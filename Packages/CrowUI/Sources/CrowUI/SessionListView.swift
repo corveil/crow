@@ -611,7 +611,8 @@ struct SessionRow: View {
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(CorveilTheme.textPrimary)
                     .lineLimit(1)
-                if appState.isRemoteControlActive(sessionID: session.id) {
+                if agent?.supportsRemoteControl == true,
+                   appState.isRemoteControlActive(sessionID: session.id) {
                     RemoteControlBadge(compact: true)
                 }
                 Spacer()

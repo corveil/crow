@@ -52,7 +52,8 @@ public struct SessionDetailView: View {
                         Text(session.name)
                             .font(.system(size: 18, weight: .bold))
                             .foregroundStyle(CorveilTheme.gold)
-                        if appState.isRemoteControlActive(sessionID: session.id) {
+                        if AgentRegistry.shared.agent(for: session.agentKind)?.supportsRemoteControl == true,
+                           appState.isRemoteControlActive(sessionID: session.id) {
                             RemoteControlBadge()
                         }
                     }

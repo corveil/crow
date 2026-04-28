@@ -13,4 +13,7 @@ public struct AgentKind: Hashable, Sendable, Codable, RawRepresentable {
 
     /// The Claude Code agent.
     public static let claudeCode = AgentKind(rawValue: "claude-code")
+
+    /// The OpenAI Codex agent.
+    public static let codex = AgentKind(rawValue: "codex")
 }

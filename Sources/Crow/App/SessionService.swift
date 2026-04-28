@@ -349,7 +349,7 @@ final class SessionService {
     /// timed out. Reverts AppState back to `.surfaceCreated` so the UI
     /// transitions out of the Retry overlay, and starts a longer-budget
     /// watch on the backend. Leaves the terminal in `autoLaunchTerminals`
-    /// so a successful sentinel fire still triggers `launchClaude`.
+    /// so a successful sentinel fire still triggers `launchAgent`.
     func retryReadiness(terminalID: UUID) {
         guard let current = appState.terminalReadiness[terminalID] else { return }
         guard current == .timedOut || current < .shellReady else { return }
@@ -381,26 +381,27 @@ final class SessionService {
         }
     }
 
-    /// Send `claude --continue` (or a review prompt for review sessions) to a terminal and mark it as launched.
-    ///
-    /// Writes hook configuration to the session's worktree first so that
-    /// Claude Code picks up the hooks on startup.
+    /// Auto-launch the session's coding agent in `terminalID`. Dispatches via
+    /// the registered `CodingAgent` for the session's `agentKind`, which
+    /// builds both the hook configuration and the launch command.
     func launchAgent(terminalID: UUID) {
         guard appState.terminalReadiness[terminalID] == .shellReady else { return }
         // Only auto-launch for restored/recovered terminals, not brand-new ones
         guard appState.autoLaunchTerminals.remove(terminalID) != nil else { return }
 
         // Find the session this terminal belongs to
-        let sessionID = appState.terminals.first(where: { _, terminals in
+        guard let sessionID = appState.terminals.first(where: { _, terminals in
             terminals.contains(where: { $0.id == terminalID })
-        })?.key
+        })?.key,
+              let session = appState.sessions.first(where: { $0.id == sessionID }),
+              let worktree = appState.primaryWorktree(for: sessionID),
+              let agent = AgentRegistry.shared.agent(for: session.agentKind) else { return }
 
-        // Write/refresh hook config for the session's worktree
-        if let sessionID,
-           let worktree = appState.primaryWorktree(for: sessionID),
-           let crowPath = ClaudeHookConfigWriter.findCrowBinary() {
+        // Write/refresh hook config (Claude path). Codex's writer is a
+        // no-op — its global config was installed once at app launch.
+        if let crowPath = ClaudeHookConfigWriter.findCrowBinary() {
             do {
-                try ClaudeHookConfigWriter().writeHookConfig(
+                try agent.hookConfigWriter.writeHookConfig(
                     worktreePath: worktree.worktreePath,
                     sessionID: sessionID,
                     crowPath: crowPath
@@ -411,71 +412,43 @@ final class SessionService {
             }
         }
 
-        let claudePath = Self.findClaudeBinary() ?? "claude"
-        let session = sessionID.flatMap { id in appState.sessions.first(where: { $0.id == id }) }
-        let sessionName = session?.name
         let rcEnabled = appState.remoteControlEnabled
         // Jobs are unattended, so opt-in (default-on) auto-permission mode lets
         // their prompts run crow/gh/git without per-call approval. Scoped to
         // .job kind so review and other session kinds are unaffected.
-        let autoPermissionMode = (session?.kind == .job) && appState.jobsAutoPermissionMode
-        let rcArgs = ClaudeLaunchArgs.argsSuffix(
-            remoteControl: rcEnabled,
-            sessionName: sessionName,
-            autoPermissionMode: autoPermissionMode
-        )
-
-        // Build OTEL telemetry env var prefix if enabled
-        let envPrefix: String
-        if let port = telemetryPort, let sessionID {
-            let vars = [
-                "CLAUDE_CODE_ENABLE_TELEMETRY=1",
-                "OTEL_METRICS_EXPORTER=otlp",
-                "OTEL_LOGS_EXPORTER=otlp",
-                "OTEL_EXPORTER_OTLP_PROTOCOL=http/json",
-                "OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:\(port)",
-                "OTEL_RESOURCE_ATTRIBUTES=crow.session.id=\(sessionID.uuidString)",
-            ].joined(separator: " ")
-            envPrefix = "export \(vars) && "
-        } else {
-            envPrefix = ""
+        let autoPermissionMode = (session.kind == .job) && appState.jobsAutoPermissionMode
+        // The agent's autoLaunchCommand mirrors this condition — the initial
+        // prompt file is only used on first launch (CROW-224, CROW-317).
+        // Compute it here so we know whether to flip `reviewPromptDispatched`
+        // (reused as the generic "initial prompt dispatched" gate) after the
+        // command goes out.
+        let reviewPromptJustDispatched = (session.kind == .review || session.kind == .job)
+            && !session.reviewPromptDispatched
+        guard let command = agent.autoLaunchCommand(
+            session: session,
+            worktreePath: worktree.worktreePath,
+            remoteControlEnabled: rcEnabled,
+            autoPermissionMode: autoPermissionMode,
+            telemetryPort: telemetryPort
+        ) else {
+            NSLog("[SessionService] Agent %@ could not build a launch command for session %@",
+                  agent.kind.rawValue, sessionID.uuidString)
+            return
         }
-
-        // Look up the SessionTerminal so we can route through TerminalRouter.
-        let routedTerminal: SessionTerminal? = sessionID.flatMap { sid in
-            appState.terminals[sid]?.first(where: { $0.id == terminalID })
-        }
-        // Review- and job-kind sessions dispatch their initial prompt file on
-        // first launch only — on subsequent app restarts, fall through to
-        // `claude --continue` so the existing conversation resumes instead of
-        // re-running the prompt (CROW-224, CROW-317). `reviewPromptDispatched`
-        // is reused as the generic "initial prompt dispatched" gate.
-        var reviewPromptJustDispatched = false
-        let claudeText: String = {
-            if let sessionID,
-               let session = appState.sessions.first(where: { $0.id == sessionID }),
-               !session.reviewPromptDispatched,
-               let promptFile = Self.initialPromptFileName(for: session.kind),
-               let worktree = appState.primaryWorktree(for: sessionID) {
-                let promptPath = (worktree.worktreePath as NSString).appendingPathComponent(promptFile)
-                reviewPromptJustDispatched = true
-                return "\(envPrefix)\(claudePath)\(rcArgs) \"$(cat \(promptPath))\"\n"
-            } else {
-                return "\(envPrefix)\(claudePath)\(rcArgs) --continue\n"
-            }
-        }()
-        if let routedTerminal {
-            TerminalRouter.send(routedTerminal, text: claudeText)
+        // Route through TerminalRouter so tmux-backed terminals get the text
+        // via tmux send-keys.
+        if let routedTerminal = appState.terminals[sessionID]?.first(where: { $0.id == terminalID }) {
+            TerminalRouter.send(routedTerminal, text: command)
         } else {
             NSLog("[SessionService] launchAgent: no terminal record for \(terminalID); cannot send")
         }
 
         appState.terminalReadiness[terminalID] = .agentLaunched
-        if rcEnabled {
+        if rcEnabled && agent.supportsRemoteControl {
             appState.remoteControlActiveTerminals.insert(terminalID)
         }
 
-        if reviewPromptJustDispatched, let sessionID {
+        if reviewPromptJustDispatched {
             if let idx = appState.sessions.firstIndex(where: { $0.id == sessionID }) {
                 appState.sessions[idx].reviewPromptDispatched = true
             }
@@ -1377,16 +1350,6 @@ final class SessionService {
     }
 
     // MARK: - Scheduled Jobs (CROW-317)
-
-    /// File name holding the initial prompt for a session kind that auto-dispatches
-    /// one on first launch. `nil` for kinds that resume with `--continue` only.
-    private static func initialPromptFileName(for kind: SessionKind) -> String? {
-        switch kind {
-        case .review: return ".crow-review-prompt.md"
-        case .job: return ".crow-job-prompt.md"
-        case .work, .manager: return nil
-        }
-    }
 
     /// Run a scheduled job: create a fresh worktree + session + managed Claude
     /// terminal in the job's scoped repo and arm auto-launch so the first prompt

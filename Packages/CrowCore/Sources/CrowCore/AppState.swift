@@ -385,6 +385,21 @@ public final class AppState {
         worktrees[sessionID] ?? []
     }
 
+    /// Resolve a session UUID by matching against the worktree path of every
+    /// known session. Returns the first match, or `nil` if no session has a
+    /// worktree at the given path. Used by the hook-event RPC handler when
+    /// the agent (e.g. Codex) doesn't carry the session UUID in its hook
+    /// invocation — the `cwd` field of the payload is matched against
+    /// worktree paths to recover the session.
+    public func sessionID(forWorktreePath path: String) -> UUID? {
+        for (sessionID, wts) in worktrees {
+            if wts.contains(where: { $0.worktreePath == path }) {
+                return sessionID
+            }
+        }
+        return nil
+    }
+
     public func links(for sessionID: UUID) -> [SessionLink] {
         links[sessionID] ?? []
     }

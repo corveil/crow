@@ -59,9 +59,9 @@ import CrowIPC
     setenv("CROW_SOCKET", nonExistent, 1)
     defer { unsetenv("CROW_SOCKET") }
 
-    try forwardHookEvent(
-        sessionID: UUID().uuidString,
-        eventName: "Stop",
-        payload: [:]
-    )
+    try forwardHookEvent(params: [
+        "session_id": .string(UUID().uuidString),
+        "event_name": .string("Stop"),
+        "payload": .object([:]),
+    ])
 }

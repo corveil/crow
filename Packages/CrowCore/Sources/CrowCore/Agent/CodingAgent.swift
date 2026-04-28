@@ -16,12 +16,45 @@ public protocol CodingAgent: Sendable {
     /// `Image(systemName:)`.
     var iconSystemName: String { get }
 
+    /// Whether this agent supports Crow's "remote control" feature (the
+    /// `--rc --name` flags Claude Code uses to register a session in
+    /// claude.ai's Remote Control panel). Drives whether the
+    /// `RemoteControlBadge` is shown for this agent's sessions.
+    var supportsRemoteControl: Bool { get }
+
+    /// The shell token that identifies a command as launching this agent.
+    /// Used by the `send` RPC handler to decide whether a managed-terminal
+    /// command needs hook-config + env-var prep before being forwarded.
+    /// Examples: `"claude"`, `"codex"`.
+    var launchCommandToken: String { get }
+
     /// Writer for the per-worktree hook configuration file.
     var hookConfigWriter: any HookConfigWriter { get }
 
     /// State-machine implementation that converts hook events into
     /// `AgentStateTransition` values.
     var stateSignalSource: any StateSignalSource { get }
+
+    /// Resolve this agent's binary on disk, or return `nil` if it isn't
+    /// installed. Drives binary-presence gating for the per-session picker
+    /// and the launch-command builder below.
+    func findBinary() -> String?
+
+    /// Build the full shell command (ending with `\n`) that auto-launches
+    /// this agent in `worktreePath`. Returns `nil` when the agent can't be
+    /// launched — typically because the binary is missing or the session
+    /// kind is unsupported.
+    ///
+    /// `autoPermissionMode` requests that the agent skip per-call permission
+    /// prompts where possible (used for unattended `.job` sessions). Agents
+    /// that don't surface this concept can ignore it.
+    func autoLaunchCommand(
+        session: Session,
+        worktreePath: String,
+        remoteControlEnabled: Bool,
+        autoPermissionMode: Bool,
+        telemetryPort: UInt16?
+    ) -> String?
 
     /// Build the initial prompt for this agent based on the session context.
     func generatePrompt(

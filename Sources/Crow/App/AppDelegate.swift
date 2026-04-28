@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import CrowClaude
+import CrowCodex
 import CrowCore
 import CrowGit
 import CrowProvider
@@ -319,10 +320,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func launchMainApp() {
         guard let devRoot else { return }
 
-        // Register the Claude Code agent in the shared registry. Phase A only
-        // has one agent; later phases will register additional conformers and
-        // let users pick one per session.
+        // Register the Claude Code agent in the shared registry — always
+        // present, since the Manager terminal and the default-agent picker
+        // both rely on it.
         AgentRegistry.shared.register(ClaudeCodeAgent())
+
+        // Conditionally register the OpenAI Codex agent — only when its
+        // binary is on disk. Keeps the per-session picker clean for users
+        // who haven't installed Codex.
+        let codexAgent = OpenAICodexAgent()
+        if codexAgent.findBinary() != nil {
+            AgentRegistry.shared.register(codexAgent)
+            NSLog("[Crow] OpenAI Codex agent registered")
+        }
 
         // Initialize libghostty
         NSLog("[Crow] Initializing Ghostty")
@@ -380,6 +390,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSLog("[Crow] Scaffold update failed: %@", error.localizedDescription)
         }
 
+        // Codex-specific dev-root and global config — only when Codex is
+        // registered. AGENTS.md goes into devRoot; hooks.json + config.toml
+        // go into ~/.codex (or $CODEX_HOME). All idempotent; safe to re-run.
+        if AgentRegistry.shared.agent(for: .codex) != nil {
+            do {
+                try CodexScaffolder.scaffold(devRoot: devRoot)
+            } catch {
+                NSLog("[Crow] Codex scaffold failed: %@", error.localizedDescription)
+            }
+            if let crowPath = ClaudeHookConfigWriter.findCrowBinary() {
+                let codexHome = ProcessInfo.processInfo.environment["CODEX_HOME"]
+                    ?? NSString(string: "~/.codex").expandingTildeInPath
+                do {
+                    try CodexHookConfigWriter.installGlobalConfig(codexHome: codexHome, crowPath: crowPath)
+                    try CodexHookConfigWriter.installGlobalTomlConfig(codexHome: codexHome, crowPath: crowPath)
+                } catch {
+                    NSLog("[Crow] Codex global config install failed: %@", error.localizedDescription)
+                }
+            }
+        }
+
         // Initialize persistence
         let store = JSONStore()
         self.store = store
@@ -408,7 +439,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Check for runtime dependencies (non-blocking)
         Task {
             let missing = await Task.detached {
-                let tools = ["gh", "git", "claude", "glab", "code"]
+                let tools = ["gh", "git", "claude", "codex", "glab", "code"]
                 return tools.filter { !ShellEnvironment.shared.hasCommand($0) }
             }.value
             if !missing.isEmpty {
@@ -1364,16 +1395,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     // tmux-backed terminals already have their window from
                     // registerTerminal — no surface recovery needed before send.
 
-                    // For managed terminals receiving a claude command, write hook config
-                    // before sending so Claude picks up the hooks on startup.
+                    // For managed terminals receiving an agent-launching
+                    // command, write hook config (and inject OTEL env vars
+                    // for Claude) before forwarding so the agent picks up
+                    // hooks on startup. The agent dispatch is driven by the
+                    // session's `agentKind` and the agent's
+                    // `launchCommandToken` (e.g. "claude", "codex").
                     if let terminals = capturedAppState.terminals[sessionID],
                        let terminal = terminals.first(where: { $0.id == terminalID }),
                        terminal.isManaged,
-                       text.contains("claude") {
+                       let session = capturedAppState.sessions.first(where: { $0.id == sessionID }),
+                       let agent = AgentRegistry.shared.agent(for: session.agentKind),
+                       text.contains(agent.launchCommandToken) {
                         if let worktree = capturedAppState.primaryWorktree(for: sessionID),
                            let crowPath = ClaudeHookConfigWriter.findCrowBinary() {
                             do {
-                                try ClaudeHookConfigWriter().writeHookConfig(
+                                try agent.hookConfigWriter.writeHookConfig(
                                     worktreePath: worktree.worktreePath,
                                     sessionID: sessionID,
                                     crowPath: crowPath
@@ -1383,8 +1420,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                       sessionID.uuidString, error.localizedDescription)
                             }
                         }
-                        // Inject OTEL telemetry env vars so analytics flow back to Crow
-                        if let port = capturedTelemetryPort {
+                        // OTEL telemetry env vars are Claude-specific —
+                        // Codex has no equivalent OTLP exporter.
+                        if agent.kind == .claudeCode, let port = capturedTelemetryPort {
                             let vars = [
                                 "CLAUDE_CODE_ENABLE_TELEMETRY=1",
                                 "OTEL_METRICS_EXPORTER=otlp",
@@ -1432,20 +1470,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return ["links": .array(items)]
             },
             "hook-event": { @Sendable params in
-                guard let sessionIDStr = params["session_id"]?.stringValue,
-                      let sessionID = UUID(uuidString: sessionIDStr),
-                      let eventName = params["event_name"]?.stringValue else {
-                    throw RPCError.invalidParams("session_id and event_name required")
+                guard let eventName = params["event_name"]?.stringValue else {
+                    throw RPCError.invalidParams("event_name required")
                 }
                 let payload = params["payload"]?.objectValue ?? [:]
 
-                if hookDebug {
-                    let shortID = String(sessionIDStr.prefix(8))
-                    let keys = payload.keys.sorted().joined(separator: ",")
-                    NSLog("[hook-event] session=\(shortID) event=\(eventName) payload-keys=[\(keys)]")
-                }
+                // session_id is now optional — Codex's global hooks don't
+                // know the Crow session UUID, so the server resolves it via
+                // the `cwd` field in the payload.
+                let providedSessionID = params["session_id"]?.stringValue
+                    .flatMap(UUID.init(uuidString:))
+                let requestedAgentKind = params["agent_kind"]?.stringValue
+                    .flatMap { $0.isEmpty ? nil : AgentKind(rawValue: $0) }
+                let cwd = payload["cwd"]?.stringValue
 
-                // Build a human-readable summary from the event
+                // Build a human-readable summary from the event (independent
+                // of session resolution).
                 let summary: String = {
                     switch eventName {
                     case "PreToolUse", "PostToolUse", "PostToolUseFailure":
@@ -1455,9 +1495,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         let msg = payload["message"]?.stringValue ?? ""
                         return "Notification: \(msg.prefix(80))"
                     case "Stop":
-                        return "Claude finished responding"
+                        return "Agent finished responding"
                     case "StopFailure":
-                        return "Claude stopped with error"
+                        return "Agent stopped with error"
                     case "SessionStart":
                         return "Session started"
                     case "SessionEnd":
@@ -1486,32 +1526,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                 }()
 
-                let event = HookEvent(
-                    sessionID: sessionID,
-                    eventName: eventName,
-                    summary: summary
-                )
+                return try await MainActor.run {
+                    // Resolve session — explicit param wins, else look up by
+                    // worktree path matching `cwd`.
+                    let sessionID: UUID
+                    if let provided = providedSessionID {
+                        sessionID = provided
+                    } else if let cwd, let resolved = capturedAppState.sessionID(forWorktreePath: cwd) {
+                        sessionID = resolved
+                    } else {
+                        throw RPCError.invalidParams("session_id required or resolvable from payload cwd")
+                    }
+                    let sessionIDStr = sessionID.uuidString
 
-                // Flatten the raw JSON payload into the typed AgentHookEvent
-                // that the state-machine signal source consumes. Keeps
-                // CrowCore free of JSONValue, and localizes the field
-                // extraction in one place.
-                let agentEvent = AgentHookEvent(
-                    sessionID: sessionID,
-                    eventName: eventName,
-                    toolName: payload["tool_name"]?.stringValue,
-                    source: payload["source"]?.stringValue,
-                    message: payload["message"]?.stringValue,
-                    notificationType: payload["notification_type"]?.stringValue,
-                    agentType: payload["agent_type"]?.stringValue,
-                    summary: summary
-                )
+                    if hookDebug {
+                        let shortID = String(sessionIDStr.prefix(8))
+                        let keys = payload.keys.sorted().joined(separator: ",")
+                        NSLog("[hook-event] session=\(shortID) event=\(eventName) payload-keys=[\(keys)]")
+                    }
 
-                // Phase A: always route through the default (Claude Code)
-                // agent. Later phases will look up a per-session agent.
-                let signalSource = AgentRegistry.shared.defaultAgent?.stateSignalSource
+                    let event = HookEvent(
+                        sessionID: sessionID,
+                        eventName: eventName,
+                        summary: summary
+                    )
 
-                return await MainActor.run {
+                    // Flatten the raw JSON payload into the typed AgentHookEvent
+                    // that the state-machine signal source consumes. Keeps
+                    // CrowCore free of JSONValue, and localizes the field
+                    // extraction in one place.
+                    let agentEvent = AgentHookEvent(
+                        sessionID: sessionID,
+                        eventName: eventName,
+                        toolName: payload["tool_name"]?.stringValue,
+                        source: payload["source"]?.stringValue,
+                        message: payload["message"]?.stringValue,
+                        notificationType: payload["notification_type"]?.stringValue,
+                        agentType: payload["agent_type"]?.stringValue,
+                        summary: summary
+                    )
+
+                    // Resolve the agent: explicit kind param > session's
+                    // stored agentKind > app default.
+                    let session = capturedAppState.sessions.first(where: { $0.id == sessionID })
+                    let resolvedKind = requestedAgentKind
+                        ?? session?.agentKind
+                        ?? capturedAppState.defaultAgentKind
+                    let signalSource = AgentRegistry.shared.agent(for: resolvedKind)?.stateSignalSource
+
                     let state = capturedAppState.hookState(for: sessionID)
                     let stateBefore = state.activityState
                     // Snapshot the color-driving subset so we can persist only on a
