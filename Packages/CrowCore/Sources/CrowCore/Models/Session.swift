@@ -12,6 +12,10 @@ public struct Session: Identifiable, Codable, Sendable {
     public var provider: Provider?
     public var createdAt: Date
     public var updatedAt: Date
+    // Whether a review-kind session has had its initial `/crow-review-pr`
+    // prompt dispatched. Gates the launchClaude prompt-vs-`--continue`
+    // branch so completed reviews don't restart on app relaunch.
+    public var reviewPromptDispatched: Bool
 
     public init(
         id: UUID = UUID(),
@@ -23,7 +27,8 @@ public struct Session: Identifiable, Codable, Sendable {
         ticketNumber: Int? = nil,
         provider: Provider? = nil,
         createdAt: Date = Date(),
-        updatedAt: Date = Date()
+        updatedAt: Date = Date(),
+        reviewPromptDispatched: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -35,9 +40,13 @@ public struct Session: Identifiable, Codable, Sendable {
         self.provider = provider
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        self.reviewPromptDispatched = reviewPromptDispatched
     }
 
-    // Backward-compatible decoding: default `kind` to `.work` when missing from older persisted data.
+    // Backward-compatible decoding: default `kind` to `.work` when missing
+    // from older persisted data. `reviewPromptDispatched` defaults to `true`
+    // when missing so existing review sessions don't re-trigger their prompt
+    // on the first launch after upgrade (CROW-224).
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
@@ -50,5 +59,6 @@ public struct Session: Identifiable, Codable, Sendable {
         provider = try container.decodeIfPresent(Provider.self, forKey: .provider)
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+        reviewPromptDispatched = try container.decodeIfPresent(Bool.self, forKey: .reviewPromptDispatched) ?? true
     }
 }

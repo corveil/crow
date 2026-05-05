@@ -350,12 +350,19 @@ final class SessionService {
         let routedTerminal: SessionTerminal? = sessionID.flatMap { sid in
             appState.terminals[sid]?.first(where: { $0.id == terminalID })
         }
+        // Review-kind sessions dispatch their `/crow-review-pr` prompt on first
+        // launch only — on subsequent app restarts, fall through to
+        // `claude --continue` so the existing conversation resumes instead of
+        // re-running the entire review (CROW-224).
+        var reviewPromptJustDispatched = false
         let claudeText: String = {
             if let sessionID,
                let session = appState.sessions.first(where: { $0.id == sessionID }),
                session.kind == .review,
+               !session.reviewPromptDispatched,
                let worktree = appState.primaryWorktree(for: sessionID) {
                 let promptPath = (worktree.worktreePath as NSString).appendingPathComponent(".crow-review-prompt.md")
+                reviewPromptJustDispatched = true
                 return "\(envPrefix)\(claudePath)\(rcArgs) \"$(cat \(promptPath))\"\n"
             } else {
                 return "\(envPrefix)\(claudePath)\(rcArgs) --continue\n"
@@ -370,6 +377,17 @@ final class SessionService {
         appState.terminalReadiness[terminalID] = .claudeLaunched
         if rcEnabled {
             appState.remoteControlActiveTerminals.insert(terminalID)
+        }
+
+        if reviewPromptJustDispatched, let sessionID {
+            if let idx = appState.sessions.firstIndex(where: { $0.id == sessionID }) {
+                appState.sessions[idx].reviewPromptDispatched = true
+            }
+            store.mutate { data in
+                if let idx = data.sessions.firstIndex(where: { $0.id == sessionID }) {
+                    data.sessions[idx].reviewPromptDispatched = true
+                }
+            }
         }
     }
 
