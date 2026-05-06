@@ -304,6 +304,13 @@ final class IssueTracker {
             if !reviewExcludePatterns.isEmpty {
                 reviews = reviews.filter { !repoMatchesExcludePatterns($0.repo, patterns: reviewExcludePatterns) }
             }
+            let ignoreLabels = config.defaults.ignoreReviewLabels
+            if !ignoreLabels.isEmpty {
+                let lowerLabels = Set(ignoreLabels.map { $0.lowercased() })
+                reviews = reviews.filter { request in
+                    !request.labels.contains(where: { lowerLabels.contains($0.lowercased()) })
+                }
+            }
             let currentIDs = Set(reviews.map(\.id))
             let newIDs = currentIDs.subtracting(previousReviewRequestIDs)
             previousReviewRequestIDs = allCurrentIDs
@@ -562,6 +569,7 @@ final class IssueTracker {
             number title url isDraft updatedAt headRefName baseRefName state
             author { login }
             repository { nameWithOwner }
+            labels(first: 20) { nodes { name } }
           }
         }
       }
@@ -1095,6 +1103,8 @@ final class IssueTracker {
             let headBranch = node["headRefName"] as? String ?? ""
             let baseBranch = node["baseRefName"] as? String ?? ""
             let updatedAt = (node["updatedAt"] as? String).flatMap { dateFormatter.date(from: $0) }
+            let labels = ((node["labels"] as? [String: Any])?["nodes"] as? [[String: Any]])?
+                .compactMap { $0["name"] as? String } ?? []
 
             requests.append(ReviewRequest(
                 id: "github:\(repoName)#\(number)",
@@ -1107,6 +1117,7 @@ final class IssueTracker {
                 baseBranch: baseBranch,
                 isDraft: isDraft,
                 requestedAt: updatedAt,
+                labels: labels,
                 provider: .github
             ))
         }

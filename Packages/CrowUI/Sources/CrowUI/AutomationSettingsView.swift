@@ -12,6 +12,7 @@ public struct AutomationSettingsView: View {
     var onSave: (() -> Void)?
 
     @State private var excludeReviewReposText: String
+    @State private var ignoreReviewLabelsText: String
     @State private var excludeTicketReposText: String
 
     public init(
@@ -27,6 +28,7 @@ public struct AutomationSettingsView: View {
         self._autoRespond = autoRespond
         self.onSave = onSave
         self._excludeReviewReposText = State(initialValue: defaults.wrappedValue.excludeReviewRepos.joined(separator: ", "))
+        self._ignoreReviewLabelsText = State(initialValue: defaults.wrappedValue.ignoreReviewLabels.joined(separator: ", "))
         self._excludeTicketReposText = State(initialValue: defaults.wrappedValue.excludeTicketRepos.joined(separator: ", "))
     }
 
@@ -46,6 +48,19 @@ public struct AutomationSettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Text("Per-workspace auto-review opt-ins are configured in Workspaces → edit a workspace.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                TextField("Ignored Labels", text: $ignoreReviewLabelsText)
+                    .textFieldStyle(.roundedBorder)
+                    .onChange(of: ignoreReviewLabelsText) { _, _ in
+                        defaults.ignoreReviewLabels = ignoreReviewLabelsText
+                            .split(separator: ",")
+                            .map { $0.trimmingCharacters(in: .whitespaces) }
+                            .filter { !$0.isEmpty }
+                        onSave?()
+                    }
+                Text("Comma-separated labels to ignore from the review board (e.g., dependencies, renovate, automated).")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

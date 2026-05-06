@@ -129,10 +129,20 @@ public final class AppState {
 
     public var excludeReviewRepos: [String] = []
     public var excludeTicketRepos: [String] = []
+    public var ignoreReviewLabels: [String] = []
 
     public var filteredReviewRequests: [ReviewRequest] {
-        guard !excludeReviewRepos.isEmpty else { return reviewRequests }
-        return reviewRequests.filter { !repoMatchesExcludePatterns($0.repo, patterns: excludeReviewRepos) }
+        var result = reviewRequests
+        if !excludeReviewRepos.isEmpty {
+            result = result.filter { !repoMatchesExcludePatterns($0.repo, patterns: excludeReviewRepos) }
+        }
+        if !ignoreReviewLabels.isEmpty {
+            let lowerLabels = Set(ignoreReviewLabels.map { $0.lowercased() })
+            result = result.filter { request in
+                !request.labels.contains(where: { lowerLabels.contains($0.lowercased()) })
+            }
+        }
+        return result
     }
 
     /// IDs of review requests the user has already seen (for badge count).

@@ -263,6 +263,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appState.managerAutoPermissionMode = config.managerAutoPermissionMode
         appState.excludeReviewRepos = config.defaults.excludeReviewRepos
         appState.excludeTicketRepos = config.defaults.excludeTicketRepos
+        appState.ignoreReviewLabels = config.defaults.ignoreReviewLabels
 
         // Create session service and hydrate state
         let service = SessionService(store: store, appState: appState, telemetryPort: config.telemetry.enabled ? config.telemetry.port : nil)
@@ -680,6 +681,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appState.managerAutoPermissionMode = config.managerAutoPermissionMode
         appState.excludeReviewRepos = config.defaults.excludeReviewRepos
         appState.excludeTicketRepos = config.defaults.excludeTicketRepos
+        appState.ignoreReviewLabels = config.defaults.ignoreReviewLabels
     }
 
     // MARK: - Socket Server

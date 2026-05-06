@@ -245,3 +245,20 @@ import Testing
     let decoded2 = try JSONDecoder().decode(AppConfig.self, from: data2)
     #expect(decoded2.experimentalTmuxBackend == false)
 }
+
+@Test func ignoreReviewLabelsRoundTrip() throws {
+    let config = AppConfig(
+        defaults: ConfigDefaults(ignoreReviewLabels: ["dependencies", "renovate", "automated"])
+    )
+    let data = try JSONEncoder().encode(config)
+    let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+    #expect(decoded.defaults.ignoreReviewLabels == ["dependencies", "renovate", "automated"])
+}
+
+@Test func ignoreReviewLabelsDefaultsEmptyWhenKeyMissing() throws {
+    let json = """
+    {"defaults": {"provider": "github", "cli": "gh", "branchPrefix": "feature/", "excludeDirs": []}}
+    """.data(using: .utf8)!
+    let config = try JSONDecoder().decode(AppConfig.self, from: json)
+    #expect(config.defaults.ignoreReviewLabels.isEmpty)
+}
