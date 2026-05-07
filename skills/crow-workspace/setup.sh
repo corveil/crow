@@ -13,6 +13,10 @@ set -uo pipefail
 # handled explicitly with `if ! ...` or `|| die/log` so that we always
 # emit structured JSON on failure instead of silently exiting.
 
+# ─── Script Location ─────────────────────────────────────────────────────────
+
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
 # ─── Defaults ────────────────────────────────────────────────────────────────
 
 DEV_ROOT=""
@@ -243,6 +247,43 @@ setup_worktree() {
   fi
 
   log "Worktree created successfully"
+}
+
+# ─── Baseline Allowlist ──────────────────────────────────────────────────────
+
+# Drop a baseline `.claude/settings.local.json` into the new worktree so the
+# launched Claude Code session doesn't prompt for the routine `gh issue view`,
+# `git`, `cat`, `tee`, … commands the prompt template tells it to run.
+#
+# Source of truth is `session-settings.template.json` next to this script.
+# Best-effort: failures are logged, not fatal — a missing template should never
+# block worktree setup. Skips if the file already exists (e.g. checked in by
+# the repo, or left over from a previous run).
+write_session_settings() {
+  local settings_dir="$WORKTREE_PATH/.claude"
+  local settings_path="$settings_dir/settings.local.json"
+  local template_path="$SCRIPT_DIR/session-settings.template.json"
+
+  if [[ ! -f "$template_path" ]]; then
+    log "Baseline allowlist template not found at $template_path, skipping"
+    return
+  fi
+
+  if ! mkdir -p "$settings_dir" 2>/dev/null; then
+    log "Warning: could not create $settings_dir, skipping baseline allowlist"
+    return
+  fi
+
+  if [[ -f "$settings_path" ]]; then
+    log "$settings_path already exists, leaving untouched"
+    return
+  fi
+
+  if cp "$template_path" "$settings_path" 2>/dev/null; then
+    log "Wrote baseline allowlist to $settings_path"
+  else
+    log "Warning: failed to copy baseline allowlist to $settings_path"
+  fi
 }
 
 # ─── Crow Session ────────────────────────────────────────────────────────────
@@ -526,6 +567,7 @@ main() {
   preflight
 
   setup_worktree
+  write_session_settings
   create_session
   github_ops
   write_prompt

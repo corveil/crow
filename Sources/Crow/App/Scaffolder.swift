@@ -69,6 +69,12 @@ struct Scaffolder {
         try setupScript.write(toFile: setupScriptPath, atomically: true, encoding: .utf8)
         try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: setupScriptPath)
 
+        // Always overwrite the baseline session-settings template (used by setup.sh
+        // to seed each new worktree with a `.claude/settings.local.json`)
+        let sessionSettingsPath = (skillsDir as NSString).appendingPathComponent("session-settings.template.json")
+        let sessionSettingsTemplate = Self.bundledSessionSettings()
+        try sessionSettingsTemplate.write(toFile: sessionSettingsPath, atomically: true, encoding: .utf8)
+
         // Always overwrite the review-pr skill with the latest version
         let reviewSkillPath = (reviewSkillsDir as NSString).appendingPathComponent("SKILL.md")
         let reviewSkillTemplate = Self.bundledReviewSkill()
@@ -148,6 +154,28 @@ struct Scaffolder {
         #!/bin/bash
         echo '{"status":"error","message":"setup.sh not bundled"}'
         exit 1
+        """
+    }
+
+    /// The crow-workspace baseline session settings template bundled with the app.
+    /// Dropped next to setup.sh so each new worktree can seed
+    /// `.claude/settings.local.json` from it.
+    static func bundledSessionSettings() -> String {
+        if let content = loadFromRepo("skills/crow-workspace/session-settings.template.json") {
+            return content
+        }
+        if let url = Bundle.main.url(forResource: "crow-workspace-session-settings.json", withExtension: "template"),
+           let content = try? String(contentsOf: url) {
+            return content
+        }
+        // Minimal fallback — keeps setup.sh's cp from failing if the template
+        // ever goes missing. Empty allow list = no extra permissions granted.
+        return """
+        {
+          "permissions": {
+            "allow": []
+          }
+        }
         """
     }
 

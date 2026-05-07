@@ -293,6 +293,14 @@ For cross-workspace setups with multiple repos, call `setup.sh` once per repo:
   --skip-launch
 ```
 
+### Baseline Permissions
+
+`setup.sh` writes a baseline `.claude/settings.local.json` into each new worktree before launching Claude Code, sourced from `session-settings.template.json` next to the script. The file is gitignored by Claude Code on creation, and its `permissions.allow` array merges with any `.claude/settings.json` shipped by the repo — so it augments rather than overrides the project's own allowlist.
+
+The baseline covers commands the prompt template instructs sessions to run on step 1 (`gh issue view`, `glab issue view`, `gh pr view`), the git operations a feature branch needs (`status`, `diff`, `add`, `commit`, `push`, …), common shell utilities (`cat`, `grep`, `jq`, `tee`), and redirects to `$TMPDIR` / `/tmp/claude`.
+
+If `{worktree}/.claude/settings.local.json` already exists (e.g. checked in by the repo, or left over from a previous setup run), the script leaves it untouched. Edit `session-settings.template.json` to extend the baseline.
+
 ## First Prompt Template
 
 IMPORTANT: Always use full absolute paths, never abbreviated (`...`) or home-relative (`~`) paths.
