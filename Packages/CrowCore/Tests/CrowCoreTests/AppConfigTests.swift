@@ -45,6 +45,7 @@ import Testing
     #expect(config.remoteControlEnabled == false)
     #expect(config.managerAutoPermissionMode == true)
     #expect(config.experimentalTmuxBackend == false)
+    #expect(config.attributionTrailers == true)
 }
 
 @Test func appConfigRemoteControlRoundTrip() throws {
@@ -244,6 +245,28 @@ import Testing
     let data2 = try JSONEncoder().encode(config)
     let decoded2 = try JSONDecoder().decode(AppConfig.self, from: data2)
     #expect(decoded2.experimentalTmuxBackend == false)
+}
+
+@Test func appConfigAttributionTrailersRoundTrip() throws {
+    var config = AppConfig()
+    config.attributionTrailers = false
+
+    let data = try JSONEncoder().encode(config)
+    let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+    #expect(decoded.attributionTrailers == false)
+
+    config.attributionTrailers = true
+    let data2 = try JSONEncoder().encode(config)
+    let decoded2 = try JSONDecoder().decode(AppConfig.self, from: data2)
+    #expect(decoded2.attributionTrailers == true)
+}
+
+@Test func appConfigAttributionTrailersDefaultsTrueWhenKeyMissing() throws {
+    // Legacy configs without the key opt in by default — matches the behavior
+    // users see when they install the feature without touching settings.
+    let json = #"{"workspaces": [], "remoteControlEnabled": false}"#.data(using: .utf8)!
+    let config = try JSONDecoder().decode(AppConfig.self, from: json)
+    #expect(config.attributionTrailers == true)
 }
 
 @Test func ignoreReviewLabelsRoundTrip() throws {

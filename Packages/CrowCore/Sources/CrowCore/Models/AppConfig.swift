@@ -17,6 +17,10 @@ public struct AppConfig: Codable, Sendable, Equatable {
     /// Opt into the tmux backend (#198). Surfaced in Settings → Experimental.
     /// Read once at app launch; takes effect on next relaunch.
     public var experimentalTmuxBackend: Bool
+    /// When true, `setup.sh` writes a per-worktree `.claude/settings.local.json`
+    /// that overrides Claude Code's `attribution.commit` to include the crow
+    /// session UUID alongside the standard `Co-Authored-By: Claude` trailer.
+    public var attributionTrailers: Bool
 
     public init(
         workspaces: [WorkspaceInfo] = [],
@@ -27,7 +31,8 @@ public struct AppConfig: Codable, Sendable, Equatable {
         managerAutoPermissionMode: Bool = true,
         telemetry: TelemetryConfig = TelemetryConfig(),
         autoRespond: AutoRespondSettings = AutoRespondSettings(),
-        experimentalTmuxBackend: Bool = false
+        experimentalTmuxBackend: Bool = false,
+        attributionTrailers: Bool = true
     ) {
         self.workspaces = workspaces
         self.defaults = defaults
@@ -38,6 +43,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         self.telemetry = telemetry
         self.autoRespond = autoRespond
         self.experimentalTmuxBackend = experimentalTmuxBackend
+        self.attributionTrailers = attributionTrailers
     }
 
     public init(from decoder: Decoder) throws {
@@ -51,10 +57,11 @@ public struct AppConfig: Codable, Sendable, Equatable {
         telemetry = try container.decodeIfPresent(TelemetryConfig.self, forKey: .telemetry) ?? TelemetryConfig()
         autoRespond = try container.decodeIfPresent(AutoRespondSettings.self, forKey: .autoRespond) ?? AutoRespondSettings()
         experimentalTmuxBackend = try container.decodeIfPresent(Bool.self, forKey: .experimentalTmuxBackend) ?? false
+        attributionTrailers = try container.decodeIfPresent(Bool.self, forKey: .attributionTrailers) ?? true
     }
 
     private enum CodingKeys: String, CodingKey {
-        case workspaces, defaults, notifications, sidebar, remoteControlEnabled, managerAutoPermissionMode, telemetry, autoRespond, experimentalTmuxBackend
+        case workspaces, defaults, notifications, sidebar, remoteControlEnabled, managerAutoPermissionMode, telemetry, autoRespond, experimentalTmuxBackend, attributionTrailers
     }
 }
 

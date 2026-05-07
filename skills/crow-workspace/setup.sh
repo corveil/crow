@@ -73,6 +73,20 @@ is_remote_control_enabled() {
     | grep -qE '"remoteControlEnabled"[[:space:]]*:[[:space:]]*true'
 }
 
+# Read the attributionTrailers flag from {devRoot}/.claude/config.json.
+# Defaults to 0 (on) when the file is missing, malformed, or the key is
+# absent — matches AppConfig's decodeIfPresent default. Returns 1 only
+# when the key is explicitly set to false.
+is_attribution_trailers_enabled() {
+  local config_path="$DEV_ROOT/.claude/config.json"
+  [[ -f "$config_path" ]] || return 0
+  if tr -d '\n' < "$config_path" \
+    | grep -qE '"attributionTrailers"[[:space:]]*:[[:space:]]*false'; then
+    return 1
+  fi
+  return 0
+}
+
 die() {
   local step="$1" msg="$2"
   local partial=""
@@ -308,6 +322,53 @@ create_session() {
   fi
 }
 
+# ─── Per-Worktree Settings (attribution trailer) ─────────────────────────────
+
+# Write a per-worktree .claude/settings.local.json that overrides Claude Code's
+# attribution.commit so commits include a `Crow-Session: <uuid>` trailer
+# alongside the standard `Co-Authored-By: Claude` line. Runs for every
+# worktree (primary and secondary) regardless of --skip-launch, so any worktree
+# the user later opens with Claude Code picks up the override.
+write_settings_local() {
+  if ! is_attribution_trailers_enabled; then
+    log "Attribution trailers disabled via config; skipping settings.local.json"
+    return
+  fi
+
+  if [[ -z "$SESSION_ID" ]]; then
+    log "Warning: SESSION_ID not set, skipping settings.local.json"
+    return
+  fi
+
+  local settings_dir="$WORKTREE_PATH/.claude"
+  local settings_path="$settings_dir/settings.local.json"
+  mkdir -p "$settings_dir"
+
+  # The newlines inside the "commit" string are literal \n escapes in JSON;
+  # the heredoc passes them through to the file as the two-character sequence.
+  cat > "$settings_path" <<EOF
+{
+  "attribution": {
+    "commit": "🤖 Generated with Claude Code, orchestrated by Crow\\n\\nCo-Authored-By: Claude <noreply@anthropic.com>\\nCrow-Session: $SESSION_ID"
+  }
+}
+EOF
+  log "Wrote attribution settings to $settings_path"
+
+  # Belt-and-suspenders: add the file to the per-worktree git exclude so it
+  # is never accidentally committed even if the repo's .gitignore does not
+  # already cover .claude/settings.local.json. For worktrees, this lives at
+  # .git/worktrees/<name>/info/exclude — `git rev-parse --git-path` resolves it.
+  local exclude_file
+  exclude_file="$(git -C "$WORKTREE_PATH" rev-parse --git-path info/exclude 2>/dev/null)" || return 0
+  [[ -n "$exclude_file" ]] || return 0
+  mkdir -p "$(dirname "$exclude_file")"
+  touch "$exclude_file"
+  if ! grep -qxF '.claude/settings.local.json' "$exclude_file" 2>/dev/null; then
+    printf '\n# Added by crow setup.sh\n.claude/settings.local.json\n' >> "$exclude_file"
+  fi
+}
+
 # ─── GitHub Housekeeping (best-effort) ───────────────────────────────────────
 
 github_ops() {
@@ -527,6 +588,7 @@ main() {
 
   setup_worktree
   create_session
+  write_settings_local
   github_ops
   write_prompt
   launch_claude
