@@ -9,6 +9,7 @@ public struct AutomationSettingsView: View {
     @Binding var remoteControlEnabled: Bool
     @Binding var managerAutoPermissionMode: Bool
     @Binding var autoRespond: AutoRespondSettings
+    @Binding var attributionTrailers: Bool
     var onSave: (() -> Void)?
 
     @State private var excludeReviewReposText: String
@@ -20,12 +21,14 @@ public struct AutomationSettingsView: View {
         remoteControlEnabled: Binding<Bool>,
         managerAutoPermissionMode: Binding<Bool>,
         autoRespond: Binding<AutoRespondSettings>,
+        attributionTrailers: Binding<Bool>,
         onSave: (() -> Void)? = nil
     ) {
         self._defaults = defaults
         self._remoteControlEnabled = remoteControlEnabled
         self._managerAutoPermissionMode = managerAutoPermissionMode
         self._autoRespond = autoRespond
+        self._attributionTrailers = attributionTrailers
         self.onSave = onSave
         self._excludeReviewReposText = State(initialValue: defaults.wrappedValue.excludeReviewRepos.joined(separator: ", "))
         self._ignoreReviewLabelsText = State(initialValue: defaults.wrappedValue.ignoreReviewLabels.joined(separator: ", "))
@@ -92,6 +95,14 @@ public struct AutomationSettingsView: View {
                 Toggle("Launch in auto permission mode", isOn: $managerAutoPermissionMode)
                     .onChange(of: managerAutoPermissionMode) { _, _ in onSave?() }
                 Text("Passes --permission-mode auto so the Manager can run crow, gh, and git commands without per-call approval. Requires Claude Code 2.1.83+ on a Max, Team, Enterprise, or API plan with the Anthropic provider. Turn off if your account reports auto mode as unavailable. Takes effect on next app launch.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Attribution") {
+                Toggle("Add Crow-Session trailer to commits", isOn: $attributionTrailers)
+                    .onChange(of: attributionTrailers) { _, _ in onSave?() }
+                Text("Writes a per-worktree .claude/settings.local.json that overrides Claude Code's commit attribution to include a Crow-Session: <uuid> trailer alongside Co-Authored-By: Claude. Applies to new worktrees only.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

@@ -43,6 +43,7 @@ public struct SettingsView: View {
                 remoteControlEnabled: $config.remoteControlEnabled,
                 managerAutoPermissionMode: $config.managerAutoPermissionMode,
                 autoRespond: $config.autoRespond,
+                attributionTrailers: $config.attributionTrailers,
                 onSave: { save() }
             )
                 .tabItem { Label("Automation", systemImage: "bolt.fill") }

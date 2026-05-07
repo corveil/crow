@@ -44,6 +44,12 @@ Configuration is at `{devRoot}/.claude/config.json` (managed by the Crow app). T
 }
 ```
 
+### Commit Attribution Trailers
+
+By default, `setup.sh` writes a per-worktree `.claude/settings.local.json` that overrides Claude Code's `attribution.commit` so commits include a `Crow-Session: <uuid>` trailer alongside the standard `Co-Authored-By: Claude` line. The trailer is a stable handle back to session metadata via `crow get-session <uuid>`. To opt out globally, set `"attributionTrailers": false` at the top level of `{devRoot}/.claude/config.json` (also surfaced in Settings → Automation → Attribution).
+
+The worktree's settings.local.json is added to that worktree's per-worktree git exclude list, so it stays local even when the repo's tracked `.gitignore` does not already cover it.
+
 ## Multi-Workspace Discovery
 
 ### Step 1: Enumerate Workspaces
