@@ -474,88 +474,70 @@ final class SessionService {
 
     // MARK: - Delete Session
 
+    /// Snapshot of one worktree's cleanup work, captured on the MainActor and
+    /// passed by value into a detached task so disk/git operations don't block UI.
+    struct WorktreeCleanupItem: Sendable {
+        let repoPath: String
+        let worktreePath: String
+        let branch: String
+        let isMainCheckout: Bool
+    }
+
     /// Delete a session and clean up all associated resources.
     ///
     /// Performs a full cascade: destroys terminal surfaces, removes worktrees from disk
     /// (with branch deletion for non-protected branches), removes hook configs, and cleans
     /// up all in-memory state (sessions, worktrees, links, terminals, hook state, PR status).
     /// The manager session cannot be deleted.
+    ///
+    /// The slow filesystem/git work runs in a detached task so the main thread stays
+    /// responsive. While cleanup is in flight, `appState.isDeletingSession[id]` is `true`
+    /// so the UI can show a spinner. On failure the session is left in place with
+    /// `appState.sessionDeletionError[id]` set, allowing the user to retry.
     func deleteSession(id: UUID) async {
         guard id != AppState.managerSessionID else { return }
+        guard appState.isDeletingSession[id] != true else { return }
 
         let session = appState.sessions.first(where: { $0.id == id })
         let wts = appState.worktrees(for: id)
         let terminals = appState.terminals(for: id)
+        let isReview = session?.kind == .review
+        let items = wts.map {
+            WorktreeCleanupItem(
+                repoPath: $0.repoPath,
+                worktreePath: $0.worktreePath,
+                branch: $0.branch,
+                isMainCheckout: $0.isMainRepoCheckout
+            )
+        }
 
-        // Destroy live terminal surfaces (routes per-backend so .tmux windows are killed too)
+        appState.isDeletingSession[id] = true
+        appState.sessionDeletionError.removeValue(forKey: id)
+
+        // Slow git + filesystem work runs on a background thread so the main actor
+        // stays free to render the spinner and respond to other input.
+        let cleanupError: String? = await Task.detached(priority: .utility) {
+            Self.performDiskCleanup(items: items, isReview: isReview)
+        }.value
+
+        if let cleanupError {
+            // Leave session, terminals, and persisted state intact so the user can
+            // retry. Surface the failure inline; auto-clear after a short delay so
+            // the row returns to its normal appearance.
+            appState.sessionDeletionError[id] = cleanupError
+            appState.isDeletingSession.removeValue(forKey: id)
+            Task { [weak appState] in
+                try? await Task.sleep(nanoseconds: 6_000_000_000)
+                _ = await MainActor.run { appState?.sessionDeletionError.removeValue(forKey: id) }
+            }
+            return
+        }
+
+        // Cleanup succeeded — destroy live terminal surfaces and tear down state.
         for terminal in terminals {
             TerminalRouter.destroy(terminal)
         }
 
-        if session?.kind == .review {
-            // For review sessions, clean up the clone directory
-            for wt in wts {
-                try? FileManager.default.removeItem(atPath: wt.worktreePath)
-                NSLog("[SessionService] Cleaned up review clone: \(wt.worktreePath)")
-            }
-        } else {
-            // Remove worktrees from disk: git worktree remove + branch delete
-            // Skip cleanup for worktrees that point at the main repo checkout (not a real worktree)
-            for wt in wts {
-                let isMainCheckout = wt.isMainRepoCheckout
-
-                if isMainCheckout {
-                    NSLog("Skipping worktree cleanup for main checkout: \(wt.worktreePath) (branch: \(wt.branch))")
-                    continue
-                }
-
-                // Remove our hook config from settings.local.json before deleting the worktree
-                HookConfigGenerator.removeHookConfig(worktreePath: wt.worktreePath)
-
-                do {
-                    // Remove the worktree
-                    let removeResult = try await shell("git", "-C", wt.repoPath, "worktree", "remove", "--force", wt.worktreePath)
-                    NSLog("Removed worktree: \(wt.worktreePath) \(removeResult)")
-
-                    // Delete the local branch (only if not a protected branch)
-                    if !SessionWorktree.isProtectedBranch(wt.branch) {
-                        do {
-                            _ = try await shell("git", "-C", wt.repoPath, "branch", "-D", wt.branch)
-                        } catch {
-                            NSLog("[SessionService] Failed to delete branch \(wt.branch): \(error)")
-                        }
-                    }
-
-                    // Prune worktree metadata
-                    do {
-                        _ = try await shell("git", "-C", wt.repoPath, "worktree", "prune")
-                    } catch {
-                        NSLog("[SessionService] Failed to prune worktree metadata: \(error)")
-                    }
-
-                    // Remove the directory if it still exists
-                    if FileManager.default.fileExists(atPath: wt.worktreePath) {
-                        do {
-                            try FileManager.default.removeItem(atPath: wt.worktreePath)
-                        } catch {
-                            NSLog("[SessionService] Failed to remove directory \(wt.worktreePath): \(error)")
-                        }
-                    }
-                } catch {
-                    NSLog("[SessionService] Failed to remove worktree \(wt.worktreePath): \(error)")
-                    // Still try to remove the directory (but not if it's the main repo)
-                    if FileManager.default.fileExists(atPath: wt.worktreePath) {
-                        do {
-                            try FileManager.default.removeItem(atPath: wt.worktreePath)
-                        } catch {
-                            NSLog("[SessionService] Failed to remove directory \(wt.worktreePath): \(error)")
-                        }
-                    }
-                }
-            }
-        }
-
-        // Remove from state and persistence
         appState.sessions.removeAll { $0.id == id }
         appState.worktrees.removeValue(forKey: id)
         appState.links.removeValue(forKey: id)
@@ -568,6 +550,7 @@ final class SessionService {
         appState.removeHookState(for: id)
         appState.prStatus.removeValue(forKey: id)
         appState.isMarkingInReview.removeValue(forKey: id)
+        appState.isDeletingSession.removeValue(forKey: id)
 
         store.mutate { data in
             data.sessions.removeAll { $0.id == id }
@@ -579,6 +562,100 @@ final class SessionService {
         if appState.selectedSessionID == id {
             appState.selectedSessionID = appState.sessions.first?.id
         }
+    }
+
+    /// Run the on-disk portion of session deletion. Safe to call from any thread —
+    /// touches no MainActor state. Returns `nil` on success, or a short error
+    /// string describing the first fatal failure (a worktree that could be removed
+    /// neither by `git worktree remove` nor by direct directory removal).
+    /// Soft failures (branch delete, prune) only get NSLog'd.
+    nonisolated static func performDiskCleanup(
+        items: [WorktreeCleanupItem],
+        isReview: Bool
+    ) -> String? {
+        var firstFatalError: String? = nil
+
+        for item in items {
+            if item.isMainCheckout {
+                NSLog("Skipping worktree cleanup for main checkout: \(item.worktreePath) (branch: \(item.branch))")
+                continue
+            }
+
+            if isReview {
+                guard FileManager.default.fileExists(atPath: item.worktreePath) else { continue }
+                do {
+                    try FileManager.default.removeItem(atPath: item.worktreePath)
+                    NSLog("[SessionService] Cleaned up review clone: \(item.worktreePath)")
+                } catch {
+                    let msg = "Failed to remove review clone: \(error.localizedDescription)"
+                    NSLog("[SessionService] \(msg) (\(item.worktreePath))")
+                    if firstFatalError == nil { firstFatalError = msg }
+                }
+                continue
+            }
+
+            // Remove our hook config from settings.local.json before deleting the worktree
+            HookConfigGenerator.removeHookConfig(worktreePath: item.worktreePath)
+
+            var gitRemoveFailed = false
+            do {
+                let removeResult = try runShellSync(["git", "-C", item.repoPath, "worktree", "remove", "--force", item.worktreePath])
+                NSLog("Removed worktree: \(item.worktreePath) \(removeResult)")
+
+                if !SessionWorktree.isProtectedBranch(item.branch) {
+                    do {
+                        _ = try runShellSync(["git", "-C", item.repoPath, "branch", "-D", item.branch])
+                    } catch {
+                        NSLog("[SessionService] Failed to delete branch \(item.branch): \(error)")
+                    }
+                }
+
+                do {
+                    _ = try runShellSync(["git", "-C", item.repoPath, "worktree", "prune"])
+                } catch {
+                    NSLog("[SessionService] Failed to prune worktree metadata: \(error)")
+                }
+            } catch {
+                gitRemoveFailed = true
+                NSLog("[SessionService] Failed to remove worktree \(item.worktreePath): \(error)")
+            }
+
+            // Either way, ensure the directory is gone.
+            if FileManager.default.fileExists(atPath: item.worktreePath) {
+                do {
+                    try FileManager.default.removeItem(atPath: item.worktreePath)
+                } catch {
+                    NSLog("[SessionService] Failed to remove directory \(item.worktreePath): \(error)")
+                    if gitRemoveFailed && firstFatalError == nil {
+                        firstFatalError = "Could not remove worktree at \(item.worktreePath): \(error.localizedDescription)"
+                    }
+                }
+            }
+        }
+
+        return firstFatalError
+    }
+
+    /// Synchronous shell helper safe to call from any thread. Used by
+    /// `performDiskCleanup` while running on a detached task.
+    nonisolated static func runShellSync(_ args: [String]) throws -> String {
+        let process = Process()
+        let stdoutPipe = Pipe()
+        let stderrPipe = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = args
+        process.environment = ShellEnvironment.shared.env
+        process.standardOutput = stdoutPipe
+        process.standardError = stderrPipe
+        try process.run()
+        process.waitUntilExit()
+        let stdout = String(data: stdoutPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        let stderr = String(data: stderrPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        guard process.terminationStatus == 0 else {
+            throw NSError(domain: "SessionService", code: Int(process.terminationStatus),
+                          userInfo: [NSLocalizedDescriptionKey: stderr.isEmpty ? stdout : stderr])
+        }
+        return stdout
     }
 
     // MARK: - Worktree Safety Checks

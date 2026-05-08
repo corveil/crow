@@ -134,7 +134,8 @@ enum DeleteSessionMessageBuilder {
 // MARK: - Bulk Delete Sessions Alert
 
 /// View modifier that attaches a bulk delete-sessions confirmation alert.
-/// Iterates `selectedIDs` serially through `appState.onDeleteSession`.
+/// Fans out `selectedIDs` concurrently through `appState.onDeleteSession` so
+/// the UI doesn't wait N×single-delete to repaint.
 struct BulkDeleteSessionsAlert: ViewModifier {
     @Binding var isPresented: Bool
     let selectedIDs: Set<UUID>
@@ -147,14 +148,22 @@ struct BulkDeleteSessionsAlert: ViewModifier {
             Button(buttonLabel, role: .destructive) {
                 let snapshot = sortedSnapshot
                 Task {
+                    // Fan each delete out as its own Task so they run concurrently.
+                    // SessionService.deleteSession yields the main actor while its
+                    // disk/git cleanup runs on a detached task, so all selected
+                    // sessions clean up in parallel rather than serially.
+                    var tasks: [Task<Void, Never>] = []
                     for id in snapshot {
-                        do {
-                            try await appState.onDeleteSession?(id)
-                        } catch {
-                            NSLog("Failed to delete session \(id): \(error)")
-                        }
+                        tasks.append(Task {
+                            do {
+                                try await appState.onDeleteSession?(id)
+                            } catch {
+                                NSLog("Failed to delete session \(id): \(error)")
+                            }
+                        })
                     }
-                    await MainActor.run { onCompletion() }
+                    for t in tasks { await t.value }
+                    onCompletion()
                 }
             }
         } message: {

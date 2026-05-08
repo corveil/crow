@@ -254,6 +254,15 @@ public final class AppState {
     /// Must be cleaned up when a session is deleted (see `SessionService.deleteSession`).
     public var isMarkingInReview: [UUID: Bool] = [:]
 
+    /// Sessions whose async deletion (worktree teardown, branch removal, persistence)
+    /// is currently in progress. Set on the main actor at the start of
+    /// `SessionService.deleteSession` and cleared when the session is fully removed.
+    public var isDeletingSession: [UUID: Bool] = [:]
+
+    /// Most recent delete-cleanup error for a session, surfaced inline on the row
+    /// so failures aren't silent. Auto-cleared after a short delay or on retry.
+    public var sessionDeletionError: [UUID: String] = [:]
+
     /// Called to open a session's primary worktree in VS Code.
     public var onOpenInVSCode: ((UUID) -> Void)?
 

@@ -198,6 +198,7 @@ public struct SessionDetailView: View {
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
+                    .disabled(appState.isDeletingSession[session.id] == true)
                 }
             }
             .padding(.horizontal, 16)

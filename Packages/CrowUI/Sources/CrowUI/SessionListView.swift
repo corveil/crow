@@ -132,6 +132,7 @@ public struct SessionListView: View {
                         } label: {
                             Label("Delete", systemImage: "trash")
                         }
+                        .disabled(appState.isDeletingSession[session.id] == true)
                     }
                 }
             }
@@ -255,6 +256,8 @@ public struct SessionListView: View {
 
     @ViewBuilder
     private func sessionContextMenu(_ session: Session) -> some View {
+        let deleting = appState.isDeletingSession[session.id] == true
+
         if session.status == .active,
            session.ticketURL != nil,
            session.provider == .github {
@@ -263,7 +266,7 @@ public struct SessionListView: View {
             } label: {
                 Label("Mark as In Review", systemImage: "eye.circle")
             }
-            .disabled(appState.isMarkingInReview[session.id] == true)
+            .disabled(appState.isMarkingInReview[session.id] == true || deleting)
         }
 
         if session.status == .active || session.status == .inReview {
@@ -272,6 +275,7 @@ public struct SessionListView: View {
             } label: {
                 Label("Mark as Completed", systemImage: "checkmark.circle")
             }
+            .disabled(deleting)
         }
 
         Button(role: .destructive) {
@@ -279,6 +283,7 @@ public struct SessionListView: View {
         } label: {
             Label("Delete", systemImage: "trash")
         }
+        .disabled(deleting)
     }
 
     private func filteredSessions(_ sessions: [Session]) -> [Session] {
@@ -461,6 +466,14 @@ struct SessionRow: View {
         appState.terminals(for: session.id).contains { $0.backend == .tmux }
     }
 
+    private var isDeleting: Bool {
+        appState.isDeletingSession[session.id] == true
+    }
+
+    private var deletionError: String? {
+        appState.sessionDeletionError[session.id]
+    }
+
     var body: some View {
         HStack(spacing: 8) {
             if isSelectionMode {
@@ -471,9 +484,11 @@ struct SessionRow: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(isChecked ? "Deselect \(session.name)" : "Select \(session.name)")
+                .disabled(isDeleting)
             }
 
             rowContent
+                .opacity(isDeleting ? 0.55 : 1.0)
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
@@ -506,6 +521,7 @@ struct SessionRow: View {
         }
         .animation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true), value: needsAttention)
         .animation(.easeInOut(duration: 0.2), value: appState.hideSessionDetails)
+        .animation(.easeInOut(duration: 0.2), value: isDeleting)
         .padding(.vertical, 1)
     }
 
@@ -521,7 +537,19 @@ struct SessionRow: View {
                     RemoteControlBadge(compact: true)
                 }
                 Spacer()
-                statusIndicator
+                if isDeleting {
+                    ProgressView()
+                        .controlSize(.small)
+                        .accessibilityLabel("Deleting session")
+                } else if let deletionError {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.red)
+                        .font(.caption)
+                        .help("Delete failed: \(deletionError)")
+                        .accessibilityLabel("Delete failed: \(deletionError)")
+                } else {
+                    statusIndicator
+                }
             }
 
             // Row 2: Ticket title (if any)
