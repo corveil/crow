@@ -126,7 +126,24 @@ Use this format for the review:
 | Green | Consider items |
 
 **Recommendation:** [Approve / Request Changes / Comment — with reasoning]
+
+---
+
+[🤖 Reviewed by Crow via Claude Code](https://github.com/radiusmethod/crow)
 ```
+
+### Step 5b: Attribution (REQUIRED)
+
+The review body passed to `gh pr review --body` MUST end with a blank line followed by exactly this line:
+
+```
+[🤖 Reviewed by Crow via Claude Code](https://github.com/radiusmethod/crow)
+```
+
+- Do not modify the link text.
+- Do not modify the URL — the link target is always `https://github.com/radiusmethod/crow`, never a fork or a derived value from the local git remote.
+- Do not wrap the line in additional formatting (no blockquote, no extra brackets, no surrounding text).
+- This line MUST appear in every review body, regardless of whether you used `--approve`, `--request-changes`, or `--comment`.
 
 ### Important Notes
 
