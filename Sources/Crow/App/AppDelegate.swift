@@ -317,6 +317,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             service?.retryTerminal(terminalID: terminalID)
         }
 
+        appState.onRetryReadiness = { [weak service] terminalID in
+            service?.retryReadiness(terminalID: terminalID)
+        }
+
         // Wire terminal tab management
         appState.onAddTerminal = { [weak service] sessionID in
             service?.addTerminal(sessionID: sessionID)
@@ -548,6 +552,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let window = self?.window,
                       let screen = window.screen ?? NSScreen.main else { return }
                 window.maxSize = screen.visibleFrame.size
+            }
+        }
+
+        // Re-arm any tmux readiness watches that timed out while the app was
+        // backgrounded. App Nap throttles Crow.app's child processes (tmux
+        // server, shell wrapper, user shell) and Crow's own polling Task, so
+        // a 30s first-prompt budget can expire even though the shell is fine
+        // — it just hasn't run its first precmd yet. Once the app comes
+        // forward, the throttle lifts and a fresh watch usually succeeds
+        // within a second.
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.sessionService?.reArmStuckReadinessWatches()
             }
         }
 

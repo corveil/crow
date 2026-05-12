@@ -289,7 +289,39 @@ final class SessionService {
             if readiness == .shellReady, currentState < .shellReady {
                 self.appState.terminalReadiness[terminalID] = .shellReady
                 self.launchClaude(terminalID: terminalID)
+            } else if readiness == .timedOut, currentState < .shellReady {
+                // First-prompt watch expired. Do NOT advance to .shellReady or
+                // auto-paste — the shell may still be starting and a paste now
+                // can land in a pane without a live line editor. The UI shows
+                // a Retry affordance; `didBecomeActive` also re-arms us
+                // automatically when the app returns to the foreground.
+                self.appState.terminalReadiness[terminalID] = .timedOut
             }
+        }
+    }
+
+    /// Re-arm the tmux readiness watch for a terminal whose first attempt
+    /// timed out. Reverts AppState back to `.surfaceCreated` so the UI
+    /// transitions out of the Retry overlay, and starts a longer-budget
+    /// watch on the backend. Leaves the terminal in `autoLaunchTerminals`
+    /// so a successful sentinel fire still triggers `launchClaude`.
+    func retryReadiness(terminalID: UUID) {
+        guard let current = appState.terminalReadiness[terminalID] else { return }
+        guard current == .timedOut || current < .shellReady else { return }
+        appState.terminalReadiness[terminalID] = .surfaceCreated
+        TmuxBackend.shared.retryReadinessWatch(id: terminalID)
+    }
+
+    /// Re-arm any tmux readiness watches that have stalled while the app
+    /// was backgrounded. Called from `NSApplication.didBecomeActiveNotification`
+    /// so a user who returns to a long-idle app doesn't have to click
+    /// Retry on every review session.
+    func reArmStuckReadinessWatches() {
+        for (terminalID, state) in appState.terminalReadiness {
+            guard appState.autoLaunchTerminals.contains(terminalID) else { continue }
+            guard state == .timedOut else { continue }
+            NSLog("[SessionService] re-arming stuck tmux readiness watch for terminal=\(terminalID)")
+            retryReadiness(terminalID: terminalID)
         }
     }
 

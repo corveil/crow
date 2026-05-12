@@ -42,6 +42,7 @@ public enum TerminalReadiness: String, Codable, Sendable, Comparable {
     case failed           // createSurface() exhausted retries; UI shows error overlay with Retry
     case uninitialized    // GhosttySurfaceView exists but createSurface() not called
     case surfaceCreated   // ghostty_surface_t exists, shell process spawning
+    case timedOut         // Sentinel never appeared within the readiness budget; UI shows Retry
     case shellReady       // Shell prompt detected (probe file appeared)
     case claudeLaunched   // claude --continue has been sent
 
@@ -50,8 +51,9 @@ public enum TerminalReadiness: String, Codable, Sendable, Comparable {
         case .failed: -1
         case .uninitialized: 0
         case .surfaceCreated: 1
-        case .shellReady: 2
-        case .claudeLaunched: 3
+        case .timedOut: 2
+        case .shellReady: 3
+        case .claudeLaunched: 4
         }
     }
 
