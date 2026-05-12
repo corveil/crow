@@ -9,7 +9,8 @@ struct TerminalReadinessTests {
 
     @Test func statesAreOrdered() {
         #expect(TerminalReadiness.uninitialized < .surfaceCreated)
-        #expect(TerminalReadiness.surfaceCreated < .shellReady)
+        #expect(TerminalReadiness.surfaceCreated < .timedOut)
+        #expect(TerminalReadiness.timedOut < .shellReady)
         #expect(TerminalReadiness.shellReady < .claudeLaunched)
     }
 
@@ -17,12 +18,22 @@ struct TerminalReadinessTests {
         #expect(TerminalReadiness.uninitialized < .claudeLaunched)
         #expect(TerminalReadiness.uninitialized < .shellReady)
         #expect(TerminalReadiness.surfaceCreated < .claudeLaunched)
+        #expect(TerminalReadiness.timedOut < .claudeLaunched)
+    }
+
+    @Test func timedOutGatesAutoPaste() {
+        // The launchClaude guard is `== .shellReady`, so .timedOut must NOT
+        // satisfy `< .shellReady ? false : true` equality checks. Verify the
+        // ordering keeps .timedOut strictly below .shellReady.
+        #expect(TerminalReadiness.timedOut < .shellReady)
+        #expect(TerminalReadiness.timedOut != .shellReady)
     }
 
     @Test func equalStatesAreNotLessThan() {
         #expect(!(TerminalReadiness.uninitialized < .uninitialized))
         #expect(!(TerminalReadiness.shellReady < .shellReady))
         #expect(!(TerminalReadiness.claudeLaunched < .claudeLaunched))
+        #expect(!(TerminalReadiness.timedOut < .timedOut))
     }
 
     // MARK: - Equality
@@ -44,6 +55,7 @@ struct TerminalReadinessTests {
     @Test func rawValues() {
         #expect(TerminalReadiness.uninitialized.rawValue == "uninitialized")
         #expect(TerminalReadiness.surfaceCreated.rawValue == "surfaceCreated")
+        #expect(TerminalReadiness.timedOut.rawValue == "timedOut")
         #expect(TerminalReadiness.shellReady.rawValue == "shellReady")
         #expect(TerminalReadiness.claudeLaunched.rawValue == "claudeLaunched")
     }
@@ -51,7 +63,7 @@ struct TerminalReadinessTests {
     // MARK: - Codable
 
     @Test func codableRoundTrip() throws {
-        let cases: [TerminalReadiness] = [.uninitialized, .surfaceCreated, .shellReady, .claudeLaunched]
+        let cases: [TerminalReadiness] = [.uninitialized, .surfaceCreated, .timedOut, .shellReady, .claudeLaunched]
         let encoder = JSONEncoder()
         let decoder = JSONDecoder()
 

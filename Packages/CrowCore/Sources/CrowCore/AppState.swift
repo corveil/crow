@@ -218,6 +218,10 @@ public final class AppState {
     /// Called when the user clicks "Retry" on a failed terminal surface.
     public var onRetryTerminal: ((UUID) -> Void)?  // receives terminal ID
 
+    /// Called when the user clicks "Retry" on a terminal whose tmux readiness
+    /// watch timed out before the shell signaled it was interactive.
+    public var onRetryReadiness: ((UUID) -> Void)?  // receives terminal ID
+
     /// Called to add a new plain-shell terminal tab to a session.
     public var onAddTerminal: ((UUID) -> Void)?  // receives session ID
 

@@ -335,14 +335,16 @@ public final class TmuxBackend {
     }
 
     private func startReadinessWatch(id: UUID, sentinelPath: String) {
+        startReadinessWatch(id: id, sentinelPath: sentinelPath, timeoutBudget: 30.0)
+    }
+
+    private func startReadinessWatch(id: UUID, sentinelPath: String, timeoutBudget: TimeInterval) {
         let waiter = SentinelWaiter()
         Task { [weak self] in
-            // 30s budget (was 5s). On app restart with many managed terminals
-            // hydrating concurrently, shell startup is CPU-contended and the
-            // wrapper's first precmd may not fire within 5s. The previous
-            // budget left the readiness UI permanently stuck on
-            // "Waiting for terminal..." in that case, with no recovery path.
-            let timeoutBudget: TimeInterval = 30.0
+            // 30s default budget (was 5s). On app restart with many managed
+            // terminals hydrating concurrently, shell startup is CPU-contended
+            // and the wrapper's first precmd may not fire within 5s. Callers
+            // can pass a longer budget for retries (see retryReadinessWatch).
             let elapsed = await waiter.waitForPrompt(
                 sentinelPath: sentinelPath,
                 timeout: timeoutBudget
@@ -356,20 +358,34 @@ public final class TmuxBackend {
                 } else {
                     // Genuine timeout. Most likely the shell is alive but its
                     // startup is pathologically slow (heavy zshrc + concurrent
-                    // hydrate); less likely the wrapper failed to install the
+                    // hydrate, cold tmux server + App Nap on a backgrounded
+                    // app); less likely the wrapper failed to install the
                     // precmd hook (exotic shell) or the shell crashed at start.
-                    // Advance to .shellReady anyway: a stuck "Waiting for
-                    // terminal..." spinner is strictly worse than letting
-                    // launchClaude proceed. If the shell is alive but slow,
-                    // the paste-buffered `claude --continue` will run when the
-                    // shell finally reads its tty. If the shell is dead, the
-                    // pane stays empty (which is the truthful state).
+                    //
+                    // Surface this via `.timedOut` rather than lying about
+                    // readiness. Auto-paste of the launch command relies on a
+                    // live `zle`, so pasting blind here can leave the pane in
+                    // an unrecoverable state (visible command, no Claude TUI,
+                    // bytes consumed by half-initialized subshells). The UI
+                    // renders a Retry affordance for `.timedOut`; the
+                    // `didBecomeActive` observer also re-arms automatically
+                    // when the app returns to the foreground.
                     let ms = Int(timeoutBudget * 1000)
-                    NSLog("[CrowTelemetry tmux:first_prompt_timeout terminal=\(id) budget_ms=\(ms) — advancing readiness anyway]")
-                    self.onReadinessChanged?(id, .shellReady)
+                    NSLog("[CrowTelemetry tmux:first_prompt_timeout terminal=\(id) budget_ms=\(ms)]")
+                    self.onReadinessChanged?(id, .timedOut)
                 }
             }
         }
+    }
+
+    /// Re-arm the readiness watch for a terminal whose first attempt timed
+    /// out. Clears the stale sentinel file (in case the wrapper now writes
+    /// to it asynchronously) and starts a fresh watch with a longer budget.
+    /// Safe to call repeatedly; previous watches resolve independently.
+    public func retryReadinessWatch(id: UUID, timeoutBudget: TimeInterval = 120.0) {
+        guard let sentinelPath = sentinels[id] else { return }
+        try? FileManager.default.removeItem(atPath: sentinelPath)
+        startReadinessWatch(id: id, sentinelPath: sentinelPath, timeoutBudget: timeoutBudget)
     }
 
     private func shellQuote(_ s: String) -> String {

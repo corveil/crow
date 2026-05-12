@@ -124,4 +124,41 @@ struct TmuxBackendTests {
         // TmuxController's loadBufferAndPaste test.
         #expect(binding.windowIndex >= 0)
     }
+
+    @Test func retryReadinessEmitsTimedOutWhenSentinelMissing() async throws {
+        let backend = makeBackend()
+        defer { backend.shutdown() }
+
+        // Register a terminal with trackReadiness=false so the default 30s
+        // watch isn't armed by registerTerminal. The wrapper still touches
+        // the sentinel on first prompt — retryReadinessWatch wipes it before
+        // the new watch begins, so the test deterministically observes a
+        // timeout.
+        let id = UUID()
+        _ = try backend.registerTerminal(
+            id: id, name: "no-watch", cwd: NSHomeDirectory(),
+            command: nil, trackReadiness: false
+        )
+
+        // Capture every readiness event the backend emits for this terminal.
+        // No lock needed — TmuxBackend is @MainActor, the test struct is
+        // @MainActor, and the callback hops back to MainActor before firing,
+        // so all access here is serialized on the main actor.
+        var received: [TerminalReadiness] = []
+        backend.onReadinessChanged = { reportedID, state in
+            guard reportedID == id else { return }
+            received.append(state)
+        }
+
+        // 150ms is short enough that the idle shell won't fire another
+        // precmd while we wait, so the watch will time out.
+        backend.retryReadinessWatch(id: id, timeoutBudget: 0.15)
+
+        // Wait long enough for the watch to resolve and the MainActor hop
+        // to deliver the callback.
+        try await Task.sleep(nanoseconds: 500_000_000)
+
+        #expect(received.contains(.timedOut))
+        #expect(!received.contains(.shellReady))
+    }
 }

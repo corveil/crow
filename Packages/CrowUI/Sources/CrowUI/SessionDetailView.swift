@@ -551,6 +551,32 @@ struct ReadinessAwareTerminal: View {
                 .padding(24)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(CorveilTheme.bgDeep.opacity(0.95))
+            } else if readiness == .timedOut {
+                // Readiness watch expired before the shell signaled it was
+                // interactive. Common on cold tmux start + App Nap on a
+                // backgrounded app + heavy zshrc. The user can retry now, or
+                // the app will retry automatically next time it returns to
+                // the foreground.
+                VStack(spacing: 10) {
+                    Image(systemName: "clock.badge.exclamationmark")
+                        .font(.system(size: 28))
+                        .foregroundStyle(.yellow)
+                    Text("Terminal didn't become ready in time")
+                        .font(.headline)
+                    Text("The shell took longer than expected to start. This usually means the app was backgrounded while a tmux session was warming up.")
+                        .font(.caption)
+                        .foregroundStyle(CorveilTheme.textMuted)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Retry") {
+                        appState.onRetryReadiness?(terminal.id)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.regular)
+                }
+                .padding(24)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(CorveilTheme.bgDeep.opacity(0.95))
             } else if readiness < .shellReady {
                 // Loading overlay while terminal is not yet ready
                 VStack(spacing: 8) {

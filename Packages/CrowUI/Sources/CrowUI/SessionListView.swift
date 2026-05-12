@@ -608,6 +608,16 @@ struct SessionRow: View {
                     .fill(.yellow)
                     .frame(width: 8, height: 8)
                     .accessibilityLabel("Terminal starting")
+            case .timedOut:
+                Circle()
+                    .fill(.yellow)
+                    .frame(width: 8, height: 8)
+                    .overlay(
+                        Circle()
+                            .stroke(.yellow.opacity(0.4), lineWidth: 2)
+                            .scaleEffect(1.6)
+                    )
+                    .accessibilityLabel("Terminal didn't become ready — click to retry")
             case .shellReady:
                 Circle()
                     .fill(.blue)
