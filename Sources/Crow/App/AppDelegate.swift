@@ -433,6 +433,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             self.autoRespondCoordinator?.handle(transitions)
         }
+        tracker.onDeleteSession = { [weak self] id in
+            do {
+                try await self?.appState.onDeleteSession?(id)
+            } catch {
+                print("[IssueTracker] auto-cleanup delete failed for \(id): \(error)")
+            }
+        }
         tracker.start()
         self.issueTracker = tracker
 

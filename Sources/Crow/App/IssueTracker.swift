@@ -36,6 +36,10 @@ final class IssueTracker {
     /// and the auto-respond coordinator.
     var onPRStatusTransitions: (([PRStatusTransition]) -> Void)?
 
+    /// Callback fired to delete a session during auto-cleanup.
+    /// Wired in AppDelegate to call `appState.onDeleteSession`.
+    var onDeleteSession: ((UUID) async -> Void)?
+
     /// Previously seen review request IDs for delta detection.
     private var previousReviewRequestIDs: Set<String> = []
     private var isFirstFetch = true
@@ -347,6 +351,12 @@ final class IssueTracker {
         // sessions that actually need it. Safe for GitLab-only or no-GitHub
         // workspaces — the GitHub branch is gated by candidate count.
         await reconcileMissingPRLinks()
+
+        // Auto-cleanup expired completed/archived sessions. Runs outside
+        // the ghResult block so it fires even without GitHub data. Placed
+        // after auto-complete so freshly completed sessions respect the
+        // full retention window.
+        await autoCleanupExpiredSessions(config: config)
 
         logRefreshSummary(elapsed: Date().timeIntervalSince(startedAt))
     }
@@ -1892,6 +1902,56 @@ final class IssueTracker {
             let name = sessionsByID[decision.sessionID]?.name ?? decision.sessionID.uuidString
             print("[IssueTracker] Review session '\(name)' — \(decision.reason), marking completed")
             appState.onCompleteSession?(decision.sessionID)
+        }
+    }
+
+    // MARK: - Auto-Cleanup
+
+    /// Protected session IDs that must never be deleted by auto-cleanup.
+    /// Includes the manager session and all fixed-UUID virtual tab sessions.
+    nonisolated static let protectedSessionIDs: Set<UUID> = [
+        AppState.managerSessionID,
+        AppState.ticketBoardSessionID,
+        AppState.allowListSessionID,
+        AppState.reviewBoardSessionID,
+        AppState.globalTerminalSessionID,
+    ]
+
+    /// Pure decision function: returns session IDs eligible for auto-cleanup.
+    /// A session is eligible when its status is `.completed` or `.archived`,
+    /// its `updatedAt` is older than the retention cutoff, and its ID is not
+    /// in the protected set.
+    nonisolated static func sessionsEligibleForCleanup(
+        sessions: [Session],
+        retentionHours: Int,
+        now: Date = Date()
+    ) -> [UUID] {
+        let cutoff = now.addingTimeInterval(-Double(retentionHours) * 3600)
+        return sessions.compactMap { session in
+            guard !protectedSessionIDs.contains(session.id) else { return nil }
+            guard session.status == .completed || session.status == .archived else { return nil }
+            guard session.updatedAt < cutoff else { return nil }
+            return session.id
+        }
+    }
+
+    /// Delete completed/archived sessions that have exceeded their retention
+    /// window. Errors are logged per-session by the `onDeleteSession` callback
+    /// and do not abort subsequent deletions.
+    private func autoCleanupExpiredSessions(config: AppConfig) async {
+        guard config.cleanup.enabled else { return }
+
+        let eligible = Self.sessionsEligibleForCleanup(
+            sessions: appState.sessions,
+            retentionHours: config.cleanup.retentionHours
+        )
+        guard !eligible.isEmpty else { return }
+
+        let sessionsByID = Dictionary(uniqueKeysWithValues: appState.sessions.map { ($0.id, $0) })
+        for sessionID in eligible {
+            let name = sessionsByID[sessionID]?.name ?? sessionID.uuidString
+            print("[IssueTracker] Auto-cleanup: deleting session '\(name)' (retention: \(config.cleanup.retentionHours)h)")
+            await onDeleteSession?(sessionID)
         }
     }
 

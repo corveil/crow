@@ -182,6 +182,24 @@ public struct SettingsView: View {
                 .onChange(of: config.telemetry.retentionDays) { _, _ in save() }
                 .disabled(!config.telemetry.enabled)
             }
+
+            Section("Session Cleanup") {
+                Toggle("Auto-delete completed sessions", isOn: $config.cleanup.enabled)
+                    .onChange(of: config.cleanup.enabled) { _, _ in save() }
+                Text("Automatically deletes completed and archived sessions after the retention period. Includes worktree and branch cleanup. Manager and virtual tab sessions are never deleted.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Picker("Retention", selection: $config.cleanup.retentionHours) {
+                    Text("1 hour").tag(1)
+                    Text("1 day").tag(24)
+                    Text("3 days").tag(72)
+                    Text("7 days").tag(168)
+                    Text("30 days").tag(720)
+                }
+                .onChange(of: config.cleanup.retentionHours) { _, _ in save() }
+                .disabled(!config.cleanup.enabled)
+            }
         }
         .formStyle(.grouped)
     }

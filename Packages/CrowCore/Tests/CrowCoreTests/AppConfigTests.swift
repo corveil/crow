@@ -46,6 +46,26 @@ import Testing
     #expect(config.managerAutoPermissionMode == true)
     #expect(config.experimentalTmuxBackend == false)
     #expect(config.attributionTrailers == true)
+    #expect(config.cleanup.enabled == false)
+    #expect(config.cleanup.retentionHours == 24)
+}
+
+@Test func appConfigCleanupRoundTrip() throws {
+    var config = AppConfig()
+    config.cleanup.enabled = true
+    config.cleanup.retentionHours = 72
+
+    let data = try JSONEncoder().encode(config)
+    let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+    #expect(decoded.cleanup.enabled == true)
+    #expect(decoded.cleanup.retentionHours == 72)
+}
+
+@Test func appConfigCleanupDefaultsWhenKeyMissing() throws {
+    let json = #"{"workspaces":[]}"#.data(using: .utf8)!
+    let config = try JSONDecoder().decode(AppConfig.self, from: json)
+    #expect(config.cleanup.enabled == false)
+    #expect(config.cleanup.retentionHours == 24)
 }
 
 @Test func appConfigRemoteControlRoundTrip() throws {

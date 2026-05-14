@@ -14,7 +14,8 @@ struct IssueTrackerCompletionTests {
         status: SessionStatus = .active,
         kind: SessionKind = .work,
         ticketURL: String? = nil,
-        provider: Provider? = .github
+        provider: Provider? = .github,
+        updatedAt: Date = Date()
     ) -> Session {
         Session(
             id: id,
@@ -22,7 +23,8 @@ struct IssueTrackerCompletionTests {
             status: status,
             kind: kind,
             ticketURL: ticketURL,
-            provider: provider
+            provider: provider,
+            updatedAt: updatedAt
         )
     }
 
@@ -305,5 +307,121 @@ struct IssueTrackerCompletionTests {
             prDataComplete: true
         )
         #expect(decisions.isEmpty)
+    }
+
+    // MARK: - Auto-Cleanup
+
+    private func hoursAgo(_ hours: Double) -> Date {
+        Date().addingTimeInterval(-hours * 3600)
+    }
+
+    @Test
+    func completedSessionPastRetentionIsEligible() {
+        let session = makeSession(status: .completed, updatedAt: hoursAgo(25))
+        let eligible = IssueTracker.sessionsEligibleForCleanup(
+            sessions: [session],
+            retentionHours: 24
+        )
+        #expect(eligible == [session.id])
+    }
+
+    @Test
+    func archivedSessionPastRetentionIsEligible() {
+        let session = makeSession(status: .archived, updatedAt: hoursAgo(25))
+        let eligible = IssueTracker.sessionsEligibleForCleanup(
+            sessions: [session],
+            retentionHours: 24
+        )
+        #expect(eligible == [session.id])
+    }
+
+    @Test
+    func completedSessionWithinRetentionIsNotEligible() {
+        let session = makeSession(status: .completed, updatedAt: hoursAgo(23))
+        let eligible = IssueTracker.sessionsEligibleForCleanup(
+            sessions: [session],
+            retentionHours: 24
+        )
+        #expect(eligible.isEmpty)
+    }
+
+    @Test
+    func activeSessionIsNeverEligible() {
+        let session = makeSession(status: .active, updatedAt: hoursAgo(48))
+        let eligible = IssueTracker.sessionsEligibleForCleanup(
+            sessions: [session],
+            retentionHours: 24
+        )
+        #expect(eligible.isEmpty)
+    }
+
+    @Test
+    func pausedSessionIsNeverEligible() {
+        let session = makeSession(status: .paused, updatedAt: hoursAgo(48))
+        let eligible = IssueTracker.sessionsEligibleForCleanup(
+            sessions: [session],
+            retentionHours: 24
+        )
+        #expect(eligible.isEmpty)
+    }
+
+    @Test
+    func inReviewSessionIsNeverEligible() {
+        let session = makeSession(status: .inReview, updatedAt: hoursAgo(48))
+        let eligible = IssueTracker.sessionsEligibleForCleanup(
+            sessions: [session],
+            retentionHours: 24
+        )
+        #expect(eligible.isEmpty)
+    }
+
+    @Test
+    func managerSessionIsProtected() {
+        let session = makeSession(
+            id: AppState.managerSessionID,
+            status: .completed,
+            updatedAt: hoursAgo(48)
+        )
+        let eligible = IssueTracker.sessionsEligibleForCleanup(
+            sessions: [session],
+            retentionHours: 24
+        )
+        #expect(eligible.isEmpty)
+    }
+
+    @Test
+    func virtualTabSessionsAreProtected() {
+        let protectedIDs = [
+            AppState.ticketBoardSessionID,
+            AppState.allowListSessionID,
+            AppState.reviewBoardSessionID,
+            AppState.globalTerminalSessionID,
+        ]
+        let sessions = protectedIDs.map {
+            makeSession(id: $0, status: .completed, updatedAt: hoursAgo(48))
+        }
+        let eligible = IssueTracker.sessionsEligibleForCleanup(
+            sessions: sessions,
+            retentionHours: 24
+        )
+        #expect(eligible.isEmpty)
+    }
+
+    @Test
+    func mixedSessionsReturnsOnlyEligible() {
+        let expired = makeSession(name: "expired", status: .completed, updatedAt: hoursAgo(25))
+        let fresh = makeSession(name: "fresh", status: .completed, updatedAt: hoursAgo(1))
+        let active = makeSession(name: "active", status: .active, updatedAt: hoursAgo(48))
+        let manager = makeSession(
+            id: AppState.managerSessionID,
+            name: "manager",
+            status: .completed,
+            updatedAt: hoursAgo(48)
+        )
+        let eligible = IssueTracker.sessionsEligibleForCleanup(
+            sessions: [expired, fresh, active, manager],
+            retentionHours: 24
+        )
+        #expect(eligible == [expired.id])
     }
 }

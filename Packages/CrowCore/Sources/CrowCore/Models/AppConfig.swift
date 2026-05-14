@@ -21,6 +21,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
     /// that overrides Claude Code's `attribution.commit` to include the crow
     /// session UUID alongside the standard `Co-Authored-By: Claude` trailer.
     public var attributionTrailers: Bool
+    public var cleanup: CleanupConfig
 
     public init(
         workspaces: [WorkspaceInfo] = [],
@@ -32,7 +33,8 @@ public struct AppConfig: Codable, Sendable, Equatable {
         telemetry: TelemetryConfig = TelemetryConfig(),
         autoRespond: AutoRespondSettings = AutoRespondSettings(),
         experimentalTmuxBackend: Bool = false,
-        attributionTrailers: Bool = true
+        attributionTrailers: Bool = true,
+        cleanup: CleanupConfig = CleanupConfig()
     ) {
         self.workspaces = workspaces
         self.defaults = defaults
@@ -44,6 +46,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         self.autoRespond = autoRespond
         self.experimentalTmuxBackend = experimentalTmuxBackend
         self.attributionTrailers = attributionTrailers
+        self.cleanup = cleanup
     }
 
     public init(from decoder: Decoder) throws {
@@ -58,10 +61,11 @@ public struct AppConfig: Codable, Sendable, Equatable {
         autoRespond = try container.decodeIfPresent(AutoRespondSettings.self, forKey: .autoRespond) ?? AutoRespondSettings()
         experimentalTmuxBackend = try container.decodeIfPresent(Bool.self, forKey: .experimentalTmuxBackend) ?? false
         attributionTrailers = try container.decodeIfPresent(Bool.self, forKey: .attributionTrailers) ?? true
+        cleanup = try container.decodeIfPresent(CleanupConfig.self, forKey: .cleanup) ?? CleanupConfig()
     }
 
     private enum CodingKeys: String, CodingKey {
-        case workspaces, defaults, notifications, sidebar, remoteControlEnabled, managerAutoPermissionMode, telemetry, autoRespond, experimentalTmuxBackend, attributionTrailers
+        case workspaces, defaults, notifications, sidebar, remoteControlEnabled, managerAutoPermissionMode, telemetry, autoRespond, experimentalTmuxBackend, attributionTrailers, cleanup
     }
 }
 
@@ -259,5 +263,18 @@ public struct TelemetryConfig: Codable, Sendable, Equatable {
         self.enabled = enabled
         self.port = port
         self.retentionDays = retentionDays
+    }
+}
+
+/// Auto-cleanup settings for completed and archived sessions.
+public struct CleanupConfig: Codable, Sendable, Equatable {
+    /// Whether auto-cleanup is enabled. Disabled by default.
+    public var enabled: Bool
+    /// Hours to retain completed/archived sessions before deletion.
+    public var retentionHours: Int
+
+    public init(enabled: Bool = false, retentionHours: Int = 24) {
+        self.enabled = enabled
+        self.retentionHours = retentionHours
     }
 }
