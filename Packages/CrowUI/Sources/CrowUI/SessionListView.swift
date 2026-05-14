@@ -452,6 +452,10 @@ struct SessionRow: View {
         appState.hookState(for: session.id).claudeState
     }
 
+    private var sessionLabels: [String] {
+        appState.labels(forSession: session)
+    }
+
     /// Readiness of the primary terminal for this session.
     private var terminalReadiness: TerminalReadiness? {
         let terminals = appState.terminals(for: session.id)
@@ -566,6 +570,11 @@ struct SessionRow: View {
                     .font(.caption2)
                     .foregroundStyle(CorveilTheme.textMuted)
                     .lineLimit(1)
+            }
+
+            // Row 3.5: Labels
+            if !appState.hideSessionDetails, !sessionLabels.isEmpty {
+                LabelPillsView(labels: sessionLabels, maxVisible: 2)
             }
 
             // Row 4: Issue badge + PR badge + Claude state

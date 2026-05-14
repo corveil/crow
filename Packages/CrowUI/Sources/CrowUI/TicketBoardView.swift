@@ -499,23 +499,7 @@ struct TicketCard: View {
     }
 
     private var labelRow: some View {
-        HStack(spacing: 4) {
-            ForEach(issue.labels.prefix(3), id: \.self) { label in
-                Text(label)
-                    .font(.system(size: 10))
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(CorveilTheme.gold.opacity(0.08))
-                    .foregroundStyle(isDone ? CorveilTheme.textMuted : CorveilTheme.textSecondary)
-                    .overlay(Capsule().strokeBorder(CorveilTheme.borderSubtle, lineWidth: 0.5))
-                    .clipShape(Capsule())
-            }
-            if issue.labels.count > 3 {
-                Text("+\(issue.labels.count - 3)")
-                    .font(.system(size: 10))
-                    .foregroundStyle(CorveilTheme.textMuted)
-            }
-        }
+        LabelPillsView(labels: issue.labels, maxVisible: 3, muted: isDone)
     }
 
     private var statusBadge: some View {

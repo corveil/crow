@@ -172,3 +172,38 @@ public struct CapsuleBadge: View {
             .clipShape(Capsule())
     }
 }
+
+// MARK: - Label Pills
+
+/// Reusable horizontal row of label capsules with overflow count.
+public struct LabelPillsView: View {
+    let labels: [String]
+    var maxVisible: Int
+    var muted: Bool
+
+    public init(labels: [String], maxVisible: Int = 3, muted: Bool = false) {
+        self.labels = labels
+        self.maxVisible = maxVisible
+        self.muted = muted
+    }
+
+    public var body: some View {
+        HStack(spacing: 4) {
+            ForEach(Array(labels.prefix(maxVisible)), id: \.self) { label in
+                Text(label)
+                    .font(.system(size: 10))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(CorveilTheme.gold.opacity(0.08))
+                    .foregroundStyle(muted ? CorveilTheme.textMuted : CorveilTheme.textSecondary)
+                    .overlay(Capsule().strokeBorder(CorveilTheme.borderSubtle, lineWidth: 0.5))
+                    .clipShape(Capsule())
+            }
+            if labels.count > maxVisible {
+                Text("+\(labels.count - maxVisible)")
+                    .font(.system(size: 10))
+                    .foregroundStyle(CorveilTheme.textMuted)
+            }
+        }
+    }
+}

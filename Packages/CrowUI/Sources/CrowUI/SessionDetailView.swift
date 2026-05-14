@@ -21,6 +21,10 @@ public struct SessionDetailView: View {
         appState.links(for: session.id)
     }
 
+    private var sessionLabels: [String] {
+        appState.labels(forSession: session)
+    }
+
     public var body: some View {
         VStack(spacing: 0) {
             sessionHeader
@@ -58,6 +62,11 @@ public struct SessionDetailView: View {
                             .font(.callout)
                             .foregroundStyle(CorveilTheme.textSecondary)
                             .lineLimit(2)
+                    }
+
+                    if !sessionLabels.isEmpty {
+                        LabelPillsView(labels: sessionLabels, maxVisible: 5)
+                            .padding(.top, 2)
                     }
                 }
 

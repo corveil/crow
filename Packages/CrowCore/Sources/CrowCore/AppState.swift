@@ -402,6 +402,30 @@ public final class AppState {
         activeSessions.first { $0.ticketURL == issue.url }
     }
 
+    /// Find the assigned issue linked to a given session (by matching ticket URL).
+    public func assignedIssue(for session: Session) -> AssignedIssue? {
+        guard let url = session.ticketURL else { return nil }
+        return assignedIssues.first { $0.url == url }
+    }
+
+    /// Find the review request linked to a given session (by matching PR link URL).
+    public func reviewRequest(for session: Session) -> ReviewRequest? {
+        guard session.kind == .review else { return nil }
+        guard let prLink = links(for: session.id).first(where: { $0.linkType == .pr }) else { return nil }
+        return reviewRequests.first { $0.url == prLink.url }
+    }
+
+    /// Labels for a session, sourced from its linked AssignedIssue or ReviewRequest.
+    public func labels(forSession session: Session) -> [String] {
+        if let issue = assignedIssue(for: session) {
+            return issue.labels
+        }
+        if let review = reviewRequest(for: session) {
+            return review.labels
+        }
+        return []
+    }
+
     /// Maps `.unknown` project status to `.backlog` for display purposes.
     private func effectiveStatus(_ issue: AssignedIssue) -> TicketStatus {
         issue.projectStatus == .unknown ? .backlog : issue.projectStatus

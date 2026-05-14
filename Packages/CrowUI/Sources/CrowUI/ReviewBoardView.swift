@@ -239,6 +239,10 @@ struct ReviewRow: View {
                             .foregroundStyle(CorveilTheme.textMuted)
                     }
                 }
+
+                if !request.labels.isEmpty {
+                    LabelPillsView(labels: request.labels, maxVisible: 3)
+                }
             }
 
             Spacer()
