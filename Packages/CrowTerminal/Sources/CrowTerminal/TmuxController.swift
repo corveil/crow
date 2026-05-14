@@ -206,6 +206,14 @@ public struct TmuxController: Sendable {
         try run(["paste-buffer", "-b", name, "-t", target])
     }
 
+    /// `tmux send-keys -t <target> <keys...>`. Each entry in `keys` is passed
+    /// as a separate argument (e.g. "Enter", "C-c"). Used by
+    /// `TmuxBackend.sendText` to deliver an Enter *outside* the bracketed-paste
+    /// bracket so prompts that end with `\n` are actually submitted (#264).
+    public func sendKeys(target: String, keys: [String]) throws {
+        try run(["send-keys", "-t", target] + keys)
+    }
+
     public func deleteBuffer(name: String) {
         _ = try? run(["delete-buffer", "-b", name])
     }
