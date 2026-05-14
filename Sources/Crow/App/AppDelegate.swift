@@ -25,6 +25,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var devRoot: String?
     private var appConfig: AppConfig?
 
+    /// Tail of the serial review-kickoff queue. Each call to
+    /// `enqueueReviewKickoff` awaits the previous tail before doing any work,
+    /// so all `createReviewSession` runs are strictly sequential across both
+    /// manual batches and auto-review refreshes. See #266 for the race this
+    /// replaced.
+    private var reviewKickoffTail: Task<Void, Never>?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         installUncaughtExceptionHandler()
 
@@ -51,6 +58,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 "[CrowCrash] uncaught NSException name=\(exception.name.rawValue) " +
                 "reason=\(exception.reason ?? "<nil>")\n\(symbols)"
             )
+        }
+    }
+
+    // MARK: - Review kickoff queue
+
+    /// Enqueue one or more PR URLs for review-session creation, processed
+    /// strictly in order on the main actor. Each batch awaits the prior tail
+    /// before starting, so a user clicking "Start Review" mid-batch (or an
+    /// auto-review refresh landing while a manual batch is in flight) does not
+    /// race the previous batch's `appState` writes.
+    ///
+    /// `selectAfterCreate` is hard-coded false: a kickoff should never yank
+    /// the user's detail-pane focus. New review sessions appear in the sidebar
+    /// and the user clicks in when they're ready. This is the selection policy
+    /// chosen for #266.
+    @MainActor
+    private func enqueueReviewKickoff(_ urls: [String]) {
+        guard !urls.isEmpty, let service = sessionService else { return }
+        let previous = reviewKickoffTail
+        reviewKickoffTail = Task { @MainActor in
+            await previous?.value
+            for url in urls {
+                _ = await service.createReviewSession(prURL: url, selectAfterCreate: false)
+            }
         }
     }
 
@@ -378,18 +409,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.appState.selectedSessionID = AppState.managerSessionID
         }
 
-        // Wire "Start Review" action — creates review session for a PR
+        // Wire "Start Review" action — creates review session for a PR.
+        // Single-PR kickoffs route through the same serial queue as batches so
+        // a rapid double-click can never race two `createReviewSession` calls.
         appState.onStartReview = { [weak self] prURL in
-            guard let self else { return }
-            Task { await self.sessionService?.createReviewSession(prURL: prURL) }
+            self?.enqueueReviewKickoff([prURL])
         }
 
-        // Wire batch "Start Review" action — creates review sessions for multiple PRs in parallel
+        // Wire batch "Start Review" action — N PRs at once.
+        // Previously this spawned one Task per PR (no serialization), which
+        // produced the SwiftUI "reentrant layout" / silent-exit crash in #266
+        // when N concurrent `createReviewSession` calls all reached the final
+        // `appState.selectedSessionID =` write within the same render frame.
         appState.onBatchStartReview = { [weak self] prURLs in
-            guard let self else { return }
-            for url in prURLs {
-                Task { await self.sessionService?.createReviewSession(prURL: url) }
-            }
+            self?.enqueueReviewKickoff(prURLs)
         }
 
         // Start issue tracker
@@ -411,12 +444,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 .map { $0.lowercased() })
             guard !enabledRepos.isEmpty else { return }
 
+            var pendingURLs: [String] = []
             for request in requests {
                 guard request.reviewSessionID == nil,
                       !autoReviewedIDs.contains(request.id),
                       enabledRepos.contains(request.repo.lowercased()) else { continue }
                 autoReviewedIDs.insert(request.id)
-                Task { await self.sessionService?.createReviewSession(prURL: request.url) }
+                pendingURLs.append(request.url)
+            }
+            if !pendingURLs.isEmpty {
+                self.enqueueReviewKickoff(pendingURLs)
             }
         }
         tracker.onAutoCreateRequest = { [weak self] issue in

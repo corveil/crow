@@ -1063,13 +1063,22 @@ final class SessionService {
     // MARK: - Review Session
 
     /// Create a review session for an incoming PR review request.
-    func createReviewSession(prURL: String) async {
+    ///
+    /// Returns the new session's ID on success, or `nil` if the PR URL could not
+    /// be resolved or session creation failed. `selectAfterCreate` defaults to
+    /// false: review kickoff is normally driven by `AppDelegate.enqueueReviewKickoff`
+    /// which intentionally leaves the user's current detail-pane focus alone, so
+    /// new review sessions appear in the sidebar without yanking the view.
+    /// Concurrent writes to `appState.selectedSessionID` from racing kickoffs are
+    /// what produced the SwiftUI reentrant-layout crash in #266.
+    @discardableResult
+    func createReviewSession(prURL: String, selectAfterCreate: Bool = false) async -> UUID? {
         // Parse org/repo and PR number from URL like "https://github.com/org/repo/pull/123"
         let components = prURL.split(separator: "/")
         guard components.count >= 5,
               let prNumber = Int(components.last ?? "") else {
             NSLog("[SessionService] Could not parse PR URL: \(prURL)")
-            return
+            return nil
         }
         let owner = String(components[components.count - 4])
         let repoName = String(components[components.count - 3])
@@ -1081,7 +1090,7 @@ final class SessionService {
             "--json", "title,headRefName,baseRefName,number"
         ) else {
             NSLog("[SessionService] Failed to fetch PR metadata for \(prURL)")
-            return
+            return nil
         }
 
         guard let prData = prOutput.data(using: .utf8),
@@ -1089,13 +1098,13 @@ final class SessionService {
               let prTitle = prJSON["title"] as? String,
               let headBranch = prJSON["headRefName"] as? String else {
             NSLog("[SessionService] Failed to parse PR metadata for \(prURL)")
-            return
+            return nil
         }
 
         // Determine clone path
         guard let devRoot = ConfigStore.loadDevRoot() else {
             NSLog("[SessionService] No devRoot configured")
-            return
+            return nil
         }
         let reviewsDir = (devRoot as NSString).appendingPathComponent("crow-reviews")
         let cloneDirName = "\(repoName)-pr-\(prNumber)"
@@ -1191,9 +1200,12 @@ final class SessionService {
         }
 
         // Select the new session
-        appState.selectedSessionID = session.id
+        if selectAfterCreate {
+            appState.selectedSessionID = session.id
+        }
 
         NSLog("[SessionService] Created review session '\(session.name)' for \(prURL)")
+        return session.id
     }
 
     // MARK: - Review Prompt
