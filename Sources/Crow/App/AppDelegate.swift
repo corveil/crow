@@ -33,7 +33,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var reviewKickoffTail: Task<Void, Never>?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        installUncaughtExceptionHandler()
+        // Must be the very first call so the next exit (graceful or not)
+        // lands somewhere readable. Also redirects stderr so Swift runtime
+        // traps (`fatalError`, `precondition`) and `print` to stderr show up
+        // in the crash log instead of being silently dropped when the app is
+        // launched from Finder.
+        CrashReporter.install()
+
+        // Surface the prior launch's crash (if any) once the app is up.
+        // Deferred via async so it doesn't block first-paint.
+        if let priorCrashLog = CrashReporter.unseenPriorCrashLog() {
+            DispatchQueue.main.async { [weak self] in
+                self?.presentPriorCrashAlert(logURL: priorCrashLog)
+            }
+        }
 
         // Check for devRoot pointer
         if let root = ConfigStore.loadDevRoot() {
@@ -44,21 +57,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Capture ObjC exceptions that would otherwise tear the app down
-    /// silently. The macOS crash reporter handles Mach exceptions / pure
-    /// SIGSEGV on its own, but ObjC exceptions thrown out of AppKit or
-    /// libghostty wrappers can `abort()` without producing a useful .ips
-    /// file. Logging name + reason + symbolicated stack to NSLog routes
-    /// them into Console.app and the unified log so the next reproduction
-    /// of issue #240 (and similar) is debuggable.
-    private func installUncaughtExceptionHandler() {
-        NSSetUncaughtExceptionHandler { exception in
-            let symbols = exception.callStackSymbols.joined(separator: "\n")
-            NSLog(
-                "[CrowCrash] uncaught NSException name=\(exception.name.rawValue) " +
-                "reason=\(exception.reason ?? "<nil>")\n\(symbols)"
-            )
+    /// Show an alert pointing the user at the prior launch's crash log.
+    /// Dismissing acknowledges the prompt; "Reveal in Finder" opens the
+    /// containing directory.
+    private func presentPriorCrashAlert(logURL: URL) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Crow exited unexpectedly last time"
+        alert.informativeText = """
+            A crash log was written to:
+            \(logURL.path)
+            """
+        alert.addButton(withTitle: "Reveal in Finder")
+        alert.addButton(withTitle: "Dismiss")
+        let response = alert.runModal()
+        if response == .alertFirstButtonReturn {
+            NSWorkspace.shared.activateFileViewerSelecting([logURL])
         }
+        CrashReporter.acknowledgePriorCrash()
     }
 
     // MARK: - Review kickoff queue

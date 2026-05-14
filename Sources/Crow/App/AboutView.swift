@@ -1,8 +1,10 @@
+import AppKit
 import CrowUI
 import SwiftUI
 
 struct AboutView: View {
     @State private var copied = false
+    @State private var revealedCrashLogs = false
 
     var body: some View {
         VStack(spacing: 12) {
@@ -45,6 +47,19 @@ struct AboutView: View {
                 .padding(.horizontal, 24)
                 .padding(.vertical, 4)
 
+            // Diagnostics: where signal-level crashes and stderr are logged.
+            Button(action: revealCrashLogs) {
+                HStack(spacing: 4) {
+                    Text("Crash logs")
+                        .font(.caption)
+                    Image(systemName: revealedCrashLogs ? "checkmark" : "folder")
+                        .font(.caption)
+                }
+                .foregroundStyle(revealedCrashLogs ? .green : CorveilTheme.textMuted)
+            }
+            .buttonStyle(.plain)
+            .help(CrashReporter.logDirectory.path)
+
             Text("© \(Calendar.current.component(.year, from: Date())) Radius Method")
                 .font(.caption)
                 .foregroundStyle(CorveilTheme.textMuted)
@@ -75,6 +90,16 @@ struct AboutView: View {
         copied = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
             copied = false
+        }
+    }
+
+    private func revealCrashLogs() {
+        let dir = CrashReporter.logDirectory
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        NSWorkspace.shared.activateFileViewerSelecting([dir])
+        revealedCrashLogs = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            revealedCrashLogs = false
         }
     }
 }
