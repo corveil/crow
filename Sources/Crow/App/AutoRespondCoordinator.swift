@@ -116,13 +116,16 @@ enum AutoRespondPrompts {
         switch transition.kind {
         case .changesRequested:
             let fetchHint: String
+            let reRequestHint: String
             if provider == .gitlab {
                 fetchHint = "Run `glab mr view \(transition.prURL) --comments` to read the review feedback."
+                reRequestHint = "After pushing, re-request review from each reviewer who requested changes by running `glab mr update \(transition.prURL) --reviewer <login>` for each one (the reviewer logins are in the review data you already fetched)."
             } else {
                 let prNumStr = transition.prNumber.map(String.init) ?? "<number>"
                 fetchHint = "Run `gh pr view \(transition.prURL) --json reviews,comments` (and `gh api repos/{owner}/{repo}/pulls/\(prNumStr)/comments` for inline comments) to read the full review feedback."
+                reRequestHint = "After pushing, re-request review from each reviewer who requested changes by running `gh pr edit \(transition.prURL) --add-reviewer <login>` for each one (the reviewer logins are in the review data you already fetched)."
             }
-            return "Crow detected a 'changes requested' review on \(prRef) (\(transition.prURL)). \(fetchHint) Address every reviewer comment in code, commit the fix, and push so the PR updates. If a comment is unclear or you disagree, leave a reply explaining your reasoning instead of changing the code.\n"
+            return "Crow detected a 'changes requested' review on \(prRef) (\(transition.prURL)). \(fetchHint) Address every reviewer comment in code, commit the fix, and push so the PR updates. If a comment is unclear or you disagree, leave a reply explaining your reasoning instead of changing the code. \(reRequestHint)\n"
 
         case .checksFailing:
             let failedSummary: String
