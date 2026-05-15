@@ -10,7 +10,8 @@ public actor ClaudeLauncher {
         session: Session,
         worktrees: [SessionWorktree],
         ticketURL: String?,
-        provider: Provider?
+        provider: Provider?,
+        customInstructions: String? = nil
     ) -> String {
         var lines: [String] = []
         lines.append("/plan")
@@ -64,6 +65,14 @@ public actor ClaudeLauncher {
                 ticketNumber: session.ticketNumber,
                 hasTicket: ticketURL != nil
             )
+        }
+
+        if let instructions = customInstructions,
+           !instructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            lines.append("")
+            lines.append("## Custom Instructions")
+            lines.append("")
+            lines.append(instructions)
         }
 
         return lines.joined(separator: "\n")

@@ -13,6 +13,7 @@ public struct WorkspaceFormView: View {
     @State private var host: String
     @State private var alwaysIncludeText: String
     @State private var autoReviewReposText: String
+    @State private var customInstructionsText: String
 
     private let existingID: UUID?
     private let existingNames: [String]
@@ -33,6 +34,7 @@ public struct WorkspaceFormView: View {
         self._host = State(initialValue: workspace?.host ?? "")
         self._alwaysIncludeText = State(initialValue: workspace?.alwaysInclude.joined(separator: ", ") ?? "")
         self._autoReviewReposText = State(initialValue: workspace?.autoReviewRepos.joined(separator: ", ") ?? "")
+        self._customInstructionsText = State(initialValue: workspace?.customInstructions ?? "")
         self.existingNames = existingNames
         self.onSave = onSave
     }
@@ -79,6 +81,15 @@ public struct WorkspaceFormView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+
+            Section("Custom Instructions") {
+                TextEditor(text: $customInstructionsText)
+                    .font(.body)
+                    .frame(minHeight: 80)
+                Text("Instructions appended to the session prompt (e.g., \"Always run npm test before committing\").")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
         .safeAreaInset(edge: .bottom) {
@@ -96,6 +107,9 @@ public struct WorkspaceFormView: View {
                         .map { $0.trimmingCharacters(in: .whitespaces) }
                         .filter { !$0.isEmpty }
 
+                    let trimmedInstructions = customInstructionsText
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+
                     let ws = WorkspaceInfo(
                         id: existingID ?? UUID(),
                         name: trimmedName,
@@ -103,7 +117,8 @@ public struct WorkspaceFormView: View {
                         cli: provider == "github" ? "gh" : "glab",
                         host: provider == "gitlab" && !host.isEmpty ? host : nil,
                         alwaysInclude: alwaysInclude,
-                        autoReviewRepos: autoReviewRepos
+                        autoReviewRepos: autoReviewRepos,
+                        customInstructions: trimmedInstructions.isEmpty ? nil : trimmedInstructions
                     )
                     onSave(ws)
                     dismiss()
@@ -113,6 +128,6 @@ public struct WorkspaceFormView: View {
             }
             .padding()
         }
-        .frame(width: 440, height: 400)
+        .frame(width: 440, height: 520)
     }
 }

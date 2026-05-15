@@ -115,6 +115,7 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
     public var host: String?          // GitLab host (e.g., "gitlab.example.com")
     public var alwaysInclude: [String] // repos to always list in prompt table
     public var autoReviewRepos: [String] // repos where review requests auto-create a review session
+    public var customInstructions: String? // free-text instructions appended to session prompts
 
     /// The CLI tool name derived from the current `provider` value.
     /// Unlike `cli` (which may be stale from an old config file), this is always correct.
@@ -129,7 +130,8 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
         cli: String = "gh",
         host: String? = nil,
         alwaysInclude: [String] = [],
-        autoReviewRepos: [String] = []
+        autoReviewRepos: [String] = [],
+        customInstructions: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -138,6 +140,7 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
         self.host = host
         self.alwaysInclude = alwaysInclude
         self.autoReviewRepos = autoReviewRepos
+        self.customInstructions = customInstructions
     }
 
     public init(from decoder: Decoder) throws {
@@ -149,10 +152,11 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
         host = try container.decodeIfPresent(String.self, forKey: .host)
         alwaysInclude = try container.decodeIfPresent([String].self, forKey: .alwaysInclude) ?? []
         autoReviewRepos = try container.decodeIfPresent([String].self, forKey: .autoReviewRepos) ?? []
+        customInstructions = try container.decodeIfPresent(String.self, forKey: .customInstructions)
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, provider, cli, host, alwaysInclude, autoReviewRepos
+        case id, name, provider, cli, host, alwaysInclude, autoReviewRepos, customInstructions
     }
 
     /// Characters that are unsafe in directory names (workspace names become directory names).

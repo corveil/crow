@@ -33,7 +33,8 @@ All persistent state lives under `~/Library/Application Support/crow/` (see `Pac
       "name": "RadiusMethod",
       "provider": "github",
       "cli": "gh",
-      "host": null
+      "host": null,
+      "customInstructions": "Always run npm test before committing"
     },
     {
       "id": "uuid",
@@ -61,6 +62,7 @@ All persistent state lives under `~/Library/Application Support/crow/` (see `Pac
 - **`excludeDirs`** — ignored when scanning repos for git worktrees.
 - **`excludeReviewRepos`** — repos to hide from the review board (e.g., `["zarf-dev/zarf"]`). Supports `*` wildcards (e.g., `"zarf-dev/*"`). Matching reviews are filtered out from the board, sidebar badge count, and notifications. Editable in Settings → Automation → Reviews.
 - **`excludeTicketRepos`** — repos to hide from the ticket board (e.g., `["zarf-dev/zarf"]`). Supports `*` wildcards (e.g., `"zarf-dev/*"`). Matching issues are filtered out from the board, pipeline counts, and auto-create candidates. Editable in Settings → Automation → Tickets.
+- **`customInstructions`** — optional free-text instructions appended to the session prompt as a `## Custom Instructions` section. Use this for workspace-specific conventions, e.g., "Always run `npm test` before committing" or "Use the auth middleware in `src/middleware/auth.ts` as a pattern."
 
 For the full set of automation toggles backed by this config, see [automation.md](automation.md).
 

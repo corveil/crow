@@ -192,6 +192,54 @@ import Testing
     #expect(command.contains("'\\''"))
 }
 
+// MARK: - Custom instructions
+
+@Test func generatePromptWithCustomInstructions() async {
+    let launcher = ClaudeLauncher()
+    let session = Session(name: "test-session")
+
+    let prompt = await launcher.generatePrompt(
+        session: session,
+        worktrees: [],
+        ticketURL: nil,
+        provider: nil,
+        customInstructions: "Always run npm test before committing"
+    )
+
+    #expect(prompt.contains("## Custom Instructions"))
+    #expect(prompt.contains("Always run npm test before committing"))
+}
+
+@Test func generatePromptWithoutCustomInstructions() async {
+    let launcher = ClaudeLauncher()
+    let session = Session(name: "test-session")
+
+    let prompt = await launcher.generatePrompt(
+        session: session,
+        worktrees: [],
+        ticketURL: nil,
+        provider: nil,
+        customInstructions: nil
+    )
+
+    #expect(!prompt.contains("## Custom Instructions"))
+}
+
+@Test func generatePromptWithEmptyCustomInstructions() async {
+    let launcher = ClaudeLauncher()
+    let session = Session(name: "test-session")
+
+    let prompt = await launcher.generatePrompt(
+        session: session,
+        worktrees: [],
+        ticketURL: nil,
+        provider: nil,
+        customInstructions: "   \n  "
+    )
+
+    #expect(!prompt.contains("## Custom Instructions"))
+}
+
 // MARK: - Prompt structure
 
 @Test func generatePromptMultipleWorktrees() async {

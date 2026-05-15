@@ -24,13 +24,15 @@ Configuration is at `{devRoot}/.claude/config.json` (managed by the Crow app). T
   "workspaces": {
     "RadiusMethod": {
       "provider": "github",
-      "cli": "gh"
+      "cli": "gh",
+      "customInstructions": "Always run `npm test` before committing."
     },
     "MyGitLab": {
       "provider": "gitlab",
       "cli": "glab",
       "host": "gitlab.example.com",
-      "alwaysInclude": []
+      "alwaysInclude": [],
+      "customInstructions": null
     }
   },
   "defaults": {
@@ -337,7 +339,13 @@ gh issue view https://github.com/org/repo/issues/123 --comments
 ```bash
 gh pr create --title "<summary>" --body "Closes #123" --base main
 ```
+
+## Custom Instructions
+
+{workspace customInstructions text — include verbatim}
 ~~~
+
+If the workspace config contains a non-empty `customInstructions` field, append a `## Custom Instructions` section at the end of the prompt with its contents verbatim. Omit this section entirely if the field is absent, null, or empty.
 
 For GitLab tickets, substitute `glab mr create --title "<summary>" --description "Closes #{number}" --target-branch main` on step 6 (use "merge request" instead of "pull request"). When no ticket number is available, drop the body/description and fall back to `gh pr create --fill` / `glab mr create --fill`.
 
