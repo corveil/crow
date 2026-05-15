@@ -8,7 +8,7 @@ public struct AssignedIssue: Identifiable, Codable, Sendable {
     public var state: String        // "open", "closed"
     public var url: String
     public var repo: String         // "org/repo"
-    public var labels: [String]
+    public var labels: [LabelInfo]
     public var provider: Provider
     /// PR number linked via closing issue references, if any.
     public var prNumber: Int?
@@ -20,7 +20,7 @@ public struct AssignedIssue: Identifiable, Codable, Sendable {
 
     public init(
         id: String, number: Int, title: String, state: String,
-        url: String, repo: String, labels: [String] = [],
+        url: String, repo: String, labels: [LabelInfo] = [],
         provider: Provider, prNumber: Int? = nil, prURL: String? = nil,
         updatedAt: Date? = nil, projectStatus: TicketStatus = .unknown
     ) {

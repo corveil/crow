@@ -139,7 +139,7 @@ public final class AppState {
         if !ignoreReviewLabels.isEmpty {
             let lowerLabels = Set(ignoreReviewLabels.map { $0.lowercased() })
             result = result.filter { request in
-                !request.labels.contains(where: { lowerLabels.contains($0.lowercased()) })
+                !request.labels.contains(where: { lowerLabels.contains($0.name.lowercased()) })
             }
         }
         return result
@@ -372,7 +372,7 @@ public final class AppState {
                 issue.title.lowercased().contains(query)
                 || issue.repo.lowercased().contains(query)
                 || "#\(issue.number)".contains(query)
-                || issue.labels.contains(where: { $0.lowercased().contains(query) })
+                || issue.labels.contains(where: { $0.name.lowercased().contains(query) })
             }
         }
 
@@ -416,7 +416,7 @@ public final class AppState {
     }
 
     /// Labels for a session, sourced from its linked AssignedIssue or ReviewRequest.
-    public func labels(forSession session: Session) -> [String] {
+    public func labels(forSession session: Session) -> [LabelInfo] {
         if let issue = assignedIssue(for: session) {
             return issue.labels
         }

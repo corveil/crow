@@ -13,7 +13,7 @@ import Testing
         state: "open",
         url: "https://github.com/radiusmethod/crow/issues/64",
         repo: "radiusmethod/crow",
-        labels: ["enhancement", "testing"],
+        labels: [LabelInfo(name: "enhancement", color: "a2eeef"), LabelInfo(name: "testing")],
         provider: .github,
         prNumber: 100,
         prURL: "https://github.com/radiusmethod/crow/pull/100",
@@ -26,7 +26,7 @@ import Testing
     #expect(decoded.number == 64)
     #expect(decoded.title == "Expand test coverage")
     #expect(decoded.state == "open")
-    #expect(decoded.labels == ["enhancement", "testing"])
+    #expect(decoded.labels == [LabelInfo(name: "enhancement", color: "a2eeef"), LabelInfo(name: "testing")])
     #expect(decoded.provider == .github)
     #expect(decoded.prNumber == 100)
     #expect(decoded.prURL == "https://github.com/radiusmethod/crow/pull/100")
