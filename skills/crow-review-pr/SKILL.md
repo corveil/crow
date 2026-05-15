@@ -129,7 +129,7 @@ Use this format for the review:
 
 ---
 
-[🤖 Reviewed by Crow via Claude Code](https://github.com/radiusmethod/crow)
+[🐦‍⬛ Reviewed by Crow via Claude Code](https://github.com/radiusmethod/crow)
 ```
 
 ### Step 5b: Attribution (REQUIRED)
@@ -137,7 +137,7 @@ Use this format for the review:
 The review body passed to `gh pr review --body` MUST end with a blank line followed by exactly this line:
 
 ```
-[🤖 Reviewed by Crow via Claude Code](https://github.com/radiusmethod/crow)
+[🐦‍⬛ Reviewed by Crow via Claude Code](https://github.com/radiusmethod/crow)
 ```
 
 - Do not modify the link text.

@@ -8,7 +8,7 @@ import Testing
 
 @Test func crowAttributionReviewLinkIsCanonical() {
     #expect(CrowAttribution.reviewMarkdownLink ==
-            "[🤖 Reviewed by Crow via Claude Code](https://github.com/radiusmethod/crow)")
+            "[🐦‍⬛ Reviewed by Crow via Claude Code](https://github.com/radiusmethod/crow)")
 }
 
 @Test func crowAttributionReviewLinkEmbedsRepoURL() {

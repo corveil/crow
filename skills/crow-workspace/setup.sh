@@ -349,7 +349,7 @@ write_settings_local() {
   cat > "$settings_path" <<EOF
 {
   "attribution": {
-    "commit": "🤖 Generated with Claude Code, orchestrated by Crow\\n\\nCo-Authored-By: Claude <noreply@anthropic.com>\\nCrow-Session: $SESSION_ID"
+    "commit": "🐦‍⬛ Generated with Claude Code, orchestrated by Crow\\n\\nCo-Authored-By: Claude <noreply@anthropic.com>\\nCrow-Session: $SESSION_ID"
   }
 }
 EOF

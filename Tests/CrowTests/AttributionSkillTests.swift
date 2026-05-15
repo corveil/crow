@@ -14,7 +14,7 @@ struct AttributionSkillTests {
 
     private static let canonicalRepoURL = "https://github.com/radiusmethod/crow"
     private static let canonicalReviewLink =
-        "[🤖 Reviewed by Crow via Claude Code](https://github.com/radiusmethod/crow)"
+        "[🐦‍⬛ Reviewed by Crow via Claude Code](https://github.com/radiusmethod/crow)"
 
     /// Walk up from this test source file until we find Package.swift.
     /// Returns the repo root URL.
