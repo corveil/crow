@@ -312,7 +312,7 @@ final class IssueTracker {
             if !ignoreLabels.isEmpty {
                 let lowerLabels = Set(ignoreLabels.map { $0.lowercased() })
                 reviews = reviews.filter { request in
-                    !request.labels.contains(where: { lowerLabels.contains($0.lowercased()) })
+                    !request.labels.contains(where: { lowerLabels.contains($0.name.lowercased()) })
                 }
             }
             let currentIDs = Set(reviews.map(\.id))
@@ -377,7 +377,7 @@ final class IssueTracker {
         }
 
         for issue in issues where issue.state == "open" {
-            let labeled = issue.labels.contains { $0.caseInsensitiveCompare(Self.autoCreateLabel) == .orderedSame }
+            let labeled = issue.labels.contains { $0.name.caseInsensitiveCompare(Self.autoCreateLabel) == .orderedSame }
             guard labeled else { continue }
             guard !autoCreateInFlight.contains(issue.url) else { continue }
 
@@ -533,7 +533,7 @@ final class IssueTracker {
           ... on Issue {
             number title url state updatedAt
             repository { nameWithOwner }
-            labels(first: 20) { nodes { name } }
+            labels(first: 20) { nodes { name color } }
             projectItems(first: 10) {
               nodes {
                 fieldValueByName(name: "Status") {
@@ -569,7 +569,7 @@ final class IssueTracker {
           ... on Issue {
             number title url state updatedAt
             repository { nameWithOwner }
-            labels(first: 20) { nodes { name } }
+            labels(first: 20) { nodes { name color } }
           }
         }
       }
@@ -579,7 +579,7 @@ final class IssueTracker {
             number title url isDraft updatedAt headRefName baseRefName state
             author { login }
             repository { nameWithOwner }
-            labels(first: 20) { nodes { name } }
+            labels(first: 20) { nodes { name color } }
           }
         }
       }
@@ -1000,7 +1000,11 @@ final class IssueTracker {
             let state = (node["state"] as? String ?? defaultState).lowercased()
             let repoName = (node["repository"] as? [String: Any])?["nameWithOwner"] as? String ?? ""
             let labels = ((node["labels"] as? [String: Any])?["nodes"] as? [[String: Any]])?
-                .compactMap { $0["name"] as? String } ?? []
+                .compactMap { labelNode -> LabelInfo? in
+                    guard let name = labelNode["name"] as? String else { return nil }
+                    let color = labelNode["color"] as? String
+                    return LabelInfo(name: name, color: color)
+                } ?? []
 
             var updatedAt: Date?
             if let dateStr = node["updatedAt"] as? String {
@@ -1114,7 +1118,11 @@ final class IssueTracker {
             let baseBranch = node["baseRefName"] as? String ?? ""
             let updatedAt = (node["updatedAt"] as? String).flatMap { dateFormatter.date(from: $0) }
             let labels = ((node["labels"] as? [String: Any])?["nodes"] as? [[String: Any]])?
-                .compactMap { $0["name"] as? String } ?? []
+                .compactMap { labelNode -> LabelInfo? in
+                    guard let name = labelNode["name"] as? String else { return nil }
+                    let color = labelNode["color"] as? String
+                    return LabelInfo(name: name, color: color)
+                } ?? []
 
             requests.append(ReviewRequest(
                 id: "github:\(repoName)#\(number)",
@@ -1982,7 +1990,7 @@ final class IssueTracker {
                   let url = item["web_url"] as? String else { return nil }
 
             let state = item["state"] as? String ?? "opened"
-            let labels = item["labels"] as? [String] ?? []
+            let labels = (item["labels"] as? [String] ?? []).map { LabelInfo(name: $0) }
             let refs = item["references"] as? [String: Any]
             let fullRef = refs?["full"] as? String ?? ""
 

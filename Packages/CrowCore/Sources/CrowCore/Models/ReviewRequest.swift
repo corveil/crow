@@ -12,7 +12,7 @@ public struct ReviewRequest: Identifiable, Codable, Sendable {
     public var baseBranch: String
     public var isDraft: Bool
     public var requestedAt: Date?
-    public var labels: [String]
+    public var labels: [LabelInfo]
     public var provider: Provider
     public var reviewSessionID: UUID?  // set if a review session already exists
 
@@ -27,7 +27,7 @@ public struct ReviewRequest: Identifiable, Codable, Sendable {
         baseBranch: String,
         isDraft: Bool = false,
         requestedAt: Date? = nil,
-        labels: [String] = [],
+        labels: [LabelInfo] = [],
         provider: Provider = .github,
         reviewSessionID: UUID? = nil
     ) {

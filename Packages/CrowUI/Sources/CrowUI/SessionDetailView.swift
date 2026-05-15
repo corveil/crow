@@ -21,7 +21,7 @@ public struct SessionDetailView: View {
         appState.links(for: session.id)
     }
 
-    private var sessionLabels: [String] {
+    private var sessionLabels: [LabelInfo] {
         appState.labels(forSession: session)
     }
 

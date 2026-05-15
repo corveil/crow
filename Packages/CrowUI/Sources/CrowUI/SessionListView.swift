@@ -452,7 +452,7 @@ struct SessionRow: View {
         appState.hookState(for: session.id).claudeState
     }
 
-    private var sessionLabels: [String] {
+    private var sessionLabels: [LabelInfo] {
         appState.labels(forSession: session)
     }
 
