@@ -500,6 +500,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Task { await tracker?.markInReview(sessionID: id) }
         }
 
+        appState.onManualRefresh = { [weak tracker] in
+            Task { await tracker?.refresh() }
+        }
+
         // Initialize notification manager
         let notifManager = NotificationManager(appState: appState, settings: config.notifications)
         self.notificationManager = notifManager

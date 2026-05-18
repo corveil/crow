@@ -52,6 +52,8 @@ public struct TicketBoardView: View {
                     .font(.caption)
                     .foregroundStyle(CorveilTheme.textSecondary)
 
+                refreshButton
+
                 selectToggleButton
 
                 SortMenu(sortOrder: $appState.ticketSortOrder)
@@ -63,6 +65,30 @@ public struct TicketBoardView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .background(CorveilTheme.bgSurface)
+    }
+
+    private var refreshButton: some View {
+        Button {
+            appState.onManualRefresh?()
+        } label: {
+            Image(systemName: "arrow.clockwise")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(CorveilTheme.textSecondary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(CorveilTheme.bgCard)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .strokeBorder(CorveilTheme.borderSubtle, lineWidth: 1)
+                        )
+                )
+        }
+        .buttonStyle(.plain)
+        .disabled(appState.isLoadingIssues)
+        .help("Refresh")
+        .accessibilityLabel("Refresh tickets")
     }
 
     private var selectToggleButton: some View {

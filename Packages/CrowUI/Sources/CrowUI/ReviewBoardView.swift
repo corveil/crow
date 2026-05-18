@@ -54,11 +54,37 @@ public struct ReviewBoardView: View {
                 .font(.caption)
                 .foregroundStyle(CorveilTheme.textSecondary)
 
+            refreshButton
+
             selectToggleButton
         }
         .padding(.horizontal)
         .padding(.vertical, 10)
         .background(CorveilTheme.bgSurface)
+    }
+
+    private var refreshButton: some View {
+        Button {
+            appState.onManualRefresh?()
+        } label: {
+            Image(systemName: "arrow.clockwise")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(CorveilTheme.textSecondary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(CorveilTheme.bgCard)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .strokeBorder(CorveilTheme.borderSubtle, lineWidth: 1)
+                        )
+                )
+        }
+        .buttonStyle(.plain)
+        .disabled(appState.isLoadingReviews)
+        .help("Refresh")
+        .accessibilityLabel("Refresh reviews")
     }
 
     private var selectToggleButton: some View {
