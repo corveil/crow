@@ -32,5 +32,18 @@ public struct MainContentView: View {
                 )
             }
         }
+        .background(refreshShortcut)
+    }
+
+    /// Zero-sized button that registers a window-wide ⌘R shortcut so the user
+    /// can force-refresh polled data without waiting for the next auto-poll.
+    private var refreshShortcut: some View {
+        Button("Refresh") {
+            appState.onManualRefresh?()
+        }
+        .keyboardShortcut("r", modifiers: .command)
+        .frame(width: 0, height: 0)
+        .opacity(0)
+        .accessibilityHidden(true)
     }
 }

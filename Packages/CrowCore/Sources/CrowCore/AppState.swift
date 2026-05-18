@@ -115,6 +115,11 @@ public final class AppState {
     /// AppDelegate wires this to its `showSettings()` method.
     public var onShowSettings: (() -> Void)?
 
+    /// Called when the user requests a manual refresh (toolbar button or ⌘R).
+    /// AppDelegate wires this to `IssueTracker.refresh()`, which re-fetches
+    /// issues, review requests, PR status, and runs auto-create/auto-complete.
+    public var onManualRefresh: (() -> Void)?
+
     // MARK: - PR & Tool Status
 
     /// PR status per session (pipeline, review, merge readiness).
