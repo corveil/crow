@@ -65,6 +65,62 @@ extension CorveilTheme {
         let luminance = 0.2126 * linearize(r) + 0.7152 * linearize(g) + 0.0722 * linearize(b)
         return luminance > 0.179 ? Color(hex: 0x1A1D20) : .white
     }
+
+    /// Hue-preserving variant of `hexString` suitable for chip text + border
+    /// against the neutral label-pill surface in the given color scheme.
+    /// Saturation is clamped to a friendly band; lightness is clamped so any
+    /// hue clears WCAG AA against the neutral fill.
+    public static func accentColor(for hexString: String, in scheme: ColorScheme) -> Color {
+        let hex = hexString.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+        guard hex.count == 6, let value = UInt(hex, radix: 16) else {
+            return scheme == .dark ? .white : Color(hex: 0x1A1D20)
+        }
+        let r = Double((value >> 16) & 0xFF) / 255
+        let g = Double((value >> 8) & 0xFF) / 255
+        let b = Double(value & 0xFF) / 255
+
+        var (h, s, l) = rgbToHSL(r: r, g: g, b: b)
+        s = min(max(s, 0.40), 0.85)
+        l = scheme == .dark ? max(l, 0.72) : min(l, 0.30)
+
+        let (nr, ng, nb) = hslToRGB(h: h, s: s, l: l)
+        return Color(red: nr, green: ng, blue: nb)
+    }
+
+    private static func rgbToHSL(r: Double, g: Double, b: Double) -> (Double, Double, Double) {
+        let maxC = max(r, g, b)
+        let minC = min(r, g, b)
+        let l = (maxC + minC) / 2
+        guard maxC != minC else { return (0, 0, l) }
+        let d = maxC - minC
+        let s = l > 0.5 ? d / (2 - maxC - minC) : d / (maxC + minC)
+        let h: Double
+        switch maxC {
+        case r: h = (g - b) / d + (g < b ? 6 : 0)
+        case g: h = (b - r) / d + 2
+        default: h = (r - g) / d + 4
+        }
+        return (h / 6, s, l)
+    }
+
+    private static func hslToRGB(h: Double, s: Double, l: Double) -> (Double, Double, Double) {
+        guard s != 0 else { return (l, l, l) }
+        let q = l < 0.5 ? l * (1 + s) : l + s - l * s
+        let p = 2 * l - q
+        return (hue2rgb(p, q, h + 1.0 / 3),
+                hue2rgb(p, q, h),
+                hue2rgb(p, q, h - 1.0 / 3))
+    }
+
+    private static func hue2rgb(_ p: Double, _ q: Double, _ t0: Double) -> Double {
+        var t = t0
+        if t < 0 { t += 1 }
+        if t > 1 { t -= 1 }
+        if t < 1.0 / 6 { return p + (q - p) * 6 * t }
+        if t < 1.0 / 2 { return q }
+        if t < 2.0 / 3 { return p + (q - p) * (2.0 / 3 - t) * 6 }
+        return p
+    }
 }
 
 // MARK: - Status Color Extensions
@@ -207,9 +263,12 @@ public struct CapsuleBadge: View {
 // MARK: - Label Pills
 
 /// Reusable horizontal row of label capsules with overflow count.
-/// When labels include color data (GitHub), renders per-label colored pills.
-/// Falls back to the gold theme for labels without color (GitLab).
+/// Renders each label as a neutral-fill chip with a hue-preserving border and
+/// text drawn from the GitHub label color (saturation + lightness clamped per
+/// color scheme so every hue clears WCAG AA against the fill). GitLab labels
+/// without color data fall back to the gold theme accent.
 public struct LabelPillsView: View {
+    @Environment(\.colorScheme) private var colorScheme
     let labels: [LabelInfo]
     var maxVisible: Int
     var muted: Bool
@@ -221,20 +280,21 @@ public struct LabelPillsView: View {
     }
 
     public var body: some View {
+        let fill = colorScheme == .dark ? Color(hex: 0x21262D) : Color(hex: 0xEAEEF2)
         HStack(spacing: 4) {
             ForEach(Array(labels.prefix(maxVisible))) { label in
-                let bgColor = label.color.map { Color(hexString: $0) } ?? CorveilTheme.gold
-                let fgColor: Color = muted
-                    ? CorveilTheme.textMuted
-                    : (label.color.map { CorveilTheme.contrastingTextColor(for: $0) }
-                       ?? CorveilTheme.textSecondary)
+                let accent: Color = label.color
+                    .map { CorveilTheme.accentColor(for: $0, in: colorScheme) }
+                    ?? CorveilTheme.gold
+                let fg: Color = muted ? CorveilTheme.textMuted : accent
+                let stroke: Color = muted ? CorveilTheme.textMuted.opacity(0.35) : accent
                 Text(label.name)
                     .font(.system(size: 10))
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
-                    .background(bgColor.opacity(muted ? 0.05 : 0.15))
-                    .foregroundStyle(fgColor)
-                    .overlay(Capsule().strokeBorder(bgColor.opacity(0.3), lineWidth: 0.5))
+                    .background(fill)
+                    .foregroundStyle(fg)
+                    .overlay(Capsule().strokeBorder(stroke, lineWidth: 1))
                     .clipShape(Capsule())
             }
             if labels.count > maxVisible {
@@ -245,3 +305,35 @@ public struct LabelPillsView: View {
         }
     }
 }
+
+#if DEBUG
+#Preview("Label Pills — Dark & Light") {
+    let samples: [LabelInfo] = [
+        LabelInfo(name: "medium",       color: "FBCA04"),
+        LabelInfo(name: "multi-tenant", color: "0E8A16"),
+        LabelInfo(name: "high",         color: "D93F0B"),
+        LabelInfo(name: "near-white",   color: "F5F5F5"),
+        LabelInfo(name: "near-black",   color: "111111"),
+    ]
+    return VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Dark on bgSurface").font(.caption).foregroundStyle(.white)
+            LabelPillsView(labels: samples, maxVisible: 5)
+            LabelPillsView(labels: samples, maxVisible: 5, muted: true)
+        }
+        .padding()
+        .background(CorveilTheme.bgSurface)
+        .environment(\.colorScheme, .dark)
+
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Light on white").font(.caption)
+            LabelPillsView(labels: samples, maxVisible: 5)
+            LabelPillsView(labels: samples, maxVisible: 5, muted: true)
+        }
+        .padding()
+        .background(Color.white)
+        .environment(\.colorScheme, .light)
+    }
+    .padding()
+}
+#endif
