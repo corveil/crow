@@ -193,7 +193,7 @@ enum QuickActionPrompts {
             if provider == .gitlab {
                 mergeHint = "Run `glab mr view \(prURL)` to verify the MR is in the expected state, then `glab mr merge \(prURL)` to merge. If the project uses a different merge strategy or extra steps, adjust accordingly."
             } else {
-                mergeHint = "Run `\(cli) pr view \(prURL)` to verify the PR is in the expected state, then `\(cli) pr merge \(prURL) --squash --delete-branch` to merge. If the repo uses a different merge strategy, adjust accordingly."
+                mergeHint = "Run `\(cli) pr view \(prURL)` to verify the PR is in the expected state, then `cd \"$TMPDIR\" && \(cli) pr merge \(prURL) --squash --delete-branch` to merge. The `cd` keeps `gh`'s post-merge git cleanup (which runs in the CWD) from tripping when `main` is checked out in another worktree. If the repo uses a different merge strategy, adjust accordingly."
             }
             return "Merge \(prRef) (\(prURL)). \(mergeHint)\n"
         }
