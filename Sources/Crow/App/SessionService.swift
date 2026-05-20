@@ -1106,7 +1106,7 @@ final class SessionService {
         // Fetch PR metadata
         guard let prOutput = try? await shell(
             "gh", "pr", "view", prURL,
-            "--json", "title,headRefName,baseRefName,number"
+            "--json", "title,headRefName,headRefOid,baseRefName,number"
         ) else {
             NSLog("[SessionService] Failed to fetch PR metadata for \(prURL)")
             return nil
@@ -1119,6 +1119,10 @@ final class SessionService {
             NSLog("[SessionService] Failed to parse PR metadata for \(prURL)")
             return nil
         }
+        // `headRefOid` is the SHA the review session is anchored to. Used by
+        // the kickoff guard (AppDelegate) as a fallback re-kick signal when
+        // the PR head advances without an explicit re-request (CROW-290).
+        let headRefOid = prJSON["headRefOid"] as? String
 
         // Determine clone path
         guard let devRoot = ConfigStore.loadDevRoot() else {
@@ -1172,7 +1176,8 @@ final class SessionService {
             name: "review-\(repoName)-\(prNumber)",
             kind: .review,
             ticketTitle: prTitle,
-            provider: .github
+            provider: .github,
+            lastReviewedHeadSha: headRefOid
         )
 
         let worktree = SessionWorktree(

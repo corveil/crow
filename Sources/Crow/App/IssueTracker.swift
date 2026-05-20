@@ -338,6 +338,7 @@ final class IssueTracker {
             autoCompleteFinishedReviews(
                 openReviewPRURLs: Set(reviews.map(\.url)),
                 prsByURL: Dictionary(allKnownPRs.map { ($0.url, $0) }, uniquingKeysWith: Self.mergePRRecords),
+                reviewRequestsByPRURL: Dictionary(reviews.map { ($0.url, $0) }, uniquingKeysWith: { lhs, _ in lhs }),
                 prDataComplete: prDataComplete
             )
 
@@ -576,13 +577,15 @@ final class IssueTracker {
       reviewPRs: search(type: ISSUE, query: $reviewQuery, first: 50) {
         nodes {
           ... on PullRequest {
-            number title url isDraft updatedAt headRefName baseRefName state
+            number title url isDraft updatedAt headRefName headRefOid baseRefName state
             author { login }
             repository { nameWithOwner }
             labels(first: 20) { nodes { name color } }
+            reviews(last: 20) { nodes { author { login } submittedAt state } }
           }
         }
       }
+      viewer { login }
       rateLimit { remaining limit resetAt cost }
     }
     """
@@ -970,9 +973,11 @@ final class IssueTracker {
             projectStatusOverride: .done
         )
         let viewerPRs = parseViewerPRs(dataObj["viewerPRs"] as? [String: Any])
+        let viewerLogin = (dataObj["viewer"] as? [String: Any])?["login"] as? String
         let reviewRequests = parseReviewRequests(
             dataObj["reviewPRs"] as? [String: Any],
-            dateFormatter: dateFormatter
+            dateFormatter: dateFormatter,
+            viewerLogin: viewerLogin
         )
         let rateLimit = parseRateLimit(dataObj["rateLimit"] as? [String: Any])
 
@@ -1101,9 +1106,15 @@ final class IssueTracker {
 
     private func parseReviewRequests(
         _ searchObj: [String: Any]?,
-        dateFormatter: ISO8601DateFormatter
+        dateFormatter: ISO8601DateFormatter,
+        viewerLogin: String?
     ) -> [ReviewRequest] {
         guard let nodes = searchObj?["nodes"] as? [[String: Any]] else { return [] }
+
+        // Only formal verdicts satisfy a review request. COMMENTED/PENDING
+        // do not — gating on those would mis-complete a session before the
+        // viewer has actually approved or requested changes.
+        let satisfyingStates: Set<String> = ["APPROVED", "CHANGES_REQUESTED", "DISMISSED"]
 
         var requests: [ReviewRequest] = []
         for node in nodes {
@@ -1115,6 +1126,7 @@ final class IssueTracker {
             let authorLogin = (node["author"] as? [String: Any])?["login"] as? String ?? ""
             let isDraft = node["isDraft"] as? Bool ?? false
             let headBranch = node["headRefName"] as? String ?? ""
+            let headRefOid = node["headRefOid"] as? String
             let baseBranch = node["baseRefName"] as? String ?? ""
             let updatedAt = (node["updatedAt"] as? String).flatMap { dateFormatter.date(from: $0) }
             let labels = ((node["labels"] as? [String: Any])?["nodes"] as? [[String: Any]])?
@@ -1123,6 +1135,26 @@ final class IssueTracker {
                     let color = labelNode["color"] as? String
                     return LabelInfo(name: name, color: color)
                 } ?? []
+
+            // Latest viewer-authored review timestamp (APPROVED / CHANGES_REQUESTED
+            // / DISMISSED only). Used by `decideReviewCompletions` to detect when
+            // the reviewer has actually submitted a verdict so the session can be
+            // auto-completed before the PR is merged.
+            var viewerLastReviewedAt: Date?
+            if let viewerLogin,
+               let reviewNodes = ((node["reviews"] as? [String: Any])?["nodes"]) as? [[String: Any]] {
+                for review in reviewNodes {
+                    guard let author = (review["author"] as? [String: Any])?["login"] as? String,
+                          author == viewerLogin,
+                          let state = review["state"] as? String,
+                          satisfyingStates.contains(state),
+                          let submittedAtStr = review["submittedAt"] as? String,
+                          let submittedAt = dateFormatter.date(from: submittedAtStr) else { continue }
+                    if viewerLastReviewedAt == nil || submittedAt > viewerLastReviewedAt! {
+                        viewerLastReviewedAt = submittedAt
+                    }
+                }
+            }
 
             requests.append(ReviewRequest(
                 id: "github:\(repoName)#\(number)",
@@ -1136,7 +1168,9 @@ final class IssueTracker {
                 isDraft: isDraft,
                 requestedAt: updatedAt,
                 labels: labels,
-                provider: .github
+                provider: .github,
+                headRefOid: headRefOid,
+                viewerLastReviewedAt: viewerLastReviewedAt
             ))
         }
         // Newest first so stale review requests sink to the bottom
@@ -1809,23 +1843,42 @@ final class IssueTracker {
         return CompletionResult(completions: decisions, floorGuardTriggered: false)
     }
 
-    /// Decide which review sessions should be auto-completed. Requires the
-    /// PR to be present in `prsByURL` with state `MERGED` or `CLOSED` — the
-    /// old "missing from open review queue == done" rule was unsafe under
-    /// partial fetches.
+    /// Decide which review sessions should be auto-completed. Three rules:
+    ///   1. Viewer has submitted a formal review (APPROVED / CHANGES_REQUESTED
+    ///      / DISMISSED) at a time strictly after `session.createdAt`. This
+    ///      closes the round so that an author's subsequent `/refine` +
+    ///      re-request lands as a fresh review request with no linked
+    ///      session, letting the kickoff guard re-fire (CROW-290).
+    ///   2. PR is MERGED — terminal state, always complete.
+    ///   3. PR is CLOSED — terminal state, always complete.
+    /// Rules 2 + 3 require the PR to be present in `prsByURL` with the
+    /// matching state and `prDataComplete == true` so the old "missing
+    /// from open review queue == done" rule isn't reintroduced under
+    /// partial fetches. Rule 1 only needs the `ReviewRequest` payload (the
+    /// PR is still open at this point so it's always present in `reviewRequestsByPRURL`).
     nonisolated static func decideReviewCompletions(
         reviewSessions: [Session],
         linksBySessionID: [UUID: [SessionLink]],
         openReviewPRURLs: Set<String>,
         prsByURL: [String: ViewerPR],
+        reviewRequestsByPRURL: [String: ReviewRequest],
         prDataComplete: Bool
     ) -> [CompletionDecision] {
-        guard prDataComplete else { return [] }
-
         var decisions: [CompletionDecision] = []
         for session in reviewSessions {
             let sessionLinks = linksBySessionID[session.id] ?? []
             guard let prLink = sessionLinks.first(where: { $0.linkType == .pr }) else { continue }
+
+            // Rule 1: viewer-submitted review after the session was created.
+            if let request = reviewRequestsByPRURL[prLink.url],
+               let reviewedAt = request.viewerLastReviewedAt,
+               reviewedAt > session.createdAt {
+                decisions.append(CompletionDecision(sessionID: session.id, reason: "viewer submitted review"))
+                continue
+            }
+
+            // Rules 2 + 3 — terminal PR states. Require complete data.
+            guard prDataComplete else { continue }
             if openReviewPRURLs.contains(prLink.url) { continue }
             guard let pr = prsByURL[prLink.url] else { continue }
             switch pr.state {
@@ -1889,6 +1942,7 @@ final class IssueTracker {
     private func autoCompleteFinishedReviews(
         openReviewPRURLs: Set<String>,
         prsByURL: [String: ViewerPR],
+        reviewRequestsByPRURL: [String: ReviewRequest],
         prDataComplete: Bool
     ) {
         let activeReviews = appState.sessions.filter { $0.kind == .review && $0.status == .active }
@@ -1902,6 +1956,7 @@ final class IssueTracker {
             linksBySessionID: linksBySessionID,
             openReviewPRURLs: openReviewPRURLs,
             prsByURL: prsByURL,
+            reviewRequestsByPRURL: reviewRequestsByPRURL,
             prDataComplete: prDataComplete
         )
 

@@ -15,6 +15,7 @@ struct IssueTrackerCompletionTests {
         kind: SessionKind = .work,
         ticketURL: String? = nil,
         provider: Provider? = .github,
+        createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) -> Session {
         Session(
@@ -24,7 +25,27 @@ struct IssueTrackerCompletionTests {
             kind: kind,
             ticketURL: ticketURL,
             provider: provider,
+            createdAt: createdAt,
             updatedAt: updatedAt
+        )
+    }
+
+    private func makeReviewRequest(
+        url: String,
+        viewerLastReviewedAt: Date? = nil,
+        headRefOid: String? = nil
+    ) -> ReviewRequest {
+        ReviewRequest(
+            id: "github:foo/bar#9",
+            prNumber: 9,
+            title: "title",
+            url: url,
+            repo: "foo/bar",
+            author: "alice",
+            headBranch: "feature",
+            baseBranch: "main",
+            headRefOid: headRefOid,
+            viewerLastReviewedAt: viewerLastReviewedAt
         )
     }
 
@@ -258,6 +279,7 @@ struct IssueTrackerCompletionTests {
             linksBySessionID: [reviewSession.id: [prLink(sessionID: reviewSession.id, url: prURL)]],
             openReviewPRURLs: [],
             prsByURL: [prURL: makeViewerPR(url: prURL, state: "MERGED")],
+            reviewRequestsByPRURL: [:],
             prDataComplete: true
         )
         #expect(decisions == [
@@ -274,6 +296,7 @@ struct IssueTrackerCompletionTests {
             linksBySessionID: [reviewSession.id: [prLink(sessionID: reviewSession.id, url: prURL)]],
             openReviewPRURLs: [prURL],
             prsByURL: [prURL: makeViewerPR(url: prURL, state: "MERGED")],
+            reviewRequestsByPRURL: [:],
             prDataComplete: true
         )
         #expect(decisions.isEmpty)
@@ -288,6 +311,7 @@ struct IssueTrackerCompletionTests {
             linksBySessionID: [reviewSession.id: [prLink(sessionID: reviewSession.id, url: prURL)]],
             openReviewPRURLs: [],
             prsByURL: [prURL: makeViewerPR(url: prURL, state: "MERGED")],
+            reviewRequestsByPRURL: [:],
             prDataComplete: false
         )
         #expect(decisions.isEmpty)
@@ -304,9 +328,93 @@ struct IssueTrackerCompletionTests {
             linksBySessionID: [reviewSession.id: [prLink(sessionID: reviewSession.id, url: prURL)]],
             openReviewPRURLs: [],
             prsByURL: [:],
+            reviewRequestsByPRURL: [:],
             prDataComplete: true
         )
         #expect(decisions.isEmpty)
+    }
+
+    // MARK: - Viewer-submitted review completes session (CROW-290)
+
+    @Test
+    func reviewSubmittedAfterSessionStartCompletes() {
+        // Reviewer has submitted a verdict (APPROVED) after the session was
+        // created — close the session so a re-request lands as a fresh one.
+        let createdAt = Date().addingTimeInterval(-3600)
+        let reviewSession = makeSession(kind: .review, createdAt: createdAt)
+        let prURL = "https://github.com/foo/bar/pull/9"
+        let request = makeReviewRequest(url: prURL, viewerLastReviewedAt: Date())
+        let decisions = IssueTracker.decideReviewCompletions(
+            reviewSessions: [reviewSession],
+            linksBySessionID: [reviewSession.id: [prLink(sessionID: reviewSession.id, url: prURL)]],
+            openReviewPRURLs: [prURL],
+            prsByURL: [:],
+            reviewRequestsByPRURL: [prURL: request],
+            prDataComplete: true
+        )
+        #expect(decisions == [
+            IssueTracker.CompletionDecision(sessionID: reviewSession.id, reason: "viewer submitted review")
+        ])
+    }
+
+    @Test
+    func reviewSubmittedBeforeSessionStartIgnored() {
+        // Reviewer's last verdict predates this session — that was round 1,
+        // round 2's session is what's active now. Don't complete it.
+        let reviewedAt = Date().addingTimeInterval(-3600)
+        let reviewSession = makeSession(kind: .review, createdAt: Date())
+        let prURL = "https://github.com/foo/bar/pull/9"
+        let request = makeReviewRequest(url: prURL, viewerLastReviewedAt: reviewedAt)
+        let decisions = IssueTracker.decideReviewCompletions(
+            reviewSessions: [reviewSession],
+            linksBySessionID: [reviewSession.id: [prLink(sessionID: reviewSession.id, url: prURL)]],
+            openReviewPRURLs: [prURL],
+            prsByURL: [:],
+            reviewRequestsByPRURL: [prURL: request],
+            prDataComplete: true
+        )
+        #expect(decisions.isEmpty)
+    }
+
+    @Test
+    func reviewWithNoViewerVerdictIgnored() {
+        // PR has reviews from other users, or only viewer COMMENTED reviews.
+        // `viewerLastReviewedAt` is nil because the parser already filters
+        // these out. Decision function should treat that as "not yet reviewed".
+        let reviewSession = makeSession(kind: .review, createdAt: Date().addingTimeInterval(-3600))
+        let prURL = "https://github.com/foo/bar/pull/9"
+        let request = makeReviewRequest(url: prURL, viewerLastReviewedAt: nil)
+        let decisions = IssueTracker.decideReviewCompletions(
+            reviewSessions: [reviewSession],
+            linksBySessionID: [reviewSession.id: [prLink(sessionID: reviewSession.id, url: prURL)]],
+            openReviewPRURLs: [prURL],
+            prsByURL: [:],
+            reviewRequestsByPRURL: [prURL: request],
+            prDataComplete: true
+        )
+        #expect(decisions.isEmpty)
+    }
+
+    @Test
+    func viewerReviewCompletesEvenUnderPartialFetch() {
+        // The viewer-submitted signal only needs the ReviewRequest payload,
+        // which is always live data. It must not be gated on prDataComplete
+        // (that gate exists for the MERGED/CLOSED rule, which has to guard
+        // against missing-PR-as-closed under partial fetches).
+        let reviewSession = makeSession(kind: .review, createdAt: Date().addingTimeInterval(-3600))
+        let prURL = "https://github.com/foo/bar/pull/9"
+        let request = makeReviewRequest(url: prURL, viewerLastReviewedAt: Date())
+        let decisions = IssueTracker.decideReviewCompletions(
+            reviewSessions: [reviewSession],
+            linksBySessionID: [reviewSession.id: [prLink(sessionID: reviewSession.id, url: prURL)]],
+            openReviewPRURLs: [prURL],
+            prsByURL: [:],
+            reviewRequestsByPRURL: [prURL: request],
+            prDataComplete: false
+        )
+        #expect(decisions == [
+            IssueTracker.CompletionDecision(sessionID: reviewSession.id, reason: "viewer submitted review")
+        ])
     }
 
     // MARK: - Auto-Cleanup

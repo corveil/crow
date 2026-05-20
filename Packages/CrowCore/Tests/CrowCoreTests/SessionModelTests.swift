@@ -48,6 +48,41 @@ import Testing
     #expect(decoded.provider == nil)
 }
 
+@Test func sessionBackwardCompatDecodingLastReviewedHeadSha() throws {
+    // Persisted state.json predating CROW-290 has no `lastReviewedHeadSha`.
+    // Decode must succeed and default the field to nil.
+    let id = UUID()
+    let date = Date()
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime]
+    let dateStr = formatter.string(from: date)
+    let json: [String: Any] = [
+        "id": id.uuidString,
+        "name": "legacy",
+        "status": "active",
+        "kind": "review",
+        "createdAt": dateStr,
+        "updatedAt": dateStr,
+    ]
+    let data = try JSONSerialization.data(withJSONObject: json)
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+    let session = try decoder.decode(Session.self, from: data)
+    #expect(session.lastReviewedHeadSha == nil)
+    #expect(session.kind == .review)
+}
+
+@Test func sessionRoundTripsLastReviewedHeadSha() throws {
+    let session = Session(
+        name: "review",
+        kind: .review,
+        lastReviewedHeadSha: "deadbeef"
+    )
+    let data = try JSONEncoder().encode(session)
+    let decoded = try JSONDecoder().decode(Session.self, from: data)
+    #expect(decoded.lastReviewedHeadSha == "deadbeef")
+}
+
 // MARK: - Enum Raw Values
 
 @Test func sessionStatusRawValues() {

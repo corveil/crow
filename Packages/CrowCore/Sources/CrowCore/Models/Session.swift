@@ -16,6 +16,13 @@ public struct Session: Identifiable, Codable, Sendable {
     // prompt dispatched. Gates the launchClaude prompt-vs-`--continue`
     // branch so completed reviews don't restart on app relaunch.
     public var reviewPromptDispatched: Bool
+    // Head SHA of the PR at the time the review session was created or
+    // last re-launched. Used by the kickoff guard as a fallback re-kick
+    // signal when a PR's head advances without an explicit re-request
+    // (e.g. force-push) or before the viewer-submitted-review signal is
+    // observed. Nil for non-review sessions and for legacy persisted
+    // sessions predating this field (CROW-290).
+    public var lastReviewedHeadSha: String?
 
     public init(
         id: UUID = UUID(),
@@ -28,7 +35,8 @@ public struct Session: Identifiable, Codable, Sendable {
         provider: Provider? = nil,
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
-        reviewPromptDispatched: Bool = false
+        reviewPromptDispatched: Bool = false,
+        lastReviewedHeadSha: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -41,6 +49,7 @@ public struct Session: Identifiable, Codable, Sendable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.reviewPromptDispatched = reviewPromptDispatched
+        self.lastReviewedHeadSha = lastReviewedHeadSha
     }
 
     // Backward-compatible decoding: default `kind` to `.work` when missing
@@ -60,5 +69,6 @@ public struct Session: Identifiable, Codable, Sendable {
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)
         reviewPromptDispatched = try container.decodeIfPresent(Bool.self, forKey: .reviewPromptDispatched) ?? true
+        lastReviewedHeadSha = try container.decodeIfPresent(String.self, forKey: .lastReviewedHeadSha)
     }
 }

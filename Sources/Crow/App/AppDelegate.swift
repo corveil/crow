@@ -451,8 +451,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Auto-review: fire on every refresh (including the first) so review
         // requests already pending at app launch are picked up. Idempotent
-        // via an in-flight Set + the persistent `reviewSessionID` cross-ref.
-        var autoReviewedIDs: Set<String> = []
+        // via a (request.id, headRefOid) fingerprint cache + the persistent
+        // `reviewSessionID` cross-ref. The fingerprint keys SHA so that a
+        // PR's next push after a completed review is treated as a fresh
+        // round (CROW-290) instead of being blocked by a stale entry.
+        var autoReviewedFingerprints: Set<String> = []
         tracker.onReviewRequestsRefreshed = { [weak self] requests in
             guard let self else { return }
             let enabledRepos = Set((self.appConfig?.workspaces ?? [])
@@ -462,10 +465,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
             var pendingURLs: [String] = []
             for request in requests {
-                guard request.reviewSessionID == nil,
-                      !autoReviewedIDs.contains(request.id),
-                      enabledRepos.contains(request.repo.lowercased()) else { continue }
-                autoReviewedIDs.insert(request.id)
+                guard enabledRepos.contains(request.repo.lowercased()) else { continue }
+                let fingerprint = "\(request.id)@\(request.headRefOid ?? "")"
+                guard !autoReviewedFingerprints.contains(fingerprint) else { continue }
+
+                // Two kickoff conditions:
+                //   1. No linked session — fresh request, or A's
+                //      viewer-submitted-review path just completed the prior
+                //      session so the cross-ref dropped to nil.
+                //   2. Linked session is still active but its
+                //      `lastReviewedHeadSha` is stale relative to the PR's
+                //      current head — fallback re-kick (force-push, or
+                //      round-2 commits landed before signal A was observed).
+                let linkedSession = request.reviewSessionID.flatMap { id in
+                    self.appState.sessions.first(where: { $0.id == id })
+                }
+                let shaAdvanced = linkedSession != nil
+                    && request.headRefOid != nil
+                    && linkedSession?.lastReviewedHeadSha != request.headRefOid
+                guard request.reviewSessionID == nil || shaAdvanced else { continue }
+
+                // B-fallback: tear down the stale round-1 session so the new
+                // session doesn't double up in `reviewSessions` for the same
+                // PR. The A path doesn't need this — `decideReviewCompletions`
+                // already completed the prior session before this point.
+                if shaAdvanced, let staleID = request.reviewSessionID {
+                    self.appState.onCompleteSession?(staleID)
+                }
+
+                autoReviewedFingerprints.insert(fingerprint)
                 pendingURLs.append(request.url)
             }
             if !pendingURLs.isEmpty {

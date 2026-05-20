@@ -15,6 +15,8 @@ public struct ReviewRequest: Identifiable, Codable, Sendable {
     public var labels: [LabelInfo]
     public var provider: Provider
     public var reviewSessionID: UUID?  // set if a review session already exists
+    public var headRefOid: String?     // PR head commit SHA — used to detect new pushes
+    public var viewerLastReviewedAt: Date?  // viewer's most recent APPROVED/CHANGES_REQUESTED/DISMISSED review timestamp
 
     public init(
         id: String,
@@ -29,7 +31,9 @@ public struct ReviewRequest: Identifiable, Codable, Sendable {
         requestedAt: Date? = nil,
         labels: [LabelInfo] = [],
         provider: Provider = .github,
-        reviewSessionID: UUID? = nil
+        reviewSessionID: UUID? = nil,
+        headRefOid: String? = nil,
+        viewerLastReviewedAt: Date? = nil
     ) {
         self.id = id
         self.prNumber = prNumber
@@ -44,5 +48,7 @@ public struct ReviewRequest: Identifiable, Codable, Sendable {
         self.labels = labels
         self.provider = provider
         self.reviewSessionID = reviewSessionID
+        self.headRefOid = headRefOid
+        self.viewerLastReviewedAt = viewerLastReviewedAt
     }
 }
