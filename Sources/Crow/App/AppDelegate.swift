@@ -95,7 +95,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let previous = reviewKickoffTail
         reviewKickoffTail = Task { @MainActor in
             await previous?.value
-            for url in urls {
+            // Yield between kickoffs so a burst of pending PRs spreads
+            // across run-loop turns and SwiftUI/AppKit can render between
+            // each `createReviewSession` (#293). The first iteration runs
+            // immediately so the single-PR case has no added latency.
+            for (i, url) in urls.enumerated() {
+                if i > 0 { await Task.yield() }
                 _ = await service.createReviewSession(prURL: url, selectAfterCreate: false)
             }
         }
