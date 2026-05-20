@@ -124,41 +124,52 @@ final class SessionService {
         // launches; spec §12). If a .tmux row's re-registration fails (e.g.
         // tmux uninstalled), silently fall back to .ghostty so the user
         // can still use the app.
-        var rehydrationOverwrites: [SessionTerminal] = []
+        //
+        // Each per-terminal rehydration is dispatched as its own @MainActor
+        // task so the run loop can service AppKit/SwiftUI between them.
+        // Previously this loop ran synchronously and pinned the main actor
+        // for seconds on profiles with many persisted .tmux rows (each
+        // call to TmuxBackend.registerTerminal spawns a subprocess) — #293.
         for session in appState.sessions {
-            guard var terminals = appState.terminals[session.id] else { continue }
+            guard let terminals = appState.terminals[session.id] else { continue }
             let isManagerSession = session.id == AppState.managerSessionID
-            for i in terminals.indices {
-                let trackReadiness = !isManagerSession && terminals[i].isManaged
-                let updated = rehydrateTerminalSurface(terminals[i], trackReadiness: trackReadiness)
-                if updated.backend != terminals[i].backend || updated.tmuxBinding != terminals[i].tmuxBinding {
-                    rehydrationOverwrites.append(updated)
+            let sid = session.id
+            for original in terminals {
+                let trackReadiness = !isManagerSession && original.isManaged
+                Task { @MainActor in
+                    let updated = self.rehydrateTerminalSurface(original, trackReadiness: trackReadiness)
+                    self.applyRehydrationResult(sessionID: sid, original: original, updated: updated)
                 }
-                terminals[i] = updated
             }
-            appState.terminals[session.id] = terminals
         }
 
-        if var globals = appState.terminals[AppState.globalTerminalSessionID] {
-            for i in globals.indices {
-                let updated = rehydrateTerminalSurface(globals[i], trackReadiness: false)
-                if updated.backend != globals[i].backend || updated.tmuxBinding != globals[i].tmuxBinding {
-                    rehydrationOverwrites.append(updated)
+        if let globals = appState.terminals[AppState.globalTerminalSessionID] {
+            let sid = AppState.globalTerminalSessionID
+            for original in globals {
+                Task { @MainActor in
+                    let updated = self.rehydrateTerminalSurface(original, trackReadiness: false)
+                    self.applyRehydrationResult(sessionID: sid, original: original, updated: updated)
                 }
-                globals[i] = updated
             }
-            appState.terminals[AppState.globalTerminalSessionID] = globals
         }
+    }
 
-        // Persist any backend / windowIndex changes from re-hydration back
-        // to the store so a subsequent crash doesn't try to re-register
-        // terminals that are already on the fallback backend.
-        if !rehydrationOverwrites.isEmpty {
+    /// Commit the result of a per-terminal rehydration task back to
+    /// `appState.terminals`, locating the row by ID since the array may
+    /// have shifted while the task awaited. If the backend or tmuxBinding
+    /// changed (e.g. .tmux → .ghostty fallback), persist the updated row
+    /// so a subsequent crash doesn't re-attempt the failed backend.
+    @MainActor
+    private func applyRehydrationResult(sessionID: UUID, original: SessionTerminal, updated: SessionTerminal) {
+        if var terminals = appState.terminals[sessionID],
+           let idx = terminals.firstIndex(where: { $0.id == updated.id }) {
+            terminals[idx] = updated
+            appState.terminals[sessionID] = terminals
+        }
+        if updated.backend != original.backend || updated.tmuxBinding != original.tmuxBinding {
             store.mutate { data in
-                for updated in rehydrationOverwrites {
-                    if let i = data.terminals.firstIndex(where: { $0.id == updated.id }) {
-                        data.terminals[i] = updated
-                    }
+                if let i = data.terminals.firstIndex(where: { $0.id == updated.id }) {
+                    data.terminals[i] = updated
                 }
             }
         }
