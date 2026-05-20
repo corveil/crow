@@ -207,9 +207,38 @@ After the LLM resolves names (slug, branch, worktree path, session name), detect
 
 > **IMPORTANT:** All `crow`, `gh`, `glab`, and `git` commands require `dangerouslyDisableSandbox: true`. The `setup.sh` call itself must use `dangerouslyDisableSandbox: true` since it runs these commands internally.
 
+#### Step 0: Pre-fetch ticket (and PR) content
+
+Before writing the prompt file, fetch the ticket title, body, and comments so they can be embedded directly into the `## Ticket` section. This avoids the launched Claude Code session sitting on a `dangerouslyDisableSandbox` permission prompt at startup when it tries to run `gh issue view` itself (issue #295).
+
+Use `dangerouslyDisableSandbox: true` for all of these fetches.
+
+**GitHub:**
+```bash
+gh issue view {ticket_url} --comments
+# Fallback if the above returns empty output (see issue #295):
+gh api repos/{owner}/{repo}/issues/{number}
+gh api repos/{owner}/{repo}/issues/{number}/comments
+```
+
+**GitLab (non-default host):**
+```bash
+GITLAB_HOST={host} glab issue view {number} --repo {org/repo} --comments
+```
+
+**If an existing PR was detected for this ticket**, also fetch the PR view so it can be embedded:
+```bash
+gh pr view {pr_url} --comments
+# Fallback:
+gh api repos/{owner}/{repo}/pulls/{pr_number}
+gh api repos/{owner}/{repo}/issues/{pr_number}/comments
+```
+
+Render the fetched content into the prompt template per the formatting rules in **First Prompt Template** below.
+
 #### Step 1: Write the prompt file
 
-The LLM writes the prompt content (see template below) to a file:
+The LLM writes the prompt content (see template below — with the pre-fetched ticket/PR content embedded) to a file:
 
 ```bash
 mkdir -p {devRoot}/.claude/prompts
@@ -322,14 +351,27 @@ Extract dynamically from first non-heading line of CLAUDE.md or README.md. If no
 
 ## Ticket
 
-IMPORTANT: All gh/glab commands MUST use dangerouslyDisableSandbox: true. They will fail with TLS certificate errors otherwise. Do NOT attempt sandboxed first.
+**{ticket_title}** — {ticket_url}
+
+{ticket_body_verbatim}
+
+### Comments
+
+{rendered_comments_or_no_comments_marker}
+
+---
+
+If you need fresher ticket data later, re-fetch with (all gh/glab commands MUST use dangerouslyDisableSandbox: true — they will fail with TLS certificate errors otherwise, and will prompt for approval):
 
 ```bash
-gh issue view https://github.com/org/repo/issues/123 --comments
+gh issue view {ticket_url} --comments
+# Fallback if the above returns empty output (see issue #295):
+gh api repos/{owner}/{repo}/issues/{number}
+gh api repos/{owner}/{repo}/issues/{number}/comments
 ```
 
 ## Instructions
-1. Study the ticket thoroughly — use dangerouslyDisableSandbox: true for ALL gh/glab commands
+1. Study the ticket above — it has been pre-fetched and embedded. Only re-run gh/glab if you need fresher data; those calls use dangerouslyDisableSandbox: true and will prompt for approval.
 2. Create an implementation plan
 3. Implement the plan
 4. Commit the changes with a descriptive message
@@ -349,40 +391,68 @@ If the workspace config contains a non-empty `customInstructions` field, append 
 
 For GitLab tickets, substitute `glab mr create --title "<summary>" --description "Closes #{number}" --target-branch main` on step 6 (use "merge request" instead of "pull request"). When no ticket number is available, drop the body/description and fall back to `gh pr create --fill` / `glab mr create --fill`.
 
-**When an existing PR was detected**, add this section to the prompt between `## Ticket` and `## Instructions`:
+### Embedding pre-fetched content
+
+Render the content pre-fetched in **Step 0** directly into the template:
+
+- **Ticket body**: insert verbatim — preserve markdown, code fences, line breaks. Do not summarize or reformat.
+- **Comments**: for each comment, render as `**@{login}** ({created_at}):` followed by the comment body, separated by `---` between comments. If there are zero comments, write `_No comments._` in the `### Comments` block.
+- **PR body / PR review comments** (existing-PR variant): same rules as ticket body/comments.
+
+If the pre-fetch fails (network, auth, rate limit), fall back to the prior behavior: leave a short `_(Ticket pre-fetch failed — run the gh command below to retrieve.)_` note in place of the embedded body and proceed. The launched Claude can re-fetch with the documented commands.
+
+**When an existing PR was detected**, add this section to the prompt between `## Ticket` and `## Instructions` (with PR content also pre-fetched in Step 0 and embedded):
 
 ~~~markdown
 ## Existing Pull Request
 
-There is an existing open PR for this issue. Review it before planning:
+**{pr_title}** — {pr_url}
+
+{pr_body_verbatim}
+
+### PR Comments
+
+{rendered_pr_comments_or_no_comments_marker}
+
+---
+
+This workspace is checked out on the PR's branch. Review existing changes with `git log origin/main..HEAD` before adding new work.
+
+If you need fresher PR data later, re-fetch with (dangerouslyDisableSandbox: true):
 
 ```bash
 gh pr view {pr_url} --comments
+# Fallback if the above returns empty:
+gh api repos/{owner}/{repo}/pulls/{pr_number}
+gh api repos/{owner}/{repo}/issues/{pr_number}/comments
 ```
-
-This workspace is checked out on the PR's branch. Review existing changes with `git log origin/main..HEAD` before adding new work.
 ~~~
 
 And update the Instructions section to:
 
 ~~~markdown
 ## Instructions
-1. Review the existing PR and its changes — use dangerouslyDisableSandbox: true for ALL gh/glab commands
-2. Study the ticket thoroughly
-3. Create an implementation plan that builds on the existing work
-4. Implement the plan
-5. Commit the changes with a descriptive message
-6. Push the branch — this updates the existing PR automatically; do NOT open a new one
+1. Review the existing PR and ticket above — both have been pre-fetched and embedded. Use `git log origin/main..HEAD` to see the current branch's changes. Only re-run gh/glab if you need fresher data; those calls use dangerouslyDisableSandbox: true and will prompt for approval.
+2. Create an implementation plan that builds on the existing work
+3. Implement the plan
+4. Commit the changes with a descriptive message
+5. Push the branch — this updates the existing PR automatically; do NOT open a new one
 ~~~
 
-For MyGitLab, add: `7. If any changes to my-project are required, create a new worktree with a feature branch before making modifications`
+For MyGitLab, add: `6. If any changes to my-project are required, create a new worktree with a feature branch before making modifications`
 
 ### CLI Commands for Fetching Issues
+
+The manager uses these in **Step 0** to pre-fetch ticket and PR content. They are also documented in the prompt so the launched Claude can re-run them for fresher data.
 
 **GitHub:**
 ```bash
 gh issue view {url} --comments
 gh pr view {url} --comments
+# Fallbacks if the above return empty (see issue #295):
+gh api repos/{owner}/{repo}/issues/{number}
+gh api repos/{owner}/{repo}/issues/{number}/comments
+gh api repos/{owner}/{repo}/pulls/{pr_number}
 ```
 
 **GitLab (non-default host like gitlab.example.com):**
