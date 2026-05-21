@@ -10,6 +10,7 @@ public struct AutomationSettingsView: View {
     @Binding var managerAutoPermissionMode: Bool
     @Binding var autoRespond: AutoRespondSettings
     @Binding var attributionTrailers: Bool
+    @Binding var autoMergeWatcherEnabled: Bool
     var onSave: (() -> Void)?
 
     @State private var excludeReviewReposText: String
@@ -22,6 +23,7 @@ public struct AutomationSettingsView: View {
         managerAutoPermissionMode: Binding<Bool>,
         autoRespond: Binding<AutoRespondSettings>,
         attributionTrailers: Binding<Bool>,
+        autoMergeWatcherEnabled: Binding<Bool>,
         onSave: (() -> Void)? = nil
     ) {
         self._defaults = defaults
@@ -29,6 +31,7 @@ public struct AutomationSettingsView: View {
         self._managerAutoPermissionMode = managerAutoPermissionMode
         self._autoRespond = autoRespond
         self._attributionTrailers = attributionTrailers
+        self._autoMergeWatcherEnabled = autoMergeWatcherEnabled
         self.onSave = onSave
         self._excludeReviewReposText = State(initialValue: defaults.wrappedValue.excludeReviewRepos.joined(separator: ", "))
         self._ignoreReviewLabelsText = State(initialValue: defaults.wrappedValue.ignoreReviewLabels.joined(separator: ", "))
@@ -103,6 +106,14 @@ public struct AutomationSettingsView: View {
                 Toggle("Add Crow-Session trailer to commits", isOn: $attributionTrailers)
                     .onChange(of: attributionTrailers) { _, _ in onSave?() }
                 Text("Writes a per-worktree .claude/settings.local.json that overrides Claude Code's commit attribution to include a Crow-Session: <uuid> trailer alongside Co-Authored-By: Claude. Applies to new worktrees only.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Auto-merge") {
+                Toggle("Enable crow:merge auto-merge for Crow-authored PRs", isOn: $autoMergeWatcherEnabled)
+                    .onChange(of: autoMergeWatcherEnabled) { _, _ in onSave?() }
+                Text("When a PR linked to a Crow session carries the crow:merge label, Crow enables GitHub native auto-merge with squash + delete branch. Only PRs whose commits include a Crow-Session trailer matching a known session are eligible. GitHub holds the merge until required reviews and checks pass. Off by default.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

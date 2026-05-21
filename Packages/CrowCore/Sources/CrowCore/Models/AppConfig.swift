@@ -21,6 +21,11 @@ public struct AppConfig: Codable, Sendable, Equatable {
     /// that overrides Claude Code's `attribution.commit` to include the crow
     /// session UUID alongside the standard `Co-Authored-By: Claude` trailer.
     public var attributionTrailers: Bool
+    /// When true, the IssueTracker watches for PRs labeled `crow:merge`
+    /// and enables GitHub native auto-merge (squash) — but only on PRs
+    /// authored by Crow (Crow-Session trailer matching a known session).
+    /// Opt-in: defaults to false (CROW-299).
+    public var autoMergeWatcherEnabled: Bool
     public var cleanup: CleanupConfig
 
     public init(
@@ -34,6 +39,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         autoRespond: AutoRespondSettings = AutoRespondSettings(),
         experimentalTmuxBackend: Bool = false,
         attributionTrailers: Bool = true,
+        autoMergeWatcherEnabled: Bool = false,
         cleanup: CleanupConfig = CleanupConfig()
     ) {
         self.workspaces = workspaces
@@ -46,6 +52,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         self.autoRespond = autoRespond
         self.experimentalTmuxBackend = experimentalTmuxBackend
         self.attributionTrailers = attributionTrailers
+        self.autoMergeWatcherEnabled = autoMergeWatcherEnabled
         self.cleanup = cleanup
     }
 
@@ -61,11 +68,12 @@ public struct AppConfig: Codable, Sendable, Equatable {
         autoRespond = try container.decodeIfPresent(AutoRespondSettings.self, forKey: .autoRespond) ?? AutoRespondSettings()
         experimentalTmuxBackend = try container.decodeIfPresent(Bool.self, forKey: .experimentalTmuxBackend) ?? false
         attributionTrailers = try container.decodeIfPresent(Bool.self, forKey: .attributionTrailers) ?? true
+        autoMergeWatcherEnabled = try container.decodeIfPresent(Bool.self, forKey: .autoMergeWatcherEnabled) ?? false
         cleanup = try container.decodeIfPresent(CleanupConfig.self, forKey: .cleanup) ?? CleanupConfig()
     }
 
     private enum CodingKeys: String, CodingKey {
-        case workspaces, defaults, notifications, sidebar, remoteControlEnabled, managerAutoPermissionMode, telemetry, autoRespond, experimentalTmuxBackend, attributionTrailers, cleanup
+        case workspaces, defaults, notifications, sidebar, remoteControlEnabled, managerAutoPermissionMode, telemetry, autoRespond, experimentalTmuxBackend, attributionTrailers, autoMergeWatcherEnabled, cleanup
     }
 }
 

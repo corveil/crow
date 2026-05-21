@@ -50,6 +50,14 @@ PR #214 added two opt-in toggles that let Crow type a follow-up instruction into
 
 Both toggles read from `AutoRespondSettings` in `AppConfig`. The session must have an active Claude Code terminal for the instruction to land.
 
+### Auto-merge
+
+PR #299 added a single toggle that lets Crow enable GitHub's native auto-merge on Crow-authored PRs carrying the `crow:merge` label. Off by default.
+
+- **Enable `crow:merge` auto-merge for Crow-authored PRs** — when on, Crow watches each session's linked PR. If it sees the `crow:merge` label, the commits include a `Crow-Session: <uuid>` trailer matching a known Crow session, and the PR is not in `CONFLICTING`/`CHANGES_REQUESTED`/draft state, Crow runs `gh pr merge --auto --squash --delete-branch`. GitHub holds the merge server-side until required reviews and checks pass; Crow only enables it once per PR (idempotent via `Session.autoMergeEnabledAt`).
+
+Backed by `AppConfig.autoMergeWatcherEnabled`. Hand-written PRs without the Crow trailer are ignored even when labeled. Crow lazily creates the `crow:merge` label in the repo on first observation so repo owners don't need to pre-seed it.
+
 ## Per-PR feature notes
 
 Short descriptions of each shipped automation, in roughly the order they fire during the lifecycle.
@@ -82,6 +90,14 @@ A per-workspace setting (Workspaces → edit workspace → Auto-review). When on
 
 See the **Auto-respond** toggles in the Settings tab section above. Crow watches the PR for review-changed and check-failed transitions on the standard 60-second polling cycle.
 
+### #299 — Auto-merge on `crow:merge` label
+
+When a PR linked to an active Crow session carries the `crow:merge` label, the IssueTracker enables GitHub native auto-merge on the next poll. Eligibility is conjunctive: the label must be present, at least one commit on the PR must carry a `Crow-Session: <uuid>` trailer whose UUID matches a session this Crow instance knows about, and the PR must not be a draft / conflicting / changes-requested. The merge method is hard-defaulted to **squash with branch delete** to match the existing `/merge-pr` quick action.
+
+Crow does not babysit the merge — GitHub queues it server-side and fires once required checks settle. Enablement is one-shot per PR: `Session.autoMergeEnabledAt` is persisted on success, and an in-memory dedupe set protects the gap between dispatch and persistence. Trailer-with-unknown-session is treated as not-Crow-authored (defensive: someone copy-pasting our trailer convention into a hand-written commit should not be able to trigger auto-merge).
+
+Audit trail: each enable writes `[Crow] Auto-merge enabled on <pr-url> (session <uuid>, squash)` to the system log and posts a banner notification.
+
 ### #137 — Session analytics via OpenTelemetry
 
 Claude Code's OpenTelemetry exporter is wired up so each session emits standard OTLP metrics for token counts, tool-call latency, and turn duration. Configuration follows Claude Code's own env vars (e.g. `CLAUDE_CODE_ENABLE_TELEMETRY`, `OTEL_EXPORTER_OTLP_ENDPOINT`); Crow does not collect telemetry itself.
@@ -95,6 +111,7 @@ Claude Code's OpenTelemetry exporter is wired up so each session emits standard 
 | Manager auto-permission decision | `Sources/Crow/App/AppDelegate.swift` (Manager command rebuild)                                    |
 | Auto-create / auto-respond loop  | `Sources/Crow/App/IssueTracker.swift` (60s polling cycle)                                         |
 | Review session auto-start        | `Sources/Crow/App/IssueTracker.swift` + per-workspace flag in `AppConfig`                         |
+| Auto-merge watcher (`crow:merge`)| `Sources/Crow/App/IssueTracker.swift` (`applyAutoMerge`, `extractCrowSessionUUIDs`, `crowAuthored`) |
 
 ## See also
 

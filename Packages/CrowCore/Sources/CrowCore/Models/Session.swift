@@ -23,6 +23,10 @@ public struct Session: Identifiable, Codable, Sendable {
     // observed. Nil for non-review sessions and for legacy persisted
     // sessions predating this field (CROW-290).
     public var lastReviewedHeadSha: String?
+    // Timestamp at which Crow enabled GitHub native auto-merge on the
+    // linked PR (CROW-299). Non-nil means the one-shot enable has already
+    // run; the auto-merge watcher skips this session on subsequent polls.
+    public var autoMergeEnabledAt: Date?
 
     public init(
         id: UUID = UUID(),
@@ -36,7 +40,8 @@ public struct Session: Identifiable, Codable, Sendable {
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
         reviewPromptDispatched: Bool = false,
-        lastReviewedHeadSha: String? = nil
+        lastReviewedHeadSha: String? = nil,
+        autoMergeEnabledAt: Date? = nil
     ) {
         self.id = id
         self.name = name
@@ -50,6 +55,7 @@ public struct Session: Identifiable, Codable, Sendable {
         self.updatedAt = updatedAt
         self.reviewPromptDispatched = reviewPromptDispatched
         self.lastReviewedHeadSha = lastReviewedHeadSha
+        self.autoMergeEnabledAt = autoMergeEnabledAt
     }
 
     // Backward-compatible decoding: default `kind` to `.work` when missing
@@ -70,5 +76,6 @@ public struct Session: Identifiable, Codable, Sendable {
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)
         reviewPromptDispatched = try container.decodeIfPresent(Bool.self, forKey: .reviewPromptDispatched) ?? true
         lastReviewedHeadSha = try container.decodeIfPresent(String.self, forKey: .lastReviewedHeadSha)
+        autoMergeEnabledAt = try container.decodeIfPresent(Date.self, forKey: .autoMergeEnabledAt)
     }
 }

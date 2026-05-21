@@ -526,6 +526,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 print("[IssueTracker] auto-cleanup delete failed for \(id): \(error)")
             }
         }
+        tracker.autoMergeWatcherEnabledProvider = { [weak self] in
+            self?.appConfig?.autoMergeWatcherEnabled ?? false
+        }
+        tracker.onAutoMergeEnabled = { [weak self] sessionID, prURL, number in
+            self?.notificationManager?.notifyAutoMergeEnabled(prURL: prURL, number: number, sessionID: sessionID)
+        }
         tracker.start()
         self.issueTracker = tracker
 
