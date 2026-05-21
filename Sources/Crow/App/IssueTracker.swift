@@ -40,6 +40,19 @@ final class IssueTracker {
     /// Wired in AppDelegate to call `appState.onDeleteSession`.
     var onDeleteSession: ((UUID) async -> Void)?
 
+    /// Reads the latest `AppConfig.autoMergeWatcherEnabled` snapshot on
+    /// every poll. Closure rather than direct AppConfig binding so toggling
+    /// the setting in Settings takes effect on the next refresh without
+    /// re-initializing the tracker. Defaults to a closure that returns
+    /// `false` so the watcher is inert until AppDelegate wires it (CROW-299).
+    var autoMergeWatcherEnabledProvider: () -> Bool = { false }
+
+    /// Fires after Crow has successfully enabled GitHub native auto-merge
+    /// on a PR. Wired in AppDelegate to post the user-facing notification.
+    /// (The durable audit-log line is `NSLog`'d at the call site so it
+    /// lands in Console regardless of notification settings.)
+    var onAutoMergeEnabled: ((UUID, String, Int) -> Void)?
+
     /// Previously seen review request IDs for delta detection.
     private var previousReviewRequestIDs: Set<String> = []
     private var isFirstFetch = true
@@ -53,6 +66,20 @@ final class IssueTracker {
     /// assigned issue. Removed after a successful dispatch (best-effort) so
     /// the trigger is one-shot and visible across machines.
     static let autoCreateLabel = "crow:auto"
+
+    /// Label that opts a PR into GitHub native auto-merge. Crow only acts
+    /// when the PR is Crow-authored (Crow-Session trailer matches a known
+    /// session). One-shot per PR: persisted via `Session.autoMergeEnabledAt`,
+    /// and gated in-process by `autoMergeInFlight` between dispatch and
+    /// persisted update (CROW-299). `nonisolated` so the pure
+    /// `shouldAttemptAutoMerge` helper can read it without main-actor hops.
+    nonisolated static let autoMergeLabel = "crow:merge"
+
+    /// PR URLs we've already started an auto-merge enable attempt for.
+    /// Cleared on failure (so the next poll retries) and effectively frozen
+    /// on success once `Session.autoMergeEnabledAt` is persisted, which
+    /// the gating guard checks first.
+    private var autoMergeInFlight: Set<String> = []
 
     /// Last observed `PRStatus` per session, used to compute transitions.
     /// Populated lazily on first observation; that first poll never fires
@@ -460,6 +487,7 @@ final class IssueTracker {
         let headRefOid: String     // Head commit SHA (empty if unavailable)
         let baseRefName: String
         let repoNameWithOwner: String
+        let labels: [LabelInfo]
         let linkedIssueReferences: [LinkedIssue]
         let checksState: String    // SUCCESS / FAILURE / PENDING / EXPECTED / ERROR / ""
         let failedCheckNames: [String]
@@ -504,6 +532,7 @@ final class IssueTracker {
             headRefOid: winner.headRefOid.isEmpty ? loser.headRefOid : winner.headRefOid,
             baseRefName: winner.baseRefName.isEmpty ? loser.baseRefName : winner.baseRefName,
             repoNameWithOwner: winner.repoNameWithOwner.isEmpty ? loser.repoNameWithOwner : winner.repoNameWithOwner,
+            labels: winner.labels.isEmpty ? loser.labels : winner.labels,
             linkedIssueReferences: winner.linkedIssueReferences.isEmpty ? loser.linkedIssueReferences : winner.linkedIssueReferences,
             checksState: winner.checksState.isEmpty ? loser.checksState : winner.checksState,
             failedCheckNames: winner.failedCheckNames.isEmpty ? loser.failedCheckNames : winner.failedCheckNames,
@@ -550,6 +579,7 @@ final class IssueTracker {
           nodes {
             number url state mergeable reviewDecision isDraft headRefName headRefOid baseRefName
             repository { nameWithOwner }
+            labels(first: 20) { nodes { name color } }
             closingIssuesReferences(first: 5) { nodes { number repository { nameWithOwner } } }
             statusCheckRollup {
               state
@@ -862,6 +892,7 @@ final class IssueTracker {
             headRefOid: headRefOid,
             baseRefName: baseRefName,
             repoNameWithOwner: fallbackSlug,
+            labels: [],
             linkedIssueReferences: [],
             checksState: "",
             failedCheckNames: [],
@@ -941,6 +972,7 @@ final class IssueTracker {
                 headRefOid: headRefOid,
                 baseRefName: baseRefName,
                 repoNameWithOwner: repoName,
+                labels: [],
                 linkedIssueReferences: [],
                 checksState: "",
                 failedCheckNames: [],
@@ -1061,6 +1093,13 @@ final class IssueTracker {
             let baseRefName = node["baseRefName"] as? String ?? ""
             let repoName = (node["repository"] as? [String: Any])?["nameWithOwner"] as? String ?? ""
 
+            let labels = ((node["labels"] as? [String: Any])?["nodes"] as? [[String: Any]])?
+                .compactMap { labelNode -> LabelInfo? in
+                    guard let name = labelNode["name"] as? String else { return nil }
+                    let color = labelNode["color"] as? String
+                    return LabelInfo(name: name, color: color)
+                } ?? []
+
             let linkedNodes = (node["closingIssuesReferences"] as? [String: Any])?["nodes"] as? [[String: Any]] ?? []
             let linkedRefs: [ViewerPR.LinkedIssue] = linkedNodes.compactMap { ref in
                 guard let n = ref["number"] as? Int else { return nil }
@@ -1096,6 +1135,7 @@ final class IssueTracker {
                 headRefOid: headRefOid,
                 baseRefName: baseRefName,
                 repoNameWithOwner: repoName,
+                labels: labels,
                 linkedIssueReferences: linkedRefs,
                 checksState: checksState,
                 failedCheckNames: failedCheckNames,
@@ -1694,6 +1734,165 @@ final class IssueTracker {
         if !transitions.isEmpty {
             onPRStatusTransitions?(transitions)
         }
+
+        applyAutoMerge(viewerPRs: viewerPRs)
+    }
+
+    // MARK: - Auto-Merge Watcher (CROW-299)
+
+    /// Pattern matching a Crow-Session commit trailer line. Anchored to
+    /// line start (multiline) so trailing footers are required, not just
+    /// anywhere in the body. The captured group is the UUID string.
+    /// `nonisolated` because it's consumed from the `nonisolated static`
+    /// extraction helper (which is in turn called by unit tests).
+    nonisolated private static let crowSessionTrailerPattern = #"^Crow-Session:\s*([0-9A-Fa-f-]{36})\s*$"#
+
+    /// Extract every Crow-Session UUID from a commit message. Returns an
+    /// empty array when no trailers match. Pure for testability. Compiles
+    /// the regex per call — NSRegularExpression isn't trivially Sendable
+    /// across `nonisolated` boundaries in Swift 6, and the cost is
+    /// negligible (only called on PRs entering the auto-merge flow).
+    nonisolated static func extractCrowSessionUUIDs(from message: String) -> [UUID] {
+        guard let regex = try? NSRegularExpression(
+            pattern: crowSessionTrailerPattern,
+            options: [.anchorsMatchLines]
+        ) else { return [] }
+        let range = NSRange(message.startIndex..., in: message)
+        var result: [UUID] = []
+        regex.enumerateMatches(in: message, range: range) { match, _, _ in
+            guard let m = match,
+                  let uuidRange = Range(m.range(at: 1), in: message),
+                  let uuid = UUID(uuidString: String(message[uuidRange])) else { return }
+            result.append(uuid)
+        }
+        return result
+    }
+
+    /// Decide whether `pr` (paired with `session`) is a candidate for
+    /// `gh pr merge --auto`. Pure so unit tests can exercise every guard
+    /// without spinning up an `IssueTracker`. Returns `false` when:
+    /// - the session has already had auto-merge enabled (one-shot guard)
+    /// - the PR is not OPEN, or is a draft
+    /// - the `crow:merge` label is absent
+    /// - the PR is in CONFLICTING or CHANGES_REQUESTED state
+    nonisolated static func shouldAttemptAutoMerge(pr: ViewerPR, session: Session) -> Bool {
+        guard session.autoMergeEnabledAt == nil else { return false }
+        guard pr.state == "OPEN" else { return false }
+        guard !pr.isDraft else { return false }
+        guard pr.labels.contains(where: { $0.name.caseInsensitiveCompare(autoMergeLabel) == .orderedSame }) else { return false }
+        guard pr.mergeable != "CONFLICTING" else { return false }
+        guard pr.reviewDecision != "CHANGES_REQUESTED" else { return false }
+        return true
+    }
+
+    /// Return true when at least one of the supplied commit messages
+    /// carries a `Crow-Session: <uuid>` trailer whose UUID matches a
+    /// session in `knownSessionIDs`. Trailer-with-unknown-session is
+    /// treated as NOT Crow-authored (acceptance criterion #4).
+    nonisolated static func crowAuthored(commitMessages: [String], knownSessionIDs: Set<UUID>) -> Bool {
+        for message in commitMessages {
+            for uuid in extractCrowSessionUUIDs(from: message) {
+                if knownSessionIDs.contains(uuid) { return true }
+            }
+        }
+        return false
+    }
+
+    /// Per-refresh entry point. Picks candidate (session, PR) pairs and
+    /// kicks off the async enable flow once each. No-op when the global
+    /// `autoMergeWatcherEnabled` setting is off.
+    private func applyAutoMerge(viewerPRs: [ViewerPR]) {
+        guard autoMergeWatcherEnabledProvider() else { return }
+        guard !viewerPRs.isEmpty else { return }
+        let byURL = Dictionary(viewerPRs.map { ($0.url, $0) }, uniquingKeysWith: Self.mergePRRecords)
+
+        for session in appState.sessions where session.id != AppState.managerSessionID {
+            guard let prLink = appState.links(for: session.id).first(where: { $0.linkType == .pr }) else { continue }
+            guard !autoMergeInFlight.contains(prLink.url) else { continue }
+            guard let pr = byURL[prLink.url] else { continue }
+            guard Self.shouldAttemptAutoMerge(pr: pr, session: session) else { continue }
+
+            autoMergeInFlight.insert(prLink.url)
+            let capturedSession = session
+            Task { await self.attemptEnableAutoMerge(session: capturedSession, pr: pr) }
+        }
+    }
+
+    /// Verify Crow authorship, lazily ensure the label exists, then enable
+    /// auto-merge with squash + delete branch. Idempotent: success persists
+    /// `Session.autoMergeEnabledAt`; failure clears the in-flight marker so
+    /// the next poll retries.
+    private func attemptEnableAutoMerge(session: Session, pr: ViewerPR) async {
+        guard await prHasCrowAuthoredCommit(pr: pr) else {
+            NSLog("[Crow] crow:merge ignored on %@ — no Crow-Session trailer matching a known session",
+                  pr.url as NSString)
+            // Leave the URL in autoMergeInFlight so we don't re-fetch
+            // commits every minute for a permanently-ineligible PR. The
+            // set is in-memory only — restart will re-check, which is
+            // fine for what's a fairly rare label-misuse case.
+            return
+        }
+
+        await ensureMergeLabel(repo: pr.repoNameWithOwner)
+
+        let cmd = #"cd "$TMPDIR" && gh pr merge \#(pr.url) --auto --squash --delete-branch"#
+        let result = await shellWithStatus(args: ["sh", "-c", cmd])
+        if result.exitCode == 0 {
+            let now = Date()
+            if let idx = appState.sessions.firstIndex(where: { $0.id == session.id }) {
+                appState.sessions[idx].autoMergeEnabledAt = now
+                appState.sessions[idx].updatedAt = now
+            }
+            JSONStore().mutate { data in
+                if let idx = data.sessions.firstIndex(where: { $0.id == session.id }) {
+                    data.sessions[idx].autoMergeEnabledAt = now
+                    data.sessions[idx].updatedAt = now
+                }
+            }
+            NSLog("[Crow] Auto-merge enabled on %@ (session %@, squash)",
+                  pr.url as NSString, session.id.uuidString as NSString)
+            onAutoMergeEnabled?(session.id, pr.url, pr.number)
+        } else {
+            autoMergeInFlight.remove(pr.url)
+            NSLog("[Crow] gh pr merge --auto failed for %@ (exit %d): %@",
+                  pr.url as NSString, result.exitCode, String(result.stderr.prefix(300)) as NSString)
+        }
+    }
+
+    /// Fetch the PR's commits and return true iff at least one carries a
+    /// `Crow-Session: <uuid>` trailer matching a known session. Uses the
+    /// REST `/repos/.../pulls/{N}/commits` endpoint (page-limited; the
+    /// default 30-commit window is plenty for any Crow PR).
+    private func prHasCrowAuthoredCommit(pr: ViewerPR) async -> Bool {
+        let endpoint = "/repos/\(pr.repoNameWithOwner)/pulls/\(pr.number)/commits"
+        let result = await shellWithStatus(args: ["gh", "api", endpoint])
+        guard result.exitCode == 0 else {
+            NSLog("[Crow] gh api %@ failed (exit %d): %@",
+                  endpoint as NSString, result.exitCode,
+                  String(result.stderr.prefix(300)) as NSString)
+            return false
+        }
+        guard let data = result.stdout.data(using: .utf8),
+              let nodes = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            return false
+        }
+        let messages: [String] = nodes.compactMap { ($0["commit"] as? [String: Any])?["message"] as? String }
+        let knownIDs = Set(appState.sessions.map(\.id))
+        return Self.crowAuthored(commitMessages: messages, knownSessionIDs: knownIDs)
+    }
+
+    /// Best-effort: ensure the `crow:merge` label exists in the repo so
+    /// repo owners don't need to pre-create it. `gh label create` fails
+    /// loudly when the label already exists; the failure is harmless and
+    /// not surfaced.
+    private func ensureMergeLabel(repo: String) async {
+        guard !repo.isEmpty else { return }
+        _ = await shellWithStatus(args: [
+            "gh", "label", "create", Self.autoMergeLabel,
+            "--repo", repo,
+            "--color", "0E8A16",
+            "--description", "Crow: enable auto-merge once mergeable"
+        ])
     }
 
     private func buildPRStatus(from pr: ViewerPR) -> PRStatus {

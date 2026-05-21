@@ -69,6 +69,7 @@ struct IssueTrackerCompletionTests {
             headRefOid: "",
             baseRefName: "",
             repoNameWithOwner: "",
+            labels: [],
             linkedIssueReferences: [],
             checksState: "",
             failedCheckNames: [],

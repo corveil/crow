@@ -209,6 +209,7 @@ struct IssueTrackerStalePRTests {
             headRefOid: "",
             baseRefName: "",
             repoNameWithOwner: "",
+            labels: [],
             linkedIssueReferences: [],
             checksState: "",
             failedCheckNames: [],

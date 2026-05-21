@@ -46,8 +46,31 @@ import Testing
     #expect(config.managerAutoPermissionMode == true)
     #expect(config.experimentalTmuxBackend == false)
     #expect(config.attributionTrailers == true)
+    #expect(config.autoMergeWatcherEnabled == false)
     #expect(config.cleanup.enabled == false)
     #expect(config.cleanup.retentionHours == 24)
+}
+
+@Test func appConfigAutoMergeWatcherEnabledRoundTrip() throws {
+    var config = AppConfig()
+    config.autoMergeWatcherEnabled = true
+
+    let data = try JSONEncoder().encode(config)
+    let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+    #expect(decoded.autoMergeWatcherEnabled == true)
+
+    config.autoMergeWatcherEnabled = false
+    let data2 = try JSONEncoder().encode(config)
+    let decoded2 = try JSONDecoder().decode(AppConfig.self, from: data2)
+    #expect(decoded2.autoMergeWatcherEnabled == false)
+}
+
+@Test func appConfigAutoMergeWatcherDefaultsOffWhenKeyMissing() throws {
+    // Legacy configs without the key must default to off — the watcher is
+    // opt-in so users explicitly enable Crow to act on the crow:merge label.
+    let json = #"{"workspaces":[]}"#.data(using: .utf8)!
+    let config = try JSONDecoder().decode(AppConfig.self, from: json)
+    #expect(config.autoMergeWatcherEnabled == false)
 }
 
 @Test func appConfigCleanupRoundTrip() throws {

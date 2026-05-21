@@ -140,6 +140,25 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
         )
     }
 
+    // MARK: - Auto-Merge Notifications
+
+    /// Notify the user that Crow has enabled GitHub native auto-merge on a
+    /// Crow-authored PR carrying the `crow:merge` label (CROW-299). One-shot
+    /// per PR — the audit-log line in `IssueTracker` is the durable record;
+    /// this is the human-facing banner.
+    func notifyAutoMergeEnabled(prURL: String, number: Int, sessionID: UUID) {
+        guard !settings.globalMute else { return }
+        guard settings.systemNotificationsEnabled else { return }
+
+        let sessionName = appState.sessions.first(where: { $0.id == sessionID })?.name ?? "session"
+        postSystemNotification(
+            title: "Auto-merge enabled \u{2014} \(sessionName)",
+            body: "PR #\(number) will merge once required reviews and checks pass.",
+            sessionID: sessionID,
+            eventName: "AutoMergeEnabled"
+        )
+    }
+
     // MARK: - PR Status Transition Notifications
 
     /// Notify the user about a detected PR status transition (changes
