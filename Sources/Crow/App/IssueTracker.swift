@@ -71,8 +71,9 @@ final class IssueTracker {
     /// when the PR is Crow-authored (Crow-Session trailer matches a known
     /// session). One-shot per PR: persisted via `Session.autoMergeEnabledAt`,
     /// and gated in-process by `autoMergeInFlight` between dispatch and
-    /// persisted update (CROW-299).
-    static let autoMergeLabel = "crow:merge"
+    /// persisted update (CROW-299). `nonisolated` so the pure
+    /// `shouldAttemptAutoMerge` helper can read it without main-actor hops.
+    nonisolated static let autoMergeLabel = "crow:merge"
 
     /// PR URLs we've already started an auto-merge enable attempt for.
     /// Cleared on failure (so the next poll retries) and effectively frozen
@@ -1742,7 +1743,9 @@ final class IssueTracker {
     /// Pattern matching a Crow-Session commit trailer line. Anchored to
     /// line start (multiline) so trailing footers are required, not just
     /// anywhere in the body. The captured group is the UUID string.
-    private static let crowSessionTrailerPattern = #"^Crow-Session:\s*([0-9A-Fa-f-]{36})\s*$"#
+    /// `nonisolated` because it's consumed from the `nonisolated static`
+    /// extraction helper (which is in turn called by unit tests).
+    nonisolated private static let crowSessionTrailerPattern = #"^Crow-Session:\s*([0-9A-Fa-f-]{36})\s*$"#
 
     /// Extract every Crow-Session UUID from a commit message. Returns an
     /// empty array when no trailers match. Pure for testability. Compiles
