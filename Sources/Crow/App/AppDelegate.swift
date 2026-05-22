@@ -526,6 +526,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         tracker.autoMergeWatcherEnabledProvider = { [weak self] in
             self?.appConfig?.autoMergeWatcherEnabled ?? false
         }
+        tracker.autoCreateWatcherEnabledProvider = { [weak self] in
+            self?.appConfig?.autoCreateWatcherEnabled ?? false
+        }
         tracker.onAutoMergeEnabled = { [weak self] sessionID, prURL, number in
             self?.notificationManager?.notifyAutoMergeEnabled(prURL: prURL, number: number, sessionID: sessionID)
         }

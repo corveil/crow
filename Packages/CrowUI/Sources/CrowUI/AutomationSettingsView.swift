@@ -11,6 +11,7 @@ public struct AutomationSettingsView: View {
     @Binding var autoRespond: AutoRespondSettings
     @Binding var attributionTrailers: Bool
     @Binding var autoMergeWatcherEnabled: Bool
+    @Binding var autoCreateWatcherEnabled: Bool
     var onSave: (() -> Void)?
 
     @State private var excludeReviewReposText: String
@@ -24,6 +25,7 @@ public struct AutomationSettingsView: View {
         autoRespond: Binding<AutoRespondSettings>,
         attributionTrailers: Binding<Bool>,
         autoMergeWatcherEnabled: Binding<Bool>,
+        autoCreateWatcherEnabled: Binding<Bool>,
         onSave: (() -> Void)? = nil
     ) {
         self._defaults = defaults
@@ -32,6 +34,7 @@ public struct AutomationSettingsView: View {
         self._autoRespond = autoRespond
         self._attributionTrailers = attributionTrailers
         self._autoMergeWatcherEnabled = autoMergeWatcherEnabled
+        self._autoCreateWatcherEnabled = autoCreateWatcherEnabled
         self.onSave = onSave
         self._excludeReviewReposText = State(initialValue: defaults.wrappedValue.excludeReviewRepos.joined(separator: ", "))
         self._ignoreReviewLabelsText = State(initialValue: defaults.wrappedValue.ignoreReviewLabels.joined(separator: ", "))
@@ -106,6 +109,14 @@ public struct AutomationSettingsView: View {
                 Toggle("Add Crow-Session trailer to commits", isOn: $attributionTrailers)
                     .onChange(of: attributionTrailers) { _, _ in onSave?() }
                 Text("Writes a per-worktree .claude/settings.local.json that overrides Claude Code's commit attribution to include a Crow-Session: <uuid> trailer alongside Co-Authored-By: Claude. Applies to new worktrees only.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Auto-launch workspaces") {
+                Toggle("Auto-launch workspaces for crow:auto labeled issues", isOn: $autoCreateWatcherEnabled)
+                    .onChange(of: autoCreateWatcherEnabled) { _, _ in onSave?() }
+                Text("When enabled, the Manager detects assigned issues tagged crow:auto and runs /crow-workspace automatically. The label is removed after dispatch so each issue triggers once. Requires Crow (and the Manager) to be running. Off by default.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

@@ -46,6 +46,7 @@ import Testing
     #expect(config.managerAutoPermissionMode == true)
     #expect(config.attributionTrailers == true)
     #expect(config.autoMergeWatcherEnabled == false)
+    #expect(config.autoCreateWatcherEnabled == false)
     #expect(config.cleanup.enabled == false)
     #expect(config.cleanup.retentionHours == 24)
 }
@@ -70,6 +71,28 @@ import Testing
     let json = #"{"workspaces":[]}"#.data(using: .utf8)!
     let config = try JSONDecoder().decode(AppConfig.self, from: json)
     #expect(config.autoMergeWatcherEnabled == false)
+}
+
+@Test func appConfigAutoCreateWatcherEnabledRoundTrip() throws {
+    var config = AppConfig()
+    config.autoCreateWatcherEnabled = true
+
+    let data = try JSONEncoder().encode(config)
+    let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+    #expect(decoded.autoCreateWatcherEnabled == true)
+
+    config.autoCreateWatcherEnabled = false
+    let data2 = try JSONEncoder().encode(config)
+    let decoded2 = try JSONDecoder().decode(AppConfig.self, from: data2)
+    #expect(decoded2.autoCreateWatcherEnabled == false)
+}
+
+@Test func appConfigAutoCreateWatcherDefaultsOffWhenKeyMissing() throws {
+    // Legacy configs without the key must default to off — the crow:auto
+    // label automation is opt-in (CROW-312).
+    let json = #"{"workspaces":[]}"#.data(using: .utf8)!
+    let config = try JSONDecoder().decode(AppConfig.self, from: json)
+    #expect(config.autoCreateWatcherEnabled == false)
 }
 
 @Test func appConfigCleanupRoundTrip() throws {

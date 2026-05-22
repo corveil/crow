@@ -47,6 +47,13 @@ final class IssueTracker {
     /// `false` so the watcher is inert until AppDelegate wires it (CROW-299).
     var autoMergeWatcherEnabledProvider: () -> Bool = { false }
 
+    /// Reads the latest `AppConfig.autoCreateWatcherEnabled` snapshot on
+    /// every poll. Closure-based so toggling the setting in Settings takes
+    /// effect on the next refresh without re-initializing the tracker.
+    /// Defaults to `false` so the `crow:auto`-label automation is inert
+    /// until AppDelegate wires it (CROW-312).
+    var autoCreateWatcherEnabledProvider: () -> Bool = { false }
+
     /// Fires after Crow has successfully enabled GitHub native auto-merge
     /// on a PR. Wired in AppDelegate to post the user-facing notification.
     /// (The durable audit-log line is `NSLog`'d at the call site so it
@@ -404,7 +411,12 @@ final class IssueTracker {
     /// is one-shot and visible across machines. Issues that already have an
     /// active session are treated as "work picked up elsewhere" — we still
     /// strip the stale label but don't re-dispatch.
+    ///
+    /// No-op when the global `autoCreateWatcherEnabled` setting is off
+    /// (CROW-312). The label is intentionally left in place while disabled
+    /// so a later opt-in still picks up the issue on the next poll.
     private func detectAutoCreateCandidates(issues: [AssignedIssue], config: AppConfig) {
+        guard autoCreateWatcherEnabledProvider() else { return }
         // Purge in-flight URLs that now have an active session — the dispatch
         // succeeded and the set can shrink.
         if !autoCreateInFlight.isEmpty {

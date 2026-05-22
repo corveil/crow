@@ -23,6 +23,13 @@ public struct AppConfig: Codable, Sendable, Equatable {
     /// authored by Crow (Crow-Session trailer matching a known session).
     /// Opt-in: defaults to false (CROW-299).
     public var autoMergeWatcherEnabled: Bool
+    /// When true, the IssueTracker dispatches `/crow-workspace` to the
+    /// Manager terminal for assigned open issues labeled `crow:auto`.
+    /// Opt-in: defaults to false (CROW-312). The label is still stripped
+    /// after a successful dispatch so the trigger remains one-shot per
+    /// issue. While disabled, the label is left alone so a later opt-in
+    /// can still pick up previously-labeled issues.
+    public var autoCreateWatcherEnabled: Bool
     public var cleanup: CleanupConfig
 
     public init(
@@ -36,6 +43,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         autoRespond: AutoRespondSettings = AutoRespondSettings(),
         attributionTrailers: Bool = true,
         autoMergeWatcherEnabled: Bool = false,
+        autoCreateWatcherEnabled: Bool = false,
         cleanup: CleanupConfig = CleanupConfig()
     ) {
         self.workspaces = workspaces
@@ -48,6 +56,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         self.autoRespond = autoRespond
         self.attributionTrailers = attributionTrailers
         self.autoMergeWatcherEnabled = autoMergeWatcherEnabled
+        self.autoCreateWatcherEnabled = autoCreateWatcherEnabled
         self.cleanup = cleanup
     }
 
@@ -63,11 +72,12 @@ public struct AppConfig: Codable, Sendable, Equatable {
         autoRespond = try container.decodeIfPresent(AutoRespondSettings.self, forKey: .autoRespond) ?? AutoRespondSettings()
         attributionTrailers = try container.decodeIfPresent(Bool.self, forKey: .attributionTrailers) ?? true
         autoMergeWatcherEnabled = try container.decodeIfPresent(Bool.self, forKey: .autoMergeWatcherEnabled) ?? false
+        autoCreateWatcherEnabled = try container.decodeIfPresent(Bool.self, forKey: .autoCreateWatcherEnabled) ?? false
         cleanup = try container.decodeIfPresent(CleanupConfig.self, forKey: .cleanup) ?? CleanupConfig()
     }
 
     private enum CodingKeys: String, CodingKey {
-        case workspaces, defaults, notifications, sidebar, remoteControlEnabled, managerAutoPermissionMode, telemetry, autoRespond, attributionTrailers, autoMergeWatcherEnabled, cleanup
+        case workspaces, defaults, notifications, sidebar, remoteControlEnabled, managerAutoPermissionMode, telemetry, autoRespond, attributionTrailers, autoMergeWatcherEnabled, autoCreateWatcherEnabled, cleanup
     }
 }
 

@@ -46,6 +46,7 @@ public struct SettingsView: View {
                 autoRespond: $config.autoRespond,
                 attributionTrailers: $config.attributionTrailers,
                 autoMergeWatcherEnabled: $config.autoMergeWatcherEnabled,
+                autoCreateWatcherEnabled: $config.autoCreateWatcherEnabled,
                 onSave: { save() }
             )
                 .tabItem { Label("Automation", systemImage: "bolt.fill") }
