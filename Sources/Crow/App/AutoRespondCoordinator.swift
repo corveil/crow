@@ -29,6 +29,11 @@ final class AutoRespondCoordinator {
     func handle(_ transitions: [PRStatusTransition]) {
         let cfg = settingsProvider()
         for t in transitions {
+            if shouldSkipReviewSession(t) {
+                NSLog("[AutoRespond] Skipping %@ for session %@: review session",
+                      t.kind.rawValue, t.sessionID.uuidString)
+                continue
+            }
             switch t.kind {
             case .changesRequested where cfg.respondToChangesRequested:
                 dispatch(t)
@@ -38,6 +43,14 @@ final class AutoRespondCoordinator {
                 continue
             }
         }
+    }
+
+    /// Review sessions exist to review someone else's PR. Auto-respond would
+    /// have Crow committing on behalf of the reviewer to the branch under
+    /// review — never correct. This gate is policy, independent of the
+    /// `AutoRespondSettings` toggles, and applies even when both toggles are on.
+    func shouldSkipReviewSession(_ transition: PRStatusTransition) -> Bool {
+        appState.sessions.first(where: { $0.id == transition.sessionID })?.kind == .review
     }
 
     private func dispatch(_ transition: PRStatusTransition) {
