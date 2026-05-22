@@ -63,6 +63,7 @@ struct IssueTrackerCompletionTests {
             url: url,
             state: state,
             mergeable: "UNKNOWN",
+            mergeStateStatus: "UNKNOWN",
             reviewDecision: "",
             isDraft: false,
             headRefName: "",

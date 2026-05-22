@@ -81,6 +81,14 @@ final class IssueTracker {
     /// the gating guard checks first.
     private var autoMergeInFlight: Set<String> = []
 
+    /// Per-head-commit guard for `gh pr update-branch`. Keyed
+    /// `"<url>\n<headRefOid>"` so a PR that is `BEHIND` its base gets exactly
+    /// one update attempt per head state — a successful update adds a merge
+    /// commit (new `headRefOid` → new key), so a base that keeps moving can
+    /// still re-update, while a stuck/no-op head isn't hammered every poll.
+    /// In-memory only; a restart re-evaluates, which is harmless.
+    private var autoUpdateBranchAttempted: Set<String> = []
+
     /// Last observed `PRStatus` per session, used to compute transitions.
     /// Populated lazily on first observation; that first poll never fires
     /// transitions (matches the `previousReviewRequestIDs` first-fetch
@@ -481,6 +489,7 @@ final class IssueTracker {
         let url: String
         let state: String          // OPEN / MERGED / CLOSED
         let mergeable: String      // MERGEABLE / CONFLICTING / UNKNOWN
+        let mergeStateStatus: String // BEHIND / BLOCKED / CLEAN / DIRTY / DRAFT / HAS_HOOKS / UNKNOWN / UNSTABLE
         let reviewDecision: String // APPROVED / CHANGES_REQUESTED / REVIEW_REQUIRED / ""
         let isDraft: Bool
         let headRefName: String
@@ -526,6 +535,7 @@ final class IssueTracker {
             url: winner.url,
             state: winner.state,
             mergeable: winner.mergeable != "UNKNOWN" ? winner.mergeable : loser.mergeable,
+            mergeStateStatus: winner.mergeStateStatus != "UNKNOWN" ? winner.mergeStateStatus : loser.mergeStateStatus,
             reviewDecision: winner.reviewDecision.isEmpty ? loser.reviewDecision : winner.reviewDecision,
             isDraft: winner.isDraft,
             headRefName: winner.headRefName.isEmpty ? loser.headRefName : winner.headRefName,
@@ -577,7 +587,7 @@ final class IssueTracker {
       viewerPRs: viewer {
         pullRequests(first: 50, states: [OPEN], orderBy: {field: UPDATED_AT, direction: DESC}) {
           nodes {
-            number url state mergeable reviewDecision isDraft headRefName headRefOid baseRefName
+            number url state mergeable mergeStateStatus reviewDecision isDraft headRefName headRefOid baseRefName
             repository { nameWithOwner }
             labels(first: 20) { nodes { name color } }
             closingIssuesReferences(first: 5) { nodes { number repository { nameWithOwner } } }
@@ -793,7 +803,7 @@ final class IssueTracker {
             queryParts.append("""
               pr\(i): repository(owner: $owner\(i), name: $repo\(i)) {
                 pullRequest(number: $num\(i)) {
-                  number url state mergeable reviewDecision isDraft
+                  number url state mergeable mergeStateStatus reviewDecision isDraft
                   headRefName headRefOid baseRefName
                   repository { nameWithOwner }
                 }
@@ -886,6 +896,7 @@ final class IssueTracker {
             url: url,
             state: state,
             mergeable: "UNKNOWN",
+            mergeStateStatus: "UNKNOWN",
             reviewDecision: "",
             isDraft: isDraft,
             headRefName: headRefName,
@@ -954,6 +965,7 @@ final class IssueTracker {
                   let state = prObj["state"] as? String else { continue }
 
             let mergeable = prObj["mergeable"] as? String ?? "UNKNOWN"
+            let mergeStateStatus = prObj["mergeStateStatus"] as? String ?? "UNKNOWN"
             let reviewDecision = prObj["reviewDecision"] as? String ?? ""
             let isDraft = prObj["isDraft"] as? Bool ?? false
             let headRefName = prObj["headRefName"] as? String ?? ""
@@ -966,6 +978,7 @@ final class IssueTracker {
                 url: url,
                 state: state,
                 mergeable: mergeable,
+                mergeStateStatus: mergeStateStatus,
                 reviewDecision: reviewDecision,
                 isDraft: isDraft,
                 headRefName: headRefName,
@@ -1086,6 +1099,7 @@ final class IssueTracker {
                   let state = node["state"] as? String else { return nil }
 
             let mergeable = node["mergeable"] as? String ?? "UNKNOWN"
+            let mergeStateStatus = node["mergeStateStatus"] as? String ?? "UNKNOWN"
             let reviewDecision = node["reviewDecision"] as? String ?? ""
             let isDraft = node["isDraft"] as? Bool ?? false
             let headRefName = node["headRefName"] as? String ?? ""
@@ -1129,6 +1143,7 @@ final class IssueTracker {
                 url: url,
                 state: state,
                 mergeable: mergeable,
+                mergeStateStatus: mergeStateStatus,
                 reviewDecision: reviewDecision,
                 isDraft: isDraft,
                 headRefName: headRefName,
@@ -1785,6 +1800,17 @@ final class IssueTracker {
         return true
     }
 
+    /// Decide whether a merge candidate should have its branch updated from
+    /// base *before* merging. True only when the PR is otherwise mergeable
+    /// (`shouldAttemptAutoMerge`) but GitHub reports it `BEHIND` its base —
+    /// the "out-of-date with the base branch" state that makes `gh pr merge`
+    /// fail with HTTP 422. Real conflicts never qualify: `CONFLICTING` is
+    /// already gated by `shouldAttemptAutoMerge`, and `DIRTY` is not `BEHIND`.
+    nonisolated static func shouldUpdateBranchBeforeMerge(pr: ViewerPR, session: Session) -> Bool {
+        guard shouldAttemptAutoMerge(pr: pr, session: session) else { return false }
+        return pr.mergeStateStatus == "BEHIND"
+    }
+
     /// Return true when at least one of the supplied commit messages
     /// carries a `Crow-Session: <uuid>` trailer whose UUID matches a
     /// session in `knownSessionIDs`. Trailer-with-unknown-session is
@@ -1812,9 +1838,20 @@ final class IssueTracker {
             guard let pr = byURL[prLink.url] else { continue }
             guard Self.shouldAttemptAutoMerge(pr: pr, session: session) else { continue }
 
-            autoMergeInFlight.insert(prLink.url)
             let capturedSession = session
-            Task { await self.attemptEnableAutoMerge(session: capturedSession, pr: pr) }
+            if Self.shouldUpdateBranchBeforeMerge(pr: pr, session: session) {
+                // Behind base: bring the branch up to date this turn instead
+                // of merging. One attempt per head commit (loop safety); the
+                // next poll re-evaluates once GitHub recomputes mergeability.
+                let key = "\(prLink.url)\n\(pr.headRefOid)"
+                guard !autoUpdateBranchAttempted.contains(key) else { continue }
+                autoUpdateBranchAttempted.insert(key)
+                autoMergeInFlight.insert(prLink.url)
+                Task { await self.attemptUpdateBranch(session: capturedSession, pr: pr) }
+            } else {
+                autoMergeInFlight.insert(prLink.url)
+                Task { await self.attemptEnableAutoMerge(session: capturedSession, pr: pr) }
+            }
         }
     }
 
@@ -1855,6 +1892,39 @@ final class IssueTracker {
         } else {
             autoMergeInFlight.remove(pr.url)
             NSLog("[Crow] gh pr merge --auto failed for %@ (exit %d): %@",
+                  pr.url as NSString, result.exitCode, String(result.stderr.prefix(300)) as NSString)
+        }
+    }
+
+    /// Bring a `BEHIND` PR up to date by merging the latest base into its
+    /// branch (`gh pr update-branch`, i.e. the GitHub "Update branch" button),
+    /// then bow out — the merge itself happens on a later poll once GitHub has
+    /// recomputed mergeability and checks have re-run. Deliberately does NOT
+    /// persist `Session.autoMergeEnabledAt`: an update must not burn the
+    /// one-shot merge guard. The same Crow-authorship check as the merge path
+    /// applies. The per-head `autoUpdateBranchAttempted` key (set by the
+    /// caller) is left in place so a failed/no-op update isn't retried until
+    /// the head commit changes.
+    private func attemptUpdateBranch(session: Session, pr: ViewerPR) async {
+        guard await prHasCrowAuthoredCommit(pr: pr) else {
+            NSLog("[Crow] crow:merge update-branch skipped on %@ — no Crow-Session trailer matching a known session",
+                  pr.url as NSString)
+            // Mirror attemptEnableAutoMerge: leave the URL in autoMergeInFlight
+            // so we don't re-fetch commits every minute for an ineligible PR.
+            return
+        }
+
+        let cmd = #"cd "$TMPDIR" && gh pr update-branch \#(pr.url)"#
+        let result = await shellWithStatus(args: ["sh", "-c", cmd])
+        // Always clear the in-flight marker so the next poll can merge (or
+        // re-update once a new head appears). The per-head attempted key still
+        // prevents re-updating the same head state.
+        autoMergeInFlight.remove(pr.url)
+        if result.exitCode == 0 {
+            NSLog("[Crow] Updated branch for %@ (session %@, was BEHIND base)",
+                  pr.url as NSString, session.id.uuidString as NSString)
+        } else {
+            NSLog("[Crow] gh pr update-branch failed for %@ (exit %d): %@",
                   pr.url as NSString, result.exitCode, String(result.stderr.prefix(300)) as NSString)
         }
     }

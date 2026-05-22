@@ -203,6 +203,7 @@ struct IssueTrackerStalePRTests {
             url: url,
             state: state,
             mergeable: "UNKNOWN",
+            mergeStateStatus: "UNKNOWN",
             reviewDecision: "",
             isDraft: false,
             headRefName: "",

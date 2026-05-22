@@ -16,6 +16,7 @@ struct IssueTrackerAutoMergeTests {
         number: Int = 42,
         state: String = "OPEN",
         mergeable: String = "MERGEABLE",
+        mergeStateStatus: String = "CLEAN",
         reviewDecision: String = "APPROVED",
         isDraft: Bool = false,
         labels: [LabelInfo] = [crowMergeLabel],
@@ -26,6 +27,7 @@ struct IssueTrackerAutoMergeTests {
             url: url,
             state: state,
             mergeable: mergeable,
+            mergeStateStatus: mergeStateStatus,
             reviewDecision: reviewDecision,
             isDraft: isDraft,
             headRefName: "feature/x",
@@ -105,6 +107,52 @@ struct IssueTrackerAutoMergeTests {
         // when the PR is mergeable. GitHub will still honor --auto for them.
         let pr = makePR(reviewDecision: "")
         #expect(IssueTracker.shouldAttemptAutoMerge(pr: pr, session: makeSession()))
+    }
+
+    // MARK: - shouldUpdateBranchBeforeMerge (BEHIND base)
+
+    @Test func updatesBranchWhenBehindBase() {
+        // Otherwise-mergeable labeled PR that GitHub reports as out-of-date.
+        let pr = makePR(mergeStateStatus: "BEHIND")
+        #expect(IssueTracker.shouldUpdateBranchBeforeMerge(pr: pr, session: makeSession()))
+    }
+
+    @Test func behindPRIsStillAMergeCandidate() {
+        // BEHIND must not disqualify candidacy — we update first, merge later.
+        let pr = makePR(mergeStateStatus: "BEHIND")
+        #expect(IssueTracker.shouldAttemptAutoMerge(pr: pr, session: makeSession()))
+    }
+
+    @Test func doesNotUpdateBranchWhenClean() {
+        let pr = makePR(mergeStateStatus: "CLEAN")
+        #expect(!IssueTracker.shouldUpdateBranchBeforeMerge(pr: pr, session: makeSession()))
+    }
+
+    @Test func doesNotUpdateBranchWhenStateUnknown() {
+        let pr = makePR(mergeStateStatus: "UNKNOWN")
+        #expect(!IssueTracker.shouldUpdateBranchBeforeMerge(pr: pr, session: makeSession()))
+    }
+
+    @Test func doesNotUpdateBranchForRealConflict() {
+        // CONFLICTING is gated by shouldAttemptAutoMerge; DIRTY is not BEHIND.
+        let conflicting = makePR(mergeable: "CONFLICTING", mergeStateStatus: "DIRTY")
+        #expect(!IssueTracker.shouldUpdateBranchBeforeMerge(pr: conflicting, session: makeSession()))
+        let dirty = makePR(mergeStateStatus: "DIRTY")
+        #expect(!IssueTracker.shouldUpdateBranchBeforeMerge(pr: dirty, session: makeSession()))
+    }
+
+    @Test func doesNotUpdateBranchWhenNotACandidate() {
+        // A BEHIND PR that fails the candidate gate (no label / already
+        // enabled / draft / changes requested) must not trigger an update.
+        let session = makeSession()
+        #expect(!IssueTracker.shouldUpdateBranchBeforeMerge(
+            pr: makePR(mergeStateStatus: "BEHIND", labels: [Self.otherLabel]), session: session))
+        #expect(!IssueTracker.shouldUpdateBranchBeforeMerge(
+            pr: makePR(mergeStateStatus: "BEHIND", reviewDecision: "CHANGES_REQUESTED"), session: session))
+        #expect(!IssueTracker.shouldUpdateBranchBeforeMerge(
+            pr: makePR(mergeStateStatus: "BEHIND", isDraft: true), session: session))
+        #expect(!IssueTracker.shouldUpdateBranchBeforeMerge(
+            pr: makePR(mergeStateStatus: "BEHIND"), session: makeSession(autoMergeEnabledAt: Date())))
     }
 
     // MARK: - Trailer parsing
