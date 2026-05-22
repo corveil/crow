@@ -31,6 +31,9 @@ public struct AppConfig: Codable, Sendable, Equatable {
     /// can still pick up previously-labeled issues.
     public var autoCreateWatcherEnabled: Bool
     public var cleanup: CleanupConfig
+    /// Scheduled jobs: named sets of prompts that fire automatically on a
+    /// schedule, scoped to a repo. Driven by `JobScheduler` (CROW-317).
+    public var jobs: [JobConfig]
 
     public init(
         workspaces: [WorkspaceInfo] = [],
@@ -44,7 +47,8 @@ public struct AppConfig: Codable, Sendable, Equatable {
         attributionTrailers: Bool = true,
         autoMergeWatcherEnabled: Bool = false,
         autoCreateWatcherEnabled: Bool = false,
-        cleanup: CleanupConfig = CleanupConfig()
+        cleanup: CleanupConfig = CleanupConfig(),
+        jobs: [JobConfig] = []
     ) {
         self.workspaces = workspaces
         self.defaults = defaults
@@ -58,6 +62,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         self.autoMergeWatcherEnabled = autoMergeWatcherEnabled
         self.autoCreateWatcherEnabled = autoCreateWatcherEnabled
         self.cleanup = cleanup
+        self.jobs = jobs
     }
 
     public init(from decoder: Decoder) throws {
@@ -74,10 +79,11 @@ public struct AppConfig: Codable, Sendable, Equatable {
         autoMergeWatcherEnabled = try container.decodeIfPresent(Bool.self, forKey: .autoMergeWatcherEnabled) ?? false
         autoCreateWatcherEnabled = try container.decodeIfPresent(Bool.self, forKey: .autoCreateWatcherEnabled) ?? false
         cleanup = try container.decodeIfPresent(CleanupConfig.self, forKey: .cleanup) ?? CleanupConfig()
+        jobs = try container.decodeIfPresent([JobConfig].self, forKey: .jobs) ?? []
     }
 
     private enum CodingKeys: String, CodingKey {
-        case workspaces, defaults, notifications, sidebar, remoteControlEnabled, managerAutoPermissionMode, telemetry, autoRespond, attributionTrailers, autoMergeWatcherEnabled, autoCreateWatcherEnabled, cleanup
+        case workspaces, defaults, notifications, sidebar, remoteControlEnabled, managerAutoPermissionMode, telemetry, autoRespond, attributionTrailers, autoMergeWatcherEnabled, autoCreateWatcherEnabled, cleanup, jobs
     }
 }
 

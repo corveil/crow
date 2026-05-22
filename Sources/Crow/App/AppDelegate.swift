@@ -18,6 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var sessionService: SessionService?
     private var socketServer: SocketServer?
     private var issueTracker: IssueTracker?
+    private var jobScheduler: JobScheduler?
     private var notificationManager: NotificationManager?
     private var autoRespondCoordinator: AutoRespondCoordinator?
     private var allowListService: AllowListService?
@@ -533,6 +534,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         tracker.start()
         self.issueTracker = tracker
 
+        // Scheduled jobs (CROW-317): fire repo-scoped prompt sets on a schedule.
+        let scheduler = JobScheduler(appState: appState, sessionService: service)
+        scheduler.jobsProvider = { [weak self] in self?.appConfig?.jobs ?? [] }
+        scheduler.devRootProvider = { [weak self] in self?.devRoot }
+        scheduler.onJobRan = { [weak self] jobID, ranAt in
+            self?.recordJobRun(jobID: jobID, ranAt: ranAt)
+        }
+        scheduler.start()
+        self.jobScheduler = scheduler
+
         appState.onMarkInReview = { [weak tracker] id in
             Task { await tracker?.markInReview(sessionID: id) }
         }
@@ -808,6 +819,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appState.excludeReviewRepos = config.defaults.excludeReviewRepos
         appState.excludeTicketRepos = config.defaults.excludeTicketRepos
         appState.ignoreReviewLabels = config.defaults.ignoreReviewLabels
+    }
+
+    /// Record a job's run time in the canonical `appConfig` and persist it, so
+    /// the scheduler doesn't replay the job after a restart (CROW-317). Called
+    /// by `JobScheduler.onJobRan`.
+    private func recordJobRun(jobID: UUID, ranAt: Date) {
+        guard var config = appConfig, let devRoot,
+              let idx = config.jobs.firstIndex(where: { $0.id == jobID }) else { return }
+        config.jobs[idx].lastRunAt = ranAt
+        self.appConfig = config
+        do {
+            try ConfigStore.saveConfig(config, devRoot: devRoot)
+        } catch {
+            NSLog("[Crow] Failed to persist job run time: %@", error.localizedDescription)
+        }
     }
 
     // MARK: - Socket Server
@@ -1446,6 +1472,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         NSLog("[Crow] Application terminating — beginning cleanup")
         issueTracker?.stop()
+        jobScheduler?.stop()
         sessionService?.persistState()
         // Persist config in case settings changed during this session
         if let devRoot, let appConfig {

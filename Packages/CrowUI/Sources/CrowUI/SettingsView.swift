@@ -14,6 +14,8 @@ public struct SettingsView: View {
     @State var config: AppConfig
     @State private var isAddingWorkspace = false
     @State private var editingWorkspace: WorkspaceInfo?
+    @State private var isAddingJob = false
+    @State private var editingJob: JobConfig?
 
     public var onSave: ((String, AppConfig) -> Void)?
     public var onRescaffold: ((String) -> Void)?
@@ -52,6 +54,8 @@ public struct SettingsView: View {
                 .tabItem { Label("Automation", systemImage: "bolt.fill") }
             workspacesTab
                 .tabItem { Label("Workspaces", systemImage: "rectangle.stack") }
+            jobsTab
+                .tabItem { Label("Jobs", systemImage: "clock.badge") }
             NotificationSettingsView(
                 settings: $config.notifications,
                 onSave: { save() }
@@ -78,6 +82,32 @@ public struct SettingsView: View {
                 }
             }
         }
+        .sheet(isPresented: $isAddingJob) {
+            JobFormView(
+                workspaces: config.workspaces,
+                existingNames: otherJobNames()
+            ) { job in
+                config.jobs.append(job)
+                save()
+            }
+        }
+        .sheet(item: $editingJob) { job in
+            JobFormView(
+                job: job,
+                workspaces: config.workspaces,
+                existingNames: otherJobNames(excluding: job.id)
+            ) { updated in
+                if let idx = config.jobs.firstIndex(where: { $0.id == updated.id }) {
+                    config.jobs[idx] = updated
+                    save()
+                }
+            }
+        }
+    }
+
+    /// Names of all jobs except the one currently being edited.
+    private func otherJobNames(excluding id: UUID? = nil) -> [String] {
+        config.jobs.filter { $0.id != id }.map(\.name)
     }
 
     // MARK: - General Tab
@@ -289,6 +319,114 @@ public struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    // MARK: - Jobs Tab
+
+    private var jobsTab: some View {
+        Form {
+            Section {
+                if config.jobs.isEmpty {
+                    Text("No jobs configured")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach($config.jobs) { $job in
+                        HStack(alignment: .top) {
+                            Toggle("", isOn: $job.enabled)
+                                .labelsHidden()
+                                .onChange(of: job.enabled) { _, _ in save() }
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(job.name).fontWeight(.medium)
+                                Text("\(job.workspace)/\(job.repo) · \(scheduleSummary(job.schedule))")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Text("\(lastRunText(job)) · \(nextRunText(job))")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+
+                            Spacer()
+
+                            Button {
+                                editingJob = job
+                            } label: {
+                                Image(systemName: "pencil")
+                            }
+                            .buttonStyle(.borderless)
+                            .accessibilityLabel("Edit \(job.name)")
+
+                            Button(role: .destructive) {
+                                config.jobs.removeAll { $0.id == job.id }
+                                save()
+                            } label: {
+                                Image(systemName: "trash")
+                            }
+                            .buttonStyle(.borderless)
+                            .accessibilityLabel("Delete \(job.name)")
+                        }
+                    }
+                }
+            } header: {
+                HStack {
+                    Text("Jobs")
+                    Spacer()
+                    Button {
+                        isAddingJob = true
+                    } label: {
+                        Label("Add", systemImage: "plus")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(config.workspaces.isEmpty)
+                }
+            } footer: {
+                if config.workspaces.isEmpty {
+                    Text("Add a workspace first — jobs are scoped to a repo in a workspace.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("Scheduled prompt sets. When a job fires, Crow creates a worktree + session in the scoped repo and runs its prompts.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    /// Human-readable summary of a job's schedule (e.g. "every 4 hours", "Mon,Wed at 09:00").
+    private func scheduleSummary(_ schedule: JobSchedule) -> String {
+        switch schedule {
+        case .interval(let seconds):
+            let value: Int
+            let unit: String
+            if seconds > 0, seconds % 86400 == 0 { value = seconds / 86400; unit = "day" }
+            else if seconds > 0, seconds % 3600 == 0 { value = seconds / 3600; unit = "hour" }
+            else { value = max(1, seconds / 60); unit = "minute" }
+            return "every \(value) \(unit)\(value == 1 ? "" : "s")"
+        case .dailyAt(let hour, let minute, let weekdays):
+            let time = String(format: "%02d:%02d", hour, minute)
+            guard !weekdays.isEmpty else { return "daily at \(time)" }
+            let names = [1: "Sun", 2: "Mon", 3: "Tue", 4: "Wed", 5: "Thu", 6: "Fri", 7: "Sat"]
+            let days = weekdays
+                .sorted { (($0 + 5) % 7) < (($1 + 5) % 7) } // Monday-first ordering
+                .compactMap { names[$0] }
+                .joined(separator: ",")
+            return "\(days) at \(time)"
+        }
+    }
+
+    private func lastRunText(_ job: JobConfig) -> String {
+        guard let last = job.lastRunAt else { return "Last run: never" }
+        return "Last run: \(last.formatted(date: .abbreviated, time: .shortened))"
+    }
+
+    private func nextRunText(_ job: JobConfig) -> String {
+        guard job.enabled else { return "disabled" }
+        let baseline = job.lastRunAt ?? job.createdAt
+        guard let next = job.nextRunDate(after: baseline) else { return "Next: —" }
+        return "Next: \(next.formatted(date: .abbreviated, time: .shortened))"
     }
 
     private func save() {

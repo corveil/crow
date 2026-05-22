@@ -4,6 +4,7 @@ import Foundation
 public enum SessionKind: String, Codable, Sendable {
     case work    // Normal development session (default)
     case review  // PR review session
+    case job     // Session spun up by a scheduled job (CROW-317)
 }
 
 /// Status of a development session.
