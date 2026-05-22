@@ -6,7 +6,7 @@ Crow automates the boring parts of moving a ticket from "assigned" to "merged". 
 
 A fully automated ticket walks through these stages:
 
-1. **Assignment** — an issue is assigned to you. If it carries the `crow:auto` label, Crow auto-creates a workspace for it (#211).
+1. **Assignment** — an issue is assigned to you. If it carries the `crow:auto` label *and* the **Auto-launch workspaces** toggle is on (off by default — #312), Crow auto-creates a workspace for it (#211).
 2. **Workspace** — a git worktree is created, ticket metadata is captured, and the issue is moved to "In Progress" on the project board.
 3. **Session** — Claude Code launches in plan mode with the issue context. Worker sessions inherit the configured permission mode; the Manager terminal can launch with `--permission-mode auto` (#189).
 4. **PR open** — when Claude pushes the branch and you open a PR, Crow auto-suggests opening one if you forget (#213) and auto-applies the `crow:auto` label so the PR is recognizable downstream (#222).
@@ -50,6 +50,14 @@ PR #214 added two opt-in toggles that let Crow type a follow-up instruction into
 
 Both toggles read from `AutoRespondSettings` in `AppConfig`. The session must have an active Claude Code terminal for the instruction to land.
 
+### Auto-launch workspaces
+
+PR #312 gated the existing `crow:auto` label automation behind a single opt-in toggle. Off by default — typing `/crow-workspace` into the Manager terminal without an explicit opt-in is intrusive, and matches the precedent set by `crow:merge` auto-merge (#299).
+
+- **Auto-launch workspaces for `crow:auto` labeled issues** — when on, Crow watches assigned open issues each polling cycle. If one carries the `crow:auto` label, Crow sends `/crow-workspace <issue-url>` to the Manager terminal and strips the label so the trigger is one-shot. While off, the label is intentionally left in place so a later opt-in still picks up the issue. Requires Crow (and the Manager) to be running.
+
+Backed by `AppConfig.autoCreateWatcherEnabled`. Issues in `excludeTicketRepos` are filtered before the toggle is consulted, so they remain ignored regardless of the setting.
+
 ### Auto-merge
 
 PR #299 added a single toggle that lets Crow enable GitHub's native auto-merge on Crow-authored PRs carrying the `crow:merge` label. Off by default.
@@ -64,7 +72,7 @@ Short descriptions of each shipped automation, in roughly the order they fire du
 
 ### #211 — Auto-create workspace on `crow:auto` label
 
-When an issue assigned to you carries the `crow:auto` label, the issue tracker auto-creates a workspace for it on the next polling cycle (every 60s). It picks the right repo, opens a worktree, captures ticket metadata, and launches Claude Code in plan mode with the issue context. Issues in `excludeTicketRepos` are skipped.
+When an issue assigned to you carries the `crow:auto` label *and* the **Auto-launch workspaces** toggle is on (PR #312, off by default), the issue tracker auto-creates a workspace for it on the next polling cycle (every 60s). It picks the right repo, opens a worktree, captures ticket metadata, and launches Claude Code in plan mode with the issue context. Issues in `excludeTicketRepos` are skipped. While the toggle is off the label is left in place, so flipping it on later still picks up previously-labeled issues.
 
 ### #189 — Manager auto permission mode
 

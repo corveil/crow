@@ -307,7 +307,7 @@ final class IssueTracker {
         let autoCreateCandidates = ticketExcludePatterns.isEmpty
             ? allIssues
             : allIssues.filter { !repoMatchesExcludePatterns($0.repo, patterns: ticketExcludePatterns) }
-        detectAutoCreateCandidates(issues: autoCreateCandidates, config: config)
+        detectAutoCreateCandidates(issues: autoCreateCandidates)
 
         if let ghResult {
             // Session PR link detection runs against open PRs only — we only
@@ -415,7 +415,7 @@ final class IssueTracker {
     /// No-op when the global `autoCreateWatcherEnabled` setting is off
     /// (CROW-312). The label is intentionally left in place while disabled
     /// so a later opt-in still picks up the issue on the next poll.
-    private func detectAutoCreateCandidates(issues: [AssignedIssue], config: AppConfig) {
+    private func detectAutoCreateCandidates(issues: [AssignedIssue]) {
         guard autoCreateWatcherEnabledProvider() else { return }
         // Purge in-flight URLs that now have an active session — the dispatch
         // succeeded and the set can shrink.
