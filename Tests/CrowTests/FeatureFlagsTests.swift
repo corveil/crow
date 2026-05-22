@@ -6,7 +6,12 @@ import Testing
 /// backend is the default; the env var is parsed only as an explicit opt-out
 /// (`0`/`false`/`no`/`off`). Anything else — including unset — means tmux is
 /// on.
-@Suite("FeatureFlags tmux backend default")
+/// `.serialized` because `tmuxBackendOffWhenEnvExplicitlyOff` mutates the
+/// process-global `CROW_TMUX_BACKEND` env var (setenv/unsetenv). Swift Testing
+/// runs `@Test`s in parallel by default, so without serialization that mutation
+/// can race `tmuxBackendDefaultIsOn` — which reads the same flag — and flip it
+/// to `false` mid-assertion.
+@Suite("FeatureFlags tmux backend default", .serialized)
 struct FeatureFlagsTests {
 
     /// Mirror of the parsing rule in `FeatureFlags.envExplicitlyOff`. If the
