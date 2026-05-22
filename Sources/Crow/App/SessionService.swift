@@ -630,11 +630,9 @@ final class SessionService {
         var firstFatalError: String? = nil
 
         for item in items {
-            if item.isMainCheckout {
-                NSLog("Skipping worktree cleanup for main checkout: \(item.worktreePath) (branch: \(item.branch))")
-                continue
-            }
-
+            // Review clones are standalone `git clone` checkouts (not `git worktree add`
+            // artifacts) and always have repoPath == worktreePath, which would otherwise
+            // trip the main-checkout guard below and leave the clone orphaned on disk.
             if isReview {
                 guard FileManager.default.fileExists(atPath: item.worktreePath) else { continue }
                 do {
@@ -645,6 +643,11 @@ final class SessionService {
                     NSLog("[SessionService] \(msg) (\(item.worktreePath))")
                     if firstFatalError == nil { firstFatalError = msg }
                 }
+                continue
+            }
+
+            if item.isMainCheckout {
+                NSLog("Skipping worktree cleanup for main checkout: \(item.worktreePath) (branch: \(item.branch))")
                 continue
             }
 
