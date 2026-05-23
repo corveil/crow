@@ -67,16 +67,32 @@ final class JobScheduler {
             guard !inFlight.contains(job.id) else { continue }
             let baseline = job.lastRunAt ?? job.createdAt
             guard let next = job.nextRunDate(after: baseline), next <= now else { continue }
+            fire(job, devRoot: devRoot)
+        }
+    }
 
-            inFlight.insert(job.id)
-            let captured = job
-            Task { @MainActor in
-                defer { self.inFlight.remove(captured.id) }
-                if let result = await self.sessionService.runJob(captured, devRoot: devRoot) {
-                    // Persist run time first so the job isn't re-fired next tick.
-                    self.onJobRan(captured.id, Date())
-                    self.deliverRemainingPrompts(captured, terminalID: result.terminalID)
-                }
+    // MARK: - Manual run
+
+    /// Fire a job on demand, regardless of its enabled flag or schedule.
+    func runNow(_ jobID: UUID) {
+        guard let devRoot = devRootProvider() else { return }
+        guard let job = jobsProvider().first(where: { $0.id == jobID }) else { return }
+        fire(job, devRoot: devRoot)
+    }
+
+    /// Launch one job: guard against double-launch, spin up the worktree/session/
+    /// Claude terminal, persist the run time, then deliver any remaining prompts.
+    /// Shared by `tick()` (scheduled) and `runNow(_:)` (manual).
+    private func fire(_ job: JobConfig, devRoot: String) {
+        guard !inFlight.contains(job.id) else { return }
+        inFlight.insert(job.id)
+        let captured = job
+        Task { @MainActor in
+            defer { self.inFlight.remove(captured.id) }
+            if let result = await self.sessionService.runJob(captured, devRoot: devRoot) {
+                // Persist run time first so the job isn't re-fired next tick.
+                self.onJobRan(captured.id, Date())
+                self.deliverRemainingPrompts(captured, terminalID: result.terminalID)
             }
         }
     }

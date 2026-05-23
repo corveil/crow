@@ -336,6 +336,9 @@ public final class AppState {
     /// Called when the sound mute toggle is changed.
     public var onSoundMutedChanged: ((Bool) -> Void)?
 
+    /// Fire a job immediately, ignoring its enabled flag and schedule (job ID).
+    public var onRunJob: ((UUID) -> Void)?
+
     // MARK: - Computed Properties
 
     public var selectedSession: Session? {

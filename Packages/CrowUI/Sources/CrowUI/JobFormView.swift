@@ -198,9 +198,21 @@ public struct JobFormView: View {
             Section {
                 ForEach(prompts.indices, id: \.self) { idx in
                     HStack(alignment: .top) {
-                        TextField("Prompt \(idx + 1)", text: $prompts[idx], axis: .vertical)
-                            .textFieldStyle(.roundedBorder)
-                            .lineLimit(1...6)
+                        TextEditor(text: $prompts[idx])
+                            .font(.body)
+                            .scrollContentBackground(.hidden)
+                            .frame(height: 90)
+                            .padding(4)
+                            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3)))
+                            .overlay(alignment: .topLeading) {
+                                if prompts[idx].isEmpty {
+                                    Text("Prompt \(idx + 1)")
+                                        .foregroundStyle(.secondary)
+                                        .padding(.horizontal, 9)
+                                        .padding(.vertical, 12)
+                                        .allowsHitTesting(false)
+                                }
+                            }
                         Button(role: .destructive) {
                             prompts.remove(at: idx)
                             if prompts.isEmpty { prompts = [""] }
@@ -229,17 +241,18 @@ public struct JobFormView: View {
             }
 
             Section("Schedule") {
-                Picker("Run", selection: $scheduleMode) {
+                Picker("", selection: $scheduleMode) {
                     Text("Every").tag(ScheduleMode.interval)
                     Text("Daily at").tag(ScheduleMode.daily)
                 }
                 .pickerStyle(.segmented)
+                .labelsHidden()
 
                 if scheduleMode == .interval {
                     HStack {
                         TextField("Every", value: $intervalValue, format: .number)
                             .textFieldStyle(.roundedBorder)
-                            .frame(width: 70)
+                            .frame(width: 90)
                         Picker("", selection: $intervalUnit) {
                             ForEach(IntervalUnit.allCases) { Text($0.label).tag($0) }
                         }
