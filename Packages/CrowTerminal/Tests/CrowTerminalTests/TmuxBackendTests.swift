@@ -12,12 +12,41 @@ import Testing
 struct TmuxBackendTests {
 
     private func makeBackend() -> TmuxBackend {
-        let id = UUID().uuidString.prefix(8).lowercased()
-        let socket = (NSTemporaryDirectory() as NSString)
-            .appendingPathComponent("crow-test-backend-\(id).sock")
+        makeBackend(socket: sharedSocketPath())
+    }
+
+    /// Configure a backend on a caller-chosen socket. The persistence tests
+    /// (#330) need two distinct backend instances pointed at the *same* socket
+    /// to model a quit/relaunch where the server outlived the app.
+    private func makeBackend(socket: String) -> TmuxBackend {
         let backend = TmuxBackend()
         backend.configure(tmuxBinary: discoveredTmuxBinary!, socketPath: socket)
         return backend
+    }
+
+    private func sharedSocketPath() -> String {
+        let id = UUID().uuidString.prefix(8).lowercased()
+        return (NSTemporaryDirectory() as NSString)
+            .appendingPathComponent("crow-test-backend-\(id).sock")
+    }
+
+    /// Mirrors `TmuxBackend.sentinelPath(for:)` (which is private). Kept in sync
+    /// by the sentinel-survival test — if the format drifts, that test's
+    /// killServer assertion fails loudly.
+    private func sentinelPath(for id: UUID) -> String {
+        let dir = ProcessInfo.processInfo.environment["TMPDIR"] ?? "/tmp/"
+        return (dir as NSString)
+            .appendingPathComponent("crow-ready-\(id.uuidString).sentinel")
+    }
+
+    /// Best-effort kill of a server left running by a `killServer: false`
+    /// shutdown in a test, so we don't leak tmux servers across the suite.
+    private func killLeftoverServer(socket: String) {
+        TmuxController(
+            tmuxBinary: discoveredTmuxBinary!,
+            socketPath: socket,
+            sessionName: TmuxBackend.cockpitSessionName
+        ).killServer()
     }
 
     @Test func registerTerminalCreatesWindowAndBinding() throws {
@@ -227,5 +256,118 @@ struct TmuxBackendTests {
 
         #expect(received.contains(.timedOut))
         #expect(!received.contains(.shellReady))
+    }
+
+    // MARK: - #330 persistence: server survives quit, relaunch re-attaches
+
+    /// A `killServer: false` shutdown (clean app quit) leaves the server and
+    /// its windows running. A fresh backend pointed at the same socket — i.e.
+    /// the relaunched app — re-binds the existing window via `adoptTerminal`
+    /// instead of spawning a new one.
+    @Test func serverSurvivesDetachAndIsAdoptedOnRelaunch() throws {
+        let socket = sharedSocketPath()
+        let backendA = makeBackend(socket: socket)
+        let id = UUID()
+        let binding = try backendA.registerTerminal(
+            id: id, name: "persist", cwd: NSHomeDirectory(),
+            command: nil, trackReadiness: false
+        )
+
+        // Clean quit — detach, don't kill.
+        backendA.shutdown(killServer: false)
+
+        // Relaunch: a brand-new backend on the SAME socket finds the live
+        // session and adopts the window. backendB.shutdown() (killServer:true)
+        // tears the shared server down so nothing leaks.
+        let backendB = makeBackend(socket: socket)
+        defer { backendB.shutdown() }
+        try backendB.adoptTerminal(id: id, binding: binding, trackReadiness: false)
+        #expect(backendB.isRegistered(id: id))
+        #expect(backendB.isRunning)
+    }
+
+    /// A `killServer: true` shutdown tears the server down. The next backend on
+    /// the same socket cold-starts a fresh cockpit session (anchor window
+    /// only), so the prior window index is gone and adoption fails — the
+    /// post-reboot clean-slate path.
+    @Test func killServerShutdownTearsDownServer() throws {
+        let socket = sharedSocketPath()
+        let backendA = makeBackend(socket: socket)
+        let id = UUID()
+        let binding = try backendA.registerTerminal(
+            id: id, name: "ephemeral", cwd: NSHomeDirectory(),
+            command: nil, trackReadiness: false
+        )
+        backendA.shutdown(killServer: true)
+
+        let backendB = makeBackend(socket: socket)
+        defer { backendB.shutdown() }
+        #expect(throws: TmuxBackendError.self) {
+            try backendB.adoptTerminal(id: id, binding: binding, trackReadiness: false)
+        }
+    }
+
+    /// The sentinel file is KEPT across a `killServer: false` shutdown (so the
+    /// next launch's `adoptTerminal` can detect the already-ready shell) and
+    /// UNLINKED across a `killServer: true` shutdown (legacy cleanup).
+    @Test func sentinelKeptOnDetachRemovedOnKill() throws {
+        let id = UUID()
+        let sentinel = sentinelPath(for: id)
+
+        // killServer:false → sentinel survives.
+        let detachSocket = sharedSocketPath()
+        let detached = makeBackend(socket: detachSocket)
+        _ = try detached.registerTerminal(
+            id: id, name: "s", cwd: NSHomeDirectory(),
+            command: nil, trackReadiness: false
+        )
+        FileManager.default.createFile(atPath: sentinel, contents: nil)
+        detached.shutdown(killServer: false)
+        #expect(FileManager.default.fileExists(atPath: sentinel))
+        killLeftoverServer(socket: detachSocket)
+
+        // killServer:true → sentinel removed.
+        let killSocket = sharedSocketPath()
+        let killed = makeBackend(socket: killSocket)
+        _ = try killed.registerTerminal(
+            id: id, name: "s", cwd: NSHomeDirectory(),
+            command: nil, trackReadiness: false
+        )
+        FileManager.default.createFile(atPath: sentinel, contents: nil)
+        killed.shutdown(killServer: true)
+        #expect(!FileManager.default.fileExists(atPath: sentinel))
+
+        try? FileManager.default.removeItem(atPath: sentinel)
+    }
+
+    /// Adopting with `trackReadiness: false` must NOT fire `.shellReady`, even
+    /// when the sentinel still exists from before the quit. This is what stops
+    /// SessionService from pasting a second `claude --continue` into a pane
+    /// where Claude is already running on relaunch (#330).
+    @Test func adoptWithoutReadinessDoesNotEmitShellReady() async throws {
+        let socket = sharedSocketPath()
+        let backendA = makeBackend(socket: socket)
+        let id = UUID()
+        let binding = try backendA.registerTerminal(
+            id: id, name: "ready-test", cwd: NSHomeDirectory(),
+            command: nil, trackReadiness: false
+        )
+        // Simulate the wrapper having marked the shell ready before the quit.
+        let sentinel = sentinelPath(for: id)
+        FileManager.default.createFile(atPath: sentinel, contents: nil)
+        backendA.shutdown(killServer: false)
+
+        let backendB = makeBackend(socket: socket)
+        defer { backendB.shutdown() }  // killServer:true also unlinks the sentinel
+
+        var received: [TerminalReadiness] = []
+        backendB.onReadinessChanged = { reportedID, state in
+            guard reportedID == id else { return }
+            received.append(state)
+        }
+        try backendB.adoptTerminal(id: id, binding: binding, trackReadiness: false)
+        // Give any erroneous MainActor callback hop a chance to land.
+        try await Task.sleep(nanoseconds: 100_000_000)
+        #expect(received.isEmpty)
     }
 }

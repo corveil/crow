@@ -1,25 +1,29 @@
 import Foundation
 
-/// Reaps orphaned tmux servers left behind by previous Crow instances that
-/// exited ungracefully (Force Quit, crash, SIGKILL — anything that bypasses
-/// `applicationWillTerminate` and therefore the shutdown fix from PR #229).
-/// Called once at app launch, BEFORE the new instance configures its own
-/// tmux server.
+/// Reaps orphaned, *legacy PID-keyed* tmux sockets left behind by pre-#330
+/// Crow builds. Called once at app launch, BEFORE the new instance configures
+/// its tmux server.
 ///
-/// Each Crow instance creates a socket at `$TMPDIR/crow-tmux-<pid>.sock`.
-/// On a clean ⌘Q, `TmuxBackend.shutdown()` runs and reaps the server. On
-/// an ungraceful exit the server lives on as an orphan, accumulating ~10-20
-/// MB of RSS per stuck instance and a stale socket file each. Without this
-/// reaper, dev iteration that involves Force Quit (or `pkill`) leaks one
-/// tmux server per cycle.
+/// Since #330 the running instance uses a single stable socket
+/// (`$TMPDIR/crow-tmux.sock`) that deliberately *outlives* the app process so
+/// a relaunch can re-attach to the still-running sessions. That stable socket
+/// is intentionally NEVER reaped — the regex below only matches the old
+/// `$TMPDIR/crow-tmux-<pid>.sock` naming, so `crow-tmux.sock` (no PID) falls
+/// through untouched, and a healthy persistent server is preserved.
+///
+/// What's left for this reaper is one-time cleanup of orphans from the old
+/// per-PID design: a `crow-tmux-<pid>.sock` whose owning CrowApp is gone leaks
+/// ~10-20 MB of RSS plus a stale socket file. (These self-heal on the app side
+/// too — a persisted binding pointing at a dead PID socket mismatches the
+/// stable socket and falls back to a fresh window — but reaping reclaims the
+/// leaked server.)
 ///
 /// The reaper is idempotent and best-effort. It enumerates
-/// `$TMPDIR/crow-tmux-*.sock`, extracts the PID encoded in each filename,
+/// `$TMPDIR/crow-tmux-<pid>.sock`, extracts the PID encoded in each filename,
 /// and:
 ///   - Skips the current process's own socket (we're about to bind it).
 ///   - Skips sockets whose PID is still bound to a live `CrowApp` process
-///     (the rare "two Crow instances running concurrently" case — must not
-///     reap a peer's server out from under it).
+///     (defensive — must not reap a peer's server out from under it).
 ///   - Otherwise: runs `tmux -S <socket> kill-server` (no-op if already
 ///     dead), then unlinks the socket file.
 public enum TmuxOrphanReaper {

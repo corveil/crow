@@ -115,33 +115,52 @@ public final class TmuxBackend {
 
     // MARK: - Lifecycle
 
-    /// Whether the cockpit session has been started this app launch.
+    /// Whether the cockpit session is live. Note this may be true on a fresh
+    /// app launch (before this process has created anything) when a prior Crow
+    /// quit left the server running at the stable socket — see #330.
     public var isRunning: Bool { controller?.hasSession() ?? false }
 
-    /// Tear down the tmux server (used by the crash-watchdog in PROD #5,
-    /// and by app quit). Resets internal state.
-    public func shutdown() {
+    /// Detach this Crow process from the tmux backend, resetting in-memory
+    /// state. Used by app quit and by the crash-watchdog (PROD #5).
+    ///
+    /// `killServer` controls whether the underlying tmux server is torn down:
+    ///   - `false` (clean app quit, #330): leave the server — and all its
+    ///     sessions/windows — running so the next launch can re-attach via
+    ///     `adoptTerminal`. The sentinel and wrapper-log files are *kept* on
+    ///     disk for the same reason: `adoptTerminal` re-fires `.shellReady`
+    ///     off the surviving sentinel.
+    ///   - `true` (default — crash-watchdog "Restart tmux server"): run
+    ///     `kill-server` and unlink the per-terminal scratch files.
+    public func shutdown(killServer: Bool = true) {
         if controller != nil {
-            NSLog("[CrowTelemetry tmux:server_shutdown bindings=\(bindings.count)]")
+            NSLog("[CrowTelemetry tmux:\(killServer ? "server_killed" : "server_detach") bindings=\(bindings.count)]")
         }
-        controller?.killServer()
+        if killServer {
+            controller?.killServer()
+        }
         sharedSurface?.destroy()
         sharedSurface = nil
         controller = nil
         bindings.removeAll()
         activeTerminalID = nil
         // Cancel any in-flight readiness watches so they don't keep polling
-        // (sentinel files are about to be unlinked) after server teardown.
-        // Mirrors the `destroyTerminal` cleanup (#282).
+        // after we let go of the backend. Mirrors the `destroyTerminal`
+        // cleanup (#282).
         for tasks in readinessTasks.values { tasks.forEach { $0.cancel() } }
         readinessTasks.removeAll()
-        for path in sentinels.values {
-            try? FileManager.default.removeItem(atPath: path)
+        // Only unlink the per-terminal scratch files when we're actually
+        // killing the server. On a clean quit that leaves the server running
+        // they must survive so the next launch's `adoptTerminal` can detect
+        // the already-ready shell from the existing sentinel (#330).
+        if killServer {
+            for path in sentinels.values {
+                try? FileManager.default.removeItem(atPath: path)
+            }
+            for path in wrapperLogs.values {
+                try? FileManager.default.removeItem(atPath: path)
+            }
         }
         sentinels.removeAll()
-        for path in wrapperLogs.values {
-            try? FileManager.default.removeItem(atPath: path)
-        }
         wrapperLogs.removeAll()
     }
 

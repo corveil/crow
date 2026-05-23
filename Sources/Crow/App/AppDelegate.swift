@@ -29,6 +29,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var devRoot: String?
     private var appConfig: AppConfig?
 
+    /// File descriptor holding the single-instance advisory lock
+    /// (`$TMPDIR/crow-instance.lock`). Held open for the whole process so the
+    /// `flock` is released only on exit/crash. -1 until acquired. See #330:
+    /// the tmux backend now uses a stable socket and outlives the app, so the
+    /// sole running instance must be the unambiguous owner of that server.
+    private var instanceLockFD: Int32 = -1
+
     /// Reused for the Jobs repo picker (avoids a fresh instance per form open).
     private let providerManager = ProviderManager()
     /// Cache of expanded `alwaysInclude` repo lists, keyed by workspace name +
@@ -52,6 +59,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // launched from Finder.
         CrashReporter.install()
 
+        // Enforce a single Crow instance per user (#330). The tmux backend now
+        // uses a stable socket that outlives the app, so a second instance
+        // would otherwise attach to (and fight over) the same persistent
+        // server. Bail out with an alert before touching any shared state.
+        guard acquireSingleInstanceLock() else {
+            presentAlreadyRunningAlert()
+            NSApp.terminate(nil)
+            return
+        }
+
         // Surface the prior launch's crash (if any) once the app is up.
         // Deferred via async so it doesn't block first-paint.
         if let priorCrashLog = CrashReporter.unseenPriorCrashLog() {
@@ -67,6 +84,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             showSetupWizard()
         }
+    }
+
+    /// Acquire the process-lifetime single-instance lock (#330). Returns true
+    /// if we got it (we're the only / owning instance), false if another live
+    /// Crow already holds it. The fd is stored in `instanceLockFD` and kept
+    /// open for the life of the process; `flock` releases automatically on
+    /// exit or crash, so a relaunch always reclaims it.
+    private func acquireSingleInstanceLock() -> Bool {
+        let tmpdir = ProcessInfo.processInfo.environment["TMPDIR"] ?? "/tmp"
+        let lockPath = (tmpdir as NSString).appendingPathComponent("crow-instance.lock")
+        let fd = open(lockPath, O_CREAT | O_RDWR, 0o600)
+        guard fd >= 0 else {
+            // Can't create the lock file — fail open rather than blocking launch.
+            NSLog("[Crow] single-instance lock open() failed (errno=\(errno)); proceeding")
+            return true
+        }
+        guard flock(fd, LOCK_EX | LOCK_NB) == 0 else {
+            close(fd)
+            return false
+        }
+        instanceLockFD = fd
+        return true
+    }
+
+    /// Native alert shown when a second Crow instance is launched. Crow only
+    /// supports one instance per user because the persistent tmux backend is a
+    /// single shared server (#330).
+    private func presentAlreadyRunningAlert() {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Crow is already running"
+        alert.informativeText = """
+            Another Crow instance is already connected to the terminal backend. \
+            Only one Crow instance can run at a time — switch to the existing \
+            window instead.
+            """
+        alert.addButton(withTitle: "Quit")
+        alert.runModal()
     }
 
     /// Show an alert pointing the user at the prior launch's crash log.
@@ -268,24 +323,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // onboarding sheet — there is no longer a per-terminal Ghostty
         // fallback, so terminals won't render until tmux is installed.
         //
-        // First reap any orphan tmux servers from past Crow runs that exited
-        // ungracefully (Force Quit / crash bypasses applicationWillTerminate
-        // and therefore the shutdown fix). Reaping is keyed on
-        // $TMPDIR/crow-tmux-<pid>.sock files whose PID is no longer a live
-        // CrowApp process. Costs ~50ms when there's nothing to do; idempotent.
+        // First reap any *legacy* per-PID tmux sockets left by pre-#330 builds
+        // (`$TMPDIR/crow-tmux-<pid>.sock` whose owning CrowApp is gone). The
+        // reaper deliberately does NOT match the stable socket below, so a
+        // healthy persistent server is preserved across this launch. Costs
+        // ~50ms when there's nothing to do; idempotent.
         let discoveredTmuxBinary = TmuxDiscovery.discover()
         if let tmuxBinary = discoveredTmuxBinary {
             TmuxOrphanReaper.reap(
                 tmuxBinary: tmuxBinary,
                 currentPID: ProcessInfo.processInfo.processIdentifier
             )
-            // Per-app socket in $TMPDIR. v1 of the rollout kills the tmux
-            // server on app quit, so restart-survival isn't a requirement;
-            // ~/Library/Application Support is reserved for that future work
-            // (spec §12).
+            // Stable, non-PID socket in $TMPDIR (#330). The tmux server now
+            // outlives the app: a clean quit leaves it running (see
+            // `applicationWillTerminate`) and this launch re-attaches to it,
+            // rebinding the existing sessions via `adoptTerminal`. Keeping the
+            // socket under $TMPDIR preserves the "reboot clears everything"
+            // property (macOS wipes /var/folders on reboot) — surviving a
+            // reboot is an explicit non-goal. The single-instance lock acquired
+            // in applicationDidFinishLaunching guarantees we're the sole owner.
             let tmpdir = ProcessInfo.processInfo.environment["TMPDIR"] ?? "/tmp"
             let socketPath = (tmpdir as NSString)
-                .appendingPathComponent("crow-tmux-\(ProcessInfo.processInfo.processIdentifier).sock")
+                .appendingPathComponent("crow-tmux.sock")
             TmuxBackend.shared.configure(tmuxBinary: tmuxBinary, socketPath: socketPath)
             TmuxBackend.shared.onUnresponsive = { [weak self] error in
                 Task { @MainActor in self?.handleTmuxUnresponsive(error: error) }
@@ -1624,8 +1683,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             _ = semaphore.wait(timeout: .now() + 2)
         }
         socketServer?.stop()
-        TmuxBackend.shared.shutdown()
+        // Leave the tmux server running so the next launch re-attaches to the
+        // existing sessions (#330). The crash-watchdog's "Restart tmux server"
+        // path still tears it down via the default `shutdown()`.
+        TmuxBackend.shared.shutdown(killServer: false)
         GhosttyApp.shared.shutdown()
+        // Release the single-instance lock last so the next Crow launch can
+        // acquire it (flock would release on exit anyway; explicit is clearer).
+        if instanceLockFD >= 0 {
+            close(instanceLockFD)
+            instanceLockFD = -1
+        }
         NSLog("[Crow] Cleanup complete")
     }
 

@@ -196,6 +196,35 @@ final class SessionService {
             NSLog("[SessionService] tmux not configured this run — terminal \(terminal.id) will not render")
             return terminal
         }
+
+        // #330: the tmux server now outlives the app, so on relaunch the
+        // window from last time is (usually) still live with its Claude TUI
+        // running. Re-attach to it rather than spawning a fresh window.
+        if let binding = terminal.tmuxBinding {
+            do {
+                // trackReadiness:false so adoptTerminal does NOT re-fire the
+                // sentinel's `.shellReady` — otherwise wireTerminalReadiness
+                // would drive launchClaude and paste a *second* `claude
+                // --continue` into a pane where Claude is already running.
+                try TmuxBackend.shared.adoptTerminal(id: terminal.id, binding: binding, trackReadiness: false)
+                // The window survived the prior quit → Claude is already up.
+                // Belt-and-suspenders against any other readiness path: drop
+                // the terminal from autoLaunchTerminals (also stops the
+                // didBecomeActive re-arm) and mark readiness terminal so
+                // launchClaude's `== .shellReady` guard can never fire.
+                appState.autoLaunchTerminals.remove(terminal.id)
+                if appState.terminalReadiness[terminal.id] != nil {
+                    appState.terminalReadiness[terminal.id] = .claudeLaunched
+                }
+                return terminal  // binding unchanged → no redundant persist
+            } catch {
+                NSLog("[SessionService] tmux adopt failed (\(error)) for \(terminal.id); creating a fresh window")
+            }
+        }
+
+        // No prior binding, or adoption failed (post-reboot clean slate, the
+        // window was closed, or a legacy per-PID socketPath that no longer
+        // matches the stable socket). Create a fresh window as before.
         do {
             let binding = try TmuxBackend.shared.registerTerminal(
                 id: terminal.id,
