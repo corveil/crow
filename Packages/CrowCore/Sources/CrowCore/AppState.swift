@@ -330,7 +330,7 @@ public final class AppState {
     }
 
     public var activeSessions: [Session] {
-        sessions.filter { $0.status == .active && $0.id != Self.managerSessionID && $0.kind == .work }
+        sessions.filter { $0.status == .active && $0.kind == .work }
     }
 
     public var inReviewSessions: [Session] {

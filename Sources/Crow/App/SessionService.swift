@@ -18,11 +18,36 @@ final class SessionService {
         self.telemetryPort = telemetryPort
     }
 
+    /// Upgrade the well-known primary Manager session from `.work` (how it was
+    /// persisted before `SessionKind.manager` existed) to `.manager`. Returns
+    /// `true` when a migration was applied. Pure/`nonisolated` so it can run on
+    /// both the in-memory `appState.sessions` and the persisted `store` copy,
+    /// and be unit-tested without a live app.
+    nonisolated static func migrateLegacyManagerKind(_ sessions: inout [Session]) -> Bool {
+        guard let idx = sessions.firstIndex(where: {
+            $0.id == AppState.managerSessionID && $0.kind != .manager
+        }) else { return false }
+        sessions[idx].kind = .manager
+        return true
+    }
+
     // MARK: - Hydrate State from Store
 
     func hydrateState() {
         let data = store.data
         appState.sessions = data.sessions
+
+        // Migrate a legacy primary Manager (persisted as `.work` before
+        // SessionKind.manager existed) to `.manager` BEFORE the per-session loop.
+        // Otherwise the `!session.isManager` hydration branch clears its claude
+        // command and reroutes it through the work-session auto-launch path,
+        // silently dropping the Manager's --auto-permission-mode args (#316).
+        // Persist so the upgrade is one-shot.
+        if Self.migrateLegacyManagerKind(&appState.sessions) {
+            store.mutate { data in
+                _ = Self.migrateLegacyManagerKind(&data.sessions)
+            }
+        }
 
         // Backfill provider from ticketURL for sessions that predate provider tracking
         for i in appState.sessions.indices {
@@ -474,16 +499,13 @@ final class SessionService {
 
     func ensureManagerSession(devRoot: String) {
         let managerID = AppState.managerSessionID
-        if let idx = appState.sessions.firstIndex(where: { $0.id == managerID }) {
-            // Migrate a legacy primary Manager (created before SessionKind.manager
-            // existed, so persisted as .work) to the .manager kind so all the
-            // kind-based special-casing recognizes it.
-            if appState.sessions[idx].kind != .manager {
-                appState.sessions[idx].kind = .manager
+        if appState.sessions.contains(where: { $0.id == managerID }) {
+            // Defense-in-depth: `hydrateState` already migrates a legacy `.work`
+            // primary Manager before this runs, but migrate here too in case the
+            // session was created/mutated via another path.
+            if Self.migrateLegacyManagerKind(&appState.sessions) {
                 store.mutate { data in
-                    if let i = data.sessions.firstIndex(where: { $0.id == managerID }) {
-                        data.sessions[i].kind = .manager
-                    }
+                    _ = Self.migrateLegacyManagerKind(&data.sessions)
                 }
             }
         } else {
@@ -614,7 +636,8 @@ final class SessionService {
     /// Performs a full cascade: destroys terminal surfaces, removes worktrees from disk
     /// (with branch deletion for non-protected branches), removes hook configs, and cleans
     /// up all in-memory state (sessions, worktrees, links, terminals, hook state, PR status).
-    /// The manager session cannot be deleted.
+    /// The primary Manager session (well-known UUID) cannot be deleted;
+    /// additional Manager sessions are deletable.
     ///
     /// The slow filesystem/git work runs in a detached task so the main thread stays
     /// responsive. While cleanup is in flight, `appState.isDeletingSession[id]` is `true`
@@ -1329,7 +1352,7 @@ final class SessionService {
         switch kind {
         case .review: return ".crow-review-prompt.md"
         case .job: return ".crow-job-prompt.md"
-        case .work: return nil
+        case .work, .manager: return nil
         }
     }
 

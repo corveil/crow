@@ -423,8 +423,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // (auto-named "Manager N") with its own Claude-Code terminal in the devRoot.
         appState.onCreateManager = { [weak self, weak service] in
             guard let self, let service else { return }
-            let name = "Manager \(self.appState.managerSessions.count + 1)"
-            let id = service.createManagerSession(name: name, cwd: devRoot)
+            // Pick the lowest unused "Manager N" so a delete-in-the-middle
+            // doesn't produce a duplicate name.
+            let existingNames = Set(self.appState.managerSessions.map(\.name))
+            var n = 2
+            while existingNames.contains("Manager \(n)") { n += 1 }
+            let id = service.createManagerSession(name: "Manager \(n)", cwd: devRoot)
             self.appState.selectedSessionID = id
         }
 
