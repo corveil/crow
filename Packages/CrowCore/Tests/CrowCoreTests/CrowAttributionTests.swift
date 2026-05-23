@@ -19,3 +19,17 @@ import Testing
     #expect(!CrowAttribution.reviewMarkdownLink.contains("nicholasgasior"))
     #expect(!CrowAttribution.reviewMarkdownLink.lowercased().contains("corveil"))
 }
+
+@Test func crowAttributionTicketLinkIsCanonical() {
+    #expect(CrowAttribution.ticketMarkdownLink ==
+            "[🐦‍⬛ Created with Crow via Claude Code](https://github.com/radiusmethod/crow)")
+}
+
+@Test func crowAttributionTicketLinkEmbedsRepoURL() {
+    #expect(CrowAttribution.ticketMarkdownLink.contains(CrowAttribution.repoURL))
+}
+
+@Test func crowAttributionTicketLinkContainsNoForkReferences() {
+    #expect(!CrowAttribution.ticketMarkdownLink.contains("nicholasgasior"))
+    #expect(!CrowAttribution.ticketMarkdownLink.lowercased().contains("corveil"))
+}

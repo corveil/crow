@@ -5,4 +5,7 @@ public enum CrowAttribution {
 
     public static let reviewMarkdownLink =
         "[🐦‍⬛ Reviewed by Crow via Claude Code](\(repoURL))"
+
+    public static let ticketMarkdownLink =
+        "[🐦‍⬛ Created with Crow via Claude Code](\(repoURL))"
 }
