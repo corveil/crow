@@ -488,7 +488,7 @@ final class IssueTracker {
 
     // MARK: - Consolidated GraphQL Query
 
-    private struct ConsolidatedGitHubResponse {
+    private struct ConsolidatedGitHubResponse: Sendable {
         let openIssues: [AssignedIssue]
         let closedIssues: [AssignedIssue]
         let viewerPRs: [ViewerPR]
@@ -681,7 +681,9 @@ final class IssueTracker {
         }
 
         clearScopeWarning()
-        return parseConsolidatedResponse(result.stdout)
+        // Parse off the main actor — only the Sendable result hops back (#304).
+        let output = result.stdout
+        return await Task.detached { self.parseConsolidatedResponse(output) }.value
     }
 
     private func retryWithoutProjectItems(openQuery: String, closedQuery: String, reviewQuery: String) async -> ConsolidatedGitHubResponse? {
@@ -711,7 +713,9 @@ final class IssueTracker {
             print("[IssueTracker] GraphQL retry (no projectItems) failed (exit \(result.exitCode)): \(result.stderr.prefix(300))")
             return nil
         }
-        return parseConsolidatedResponse(result.stdout)
+        // Parse off the main actor — only the Sendable result hops back (#304).
+        let output = result.stdout
+        return await Task.detached { self.parseConsolidatedResponse(output) }.value
     }
 
     // MARK: - Stale PR Follow-up
@@ -1007,7 +1011,13 @@ final class IssueTracker {
         return prs
     }
 
-    private func parseConsolidatedResponse(_ output: String) -> ConsolidatedGitHubResponse? {
+    // `nonisolated` so the JSON parsing — the heaviest CPU work in a refresh
+    // (up to ~50 PRs + ~50 review requests + ~150 issues with nested
+    // label/check/review traversal) — can run off the main actor via
+    // `Task.detached`. These helpers touch no instance/`appState` state, only
+    // their arguments and a local date formatter, so they are safe off-actor.
+    // Only the resulting (Sendable) value hops back to the main actor (#304).
+    nonisolated private func parseConsolidatedResponse(_ output: String) -> ConsolidatedGitHubResponse? {
         guard let data = output.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let dataObj = json["data"] as? [String: Any] else {
@@ -1047,7 +1057,7 @@ final class IssueTracker {
         )
     }
 
-    private func parseIssueNodes(
+    nonisolated private func parseIssueNodes(
         _ searchObj: [String: Any]?,
         defaultState: String,
         dateFormatter: ISO8601DateFormatter,
@@ -1101,7 +1111,7 @@ final class IssueTracker {
         }
     }
 
-    private func parseViewerPRs(_ viewerObj: [String: Any]?) -> [ViewerPR] {
+    nonisolated private func parseViewerPRs(_ viewerObj: [String: Any]?) -> [ViewerPR] {
         guard let pullRequests = viewerObj?["pullRequests"] as? [String: Any],
               let nodes = pullRequests["nodes"] as? [[String: Any]] else { return [] }
 
@@ -1171,7 +1181,7 @@ final class IssueTracker {
         }
     }
 
-    private func parseReviewRequests(
+    nonisolated private func parseReviewRequests(
         _ searchObj: [String: Any]?,
         dateFormatter: ISO8601DateFormatter,
         viewerLogin: String?
@@ -1244,7 +1254,7 @@ final class IssueTracker {
         return requests.sorted { ($0.requestedAt ?? .distantPast) > ($1.requestedAt ?? .distantPast) }
     }
 
-    private func parseRateLimit(_ obj: [String: Any]?) -> GitHubRateLimit? {
+    nonisolated private func parseRateLimit(_ obj: [String: Any]?) -> GitHubRateLimit? {
         guard let obj,
               let remaining = obj["remaining"] as? Int,
               let limit = obj["limit"] as? Int,
@@ -1286,7 +1296,11 @@ final class IssueTracker {
             }
         }
 
-        let store = JSONStore()
+        // Accumulate new links and persist them in a single store write below.
+        // Writing per-session inside the loop meant N full-store encode + atomic
+        // disk writes when a burst of PRs got linked at once — the dominant
+        // main-thread stall behind the concurrent-review freeze (#304).
+        var newLinks: [SessionLink] = []
 
         for session in appState.sessions {
             guard session.id != AppState.managerSessionID else { continue }
@@ -1311,9 +1325,12 @@ final class IssueTracker {
                 linkType: .pr
             )
             appState.links[session.id, default: []].append(link)
-            store.mutate { data in
-                data.links.append(link)
-            }
+            newLinks.append(link)
+        }
+
+        guard !newLinks.isEmpty else { return }
+        JSONStore().mutate { data in
+            data.links.append(contentsOf: newLinks)
         }
     }
 
@@ -1590,7 +1607,8 @@ final class IssueTracker {
     /// (identified by URL match) wins without leaving a duplicate row.
     private func applyReconciledPRLinks(_ picks: [ReconcileBranchMatch]) {
         guard !picks.isEmpty else { return }
-        let store = JSONStore()
+        // Accumulate then persist once — see `applySessionPRLinks` (#304).
+        var newLinks: [SessionLink] = []
         for pick in picks {
             let existing = appState.links(for: pick.sessionID)
             if existing.contains(where: { $0.linkType == .pr || $0.url == pick.url }) { continue }
@@ -1601,9 +1619,12 @@ final class IssueTracker {
                 linkType: .pr
             )
             appState.links[pick.sessionID, default: []].append(link)
-            store.mutate { data in
-                data.links.append(link)
-            }
+            newLinks.append(link)
+        }
+
+        guard !newLinks.isEmpty else { return }
+        JSONStore().mutate { data in
+            data.links.append(contentsOf: newLinks)
         }
     }
 

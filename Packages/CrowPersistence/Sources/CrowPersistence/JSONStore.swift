@@ -37,6 +37,15 @@ public final class JSONStore: Sendable {
     private let fileURL: URL
     private let lock = NSLock()
     private nonisolated(unsafe) var _data: StoreData
+    /// Monotonic mutation counter, bumped under `lock` for every `mutate`.
+    /// Each snapshot carries the sequence it was taken at so the write path
+    /// can drop stale snapshots (see `mutate`).
+    private nonisolated(unsafe) var writeSeq: UInt64 = 0
+    /// Serializes disk writes independently of `lock`, so the in-memory data
+    /// lock is never held across the (potentially slow) encode + atomic write.
+    private let writeLock = NSLock()
+    /// Highest sequence already persisted, guarded by `writeLock`.
+    private nonisolated(unsafe) var lastWrittenSeq: UInt64 = 0
 
     public var data: StoreData {
         lock.lock()
@@ -70,10 +79,28 @@ public final class JSONStore: Sendable {
     }
 
     public func mutate(_ transform: (inout StoreData) -> Void) {
+        // Apply the mutation and snapshot under `lock`, then release it before
+        // touching disk. Holding `lock` across the encode + atomic write blocks
+        // every reader (`data`) and other mutators for the full duration of the
+        // I/O — exactly the contention that froze the UI when many sessions
+        // updated at once (#304).
         lock.lock()
-        defer { lock.unlock() }
         transform(&_data)
-        Self.save(_data, to: fileURL)
+        writeSeq &+= 1
+        let mySeq = writeSeq
+        let snapshot = _data
+        lock.unlock()
+
+        // Serialize writes on a separate lock so disk order matches mutation
+        // order. Each save carries its sequence; a snapshot that is already
+        // stale (a newer one has been written) is dropped. Because the
+        // highest-sequence snapshot reflects every mutation up to that point,
+        // coalescing redundant writes can never drop data.
+        writeLock.lock()
+        defer { writeLock.unlock() }
+        guard mySeq > lastWrittenSeq else { return }
+        lastWrittenSeq = mySeq
+        Self.save(snapshot, to: fileURL)
     }
 
     private static func save(_ data: StoreData, to url: URL) {

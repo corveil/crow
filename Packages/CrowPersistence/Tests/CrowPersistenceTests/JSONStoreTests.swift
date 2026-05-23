@@ -59,6 +59,63 @@ import Testing
     #expect(reloaded.data.sessions.count == iterations)
 }
 
+// Guards the lock-scope + write-coalescing change (#304): the in-memory data
+// lock is released before the disk write, but writes must still land in
+// mutation order and the newest snapshot must win. A stale snapshot winning
+// would leave the on-disk state internally inconsistent across fields.
+@Test func concurrentMutatesAcrossFieldsAreConsistent() throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    let store = JSONStore(directory: dir)
+    let iterations = 100
+
+    let group = DispatchGroup()
+    for i in 0..<iterations {
+        group.enter()
+        DispatchQueue.global().async {
+            // Each mutate appends to two different arrays. The newest snapshot
+            // always reflects every prior mutation, so the final on-disk state
+            // must carry equal counts for both — never a torn write where one
+            // array advanced but the other did not.
+            store.mutate { data in
+                data.sessions.append(Session(name: "s-\(i)"))
+                data.links.append(SessionLink(
+                    sessionID: UUID(), label: "l-\(i)",
+                    url: "https://example.com/\(i)", linkType: .pr
+                ))
+            }
+            group.leave()
+        }
+    }
+    group.wait()
+
+    #expect(store.data.sessions.count == iterations)
+    #expect(store.data.links.count == iterations)
+
+    let reloaded = JSONStore(directory: dir)
+    #expect(reloaded.data.sessions.count == iterations)
+    #expect(reloaded.data.links.count == iterations)
+}
+
+// The final mutation in a rapid burst must always be the one persisted —
+// write coalescing may drop intermediate snapshots but never the latest (#304).
+@Test func lastMutationInBurstIsPersisted() throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    let store = JSONStore(directory: dir)
+    for i in 0..<200 {
+        store.mutate { data in
+            data.sessions.append(Session(name: "burst-\(i)"))
+        }
+    }
+
+    let reloaded = JSONStore(directory: dir)
+    #expect(reloaded.data.sessions.count == 200)
+    #expect(reloaded.data.sessions.last?.name == "burst-199")
+}
+
 @Test func corruptFileCreatesBackup() throws {
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: dir) }
