@@ -311,33 +311,36 @@ struct TmuxBackendTests {
     /// next launch's `adoptTerminal` can detect the already-ready shell) and
     /// UNLINKED across a `killServer: true` shutdown (legacy cleanup).
     @Test func sentinelKeptOnDetachRemovedOnKill() throws {
-        let id = UUID()
-        let sentinel = sentinelPath(for: id)
-
-        // killServer:false → sentinel survives.
+        // killServer:false → sentinel survives. Independent id/socket per half
+        // so the two assertions don't share any state.
+        let keptID = UUID()
+        let keptSentinel = sentinelPath(for: keptID)
         let detachSocket = sharedSocketPath()
         let detached = makeBackend(socket: detachSocket)
         _ = try detached.registerTerminal(
-            id: id, name: "s", cwd: NSHomeDirectory(),
+            id: keptID, name: "s", cwd: NSHomeDirectory(),
             command: nil, trackReadiness: false
         )
-        FileManager.default.createFile(atPath: sentinel, contents: nil)
+        FileManager.default.createFile(atPath: keptSentinel, contents: nil)
         detached.shutdown(killServer: false)
-        #expect(FileManager.default.fileExists(atPath: sentinel))
+        #expect(FileManager.default.fileExists(atPath: keptSentinel))
         killLeftoverServer(socket: detachSocket)
+        try? FileManager.default.removeItem(atPath: keptSentinel)
 
         // killServer:true → sentinel removed.
+        let killedID = UUID()
+        let killedSentinel = sentinelPath(for: killedID)
         let killSocket = sharedSocketPath()
         let killed = makeBackend(socket: killSocket)
         _ = try killed.registerTerminal(
-            id: id, name: "s", cwd: NSHomeDirectory(),
+            id: killedID, name: "s", cwd: NSHomeDirectory(),
             command: nil, trackReadiness: false
         )
-        FileManager.default.createFile(atPath: sentinel, contents: nil)
+        FileManager.default.createFile(atPath: killedSentinel, contents: nil)
         killed.shutdown(killServer: true)
-        #expect(!FileManager.default.fileExists(atPath: sentinel))
+        #expect(!FileManager.default.fileExists(atPath: killedSentinel))
 
-        try? FileManager.default.removeItem(atPath: sentinel)
+        try? FileManager.default.removeItem(atPath: killedSentinel)
     }
 
     /// Adopting with `trackReadiness: false` must NOT fire `.shellReady`, even

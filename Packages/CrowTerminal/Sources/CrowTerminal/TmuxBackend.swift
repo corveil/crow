@@ -104,8 +104,11 @@ public final class TmuxBackend {
     /// Must be called before any other method.
     public private(set) var tmuxBinary: String = ""
 
-    /// Persistent socket path — Crow uses one explicit socket per app
-    /// instance so it never collides with a user's own tmux.
+    /// Persistent socket path. Crow uses one explicit, per-user socket
+    /// (`$TMPDIR/crow-tmux.sock`) so it never collides with a user's own tmux.
+    /// Since #330 it is stable across app instances: the server outlives a
+    /// clean quit and a relaunch re-attaches to it (single-instance guard in
+    /// AppDelegate guarantees only one owner).
     public private(set) var socketPath: String = ""
 
     public func configure(tmuxBinary: String, socketPath: String) {

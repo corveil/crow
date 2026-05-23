@@ -141,10 +141,12 @@ final class SessionService {
         // tmux sentinel's .shellReady event is never lost.
         wireTerminalReadiness()
 
-        // Re-hydrate every persisted terminal by re-registering it with a
-        // freshly-started tmux server (v1 doesn't keep the server alive across
-        // launches; spec §12). If re-registration fails (e.g. tmux uninstalled)
-        // the row is left as-is and simply won't render this launch.
+        // Re-hydrate every persisted terminal. Since #330 the tmux server
+        // outlives the app, so rehydrateTerminalSurface adopts the persisted
+        // window when it's still live and only re-registers a fresh one as a
+        // fallback (post-reboot, closed window, or a legacy socket). If both
+        // fail (e.g. tmux uninstalled) the row is left as-is and simply won't
+        // render this launch.
         //
         // Each per-terminal rehydration is dispatched as its own @MainActor
         // task so the run loop can service AppKit/SwiftUI between them.

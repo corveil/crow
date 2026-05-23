@@ -94,10 +94,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func acquireSingleInstanceLock() -> Bool {
         let tmpdir = ProcessInfo.processInfo.environment["TMPDIR"] ?? "/tmp"
         let lockPath = (tmpdir as NSString).appendingPathComponent("crow-instance.lock")
-        let fd = open(lockPath, O_CREAT | O_RDWR, 0o600)
+        // O_CLOEXEC so the lock fd is NOT inherited across exec by the
+        // subprocesses Crow spawns (Process/posix_spawn defaults to inheriting
+        // fds). A `flock` is released only when *every* descriptor on its
+        // open-file-description is closed across all processes — if the
+        // persistent tmux daemon (#330) inherited and held this fd, a relaunch
+        // would fail to re-acquire the lock even with no Crow alive. Don't rely
+        // on the child's own fd cleanup; close on exec unconditionally.
+        let fd = open(lockPath, O_CREAT | O_RDWR | O_CLOEXEC, 0o600)
         guard fd >= 0 else {
             // Can't create the lock file — fail open rather than blocking launch.
-            NSLog("[Crow] single-instance lock open() failed (errno=\(errno)); proceeding")
+            NSLog("[CrowTelemetry instance_lock:open_failed errno=\(errno)] proceeding without single-instance guard")
             return true
         }
         guard flock(fd, LOCK_EX | LOCK_NB) == 0 else {
@@ -112,6 +119,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// supports one instance per user because the persistent tmux backend is a
     /// single shared server (#330).
     private func presentAlreadyRunningAlert() {
+        let tmpdir = ProcessInfo.processInfo.environment["TMPDIR"] ?? "/tmp"
+        let lockPath = (tmpdir as NSString).appendingPathComponent("crow-instance.lock")
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Crow is already running"
@@ -119,6 +128,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Another Crow instance is already connected to the terminal backend. \
             Only one Crow instance can run at a time — switch to the existing \
             window instead.
+
+            If no Crow is actually running, remove the stale lock file:
+            \(lockPath)
             """
         alert.addButton(withTitle: "Quit")
         alert.runModal()
@@ -1683,17 +1695,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             _ = semaphore.wait(timeout: .now() + 2)
         }
         socketServer?.stop()
+        // Release the single-instance lock as early as possible so a fast
+        // quit→relaunch doesn't hit a spurious "Crow is already running" while
+        // the slower Ghostty/tmux teardown below finishes (flock would release
+        // on exit anyway; explicit + early is best).
+        if instanceLockFD >= 0 {
+            close(instanceLockFD)
+            instanceLockFD = -1
+        }
         // Leave the tmux server running so the next launch re-attaches to the
         // existing sessions (#330). The crash-watchdog's "Restart tmux server"
         // path still tears it down via the default `shutdown()`.
         TmuxBackend.shared.shutdown(killServer: false)
         GhosttyApp.shared.shutdown()
-        // Release the single-instance lock last so the next Crow launch can
-        // acquire it (flock would release on exit anyway; explicit is clearer).
-        if instanceLockFD >= 0 {
-            close(instanceLockFD)
-            instanceLockFD = -1
-        }
         NSLog("[Crow] Cleanup complete")
     }
 
