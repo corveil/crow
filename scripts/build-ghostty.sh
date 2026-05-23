@@ -36,7 +36,7 @@ REQUIRED_ZIG="0.15.2"
 CURRENT_ZIG=$(zig version 2>/dev/null || echo "not found")
 if [ "$CURRENT_ZIG" != "$REQUIRED_ZIG" ]; then
     echo "ERROR: Zig $REQUIRED_ZIG required, found: $CURRENT_ZIG"
-    echo "Install with: brew install zig"
+    echo "Install with: brew install zig@0.15"
     exit 1
 fi
 
