@@ -15,14 +15,6 @@ public struct SummaryBoardView: View {
     /// does the filtering.
     private static let sinceWindow = "24 hours ago"
 
-    /// Whether the `claude` CLI is on PATH; gates the LLM Summarize button.
-    /// Resolved once on appear (a PATH scan, not worth doing per render).
-    @State private var claudeAvailable = true
-
-    /// Bumped whenever results change (Generate) or a new LLM run starts, so an
-    /// in-flight LLM task can detect it was superseded and drop its stale result.
-    @State private var llmGeneration = 0
-
     public init(appState: AppState) {
         self.appState = appState
     }
@@ -35,13 +27,11 @@ public struct SummaryBoardView: View {
                 storageKey: "helpDismissed_summary"
             )
             controls
-            narrativeCard
             Divider()
             resultsList
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.background)
-        .task { claudeAvailable = ShellEnvironment.shared.hasCommand("claude") }
     }
 
     // MARK: Header
@@ -104,31 +94,6 @@ public struct SummaryBoardView: View {
                 .font(.caption)
                 .foregroundStyle(CorveilTheme.textSecondary)
             Spacer()
-            Button(action: summarizeWithLLM) {
-                HStack(spacing: 4) {
-                    if appState.isSummarizingLLM {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        Image(systemName: "sparkles")
-                            .font(.system(size: 10))
-                    }
-                    Text("Summarize")
-                        .font(.system(size: 13, weight: .semibold))
-                }
-                .foregroundStyle(CorveilTheme.gold)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 6)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8)
-                        .strokeBorder(CorveilTheme.goldDark.opacity(0.4), lineWidth: 1)
-                )
-            }
-            .buttonStyle(.plain)
-            .disabled(appState.lastSummary.isEmpty || appState.isLoadingSummary || appState.isSummarizingLLM || !claudeAvailable)
-            .help(claudeAvailable
-                  ? "Summarize the digest with Claude"
-                  : "Install the `claude` CLI to use Summarize")
-
             Button(action: generate) {
                 HStack(spacing: 4) {
                     Image(systemName: "arrow.triangle.2.circlepath")
@@ -148,58 +113,6 @@ public struct SummaryBoardView: View {
         .padding(.horizontal)
         .padding(.vertical, 10)
         .background(CorveilTheme.bgSurface)
-    }
-
-    // MARK: LLM narrative
-
-    /// Narrative card shown above the results once an LLM summary is produced
-    /// (or an error if the run failed). Dismissible by clearing the text.
-    @ViewBuilder
-    private var narrativeCard: some View {
-        if let error = appState.llmSummaryError {
-            HStack(alignment: .top, spacing: 8) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.orange)
-                Text(error)
-                    .font(.caption)
-                    .foregroundStyle(CorveilTheme.textSecondary)
-                Spacer()
-                Button {
-                    appState.llmSummaryError = nil
-                } label: {
-                    Image(systemName: "xmark").font(.system(size: 10))
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(CorveilTheme.textMuted)
-            }
-            .padding(.horizontal)
-            .padding(.vertical, 8)
-            .background(Color.orange.opacity(0.08))
-        } else if !appState.llmNarrative.isEmpty {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                    Label("Summary", systemImage: "sparkles")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(CorveilTheme.gold)
-                    Spacer()
-                    Button {
-                        appState.llmNarrative = ""
-                    } label: {
-                        Image(systemName: "xmark").font(.system(size: 10))
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(CorveilTheme.textMuted)
-                }
-                Text(appState.llmNarrative)
-                    .font(.system(size: 14))
-                    .foregroundStyle(CorveilTheme.textPrimary)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(.horizontal)
-            .padding(.vertical, 10)
-            .background(CorveilTheme.gold.opacity(0.06))
-        }
     }
 
     // MARK: Results
@@ -305,53 +218,10 @@ public struct SummaryBoardView: View {
     private func generate() {
         guard let onGenerate = appState.onGenerateSummary else { return }
         appState.isLoadingSummary = true
-        // Any in-flight LLM summary now targets a stale digest — invalidate it
-        // (so its late result is dropped) and clear the current narrative.
-        llmGeneration += 1
-        appState.isSummarizingLLM = false
-        appState.llmNarrative = ""
-        appState.llmSummaryError = nil
         Task {
             let result = await onGenerate(Self.sinceWindow, nil)
             appState.lastSummary = result
             appState.isLoadingSummary = false
         }
-    }
-
-    /// Build a text digest of the current results and hand it to the LLM.
-    private func summarizeWithLLM() {
-        guard let onSummarize = appState.onSummarizeWithLLM,
-              !appState.lastSummary.isEmpty else { return }
-        let digest = Self.buildDigest(appState.lastSummary)
-        llmGeneration += 1
-        let generation = llmGeneration
-        appState.isSummarizingLLM = true
-        appState.llmSummaryError = nil
-        appState.llmNarrative = ""
-        Task {
-            do {
-                let narrative = try await onSummarize(digest)
-                guard generation == llmGeneration else { return }  // superseded
-                appState.llmNarrative = narrative
-            } catch {
-                guard generation == llmGeneration else { return }
-                appState.llmSummaryError = error.localizedDescription
-            }
-            if generation == llmGeneration { appState.isSummarizingLLM = false }
-        }
-    }
-
-    /// Render the digest the same way a human reads the board: a header per repo
-    /// with counts/stats, then one line per commit.
-    static func buildDigest(_ summaries: [RepoCommitSummary]) -> String {
-        var lines: [String] = []
-        for repo in summaries {
-            lines.append("## \(repo.repo) — \(repo.commits.count) commit\(repo.commits.count == 1 ? "" : "s"), \(repo.totalFilesChanged) file\(repo.totalFilesChanged == 1 ? "" : "s"), +\(repo.totalInsertions)/-\(repo.totalDeletions)")
-            for c in repo.commits {
-                lines.append("- \(c.shortHash) \(c.subject) (+\(c.insertions)/-\(c.deletions))")
-            }
-            lines.append("")
-        }
-        return lines.joined(separator: "\n")
     }
 }

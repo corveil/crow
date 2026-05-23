@@ -8,7 +8,6 @@ import CrowPersistence
 import CrowTerminal
 import CrowIPC
 import CrowTelemetry
-import CrowClaude
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -452,10 +451,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 defaults: WorkspaceDefaults(excludeDirs: excludeDirs)
             ))
             return (try? await gm.summarizeCommits(since: since, until: until, includeRepos: include)) ?? []
-        }
-        // LLM Summarize: hand the deterministic digest to `claude -p` for a narrative.
-        appState.onSummarizeWithLLM = { digest in
-            try await ClaudeSummarizer().summarize(digest: digest)
         }
         appState.onSetSessionInReview = { [weak service] id in
             service?.setSessionInReview(id: id)
