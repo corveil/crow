@@ -12,7 +12,7 @@ public struct MainContentView: View {
     public var body: some View {
         NavigationSplitView {
             SessionListView(appState: appState)
-                .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 350)
+                .navigationSplitViewColumnWidth(min: 220, ideal: 350, max: 350)
         } detail: {
             if appState.selectedSessionID == AppState.ticketBoardSessionID {
                 TicketBoardView(appState: appState)
