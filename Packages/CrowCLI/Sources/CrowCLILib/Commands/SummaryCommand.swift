@@ -13,8 +13,8 @@ public struct Summary: ParsableCommand {
         abstract: "Cross-repo commit digest over a time period"
     )
 
-    @Option(name: .long, help: "Start of window (git date: '1 week ago', '2026-05-01').")
-    var since: String = "1 week ago"
+    @Option(name: .long, help: "Start of window (git date: '24 hours ago', '2026-05-01'). Defaults to the last 24 hours.")
+    var since: String = "24 hours ago"
 
     @Option(name: .long, help: "End of window (git date). Defaults to now.")
     var until: String?

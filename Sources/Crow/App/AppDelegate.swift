@@ -8,6 +8,7 @@ import CrowPersistence
 import CrowTerminal
 import CrowIPC
 import CrowTelemetry
+import CrowClaude
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -379,6 +380,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 defaults: WorkspaceDefaults(excludeDirs: excludeDirs)
             ))
             return (try? await gm.summarizeCommits(since: since, until: until, includeRepos: include)) ?? []
+        }
+        // LLM Summarize: hand the deterministic digest to `claude -p` for a narrative.
+        appState.onSummarizeWithLLM = { digest in
+            try await ClaudeSummarizer().summarize(digest: digest)
         }
         appState.onSetSessionInReview = { [weak service] id in
             service?.setSessionInReview(id: id)
@@ -1549,7 +1554,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             },
             "get-summary": { @Sendable params in
-                let since = params["since"]?.stringValue ?? "1 week ago"
+                let since = params["since"]?.stringValue ?? "24 hours ago"
                 let until = params["until"]?.stringValue
                 let excludeDirs = await excludeDirsProvider()
                 let include = await summaryReposProvider()
@@ -1561,7 +1566,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let summaries = try await gm.summarizeCommits(since: since, until: until, includeRepos: include)
                 let fmt = ISO8601DateFormatter()
                 let repos: [JSONValue] = summaries.map { s in
-                    .object([
+                    var obj: [String: JSONValue] = [
                         "repo": .string(s.repo),
                         "path": .string(s.path),
                         "workspace": .string(s.workspace),
@@ -1581,7 +1586,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                 "deletions": .int(c.deletions),
                             ])
                         }),
-                    ])
+                    ]
+                    if let prefix = s.commitURLPrefix { obj["commitURLPrefix"] = .string(prefix) }
+                    return .object(obj)
                 }
                 return ["repos": .array(repos)]
             },

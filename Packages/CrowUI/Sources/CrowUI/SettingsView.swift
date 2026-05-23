@@ -244,7 +244,7 @@ public struct SettingsView: View {
                             .filter { !$0.isEmpty }
                         save()
                     }
-                Text("Comma-separated repo names the Changes board summarizes (e.g., crow, acme-api). Empty means nothing is summarized.")
+                Text("Comma-separated org/repo the Changes board summarizes (e.g., radiusmethod/crow, acme/api). Duplicate names under different orgs resolve independently. Empty means nothing is summarized.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

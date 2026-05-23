@@ -127,4 +127,38 @@ struct CommitSummaryTests {
             .summarizeCommits(since: "2019-01-01", until: "2019-12-31")
         #expect(summaries.isEmpty)
     }
+
+    @Test func scopesByOrgRepoSlugAndDerivesCommitURLPrefix() async throws {
+        try #require(gitAvailable())
+        let devRoot = try #require(makeDevRoot())
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+
+        let repoPath = ((devRoot as NSString).appendingPathComponent("ws") as NSString)
+            .appendingPathComponent("repo")
+        git(["remote", "add", "origin", "git@github.com:acme/repo.git"], in: repoPath)
+
+        let gm = manager(devRoot: devRoot)
+        let window = (since: "2026-05-01", until: "2026-12-31")
+
+        // Matching slug → included, with a GitHub commit-URL prefix.
+        let matched = try await gm.summarizeCommits(
+            since: window.since, until: window.until, includeRepos: ["acme/repo"])
+        #expect(matched.count == 1)
+        #expect(matched.first?.commitURLPrefix == "https://github.com/acme/repo/commit/")
+
+        // Case-insensitive match.
+        let cased = try await gm.summarizeCommits(
+            since: window.since, until: window.until, includeRepos: ["ACME/Repo"])
+        #expect(cased.count == 1)
+
+        // Same bare name under a different org → no match.
+        let other = try await gm.summarizeCommits(
+            since: window.since, until: window.until, includeRepos: ["other/repo"])
+        #expect(other.isEmpty)
+
+        // Empty scope set → nothing (distinct from nil = include all).
+        let none = try await gm.summarizeCommits(
+            since: window.since, until: window.until, includeRepos: [])
+        #expect(none.isEmpty)
+    }
 }
