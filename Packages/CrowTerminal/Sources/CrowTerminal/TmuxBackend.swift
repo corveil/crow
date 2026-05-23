@@ -2,6 +2,16 @@ import AppKit
 import CrowCore
 import Foundation
 
+/// The two cockpit-session ops `TmuxBackend.ensureCockpitSession` performs
+/// while starting the tmux server. Abstracted so the create-or-adopt branch
+/// is unit-testable with a fake — without spinning up a real tmux server or
+/// abstracting the whole `TmuxController`. `TmuxController` is the production
+/// conformer (see its `extension` in TmuxController.swift).
+protocol CockpitSessionStarter {
+    func hasSession() -> Bool
+    func newSessionDetached(configPath: String?, env: [String: String], command: String?) throws
+}
+
 /// Crow-app-wide singleton that owns the tmux server backing all
 /// `SessionTerminal.backend == .tmux` rows.
 ///
@@ -48,6 +58,14 @@ public final class TmuxBackend {
 
     /// UUID → tmux window index for tabs registered with us.
     private var bindings: [UUID: Int] = [:]
+
+    /// Terminal whose tmux window is currently selected, so `makeActive` can
+    /// skip a redundant `select-window`. SwiftUI re-runs `updateNSView` (→
+    /// `syncSurface` → `makeActive`) repeatedly for the same visible tab;
+    /// without this each call shells out another run-loop-pumping subprocess
+    /// (review nit on #336). Keyed by UUID, not window index — tmux can reuse
+    /// a freed index for a new window, and a UUID never collides that way.
+    private(set) var activeTerminalID: UUID?
 
     /// UUID → per-terminal sentinel path. Cleared on destroy.
     private var sentinels: [UUID: String] = [:]
@@ -111,6 +129,7 @@ public final class TmuxBackend {
         sharedSurface = nil
         controller = nil
         bindings.removeAll()
+        activeTerminalID = nil
         // Cancel any in-flight readiness watches so they don't keep polling
         // (sentinel files are about to be unlinked) after server teardown.
         // Mirrors the `destroyTerminal` cleanup (#282).
@@ -233,6 +252,9 @@ public final class TmuxBackend {
         guard let windowIndex = bindings[id] else {
             throw TmuxBackendError.unknownTerminal(id)
         }
+        // Already the selected window — skip the redundant `select-window`
+        // subprocess (see `activeTerminalID`).
+        if id == activeTerminalID { return }
         let start = Date()
         do {
             try ensureRunningServer().selectWindow(index: windowIndex)
@@ -240,6 +262,9 @@ public final class TmuxBackend {
             reportIfTimeout(error)
             throw error
         }
+        // Record only after a successful switch — a failed `select-window`
+        // must not suppress the next attempt.
+        activeTerminalID = id
         let elapsedMS = Int((Date().timeIntervalSince(start)) * 1000)
         // Operator-greppable: `[CrowTelemetry tmux:tab_switch_ms=…]`. Easy
         // to graph from logs today; trivially re-routed to a real metrics
@@ -303,6 +328,9 @@ public final class TmuxBackend {
             controller?.killWindow(index: windowIndex)
         }
         bindings.removeValue(forKey: id)
+        // Forget the active marker if this was the selected terminal, so a
+        // window index tmux later reuses can't be wrongly deduped away.
+        if activeTerminalID == id { activeTerminalID = nil }
         // Cancel in-flight readiness watch Tasks so a 30s waiter doesn't
         // fire `onReadinessChanged` against a stale id long after the tab
         // is gone (issue #282).
@@ -384,39 +412,47 @@ public final class TmuxBackend {
         if confPath == nil {
             throw TmuxBackendError.bundledResourceMissing("crow-tmux.conf")
         }
-        // The cockpit session may already be live even though `controller` is
-        // nil. `TmuxController.run` blocks on `Process.waitUntilExit()`, which
-        // pumps the main run loop — so the `new-session` we're about to issue
-        // can be re-entered by another `ensureRunningServer()` caller before
-        // we cache `controller`. On launch this is the norm: every persisted
-        // terminal hydrates as its own `Task { @MainActor }` (#293) and, with
-        // multiple Manager sessions (#326), six-plus of them race here at once.
-        // Whoever wins creates `crow-cockpit`; the rest must ADOPT it, not
-        // re-create it (`new-session` errors with "duplicate session", and
-        // because that throws the loser never cached `controller` — so every
-        // subsequent call kept failing and every terminal rendered blank).
-        if ctrl.hasSession() {
-            controller = ctrl
-            return ctrl
-        }
-        // The "session anchor" is a no-op long-running command — kept alive
-        // so the session persists even if every window is closed by the
-        // user. /usr/bin/tail -f /dev/null is the conventional choice.
+        try Self.ensureCockpitSession(ctrl, configPath: confPath)
+        controller = ctrl
+        return ctrl
+    }
+
+    /// Ensure the cockpit session is live, adopting an existing one if a
+    /// concurrent caller won the `new-session` race.
+    ///
+    /// The cockpit session may already be live even though `controller` is
+    /// nil. `TmuxController.run` blocks on `Process.waitUntilExit()`, which
+    /// pumps the main run loop — so the `new-session` we're about to issue can
+    /// be re-entered by another `ensureRunningServer()` caller before we cache
+    /// `controller`. On launch this is the norm: every persisted terminal
+    /// hydrates as its own `Task { @MainActor }` (#293) and, with multiple
+    /// Manager sessions (#326), six-plus of them race here at once. Whoever
+    /// wins creates `crow-cockpit`; the rest must ADOPT it, not re-create it
+    /// (`new-session` errors with "duplicate session", and because that throws
+    /// the loser never cached `controller` — so every subsequent call kept
+    /// failing and every terminal rendered blank).
+    ///
+    /// `nonisolated static` so the adopt branch is testable without a real
+    /// tmux server or the main actor — it touches no instance/actor state.
+    nonisolated static func ensureCockpitSession(
+        _ ctrl: CockpitSessionStarter,
+        configPath: String?,
+        // The "session anchor" is a no-op long-running command — kept alive so
+        // the session persists even if every window is closed by the user.
+        // /usr/bin/tail -f /dev/null is the conventional choice.
+        anchorCommand: String = "/usr/bin/tail -f /dev/null"
+    ) throws {
+        if ctrl.hasSession() { return }
         do {
-            try ctrl.newSessionDetached(
-                configPath: confPath,
-                command: "/usr/bin/tail -f /dev/null"
-            )
+            try ctrl.newSessionDetached(configPath: configPath, env: [:], command: anchorCommand)
         } catch {
-            // Lost the creation race after the `hasSession()` check above:
-            // a reentrant caller created the session while our `new-session`
+            // Lost the creation race after the `hasSession()` check above: a
+            // reentrant caller created the session while our `new-session`
             // subprocess was starting. The session exists, which is exactly
             // the post-condition we want — adopt it rather than propagating
             // the spurious "duplicate session" failure.
             guard ctrl.hasSession() else { throw error }
         }
-        controller = ctrl
-        return ctrl
     }
 
     private func sentinelPath(for id: UUID) -> String {

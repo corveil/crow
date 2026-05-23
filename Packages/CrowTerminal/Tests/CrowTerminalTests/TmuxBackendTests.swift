@@ -65,6 +65,37 @@ struct TmuxBackendTests {
         }
     }
 
+    @Test func makeActiveTracksActiveTerminal() throws {
+        let backend = makeBackend()
+        defer { backend.shutdown() }
+
+        let a = UUID()
+        let b = UUID()
+        _ = try backend.registerTerminal(
+            id: a, name: "a", cwd: NSHomeDirectory(),
+            command: nil, trackReadiness: false
+        )
+        _ = try backend.registerTerminal(
+            id: b, name: "b", cwd: NSHomeDirectory(),
+            command: nil, trackReadiness: false
+        )
+
+        try backend.makeActive(id: a)
+        #expect(backend.activeTerminalID == a)
+        // Re-activating the same terminal is a no-op but must not lose the
+        // marker (the dedup path returns early without touching it).
+        try backend.makeActive(id: a)
+        #expect(backend.activeTerminalID == a)
+
+        try backend.makeActive(id: b)
+        #expect(backend.activeTerminalID == b)
+
+        // Destroying the active terminal clears the marker so a reused window
+        // index can't be wrongly deduped away.
+        backend.destroyTerminal(id: b)
+        #expect(backend.activeTerminalID == nil)
+    }
+
     @Test func destroyRemovesBinding() throws {
         let backend = makeBackend()
         defer { backend.shutdown() }

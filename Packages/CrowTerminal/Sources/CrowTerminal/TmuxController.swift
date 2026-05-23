@@ -250,6 +250,11 @@ public struct TmuxController: Sendable {
     }
 }
 
+/// `hasSession()` and `newSessionDetached(...)` already match the protocol
+/// requirements — this conformance is what lets the real controller flow
+/// through `TmuxBackend.ensureCockpitSession`.
+extension TmuxController: CockpitSessionStarter {}
+
 public enum TmuxError: Error, CustomStringConvertible {
     case cliFailed(args: [String], status: Int32, stdout: String, stderr: String)
     case timedOut(args: [String], after: TimeInterval)
