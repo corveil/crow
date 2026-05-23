@@ -92,9 +92,11 @@ public final class AppState {
         sessions.filter { $0.isManager }
     }
 
-    /// Whether the session with the given id is a Manager. Falls back to the
-    /// well-known primary UUID when the session isn't loaded yet (e.g. during
-    /// terminal creation before the session row is present).
+    /// Whether the session with the given id is a Manager. When the session row
+    /// isn't loaded yet (e.g. during terminal creation before it's inserted) the
+    /// fallback only recognizes the well-known *primary* UUID — a not-yet-loaded
+    /// non-primary manager id returns `false`, so callers must not rely on this
+    /// for non-primary managers pre-load.
     public func isManagerSession(_ id: UUID) -> Bool {
         if let session = sessions.first(where: { $0.id == id }) { return session.isManager }
         return id == Self.managerSessionID

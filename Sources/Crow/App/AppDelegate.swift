@@ -917,20 +917,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard AppDelegate.isValidSessionName(name) else {
                     throw RPCError.invalidParams("Invalid session name (max \(AppDelegate.maxSessionNameLength) chars, no control characters)")
                 }
+                // Only work and manager sessions can be created here. Review and
+                // job sessions need their dedicated setup (worktree, prompt files,
+                // scheduler) and would be malformed if created bare via this path.
                 let kindStr = params["kind"]?.stringValue
-                guard kindStr == nil || SessionKind(rawValue: kindStr!) != nil else {
-                    throw RPCError.invalidParams("Invalid kind (expected work, review, or manager)")
+                guard kindStr == nil || kindStr == "work" || kindStr == "manager" else {
+                    throw RPCError.invalidParams("Invalid kind (expected work or manager)")
                 }
-                let kind = kindStr.flatMap(SessionKind.init(rawValue:)) ?? .work
+                let isManagerKind = kindStr == "manager"
                 return await MainActor.run {
                     // Manager sessions get their own Claude-Code terminal in the
                     // devRoot, mirroring the primary Manager.
-                    if kind == .manager {
+                    if isManagerKind {
                         let id = capturedService.createManagerSession(name: name, cwd: devRoot)
                         let createdName = capturedAppState.sessions.first(where: { $0.id == id })?.name ?? name
                         return ["session_id": .string(id.uuidString), "name": .string(createdName)]
                     }
-                    let session = Session(name: name, kind: kind)
+                    let session = Session(name: name, kind: .work)
                     capturedAppState.sessions.append(session)
                     capturedStore.mutate { $0.sessions.append(session) }
                     return ["session_id": .string(session.id.uuidString), "name": .string(session.name)]

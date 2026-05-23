@@ -92,26 +92,21 @@ final class SessionService {
             } else {
                 // Manager terminal: rebuild its claude command to match the
                 // current remoteControlEnabled and managerAutoPermissionMode
-                // preferences. Unlike worker sessions the Manager launches
-                // claude directly as the shell command, so the stored string
-                // needs to be correct before preInitialize runs.
-                let claudePath = Self.findClaudeBinary() ?? "claude"
-                let rcEnabled = appState.remoteControlEnabled
-                let autoMode = appState.managerAutoPermissionMode
-                let managerCommand = claudePath + ClaudeLaunchArgs.argsSuffix(
-                    remoteControl: rcEnabled,
-                    sessionName: session.name,
-                    autoPermissionMode: autoMode
-                )
+                // preferences, using this session's own name for the --name
+                // label. Unlike worker sessions the Manager launches claude
+                // directly as the shell command, so the stored string needs to
+                // be correct before preInitialize runs. Built via the shared
+                // `managerCommand` helper so the name flow has one source.
+                let rebuiltCommand = managerCommand(sessionName: session.name)
                 for i in terminals.indices {
                     if let cmd = terminals[i].command, cmd.contains("claude") {
                         terminals[i] = SessionTerminal(
                             id: terminals[i].id, sessionID: terminals[i].sessionID,
                             name: terminals[i].name, cwd: terminals[i].cwd,
-                            command: managerCommand, isManaged: terminals[i].isManaged,
+                            command: rebuiltCommand, isManaged: terminals[i].isManaged,
                             createdAt: terminals[i].createdAt
                         )
-                        if rcEnabled {
+                        if appState.remoteControlEnabled {
                             appState.remoteControlActiveTerminals.insert(terminals[i].id)
                         }
                     }
@@ -567,8 +562,10 @@ final class SessionService {
 
     /// Build the claude shell command for a Manager terminal, reflecting the
     /// current remote-control and auto-permission-mode preferences. Managers
-    /// launch claude directly as the terminal's shell command.
-    private func managerCommand(sessionName: String) -> String {
+    /// launch claude directly as the terminal's shell command. Used by both
+    /// fresh-terminal creation and the hydrate rebuild so the per-session
+    /// `--name` label has a single source. `internal` for unit testing.
+    func managerCommand(sessionName: String) -> String {
         // Find the real claude binary (skip CMUX wrapper)
         let claudePath = Self.findClaudeBinary() ?? "claude"
         return claudePath + ClaudeLaunchArgs.argsSuffix(
@@ -609,8 +606,8 @@ final class SessionService {
         return terminal
     }
 
-    /// Create an additional (non-primary) Manager session with its own
-    /// Claude-Code terminal running in `cwd`. Returns the new session's id.
+    /// Create an additional (non-primary) Manager session in `cwd`. Returns the
+    /// new session's id. The terminal is set up by `createManagerTerminal`.
     @discardableResult
     func createManagerSession(name: String, cwd: String) -> UUID {
         let session = Session(name: name, status: .active, kind: .manager)

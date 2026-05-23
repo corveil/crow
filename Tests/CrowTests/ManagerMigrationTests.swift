@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import CrowCore
+import CrowPersistence
 @testable import Crow
 
 /// Locks down the legacy primary-Manager migration (#316). Before
@@ -35,5 +36,29 @@ struct ManagerMigrationTests {
     func noOpWhenNoPrimaryManager() {
         var sessions = [Session(name: "work", kind: .work)]
         #expect(SessionService.migrateLegacyManagerKind(&sessions) == false)
+    }
+
+    /// Locks in the per-session `--name` label flow that `hydrateState` and
+    /// `createManagerTerminal` both rely on (#316 review): distinct manager
+    /// names must produce distinct `--name '…'` flags so additional managers
+    /// show correct labels in the Remote Control panel.
+    @MainActor
+    @Test
+    func managerCommandUsesSessionNameForRemoteControlLabel() {
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("crow-mgr-cmd-\(UUID().uuidString)")
+        let appState = AppState()
+        appState.remoteControlEnabled = true
+        appState.managerAutoPermissionMode = true
+        let service = SessionService(store: JSONStore(directory: tmp), appState: appState)
+
+        let cmd2 = service.managerCommand(sessionName: "Manager 2")
+        let cmd3 = service.managerCommand(sessionName: "Manager 3")
+
+        #expect(cmd2.contains("--name 'Manager 2'"))
+        #expect(cmd3.contains("--name 'Manager 3'"))
+        #expect(cmd2 != cmd3)
+        #expect(cmd2.contains("--permission-mode auto"))
+        #expect(cmd2.contains("--rc"))
     }
 }
