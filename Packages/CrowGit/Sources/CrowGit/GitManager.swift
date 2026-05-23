@@ -236,9 +236,12 @@ public actor GitManager {
     ///
     /// - `since`/`until` are passed straight to git, which parses flexible date
     ///   strings ("1 week ago", "2026-05-01"); `until` defaults to now when nil.
-    /// - `includeRepos`, when non-nil, scopes the scan to repos whose name is
+    /// - `includeRepos`, when non-nil, scopes the scan to repos whose `org/repo`
+    ///   slug (derived from the `origin` remote, matched case-insensitively) is
     ///   in the set (an empty set yields nothing); `nil` includes every
-    ///   discovered repo.
+    ///   discovered repo. Bare names are ambiguous across orgs, so the scope key
+    ///   is the full slug; a repo with no parseable remote can't match a scoped
+    ///   set and is dropped.
     /// - `--all` picks up commits on every branch (worktree feature branches
     ///   share the main checkout's object store), `--no-merges` keeps diffstats
     ///   from double-counting merge commits.
@@ -249,14 +252,18 @@ public actor GitManager {
     /// Runs sequentially: `run` is actor-isolated and blocks on
     /// `waitUntilExit`, so a task group would serialize on the actor anyway.
     public func summarizeCommits(since: String, until: String?, includeRepos: Set<String>? = nil) async throws -> [RepoCommitSummary] {
-        var repos = try await discoverRepos()
-        // When an include-set is provided, scope to repos whose name is listed;
-        // an empty set yields nothing. `nil` keeps all repos.
-        if let includeRepos {
-            repos = repos.filter { includeRepos.contains($0.name) }
-        }
+        let repos = try await discoverRepos()
+        // Configured scope keys are `org/repo` slugs; compare case-insensitively
+        // since git hosts treat org/repo case-insensitively. nil = include all.
+        let wantedSlugs = includeRepos.map { Set($0.map { $0.lowercased() }) }
         var summaries: [RepoCommitSummary] = []
         for repo in repos {
+            // Derive org/repo + the hosted-commit-page prefix from the remote.
+            // When scoping, skip repos that don't match (or have no remote).
+            let remote = await remoteInfo(forRepoAt: repo.path)
+            if let wantedSlugs {
+                guard let slug = remote?.slug, wantedSlugs.contains(slug.lowercased()) else { continue }
+            }
             var args = [
                 "git", "-C", repo.path, "log", "--all", "--no-merges",
                 "--since=\(since)",
@@ -279,11 +286,79 @@ public actor GitManager {
             let commits = Self.parseCommitLog(output)
             if !commits.isEmpty {
                 summaries.append(RepoCommitSummary(
-                    repo: repo.name, path: repo.path, workspace: repo.workspace, commits: commits
+                    repo: repo.name, path: repo.path, workspace: repo.workspace,
+                    commits: commits, commitURLPrefix: remote?.commitURLPrefix
                 ))
             }
         }
         return summaries
+    }
+
+    /// Parsed `origin` remote for a repo: the `org/repo` slug and the
+    /// hosted-commit-page URL prefix. Used both to scope the summary scan to an
+    /// `org/repo` allowlist and to make commits clickable in the UI.
+    struct RemoteInfo: Sendable {
+        let slug: String        // "org/repo" (or nested "group/sub/repo")
+        let commitURLPrefix: String   // "https://host/slug/commit/" or ".../-/commit/"
+    }
+
+    /// Resolve the `origin` remote of the repo at `path` into a slug + commit
+    /// URL prefix. Handles SSH (`git@host:org/repo`) and HTTPS
+    /// (`https://host/org/repo`), strips a trailing `.git`. GitLab hosts use the
+    /// `/-/commit/` path; everything else (GitHub) uses `/commit/`. Returns nil
+    /// when the repo has no remote or it can't be parsed.
+    func remoteInfo(forRepoAt path: String) async -> RemoteInfo? {
+        guard let raw = try? await run(["git", "-C", path, "remote", "get-url", "origin"]) else { return nil }
+        let url = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !url.isEmpty else { return nil }
+        let host = Self.host(fromRemote: url)
+        let slug = Self.slug(fromRemote: url)
+        guard !host.isEmpty, !slug.isEmpty else { return nil }
+        return RemoteInfo(slug: slug, commitURLPrefix: Self.commitURLPrefix(host: host, slug: slug))
+    }
+
+    /// Build the hosted-commit-page prefix for a host + slug. GitLab puts commits
+    /// under `/-/commit/`; GitHub (and the default) uses `/commit/`.
+    static func commitURLPrefix(host: String, slug: String) -> String {
+        let commitPath = host.lowercased().contains("gitlab") ? "/-/commit/" : "/commit/"
+        return "https://\(host)/\(slug)\(commitPath)"
+    }
+
+    /// Extract the host ("github.com", "gitlab.example.com") from a git remote
+    /// URL. Handles SSH (`git@host:org/repo`) and HTTPS (`https://host/...`).
+    static func host(fromRemote url: String) -> String {
+        // SSH: git@host:org/repo
+        if let range = url.range(of: #"^[^@]+@([^:]+):"#, options: .regularExpression) {
+            let match = String(url[range])
+            if let at = match.firstIndex(of: "@"), let colon = match.lastIndex(of: ":") {
+                return String(match[match.index(after: at)..<colon])
+            }
+        }
+        // HTTPS: https://host/...
+        if let range = url.range(of: #"^https?://([^/]+)/"#, options: .regularExpression) {
+            let match = String(url[range])
+            return match
+                .replacingOccurrences(of: #"^https?://"#, with: "", options: .regularExpression)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        }
+        return ""
+    }
+
+    /// Extract the project slug ("org/repo", "group/sub/repo") from a git remote
+    /// URL. Handles SSH and HTTPS, preserves nested-group paths, strips trailing
+    /// `.git`. Returns "" when the URL can't be parsed.
+    static func slug(fromRemote url: String) -> String {
+        var trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasSuffix(".git") { trimmed = String(trimmed.dropLast(4)) }
+        // SSH: git@host:org/repo or user@host:group/sub/repo
+        if let range = trimmed.range(of: #"^[^@/\s]+@[^:/\s]+:"#, options: .regularExpression) {
+            return String(trimmed[range.upperBound...]).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        }
+        // HTTPS: https://host/org/repo
+        if let range = trimmed.range(of: #"^https?://[^/]+/"#, options: .regularExpression) {
+            return String(trimmed[range.upperBound...]).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        }
+        return ""
     }
 
     /// Parse the `--pretty`/`--numstat` output of the `summarizeCommits` git

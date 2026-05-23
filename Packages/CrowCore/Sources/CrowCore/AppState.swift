@@ -173,6 +173,11 @@ public final class AppState {
     public var lastSummary: [RepoCommitSummary] = []
     public var isLoadingSummary: Bool = false
 
+    /// LLM narrative of the current digest (item 4). Transient.
+    public var llmNarrative: String = ""
+    public var isSummarizingLLM: Bool = false
+    public var llmSummaryError: String?
+
     public var filteredReviewRequests: [ReviewRequest] {
         var result = reviewRequests
         if !excludeReviewRepos.isEmpty {
@@ -260,6 +265,11 @@ public final class AppState {
     /// Called when the user generates a changes summary. Returns the grouped
     /// per-repo commit digest for the given window (git date strings).
     public var onGenerateSummary: ((_ since: String, _ until: String?) async -> [RepoCommitSummary])?
+
+    /// Called when the user hits "LLM Summarize". Takes a text digest of the
+    /// current results and returns a short narrative. Wired to a `claude -p`
+    /// subprocess in the app.
+    public var onSummarizeWithLLM: ((_ digest: String) async throws -> String)?
 
     /// Called to launch Claude in a terminal that just became ready.
     public var onLaunchClaude: ((UUID) -> Void)?  // receives terminal ID
