@@ -1061,6 +1061,20 @@ final class SessionService {
         return true
     }
 
+    /// Rename a session. Returns `false` if the session was not found or the name is invalid.
+    @discardableResult
+    func renameSession(sessionID: UUID, name: String) -> Bool {
+        guard Validation.isValidSessionName(name),
+              let idx = appState.sessions.firstIndex(where: { $0.id == sessionID }) else { return false }
+        appState.sessions[idx].name = name
+        store.mutate { data in
+            if let i = data.sessions.firstIndex(where: { $0.id == sessionID }) {
+                data.sessions[i].name = name
+            }
+        }
+        return true
+    }
+
     // MARK: - Global Terminal Management
 
 

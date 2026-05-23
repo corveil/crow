@@ -57,6 +57,8 @@ public struct SummaryBoardView: View {
                     .controlSize(.small)
             }
 
+            scopeMenu
+
             Spacer()
 
             if !appState.lastSummary.isEmpty {
@@ -68,6 +70,30 @@ public struct SummaryBoardView: View {
         .padding(.horizontal)
         .padding(.vertical, 10)
         .background(CorveilTheme.bgSurface)
+    }
+
+    /// Dropdown listing the configured Changes-summary scope so it's clear which
+    /// repos' commits are shown. Reflects `config.defaults.summaryRepos` (synced
+    /// into `appState.summaryRepoScope`); edited in Settings, not here.
+    private var scopeMenu: some View {
+        Menu {
+            if appState.summaryRepoScope.isEmpty {
+                Text("No repos configured")
+            } else {
+                ForEach(appState.summaryRepoScope, id: \.self) { Text($0) }
+            }
+            Divider()
+            Text("Edit in Settings → General → Changes Summary")
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "line.3.horizontal.decrease.circle")
+                Text("\(appState.summaryRepoScope.count) repo\(appState.summaryRepoScope.count == 1 ? "" : "s")")
+            }
+            .font(.caption)
+            .foregroundStyle(CorveilTheme.textSecondary)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
     }
 
     // MARK: Controls
@@ -86,7 +112,7 @@ public struct SummaryBoardView: View {
                         Image(systemName: "sparkles")
                             .font(.system(size: 10))
                     }
-                    Text("LLM Summarize")
+                    Text("Summarize")
                         .font(.system(size: 13, weight: .semibold))
                 }
                 .foregroundStyle(CorveilTheme.gold)
@@ -101,7 +127,7 @@ public struct SummaryBoardView: View {
             .disabled(appState.lastSummary.isEmpty || appState.isLoadingSummary || appState.isSummarizingLLM || !claudeAvailable)
             .help(claudeAvailable
                   ? "Summarize the digest with Claude"
-                  : "Install the `claude` CLI to use LLM Summarize")
+                  : "Install the `claude` CLI to use Summarize")
 
             Button(action: generate) {
                 HStack(spacing: 4) {
@@ -211,6 +237,7 @@ public struct SummaryBoardView: View {
                 }
             }
             .listStyle(.inset)
+            .scrollIndicators(.visible)
         }
     }
 

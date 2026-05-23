@@ -388,6 +388,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appState.excludeReviewRepos = config.defaults.excludeReviewRepos
         appState.excludeTicketRepos = config.defaults.excludeTicketRepos
         appState.ignoreReviewLabels = config.defaults.ignoreReviewLabels
+        appState.summaryRepoScope = config.defaults.summaryRepos
 
         // Create session service and hydrate state
         let service = SessionService(store: store, appState: appState, telemetryPort: config.telemetry.enabled ? config.telemetry.port : nil)
@@ -488,6 +489,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         appState.onRenameTerminal = { [weak service] sessionID, terminalID, name in
             service?.renameTerminal(sessionID: sessionID, terminalID: terminalID, name: name)
+        }
+        appState.onRenameSession = { [weak service] sessionID, name in
+            service?.renameSession(sessionID: sessionID, name: name)
         }
 
         // Detect VS Code CLI and wire open action
@@ -987,6 +991,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appState.excludeReviewRepos = config.defaults.excludeReviewRepos
         appState.excludeTicketRepos = config.defaults.excludeTicketRepos
         appState.ignoreReviewLabels = config.defaults.ignoreReviewLabels
+        appState.summaryRepoScope = config.defaults.summaryRepos
     }
 
     /// Record a job's run time in the canonical `appConfig` and persist it, so

@@ -6,6 +6,7 @@ public struct SessionListView: View {
     @Bindable var appState: AppState
     @State private var searchText = ""
     @State private var sessionToDelete: Session?
+    @State private var editingManagerID: UUID?
     @State private var isSelectionMode = false
     @State private var selectedSessionIDs: Set<UUID> = []
     @State private var showBulkDeleteConfirm = false
@@ -85,11 +86,16 @@ public struct SessionListView: View {
             // Additional (non-primary) Manager sessions, each deletable.
             let extraManagers = appState.managerSessions.filter { $0.id != AppState.managerSessionID }
             ForEach(extraManagers) { session in
-                ManagerSessionRow(session: session, appState: appState)
+                ManagerSessionRow(session: session, appState: appState, editingSessionID: $editingManagerID)
                     .tag(session.id)
                     .listRowSeparator(.hidden)
                     .listRowBackground(Color.clear)
                     .contextMenu {
+                        Button {
+                            editingManagerID = session.id
+                        } label: {
+                            Label("Rename", systemImage: "pencil")
+                        }
                         Button(role: .destructive) {
                             sessionToDelete = session
                         } label: {
@@ -97,6 +103,30 @@ public struct SessionListView: View {
                         }
                         .disabled(appState.isDeletingSession[session.id] == true)
                     }
+            }
+
+            // Job sessions
+            if !appState.jobSessions.isEmpty {
+                SectionDivider(
+                    title: "Jobs",
+                    isSelectionMode: isSelectionMode,
+                    sectionIDs: Set(filteredSessions(appState.jobSessions).map(\.id)),
+                    selectedSessionIDs: $selectedSessionIDs
+                )
+                ForEach(filteredSessions(appState.jobSessions)) { session in
+                    SessionRow(
+                        session: session,
+                        appState: appState,
+                        isSelectionMode: isSelectionMode,
+                        selectedSessionIDs: $selectedSessionIDs
+                    )
+                    .tag(session.id)
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
+                    .contextMenu {
+                        sessionContextMenu(session)
+                    }
+                }
             }
 
             // Active sessions
@@ -469,9 +499,14 @@ struct ManagerSidebarRow: View {
 struct ManagerSessionRow: View {
     let session: Session
     @Bindable var appState: AppState
+    @Binding var editingSessionID: UUID?
+
+    @State private var editingName: String = ""
+    @FocusState private var isEditing: Bool
 
     private var isActive: Bool { appState.selectedSessionID == session.id }
     private var isDeleting: Bool { appState.isDeletingSession[session.id] == true }
+    private var isEditingThis: Bool { editingSessionID == session.id }
 
     var body: some View {
         Button {
@@ -480,9 +515,21 @@ struct ManagerSessionRow: View {
             HStack(spacing: 6) {
                 Image(systemName: "person.2.fill")
                     .font(.system(size: 11))
-                Text(session.name)
-                    .font(.system(size: 12, weight: .bold))
-                    .lineLimit(1)
+                if isEditingThis {
+                    TextField("Name", text: $editingName)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 12, weight: .bold))
+                        .focused($isEditing)
+                        .onSubmit { commitRename() }
+                        .onExitCommand { editingSessionID = nil }
+                        .onChange(of: isEditing) { _, nowEditing in
+                            if !nowEditing, isEditingThis { commitRename() }
+                        }
+                } else {
+                    Text(session.name)
+                        .font(.system(size: 12, weight: .bold))
+                        .lineLimit(1)
+                }
                 Spacer()
                 if isDeleting {
                     ProgressView().controlSize(.small)
@@ -512,6 +559,20 @@ struct ManagerSessionRow: View {
         }
         .buttonStyle(.plain)
         .padding(.vertical, 2)
+        .onChange(of: editingSessionID) { _, newValue in
+            if newValue == session.id {
+                editingName = session.name
+                isEditing = true
+            }
+        }
+    }
+
+    private func commitRename() {
+        let trimmed = editingName.trimmingCharacters(in: .whitespaces)
+        if !trimmed.isEmpty {
+            appState.onRenameSession?(session.id, trimmed)
+        }
+        editingSessionID = nil
     }
 }
 
