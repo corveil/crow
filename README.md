@@ -14,11 +14,12 @@ A native macOS application for managing AI-powered development sessions. Orchest
 
 ### Build Dependencies
 
-| Tool  | Version | Purpose                                | Install                                                                           |
-| ----- | ------- | -------------------------------------- | --------------------------------------------------------------------------------- |
-| Swift | 6.0+    | Compiler (ships with Xcode)            | `xcode-select --install`                                                          |
-| Zig   | 0.15.2  | Builds the Ghostty terminal framework  | `brew install zig` or [ziglang.org](https://ziglang.org/download/)                |
-| mise  | latest  | Task runner (optional)                 | `brew install mise`                                                               |
+| Tool             | Version | Purpose                                | Install                                                                  |
+| ---------------- | ------- | -------------------------------------- | ------------------------------------------------------------------------ |
+| Swift            | 6.0+    | Compiler (ships with Xcode)            | `xcode-select --install`                                                 |
+| Zig              | 0.15.2  | Builds the Ghostty terminal framework  | `brew install zig@0.15` or [ziglang.org](https://ziglang.org/download/)  |
+| Metal Toolchain  | bundled | Compiles Ghostty's Metal shaders       | `xcodebuild -downloadComponent MetalToolchain`                           |
+| mise             | latest  | Task runner (optional)                 | `brew install mise`                                                      |
 
 ### Runtime Dependencies
 
@@ -37,14 +38,17 @@ A native macOS application for managing AI-powered development sessions. Orchest
 git clone --recurse-submodules https://github.com/radiusmethod/crow.git
 cd crow
 
-# 2. Build (submodules + GhosttyKit + swift build in one shot)
+# 2. Install the Metal Toolchain (required to compile Ghostty's Metal shaders)
+xcodebuild -downloadComponent MetalToolchain
+
+# 3. Build (submodules + GhosttyKit + swift build in one shot)
 make build
 
-# 3. Authenticate GitHub CLI — the write `project` scope is required
+# 4. Authenticate GitHub CLI — the write `project` scope is required
 gh auth login
 gh auth refresh -s project,read:org,repo
 
-# 4. Run
+# 5. Run
 .build/debug/CrowApp
 ```
 

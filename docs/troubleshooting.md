@@ -4,8 +4,8 @@
 
 | Problem                                                  | Solution                                                                 |
 | -------------------------------------------------------- | ------------------------------------------------------------------------ |
-| `zig` not found                                          | `brew install zig` or download from [ziglang.org](https://ziglang.org/download/) |
-| Zig version mismatch                                     | Version **0.15.2** is required. Check with `zig version`                 |
+| `zig` not found                                          | `brew install zig@0.15` or download from [ziglang.org](https://ziglang.org/download/) |
+| Zig version mismatch                                     | Version **0.15.2** is required (plain `brew install zig` is now 0.16.0 — use `brew install zig@0.15`). Check with `zig version` |
 | Metal toolchain not found                                | Run `xcodebuild -downloadComponent MetalToolchain`                       |
 | Ghostty submodule missing                                | Run `git submodule update --init vendor/ghostty`                         |
 | `swift build` fails with linker errors                   | Build `GhosttyKit` first: `./scripts/build-ghostty.sh` (or just run `make build`) |

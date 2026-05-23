@@ -30,10 +30,11 @@ $(SUBMODULE_MARKER):
 	git submodule update --init --recursive
 
 setup: $(SUBMODULE_MARKER)
-	@command -v zig >/dev/null 2>&1 || { echo "ERROR: zig not found. Install with: brew install zig"; exit 1; }
+	@command -v zig >/dev/null 2>&1 || { echo "ERROR: zig not found. Install with: brew install zig@0.15"; exit 1; }
 	@ZIG_VER=$$(zig version); \
 	if [ "$$ZIG_VER" != "0.15.2" ]; then \
-		echo "WARNING: Zig 0.15.2 required, found: $$ZIG_VER"; \
+		echo "ERROR: Zig 0.15.2 required, found: $$ZIG_VER. Install with: brew install zig@0.15"; \
+		exit 1; \
 	fi
 	@xcrun -sdk macosx metal --version >/dev/null 2>&1 || { echo "ERROR: Metal Toolchain not installed. Run: xcodebuild -downloadComponent MetalToolchain"; exit 1; }
 	@echo "Prerequisites OK"
