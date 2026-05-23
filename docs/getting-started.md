@@ -39,6 +39,9 @@ This runs `setup` (initializes submodules and checks prerequisites), `ghostty` (
 | `app`        | Run `swift build` (debug) without touching ghostty                            |
 | `release`    | Release build + `.app` bundle via `scripts/bundle.sh`                         |
 | `sign`       | Sign, create DMG, and notarize (requires `DEVELOPER_ID_APPLICATION`)          |
+| `install`    | Symlink `crow` + `CrowApp` into `~/.local/bin` (override `BINDIR=`, `CONFIG=`) |
+| `install-app`| Copy `Crow.app` into `/Applications` (run `make release` first)               |
+| `uninstall`  | Remove the `crow` + `CrowApp` symlinks created by `install`                   |
 | `test`       | Run all package tests                                                         |
 | `clean`      | Remove `.build/` (keeps the ghostty framework)                                |
 | `clean-all`  | Remove `.build/` and `Frameworks/` (full rebuild)                             |
@@ -165,6 +168,68 @@ Alternatively, you can scaffold without launching the GUI by running the CLI set
 .build/debug/crow setup            # prompts interactively
 .build/debug/crow setup --dev-root ~/Dev   # skip the devRoot prompt
 ```
+
+## 6. Install (Optional)
+
+Running the binaries by full path (`.build/debug/CrowApp`, `.build/debug/crow`) works, but the Manager terminal and the `/crow-workspace` skill invoke bare `crow ...` — so for day-to-day use you'll want `crow` (and optionally `CrowApp`) on your `PATH`.
+
+### Put the binaries on PATH
+
+```bash
+make install
+```
+
+This symlinks both binaries into `~/.local/bin`:
+
+- `~/.local/bin/crow` → `.build/debug/crow`
+- `~/.local/bin/CrowApp` → `.build/debug/CrowApp`
+
+If `~/.local/bin` isn't on your `PATH`, `make install` prints a reminder. Add this to your shell rc (e.g. `~/.zshrc`) and restart the shell:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+**Overrides:**
+
+| Variable  | Default          | Example                                  |
+| --------- | ---------------- | ---------------------------------------- |
+| `BINDIR`  | `~/.local/bin`   | `make install BINDIR=/usr/local/bin`     |
+| `CONFIG`  | `debug`          | `make install CONFIG=release`            |
+
+`CONFIG` selects which build directory the symlinks point at — `.build/debug/` (from `make build`) or `.build/release/` (from `make release`). If the chosen binaries don't exist yet, `make install` errors and tells you to build first.
+
+### Rebuilds and re-pointing
+
+Because `install` creates **symlinks** (not copies), `swift build` overwrites the underlying `.build/debug/` binaries in place and the symlinks keep working — no need to re-run `make install` after a normal `make build`.
+
+Re-run `make install` only when:
+
+- You switch debug ↔ release: `make release && make install CONFIG=release`.
+- You ran `make clean` (or `mise clean`), which deletes `.build/` and leaves the symlinks dangling until the next build.
+
+Remove the symlinks at any time:
+
+```bash
+make uninstall
+```
+
+### GUI install (`/Applications`)
+
+For a proper `.app` bundle you can launch from Spotlight or the Dock:
+
+```bash
+make release        # produces ./Crow.app
+make install-app    # copies Crow.app into /Applications
+```
+
+Builds from source are unsigned. If macOS quarantines the bundle on first launch, clear the attribute:
+
+```bash
+xattr -cr /Applications/Crow.app
+```
+
+Official signed/notarized builds are available on the [Releases](https://github.com/radiusmethod/crow/releases) page and install without Gatekeeper warnings.
 
 ## Next Steps
 
