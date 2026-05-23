@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 import CrowCore
 import CrowGit
+import CrowProvider
 import CrowUI
 import CrowPersistence
 import CrowTerminal
@@ -624,6 +625,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         appState.onPromoteToGlobal = { [weak allowList] patterns in
             allowList?.promoteToGlobal(patterns: patterns)
+        }
+
+        // Jobs repo picker: expand a workspace's alwaysInclude specs (owner/*,
+        // owner/repo) into the repos available from its provider.
+        appState.onListWorkspaceRepos = { ws in
+            let provider = Provider(rawValue: ws.provider) ?? .github
+            return await ProviderManager().reposForSpecs(
+                ws.alwaysInclude, provider: provider, host: ws.host
+            )
         }
 
         // Hydrate mute state from config and wire toggle

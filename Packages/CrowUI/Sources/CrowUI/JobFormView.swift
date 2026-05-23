@@ -4,13 +4,14 @@ import CrowCore
 /// Form for creating or editing a scheduled job (CROW-317).
 ///
 /// Mirrors `WorkspaceFormView`: holds field state, validates, and constructs a
-/// `JobConfig` on save. A job is scoped to a repo (resolved by name under the
-/// dev root), carries one or more prompts, and fires on an interval or daily at
-/// a time.
+/// `JobConfig` on save. A job is scoped to a repo within a workspace; the repo
+/// list is loaded from the workspace's provider. The job carries one or more
+/// prompts and fires on an interval or daily at a time.
 public struct JobFormView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var name: String
+    @State private var workspace: String
     @State private var repo: String
     @State private var prompts: [String]
     @State private var scheduleMode: ScheduleMode
@@ -20,6 +21,13 @@ public struct JobFormView: View {
     @State private var weekdays: Set<Int>
     @State private var enabled: Bool
 
+    /// Repo slugs for the selected workspace, loaded via `listRepos`.
+    @State private var repoOptions: [String] = []
+    @State private var isLoadingRepos = false
+    @State private var didLoadRepos = false
+
+    private let workspaces: [WorkspaceInfo]
+    private let listRepos: (WorkspaceInfo) async -> [String]
     private let existingID: UUID?
     private let existingLastRunAt: Date?
     private let existingCreatedAt: Date
@@ -48,13 +56,19 @@ public struct JobFormView: View {
 
     /// - Parameters:
     ///   - job: An existing job to edit, or `nil` to create a new one.
+    ///   - workspaces: Workspaces to choose from; their providers source the repo list.
     ///   - existingNames: Names of other jobs, used for duplicate detection.
+    ///   - listRepos: Loads the `owner/repo` slugs available to a workspace.
     ///   - onSave: Called with the validated `JobConfig` when the user taps Save/Add.
     public init(
         job: JobConfig? = nil,
+        workspaces: [WorkspaceInfo] = [],
         existingNames: [String] = [],
+        listRepos: @escaping (WorkspaceInfo) async -> [String] = { _ in [] },
         onSave: @escaping (JobConfig) -> Void
     ) {
+        self.workspaces = workspaces
+        self.listRepos = listRepos
         self.existingID = job?.id
         self.existingLastRunAt = job?.lastRunAt
         self.existingCreatedAt = job?.createdAt ?? Date()
@@ -62,6 +76,8 @@ public struct JobFormView: View {
         self.onSave = onSave
 
         self._name = State(initialValue: job?.name ?? "")
+        // Default to the job's workspace, else the first available workspace.
+        self._workspace = State(initialValue: job?.workspace ?? workspaces.first?.name ?? "")
         self._repo = State(initialValue: job?.repo ?? "")
         self._prompts = State(initialValue: job?.prompts.isEmpty == false ? job!.prompts : [""])
         self._enabled = State(initialValue: job?.enabled ?? true)
@@ -102,11 +118,36 @@ public struct JobFormView: View {
         JobConfig.validateName(trimmedName, existingNames: existingNames)
     }
 
+    /// The currently selected workspace, if any.
+    private var selectedWorkspace: WorkspaceInfo? {
+        workspaces.first { $0.name == workspace }
+    }
+
+    /// Repo options shown in the picker. Includes the current `repo` (when
+    /// editing) even if it isn't in the loaded list, so the saved value survives.
+    private var repoChoices: [String] {
+        var choices = repoOptions
+        if !repo.isEmpty, !choices.contains(repo) { choices.insert(repo, at: 0) }
+        return choices
+    }
+
     private var isValid: Bool {
         nameValidationError == nil
+            && !workspace.isEmpty
             && !repo.trimmingCharacters(in: .whitespaces).isEmpty
             && !nonEmptyPrompts.isEmpty
             && (scheduleMode == .daily || intervalValue >= 1)
+    }
+
+    /// Load the selected workspace's repo list, replacing any prior options.
+    private func loadRepos() async {
+        guard let ws = selectedWorkspace else {
+            repoOptions = []
+            return
+        }
+        isLoadingRepos = true
+        defer { isLoadingRepos = false; didLoadRepos = true }
+        repoOptions = await listRepos(ws)
     }
 
     public var body: some View {
@@ -118,10 +159,29 @@ public struct JobFormView: View {
                     Text(error).font(.caption).foregroundStyle(.red)
                 }
 
-                TextField("Repo", text: $repo)
-                    .textFieldStyle(.roundedBorder)
-                Text("Folder name of the repo under the dev root (e.g. \"api\").")
-                    .font(.caption).foregroundStyle(.secondary)
+                Picker("Workspace", selection: $workspace) {
+                    ForEach(workspaces) { ws in Text(ws.name).tag(ws.name) }
+                }
+                .onChange(of: workspace) { _, _ in
+                    // Reset repo when it no longer belongs to the chosen workspace.
+                    repo = ""
+                    Task { await loadRepos() }
+                }
+
+                HStack {
+                    Picker("Repo", selection: $repo) {
+                        Text("Select…").tag("")
+                        ForEach(repoChoices, id: \.self) { Text($0).tag($0) }
+                    }
+                    .disabled(isLoadingRepos)
+                    if isLoadingRepos {
+                        ProgressView().controlSize(.small)
+                    }
+                }
+                if didLoadRepos, !isLoadingRepos, repoOptions.isEmpty {
+                    Text("No repos found for this workspace. Set its “Always Include Repos” to e.g. \(workspace.isEmpty ? "owner" : workspace.lowercased())/* in Workspaces settings.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
 
                 Toggle("Enabled", isOn: $enabled)
             }
@@ -214,6 +274,7 @@ public struct JobFormView: View {
             .padding()
         }
         .frame(width: 460, height: 600)
+        .task { await loadRepos() }
     }
 
     private func buildJob() -> JobConfig {
@@ -228,6 +289,7 @@ public struct JobFormView: View {
         return JobConfig(
             id: existingID ?? UUID(),
             name: trimmedName,
+            workspace: workspace,
             repo: repo.trimmingCharacters(in: .whitespaces),
             prompts: nonEmptyPrompts,
             schedule: schedule,

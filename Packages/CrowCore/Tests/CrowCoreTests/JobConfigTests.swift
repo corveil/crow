@@ -6,7 +6,8 @@ import Testing
     let config = AppConfig(jobs: [
         JobConfig(
             name: "Nightly Audit",
-            repo: "api",
+            workspace: "RadiusMethod",
+            repo: "radiusmethod/api",
             prompts: ["Run the audit", "Summarize findings"],
             schedule: .interval(seconds: 3600),
             enabled: true
@@ -21,7 +22,8 @@ import Testing
     #expect(decoded.jobs.count == 1)
     let job = decoded.jobs[0]
     #expect(job.name == "Nightly Audit")
-    #expect(job.repo == "api")
+    #expect(job.workspace == "RadiusMethod")
+    #expect(job.repo == "radiusmethod/api")
     #expect(job.prompts == ["Run the audit", "Summarize findings"])
     #expect(job.schedule == .interval(seconds: 3600))
     #expect(job.enabled == true)
@@ -30,7 +32,8 @@ import Testing
 @Test func jobConfigRoundTripDailyAt() throws {
     let job = JobConfig(
         name: "Standup",
-        repo: "web",
+        workspace: "Acme",
+        repo: "acme/web",
         prompts: ["Generate the standup report"],
         schedule: .dailyAt(hour: 9, minute: 30, weekdays: [2, 3, 4, 5, 6]),
         lastRunAt: Date(timeIntervalSince1970: 1_700_000_000)
@@ -39,21 +42,25 @@ import Testing
     let data = try JSONEncoder().encode(job)
     let decoded = try JSONDecoder().decode(JobConfig.self, from: data)
 
+    #expect(decoded.workspace == "Acme")
+    #expect(decoded.repo == "acme/web")
     #expect(decoded.schedule == .dailyAt(hour: 9, minute: 30, weekdays: [2, 3, 4, 5, 6]))
     #expect(decoded.lastRunAt == Date(timeIntervalSince1970: 1_700_000_000))
 }
 
-/// A job persisted before the workspace field was dropped must still decode:
-/// the stale `workspace` key is ignored and `repo` is preserved.
-@Test func jobConfigForwardCompatLegacyWorkspaceKey() throws {
+/// A job persisted before the workspace field returned (the brief free-form
+/// `repo`-only era) must still decode: the missing `workspace` defaults to ""
+/// and `repo` is preserved so it resolves by folder name at run time.
+@Test func jobConfigBackCompatMissingWorkspaceKey() throws {
     let json = """
-    {"id":"\(UUID().uuidString)","name":"Legacy","workspace":"Acme","repo":"api",
+    {"id":"\(UUID().uuidString)","name":"FreeForm","repo":"api",
      "prompts":["go"],"schedule":{"type":"interval","seconds":3600},
      "enabled":true,"createdAt":0}
     """
     let decoded = try JSONDecoder().decode(JobConfig.self, from: Data(json.utf8))
+    #expect(decoded.workspace == "")
     #expect(decoded.repo == "api")
-    #expect(decoded.name == "Legacy")
+    #expect(decoded.name == "FreeForm")
     #expect(decoded.prompts == ["go"])
 }
 

@@ -1256,26 +1256,46 @@ final class SessionService {
             return nil
         }
 
-        // Resolve the repo by folder name among the checkouts under the dev root.
-        // The repo's workspace is implied by its location, so jobs only store a
-        // repo name (CROW-327). First match wins if a name is duplicated.
         let gitManager = GitManager(config: WorkspaceConfig(
             devRoot: devRoot, workspaces: [:], defaults: WorkspaceDefaults()
         ))
-        let repos = (try? await gitManager.discoverRepos()) ?? []
-        guard let repoInfo = repos.first(where: { $0.name == job.repo }) else {
-            NSLog("[SessionService] Job '\(job.name)': repo '\(job.repo)' not found under devRoot")
-            return nil
+
+        // Resolve the repo to a local checkout. The job carries a workspace and
+        // an `owner/repo` slug (CROW-327): the checkout lives at
+        // `{devRoot}/{workspace}/{repoFolder}` where repoFolder is the slug's
+        // last component. Clone it on demand if it isn't on disk yet.
+        let repoFolder = job.repo.contains("/")
+            ? (job.repo as NSString).lastPathComponent
+            : job.repo
+        let repoPath: String
+        let workspacePath: String
+
+        if !job.workspace.isEmpty {
+            workspacePath = (devRoot as NSString).appendingPathComponent(job.workspace)
+            repoPath = (workspacePath as NSString).appendingPathComponent(repoFolder)
+            if !FileManager.default.fileExists(atPath: (repoPath as NSString).appendingPathComponent(".git")) {
+                guard await cloneJobRepo(job: job, devRoot: devRoot, into: repoPath) else {
+                    NSLog("[SessionService] Job '\(job.name)': repo '\(job.repo)' is not cloned and clone-on-demand failed")
+                    return nil
+                }
+            }
+        } else {
+            // Back-compat: jobs saved before the workspace field returned store a
+            // bare repo name. Resolve by folder name among local checkouts.
+            let repos = (try? await gitManager.discoverRepos()) ?? []
+            guard let repoInfo = repos.first(where: { $0.name == job.repo }) else {
+                NSLog("[SessionService] Job '\(job.name)': repo '\(job.repo)' not found under devRoot")
+                return nil
+            }
+            repoPath = repoInfo.path
+            workspacePath = (repoPath as NSString).deletingLastPathComponent
         }
-        let repoPath = repoInfo.path
-        // Worktree is a sibling of the repo checkout (matches the naming rule).
-        let workspacePath = (repoPath as NSString).deletingLastPathComponent
 
         let slug = Self.slugify(job.name)
         let stamp = Self.runStamp()
         let branch = "feature/job-\(slug)-\(stamp)"
         let worktreePath = (workspacePath as NSString)
-            .appendingPathComponent("\(job.repo)-job-\(slug)-\(stamp)")
+            .appendingPathComponent("\(repoFolder)-job-\(slug)-\(stamp)")
 
         // Create the worktree on disk (fetch + new branch off default + retry).
         do {
@@ -1297,7 +1317,7 @@ final class SessionService {
         )
         let worktree = SessionWorktree(
             sessionID: session.id,
-            repoName: job.repo,
+            repoName: repoFolder,
             repoPath: repoPath,
             worktreePath: worktreePath,
             branch: branch,
@@ -1327,6 +1347,36 @@ final class SessionService {
 
         NSLog("[SessionService] Job '\(job.name)': created session '\(session.name)' at \(worktreePath)")
         return (session.id, preparedTerminal.id)
+    }
+
+    /// Clone a job's repo into `destination` on demand (the provider list can
+    /// include repos not yet checked out). Needs an `owner/repo` slug; the
+    /// workspace supplies the provider and (for GitLab) the host. Returns
+    /// whether a `.git` checkout exists at `destination` afterward.
+    private func cloneJobRepo(job: JobConfig, devRoot: String, into destination: String) async -> Bool {
+        guard job.repo.contains("/") else {
+            NSLog("[SessionService] Job '\(job.name)': repo '\(job.repo)' is not an owner/repo slug; cannot clone")
+            return false
+        }
+        let workspace = ConfigStore.loadConfig(devRoot: devRoot)?
+            .workspaces.first { $0.name == job.workspace }
+        let provider = workspace?.provider ?? "github"
+
+        NSLog("[SessionService] Job '\(job.name)': cloning \(job.repo) into \(destination)")
+        do {
+            if provider == "gitlab" {
+                if let host = workspace?.host, !host.isEmpty {
+                    _ = try await shell("GITLAB_HOST=\(host)", "glab", "repo", "clone", job.repo, destination)
+                } else {
+                    _ = try await shell("glab", "repo", "clone", job.repo, destination)
+                }
+            } else {
+                _ = try await shell("gh", "repo", "clone", job.repo, destination)
+            }
+        } catch {
+            NSLog("[SessionService] Job '\(job.name)': clone failed: \(error.localizedDescription)")
+        }
+        return FileManager.default.fileExists(atPath: (destination as NSString).appendingPathComponent(".git"))
     }
 
     /// A filesystem/branch-safe slug derived from a job name.

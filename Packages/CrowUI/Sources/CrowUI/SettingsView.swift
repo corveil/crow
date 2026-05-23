@@ -85,7 +85,9 @@ public struct SettingsView: View {
         }
         .sheet(isPresented: $isAddingJob) {
             JobFormView(
-                existingNames: otherJobNames()
+                workspaces: config.workspaces,
+                existingNames: otherJobNames(),
+                listRepos: { ws in await appState.onListWorkspaceRepos?(ws) ?? [] }
             ) { job in
                 config.jobs.append(job)
                 save()
@@ -94,7 +96,9 @@ public struct SettingsView: View {
         .sheet(item: $editingJob) { job in
             JobFormView(
                 job: job,
-                existingNames: otherJobNames(excluding: job.id)
+                workspaces: config.workspaces,
+                existingNames: otherJobNames(excluding: job.id),
+                listRepos: { ws in await appState.onListWorkspaceRepos?(ws) ?? [] }
             ) { updated in
                 if let idx = config.jobs.firstIndex(where: { $0.id == updated.id }) {
                     config.jobs[idx] = updated
@@ -337,7 +341,7 @@ public struct SettingsView: View {
 
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(job.name).fontWeight(.medium)
-                                Text("\(job.repo) · \(scheduleSummary(job.schedule))")
+                                Text("\(jobScope(job)) · \(scheduleSummary(job.schedule))")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                                 Text("\(lastRunText(job)) · \(nextRunText(job))")
@@ -377,14 +381,27 @@ public struct SettingsView: View {
                             .font(.caption)
                     }
                     .buttonStyle(.borderless)
+                    .disabled(config.workspaces.isEmpty)
                 }
             } footer: {
-                Text("Scheduled prompt sets. When a job fires, Crow creates a worktree + session in the scoped repo and runs its prompts.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                if config.workspaces.isEmpty {
+                    Text("Add a workspace first — jobs are scoped to a repo in a workspace.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("Scheduled prompt sets. When a job fires, Crow creates a worktree + session in the scoped repo and runs its prompts.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
         }
         .formStyle(.grouped)
+    }
+
+    /// "workspace/repo" for a job, or just the repo when no workspace is stored
+    /// (jobs persisted before the workspace field returned).
+    private func jobScope(_ job: JobConfig) -> String {
+        job.workspace.isEmpty ? job.repo : "\(job.workspace)/\(job.repo)"
     }
 
     /// Human-readable summary of a job's schedule (e.g. "every 4 hours", "Mon,Wed at 09:00").

@@ -1,20 +1,24 @@
 import Foundation
 
 /// A scheduled job: one or more prompts that fire automatically on a schedule,
-/// scoped to a repo.
+/// scoped to a repo within a workspace.
 ///
-/// When a job fires, the scheduler resolves `repo` to a checkout under the dev
-/// root (by folder name), creates a fresh worktree + session + Claude Code
-/// terminal there, and sends `prompts` in order. Persisted as part of
-/// `AppConfig` in `{devRoot}/.claude/config.json`.
+/// When a job fires, the scheduler resolves the repo under
+/// `{devRoot}/{workspace}/` — cloning it on demand if it isn't checked out yet —
+/// then creates a fresh worktree + session + Claude Code terminal there and
+/// sends `prompts` in order. Persisted as part of `AppConfig` in
+/// `{devRoot}/.claude/config.json`.
 ///
 /// Like `WorkspaceInfo`, decoding is forward-compatible: missing keys fall back
-/// to defaults so older config files keep working (a legacy `workspace` key is
-/// simply ignored).
+/// to defaults so older config files keep working.
 public struct JobConfig: Identifiable, Codable, Sendable, Equatable {
     public let id: UUID
     public var name: String
-    /// Repo folder name. Resolved to a checkout under the dev root at run time.
+    /// Workspace name (matches `WorkspaceInfo.name`); the repo's parent folder
+    /// under the dev root and the source of its provider/host.
+    public var workspace: String
+    /// The repo as an `owner/repo` slug (chosen from the workspace's provider).
+    /// Its last path component is the local folder name under the workspace.
     public var repo: String
     /// Ordered prompts. The first launches Claude; the rest are sent after launch.
     public var prompts: [String]
@@ -27,6 +31,7 @@ public struct JobConfig: Identifiable, Codable, Sendable, Equatable {
     public init(
         id: UUID = UUID(),
         name: String,
+        workspace: String,
         repo: String,
         prompts: [String],
         schedule: JobSchedule,
@@ -36,6 +41,7 @@ public struct JobConfig: Identifiable, Codable, Sendable, Equatable {
     ) {
         self.id = id
         self.name = name
+        self.workspace = workspace
         self.repo = repo
         self.prompts = prompts
         self.schedule = schedule
@@ -48,6 +54,7 @@ public struct JobConfig: Identifiable, Codable, Sendable, Equatable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
         name = try container.decode(String.self, forKey: .name)
+        workspace = try container.decodeIfPresent(String.self, forKey: .workspace) ?? ""
         repo = try container.decodeIfPresent(String.self, forKey: .repo) ?? ""
         prompts = try container.decodeIfPresent([String].self, forKey: .prompts) ?? []
         schedule = try container.decodeIfPresent(JobSchedule.self, forKey: .schedule) ?? .interval(seconds: 86400)
@@ -57,7 +64,7 @@ public struct JobConfig: Identifiable, Codable, Sendable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, repo, prompts, schedule, enabled, lastRunAt, createdAt
+        case id, name, workspace, repo, prompts, schedule, enabled, lastRunAt, createdAt
     }
 
     /// Validate a job name, returning an error message or `nil` if valid.
