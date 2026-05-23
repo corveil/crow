@@ -82,8 +82,22 @@ public final class AppState {
     /// Fixed UUID for the global terminals page.
     nonisolated public static let globalTerminalSessionID = UUID(uuidString: "00000000-0000-0000-0000-000000000004")!
 
+    /// The primary (back-compat) Manager session identified by the well-known UUID.
     public var managerSession: Session? {
         sessions.first { $0.id == Self.managerSessionID }
+    }
+
+    /// All Manager-kind sessions (primary + any additional ones).
+    public var managerSessions: [Session] {
+        sessions.filter { $0.isManager }
+    }
+
+    /// Whether the session with the given id is a Manager. Falls back to the
+    /// well-known primary UUID when the session isn't loaded yet (e.g. during
+    /// terminal creation before the session row is present).
+    public func isManagerSession(_ id: UUID) -> Bool {
+        if let session = sessions.first(where: { $0.id == id }) { return session.isManager }
+        return id == Self.managerSessionID
     }
 
     // MARK: - Issue Tracking
@@ -210,6 +224,9 @@ public final class AppState {
         _sessionState.removeValue(forKey: sessionID)
     }
 
+    /// Called when the user clicks the sidebar "+" to spawn a new Manager session.
+    public var onCreateManager: (() -> Void)?
+
     /// Called when user clicks "Work on" for an assigned issue.
     public var onWorkOnIssue: ((String) -> Void)?  // receives issue URL
 
@@ -317,11 +334,11 @@ public final class AppState {
     }
 
     public var inReviewSessions: [Session] {
-        sessions.filter { $0.status == .inReview && $0.id != Self.managerSessionID }
+        sessions.filter { $0.status == .inReview && !$0.isManager }
     }
 
     public var completedSessions: [Session] {
-        sessions.filter { $0.status == .completed || $0.status == .archived }
+        sessions.filter { ($0.status == .completed || $0.status == .archived) && !$0.isManager }
     }
 
     public var reviewSessions: [Session] {

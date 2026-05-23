@@ -723,7 +723,7 @@ final class IssueTracker {
     /// during the cycle they auto-complete and is preserved thereafter.
     private func collectStalePRURLs(excluding openPRURLs: Set<String>) -> [String] {
         var urls: Set<String> = []
-        for session in appState.sessions where session.id != AppState.managerSessionID {
+        for session in appState.sessions where !session.isManager {
             switch session.status {
             case .active, .paused, .inReview:
                 break
@@ -1289,7 +1289,7 @@ final class IssueTracker {
         let store = JSONStore()
 
         for session in appState.sessions {
-            guard session.id != AppState.managerSessionID else { continue }
+            guard !session.isManager else { continue }
             let wts = appState.worktrees(for: session.id)
             let links = appState.links(for: session.id)
 
@@ -1404,7 +1404,7 @@ final class IssueTracker {
     private func buildReconcileCandidates() -> [ReconcileCandidate] {
         var out: [ReconcileCandidate] = []
         for session in appState.sessions {
-            guard session.id != AppState.managerSessionID else { continue }
+            guard !session.isManager else { continue }
             guard session.status != .archived else { continue }
             guard session.kind == .work else { continue }  // review sessions get PR links at creation
             let links = appState.links(for: session.id)
@@ -1719,7 +1719,7 @@ final class IssueTracker {
         let byURL = Dictionary(viewerPRs.map { ($0.url, $0) }, uniquingKeysWith: Self.mergePRRecords)
 
         var transitions: [PRStatusTransition] = []
-        let sessionsWithPRs = appState.sessions.filter { $0.id != AppState.managerSessionID }
+        let sessionsWithPRs = appState.sessions.filter { !$0.isManager }
         for session in sessionsWithPRs {
             let links = appState.links(for: session.id)
             guard let prLink = links.first(where: { $0.linkType == .pr }) else { continue }
@@ -1844,7 +1844,7 @@ final class IssueTracker {
         guard !viewerPRs.isEmpty else { return }
         let byURL = Dictionary(viewerPRs.map { ($0.url, $0) }, uniquingKeysWith: Self.mergePRRecords)
 
-        for session in appState.sessions where session.id != AppState.managerSessionID {
+        for session in appState.sessions where !session.isManager {
             guard let prLink = appState.links(for: session.id).first(where: { $0.linkType == .pr }) else { continue }
             guard !autoMergeInFlight.contains(prLink.url) else { continue }
             guard let pr = byURL[prLink.url] else { continue }
@@ -2187,7 +2187,7 @@ final class IssueTracker {
         let prsByURL = Dictionary(viewerPRs.map { ($0.url, $0) }, uniquingKeysWith: Self.mergePRRecords)
 
         let candidateSessions = appState.sessions.filter {
-            $0.id != AppState.managerSessionID &&
+            !$0.isManager &&
             ($0.status == .active || $0.status == .paused || $0.status == .inReview)
         }
         var linksBySessionID: [UUID: [SessionLink]] = [:]
@@ -2273,6 +2273,7 @@ final class IssueTracker {
         let cutoff = now.addingTimeInterval(-Double(retentionHours) * 3600)
         return sessions.compactMap { session in
             guard !protectedSessionIDs.contains(session.id) else { return nil }
+            guard !session.isManager else { return nil }
             guard session.status == .completed || session.status == .archived else { return nil }
             guard session.updatedAt < cutoff else { return nil }
             return session.id

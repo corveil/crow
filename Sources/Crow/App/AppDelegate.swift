@@ -419,6 +419,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             service?.openTerminal(sessionID: sessionID)
         }
 
+        // Wire create-manager action — spawns an additional Manager session
+        // (auto-named "Manager N") with its own Claude-Code terminal in the devRoot.
+        appState.onCreateManager = { [weak self, weak service] in
+            guard let self, let service else { return }
+            let name = "Manager \(self.appState.managerSessions.count + 1)"
+            let id = service.createManagerSession(name: name, cwd: devRoot)
+            self.appState.selectedSessionID = id
+        }
+
         // Wire "Work on" issue action — sends issue URL to Manager terminal
         appState.onWorkOnIssue = { [weak self] issueURL in
             guard let self, let managerTerminals = self.appState.terminals[AppState.managerSessionID],
@@ -889,8 +898,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard AppDelegate.isValidSessionName(name) else {
                     throw RPCError.invalidParams("Invalid session name (max \(AppDelegate.maxSessionNameLength) chars, no control characters)")
                 }
+                let kindStr = params["kind"]?.stringValue
+                guard kindStr == nil || SessionKind(rawValue: kindStr!) != nil else {
+                    throw RPCError.invalidParams("Invalid kind (expected work, review, or manager)")
+                }
+                let kind = kindStr.flatMap(SessionKind.init(rawValue:)) ?? .work
                 return await MainActor.run {
-                    let session = Session(name: name)
+                    // Manager sessions get their own Claude-Code terminal in the
+                    // devRoot, mirroring the primary Manager.
+                    if kind == .manager {
+                        let id = capturedService.createManagerSession(name: name, cwd: devRoot)
+                        let createdName = capturedAppState.sessions.first(where: { $0.id == id })?.name ?? name
+                        return ["session_id": .string(id.uuidString), "name": .string(createdName)]
+                    }
+                    let session = Session(name: name, kind: kind)
                     capturedAppState.sessions.append(session)
                     capturedStore.mutate { $0.sessions.append(session) }
                     return ["session_id": .string(session.id.uuidString), "name": .string(session.name)]

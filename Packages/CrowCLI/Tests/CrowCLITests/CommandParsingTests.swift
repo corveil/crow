@@ -20,6 +20,26 @@ private let validUUID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
     }
 }
 
+@Test func newSessionParsesManagerKind() throws {
+    let cmd = try NewSession.parse(["--name", "Manager 2", "--kind", "manager"])
+    #expect(cmd.name == "Manager 2")
+    #expect(cmd.kind == "manager")
+    try cmd.validate()
+}
+
+@Test func newSessionDefaultsToNoKind() throws {
+    let cmd = try NewSession.parse(["--name", "feature"])
+    #expect(cmd.kind == nil)
+    try cmd.validate()
+}
+
+@Test func newSessionRejectsInvalidKind() {
+    // ArgumentParser runs validate() during parse, so an invalid kind throws here.
+    #expect(throws: (any Error).self) {
+        _ = try NewSession.parse(["--name", "x", "--kind", "bogus"])
+    }
+}
+
 @Test func setStatusParsesArgs() throws {
     let cmd = try SetStatus.parse(["--session", validUUID, "active"])
     #expect(cmd.session == validUUID)

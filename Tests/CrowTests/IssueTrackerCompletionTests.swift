@@ -500,6 +500,23 @@ struct IssueTrackerCompletionTests {
     }
 
     @Test
+    func nonPrimaryManagerIsExcludedFromCleanup() {
+        // A non-primary manager has a fresh UUID (not in protectedSessionIDs),
+        // so it must be excluded via its kind rather than its ID.
+        let session = makeSession(
+            name: "Manager 2",
+            status: .completed,
+            kind: .manager,
+            updatedAt: hoursAgo(48)
+        )
+        let eligible = IssueTracker.sessionsEligibleForCleanup(
+            sessions: [session],
+            retentionHours: 24
+        )
+        #expect(eligible.isEmpty)
+    }
+
+    @Test
     func virtualTabSessionsAreProtected() {
         let protectedIDs = [
             AppState.ticketBoardSessionID,
