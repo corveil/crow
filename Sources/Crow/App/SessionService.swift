@@ -141,10 +141,12 @@ final class SessionService {
         // tmux sentinel's .shellReady event is never lost.
         wireTerminalReadiness()
 
-        // Re-hydrate every persisted terminal by re-registering it with a
-        // freshly-started tmux server (v1 doesn't keep the server alive across
-        // launches; spec §12). If re-registration fails (e.g. tmux uninstalled)
-        // the row is left as-is and simply won't render this launch.
+        // Re-hydrate every persisted terminal. Since #330 the tmux server
+        // outlives the app, so rehydrateTerminalSurface adopts the persisted
+        // window when it's still live and only re-registers a fresh one as a
+        // fallback (post-reboot, closed window, or a legacy socket). If both
+        // fail (e.g. tmux uninstalled) the row is left as-is and simply won't
+        // render this launch.
         //
         // Each per-terminal rehydration is dispatched as its own @MainActor
         // task so the run loop can service AppKit/SwiftUI between them.
@@ -196,6 +198,35 @@ final class SessionService {
             NSLog("[SessionService] tmux not configured this run — terminal \(terminal.id) will not render")
             return terminal
         }
+
+        // #330: the tmux server now outlives the app, so on relaunch the
+        // window from last time is (usually) still live with its Claude TUI
+        // running. Re-attach to it rather than spawning a fresh window.
+        if let binding = terminal.tmuxBinding {
+            do {
+                // trackReadiness:false so adoptTerminal does NOT re-fire the
+                // sentinel's `.shellReady` — otherwise wireTerminalReadiness
+                // would drive launchClaude and paste a *second* `claude
+                // --continue` into a pane where Claude is already running.
+                try TmuxBackend.shared.adoptTerminal(id: terminal.id, binding: binding, trackReadiness: false)
+                // The window survived the prior quit → Claude is already up.
+                // Belt-and-suspenders against any other readiness path: drop
+                // the terminal from autoLaunchTerminals (also stops the
+                // didBecomeActive re-arm) and mark readiness terminal so
+                // launchClaude's `== .shellReady` guard can never fire.
+                appState.autoLaunchTerminals.remove(terminal.id)
+                if appState.terminalReadiness[terminal.id] != nil {
+                    appState.terminalReadiness[terminal.id] = .claudeLaunched
+                }
+                return terminal  // binding unchanged → no redundant persist
+            } catch {
+                NSLog("[SessionService] tmux adopt failed (\(error)) for \(terminal.id); creating a fresh window")
+            }
+        }
+
+        // No prior binding, or adoption failed (post-reboot clean slate, the
+        // window was closed, or a legacy per-PID socketPath that no longer
+        // matches the stable socket). Create a fresh window as before.
         do {
             let binding = try TmuxBackend.shared.registerTerminal(
                 id: terminal.id,
