@@ -91,6 +91,19 @@ private func makeConfig(
     #expect(repos.isEmpty)
 }
 
+@Test func discoverReposSkipsCrowReviewsClones() async throws {
+    let root = makeTempDevRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    // crow-reviews holds transient PR-review clones that resolve to the same
+    // org/repo slug as the canonical checkout; they must never be discovered.
+    createFakeRepo(at: root, workspace: "crow-reviews", repo: "crow-pr-346")
+    let config = makeConfig(devRoot: root.path)
+    let repos = try await GitManager(config: config).discoverRepos()
+
+    #expect(repos.isEmpty)
+}
+
 @Test func discoverReposSkipsWorktrees() async throws {
     let root = makeTempDevRoot()
     defer { try? FileManager.default.removeItem(at: root) }

@@ -29,6 +29,10 @@ public actor GitManager {
             var isDir: ObjCBool = false
             guard fm.fileExists(atPath: wsPath, isDirectory: &isDir), isDir.boolValue else { continue }
             guard !config.defaults.excludeDirs.contains(wsDir) else { continue }
+            // crow-reviews holds transient PR-review clones (full clones that
+            // resolve to the same org/repo slug as the canonical checkout); never
+            // discover them or they'd duplicate the real repo in the summary scan.
+            guard wsDir != "crow-reviews" else { continue }
 
             let wsConfig = config.workspaces[wsDir]
             let provider = wsConfig?.provider ?? config.defaults.provider
@@ -242,9 +246,14 @@ public actor GitManager {
     ///   discovered repo. Bare names are ambiguous across orgs, so the scope key
     ///   is the full slug; a repo with no parseable remote can't match a scoped
     ///   set and is dropped.
-    /// - `--all` picks up commits on every branch (worktree feature branches
-    ///   share the main checkout's object store), `--no-merges` keeps diffstats
-    ///   from double-counting merge commits.
+    /// - Before scanning each repo we `git fetch --no-tags origin <defaultBranch>`
+    ///   and base the digest on `origin/<defaultBranch>` (the latest remote
+    ///   default branch) so it reflects what landed on the remote regardless of
+    ///   local state. The default branch is resolved from `origin/HEAD`; if that
+    ///   can't be resolved we fall back to `--all` (commits on every branch).
+    ///   `--no-merges` keeps diffstats from double-counting merge commits.
+    /// - Repos sharing an `org/repo` slug are deduped (first seen wins) so each
+    ///   configured repo appears at most once.
     /// - Repos with zero commits in the window are omitted; a repo whose
     ///   `git log` errors (empty/detached) is skipped rather than failing the
     ///   whole scan.
@@ -257,6 +266,7 @@ public actor GitManager {
         // since git hosts treat org/repo case-insensitively. nil = include all.
         let wantedSlugs = includeRepos.map { Set($0.map { $0.lowercased() }) }
         var summaries: [RepoCommitSummary] = []
+        var seenSlugs = Set<String>()
         for repo in repos {
             // Derive org/repo + the hosted-commit-page prefix from the remote.
             // When scoping, skip repos that don't match (or have no remote).
@@ -264,8 +274,19 @@ public actor GitManager {
             if let wantedSlugs {
                 guard let slug = remote?.slug, wantedSlugs.contains(slug.lowercased()) else { continue }
             }
+            // Dedupe by slug so a repo checked out in two workspaces appears once.
+            if let slug = remote?.slug.lowercased() {
+                guard seenSlugs.insert(slug).inserted else { continue }
+            }
+            // Base the digest on the latest remote default branch: fetch it, then
+            // log `origin/<default>`. Fall back to `--all` if it can't be resolved.
+            let defaultBranch = try? await resolveDefaultBranch(repoPath: repo.path)
+            if let defaultBranch {
+                _ = try? await run(["git", "-C", repo.path, "fetch", "--no-tags", "origin", defaultBranch])
+            }
+            let logRange = defaultBranch.map { "origin/\($0)" } ?? "--all"
             var args = [
-                "git", "-C", repo.path, "log", "--all", "--no-merges",
+                "git", "-C", repo.path, "log", logRange, "--no-merges",
                 "--since=\(since)",
             ]
             if let until { args.append("--until=\(until)") }

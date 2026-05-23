@@ -173,6 +173,10 @@ public final class AppState {
     public var lastSummary: [RepoCommitSummary] = []
     public var isLoadingSummary: Bool = false
 
+    /// The configured Changes-summary scope (from config.defaults.summaryRepos),
+    /// surfaced in the board's repo dropdown. Synced from AppConfig.
+    public var summaryRepoScope: [String] = []
+
     /// LLM narrative of the current digest (item 4). Transient.
     public var llmNarrative: String = ""
     public var isSummarizingLLM: Bool = false

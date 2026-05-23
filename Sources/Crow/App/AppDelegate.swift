@@ -317,6 +317,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appState.excludeReviewRepos = config.defaults.excludeReviewRepos
         appState.excludeTicketRepos = config.defaults.excludeTicketRepos
         appState.ignoreReviewLabels = config.defaults.ignoreReviewLabels
+        appState.summaryRepoScope = config.defaults.summaryRepos
 
         // Create session service and hydrate state
         let service = SessionService(store: store, appState: appState, telemetryPort: config.telemetry.enabled ? config.telemetry.port : nil)
@@ -919,6 +920,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appState.excludeReviewRepos = config.defaults.excludeReviewRepos
         appState.excludeTicketRepos = config.defaults.excludeTicketRepos
         appState.ignoreReviewLabels = config.defaults.ignoreReviewLabels
+        appState.summaryRepoScope = config.defaults.summaryRepos
     }
 
     /// Record a job's run time in the canonical `appConfig` and persist it, so
