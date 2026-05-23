@@ -593,6 +593,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         scheduler.start()
         self.jobScheduler = scheduler
 
+        // Manual "Run now" — fire a job immediately, regardless of enabled/schedule.
+        appState.onRunJob = { [weak self] jobID in
+            self?.jobScheduler?.runNow(jobID)
+        }
+
         appState.onMarkInReview = { [weak tracker] id in
             Task { await tracker?.markInReview(sessionID: id) }
         }

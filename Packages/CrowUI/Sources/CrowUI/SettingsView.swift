@@ -352,6 +352,14 @@ public struct SettingsView: View {
                             Spacer()
 
                             Button {
+                                appState.onRunJob?(job.id)
+                            } label: {
+                                Image(systemName: "play.fill")
+                            }
+                            .buttonStyle(.borderless)
+                            .accessibilityLabel("Run \(job.name) now")
+
+                            Button {
                                 editingJob = job
                             } label: {
                                 Image(systemName: "pencil")
