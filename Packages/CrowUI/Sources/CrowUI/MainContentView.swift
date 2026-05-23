@@ -22,6 +22,8 @@ public struct MainContentView: View {
                 ReviewBoardView(appState: appState)
             } else if appState.selectedSessionID == AppState.globalTerminalSessionID {
                 GlobalTerminalView(appState: appState)
+            } else if appState.selectedSessionID == AppState.summaryBoardSessionID {
+                SummaryBoardView(appState: appState)
             } else if let session = appState.selectedSession {
                 SessionDetailView(session: session, appState: appState)
             } else {

@@ -231,6 +231,94 @@ public actor GitManager {
         }
     }
 
+    /// Collect commits across every discovered repo within a time window and
+    /// group them by repo. Deterministic digest — no LLM.
+    ///
+    /// - `since`/`until` are passed straight to git, which parses flexible date
+    ///   strings ("1 week ago", "2026-05-01"); `until` defaults to now when nil.
+    /// - `--all` picks up commits on every branch (worktree feature branches
+    ///   share the main checkout's object store), `--no-merges` keeps diffstats
+    ///   from double-counting merge commits.
+    /// - Repos with zero commits in the window are omitted; a repo whose
+    ///   `git log` errors (empty/detached) is skipped rather than failing the
+    ///   whole scan.
+    ///
+    /// Runs sequentially: `run` is actor-isolated and blocks on
+    /// `waitUntilExit`, so a task group would serialize on the actor anyway.
+    public func summarizeCommits(since: String, until: String?) async throws -> [RepoCommitSummary] {
+        let repos = try await discoverRepos()
+        var summaries: [RepoCommitSummary] = []
+        for repo in repos {
+            var args = [
+                "git", "-C", repo.path, "log", "--all", "--no-merges",
+                "--since=\(since)",
+            ]
+            if let until { args.append("--until=\(until)") }
+            args.append(contentsOf: [
+                "--date=iso-strict",
+                "--pretty=format:%x1e%H%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%s",
+                "--numstat",
+            ])
+
+            let output: String
+            do {
+                output = try await run(args)
+            } catch {
+                // Empty repo, detached HEAD, etc. — skip, don't abort the scan.
+                continue
+            }
+
+            let commits = Self.parseCommitLog(output)
+            if !commits.isEmpty {
+                summaries.append(RepoCommitSummary(
+                    repo: repo.name, path: repo.path, workspace: repo.workspace, commits: commits
+                ))
+            }
+        }
+        return summaries
+    }
+
+    /// Parse the `--pretty`/`--numstat` output of the `summarizeCommits` git
+    /// command. Records are delimited by RS (`\u{1e}`), header fields by US
+    /// (`\u{1f}`); numstat lines (`<ins>\t<del>\t<path>`) follow each header.
+    static func parseCommitLog(_ output: String) -> [CommitInfo] {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        var commits: [CommitInfo] = []
+
+        for record in output.components(separatedBy: "\u{1e}") {
+            let trimmed = record.trimmingCharacters(in: .newlines)
+            guard !trimmed.isEmpty else { continue }
+
+            let lines = trimmed.components(separatedBy: "\n")
+            let fields = lines[0].components(separatedBy: "\u{1f}")
+            guard fields.count >= 6 else { continue }
+
+            var files = 0, insertions = 0, deletions = 0
+            for line in lines.dropFirst() where !line.isEmpty {
+                let cols = line.components(separatedBy: "\t")
+                guard cols.count >= 3 else { continue }
+                files += 1
+                // Binary files report "-" for ins/del; treat as 0.
+                insertions += Int(cols[0]) ?? 0
+                deletions += Int(cols[1]) ?? 0
+            }
+
+            commits.append(CommitInfo(
+                hash: fields[0],
+                shortHash: fields[1],
+                authorName: fields[2],
+                authorEmail: fields[3],
+                date: formatter.date(from: fields[4]) ?? Date(timeIntervalSince1970: 0),
+                subject: fields[5],
+                filesChanged: files,
+                insertions: insertions,
+                deletions: deletions
+            ))
+        }
+        return commits
+    }
+
     /// Run a git command, returning stdout on success.
     private func run(_ args: [String]) async throws -> String {
         let process = Process()

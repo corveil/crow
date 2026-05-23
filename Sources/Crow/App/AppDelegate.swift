@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import CrowCore
+import CrowGit
 import CrowUI
 import CrowPersistence
 import CrowTerminal
@@ -355,6 +356,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         appState.onCompleteSession = { [weak service] id in
             service?.completeSession(id: id)
+        }
+        // In-app Summary view calls GitManager directly (no socket round-trip);
+        // the CLI path goes through the "get-summary" RPC handler. Both converge
+        // on summarizeCommits.
+        appState.onGenerateSummary = { [weak self] since, until in
+            guard let self, let devRoot = self.devRoot else { return [] }
+            let excludeDirs = self.appConfig?.defaults.excludeDirs ?? WorkspaceDefaults().excludeDirs
+            let gm = GitManager(config: WorkspaceConfig(
+                devRoot: devRoot,
+                workspaces: [:],
+                defaults: WorkspaceDefaults(excludeDirs: excludeDirs)
+            ))
+            return (try? await gm.summarizeCommits(since: since, until: until)) ?? []
         }
         appState.onSetSessionInReview = { [weak service] id in
             service?.setSessionInReview(id: id)
@@ -898,6 +912,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let capturedService = sessionService
         let capturedTelemetryPort = sessionService.telemetryPort
         let hookDebug = ProcessInfo.processInfo.environment["CROW_HOOK_DEBUG"] == "1"
+        // Handler closures capture locals (not `self`); snapshot what the
+        // get-summary handler needs to build a GitManager.
+        let capturedDevRoot = devRoot
+        let capturedExcludeDirs = appConfig?.defaults.excludeDirs ?? WorkspaceDefaults().excludeDirs
 
         let router = CommandRouter(handlers: [
             "new-session": { @Sendable params in
@@ -1486,6 +1504,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         "event_name": .string(eventName),
                     ]
                 }
+            },
+            "get-summary": { @Sendable params in
+                let since = params["since"]?.stringValue ?? "1 week ago"
+                let until = params["until"]?.stringValue
+                let gm = GitManager(config: WorkspaceConfig(
+                    devRoot: capturedDevRoot,
+                    workspaces: [:],
+                    defaults: WorkspaceDefaults(excludeDirs: capturedExcludeDirs)
+                ))
+                let summaries = try await gm.summarizeCommits(since: since, until: until)
+                let fmt = ISO8601DateFormatter()
+                let repos: [JSONValue] = summaries.map { s in
+                    .object([
+                        "repo": .string(s.repo),
+                        "path": .string(s.path),
+                        "workspace": .string(s.workspace),
+                        "totalFilesChanged": .int(s.totalFilesChanged),
+                        "totalInsertions": .int(s.totalInsertions),
+                        "totalDeletions": .int(s.totalDeletions),
+                        "commits": .array(s.commits.map { c in
+                            .object([
+                                "hash": .string(c.hash),
+                                "shortHash": .string(c.shortHash),
+                                "authorName": .string(c.authorName),
+                                "authorEmail": .string(c.authorEmail),
+                                "date": .string(fmt.string(from: c.date)),
+                                "subject": .string(c.subject),
+                                "filesChanged": .int(c.filesChanged),
+                                "insertions": .int(c.insertions),
+                                "deletions": .int(c.deletions),
+                            ])
+                        }),
+                    ])
+                }
+                return ["repos": .array(repos)]
             },
         ])
 
