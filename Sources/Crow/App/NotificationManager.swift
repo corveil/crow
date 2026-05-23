@@ -159,6 +159,41 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
         )
     }
 
+    // MARK: - Auto-Rebase Notifications (CROW-318)
+
+    /// Notify the user that Crow rebased a PR branch onto its base and
+    /// force-pushed it (the branch had fallen behind base or developed
+    /// conflicts Crow could resolve mechanically).
+    func notifyAutoRebasePushed(number: Int, sessionID: UUID) {
+        guard !settings.globalMute else { return }
+        guard settings.systemNotificationsEnabled else { return }
+
+        let sessionName = appState.sessions.first(where: { $0.id == sessionID })?.name ?? "session"
+        postSystemNotification(
+            title: "Branch rebased \u{2014} \(sessionName)",
+            body: "PR #\(number) was rebased onto its base and force-pushed.",
+            sessionID: sessionID,
+            eventName: "AutoRebasePushed"
+        )
+    }
+
+    /// Notify the user that an auto-rebase hit conflicts that couldn't be
+    /// resolved mechanically. Crow asks the session's Claude terminal to
+    /// resolve them; this banner ensures the user knows even if no live
+    /// terminal picked it up.
+    func notifyAutoRebaseConflicts(number: Int, sessionID: UUID) {
+        guard !settings.globalMute else { return }
+        guard settings.systemNotificationsEnabled else { return }
+
+        let sessionName = appState.sessions.first(where: { $0.id == sessionID })?.name ?? "session"
+        postSystemNotification(
+            title: "Rebase conflicts \u{2014} \(sessionName)",
+            body: "PR #\(number) has conflicts. Crow asked Claude to resolve them.",
+            sessionID: sessionID,
+            eventName: "AutoRebaseConflicts"
+        )
+    }
+
     // MARK: - PR Status Transition Notifications
 
     /// Notify the user about a detected PR status transition (changes

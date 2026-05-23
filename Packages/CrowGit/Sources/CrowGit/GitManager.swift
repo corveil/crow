@@ -3,14 +3,20 @@ import CrowCore
 
 /// Discovers git repos across workspaces and manages worktrees.
 public actor GitManager {
-    private let config: WorkspaceConfig
+    /// Workspace config is only needed by `discoverRepos`. Operations that
+    /// act on an explicit path (worktree create/remove, `rebaseOntoBase`)
+    /// don't use it, so it's optional and the no-arg `init()` lets callers
+    /// that only rebase (e.g. IssueTracker) construct one without plumbing
+    /// `WorkspaceConfig` through.
+    private let config: WorkspaceConfig?
 
-    public init(config: WorkspaceConfig) {
+    public init(config: WorkspaceConfig? = nil) {
         self.config = config
     }
 
     /// Discover all git repositories under devRoot.
     public func discoverRepos() async throws -> [RepoInfo] {
+        guard let config else { return [] }
         let devRoot = config.devRoot
         let fm = FileManager.default
         guard let workspaceDirs = try? fm.contentsOfDirectory(atPath: devRoot) else {
@@ -85,6 +91,116 @@ public actor GitManager {
         _ = try await run(["git", "-C", repoPath, "worktree", "remove", worktreePath])
     }
 
+    // MARK: - Rebase
+
+    /// Rebase the worktree's current branch onto `origin/<baseBranch>` and
+    /// force-push it with `--force-with-lease`.
+    ///
+    /// Designed to run unattended from the IssueTracker poll loop, so it is
+    /// deliberately conservative:
+    /// - **Never touches a dirty tree.** A `git status --porcelain` check
+    ///   short-circuits to `.dirtyWorktree` so we never clobber a Claude
+    ///   session's in-progress edits.
+    /// - **Verifies HEAD is on `branch`** before rebasing, so a worktree that
+    ///   was switched to another branch is left alone (`.failed`).
+    /// - **Requires the local branch to match the remote PR head** before
+    ///   rewriting — committed-but-unpushed local commits (or a stale local
+    ///   branch) yield `.outOfSyncWithRemote` so a force-push can't publish
+    ///   unpushed work or revert remote commits.
+    /// - **Aborts on conflict** to restore a clean checkout, then reports
+    ///   `.conflicts` so the caller can hand resolution to a Claude session.
+    /// - **`--force-with-lease`** (against the remote head of `branch` fetched
+    ///   at the start) so a concurrent push to the PR branch fails the lease
+    ///   rather than being overwritten.
+    ///
+    /// Returns a `RebaseOutcome` instead of throwing: the caller branches on
+    /// the result (push / delegate / defer / log) rather than catching.
+    public func rebaseOntoBase(
+        worktreePath: String,
+        branch: String,
+        baseBranch: String
+    ) async -> RebaseOutcome {
+        do {
+            // Refuse to touch a worktree with uncommitted changes.
+            let status = try await run(["git", "-C", worktreePath, "status", "--porcelain"])
+            guard status.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return .dirtyWorktree
+            }
+
+            // Confirm we're on the branch we intend to rebase.
+            let head = try await run(["git", "-C", worktreePath, "rev-parse", "--abbrev-ref", "HEAD"])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard head == branch else {
+                return .failed("worktree HEAD is '\(head)', expected '\(branch)'")
+            }
+
+            // Fetch both the base (rebase target) and the branch itself so the
+            // remote-tracking ref used for the in-sync check and the
+            // `--force-with-lease` baseline reflect the current remote state.
+            _ = try await run(["git", "-C", worktreePath, "fetch", "origin", baseBranch, branch])
+
+            // Refuse to rewrite a branch that isn't in sync with its remote:
+            // local commits not yet pushed (ahead) would be published
+            // unexpectedly, and a stale local branch (behind/diverged) would
+            // revert remote commits on force-push. Only proceed when the local
+            // head exactly matches the remote PR head.
+            let localSha = try await run(["git", "-C", worktreePath, "rev-parse", "HEAD"])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let remoteSha = try await run(["git", "-C", worktreePath, "rev-parse", "origin/\(branch)"])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard localSha == remoteSha else {
+                return .outOfSyncWithRemote
+            }
+
+            // Attempt the rebase. A failure here is almost always conflicts.
+            // `-c commit.gpgsign=false`: rewriting commits would otherwise try
+            // to (re)sign each one, which can block on a pinentry/SSH-agent
+            // prompt — fatal for an unattended background rebase.
+            do {
+                _ = try await run([
+                    "git", "-C", worktreePath, "-c", "commit.gpgsign=false",
+                    "rebase", "origin/\(baseBranch)",
+                ])
+            } catch let error as GitError {
+                // Distinguish a genuine conflict from other failures (e.g. a
+                // bad base ref) by looking for unmerged paths — robust across
+                // git versions, unlike matching stderr text. Always abort
+                // afterward to restore a clean tree.
+                let unmerged = (try? await run([
+                    "git", "-C", worktreePath, "diff", "--name-only", "--diff-filter=U",
+                ])) ?? ""
+                _ = try? await run(["git", "-C", worktreePath, "rebase", "--abort"])
+                guard unmerged.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    return .conflicts
+                }
+                // Not a conflict — surface the failure rather than misleadingly
+                // asking Claude to "resolve conflicts".
+                if case .commandFailed(_, _, let stderr) = error {
+                    return .failed("rebase failed: \(stderr.prefix(300))")
+                }
+                return .failed("rebase failed")
+            }
+
+            // Rebase succeeded cleanly — publish it.
+            do {
+                _ = try await run([
+                    "git", "-C", worktreePath, "push",
+                    "--force-with-lease", "origin", branch,
+                ])
+            } catch let error as GitError {
+                if case .commandFailed(_, _, let stderr) = error {
+                    return .failed("push --force-with-lease rejected: \(stderr.prefix(300))")
+                }
+                return .failed("push failed")
+            }
+            return .rebasedAndPushed
+        } catch let error as GitError {
+            return .failed(error.errorDescription ?? "git error")
+        } catch {
+            return .failed(error.localizedDescription)
+        }
+    }
+
     // MARK: - Private Helpers
 
     /// Resolve the default branch for the remote (e.g. main, master).
@@ -142,6 +258,29 @@ public actor GitManager {
         }
         return stdout
     }
+}
+
+/// Result of `GitManager.rebaseOntoBase`. Distinguishes the outcomes the
+/// caller must handle differently: a clean rebase that was pushed, conflicts
+/// that need delegation to a Claude session, a dirty worktree to retry later,
+/// and any other failure to log.
+public enum RebaseOutcome: Sendable, Equatable {
+    /// Rebase applied cleanly and the branch was force-pushed.
+    case rebasedAndPushed
+    /// Rebase hit conflicts; the rebase was aborted (tree is clean again) and
+    /// resolution should be delegated to a Claude session.
+    case conflicts
+    /// The worktree had uncommitted changes; nothing was touched. Transient —
+    /// retry once the tree is clean.
+    case dirtyWorktree
+    /// The local branch head doesn't match the remote PR head — there are
+    /// committed-but-unpushed local commits (ahead) or the worktree is stale
+    /// relative to the remote (behind/diverged). Nothing was touched, since a
+    /// rebase + force-push would either publish unpushed work or revert remote
+    /// commits. Transient — retry once the branch is back in sync.
+    case outOfSyncWithRemote
+    /// Any other failure (branch mismatch, fetch error, rejected push, …).
+    case failed(String)
 }
 
 public struct RepoInfo: Sendable {

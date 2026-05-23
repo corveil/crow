@@ -30,6 +30,12 @@ public struct AppConfig: Codable, Sendable, Equatable {
     /// issue. While disabled, the label is left alone so a later opt-in
     /// can still pick up previously-labeled issues.
     public var autoCreateWatcherEnabled: Bool
+    /// When true, the IssueTracker rebases watched Crow-authored PR branches
+    /// onto their base and force-pushes (`--force-with-lease`) whenever they
+    /// fall BEHIND base or become CONFLICTING — no label required (unlike
+    /// `autoMergeWatcherEnabled`). Rebases that hit conflicts are handed to
+    /// the session's Claude terminal. Opt-in: defaults to false (CROW-318).
+    public var autoRebaseWatcherEnabled: Bool
     public var cleanup: CleanupConfig
     /// Scheduled jobs: named sets of prompts that fire automatically on a
     /// schedule, scoped to a repo. Driven by `JobScheduler` (CROW-317).
@@ -47,6 +53,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         attributionTrailers: Bool = true,
         autoMergeWatcherEnabled: Bool = false,
         autoCreateWatcherEnabled: Bool = false,
+        autoRebaseWatcherEnabled: Bool = false,
         cleanup: CleanupConfig = CleanupConfig(),
         jobs: [JobConfig] = []
     ) {
@@ -61,6 +68,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         self.attributionTrailers = attributionTrailers
         self.autoMergeWatcherEnabled = autoMergeWatcherEnabled
         self.autoCreateWatcherEnabled = autoCreateWatcherEnabled
+        self.autoRebaseWatcherEnabled = autoRebaseWatcherEnabled
         self.cleanup = cleanup
         self.jobs = jobs
     }
@@ -78,12 +86,13 @@ public struct AppConfig: Codable, Sendable, Equatable {
         attributionTrailers = try container.decodeIfPresent(Bool.self, forKey: .attributionTrailers) ?? true
         autoMergeWatcherEnabled = try container.decodeIfPresent(Bool.self, forKey: .autoMergeWatcherEnabled) ?? false
         autoCreateWatcherEnabled = try container.decodeIfPresent(Bool.self, forKey: .autoCreateWatcherEnabled) ?? false
+        autoRebaseWatcherEnabled = try container.decodeIfPresent(Bool.self, forKey: .autoRebaseWatcherEnabled) ?? false
         cleanup = try container.decodeIfPresent(CleanupConfig.self, forKey: .cleanup) ?? CleanupConfig()
         jobs = try container.decodeIfPresent([JobConfig].self, forKey: .jobs) ?? []
     }
 
     private enum CodingKeys: String, CodingKey {
-        case workspaces, defaults, notifications, sidebar, remoteControlEnabled, managerAutoPermissionMode, telemetry, autoRespond, attributionTrailers, autoMergeWatcherEnabled, autoCreateWatcherEnabled, cleanup, jobs
+        case workspaces, defaults, notifications, sidebar, remoteControlEnabled, managerAutoPermissionMode, telemetry, autoRespond, attributionTrailers, autoMergeWatcherEnabled, autoCreateWatcherEnabled, autoRebaseWatcherEnabled, cleanup, jobs
     }
 }
 

@@ -547,6 +547,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         tracker.onAutoMergeEnabled = { [weak self] sessionID, prURL, number in
             self?.notificationManager?.notifyAutoMergeEnabled(prURL: prURL, number: number, sessionID: sessionID)
         }
+        tracker.autoRebaseWatcherEnabledProvider = { [weak self] in
+            self?.appConfig?.autoRebaseWatcherEnabled ?? false
+        }
+        tracker.onAutoRebasePushed = { [weak self] sessionID, _, number in
+            self?.notificationManager?.notifyAutoRebasePushed(number: number, sessionID: sessionID)
+        }
+        tracker.onAutoRebaseConflicts = { [weak self] sessionID, _, number in
+            guard let self else { return }
+            // Hand conflict resolution to the session's Claude terminal via the
+            // existing fixConflicts quick action (rebase + resolve + force-push
+            // prompt). Notify regardless so the user knows even if there's no
+            // live managed terminal to receive it.
+            self.autoRespondCoordinator?.dispatchManual(action: .fixConflicts, sessionID: sessionID)
+            self.notificationManager?.notifyAutoRebaseConflicts(number: number, sessionID: sessionID)
+        }
         tracker.start()
         self.issueTracker = tracker
 

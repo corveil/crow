@@ -12,6 +12,7 @@ public struct AutomationSettingsView: View {
     @Binding var attributionTrailers: Bool
     @Binding var autoMergeWatcherEnabled: Bool
     @Binding var autoCreateWatcherEnabled: Bool
+    @Binding var autoRebaseWatcherEnabled: Bool
     var onSave: (() -> Void)?
 
     @State private var excludeReviewReposText: String
@@ -26,6 +27,7 @@ public struct AutomationSettingsView: View {
         attributionTrailers: Binding<Bool>,
         autoMergeWatcherEnabled: Binding<Bool>,
         autoCreateWatcherEnabled: Binding<Bool>,
+        autoRebaseWatcherEnabled: Binding<Bool>,
         onSave: (() -> Void)? = nil
     ) {
         self._defaults = defaults
@@ -35,6 +37,7 @@ public struct AutomationSettingsView: View {
         self._attributionTrailers = attributionTrailers
         self._autoMergeWatcherEnabled = autoMergeWatcherEnabled
         self._autoCreateWatcherEnabled = autoCreateWatcherEnabled
+        self._autoRebaseWatcherEnabled = autoRebaseWatcherEnabled
         self.onSave = onSave
         self._excludeReviewReposText = State(initialValue: defaults.wrappedValue.excludeReviewRepos.joined(separator: ", "))
         self._ignoreReviewLabelsText = State(initialValue: defaults.wrappedValue.ignoreReviewLabels.joined(separator: ", "))
@@ -125,6 +128,14 @@ public struct AutomationSettingsView: View {
                 Toggle("Enable crow:merge auto-merge for Crow-authored PRs", isOn: $autoMergeWatcherEnabled)
                     .onChange(of: autoMergeWatcherEnabled) { _, _ in onSave?() }
                 Text("When a PR linked to a Crow session carries the crow:merge label, Crow enables GitHub native auto-merge with squash + delete branch. Only PRs whose commits include a Crow-Session trailer matching a known session are eligible. GitHub holds the merge until required reviews and checks pass. Off by default.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Auto-rebase") {
+                Toggle("Auto-rebase Crow-authored PR branches that fall behind or conflict", isOn: $autoRebaseWatcherEnabled)
+                    .onChange(of: autoRebaseWatcherEnabled) { _, _ in onSave?() }
+                Text("When a PR linked to a Crow session falls behind its base or develops conflicts, Crow rebases the session's worktree onto the base and force-pushes with --force-with-lease. No label required. Only PRs whose commits include a Crow-Session trailer matching a known session are eligible. If the rebase hits conflicts, Crow asks the session's Claude Code terminal to resolve them. Off by default.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
