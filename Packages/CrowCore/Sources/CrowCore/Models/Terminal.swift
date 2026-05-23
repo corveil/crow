@@ -2,16 +2,13 @@ import Foundation
 
 /// Which terminal backend hosts a `SessionTerminal`'s shell.
 ///
-/// The `.ghostty` path is the historical one — each terminal owns its own
-/// libghostty surface and PTY. The `.tmux` path is rolling out behind a
-/// feature flag (see #198): all terminals share a single embedded Ghostty
-/// surface that's attached to a tmux session, and each terminal is one
-/// tmux window inside that session.
-///
-/// `.ghostty` is the default for back-compat with persisted store rows
-/// written before this discriminator existed.
+/// tmux is the only backend (#198 → defaulted on in #301 → legacy
+/// per-terminal Ghostty path removed in #303): all terminals share a single
+/// embedded Ghostty surface that's attached to a tmux session, and each
+/// terminal is one tmux window inside that session. The enum is retained as
+/// a single-case discriminator so the persisted schema is stable and a
+/// future backend can be added without another migration.
 public enum TerminalBackend: String, Codable, Sendable {
-    case ghostty
     case tmux
 }
 
@@ -41,10 +38,11 @@ public struct SessionTerminal: Identifiable, Codable, Sendable {
     public var command: String?
     public var isManaged: Bool
     public var createdAt: Date
-    /// Which backend hosts this terminal. Defaults to `.ghostty` so rows
-    /// written before this field existed continue to load unchanged.
+    /// Which backend hosts this terminal. Always `.tmux` since #303; the
+    /// custom decoder maps legacy `"ghostty"` rows forward.
     public var backend: TerminalBackend
-    /// Populated when `backend == .tmux`. Nil for `.ghostty`.
+    /// The tmux window that backs this terminal. Nil only when registration
+    /// hasn't happened yet or failed this run.
     public var tmuxBinding: TmuxBinding?
 
     public init(
@@ -55,7 +53,7 @@ public struct SessionTerminal: Identifiable, Codable, Sendable {
         command: String? = nil,
         isManaged: Bool = false,
         createdAt: Date = Date(),
-        backend: TerminalBackend = .ghostty,
+        backend: TerminalBackend = .tmux,
         tmuxBinding: TmuxBinding? = nil
     ) {
         self.id = id
@@ -80,7 +78,15 @@ public struct SessionTerminal: Identifiable, Codable, Sendable {
         command = try container.decodeIfPresent(String.self, forKey: .command)
         isManaged = try container.decodeIfPresent(Bool.self, forKey: .isManaged) ?? false
         createdAt = try container.decode(Date.self, forKey: .createdAt)
-        backend = try container.decodeIfPresent(TerminalBackend.self, forKey: .backend) ?? .ghostty
+        // tmux is the only backend since #303. Decode the raw string and map
+        // anything that isn't a known case — including legacy `"ghostty"` rows
+        // and rows written before this field existed — forward to `.tmux`, so
+        // an upgrade never throws on an old store.
+        if let raw = try container.decodeIfPresent(String.self, forKey: .backend) {
+            backend = TerminalBackend(rawValue: raw) ?? .tmux
+        } else {
+            backend = .tmux
+        }
         tmuxBinding = try container.decodeIfPresent(TmuxBinding.self, forKey: .tmuxBinding)
     }
 }

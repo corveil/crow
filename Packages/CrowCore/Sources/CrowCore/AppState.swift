@@ -225,9 +225,6 @@ public final class AppState {
     /// Called to launch Claude in a terminal that just became ready.
     public var onLaunchClaude: ((UUID) -> Void)?  // receives terminal ID
 
-    /// Called when the user clicks "Retry" on a failed terminal surface.
-    public var onRetryTerminal: ((UUID) -> Void)?  // receives terminal ID
-
     /// Called to relaunch the Manager's `claude` process after it exited, while
     /// preserving the Manager session identity. Wired to `SessionService.restartManager`.
     public var onRestartManager: (() -> Void)?

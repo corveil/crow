@@ -3,40 +3,36 @@ import AppKit
 import CrowCore
 import GhosttyKit
 
-/// SwiftUI wrapper that reuses a persistent `GhosttySurfaceView`.
+/// SwiftUI wrapper that reuses the shared tmux cockpit `GhosttySurfaceView`.
 ///
-/// For `.ghostty` terminals: fetches a per-terminal surface from
-/// `TerminalManager.shared` (legacy path; one surface per terminal).
-///
-/// For `.tmux` terminals (#198 rollout): all visible-tab views share the
-/// same `GhosttySurfaceView` from `TmuxBackend.shared.cockpitSurface()`.
+/// All visible-tab views share the same `GhosttySurfaceView` from
+/// `TmuxBackend.shared.cockpitSurface()` (#198 → only backend since #303).
 /// Switching tabs re-parents the same NSView and fires
 /// `TmuxBackend.shared.makeActive(id:)` so the attached tmux client jumps
-/// to the right window. The shared-surface model means at most one tmux
-/// terminal is on-screen at a time — fine today (Crow has no split view).
+/// to the right window. The shared-surface model means at most one terminal
+/// is on-screen at a time — fine today (Crow has no split view). When tmux
+/// is unavailable the view renders blank rather than crashing.
 public struct TerminalSurfaceView: NSViewRepresentable {
     let terminalID: UUID
     let workingDirectory: String?
     let command: String?
-    let backend: TerminalBackend
 
     public init(
         terminalID: UUID = UUID(),
         workingDirectory: String? = nil,
-        command: String? = nil,
-        backend: TerminalBackend = .ghostty
+        command: String? = nil
     ) {
         self.terminalID = terminalID
         self.workingDirectory = workingDirectory
         self.command = command
-        self.backend = backend
     }
 
     @MainActor
     public func makeNSView(context: Context) -> NSView {
-        let surface = surfaceForBackend()
         let container = NSView()
-        attach(surface: surface, to: container)
+        if let surface = cockpitSurface() {
+            attach(surface: surface, to: container)
+        }
         // makeActive is fired from updateNSView — issuing it here too can
         // double-fire `tmux select-window` on the same tab activation when
         // SwiftUI calls update right after make on .id() recreation.
@@ -44,16 +40,14 @@ public struct TerminalSurfaceView: NSViewRepresentable {
     }
 
     /// Re-parent the surface if SwiftUI replaced the container, and acquire
-    /// first responder once the view is in a window. For tmux backends, also
-    /// fire makeActive — this is the "tab switched to a different tmux
-    /// terminal" hook in the shared-surface model.
+    /// first responder once the view is in a window. Also fire makeActive —
+    /// this is the "tab switched to a different tmux terminal" hook in the
+    /// shared-surface model.
     @MainActor
     public func updateNSView(_ nsView: NSView, context: Context) {
-        guard let surface = existingSurfaceForBackend() else { return }
+        guard let surface = TmuxBackend.shared.existingCockpitSurface else { return }
 
-        if backend == .tmux {
-            try? TmuxBackend.shared.makeActive(id: terminalID)
-        }
+        try? TmuxBackend.shared.makeActive(id: terminalID)
 
         if surface.superview !== nsView {
             // addSubview re-parents atomically — no need for an explicit
@@ -94,40 +88,15 @@ public struct TerminalSurfaceView: NSViewRepresentable {
     }
 
     @MainActor
-    private func surfaceForBackend() -> GhosttySurfaceView {
-        switch backend {
-        case .ghostty:
-            return TerminalManager.shared.surface(
-                for: terminalID,
-                workingDirectory: workingDirectory ?? FileManager.default.homeDirectoryForCurrentUser.path,
-                command: command
-            )
-        case .tmux:
-            // The cockpit surface is created lazily on first call; subsequent
-            // call sites (other tabs) get the same NSView.
-            do {
-                return try TmuxBackend.shared.cockpitSurface()
-            } catch {
-                NSLog("[TerminalSurfaceView] tmux cockpitSurface failed: \(error). Falling back to per-terminal Ghostty.")
-                return TerminalManager.shared.surface(
-                    for: terminalID,
-                    workingDirectory: workingDirectory ?? FileManager.default.homeDirectoryForCurrentUser.path,
-                    command: command
-                )
-            }
-        }
-    }
-
-    @MainActor
-    private func existingSurfaceForBackend() -> GhosttySurfaceView? {
-        switch backend {
-        case .ghostty:
-            return TerminalManager.shared.existingSurface(for: terminalID)
-        case .tmux:
-            // Side-effect-free peek — must NOT create the cockpit, otherwise
-            // updateNSView would race with the makeNSView path and could
-            // spawn a duplicate tmux client.
-            return TmuxBackend.shared.existingCockpitSurface
+    private func cockpitSurface() -> GhosttySurfaceView? {
+        // The cockpit surface is created lazily on first call; subsequent
+        // call sites (other tabs) get the same NSView. Returns nil when tmux
+        // is unavailable so the container renders blank instead of crashing.
+        do {
+            return try TmuxBackend.shared.cockpitSurface()
+        } catch {
+            NSLog("[TerminalSurfaceView] tmux cockpitSurface failed: \(error). Rendering blank — tmux is required.")
+            return nil
         }
     }
 }

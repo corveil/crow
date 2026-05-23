@@ -95,8 +95,9 @@ struct SessionTerminalTests {
     // MARK: - Backend discriminator (#198 follow-up)
 
     /// Existing rows on disk lack `backend` and `tmuxBinding`. They must
-    /// keep loading and default to the historical Ghostty path.
-    @Test func missingBackendDefaultsToGhostty() throws {
+    /// keep loading; since #303 tmux is the only backend, so a missing
+    /// `backend` decodes to `.tmux`.
+    @Test func missingBackendDefaultsToTmux() throws {
         let json = """
         {
             "id": "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE",
@@ -111,7 +112,7 @@ struct SessionTerminalTests {
         decoder.dateDecodingStrategy = .secondsSince1970
         let terminal = try decoder.decode(SessionTerminal.self, from: json)
 
-        #expect(terminal.backend == .ghostty)
+        #expect(terminal.backend == .tmux)
         #expect(terminal.tmuxBinding == nil)
     }
 
@@ -145,7 +146,10 @@ struct SessionTerminalTests {
         #expect(decoded.tmuxBinding == binding)
     }
 
-    @Test func explicitGhosttyBackendDecodes() throws {
+    /// Legacy rows persisted with `"backend":"ghostty"` (before #303) must
+    /// migrate forward to `.tmux` on load rather than throwing on the
+    /// now-removed enum case.
+    @Test func legacyGhosttyBackendMigratesToTmux() throws {
         let json = """
         {
             "id": "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE",
@@ -162,7 +166,7 @@ struct SessionTerminalTests {
         decoder.dateDecodingStrategy = .secondsSince1970
         let terminal = try decoder.decode(SessionTerminal.self, from: json)
 
-        #expect(terminal.backend == .ghostty)
+        #expect(terminal.backend == .tmux)
         #expect(terminal.tmuxBinding == nil)
     }
 

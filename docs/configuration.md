@@ -99,7 +99,6 @@ Worktrees are created **at the same level as the main repo**, not in a `worktree
 | `CROW_SOCKET`         | Override the Unix socket path for CLI ↔ app IPC                                                    | `~/.local/share/crow/crow.sock` |
 | `TMPDIR`              | Temporary file directory (used by the terminal subsystem)                                          | System default                 |
 | `GITLAB_HOST`         | GitLab instance hostname (set automatically per workspace from `host` in `config.json`)            | —                              |
-| `CROW_TMUX_BACKEND`   | Set to `0`/`false`/`no`/`off` to fall back to the legacy per-terminal Ghostty backend for a launch. Any other value (or unset) keeps the default tmux backend (#301). Frozen at app launch — relaunch to flip. Escape hatch only; will be removed in a follow-up release. | unset (tmux backend) |
 | `CROW_HOOK_DEBUG`     | Set to `1` to enable `[hook-event]` debug logging                                                  | unset                          |
 
 ## Session Lifecycle

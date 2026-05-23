@@ -35,8 +35,8 @@ enum CrashReporter {
     ]
 
     // Mutable state is touched once on the main thread at install time and
-    // then read-only from C signal handlers. `nonisolated(unsafe)` follows
-    // the convention established in FeatureFlags.swift.
+    // then read-only from C signal handlers, so `nonisolated(unsafe)` is safe
+    // here.
     nonisolated(unsafe) private static var currentLogURL: URL?
     nonisolated(unsafe) private static var priorCrashLogURL: URL?
     nonisolated(unsafe) private static var logFD: Int32 = -1

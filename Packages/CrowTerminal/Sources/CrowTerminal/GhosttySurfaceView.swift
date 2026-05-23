@@ -22,9 +22,11 @@ public final class GhosttySurfaceView: NSView {
     /// Called after createSurface() exhausts its retry budget without producing a surface.
     public var onSurfaceCreationFailed: (() -> Void)?
 
-    /// The terminal UUID this surface backs. Set by `TerminalManager` when the
-    /// view is created so Ghostty's child-exit action callback can map a dead
-    /// surface back to its terminal (see `GhosttyApp.handleAction`).
+    /// The terminal UUID this surface backs, if the owner wires per-surface
+    /// child-exit mapping. Read by Ghostty's child-exit action callback to map
+    /// a dead surface back to its terminal (see `GhosttyApp.handleAction`). The
+    /// shared tmux cockpit surface leaves this nil — its child is the `tmux
+    /// attach` client, not a single terminal's process.
     public var terminalID: UUID?
 
     /// The working directory for the shell spawned in this surface.

@@ -14,18 +14,17 @@ import Foundation
 ///   - Drive `select-window` / `new-window` / `kill-window` / `paste-buffer`
 ///     in response to UI events from the rest of the app.
 ///   - Track readiness via `SentinelWaiter` (replaces the historical 5s
-///     sleep at `TerminalManager.swift:113-126`).
+///     sleep used by the now-removed per-terminal Ghostty path).
 ///
-/// Thread-safety: `@MainActor` — same constraint as `TerminalManager` and
-/// libghostty (which requires AppKit-thread access for surface ops).
+/// Thread-safety: `@MainActor` — same constraint as libghostty, which
+/// requires AppKit-thread access for surface ops.
 @MainActor
 public final class TmuxBackend {
     public static let shared = TmuxBackend()
 
     /// Fired when a tmux-backed terminal's readiness state changes.
-    /// Callers wire this through to the same readiness state machine the
-    /// Ghostty path uses, so downstream consumers (e.g. `ClaudeLauncher`)
-    /// don't have to special-case backends.
+    /// Callers wire this through to the `TerminalReadiness` state machine so
+    /// downstream consumers (e.g. `ClaudeLauncher`) stay backend-agnostic.
     public var onReadinessChanged: ((UUID, TerminalReadiness) -> Void)?
 
     /// Fired when a tmux subcommand exceeds the watchdog timeout in
@@ -127,7 +126,7 @@ public final class TmuxBackend {
         wrapperLogs.removeAll()
     }
 
-    // MARK: - Per-terminal API (mirrors TerminalManager surface)
+    // MARK: - Per-terminal API
 
     /// Create a new tmux window for `id`. If the cockpit session doesn't
     /// exist yet, starts it. Returns the binding so callers can persist
@@ -711,7 +710,7 @@ public enum TmuxBackendError: Error, CustomStringConvertible {
         case let .windowNotFound(index):
             return "TmuxBackend: no live window at index \(index)"
         case .notConfigured:
-            return "TmuxBackend.configure(...) was not called this run (tmux backend disabled via CROW_TMUX_BACKEND=0, or no tmux ≥ 3.3 binary was found)"
+            return "TmuxBackend.configure(...) was not called this run (no tmux ≥ 3.3 binary was found)"
         }
     }
 }
