@@ -252,6 +252,12 @@ import Testing
     #expect(WorkspaceInfo.validateName("My/Org", existingNames: []) != nil)
     #expect(WorkspaceInfo.validateName("My:Org", existingNames: []) != nil)
 
+    // Path-traversal names (would escape devRoot)
+    #expect(WorkspaceInfo.validateName(".", existingNames: []) != nil)
+    #expect(WorkspaceInfo.validateName("..", existingNames: []) != nil)
+    // A name merely containing a dot is still fine.
+    #expect(WorkspaceInfo.validateName("my.org", existingNames: []) == nil)
+
     // Valid with existing names that don't conflict
     #expect(WorkspaceInfo.validateName("NewOrg", existingNames: ["OtherOrg"]) == nil)
 }

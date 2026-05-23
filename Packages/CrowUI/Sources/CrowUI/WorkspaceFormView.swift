@@ -71,7 +71,7 @@ public struct WorkspaceFormView: View {
 
                 TextField("Always Include Repos", text: $alwaysIncludeText)
                     .textFieldStyle(.roundedBorder)
-                Text("Comma-separated list of repos to always show in the workspace prompt.")
+                Text("Comma-separated repo specs: owner/* lists all of an org's repos, or owner/repo for a single repo. Populates the Jobs repo picker.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 

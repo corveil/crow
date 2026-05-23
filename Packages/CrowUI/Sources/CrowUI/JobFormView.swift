@@ -4,8 +4,9 @@ import CrowCore
 /// Form for creating or editing a scheduled job (CROW-317).
 ///
 /// Mirrors `WorkspaceFormView`: holds field state, validates, and constructs a
-/// `JobConfig` on save. A job is scoped to a workspace + repo, carries one or
-/// more prompts, and fires on an interval or daily at a time.
+/// `JobConfig` on save. A job is scoped to a repo within a workspace; the repo
+/// list is loaded from the workspace's provider. The job carries one or more
+/// prompts and fires on an interval or daily at a time.
 public struct JobFormView: View {
     @Environment(\.dismiss) private var dismiss
 
@@ -20,11 +21,19 @@ public struct JobFormView: View {
     @State private var weekdays: Set<Int>
     @State private var enabled: Bool
 
+    /// Repo slugs for the selected workspace, loaded via `listRepos`.
+    @State private var repoOptions: [String] = []
+    @State private var isLoadingRepos = false
+    @State private var didLoadRepos = false
+    /// Bumped on each load so a stale slow response can't clobber a newer one.
+    @State private var loadGeneration = 0
+
+    private let workspaces: [WorkspaceInfo]
+    private let listRepos: (WorkspaceInfo) async -> [String]
     private let existingID: UUID?
     private let existingLastRunAt: Date?
     private let existingCreatedAt: Date
     private let existingNames: [String]
-    private let workspaces: [WorkspaceInfo]
     private let onSave: (JobConfig) -> Void
 
     enum ScheduleMode: Hashable { case interval, daily }
@@ -49,23 +58,27 @@ public struct JobFormView: View {
 
     /// - Parameters:
     ///   - job: An existing job to edit, or `nil` to create a new one.
-    ///   - workspaces: All configured workspaces (for the workspace/repo pickers).
+    ///   - workspaces: Workspaces to choose from; their providers source the repo list.
     ///   - existingNames: Names of other jobs, used for duplicate detection.
+    ///   - listRepos: Loads the `owner/repo` slugs available to a workspace.
     ///   - onSave: Called with the validated `JobConfig` when the user taps Save/Add.
     public init(
         job: JobConfig? = nil,
         workspaces: [WorkspaceInfo] = [],
         existingNames: [String] = [],
+        listRepos: @escaping (WorkspaceInfo) async -> [String] = { _ in [] },
         onSave: @escaping (JobConfig) -> Void
     ) {
+        self.workspaces = workspaces
+        self.listRepos = listRepos
         self.existingID = job?.id
         self.existingLastRunAt = job?.lastRunAt
         self.existingCreatedAt = job?.createdAt ?? Date()
         self.existingNames = existingNames
-        self.workspaces = workspaces
         self.onSave = onSave
 
         self._name = State(initialValue: job?.name ?? "")
+        // Default to the job's workspace, else the first available workspace.
         self._workspace = State(initialValue: job?.workspace ?? workspaces.first?.name ?? "")
         self._repo = State(initialValue: job?.repo ?? "")
         self._prompts = State(initialValue: job?.prompts.isEmpty == false ? job!.prompts : [""])
@@ -107,12 +120,17 @@ public struct JobFormView: View {
         JobConfig.validateName(trimmedName, existingNames: existingNames)
     }
 
-    /// Repos to offer for the selected workspace (its `alwaysInclude`), plus the
-    /// current value if it isn't listed (so editing an off-list repo still works).
-    private var repoOptions: [String] {
-        var options = workspaces.first(where: { $0.name == workspace })?.alwaysInclude ?? []
-        if !repo.isEmpty, !options.contains(repo) { options.insert(repo, at: 0) }
-        return options
+    /// The currently selected workspace, if any.
+    private var selectedWorkspace: WorkspaceInfo? {
+        workspaces.first { $0.name == workspace }
+    }
+
+    /// Repo options shown in the picker. Includes the current `repo` (when
+    /// editing) even if it isn't in the loaded list, so the saved value survives.
+    private var repoChoices: [String] {
+        var choices = repoOptions
+        if !repo.isEmpty, !choices.contains(repo) { choices.insert(repo, at: 0) }
+        return choices
     }
 
     private var isValid: Bool {
@@ -121,6 +139,24 @@ public struct JobFormView: View {
             && !repo.trimmingCharacters(in: .whitespaces).isEmpty
             && !nonEmptyPrompts.isEmpty
             && (scheduleMode == .daily || intervalValue >= 1)
+    }
+
+    /// Load the selected workspace's repo list, replacing any prior options.
+    /// Discards the result if the selection changed while loading.
+    private func loadRepos() async {
+        guard let ws = selectedWorkspace else {
+            repoOptions = []
+            return
+        }
+        loadGeneration += 1
+        let generation = loadGeneration
+        isLoadingRepos = true
+        let result = await listRepos(ws)
+        // A newer load started while we were awaiting — drop this stale result.
+        guard generation == loadGeneration else { return }
+        repoOptions = result
+        isLoadingRepos = false
+        didLoadRepos = true
     }
 
     public var body: some View {
@@ -137,19 +173,23 @@ public struct JobFormView: View {
                 }
                 .onChange(of: workspace) { _, _ in
                     // Reset repo when it no longer belongs to the chosen workspace.
-                    if !repoOptions.contains(repo) { repo = "" }
+                    repo = ""
+                    Task { await loadRepos() }
                 }
 
-                if repoOptions.isEmpty {
-                    TextField("Repo", text: $repo)
-                        .textFieldStyle(.roundedBorder)
-                    Text("Folder name of the repo under the workspace (e.g. \"api\").")
-                        .font(.caption).foregroundStyle(.secondary)
-                } else {
+                HStack {
                     Picker("Repo", selection: $repo) {
                         Text("Select…").tag("")
-                        ForEach(repoOptions, id: \.self) { Text($0).tag($0) }
+                        ForEach(repoChoices, id: \.self) { Text($0).tag($0) }
                     }
+                    .disabled(isLoadingRepos)
+                    if isLoadingRepos {
+                        ProgressView().controlSize(.small)
+                    }
+                }
+                if didLoadRepos, !isLoadingRepos, repoOptions.isEmpty {
+                    Text("No repos found. In Workspaces settings, set this workspace's Always Include Repos to e.g. owner/* or owner/repo — and check that gh/glab is authenticated.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
 
                 Toggle("Enabled", isOn: $enabled)
@@ -243,6 +283,7 @@ public struct JobFormView: View {
             .padding()
         }
         .frame(width: 460, height: 600)
+        .task { await loadRepos() }
     }
 
     private func buildJob() -> JobConfig {

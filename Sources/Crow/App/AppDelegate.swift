@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 import CrowCore
 import CrowGit
+import CrowProvider
 import CrowUI
 import CrowPersistence
 import CrowTerminal
@@ -26,6 +27,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var telemetryService: TelemetryService?
     private var devRoot: String?
     private var appConfig: AppConfig?
+
+    /// Reused for the Jobs repo picker (avoids a fresh instance per form open).
+    private let providerManager = ProviderManager()
+    /// Cache of expanded `alwaysInclude` repo lists, keyed by workspace name +
+    /// its specs, with a short TTL so repeated form opens don't re-hit the
+    /// provider CLI.
+    private var workspaceRepoCache: [String: (fetchedAt: Date, repos: [String])] = [:]
+    private let workspaceRepoCacheTTL: TimeInterval = 300
 
     /// Tail of the serial review-kickoff queue. Each call to
     /// `enqueueReviewKickoff` awaits the previous tail before doing any work,
@@ -624,6 +633,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         appState.onPromoteToGlobal = { [weak allowList] patterns in
             allowList?.promoteToGlobal(patterns: patterns)
+        }
+
+        // Jobs repo picker: expand a workspace's alwaysInclude specs (owner/*,
+        // owner/repo) into the repos available from its provider. Results are
+        // cached per (workspace, specs) with a short TTL.
+        appState.onListWorkspaceRepos = { [weak self] ws in
+            guard let self else { return [] }
+            let provider: Provider
+            if let p = Provider(rawValue: ws.provider) {
+                provider = p
+            } else {
+                NSLog("[AppDelegate] Workspace '\(ws.name)': unknown provider '\(ws.provider)', defaulting to GitHub")
+                provider = .github
+            }
+            // Key includes provider + host so flipping a workspace's provider
+            // (or GitLab host) without changing its specs doesn't return stale,
+            // wrong-provider slugs within the TTL window.
+            let key = [
+                ws.name, ws.provider, ws.host ?? "", ws.alwaysInclude.joined(separator: ","),
+            ].joined(separator: "\u{1}")
+            if let cached = self.workspaceRepoCache[key],
+               Date().timeIntervalSince(cached.fetchedAt) < self.workspaceRepoCacheTTL {
+                return cached.repos
+            }
+            let repos = await self.providerManager.reposForSpecs(
+                ws.alwaysInclude, provider: provider, host: ws.host
+            )
+            self.workspaceRepoCache[key] = (Date(), repos)
+            return repos
         }
 
         // Hydrate mute state from config and wire toggle

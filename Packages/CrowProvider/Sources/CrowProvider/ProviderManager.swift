@@ -111,6 +111,102 @@ public actor ProviderManager {
         )
     }
 
+    // MARK: - Repo listing (Jobs repo picker)
+
+    /// Expand a workspace's repo specs into a sorted, de-duplicated list of
+    /// `owner/repo` slugs.
+    ///
+    /// Each spec is either a glob (`owner/*` — list every repo owned by `owner`
+    /// via the provider) or an explicit slug (`owner/repo` — passed through
+    /// verbatim). Used to populate the Jobs form's repo picker from a
+    /// workspace's `alwaysInclude` entries.
+    public func reposForSpecs(_ specs: [String], provider: Provider, host: String?) async -> [String] {
+        var slugs: Set<String> = []
+        for spec in specs {
+            switch Self.classifySpec(spec) {
+            case .glob(let owner):
+                for slug in await listRepos(owner: owner, provider: provider, host: host) {
+                    slugs.insert(slug)
+                }
+            case .explicit(let slug):
+                slugs.insert(slug)
+            case .invalid:
+                continue
+            }
+        }
+        return slugs.sorted()
+    }
+
+    /// List every repo owned by `owner` as `owner/repo` slugs.
+    ///
+    /// Shells out to the provider CLI. Returns `[]` (logged) on any failure so
+    /// the form degrades to an empty picker rather than throwing.
+    public func listRepos(owner: String, provider: Provider, host: String?) async -> [String] {
+        do {
+            switch provider {
+            case .github:
+                let out = try await shell(
+                    "gh", "repo", "list", owner,
+                    "--limit", "1000", "--json", "nameWithOwner", "--jq", ".[].nameWithOwner"
+                )
+                return Self.nonEmptyLines(out)
+            case .gitlab:
+                var env: [String: String] = [:]
+                if let host { env["GITLAB_HOST"] = host }
+                // GitLab's group-by-path endpoint needs the full group path
+                // URL-encoded (`group/sub` → `group%2Fsub`); the raw slash 404s.
+                let encodedOwner = Self.encodeGitLabGroupPath(owner)
+                let out = try await shell(
+                    env: env, cwd: NSHomeDirectory(),
+                    "glab", "api", "--paginate",
+                    "groups/\(encodedOwner)/projects?per_page=100&include_subgroups=true",
+                    "--jq", ".[].path_with_namespace"
+                )
+                return Self.nonEmptyLines(out)
+            }
+        } catch {
+            NSLog("[ProviderManager] listRepos failed for owner '\(owner)': \(error.localizedDescription)")
+            return []
+        }
+    }
+
+    /// How a repo spec resolves: a glob over an owner, an explicit slug, or unusable.
+    enum RepoSpec: Equatable {
+        case glob(owner: String)
+        case explicit(slug: String)
+        case invalid
+    }
+
+    /// Classify a raw `alwaysInclude` entry. `owner/*` → glob; `owner/repo`
+    /// (or deeper, e.g. GitLab nested groups) → explicit slug; anything else
+    /// (empty, or a bare name with no owner) → invalid.
+    nonisolated static func classifySpec(_ raw: String) -> RepoSpec {
+        let spec = raw.trimmingCharacters(in: .whitespaces)
+        guard !spec.isEmpty else { return .invalid }
+        if spec.hasSuffix("/*") {
+            let owner = String(spec.dropLast(2)).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            return owner.isEmpty ? .invalid : .glob(owner: owner)
+        }
+        // A usable explicit entry needs an owner and a repo (at least one "/").
+        guard spec.contains("/"), !spec.contains("*") else { return .invalid }
+        return .explicit(slug: spec)
+    }
+
+    private static func nonEmptyLines(_ output: String) -> [String] {
+        output
+            .split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
+    /// Percent-encode a GitLab group path for the `groups/:id` API, where the
+    /// id may be a path like `group/sub` that must arrive as `group%2Fsub`.
+    /// Group paths are otherwise `[A-Za-z0-9_.-]`, so encoding the separators is
+    /// sufficient.
+    nonisolated static func encodeGitLabGroupPath(_ owner: String) -> String {
+        owner.replacingOccurrences(of: "/", with: "%2F")
+    }
+
     private func extractTitle(from output: String) -> String? {
         // Try JSON first (GitHub gh output)
         if let data = output.data(using: .utf8),

@@ -202,6 +202,11 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
         if name.unicodeScalars.contains(where: { unsafeCharacters.contains($0) }) {
             return "Name cannot contain /, :, or null characters"
         }
+        // The name becomes a path component under devRoot; "." / ".." would
+        // resolve outside the intended directory.
+        if name == "." || name == ".." {
+            return "Name cannot be “.” or “..”"
+        }
         let lowercased = name.lowercased()
         if existingNames.contains(where: { $0.lowercased() == lowercased }) {
             return "A workspace with this name already exists"

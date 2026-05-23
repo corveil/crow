@@ -159,6 +159,57 @@ struct ProviderManagerTests {
         #expect(result?.repo == "sub")
     }
 
+    // MARK: - classifySpec (Jobs repo specs)
+
+    @Test func classifySpecGlobExtractsOwner() {
+        #expect(ProviderManager.classifySpec("radiusmethod/*") == .glob(owner: "radiusmethod"))
+    }
+
+    @Test func classifySpecNestedGroupGlob() {
+        #expect(ProviderManager.classifySpec("group/subgroup/*") == .glob(owner: "group/subgroup"))
+    }
+
+    @Test func classifySpecExplicitSlugPassesThrough() {
+        #expect(ProviderManager.classifySpec("radiusmethod/api") == .explicit(slug: "radiusmethod/api"))
+    }
+
+    @Test func classifySpecTrimsWhitespace() {
+        #expect(ProviderManager.classifySpec("  radiusmethod/api  ") == .explicit(slug: "radiusmethod/api"))
+    }
+
+    @Test func classifySpecBareNameIsInvalid() {
+        // No owner — can't list or clone it.
+        #expect(ProviderManager.classifySpec("api") == .invalid)
+    }
+
+    @Test func classifySpecEmptyIsInvalid() {
+        #expect(ProviderManager.classifySpec("   ") == .invalid)
+    }
+
+    @Test func classifySpecBareGlobIsInvalid() {
+        #expect(ProviderManager.classifySpec("/*") == .invalid)
+    }
+
+    @Test func encodeGitLabGroupPathEncodesSeparators() {
+        // A nested-group glob (group/sub/*) yields owner "group/sub", which the
+        // GitLab groups endpoint needs as "group%2Fsub".
+        #expect(ProviderManager.encodeGitLabGroupPath("group/sub") == "group%2Fsub")
+    }
+
+    @Test func encodeGitLabGroupPathLeavesSimpleOwnerUnchanged() {
+        #expect(ProviderManager.encodeGitLabGroupPath("radiusmethod") == "radiusmethod")
+    }
+
+    @Test func reposForSpecsKeepsExplicitSlugsSortedAndDeduped() async {
+        // Explicit-only specs need no provider call, so this exercises the
+        // merge/dedup/sort path without shelling out.
+        let result = await manager.reposForSpecs(
+            ["org/zeta", "org/alpha", "org/alpha", "bare"],
+            provider: .github, host: nil
+        )
+        #expect(result == ["org/alpha", "org/zeta"])
+    }
+
     // MARK: - ProviderError
 
     @Test func providerErrorInvalidURLStoresURL() {

@@ -3,18 +3,22 @@ import Foundation
 /// A scheduled job: one or more prompts that fire automatically on a schedule,
 /// scoped to a repo within a workspace.
 ///
-/// When a job fires, the scheduler creates a fresh worktree + session + Claude
-/// Code terminal in `{devRoot}/{workspace}/{repo}` and sends `prompts` in order.
-/// Persisted as part of `AppConfig` in `{devRoot}/.claude/config.json`.
+/// When a job fires, the scheduler resolves the repo under
+/// `{devRoot}/{workspace}/` — cloning it on demand if it isn't checked out yet —
+/// then creates a fresh worktree + session + Claude Code terminal there and
+/// sends `prompts` in order. Persisted as part of `AppConfig` in
+/// `{devRoot}/.claude/config.json`.
 ///
 /// Like `WorkspaceInfo`, decoding is forward-compatible: missing keys fall back
 /// to defaults so older config files keep working.
 public struct JobConfig: Identifiable, Codable, Sendable, Equatable {
     public let id: UUID
     public var name: String
-    /// Workspace name (matches `WorkspaceInfo.name`).
+    /// Workspace name (matches `WorkspaceInfo.name`); the repo's parent folder
+    /// under the dev root and the source of its provider/host.
     public var workspace: String
-    /// Repo folder name within the workspace (the checkout at `{devRoot}/{workspace}/{repo}`).
+    /// The repo as an `owner/repo` slug (chosen from the workspace's provider).
+    /// Its last path component is the local folder name under the workspace.
     public var repo: String
     /// Ordered prompts. The first launches Claude; the rest are sent after launch.
     public var prompts: [String]

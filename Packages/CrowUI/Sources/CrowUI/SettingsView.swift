@@ -86,7 +86,8 @@ public struct SettingsView: View {
         .sheet(isPresented: $isAddingJob) {
             JobFormView(
                 workspaces: config.workspaces,
-                existingNames: otherJobNames()
+                existingNames: otherJobNames(),
+                listRepos: { ws in await appState.onListWorkspaceRepos?(ws) ?? [] }
             ) { job in
                 config.jobs.append(job)
                 save()
@@ -96,7 +97,8 @@ public struct SettingsView: View {
             JobFormView(
                 job: job,
                 workspaces: config.workspaces,
-                existingNames: otherJobNames(excluding: job.id)
+                existingNames: otherJobNames(excluding: job.id),
+                listRepos: { ws in await appState.onListWorkspaceRepos?(ws) ?? [] }
             ) { updated in
                 if let idx = config.jobs.firstIndex(where: { $0.id == updated.id }) {
                     config.jobs[idx] = updated
@@ -339,7 +341,7 @@ public struct SettingsView: View {
 
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(job.name).fontWeight(.medium)
-                                Text("\(job.workspace)/\(job.repo) · \(scheduleSummary(job.schedule))")
+                                Text("\(jobScope(job)) · \(scheduleSummary(job.schedule))")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                                 Text("\(lastRunText(job)) · \(nextRunText(job))")
@@ -394,6 +396,14 @@ public struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    /// How a job's repo is shown. `repo` is already an `owner/repo` slug, so we
+    /// show it as-is (avoiding a redundant "workspace/owner/repo"); the
+    /// workspace is prefixed only for legacy bare-name jobs that lack an owner.
+    private func jobScope(_ job: JobConfig) -> String {
+        if job.repo.contains("/") { return job.repo }
+        return job.workspace.isEmpty ? job.repo : "\(job.workspace)/\(job.repo)"
     }
 
     /// Human-readable summary of a job's schedule (e.g. "every 4 hours", "Mon,Wed at 09:00").

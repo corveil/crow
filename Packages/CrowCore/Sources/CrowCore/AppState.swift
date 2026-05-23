@@ -135,6 +135,11 @@ public final class AppState {
     /// Called to promote selected patterns to the global settings.
     public var onPromoteToGlobal: ((Set<String>) -> Void)?
 
+    /// Lists the repos available to a workspace, as `owner/repo` slugs, by
+    /// expanding its `alwaysInclude` specs against the provider. Wired in
+    /// AppDelegate; used by the Jobs form's repo picker.
+    public var onListWorkspaceRepos: ((WorkspaceInfo) async -> [String])?
+
     /// Called when the user clicks the gear icon in the sidebar toolbar.
     /// AppDelegate wires this to its `showSettings()` method.
     public var onShowSettings: (() -> Void)?
