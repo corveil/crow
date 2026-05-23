@@ -62,9 +62,11 @@ All `gh`/`glab`/`git` commands below require `dangerouslyDisableSandbox: true`.
 Extract the title (required) and optional body from `$ARGUMENTS` per the **Arguments**
 rules above. If there is no usable title, ask the user for one and stop until provided.
 
-**Keep the body footer-free.** Do NOT append any Crow attribution, "Generated with"
-footer, or co-author trailer — those belong on PRs, not issues. The body is exactly
-what the user provided (or empty).
+The body is the text the user provided (or empty). It MUST end with the Crow
+attribution footer (see **Step 4b**): a blank line, then exactly
+`[🐦‍⬛ Created with Crow via Claude Code](https://github.com/radiusmethod/crow)`.
+Do NOT add any other footer — no "Generated with Claude Code" line and no co-author
+trailer. The Crow attribution is the only footer.
 
 ### Step 2: Determine the target repo and provider
 
@@ -98,26 +100,47 @@ GITLAB_HOST={host} glab api user --jq '.username'
 
 ### Step 4: Create the issue (assigned + labeled `crow:auto`)
 
+In both commands below, `BODY` is the user-provided body followed by the required
+attribution footer from **Step 4b** (a blank line, then the canonical link).
+
 **GitHub:**
 ```bash
 gh issue create --repo OWNER/REPO \
   --title "TITLE" \
-  --body "BODY" \
+  --body "BODY
+
+[🐦‍⬛ Created with Crow via Claude Code](https://github.com/radiusmethod/crow)" \
   --assignee "{login}" \
   --label "crow:auto"
 ```
-- If the body is empty, still pass `--body ""` so `gh` does not open an interactive
-  editor.
+- If the user-provided body is empty, the body is just the attribution footer — never
+  pass `--body ""`, or `gh` would open an interactive editor.
 
 **GitLab (non-default host):**
 ```bash
 GITLAB_HOST={host} glab issue create --repo {org/repo} \
   --title "TITLE" \
-  --description "BODY" \
+  --description "BODY
+
+[🐦‍⬛ Created with Crow via Claude Code](https://github.com/radiusmethod/crow)" \
   --assignee "{username}" \
   --label "crow:auto" \
   --yes
 ```
+
+### Step 4b: Attribution (REQUIRED)
+
+The body passed to `gh issue create --body` / `glab issue create --description` MUST
+end with a blank line followed by exactly this line:
+
+```
+[🐦‍⬛ Created with Crow via Claude Code](https://github.com/radiusmethod/crow)
+```
+
+- Do not modify the link text.
+- Do not modify the URL — the link target is always `https://github.com/radiusmethod/crow`, never a fork or a derived value from the local git remote.
+- Do not wrap the line in additional formatting (no blockquote, no extra brackets, no surrounding text).
+- This line MUST appear in every issue body, whether GitHub or GitLab, and whether or not the user supplied any body text.
 
 ### Step 5: Missing-label fallback
 
