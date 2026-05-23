@@ -608,6 +608,9 @@ public struct TicketBoardSidebarRow: View {
                 }
                 Spacer()
             }
+            .overlay(alignment: .trailing) {
+                refreshButton
+            }
             HStack(spacing: 8) {
                 Spacer(minLength: 0)
                 StatusCount(icon: "tray", color: CorveilTheme.textMuted, count: appState.issueCount(for: .backlog))
@@ -628,6 +631,32 @@ public struct TicketBoardSidebarRow: View {
                         .strokeBorder(CorveilTheme.borderSubtle, lineWidth: 1)
                 )
         )
+    }
+
+    /// Refreshes the ticket board without leaving the sidebar — same action as
+    /// the board toolbar's refresh (`onManualRefresh`). `.plain` style keeps the
+    /// tap on the button rather than selecting the enclosing list row.
+    private var refreshButton: some View {
+        Button {
+            appState.onManualRefresh?()
+        } label: {
+            Image(systemName: "arrow.clockwise")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(CorveilTheme.textSecondary)
+                .padding(5)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(CorveilTheme.bgCard)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .strokeBorder(CorveilTheme.borderSubtle, lineWidth: 1)
+                        )
+                )
+        }
+        .buttonStyle(.plain)
+        .disabled(appState.isLoadingIssues)
+        .help("Refresh")
+        .accessibilityLabel("Refresh tickets")
     }
 }
 
