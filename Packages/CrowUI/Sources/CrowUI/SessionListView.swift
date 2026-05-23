@@ -77,6 +77,11 @@ public struct SessionListView: View {
                 .listRowSeparator(.hidden)
                 .listRowBackground(Color.clear)
 
+            // Changes Summary row
+            SummaryBoardSidebarRow(appState: appState)
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
+
             // Manager + Allow List row
             if appState.managerSession != nil {
                 ManagerAllowListRow(appState: appState)
@@ -449,6 +454,50 @@ struct ManagerAllowListRow: View {
                 )
         }
         .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Summary Board Row
+
+/// Full-width sidebar button that selects the changes-summary board tab.
+struct SummaryBoardSidebarRow: View {
+    @Bindable var appState: AppState
+
+    private var isActive: Bool { appState.selectedSessionID == AppState.summaryBoardSessionID }
+
+    var body: some View {
+        Button {
+            appState.selectedSessionID = AppState.summaryBoardSessionID
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "chart.bar.doc.horizontal")
+                    .font(.system(size: 11))
+                Text("Changes Summary")
+                    .font(.system(size: 12, weight: .bold))
+                    .lineLimit(1)
+                Spacer()
+                if appState.isLoadingSummary {
+                    ProgressView().controlSize(.mini)
+                }
+            }
+            .foregroundStyle(isActive ? CorveilTheme.gold : CorveilTheme.goldDark)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(isActive ? CorveilTheme.bgCard : CorveilTheme.bgSurface)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .strokeBorder(
+                                isActive ? CorveilTheme.goldDark.opacity(0.6) : CorveilTheme.goldDark.opacity(0.3),
+                                lineWidth: 1
+                            )
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+        .padding(.vertical, 2)
     }
 }
 
