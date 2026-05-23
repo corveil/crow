@@ -418,6 +418,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appState.onRenameTerminal = { [weak service] sessionID, terminalID, name in
             service?.renameTerminal(sessionID: sessionID, terminalID: terminalID, name: name)
         }
+        appState.onRenameSession = { [weak service] sessionID, name in
+            service?.renameSession(sessionID: sessionID, name: name)
+        }
 
         // Detect VS Code CLI and wire open action
         service.detectVSCode()

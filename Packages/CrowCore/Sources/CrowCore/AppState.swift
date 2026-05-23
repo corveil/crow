@@ -297,6 +297,9 @@ public final class AppState {
     /// Called to rename a terminal tab.
     public var onRenameTerminal: ((UUID, UUID, String) -> Void)?  // receives (sessionID, terminalID, newName)
 
+    /// Called to rename a session (used for non-primary Manager rows).
+    public var onRenameSession: ((UUID, String) -> Void)?  // receives (sessionID, newName)
+
     // MARK: - Closures wired by AppDelegate
 
     /// Called to delete a session and clean up its worktrees.
