@@ -224,8 +224,8 @@ public struct ConfigDefaults: Codable, Sendable, Equatable {
     public var excludeReviewRepos: [String]
     public var excludeTicketRepos: [String]
     public var ignoreReviewLabels: [String]
-    /// Repos (as "workspace/name" keys) the Changes board summarizes. Empty
-    /// means nothing is summarized — the user opts in explicitly.
+    /// Repo names the Changes board summarizes. Empty means nothing is
+    /// summarized — the user opts in explicitly.
     public var summaryRepos: [String]
 
     /// Characters that are invalid in git ref names (see `git check-ref-format`).

@@ -16,6 +16,7 @@ public struct SettingsView: View {
     @State private var editingWorkspace: WorkspaceInfo?
     @State private var isAddingJob = false
     @State private var editingJob: JobConfig?
+    @State private var summaryReposText: String
 
     public var onSave: ((String, AppConfig) -> Void)?
     public var onRescaffold: ((String) -> Void)?
@@ -26,6 +27,7 @@ public struct SettingsView: View {
         self.appState = appState
         self._devRoot = State(initialValue: devRoot)
         self._config = State(initialValue: config)
+        self._summaryReposText = State(initialValue: config.defaults.summaryRepos.joined(separator: ", "))
         self.onSave = onSave
         self.onRescaffold = onRescaffold
     }
@@ -233,14 +235,18 @@ public struct SettingsView: View {
             }
 
             Section("Changes Summary") {
-                Text("Select which repositories the Changes board summarizes. Nothing is summarized until you pick at least one.")
+                TextField("Monitored Repos", text: $summaryReposText)
+                    .textFieldStyle(.roundedBorder)
+                    .onChange(of: summaryReposText) { _, _ in
+                        config.defaults.summaryRepos = summaryReposText
+                            .split(separator: ",")
+                            .map { $0.trimmingCharacters(in: .whitespaces) }
+                            .filter { !$0.isEmpty }
+                        save()
+                    }
+                Text("Comma-separated repo names the Changes board summarizes (e.g., crow, acme-api). Empty means nothing is summarized.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                SummaryReposPicker(
-                    selected: $config.defaults.summaryRepos,
-                    listRepos: { await appState.onListSummaryRepos?() ?? [] },
-                    onSave: { save() }
-                )
             }
         }
         .formStyle(.grouped)

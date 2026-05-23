@@ -380,19 +380,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ))
             return (try? await gm.summarizeCommits(since: since, until: until, includeRepos: include)) ?? []
         }
-        // Lists every discovered repo (as "workspace/name") so the Settings
-        // picker can scope which repos the Changes board summarizes.
-        appState.onListSummaryRepos = { [weak self] in
-            guard let self, let devRoot = self.devRoot else { return [] }
-            let excludeDirs = self.appConfig?.defaults.excludeDirs ?? WorkspaceDefaults().excludeDirs
-            let gm = GitManager(config: WorkspaceConfig(
-                devRoot: devRoot,
-                workspaces: [:],
-                defaults: WorkspaceDefaults(excludeDirs: excludeDirs)
-            ))
-            let repos = (try? await gm.discoverRepos()) ?? []
-            return repos.map { "\($0.workspace)/\($0.name)" }.sorted()
-        }
         appState.onSetSessionInReview = { [weak service] id in
             service?.setSessionInReview(id: id)
         }
