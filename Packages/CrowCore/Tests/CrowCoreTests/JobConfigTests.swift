@@ -6,7 +6,6 @@ import Testing
     let config = AppConfig(jobs: [
         JobConfig(
             name: "Nightly Audit",
-            workspace: "Acme",
             repo: "api",
             prompts: ["Run the audit", "Summarize findings"],
             schedule: .interval(seconds: 3600),
@@ -22,7 +21,6 @@ import Testing
     #expect(decoded.jobs.count == 1)
     let job = decoded.jobs[0]
     #expect(job.name == "Nightly Audit")
-    #expect(job.workspace == "Acme")
     #expect(job.repo == "api")
     #expect(job.prompts == ["Run the audit", "Summarize findings"])
     #expect(job.schedule == .interval(seconds: 3600))
@@ -32,7 +30,6 @@ import Testing
 @Test func jobConfigRoundTripDailyAt() throws {
     let job = JobConfig(
         name: "Standup",
-        workspace: "Acme",
         repo: "web",
         prompts: ["Generate the standup report"],
         schedule: .dailyAt(hour: 9, minute: 30, weekdays: [2, 3, 4, 5, 6]),
@@ -44,6 +41,20 @@ import Testing
 
     #expect(decoded.schedule == .dailyAt(hour: 9, minute: 30, weekdays: [2, 3, 4, 5, 6]))
     #expect(decoded.lastRunAt == Date(timeIntervalSince1970: 1_700_000_000))
+}
+
+/// A job persisted before the workspace field was dropped must still decode:
+/// the stale `workspace` key is ignored and `repo` is preserved.
+@Test func jobConfigForwardCompatLegacyWorkspaceKey() throws {
+    let json = """
+    {"id":"\(UUID().uuidString)","name":"Legacy","workspace":"Acme","repo":"api",
+     "prompts":["go"],"schedule":{"type":"interval","seconds":3600},
+     "enabled":true,"createdAt":0}
+    """
+    let decoded = try JSONDecoder().decode(JobConfig.self, from: Data(json.utf8))
+    #expect(decoded.repo == "api")
+    #expect(decoded.name == "Legacy")
+    #expect(decoded.prompts == ["go"])
 }
 
 /// A config file written before jobs existed must still decode (jobs → []).

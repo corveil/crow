@@ -1256,13 +1256,20 @@ final class SessionService {
             return nil
         }
 
-        let workspacePath = (devRoot as NSString).appendingPathComponent(job.workspace)
-        let repoPath = (workspacePath as NSString).appendingPathComponent(job.repo)
-        let gitDir = (repoPath as NSString).appendingPathComponent(".git")
-        guard FileManager.default.fileExists(atPath: gitDir) else {
-            NSLog("[SessionService] Job '\(job.name)': repo not found at \(repoPath)")
+        // Resolve the repo by folder name among the checkouts under the dev root.
+        // The repo's workspace is implied by its location, so jobs only store a
+        // repo name (CROW-327). First match wins if a name is duplicated.
+        let gitManager = GitManager(config: WorkspaceConfig(
+            devRoot: devRoot, workspaces: [:], defaults: WorkspaceDefaults()
+        ))
+        let repos = (try? await gitManager.discoverRepos()) ?? []
+        guard let repoInfo = repos.first(where: { $0.name == job.repo }) else {
+            NSLog("[SessionService] Job '\(job.name)': repo '\(job.repo)' not found under devRoot")
             return nil
         }
+        let repoPath = repoInfo.path
+        // Worktree is a sibling of the repo checkout (matches the naming rule).
+        let workspacePath = (repoPath as NSString).deletingLastPathComponent
 
         let slug = Self.slugify(job.name)
         let stamp = Self.runStamp()
@@ -1271,9 +1278,6 @@ final class SessionService {
             .appendingPathComponent("\(job.repo)-job-\(slug)-\(stamp)")
 
         // Create the worktree on disk (fetch + new branch off default + retry).
-        let gitManager = GitManager(config: WorkspaceConfig(
-            devRoot: devRoot, workspaces: [:], defaults: WorkspaceDefaults()
-        ))
         do {
             try await gitManager.createWorktree(
                 repoPath: repoPath, worktreePath: worktreePath, branch: branch

@@ -4,13 +4,13 @@ import CrowCore
 /// Form for creating or editing a scheduled job (CROW-317).
 ///
 /// Mirrors `WorkspaceFormView`: holds field state, validates, and constructs a
-/// `JobConfig` on save. A job is scoped to a workspace + repo, carries one or
-/// more prompts, and fires on an interval or daily at a time.
+/// `JobConfig` on save. A job is scoped to a repo (resolved by name under the
+/// dev root), carries one or more prompts, and fires on an interval or daily at
+/// a time.
 public struct JobFormView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var name: String
-    @State private var workspace: String
     @State private var repo: String
     @State private var prompts: [String]
     @State private var scheduleMode: ScheduleMode
@@ -24,7 +24,6 @@ public struct JobFormView: View {
     private let existingLastRunAt: Date?
     private let existingCreatedAt: Date
     private let existingNames: [String]
-    private let workspaces: [WorkspaceInfo]
     private let onSave: (JobConfig) -> Void
 
     enum ScheduleMode: Hashable { case interval, daily }
@@ -49,12 +48,10 @@ public struct JobFormView: View {
 
     /// - Parameters:
     ///   - job: An existing job to edit, or `nil` to create a new one.
-    ///   - workspaces: All configured workspaces (for the workspace/repo pickers).
     ///   - existingNames: Names of other jobs, used for duplicate detection.
     ///   - onSave: Called with the validated `JobConfig` when the user taps Save/Add.
     public init(
         job: JobConfig? = nil,
-        workspaces: [WorkspaceInfo] = [],
         existingNames: [String] = [],
         onSave: @escaping (JobConfig) -> Void
     ) {
@@ -62,11 +59,9 @@ public struct JobFormView: View {
         self.existingLastRunAt = job?.lastRunAt
         self.existingCreatedAt = job?.createdAt ?? Date()
         self.existingNames = existingNames
-        self.workspaces = workspaces
         self.onSave = onSave
 
         self._name = State(initialValue: job?.name ?? "")
-        self._workspace = State(initialValue: job?.workspace ?? workspaces.first?.name ?? "")
         self._repo = State(initialValue: job?.repo ?? "")
         self._prompts = State(initialValue: job?.prompts.isEmpty == false ? job!.prompts : [""])
         self._enabled = State(initialValue: job?.enabled ?? true)
@@ -107,17 +102,8 @@ public struct JobFormView: View {
         JobConfig.validateName(trimmedName, existingNames: existingNames)
     }
 
-    /// Repos to offer for the selected workspace (its `alwaysInclude`), plus the
-    /// current value if it isn't listed (so editing an off-list repo still works).
-    private var repoOptions: [String] {
-        var options = workspaces.first(where: { $0.name == workspace })?.alwaysInclude ?? []
-        if !repo.isEmpty, !options.contains(repo) { options.insert(repo, at: 0) }
-        return options
-    }
-
     private var isValid: Bool {
         nameValidationError == nil
-            && !workspace.isEmpty
             && !repo.trimmingCharacters(in: .whitespaces).isEmpty
             && !nonEmptyPrompts.isEmpty
             && (scheduleMode == .daily || intervalValue >= 1)
@@ -132,25 +118,10 @@ public struct JobFormView: View {
                     Text(error).font(.caption).foregroundStyle(.red)
                 }
 
-                Picker("Workspace", selection: $workspace) {
-                    ForEach(workspaces) { ws in Text(ws.name).tag(ws.name) }
-                }
-                .onChange(of: workspace) { _, _ in
-                    // Reset repo when it no longer belongs to the chosen workspace.
-                    if !repoOptions.contains(repo) { repo = "" }
-                }
-
-                if repoOptions.isEmpty {
-                    TextField("Repo", text: $repo)
-                        .textFieldStyle(.roundedBorder)
-                    Text("Folder name of the repo under the workspace (e.g. \"api\").")
-                        .font(.caption).foregroundStyle(.secondary)
-                } else {
-                    Picker("Repo", selection: $repo) {
-                        Text("Select…").tag("")
-                        ForEach(repoOptions, id: \.self) { Text($0).tag($0) }
-                    }
-                }
+                TextField("Repo", text: $repo)
+                    .textFieldStyle(.roundedBorder)
+                Text("Folder name of the repo under the dev root (e.g. \"api\").")
+                    .font(.caption).foregroundStyle(.secondary)
 
                 Toggle("Enabled", isOn: $enabled)
             }
@@ -257,7 +228,6 @@ public struct JobFormView: View {
         return JobConfig(
             id: existingID ?? UUID(),
             name: trimmedName,
-            workspace: workspace,
             repo: repo.trimmingCharacters(in: .whitespaces),
             prompts: nonEmptyPrompts,
             schedule: schedule,

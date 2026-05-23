@@ -85,7 +85,6 @@ public struct SettingsView: View {
         }
         .sheet(isPresented: $isAddingJob) {
             JobFormView(
-                workspaces: config.workspaces,
                 existingNames: otherJobNames()
             ) { job in
                 config.jobs.append(job)
@@ -95,7 +94,6 @@ public struct SettingsView: View {
         .sheet(item: $editingJob) { job in
             JobFormView(
                 job: job,
-                workspaces: config.workspaces,
                 existingNames: otherJobNames(excluding: job.id)
             ) { updated in
                 if let idx = config.jobs.firstIndex(where: { $0.id == updated.id }) {
@@ -339,7 +337,7 @@ public struct SettingsView: View {
 
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(job.name).fontWeight(.medium)
-                                Text("\(job.workspace)/\(job.repo) · \(scheduleSummary(job.schedule))")
+                                Text("\(job.repo) · \(scheduleSummary(job.schedule))")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                                 Text("\(lastRunText(job)) · \(nextRunText(job))")
@@ -379,18 +377,11 @@ public struct SettingsView: View {
                             .font(.caption)
                     }
                     .buttonStyle(.borderless)
-                    .disabled(config.workspaces.isEmpty)
                 }
             } footer: {
-                if config.workspaces.isEmpty {
-                    Text("Add a workspace first — jobs are scoped to a repo in a workspace.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } else {
-                    Text("Scheduled prompt sets. When a job fires, Crow creates a worktree + session in the scoped repo and runs its prompts.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+                Text("Scheduled prompt sets. When a job fires, Crow creates a worktree + session in the scoped repo and runs its prompts.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
