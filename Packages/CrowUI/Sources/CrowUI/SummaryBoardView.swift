@@ -178,8 +178,8 @@ public struct SummaryBoardView: View {
         } else if !appState.llmNarrative.isEmpty {
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
-                    Label("LLM Summary", systemImage: "sparkles")
-                        .font(.system(size: 12, weight: .semibold))
+                    Label("Summary", systemImage: "sparkles")
+                        .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(CorveilTheme.gold)
                     Spacer()
                     Button {
@@ -191,7 +191,7 @@ public struct SummaryBoardView: View {
                     .foregroundStyle(CorveilTheme.textMuted)
                 }
                 Text(appState.llmNarrative)
-                    .font(.system(size: 12))
+                    .font(.system(size: 14))
                     .foregroundStyle(CorveilTheme.textPrimary)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
@@ -244,14 +244,14 @@ public struct SummaryBoardView: View {
     private func repoHeader(_ repo: RepoCommitSummary) -> some View {
         HStack {
             Text(repo.repo)
-                .font(.system(size: 13, weight: .bold))
+                .font(.system(size: 15, weight: .bold))
                 .foregroundStyle(CorveilTheme.gold)
             Text("(\(repo.commits.count))")
                 .font(.caption)
                 .foregroundStyle(CorveilTheme.textSecondary)
             Spacer()
             Text("\(repo.totalFilesChanged) file\(repo.totalFilesChanged == 1 ? "" : "s"), +\(repo.totalInsertions) / -\(repo.totalDeletions)")
-                .font(.system(size: 11, design: .monospaced))
+                .font(.system(size: 13, design: .monospaced))
                 .foregroundStyle(CorveilTheme.textMuted)
         }
     }
@@ -263,14 +263,14 @@ public struct SummaryBoardView: View {
     private func commitRow(_ commit: CommitInfo, urlPrefix: String?) -> some View {
         let content = HStack(alignment: .top, spacing: 8) {
             Text(commit.shortHash)
-                .font(.system(size: 11, design: .monospaced))
+                .font(.system(size: 13, design: .monospaced))
                 .foregroundStyle(CorveilTheme.goldDark)
             Text(commit.subject)
-                .font(.system(size: 12))
+                .font(.system(size: 14))
                 .foregroundStyle(CorveilTheme.textPrimary)
             Spacer()
             Text("+\(commit.insertions) / -\(commit.deletions)")
-                .font(.system(size: 10, design: .monospaced))
+                .font(.system(size: 12, design: .monospaced))
                 .foregroundStyle(CorveilTheme.textMuted)
         }
 
