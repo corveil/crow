@@ -406,11 +406,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appState.onWorkOnIssue = { [weak self] issueURL in
             guard let self, let managerTerminals = self.appState.terminals[AppState.managerSessionID],
                   let managerTerminal = managerTerminals.first else { return }
-            // Type the /crow-workspace command into the Manager terminal
-            TerminalManager.shared.send(
-                id: managerTerminal.id,
-                text: "/crow-workspace \(issueURL)\n"
-            )
+            // Type the /crow-workspace command into the Manager terminal.
+            // Route through TerminalRouter so it reaches the Manager regardless
+            // of backend (Ghostty or tmux, #314).
+            TerminalRouter.send(managerTerminal, text: "/crow-workspace \(issueURL)\n")
             // Switch to Manager tab
             self.appState.selectedSessionID = AppState.managerSessionID
         }
@@ -420,10 +419,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self, let managerTerminals = self.appState.terminals[AppState.managerSessionID],
                   let managerTerminal = managerTerminals.first else { return }
             let urls = issueURLs.joined(separator: " ")
-            TerminalManager.shared.send(
-                id: managerTerminal.id,
-                text: "/crow-batch-workspace \(urls)\n"
-            )
+            // Route through TerminalRouter so it reaches the Manager regardless
+            // of backend (Ghostty or tmux, #314).
+            TerminalRouter.send(managerTerminal, text: "/crow-batch-workspace \(urls)\n")
             self.appState.selectedSessionID = AppState.managerSessionID
         }
 
@@ -1023,13 +1021,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                             && !cmd.contains("--rc")
                             && !cmd.contains("--remote-control")
                     }
-                    let trackReadiness = isManaged && sessionID != AppState.managerSessionID
-                    // Decide backend at terminal-create time. Manager terminal
-                    // stays on Ghostty for now (special case; migrating it is
-                    // its own follow-up). Everything else honors the flag.
+                    let trackReadiness = isManaged
+                    // Decide backend at terminal-create time. Every session,
+                    // including the Manager (#314), honors the flag.
                     let useTmux = FeatureFlags.tmuxBackend
                         && !TmuxBackend.shared.tmuxBinary.isEmpty
-                        && sessionID != AppState.managerSessionID
                     var terminal = SessionTerminal(
                         sessionID: sessionID,
                         name: terminalName,

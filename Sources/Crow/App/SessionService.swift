@@ -498,12 +498,19 @@ final class SessionService {
                 sessionName: "Manager",
                 autoPermissionMode: autoMode
             )
-            let terminal = SessionTerminal(
+            let rawTerminal = SessionTerminal(
                 sessionID: managerID,
                 name: "Manager",
                 cwd: devRoot,
                 command: managerCommand
             )
+
+            // Route through the same backend-selection path as work sessions
+            // (#314). On tmux this registers a window and pastes the `claude`
+            // command into it; on Ghostty it pre-initializes the offscreen
+            // surface. `trackReadiness: false` matches the Manager's
+            // command-launches-claude model — no readiness/launchClaude flow.
+            let terminal = prepareTerminal(rawTerminal, trackReadiness: false)
             appState.terminals[managerID] = [terminal]
 
             store.mutate { data in
@@ -515,9 +522,6 @@ final class SessionService {
             if rcEnabled {
                 appState.remoteControlActiveTerminals.insert(terminal.id)
             }
-
-            // Pre-initialize in offscreen window so Manager terminal starts immediately
-            TerminalManager.shared.preInitialize(id: terminal.id, workingDirectory: devRoot, command: managerCommand)
         }
 
         // Select Manager on launch (selectedSessionID isn't persisted)
@@ -1367,14 +1371,14 @@ final class SessionService {
     /// Decide which backend hosts a brand-new SessionTerminal and prepare it
     /// (register a tmux window or pre-initialize a Ghostty surface). Returns
     /// the (possibly-modified) row with `backend`/`tmuxBinding` set so the
-    /// caller can persist it. The Manager terminal is force-pinned to the
-    /// Ghostty backend until that migration is done as its own follow-up.
+    /// caller can persist it. The Manager terminal goes through this same path
+    /// as every other session (#314); for it, `registerTerminal` pastes the
+    /// stored `claude` command into the tmux window directly.
     @MainActor
     private func prepareTerminal(_ terminal: SessionTerminal, trackReadiness: Bool) -> SessionTerminal {
         var t = terminal
         let useTmux = FeatureFlags.tmuxBackend
             && !TmuxBackend.shared.tmuxBinary.isEmpty
-            && t.sessionID != AppState.managerSessionID
         if useTmux {
             do {
                 let binding = try TmuxBackend.shared.registerTerminal(
