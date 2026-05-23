@@ -256,6 +256,17 @@ final class SessionService {
                     if appState.remoteControlEnabled {
                         appState.remoteControlActiveTerminals.insert(terminal.id)
                     }
+                    // Emulate the SessionStart(source: resume) hook that pre-#330
+                    // relaunch fired (via re-running `claude --continue`), which set
+                    // claudeState to .done — so an adopted, idle-at-the-prompt Claude
+                    // shows the "done" green card like it used to (#367). A persisted
+                    // in-progress state (working/waiting) was already restored in
+                    // hydrateState and is more specific, so only fill in .done when
+                    // nothing meaningful was restored (still the .idle default).
+                    let hookState = appState.hookState(for: terminal.sessionID)
+                    if hookState.claudeState == .idle {
+                        hookState.claudeState = .done
+                    }
                 }
                 return terminal  // binding unchanged → no redundant persist
             } catch {
