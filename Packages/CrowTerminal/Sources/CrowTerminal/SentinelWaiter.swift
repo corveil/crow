@@ -7,10 +7,10 @@ import Foundation
 /// First appearance = the shell has reached its first interactive prompt
 /// = ready to accept input.
 ///
-/// This replaces the historical 5-second sleep at
-/// `TerminalManager.surfaceDidCreate` for tmux-backed terminals. The
-/// sentinel approach is tmux-agnostic — the wrapper writes directly to
-/// disk, bypassing the tmux emulator's escape-sequence handling.
+/// This replaces the historical 5-second sleep used by the now-removed
+/// per-terminal Ghostty path. The sentinel approach is tmux-agnostic — the
+/// wrapper writes directly to disk, bypassing the tmux emulator's
+/// escape-sequence handling.
 ///
 /// See `docs/tmux-backend-spec.md` §6 for the rationale and the empirical
 /// numbers from the spike (zsh 172ms / bash 231ms first-prompt latency

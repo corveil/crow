@@ -145,20 +145,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - tmux first-run onboarding
 
-    /// Surface a native alert when the tmux backend (the default since #301)
-    /// can't find a usable tmux on the host. Spec §11 / PROD #4. The user
-    /// can:
+    /// Surface a native alert when the required tmux backend can't find a
+    /// usable tmux on the host. Spec §11 / PROD #4. The user can:
     ///   - Copy the brew-install command to their clipboard.
     ///   - Open the upstream tmux installation guide.
-    ///   - Continue without the tmux backend (we fall through to Ghostty).
+    ///   - Continue (managed terminals stay unavailable until tmux is installed).
     private func showTmuxNotFoundOnboardingSheet() {
         let alert = NSAlert()
         alert.alertStyle = .informational
         alert.messageText = "tmux ≥ 3.3 not found"
         alert.informativeText = """
-            Crow now uses tmux for managed terminals by default, but no \
-            tmux binary ≥ 3.3 was found in /opt/homebrew/bin, /usr/local/bin, \
-            or /usr/bin.
+            Crow uses tmux for managed terminals, but no tmux binary ≥ 3.3 was \
+            found in /opt/homebrew/bin, /usr/local/bin, or /usr/bin.
 
             On Macs with Homebrew, install with:
 
@@ -167,8 +165,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Crow won't change your dotfiles — it runs your usual shell config \
             inside the tmux session.
 
-            Falling back to the legacy per-terminal Ghostty backend for this \
-            launch. Restart Crow after installing tmux to enable the default.
+            Managed terminals won't render until tmux is installed. Restart \
+            Crow after installing tmux.
             """
         alert.addButton(withTitle: "Copy `brew install tmux`")
         alert.addButton(withTitle: "Open tmux install guide")
@@ -253,44 +251,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.appConfig = config
         NSLog("[Crow] Config loaded (workspaces: %d)", config.workspaces.count)
 
-        // Configure the tmux backend (#198 → defaulted-on in #301). The
-        // legacy per-terminal Ghostty path is still reachable for this
-        // release via `CROW_TMUX_BACKEND=0` as an escape hatch; it will be
-        // removed once one release of soak passes without regressions. If
-        // tmux is missing or < 3.3 we log a warning, surface the first-run
-        // onboarding sheet, and fall back to Ghostty for this launch.
+        // Configure the tmux backend (#198 → defaulted-on in #301 → the only
+        // backend since #303). tmux ≥ 3.3 is required for managed terminals;
+        // if none is found we log a warning and surface the first-run
+        // onboarding sheet — there is no longer a per-terminal Ghostty
+        // fallback, so terminals won't render until tmux is installed.
         //
-        // Independently of the flag, reap any orphan tmux servers from past
-        // Crow runs that exited ungracefully (Force Quit / crash bypasses
-        // applicationWillTerminate and therefore the shutdown fix). Reaping
-        // is keyed on $TMPDIR/crow-tmux-<pid>.sock files whose PID is no
-        // longer a live CrowApp process. Costs ~50ms when there's nothing
-        // to do; idempotent.
+        // First reap any orphan tmux servers from past Crow runs that exited
+        // ungracefully (Force Quit / crash bypasses applicationWillTerminate
+        // and therefore the shutdown fix). Reaping is keyed on
+        // $TMPDIR/crow-tmux-<pid>.sock files whose PID is no longer a live
+        // CrowApp process. Costs ~50ms when there's nothing to do; idempotent.
         let discoveredTmuxBinary = TmuxDiscovery.discover()
         if let tmuxBinary = discoveredTmuxBinary {
             TmuxOrphanReaper.reap(
                 tmuxBinary: tmuxBinary,
                 currentPID: ProcessInfo.processInfo.processIdentifier
             )
-        }
-        if FeatureFlags.tmuxBackend {
-            if let tmuxBinary = discoveredTmuxBinary {
-                // Per-app socket in $TMPDIR. v1 of the rollout kills the
-                // tmux server on app quit, so restart-survival isn't a
-                // requirement; ~/Library/Application Support is reserved
-                // for that future work (spec §12).
-                let tmpdir = ProcessInfo.processInfo.environment["TMPDIR"] ?? "/tmp"
-                let socketPath = (tmpdir as NSString)
-                    .appendingPathComponent("crow-tmux-\(ProcessInfo.processInfo.processIdentifier).sock")
-                TmuxBackend.shared.configure(tmuxBinary: tmuxBinary, socketPath: socketPath)
-                TmuxBackend.shared.onUnresponsive = { [weak self] error in
-                    Task { @MainActor in self?.handleTmuxUnresponsive(error: error) }
-                }
-                NSLog("[Crow] tmux backend configured: binary=\(tmuxBinary) socket=\(socketPath)")
-            } else {
-                NSLog("[Crow] tmux backend is the default but no tmux ≥ 3.3 found — falling back to Ghostty for this launch")
-                showTmuxNotFoundOnboardingSheet()
+            // Per-app socket in $TMPDIR. v1 of the rollout kills the tmux
+            // server on app quit, so restart-survival isn't a requirement;
+            // ~/Library/Application Support is reserved for that future work
+            // (spec §12).
+            let tmpdir = ProcessInfo.processInfo.environment["TMPDIR"] ?? "/tmp"
+            let socketPath = (tmpdir as NSString)
+                .appendingPathComponent("crow-tmux-\(ProcessInfo.processInfo.processIdentifier).sock")
+            TmuxBackend.shared.configure(tmuxBinary: tmuxBinary, socketPath: socketPath)
+            TmuxBackend.shared.onUnresponsive = { [weak self] error in
+                Task { @MainActor in self?.handleTmuxUnresponsive(error: error) }
             }
+            NSLog("[Crow] tmux backend configured: binary=\(tmuxBinary) socket=\(socketPath)")
+        } else {
+            NSLog("[Crow] no tmux ≥ 3.3 found — managed terminals are unavailable until tmux is installed")
+            showTmuxNotFoundOnboardingSheet()
         }
 
         // Update skills and CLAUDE.md on every launch
@@ -373,10 +365,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         appState.onLaunchClaude = { [weak service] terminalID in
             service?.launchClaude(terminalID: terminalID)
-        }
-
-        appState.onRetryTerminal = { [weak service] terminalID in
-            service?.retryTerminal(terminalID: terminalID)
         }
 
         appState.onRestartManager = { [weak service] in
@@ -1072,33 +1060,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                             && !cmd.contains("--remote-control")
                     }
                     let trackReadiness = isManaged
-                    // Decide backend at terminal-create time. Every session,
-                    // including the Manager (#314), honors the flag.
-                    let useTmux = FeatureFlags.tmuxBackend
-                        && !TmuxBackend.shared.tmuxBinary.isEmpty
+                    // Every session, including the Manager (#314), runs on
+                    // tmux (#303). Register the tmux window now — its shell
+                    // starts immediately, so there's no offscreen pre-init.
                     var terminal = SessionTerminal(
                         sessionID: sessionID,
                         name: terminalName,
                         cwd: cwd,
                         command: command,
                         isManaged: isManaged,
-                        backend: useTmux ? .tmux : .ghostty
+                        backend: .tmux
                     )
-                    if useTmux {
-                        do {
-                            let binding = try TmuxBackend.shared.registerTerminal(
-                                id: terminal.id,
-                                name: terminalName,
-                                cwd: cwd,
-                                command: command,
-                                trackReadiness: trackReadiness
-                            )
-                            terminal.tmuxBinding = binding
-                        } catch {
-                            NSLog("[Crow] tmux registerTerminal failed (\(error)); falling back to Ghostty")
-                            terminal.backend = .ghostty
-                            terminal.tmuxBinding = nil
-                        }
+                    do {
+                        let binding = try TmuxBackend.shared.registerTerminal(
+                            id: terminal.id,
+                            name: terminalName,
+                            cwd: cwd,
+                            command: command,
+                            trackReadiness: trackReadiness
+                        )
+                        terminal.tmuxBinding = binding
+                    } catch {
+                        NSLog("[Crow] tmux registerTerminal failed (\(error)); terminal will not render until tmux is available")
                     }
                     capturedAppState.terminals[sessionID, default: []].append(terminal)
                     capturedStore.mutate { $0.terminals.append(terminal) }
@@ -1108,12 +1091,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                     if rcInjected {
                         capturedAppState.remoteControlActiveTerminals.insert(terminal.id)
-                    }
-                    // For Ghostty terminals, pre-initialize the offscreen
-                    // surface so the shell starts in the background. For
-                    // tmux, the window already exists from registerTerminal.
-                    if terminal.backend == .ghostty {
-                        TerminalManager.shared.preInitialize(id: terminal.id, workingDirectory: cwd, command: command)
                     }
                     return ["terminal_id": .string(terminal.id.uuidString), "session_id": .string(idStr)]
                 }
@@ -1187,18 +1164,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 NSLog("crow send: text length=\(text.count), ends_with_newline=\(text.hasSuffix("\n")), ends_with_cr=\(text.hasSuffix("\r"))")
                 await MainActor.run {
                     let routedTerminal = capturedAppState.terminals[sessionID]?.first(where: { $0.id == terminalID })
-                    // If a Ghostty surface doesn't exist yet, pre-initialize it
-                    // so the shell starts. tmux-backed terminals already have
-                    // their window from registerTerminal — no recovery needed.
-                    if let routedTerminal,
-                       routedTerminal.backend == .ghostty,
-                       TerminalManager.shared.existingSurface(for: terminalID) == nil {
-                        TerminalManager.shared.preInitialize(
-                            id: terminalID,
-                            workingDirectory: routedTerminal.cwd,
-                            command: routedTerminal.command
-                        )
-                    }
+                    // tmux-backed terminals already have their window from
+                    // registerTerminal — no surface recovery needed before send.
 
                     // For managed terminals receiving a claude command, write hook config
                     // before sending so Claude picks up the hooks on startup.
@@ -1237,10 +1204,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     if let routedTerminal {
                         TerminalRouter.send(routedTerminal, text: text)
                     } else {
-                        // No SessionTerminal row known — fall back to legacy
-                        // path for backward-compat with anything that calls
-                        // `crow send` for an id we haven't seen.
-                        TerminalManager.shared.send(id: terminalID, text: text)
+                        // No SessionTerminal row known — nothing to route to.
+                        NSLog("[Crow] crow send for unknown terminal \(terminalID); ignoring")
                     }
                 }
                 return ["sent": .bool(true)]

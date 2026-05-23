@@ -71,8 +71,7 @@ public struct GlobalTerminalView: View {
                     TerminalSurfaceView(
                         terminalID: terminal.id,
                         workingDirectory: terminal.cwd,
-                        command: terminal.command,
-                        backend: terminal.backend
+                        command: terminal.command
                     )
                     .id(terminal.id)
                 }

@@ -43,6 +43,7 @@ Backfill of merged PRs since the 0.1.0 release, grouped by theme.
 - #218 — Recover from failed Ghostty surface creation by retrying.
 - #229 — New tmux backend behind the `CROW_TMUX_BACKEND` feature flag (or Settings → Experimental). Off by default; opt in for a headless-PTY runtime that decouples terminal lifecycle from view rendering.
 - #301 — The tmux backend is now the default for managed terminals. The Settings → Experimental tab and `AppConfig.experimentalTmuxBackend` key are gone; existing configs containing the key still load (the key is silently dropped on next save). Escape hatch: set `CROW_TMUX_BACKEND=0` (also `false`/`no`/`off`) to fall back to the legacy per-terminal Ghostty backend for a launch — the legacy path will be removed in a follow-up release.
+- #303 — Removed the legacy per-terminal Ghostty backend and the `CROW_TMUX_BACKEND` escape hatch. tmux ≥ 3.3 is now required for managed terminals; without it, Crow shows the install alert and managed terminals don't render. `TerminalManager` is gone and `TerminalRouter` no longer branches on backend. Persisted terminals tagged `"backend":"ghostty"` migrate forward to tmux on load.
 
 ### GitLab
 

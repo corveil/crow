@@ -140,7 +140,7 @@ Crow can drive a ticket from assignment to merged with minimal manual steps. Tog
 
 - Rename tabs from the UI or via `crow rename-terminal`
 - GPU-accelerated rendering via Ghostty
-- tmux-backed managed terminals by default — one shared Ghostty surface attached to a tmux session, so per-session shells stay alive across UI navigation. Requires `tmux ≥ 3.3` (`brew install tmux`). Set `CROW_TMUX_BACKEND=0` for a launch to fall back to the legacy per-terminal Ghostty backend (escape hatch; will be removed in a follow-up release). See [docs/architecture.md#terminal-backends](docs/architecture.md#terminal-backends).
+- tmux-backed managed terminals — one shared Ghostty surface attached to a tmux session, so per-session shells stay alive across UI navigation. Requires `tmux ≥ 3.3` (`brew install tmux`); without it, managed terminals don't render. See [docs/architecture.md#terminal-backends](docs/architecture.md#terminal-backends).
 
 ### Orphan Recovery
 
