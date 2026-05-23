@@ -83,7 +83,27 @@ import Testing
     #expect(decoded.lastReviewedHeadSha == "deadbeef")
 }
 
+@Test func sessionManagerKindRoundTrip() throws {
+    let session = Session(name: "Manager 2", kind: .manager)
+    #expect(session.isManager)
+    let data = try JSONEncoder().encode(session)
+    let decoded = try JSONDecoder().decode(Session.self, from: data)
+    #expect(decoded.kind == .manager)
+    #expect(decoded.isManager)
+}
+
+@Test func sessionWorkKindIsNotManager() {
+    #expect(Session(name: "work").isManager == false)
+    #expect(Session(name: "review", kind: .review).isManager == false)
+}
+
 // MARK: - Enum Raw Values
+
+@Test func sessionKindRawValues() {
+    #expect(SessionKind.work.rawValue == "work")
+    #expect(SessionKind.review.rawValue == "review")
+    #expect(SessionKind.manager.rawValue == "manager")
+}
 
 @Test func sessionStatusRawValues() {
     #expect(SessionStatus.active.rawValue == "active")

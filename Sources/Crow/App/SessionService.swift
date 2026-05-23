@@ -18,11 +18,36 @@ final class SessionService {
         self.telemetryPort = telemetryPort
     }
 
+    /// Upgrade the well-known primary Manager session from `.work` (how it was
+    /// persisted before `SessionKind.manager` existed) to `.manager`. Returns
+    /// `true` when a migration was applied. Pure/`nonisolated` so it can run on
+    /// both the in-memory `appState.sessions` and the persisted `store` copy,
+    /// and be unit-tested without a live app.
+    nonisolated static func migrateLegacyManagerKind(_ sessions: inout [Session]) -> Bool {
+        guard let idx = sessions.firstIndex(where: {
+            $0.id == AppState.managerSessionID && $0.kind != .manager
+        }) else { return false }
+        sessions[idx].kind = .manager
+        return true
+    }
+
     // MARK: - Hydrate State from Store
 
     func hydrateState() {
         let data = store.data
         appState.sessions = data.sessions
+
+        // Migrate a legacy primary Manager (persisted as `.work` before
+        // SessionKind.manager existed) to `.manager` BEFORE the per-session loop.
+        // Otherwise the `!session.isManager` hydration branch clears its claude
+        // command and reroutes it through the work-session auto-launch path,
+        // silently dropping the Manager's --auto-permission-mode args (#316).
+        // Persist so the upgrade is one-shot.
+        if Self.migrateLegacyManagerKind(&appState.sessions) {
+            store.mutate { data in
+                _ = Self.migrateLegacyManagerKind(&data.sessions)
+            }
+        }
 
         // Backfill provider from ticketURL for sessions that predate provider tracking
         for i in appState.sessions.indices {
@@ -36,7 +61,7 @@ final class SessionService {
             appState.links[session.id] = data.links.filter { $0.sessionID == session.id }
 
             var terminals = data.terminals.filter { $0.sessionID == session.id }
-            if session.id != AppState.managerSessionID {
+            if !session.isManager {
                 // Backward-compat migration: if no terminal is marked managed,
                 // heuristically mark the first "Claude Code" terminal.
                 let hasManagedTerminal = terminals.contains { $0.isManaged }
@@ -67,26 +92,21 @@ final class SessionService {
             } else {
                 // Manager terminal: rebuild its claude command to match the
                 // current remoteControlEnabled and managerAutoPermissionMode
-                // preferences. Unlike worker sessions the Manager launches
-                // claude directly as the shell command, so the stored string
-                // needs to be correct before preInitialize runs.
-                let claudePath = Self.findClaudeBinary() ?? "claude"
-                let rcEnabled = appState.remoteControlEnabled
-                let autoMode = appState.managerAutoPermissionMode
-                let managerCommand = claudePath + ClaudeLaunchArgs.argsSuffix(
-                    remoteControl: rcEnabled,
-                    sessionName: "Manager",
-                    autoPermissionMode: autoMode
-                )
+                // preferences, using this session's own name for the --name
+                // label. Unlike worker sessions the Manager launches claude
+                // directly as the shell command, so the stored string needs to
+                // be correct before preInitialize runs. Built via the shared
+                // `managerCommand` helper so the name flow has one source.
+                let rebuiltCommand = managerCommand(sessionName: session.name)
                 for i in terminals.indices {
                     if let cmd = terminals[i].command, cmd.contains("claude") {
                         terminals[i] = SessionTerminal(
                             id: terminals[i].id, sessionID: terminals[i].sessionID,
                             name: terminals[i].name, cwd: terminals[i].cwd,
-                            command: managerCommand, isManaged: terminals[i].isManaged,
+                            command: rebuiltCommand, isManaged: terminals[i].isManaged,
                             createdAt: terminals[i].createdAt
                         )
-                        if rcEnabled {
+                        if appState.remoteControlEnabled {
                             appState.remoteControlActiveTerminals.insert(terminals[i].id)
                         }
                     }
@@ -99,7 +119,7 @@ final class SessionService {
             // and tmux's onReadinessChanged) have something to update. The
             // actual trackReadiness/registerTerminal call happens in
             // rehydrateTerminalSurface below.
-            if session.id != AppState.managerSessionID {
+            if !session.isManager {
                 for terminal in terminals where terminal.isManaged {
                     appState.terminalReadiness[terminal.id] = .uninitialized
                     appState.autoLaunchTerminals.insert(terminal.id)
@@ -129,7 +149,7 @@ final class SessionService {
         // call to TmuxBackend.registerTerminal spawns a subprocess) — #293.
         for session in appState.sessions {
             guard let terminals = appState.terminals[session.id] else { continue }
-            let isManagerSession = session.id == AppState.managerSessionID
+            let isManagerSession = session.isManager
             let sid = session.id
             for original in terminals {
                 let trackReadiness = !isManagerSession && original.isManaged
@@ -362,11 +382,21 @@ final class SessionService {
 
     func ensureManagerSession(devRoot: String) {
         let managerID = AppState.managerSessionID
-        if !appState.sessions.contains(where: { $0.id == managerID }) {
+        if appState.sessions.contains(where: { $0.id == managerID }) {
+            // Defense-in-depth: `hydrateState` already migrates a legacy `.work`
+            // primary Manager before this runs, but migrate here too in case the
+            // session was created/mutated via another path.
+            if Self.migrateLegacyManagerKind(&appState.sessions) {
+                store.mutate { data in
+                    _ = Self.migrateLegacyManagerKind(&data.sessions)
+                }
+            }
+        } else {
             let manager = Session(
                 id: managerID,
                 name: "Manager",
-                status: .active
+                status: .active,
+                kind: .manager
             )
             appState.sessions.insert(manager, at: 0)
 
@@ -379,39 +409,7 @@ final class SessionService {
 
         // Ensure manager has a terminal
         if appState.terminals(for: managerID).isEmpty {
-            // Find the real claude binary (skip CMUX wrapper)
-            let claudePath = Self.findClaudeBinary() ?? "claude"
-            let rcEnabled = appState.remoteControlEnabled
-            let autoMode = appState.managerAutoPermissionMode
-            let managerCommand = claudePath + ClaudeLaunchArgs.argsSuffix(
-                remoteControl: rcEnabled,
-                sessionName: "Manager",
-                autoPermissionMode: autoMode
-            )
-            let rawTerminal = SessionTerminal(
-                sessionID: managerID,
-                name: "Manager",
-                cwd: devRoot,
-                command: managerCommand
-            )
-
-            // Route through the same backend-selection path as work sessions
-            // (#314). On tmux this registers a window and pastes the `claude`
-            // command into it; on Ghostty it pre-initializes the offscreen
-            // surface. `trackReadiness: false` matches the Manager's
-            // command-launches-claude model — no readiness/launchClaude flow.
-            let terminal = prepareTerminal(rawTerminal, trackReadiness: false)
-            appState.terminals[managerID] = [terminal]
-
-            store.mutate { data in
-                if !data.terminals.contains(where: { $0.sessionID == managerID }) {
-                    data.terminals.append(terminal)
-                }
-            }
-
-            if rcEnabled {
-                appState.remoteControlActiveTerminals.insert(terminal.id)
-            }
+            createManagerTerminal(sessionID: managerID, sessionName: "Manager", cwd: devRoot)
         }
 
         // Select Manager on launch (selectedSessionID isn't persisted)
@@ -450,6 +448,63 @@ final class SessionService {
         ensureManagerSession(devRoot: resolvedDevRoot)
     }
 
+    /// Build the claude shell command for a Manager terminal, reflecting the
+    /// current remote-control and auto-permission-mode preferences. Managers
+    /// launch claude directly as the terminal's shell command. Used by both
+    /// fresh-terminal creation and the hydrate rebuild so the per-session
+    /// `--name` label has a single source. `internal` for unit testing.
+    func managerCommand(sessionName: String) -> String {
+        // Find the real claude binary (skip CMUX wrapper)
+        let claudePath = Self.findClaudeBinary() ?? "claude"
+        return claudePath + ClaudeLaunchArgs.argsSuffix(
+            remoteControl: appState.remoteControlEnabled,
+            sessionName: sessionName,
+            autoPermissionMode: appState.managerAutoPermissionMode
+        )
+    }
+
+    /// Create the single Claude-Code terminal for a Manager session and persist
+    /// it. Routes through the same backend-selection path as work sessions
+    /// (#314): on tmux this registers a window and pastes the `claude` command
+    /// into it; on Ghostty it pre-initializes the offscreen surface.
+    /// `trackReadiness: false` matches the Manager's command-launches-claude
+    /// model — no readiness/launchClaude flow.
+    @discardableResult
+    private func createManagerTerminal(sessionID: UUID, sessionName: String, cwd: String) -> SessionTerminal {
+        let command = managerCommand(sessionName: sessionName)
+        let rawTerminal = SessionTerminal(
+            sessionID: sessionID,
+            name: sessionName,
+            cwd: cwd,
+            command: command
+        )
+
+        let terminal = prepareTerminal(rawTerminal, trackReadiness: false)
+        appState.terminals[sessionID] = [terminal]
+
+        store.mutate { data in
+            if !data.terminals.contains(where: { $0.sessionID == sessionID }) {
+                data.terminals.append(terminal)
+            }
+        }
+
+        if appState.remoteControlEnabled {
+            appState.remoteControlActiveTerminals.insert(terminal.id)
+        }
+        return terminal
+    }
+
+    /// Create an additional (non-primary) Manager session in `cwd`. Returns the
+    /// new session's id. The terminal is set up by `createManagerTerminal`.
+    @discardableResult
+    func createManagerSession(name: String, cwd: String) -> UUID {
+        let session = Session(name: name, status: .active, kind: .manager)
+        appState.sessions.append(session)
+        store.mutate { $0.sessions.append(session) }
+        createManagerTerminal(sessionID: session.id, sessionName: name, cwd: cwd)
+        return session.id
+    }
+
     // MARK: - Delete Session
 
     /// Snapshot of one worktree's cleanup work, captured on the MainActor and
@@ -466,7 +521,8 @@ final class SessionService {
     /// Performs a full cascade: destroys terminal surfaces, removes worktrees from disk
     /// (with branch deletion for non-protected branches), removes hook configs, and cleans
     /// up all in-memory state (sessions, worktrees, links, terminals, hook state, PR status).
-    /// The manager session cannot be deleted.
+    /// The primary Manager session (well-known UUID) cannot be deleted;
+    /// additional Manager sessions are deletable.
     ///
     /// The slow filesystem/git work runs in a detached task so the main thread stays
     /// responsive. While cleanup is in flight, `appState.isDeletingSession[id]` is `true`
@@ -519,9 +575,12 @@ final class SessionService {
         appState.sessions.removeAll { $0.id == id }
         appState.worktrees.removeValue(forKey: id)
         appState.links.removeValue(forKey: id)
-        // Clean up auto-launch set for deleted session's terminals
+        // Clean up auto-launch and remote-control sets for deleted session's terminals
         if let terms = appState.terminals[id] {
-            for t in terms { appState.autoLaunchTerminals.remove(t.id) }
+            for t in terms {
+                appState.autoLaunchTerminals.remove(t.id)
+                appState.remoteControlActiveTerminals.remove(t.id)
+            }
         }
         appState.terminals.removeValue(forKey: id)
         appState.activeTerminalID.removeValue(forKey: id)
@@ -1178,7 +1237,7 @@ final class SessionService {
         switch kind {
         case .review: return ".crow-review-prompt.md"
         case .job: return ".crow-job-prompt.md"
-        case .work: return nil
+        case .work, .manager: return nil
         }
     }
 
@@ -1305,7 +1364,9 @@ final class SessionService {
 
     /// Update a session's status and persist the change.
     private func updateSessionStatus(_ id: UUID, to status: SessionStatus) {
-        guard id != AppState.managerSessionID else { return }
+        // Managers stay always-active; never transition them through the
+        // review/complete lifecycle.
+        guard !appState.isManagerSession(id) else { return }
 
         if let idx = appState.sessions.firstIndex(where: { $0.id == id }) {
             appState.sessions[idx].status = status

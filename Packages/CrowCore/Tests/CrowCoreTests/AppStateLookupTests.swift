@@ -105,6 +105,44 @@ import Testing
     #expect(appState.labels(forSession: session).isEmpty)
 }
 
+// MARK: - Manager Session Lookups
+
+@MainActor @Test func managerSessionsIncludesPrimaryAndAdditional() {
+    let appState = AppState()
+    let primary = Session(id: AppState.managerSessionID, name: "Manager", kind: .manager)
+    let extra = Session(name: "Manager 2", kind: .manager)
+    let work = Session(name: "work")
+    appState.sessions = [primary, extra, work]
+
+    #expect(Set(appState.managerSessions.map(\.id)) == [primary.id, extra.id])
+    #expect(appState.managerSession?.id == primary.id)
+}
+
+@MainActor @Test func isManagerSessionRecognizesAllManagers() {
+    let appState = AppState()
+    let primary = Session(id: AppState.managerSessionID, name: "Manager", kind: .manager)
+    let extra = Session(name: "Manager 2", kind: .manager)
+    let work = Session(name: "work")
+    appState.sessions = [primary, extra, work]
+
+    #expect(appState.isManagerSession(primary.id))
+    #expect(appState.isManagerSession(extra.id))
+    #expect(appState.isManagerSession(work.id) == false)
+    // Falls back to the well-known UUID when the session isn't loaded yet.
+    #expect(appState.isManagerSession(AppState.managerSessionID))
+}
+
+@MainActor @Test func managerSessionsExcludedFromActiveAndCompleted() {
+    let appState = AppState()
+    let manager = Session(name: "Manager 2", status: .active, kind: .manager)
+    let completedManager = Session(name: "Manager 3", status: .completed, kind: .manager)
+    let work = Session(name: "work", status: .active)
+    appState.sessions = [manager, completedManager, work]
+
+    #expect(appState.activeSessions.map(\.id) == [work.id])
+    #expect(appState.completedSessions.isEmpty)
+}
+
 // MARK: - LabelInfo Tests
 
 @Test func labelInfoCodableRoundTripWithColor() throws {

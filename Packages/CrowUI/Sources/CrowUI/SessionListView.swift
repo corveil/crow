@@ -84,6 +84,23 @@ public struct SessionListView: View {
                     .listRowBackground(Color.clear)
             }
 
+            // Additional (non-primary) Manager sessions, each deletable.
+            let extraManagers = appState.managerSessions.filter { $0.id != AppState.managerSessionID }
+            ForEach(extraManagers) { session in
+                ManagerSessionRow(session: session, appState: appState)
+                    .tag(session.id)
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
+                    .contextMenu {
+                        Button(role: .destructive) {
+                            sessionToDelete = session
+                        } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
+                        .disabled(appState.isDeletingSession[session.id] == true)
+                    }
+            }
+
             // Active sessions
             if !appState.activeSessions.isEmpty {
                 SectionDivider(
@@ -387,6 +404,27 @@ struct ManagerAllowListRow: View {
             ) {
                 appState.selectedSessionID = AppState.allowListSessionID
             }
+
+            Button {
+                appState.onCreateManager?()
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(CorveilTheme.goldDark)
+                    .frame(width: 28)
+                    .padding(.vertical, 8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(CorveilTheme.bgSurface)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .strokeBorder(CorveilTheme.goldDark.opacity(0.3), lineWidth: 1)
+                            )
+                    )
+            }
+            .buttonStyle(.plain)
+            .help("New Manager session")
+            .accessibilityLabel("New Manager session")
         }
         .padding(.vertical, 2)
     }
@@ -411,6 +449,60 @@ struct ManagerAllowListRow: View {
                 )
         }
         .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Manager Session Row
+
+/// Sidebar row for an additional (non-primary) Manager session. Renders a
+/// full-width selectable button with the manager's name, a remote-control
+/// badge, and a deletion spinner when cleanup is in flight.
+struct ManagerSessionRow: View {
+    let session: Session
+    @Bindable var appState: AppState
+
+    private var isActive: Bool { appState.selectedSessionID == session.id }
+    private var isDeleting: Bool { appState.isDeletingSession[session.id] == true }
+
+    var body: some View {
+        Button {
+            appState.selectedSessionID = session.id
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "person.2.fill")
+                    .font(.system(size: 11))
+                Text(session.name)
+                    .font(.system(size: 12, weight: .bold))
+                    .lineLimit(1)
+                Spacer()
+                if isDeleting {
+                    ProgressView().controlSize(.small)
+                }
+            }
+            .foregroundStyle(isActive ? CorveilTheme.gold : CorveilTheme.goldDark)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(isActive ? CorveilTheme.bgCard : CorveilTheme.bgSurface)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .strokeBorder(
+                                isActive ? CorveilTheme.goldDark.opacity(0.6) : CorveilTheme.goldDark.opacity(0.3),
+                                lineWidth: 1
+                            )
+                    )
+            )
+            .overlay(alignment: .topTrailing) {
+                if appState.isRemoteControlActive(sessionID: session.id) {
+                    RemoteControlBadge(compact: true)
+                        .padding(4)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .padding(.vertical, 2)
     }
 }
 

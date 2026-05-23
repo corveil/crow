@@ -6,15 +6,28 @@ import Foundation
 
 /// Create a new development session.
 ///
-/// Returns the new session's UUID and name as JSON.
+/// Returns the new session's UUID and name as JSON. Pass `--kind manager` to
+/// create a Manager (orchestration) session with its own Claude Code terminal
+/// running in the devRoot. The supplied name is used verbatim (the caller is
+/// responsible for uniqueness — sessions are identified by UUID, not name).
+/// Review and job sessions are created through their own setup flows, not here.
 public struct NewSession: ParsableCommand {
     public static let configuration = CommandConfiguration(commandName: "new-session", abstract: "Create a new session")
     @Option(name: .long, help: "Session name") var name: String
+    @Option(name: .long, help: "Session kind: work (default) or manager") var kind: String?
 
     public init() {}
 
+    public func validate() throws {
+        if let kind, !["work", "manager"].contains(kind) {
+            throw ValidationError("kind must be one of: work, manager")
+        }
+    }
+
     public func run() throws {
-        let result = try rpc("new-session", params: ["name": .string(name)])
+        var params: [String: JSONValue] = ["name": .string(name)]
+        if let kind { params["kind"] = .string(kind) }
+        let result = try rpc("new-session", params: params)
         printJSON(result)
     }
 }

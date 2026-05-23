@@ -28,6 +28,10 @@ public struct Session: Identifiable, Codable, Sendable {
     // run; the auto-merge watcher skips this session on subsequent polls.
     public var autoMergeEnabledAt: Date?
 
+    /// Whether this session is a Manager (orchestration) session. Managers run
+    /// Claude Code in the devRoot and are excluded from PR/issue tracking.
+    public var isManager: Bool { kind == .manager }
+
     public init(
         id: UUID = UUID(),
         name: String,

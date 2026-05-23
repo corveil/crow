@@ -28,7 +28,7 @@ public struct SessionDetailView: View {
     public var body: some View {
         VStack(spacing: 0) {
             sessionHeader
-            if session.id == AppState.managerSessionID {
+            if session.isManager {
                 SectionHelpBanner(
                     description: "Orchestration hub for Crow workspaces. Use /crow-workspace to set up new sessions with worktrees, ticket tracking, and auto-launched Claude Code.",
                     storageKey: "helpDismissed_manager"
@@ -97,7 +97,7 @@ public struct SessionDetailView: View {
             }
 
             // Row 3: Links + Actions (only if there's content to show)
-            if session.ticketURL != nil || !sessionLinks.isEmpty || session.id != AppState.managerSessionID {
+            if session.ticketURL != nil || !sessionLinks.isEmpty || !session.isManager {
                 Divider().overlay(CorveilTheme.borderSubtle).padding(.horizontal, 16)
 
                 HStack(spacing: 8) {
@@ -128,7 +128,7 @@ public struct SessionDetailView: View {
                 Spacer()
 
                 // Action buttons (not for Manager)
-                if session.id != AppState.managerSessionID {
+                if !session.isManager {
                     quickActionButtons
 
                     if appState.vsCodeAvailable, primaryWorktree != nil {
@@ -306,7 +306,7 @@ public struct SessionDetailView: View {
     @ViewBuilder
     private var terminalArea: some View {
         let sessionTerminals = appState.terminals(for: session.id)
-        let isManager = session.id == AppState.managerSessionID
+        let isManager = session.isManager
         if sessionTerminals.isEmpty {
             TerminalSurfaceView(
                 terminalID: session.id,
