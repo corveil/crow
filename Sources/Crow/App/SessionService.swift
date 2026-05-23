@@ -1386,6 +1386,13 @@ final class SessionService {
             .workspaces.first { $0.name == job.workspace }
         let provider = workspace?.provider ?? "github"
 
+        // Ensure the workspace parent exists — a brand-new workspace may have no
+        // checkouts on disk yet, and git won't create leading directories.
+        try? FileManager.default.createDirectory(
+            atPath: (destination as NSString).deletingLastPathComponent,
+            withIntermediateDirectories: true
+        )
+
         NSLog("[SessionService] Job '\(job.name)': cloning \(job.repo) into \(destination)")
         do {
             if provider == "gitlab" {

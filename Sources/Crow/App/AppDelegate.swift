@@ -647,7 +647,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 NSLog("[AppDelegate] Workspace '\(ws.name)': unknown provider '\(ws.provider)', defaulting to GitHub")
                 provider = .github
             }
-            let key = "\(ws.name)\u{1}\(ws.alwaysInclude.joined(separator: ","))"
+            // Key includes provider + host so flipping a workspace's provider
+            // (or GitLab host) without changing its specs doesn't return stale,
+            // wrong-provider slugs within the TTL window.
+            let key = [
+                ws.name, ws.provider, ws.host ?? "", ws.alwaysInclude.joined(separator: ","),
+            ].joined(separator: "\u{1}")
             if let cached = self.workspaceRepoCache[key],
                Date().timeIntervalSince(cached.fetchedAt) < self.workspaceRepoCacheTTL {
                 return cached.repos

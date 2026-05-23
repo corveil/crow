@@ -188,7 +188,7 @@ public struct JobFormView: View {
                     }
                 }
                 if didLoadRepos, !isLoadingRepos, repoOptions.isEmpty {
-                    Text("No repos found for this workspace. Set its “Always Include Repos” to e.g. owner/* or owner/repo in Workspaces settings, and check that gh/glab is authenticated.")
+                    Text("No repos found. In Workspaces settings, set this workspace's Always Include Repos to e.g. owner/* or owner/repo — and check that gh/glab is authenticated.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
 

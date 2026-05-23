@@ -398,10 +398,12 @@ public struct SettingsView: View {
         .formStyle(.grouped)
     }
 
-    /// "workspace/repo" for a job, or just the repo when no workspace is stored
-    /// (jobs persisted before the workspace field returned).
+    /// How a job's repo is shown. `repo` is already an `owner/repo` slug, so we
+    /// show it as-is (avoiding a redundant "workspace/owner/repo"); the
+    /// workspace is prefixed only for legacy bare-name jobs that lack an owner.
     private func jobScope(_ job: JobConfig) -> String {
-        job.workspace.isEmpty ? job.repo : "\(job.workspace)/\(job.repo)"
+        if job.repo.contains("/") { return job.repo }
+        return job.workspace.isEmpty ? job.repo : "\(job.workspace)/\(job.repo)"
     }
 
     /// Human-readable summary of a job's schedule (e.g. "every 4 hours", "Mon,Wed at 09:00").

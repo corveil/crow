@@ -153,10 +153,13 @@ public actor ProviderManager {
             case .gitlab:
                 var env: [String: String] = [:]
                 if let host { env["GITLAB_HOST"] = host }
+                // GitLab's group-by-path endpoint needs the full group path
+                // URL-encoded (`group/sub` → `group%2Fsub`); the raw slash 404s.
+                let encodedOwner = Self.encodeGitLabGroupPath(owner)
                 let out = try await shell(
                     env: env, cwd: NSHomeDirectory(),
                     "glab", "api", "--paginate",
-                    "groups/\(owner)/projects?per_page=100&include_subgroups=true",
+                    "groups/\(encodedOwner)/projects?per_page=100&include_subgroups=true",
                     "--jq", ".[].path_with_namespace"
                 )
                 return Self.nonEmptyLines(out)
@@ -194,6 +197,14 @@ public actor ProviderManager {
             .split(whereSeparator: \.isNewline)
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
+    }
+
+    /// Percent-encode a GitLab group path for the `groups/:id` API, where the
+    /// id may be a path like `group/sub` that must arrive as `group%2Fsub`.
+    /// Group paths are otherwise `[A-Za-z0-9_.-]`, so encoding the separators is
+    /// sufficient.
+    nonisolated static func encodeGitLabGroupPath(_ owner: String) -> String {
+        owner.replacingOccurrences(of: "/", with: "%2F")
     }
 
     private func extractTitle(from output: String) -> String? {

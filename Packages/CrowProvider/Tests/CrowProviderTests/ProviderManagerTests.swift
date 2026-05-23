@@ -190,6 +190,16 @@ struct ProviderManagerTests {
         #expect(ProviderManager.classifySpec("/*") == .invalid)
     }
 
+    @Test func encodeGitLabGroupPathEncodesSeparators() {
+        // A nested-group glob (group/sub/*) yields owner "group/sub", which the
+        // GitLab groups endpoint needs as "group%2Fsub".
+        #expect(ProviderManager.encodeGitLabGroupPath("group/sub") == "group%2Fsub")
+    }
+
+    @Test func encodeGitLabGroupPathLeavesSimpleOwnerUnchanged() {
+        #expect(ProviderManager.encodeGitLabGroupPath("radiusmethod") == "radiusmethod")
+    }
+
     @Test func reposForSpecsKeepsExplicitSlugsSortedAndDeduped() async {
         // Explicit-only specs need no provider call, so this exercises the
         // merge/dedup/sort path without shelling out.
