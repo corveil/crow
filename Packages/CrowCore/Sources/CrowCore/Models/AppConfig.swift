@@ -224,6 +224,9 @@ public struct ConfigDefaults: Codable, Sendable, Equatable {
     public var excludeReviewRepos: [String]
     public var excludeTicketRepos: [String]
     public var ignoreReviewLabels: [String]
+    /// Repos (as "workspace/name" keys) the Changes board summarizes. Empty
+    /// means nothing is summarized — the user opts in explicitly.
+    public var summaryRepos: [String]
 
     /// Characters that are invalid in git ref names (see `git check-ref-format`).
     private static let invalidBranchChars = CharacterSet(charactersIn: " ~^:?*[\\")
@@ -250,7 +253,8 @@ public struct ConfigDefaults: Codable, Sendable, Equatable {
         excludeDirs: [String] = ["node_modules", ".git", "vendor", "dist", "build", "target"],
         excludeReviewRepos: [String] = [],
         excludeTicketRepos: [String] = [],
-        ignoreReviewLabels: [String] = []
+        ignoreReviewLabels: [String] = [],
+        summaryRepos: [String] = []
     ) {
         self.provider = provider
         self.cli = cli
@@ -259,6 +263,7 @@ public struct ConfigDefaults: Codable, Sendable, Equatable {
         self.excludeReviewRepos = excludeReviewRepos
         self.excludeTicketRepos = excludeTicketRepos
         self.ignoreReviewLabels = ignoreReviewLabels
+        self.summaryRepos = summaryRepos
     }
 
     public init(from decoder: Decoder) throws {
@@ -270,10 +275,11 @@ public struct ConfigDefaults: Codable, Sendable, Equatable {
         excludeReviewRepos = try container.decodeIfPresent([String].self, forKey: .excludeReviewRepos) ?? []
         excludeTicketRepos = try container.decodeIfPresent([String].self, forKey: .excludeTicketRepos) ?? []
         ignoreReviewLabels = try container.decodeIfPresent([String].self, forKey: .ignoreReviewLabels) ?? []
+        summaryRepos = try container.decodeIfPresent([String].self, forKey: .summaryRepos) ?? []
     }
 
     private enum CodingKeys: String, CodingKey {
-        case provider, cli, branchPrefix, excludeDirs, excludeReviewRepos, excludeTicketRepos, ignoreReviewLabels
+        case provider, cli, branchPrefix, excludeDirs, excludeReviewRepos, excludeTicketRepos, ignoreReviewLabels, summaryRepos
     }
 }
 

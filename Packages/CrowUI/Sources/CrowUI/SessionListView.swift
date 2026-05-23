@@ -77,17 +77,10 @@ public struct SessionListView: View {
                 .listRowSeparator(.hidden)
                 .listRowBackground(Color.clear)
 
-            // Changes Summary row
-            SummaryBoardSidebarRow(appState: appState)
+            // Changes + Manager + New Manager (+) row
+            ManagerSidebarRow(appState: appState)
                 .listRowSeparator(.hidden)
                 .listRowBackground(Color.clear)
-
-            // Manager + New Manager (+) row
-            if appState.managerSession != nil {
-                ManagerSidebarRow(appState: appState)
-                    .listRowSeparator(.hidden)
-                    .listRowBackground(Color.clear)
-            }
 
             // Additional (non-primary) Manager sessions, each deletable.
             let extraManagers = appState.managerSessions.filter { $0.id != AppState.managerSessionID }
@@ -384,46 +377,63 @@ struct SectionDivider: View {
 
 // MARK: - Manager Row
 
-/// Primary Manager toggle button plus the "new Manager" (+) button, on their
-/// own sidebar row.
+/// Sidebar row holding the "Changes" board button followed by the primary
+/// Manager toggle and the "new Manager" (+) button. Changes is always visible;
+/// the Manager + (+) buttons appear once the primary Manager has loaded.
 struct ManagerSidebarRow: View {
     @Bindable var appState: AppState
 
     var body: some View {
         HStack(spacing: 6) {
             sidebarButton(
-                title: "Manager",
-                isActive: appState.selectedSessionID == AppState.managerSessionID
+                title: "Changes",
+                isActive: appState.selectedSessionID == AppState.summaryBoardSessionID
             ) {
-                appState.selectedSessionID = AppState.managerSessionID
+                appState.selectedSessionID = AppState.summaryBoardSessionID
             }
-            .overlay(alignment: .topTrailing) {
-                if appState.isRemoteControlActive(sessionID: AppState.managerSessionID) {
-                    RemoteControlBadge(compact: true)
-                        .padding(4)
+            .overlay(alignment: .trailing) {
+                if appState.isLoadingSummary {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .padding(.trailing, 8)
                 }
             }
 
-            Button {
-                appState.onCreateManager?()
-            } label: {
-                Image(systemName: "plus")
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(CorveilTheme.goldDark)
-                    .frame(width: 28)
-                    .padding(.vertical, 8)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6)
-                            .fill(CorveilTheme.bgSurface)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 6)
-                                    .strokeBorder(CorveilTheme.goldDark.opacity(0.3), lineWidth: 1)
-                            )
-                    )
+            if appState.managerSession != nil {
+                sidebarButton(
+                    title: "Manager",
+                    isActive: appState.selectedSessionID == AppState.managerSessionID
+                ) {
+                    appState.selectedSessionID = AppState.managerSessionID
+                }
+                .overlay(alignment: .topTrailing) {
+                    if appState.isRemoteControlActive(sessionID: AppState.managerSessionID) {
+                        RemoteControlBadge(compact: true)
+                            .padding(4)
+                    }
+                }
+
+                Button {
+                    appState.onCreateManager?()
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(CorveilTheme.goldDark)
+                        .frame(width: 28)
+                        .padding(.vertical, 8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(CorveilTheme.bgSurface)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .strokeBorder(CorveilTheme.goldDark.opacity(0.3), lineWidth: 1)
+                                )
+                        )
+                }
+                .buttonStyle(.plain)
+                .help("New Manager session")
+                .accessibilityLabel("New Manager session")
             }
-            .buttonStyle(.plain)
-            .help("New Manager session")
-            .accessibilityLabel("New Manager session")
         }
         .padding(.vertical, 2)
     }
@@ -448,50 +458,6 @@ struct ManagerSidebarRow: View {
                 )
         }
         .buttonStyle(.plain)
-    }
-}
-
-// MARK: - Summary Board Row
-
-/// Full-width sidebar button that selects the changes-summary board tab.
-struct SummaryBoardSidebarRow: View {
-    @Bindable var appState: AppState
-
-    private var isActive: Bool { appState.selectedSessionID == AppState.summaryBoardSessionID }
-
-    var body: some View {
-        Button {
-            appState.selectedSessionID = AppState.summaryBoardSessionID
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "chart.bar.doc.horizontal")
-                    .font(.system(size: 11))
-                Text("Changes Summary")
-                    .font(.system(size: 12, weight: .bold))
-                    .lineLimit(1)
-                Spacer()
-                if appState.isLoadingSummary {
-                    ProgressView().controlSize(.mini)
-                }
-            }
-            .foregroundStyle(isActive ? CorveilTheme.gold : CorveilTheme.goldDark)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 8)
-            .background(
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(isActive ? CorveilTheme.bgCard : CorveilTheme.bgSurface)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 6)
-                            .strokeBorder(
-                                isActive ? CorveilTheme.goldDark.opacity(0.6) : CorveilTheme.goldDark.opacity(0.3),
-                                lineWidth: 1
-                            )
-                    )
-            )
-        }
-        .buttonStyle(.plain)
-        .padding(.vertical, 2)
     }
 }
 

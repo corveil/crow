@@ -261,6 +261,10 @@ public final class AppState {
     /// per-repo commit digest for the given window (git date strings).
     public var onGenerateSummary: ((_ since: String, _ until: String?) async -> [RepoCommitSummary])?
 
+    /// Lists discovered repos (as "workspace/name" keys) for the
+    /// Changes-summary scope picker in Settings.
+    public var onListSummaryRepos: (() async -> [String])?
+
     /// Called to launch Claude in a terminal that just became ready.
     public var onLaunchClaude: ((UUID) -> Void)?  // receives terminal ID
 

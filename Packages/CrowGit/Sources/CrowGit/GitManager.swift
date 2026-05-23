@@ -231,11 +231,14 @@ public actor GitManager {
         }
     }
 
-    /// Collect commits across every discovered repo within a time window and
-    /// group them by repo. Deterministic digest — no LLM.
+    /// Collect commits across discovered repos within a time window and group
+    /// them by repo. Deterministic digest — no LLM.
     ///
     /// - `since`/`until` are passed straight to git, which parses flexible date
     ///   strings ("1 week ago", "2026-05-01"); `until` defaults to now when nil.
+    /// - `includeRepos`, when non-nil, scopes the scan to repos whose
+    ///   "workspace/name" key is in the set (an empty set yields nothing); `nil`
+    ///   includes every discovered repo.
     /// - `--all` picks up commits on every branch (worktree feature branches
     ///   share the main checkout's object store), `--no-merges` keeps diffstats
     ///   from double-counting merge commits.
@@ -245,8 +248,13 @@ public actor GitManager {
     ///
     /// Runs sequentially: `run` is actor-isolated and blocks on
     /// `waitUntilExit`, so a task group would serialize on the actor anyway.
-    public func summarizeCommits(since: String, until: String?) async throws -> [RepoCommitSummary] {
-        let repos = try await discoverRepos()
+    public func summarizeCommits(since: String, until: String?, includeRepos: Set<String>? = nil) async throws -> [RepoCommitSummary] {
+        var repos = try await discoverRepos()
+        // When an include-set is provided, scope to repos whose "workspace/name"
+        // key is selected; an empty set yields nothing. `nil` keeps all repos.
+        if let includeRepos {
+            repos = repos.filter { includeRepos.contains("\($0.workspace)/\($0.name)") }
+        }
         var summaries: [RepoCommitSummary] = []
         for repo in repos {
             var args = [

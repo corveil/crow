@@ -231,6 +231,17 @@ public struct SettingsView: View {
                 .onChange(of: config.cleanup.retentionHours) { _, _ in save() }
                 .disabled(!config.cleanup.enabled)
             }
+
+            Section("Changes Summary") {
+                Text("Select which repositories the Changes board summarizes. Nothing is summarized until you pick at least one.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                SummaryReposPicker(
+                    selected: $config.defaults.summaryRepos,
+                    listRepos: { await appState.onListSummaryRepos?() ?? [] },
+                    onSave: { save() }
+                )
+            }
         }
         .formStyle(.grouped)
     }

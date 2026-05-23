@@ -31,7 +31,7 @@ public struct SummaryBoardView: View {
         VStack(spacing: 0) {
             header
             SectionHelpBanner(
-                description: "A deterministic digest of every commit across all repos under your dev root for the chosen window, grouped by repo. Same data as `crow summary`.",
+                description: "A deterministic digest of commits for the chosen window, grouped by repo. Scoped to the repos you select in Settings → General → Changes Summary — nothing is summarized until at least one is selected. Same data as `crow summary`.",
                 storageKey: "helpDismissed_summary"
             )
             controls
@@ -126,7 +126,7 @@ public struct SummaryBoardView: View {
                     .font(.headline)
                     .foregroundStyle(CorveilTheme.textSecondary)
                     .padding(.top, 8)
-                Text("Pick a window and hit Generate to see what changed across every repo.")
+                Text("Select repos in Settings → General → Changes Summary, pick a window, and hit Generate to see what changed.")
                     .font(.caption)
                     .foregroundStyle(CorveilTheme.textMuted)
                     .multilineTextAlignment(.center)
