@@ -152,35 +152,65 @@ final class SessionService {
             }
         }
 
-        // Wire the readiness callback BEFORE re-registering terminals so the
-        // tmux sentinel's .shellReady event is never lost.
+        // Wire the readiness callback and re-hydrate every persisted terminal.
+        // Since #330 the tmux server outlives the app, so on launch
+        // rehydrateTerminalSurface adopts the persisted window when it's still
+        // live and only re-registers a fresh one as a fallback (post-reboot,
+        // closed window, or a legacy socket). `forceRegister: false` keeps that
+        // adopt-first behavior; the manual "Restart tmux Server" path passes
+        // true. If both adopt and register fail (e.g. tmux uninstalled) the row
+        // is left as-is and simply won't render this launch.
+        rebuildAllSurfaces(forceRegister: false)
+    }
+
+    /// Wire the tmux readiness callback, then re-register a tmux window and
+    /// relaunch claude for every persisted terminal across all sessions. Shared
+    /// by `hydrateState` (launch) and `restartTmuxServer` (manual recycle).
+    ///
+    /// `forceRegister: true` drops each terminal's persisted `tmuxBinding` so
+    /// `rehydrateTerminalSurface` always takes the `registerTerminal` path —
+    /// used after the server was killed, when every binding is dead — and
+    /// re-arms the managed work terminals' readiness/auto-launch state so the
+    /// fresh shell's `.shellReady` fire drives `launchClaude`. On launch the
+    /// pre-seed already happened in `hydrateState`, so `forceRegister: false`
+    /// skips it and preserves the adopt-first behavior.
+    ///
+    /// Each per-terminal rehydration is dispatched as its own @MainActor task
+    /// so the run loop can service AppKit/SwiftUI between them. Running the loop
+    /// synchronously pinned the main actor for seconds on profiles with many
+    /// persisted rows (each `registerTerminal` spawns a subprocess) — #293.
+    @MainActor
+    func rebuildAllSurfaces(forceRegister: Bool = false) {
+        // Wire BEFORE re-registering so the sentinel's .shellReady is never lost.
         wireTerminalReadiness()
 
-        // Re-hydrate every persisted terminal. Since #330 the tmux server
-        // outlives the app, so rehydrateTerminalSurface adopts the persisted
-        // window when it's still live and only re-registers a fresh one as a
-        // fallback (post-reboot, closed window, or a legacy socket). If both
-        // fail (e.g. tmux uninstalled) the row is left as-is and simply won't
-        // render this launch.
-        //
-        // Each per-terminal rehydration is dispatched as its own @MainActor
-        // task so the run loop can service AppKit/SwiftUI between them.
-        // Previously this loop ran synchronously and pinned the main actor
-        // for seconds on profiles with many persisted .tmux rows (each
-        // call to TmuxBackend.registerTerminal spawns a subprocess) — #293.
         for session in appState.sessions {
             guard let terminals = appState.terminals[session.id] else { continue }
             let isManagerSession = session.isManager
             let sid = session.id
+
+            if forceRegister, !isManagerSession {
+                // The previous adopt (#367) / launchClaude cleared these; re-arm
+                // so the fresh shell's .shellReady relaunches claude --continue.
+                for terminal in terminals where terminal.isManaged {
+                    appState.terminalReadiness[terminal.id] = .uninitialized
+                    appState.autoLaunchTerminals.insert(terminal.id)
+                }
+            }
+
             for original in terminals {
                 let trackReadiness = !isManagerSession && original.isManaged
+                // Server was just killed → binding is dead. Drop it so
+                // rehydrateTerminalSurface skips adopt and registers a fresh
+                // window (and persists the new windowIndex).
+                var seed = original
+                if forceRegister { seed.tmuxBinding = nil }
                 Task { @MainActor in
-                    let updated = self.rehydrateTerminalSurface(original, trackReadiness: trackReadiness)
-                    self.applyRehydrationResult(sessionID: sid, original: original, updated: updated)
+                    let updated = self.rehydrateTerminalSurface(seed, trackReadiness: trackReadiness)
+                    self.applyRehydrationResult(sessionID: sid, original: seed, updated: updated)
                 }
             }
         }
-
     }
 
     /// Commit the result of a per-terminal rehydration task back to
@@ -522,6 +552,33 @@ final class SessionService {
 
         // Session row still exists, so this only recreates the terminal.
         ensureManagerSession(devRoot: resolvedDevRoot)
+    }
+
+    /// Tear down the tmux server and rebuild every terminal surface from
+    /// scratch. Manual recovery for a wedged/leaked cockpit session (#375):
+    /// kills the server — every pane's claude included — then re-registers a
+    /// fresh window and relaunches claude for every persisted terminal across
+    /// all sessions (Manager via its stored command, work sessions via
+    /// `claude --continue`). The destructive teardown is guarded by a
+    /// confirmation alert in `AppDelegate.restartTmuxServer`.
+    @MainActor
+    func restartTmuxServer() {
+        NSLog("[CrowTelemetry tmux:server_restart_by_user]")
+        let savedSelection = appState.selectedSessionID
+        let savedActive = appState.activeTerminalID
+
+        // kill-server + unlink scratch/sentinel files. The first registerTerminal
+        // in rebuildAllSurfaces lazily recreates the controller + cockpit session
+        // via ensureRunningServer, so no explicit reconfigure is needed.
+        TmuxBackend.shared.shutdown(killServer: true)
+
+        rebuildAllSurfaces(forceRegister: true)
+
+        // Re-assign selection (even to the same values) to force a SwiftUI
+        // re-render so TerminalSurfaceView re-creates the destroyed cockpit
+        // surface and re-attaches a fresh tmux client; preserves focus.
+        appState.selectedSessionID = savedSelection
+        appState.activeTerminalID = savedActive
     }
 
     /// Build the claude shell command for a Manager terminal, reflecting the

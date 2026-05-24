@@ -467,6 +467,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             service?.restartManager(devRoot: devRoot)
         }
 
+        appState.onRestartTmuxServer = { [weak service] in
+            service?.restartTmuxServer()
+        }
+
         appState.onRetryReadiness = { [weak service] terminalID in
             service?.retryReadiness(terminalID: terminalID)
         }
@@ -871,6 +875,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let restartManagerItem = NSMenuItem(title: "Restart Manager", action: #selector(restartManager), keyEquivalent: "")
         restartManagerItem.target = self
         appMenu.addItem(restartManagerItem)
+        // No keyEquivalent — recycling the tmux server kills every pane's claude,
+        // so keep it menu-only to avoid accidental fires (#375).
+        let restartTmuxItem = NSMenuItem(title: "Restart tmux Server", action: #selector(restartTmuxServer), keyEquivalent: "")
+        restartTmuxItem.target = self
+        appMenu.addItem(restartTmuxItem)
         appMenu.addItem(NSMenuItem.separator())
         appMenu.addItem(withTitle: "Hide Crow", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
         let hideOthersItem = NSMenuItem(title: "Hide Others", action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h")
@@ -887,6 +896,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func restartManager() {
         appState.onRestartManager?()
+    }
+
+    @objc private func restartTmuxServer() {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Restart tmux server?"
+        alert.informativeText = """
+            This kills the tmux server and every terminal it hosts — including \
+            all running Claude sessions — then rebuilds a fresh window for each \
+            and relaunches Claude. Use it to recover a stuck or corrupted cockpit.
+
+            Unsaved work in any terminal will be lost.
+            """
+        alert.addButton(withTitle: "Restart tmux Server")
+        alert.addButton(withTitle: "Cancel")
+        if alert.runModal() == .alertFirstButtonReturn {
+            appState.onRestartTmuxServer?()
+        }
     }
 
     @objc private func showAbout() {

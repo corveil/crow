@@ -283,6 +283,11 @@ public final class AppState {
     /// preserving the Manager session identity. Wired to `SessionService.restartManager`.
     public var onRestartManager: (() -> Void)?
 
+    /// Called from the "Restart tmux Server" menu item (after confirmation) to
+    /// kill the tmux server and rebuild every terminal surface. Wired to
+    /// `SessionService.restartTmuxServer`.
+    public var onRestartTmuxServer: (() -> Void)?
+
     /// Called when the user clicks "Retry" on a terminal whose tmux readiness
     /// watch timed out before the shell signaled it was interactive.
     public var onRetryReadiness: ((UUID) -> Void)?  // receives terminal ID
