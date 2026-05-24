@@ -83,12 +83,10 @@ final class SessionService {
                 if !hasManagedTerminal, let idx = terminals.firstIndex(where: {
                     $0.name == "Claude Code" || ($0.command?.contains("claude") ?? false)
                 }) {
-                    terminals[idx] = SessionTerminal(
-                        id: terminals[idx].id, sessionID: terminals[idx].sessionID,
-                        name: terminals[idx].name, cwd: terminals[idx].cwd,
-                        command: terminals[idx].command, isManaged: true,
-                        createdAt: terminals[idx].createdAt
-                    )
+                    // Mutate in place so tmuxBinding (and every other field) is
+                    // preserved — reconstructing via the memberwise init defaults
+                    // tmuxBinding to nil and breaks adopt-on-relaunch (#374).
+                    terminals[idx].isManaged = true
                 }
 
                 // For managed terminals, clear the claude command so they start as plain shells.
@@ -96,12 +94,8 @@ final class SessionService {
                 for i in terminals.indices {
                     if terminals[i].isManaged,
                        let cmd = terminals[i].command, cmd.contains("claude") {
-                        terminals[i] = SessionTerminal(
-                            id: terminals[i].id, sessionID: terminals[i].sessionID,
-                            name: terminals[i].name, cwd: terminals[i].cwd,
-                            command: nil, isManaged: true,
-                            createdAt: terminals[i].createdAt
-                        )
+                        // In-place so tmuxBinding survives the rebuild (#374).
+                        terminals[i].command = nil
                     }
                 }
             } else {
@@ -115,12 +109,11 @@ final class SessionService {
                 let rebuiltCommand = managerCommand(sessionName: session.name)
                 for i in terminals.indices {
                     if let cmd = terminals[i].command, cmd.contains("claude") {
-                        terminals[i] = SessionTerminal(
-                            id: terminals[i].id, sessionID: terminals[i].sessionID,
-                            name: terminals[i].name, cwd: terminals[i].cwd,
-                            command: rebuiltCommand, isManaged: terminals[i].isManaged,
-                            createdAt: terminals[i].createdAt
-                        )
+                        // Mutate in place rather than reconstructing the row:
+                        // the memberwise init drops tmuxBinding, which made the
+                        // Manager spawn a fresh window + claude every relaunch
+                        // instead of re-attaching to its live window (#374).
+                        terminals[i].command = rebuiltCommand
                         if appState.remoteControlEnabled {
                             appState.remoteControlActiveTerminals.insert(terminals[i].id)
                         }
