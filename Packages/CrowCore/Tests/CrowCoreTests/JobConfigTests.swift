@@ -124,3 +124,32 @@ import Testing
     #expect(JobConfig.validateName("Audit", existingNames: ["audit"]) != nil) // case-insensitive dupe
     #expect(JobConfig.validateName("Audit", existingNames: ["Other"]) == nil)
 }
+
+@Test func jobConfigDuplicated() {
+    let src = JobConfig(
+        name: "Audit",
+        workspace: "ws",
+        repo: "o/r",
+        prompts: ["a", "b"],
+        schedule: .interval(seconds: 3600),
+        enabled: true,
+        lastRunAt: Date(),
+        createdAt: Date(timeIntervalSince1970: 0)
+    )
+    let copy = src.duplicated(existingNames: ["Audit"])
+
+    #expect(copy.id != src.id)              // fresh id
+    #expect(copy.name == "Audit copy")      // unique name
+    #expect(copy.enabled == false)          // disabled by default
+    #expect(copy.lastRunAt == nil)          // run state reset
+    #expect(copy.createdAt > src.createdAt) // fresh createdAt
+    #expect(copy.workspace == src.workspace) // copied verbatim
+    #expect(copy.repo == src.repo)
+    #expect(copy.prompts == src.prompts)
+    #expect(copy.schedule == src.schedule)
+
+    // escalates when " copy" is already taken (case-insensitive)
+    #expect(src.duplicated(existingNames: ["Audit", "audit copy"]).name == "Audit copy 2")
+    // the suggested name must itself pass the validator against the originals
+    #expect(JobConfig.validateName(copy.name, existingNames: ["Audit"]) == nil)
+}

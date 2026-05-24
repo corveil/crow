@@ -16,6 +16,8 @@ public struct SettingsView: View {
     @State private var editingWorkspace: WorkspaceInfo?
     @State private var isAddingJob = false
     @State private var editingJob: JobConfig?
+    /// A pre-filled copy of a job, presented in the form (create mode) to duplicate it.
+    @State private var duplicatingJob: JobConfig?
     @State private var summaryReposText: String
 
     public var onSave: ((String, AppConfig) -> Void)?
@@ -106,6 +108,18 @@ public struct SettingsView: View {
                     config.jobs[idx] = updated
                     save()
                 }
+            }
+        }
+        .sheet(item: $duplicatingJob) { job in
+            JobFormView(
+                job: job,
+                isDuplicate: true,
+                workspaces: config.workspaces,
+                existingNames: otherJobNames(),
+                listRepos: { ws in await appState.onListWorkspaceRepos?(ws) ?? [] }
+            ) { newJob in
+                config.jobs.append(newJob)
+                save()
             }
         }
     }
@@ -383,6 +397,14 @@ public struct SettingsView: View {
                             }
                             .buttonStyle(.borderless)
                             .accessibilityLabel("Edit \(job.name)")
+
+                            Button {
+                                duplicatingJob = job.duplicated(existingNames: config.jobs.map(\.name))
+                            } label: {
+                                Image(systemName: "plus.square.on.square")
+                            }
+                            .buttonStyle(.borderless)
+                            .accessibilityLabel("Duplicate \(job.name)")
 
                             Button(role: .destructive) {
                                 config.jobs.removeAll { $0.id == job.id }

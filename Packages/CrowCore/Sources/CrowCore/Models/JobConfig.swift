@@ -79,6 +79,36 @@ public struct JobConfig: Identifiable, Codable, Sendable, Equatable {
         return nil
     }
 
+    /// A new job seeded from this one as the starting point for a duplicate:
+    /// fresh `id` + `createdAt`, cleared `lastRunAt`, and `enabled = false` so it
+    /// can't fire before the user reviews it. `workspace`, `repo`, `prompts`, and
+    /// `schedule` are copied verbatim. The name is made unique against
+    /// `existingNames` by appending " copy" (then " copy 2", " copy 3", …).
+    public func duplicated(existingNames: [String]) -> JobConfig {
+        JobConfig(
+            id: UUID(),
+            name: Self.uniqueCopyName(of: name, existingNames: existingNames),
+            workspace: workspace,
+            repo: repo,
+            prompts: prompts,
+            schedule: schedule,
+            enabled: false,
+            lastRunAt: nil,
+            createdAt: Date()
+        )
+    }
+
+    /// Builds a "<base> copy" name absent from `existingNames` (case-insensitive,
+    /// matching `validateName`), escalating to " copy 2", " copy 3", … on collision.
+    static func uniqueCopyName(of base: String, existingNames: [String]) -> String {
+        let taken = Set(existingNames.map { $0.lowercased() })
+        let first = "\(base) copy"
+        if !taken.contains(first.lowercased()) { return first }
+        var n = 2
+        while taken.contains("\(base) copy \(n)".lowercased()) { n += 1 }
+        return "\(base) copy \(n)"
+    }
+
     /// The next time this job should fire strictly after `reference`.
     ///
     /// The scheduler treats the job as due when

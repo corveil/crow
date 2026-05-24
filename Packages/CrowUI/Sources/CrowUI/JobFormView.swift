@@ -58,12 +58,16 @@ public struct JobFormView: View {
 
     /// - Parameters:
     ///   - job: An existing job to edit, or `nil` to create a new one.
+    ///   - isDuplicate: When `true`, the form prefills its fields from `job` but
+    ///     treats the result as a brand-new job — it gets a fresh `id` and
+    ///     `createdAt`, a cleared `lastRunAt`, and the save button reads "Add".
     ///   - workspaces: Workspaces to choose from; their providers source the repo list.
     ///   - existingNames: Names of other jobs, used for duplicate detection.
     ///   - listRepos: Loads the `owner/repo` slugs available to a workspace.
     ///   - onSave: Called with the validated `JobConfig` when the user taps Save/Add.
     public init(
         job: JobConfig? = nil,
+        isDuplicate: Bool = false,
         workspaces: [WorkspaceInfo] = [],
         existingNames: [String] = [],
         listRepos: @escaping (WorkspaceInfo) async -> [String] = { _ in [] },
@@ -71,9 +75,9 @@ public struct JobFormView: View {
     ) {
         self.workspaces = workspaces
         self.listRepos = listRepos
-        self.existingID = job?.id
-        self.existingLastRunAt = job?.lastRunAt
-        self.existingCreatedAt = job?.createdAt ?? Date()
+        self.existingID = isDuplicate ? nil : job?.id
+        self.existingLastRunAt = isDuplicate ? nil : job?.lastRunAt
+        self.existingCreatedAt = isDuplicate ? Date() : (job?.createdAt ?? Date())
         self.existingNames = existingNames
         self.onSave = onSave
 
