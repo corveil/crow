@@ -61,4 +61,74 @@ struct ManagerMigrationTests {
         #expect(cmd2.contains("--permission-mode auto"))
         #expect(cmd2.contains("--rc"))
     }
+
+    /// #374: hydrating the Manager rebuilds its claude `command` to refresh the
+    /// --rc/--name/--permission-mode flags. That rebuild must NOT drop the
+    /// terminal's `tmuxBinding` — if it does, `rehydrateTerminalSurface` can't
+    /// take the adopt path and spawns a fresh tmux window + claude every
+    /// relaunch, leaking the prior Manager window in `crow-cockpit`.
+    @MainActor
+    @Test
+    func hydratePreservesManagerTmuxBinding() {
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("crow-hydrate-mgr-\(UUID().uuidString)")
+        let store = JSONStore(directory: tmp)
+        let binding = TmuxBinding(socketPath: "/tmp/crow.sock", sessionName: "crow-cockpit", windowIndex: 5)
+        let terminalID = UUID()
+        store.mutate { data in
+            data.sessions = [Session(id: AppState.managerSessionID, name: "Manager", kind: .manager)]
+            data.terminals = [SessionTerminal(
+                id: terminalID, sessionID: AppState.managerSessionID,
+                name: "Manager", cwd: tmp.path,
+                command: "claude --rc --name 'Manager'", isManaged: false,
+                tmuxBinding: binding
+            )]
+        }
+
+        let appState = AppState()
+        appState.remoteControlEnabled = true  // so the rebuilt command carries --rc/--name
+        let service = SessionService(store: store, appState: appState)
+        service.hydrateState()
+
+        let row = appState.terminals[AppState.managerSessionID]?.first { $0.id == terminalID }
+        // Binding preserved → relaunch will adopt the live window, not register a new one.
+        #expect(row?.tmuxBinding == binding)
+        // Command was still rebuilt (proves we didn't just skip the rebuild).
+        #expect(row?.command?.contains("--name 'Manager'") == true)
+        // Rebuild also re-seeds the Remote Control active set for the row.
+        #expect(appState.remoteControlActiveTerminals.contains(terminalID))
+    }
+
+    /// Same in-place-mutation guarantee for the work-session hydration branch
+    /// that clears a managed terminal's claude command (#374). The command is
+    /// nilled (so the surface starts as a plain shell) but the `tmuxBinding`
+    /// must survive so the work terminal also re-adopts its window.
+    @MainActor
+    @Test
+    func hydratePreservesWorkTerminalTmuxBinding() {
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("crow-hydrate-work-\(UUID().uuidString)")
+        let store = JSONStore(directory: tmp)
+        let binding = TmuxBinding(socketPath: "/tmp/crow.sock", sessionName: "crow-cockpit", windowIndex: 9)
+        let sessionID = UUID()
+        let terminalID = UUID()
+        store.mutate { data in
+            data.sessions = [Session(id: sessionID, name: "feature", kind: .work)]
+            data.terminals = [SessionTerminal(
+                id: terminalID, sessionID: sessionID,
+                name: "Claude Code", cwd: tmp.path,
+                command: "claude --continue", isManaged: true,
+                tmuxBinding: binding
+            )]
+        }
+
+        let appState = AppState()
+        let service = SessionService(store: store, appState: appState)
+        service.hydrateState()
+
+        let row = appState.terminals[sessionID]?.first { $0.id == terminalID }
+        #expect(row?.tmuxBinding == binding)
+        // Managed work terminal's claude command is cleared so it starts as a shell.
+        #expect(row?.command == nil)
+    }
 }
