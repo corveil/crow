@@ -84,9 +84,6 @@ public final class AppState {
     /// purged on load (multiple Manager sessions replaced standalone terminals).
     nonisolated public static let globalTerminalSessionID = UUID(uuidString: "00000000-0000-0000-0000-000000000004")!
 
-    /// Fixed UUID for the changes-summary board tab.
-    nonisolated public static let summaryBoardSessionID = UUID(uuidString: "00000000-0000-0000-0000-000000000005")!
-
     /// The primary (back-compat) Manager session identified by the well-known UUID.
     public var managerSession: Session? {
         sessions.first { $0.id == Self.managerSessionID }
@@ -125,7 +122,7 @@ public final class AppState {
     /// Sort order for the ticket board.
     public var ticketSortOrder: TicketSortOrder = .updatedDesc
 
-    // MARK: - Allow List
+    // MARK: - Allowlist
 
     /// Aggregated allow-list entries from all worktrees.
     public var allowEntries: [AllowEntry] = []
@@ -166,16 +163,6 @@ public final class AppState {
     public var excludeReviewRepos: [String] = []
     public var excludeTicketRepos: [String] = []
     public var ignoreReviewLabels: [String] = []
-
-    // MARK: - Changes Summary
-
-    /// Last generated cross-repo commit digest (transient; not persisted).
-    public var lastSummary: [RepoCommitSummary] = []
-    public var isLoadingSummary: Bool = false
-
-    /// The configured Changes-summary scope (from config.defaults.summaryRepos),
-    /// surfaced in the board's repo dropdown. Synced from AppConfig.
-    public var summaryRepoScope: [String] = []
 
     public var filteredReviewRequests: [ReviewRequest] {
         var result = reviewRequests
@@ -272,10 +259,6 @@ public final class AppState {
     /// Called when user clicks "Start Review" for multiple selected PR review requests (batch mode).
     public var onBatchStartReview: (([String]) -> Void)?  // receives array of PR URLs
 
-    /// Called when the user generates a changes summary. Returns the grouped
-    /// per-repo commit digest for the given window (git date strings).
-    public var onGenerateSummary: ((_ since: String, _ until: String?) async -> [RepoCommitSummary])?
-
     /// Called to launch Claude in a terminal that just became ready.
     public var onLaunchClaude: ((UUID) -> Void)?  // receives terminal ID
 
@@ -363,8 +346,7 @@ public final class AppState {
     public var selectedSession: Session? {
         guard selectedSessionID != Self.ticketBoardSessionID,
               selectedSessionID != Self.allowListSessionID,
-              selectedSessionID != Self.reviewBoardSessionID,
-              selectedSessionID != Self.summaryBoardSessionID else { return nil }
+              selectedSessionID != Self.reviewBoardSessionID else { return nil }
         return sessions.first { $0.id == selectedSessionID }
     }
 

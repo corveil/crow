@@ -387,7 +387,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appState.excludeReviewRepos = config.defaults.excludeReviewRepos
         appState.excludeTicketRepos = config.defaults.excludeTicketRepos
         appState.ignoreReviewLabels = config.defaults.ignoreReviewLabels
-        appState.summaryRepoScope = config.defaults.summaryRepos
 
         // Create session service and hydrate state
         let service = SessionService(store: store, appState: appState, telemetryPort: config.telemetry.enabled ? config.telemetry.port : nil)
@@ -437,20 +436,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         appState.onCompleteSession = { [weak service] id in
             service?.completeSession(id: id)
-        }
-        // In-app Summary view calls GitManager directly (no socket round-trip);
-        // the CLI path goes through the "get-summary" RPC handler. Both converge
-        // on summarizeCommits.
-        appState.onGenerateSummary = { [weak self] since, until in
-            guard let self, let devRoot = self.devRoot else { return [] }
-            let excludeDirs = self.appConfig?.defaults.excludeDirs ?? WorkspaceDefaults().excludeDirs
-            let include = Set(self.appConfig?.defaults.summaryRepos ?? [])
-            let gm = GitManager(config: WorkspaceConfig(
-                devRoot: devRoot,
-                workspaces: [:],
-                defaults: WorkspaceDefaults(excludeDirs: excludeDirs)
-            ))
-            return (try? await gm.summarizeCommits(since: since, until: until, includeRepos: include)) ?? []
         }
         appState.onSetSessionInReview = { [weak service] id in
             service?.setSessionInReview(id: id)
@@ -1012,7 +997,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appState.excludeReviewRepos = config.defaults.excludeReviewRepos
         appState.excludeTicketRepos = config.defaults.excludeTicketRepos
         appState.ignoreReviewLabels = config.defaults.ignoreReviewLabels
-        appState.summaryRepoScope = config.defaults.summaryRepos
     }
 
     /// Record a job's run time in the canonical `appConfig` and persist it, so
@@ -1052,19 +1036,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let capturedService = sessionService
         let capturedTelemetryPort = sessionService.telemetryPort
         let hookDebug = ProcessInfo.processInfo.environment["CROW_HOOK_DEBUG"] == "1"
-        // Handler closures capture locals (not `self`). `devRoot` is fixed for
-        // the server's lifetime, so it's snapshotted; but the Changes-summary
-        // scope (`summaryRepos`) and `excludeDirs` are edited live in Settings,
-        // so the get-summary handler reads them per-call via providers that hop
-        // to the main actor — keeping `crow summary` in sync with the in-app
-        // board (which reads `appConfig` at call time too).
-        let capturedDevRoot = devRoot
-        let summaryReposProvider: @Sendable () async -> Set<String> = { [weak self] in
-            await MainActor.run { Set(self?.appConfig?.defaults.summaryRepos ?? []) }
-        }
-        let excludeDirsProvider: @Sendable () async -> [String] = { [weak self] in
-            await MainActor.run { self?.appConfig?.defaults.excludeDirs ?? WorkspaceDefaults().excludeDirs }
-        }
 
         let router = CommandRouter(handlers: [
             "new-session": { @Sendable params in
@@ -1664,45 +1635,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         "event_name": .string(eventName),
                     ]
                 }
-            },
-            "get-summary": { @Sendable params in
-                let since = params["since"]?.stringValue ?? "24 hours ago"
-                let until = params["until"]?.stringValue
-                let excludeDirs = await excludeDirsProvider()
-                let include = await summaryReposProvider()
-                let gm = GitManager(config: WorkspaceConfig(
-                    devRoot: capturedDevRoot,
-                    workspaces: [:],
-                    defaults: WorkspaceDefaults(excludeDirs: excludeDirs)
-                ))
-                let summaries = try await gm.summarizeCommits(since: since, until: until, includeRepos: include)
-                let fmt = ISO8601DateFormatter()
-                let repos: [JSONValue] = summaries.map { s in
-                    var obj: [String: JSONValue] = [
-                        "repo": .string(s.repo),
-                        "path": .string(s.path),
-                        "workspace": .string(s.workspace),
-                        "totalFilesChanged": .int(s.totalFilesChanged),
-                        "totalInsertions": .int(s.totalInsertions),
-                        "totalDeletions": .int(s.totalDeletions),
-                        "commits": .array(s.commits.map { c in
-                            .object([
-                                "hash": .string(c.hash),
-                                "shortHash": .string(c.shortHash),
-                                "authorName": .string(c.authorName),
-                                "authorEmail": .string(c.authorEmail),
-                                "date": .string(fmt.string(from: c.date)),
-                                "subject": .string(c.subject),
-                                "filesChanged": .int(c.filesChanged),
-                                "insertions": .int(c.insertions),
-                                "deletions": .int(c.deletions),
-                            ])
-                        }),
-                    ]
-                    if let prefix = s.commitURLPrefix { obj["commitURLPrefix"] = .string(prefix) }
-                    return .object(obj)
-                }
-                return ["repos": .array(repos)]
             },
         ])
 

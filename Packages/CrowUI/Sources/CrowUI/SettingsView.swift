@@ -18,7 +18,6 @@ public struct SettingsView: View {
     @State private var editingJob: JobConfig?
     /// A pre-filled copy of a job, presented in the form (create mode) to duplicate it.
     @State private var duplicatingJob: JobConfig?
-    @State private var summaryReposText: String
 
     public var onSave: ((String, AppConfig) -> Void)?
     public var onRescaffold: ((String) -> Void)?
@@ -29,7 +28,6 @@ public struct SettingsView: View {
         self.appState = appState
         self._devRoot = State(initialValue: devRoot)
         self._config = State(initialValue: config)
-        self._summaryReposText = State(initialValue: config.defaults.summaryRepos.joined(separator: ", "))
         self.onSave = onSave
         self.onRescaffold = onRescaffold
     }
@@ -246,21 +244,6 @@ public struct SettingsView: View {
                 }
                 .onChange(of: config.cleanup.retentionHours) { _, _ in save() }
                 .disabled(!config.cleanup.enabled)
-            }
-
-            Section("Changes Summary") {
-                TextField("Monitored Repos", text: $summaryReposText)
-                    .textFieldStyle(.roundedBorder)
-                    .onChange(of: summaryReposText) { _, _ in
-                        config.defaults.summaryRepos = summaryReposText
-                            .split(separator: ",")
-                            .map { $0.trimmingCharacters(in: .whitespaces) }
-                            .filter { !$0.isEmpty }
-                        save()
-                    }
-                Text("Comma-separated org/repo the Changes board summarizes (e.g., radiusmethod/crow, acme/api). Duplicate names under different orgs resolve independently. Empty means nothing is summarized.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)

@@ -29,7 +29,6 @@ public struct CrowCommand: ParsableCommand {
             AddLink.self,
             ListLinks.self,
             HookEventCmd.self,
-            Summary.self,
         ]
     )
 

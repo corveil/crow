@@ -73,13 +73,8 @@ public struct SessionListView: View {
                 .listRowSeparator(.hidden)
                 .listRowBackground(Color.clear)
 
-            // Reviews + Allow List row
-            ReviewsAllowListRow(appState: appState)
-                .listRowSeparator(.hidden)
-                .listRowBackground(Color.clear)
-
-            // Changes + Manager + New Manager (+) row
-            ManagerSidebarRow(appState: appState)
+            // Manager + Reviews + Allowlist row
+            ManagerReviewsAllowListRow(appState: appState)
                 .listRowSeparator(.hidden)
                 .listRowBackground(Color.clear)
 
@@ -394,92 +389,6 @@ struct SectionDivider: View {
         .padding(.top, 10)
         .padding(.bottom, 2)
         .listRowSeparator(.hidden)
-    }
-}
-
-// MARK: - Manager Row
-
-/// Sidebar row holding the "Changes" board button followed by the primary
-/// Manager toggle and the "new Manager" (+) button. Changes is always visible;
-/// the Manager + (+) buttons appear once the primary Manager has loaded.
-struct ManagerSidebarRow: View {
-    @Bindable var appState: AppState
-
-    var body: some View {
-        HStack(spacing: 6) {
-            sidebarButton(
-                title: "Changes",
-                isActive: appState.selectedSessionID == AppState.summaryBoardSessionID
-            ) {
-                appState.selectedSessionID = AppState.summaryBoardSessionID
-            }
-            .overlay(alignment: .trailing) {
-                if appState.isLoadingSummary {
-                    ProgressView()
-                        .controlSize(.mini)
-                        .padding(.trailing, 8)
-                }
-            }
-
-            if appState.managerSession != nil {
-                sidebarButton(
-                    title: "Manager",
-                    isActive: appState.selectedSessionID == AppState.managerSessionID
-                ) {
-                    appState.selectedSessionID = AppState.managerSessionID
-                }
-                .overlay(alignment: .topTrailing) {
-                    if appState.isRemoteControlActive(sessionID: AppState.managerSessionID) {
-                        RemoteControlBadge(compact: true)
-                            .padding(4)
-                    }
-                }
-
-                Button {
-                    appState.onCreateManager?()
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(CorveilTheme.goldDark)
-                        .frame(width: 28)
-                        .padding(.vertical, 8)
-                        .background(
-                            RoundedRectangle(cornerRadius: 6)
-                                .fill(CorveilTheme.bgSurface)
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 6)
-                                        .strokeBorder(CorveilTheme.goldDark.opacity(0.3), lineWidth: 1)
-                                )
-                        )
-                }
-                .buttonStyle(.plain)
-                .help("New Manager session")
-                .accessibilityLabel("New Manager session")
-            }
-        }
-        .padding(.vertical, 2)
-    }
-
-    private func sidebarButton(title: String, isActive: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(.system(size: 12, weight: .bold))
-                .foregroundStyle(isActive ? CorveilTheme.gold : CorveilTheme.goldDark)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 8)
-                .background(
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(isActive ? CorveilTheme.bgCard : CorveilTheme.bgSurface)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 6)
-                                .strokeBorder(
-                                    isActive ? CorveilTheme.goldDark.opacity(0.6) : CorveilTheme.goldDark.opacity(0.3),
-                                    lineWidth: 1
-                                )
-                        )
-                )
-        }
-        .buttonStyle(.plain)
     }
 }
 

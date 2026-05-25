@@ -1,9 +1,9 @@
 import SwiftUI
 import CrowCore
 
-// MARK: - Main Allow List View
+// MARK: - Main Allowlist View
 
-/// Full-pane view for aggregating and promoting allow-list entries.
+/// Full-pane view for aggregating and promoting allowlist entries.
 public struct AllowListView: View {
     @Bindable var appState: AppState
     @State private var selection: Set<String> = []
@@ -56,7 +56,7 @@ public struct AllowListView: View {
 
     private var header: some View {
         HStack {
-            Text("Allow List")
+            Text("Allowlist")
                 .font(.system(size: 18, weight: .bold))
                 .foregroundStyle(CorveilTheme.gold)
 

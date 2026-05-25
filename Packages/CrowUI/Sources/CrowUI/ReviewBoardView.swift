@@ -338,8 +338,10 @@ struct ReviewRow: View {
 
 // MARK: - Sidebar Row
 
-/// Combined Reviews and Allow List toggle buttons in the sidebar.
-public struct ReviewsAllowListRow: View {
+/// Combined Manager, Reviews, and Allowlist toggle buttons in the sidebar. The
+/// Manager toggle and its "new Manager" (+) button appear once the primary
+/// Manager has loaded; Reviews and Allowlist are always present.
+public struct ManagerReviewsAllowListRow: View {
     @Bindable var appState: AppState
 
     public init(appState: AppState) {
@@ -348,10 +350,75 @@ public struct ReviewsAllowListRow: View {
 
     public var body: some View {
         HStack(spacing: 6) {
+            if appState.managerSession != nil {
+                managerButton
+                newManagerButton
+            }
             reviewButton
             allowListButton
         }
         .padding(.vertical, 2)
+    }
+
+    private var managerButton: some View {
+        sidebarButton(
+            title: "Manager",
+            isActive: appState.selectedSessionID == AppState.managerSessionID
+        ) {
+            appState.selectedSessionID = AppState.managerSessionID
+        }
+        .overlay(alignment: .topTrailing) {
+            if appState.isRemoteControlActive(sessionID: AppState.managerSessionID) {
+                RemoteControlBadge(compact: true)
+                    .padding(4)
+            }
+        }
+    }
+
+    private var newManagerButton: some View {
+        Button {
+            appState.onCreateManager?()
+        } label: {
+            Image(systemName: "plus")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(CorveilTheme.goldDark)
+                .frame(width: 28)
+                .padding(.vertical, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(CorveilTheme.bgSurface)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .strokeBorder(CorveilTheme.goldDark.opacity(0.3), lineWidth: 1)
+                        )
+                )
+        }
+        .buttonStyle(.plain)
+        .help("New Manager session")
+        .accessibilityLabel("New Manager session")
+    }
+
+    /// Shared full-width pill styling for the toggle buttons in this row.
+    private func sidebarButton(title: String, isActive: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(isActive ? CorveilTheme.gold : CorveilTheme.goldDark)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(isActive ? CorveilTheme.bgCard : CorveilTheme.bgSurface)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .strokeBorder(
+                                    isActive ? CorveilTheme.goldDark.opacity(0.6) : CorveilTheme.goldDark.opacity(0.3),
+                                    lineWidth: 1
+                                )
+                        )
+                )
+        }
+        .buttonStyle(.plain)
     }
 
     private var allowListButton: some View {
@@ -359,7 +426,7 @@ public struct ReviewsAllowListRow: View {
         return Button {
             appState.selectedSessionID = AppState.allowListSessionID
         } label: {
-            Text("Allow List")
+            Text("Allowlist")
                 .font(.system(size: 12, weight: .bold))
                 .foregroundStyle(isActive ? CorveilTheme.gold : CorveilTheme.goldDark)
                 .frame(maxWidth: .infinity)
