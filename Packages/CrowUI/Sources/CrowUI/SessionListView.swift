@@ -83,26 +83,18 @@ public struct SessionListView: View {
                 .listRowSeparator(.hidden)
                 .listRowBackground(Color.clear)
 
-            // Additional (non-primary) Manager sessions, each deletable.
+            // Additional (non-primary) Manager sessions, packed as wrapping
+            // chips so they don't each consume a full row.
             let extraManagers = appState.managerSessions.filter { $0.id != AppState.managerSessionID }
-            ForEach(extraManagers) { session in
-                ManagerSessionRow(session: session, appState: appState, editingSessionID: $editingManagerID)
-                    .tag(session.id)
-                    .listRowSeparator(.hidden)
-                    .listRowBackground(Color.clear)
-                    .contextMenu {
-                        Button {
-                            editingManagerID = session.id
-                        } label: {
-                            Label("Rename", systemImage: "pencil")
-                        }
-                        Button(role: .destructive) {
-                            sessionToDelete = session
-                        } label: {
-                            Label("Delete", systemImage: "trash")
-                        }
-                        .disabled(appState.isDeletingSession[session.id] == true)
-                    }
+            if !extraManagers.isEmpty {
+                ManagerChipsFlow(
+                    sessions: extraManagers,
+                    appState: appState,
+                    editingSessionID: $editingManagerID,
+                    sessionToDelete: $sessionToDelete
+                )
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
             }
 
             // Job sessions
@@ -491,15 +483,89 @@ struct ManagerSidebarRow: View {
     }
 }
 
-// MARK: - Manager Session Row
+// MARK: - Manager Chips
 
-/// Sidebar row for an additional (non-primary) Manager session. Renders a
-/// full-width selectable button with the manager's name, a remote-control
-/// badge, and a deletion spinner when cleanup is in flight.
-struct ManagerSessionRow: View {
+/// Layout that flows its subviews left-to-right, wrapping to a new line when
+/// the next subview would overflow the proposed width. Used to pack the extra
+/// Manager chips densely instead of stacking one per row.
+struct FlowLayout: Layout {
+    var spacing: CGFloat = 6
+    var lineSpacing: CGFloat = 6
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxWidth = proposal.width ?? .infinity
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var lineHeight: CGFloat = 0
+        var widestLine: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > 0, x + size.width > maxWidth {
+                // Wrap to the next line.
+                y += lineHeight + lineSpacing
+                x = 0
+                lineHeight = 0
+            }
+            x += size.width + spacing
+            lineHeight = max(lineHeight, size.height)
+            widestLine = max(widestLine, x - spacing)
+        }
+
+        return CGSize(width: min(widestLine, maxWidth), height: y + lineHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX
+        var y = bounds.minY
+        var lineHeight: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > bounds.minX, x + size.width > bounds.maxX {
+                y += lineHeight + lineSpacing
+                x = bounds.minX
+                lineHeight = 0
+            }
+            subview.place(at: CGPoint(x: x, y: y), anchor: .topLeading, proposal: ProposedViewSize(size))
+            x += size.width + spacing
+            lineHeight = max(lineHeight, size.height)
+        }
+    }
+}
+
+/// Wrapping flow of `ManagerChip`s for the additional (non-primary) Manager
+/// sessions. Rendered as a single list row so the chips pack multiple-per-line.
+struct ManagerChipsFlow: View {
+    let sessions: [Session]
+    @Bindable var appState: AppState
+    @Binding var editingSessionID: UUID?
+    @Binding var sessionToDelete: Session?
+
+    var body: some View {
+        FlowLayout(spacing: 6, lineSpacing: 6) {
+            ForEach(sessions) { session in
+                ManagerChip(
+                    session: session,
+                    appState: appState,
+                    editingSessionID: $editingSessionID,
+                    sessionToDelete: $sessionToDelete
+                )
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 2)
+    }
+}
+
+/// Compact selectable pill for an additional (non-primary) Manager session.
+/// Sizes to its content so chips wrap; supports inline rename, a deletion
+/// spinner, and a remote-control badge.
+struct ManagerChip: View {
     let session: Session
     @Bindable var appState: AppState
     @Binding var editingSessionID: UUID?
+    @Binding var sessionToDelete: Session?
 
     @State private var editingName: String = ""
     @FocusState private var isEditing: Bool
@@ -512,13 +578,18 @@ struct ManagerSessionRow: View {
         Button {
             appState.selectedSessionID = session.id
         } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "person.2.fill")
-                    .font(.system(size: 11))
+            HStack(spacing: 4) {
+                if isDeleting {
+                    ProgressView().controlSize(.mini)
+                } else {
+                    Image(systemName: "person.2.fill")
+                        .font(.system(size: 9))
+                }
                 if isEditingThis {
                     TextField("Name", text: $editingName)
                         .textFieldStyle(.plain)
-                        .font(.system(size: 12, weight: .bold))
+                        .font(.system(size: 11, weight: .semibold))
+                        .frame(minWidth: 60)
                         .focused($isEditing)
                         .onSubmit { commitRename() }
                         .onExitCommand { editingSessionID = nil }
@@ -527,23 +598,18 @@ struct ManagerSessionRow: View {
                         }
                 } else {
                     Text(session.name)
-                        .font(.system(size: 12, weight: .bold))
+                        .font(.system(size: 11, weight: .semibold))
                         .lineLimit(1)
-                }
-                Spacer()
-                if isDeleting {
-                    ProgressView().controlSize(.small)
                 }
             }
             .foregroundStyle(isActive ? CorveilTheme.gold : CorveilTheme.goldDark)
-            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 8)
-            .padding(.vertical, 8)
+            .padding(.vertical, 4)
             .background(
-                RoundedRectangle(cornerRadius: 6)
+                RoundedRectangle(cornerRadius: 12)
                     .fill(isActive ? CorveilTheme.bgCard : CorveilTheme.bgSurface)
                     .overlay(
-                        RoundedRectangle(cornerRadius: 6)
+                        RoundedRectangle(cornerRadius: 12)
                             .strokeBorder(
                                 isActive ? CorveilTheme.goldDark.opacity(0.6) : CorveilTheme.goldDark.opacity(0.3),
                                 lineWidth: 1
@@ -553,12 +619,25 @@ struct ManagerSessionRow: View {
             .overlay(alignment: .topTrailing) {
                 if appState.isRemoteControlActive(sessionID: session.id) {
                     RemoteControlBadge(compact: true)
-                        .padding(4)
+                        .padding(2)
                 }
             }
+            .opacity(isDeleting ? 0.55 : 1.0)
         }
         .buttonStyle(.plain)
-        .padding(.vertical, 2)
+        .contextMenu {
+            Button {
+                editingSessionID = session.id
+            } label: {
+                Label("Rename", systemImage: "pencil")
+            }
+            Button(role: .destructive) {
+                sessionToDelete = session
+            } label: {
+                Label("Delete", systemImage: "trash")
+            }
+            .disabled(isDeleting)
+        }
         .onChange(of: editingSessionID) { _, newValue in
             if newValue == session.id {
                 editingName = session.name
@@ -575,6 +654,30 @@ struct ManagerSessionRow: View {
         editingSessionID = nil
     }
 }
+
+#if DEBUG
+#Preview("Manager Chips — Flow") {
+    let appState = AppState()
+    let managers = [
+        Session(name: "infra-manager", kind: .manager),
+        Session(name: "docs", kind: .manager),
+        Session(name: "release-train-orchestrator", kind: .manager),
+        Session(name: "api", kind: .manager),
+        Session(name: "ui", kind: .manager),
+    ]
+    appState.sessions = managers
+    appState.selectedSessionID = managers[1].id
+    return ManagerChipsFlow(
+        sessions: managers,
+        appState: appState,
+        editingSessionID: .constant(nil),
+        sessionToDelete: .constant(nil)
+    )
+    .padding()
+    .frame(width: 260)
+    .background(CorveilTheme.bgDeep)
+}
+#endif
 
 // MARK: - Session Row
 
