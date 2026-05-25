@@ -211,7 +211,7 @@ After the LLM resolves names (slug, branch, worktree path, session name), detect
 
 Before writing the prompt file, fetch the ticket title, body, and comments so they can be embedded directly into the `## Ticket` section. This avoids the launched Claude Code session sitting on a `dangerouslyDisableSandbox` permission prompt at startup when it tries to run `gh issue view` itself (issue #295).
 
-Use `dangerouslyDisableSandbox: true` for all of these fetches.
+Use `dangerouslyDisableSandbox: true` for all of these fetches. Issue each as a **single, clean invocation** — one `gh`/`git` command per Bash call, with no `cd …`/`echo`/`find` prefix and no `| head`/`| tail` pipe. The permission allowlist prefix-matches the *whole* command, so bundling defeats the `Bash(gh issue view:*)` / `Bash(gh api:*)` rules and forces a prompt (see CLAUDE.md → "Fetching Ticket / PR Data").
 
 **GitHub:**
 ```bash

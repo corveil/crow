@@ -70,6 +70,8 @@ Validate each is a recognizable format.
 
 For each workspace spec, perform the same resolution as `/crow-workspace`:
 
+> Issue each `gh`/`git` fetch below as a **single, clean invocation** — one command per Bash call, no `cd …`/`echo`/`find` prefix or `| head` pipe — so the allowlist auto-approves it instead of prompting (see CLAUDE.md → "Fetching Ticket / PR Data").
+
 1. **Read config**: `cat {devRoot}/.claude/config.json`
 2. **Detect provider** from URL (see Provider Detection table in `/crow-workspace` skill)
 3. **Scan repos**: Find repos in all configured workspaces

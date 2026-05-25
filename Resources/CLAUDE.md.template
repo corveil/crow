@@ -55,6 +55,29 @@ The crow CLI is safe for concurrent use. Multiple `crow` commands can run simult
 
 Use `/crow-batch-workspace` to set up multiple workspaces in parallel.
 
+## Fetching Ticket / PR Data
+
+Claude Code permission allow-rules (`Bash(gh issue view:*)`, `Bash(gh api:*)`, `Bash(gh pr view:*)`, `Bash(git -C:*)`, …) are **prefix matches against the whole Bash command**. A compound invocation auto-approves only if **every** segment matches a rule — so one un-allowlisted segment (a `cd`, a `find`, an `echo` banner, a pipe into `head`) forces a permission prompt even though the `gh`/`git` part is allowlisted on its own.
+
+Issue ticket/PR fetches as **single, clean invocations**:
+
+- Use `gh -R <owner>/<repo> …` and `git -C <path> …` instead of `cd <path> && …`.
+- Do **not** chain with `;` / `&&`, add `echo` banners, or pipe into `head`/`tail`/`find` in the same Bash call as a `gh`/`git` fetch.
+- Run **one** command per Bash call for ticket/PR fetches.
+
+```bash
+# ✅ single clean invocations — auto-approved
+gh issue view https://github.com/owner/repo/issues/123 --comments
+gh api repos/owner/repo/issues/123
+git -C /path/to/worktree log --oneline -10
+
+# ❌ compound — falls back to a permission prompt
+cd /path && gh issue view 123 | head -200
+echo "=== api ==="; gh api repos/owner/repo/issues/123 | head -120
+```
+
+This keeps the allowlist tight (preferred over broadening it with `cd:*` / `find:*`).
+
 ## Known Issues / Corrections
 
 <!-- Claude Code appends corrections here when crow commands fail -->

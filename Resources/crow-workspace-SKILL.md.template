@@ -70,6 +70,8 @@ Match repos to input by: direct name match (+10), workspace mention (+5), keywor
 
 ## Git Provider Commands
 
+Issue every ticket/PR fetch as a **single, clean invocation** — one `gh`/`glab`/`git` command per Bash call, with no `cd …`/`echo`/`find` prefix and no `| head`/`| tail` pipe. The permission allowlist prefix-matches the *whole* command, so bundling defeats rules like `Bash(gh issue view:*)` / `Bash(gh api:*)` and forces a prompt (see CLAUDE.md → "Fetching Ticket / PR Data").
+
 ### GitHub (gh)
 ```bash
 gh issue view {url} --json title,body,labels

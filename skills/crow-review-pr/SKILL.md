@@ -58,10 +58,12 @@ Read all changed files in the PR. For each file, analyze:
 
 ### Step 4: Run Static Analysis
 
+Run the `gh`/`git` review commands (Steps 1–3 and Step 5) as **single, clean invocations** so the allowlist auto-approves them — one command per Bash call, no `cd …`/`echo` prefix or pipe bundling (see CLAUDE.md → "Fetching Ticket / PR Data"). Use a tool's own directory flag (`go -C <dir>`, `git -C <path>`) rather than `cd <dir> && …`.
+
 For Go projects:
 ```bash
-cd core && go vet ./... 2>&1
-cd core && go test ./... -v 2>&1 | head -50
+go -C core vet ./...
+go -C core test ./... -v 2>&1 | head -50
 ```
 
 For JavaScript/TypeScript projects:
