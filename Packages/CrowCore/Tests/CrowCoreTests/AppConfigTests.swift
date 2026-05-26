@@ -144,6 +144,29 @@ import Testing
     #expect(config.managerAutoPermissionMode == true)
 }
 
+@Test func appConfigJobsAutoPermissionModeRoundTrip() throws {
+    var config = AppConfig()
+    config.jobsAutoPermissionMode = false
+
+    let data = try JSONEncoder().encode(config)
+    let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+    #expect(decoded.jobsAutoPermissionMode == false)
+
+    config.jobsAutoPermissionMode = true
+    let data2 = try JSONEncoder().encode(config)
+    let decoded2 = try JSONDecoder().decode(AppConfig.self, from: data2)
+    #expect(decoded2.jobsAutoPermissionMode == true)
+}
+
+@Test func appConfigJobsAutoPermissionModeDefaultsTrueWhenKeyMissing() throws {
+    // Jobs are unattended by definition — legacy configs without the key opt
+    // in by default so scheduled runs can execute crow/gh/git without
+    // per-call approval, matching the Manager toggle's default.
+    let json = #"{"workspaces": [], "remoteControlEnabled": false}"#.data(using: .utf8)!
+    let config = try JSONDecoder().decode(AppConfig.self, from: json)
+    #expect(config.jobsAutoPermissionMode == true)
+}
+
 @Test func appConfigDecodeWithPartialKeys() throws {
     let json = """
     {"workspaces": [{"id": "00000000-0000-0000-0000-000000000001", "name": "Org", "provider": "github", "cli": "gh", "alwaysInclude": []}]}

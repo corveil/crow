@@ -342,6 +342,14 @@ public struct SettingsView: View {
 
     private var jobsTab: some View {
         Form {
+            Section("Auto-permission mode") {
+                Toggle("Run scheduled jobs in auto permission mode", isOn: $config.jobsAutoPermissionMode)
+                    .onChange(of: config.jobsAutoPermissionMode) { _, _ in save() }
+                Text("Passes --permission-mode auto so scheduled jobs can run crow, gh, and git commands without per-call approval. Requires Claude Code 2.1.83+ on a Max, Team, Enterprise, or API plan with the Anthropic provider. Turn off if your account reports auto mode as unavailable. Takes effect on the next job run.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section {
                 if config.jobs.isEmpty {
                     Text("No jobs configured")

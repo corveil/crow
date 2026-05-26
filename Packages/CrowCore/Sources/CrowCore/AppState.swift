@@ -43,6 +43,12 @@ public final class AppState {
     /// launch; worker sessions and CLI-spawned terminals are unaffected.
     public var managerAutoPermissionMode: Bool = true
 
+    /// Whether sessions launched by the Jobs scheduler start with
+    /// `--permission-mode auto` so the job's prompts can run `crow`, `gh`, and
+    /// `git` without per-call approval. Mirrors `AppConfig.jobsAutoPermissionMode`.
+    /// Applies only to `.job`-kind sessions; manager/review/CLI sessions are unaffected.
+    public var jobsAutoPermissionMode: Bool = true
+
     /// `true` when the Manager's `claude` process has exited (crash, kill, OOM)
     /// and has not yet been restarted. Drives the "Manager process exited" banner
     /// and enables the "Restart Manager" action. Reset when the Manager relaunches.

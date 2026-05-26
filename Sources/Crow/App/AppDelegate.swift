@@ -384,6 +384,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // be rebuilt to include (or drop) `--rc` before its surface is pre-initialized.
         appState.remoteControlEnabled = config.remoteControlEnabled
         appState.managerAutoPermissionMode = config.managerAutoPermissionMode
+        appState.jobsAutoPermissionMode = config.jobsAutoPermissionMode
         appState.excludeReviewRepos = config.defaults.excludeReviewRepos
         appState.excludeTicketRepos = config.defaults.excludeTicketRepos
         appState.ignoreReviewLabels = config.defaults.ignoreReviewLabels
@@ -994,6 +995,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appState.hideSessionDetails = config.sidebar.hideSessionDetails
         appState.remoteControlEnabled = config.remoteControlEnabled
         appState.managerAutoPermissionMode = config.managerAutoPermissionMode
+        appState.jobsAutoPermissionMode = config.jobsAutoPermissionMode
         appState.excludeReviewRepos = config.defaults.excludeReviewRepos
         appState.excludeTicketRepos = config.defaults.excludeTicketRepos
         appState.ignoreReviewLabels = config.defaults.ignoreReviewLabels

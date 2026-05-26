@@ -411,9 +411,18 @@ final class SessionService {
         }
 
         let claudePath = Self.findClaudeBinary() ?? "claude"
-        let sessionName = sessionID.flatMap { id in appState.sessions.first(where: { $0.id == id })?.name }
+        let session = sessionID.flatMap { id in appState.sessions.first(where: { $0.id == id }) }
+        let sessionName = session?.name
         let rcEnabled = appState.remoteControlEnabled
-        let rcArgs = ClaudeLaunchArgs.argsSuffix(remoteControl: rcEnabled, sessionName: sessionName)
+        // Jobs are unattended, so opt-in (default-on) auto-permission mode lets
+        // their prompts run crow/gh/git without per-call approval. Scoped to
+        // .job kind so review and other session kinds are unaffected.
+        let autoPermissionMode = (session?.kind == .job) && appState.jobsAutoPermissionMode
+        let rcArgs = ClaudeLaunchArgs.argsSuffix(
+            remoteControl: rcEnabled,
+            sessionName: sessionName,
+            autoPermissionMode: autoPermissionMode
+        )
 
         // Build OTEL telemetry env var prefix if enabled
         let envPrefix: String
