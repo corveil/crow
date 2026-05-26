@@ -81,6 +81,12 @@ If a new package is needed, create it under `Packages/` and add it to the root `
    - A link to the related issue
    - Screenshots for UI changes
 
+## Architecture Decision Records
+
+Decisions that will outlive a single PR — defaults, contracts, architecture choices, or anything a new contributor or agent would want to find by grep — get recorded as ADRs under [`docs/adr/`](docs/adr/). Copy [`docs/adr/template.md`](docs/adr/template.md), give it the next 4-digit sequence number, fill in `Context` / `Decision` / `Consequences` / `Alternatives considered`, and add a row to the index in [`docs/adr/README.md`](docs/adr/README.md). PR descriptions are still where you explain *this change*; ADRs are where you explain *the decision* that change is implementing.
+
+When superseding an existing ADR, leave the old file in place and update its `Status` field to `Superseded by NNNN`. We keep the trail.
+
 ## Versioning
 
 Crow follows [Semantic Versioning](https://semver.org/):
