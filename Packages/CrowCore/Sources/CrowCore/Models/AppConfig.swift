@@ -12,6 +12,11 @@ public struct AppConfig: Codable, Sendable, Equatable {
     public var sidebar: SidebarSettings
     public var remoteControlEnabled: Bool
     public var managerAutoPermissionMode: Bool
+    /// When true, sessions launched by the Jobs scheduler start with
+    /// `--permission-mode auto` so their prompts can run `crow`, `gh`, and
+    /// `git` without per-call approval. Defaults to true — jobs are
+    /// unattended by definition.
+    public var jobsAutoPermissionMode: Bool
     public var telemetry: TelemetryConfig
     public var autoRespond: AutoRespondSettings
     /// When true, `setup.sh` writes a per-worktree `.claude/settings.local.json`
@@ -48,6 +53,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         sidebar: SidebarSettings = SidebarSettings(),
         remoteControlEnabled: Bool = false,
         managerAutoPermissionMode: Bool = true,
+        jobsAutoPermissionMode: Bool = true,
         telemetry: TelemetryConfig = TelemetryConfig(),
         autoRespond: AutoRespondSettings = AutoRespondSettings(),
         attributionTrailers: Bool = true,
@@ -63,6 +69,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         self.sidebar = sidebar
         self.remoteControlEnabled = remoteControlEnabled
         self.managerAutoPermissionMode = managerAutoPermissionMode
+        self.jobsAutoPermissionMode = jobsAutoPermissionMode
         self.telemetry = telemetry
         self.autoRespond = autoRespond
         self.attributionTrailers = attributionTrailers
@@ -81,6 +88,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         sidebar = try container.decodeIfPresent(SidebarSettings.self, forKey: .sidebar) ?? SidebarSettings()
         remoteControlEnabled = try container.decodeIfPresent(Bool.self, forKey: .remoteControlEnabled) ?? false
         managerAutoPermissionMode = try container.decodeIfPresent(Bool.self, forKey: .managerAutoPermissionMode) ?? true
+        jobsAutoPermissionMode = try container.decodeIfPresent(Bool.self, forKey: .jobsAutoPermissionMode) ?? true
         telemetry = try container.decodeIfPresent(TelemetryConfig.self, forKey: .telemetry) ?? TelemetryConfig()
         autoRespond = try container.decodeIfPresent(AutoRespondSettings.self, forKey: .autoRespond) ?? AutoRespondSettings()
         attributionTrailers = try container.decodeIfPresent(Bool.self, forKey: .attributionTrailers) ?? true
@@ -92,7 +100,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case workspaces, defaults, notifications, sidebar, remoteControlEnabled, managerAutoPermissionMode, telemetry, autoRespond, attributionTrailers, autoMergeWatcherEnabled, autoCreateWatcherEnabled, autoRebaseWatcherEnabled, cleanup, jobs
+        case workspaces, defaults, notifications, sidebar, remoteControlEnabled, managerAutoPermissionMode, jobsAutoPermissionMode, telemetry, autoRespond, attributionTrailers, autoMergeWatcherEnabled, autoCreateWatcherEnabled, autoRebaseWatcherEnabled, cleanup, jobs
     }
 }
 
