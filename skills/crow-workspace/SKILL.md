@@ -234,6 +234,16 @@ gh api repos/{owner}/{repo}/pulls/{pr_number}
 gh api repos/{owner}/{repo}/issues/{pr_number}/comments
 ```
 
+**Also detect the repo's default branch** so the worktree base ref and the prompt template's PR/MR commands aren't pinned to `main` (issue #397). One clean call per repo:
+
+```bash
+gh repo view {owner}/{repo} --json defaultBranchRef --jq .defaultBranchRef.name
+# GitLab equivalent:
+glab repo view {org}/{repo} -F json | jq -r .default_branch
+```
+
+Store the result as `{base_branch}` for substitution into Step 2 and into the prompt template. `setup.sh` will auto-detect from `origin/HEAD` if you omit the flag, but passing it explicitly avoids the round-trip and keeps the prompt template accurate.
+
 Render the fetched content into the prompt template per the formatting rules in **First Prompt Template** below.
 
 #### Step 1: Write the prompt file
@@ -258,6 +268,7 @@ PROMPT
   --slug "{slug}" \
   --branch "{branch}" \
   --worktree-path "{worktree_path}" \
+  --base-branch "{base_branch}" \
   --session-name "{session_name}" \
   --provider "{provider}" \
   --cli "{cli}" \
@@ -313,6 +324,8 @@ For cross-workspace setups with multiple repos, call `setup.sh` once per repo:
 1. **First repo** (primary): Use `--primary` flag. Capture `session_id` from output.
 2. **Additional repos**: Pass `--session-id {uuid}` from the first call's output and use `--skip-launch` (Claude only launches once, in the primary worktree).
 
+Detect each secondary repo's default branch with the same `gh repo view --json defaultBranchRef` call from Step 0 — each repo has its own (bigbang uses `master`, others use `main`).
+
 ```bash
 # Secondary repo (no launch, attach to existing session):
 .claude/skills/crow-workspace/setup.sh \
@@ -322,7 +335,8 @@ For cross-workspace setups with multiple repos, call `setup.sh` once per repo:
   --repo "{other_repo}" \
   --repo-path "{other_repo_path}" \
   --slug "{slug}" \
-  --branch "main" \
+  --branch "{other_base_branch}" \
+  --base-branch "{other_base_branch}" \
   --worktree-path "{other_repo_path}" \
   --session-name "{session_name}" \
   --provider "{provider}" \
@@ -379,7 +393,7 @@ gh api repos/{owner}/{repo}/issues/{number}/comments
 6. Open a pull request linked to the ticket:
 
 ```bash
-gh pr create --title "<summary>" --body "Closes #123" --base main
+gh pr create --title "<summary>" --body "Closes #123" --base {base_branch}
 ```
 
 ## Custom Instructions
@@ -389,7 +403,7 @@ gh pr create --title "<summary>" --body "Closes #123" --base main
 
 If the workspace config contains a non-empty `customInstructions` field, append a `## Custom Instructions` section at the end of the prompt with its contents verbatim. Omit this section entirely if the field is absent, null, or empty.
 
-For GitLab tickets, substitute `glab mr create --title "<summary>" --description "Closes #{number}" --target-branch main` on step 6 (use "merge request" instead of "pull request"). When no ticket number is available, drop the body/description and fall back to `gh pr create --fill` / `glab mr create --fill`.
+For GitLab tickets, substitute `glab mr create --title "<summary>" --description "Closes #{number}" --target-branch {base_branch}` on step 6 (use "merge request" instead of "pull request"). When no ticket number is available, drop the body/description and fall back to `gh pr create --fill` / `glab mr create --fill`.
 
 ### Embedding pre-fetched content
 
@@ -416,7 +430,7 @@ If the pre-fetch fails (network, auth, rate limit), fall back to the prior behav
 
 ---
 
-This workspace is checked out on the PR's branch. Review existing changes with `git log origin/main..HEAD` before adding new work.
+This workspace is checked out on the PR's branch. Review existing changes with `git log origin/{base_branch}..HEAD` before adding new work.
 
 If you need fresher PR data later, re-fetch with (dangerouslyDisableSandbox: true):
 
@@ -432,7 +446,7 @@ And update the Instructions section to:
 
 ~~~markdown
 ## Instructions
-1. Review the existing PR and ticket above — both have been pre-fetched and embedded. Use `git log origin/main..HEAD` to see the current branch's changes. Only re-run gh/glab if you need fresher data; those calls use dangerouslyDisableSandbox: true and will prompt for approval.
+1. Review the existing PR and ticket above — both have been pre-fetched and embedded. Use `git log origin/{base_branch}..HEAD` to see the current branch's changes. Only re-run gh/glab if you need fresher data; those calls use dangerouslyDisableSandbox: true and will prompt for approval.
 2. Create an implementation plan that builds on the existing work
 3. Implement the plan
 4. Commit the changes with a descriptive message
