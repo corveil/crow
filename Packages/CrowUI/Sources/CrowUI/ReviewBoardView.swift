@@ -361,13 +361,50 @@ public struct ManagerReviewsAllowListRow: View {
         .padding(.vertical, 2)
     }
 
+    private var managerNeedsAttention: Bool {
+        appState.hookState(for: AppState.managerSessionID).pendingNotification != nil
+    }
+
     private var managerButton: some View {
-        sidebarButton(
-            title: "Manager",
-            isActive: appState.selectedSessionID == AppState.managerSessionID
-        ) {
+        let isActive = appState.selectedSessionID == AppState.managerSessionID
+        let needsAttention = managerNeedsAttention
+        return Button {
             appState.selectedSessionID = AppState.managerSessionID
+        } label: {
+            HStack(spacing: 4) {
+                if needsAttention {
+                    Circle()
+                        .fill(.orange)
+                        .frame(width: 8, height: 8)
+                        .overlay(
+                            Circle()
+                                .stroke(.orange.opacity(0.4), lineWidth: 2)
+                                .scaleEffect(1.6)
+                        )
+                        .accessibilityLabel("Needs attention")
+                }
+                Text("Manager")
+                    .font(.system(size: 12, weight: .bold))
+            }
+            .foregroundStyle(isActive ? CorveilTheme.gold : CorveilTheme.goldDark)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(needsAttention ? Color.orange.opacity(0.12) : (isActive ? CorveilTheme.bgCard : CorveilTheme.bgSurface))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .strokeBorder(
+                                needsAttention
+                                    ? Color.orange.opacity(0.4)
+                                    : (isActive ? CorveilTheme.goldDark.opacity(0.6) : CorveilTheme.goldDark.opacity(0.3)),
+                                lineWidth: 1
+                            )
+                    )
+            )
+            .animation(.easeInOut(duration: 0.2), value: needsAttention)
         }
+        .buttonStyle(.plain)
         .overlay(alignment: .topTrailing) {
             if appState.isRemoteControlActive(sessionID: AppState.managerSessionID) {
                 RemoteControlBadge(compact: true)
