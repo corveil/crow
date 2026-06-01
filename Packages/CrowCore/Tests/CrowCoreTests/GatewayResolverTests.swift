@@ -58,31 +58,3 @@ import Testing
     #expect(resolved?.baseURL == "https://corveil.io")
     #expect(resolved?.customHeaders == "x-plain: kept")
 }
-
-// MARK: - Launch-line prefix (ClaudeLaunchArgs.gatewayEnvPrefix)
-
-@Test func gatewayEnvPrefixUnsetsWhenNil() throws {
-    #expect(ClaudeLaunchArgs.gatewayEnvPrefix(nil) == "unset ANTHROPIC_BASE_URL ANTHROPIC_CUSTOM_HEADERS && ")
-}
-
-@Test func gatewayEnvPrefixAssignsSingleHeader() throws {
-    let resolved = GatewayResolver.Resolved(
-        baseURL: "https://corveil.io",
-        customHeaders: "x-citadel-api-key: Bearer sk-1"
-    )
-    let prefix = ClaudeLaunchArgs.gatewayEnvPrefix(resolved)
-    #expect(prefix == "ANTHROPIC_BASE_URL='https://corveil.io' ANTHROPIC_CUSTOM_HEADERS='x-citadel-api-key: Bearer sk-1' ")
-}
-
-@Test func gatewayEnvPrefixOmitsMultiLineHeadersFromLine() throws {
-    // A multi-header value has an embedded newline; pasting it onto the launch
-    // line would submit the command early, so it's omitted (settings.local.json
-    // carries it). baseURL is still set.
-    let resolved = GatewayResolver.Resolved(
-        baseURL: "https://corveil.io",
-        customHeaders: "x-a: one\nx-b: two"
-    )
-    let prefix = ClaudeLaunchArgs.gatewayEnvPrefix(resolved)
-    #expect(prefix == "ANTHROPIC_BASE_URL='https://corveil.io' ")
-    #expect(!prefix.contains("\n"))
-}

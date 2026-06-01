@@ -81,7 +81,7 @@ A workspace can route its Claude Code sessions through a proxy/gateway (e.g. an 
 "gateway": {
   "baseURL": "https://corveil.io",
   "customHeaders": {
-    // op:// reference — resolved at launch via the 1Password CLI, never stored at rest
+    // op:// reference — resolved at launch via the 1Password CLI; kept out of config.json
     "x-citadel-api-key": "op://Spotlight Prod/Citadel/api_key"
     // or a plaintext value (stored in config.json — see the security note)
     // "x-citadel-api-key": "Bearer sk-citadel-…"
@@ -94,10 +94,12 @@ A workspace can route its Claude Code sessions through a proxy/gateway (e.g. an 
 
 When a workspace has a `gateway`, Crow injects these vars two ways so they apply on the initial launch *and* survive manual `claude` re-runs:
 
-1. **Launch line** — the `claude` invocation is prefixed with the env-var assignments, overriding any global `~/.zshrc` export for that launch.
-2. **`settings.local.json`** — the resolved values are written to the worktree's `.claude/settings.local.json` `env` block (gitignored), which Claude Code reads on every run.
+1. **Launch line** — the `claude` invocation is prefixed with the env-var assignments, overriding any global `~/.zshrc` export for that launch. (When a workspace has multiple headers, the header value can't go on the line — an embedded newline would submit the command early — so it's carried by `settings.local.json` and the launch line instead `unset`s any inherited `ANTHROPIC_CUSTOM_HEADERS` so the gateway's `baseURL` is never paired with stale global headers.)
+2. **`settings.local.json`** — the resolved values are written to the worktree's `.claude/settings.local.json` `env` block (gitignored, mode `0600`), which Claude Code reads on every run.
 
 When a workspace has **no** `gateway`, Crow instead prefixes the launch with `unset ANTHROPIC_BASE_URL ANTHROPIC_CUSTOM_HEADERS` so a global shell export — or a sibling workspace's gateway — can't bleed into it. Edit a workspace's gateway in **Settings → Workspaces**.
+
+> **Precedence note:** the launch-line assignment is what reliably overrides a value exported by your shell for the initial launch. Whether Claude Code's `settings.local.json` `env` block *alone* overrides an inherited shell variable (e.g. an `ANTHROPIC_BASE_URL` still left in `~/.zshrc`) is not something Crow controls — so the intended end state is to delete the global `~/.zshrc` exports once per-workspace gateways are configured, leaving `config.json` the single source of truth.
 
 ### Secret storage
 
@@ -106,7 +108,7 @@ A header value can be either:
 - **An `op://` reference** (recommended) — resolved at session launch via the 1Password CLI (`op read`). The secret is **never written to `config.json`**. Requires `op` installed and signed in; a failed lookup drops that header and logs a redacted warning (the gateway then rejects the request rather than silently falling back to the vanilla API).
 - **A plaintext value** — stored as-is in `config.json` (mode `0600`). Convenient for local dev, but **anyone with read access to the file can see the key**. The Settings UI shows a warning. Prefer an `op://` reference for production keys.
 
-Resolved secret values are never logged.
+`op://` keeps secrets out of `config.json` — but note it does **not** mean "no secret on disk." The *resolved* value is written into the worktree's `.claude/settings.local.json` `env` block (so manual re-runs inherit it) and cached there for the worktree's lifetime. That file is gitignored and written `0600` (owner-only), the same protection `config.json` gets. Resolved secret values are never logged.
 
 ### Manager gateway
 

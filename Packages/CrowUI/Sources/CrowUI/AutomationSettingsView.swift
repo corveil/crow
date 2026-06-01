@@ -155,7 +155,7 @@ public struct AutomationSettingsView: View {
                     .font(.system(.caption, design: .monospaced))
                     .frame(minHeight: 60)
                     .onChange(of: managerGatewayHeadersText) { _, _ in commitManagerGateway() }
-                Text("One `Name: Value` per line. A value starting with `op://` is resolved at launch via the 1Password CLI; any other value is stored in plain text in config.json — prefer an `op://` reference for production keys.")
+                Text("One `Name: Value` per line. A value starting with `op://` is resolved at launch via the 1Password CLI and kept out of config.json (the resolved value is cached owner-only in settings.local.json); any other value is stored in plain text in config.json — prefer an `op://` reference for production keys.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 

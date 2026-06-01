@@ -198,7 +198,7 @@ public struct WorkspaceFormView: View {
                 TextEditor(text: $gatewayHeadersText)
                     .font(.system(.caption, design: .monospaced))
                     .frame(minHeight: 60)
-                Text("One `Name: Value` per line. A value starting with `op://` is resolved at launch via the 1Password CLI. Any other value is stored in plain text in config.json — anyone with read access can see it; prefer an `op://` reference for production keys.")
+                Text("One `Name: Value` per line. A value starting with `op://` is resolved at launch via the 1Password CLI and kept out of config.json (the resolved value is cached owner-only in the worktree's settings.local.json). Any other value is stored in plain text in config.json — anyone with read access can see it; prefer an `op://` reference for production keys.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 

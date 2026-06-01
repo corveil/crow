@@ -88,10 +88,12 @@ contains "plaintext header passed through" "$WS_CUSTOM_HEADERS" "x-plain: litera
 
 prefix=$(gateway_launch_prefix)
 contains "launch prefix sets baseURL" "$prefix" "ANTHROPIC_BASE_URL='https://corveil.io'"
-# Two headers → the value has an embedded newline, so it is intentionally omitted
-# from the launch line (a pasted newline would submit the command early); the
-# settings.local.json env block below carries it instead.
-check "launch prefix omits multi-line headers" "0" "$([[ "$prefix" == *"ANTHROPIC_CUSTOM_HEADERS"* ]] && echo 1 || echo 0)"
+# Two headers → the value has an embedded newline, so it is carried by
+# settings.local.json rather than the launch line; the prefix still unsets any
+# inherited ANTHROPIC_CUSTOM_HEADERS so the baseURL isn't paired with a stale
+# ~/.zshrc header, and must not contain a literal newline.
+contains "multi-header prefix unsets inherited headers" "$prefix" "unset ANTHROPIC_CUSTOM_HEADERS && "
+check "multi-header prefix omits headers assignment" "0" "$([[ "$prefix" == *"ANTHROPIC_CUSTOM_HEADERS='"* ]] && echo 1 || echo 0)"
 check "launch prefix has no embedded newline" "0" "$([[ "$prefix" == *$'\n'* ]] && echo 1 || echo 0)"
 
 mkdir -p "$WORKTREE_PATH"
@@ -106,6 +108,8 @@ contains "attribution preserved alongside env" "$(cat "$settings")" '"attributio
 # store for re-runs) but the bearer reference scheme must be gone.
 contains "resolved secret in env" "$(cat "$settings")" "RESOLVED-SECRET-for-op://Vault/Citadel/api_key"
 contains "both headers serialized in env" "$(cat "$settings")" "x-plain: literal-value"
+# The file caches a resolved bearer token, so it must be owner-only (0600).
+check "settings.local.json is 0600" "600" "$(stat -f '%Lp' "$settings" 2>/dev/null || stat -c '%a' "$settings")"
 
 echo "== gateway-absent workspace =="
 WORKSPACE="Personal"

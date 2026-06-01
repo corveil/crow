@@ -194,19 +194,23 @@ resolve_gateway_env() {
 
 # Build the shell prefix that applies (or clears) the gateway env vars on the
 # `claude` launch line — mirrors ClaudeLaunchArgs.gatewayEnvPrefix in Swift.
-# Gateway present → `ANTHROPIC_BASE_URL='…' ANTHROPIC_CUSTOM_HEADERS='…' ` (the
-# header is omitted when multi-line, since a pasted newline would submit the
-# command early — settings.local.json carries it). Absent → `unset … && ` so a
-# no-gateway workspace doesn't inherit a sibling's or ~/.zshrc's gateway.
+# Gateway absent → `unset … && ` so a no-gateway workspace doesn't inherit a
+# sibling's or ~/.zshrc's gateway. Single header → `ANTHROPIC_BASE_URL='…'
+# ANTHROPIC_CUSTOM_HEADERS='…' `. Multi-header → the header value has an embedded
+# newline and can't go on the line (a pasted newline would submit the command
+# early), so settings.local.json carries it; we still `unset ANTHROPIC_CUSTOM_HEADERS`
+# so the gateway's baseURL is never paired with a stale ~/.zshrc-inherited header.
 gateway_launch_prefix() {
   if [[ "$WS_HAS_GATEWAY" != true ]]; then
     printf 'unset ANTHROPIC_BASE_URL ANTHROPIC_CUSTOM_HEADERS && '
     return 0
   fi
-  printf 'ANTHROPIC_BASE_URL=%s ' "$(posix_quote "$WS_BASE_URL")"
-  if [[ "$WS_CUSTOM_HEADERS" != *$'\n'* ]]; then
-    printf 'ANTHROPIC_CUSTOM_HEADERS=%s ' "$(posix_quote "$WS_CUSTOM_HEADERS")"
+  if [[ "$WS_CUSTOM_HEADERS" == *$'\n'* ]]; then
+    printf 'unset ANTHROPIC_CUSTOM_HEADERS && ANTHROPIC_BASE_URL=%s ' "$(posix_quote "$WS_BASE_URL")"
+    return 0
   fi
+  printf 'ANTHROPIC_BASE_URL=%s ANTHROPIC_CUSTOM_HEADERS=%s ' \
+    "$(posix_quote "$WS_BASE_URL")" "$(posix_quote "$WS_CUSTOM_HEADERS")"
 }
 
 die() {
@@ -561,6 +565,9 @@ Crow-Session: $SESSION_ID"
     die "settings_local" "jq failed to build settings.local.json"
   fi
   printf '%s\n' "$merged" > "$settings_path"
+  # The env block can carry a resolved bearer token, so restrict the file to
+  # owner-only — matching ConfigStore's 0600 on config.json.
+  chmod 600 "$settings_path" 2>/dev/null || true
 
   if [[ "$WS_HAS_GATEWAY" == true ]]; then
     log "Wrote settings.local.json (attribution + gateway env) to $settings_path (agent: $display_name)"

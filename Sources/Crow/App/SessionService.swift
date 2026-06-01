@@ -562,7 +562,6 @@ final class SessionService {
             gatewayPrefix = ClaudeLaunchArgs.gatewayEnvPrefix(gatewayResolved)
         }
 
-
         let rcEnabled = appState.remoteControlEnabled
         // Jobs are unattended, so opt-in (default-on) auto-permission mode lets
         // their prompts run crow/gh/git without per-call approval. Scoped to
