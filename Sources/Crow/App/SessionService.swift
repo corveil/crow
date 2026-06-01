@@ -147,6 +147,7 @@ final class SessionService {
                     }
                 }
                 let rebuiltCommand = managerCommand(for: reconciled)
+                writeManagerGatewayEnv()
                 // Remote-control bookkeeping reflects what the agent actually
                 // emitted — `supportsRemoteControl` is per-agent capability,
                 // but per-launch the Cursor Manager intentionally omits `--rc`
@@ -546,6 +547,22 @@ final class SessionService {
             }
         }
 
+        // Resolve and apply the workspace's AI gateway for Claude sessions
+        // (CROW-402). Write the resolved env block into the worktree's
+        // settings.local.json so manual `claude` re-runs inherit it, and build a
+        // launch-line prefix for the initial launch. Always called (resolved or
+        // nil) so switching a workspace off its gateway clears the stale env
+        // keys. Gated to the Claude agent — the ANTHROPIC_* vars are
+        // Claude-specific; the Manager uses `managerGateway` instead.
+        var gatewayPrefix = ""
+        if agent.kind == .claudeCode {
+            let gatewayResolved = workspaceGatewayResolved(for: sessionID)
+            ClaudeHookConfigWriter.writeGatewayEnv(
+                dirPath: worktree.worktreePath, resolved: gatewayResolved)
+            gatewayPrefix = ClaudeLaunchArgs.gatewayEnvPrefix(gatewayResolved)
+        }
+
+
         let rcEnabled = appState.remoteControlEnabled
         // Jobs are unattended, so opt-in (default-on) auto-permission mode lets
         // their prompts run crow/gh/git without per-call approval. Scoped to
@@ -601,9 +618,11 @@ final class SessionService {
         }
 
         // Route through TerminalRouter so tmux-backed terminals get the text
-        // via tmux send-keys.
+        // via tmux send-keys. The gateway prefix (empty for non-Claude agents)
+        // is prepended here so it composes in front of any OTEL `export … &&`
+        // prefix the agent baked into `command` (CROW-402).
         if let routedTerminal = appState.terminals[sessionID]?.first(where: { $0.id == terminalID }) {
-            TerminalRouter.send(routedTerminal, text: command)
+            TerminalRouter.send(routedTerminal, text: gatewayPrefix + command)
         } else {
             NSLog("[SessionService] launchAgent: no terminal record for \(terminalID); cannot send")
         }
@@ -760,11 +779,60 @@ final class SessionService {
         // AgentRegistry setup). Fall back to the legacy Claude command so
         // pre-CROW-433 tests keep producing the same output.
         let claudePath = Self.findClaudeBinary() ?? "claude"
-        return claudePath + ClaudeLaunchArgs.argsSuffix(
+        let suffix = ClaudeLaunchArgs.argsSuffix(
             remoteControl: appState.remoteControlEnabled,
             sessionName: session.name,
             autoPermissionMode: appState.managerAutoPermissionMode
         )
+        // CROW-402: prefix the command with the Manager's own gateway
+        // (AppConfig.managerGateway) so the initial launch overrides any global
+        // ~/.zshrc export. The matching settings.local.json `env` block (for
+        // manual re-runs) is written by the terminal-creation / hydrate paths,
+        // which own the devRoot write site — keeping this builder pure.
+        return ClaudeLaunchArgs.gatewayEnvPrefix(managerGatewayResolved()) + claudePath + suffix
+    }
+
+    /// Write the Manager's gateway `env` block to `{devRoot}/.claude/settings.local.json`
+    /// (or clear it when unset) so manual `claude` re-runs in the Manager terminal
+    /// inherit the same routing as the initial launch (CROW-402).
+    private func writeManagerGatewayEnv() {
+        guard let devRoot = ConfigStore.loadDevRoot() else { return }
+        ClaudeHookConfigWriter.writeGatewayEnv(dirPath: devRoot, resolved: managerGatewayResolved())
+    }
+
+    /// Resolve the Manager's own AI gateway (`AppConfig.managerGateway`) from
+    /// disk, or nil when unset/empty (CROW-402).
+    private func managerGatewayResolved() -> GatewayResolver.Resolved? {
+        guard let devRoot = ConfigStore.loadDevRoot(),
+              let config = ConfigStore.loadConfig(devRoot: devRoot),
+              let gateway = config.managerGateway, !gateway.isEmpty
+        else { return nil }
+        return GatewayResolver.resolve(gateway)
+    }
+
+    /// Resolve the AI gateway for a non-Manager session from its worktree's
+    /// workspace (CROW-402). The worktree lives at `{devRoot}/{workspace}/…`, so
+    /// the workspace folder name is the first path component under devRoot.
+    /// Returns nil when there's no matching workspace or no (non-empty) gateway.
+    private func workspaceGatewayResolved(for sessionID: UUID) -> GatewayResolver.Resolved? {
+        guard let devRoot = ConfigStore.loadDevRoot(),
+              let config = ConfigStore.loadConfig(devRoot: devRoot),
+              let worktree = appState.primaryWorktree(for: sessionID),
+              let wsName = Self.workspaceName(forWorktreePath: worktree.worktreePath, devRoot: devRoot),
+              let workspace = config.workspaces.first(where: { $0.name == wsName }),
+              let gateway = workspace.gateway, !gateway.isEmpty
+        else { return nil }
+        return GatewayResolver.resolve(gateway)
+    }
+
+    /// Derive the workspace folder name from a worktree path:
+    /// `{devRoot}/{workspace}/{repo-folder}` → `{workspace}`. Pure path math.
+    static func workspaceName(forWorktreePath path: String, devRoot: String) -> String? {
+        let root = (devRoot as NSString).standardizingPath
+        let full = (path as NSString).standardizingPath
+        guard full.hasPrefix(root + "/") else { return nil }
+        let relative = String(full.dropFirst(root.count + 1))
+        return relative.split(separator: "/").first.map(String.init)
     }
 
     /// Legacy entry point preserved for tests that don't have a `Session` in
@@ -785,6 +853,10 @@ final class SessionService {
     @discardableResult
     private func createManagerTerminal(session: Session, cwd: String) -> SessionTerminal {
         let command = managerCommand(for: session)
+        // CROW-402: write the Manager gateway env block to {devRoot}/.claude so
+        // manual `claude` re-runs in this terminal inherit the same routing. The
+        // Manager's cwd is the devRoot.
+        ClaudeHookConfigWriter.writeGatewayEnv(dirPath: cwd, resolved: managerGatewayResolved())
         let rawTerminal = SessionTerminal(
             sessionID: session.id,
             name: session.name,

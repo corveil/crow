@@ -92,6 +92,66 @@ public struct ClaudeHookConfigWriter: HookConfigWriter {
         try data.write(to: URL(fileURLWithPath: settingsPath))
     }
 
+    // MARK: - Gateway env
+
+    /// Keys we manage inside the settings `env` block (CROW-402).
+    private static let gatewayEnvKeys = ["ANTHROPIC_BASE_URL", "ANTHROPIC_CUSTOM_HEADERS"]
+
+    /// Write (or clear) the AI-gateway env vars in a directory's
+    /// `.claude/settings.local.json` `env` block, merging with existing settings.
+    ///
+    /// Claude Code reads this `env` block on every launch, so this makes the
+    /// gateway survive manual `claude` re-runs in the terminal — not just the
+    /// initial launch (CROW-402). Pass a resolved gateway to set the vars, or
+    /// `nil` to remove them (so switching a workspace off its gateway clears the
+    /// stale values rather than leaving them behind).
+    ///
+    /// `dirPath` is the worktree path for work/job/review sessions, or the dev
+    /// root for the Manager session.
+    public static func writeGatewayEnv(dirPath: String, resolved: GatewayResolver.Resolved?) {
+        let claudeDir = (dirPath as NSString).appendingPathComponent(".claude")
+        let settingsPath = (claudeDir as NSString).appendingPathComponent("settings.local.json")
+
+        // Read existing settings if present.
+        var settings: [String: Any] = [:]
+        if let data = FileManager.default.contents(atPath: settingsPath),
+           let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            settings = parsed
+        }
+
+        var env = settings["env"] as? [String: Any] ?? [:]
+        if let resolved {
+            env["ANTHROPIC_BASE_URL"] = resolved.baseURL
+            env["ANTHROPIC_CUSTOM_HEADERS"] = resolved.customHeaders
+        } else {
+            for key in gatewayEnvKeys { env.removeValue(forKey: key) }
+        }
+
+        if env.isEmpty {
+            settings.removeValue(forKey: "env")
+        } else {
+            settings["env"] = env
+        }
+
+        // Nothing to write and no file to clean up.
+        if settings.isEmpty && !FileManager.default.fileExists(atPath: settingsPath) {
+            return
+        }
+
+        do {
+            try FileManager.default.createDirectory(atPath: claudeDir, withIntermediateDirectories: true)
+            let data = try JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .sortedKeys])
+            try data.write(to: URL(fileURLWithPath: settingsPath))
+            // The env block can carry a resolved bearer token, so restrict the
+            // file to owner-only — matching ConfigStore's 0600 on config.json.
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o600], ofItemAtPath: settingsPath)
+        } catch {
+            NSLog("[ClaudeHookConfigWriter] Failed to write gateway env to %@: %@",
+                  settingsPath, error.localizedDescription)
+        }
+    }
+
     /// Remove our hook entries from a worktree's settings.local.json, preserving user settings.
     public func removeHookConfig(worktreePath: String) {
         let settingsPath = (worktreePath as NSString)
