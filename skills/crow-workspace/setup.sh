@@ -46,6 +46,12 @@ BASE_BRANCH=""
 # Runtime state
 TERMINAL_ID=""
 
+# Resolved AI gateway for this workspace (populated by resolve_gateway_env).
+WS_BASE_URL=""
+WS_CUSTOM_HEADERS=""
+WS_HAS_GATEWAY=false
+WS_GATEWAY_RESOLVED=false
+
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
 log() { echo "[setup.sh] $*" >&2; }
@@ -139,6 +145,68 @@ agent_display_name() {
     codex)       echo "OpenAI Codex" ;;
     *)           echo "Claude Code" ;;
   esac
+}
+
+# Resolve this workspace's AI gateway from {devRoot}/.claude/config.json (CROW-402).
+# Populates WS_BASE_URL / WS_CUSTOM_HEADERS and sets WS_HAS_GATEWAY=true when a
+# gateway is configured. Header values prefixed `op://` are resolved via the
+# 1Password CLI (`op read`); any other value is used literally. Idempotent — the
+# expensive `op read` only runs once. Never logs the resolved header values.
+resolve_gateway_env() {
+  [[ "$WS_GATEWAY_RESOLVED" == true ]] && return 0
+  WS_GATEWAY_RESOLVED=true
+
+  local config_path="$DEV_ROOT/.claude/config.json"
+  [[ -f "$config_path" ]] || return 0
+  command -v jq >/dev/null 2>&1 || { log "jq not found; skipping gateway resolution"; return 0; }
+
+  local gateway
+  gateway=$(jq -c --arg name "$WORKSPACE" \
+    '.workspaces[]? | select(.name == $name) | .gateway // empty' \
+    "$config_path" 2>/dev/null) || return 0
+  [[ -n "$gateway" && "$gateway" != "null" ]] || return 0
+
+  local base_url
+  base_url=$(jq -r '.baseURL // ""' <<< "$gateway")
+  [[ -n "$base_url" ]] || return 0
+
+  # Resolve each header value and join as newline-separated "Name: Value".
+  local headers="" name value resolved
+  while IFS= read -r name; do
+    [[ -n "$name" ]] || continue
+    value=$(jq -r --arg k "$name" '.customHeaders[$k]' <<< "$gateway")
+    if [[ "$value" == op://* ]]; then
+      if ! resolved=$(op read "$value" 2>/dev/null); then
+        log "Gateway: failed to resolve secret reference for header '$name' (op read failed); dropping it"
+        continue
+      fi
+      value="$resolved"
+    fi
+    [[ -n "$headers" ]] && headers+=$'\n'
+    headers+="$name: $value"
+  done < <(jq -r '.customHeaders | keys[]' <<< "$gateway" 2>/dev/null)
+
+  WS_BASE_URL="$base_url"
+  WS_CUSTOM_HEADERS="$headers"
+  WS_HAS_GATEWAY=true
+  log "Gateway: routing this workspace through $base_url"
+}
+
+# Build the shell prefix that applies (or clears) the gateway env vars on the
+# `claude` launch line — mirrors ClaudeLaunchArgs.gatewayEnvPrefix in Swift.
+# Gateway present → `ANTHROPIC_BASE_URL='…' ANTHROPIC_CUSTOM_HEADERS='…' ` (the
+# header is omitted when multi-line, since a pasted newline would submit the
+# command early — settings.local.json carries it). Absent → `unset … && ` so a
+# no-gateway workspace doesn't inherit a sibling's or ~/.zshrc's gateway.
+gateway_launch_prefix() {
+  if [[ "$WS_HAS_GATEWAY" != true ]]; then
+    printf 'unset ANTHROPIC_BASE_URL ANTHROPIC_CUSTOM_HEADERS && '
+    return 0
+  fi
+  printf 'ANTHROPIC_BASE_URL=%s ' "$(posix_quote "$WS_BASE_URL")"
+  if [[ "$WS_CUSTOM_HEADERS" != *$'\n'* ]]; then
+    printf 'ANTHROPIC_CUSTOM_HEADERS=%s ' "$(posix_quote "$WS_CUSTOM_HEADERS")"
+  fi
 }
 
 die() {
@@ -424,17 +492,32 @@ create_session() {
 
 # Write a per-worktree .claude/settings.local.json that overrides Claude Code's
 # attribution.commit so commits include a `Crow-Session: <uuid>` trailer
-# alongside the standard `Co-Authored-By: Claude` line. Runs for every
-# worktree (primary and secondary) regardless of --skip-launch, so any worktree
-# the user later opens with Claude Code picks up the override.
+# alongside the standard `Co-Authored-By: Claude` line, and — when this workspace
+# has an AI gateway (CROW-402) — an `env` block so manual `claude` re-runs in the
+# terminal inherit the gateway. Runs for every worktree (primary and secondary)
+# regardless of --skip-launch, so any worktree the user later opens with Claude
+# Code picks up both overrides.
 write_settings_local() {
-  if ! is_attribution_trailers_enabled; then
-    log "Attribution trailers disabled via config; skipping settings.local.json"
+  # Resolve the gateway first so its env block is written even when attribution
+  # trailers are disabled.
+  resolve_gateway_env
+
+  local want_attribution=false
+  if is_attribution_trailers_enabled && [[ -n "$SESSION_ID" ]]; then
+    want_attribution=true
+  elif [[ -z "$SESSION_ID" ]]; then
+    log "Warning: SESSION_ID not set, skipping attribution trailer"
+  else
+    log "Attribution trailers disabled via config"
+  fi
+
+  if [[ "$want_attribution" != true && "$WS_HAS_GATEWAY" != true ]]; then
+    log "No attribution trailer or gateway to write; skipping settings.local.json"
     return
   fi
 
-  if [[ -z "$SESSION_ID" ]]; then
-    log "Warning: SESSION_ID not set, skipping settings.local.json"
+  if ! command -v jq >/dev/null 2>&1; then
+    log "jq not found; skipping settings.local.json"
     return
   fi
 
@@ -454,17 +537,36 @@ write_settings_local() {
   local display_name
   display_name=$(agent_display_name "$resolved_kind")
 
-  # The newlines inside the "commit" string are literal \n escapes in JSON;
-  # the heredoc passes them through to the file as the two-character sequence.
-  # Heredoc is unquoted so bash expands $display_name and $SESSION_ID.
-  cat > "$settings_path" <<EOF
-{
-  "attribution": {
-    "commit": "🐦‍⬛ Generated with $display_name, orchestrated by Crow\\n\\nCo-Authored-By: Claude <noreply@anthropic.com>\\nCrow-Session: $SESSION_ID"
-  }
-}
-EOF
-  log "Wrote attribution settings to $settings_path (agent: $display_name)"
+  # Merge into existing settings (preserving hooks etc.) via jq, which handles
+  # JSON escaping of the newlines in the commit trailer and the header values.
+  local base="{}"
+  [[ -f "$settings_path" ]] && base=$(cat "$settings_path")
+
+  local commit_trailer="🐦‍⬛ Generated with $display_name, orchestrated by Crow
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+Crow-Session: $SESSION_ID"
+
+  local merged
+  if ! merged=$(jq \
+    --argjson want_attr "$want_attribution" \
+    --arg commit "$commit_trailer" \
+    --argjson want_gw "$WS_HAS_GATEWAY" \
+    --arg base_url "$WS_BASE_URL" \
+    --arg headers "$WS_CUSTOM_HEADERS" \
+    '(if $want_attr then .attribution.commit = $commit else . end)
+     | (if $want_gw then .env.ANTHROPIC_BASE_URL = $base_url
+                       | .env.ANTHROPIC_CUSTOM_HEADERS = $headers else . end)' \
+    <<< "$base"); then
+    die "settings_local" "jq failed to build settings.local.json"
+  fi
+  printf '%s\n' "$merged" > "$settings_path"
+
+  if [[ "$WS_HAS_GATEWAY" == true ]]; then
+    log "Wrote settings.local.json (attribution + gateway env) to $settings_path (agent: $display_name)"
+  else
+    log "Wrote attribution settings to $settings_path (agent: $display_name)"
+  fi
 
   # Belt-and-suspenders: add the file to the per-worktree git exclude so it
   # is never accidentally committed even if the repo's .gitignore does not
@@ -671,7 +773,17 @@ launch_claude_code() {
     rc_args=" --rc --name $(posix_quote "$SESSION_NAME")"
     log "Remote control enabled — launching with --rc --name '$SESSION_NAME'"
   fi
-  local launch_cmd="cd $WORKTREE_PATH && $bin --permission-mode plan$rc_args \"\$(cat $prompt_path)\""
+  # CROW-402: prefix the launch line with the workspace gateway env (or `unset`
+  # when there's none) so the deferred launch overrides any global ~/.zshrc
+  # export. resolve_gateway_env is idempotent (it already ran in
+  # write_settings_local), so this reuses its result without a second `op read`.
+  # The assignments are intentionally not logged (the header value is a bearer
+  # token). Placed immediately before $bin so the command-prefix
+  # assignments bind to claude.
+  resolve_gateway_env
+  local gw_prefix
+  gw_prefix=$(gateway_launch_prefix)
+  local launch_cmd="cd $WORKTREE_PATH && ${gw_prefix}$bin --permission-mode plan$rc_args \"\$(cat $prompt_path)\""
   create_agent_terminal "Claude Code" "$launch_cmd"
 }
 
@@ -845,4 +957,8 @@ main() {
   emit_result
 }
 
-main "$@"
+# Only run when executed directly — sourcing (e.g. from tests) exposes the
+# functions without kicking off a full workspace setup.
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main "$@"
+fi
