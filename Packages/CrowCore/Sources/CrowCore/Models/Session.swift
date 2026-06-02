@@ -6,6 +6,7 @@ public struct Session: Identifiable, Codable, Sendable {
     public var name: String
     public var status: SessionStatus
     public var kind: SessionKind
+    public var agentKind: AgentKind
     public var ticketURL: String?
     public var ticketTitle: String?
     public var ticketNumber: Int?
@@ -37,6 +38,7 @@ public struct Session: Identifiable, Codable, Sendable {
         name: String,
         status: SessionStatus = .active,
         kind: SessionKind = .work,
+        agentKind: AgentKind = .claudeCode,
         ticketURL: String? = nil,
         ticketTitle: String? = nil,
         ticketNumber: Int? = nil,
@@ -51,6 +53,7 @@ public struct Session: Identifiable, Codable, Sendable {
         self.name = name
         self.status = status
         self.kind = kind
+        self.agentKind = agentKind
         self.ticketURL = ticketURL
         self.ticketTitle = ticketTitle
         self.ticketNumber = ticketNumber
@@ -62,16 +65,17 @@ public struct Session: Identifiable, Codable, Sendable {
         self.autoMergeEnabledAt = autoMergeEnabledAt
     }
 
-    // Backward-compatible decoding: default `kind` to `.work` when missing
-    // from older persisted data. `reviewPromptDispatched` defaults to `true`
-    // when missing so existing review sessions don't re-trigger their prompt
-    // on the first launch after upgrade (CROW-224).
+    // Backward-compatible decoding: default `kind`, `agentKind`, and
+    // `reviewPromptDispatched` when missing from older persisted data.
+    // `reviewPromptDispatched` defaults to `true` so existing review sessions
+    // don't re-trigger their prompt on first launch after upgrade (CROW-224).
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
         name = try container.decode(String.self, forKey: .name)
         status = try container.decode(SessionStatus.self, forKey: .status)
         kind = try container.decodeIfPresent(SessionKind.self, forKey: .kind) ?? .work
+        agentKind = try container.decodeIfPresent(AgentKind.self, forKey: .agentKind) ?? .claudeCode
         ticketURL = try container.decodeIfPresent(String.self, forKey: .ticketURL)
         ticketTitle = try container.decodeIfPresent(String.self, forKey: .ticketTitle)
         ticketNumber = try container.decodeIfPresent(Int.self, forKey: .ticketNumber)

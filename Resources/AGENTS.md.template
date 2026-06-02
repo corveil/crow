@@ -1,0 +1,56 @@
+# Crow — Codex Workspace Context
+
+You are operating inside a Crow-managed development root. Crow orchestrates
+sessions in worktrees under workspace folders here, and provides a CLI for
+session, worktree, and metadata operations.
+
+## Crow CLI Reference
+
+The `crow` CLI talks to the Crow app over a Unix socket. The app must be
+running. Commands return JSON on stdout.
+
+### Sessions
+```
+crow new-session --name "feature-name" [--agent codex]
+crow rename-session --session <uuid> "new-name"
+crow select-session --session <uuid>
+crow list-sessions
+crow get-session --session <uuid>
+crow set-status --session <uuid> active|paused|inReview|completed|archived
+crow delete-session --session <uuid>
+```
+
+### Worktrees
+```
+crow add-worktree --session <uuid> --repo "name" --repo-path "/main/repo" --path "/worktree/path" --branch "feature/..." [--primary]
+crow list-worktrees --session <uuid>
+```
+
+### Terminals
+```
+crow new-terminal --session <uuid> --cwd "/path" [--name "..."] [--command "..."] [--managed]
+crow list-terminals --session <uuid>
+crow close-terminal --session <uuid> --terminal <uuid>
+crow rename-terminal --session <uuid> --terminal <uuid> "new name"
+crow send --session <uuid> --terminal <uuid> "text to send"
+```
+
+### Metadata
+```
+crow set-ticket --session <uuid> --url "..." [--title "..."] [--number N]
+crow add-link --session <uuid> --label "..." --url "..." --type ticket|pr|repo|custom
+crow list-links --session <uuid>
+```
+
+## Important Notes
+
+- `--session` always expects a full UUID, not a session name.
+- Use `$TMPDIR` (not `/tmp`) for temporary files.
+- Worktree paths sit directly under the workspace folder:
+  `{devRoot}/{workspace}/{repo}-{number}-{slug}` — never inside a
+  `worktrees/` subdirectory.
+- For new branches use `--no-track` so accidental pushes go to your branch,
+  not `main`:
+  `git worktree add /path -b feature/name --no-track origin/main`
+
+## Known Issues / Corrections

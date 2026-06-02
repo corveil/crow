@@ -193,6 +193,20 @@ public struct SettingsView: View {
                 .font(.caption)
             }
 
+            Section("Defaults") {
+                Picker("Default Agent", selection: $config.defaultAgentKind) {
+                    ForEach(AgentRegistry.shared.allAgents(), id: \.kind) { agent in
+                        Label(agent.displayName, systemImage: agent.iconSystemName)
+                            .tag(agent.kind)
+                    }
+                }
+                .onChange(of: config.defaultAgentKind) { _, _ in save() }
+                .disabled(AgentRegistry.shared.allAgents().count < 2)
+                Text("Selected agent runs new sessions. Disabled until a second agent (e.g., Codex) is registered.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("Sidebar") {
                 Toggle("Hide session details", isOn: $config.sidebar.hideSessionDetails)
                     .onChange(of: config.sidebar.hideSessionDetails) { _, _ in save() }

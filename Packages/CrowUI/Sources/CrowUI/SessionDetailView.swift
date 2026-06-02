@@ -52,7 +52,8 @@ public struct SessionDetailView: View {
                         Text(session.name)
                             .font(.system(size: 18, weight: .bold))
                             .foregroundStyle(CorveilTheme.gold)
-                        if appState.isRemoteControlActive(sessionID: session.id) {
+                        if AgentRegistry.shared.agent(for: session.agentKind)?.supportsRemoteControl == true,
+                           appState.isRemoteControlActive(sessionID: session.id) {
                             RemoteControlBadge()
                         }
                     }
@@ -91,6 +92,21 @@ public struct SessionDetailView: View {
                         .foregroundStyle(CorveilTheme.textMuted)
                         .lineLimit(1)
                         .truncationMode(.middle)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 6)
+            }
+
+            // Row 2.5: Agent — read-only label for non-Manager sessions so
+            // users can see which agent was chosen at creation time. The
+            // Manager tab is pinned to Claude Code and hides this row per spec.
+            if session.id != AppState.managerSessionID,
+               let agent = AgentRegistry.shared.agent(for: session.agentKind) {
+                Divider().overlay(CorveilTheme.borderSubtle).padding(.horizontal, 16)
+
+                HStack(spacing: 16) {
+                    DetailLabel(icon: agent.iconSystemName, text: "Agent: \(agent.displayName)")
+                    Spacer()
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 6)
@@ -545,7 +561,7 @@ struct StatusBadge: View {
 // MARK: - Readiness-Aware Terminal Wrapper
 
 /// Wraps a TerminalSurfaceView with readiness tracking.
-/// Auto-launches `claude --continue` when the shell becomes ready on first focus.
+/// Auto-launches the coding agent when the shell becomes ready on first focus.
 struct ReadinessAwareTerminal: View {
     let terminal: SessionTerminal
     @Bindable var appState: AppState
@@ -553,7 +569,7 @@ struct ReadinessAwareTerminal: View {
     @State private var diagnosticsCopied = false
 
     private var readiness: TerminalReadiness {
-        appState.terminalReadiness[terminal.id] ?? .claudeLaunched  // Default for non-tracked terminals
+        appState.terminalReadiness[terminal.id] ?? .agentLaunched  // Default for non-tracked terminals
     }
 
     var body: some View {
@@ -622,8 +638,8 @@ struct ReadinessAwareTerminal: View {
         }
         .onChange(of: readiness) { oldValue, newValue in
             if newValue == .shellReady {
-                // Shell just became ready — auto-launch Claude
-                appState.onLaunchClaude?(terminal.id)
+                // Shell just became ready — auto-launch the agent
+                appState.onLaunchAgent?(terminal.id)
             }
         }
     }

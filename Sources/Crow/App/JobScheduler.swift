@@ -8,7 +8,7 @@ import CrowTerminal
 /// due, asks `SessionService.runJob` to spin up a worktree + session + Claude
 /// terminal in the job's scoped repo. The first prompt is dispatched by the
 /// terminal-readiness machine on launch; any remaining prompts are delivered
-/// here once the terminal reports `.claudeLaunched`, spaced by a fixed gap.
+/// here once the terminal reports `.agentLaunched`, spaced by a fixed gap.
 ///
 /// Job config (including `lastRunAt`) lives in `AppConfig`; this class reads it
 /// through `jobsProvider`/`devRootProvider` closures and reports each run back
@@ -24,7 +24,7 @@ final class JobScheduler {
     private let tickInterval: TimeInterval = 30
     /// Gap between consecutive prompt sends after Claude has launched.
     private let promptGap: TimeInterval = 20
-    /// Max polls (× 5s) to wait for `.claudeLaunched` before giving up on the
+    /// Max polls (× 5s) to wait for `.agentLaunched` before giving up on the
     /// follow-up prompts for a run.
     private let maxLaunchWaitPolls = 60
 
@@ -108,24 +108,24 @@ final class JobScheduler {
             .dropFirst()
         guard !remaining.isEmpty else { return }
 
-        waitForClaudeLaunched(terminalID: terminalID, polls: 0) { [weak self] in
+        waitForAgentLaunched(terminalID: terminalID, polls: 0) { [weak self] in
             self?.sendSequentially(Array(remaining), terminalID: terminalID)
         }
     }
 
-    /// Poll the readiness machine until the terminal reports `.claudeLaunched`,
+    /// Poll the readiness machine until the terminal reports `.agentLaunched`,
     /// then run `then`. Bounded so a stuck launch doesn't poll forever.
-    private func waitForClaudeLaunched(terminalID: UUID, polls: Int, then: @escaping () -> Void) {
-        if appState.terminalReadiness[terminalID] == .claudeLaunched {
+    private func waitForAgentLaunched(terminalID: UUID, polls: Int, then: @escaping () -> Void) {
+        if appState.terminalReadiness[terminalID] == .agentLaunched {
             then()
             return
         }
         guard polls < maxLaunchWaitPolls else {
-            NSLog("[JobScheduler] gave up waiting for claude launch on \(terminalID)")
+            NSLog("[JobScheduler] gave up waiting for agent launch on \(terminalID)")
             return
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
-            self?.waitForClaudeLaunched(terminalID: terminalID, polls: polls + 1, then: then)
+            self?.waitForAgentLaunched(terminalID: terminalID, polls: polls + 1, then: then)
         }
     }
 

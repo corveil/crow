@@ -11,18 +11,18 @@ struct TerminalReadinessTests {
         #expect(TerminalReadiness.uninitialized < .surfaceCreated)
         #expect(TerminalReadiness.surfaceCreated < .timedOut)
         #expect(TerminalReadiness.timedOut < .shellReady)
-        #expect(TerminalReadiness.shellReady < .claudeLaunched)
+        #expect(TerminalReadiness.shellReady < .agentLaunched)
     }
 
     @Test func transitiveOrdering() {
-        #expect(TerminalReadiness.uninitialized < .claudeLaunched)
+        #expect(TerminalReadiness.uninitialized < .agentLaunched)
         #expect(TerminalReadiness.uninitialized < .shellReady)
-        #expect(TerminalReadiness.surfaceCreated < .claudeLaunched)
-        #expect(TerminalReadiness.timedOut < .claudeLaunched)
+        #expect(TerminalReadiness.surfaceCreated < .agentLaunched)
+        #expect(TerminalReadiness.timedOut < .agentLaunched)
     }
 
     @Test func timedOutGatesAutoPaste() {
-        // The launchClaude guard is `== .shellReady`, so .timedOut must NOT
+        // The launchAgent guard is `== .shellReady`, so .timedOut must NOT
         // satisfy `< .shellReady ? false : true` equality checks. Verify the
         // ordering keeps .timedOut strictly below .shellReady.
         #expect(TerminalReadiness.timedOut < .shellReady)
@@ -32,7 +32,7 @@ struct TerminalReadinessTests {
     @Test func equalStatesAreNotLessThan() {
         #expect(!(TerminalReadiness.uninitialized < .uninitialized))
         #expect(!(TerminalReadiness.shellReady < .shellReady))
-        #expect(!(TerminalReadiness.claudeLaunched < .claudeLaunched))
+        #expect(!(TerminalReadiness.agentLaunched < .agentLaunched))
         #expect(!(TerminalReadiness.timedOut < .timedOut))
     }
 
@@ -42,12 +42,12 @@ struct TerminalReadinessTests {
         #expect(TerminalReadiness.uninitialized == .uninitialized)
         #expect(TerminalReadiness.surfaceCreated == .surfaceCreated)
         #expect(TerminalReadiness.shellReady == .shellReady)
-        #expect(TerminalReadiness.claudeLaunched == .claudeLaunched)
+        #expect(TerminalReadiness.agentLaunched == .agentLaunched)
     }
 
     @Test func differentStatesAreNotEqual() {
         #expect(TerminalReadiness.uninitialized != .surfaceCreated)
-        #expect(TerminalReadiness.shellReady != .claudeLaunched)
+        #expect(TerminalReadiness.shellReady != .agentLaunched)
     }
 
     // MARK: - Raw Values
@@ -57,13 +57,13 @@ struct TerminalReadinessTests {
         #expect(TerminalReadiness.surfaceCreated.rawValue == "surfaceCreated")
         #expect(TerminalReadiness.timedOut.rawValue == "timedOut")
         #expect(TerminalReadiness.shellReady.rawValue == "shellReady")
-        #expect(TerminalReadiness.claudeLaunched.rawValue == "claudeLaunched")
+        #expect(TerminalReadiness.agentLaunched.rawValue == "agentLaunched")
     }
 
     // MARK: - Codable
 
     @Test func codableRoundTrip() throws {
-        let cases: [TerminalReadiness] = [.uninitialized, .surfaceCreated, .timedOut, .shellReady, .claudeLaunched]
+        let cases: [TerminalReadiness] = [.uninitialized, .surfaceCreated, .timedOut, .shellReady, .agentLaunched]
         let encoder = JSONEncoder()
         let decoder = JSONDecoder()
 

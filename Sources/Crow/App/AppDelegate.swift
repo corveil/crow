@@ -1,5 +1,7 @@
 import AppKit
 import SwiftUI
+import CrowClaude
+import CrowCodex
 import CrowCore
 import CrowGit
 import CrowProvider
@@ -318,6 +320,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func launchMainApp() {
         guard let devRoot else { return }
 
+        // Register the Claude Code agent in the shared registry — always
+        // present, since the Manager terminal and the default-agent picker
+        // both rely on it.
+        AgentRegistry.shared.register(ClaudeCodeAgent())
+
+        // Conditionally register the OpenAI Codex agent — only when its
+        // binary is on disk. Keeps the per-session picker clean for users
+        // who haven't installed Codex.
+        let codexAgent = OpenAICodexAgent()
+        if codexAgent.findBinary() != nil {
+            AgentRegistry.shared.register(codexAgent)
+            NSLog("[Crow] OpenAI Codex agent registered")
+        }
+
         // Initialize libghostty
         NSLog("[Crow] Initializing Ghostty")
         GhosttyApp.shared.initialize()
@@ -374,6 +390,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSLog("[Crow] Scaffold update failed: %@", error.localizedDescription)
         }
 
+        // Codex-specific dev-root and global config — only when Codex is
+        // registered. AGENTS.md goes into devRoot; hooks.json + config.toml
+        // go into ~/.codex (or $CODEX_HOME). All idempotent; safe to re-run.
+        if AgentRegistry.shared.agent(for: .codex) != nil {
+            do {
+                try CodexScaffolder.scaffold(devRoot: devRoot)
+            } catch {
+                NSLog("[Crow] Codex scaffold failed: %@", error.localizedDescription)
+            }
+            if let crowPath = ClaudeHookConfigWriter.findCrowBinary() {
+                let codexHome = ProcessInfo.processInfo.environment["CODEX_HOME"]
+                    ?? NSString(string: "~/.codex").expandingTildeInPath
+                do {
+                    try CodexHookConfigWriter.installGlobalConfig(codexHome: codexHome, crowPath: crowPath)
+                    try CodexHookConfigWriter.installGlobalTomlConfig(codexHome: codexHome, crowPath: crowPath)
+                } catch {
+                    NSLog("[Crow] Codex global config install failed: %@", error.localizedDescription)
+                }
+            }
+        }
+
         // Initialize persistence
         let store = JSONStore()
         self.store = store
@@ -388,6 +425,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appState.excludeReviewRepos = config.defaults.excludeReviewRepos
         appState.excludeTicketRepos = config.defaults.excludeTicketRepos
         appState.ignoreReviewLabels = config.defaults.ignoreReviewLabels
+        appState.defaultAgentKind = config.defaultAgentKind
 
         // Create session service and hydrate state
         let service = SessionService(store: store, appState: appState, telemetryPort: config.telemetry.enabled ? config.telemetry.port : nil)
@@ -401,7 +439,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Check for runtime dependencies (non-blocking)
         Task {
             let missing = await Task.detached {
-                let tools = ["gh", "git", "claude", "glab", "code"]
+                let tools = ["gh", "git", "claude", "codex", "glab", "code"]
                 return tools.filter { !ShellEnvironment.shared.hasCommand($0) }
             }.value
             if !missing.isEmpty {
@@ -445,8 +483,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             service?.setSessionActive(id: id)
         }
 
-        appState.onLaunchClaude = { [weak service] terminalID in
-            service?.launchClaude(terminalID: terminalID)
+        appState.onLaunchAgent = { [weak service] terminalID in
+            service?.launchAgent(terminalID: terminalID)
         }
 
         appState.onRestartManager = { [weak service] in
@@ -999,6 +1037,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appState.excludeReviewRepos = config.defaults.excludeReviewRepos
         appState.excludeTicketRepos = config.defaults.excludeTicketRepos
         appState.ignoreReviewLabels = config.defaults.ignoreReviewLabels
+        appState.defaultAgentKind = config.defaultAgentKind
     }
 
     /// Record a job's run time in the canonical `appConfig` and persist it, so
@@ -1053,18 +1092,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     throw RPCError.invalidParams("Invalid kind (expected work or manager)")
                 }
                 let isManagerKind = kindStr == "manager"
+                // Optional `agent_kind` param (e.g. "claude-code"). Falls
+                // back to the app-wide default when absent or empty.
+                let requestedAgentKind = params["agent_kind"]?.stringValue
+                    .flatMap { $0.isEmpty ? nil : AgentKind(rawValue: $0) }
                 return await MainActor.run {
                     // Manager sessions get their own Claude-Code terminal in the
-                    // devRoot, mirroring the primary Manager.
+                    // devRoot, mirroring the primary Manager. Manager is pinned to
+                    // Claude Code, so `agent_kind` is ignored for manager kind.
                     if isManagerKind {
                         let id = capturedService.createManagerSession(name: name, cwd: devRoot)
                         let createdName = capturedAppState.sessions.first(where: { $0.id == id })?.name ?? name
                         return ["session_id": .string(id.uuidString), "name": .string(createdName)]
                     }
-                    let session = Session(name: name, kind: .work)
+                    let agentKind = requestedAgentKind ?? capturedAppState.defaultAgentKind
+                    let session = Session(name: name, kind: .work, agentKind: agentKind)
                     capturedAppState.sessions.append(session)
                     capturedStore.mutate { $0.sessions.append(session) }
-                    return ["session_id": .string(session.id.uuidString), "name": .string(session.name)]
+                    return [
+                        "session_id": .string(session.id.uuidString),
+                        "name": .string(session.name),
+                        "agent_kind": .string(session.agentKind.rawValue),
+                    ]
                 }
             },
             "rename-session": { @Sendable params in
@@ -1346,16 +1395,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     // tmux-backed terminals already have their window from
                     // registerTerminal — no surface recovery needed before send.
 
-                    // For managed terminals receiving a claude command, write hook config
-                    // before sending so Claude picks up the hooks on startup.
+                    // For managed terminals receiving an agent-launching
+                    // command, write hook config (and inject OTEL env vars
+                    // for Claude) before forwarding so the agent picks up
+                    // hooks on startup. The agent dispatch is driven by the
+                    // session's `agentKind` and the agent's
+                    // `launchCommandToken` (e.g. "claude", "codex").
                     if let terminals = capturedAppState.terminals[sessionID],
                        let terminal = terminals.first(where: { $0.id == terminalID }),
                        terminal.isManaged,
-                       text.contains("claude") {
+                       let session = capturedAppState.sessions.first(where: { $0.id == sessionID }),
+                       let agent = AgentRegistry.shared.agent(for: session.agentKind),
+                       text.contains(agent.launchCommandToken) {
                         if let worktree = capturedAppState.primaryWorktree(for: sessionID),
-                           let crowPath = HookConfigGenerator.findCrowBinary() {
+                           let crowPath = ClaudeHookConfigWriter.findCrowBinary() {
                             do {
-                                try HookConfigGenerator.writeHookConfig(
+                                try agent.hookConfigWriter.writeHookConfig(
                                     worktreePath: worktree.worktreePath,
                                     sessionID: sessionID,
                                     crowPath: crowPath
@@ -1365,8 +1420,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                       sessionID.uuidString, error.localizedDescription)
                             }
                         }
-                        // Inject OTEL telemetry env vars so analytics flow back to Crow
-                        if let port = capturedTelemetryPort {
+                        // OTEL telemetry env vars are Claude-specific —
+                        // Codex has no equivalent OTLP exporter.
+                        if agent.kind == .claudeCode, let port = capturedTelemetryPort {
                             let vars = [
                                 "CLAUDE_CODE_ENABLE_TELEMETRY=1",
                                 "OTEL_METRICS_EXPORTER=otlp",
@@ -1377,7 +1433,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                             ].joined(separator: " ")
                             text = "export \(vars) && \(text)"
                         }
-                        capturedAppState.terminalReadiness[terminalID] = .claudeLaunched
+                        capturedAppState.terminalReadiness[terminalID] = .agentLaunched
                     }
 
                     if let routedTerminal {
@@ -1414,20 +1470,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return ["links": .array(items)]
             },
             "hook-event": { @Sendable params in
-                guard let sessionIDStr = params["session_id"]?.stringValue,
-                      let sessionID = UUID(uuidString: sessionIDStr),
-                      let eventName = params["event_name"]?.stringValue else {
-                    throw RPCError.invalidParams("session_id and event_name required")
+                guard let eventName = params["event_name"]?.stringValue else {
+                    throw RPCError.invalidParams("event_name required")
                 }
                 let payload = params["payload"]?.objectValue ?? [:]
 
-                if hookDebug {
-                    let shortID = String(sessionIDStr.prefix(8))
-                    let keys = payload.keys.sorted().joined(separator: ",")
-                    NSLog("[hook-event] session=\(shortID) event=\(eventName) payload-keys=[\(keys)]")
-                }
+                // session_id is now optional — Codex's global hooks don't
+                // know the Crow session UUID, so the server resolves it via
+                // the `cwd` field in the payload.
+                let providedSessionID = params["session_id"]?.stringValue
+                    .flatMap(UUID.init(uuidString:))
+                let requestedAgentKind = params["agent_kind"]?.stringValue
+                    .flatMap { $0.isEmpty ? nil : AgentKind(rawValue: $0) }
+                let cwd = payload["cwd"]?.stringValue
 
-                // Build a human-readable summary from the event
+                // Build a human-readable summary from the event (independent
+                // of session resolution).
                 let summary: String = {
                     switch eventName {
                     case "PreToolUse", "PostToolUse", "PostToolUseFailure":
@@ -1437,9 +1495,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         let msg = payload["message"]?.stringValue ?? ""
                         return "Notification: \(msg.prefix(80))"
                     case "Stop":
-                        return "Claude finished responding"
+                        return "Agent finished responding"
                     case "StopFailure":
-                        return "Claude stopped with error"
+                        return "Agent stopped with error"
                     case "SessionStart":
                         return "Session started"
                     case "SessionEnd":
@@ -1468,15 +1526,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                 }()
 
-                let event = HookEvent(
-                    sessionID: sessionID,
-                    eventName: eventName,
-                    summary: summary
-                )
+                return try await MainActor.run {
+                    // Resolve session — explicit param wins, else look up by
+                    // worktree path matching `cwd`.
+                    let sessionID: UUID
+                    if let provided = providedSessionID {
+                        sessionID = provided
+                    } else if let cwd, let resolved = capturedAppState.sessionID(forWorktreePath: cwd) {
+                        sessionID = resolved
+                    } else {
+                        throw RPCError.invalidParams("session_id required or resolvable from payload cwd")
+                    }
+                    let sessionIDStr = sessionID.uuidString
 
-                return await MainActor.run {
+                    if hookDebug {
+                        let shortID = String(sessionIDStr.prefix(8))
+                        let keys = payload.keys.sorted().joined(separator: ",")
+                        NSLog("[hook-event] session=\(shortID) event=\(eventName) payload-keys=[\(keys)]")
+                    }
+
+                    let event = HookEvent(
+                        sessionID: sessionID,
+                        eventName: eventName,
+                        summary: summary
+                    )
+
+                    // Flatten the raw JSON payload into the typed AgentHookEvent
+                    // that the state-machine signal source consumes. Keeps
+                    // CrowCore free of JSONValue, and localizes the field
+                    // extraction in one place.
+                    let agentEvent = AgentHookEvent(
+                        sessionID: sessionID,
+                        eventName: eventName,
+                        toolName: payload["tool_name"]?.stringValue,
+                        source: payload["source"]?.stringValue,
+                        message: payload["message"]?.stringValue,
+                        notificationType: payload["notification_type"]?.stringValue,
+                        agentType: payload["agent_type"]?.stringValue,
+                        summary: summary
+                    )
+
+                    // Resolve the agent: explicit kind param > session's
+                    // stored agentKind > app default.
+                    let session = capturedAppState.sessions.first(where: { $0.id == sessionID })
+                    let resolvedKind = requestedAgentKind
+                        ?? session?.agentKind
+                        ?? capturedAppState.defaultAgentKind
+                    let signalSource = AgentRegistry.shared.agent(for: resolvedKind)?.stateSignalSource
+
                     let state = capturedAppState.hookState(for: sessionID)
-                    let stateBefore = state.claudeState
+                    let stateBefore = state.activityState
                     // Snapshot the color-driving subset so we can persist only on a
                     // real change (keeps sidebar colors correct after relaunch — #367).
                     let snapshotBefore = state.persistedSnapshot
@@ -1485,124 +1584,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     state.hookEvents.append(event)
                     if state.hookEvents.count > 50 { state.hookEvents.removeFirst(state.hookEvents.count - 50) }
 
-                    // Update derived state based on event type.
-                    // Clear pending notification on ANY event that indicates
-                    // Claude moved past the waiting state (except Notification
-                    // itself, which may SET the pending state).
-                    if eventName != "Notification" && eventName != "PermissionRequest" {
-                        state.pendingNotification = nil
-                    }
-
-                    switch eventName {
-                    case "PreToolUse":
-                        let toolName = payload["tool_name"]?.stringValue ?? "unknown"
-                        if toolName == "AskUserQuestion" {
-                            // Question for the user — set attention state
-                            state.pendingNotification = HookNotification(
-                                message: "Claude has a question",
-                                notificationType: "question"
-                            )
-                            state.claudeState = .waiting
-                            state.lastToolActivity = nil
-                        } else {
-                            state.lastToolActivity = ToolActivity(
-                                toolName: toolName, isActive: true
-                            )
-                            state.claudeState = .working
+                    // Ask the agent for the state transition and apply it.
+                    // The signal source is pure — all side effects (persistence,
+                    // notifications, etc.) stay here in the handler.
+                    if let signalSource {
+                        let transition = signalSource.transition(
+                            for: agentEvent,
+                            currentActivityState: state.activityState,
+                            currentNotificationType: state.pendingNotification?.notificationType,
+                            currentLastTopLevelStopAt: state.lastTopLevelStopAt
+                        )
+                        if let newActivityState = transition.newActivityState {
+                            state.activityState = newActivityState
                         }
-
-                    case "PostToolUse":
-                        let toolName = payload["tool_name"]?.stringValue ?? "unknown"
-                        state.lastToolActivity = ToolActivity(
-                            toolName: toolName, isActive: false
-                        )
-
-                    case "PostToolUseFailure":
-                        let toolName = payload["tool_name"]?.stringValue ?? "unknown"
-                        state.lastToolActivity = ToolActivity(
-                            toolName: toolName, isActive: false
-                        )
-
-                    case "Notification":
-                        let message = payload["message"]?.stringValue ?? ""
-                        let notifType = payload["notification_type"]?.stringValue ?? ""
-                        if notifType == "permission_prompt" {
-                            // Permission needed — show attention state
-                            state.pendingNotification = HookNotification(
-                                message: message, notificationType: notifType
-                            )
-                            state.claudeState = .waiting
-                        } else if notifType == "idle_prompt" {
-                            // Claude is at the prompt — clear any stale permission notification
-                            // but don't change claudeState (Stop already set it to .done)
+                        switch transition.notification {
+                        case .leave:
+                            break
+                        case .clear:
                             state.pendingNotification = nil
+                        case .set(let notification):
+                            state.pendingNotification = notification
                         }
-
-                    case "PermissionRequest":
-                        // Don't override a "question" notification — AskUserQuestion
-                        // triggers both PreToolUse and PermissionRequest, and the
-                        // question badge is more specific than generic "Permission"
-                        if state.pendingNotification?.notificationType != "question" {
-                            state.pendingNotification = HookNotification(
-                                message: "Permission requested",
-                                notificationType: "permission_prompt"
-                            )
-                        }
-                        state.claudeState = .waiting
-                        state.lastToolActivity = nil
-
-                    case "UserPromptSubmit":
-                        state.claudeState = .working
-                        // A new real turn has begun — clear the post-Stop guard so
-                        // legitimate subagents in this turn can elevate state again.
-                        state.lastTopLevelStopAt = nil
-
-                    case "Stop":
-                        state.claudeState = .done
-                        state.lastToolActivity = nil
-                        state.lastTopLevelStopAt = Date()
-
-                    case "StopFailure":
-                        state.claudeState = .waiting
-                        state.lastTopLevelStopAt = Date()
-
-                    case "SessionStart":
-                        let source = payload["source"]?.stringValue ?? "startup"
-                        if source == "resume" {
-                            state.claudeState = .done
-                        } else {
-                            state.claudeState = .idle
-                        }
-                        state.lastTopLevelStopAt = nil
-
-                    case "SessionEnd":
-                        state.claudeState = .idle
-                        state.lastToolActivity = nil
-                        state.lastTopLevelStopAt = nil
-
-                    case "SubagentStart":
-                        // If a top-level Stop has already fired for this turn, the
-                        // subagent is background work (e.g. the recap generator from
-                        // Claude Code ≥ 2.1.108's awaySummaryEnabled feature). Don't
-                        // elevate state — the user is genuinely done.
-                        if state.lastTopLevelStopAt == nil {
-                            state.claudeState = .working
-                        }
-
-                    case "TaskCreated", "TaskCompleted", "SubagentStop":
-                        // Stay in working state, but only while the turn is still live.
-                        // After a top-level Stop, treat these as background activity
-                        // and leave claudeState alone.
-                        if state.claudeState != .waiting && state.lastTopLevelStopAt == nil {
-                            state.claudeState = .working
-                        }
-
-                    default:
-                        // PermissionDenied, PreCompact, PostCompact — state change
-                        // handled by blanket notification clear above
-                        if eventName == "PermissionDenied" {
-                            state.claudeState = .working
+                        switch transition.toolActivity {
+                        case .leave:
+                            break
+                        case .clear:
                             state.lastToolActivity = nil
+                        case .set(let activity):
+                            state.lastToolActivity = activity
+                        }
+                        switch transition.lastTopLevelStopAt {
+                        case .leave:
+                            break
+                        case .clear:
+                            state.lastTopLevelStopAt = nil
+                        case .set(let date):
+                            state.lastTopLevelStopAt = date
                         }
                     }
 
@@ -1614,9 +1631,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         summary: summary
                     )
 
-                    if hookDebug && state.claudeState != stateBefore {
+                    if hookDebug && state.activityState != stateBefore {
                         let shortID = String(sessionIDStr.prefix(8))
-                        NSLog("[hook-event] session=\(shortID) event=\(eventName) state=\(stateBefore.rawValue)→\(state.claudeState.rawValue)")
+                        NSLog("[hook-event] session=\(shortID) event=\(eventName) state=\(stateBefore.rawValue)→\(state.activityState.rawValue)")
                     }
 
                     // Persist the color-driving state only when it actually changed,

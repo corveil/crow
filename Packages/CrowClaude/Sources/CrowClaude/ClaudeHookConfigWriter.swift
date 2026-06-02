@@ -1,10 +1,14 @@
 import Foundation
+import CrowCore
 
-/// Generates and manages Claude Code hook configuration for session worktrees.
-struct HookConfigGenerator {
+/// Writes Claude Code's hook configuration into a worktree's
+/// `.claude/settings.local.json`. Conforms to `HookConfigWriter` so the main
+/// app can treat the configuration step generically; the concrete event list
+/// and file format stay local to CrowClaude.
+public struct ClaudeHookConfigWriter: HookConfigWriter {
 
     /// All hook event names we register.
-    private static let allEvents = [
+    static let allEvents = [
         "SessionStart", "SessionEnd", "Stop", "StopFailure",
         "Notification", "PreToolUse", "PostToolUse", "PostToolUseFailure",
         "PermissionRequest", "PermissionDenied", "UserPromptSubmit",
@@ -19,8 +23,7 @@ struct HookConfigGenerator {
         "PostToolUse", "PostToolUseFailure",
     ]
 
-    /// Marker key to identify our hooks vs user hooks.
-    private static let markerComment = "crow-managed"
+    public init() {}
 
     // MARK: - Generate Hook Configuration
 
@@ -50,11 +53,11 @@ struct HookConfigGenerator {
         return hooks
     }
 
-    // MARK: - Write / Merge Configuration
+    // MARK: - HookConfigWriter Conformance
 
     /// Write hook configuration to a worktree's .claude/settings.local.json.
     /// Uses a merge strategy: preserves user settings, only updates our hook entries.
-    static func writeHookConfig(
+    public func writeHookConfig(
         worktreePath: String,
         sessionID: UUID,
         crowPath: String
@@ -75,7 +78,7 @@ struct HookConfigGenerator {
         var existingHooks = settings["hooks"] as? [String: Any] ?? [:]
 
         // Generate our hooks
-        let ourHooks = generateHooks(sessionID: sessionID, crowPath: crowPath)
+        let ourHooks = Self.generateHooks(sessionID: sessionID, crowPath: crowPath)
 
         // Merge: our hooks overwrite matching event names, user hooks for other events are preserved
         for (eventName, hookConfig) in ourHooks {
@@ -90,7 +93,7 @@ struct HookConfigGenerator {
     }
 
     /// Remove our hook entries from a worktree's settings.local.json, preserving user settings.
-    static func removeHookConfig(worktreePath: String) {
+    public func removeHookConfig(worktreePath: String) {
         let settingsPath = (worktreePath as NSString)
             .appendingPathComponent(".claude/settings.local.json")
 
@@ -101,7 +104,7 @@ struct HookConfigGenerator {
         }
 
         // Remove our managed event entries
-        for event in allEvents {
+        for event in Self.allEvents {
             hooks.removeValue(forKey: event)
         }
 
@@ -116,7 +119,7 @@ struct HookConfigGenerator {
             do {
                 try FileManager.default.removeItem(atPath: settingsPath)
             } catch {
-                NSLog("[HookConfigGenerator] Failed to remove empty settings file at %@: %@",
+                NSLog("[ClaudeHookConfigWriter] Failed to remove empty settings file at %@: %@",
                       settingsPath, error.localizedDescription)
             }
         } else {
@@ -125,7 +128,7 @@ struct HookConfigGenerator {
                     withJSONObject: settings, options: [.prettyPrinted, .sortedKeys])
                 try updatedData.write(to: URL(fileURLWithPath: settingsPath))
             } catch {
-                NSLog("[HookConfigGenerator] Failed to write updated settings to %@: %@",
+                NSLog("[ClaudeHookConfigWriter] Failed to write updated settings to %@: %@",
                       settingsPath, error.localizedDescription)
             }
         }
@@ -134,7 +137,7 @@ struct HookConfigGenerator {
     // MARK: - Find crow Binary
 
     /// Find the crow binary, checking common install locations.
-    static func findCrowBinary() -> String? {
+    public static func findCrowBinary() -> String? {
         // Check same directory as running executable first (development builds)
         let execURL = URL(fileURLWithPath: ProcessInfo.processInfo.arguments[0])
         let buildDir = execURL.deletingLastPathComponent()

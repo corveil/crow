@@ -45,6 +45,9 @@ public struct AppConfig: Codable, Sendable, Equatable {
     /// Scheduled jobs: named sets of prompts that fire automatically on a
     /// schedule, scoped to a repo. Driven by `JobScheduler` (CROW-317).
     public var jobs: [JobConfig]
+    /// The agent used for newly created sessions when none is specified.
+    /// Existing persisted configs without this key decode to `.claudeCode`.
+    public var defaultAgentKind: AgentKind
 
     public init(
         workspaces: [WorkspaceInfo] = [],
@@ -61,7 +64,8 @@ public struct AppConfig: Codable, Sendable, Equatable {
         autoCreateWatcherEnabled: Bool = false,
         autoRebaseWatcherEnabled: Bool = false,
         cleanup: CleanupConfig = CleanupConfig(),
-        jobs: [JobConfig] = []
+        jobs: [JobConfig] = [],
+        defaultAgentKind: AgentKind = .claudeCode
     ) {
         self.workspaces = workspaces
         self.defaults = defaults
@@ -78,6 +82,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         self.autoRebaseWatcherEnabled = autoRebaseWatcherEnabled
         self.cleanup = cleanup
         self.jobs = jobs
+        self.defaultAgentKind = defaultAgentKind
     }
 
     public init(from decoder: Decoder) throws {
@@ -97,10 +102,11 @@ public struct AppConfig: Codable, Sendable, Equatable {
         autoRebaseWatcherEnabled = try container.decodeIfPresent(Bool.self, forKey: .autoRebaseWatcherEnabled) ?? false
         cleanup = try container.decodeIfPresent(CleanupConfig.self, forKey: .cleanup) ?? CleanupConfig()
         jobs = try container.decodeIfPresent([JobConfig].self, forKey: .jobs) ?? []
+        defaultAgentKind = try container.decodeIfPresent(AgentKind.self, forKey: .defaultAgentKind) ?? .claudeCode
     }
 
     private enum CodingKeys: String, CodingKey {
-        case workspaces, defaults, notifications, sidebar, remoteControlEnabled, managerAutoPermissionMode, jobsAutoPermissionMode, telemetry, autoRespond, attributionTrailers, autoMergeWatcherEnabled, autoCreateWatcherEnabled, autoRebaseWatcherEnabled, cleanup, jobs
+        case workspaces, defaults, notifications, sidebar, remoteControlEnabled, managerAutoPermissionMode, jobsAutoPermissionMode, telemetry, autoRespond, attributionTrailers, autoMergeWatcherEnabled, autoCreateWatcherEnabled, autoRebaseWatcherEnabled, cleanup, jobs, defaultAgentKind
     }
 }
 

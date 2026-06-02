@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import CrowCore
+@testable import CrowClaude
 
 @Test func claudeLaunchArgsDisabledReturnsEmpty() {
     #expect(ClaudeLaunchArgs.argsSuffix(remoteControl: false, sessionName: nil) == "")

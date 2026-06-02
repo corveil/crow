@@ -32,8 +32,8 @@ public enum LinkType: String, Codable, Sendable {
     case custom
 }
 
-/// Claude Code process state as inferred from PTY output.
-public enum ClaudeState: String, Codable, Sendable {
+/// Coding-agent activity state as inferred from hook events.
+public enum AgentActivityState: String, Codable, Sendable {
     case idle
     case working
     case waiting
@@ -47,7 +47,7 @@ public enum TerminalReadiness: String, Codable, Sendable, Comparable {
     case surfaceCreated   // ghostty_surface_t exists, shell process spawning
     case timedOut         // Sentinel never appeared within the readiness budget; UI shows Retry
     case shellReady       // Shell prompt detected (probe file appeared)
-    case claudeLaunched   // claude --continue has been sent
+    case agentLaunched    // Agent launch command has been sent
 
     private var sortOrder: Int {
         switch self {
@@ -56,7 +56,7 @@ public enum TerminalReadiness: String, Codable, Sendable, Comparable {
         case .surfaceCreated: 1
         case .timedOut: 2
         case .shellReady: 3
-        case .claudeLaunched: 4
+        case .agentLaunched: 4
         }
     }
 
