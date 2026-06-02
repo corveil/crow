@@ -814,26 +814,64 @@ final class SessionService {
     // MARK: - Worktree Safety Checks
     // Protected branch and main-checkout detection are centralized on SessionWorktree in CrowCore.
 
-    private func shell(env: [String: String] = [:], _ args: String...) async throws -> String {
-        let process = Process()
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = args
-        process.environment = env.isEmpty
+    /// Run `/usr/bin/env <args...>` and return stdout. Marked `nonisolated` and
+    /// implemented via `withCheckedThrowingContinuation` + `terminationHandler`
+    /// so `await shell(...)` truly suspends the calling task instead of
+    /// blocking on `waitUntilExit()`. This is what keeps the main actor free
+    /// during review-session kickoff (#404); the prior implementation pinned
+    /// every git/gh call to the main thread.
+    nonisolated private func shell(env: [String: String] = [:], _ args: String...) async throws -> String {
+        let resolvedEnv = env.isEmpty
             ? ShellEnvironment.shared.env
             : ShellEnvironment.shared.merging(env)
-        process.standardOutput = stdoutPipe
-        process.standardError = stderrPipe
-        try process.run()
-        process.waitUntilExit()
-        let stdout = String(data: stdoutPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        let stderr = String(data: stderrPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        guard process.terminationStatus == 0 else {
-            throw NSError(domain: "SessionService", code: Int(process.terminationStatus),
-                          userInfo: [NSLocalizedDescriptionKey: stderr])
+        return try await Self.runShellAsync(env: resolvedEnv, args: args)
+    }
+
+    /// Shared async Process runner. Hands ownership of the pipes/process to
+    /// the termination handler so reads happen after exit (no deadlock from
+    /// a full pipe blocking the child) and the continuation is resumed
+    /// exactly once.
+    nonisolated static func runShellAsync(env: [String: String], args: [String]) async throws -> String {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, Error>) in
+            let process = Process()
+            let stdoutPipe = Pipe()
+            let stderrPipe = Pipe()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            process.arguments = args
+            process.environment = env
+            process.standardOutput = stdoutPipe
+            process.standardError = stderrPipe
+
+            process.terminationHandler = { proc in
+                let stdout = String(
+                    data: stdoutPipe.fileHandleForReading.readDataToEndOfFile(),
+                    encoding: .utf8
+                ) ?? ""
+                let stderr = String(
+                    data: stderrPipe.fileHandleForReading.readDataToEndOfFile(),
+                    encoding: .utf8
+                ) ?? ""
+                if proc.terminationStatus == 0 {
+                    continuation.resume(returning: stdout)
+                } else {
+                    continuation.resume(throwing: NSError(
+                        domain: "SessionService",
+                        code: Int(proc.terminationStatus),
+                        userInfo: [NSLocalizedDescriptionKey: stderr.isEmpty ? stdout : stderr]
+                    ))
+                }
+            }
+
+            do {
+                try process.run()
+            } catch {
+                // Clear the termination handler so it can't fire after we
+                // resume here — Process invokes it on launch failure paths
+                // in some macOS versions, which would double-resume.
+                process.terminationHandler = nil
+                continuation.resume(throwing: error)
+            }
         }
-        return stdout
     }
 
     /// Resolve org/repo slug from a repo's git remote URL.
@@ -1219,97 +1257,57 @@ final class SessionService {
         let repoName = String(components[components.count - 3])
         let repoSlug = "\(owner)/\(repoName)"
 
-        // Fetch PR metadata
-        guard let prOutput = try? await shell(
-            "gh", "pr", "view", prURL,
-            "--json", "title,headRefName,headRefOid,baseRefName,number"
-        ) else {
-            NSLog("[SessionService] Failed to fetch PR metadata for \(prURL)")
-            return nil
-        }
-
-        guard let prData = prOutput.data(using: .utf8),
-              let prJSON = try? JSONSerialization.jsonObject(with: prData) as? [String: Any],
-              let prTitle = prJSON["title"] as? String,
-              let headBranch = prJSON["headRefName"] as? String else {
-            NSLog("[SessionService] Failed to parse PR metadata for \(prURL)")
-            return nil
-        }
-        // `headRefOid` is the SHA the review session is anchored to. Used by
-        // the kickoff guard (AppDelegate) as a fallback re-kick signal when
-        // the PR head advances without an explicit re-request (CROW-290).
-        let headRefOid = prJSON["headRefOid"] as? String
-
         // Determine clone path
         guard let devRoot = ConfigStore.loadDevRoot() else {
             NSLog("[SessionService] No devRoot configured")
             return nil
         }
-        let reviewsDir = (devRoot as NSString).appendingPathComponent("crow-reviews")
-        let cloneDirName = "\(repoName)-pr-\(prNumber)"
-        let clonePath = (reviewsDir as NSString).appendingPathComponent(cloneDirName)
 
-        let fm = FileManager.default
-
-        // Ensure reviews directory exists
-        try? fm.createDirectory(atPath: reviewsDir, withIntermediateDirectories: true)
-
-        // Clone or update the repo
-        if !fm.fileExists(atPath: (clonePath as NSString).appendingPathComponent(".git")) {
-            NSLog("[SessionService] Cloning \(repoSlug) into \(clonePath)")
-            _ = try? await shell("gh", "repo", "clone", repoSlug, clonePath)
+        // All git/network/file-write work runs off the main actor so the UI
+        // never beachballs while a review spins up (#404). The detached task
+        // hands back just the metadata the main-actor tail needs to build
+        // the Session/Worktree/Terminal/Link rows.
+        let env = ShellEnvironment.shared.env
+        let prep: ReviewClonePrep
+        do {
+            prep = try await Task.detached(priority: .userInitiated) {
+                try await Self.prepareReviewClone(
+                    prURL: prURL,
+                    repoSlug: repoSlug,
+                    repoName: repoName,
+                    prNumber: prNumber,
+                    devRoot: devRoot,
+                    env: env
+                )
+            }.value
+        } catch {
+            NSLog("[SessionService] Failed to prepare review clone for \(prURL): \(error.localizedDescription)")
+            return nil
         }
-
-        // Fetch and checkout the PR branch
-        _ = try? await shell("git", "-C", clonePath, "fetch", "origin", headBranch)
-        _ = try? await shell("git", "-C", clonePath, "checkout", headBranch)
-        _ = try? await shell("git", "-C", clonePath, "pull", "origin", headBranch)
-
-        // Write review prompt file into the clone directory
-        let promptPath = (clonePath as NSString).appendingPathComponent(".crow-review-prompt.md")
-        let reviewPrompt = Self.buildReviewPrompt(prURL: prURL, prTitle: prTitle, repoSlug: repoSlug, prNumber: prNumber)
-        try? reviewPrompt.write(toFile: promptPath, atomically: true, encoding: .utf8)
-
-        // Copy the crow-review-pr skill into the clone's .claude/skills/ so Claude Code can find it
-        let cloneSkillsDir = (clonePath as NSString).appendingPathComponent(".claude/skills/crow-review-pr")
-        try? fm.createDirectory(atPath: cloneSkillsDir, withIntermediateDirectories: true)
-        let skillContent = Scaffolder.bundledReviewSkill()
-        try? skillContent.write(
-            toFile: (cloneSkillsDir as NSString).appendingPathComponent("SKILL.md"),
-            atomically: true, encoding: .utf8
-        )
-
-        // Copy settings.json into the clone's .claude/ for permissions
-        let cloneSettingsDir = (clonePath as NSString).appendingPathComponent(".claude")
-        let settingsContent = Scaffolder.bundledSettings()
-        try? settingsContent.write(
-            toFile: (cloneSettingsDir as NSString).appendingPathComponent("settings.json"),
-            atomically: true, encoding: .utf8
-        )
 
         // Create session
         let session = Session(
             name: "review-\(repoName)-\(prNumber)",
             kind: .review,
             agentKind: appState.defaultAgentKind,
-            ticketTitle: prTitle,
+            ticketTitle: prep.prTitle,
             provider: .github,
-            lastReviewedHeadSha: headRefOid
+            lastReviewedHeadSha: prep.headRefOid
         )
 
         let worktree = SessionWorktree(
             sessionID: session.id,
             repoName: repoName,
-            repoPath: clonePath,
-            worktreePath: clonePath,
-            branch: headBranch,
+            repoPath: prep.clonePath,
+            worktreePath: prep.clonePath,
+            branch: prep.headBranch,
             isPrimary: true
         )
 
         let terminal = SessionTerminal(
             sessionID: session.id,
             name: "Claude Code",
-            cwd: clonePath,
+            cwd: prep.clonePath,
             isManaged: true
         )
 
@@ -1347,6 +1345,102 @@ final class SessionService {
 
         NSLog("[SessionService] Created review session '\(session.name)' for \(prURL)")
         return session.id
+    }
+
+    /// Metadata produced by the off-main-actor `prepareReviewClone` step.
+    /// Holds everything the main-actor tail of `createReviewSession` needs to
+    /// build the `Session` / `SessionWorktree` / `SessionTerminal` rows.
+    private struct ReviewClonePrep: Sendable {
+        let prTitle: String
+        let headBranch: String
+        let headRefOid: String?
+        let clonePath: String
+    }
+
+    /// Off-main-actor preparation for a review session: fetch PR metadata,
+    /// clone the repo (if needed), check out the PR branch, and stage the
+    /// review prompt / skill / settings files. Returns the metadata the
+    /// main-actor portion of `createReviewSession` needs. Throws on the only
+    /// failure that should abort kickoff entirely (PR metadata fetch). git
+    /// fetch/checkout/pull errors are tolerated as before — the worktree may
+    /// already be in a usable state from a prior run.
+    nonisolated private static func prepareReviewClone(
+        prURL: String,
+        repoSlug: String,
+        repoName: String,
+        prNumber: Int,
+        devRoot: String,
+        env: [String: String]
+    ) async throws -> ReviewClonePrep {
+        // Fetch PR metadata
+        let prOutput = try await runShellAsync(env: env, args: [
+            "gh", "pr", "view", prURL,
+            "--json", "title,headRefName,headRefOid,baseRefName,number"
+        ])
+
+        guard let prData = prOutput.data(using: .utf8),
+              let prJSON = try? JSONSerialization.jsonObject(with: prData) as? [String: Any],
+              let prTitle = prJSON["title"] as? String,
+              let headBranch = prJSON["headRefName"] as? String else {
+            throw NSError(
+                domain: "SessionService",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "Failed to parse PR metadata for \(prURL)"]
+            )
+        }
+        // `headRefOid` is the SHA the review session is anchored to. Used by
+        // the kickoff guard (AppDelegate) as a fallback re-kick signal when
+        // the PR head advances without an explicit re-request (CROW-290).
+        let headRefOid = prJSON["headRefOid"] as? String
+
+        let reviewsDir = (devRoot as NSString).appendingPathComponent("crow-reviews")
+        let cloneDirName = "\(repoName)-pr-\(prNumber)"
+        let clonePath = (reviewsDir as NSString).appendingPathComponent(cloneDirName)
+
+        let fm = FileManager.default
+
+        // Ensure reviews directory exists
+        try? fm.createDirectory(atPath: reviewsDir, withIntermediateDirectories: true)
+
+        // Clone or update the repo
+        if !fm.fileExists(atPath: (clonePath as NSString).appendingPathComponent(".git")) {
+            NSLog("[SessionService] Cloning \(repoSlug) into \(clonePath)")
+            _ = try? await runShellAsync(env: env, args: ["gh", "repo", "clone", repoSlug, clonePath])
+        }
+
+        // Fetch and checkout the PR branch
+        _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "fetch", "origin", headBranch])
+        _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "checkout", headBranch])
+        _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "pull", "origin", headBranch])
+
+        // Write review prompt file into the clone directory
+        let promptPath = (clonePath as NSString).appendingPathComponent(".crow-review-prompt.md")
+        let reviewPrompt = Self.buildReviewPrompt(prURL: prURL, prTitle: prTitle, repoSlug: repoSlug, prNumber: prNumber)
+        try? reviewPrompt.write(toFile: promptPath, atomically: true, encoding: .utf8)
+
+        // Copy the crow-review-pr skill into the clone's .claude/skills/ so Claude Code can find it
+        let cloneSkillsDir = (clonePath as NSString).appendingPathComponent(".claude/skills/crow-review-pr")
+        try? fm.createDirectory(atPath: cloneSkillsDir, withIntermediateDirectories: true)
+        let skillContent = Scaffolder.bundledReviewSkill()
+        try? skillContent.write(
+            toFile: (cloneSkillsDir as NSString).appendingPathComponent("SKILL.md"),
+            atomically: true, encoding: .utf8
+        )
+
+        // Copy settings.json into the clone's .claude/ for permissions
+        let cloneSettingsDir = (clonePath as NSString).appendingPathComponent(".claude")
+        let settingsContent = Scaffolder.bundledSettings()
+        try? settingsContent.write(
+            toFile: (cloneSettingsDir as NSString).appendingPathComponent("settings.json"),
+            atomically: true, encoding: .utf8
+        )
+
+        return ReviewClonePrep(
+            prTitle: prTitle,
+            headBranch: headBranch,
+            headRefOid: headRefOid,
+            clonePath: clonePath
+        )
     }
 
     // MARK: - Scheduled Jobs (CROW-317)
@@ -1545,7 +1639,7 @@ final class SessionService {
     // MARK: - Review Prompt
 
     /// Build the initial prompt for a review session.
-    private static func buildReviewPrompt(prURL: String, prTitle: String, repoSlug: String, prNumber: Int) -> String {
+    nonisolated private static func buildReviewPrompt(prURL: String, prTitle: String, repoSlug: String, prNumber: Int) -> String {
         """
         /crow-review-pr \(prURL)
         """
