@@ -1246,15 +1246,26 @@ final class SessionService {
     /// what produced the SwiftUI reentrant-layout crash in #266.
     @discardableResult
     func createReviewSession(prURL: String, selectAfterCreate: Bool = false) async -> UUID? {
+        // Universal backstop against duplicate sessions for the same PR. The
+        // serial kickoff queue in AppDelegate guarantees that by the time a
+        // second `createReviewSession` runs, the first has already appended
+        // its row to `appState.sessions` — so this check is authoritative,
+        // not racy. Belt-and-suspenders for the auto-review watcher race
+        // (CROW-406) and any future caller that re-enters during a kickoff.
+        if let existing = appState.existingReviewSession(forPRURL: prURL) {
+            NSLog("[SessionService] Skipping duplicate review session for \(prURL); reusing \(existing.id)")
+            if selectAfterCreate { appState.selectedSessionID = existing.id }
+            return existing.id
+        }
+
         // Parse org/repo and PR number from URL like "https://github.com/org/repo/pull/123"
-        let components = prURL.split(separator: "/")
-        guard components.count >= 5,
-              let prNumber = Int(components.last ?? "") else {
+        guard let parsed = Session.parseReviewPR(url: prURL) else {
             NSLog("[SessionService] Could not parse PR URL: \(prURL)")
             return nil
         }
-        let owner = String(components[components.count - 4])
-        let repoName = String(components[components.count - 3])
+        let owner = parsed.owner
+        let repoName = parsed.repo
+        let prNumber = parsed.number
         let repoSlug = "\(owner)/\(repoName)"
 
         // Determine clone path

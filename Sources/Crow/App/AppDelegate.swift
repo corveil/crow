@@ -621,7 +621,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let shaAdvanced = linkedSession != nil
                     && request.headRefOid != nil
                     && linkedSession?.lastReviewedHeadSha != request.headRefOid
-                guard request.reviewSessionID == nil || shaAdvanced else { continue }
+                // Authoritative `appState`-side check: a prior tick during an
+                // in-flight kickoff may have already created a session even
+                // though `request.reviewSessionID` hasn't been repopulated by
+                // the next IssueTracker refresh yet (CROW-406). Without this,
+                // a watcher tick during the ~10s clone window enqueues a
+                // duplicate kickoff for the same PR.
+                let existingByPR = self.appState.existingReviewSession(forPRURL: request.url)
+                guard (request.reviewSessionID == nil && existingByPR == nil) || shaAdvanced else { continue }
 
                 // B-fallback: tear down the stale round-1 session so the new
                 // session doesn't double up in `reviewSessions` for the same

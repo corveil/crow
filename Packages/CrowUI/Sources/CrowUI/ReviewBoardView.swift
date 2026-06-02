@@ -136,9 +136,15 @@ public struct ReviewBoardView: View {
             .buttonStyle(.plain)
 
             Button {
+                // Pre-filter PRs that already have an active review session
+                // so a stale multi-select doesn't enqueue duplicate kickoffs
+                // (CROW-406). The dedup in createReviewSession would catch
+                // these too, but filtering here keeps the kickoff queue from
+                // accumulating no-op work.
                 let urls = appState.filteredReviewRequests
                     .filter { selectedRequestIDs.contains($0.id) }
                     .map(\.url)
+                    .filter { appState.existingReviewSession(forPRURL: $0) == nil }
                 appState.onBatchStartReview?(urls)
                 selectedRequestIDs.removeAll()
                 isSelectionMode = false
@@ -306,10 +312,13 @@ struct ReviewRow: View {
     private var reviewAction: some View {
         if isSelectionMode {
             EmptyView()
-        } else if let sessionID = request.reviewSessionID,
-           appState.sessions.contains(where: { $0.id == sessionID }) {
+        } else if let existing = appState.existingReviewSession(forPRURL: request.url) {
+            // Look up the session directly from `appState` instead of the
+            // lagging `request.reviewSessionID` so the button flips to
+            // "Go to Session" the instant the session row is appended,
+            // not on the next IssueTracker refresh (CROW-406).
             Button {
-                appState.selectedSessionID = sessionID
+                appState.selectedSessionID = existing.id
             } label: {
                 HStack(spacing: 4) {
                     Image(systemName: "arrow.right.circle")

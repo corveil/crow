@@ -65,6 +65,19 @@ public struct Session: Identifiable, Codable, Sendable {
         self.autoMergeEnabledAt = autoMergeEnabledAt
     }
 
+    /// Parse a GitHub PR URL (`https://github.com/<owner>/<repo>/pull/<number>`)
+    /// into its components. Returns `nil` if the URL is malformed. Shared by
+    /// `SessionService.createReviewSession` and the kickoff-dedup helpers on
+    /// `AppState`; keep here so callers don't reinvent the same parser.
+    public static func parseReviewPR(url: String) -> (owner: String, repo: String, number: Int)? {
+        let components = url.split(separator: "/")
+        guard components.count >= 5,
+              let number = Int(components.last ?? "") else { return nil }
+        let owner = String(components[components.count - 4])
+        let repo = String(components[components.count - 3])
+        return (owner, repo, number)
+    }
+
     // Backward-compatible decoding: default `kind`, `agentKind`, and
     // `reviewPromptDispatched` when missing from older persisted data.
     // `reviewPromptDispatched` defaults to `true` so existing review sessions

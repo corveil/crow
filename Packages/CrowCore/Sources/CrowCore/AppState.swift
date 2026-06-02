@@ -497,6 +497,19 @@ public final class AppState {
         return reviewRequests.first { $0.url == prLink.url }
     }
 
+    /// Authoritative lookup for "is there already an active review session
+    /// for this PR URL?". Cross-references `reviewSessions` (which already
+    /// excludes completed/archived) against `links` by `.pr` linkType +
+    /// exact URL match. Used by the kickoff watcher, the review-board
+    /// buttons, and `SessionService.createReviewSession` as a single source
+    /// of truth so they don't rely on the lagging `ReviewRequest.reviewSessionID`
+    /// cross-reference that IssueTracker populates one tick late (CROW-406).
+    public func existingReviewSession(forPRURL url: String) -> Session? {
+        reviewSessions.first { session in
+            links(for: session.id).contains { $0.linkType == .pr && $0.url == url }
+        }
+    }
+
     /// Labels for a session, sourced from its linked AssignedIssue or ReviewRequest.
     public func labels(forSession session: Session) -> [LabelInfo] {
         if let issue = assignedIssue(for: session) {
