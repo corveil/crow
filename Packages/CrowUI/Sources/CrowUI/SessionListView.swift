@@ -486,6 +486,11 @@ struct ManagerSessionRow: View {
         }
         .buttonStyle(.plain)
         .padding(.vertical, 2)
+        .simultaneousGesture(
+            TapGesture(count: 2).onEnded {
+                editingSessionID = session.id
+            }
+        )
         .onChange(of: editingSessionID) { _, newValue in
             if newValue == session.id {
                 editingName = session.name
