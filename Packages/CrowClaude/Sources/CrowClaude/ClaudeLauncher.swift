@@ -43,7 +43,7 @@ public actor ClaudeLauncher {
                 lines.append("```bash")
                 lines.append("glab issue view \(url) --comments")
                 lines.append("```")
-            case nil:
+            case .corveil, nil:
                 lines.append("URL: \(url)")
             }
         }
@@ -108,7 +108,7 @@ public actor ClaudeLauncher {
                 lines.append("glab mr create --fill --target-branch main")
             }
             lines.append("```")
-        case nil:
+        case .corveil, nil:
             lines.append("6. Open a pull request\(suffix)")
         }
     }

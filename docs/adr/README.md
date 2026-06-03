@@ -41,3 +41,4 @@ Don't delete the old file. Update its `Status` to `Superseded by NNNN` and point
 | 0002 | [Unix-socket CLI ↔ app architecture](./0002-unix-socket-cli-architecture.md) | Accepted | 2026-05-25 |
 | 0003 | [Worktree-per-task model](./0003-worktree-per-task-model.md) | Accepted | 2026-05-25 |
 | 0004 | [Manager session launches in auto-permission mode by default](./0004-manager-auto-permission-mode.md) | Accepted | 2026-05-25 |
+| 0005 | [TaskBackend and CodeBackend protocols](./0005-task-and-code-backend-protocols.md) | Proposed | 2026-06-03 |

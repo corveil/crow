@@ -428,7 +428,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appState.defaultAgentKind = config.defaultAgentKind
 
         // Create session service and hydrate state
-        let service = SessionService(store: store, appState: appState, telemetryPort: config.telemetry.enabled ? config.telemetry.port : nil)
+        let service = SessionService(store: store, appState: appState, telemetryPort: config.telemetry.enabled ? config.telemetry.port : nil, providerManager: providerManager)
         service.hydrateState()
         self.sessionService = service
         NSLog("[Crow] Session state hydrated (%d sessions)", appState.sessions.count)

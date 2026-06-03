@@ -4,6 +4,7 @@ import CrowClaude
 import CrowCore
 import CrowGit
 import CrowPersistence
+import CrowProvider
 import CrowTerminal
 
 /// Simplified session service — CRUD only. Orchestration moved to Claude Code via crow CLI.
@@ -12,11 +13,15 @@ final class SessionService {
     private let store: JSONStore
     private let appState: AppState
     let telemetryPort: UInt16?
+    /// Backend factory for ticket/PR lookups during recovery. Optional so unit-tests
+    /// that don't exercise recovery paths needn't construct one. See ADR 0005.
+    private let providerManager: ProviderManager?
 
-    init(store: JSONStore, appState: AppState, telemetryPort: UInt16? = nil) {
+    init(store: JSONStore, appState: AppState, telemetryPort: UInt16? = nil, providerManager: ProviderManager? = nil) {
         self.store = store
         self.appState = appState
         self.telemetryPort = telemetryPort
+        self.providerManager = providerManager
     }
 
     /// Upgrade the well-known primary Manager session from `.work` (how it was
@@ -1119,9 +1124,15 @@ final class SessionService {
             }
         }
 
-        // Try to fetch issue title
+        // Try to fetch issue title — prefer the TaskBackend abstraction (ADR 0005)
+        // when a manager is wired; fall back to inline `gh` for older call paths.
         if let issueURL = info.url {
-            if let output = try? await shell("gh", "issue", "view", issueURL, "--json", "title"),
+            if let manager = providerManager {
+                let backend = manager.taskBackend(forURL: issueURL)
+                if let ticket = try? await backend.fetchTask(url: issueURL) {
+                    info.title = ticket.title
+                }
+            } else if let output = try? await shell("gh", "issue", "view", issueURL, "--json", "title"),
                let data = output.data(using: .utf8),
                let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let title = json["title"] as? String {
@@ -1135,6 +1146,14 @@ final class SessionService {
     /// Check for a pull request on a branch and return a link if found.
     private func findPRLink(branch: String, repoPath: String, sessionID: UUID) async -> SessionLink? {
         guard let repoSlug = resolveRepoSlug(repoPath: repoPath) else { return nil }
+        // Prefer CodeBackend.linkedPR (ADR 0005) when a manager is wired; fall
+        // back to the inline `gh pr list` shell-out for legacy call paths.
+        if let manager = providerManager,
+           let backend = manager.codeBackend(for: .github),
+           let pr = try? await backend.linkedPR(repo: repoSlug, branch: branch) {
+            NSLog("[SessionService] Found PR #\(pr.number) for branch '\(branch)'")
+            return SessionLink(sessionID: sessionID, label: "PR #\(pr.number)", url: pr.url, linkType: .pr)
+        }
         guard let prOutput = try? await shell(
             "gh", "pr", "list", "--repo", repoSlug, "--head", branch,
             "--state", "all", "--json", "number,url,state", "--limit", "1"

@@ -22,6 +22,7 @@ public enum SessionStatus: String, Codable, Sendable {
 public enum Provider: String, Codable, Sendable {
     case github
     case gitlab
+    case corveil
 }
 
 /// Type of link associated with a session.

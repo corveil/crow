@@ -512,6 +512,11 @@ final class IssueTracker {
                     "--unlabel", Self.autoCreateLabel
                 ]
             )
+        case .corveil:
+            // Stub: Corveil label management arrives with a real CorveilTaskBackend.
+            // See ADR 0005. listAssigned() returns no Corveil issues today, so this
+            // branch is defensive only.
+            return
         }
         if result.exitCode != 0 {
             let stderr = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)

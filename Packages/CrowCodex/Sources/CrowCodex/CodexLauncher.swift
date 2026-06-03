@@ -47,7 +47,7 @@ public actor CodexLauncher {
                 lines.append("```bash")
                 lines.append("glab issue view \(url) --comments")
                 lines.append("```")
-            case nil:
+            case .corveil, nil:
                 lines.append("URL: \(url)")
             }
         }

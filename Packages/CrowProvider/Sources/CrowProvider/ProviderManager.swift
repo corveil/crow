@@ -2,12 +2,75 @@ import Foundation
 import CrowCore
 
 /// Detects provider from URL and fetches ticket details.
+///
+/// Also acts as a factory for ``TaskBackend`` / ``CodeBackend`` instances — call
+/// ``taskBackend(for:host:)`` or ``codeBackend(for:host:)`` to get a provider-
+/// specific backend rather than switching on `Provider` at the call site. See ADR 0005.
 public actor ProviderManager {
     /// Additional GitLab hosts beyond gitlab.com (user-configurable).
-    private let additionalGitLabHosts: [String]
+    nonisolated private let additionalGitLabHosts: [String]
 
-    public init(additionalGitLabHosts: [String] = []) {
+    /// Subprocess runner shared by all backends this manager hands out.
+    nonisolated private let shellRunner: ShellRunner
+
+    public init(additionalGitLabHosts: [String] = [], shellRunner: ShellRunner = ProcessShellRunner()) {
         self.additionalGitLabHosts = additionalGitLabHosts
+        self.shellRunner = shellRunner
+    }
+
+    // MARK: - Backend factory
+
+    /// Hand out a ``TaskBackend`` for the given provider. Use the URL-based
+    /// variant when only a ticket URL is in hand.
+    public nonisolated func taskBackend(for provider: Provider, host: String? = nil) -> TaskBackend {
+        switch provider {
+        case .github:
+            return GitHubTaskBackend(shellRunner: shellRunner)
+        case .gitlab:
+            return GitLabTaskBackend(shellRunner: shellRunner, host: host)
+        case .corveil:
+            return StubCorveilTaskBackend()
+        }
+    }
+
+    /// Hand out a ``CodeBackend`` for the given provider, or `nil` for providers
+    /// that have no VCS-side surface (Corveil). Callers must handle `nil` —
+    /// a non-coding task may legitimately have no code backend at all.
+    public nonisolated func codeBackend(for provider: Provider, host: String? = nil) -> CodeBackend? {
+        switch provider {
+        case .github:
+            return GitHubCodeBackend(shellRunner: shellRunner)
+        case .gitlab:
+            return GitLabCodeBackend(shellRunner: shellRunner, host: host)
+        case .corveil:
+            return nil
+        }
+    }
+
+    /// URL-driven `TaskBackend` lookup — detect the provider from `url` and
+    /// hand back the matching backend.
+    public nonisolated func taskBackend(forURL url: String) -> TaskBackend {
+        let detected = detectProviderNonisolated(from: url)
+        return taskBackend(for: detected.provider, host: detected.host)
+    }
+
+    /// Non-isolated variant of ``detectProvider(from:)`` — same logic, available
+    /// off-actor for use by the factory methods above. Kept in sync with the
+    /// actor-isolated variant on purpose; if you change one, change both.
+    nonisolated private func detectProviderNonisolated(from url: String) -> (provider: Provider, cli: String, host: String?) {
+        if url.contains("github.com") {
+            return (.github, "gh", nil)
+        } else if url.contains("gitlab.com") {
+            return (.gitlab, "glab", "gitlab.com")
+        } else if url.contains("corveil.io") {
+            return (.corveil, "", nil)
+        }
+        for host in additionalGitLabHosts {
+            if url.contains(host) {
+                return (.gitlab, "glab", host)
+            }
+        }
+        return (.github, "gh", nil)
     }
 
     /// Detect provider from a URL string.
@@ -19,6 +82,10 @@ public actor ProviderManager {
             return (.github, "gh", nil)
         } else if url.contains("gitlab.com") {
             return (.gitlab, "glab", "gitlab.com")
+        } else if url.contains("corveil.io") {
+            // Corveil is task-only (no embedded git, no CLI). Detected so the
+            // stub backend can be exercised end-to-end via URL. See ADR 0005.
+            return (.corveil, "", nil)
         }
         // Check user-configured GitLab hosts
         for host in additionalGitLabHosts {
@@ -95,6 +162,9 @@ public actor ProviderManager {
             } else {
                 output = try await shell(env: env, cwd: NSHomeDirectory(), "glab", "issue", "view", "\(parsed.number)", "--repo", repoSlug)
             }
+        case .corveil:
+            // Stub: real Corveil API integration arrives in a follow-up. See ADR 0005.
+            throw ProviderError.unimplemented("Corveil ticket fetching not yet implemented")
         }
 
         // Parse title from JSON output (GitHub returns JSON, GitLab returns text)
@@ -163,6 +233,9 @@ public actor ProviderManager {
                     "--jq", ".[].path_with_namespace"
                 )
                 return Self.nonEmptyLines(out)
+            case .corveil:
+                // Corveil is task-only; no repo listing is meaningful here.
+                return []
             }
         } catch {
             NSLog("[ProviderManager] listRepos failed for owner '\(owner)': \(error.localizedDescription)")
@@ -253,4 +326,7 @@ public struct TicketInfo: Sendable {
 public enum ProviderError: Error {
     case invalidURL(String)
     case commandFailed(String)
+    /// A backend method is part of the protocol but not implemented for this provider yet
+    /// (e.g. `StubCorveilTaskBackend` — every method throws this; see ADR 0005).
+    case unimplemented(String)
 }
