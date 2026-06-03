@@ -16,4 +16,7 @@ public struct AgentKind: Hashable, Sendable, Codable, RawRepresentable {
 
     /// The OpenAI Codex agent.
     public static let codex = AgentKind(rawValue: "codex")
+
+    /// The Cursor agent.
+    public static let cursor = AgentKind(rawValue: "cursor")
 }

@@ -3,6 +3,7 @@ import SwiftUI
 import CrowClaude
 import CrowCodex
 import CrowCore
+import CrowCursor
 import CrowGit
 import CrowProvider
 import CrowUI
@@ -334,6 +335,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSLog("[Crow] OpenAI Codex agent registered")
         }
 
+        // Conditionally register the Cursor agent on the same gate. The
+        // Cursor CLI installs the binary as `agent` (not `cursor`); when
+        // it's absent the picker silently stays at the two prior agents.
+        let cursorAgent = CursorAgent()
+        if cursorAgent.findBinary() != nil {
+            AgentRegistry.shared.register(cursorAgent)
+            NSLog("[Crow] Cursor agent registered")
+        }
+
         // Initialize libghostty
         NSLog("[Crow] Initializing Ghostty")
         GhosttyApp.shared.initialize()
@@ -411,6 +421,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
+        // Cursor-specific dev-root and global config — only when Cursor
+        // is registered. AGENTS.md is the same file Codex writes; both
+        // scaffolders are idempotent and preserve the user-edited
+        // `## Known Issues / Corrections` section, so co-existence is
+        // safe. hooks.json goes into ~/.cursor (or $CURSOR_CONFIG_DIR).
+        if AgentRegistry.shared.agent(for: .cursor) != nil {
+            do {
+                try CursorScaffolder.scaffold(devRoot: devRoot)
+            } catch {
+                NSLog("[Crow] Cursor scaffold failed: %@", error.localizedDescription)
+            }
+            if let crowPath = ClaudeHookConfigWriter.findCrowBinary() {
+                let cursorHome = ProcessInfo.processInfo.environment["CURSOR_CONFIG_DIR"]
+                    ?? NSString(string: "~/.cursor").expandingTildeInPath
+                do {
+                    try CursorHookConfigWriter.installGlobalConfig(cursorHome: cursorHome, crowPath: crowPath)
+                } catch {
+                    NSLog("[Crow] Cursor global config install failed: %@", error.localizedDescription)
+                }
+            }
+        }
+
         // Initialize persistence
         let store = JSONStore()
         self.store = store
@@ -446,7 +478,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Check for runtime dependencies (non-blocking)
         Task {
             let missing = await Task.detached {
-                let tools = ["gh", "git", "claude", "codex", "glab", "code"]
+                let tools = ["gh", "git", "claude", "codex", "agent", "glab", "code"]
                 return tools.filter { !ShellEnvironment.shared.hasCommand($0) }
             }.value
             if !missing.isEmpty {
