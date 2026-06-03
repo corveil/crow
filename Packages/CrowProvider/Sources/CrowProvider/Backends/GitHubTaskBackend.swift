@@ -5,18 +5,20 @@ import CrowCore
 ///
 /// Capabilities declared:
 /// - `.batchedQuery` — `listAssigned`-style fetches use one GraphQL call.
+/// - `.projectBoardStatus` — GitHub Projects v2 is the UI surface this
+///   capability gates. The `setTaskStatus` GraphQL migration is still
+///   pending; the legacy `IssueTracker.markInReview` path (see
+///   `IssueTracker.swift:2549`) executes the mutation today via the
+///   `onMarkInReview` closure, so calling `setTaskStatus` on this backend
+///   directly still throws `.unimplemented`. UI guards branch on this
+///   capability instead of `provider == .github` (see ADR 0005); execution
+///   falls through to the legacy path until the migration lands.
 ///
-/// Note: `.projectBoardStatus` is intentionally *not* declared until the
-/// `markInReview` GraphQL migration lands (see `setTaskStatus` below and
-/// IssueTracker.swift:2539). The flag is contract: declaring it means a
-/// capability-gated caller can call `setTaskStatus` and expect success.
-/// We add the flag when the implementation arrives, not before.
-///
-/// See ADR 0005 for the protocol contract and ADR 0005's Context section for why
+/// See ADR 0005 for the protocol contract and its Context section for why
 /// task ops are separate from code ops.
 public struct GitHubTaskBackend: TaskBackend {
     public let provider: Provider = .github
-    public let capabilities: Set<TaskCapability> = [.batchedQuery]
+    public let capabilities: Set<TaskCapability> = [.batchedQuery, .projectBoardStatus]
 
     private let shellRunner: ShellRunner
 
@@ -65,10 +67,12 @@ public struct GitHubTaskBackend: TaskBackend {
 
     public func setTaskStatus(url: String, status: TicketStatus) async throws {
         // Real implementation requires the GraphQL project-item lookup + mutation
-        // sequence currently inlined at IssueTracker.swift:2539. That migration is
+        // sequence currently inlined at IssueTracker.swift:2549. That migration is
         // deferred to a follow-up PR — see ADR 0005 references.
-        // The capability is declared so callers don't fall into the throw path
-        // before the migration lands.
+        // UI guards key off `.projectBoardStatus` (declared above); execution
+        // currently routes through `IssueTracker.markInReview` via the
+        // `onMarkInReview` closure rather than through this method, so the
+        // throw is unreached on the live path until the migration lands.
         throw ProviderError.unimplemented(
             "GitHubTaskBackend.setTaskStatus: migration of markInReview project-board mutation pending"
         )

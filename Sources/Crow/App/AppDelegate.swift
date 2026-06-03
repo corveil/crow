@@ -715,6 +715,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.jobScheduler?.runNow(jobID)
         }
 
+        appState.canSetProjectStatusResolver = { [providerManager] session in
+            guard let provider = session.provider else { return false }
+            return providerManager
+                .taskBackend(for: provider)
+                .capabilities
+                .contains(.projectBoardStatus)
+        }
+
         appState.onMarkInReview = { [weak tracker] id in
             Task { await tracker?.markInReview(sessionID: id) }
         }
