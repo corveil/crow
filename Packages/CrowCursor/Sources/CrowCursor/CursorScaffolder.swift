@@ -5,9 +5,13 @@ import Foundation
 /// alternative to `.cursor/rules/*.mdc` — this is the same file Codex
 /// uses, and we reuse the shared `Resources/AGENTS.md.template`.
 ///
-/// Co-existence with `CodexScaffolder` is safe: both write byte-identical
-/// content using the same template, both preserve user edits below the
-/// `## Known Issues / Corrections` marker, and both are idempotent. The
+/// Co-existence with `CodexScaffolder` is safe: when the bundled template
+/// is present (the normal path), both writers produce byte-identical
+/// content. The two fallback strings still differ slightly — Cursor says
+/// "Cursor Workspace Context" — so with both agents registered each
+/// launch has Codex write then Cursor overwrite (deterministic because
+/// `AppDelegate` runs Cursor's block after Codex's), with the user-edited
+/// `## Known Issues / Corrections` section preserved either way. The
 /// `.cursorrules` legacy file is intentionally not written — it's silent
 /// in current Cursor docs, and `AGENTS.md` covers the same role.
 public enum CursorScaffolder {

@@ -1837,7 +1837,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         crowPath: String?,
         telemetryPort: UInt16?
     ) -> (text: String, didLaunch: Bool) {
-        guard command.contains(agent.launchCommandToken) else { return (command, false) }
+        guard commandLaunchesToken(command, token: agent.launchCommandToken) else { return (command, false) }
         if let worktreePath, let crowPath {
             do {
                 try agent.hookConfigWriter.writeHookConfig(
@@ -1862,6 +1862,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             "OTEL_RESOURCE_ATTRIBUTES=crow.session.id=\(sessionID.uuidString)",
         ].joined(separator: " ")
         return ("export \(vars) && \(command)", true)
+    }
+
+    /// Whether `command` invokes `token` as a shell command rather than an
+    /// incidental substring. Anchored at start-of-string or after a shell
+    /// command separator (`;`, `&&`, `||`, `|`, possibly with whitespace) and
+    /// bounded on the right by whitespace, end-of-string, or a quote.
+    ///
+    /// Plain `command.contains(token)` was fine for Claude (`"claude"`) and
+    /// Codex (`"codex"`), which rarely appear incidentally — but Cursor's
+    /// token is `"agent"`, a common English word that can show up in any
+    /// `crow send` text (e.g. *"refactor the agent registry"*). Without
+    /// anchoring we would flip `terminalReadiness = .agentLaunched` on
+    /// arbitrary prose and `list-terminals` would report the agent had
+    /// started when it hadn't.
+    nonisolated static func commandLaunchesToken(_ command: String, token: String) -> Bool {
+        let escaped = NSRegularExpression.escapedPattern(for: token)
+        let pattern = "(?:^|[;&|]\\s*)\(escaped)(?=\\s|$|[\"'])"
+        return command.range(of: pattern, options: .regularExpression) != nil
     }
 
     // MARK: - Claude Binary Resolution

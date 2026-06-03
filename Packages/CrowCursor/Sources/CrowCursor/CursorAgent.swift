@@ -2,10 +2,14 @@ import Foundation
 import CrowCore
 
 /// `CodingAgent` conformer for the Cursor CLI (`agent` binary). Mirrors the
-/// shape of `OpenAICodexAgent` but enables remote control — Cursor's hook
-/// engine is a superset of Claude Code's (it supports `stop.followup_message`
-/// for auto-continue, accepts the `CLAUDE_PROJECT_DIR` alias, and uses the
-/// same exit-code 0/2 protocol).
+/// shape of `OpenAICodexAgent` but enables remote control — Cursor runs an
+/// interactive TUI, so `crow send` (the agent-agnostic stdin-paste path in
+/// `SessionService`) is sufficient for remote-driving it; no per-agent
+/// hookery needed. Cursor's hook engine itself is a superset of Claude
+/// Code's — same exit-code 0/2 protocol, accepts `CLAUDE_PROJECT_DIR` as
+/// an alias — which is why the `HookConfigWriter` / `StateSignalSource`
+/// pair below works rather than being a no-op like Codex's per-session
+/// writer.
 public struct CursorAgent: CodingAgent {
     public let kind: AgentKind = .cursor
     public let displayName: String = "Cursor"
@@ -62,10 +66,10 @@ public struct CursorAgent: CodingAgent {
         // Bare `agent` launch — the user types their prompt into the TUI.
         // No env prefix (Cursor reads `CURSOR_API_KEY` from the shell;
         // GUI-stored creds are inherited otherwise), no `--continue`
-        // (MVP doesn't auto-resume), no remote-control flag (Cursor's hook
-        // engine provides remote control via `stop.followup_message` in the
-        // global hooks.json, not a per-launch flag). The terminal's cwd is
-        // already the worktree path.
+        // (MVP doesn't auto-resume), no remote-control flag (remote
+        // control is `crow send` typing into the TUI — agent-agnostic,
+        // handled by `SessionService.send`, not a per-launch flag). The
+        // terminal's cwd is already the worktree path.
         return "agent\n"
     }
 
