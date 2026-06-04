@@ -346,12 +346,14 @@ final class SessionService {
         // window was closed, or a legacy per-PID socketPath that no longer
         // matches the stable socket). Create a fresh window as before.
         do {
+            let agentKind = appState.sessions.first(where: { $0.id == terminal.sessionID })?.agentKind
             let binding = try TmuxBackend.shared.registerTerminal(
                 id: terminal.id,
                 name: terminal.name,
                 cwd: terminal.cwd,
                 command: terminal.command,
-                trackReadiness: trackReadiness
+                trackReadiness: trackReadiness,
+                agentKind: agentKind
             )
             var updated = terminal
             updated.tmuxBinding = binding
@@ -1969,17 +1971,18 @@ final class SessionService {
     }
 
     /// Apply the Cursor-specific substitutions to a raw `crow-review-pr`
-    /// SKILL body: replace `$ARGUMENTS` with the PR URL, and swap the
-    /// "via Claude Code" attribution suffix for "via Cursor" so the posted
-    /// GitHub review identifies the reviewing agent correctly.
+    /// SKILL body: replace `$ARGUMENTS` with the PR URL, and expand
+    /// `${CROW_AGENT_DISPLAY_NAME:-…}` / legacy "via Claude Code" wording so the
+    /// posted GitHub review identifies the reviewing agent correctly.
     ///
     /// Split out from `buildReviewPrompt` so unit tests can verify the
     /// substitutions against a known input without depending on the
     /// scaffolder's file-resolution fallback.
     nonisolated static func cursorReviewPrompt(skillBody: String, prURL: String) -> String {
-        return skillBody
-            .replacingOccurrences(of: "$ARGUMENTS", with: prURL)
-            .replacingOccurrences(of: "via Claude Code", with: "via Cursor")
+        CrowAttribution.expandSkillBody(
+            skillBody.replacingOccurrences(of: "$ARGUMENTS", with: prURL),
+            agentKind: .cursor
+        )
     }
 
     // MARK: - Session Status
@@ -2111,13 +2114,15 @@ final class SessionService {
             NSLog("[SessionService] tmux not configured; terminal \(t.id) will not render")
             return t
         }
+        let agentKind = appState.sessions.first(where: { $0.id == t.sessionID })?.agentKind
         do {
             let binding = try TmuxBackend.shared.registerTerminal(
                 id: t.id,
                 name: t.name,
                 cwd: t.cwd,
                 command: t.command,
-                trackReadiness: trackReadiness
+                trackReadiness: trackReadiness,
+                agentKind: agentKind
             )
             t.tmuxBinding = binding
         } catch {

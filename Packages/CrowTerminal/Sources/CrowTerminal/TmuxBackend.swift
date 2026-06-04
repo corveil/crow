@@ -179,6 +179,7 @@ public final class TmuxBackend {
         cwd: String,
         command: String?,
         trackReadiness: Bool,
+        agentKind: AgentKind? = nil,
         newWindowTimeout: TimeInterval = TmuxController.defaultTimeout
     ) throws -> TmuxBinding {
         precondition(!tmuxBinary.isEmpty, "TmuxBackend.configure(...) must be called first")
@@ -214,6 +215,11 @@ public final class TmuxBackend {
             "CROW_SENTINEL": sentinelPath,
             "CROW_WRAPPER_LOG": wrapperLog,
         ]
+        if let agentKind {
+            for (key, value) in CrowAttribution.environmentEntries(for: agentKind) {
+                env[key] = value
+            }
+        }
         if !cwd.isEmpty { env["PWD"] = cwd }
 
         let windowIndex = try ctrl.newWindow(

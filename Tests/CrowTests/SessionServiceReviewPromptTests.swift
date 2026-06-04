@@ -28,7 +28,7 @@ struct SessionServiceReviewPromptTests {
     # Crow Review PR
     Review PR $ARGUMENTS — checkout via `gh pr checkout $ARGUMENTS`.
 
-    [🐦‍⬛ Reviewed by Crow via Claude Code](https://github.com/radiusmethod/crow)
+    [🐦‍⬛ Reviewed by Crow via ${CROW_AGENT_DISPLAY_NAME:-Claude Code}](https://github.com/radiusmethod/crow)
     """
 
     @Test func cursorPromptSubstitutesPRURLForArguments() {
@@ -57,6 +57,8 @@ struct SessionServiceReviewPromptTests {
         // posted GitHub review body says "via Cursor", not "via Claude Code".
         #expect(prompt.contains("via Cursor"))
         #expect(!prompt.contains("via Claude Code"))
+        #expect(!prompt.contains("${CROW_AGENT_DISPLAY_NAME:-Claude Code}"))
+        #expect(!prompt.contains("$CROW_AGENT_DISPLAY_NAME"))
         // The canonical URL must remain — only the agent-name segment is
         // swapped.
         #expect(prompt.contains("https://github.com/radiusmethod/crow"))

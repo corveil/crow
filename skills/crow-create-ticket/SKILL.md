@@ -63,8 +63,10 @@ Extract the title (required) and optional body from `$ARGUMENTS` per the **Argum
 rules above. If there is no usable title, ask the user for one and stop until provided.
 
 The body is the text the user provided (or empty). It MUST end with the Crow
-attribution footer (see **Step 4b**): a blank line, then exactly
-`[🐦‍⬛ Created with Crow via Claude Code](https://github.com/radiusmethod/crow)`.
+attribution footer (see **Step 4b** and `.claude/skills/crow-attribution/FOOTER.md`):
+a blank line, then
+`[🐦‍⬛ Created with Crow via ${CROW_AGENT_DISPLAY_NAME:-Claude Code}](https://github.com/radiusmethod/crow)`
+(shell applies `Claude Code` when the variable is unset).
 Do NOT add any other footer — no "Generated with Claude Code" line and no co-author
 trailer. The Crow attribution is the only footer.
 
@@ -109,7 +111,7 @@ gh issue create --repo OWNER/REPO \
   --title "TITLE" \
   --body "BODY
 
-[🐦‍⬛ Created with Crow via Claude Code](https://github.com/radiusmethod/crow)" \
+[🐦‍⬛ Created with Crow via ${CROW_AGENT_DISPLAY_NAME:-Claude Code}](https://github.com/radiusmethod/crow)" \
   --assignee "{login}" \
   --label "crow:auto"
 ```
@@ -122,7 +124,7 @@ GITLAB_HOST={host} glab issue create --repo {org/repo} \
   --title "TITLE" \
   --description "BODY
 
-[🐦‍⬛ Created with Crow via Claude Code](https://github.com/radiusmethod/crow)" \
+[🐦‍⬛ Created with Crow via ${CROW_AGENT_DISPLAY_NAME:-Claude Code}](https://github.com/radiusmethod/crow)" \
   --assignee "{username}" \
   --label "crow:auto" \
   --yes
@@ -130,14 +132,15 @@ GITLAB_HOST={host} glab issue create --repo {org/repo} \
 
 ### Step 4b: Attribution (REQUIRED)
 
-The body passed to `gh issue create --body` / `glab issue create --description` MUST
-end with a blank line followed by exactly this line:
+See `.claude/skills/crow-attribution/FOOTER.md` for the full rules. The body passed to
+`gh issue create --body` / `glab issue create --description` MUST end with a blank line
+followed by:
 
 ```
-[🐦‍⬛ Created with Crow via Claude Code](https://github.com/radiusmethod/crow)
+[🐦‍⬛ Created with Crow via ${CROW_AGENT_DISPLAY_NAME:-Claude Code}](https://github.com/radiusmethod/crow)
 ```
 
-- Do not modify the link text.
+- Use `${CROW_AGENT_DISPLAY_NAME:-Claude Code}` so the shell applies the default when the variable is unset (Crow injects it per session).
 - Do not modify the URL — the link target is always `https://github.com/radiusmethod/crow`, never a fork or a derived value from the local git remote.
 - Do not wrap the line in additional formatting (no blockquote, no extra brackets, no surrounding text).
 - This line MUST appear in every issue body, whether GitHub or GitLab, and whether or not the user supplied any body text.

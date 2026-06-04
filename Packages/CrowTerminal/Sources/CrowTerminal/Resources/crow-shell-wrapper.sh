@@ -29,6 +29,10 @@ if [ -z "${CROW_SENTINEL:-}" ]; then
 fi
 export CROW_SENTINEL
 
+# Agent attribution (issue #443). Crow sets these via tmux new-window -e.
+if [ -n "${CROW_AGENT_KIND:-}" ]; then export CROW_AGENT_KIND; fi
+if [ -n "${CROW_AGENT_DISPLAY_NAME:-}" ]; then export CROW_AGENT_DISPLAY_NAME; fi
+
 # CROW_WRAPPER_LOG is optional. Default to /dev/null so the helper is always
 # safe to call without an unset-var guard. Issue #256.
 CROW_WRAPPER_LOG="${CROW_WRAPPER_LOG:-/dev/null}"
