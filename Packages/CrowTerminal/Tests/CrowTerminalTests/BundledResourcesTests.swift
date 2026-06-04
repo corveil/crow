@@ -46,7 +46,7 @@ struct BundledResourcesTests {
         // libghostty clear selection on mouse-up (#445).
         let url = try #require(BundledResources.tmuxConfURL)
         let body = try String(contentsOf: url, encoding: .utf8)
-        #expect(body.contains("mouse off"))
-        #expect(!body.contains("mouse on"))
+        #expect(body.contains("set -gs mouse off"))
+        #expect(!body.contains("set -gs mouse on"))
     }
 }
