@@ -534,6 +534,26 @@ final class SessionService {
             appState.terminalReadiness[terminalID] = .agentLaunched
             return
         }
+        // Preflight (CROW-439): review/job sessions inline their initial prompt
+        // via `$(cat .crow-*-prompt.md)`. If that file isn't on disk when the
+        // shell substitution runs, the agent launches with an empty string and
+        // silently idles. Refuse to dispatch and surface the missing path
+        // instead so the user sees why nothing happened.
+        if reviewPromptJustDispatched,
+           let initialPromptFile = Self.initialPromptFileName(for: session.kind) {
+            let promptPath = (worktree.worktreePath as NSString)
+                .appendingPathComponent(initialPromptFile)
+            if !FileManager.default.fileExists(atPath: promptPath) {
+                NSLog("[SessionService] launchAgent: initial prompt missing at \(promptPath) for session \(sessionID.uuidString); refusing to dispatch")
+                if let routedTerminal = appState.terminals[sessionID]?.first(where: { $0.id == terminalID }) {
+                    let msg = "echo '⚠️  Crow: \(session.kind.rawValue) prompt missing at \(promptPath); not launching \(agent.displayName).'\n"
+                    TerminalRouter.send(routedTerminal, text: msg)
+                }
+                appState.terminalReadiness[terminalID] = .agentLaunched
+                return
+            }
+        }
+
         // Route through TerminalRouter so tmux-backed terminals get the text
         // via tmux send-keys.
         if let routedTerminal = appState.terminals[sessionID]?.first(where: { $0.id == terminalID }) {
@@ -1538,21 +1558,58 @@ final class SessionService {
         // Ensure reviews directory exists
         try? fm.createDirectory(atPath: reviewsDir, withIntermediateDirectories: true)
 
-        // Clone or update the repo
+        // Clone or update the repo. Clone failures MUST surface (CROW-439): if
+        // the checkout directory never gets created, the launcher would still
+        // build a `agent "$(cat .crow-review-prompt.md)"` command pointing at a
+        // path that doesn't exist, and the agent would launch with an empty
+        // prompt. Throwing here aborts session creation cleanly.
         if !fm.fileExists(atPath: (clonePath as NSString).appendingPathComponent(".git")) {
             NSLog("[SessionService] Cloning \(repoSlug) into \(clonePath)")
-            _ = try? await runShellAsync(env: env, args: ["gh", "repo", "clone", repoSlug, clonePath])
+            do {
+                _ = try await runShellAsync(env: env, args: ["gh", "repo", "clone", repoSlug, clonePath])
+            } catch {
+                throw NSError(
+                    domain: "SessionService",
+                    code: -1,
+                    userInfo: [NSLocalizedDescriptionKey: "Failed to clone \(repoSlug) into \(clonePath): \(error.localizedDescription)"]
+                )
+            }
         }
 
-        // Fetch and checkout the PR branch
+        // Defense-in-depth: clone may have "succeeded" (exit 0) but left the
+        // directory in an unusable state. Refuse to proceed if the path isn't
+        // a real directory.
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: clonePath, isDirectory: &isDir), isDir.boolValue else {
+            throw NSError(
+                domain: "SessionService",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "Clone path \(clonePath) does not exist after clone step"]
+            )
+        }
+
+        // Fetch and checkout the PR branch. These are best-effort: the existing
+        // working tree may already be on the right branch, and a network blip
+        // on `pull` shouldn't abort the launch — the agent can resume from the
+        // local state.
         _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "fetch", "origin", headBranch])
         _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "checkout", headBranch])
         _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "pull", "origin", headBranch])
 
-        // Write review prompt file into the clone directory
+        // Write review prompt file into the clone directory. Write failures
+        // MUST surface (CROW-439): the launcher's `$(cat ...)` shell
+        // substitution will yield an empty string and the agent will idle if
+        // the file isn't there.
         let promptPath = (clonePath as NSString).appendingPathComponent(".crow-review-prompt.md")
         let reviewPrompt = Self.buildReviewPrompt(prURL: prURL, prTitle: prTitle, repoSlug: repoSlug, prNumber: prNumber, agentKind: reviewAgentKind)
-        try? reviewPrompt.write(toFile: promptPath, atomically: true, encoding: .utf8)
+        try reviewPrompt.write(toFile: promptPath, atomically: true, encoding: .utf8)
+        guard fm.fileExists(atPath: promptPath) else {
+            throw NSError(
+                domain: "SessionService",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "Review prompt file missing at \(promptPath) after write"]
+            )
+        }
 
         // Copy the crow-review-pr skill into the clone's .claude/skills/ so Claude Code can find it
         let cloneSkillsDir = (clonePath as NSString).appendingPathComponent(".claude/skills/crow-review-pr")
@@ -1651,8 +1708,20 @@ final class SessionService {
         }
 
         // Write the first prompt to the file launchClaude reads on first launch.
+        // Write failures MUST surface (CROW-439): if the file isn't there, the
+        // launcher's `$(cat .crow-job-prompt.md)` shell substitution yields an
+        // empty string and the agent silently idles.
         let promptPath = (worktreePath as NSString).appendingPathComponent(".crow-job-prompt.md")
-        try? firstPrompt.write(toFile: promptPath, atomically: true, encoding: .utf8)
+        do {
+            try firstPrompt.write(toFile: promptPath, atomically: true, encoding: .utf8)
+        } catch {
+            NSLog("[SessionService] Job '\(job.name)': failed to write \(promptPath): \(error.localizedDescription)")
+            return nil
+        }
+        guard FileManager.default.fileExists(atPath: promptPath) else {
+            NSLog("[SessionService] Job '\(job.name)': prompt file missing at \(promptPath) after write")
+            return nil
+        }
 
         let session = Session(
             name: "job-\(slug)-\(stamp)",
@@ -1792,6 +1861,22 @@ final class SessionService {
     /// `Scaffolder.bundledReviewSkill()` (which falls back to a trivial stub
     /// in test environments where the repo path can't be resolved from
     /// `ProcessInfo.processInfo.arguments[0]`).
+    /// Filename of the initial prompt file the launcher expects for a given
+    /// session kind. `review` and `job` sessions dispatch their first prompt
+    /// by shell-substituting the file's contents into the agent's command
+    /// (CROW-439); `work` and `manager` have no initial prompt file.
+    ///
+    /// Both `CursorAgent.autoLaunchCommand` and `ClaudeCodeAgent.autoLaunchCommand`
+    /// encode the same mapping inline — this helper is the launcher's preflight
+    /// validator, not a refactor of the agents.
+    nonisolated static func initialPromptFileName(for kind: SessionKind) -> String? {
+        switch kind {
+        case .review: return ".crow-review-prompt.md"
+        case .job:    return ".crow-job-prompt.md"
+        case .work, .manager: return nil
+        }
+    }
+
     nonisolated static func buildReviewPrompt(prURL: String, prTitle: String, repoSlug: String, prNumber: Int, agentKind: AgentKind) -> String {
         switch agentKind {
         case .cursor:
