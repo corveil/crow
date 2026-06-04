@@ -93,14 +93,15 @@ public protocol CodingAgent: Sendable {
 
 public extension CodingAgent {
     /// Default Manager launch command: invoke the agent's CLI binary by
-    /// name with no extra flags. Agents with richer launch ergonomics
-    /// (Claude Code's `--rc`/`--name`/`--permission-mode`) override this.
+    /// name with no extra flags. The terminal backend (tmux/Ghostty) owns
+    /// the submitting Enter — return the raw command without a trailing
+    /// newline so the convention is uniform across agents (CROW-433 review).
     func managerLaunchCommand(
         sessionName: String,
         remoteControlEnabled: Bool,
         autoPermissionMode: Bool,
         telemetryPort: UInt16?
     ) -> String {
-        return "\(launchCommandToken)\n"
+        return launchCommandToken
     }
 }

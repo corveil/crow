@@ -124,8 +124,9 @@ public struct CursorAgent: CodingAgent {
         // Cursor's Manager is a plain orchestration TUI in the devRoot — no
         // auto-prompt, no `--continue`. Cursor has no `--rc`/`--name`
         // equivalent, so the remote-control / auto-permission knobs don't
-        // apply (CROW-433).
-        let agentPath = findBinary() ?? "agent"
-        return "\(agentPath)\n"
+        // apply (CROW-433). Terminal backend appends the submitting Enter,
+        // so we return the bare command without a trailing newline to match
+        // the cross-agent convention.
+        return findBinary() ?? "agent"
     }
 }

@@ -116,6 +116,14 @@ final class SessionService {
                 // a Cursor/Codex Manager (whose command never contained
                 // "claude") still gets refreshed across restarts.
                 let rebuiltCommand = managerCommand(for: session)
+                // Remote-control bookkeeping reflects what the agent actually
+                // emitted — `supportsRemoteControl` is per-agent capability,
+                // but per-launch the Cursor Manager intentionally omits `--rc`
+                // even though Cursor reports the capability. Gate on the flag
+                // appearing in the built command so the RC badge and
+                // `/rename` injection don't fire for a Cursor Manager
+                // (CROW-433 review).
+                let rebuiltCarriesRC = rebuiltCommand.contains(" --rc")
                 for i in terminals.indices {
                     if terminals[i].command != nil {
                         // Mutate in place rather than reconstructing the row:
@@ -123,8 +131,10 @@ final class SessionService {
                         // Manager spawn a fresh window + claude every relaunch
                         // instead of re-attaching to its live window (#374).
                         terminals[i].command = rebuiltCommand
-                        if appState.remoteControlEnabled {
+                        if rebuiltCarriesRC {
                             appState.remoteControlActiveTerminals.insert(terminals[i].id)
+                        } else {
+                            appState.remoteControlActiveTerminals.remove(terminals[i].id)
                         }
                     }
                 }
@@ -738,7 +748,10 @@ final class SessionService {
             }
         }
 
-        if appState.remoteControlEnabled {
+        if command.contains(" --rc") {
+            // See hydrate path: gate on what the agent actually emitted, not
+            // on the global toggle, so a Cursor Manager doesn't get a stale
+            // RC badge or a `/rename` injection (CROW-433 review).
             appState.remoteControlActiveTerminals.insert(terminal.id)
         }
         return terminal

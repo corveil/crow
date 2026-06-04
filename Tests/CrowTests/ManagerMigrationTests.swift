@@ -55,7 +55,10 @@ struct ManagerMigrationTests {
         let service = SessionService(store: JSONStore(directory: tmp), appState: appState)
 
         // Register Claude so the dispatch path returns the Claude command.
-        // Use a fresh registry to avoid bleed across tests.
+        // `AgentRegistry.shared` is a process-wide singleton with no reset
+        // hook — repeated registrations of the same `AgentKind` are
+        // idempotent, so this is safe under `--parallel`, but be aware the
+        // registry survives across tests rather than being scoped per test.
         AgentRegistry.shared.register(ClaudeCodeAgent())
 
         let session2 = Session(name: "Manager 2", kind: .manager, agentKind: .claudeCode)
