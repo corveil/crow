@@ -50,7 +50,12 @@ struct CursorAgentTests {
         #expect(cmd?.contains(".crow-job-prompt.md") == false)
     }
 
-    @Test func autoLaunchCommandReviewSessionUnsupported() {
+    @Test func autoLaunchCommandReviewSessionFirstLaunch() {
+        // First review launch (reviewPromptDispatched == false) should pass
+        // the pre-written `.crow-review-prompt.md` as argv so Cursor starts
+        // the review unattended. The prompt file content is agent-aware
+        // (inlined SKILL body for Cursor) — see SessionService.buildReviewPrompt
+        // and #431.
         let session = Session(name: "review", kind: .review, agentKind: .cursor)
         let cmd = agent.autoLaunchCommand(
             session: session,
@@ -59,7 +64,43 @@ struct CursorAgentTests {
             autoPermissionMode: false,
             telemetryPort: nil
         )
-        // Phase C: review-on-Cursor isn't supported (review skill is Claude-only).
+        #expect(cmd != nil)
+        #expect(cmd?.contains(".crow-review-prompt.md") == true)
+        #expect(cmd?.contains(".crow-job-prompt.md") == false)
+        #expect(cmd?.hasSuffix("\n") == true)
+    }
+
+    @Test func autoLaunchCommandReviewSessionSubsequentLaunch() {
+        // After the initial review prompt has been dispatched, restarting
+        // Crow should resume the TUI with a bare `agent` (no re-issued
+        // review brief). Mirrors the Jobs subsequent-launch contract.
+        var session = Session(name: "review", kind: .review, agentKind: .cursor)
+        session.reviewPromptDispatched = true
+        let cmd = agent.autoLaunchCommand(
+            session: session,
+            worktreePath: "/tmp/wt",
+            remoteControlEnabled: false,
+            autoPermissionMode: false,
+            telemetryPort: nil
+        )
+        #expect(cmd != nil)
+        #expect(cmd?.contains(".crow-review-prompt.md") == false)
+        #expect(cmd?.hasSuffix("agent\n") == true)
+    }
+
+    @Test func autoLaunchCommandManagerSessionUnsupported() {
+        // Manager sessions never auto-launch an agent; Crow drives them
+        // externally. Cursor must keep returning nil here so the manager
+        // contract isn't accidentally regressed by the review-enable work
+        // in #431.
+        let session = Session(name: "manager", kind: .manager, agentKind: .cursor)
+        let cmd = agent.autoLaunchCommand(
+            session: session,
+            worktreePath: "/tmp/wt",
+            remoteControlEnabled: false,
+            autoPermissionMode: false,
+            telemetryPort: nil
+        )
         #expect(cmd == nil)
     }
 

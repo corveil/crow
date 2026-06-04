@@ -69,22 +69,30 @@ public struct CursorAgent: CodingAgent {
             // control is `crow send` typing into the TUI — agent-agnostic,
             // handled by `SessionService.send`, not a per-launch flag).
             return "\(agentPath)\n"
-        case .job:
-            // Jobs write their first prompt to `.crow-job-prompt.md` in the
-            // worktree before the terminal becomes shell-ready. On first
-            // launch we pass that prompt as argv so Cursor starts working
-            // unattended; on subsequent app restarts we fall back to a bare
+        case .job, .review:
+            // Jobs and reviews share the same dispatch shape: a pre-written
+            // initial prompt file (`.crow-job-prompt.md` / `.crow-review-prompt.md`)
+            // is passed as argv on first launch so Cursor starts working
+            // unattended. On subsequent app restarts we fall back to a bare
             // `agent` (Cursor has no `--continue` equivalent in MVP), so the
             // user resumes the TUI rather than re-running the full prompt.
+            //
+            // Review prompts are agent-aware: SessionService.buildReviewPrompt
+            // inlines the crow-review-pr SKILL body for Cursor so the `agent`
+            // CLI gets a self-contained brief — no slash-command engine
+            // needed (#431). `reviewPromptDispatched` gates both kinds.
             if !session.reviewPromptDispatched {
+                let promptFile = session.kind == .review
+                    ? ".crow-review-prompt.md"
+                    : ".crow-job-prompt.md"
                 let promptPath = (worktreePath as NSString)
-                    .appendingPathComponent(".crow-job-prompt.md")
+                    .appendingPathComponent(promptFile)
                 return "\(agentPath) \"$(cat \(promptPath))\"\n"
             }
             return "\(agentPath)\n"
-        case .review, .manager:
-            // Review-on-Cursor isn't supported in Phase C — the review skill
-            // is Claude-only. Manager sessions don't auto-launch an agent.
+        case .manager:
+            // Manager sessions never auto-launch an agent — Crow drives them
+            // externally. Returning nil here is the contract, not a gap.
             return nil
         }
     }
