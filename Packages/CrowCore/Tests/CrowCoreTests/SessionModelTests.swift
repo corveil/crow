@@ -11,6 +11,7 @@ import Testing
     #expect(session.ticketTitle == nil)
     #expect(session.ticketNumber == nil)
     #expect(session.provider == nil)
+    #expect(session.codeProvider == nil)
     #expect(session.createdAt <= Date())
     #expect(session.updatedAt <= Date())
 }
@@ -22,7 +23,8 @@ import Testing
         ticketURL: "https://github.com/org/repo/issues/42",
         ticketTitle: "Fix the thing",
         ticketNumber: 42,
-        provider: .github
+        provider: .github,
+        codeProvider: .gitlab
     )
     let data = try JSONEncoder().encode(session)
     let decoded = try JSONDecoder().decode(Session.self, from: data)
@@ -34,6 +36,7 @@ import Testing
     #expect(decoded.ticketTitle == "Fix the thing")
     #expect(decoded.ticketNumber == 42)
     #expect(decoded.provider == .github)
+    #expect(decoded.codeProvider == .gitlab)
 }
 
 @Test func sessionCodableWithNilOptionals() throws {
@@ -46,6 +49,34 @@ import Testing
     #expect(decoded.ticketTitle == nil)
     #expect(decoded.ticketNumber == nil)
     #expect(decoded.provider == nil)
+    #expect(decoded.codeProvider == nil)
+}
+
+@Test func sessionBackwardCompatDecodingWithoutCodeProvider() throws {
+    // Persisted state.json predating CROW-414 has no `codeProvider`. Decode
+    // must succeed and default the field to nil so the runtime fallback
+    // (`session.codeProvider ?? session.provider`) routes legacy sessions
+    // to the same backend they used pre-split.
+    let id = UUID()
+    let date = Date()
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime]
+    let dateStr = formatter.string(from: date)
+    let json: [String: Any] = [
+        "id": id.uuidString,
+        "name": "legacy",
+        "status": "active",
+        "kind": "work",
+        "provider": "github",
+        "createdAt": dateStr,
+        "updatedAt": dateStr,
+    ]
+    let data = try JSONSerialization.data(withJSONObject: json)
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+    let session = try decoder.decode(Session.self, from: data)
+    #expect(session.provider == .github)
+    #expect(session.codeProvider == nil)
 }
 
 @Test func sessionBackwardCompatDecodingLastReviewedHeadSha() throws {
