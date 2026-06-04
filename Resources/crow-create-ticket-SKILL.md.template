@@ -65,8 +65,8 @@ rules above. If there is no usable title, ask the user for one and stop until pr
 The body is the text the user provided (or empty). It MUST end with the Crow
 attribution footer (see **Step 4b** and `.claude/skills/crow-attribution/FOOTER.md`):
 a blank line, then
-`[🐦‍⬛ Created with Crow via $CROW_AGENT_DISPLAY_NAME](https://github.com/radiusmethod/crow)`
-(use `Claude Code` if `$CROW_AGENT_DISPLAY_NAME` is unset).
+`[🐦‍⬛ Created with Crow via ${CROW_AGENT_DISPLAY_NAME:-Claude Code}](https://github.com/radiusmethod/crow)`
+(shell applies `Claude Code` when the variable is unset).
 Do NOT add any other footer — no "Generated with Claude Code" line and no co-author
 trailer. The Crow attribution is the only footer.
 

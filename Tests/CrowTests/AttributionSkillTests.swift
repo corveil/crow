@@ -5,14 +5,14 @@ import Testing
 
 /// Snapshot tests for Crow skill attribution instructions (issue #443).
 ///
-/// Skills reference `$CROW_AGENT_DISPLAY_NAME`. The unit tests in
+/// Skills reference `${CROW_AGENT_DISPLAY_NAME:-Claude Code}` in footers. The unit tests in
 /// `Packages/CrowCore/Tests/CrowCoreTests/CrowAttributionTests.swift` verify the
 /// Swift helpers and default Claude Code footers.
 @Suite("Review attribution snapshot")
 struct AttributionSkillTests {
 
     private static let canonicalRepoURL = "https://github.com/radiusmethod/crow"
-    private static let agentDisplayEnvKey = "CROW_AGENT_DISPLAY_NAME"
+    private static let shellAgentExpression = "${CROW_AGENT_DISPLAY_NAME:-Claude Code}"
     private static let agentPlaceholder = "{{CROW_AGENT_DISPLAY_NAME}}"
 
     /// Walk up from this test source file until we find Package.swift.
@@ -69,14 +69,14 @@ struct AttributionSkillTests {
 
     @Test func liveSkillReferencesAgentDisplayNameEnv() throws {
         let content = try Self.liveSkill()
-        #expect(content.contains("$\(Self.agentDisplayEnvKey)"))
+        #expect(content.contains(Self.shellAgentExpression))
         #expect(!content.contains(Self.agentPlaceholder))
         #expect(content.contains(Self.canonicalRepoURL))
     }
 
     @Test func bundledTemplateReferencesAgentDisplayNameEnv() throws {
         let content = try Self.bundledTemplate()
-        #expect(content.contains("$\(Self.agentDisplayEnvKey)"))
+        #expect(content.contains(Self.shellAgentExpression))
         #expect(!content.contains(Self.agentPlaceholder))
     }
 
@@ -119,14 +119,14 @@ struct AttributionSkillTests {
 
     @Test func liveTicketSkillReferencesAgentDisplayNameEnv() throws {
         let content = try Self.liveTicketSkill()
-        #expect(content.contains("$\(Self.agentDisplayEnvKey)"))
+        #expect(content.contains(Self.shellAgentExpression))
         #expect(content.contains(Self.canonicalRepoURL))
         #expect(!content.contains("Do not modify the link text"))
     }
 
     @Test func bundledTicketTemplateReferencesAgentDisplayNameEnv() throws {
         let content = try Self.bundledTicketTemplate()
-        #expect(content.contains("$\(Self.agentDisplayEnvKey)"))
+        #expect(content.contains(Self.shellAgentExpression))
     }
 
     @Test func liveTicketSkillAndBundledTemplateAreByteIdentical() throws {

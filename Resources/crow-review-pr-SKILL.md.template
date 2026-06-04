@@ -131,7 +131,7 @@ Use this format for the review:
 
 ---
 
-[🐦‍⬛ Reviewed by Crow via $CROW_AGENT_DISPLAY_NAME](https://github.com/radiusmethod/crow)
+[🐦‍⬛ Reviewed by Crow via ${CROW_AGENT_DISPLAY_NAME:-Claude Code}](https://github.com/radiusmethod/crow)
 ```
 
 ### Step 5b: Attribution (REQUIRED)
@@ -140,7 +140,7 @@ See `.claude/skills/crow-attribution/FOOTER.md` for the full rules. The review b
 `gh pr review --body` MUST end with a blank line followed by:
 
 ```
-[🐦‍⬛ Reviewed by Crow via $CROW_AGENT_DISPLAY_NAME](https://github.com/radiusmethod/crow)
+[🐦‍⬛ Reviewed by Crow via ${CROW_AGENT_DISPLAY_NAME:-Claude Code}](https://github.com/radiusmethod/crow)
 ```
 
 - Use `$CROW_AGENT_DISPLAY_NAME` from the environment (Crow injects it per session). Fall back to `Claude Code` if unset.

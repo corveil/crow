@@ -131,7 +131,7 @@ Use this format for the review:
 
 ---
 
-[🐦‍⬛ Reviewed by Crow via $CROW_AGENT_DISPLAY_NAME](https://github.com/radiusmethod/crow)
+[🐦‍⬛ Reviewed by Crow via ${CROW_AGENT_DISPLAY_NAME:-Claude Code}](https://github.com/radiusmethod/crow)
 ```
 
 ### Step 5b: Attribution (REQUIRED)
@@ -140,10 +140,10 @@ See `.claude/skills/crow-attribution/FOOTER.md` for the full rules. The review b
 `gh pr review --body` MUST end with a blank line followed by:
 
 ```
-[🐦‍⬛ Reviewed by Crow via $CROW_AGENT_DISPLAY_NAME](https://github.com/radiusmethod/crow)
+[🐦‍⬛ Reviewed by Crow via ${CROW_AGENT_DISPLAY_NAME:-Claude Code}](https://github.com/radiusmethod/crow)
 ```
 
-- Use `$CROW_AGENT_DISPLAY_NAME` from the environment (Crow injects it per session). Fall back to `Claude Code` if unset.
+- Use `${CROW_AGENT_DISPLAY_NAME:-Claude Code}` so the shell applies the default when the variable is unset (Crow injects it per session).
 - Do not modify the URL — the link target is always `https://github.com/radiusmethod/crow`, never a fork or a derived value from the local git remote.
 - Do not wrap the line in additional formatting (no blockquote, no extra brackets, no surrounding text).
 - This line MUST appear in every review body, regardless of whether you used `--approve` or `--request-changes`.

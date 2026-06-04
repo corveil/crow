@@ -1972,7 +1972,7 @@ final class SessionService {
 
     /// Apply the Cursor-specific substitutions to a raw `crow-review-pr`
     /// SKILL body: replace `$ARGUMENTS` with the PR URL, and expand
-    /// `$CROW_AGENT_DISPLAY_NAME` / legacy "via Claude Code" wording so the
+    /// `${CROW_AGENT_DISPLAY_NAME:-…}` / legacy "via Claude Code" wording so the
     /// posted GitHub review identifies the reviewing agent correctly.
     ///
     /// Split out from `buildReviewPrompt` so unit tests can verify the
