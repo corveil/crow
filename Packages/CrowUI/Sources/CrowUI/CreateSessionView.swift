@@ -55,7 +55,7 @@ public struct CreateSessionView: View {
         .padding(24)
         .frame(width: 400)
         .onAppear {
-            agentKind = appState.defaultAgentKind
+            agentKind = appState.agentKind(for: .work)
         }
     }
 

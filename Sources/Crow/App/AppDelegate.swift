@@ -458,6 +458,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appState.excludeTicketRepos = config.defaults.excludeTicketRepos
         appState.ignoreReviewLabels = config.defaults.ignoreReviewLabels
         appState.defaultAgentKind = config.defaultAgentKind
+        appState.agentsByKind = config.agentsByKind
 
         // Create session service and hydrate state
         let service = SessionService(store: store, appState: appState, telemetryPort: config.telemetry.enabled ? config.telemetry.port : nil, providerManager: providerManager)
@@ -1092,6 +1093,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appState.excludeTicketRepos = config.defaults.excludeTicketRepos
         appState.ignoreReviewLabels = config.defaults.ignoreReviewLabels
         appState.defaultAgentKind = config.defaultAgentKind
+        appState.agentsByKind = config.agentsByKind
     }
 
     /// Record a job's run time in the canonical `appConfig` and persist it, so
@@ -1159,7 +1161,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         let createdName = capturedAppState.sessions.first(where: { $0.id == id })?.name ?? name
                         return ["session_id": .string(id.uuidString), "name": .string(createdName)]
                     }
-                    let agentKind = requestedAgentKind ?? capturedAppState.defaultAgentKind
+                    let agentKind = requestedAgentKind ?? capturedAppState.agentKind(for: .work)
                     let session = Session(name: name, kind: .work, agentKind: agentKind)
                     capturedAppState.sessions.append(session)
                     capturedStore.mutate { $0.sessions.append(session) }

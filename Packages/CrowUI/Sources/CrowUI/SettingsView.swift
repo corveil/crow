@@ -205,6 +205,13 @@ public struct SettingsView: View {
                 Text("Selected agent runs new sessions. Disabled until a second agent (e.g., Codex) is registered.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                perActionAgentPicker(label: "Agent for coding", kind: .work)
+                perActionAgentPicker(label: "Agent for reviews", kind: .review)
+                perActionAgentPicker(label: "Agent for scheduled jobs", kind: .job)
+                Text("Per-action overrides. “Use default” falls back to the Default Agent above.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Sidebar") {
@@ -494,5 +501,33 @@ public struct SettingsView: View {
 
     private func save() {
         onSave?(devRoot, config)
+    }
+
+    /// One per-action agent picker (Coding/Reviews/Jobs). "Use default"
+    /// removes the override; selecting a concrete agent writes the
+    /// `config.agentsByKind` entry. Disabled until a second agent is
+    /// registered, matching the Default Agent picker (CROW-421).
+    @ViewBuilder
+    private func perActionAgentPicker(label: String, kind: SessionKind) -> some View {
+        let key = kind.rawValue
+        let binding = Binding<AgentKind?>(
+            get: { config.agentsByKind[key] },
+            set: { newValue in
+                if let newValue {
+                    config.agentsByKind[key] = newValue
+                } else {
+                    config.agentsByKind.removeValue(forKey: key)
+                }
+                save()
+            }
+        )
+        Picker(label, selection: binding) {
+            Text("Use default").tag(AgentKind?.none)
+            ForEach(AgentRegistry.shared.allAgents(), id: \.kind) { agent in
+                Label(agent.displayName, systemImage: agent.iconSystemName)
+                    .tag(Optional(agent.kind))
+            }
+        }
+        .disabled(AgentRegistry.shared.allAgents().count < 2)
     }
 }

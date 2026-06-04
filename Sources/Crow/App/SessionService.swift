@@ -1178,7 +1178,7 @@ final class SessionService {
         let session = Session(
             name: dirName,
             status: .active,
-            agentKind: appState.defaultAgentKind,
+            agentKind: appState.agentKind(for: .work),
             ticketURL: ticket.url,
             ticketTitle: ticket.title,
             ticketNumber: ticket.number,
@@ -1406,7 +1406,7 @@ final class SessionService {
         let session = Session(
             name: "review-\(repoName)-\(prNumber)",
             kind: .review,
-            agentKind: appState.defaultAgentKind,
+            agentKind: appState.agentKind(for: .review),
             ticketTitle: prep.prTitle,
             provider: .github,
             lastReviewedHeadSha: prep.headRefOid
@@ -1637,7 +1637,8 @@ final class SessionService {
 
         let session = Session(
             name: "job-\(slug)-\(stamp)",
-            kind: .job
+            kind: .job,
+            agentKind: appState.agentKind(for: .job)
         )
         let worktree = SessionWorktree(
             sessionID: session.id,

@@ -59,6 +59,20 @@ public final class AppState {
     /// current default without a config round-trip.
     public var defaultAgentKind: AgentKind = .claudeCode
 
+    /// Per-action agent overrides keyed by `SessionKind.rawValue`. Mirrors
+    /// `AppConfig.agentsByKind`. Empty means every kind falls back to
+    /// `defaultAgentKind` (CROW-421).
+    public var agentsByKind: [String: AgentKind] = [:]
+
+    /// Resolve the agent that should drive a newly-created session of the
+    /// given kind. Manager sessions are pinned to Claude Code; all other
+    /// kinds prefer an `agentsByKind` override and fall back to
+    /// `defaultAgentKind` when no override is set (CROW-421).
+    public func agentKind(for sessionKind: SessionKind) -> AgentKind {
+        if sessionKind == .manager { return .claudeCode }
+        return agentsByKind[sessionKind.rawValue] ?? defaultAgentKind
+    }
+
     /// Terminal IDs whose Claude Code was launched with `--rc` — drives the
     /// per-session indicator badge. Survives toggle changes so existing sessions
     /// keep showing the badge until they're restarted.

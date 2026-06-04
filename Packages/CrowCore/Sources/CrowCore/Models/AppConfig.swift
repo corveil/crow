@@ -48,6 +48,16 @@ public struct AppConfig: Codable, Sendable, Equatable {
     /// The agent used for newly created sessions when none is specified.
     /// Existing persisted configs without this key decode to `.claudeCode`.
     public var defaultAgentKind: AgentKind
+    /// Per-action-type overrides. When a key is present, sessions of that
+    /// kind are created with the mapped agent; when absent, they fall back
+    /// to `defaultAgentKind`. Manager sessions are pinned to `.claudeCode`
+    /// and intentionally not honored by this map (CROW-421).
+    ///
+    /// Keyed by `SessionKind.rawValue` (string) rather than `SessionKind`
+    /// directly so JSON serializes as an object literal like
+    /// `{"review": "codex"}` — Swift's default `JSONEncoder` only treats
+    /// dictionaries with `String`/`Int` keys as JSON objects.
+    public var agentsByKind: [String: AgentKind]
 
     public init(
         workspaces: [WorkspaceInfo] = [],
@@ -65,7 +75,8 @@ public struct AppConfig: Codable, Sendable, Equatable {
         autoRebaseWatcherEnabled: Bool = false,
         cleanup: CleanupConfig = CleanupConfig(),
         jobs: [JobConfig] = [],
-        defaultAgentKind: AgentKind = .claudeCode
+        defaultAgentKind: AgentKind = .claudeCode,
+        agentsByKind: [String: AgentKind] = [:]
     ) {
         self.workspaces = workspaces
         self.defaults = defaults
@@ -83,6 +94,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         self.cleanup = cleanup
         self.jobs = jobs
         self.defaultAgentKind = defaultAgentKind
+        self.agentsByKind = agentsByKind
     }
 
     public init(from decoder: Decoder) throws {
@@ -103,10 +115,20 @@ public struct AppConfig: Codable, Sendable, Equatable {
         cleanup = try container.decodeIfPresent(CleanupConfig.self, forKey: .cleanup) ?? CleanupConfig()
         jobs = try container.decodeIfPresent([JobConfig].self, forKey: .jobs) ?? []
         defaultAgentKind = try container.decodeIfPresent(AgentKind.self, forKey: .defaultAgentKind) ?? .claudeCode
+        agentsByKind = try container.decodeIfPresent([String: AgentKind].self, forKey: .agentsByKind) ?? [:]
     }
 
     private enum CodingKeys: String, CodingKey {
-        case workspaces, defaults, notifications, sidebar, remoteControlEnabled, managerAutoPermissionMode, jobsAutoPermissionMode, telemetry, autoRespond, attributionTrailers, autoMergeWatcherEnabled, autoCreateWatcherEnabled, autoRebaseWatcherEnabled, cleanup, jobs, defaultAgentKind
+        case workspaces, defaults, notifications, sidebar, remoteControlEnabled, managerAutoPermissionMode, jobsAutoPermissionMode, telemetry, autoRespond, attributionTrailers, autoMergeWatcherEnabled, autoCreateWatcherEnabled, autoRebaseWatcherEnabled, cleanup, jobs, defaultAgentKind, agentsByKind
+    }
+
+    /// Resolve the agent that should drive a newly-created session of the
+    /// given kind. Manager sessions are always Claude Code (pinned by spec).
+    /// All other kinds prefer an explicit `agentsByKind` override, falling
+    /// back to `defaultAgentKind` (CROW-421).
+    public func agentKind(for sessionKind: SessionKind) -> AgentKind {
+        if sessionKind == .manager { return .claudeCode }
+        return agentsByKind[sessionKind.rawValue] ?? defaultAgentKind
     }
 }
 
