@@ -34,6 +34,8 @@ PR_URL=""
 PR_BRANCH=""
 PROMPT_CONTENT=""
 CLAUDE_BINARY=""
+AGENT_BINARY=""
+AGENT_KIND=""
 SESSION_ID=""
 PRIMARY=false
 SKIP_LAUNCH=false
@@ -68,6 +70,32 @@ die() {
   exit 1
 }
 
+# Resolve the agent kind for a given SessionKind raw value, mirroring
+# AppConfig.agentKind(for:) in Packages/CrowCore — agentsByKind[<kind>]
+# wins, falling back to defaultAgentKind, falling back to claude-code.
+# The crow-workspace skill is for `work` (coding) sessions.
+read_agent_kind_from_config() {
+  local session_kind="${1:-work}"
+  local cfg="$DEV_ROOT/.claude/config.json"
+  [[ -f "$cfg" ]] || { echo "claude-code"; return; }
+
+  local flat
+  flat=$(tr -d '\n' < "$cfg")
+
+  local override
+  override=$(printf '%s' "$flat" \
+    | grep -oE "\"agentsByKind\"[[:space:]]*:[[:space:]]*\{[^}]*\}" \
+    | grep -oE "\"$session_kind\"[[:space:]]*:[[:space:]]*\"[^\"]+\"" \
+    | head -1 | sed -E 's/.*"([^"]+)"$/\1/')
+  if [[ -n "$override" ]]; then echo "$override"; return; fi
+
+  local def
+  def=$(printf '%s' "$flat" \
+    | grep -oE "\"defaultAgentKind\"[[:space:]]*:[[:space:]]*\"[^\"]+\"" \
+    | head -1 | sed -E 's/.*"([^"]+)"$/\1/')
+  echo "${def:-claude-code}"
+}
+
 # ─── Argument Parsing ────────────────────────────────────────────────────────
 
 usage() {
@@ -95,10 +123,16 @@ Optional:
   --pr-url <url>             Existing PR URL
   --pr-branch <branch>       Existing PR branch name
   --prompt-content <path>    Path to LLM-written prompt file
-  --claude-binary <path>     Full path to claude binary
+  --agent-kind <kind>        Coding agent: claude-code | cursor | codex.
+                             Defaults to agentsByKind["work"] then
+                             defaultAgentKind from {devRoot}/.claude/config.json
+                             (final fallback: claude-code).
+  --agent-binary <path>      Full path to the selected agent's binary.
+  --claude-binary <path>     [deprecated alias] Same as --agent-binary; only
+                             honored when the resolved agent is claude-code.
   --session-id <uuid>        Existing session ID (for secondary repos)
   --primary                  Mark worktree as primary
-  --skip-launch              Skip Claude Code launch
+  --skip-launch              Skip agent launch
   --skip-assign              Skip auto-assign
   --skip-project-status      Skip project status mutation
   --help                     Show this help
@@ -127,6 +161,8 @@ parse_args() {
       --pr-url)            PR_URL="$2"; shift 2 ;;
       --pr-branch)         PR_BRANCH="$2"; shift 2 ;;
       --prompt-content)    PROMPT_CONTENT="$2"; shift 2 ;;
+      --agent-kind)        AGENT_KIND="$2"; shift 2 ;;
+      --agent-binary)      AGENT_BINARY="$2"; shift 2 ;;
       --claude-binary)     CLAUDE_BINARY="$2"; shift 2 ;;
       --session-id)        SESSION_ID="$2"; shift 2 ;;
       --primary)           PRIMARY=true; shift ;;
@@ -153,6 +189,14 @@ parse_args() {
 
   if [[ ${#missing[@]} -gt 0 ]]; then
     die "parse_args" "Missing required arguments: ${missing[*]}"
+  fi
+
+  # Validate --agent-kind early so bad values fail fast rather than at launch.
+  if [[ -n "$AGENT_KIND" ]]; then
+    case "$AGENT_KIND" in
+      claude-code|cursor|codex) ;;
+      *) die "parse_args" "Unknown --agent-kind: $AGENT_KIND (expected claude-code | cursor | codex)" ;;
+    esac
   fi
 }
 
@@ -425,29 +469,34 @@ write_prompt() {
   fi
 }
 
-# ─── Launch Claude Code ─────────────────────────────────────────────────────
+# ─── Launch Agent ───────────────────────────────────────────────────────────
+#
+# Dispatcher + per-agent launchers. Each sub-launcher knows its own binary,
+# flags, and terminal name; the shared create_agent_terminal helper creates
+# the terminal, waits for the shell, and pastes the launch command. Mirrors
+# the corresponding Swift CodingAgent.autoLaunchCommand for each kind.
 
-launch_claude() {
-  if [[ "$SKIP_LAUNCH" == "true" ]]; then
-    log "Skipping Claude Code launch (--skip-launch)"
-    return
-  fi
+resolve_binary() {
+  local token="$1"; shift
+  local p
+  for p in "$@"; do
+    [[ -n "$p" && -x "$p" ]] && { echo "$p"; return 0; }
+  done
+  p=$(command -v "$token" 2>/dev/null) || true
+  [[ -n "$p" ]] && { echo "$p"; return 0; }
+  return 1
+}
 
-  # Resolve claude binary
-  local claude_bin="$CLAUDE_BINARY"
-  if [[ -z "$claude_bin" ]]; then
-    claude_bin=$(command -v claude 2>/dev/null) || true
-    if [[ -z "$claude_bin" ]]; then
-      die "launch_claude" "claude binary not found — provide --claude-binary"
-    fi
-  fi
+# Shared terminal creation + send-launch path. Sets TERMINAL_ID.
+create_agent_terminal() {
+  local terminal_name="$1"
+  local send_text="$2"
 
-  # Create terminal
-  log "Creating terminal..."
+  log "Creating terminal '$terminal_name'..."
   local term_result
   if ! term_result=$(crow new-terminal --session "$SESSION_ID" \
     --cwd "$WORKTREE_PATH" \
-    --name "Claude Code" \
+    --name "$terminal_name" \
     --managed 2>&1); then
     die "new_terminal" "crow new-terminal failed: $term_result"
   fi
@@ -463,22 +512,97 @@ launch_claude() {
     || log "Warning: select-session failed"
 
   # Wait for the shell to initialize in the new terminal.
-  # The terminal surface is pre-initialized by crow new-terminal, but the
-  # shell process needs time to start and display its prompt.
   log "Waiting for shell to initialize..."
   sleep 3
 
-  # Build the prompt file path
-  local prompt_path="$DEV_ROOT/.claude/prompts/crow-prompt-$SESSION_NAME.md"
-
-  # Send launch command
-  log "Launching Claude Code..."
-  local send_text="cd $WORKTREE_PATH && $claude_bin --permission-mode plan \"\$(cat $prompt_path)\"\\n"
+  log "Launching $terminal_name..."
   if ! crow send --session "$SESSION_ID" --terminal "$TERMINAL_ID" "$send_text" >/dev/null 2>&1; then
     die "send_launch" "crow send failed"
   fi
+  log "$terminal_name launched"
+}
 
-  log "Claude Code launched"
+launch_claude_code() {
+  local prompt_path="$1"
+  local override_bin="$2"
+  local bin
+  if [[ -n "$override_bin" ]]; then
+    bin="$override_bin"
+  else
+    bin=$(resolve_binary "claude" \
+      "$HOME/.local/bin/claude" \
+      "/usr/local/bin/claude" \
+      "/opt/homebrew/bin/claude") || \
+      die "launch_agent" "claude binary not found at PATH or known locations; provide --agent-binary"
+  fi
+  local send_text="cd $WORKTREE_PATH && $bin --permission-mode plan \"\$(cat $prompt_path)\"\\n"
+  create_agent_terminal "Claude Code" "$send_text"
+}
+
+launch_cursor() {
+  local prompt_path="$1"
+  local override_bin="$2"
+  local bin
+  if [[ -n "$override_bin" ]]; then
+    bin="$override_bin"
+  else
+    # Cursor's CLI binary is named `agent`, not `cursor`.
+    bin=$(resolve_binary "agent" \
+      "/opt/homebrew/bin/agent" \
+      "/usr/local/bin/agent" \
+      "$HOME/.local/bin/agent") || \
+      die "launch_agent" "cursor binary not found at PATH or known locations; provide --agent-binary"
+  fi
+  local send_text="cd $WORKTREE_PATH && $bin \"\$(cat $prompt_path)\"\\n"
+  create_agent_terminal "Cursor" "$send_text"
+}
+
+launch_codex() {
+  local prompt_path="$1"
+  local override_bin="$2"
+  local bin
+  if [[ -n "$override_bin" ]]; then
+    bin="$override_bin"
+  else
+    bin=$(resolve_binary "codex" \
+      "/opt/homebrew/bin/codex" \
+      "/usr/local/bin/codex" \
+      "$HOME/.local/bin/codex") || \
+      die "launch_agent" "codex binary not found at PATH or known locations; provide --agent-binary"
+  fi
+  log "Note: Codex has no prompt-argv form; prompt file is at $prompt_path (paste manually if needed)."
+  local send_text="cd $WORKTREE_PATH && $bin\\n"
+  create_agent_terminal "OpenAI Codex" "$send_text"
+}
+
+launch_agent() {
+  if [[ "$SKIP_LAUNCH" == "true" ]]; then
+    log "Skipping agent launch (--skip-launch)"
+    return
+  fi
+
+  # Resolve agent kind: --agent-kind > config > claude-code fallback.
+  local kind="$AGENT_KIND"
+  if [[ -z "$kind" ]]; then
+    kind=$(read_agent_kind_from_config "work")
+    log "Resolved agent kind from config: $kind"
+  else
+    log "Using agent kind from --agent-kind flag: $kind"
+  fi
+
+  local override_bin="$AGENT_BINARY"
+  if [[ -z "$override_bin" && "$kind" == "claude-code" && -n "$CLAUDE_BINARY" ]]; then
+    override_bin="$CLAUDE_BINARY"
+  fi
+
+  local prompt_path="$DEV_ROOT/.claude/prompts/crow-prompt-$SESSION_NAME.md"
+
+  case "$kind" in
+    claude-code) launch_claude_code "$prompt_path" "$override_bin" ;;
+    cursor)      launch_cursor "$prompt_path" "$override_bin" ;;
+    codex)       launch_codex "$prompt_path" "$override_bin" ;;
+    *) die "launch_agent" "Unknown agent kind: $kind (expected claude-code | cursor | codex)" ;;
+  esac
 }
 
 # ─── Result ──────────────────────────────────────────────────────────────────
@@ -506,7 +630,7 @@ main() {
   create_session
   github_ops
   write_prompt
-  launch_claude
+  launch_agent
   emit_result
 }
 

@@ -259,6 +259,8 @@ PROMPT
 
 #### Step 2: Run setup.sh
 
+`setup.sh` resolves the coding agent automatically from `{devRoot}/.claude/config.json`: it prefers `agentsByKind["work"]`, falls back to `defaultAgentKind`, and finally to `claude-code`. Pass `--agent-kind <claude-code|cursor|codex>` only if you need to override the configured choice for a single invocation (e.g. for testing). The binary is looked up on PATH and in the standard install locations for the selected agent — pass `--agent-binary <path>` to pin it explicitly.
+
 ```bash
 .claude/skills/crow-workspace/setup.sh \
   --dev-root "{devRoot}" \
@@ -276,7 +278,6 @@ PROMPT
   --ticket-title "{ticket_title}" \
   --ticket-number {ticket_number} \
   --prompt-content "{devRoot}/.claude/prompts/crow-prompt-{session_name}.md" \
-  --claude-binary "$(which claude)" \
   --primary
 ```
 

@@ -115,7 +115,6 @@ Then, in a **single message**, fire one Bash tool call per workspace:
   --ticket-title "{ticket_title}" \
   --ticket-number {ticket_number} \
   --prompt-content "{devRoot}/.claude/prompts/crow-prompt-{session_name}.md" \
-  --claude-binary "$(which claude)" \
   --primary
 ```
 
