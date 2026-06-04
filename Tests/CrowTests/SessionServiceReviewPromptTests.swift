@@ -109,4 +109,27 @@ struct SessionServiceReviewPromptTests {
 
         #expect(prompt == "/crow-review-pr \(Self.prURL)")
     }
+
+    // MARK: - initialPromptFileName (CROW-439)
+
+    /// `launchAgent` uses `SessionService.initialPromptFileName(for:)` as its
+    /// preflight check: if the named file isn't on disk when the shell runs
+    /// the `$(cat …)` substitution, the agent launches with an empty prompt
+    /// and silently idles. The mapping must stay in sync with the inline
+    /// branches in `CursorAgent.autoLaunchCommand` and
+    /// `ClaudeCodeAgent.autoLaunchCommand`.
+    @Test func initialPromptFileNameMapsReviewToReviewPrompt() {
+        #expect(SessionService.initialPromptFileName(for: .review) == ".crow-review-prompt.md")
+    }
+
+    @Test func initialPromptFileNameMapsJobToJobPrompt() {
+        #expect(SessionService.initialPromptFileName(for: .job) == ".crow-job-prompt.md")
+    }
+
+    @Test func initialPromptFileNameIsNilForWorkAndManager() {
+        // Work and manager sessions never inline an initial prompt — the
+        // preflight check skips them entirely.
+        #expect(SessionService.initialPromptFileName(for: .work) == nil)
+        #expect(SessionService.initialPromptFileName(for: .manager) == nil)
+    }
 }
