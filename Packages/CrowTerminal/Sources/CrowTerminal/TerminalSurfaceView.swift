@@ -72,7 +72,9 @@ public struct TerminalSurfaceView: NSViewRepresentable {
                 Self.attach(surface: surface, to: container)
             }
             try? TmuxBackend.shared.makeActive(id: id)
-            if let window = container.window, surface.window === window {
+            if let window = container.window,
+               surface.window === window,
+               window.firstResponder !== surface {
                 window.makeFirstResponder(surface)
             }
         }

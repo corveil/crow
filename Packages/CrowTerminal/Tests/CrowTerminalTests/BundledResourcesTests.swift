@@ -40,4 +40,13 @@ struct BundledResourcesTests {
         let body = try String(contentsOf: url, encoding: .utf8)
         #expect(body.contains("status off"))
     }
+
+    @Test func tmuxConfDisablesMouse() throws {
+        // tmux mouse on enables terminal mouse reporting, which makes
+        // libghostty clear selection on mouse-up (#445).
+        let url = try #require(BundledResources.tmuxConfURL)
+        let body = try String(contentsOf: url, encoding: .utf8)
+        #expect(body.contains("set -gs mouse off"))
+        #expect(!body.contains("set -gs mouse on"))
+    }
 }

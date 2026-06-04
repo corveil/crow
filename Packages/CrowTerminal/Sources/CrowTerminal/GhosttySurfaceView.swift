@@ -371,15 +371,22 @@ public final class GhosttySurfaceView: NSView {
 
     public override func mouseDown(with event: NSEvent) {
         guard let surface else { return }
+        sendMousePosition(for: event)
         ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_LEFT, translateMods(event.modifierFlags))
     }
 
     public override func mouseUp(with event: NSEvent) {
         guard let surface else { return }
+        sendMousePosition(for: event)
         ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_LEFT, translateMods(event.modifierFlags))
     }
 
     public override func mouseMoved(with event: NSEvent) {
+        guard let surface else { return }
+        sendMousePosition(for: event)
+    }
+
+    private func sendMousePosition(for event: NSEvent) {
         guard let surface else { return }
         let pos = convert(event.locationInWindow, from: nil)
         ghostty_surface_mouse_pos(surface, pos.x, frame.height - pos.y, translateMods(event.modifierFlags))
