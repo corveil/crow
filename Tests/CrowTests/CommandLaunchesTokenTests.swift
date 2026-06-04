@@ -43,6 +43,33 @@ struct CommandLaunchesTokenTests {
         #expect(AppDelegate.commandLaunchesToken(cmd, token: "codex"))
     }
 
+    // MARK: Absolute-path resolved binaries — must match
+    // `resolveClaudeInCommand` rewrites the bare `claude` token to an
+    // absolute path before the deferred-launch paste reaches
+    // `prepareAgentLaunchText`. The left boundary must accept `/` or
+    // hook-config writes (the per-worktree `.claude/settings.local.json`)
+    // and Claude's OTEL env injection both silently skip.
+
+    @Test func pathResolvedClaudeBrew() {
+        #expect(AppDelegate.commandLaunchesToken("/opt/homebrew/bin/claude --rc --name 'foo'", token: "claude"))
+    }
+
+    @Test func pathResolvedClaudeLocal() {
+        #expect(AppDelegate.commandLaunchesToken("/usr/local/bin/claude --rc", token: "claude"))
+    }
+
+    @Test func pathResolvedAgent() {
+        #expect(AppDelegate.commandLaunchesToken("/opt/homebrew/bin/agent\n", token: "agent"))
+    }
+
+    @Test func pathResolvedClaudeWithEnvPrefix() {
+        // The full shape that flows through pasteDeferredLaunch on the
+        // standard #408 path — env prefix from telemetry merge + path-resolved
+        // claude. The guard must still admit this so writeHookConfig runs.
+        let cmd = "export CLAUDE_CODE_ENABLE_TELEMETRY=1 OTEL_EXPORTER_OTLP_PROTOCOL=http/json && /opt/homebrew/bin/claude --rc"
+        #expect(AppDelegate.commandLaunchesToken(cmd, token: "claude"))
+    }
+
     // MARK: Incidental prose — must NOT match (the Cursor footgun)
 
     @Test func proseContainingAgentRejected() {
@@ -61,6 +88,13 @@ struct CommandLaunchesTokenTests {
     @Test func proseContainingClaudeStillRejected() {
         // Even rare-as-prose tokens are now properly word-bounded.
         #expect(!AppDelegate.commandLaunchesToken("the claudeKind enum", token: "claude"))
+    }
+
+    @Test func pathLikeAgentSubstringRejected() {
+        // `/tmp/agent_log` has `/` left of `agent` but `_log` on the right,
+        // so the right-boundary (`\s|$|["']`) keeps it rejected. Confirms
+        // the `/` boundary doesn't open the door to incidental path substrings.
+        #expect(!AppDelegate.commandLaunchesToken("tail -f /tmp/agent_log", token: "agent"))
     }
 
     // MARK: Edge cases

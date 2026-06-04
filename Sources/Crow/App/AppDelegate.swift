@@ -1873,9 +1873,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Whether `command` invokes `token` as a shell command rather than an
-    /// incidental substring. Anchored at start-of-string or after a shell
-    /// command separator (`;`, `&&`, `||`, `|`, possibly with whitespace) and
-    /// bounded on the right by whitespace, end-of-string, or a quote.
+    /// incidental substring. Anchored at start-of-string, after a shell
+    /// command separator (`;`, `&&`, `||`, `|`, possibly with whitespace),
+    /// or at a path separator (`/`) — the last covers binaries that have
+    /// already been path-resolved (e.g. `resolveClaudeInCommand` rewrites
+    /// bare `claude` to `/opt/homebrew/bin/claude` before this guard runs
+    /// on the deferred-launch path, so without the `/` boundary the guard
+    /// returns early and we'd silently skip per-worktree hook-config writes
+    /// and Claude's OTEL env injection). Bounded on the right by whitespace,
+    /// end-of-string, or a quote.
     ///
     /// Plain `command.contains(token)` was fine for Claude (`"claude"`) and
     /// Codex (`"codex"`), which rarely appear incidentally — but Cursor's
@@ -1886,7 +1892,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// started when it hadn't.
     nonisolated static func commandLaunchesToken(_ command: String, token: String) -> Bool {
         let escaped = NSRegularExpression.escapedPattern(for: token)
-        let pattern = "(?:^|[;&|]\\s*)\(escaped)(?=\\s|$|[\"'])"
+        let pattern = "(?:^|[;&|]\\s*|/)\(escaped)(?=\\s|$|[\"'])"
         return command.range(of: pattern, options: .regularExpression) != nil
     }
 
