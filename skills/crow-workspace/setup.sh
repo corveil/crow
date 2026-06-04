@@ -624,6 +624,7 @@ launch_claude_code() {
       "/opt/homebrew/bin/claude") || \
       die "launch_agent" "claude binary not found at PATH or known locations; provide --agent-binary"
   fi
+  log "Resolved claude-code binary: $bin"
 
   # Build the agent launch command and hand it to crow at terminal-creation
   # time via --command. Crow holds the command and pastes it only once the
@@ -662,8 +663,12 @@ launch_cursor() {
       "$HOME/.local/bin/agent") || \
       die "launch_agent" "cursor binary not found at PATH or known locations; provide --agent-binary"
   fi
-  # Cursor: no --permission-mode, no --rc; pass the prompt as argv. Matches
-  # CursorAgent.autoLaunchCommand for the .work session kind.
+  log "Resolved cursor binary: $bin"
+  # Cursor: no --permission-mode, no --rc; pass the prompt as argv.
+  # This intentionally uses CursorAgent's .job/.review first-launch argv
+  # form (NOT the .work bare-`agent` form) so the unattended skill flow
+  # feeds the prompt at launch — same divergence-from-Swift-.work
+  # rationale that launch_claude_code uses for its prompt-argv form.
   local launch_cmd="cd $WORKTREE_PATH && $bin \"\$(cat $prompt_path)\""
   create_agent_terminal "Cursor" "$launch_cmd"
 }
@@ -681,6 +686,7 @@ launch_codex() {
       "$HOME/.local/bin/codex") || \
       die "launch_agent" "codex binary not found at PATH or known locations; provide --agent-binary"
   fi
+  log "Resolved codex binary: $bin"
   # Codex has no prompt-argv form (matches OpenAICodexAgent.autoLaunchCommand
   # — bare `codex` only). The prompt file is still written; the user can
   # paste from it into the TUI.

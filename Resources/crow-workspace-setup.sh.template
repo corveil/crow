@@ -535,6 +535,7 @@ launch_claude_code() {
       "/opt/homebrew/bin/claude") || \
       die "launch_agent" "claude binary not found at PATH or known locations; provide --agent-binary"
   fi
+  log "Resolved claude-code binary: $bin"
   local send_text="cd $WORKTREE_PATH && $bin --permission-mode plan \"\$(cat $prompt_path)\"\\n"
   create_agent_terminal "Claude Code" "$send_text"
 }
@@ -553,6 +554,7 @@ launch_cursor() {
       "$HOME/.local/bin/agent") || \
       die "launch_agent" "cursor binary not found at PATH or known locations; provide --agent-binary"
   fi
+  log "Resolved cursor binary: $bin"
   local send_text="cd $WORKTREE_PATH && $bin \"\$(cat $prompt_path)\"\\n"
   create_agent_terminal "Cursor" "$send_text"
 }
@@ -570,6 +572,7 @@ launch_codex() {
       "$HOME/.local/bin/codex") || \
       die "launch_agent" "codex binary not found at PATH or known locations; provide --agent-binary"
   fi
+  log "Resolved codex binary: $bin"
   log "Note: Codex has no prompt-argv form; prompt file is at $prompt_path (paste manually if needed)."
   local send_text="cd $WORKTREE_PATH && $bin\\n"
   create_agent_terminal "OpenAI Codex" "$send_text"
