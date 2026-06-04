@@ -1154,9 +1154,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let requestedAgentKind = params["agent_kind"]?.stringValue
                     .flatMap { $0.isEmpty ? nil : AgentKind(rawValue: $0) }
                 return await MainActor.run {
-                    // Manager sessions get their own Claude-Code terminal in the
-                    // devRoot, mirroring the primary Manager. Manager is pinned to
-                    // Claude Code, so `agent_kind` is ignored for manager kind.
+                    // Manager sessions get their own agent terminal in the
+                    // devRoot, mirroring the primary Manager. The Manager
+                    // agent is resolved from `appState.agentKind(for: .manager)`
+                    // inside `createManagerSession`, so the request's
+                    // `agent_kind` param is ignored for manager kind
+                    // (CROW-433).
                     if isManagerKind {
                         let id = capturedService.createManagerSession(name: name, cwd: devRoot)
                         let createdName = capturedAppState.sessions.first(where: { $0.id == id })?.name ?? name

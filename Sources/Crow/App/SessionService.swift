@@ -115,7 +115,29 @@ final class SessionService {
                 // has one source. Rebuilds any non-empty existing command so
                 // a Cursor/Codex Manager (whose command never contained
                 // "claude") still gets refreshed across restarts.
-                let rebuiltCommand = managerCommand(for: session)
+                //
+                // Reconcile `session.agentKind` to the currently-configured
+                // Manager agent BEFORE the command rebuild. `ensureManagerSession`
+                // also performs this reconciliation, but it runs after
+                // `hydrateState` — on the reboot / dead-tmux path
+                // `rebuildAllSurfaces` registers a fresh window and pastes
+                // the just-rebuilt command, so if hydrate keyed off the
+                // stale persisted kind the change would only take effect on
+                // the second respawn (CROW-433 review).
+                let configuredKind = appState.agentKind(for: .manager)
+                var reconciled = session
+                if reconciled.agentKind != configuredKind {
+                    reconciled.agentKind = configuredKind
+                    if let idx = appState.sessions.firstIndex(where: { $0.id == session.id }) {
+                        appState.sessions[idx].agentKind = configuredKind
+                    }
+                    store.mutate { data in
+                        if let i = data.sessions.firstIndex(where: { $0.id == session.id }) {
+                            data.sessions[i].agentKind = configuredKind
+                        }
+                    }
+                }
+                let rebuiltCommand = managerCommand(for: reconciled)
                 // Remote-control bookkeeping reflects what the agent actually
                 // emitted — `supportsRemoteControl` is per-agent capability,
                 // but per-launch the Cursor Manager intentionally omits `--rc`
