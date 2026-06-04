@@ -117,6 +117,23 @@ echo "=== api ==="; gh api repos/owner/repo/issues/123 | head -120
 
 This keeps the allowlist tight (preferred over broadening it with `cd:*` / `find:*`).
 
+## Bash Conventions
+
+Same allowlist-prefix problem applies to `find -exec`: the rule engine can't see what gets exec'd, so `find ... -exec X` falls back to a permission prompt even when both `find` and `X` are individually allowlisted. Prefer these instead — they avoid the prompt entirely:
+
+| Intent | Use | Not |
+|---|---|---|
+| Search files for text | `rg PATTERN` (recursive by default, respects `.gitignore`) | `find . -exec grep PATTERN {} \;` |
+| Search by file type | `rg PATTERN --type py` / `--type swift` | `find . -name '*.py' -exec grep ...` |
+| Find files by name | `find . -name X` (no `-exec`) | — |
+| Delete matches | `find . -name X -delete` | `find . -name X -exec rm {} \;` |
+| Run a command per match | `find ... -print0 \| xargs -0 CMD` | `find ... -exec CMD {} \;` |
+| Filter then count | `find ... \| wc -l` (single pipe is fine) | — |
+
+`rg` (ripgrep) is the default search tool — much faster than `grep -r` and skips ignored files. Install via `brew install ripgrep` if missing.
+
+`find -exec` is essentially never the right tool today — `-delete` and `xargs` cover what it was originally needed for, and both keep the allowlist clean.
+
 ## Known Issues / Corrections
 
 <!-- Auto-maintained by Claude Code during workspace setup -->
