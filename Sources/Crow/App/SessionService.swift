@@ -1784,17 +1784,21 @@ final class SessionService {
     /// command engine, so for Cursor we expand the SKILL body inline with
     /// `$ARGUMENTS` already substituted to the PR URL — same instructions,
     /// no second-file indirection (#431).
-    nonisolated private static func buildReviewPrompt(prURL: String, prTitle: String, repoSlug: String, prNumber: Int, agentKind: AgentKind) -> String {
+    ///
+    /// `internal` (not `private`) so `SessionServiceReviewPromptTests` can
+    /// assert the branch dispatch via `@testable import Crow`. The actual
+    /// SKILL-body substitution lives in `cursorReviewPrompt(skillBody:prURL:)`
+    /// so tests can exercise the substitution logic without depending on
+    /// `Scaffolder.bundledReviewSkill()` (which falls back to a trivial stub
+    /// in test environments where the repo path can't be resolved from
+    /// `ProcessInfo.processInfo.arguments[0]`).
+    nonisolated static func buildReviewPrompt(prURL: String, prTitle: String, repoSlug: String, prNumber: Int, agentKind: AgentKind) -> String {
         switch agentKind {
         case .cursor:
-            // Inline the SKILL body so Cursor receives the full review brief
-            // as the prompt argv. Swap the trailing attribution from Claude
-            // Code to Cursor so reviews posted to GitHub correctly identify
-            // the reviewing agent.
-            let skill = Scaffolder.bundledReviewSkill()
-            return skill
-                .replacingOccurrences(of: "$ARGUMENTS", with: prURL)
-                .replacingOccurrences(of: "via Claude Code", with: "via Cursor")
+            return cursorReviewPrompt(
+                skillBody: Scaffolder.bundledReviewSkill(),
+                prURL: prURL
+            )
         default:
             // Claude Code (and any future agent with a compatible slash-
             // command engine) gets the terse `/crow-review-pr <URL>` form.
@@ -1802,6 +1806,20 @@ final class SessionService {
             /crow-review-pr \(prURL)
             """
         }
+    }
+
+    /// Apply the Cursor-specific substitutions to a raw `crow-review-pr`
+    /// SKILL body: replace `$ARGUMENTS` with the PR URL, and swap the
+    /// "via Claude Code" attribution suffix for "via Cursor" so the posted
+    /// GitHub review identifies the reviewing agent correctly.
+    ///
+    /// Split out from `buildReviewPrompt` so unit tests can verify the
+    /// substitutions against a known input without depending on the
+    /// scaffolder's file-resolution fallback.
+    nonisolated static func cursorReviewPrompt(skillBody: String, prURL: String) -> String {
+        return skillBody
+            .replacingOccurrences(of: "$ARGUMENTS", with: prURL)
+            .replacingOccurrences(of: "via Claude Code", with: "via Cursor")
     }
 
     // MARK: - Session Status
