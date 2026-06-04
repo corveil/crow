@@ -687,7 +687,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         tracker.onAutoCreateRequest = { [weak self] issue in
             guard let self else { return }
-            self.appState.onWorkOnIssue?(issue.url)
+            // Send `/crow-workspace <url>` to the Manager terminal WITHOUT
+            // switching the selected session. The manual "Start Working"
+            // button routes through `onWorkOnIssue` (which does select
+            // Manager) because the user explicitly asked for that
+            // workspace; an auto-pickup is background work and must not
+            // yank the user out of their current session (#429). The
+            // sidebar still updates and `notifyAutoWorkspaceCreated`
+            // already surfaces the event.
+            if let managerTerminals = self.appState.terminals[AppState.managerSessionID],
+               let managerTerminal = managerTerminals.first {
+                TerminalRouter.send(managerTerminal, text: "/crow-workspace \(issue.url)\n")
+            }
             self.notificationManager?.notifyAutoWorkspaceCreated(issue)
         }
         tracker.onPRStatusTransitions = { [weak self] transitions in
