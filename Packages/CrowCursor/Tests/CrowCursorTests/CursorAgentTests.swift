@@ -24,7 +24,11 @@ struct CursorAgentTests {
             autoPermissionMode: false,
             telemetryPort: nil
         )
-        #expect(cmd == "agent\n")
+        // Work sessions launch a bare `agent` — prefer the absolute binary
+        // path when `findBinary()` resolves, otherwise fall back to the bare
+        // token. Either way the tail is `agent\n` (no prompt, no flags).
+        #expect(cmd?.hasSuffix("agent\n") == true)
+        #expect(cmd?.contains(".crow-job-prompt.md") == false)
     }
 
     @Test func autoLaunchCommandIgnoresTelemetryAndRemoteControl() {
@@ -39,7 +43,11 @@ struct CursorAgentTests {
             autoPermissionMode: false,
             telemetryPort: 4318
         )
-        #expect(cmd == "agent\n")
+        #expect(cmd?.hasSuffix("agent\n") == true)
+        // No OTEL env-var prefix and no review/job prompt file should be
+        // referenced for a plain work session.
+        #expect(cmd?.contains("OTEL_") == false)
+        #expect(cmd?.contains(".crow-job-prompt.md") == false)
     }
 
     @Test func autoLaunchCommandReviewSessionUnsupported() {
@@ -51,7 +59,43 @@ struct CursorAgentTests {
             autoPermissionMode: false,
             telemetryPort: nil
         )
-        #expect(cmd == nil) // Cursor review sessions aren't supported in MVP.
+        // Phase C: review-on-Cursor isn't supported (review skill is Claude-only).
+        #expect(cmd == nil)
+    }
+
+    @Test func autoLaunchCommandJobSessionFirstLaunch() {
+        // First job launch (reviewPromptDispatched == false) should pass the
+        // pre-written `.crow-job-prompt.md` as argv so Cursor starts working
+        // unattended — mirrors the Claude Code Jobs path (#424).
+        let session = Session(name: "job", kind: .job, agentKind: .cursor)
+        let cmd = agent.autoLaunchCommand(
+            session: session,
+            worktreePath: "/tmp/wt",
+            remoteControlEnabled: false,
+            autoPermissionMode: false,
+            telemetryPort: nil
+        )
+        #expect(cmd != nil)
+        #expect(cmd?.contains(".crow-job-prompt.md") == true)
+        #expect(cmd?.hasSuffix("\n") == true)
+    }
+
+    @Test func autoLaunchCommandJobSessionSubsequentLaunch() {
+        // After the initial prompt has been dispatched, the deferred-launch
+        // path falls back to a bare `agent` (Cursor has no `--continue`), so
+        // restarting Crow resumes the TUI instead of re-running the prompt.
+        var session = Session(name: "job", kind: .job, agentKind: .cursor)
+        session.reviewPromptDispatched = true
+        let cmd = agent.autoLaunchCommand(
+            session: session,
+            worktreePath: "/tmp/wt",
+            remoteControlEnabled: false,
+            autoPermissionMode: false,
+            telemetryPort: nil
+        )
+        #expect(cmd != nil)
+        #expect(cmd?.contains(".crow-job-prompt.md") == false)
+        #expect(cmd?.hasSuffix("agent\n") == true)
     }
 
     @Test func findBinaryReturnsNilWhenAbsent() {
