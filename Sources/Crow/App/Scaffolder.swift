@@ -31,6 +31,9 @@ struct Scaffolder {
         let createTicketSkillsDir = (claudeDir as NSString).appendingPathComponent("skills/crow-create-ticket")
         try fm.createDirectory(atPath: createTicketSkillsDir, withIntermediateDirectories: true)
 
+        let attributionSkillsDir = (claudeDir as NSString).appendingPathComponent("skills/crow-attribution")
+        try fm.createDirectory(atPath: attributionSkillsDir, withIntermediateDirectories: true)
+
         // Create crow-reviews directory for PR review clones
         let reviewsDir = (devRoot as NSString).appendingPathComponent("crow-reviews")
         try fm.createDirectory(atPath: reviewsDir, withIntermediateDirectories: true)
@@ -86,6 +89,10 @@ struct Scaffolder {
         let createTicketSkillPath = (createTicketSkillsDir as NSString).appendingPathComponent("SKILL.md")
         let createTicketSkillTemplate = Self.bundledCreateTicketSkill()
         try createTicketSkillTemplate.write(toFile: createTicketSkillPath, atomically: true, encoding: .utf8)
+
+        // Shared attribution footer rules (issue #443)
+        let attributionFooterPath = (attributionSkillsDir as NSString).appendingPathComponent("FOOTER.md")
+        try Self.bundledAttributionFooter().write(toFile: attributionFooterPath, atomically: true, encoding: .utf8)
 
         // Always overwrite settings.json (permissions for crow, gh, git commands)
         let settingsPath = (claudeDir as NSString).appendingPathComponent("settings.json")
@@ -220,6 +227,14 @@ struct Scaffolder {
         user and labeled `crow:auto`. All `gh`, `glab`, and `git` commands require
         `dangerouslyDisableSandbox: true`.
         """
+    }
+
+    /// Shared attribution footer instructions (issue #443).
+    static func bundledAttributionFooter() -> String {
+        if let content = loadFromRepo("skills/crow-attribution/FOOTER.md") {
+            return content
+        }
+        return CrowAttribution.sharedFooterInstructions
     }
 
     /// The settings.json template with pre-approved permissions.

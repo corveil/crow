@@ -1427,6 +1427,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                 cwd: cwd,
                                 command: registerCommand,
                                 trackReadiness: trackReadiness,
+                                agentKind: agentKind,
                                 newWindowTimeout: 3.0
                             )
                         }

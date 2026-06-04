@@ -2,21 +2,18 @@ import Foundation
 import Testing
 @testable import Crow
 
-/// Snapshot tests for the `/crow-review-pr` skill attribution line.
+/// Snapshot tests for Crow skill attribution instructions (issue #443).
 ///
-/// These tests intentionally hardcode the expected attribution string rather
-/// than importing `CrowCore.CrowAttribution`. The unit test in
-/// `Packages/CrowCore/Tests/CrowCoreTests/CrowAttributionTests.swift` verifies
-/// that the Swift constant matches this literal, so any drift between the
-/// markdown skill file and the Swift constant is caught from both sides.
+/// Skills reference `$CROW_AGENT_DISPLAY_NAME` (and review templates use
+/// `{{CROW_AGENT_DISPLAY_NAME}}` for Cursor inline expansion). The unit tests in
+/// `Packages/CrowCore/Tests/CrowCoreTests/CrowAttributionTests.swift` verify the
+/// Swift helpers and default Claude Code footers.
 @Suite("Review attribution snapshot")
 struct AttributionSkillTests {
 
     private static let canonicalRepoURL = "https://github.com/radiusmethod/crow"
-    private static let canonicalReviewLink =
-        "[🐦‍⬛ Reviewed by Crow via Claude Code](https://github.com/radiusmethod/crow)"
-    private static let canonicalTicketLink =
-        "[🐦‍⬛ Created with Crow via Claude Code](https://github.com/radiusmethod/crow)"
+    private static let agentDisplayEnvKey = "CROW_AGENT_DISPLAY_NAME"
+    private static let agentPlaceholder = "{{CROW_AGENT_DISPLAY_NAME}}"
 
     /// Walk up from this test source file until we find Package.swift.
     /// Returns the repo root URL.
@@ -58,14 +55,23 @@ struct AttributionSkillTests {
         return try String(contentsOf: url, encoding: .utf8)
     }
 
-    @Test func liveSkillContainsCanonicalAttributionLink() throws {
-        let content = try Self.liveSkill()
-        #expect(content.contains(Self.canonicalReviewLink))
+    private static func liveAttributionFooter() throws -> String {
+        let url = repoRoot()
+            .appendingPathComponent("skills/crow-attribution/FOOTER.md")
+        return try String(contentsOf: url, encoding: .utf8)
     }
 
-    @Test func bundledTemplateContainsCanonicalAttributionLink() throws {
+    @Test func liveSkillReferencesAgentDisplayNameEnv() throws {
+        let content = try Self.liveSkill()
+        #expect(content.contains("$\(Self.agentDisplayEnvKey)"))
+        #expect(content.contains(Self.agentPlaceholder))
+        #expect(content.contains(Self.canonicalRepoURL))
+    }
+
+    @Test func bundledTemplateReferencesAgentDisplayNameEnv() throws {
         let content = try Self.bundledTemplate()
-        #expect(content.contains(Self.canonicalReviewLink))
+        #expect(content.contains("$\(Self.agentDisplayEnvKey)"))
+        #expect(content.contains(Self.agentPlaceholder))
     }
 
     @Test func liveSkillAndBundledTemplateAreByteIdentical() throws {
@@ -105,14 +111,16 @@ struct AttributionSkillTests {
         }
     }
 
-    @Test func liveTicketSkillContainsCanonicalAttributionLink() throws {
+    @Test func liveTicketSkillReferencesAgentDisplayNameEnv() throws {
         let content = try Self.liveTicketSkill()
-        #expect(content.contains(Self.canonicalTicketLink))
+        #expect(content.contains("$\(Self.agentDisplayEnvKey)"))
+        #expect(content.contains(Self.canonicalRepoURL))
+        #expect(!content.contains("Do not modify the link text"))
     }
 
-    @Test func bundledTicketTemplateContainsCanonicalAttributionLink() throws {
+    @Test func bundledTicketTemplateReferencesAgentDisplayNameEnv() throws {
         let content = try Self.bundledTicketTemplate()
-        #expect(content.contains(Self.canonicalTicketLink))
+        #expect(content.contains("$\(Self.agentDisplayEnvKey)"))
     }
 
     @Test func liveTicketSkillAndBundledTemplateAreByteIdentical() throws {
@@ -136,5 +144,12 @@ struct AttributionSkillTests {
             #expect(url == Self.canonicalRepoURL,
                     "create-ticket skill contains non-canonical github.com link: \(url)")
         }
+    }
+
+    @Test func sharedFooterDocumentsAgentEnvVars() throws {
+        let footer = try Self.liveAttributionFooter()
+        #expect(footer.contains("CROW_AGENT_KIND"))
+        #expect(footer.contains("CROW_AGENT_DISPLAY_NAME"))
+        #expect(footer.contains(Self.canonicalRepoURL))
     }
 }

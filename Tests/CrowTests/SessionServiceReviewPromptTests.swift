@@ -28,7 +28,7 @@ struct SessionServiceReviewPromptTests {
     # Crow Review PR
     Review PR $ARGUMENTS — checkout via `gh pr checkout $ARGUMENTS`.
 
-    [🐦‍⬛ Reviewed by Crow via Claude Code](https://github.com/radiusmethod/crow)
+    [🐦‍⬛ Reviewed by Crow via {{CROW_AGENT_DISPLAY_NAME}}](https://github.com/radiusmethod/crow)
     """
 
     @Test func cursorPromptSubstitutesPRURLForArguments() {
