@@ -259,6 +259,8 @@ public struct SettingsView: View {
 
                 Picker("Retention", selection: $config.cleanup.retentionHours) {
                     Text("1 hour").tag(1)
+                    Text("4 hours").tag(4)
+                    Text("8 hours").tag(8)
                     Text("1 day").tag(24)
                     Text("3 days").tag(72)
                     Text("7 days").tag(168)

@@ -1282,7 +1282,7 @@ final class SessionService {
 
         let rawTerminal = SessionTerminal(
             sessionID: session.id,
-            name: "Claude Code",
+            name: session.agentKind.displayName,
             cwd: worktreePath,
             isManaged: true
         )
@@ -1470,6 +1470,12 @@ final class SessionService {
         // never beachballs while a review spins up (#404). The detached task
         // hands back just the metadata the main-actor tail needs to build
         // the Session/Worktree/Terminal/Link rows.
+        //
+        // The resolved review-agent kind is captured here (main actor) so the
+        // detached prepareReviewClone can pick the right prompt-file content
+        // — Claude reads a `/crow-review-pr` slash command; Cursor reads the
+        // expanded SKILL.md body (#431).
+        let reviewAgentKind = appState.agentKind(for: .review)
         let env = ShellEnvironment.shared.env
         let prep: ReviewClonePrep
         do {
@@ -1480,7 +1486,8 @@ final class SessionService {
                     repoName: repoName,
                     prNumber: prNumber,
                     devRoot: devRoot,
-                    env: env
+                    env: env,
+                    reviewAgentKind: reviewAgentKind
                 )
             }.value
         } catch {
@@ -1509,7 +1516,7 @@ final class SessionService {
 
         let terminal = SessionTerminal(
             sessionID: session.id,
-            name: "Claude Code",
+            name: session.agentKind.displayName,
             cwd: prep.clonePath,
             isManaged: true
         )
@@ -1573,7 +1580,8 @@ final class SessionService {
         repoName: String,
         prNumber: Int,
         devRoot: String,
-        env: [String: String]
+        env: [String: String],
+        reviewAgentKind: AgentKind
     ) async throws -> ReviewClonePrep {
         // Fetch PR metadata
         let prOutput = try await runShellAsync(env: env, args: [
@@ -1618,7 +1626,7 @@ final class SessionService {
 
         // Write review prompt file into the clone directory
         let promptPath = (clonePath as NSString).appendingPathComponent(".crow-review-prompt.md")
-        let reviewPrompt = Self.buildReviewPrompt(prURL: prURL, prTitle: prTitle, repoSlug: repoSlug, prNumber: prNumber)
+        let reviewPrompt = Self.buildReviewPrompt(prURL: prURL, prTitle: prTitle, repoSlug: repoSlug, prNumber: prNumber, agentKind: reviewAgentKind)
         try? reviewPrompt.write(toFile: promptPath, atomically: true, encoding: .utf8)
 
         // Copy the crow-review-pr skill into the clone's .claude/skills/ so Claude Code can find it
@@ -1736,7 +1744,7 @@ final class SessionService {
         )
         let terminal = SessionTerminal(
             sessionID: session.id,
-            name: "Claude Code",
+            name: session.agentKind.displayName,
             cwd: worktreePath,
             isManaged: true
         )
@@ -1843,10 +1851,50 @@ final class SessionService {
     // MARK: - Review Prompt
 
     /// Build the initial prompt for a review session.
-    nonisolated private static func buildReviewPrompt(prURL: String, prTitle: String, repoSlug: String, prNumber: Int) -> String {
-        """
-        /crow-review-pr \(prURL)
-        """
+    ///
+    /// Claude Code resolves `/crow-review-pr <URL>` via its slash-command /
+    /// SKILL engine — the prompt file is a one-liner and the bundled
+    /// `.claude/skills/crow-review-pr/SKILL.md` (copied alongside) supplies
+    /// the actual instructions. Cursor's `agent` CLI has no equivalent slash-
+    /// command engine, so for Cursor we expand the SKILL body inline with
+    /// `$ARGUMENTS` already substituted to the PR URL — same instructions,
+    /// no second-file indirection (#431).
+    ///
+    /// `internal` (not `private`) so `SessionServiceReviewPromptTests` can
+    /// assert the branch dispatch via `@testable import Crow`. The actual
+    /// SKILL-body substitution lives in `cursorReviewPrompt(skillBody:prURL:)`
+    /// so tests can exercise the substitution logic without depending on
+    /// `Scaffolder.bundledReviewSkill()` (which falls back to a trivial stub
+    /// in test environments where the repo path can't be resolved from
+    /// `ProcessInfo.processInfo.arguments[0]`).
+    nonisolated static func buildReviewPrompt(prURL: String, prTitle: String, repoSlug: String, prNumber: Int, agentKind: AgentKind) -> String {
+        switch agentKind {
+        case .cursor:
+            return cursorReviewPrompt(
+                skillBody: Scaffolder.bundledReviewSkill(),
+                prURL: prURL
+            )
+        default:
+            // Claude Code (and any future agent with a compatible slash-
+            // command engine) gets the terse `/crow-review-pr <URL>` form.
+            return """
+            /crow-review-pr \(prURL)
+            """
+        }
+    }
+
+    /// Apply the Cursor-specific substitutions to a raw `crow-review-pr`
+    /// SKILL body: replace `$ARGUMENTS` with the PR URL, and swap the
+    /// "via Claude Code" attribution suffix for "via Cursor" so the posted
+    /// GitHub review identifies the reviewing agent correctly.
+    ///
+    /// Split out from `buildReviewPrompt` so unit tests can verify the
+    /// substitutions against a known input without depending on the
+    /// scaffolder's file-resolution fallback.
+    nonisolated static func cursorReviewPrompt(skillBody: String, prURL: String) -> String {
+        return skillBody
+            .replacingOccurrences(of: "$ARGUMENTS", with: prURL)
+            .replacingOccurrences(of: "via Claude Code", with: "via Cursor")
     }
 
     // MARK: - Session Status

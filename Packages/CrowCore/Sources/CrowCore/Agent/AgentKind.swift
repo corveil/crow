@@ -20,3 +20,20 @@ public struct AgentKind: Hashable, Sendable, Codable, RawRepresentable {
     /// The Cursor agent.
     public static let cursor = AgentKind(rawValue: "cursor")
 }
+
+public extension AgentKind {
+    /// Human-readable label for this kind, resolved through `AgentRegistry`.
+    /// Falls back to `rawValue` (e.g. `"cursor"`) when no agent is registered
+    /// for the kind — per CROW-427 the fallback must NOT silently be
+    /// `"Claude Code"`.
+    var displayName: String {
+        AgentRegistry.shared.agent(for: self)?.displayName ?? rawValue
+    }
+
+    /// SF Symbol name for this kind, resolved through `AgentRegistry`.
+    /// Falls back to a neutral `"sparkles"` when no agent is registered, so
+    /// the tab UI doesn't render an empty SF Symbol box.
+    var iconSystemName: String {
+        AgentRegistry.shared.agent(for: self)?.iconSystemName ?? "sparkles"
+    }
+}

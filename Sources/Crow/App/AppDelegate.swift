@@ -687,7 +687,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         tracker.onAutoCreateRequest = { [weak self] issue in
             guard let self else { return }
-            self.appState.onWorkOnIssue?(issue.url)
+            // Send `/crow-workspace <url>` to the Manager terminal WITHOUT
+            // switching the selected session. The manual "Start Working"
+            // button routes through `onWorkOnIssue` (which does select
+            // Manager) because the user explicitly asked for that
+            // workspace; an auto-pickup is background work and must not
+            // yank the user out of their current session (#429). The
+            // sidebar still updates and `notifyAutoWorkspaceCreated`
+            // already surfaces the event.
+            if let managerTerminals = self.appState.terminals[AppState.managerSessionID],
+               let managerTerminal = managerTerminals.first {
+                TerminalRouter.send(managerTerminal, text: "/crow-workspace \(issue.url)\n")
+            }
             self.notificationManager?.notifyAutoWorkspaceCreated(issue)
         }
         tracker.onPRStatusTransitions = { [weak self] transitions in
@@ -1330,8 +1341,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 let rawCommand = params["command"]?.stringValue
                 let isManaged = params["managed"]?.boolValue ?? false
-                let defaultName = isManaged ? "Claude Code" : "Shell"
-                let terminalName = params["name"]?.stringValue ?? defaultName
                 return await MainActor.run {
                     // Resolve claude binary path if command references claude; also
                     // inject --rc --name when remote control is enabled so the session
@@ -1339,9 +1348,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     // session name.
                     var command = rawCommand
                     var rcInjected = false
+                    let session = capturedAppState.sessions.first(where: { $0.id == sessionID })
+                    let sessionName = session?.name
+                    // The default managed-terminal name is the configured agent's
+                    // displayName (CROW-427) — Cursor sessions read "Cursor",
+                    // Codex sessions read "OpenAI Codex", etc. When the session
+                    // can't be found yet, fall back to the AppState default kind.
+                    let agentKind = session?.agentKind ?? capturedAppState.defaultAgentKind
+                    let defaultName = isManaged ? agentKind.displayName : "Shell"
+                    let terminalName = params["name"]?.stringValue ?? defaultName
                     if let cmd = rawCommand, cmd.contains("claude") {
                         let rcEnabled = capturedAppState.remoteControlEnabled
-                        let sessionName = capturedAppState.sessions.first(where: { $0.id == sessionID })?.name
                         command = AppDelegate.resolveClaudeInCommand(
                             cmd,
                             remoteControl: rcEnabled,
