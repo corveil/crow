@@ -65,11 +65,9 @@ public final class AppState {
     public var agentsByKind: [String: AgentKind] = [:]
 
     /// Resolve the agent that should drive a newly-created session of the
-    /// given kind. Manager sessions are pinned to Claude Code; all other
-    /// kinds prefer an `agentsByKind` override and fall back to
-    /// `defaultAgentKind` when no override is set (CROW-421).
+    /// given kind. Prefers an `agentsByKind` override and falls back to
+    /// `defaultAgentKind` when no override is set (CROW-421, CROW-433).
     public func agentKind(for sessionKind: SessionKind) -> AgentKind {
-        if sessionKind == .manager { return .claudeCode }
         return agentsByKind[sessionKind.rawValue] ?? defaultAgentKind
     }
 

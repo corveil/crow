@@ -71,4 +71,36 @@ public protocol CodingAgent: Sendable {
         worktreePath: String,
         prompt: String
     ) async throws -> String
+
+    /// Build the shell command that the Manager tab uses to launch this
+    /// agent in the devRoot. Unlike `autoLaunchCommand`, this is the
+    /// terminal's pre-populated `command` string — it runs before the
+    /// shell prompt is ready, with no auto-prompt or `--continue` flag.
+    ///
+    /// `sessionName` labels the agent's session in claude.ai's Remote
+    /// Control panel (and analogous systems if other agents support it).
+    /// `autoPermissionMode` mirrors `ClaudeCodeAgent`'s `--permission-mode auto`
+    /// — agents that don't surface this concept can ignore it. `telemetryPort`
+    /// is passed through for consistency with `autoLaunchCommand`; most
+    /// agents won't need it for Manager terminals (CROW-433).
+    func managerLaunchCommand(
+        sessionName: String,
+        remoteControlEnabled: Bool,
+        autoPermissionMode: Bool,
+        telemetryPort: UInt16?
+    ) -> String
+}
+
+public extension CodingAgent {
+    /// Default Manager launch command: invoke the agent's CLI binary by
+    /// name with no extra flags. Agents with richer launch ergonomics
+    /// (Claude Code's `--rc`/`--name`/`--permission-mode`) override this.
+    func managerLaunchCommand(
+        sessionName: String,
+        remoteControlEnabled: Bool,
+        autoPermissionMode: Bool,
+        telemetryPort: UInt16?
+    ) -> String {
+        return "\(launchCommandToken)\n"
+    }
 }

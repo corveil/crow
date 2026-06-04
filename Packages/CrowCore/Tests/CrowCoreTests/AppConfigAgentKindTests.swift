@@ -91,9 +91,19 @@ import Testing
     #expect(config.agentKind(for: .job) == .claudeCode)
 }
 
-@Test func appConfigAgentResolverPinsManagerToClaudeCode() {
-    var config = AppConfig(defaultAgentKind: AgentKind(rawValue: "codex"))
-    // Even if someone hand-edits the map to override manager, it's ignored.
+@Test func appConfigAgentResolverFallsBackToDefaultForManager() {
+    // CROW-433: Manager is no longer pinned to Claude Code — when there's no
+    // explicit `agentsByKind["manager"]` entry, it inherits from the
+    // configured default agent like every other kind.
+    let config = AppConfig(defaultAgentKind: AgentKind(rawValue: "codex"))
+    #expect(config.agentKind(for: .manager) == AgentKind(rawValue: "codex"))
+}
+
+@Test func appConfigAgentResolverHonorsExplicitManagerOverride() {
+    // CROW-433: explicit `agentsByKind["manager"]` wins over `defaultAgentKind`.
+    var config = AppConfig(defaultAgentKind: .claudeCode)
     config.agentsByKind["manager"] = AgentKind(rawValue: "cursor")
-    #expect(config.agentKind(for: .manager) == .claudeCode)
+    #expect(config.agentKind(for: .manager) == AgentKind(rawValue: "cursor"))
+    // Other kinds without an override still resolve to the default.
+    #expect(config.agentKind(for: .work) == .claudeCode)
 }

@@ -209,7 +209,8 @@ public struct SettingsView: View {
                 perActionAgentPicker(label: "Agent for coding", kind: .work)
                 perActionAgentPicker(label: "Agent for reviews", kind: .review)
                 perActionAgentPicker(label: "Agent for scheduled jobs", kind: .job)
-                Text("Per-action overrides. “Use default” falls back to the Default Agent above.")
+                perActionAgentPicker(label: "Agent for Manager", kind: .manager)
+                Text("Per-action overrides. “Use default” falls back to the Default Agent above. Manager changes take effect on next app launch.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

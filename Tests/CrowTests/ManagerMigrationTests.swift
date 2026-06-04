@@ -1,6 +1,8 @@
 import Foundation
 import Testing
 import CrowCore
+import CrowClaude
+import CrowCursor
 import CrowPersistence
 @testable import Crow
 
@@ -52,14 +54,47 @@ struct ManagerMigrationTests {
         appState.managerAutoPermissionMode = true
         let service = SessionService(store: JSONStore(directory: tmp), appState: appState)
 
-        let cmd2 = service.managerCommand(sessionName: "Manager 2")
-        let cmd3 = service.managerCommand(sessionName: "Manager 3")
+        // Register Claude so the dispatch path returns the Claude command.
+        // Use a fresh registry to avoid bleed across tests.
+        AgentRegistry.shared.register(ClaudeCodeAgent())
+
+        let session2 = Session(name: "Manager 2", kind: .manager, agentKind: .claudeCode)
+        let session3 = Session(name: "Manager 3", kind: .manager, agentKind: .claudeCode)
+        let cmd2 = service.managerCommand(for: session2)
+        let cmd3 = service.managerCommand(for: session3)
 
         #expect(cmd2.contains("--name 'Manager 2'"))
         #expect(cmd3.contains("--name 'Manager 3'"))
         #expect(cmd2 != cmd3)
         #expect(cmd2.contains("--permission-mode auto"))
         #expect(cmd2.contains("--rc"))
+    }
+
+    /// CROW-433: a Manager session whose `agentKind` is `.cursor` must
+    /// dispatch through `CursorAgent.managerLaunchCommand`, producing a
+    /// `cursor-agent`-style command rather than a Claude one.
+    @MainActor
+    @Test
+    func managerCommandDispatchesByAgentKind() {
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("crow-mgr-cursor-\(UUID().uuidString)")
+        let appState = AppState()
+        let service = SessionService(store: JSONStore(directory: tmp), appState: appState)
+
+        AgentRegistry.shared.register(ClaudeCodeAgent())
+        AgentRegistry.shared.register(CursorAgent())
+
+        let claudeSession = Session(name: "Manager", kind: .manager, agentKind: .claudeCode)
+        let cursorSession = Session(name: "Manager", kind: .manager, agentKind: .cursor)
+
+        let claudeCmd = service.managerCommand(for: claudeSession)
+        let cursorCmd = service.managerCommand(for: cursorSession)
+
+        // Claude path keeps producing a `claude` invocation.
+        #expect(claudeCmd.contains("claude"))
+        // Cursor path emits the `agent` binary (Cursor's CLI name), not claude.
+        #expect(cursorCmd.contains("agent"))
+        #expect(!cursorCmd.contains("claude"))
     }
 
     /// #374: hydrating the Manager rebuilds its claude `command` to refresh the

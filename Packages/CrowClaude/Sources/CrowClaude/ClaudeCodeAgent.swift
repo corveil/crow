@@ -116,4 +116,18 @@ public struct ClaudeCodeAgent: CodingAgent {
             prompt: prompt
         )
     }
+
+    public func managerLaunchCommand(
+        sessionName: String,
+        remoteControlEnabled: Bool,
+        autoPermissionMode: Bool,
+        telemetryPort: UInt16?
+    ) -> String {
+        let claudePath = findBinary() ?? "claude"
+        return claudePath + ClaudeLaunchArgs.argsSuffix(
+            remoteControl: remoteControlEnabled,
+            sessionName: sessionName,
+            autoPermissionMode: autoPermissionMode
+        )
+    }
 }

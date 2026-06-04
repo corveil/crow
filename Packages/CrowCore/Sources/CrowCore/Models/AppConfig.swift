@@ -50,8 +50,8 @@ public struct AppConfig: Codable, Sendable, Equatable {
     public var defaultAgentKind: AgentKind
     /// Per-action-type overrides. When a key is present, sessions of that
     /// kind are created with the mapped agent; when absent, they fall back
-    /// to `defaultAgentKind`. Manager sessions are pinned to `.claudeCode`
-    /// and intentionally not honored by this map (CROW-421).
+    /// to `defaultAgentKind`. Honored for every `SessionKind`, including
+    /// `.manager` (CROW-433 — Manager was previously pinned to Claude Code).
     ///
     /// Keyed by `SessionKind.rawValue` (string) rather than `SessionKind`
     /// directly so JSON serializes as an object literal like
@@ -123,11 +123,9 @@ public struct AppConfig: Codable, Sendable, Equatable {
     }
 
     /// Resolve the agent that should drive a newly-created session of the
-    /// given kind. Manager sessions are always Claude Code (pinned by spec).
-    /// All other kinds prefer an explicit `agentsByKind` override, falling
-    /// back to `defaultAgentKind` (CROW-421).
+    /// given kind. Prefers an explicit `agentsByKind` override, falling
+    /// back to `defaultAgentKind` (CROW-421, CROW-433).
     public func agentKind(for sessionKind: SessionKind) -> AgentKind {
-        if sessionKind == .manager { return .claudeCode }
         return agentsByKind[sessionKind.rawValue] ?? defaultAgentKind
     }
 }
