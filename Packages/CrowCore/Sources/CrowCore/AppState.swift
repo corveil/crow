@@ -424,6 +424,22 @@ public final class AppState {
         terminals(for: sessionID).contains(where: { $0.isManaged })
     }
 
+    /// Resolves whether a session's task backend declares the
+    /// `.projectBoardStatus` capability. Wired by `AppDelegate` using
+    /// `ProviderManager.taskBackend(for:)`. CrowUI does not depend on
+    /// CrowProvider, so the capability lookup is injected as a closure
+    /// (same pattern as `onMarkInReview`, `onListWorkspaceRepos`).
+    /// Defaults to `nil` so unwired contexts (tests, previews) treat the
+    /// capability as absent. See ADR 0005.
+    public var canSetProjectStatusResolver: ((Session) -> Bool)?
+
+    /// Whether the session's provider supports setting project-board status,
+    /// based on the `TaskBackend` capability set. Replaces the previous
+    /// `session.provider == .github` UI guards. See ADR 0005.
+    public func canSetProjectStatus(for session: Session) -> Bool {
+        canSetProjectStatusResolver?(session) ?? false
+    }
+
     public func primaryWorktree(for sessionID: UUID) -> SessionWorktree? {
         worktrees[sessionID]?.first(where: { $0.isPrimary }) ?? worktrees[sessionID]?.first
     }

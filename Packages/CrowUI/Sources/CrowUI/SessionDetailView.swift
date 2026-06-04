@@ -173,7 +173,7 @@ public struct SessionDetailView: View {
 
                     if session.status == .active,
                        session.ticketURL != nil,
-                       session.provider == .github {
+                       appState.canSetProjectStatus(for: session) {
                         if appState.isMarkingInReview[session.id] == true {
                             ProgressView()
                                 .controlSize(.small)

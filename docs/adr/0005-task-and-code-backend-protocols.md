@@ -26,15 +26,24 @@ Crow exposes two independent protocols under `CrowProvider`:
 - **`TaskBackend`** — tracker side. Owns issue/task lifecycle: `fetchTask`, `listAssigned`, `setLabels`, `setTaskStatus`, `assign`, `createTask`.
 - **`CodeBackend`** — VCS side. Owns PR lifecycle: `linkedPR`, `prStates`, `ensureMergeLabel`, `fetchCrowAuthoredCommits`.
 
-Each backend declares its **capabilities** as a `Set` (`TaskCapability` and `CodeCapability`). Callers branch on capabilities, not on provider identity. Examples:
+Each backend declares its **capabilities** as a `Set` (`TaskCapability` and `CodeCapability`). Callers branch on capabilities, not on provider identity. Capabilities gate UI affordances and call-site decisions; they do not by themselves guarantee a method's implementation is wired (a backend may declare a UI-facing capability while routing execution through a legacy path — see `.projectBoardStatus` on `GitHubTaskBackend`, where `IssueTracker.markInReview` performs the mutation until the `setTaskStatus` GraphQL migration lands). Examples:
 
 ```swift
+// UI gating — the direct replacement for `if session.provider == .github { ... }`.
+if taskBackend.capabilities.contains(.projectBoardStatus) {
+    showInReviewButton()
+}
+
+// Calling a capability-gated method. Backends that declare the capability may
+// still throw `.unimplemented` if their implementation is pending; callers
+// that exercise the method directly must be prepared for that and either fall
+// back to a legacy path or surface the error.
 if taskBackend.capabilities.contains(.projectBoardStatus) {
     try await taskBackend.setTaskStatus(url: url, status: .inReview)
 }
 ```
 
-This is the direct replacement for `if session.provider == .github { ... }`. New backends declare what they support and the call site asks; no `switch` over a closed set of providers.
+New backends declare what they support and the call site asks; no `switch` over a closed set of providers.
 
 Backends take a `ShellRunner` (a thin `protocol` over `Process()` + `ShellEnvironment.shared`) at init, so unit tests inject a `FakeShellRunner` that records command vectors and returns canned JSON. The three near-duplicate `private func shell` implementations in `ProviderManager`, `IssueTracker`, and `SessionService` collapse into one `ProcessShellRunner`.
 

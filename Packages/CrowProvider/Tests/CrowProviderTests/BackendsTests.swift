@@ -32,10 +32,14 @@ final class BackendsTests: XCTestCase {
     func testGitHubTaskBackendDeclaresCapabilities() {
         let backend = GitHubTaskBackend(shellRunner: FakeShellRunner())
         XCTAssertEqual(backend.provider, .github)
-        // .projectBoardStatus intentionally NOT declared until the markInReview
-        // GraphQL migration lands. Declaring it while setTaskStatus throws would
-        // lie to capability-gated callers. See ADR 0005.
-        XCTAssertFalse(backend.capabilities.contains(.projectBoardStatus))
+        // `.projectBoardStatus` declares the UI surface (GitHub Projects v2).
+        // The `setTaskStatus` GraphQL migration is still pending — execution
+        // currently routes through IssueTracker.markInReview via the
+        // onMarkInReview closure, so direct `setTaskStatus` calls on this
+        // backend still throw .unimplemented (asserted by
+        // testGitHubTaskBackendSetTaskStatusThrowsUnimplemented). See ADR 0005
+        // and issue crow#413 for the UI guard migration.
+        XCTAssertTrue(backend.capabilities.contains(.projectBoardStatus))
         XCTAssertTrue(backend.capabilities.contains(.batchedQuery))
     }
 

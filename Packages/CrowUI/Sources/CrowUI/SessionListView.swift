@@ -300,7 +300,7 @@ public struct SessionListView: View {
 
         if session.status == .active,
            session.ticketURL != nil,
-           session.provider == .github {
+           appState.canSetProjectStatus(for: session) {
             Button {
                 appState.onMarkInReview?(session.id)
             } label: {

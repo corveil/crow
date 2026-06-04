@@ -31,8 +31,14 @@ public protocol TaskBackend: Sendable {
     func setLabels(url: String, add: [String], remove: [String]) async throws
 
     /// Set the project-board status for a task.
-    /// Capability-gated: only call when `capabilities.contains(.projectBoardStatus)`.
-    /// Calling without the capability throws `ProviderError.unimplemented`.
+    /// Capability-gated for **UI surfacing**: callers gate the affordance on
+    /// `capabilities.contains(.projectBoardStatus)` (see ADR 0005). The
+    /// capability does *not* guarantee this method is implemented — a backend
+    /// may declare it to surface the UI while routing execution through a
+    /// legacy path (e.g. `GitHubTaskBackend` declares the capability but
+    /// throws here; `IssueTracker.markInReview` performs the mutation until
+    /// the `setTaskStatus` GraphQL migration lands). Calling without the
+    /// capability also throws `ProviderError.unimplemented`.
     func setTaskStatus(url: String, status: TicketStatus) async throws
 }
 
@@ -42,8 +48,11 @@ public protocol TaskBackend: Sendable {
 /// becomes `if taskBackend.capabilities.contains(.projectBoardStatus)`, so adding
 /// a third provider (or extending an existing one) doesn't ripple through call sites.
 public enum TaskCapability: Sendable, Hashable {
-    /// Can set project-board status (GitHub Projects v2 today).
-    /// Gates `setTaskStatus`. Without this capability that method throws.
+    /// Declares that the provider exposes a project-board status concept the
+    /// UI should surface (GitHub Projects v2 today). Gates UI affordances such
+    /// as the "Mark as In Review" button. Does **not** guarantee that calling
+    /// `setTaskStatus` succeeds — see `setTaskStatus` for the implementation
+    /// caveat. Backends without this capability hide the affordance entirely.
     case projectBoardStatus
 
     /// Can fulfill `listAssigned`-style queries in a single batched call rather
