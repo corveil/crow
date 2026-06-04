@@ -366,6 +366,12 @@ public struct SessionDetailView: View {
             }
         } else {
             VStack(spacing: 0) {
+                // Icon is resolved live from `session.agentKind` on every
+                // render, while the tab label is snapshotted into
+                // `terminal.name` at creation (so a user-typed rename
+                // sticks). The asymmetry is intentional — don't "fix" it by
+                // moving either side without considering rename UX and
+                // legacy persisted names (CROW-427).
                 TerminalTabBar(
                     terminals: sessionTerminals,
                     managedAgentIcon: session.agentKind.iconSystemName,
