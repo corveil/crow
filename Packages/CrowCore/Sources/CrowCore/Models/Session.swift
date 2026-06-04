@@ -11,6 +11,11 @@ public struct Session: Identifiable, Codable, Sendable {
     public var ticketTitle: String?
     public var ticketNumber: Int?
     public var provider: Provider?
+    // Code-source provider, distinct from the task-source `provider`. Lets a
+    // Corveil-tasked session use a GitHub or GitLab `CodeBackend` (ADR 0005,
+    // CROW-414). `nil` means "follow `provider`"; callers resolve with
+    // `session.codeProvider ?? session.provider`.
+    public var codeProvider: Provider?
     public var createdAt: Date
     public var updatedAt: Date
     // Whether a review-kind session has had its initial `/crow-review-pr`
@@ -43,6 +48,7 @@ public struct Session: Identifiable, Codable, Sendable {
         ticketTitle: String? = nil,
         ticketNumber: Int? = nil,
         provider: Provider? = nil,
+        codeProvider: Provider? = nil,
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
         reviewPromptDispatched: Bool = false,
@@ -58,6 +64,7 @@ public struct Session: Identifiable, Codable, Sendable {
         self.ticketTitle = ticketTitle
         self.ticketNumber = ticketNumber
         self.provider = provider
+        self.codeProvider = codeProvider
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.reviewPromptDispatched = reviewPromptDispatched
@@ -93,6 +100,7 @@ public struct Session: Identifiable, Codable, Sendable {
         ticketTitle = try container.decodeIfPresent(String.self, forKey: .ticketTitle)
         ticketNumber = try container.decodeIfPresent(Int.self, forKey: .ticketNumber)
         provider = try container.decodeIfPresent(Provider.self, forKey: .provider)
+        codeProvider = try container.decodeIfPresent(Provider.self, forKey: .codeProvider)
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)
         reviewPromptDispatched = try container.decodeIfPresent(Bool.self, forKey: .reviewPromptDispatched) ?? true

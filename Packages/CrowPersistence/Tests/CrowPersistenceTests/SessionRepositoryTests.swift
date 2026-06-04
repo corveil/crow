@@ -156,7 +156,8 @@ import Testing
         ticketURL: "https://github.com/org/repo/issues/42",
         ticketTitle: "Fix the bug",
         ticketNumber: 42,
-        provider: .github
+        provider: .github,
+        codeProvider: .gitlab
     )
     repo.save(session)
 
@@ -165,6 +166,7 @@ import Testing
     #expect(found?.ticketTitle == "Fix the bug")
     #expect(found?.ticketNumber == 42)
     #expect(found?.provider == .github)
+    #expect(found?.codeProvider == .gitlab)
     #expect(found?.status == .inReview)
 }
 

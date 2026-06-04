@@ -1144,14 +1144,14 @@ final class SessionService {
     }
 
     /// Check for a pull request on a branch and return a link if found.
-    private func findPRLink(branch: String, repoPath: String, sessionID: UUID) async -> SessionLink? {
+    private func findPRLink(branch: String, repoPath: String, sessionID: UUID, provider: Provider) async -> SessionLink? {
         guard let repoSlug = resolveRepoSlug(repoPath: repoPath) else { return nil }
         // Prefer CodeBackend.linkedPR (ADR 0005) when a manager is wired; fall
         // back to the inline `gh pr list` shell-out only when no manager is
         // available — otherwise we'd issue the identical command twice on the
         // common "no PR exists" path.
         if let manager = providerManager {
-            guard let backend = manager.codeBackend(for: .github),
+            guard let backend = manager.codeBackend(for: provider),
                   let pr = try? await backend.linkedPR(repo: repoSlug, branch: branch) else {
                 return nil
             }
@@ -1207,7 +1207,7 @@ final class SessionService {
             let label = ticket.number.map { "Issue #\($0)" } ?? "Issue"
             links.append(SessionLink(sessionID: session.id, label: label, url: ticketURL, linkType: .ticket))
         }
-        if let prLink = await findPRLink(branch: branch, repoPath: repoPath, sessionID: session.id) {
+        if let prLink = await findPRLink(branch: branch, repoPath: repoPath, sessionID: session.id, provider: session.codeProvider ?? session.provider ?? .github) {
             links.append(prLink)
         }
 
