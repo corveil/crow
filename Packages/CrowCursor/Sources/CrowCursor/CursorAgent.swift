@@ -58,19 +58,35 @@ public struct CursorAgent: CodingAgent {
         autoPermissionMode: Bool,
         telemetryPort: UInt16?
     ) -> String? {
-        // Review-on-Cursor isn't supported in Phase C — the review skill is
-        // Claude-only. Returning nil tells `SessionService.launchAgent` to
-        // log and skip rather than producing a malformed command.
-        guard session.kind == .work else { return nil }
+        let agentPath = findBinary() ?? "agent"
 
-        // Bare `agent` launch — the user types their prompt into the TUI.
-        // No env prefix (Cursor reads `CURSOR_API_KEY` from the shell;
-        // GUI-stored creds are inherited otherwise), no `--continue`
-        // (MVP doesn't auto-resume), no remote-control flag (remote
-        // control is `crow send` typing into the TUI — agent-agnostic,
-        // handled by `SessionService.send`, not a per-launch flag). The
-        // terminal's cwd is already the worktree path.
-        return "agent\n"
+        switch session.kind {
+        case .work:
+            // Bare `agent` launch — the user types their prompt into the TUI.
+            // No env prefix (Cursor reads `CURSOR_API_KEY` from the shell;
+            // GUI-stored creds are inherited otherwise), no `--continue`
+            // (MVP doesn't auto-resume), no remote-control flag (remote
+            // control is `crow send` typing into the TUI — agent-agnostic,
+            // handled by `SessionService.send`, not a per-launch flag).
+            return "\(agentPath)\n"
+        case .job:
+            // Jobs write their first prompt to `.crow-job-prompt.md` in the
+            // worktree before the terminal becomes shell-ready. On first
+            // launch we pass that prompt as argv so Cursor starts working
+            // unattended; on subsequent app restarts we fall back to a bare
+            // `agent` (Cursor has no `--continue` equivalent in MVP), so the
+            // user resumes the TUI rather than re-running the full prompt.
+            if !session.reviewPromptDispatched {
+                let promptPath = (worktreePath as NSString)
+                    .appendingPathComponent(".crow-job-prompt.md")
+                return "\(agentPath) \"$(cat \(promptPath))\"\n"
+            }
+            return "\(agentPath)\n"
+        case .review, .manager:
+            // Review-on-Cursor isn't supported in Phase C — the review skill
+            // is Claude-only. Manager sessions don't auto-launch an agent.
+            return nil
+        }
     }
 
     public func generatePrompt(

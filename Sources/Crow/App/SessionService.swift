@@ -519,8 +519,19 @@ final class SessionService {
             autoPermissionMode: autoPermissionMode,
             telemetryPort: telemetryPort
         ) else {
-            NSLog("[SessionService] Agent %@ could not build a launch command for session %@",
-                  agent.kind.rawValue, sessionID.uuidString)
+            NSLog("[SessionService] Agent %@ could not build a launch command for session %@ (kind=%@)",
+                  agent.kind.rawValue, sessionID.uuidString, String(describing: session.kind))
+            // Surface the failure where the user is already looking — paste a
+            // shell-comment + echo line into the terminal so they aren't stuck
+            // staring at an idle prompt wondering why nothing happened (#424).
+            if let routedTerminal = appState.terminals[sessionID]?.first(where: { $0.id == terminalID }) {
+                let msg = "echo '⚠️  Crow: agent \"\(agent.displayName)\" cannot launch a "
+                    + "\(session.kind.rawValue) session. Switch the agent for this action type "
+                    + "(Settings → Agents) or pick a session kind this agent supports.'\n"
+                TerminalRouter.send(routedTerminal, text: msg)
+            }
+            // Park readiness so the deferred-launch loop doesn't keep retrying.
+            appState.terminalReadiness[terminalID] = .agentLaunched
             return
         }
         // Route through TerminalRouter so tmux-backed terminals get the text
