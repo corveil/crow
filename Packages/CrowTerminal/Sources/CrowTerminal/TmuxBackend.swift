@@ -488,13 +488,70 @@ public final class TmuxBackend {
             socketPath: socketPath,
             sessionName: TmuxBackend.cockpitSessionName
         )
-        let confPath = BundledResources.tmuxConfURL?.path
-        if confPath == nil {
+        guard let confURL = BundledResources.tmuxConfURL else {
             throw TmuxBackendError.bundledResourceMissing("crow-tmux.conf")
         }
-        try Self.ensureCockpitSession(ctrl, configPath: confPath)
+        // The cockpit session may already be live from a prior Crow launch
+        // (#330 stable socket). If so, the bundled conf the server loaded at
+        // `-f` time may now be stale relative to the file on disk (#450) —
+        // capture the pre-attach state so we can reconcile below.
+        let serverWasAlreadyLive = ctrl.hasSession()
+        try Self.ensureCockpitSession(ctrl, configPath: confURL.path)
         controller = ctrl
+        if serverWasAlreadyLive {
+            Self.reconcileBundledConfigIfStale(controller: ctrl, configURL: confURL)
+        }
         return ctrl
+    }
+
+    // MARK: - Stale-config reconciliation (#450)
+
+    /// Re-source the bundled tmux conf on a live server iff the file on disk
+    /// has been modified since the server started. Non-destructive: existing
+    /// windows/sessions survive a `source-file` — server-scoped options
+    /// (mouse, status, escape-time, …) update in place. Failures are logged
+    /// and swallowed; a stale conf is not worth aborting startup over.
+    ///
+    /// Caveat: the bundled conf includes `set -gas terminal-features ',…'`
+    /// which re-appends on each source-file. tmux tolerates duplicate feature
+    /// flags (merged by name) so the duplication is benign.
+    nonisolated static func reconcileBundledConfigIfStale(
+        controller: TmuxController,
+        configURL: URL
+    ) {
+        let confPath = configURL.path
+        let confMTime = (try? FileManager.default.attributesOfItem(atPath: confPath))?[.modificationDate] as? Date
+        let serverStart = serverStartTime(controller: controller)
+
+        guard shouldReconcile(configMTime: confMTime, serverStartTime: serverStart) else {
+            NSLog("[CrowTelemetry tmux:config_reconcile_skipped reason=fresh]")
+            return
+        }
+
+        do {
+            try controller.run(["source-file", confPath])
+            NSLog("[CrowTelemetry tmux:config_reconciled path=\(confPath)]")
+        } catch {
+            NSLog("[CrowTelemetry tmux:config_reconcile_failed error=\"\(error)\"]")
+        }
+    }
+
+    /// Pure policy: reconcile when either timestamp is missing (conservative
+    /// — a redundant `source-file` is cheap) or when the conf is newer than
+    /// the running server.
+    nonisolated static func shouldReconcile(configMTime: Date?, serverStartTime: Date?) -> Bool {
+        guard let configMTime, let serverStartTime else { return true }
+        return configMTime > serverStartTime
+    }
+
+    /// `tmux display -p '#{start_time}'` → Unix epoch as a string. Returns
+    /// nil on any IO/parse failure; callers treat nil as "unknown — reconcile
+    /// to be safe".
+    nonisolated static func serverStartTime(controller: TmuxController) -> Date? {
+        guard let raw = try? controller.run(["display", "-p", "#{start_time}"]) else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let epoch = TimeInterval(trimmed) else { return nil }
+        return Date(timeIntervalSince1970: epoch)
     }
 
     /// Ensure the cockpit session is live, adopting an existing one if a
