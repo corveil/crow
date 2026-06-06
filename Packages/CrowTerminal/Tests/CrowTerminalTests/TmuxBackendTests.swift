@@ -448,4 +448,138 @@ struct TmuxBackendTests {
 
         #expect(bareShells.isEmpty)
     }
+
+    // MARK: - #450 stale-config reconciliation
+
+    /// Integration regression for #450: when Crow attaches to a tmux server
+    /// that loaded an older bundled conf, source-file the on-disk version on
+    /// the live server so server-scoped options catch up — without touching
+    /// existing windows.
+    @Test func staleConfIsReconciledOnAttach() throws {
+        let socket = sharedSocketPath()
+        let dir = NSTemporaryDirectory() as NSString
+        let confPath = dir.appendingPathComponent("crow-test-conf-\(UUID().uuidString.prefix(8)).conf")
+        defer { try? FileManager.default.removeItem(atPath: confPath) }
+
+        // Conf A: status on. Back-date the file so its mtime is clearly older
+        // than the server we're about to start.
+        try "set -gs status on\n".write(toFile: confPath, atomically: true, encoding: .utf8)
+        let oldMTime = Date(timeIntervalSinceNow: -3600)
+        try FileManager.default.setAttributes(
+            [.modificationDate: oldMTime], ofItemAtPath: confPath
+        )
+
+        let ctrl = TmuxController(
+            tmuxBinary: discoveredTmuxBinary!,
+            socketPath: socket,
+            sessionName: TmuxBackend.cockpitSessionName
+        )
+        defer {
+            ctrl.killServer()
+            try? FileManager.default.removeItem(atPath: socket)
+        }
+        try ctrl.newSessionDetached(
+            configPath: confPath,
+            command: "/usr/bin/tail -f /dev/null"
+        )
+        let beforeWindows = try ctrl.listWindowIndices()
+        let statusBefore = try ctrl.run(["show", "-gv", "status"])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        #expect(statusBefore == "on")
+
+        // Conf B: status off. mtime defaults to now → clearly newer than the
+        // server's start time.
+        try "set -gs status off\n".write(toFile: confPath, atomically: true, encoding: .utf8)
+
+        TmuxBackend.reconcileBundledConfigIfStale(
+            controller: ctrl,
+            configURL: URL(fileURLWithPath: confPath)
+        )
+
+        let statusAfter = try ctrl.run(["show", "-gv", "status"])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        #expect(statusAfter == "off")
+
+        // Existing windows survive.
+        let afterWindows = try ctrl.listWindowIndices()
+        #expect(afterWindows == beforeWindows)
+    }
+
+    /// When the conf is older than the server start, reconciliation is a
+    /// no-op — the running settings stay as-is.
+    @Test func freshConfIsNotReconciled() throws {
+        let socket = sharedSocketPath()
+        let dir = NSTemporaryDirectory() as NSString
+        let confPath = dir.appendingPathComponent("crow-test-conf-\(UUID().uuidString.prefix(8)).conf")
+        defer { try? FileManager.default.removeItem(atPath: confPath) }
+
+        // Conf seeds status=on at server start.
+        try "set -gs status on\n".write(toFile: confPath, atomically: true, encoding: .utf8)
+        let ctrl = TmuxController(
+            tmuxBinary: discoveredTmuxBinary!,
+            socketPath: socket,
+            sessionName: TmuxBackend.cockpitSessionName
+        )
+        defer {
+            ctrl.killServer()
+            try? FileManager.default.removeItem(atPath: socket)
+        }
+        try ctrl.newSessionDetached(
+            configPath: confPath,
+            command: "/usr/bin/tail -f /dev/null"
+        )
+
+        // Rewrite the file content but back-date mtime so it predates server
+        // start. Reconciler must skip and the running value must not change.
+        try "set -gs status off\n".write(toFile: confPath, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSinceNow: -3600)],
+            ofItemAtPath: confPath
+        )
+
+        TmuxBackend.reconcileBundledConfigIfStale(
+            controller: ctrl,
+            configURL: URL(fileURLWithPath: confPath)
+        )
+
+        let status = try ctrl.run(["show", "-gv", "status"])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        #expect(status == "on")
+    }
+}
+
+/// Pure-policy tests for `shouldReconcile`. No tmux required, so the suite is
+/// always enabled (unlike the integration suite above).
+@Suite("TmuxBackend stale-config policy")
+struct TmuxBackendConfigPolicyTests {
+    @Test func reconcileWhenConfNewer() {
+        let server = Date(timeIntervalSince1970: 1_000)
+        let conf = Date(timeIntervalSince1970: 2_000)
+        #expect(TmuxBackend.shouldReconcile(configMTime: conf, serverStartTime: server))
+    }
+
+    @Test func skipWhenConfOlder() {
+        let server = Date(timeIntervalSince1970: 2_000)
+        let conf = Date(timeIntervalSince1970: 1_000)
+        #expect(!TmuxBackend.shouldReconcile(configMTime: conf, serverStartTime: server))
+    }
+
+    @Test func skipWhenConfEqualsServerStart() {
+        let same = Date(timeIntervalSince1970: 1_500)
+        #expect(!TmuxBackend.shouldReconcile(configMTime: same, serverStartTime: same))
+    }
+
+    @Test func reconcileWhenServerStartUnknown() {
+        let conf = Date(timeIntervalSince1970: 1_000)
+        #expect(TmuxBackend.shouldReconcile(configMTime: conf, serverStartTime: nil))
+    }
+
+    @Test func reconcileWhenConfMTimeUnknown() {
+        let server = Date(timeIntervalSince1970: 1_000)
+        #expect(TmuxBackend.shouldReconcile(configMTime: nil, serverStartTime: server))
+    }
+
+    @Test func reconcileWhenBothUnknown() {
+        #expect(TmuxBackend.shouldReconcile(configMTime: nil, serverStartTime: nil))
+    }
 }
