@@ -6,17 +6,26 @@ import CrowProvider
 
 /// Polls GitHub/GitLab for issues assigned to the current user.
 ///
-/// GitHub polling is consolidated into a single aliased GraphQL query per refresh
-/// (see `Self.consolidatedQuery`). Per-session PR detection, PR status, and
-/// auto-complete all piggyback on that one response — no per-session `gh` calls.
-/// The `rateLimit` block on each response feeds `AppState.githubRateLimit`, and
-/// a soft threshold + 403 detection suspend polling when quotas are low.
+/// GitHub polling routes through `CrowProvider`'s `TaskBackend.listAssigned`
+/// and `CodeBackend.listMonitoredPRs` (see ADR 0005). The PR side picks up
+/// review requests, viewer PRs, and rate-limit observation in one batched
+/// GraphQL call; the task side fetches open + recently-closed issues in
+/// another. Per-session PR detection, PR status, and auto-complete all
+/// piggyback on those two responses — no per-session `gh` calls. The
+/// `rateLimit` block on each response feeds `AppState.githubRateLimit`,
+/// and a soft threshold + 403 detection suspend polling when quotas are low.
 @MainActor
 final class IssueTracker {
     private let appState: AppState
+    private let providerManager: ProviderManager
     private var timer: Timer?
     private let pollInterval: TimeInterval = 60 // 1 minute
     private var isRefreshing = false
+
+    /// Local alias for the canonical `PRRecord` shape now living in
+    /// `CrowProvider`. The migration kept the name in place to minimize the
+    /// IssueTracker diff — every `ViewerPR` in this file is a `PRRecord`.
+    typealias ViewerPR = PRRecord
 
     /// Callback for new review request notifications (set by AppDelegate).
     var onNewReviewRequests: (([ReviewRequest]) -> Void)?
@@ -160,12 +169,9 @@ final class IssueTracker {
     /// Below this many remaining GraphQL points we proactively skip a cycle.
     private let rateLimitThreshold = 50
 
-    /// gh invocations made during the current `refresh()`. Incremented by the
-    /// shell helpers, reset at the start of each refresh.
-    private var currentRefreshGhCalls = 0
-
-    init(appState: AppState) {
+    init(appState: AppState, providerManager: ProviderManager) {
         self.appState = appState
+        self.providerManager = providerManager
     }
 
     func start() {
@@ -297,7 +303,6 @@ final class IssueTracker {
         appState.isLoadingIssues = true
         defer { appState.isLoadingIssues = false }
 
-        currentRefreshGhCalls = 0
         let startedAt = Date()
 
         guard let devRoot = ConfigStore.loadDevRoot(),
@@ -488,39 +493,24 @@ final class IssueTracker {
     /// otherwise ignored — the in-memory `autoCreateInFlight` + active-session
     /// dedup keeps duplicate spawns at bay until the label is gone.
     private func removeAutoCreateLabel(from issue: AssignedIssue) async {
-        let result: ShellResult
-        switch issue.provider {
-        case .github:
-            result = await shellWithStatus(
-                "gh", "issue", "edit", issue.url,
-                "--remove-label", Self.autoCreateLabel
-            )
-        case .gitlab:
-            // issue.id format: "gitlab:host:org/repo#number"
+        // issue.id format for GitLab: "gitlab:host:org/repo#number". Need the
+        // host segment to pick the right `GITLAB_HOST` for the backend.
+        let host: String?
+        if issue.provider == .gitlab {
             let parts = issue.id.split(separator: ":", maxSplits: 2).map(String.init)
             guard parts.count == 3 else {
                 print("[IssueTracker] cannot strip label, malformed gitlab id: \(issue.id)")
                 return
             }
-            let host = parts[1]
-            let repo = issue.repo
-            result = await shellWithStatus(
-                env: ["GITLAB_HOST": host],
-                args: [
-                    "glab", "issue", "update", String(issue.number),
-                    "--repo", repo,
-                    "--unlabel", Self.autoCreateLabel
-                ]
-            )
-        case .corveil:
-            // Stub: Corveil label management arrives with a real CorveilTaskBackend.
-            // See ADR 0005. listAssigned() returns no Corveil issues today, so this
-            // branch is defensive only.
-            return
+            host = parts[1]
+        } else {
+            host = nil
         }
-        if result.exitCode != 0 {
-            let stderr = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
-            print("[IssueTracker] failed to remove \(Self.autoCreateLabel) from \(issue.url): \(stderr)")
+        let backend = providerManager.taskBackend(for: issue.provider, host: host)
+        do {
+            try await backend.setLabels(url: issue.url, add: [], remove: [Self.autoCreateLabel])
+        } catch {
+            print("[IssueTracker] failed to remove \(Self.autoCreateLabel) from \(issue.url): \(error.localizedDescription)")
         }
     }
 
@@ -528,9 +518,9 @@ final class IssueTracker {
         let elapsedStr = String(format: "%.2fs", elapsed)
         if let rl = appState.githubRateLimit {
             let mins = Int(max(0, rl.resetAt.timeIntervalSinceNow / 60))
-            print("[IssueTracker] refresh: \(currentRefreshGhCalls) gh calls in \(elapsedStr), GraphQL \(rl.remaining)/\(rl.limit) remaining, resets in \(mins)m")
+            print("[IssueTracker] refresh: \(elapsedStr), GraphQL \(rl.remaining)/\(rl.limit) remaining, resets in \(mins)m")
         } else {
-            print("[IssueTracker] refresh: \(currentRefreshGhCalls) gh calls in \(elapsedStr)")
+            print("[IssueTracker] refresh: \(elapsedStr)")
         }
     }
 
@@ -542,30 +532,6 @@ final class IssueTracker {
         let viewerPRs: [ViewerPR]
         let reviewRequests: [ReviewRequest]
         let rateLimit: GitHubRateLimit?
-    }
-
-    struct ViewerPR: Sendable {
-        let number: Int
-        let url: String
-        let state: String          // OPEN / MERGED / CLOSED
-        let mergeable: String      // MERGEABLE / CONFLICTING / UNKNOWN
-        let mergeStateStatus: String // BEHIND / BLOCKED / CLEAN / DIRTY / DRAFT / HAS_HOOKS / UNKNOWN / UNSTABLE
-        let reviewDecision: String // APPROVED / CHANGES_REQUESTED / REVIEW_REQUIRED / ""
-        let isDraft: Bool
-        let headRefName: String
-        let headRefOid: String     // Head commit SHA (empty if unavailable)
-        let baseRefName: String
-        let repoNameWithOwner: String
-        let labels: [LabelInfo]
-        let linkedIssueReferences: [LinkedIssue]
-        let checksState: String    // SUCCESS / FAILURE / PENDING / EXPECTED / ERROR / ""
-        let failedCheckNames: [String]
-        let latestReviewStates: [String]
-
-        struct LinkedIssue: Sendable {
-            let number: Int
-            let repo: String
-        }
     }
 
     // MARK: - PR Dedup
@@ -626,144 +592,66 @@ final class IssueTracker {
         return order.compactMap { byURL[$0] }
     }
 
-    private static let consolidatedQuery = """
-    query($openQuery: String!, $closedQuery: String!, $reviewQuery: String!) {
-      openIssues: search(type: ISSUE, query: $openQuery, first: 100) {
-        nodes {
-          ... on Issue {
-            number title url state updatedAt
-            repository { nameWithOwner }
-            labels(first: 20) { nodes { name color } }
-            projectItems(first: 10) {
-              nodes {
-                fieldValueByName(name: "Status") {
-                  ... on ProjectV2ItemFieldSingleSelectValue { name }
-                }
-              }
-            }
-          }
-        }
-      }
-      viewerPRs: viewer {
-        pullRequests(first: 50, states: [OPEN], orderBy: {field: UPDATED_AT, direction: DESC}) {
-          nodes {
-            number url state mergeable mergeStateStatus reviewDecision isDraft headRefName headRefOid baseRefName
-            repository { nameWithOwner }
-            labels(first: 20) { nodes { name color } }
-            closingIssuesReferences(first: 5) { nodes { number repository { nameWithOwner } } }
-            statusCheckRollup {
-              state
-              contexts(first: 25) {
-                nodes {
-                  __typename
-                  ... on CheckRun { name conclusion status }
-                  ... on StatusContext { context state }
-                }
-              }
-            }
-            latestReviews(first: 5) { nodes { state } }
-          }
-        }
-      }
-      closedIssues: search(type: ISSUE, query: $closedQuery, first: 50) {
-        nodes {
-          ... on Issue {
-            number title url state updatedAt
-            repository { nameWithOwner }
-            labels(first: 20) { nodes { name color } }
-          }
-        }
-      }
-      reviewPRs: search(type: ISSUE, query: $reviewQuery, first: 50) {
-        nodes {
-          ... on PullRequest {
-            number title url isDraft updatedAt headRefName headRefOid baseRefName state
-            author { login }
-            repository { nameWithOwner }
-            labels(first: 20) { nodes { name color } }
-            reviews(last: 20) { nodes { author { login } submittedAt state } }
-          }
-        }
-      }
-      viewer { login }
-      rateLimit { remaining limit resetAt cost }
-    }
-    """
-
-    /// GraphQL search only accepts date-only for `closed:>=` — full ISO8601 gets
-    /// rejected, so format YYYY-MM-DD based on 24h ago.
-    private func closedSinceString() -> String {
-        let fmt = DateFormatter()
-        fmt.dateFormat = "yyyy-MM-dd"
-        fmt.timeZone = TimeZone(identifier: "UTC")
-        return fmt.string(from: Date().addingTimeInterval(-86400))
-    }
-
+    /// Pull the viewer's assigned issues, monitored PRs, and review requests
+    /// via the GitHub backends. Issues + PRs go in parallel — the GitHub
+    /// backend issues two GraphQL calls in flight at once (one for assigned
+    /// issues, one for PRs + reviews).
     private func runConsolidatedGitHubQuery() async -> ConsolidatedGitHubResponse? {
-        let openQuery = "assignee:@me state:open type:issue"
-        let closedQuery = "assignee:@me state:closed closed:>=\(closedSinceString()) type:issue"
-        let reviewQuery = "review-requested:@me state:open type:pr"
+        let taskBackend = providerManager.taskBackend(for: .github)
+        let codeBackend = providerManager.codeBackend(for: .github)!
 
-        let args: [String] = [
-            "gh", "api", "graphql",
-            "-f", "query=\(Self.consolidatedQuery)",
-            "-F", "openQuery=\(openQuery)",
-            "-F", "closedQuery=\(closedQuery)",
-            "-F", "reviewQuery=\(reviewQuery)"
-        ]
-        let result = await shellWithStatus(args: args)
+        async let assignedAsync = taskBackend.listAssigned()
+        async let monitoredAsync = codeBackend.listMonitoredPRs()
 
-        if result.exitCode != 0 {
-            if handleGraphQLRateLimit(stderr: result.stderr) { return nil }
-            if result.stderr.contains("INSUFFICIENT_SCOPES") || result.stderr.contains("read:project") {
-                reportScopeWarning("read:project")
-                // Retry without projectItems so the rest of the data still renders.
-                return await retryWithoutProjectItems(
-                    openQuery: openQuery,
-                    closedQuery: closedQuery,
-                    reviewQuery: reviewQuery
-                )
-            }
-            print("[IssueTracker] Consolidated GraphQL query failed (exit \(result.exitCode)): \(result.stderr.prefix(300))")
+        let assigned: AssignedListing
+        let monitored: MonitoredPRListing
+        do {
+            assigned = try await assignedAsync
+        } catch {
+            handleGitHubBackendError(error, operation: "listAssigned")
+            // Drain the second task so we don't leak an unawaited future.
+            _ = try? await monitoredAsync
+            return nil
+        }
+        do {
+            monitored = try await monitoredAsync
+        } catch {
+            handleGitHubBackendError(error, operation: "listMonitoredPRs")
             return nil
         }
 
-        clearScopeWarning()
-        // Parse off the main actor — only the Sendable result hops back (#304).
-        let output = result.stdout
-        return await Task.detached { self.parseConsolidatedResponse(output) }.value
+        if let scope = assigned.missingScope {
+            // listAssigned silently degrades on INSUFFICIENT_SCOPES (drops
+            // projectItems) and reports the scope here so the warning UI
+            // stays lit instead of getting cleared on the next poll. This
+            // preserves the prior `reportScopeWarning("read:project")`
+            // behavior the consolidated query had inline.
+            reportScopeWarning(scope)
+        } else {
+            clearScopeWarning()
+        }
+        return ConsolidatedGitHubResponse(
+            openIssues: assigned.open,
+            closedIssues: assigned.closed,
+            viewerPRs: monitored.viewerPRs,
+            reviewRequests: monitored.reviewRequests,
+            rateLimit: assigned.rateLimit ?? monitored.rateLimit
+        )
     }
 
-    private func retryWithoutProjectItems(openQuery: String, closedQuery: String, reviewQuery: String) async -> ConsolidatedGitHubResponse? {
-        // Stripped query: same as consolidatedQuery but with the projectItems block removed.
-        let stripped = Self.consolidatedQuery.replacingOccurrences(
-            of: """
-                projectItems(first: 10) {
-                  nodes {
-                    fieldValueByName(name: "Status") {
-                      ... on ProjectV2ItemFieldSingleSelectValue { name }
-                    }
-                  }
-                }
-        """,
-            with: ""
-        )
-        let args: [String] = [
-            "gh", "api", "graphql",
-            "-f", "query=\(stripped)",
-            "-F", "openQuery=\(openQuery)",
-            "-F", "closedQuery=\(closedQuery)",
-            "-F", "reviewQuery=\(reviewQuery)"
-        ]
-        let result = await shellWithStatus(args: args)
-        guard result.exitCode == 0 else {
-            if handleGraphQLRateLimit(stderr: result.stderr) { return nil }
-            print("[IssueTracker] GraphQL retry (no projectItems) failed (exit \(result.exitCode)): \(result.stderr.prefix(300))")
-            return nil
+    /// Route typed `ProviderError`s from GitHub backends to the matching
+    /// IssueTracker UI side-effect (scope warning, rate-limit suspension).
+    /// Untyped errors get a console line and otherwise propagate as "this
+    /// cycle is degraded" via the caller's nil-return.
+    private func handleGitHubBackendError(_ error: Error, operation: String) {
+        switch error {
+        case ProviderError.insufficientScope(let scope):
+            reportScopeWarning(scope)
+        case ProviderError.rateLimited(let stderr):
+            _ = handleGraphQLRateLimit(stderr: stderr)
+        default:
+            print("[IssueTracker] \(operation) failed: \(error.localizedDescription)")
         }
-        // Parse off the main actor — only the Sendable result hops back (#304).
-        let output = result.stdout
-        return await Task.detached { self.parseConsolidatedResponse(output) }.value
     }
 
     // MARK: - Stale PR Follow-up
@@ -802,195 +690,115 @@ final class IssueTracker {
     /// Fetch state for a small set of PRs/MRs that are linked to a session
     /// but no longer in the open viewer set (typically merged or closed).
     /// Splits URLs by provider — GitHub PRs go through one batched aliased
-    /// `gh api graphql` call, GitLab MRs go through one `glab api` call per
+    /// `gh`/`glab` call, GitLab MRs go through one REST call per
     /// MR (with `GITLAB_HOST` set per host). A failure on either side marks
     /// the result incomplete but doesn't suppress the other side's PRs.
     /// Returns minimal `ViewerPR` records — only `state`, `url`, repo, and
     /// branch refs are populated; checks/reviews are left empty since
     /// they're moot for closed PRs.
     private func fetchStalePRStates(urls: [String]) async -> StalePRFetchResult {
-        // Parse each URL into (owner, repo, number); skip any we can't parse.
-        var githubParsed: [(url: String, owner: String, repo: String, number: Int)] = []
-        var gitlabParsedByHost: [String: [(url: String, slug: String, number: Int)]] = [:]
+        // Bucket URLs by (provider, host). GitLab self-hosted needs the host so the
+        // backend pins the right GITLAB_HOST env var.
+        var githubRefs: [PRRef] = []
+        var githubURLByRef: [PRRef: String] = [:]
+        var gitlabByHost: [String: [PRRef]] = [:]
+        var gitlabURLByRef: [PRRef: String] = [:]
+
         for url in urls {
             if let g = Self.parseGitLabMRURL(url) {
-                gitlabParsedByHost[g.host, default: []].append((url, g.slug, g.number))
+                let parts = g.slug.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: true).map(String.init)
+                guard parts.count == 2 else { continue }
+                let ref = PRRef(owner: parts[0], repo: parts[1], number: g.number)
+                gitlabByHost[g.host, default: []].append(ref)
+                gitlabURLByRef[ref] = url
                 continue
             }
             guard let p = ProviderManager.parseTicketURLComponents(url) else { continue }
-            // Anything not parsed as GitLab is treated as GitHub. The
-            // ProviderManager parser covers github.com URLs; self-hosted
-            // GitLab URLs are caught above by `parseGitLabMRURL`.
             if let host = URL(string: url)?.host, host != "github.com" {
-                // Unrecognized host that didn't match the GitLab MR shape —
-                // skip rather than blindly route to gh.
                 continue
             }
-            githubParsed.append((url, p.org, p.repo, p.number))
+            let ref = PRRef(owner: p.org, repo: p.repo, number: p.number)
+            githubRefs.append(ref)
+            githubURLByRef[ref] = url
         }
-        guard !githubParsed.isEmpty || !gitlabParsedByHost.isEmpty else {
+        guard !githubRefs.isEmpty || !gitlabByHost.isEmpty else {
             return StalePRFetchResult(prs: [], complete: true)
         }
 
         var prs: [ViewerPR] = []
         var complete = true
 
-        if !githubParsed.isEmpty {
-            if let ghPRs = await fetchStalePRStatesGitHub(parsed: githubParsed) {
-                prs.append(contentsOf: ghPRs)
-            } else {
+        if !githubRefs.isEmpty {
+            let backend = providerManager.codeBackend(for: .github)!
+            do {
+                let states = try await backend.prStates(refs: githubRefs)
+                // Keying by PRRef means we don't lose records when the API
+                // returns a canonical URL different from the stored one.
+                // Fall back to the stored URL when the API didn't provide
+                // one (defensive — usually populated).
+                for ref in githubRefs {
+                    guard var rec = states[ref] else { continue }
+                    if rec.url.isEmpty, let stored = githubURLByRef[ref] {
+                        rec = Self.withURL(rec, url: stored)
+                    }
+                    prs.append(rec)
+                }
+            } catch {
+                handleGitHubBackendError(error, operation: "prStates(github)")
                 complete = false
             }
         }
 
-        for (host, parsed) in gitlabParsedByHost {
-            let (mrPRs, ok) = await fetchStaleMRStatesGitLab(parsed: parsed, host: host)
-            prs.append(contentsOf: mrPRs)
-            if !ok { complete = false }
+        for (host, refs) in gitlabByHost {
+            let backend = providerManager.codeBackend(for: .gitlab, host: host)!
+            do {
+                let states = try await backend.prStates(refs: refs)
+                for ref in refs {
+                    guard var rec = states[ref] else { continue }
+                    if rec.url.isEmpty, let stored = gitlabURLByRef[ref] {
+                        rec = Self.withURL(rec, url: stored)
+                    }
+                    prs.append(rec)
+                }
+            } catch {
+                print("[IssueTracker] Stale-PR follow-up via backend failed for host \(host): \(error.localizedDescription.prefix(200))")
+                complete = false
+            }
         }
 
         return StalePRFetchResult(prs: prs, complete: complete)
     }
 
-    /// GitHub stale-PR fetch: one aliased GraphQL query covering every
-    /// (owner, repo, number) tuple. Returns `nil` on shell error or rate
-    /// limit so the caller can mark the cycle incomplete.
-    private func fetchStalePRStatesGitHub(
-        parsed: [(url: String, owner: String, repo: String, number: Int)]
-    ) async -> [ViewerPR]? {
-        guard !parsed.isEmpty else { return [] }
-
-        // Build aliased query: pr0, pr1, ... each fetching one pullRequest.
-        var queryParts: [String] = []
-        var args: [String] = ["gh", "api", "graphql"]
-        for (i, p) in parsed.enumerated() {
-            queryParts.append("""
-              pr\(i): repository(owner: $owner\(i), name: $repo\(i)) {
-                pullRequest(number: $num\(i)) {
-                  number url state mergeable mergeStateStatus reviewDecision isDraft
-                  headRefName headRefOid baseRefName
-                  repository { nameWithOwner }
-                }
-              }
-            """)
-            args.append(contentsOf: ["-F", "owner\(i)=\(p.owner)"])
-            args.append(contentsOf: ["-F", "repo\(i)=\(p.repo)"])
-            args.append(contentsOf: ["-F", "num\(i)=\(p.number)"])
-        }
-        var varDecls: [String] = []
-        for i in 0..<parsed.count {
-            varDecls.append("$owner\(i): String!, $repo\(i): String!, $num\(i): Int!")
-        }
-        let query = """
-        query(\(varDecls.joined(separator: ", "))) {
-        \(queryParts.joined(separator: "\n"))
-          rateLimit { remaining limit resetAt cost }
-        }
-        """
-        args.insert(contentsOf: ["-f", "query=\(query)"], at: 3)
-
-        let result = await shellWithStatus(args: args)
-        if result.exitCode != 0 {
-            if handleGraphQLRateLimit(stderr: result.stderr) { return nil }
-            print("[IssueTracker] Stale-PR follow-up failed (exit \(result.exitCode)): \(result.stderr.prefix(200))")
-            return nil
-        }
-        return parseStalePRResponse(result.stdout, count: parsed.count)
-    }
-
-    /// GitLab stale-MR fetch: one `glab api projects/{slug}/merge_requests/{iid}`
-    /// per MR for a given host. GitLab's REST API doesn't support batching by
-    /// IDs the way GitHub's GraphQL does, but the per-cycle stale set is
-    /// usually tiny (sessions with merged/closed PRs that haven't been
-    /// auto-completed yet). Returns `(prs, ok)` where `ok` is false if any
-    /// call for this host failed.
-    private func fetchStaleMRStatesGitLab(
-        parsed: [(url: String, slug: String, number: Int)],
-        host: String
-    ) async -> ([ViewerPR], Bool) {
-        var prs: [ViewerPR] = []
-        var ok = true
-        for entry in parsed {
-            let encodedSlug = entry.slug.addingPercentEncoding(
-                withAllowedCharacters: .alphanumerics
-            ) ?? entry.slug
-            let endpoint = "projects/\(encodedSlug)/merge_requests/\(entry.number)"
-
-            let output: String
-            do {
-                output = try await shell(env: ["GITLAB_HOST": host], cwd: NSHomeDirectory(), "glab", "api", endpoint)
-            } catch {
-                print("[IssueTracker] Stale-PR follow-up failed for \(entry.slug)!\(entry.number) on \(host): \(error.localizedDescription.prefix(200))")
-                ok = false
-                continue
-            }
-            if let pr = Self.parseGitLabStaleMRResponse(output, fallbackURL: entry.url, fallbackSlug: entry.slug) {
-                prs.append(pr)
-            } else {
-                ok = false
-            }
-        }
-        return (prs, ok)
-    }
-
-    /// Parse a GitLab `projects/{slug}/merge_requests/{iid}` REST response
-    /// into a minimal `ViewerPR`. State is normalized to GitHub's
-    /// `OPEN|MERGED|CLOSED` so downstream code stays provider-agnostic.
-    /// Returns nil if the JSON shape doesn't match.
-    nonisolated static func parseGitLabStaleMRResponse(
-        _ output: String,
-        fallbackURL: String,
-        fallbackSlug: String
-    ) -> ViewerPR? {
-        guard let data = output.data(using: .utf8),
-              let item = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return nil
-        }
-        guard let number = item["iid"] as? Int else { return nil }
-        let url = (item["web_url"] as? String) ?? fallbackURL
-        let rawState = (item["state"] as? String) ?? ""
-        let state = normalizeGitLabPRState(rawState)
-        let headRefName = (item["source_branch"] as? String) ?? ""
-        let baseRefName = (item["target_branch"] as? String) ?? ""
-        let headRefOid = (item["sha"] as? String) ?? ""
-        let isDraft = (item["draft"] as? Bool) ?? (item["work_in_progress"] as? Bool) ?? false
-
-        return ViewerPR(
-            number: number,
+    /// Copy `pr` with a different `url`. Used by the stale-PR follow-up to
+    /// substitute the session-link URL when the backend returned an empty
+    /// `web_url` (defensive — GitLab's REST shape always populates it, but
+    /// we'd rather preserve the link than lose the record).
+    nonisolated static func withURL(_ pr: ViewerPR, url: String) -> ViewerPR {
+        PRRecord(
+            number: pr.number,
             url: url,
-            state: state,
-            mergeable: "UNKNOWN",
-            mergeStateStatus: "UNKNOWN",
-            reviewDecision: "",
-            isDraft: isDraft,
-            headRefName: headRefName,
-            headRefOid: headRefOid,
-            baseRefName: baseRefName,
-            repoNameWithOwner: fallbackSlug,
-            labels: [],
-            linkedIssueReferences: [],
-            checksState: "",
-            failedCheckNames: [],
-            latestReviewStates: []
+            state: pr.state,
+            mergeable: pr.mergeable,
+            mergeStateStatus: pr.mergeStateStatus,
+            reviewDecision: pr.reviewDecision,
+            isDraft: pr.isDraft,
+            headRefName: pr.headRefName,
+            headRefOid: pr.headRefOid,
+            baseRefName: pr.baseRefName,
+            repoNameWithOwner: pr.repoNameWithOwner,
+            labels: pr.labels,
+            linkedIssueReferences: pr.linkedIssueReferences,
+            checksState: pr.checksState,
+            failedCheckNames: pr.failedCheckNames,
+            latestReviewStates: pr.latestReviewStates,
+            updatedAt: pr.updatedAt
         )
-    }
-
-    /// Normalize GitLab MR state strings to the GitHub `state` vocabulary
-    /// the rest of the codebase reads (`OPEN`/`MERGED`/`CLOSED`). Falls back
-    /// to upper-casing the raw value for unrecognized states (matches
-    /// `fetchGitLabMRsForReconcile`).
-    nonisolated static func normalizeGitLabPRState(_ raw: String) -> String {
-        switch raw {
-        case "opened": return "OPEN"
-        case "merged": return "MERGED"
-        case "closed": return "CLOSED"
-        default:       return raw.uppercased()
-        }
     }
 
     /// Parse a GitLab MR URL into (host, slug, number). Robust to nested
     /// groups (slug is everything between the host and `/-/merge_requests/`).
-    /// Returns nil for non-GitLab-MR URLs.
+    /// Returns nil for non-GitLab-MR URLs. Kept here (not in CrowProvider)
+    /// because it's used by the URL-routing logic above.
     nonisolated static func parseGitLabMRURL(_ url: String) -> (host: String, slug: String, number: Int)? {
         guard let protoRange = url.range(of: "://") else { return nil }
         let afterProto = String(url[protoRange.upperBound...])
@@ -1003,326 +811,35 @@ final class IssueTracker {
         let host = leadParts[0]
         let slug = leadParts.dropFirst().joined(separator: "/")
 
-        // `trailing` is everything after `/-/merge_requests/` — usually just
-        // the MR number, occasionally `<n>/diffs` or similar from a deep
-        // link. Take the first segment as the number.
         let trailParts = trailing.split(separator: "/").map(String.init)
         guard let first = trailParts.first, let number = Int(first) else { return nil }
         return (host, slug, number)
     }
 
-    private func parseStalePRResponse(_ output: String, count: Int) -> [ViewerPR]? {
-        guard let data = output.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let dataObj = json["data"] as? [String: Any] else { return nil }
-
-        if let rl = parseRateLimit(dataObj["rateLimit"] as? [String: Any]) {
-            appState.githubRateLimit = rl
-        }
-
-        var prs: [ViewerPR] = []
-        for i in 0..<count {
-            guard let repoObj = dataObj["pr\(i)"] as? [String: Any],
-                  let prObj = repoObj["pullRequest"] as? [String: Any],
-                  let number = prObj["number"] as? Int,
-                  let url = prObj["url"] as? String,
-                  let state = prObj["state"] as? String else { continue }
-
-            let mergeable = prObj["mergeable"] as? String ?? "UNKNOWN"
-            let mergeStateStatus = prObj["mergeStateStatus"] as? String ?? "UNKNOWN"
-            let reviewDecision = prObj["reviewDecision"] as? String ?? ""
-            let isDraft = prObj["isDraft"] as? Bool ?? false
-            let headRefName = prObj["headRefName"] as? String ?? ""
-            let headRefOid = prObj["headRefOid"] as? String ?? ""
-            let baseRefName = prObj["baseRefName"] as? String ?? ""
-            let repoName = (prObj["repository"] as? [String: Any])?["nameWithOwner"] as? String ?? ""
-
-            prs.append(ViewerPR(
-                number: number,
-                url: url,
-                state: state,
-                mergeable: mergeable,
-                mergeStateStatus: mergeStateStatus,
-                reviewDecision: reviewDecision,
-                isDraft: isDraft,
-                headRefName: headRefName,
-                headRefOid: headRefOid,
-                baseRefName: baseRefName,
-                repoNameWithOwner: repoName,
-                labels: [],
-                linkedIssueReferences: [],
-                checksState: "",
-                failedCheckNames: [],
-                latestReviewStates: []
-            ))
-        }
-        return prs
+    /// Thin alias so test code keeps working through the migration. The real
+    /// normalization lives on `GitLabCodeBackend` (CrowProvider).
+    nonisolated static func normalizeGitLabPRState(_ raw: String) -> String {
+        GitLabCodeBackend.normalizeState(raw)
     }
 
-    // `nonisolated` so the JSON parsing — the heaviest CPU work in a refresh
-    // (up to ~50 PRs + ~50 review requests + ~150 issues with nested
-    // label/check/review traversal) — can run off the main actor via
-    // `Task.detached`. These helpers touch no instance/`appState` state, only
-    // their arguments and a local date formatter, so they are safe off-actor.
-    // Only the resulting (Sendable) value hops back to the main actor (#304).
-    nonisolated private func parseConsolidatedResponse(_ output: String) -> ConsolidatedGitHubResponse? {
-        guard let data = output.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let dataObj = json["data"] as? [String: Any] else {
-            print("[IssueTracker] Failed to parse consolidated GraphQL response")
-            return nil
-        }
-
-        let dateFormatter = ISO8601DateFormatter()
-        dateFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-
-        let openIssues = parseIssueNodes(
-            dataObj["openIssues"] as? [String: Any],
-            defaultState: "open",
-            dateFormatter: dateFormatter
-        )
-        let closedIssues = parseIssueNodes(
-            dataObj["closedIssues"] as? [String: Any],
-            defaultState: "closed",
-            dateFormatter: dateFormatter,
-            projectStatusOverride: .done
-        )
-        let viewerPRs = parseViewerPRs(dataObj["viewerPRs"] as? [String: Any])
-        let viewerLogin = (dataObj["viewer"] as? [String: Any])?["login"] as? String
-        let reviewRequests = parseReviewRequests(
-            dataObj["reviewPRs"] as? [String: Any],
-            dateFormatter: dateFormatter,
-            viewerLogin: viewerLogin
-        )
-        let rateLimit = parseRateLimit(dataObj["rateLimit"] as? [String: Any])
-
-        return ConsolidatedGitHubResponse(
-            openIssues: openIssues,
-            closedIssues: closedIssues,
-            viewerPRs: viewerPRs,
-            reviewRequests: reviewRequests,
-            rateLimit: rateLimit
+    /// Thin alias so test code keeps working through the migration. The real
+    /// parsing lives on `GitLabCodeBackend` (CrowProvider).
+    nonisolated static func parseGitLabStaleMRResponse(
+        _ output: String,
+        fallbackURL: String,
+        fallbackSlug: String
+    ) -> ViewerPR? {
+        GitLabCodeBackend.parseStaleMRResponse(
+            output,
+            fallbackURL: fallbackURL,
+            fallbackSlug: fallbackSlug
         )
     }
 
-    nonisolated private func parseIssueNodes(
-        _ searchObj: [String: Any]?,
-        defaultState: String,
-        dateFormatter: ISO8601DateFormatter,
-        projectStatusOverride: TicketStatus? = nil
-    ) -> [AssignedIssue] {
-        guard let nodes = searchObj?["nodes"] as? [[String: Any]] else { return [] }
-        return nodes.compactMap { node -> AssignedIssue? in
-            guard let number = node["number"] as? Int,
-                  let title = node["title"] as? String,
-                  let url = node["url"] as? String else { return nil }
-
-            let state = (node["state"] as? String ?? defaultState).lowercased()
-            let repoName = (node["repository"] as? [String: Any])?["nameWithOwner"] as? String ?? ""
-            let labels = ((node["labels"] as? [String: Any])?["nodes"] as? [[String: Any]])?
-                .compactMap { labelNode -> LabelInfo? in
-                    guard let name = labelNode["name"] as? String else { return nil }
-                    let color = labelNode["color"] as? String
-                    return LabelInfo(name: name, color: color)
-                } ?? []
-
-            var updatedAt: Date?
-            if let dateStr = node["updatedAt"] as? String {
-                updatedAt = dateFormatter.date(from: dateStr)
-            }
-
-            var projectStatus: TicketStatus = projectStatusOverride ?? .unknown
-            if projectStatusOverride == nil,
-               let projectItems = node["projectItems"] as? [String: Any],
-               let itemNodes = projectItems["nodes"] as? [[String: Any]] {
-                for item in itemNodes {
-                    if let fv = item["fieldValueByName"] as? [String: Any],
-                       let statusName = fv["name"] as? String {
-                        projectStatus = TicketStatus(projectBoardName: statusName)
-                        break
-                    }
-                }
-            }
-
-            return AssignedIssue(
-                id: "github:\(repoName)#\(number)",
-                number: number,
-                title: title,
-                state: state,
-                url: url,
-                repo: repoName,
-                labels: labels,
-                provider: .github,
-                updatedAt: updatedAt,
-                projectStatus: projectStatus
-            )
-        }
-    }
-
-    nonisolated private func parseViewerPRs(_ viewerObj: [String: Any]?) -> [ViewerPR] {
-        guard let pullRequests = viewerObj?["pullRequests"] as? [String: Any],
-              let nodes = pullRequests["nodes"] as? [[String: Any]] else { return [] }
-
-        return nodes.compactMap { node -> ViewerPR? in
-            guard let number = node["number"] as? Int,
-                  let url = node["url"] as? String,
-                  let state = node["state"] as? String else { return nil }
-
-            let mergeable = node["mergeable"] as? String ?? "UNKNOWN"
-            let mergeStateStatus = node["mergeStateStatus"] as? String ?? "UNKNOWN"
-            let reviewDecision = node["reviewDecision"] as? String ?? ""
-            let isDraft = node["isDraft"] as? Bool ?? false
-            let headRefName = node["headRefName"] as? String ?? ""
-            let headRefOid = node["headRefOid"] as? String ?? ""
-            let baseRefName = node["baseRefName"] as? String ?? ""
-            let repoName = (node["repository"] as? [String: Any])?["nameWithOwner"] as? String ?? ""
-
-            let labels = ((node["labels"] as? [String: Any])?["nodes"] as? [[String: Any]])?
-                .compactMap { labelNode -> LabelInfo? in
-                    guard let name = labelNode["name"] as? String else { return nil }
-                    let color = labelNode["color"] as? String
-                    return LabelInfo(name: name, color: color)
-                } ?? []
-
-            let linkedNodes = (node["closingIssuesReferences"] as? [String: Any])?["nodes"] as? [[String: Any]] ?? []
-            let linkedRefs: [ViewerPR.LinkedIssue] = linkedNodes.compactMap { ref in
-                guard let n = ref["number"] as? Int else { return nil }
-                let r = (ref["repository"] as? [String: Any])?["nameWithOwner"] as? String ?? ""
-                return ViewerPR.LinkedIssue(number: n, repo: r)
-            }
-
-            let rollup = node["statusCheckRollup"] as? [String: Any]
-            let checksState = rollup?["state"] as? String ?? ""
-            let contextNodes = ((rollup?["contexts"] as? [String: Any])?["nodes"] as? [[String: Any]]) ?? []
-            let failedCheckNames: [String] = contextNodes.compactMap { ctx in
-                // CheckRun: conclusion == "FAILURE"; StatusContext: state == "FAILURE"/"ERROR"
-                if let conclusion = ctx["conclusion"] as? String, conclusion == "FAILURE" {
-                    return ctx["name"] as? String
-                }
-                if let st = ctx["state"] as? String, st == "FAILURE" || st == "ERROR" {
-                    return ctx["context"] as? String
-                }
-                return nil
-            }
-
-            let latestReviewNodes = (node["latestReviews"] as? [String: Any])?["nodes"] as? [[String: Any]] ?? []
-            let reviewStates = latestReviewNodes.compactMap { $0["state"] as? String }
-
-            return ViewerPR(
-                number: number,
-                url: url,
-                state: state,
-                mergeable: mergeable,
-                mergeStateStatus: mergeStateStatus,
-                reviewDecision: reviewDecision,
-                isDraft: isDraft,
-                headRefName: headRefName,
-                headRefOid: headRefOid,
-                baseRefName: baseRefName,
-                repoNameWithOwner: repoName,
-                labels: labels,
-                linkedIssueReferences: linkedRefs,
-                checksState: checksState,
-                failedCheckNames: failedCheckNames,
-                latestReviewStates: reviewStates
-            )
-        }
-    }
-
-    nonisolated private func parseReviewRequests(
-        _ searchObj: [String: Any]?,
-        dateFormatter: ISO8601DateFormatter,
-        viewerLogin: String?
-    ) -> [ReviewRequest] {
-        guard let nodes = searchObj?["nodes"] as? [[String: Any]] else { return [] }
-
-        // Only formal verdicts satisfy a review request. COMMENTED/PENDING
-        // do not — gating on those would mis-complete a session before the
-        // viewer has actually approved or requested changes.
-        let satisfyingStates: Set<String> = ["APPROVED", "CHANGES_REQUESTED", "DISMISSED"]
-
-        var requests: [ReviewRequest] = []
-        for node in nodes {
-            guard let number = node["number"] as? Int,
-                  let title = node["title"] as? String,
-                  let url = node["url"] as? String else { continue }
-
-            let repoName = (node["repository"] as? [String: Any])?["nameWithOwner"] as? String ?? ""
-            let authorLogin = (node["author"] as? [String: Any])?["login"] as? String ?? ""
-            let isDraft = node["isDraft"] as? Bool ?? false
-            let headBranch = node["headRefName"] as? String ?? ""
-            let headRefOid = node["headRefOid"] as? String
-            let baseBranch = node["baseRefName"] as? String ?? ""
-            let updatedAt = (node["updatedAt"] as? String).flatMap { dateFormatter.date(from: $0) }
-            let labels = ((node["labels"] as? [String: Any])?["nodes"] as? [[String: Any]])?
-                .compactMap { labelNode -> LabelInfo? in
-                    guard let name = labelNode["name"] as? String else { return nil }
-                    let color = labelNode["color"] as? String
-                    return LabelInfo(name: name, color: color)
-                } ?? []
-
-            // Latest viewer-authored review timestamp (APPROVED / CHANGES_REQUESTED
-            // / DISMISSED only). Used by `decideReviewCompletions` to detect when
-            // the reviewer has actually submitted a verdict so the session can be
-            // auto-completed before the PR is merged.
-            var viewerLastReviewedAt: Date?
-            if let viewerLogin,
-               let reviewNodes = ((node["reviews"] as? [String: Any])?["nodes"]) as? [[String: Any]] {
-                for review in reviewNodes {
-                    guard let author = (review["author"] as? [String: Any])?["login"] as? String,
-                          author == viewerLogin,
-                          let state = review["state"] as? String,
-                          satisfyingStates.contains(state),
-                          let submittedAtStr = review["submittedAt"] as? String,
-                          let submittedAt = dateFormatter.date(from: submittedAtStr) else { continue }
-                    if viewerLastReviewedAt == nil || submittedAt > viewerLastReviewedAt! {
-                        viewerLastReviewedAt = submittedAt
-                    }
-                }
-            }
-
-            requests.append(ReviewRequest(
-                id: "github:\(repoName)#\(number)",
-                prNumber: number,
-                title: title,
-                url: url,
-                repo: repoName,
-                author: authorLogin,
-                headBranch: headBranch,
-                baseBranch: baseBranch,
-                isDraft: isDraft,
-                requestedAt: updatedAt,
-                labels: labels,
-                provider: .github,
-                headRefOid: headRefOid,
-                viewerLastReviewedAt: viewerLastReviewedAt
-            ))
-        }
-        // Newest first so stale review requests sink to the bottom
-        return requests.sorted { ($0.requestedAt ?? .distantPast) > ($1.requestedAt ?? .distantPast) }
-    }
-
-    nonisolated private func parseRateLimit(_ obj: [String: Any]?) -> GitHubRateLimit? {
-        guard let obj,
-              let remaining = obj["remaining"] as? Int,
-              let limit = obj["limit"] as? Int,
-              let cost = obj["cost"] as? Int,
-              let resetAtStr = obj["resetAt"] as? String else { return nil }
-
-        let fmt = ISO8601DateFormatter()
-        fmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let resetAt = fmt.date(from: resetAtStr)
-            ?? ISO8601DateFormatter().date(from: resetAtStr)
-            ?? Date().addingTimeInterval(60 * 60)
-
-        return GitHubRateLimit(
-            remaining: remaining,
-            limit: limit,
-            resetAt: resetAt,
-            cost: cost,
-            observedAt: Date()
-        )
-    }
+    // Consolidated GraphQL parsing now lives in CrowProvider's GitHubTaskBackend
+    // and GitHubCodeBackend (see ADR 0005). The IssueTracker pulls assembled
+    // `AssignedListing` / `MonitoredPRListing` from the backends in
+    // `runConsolidatedGitHubQuery` above and consumes them directly.
 
     // MARK: - Session PR Link Detection (piggyback)
 
@@ -1514,140 +1031,88 @@ final class IssueTracker {
         return out
     }
 
-    /// One aliased `gh api graphql` call: for each candidate, fetch up to 5 PRs
-    /// on that `headRefName`, most-recently-updated first. Returns `nil` on
-    /// shell / rate-limit / parse failure so the reconcile pass can skip the
-    /// cycle without treating a degraded response as "no PRs found".
+    /// One batched call per backend: GitHub issues a single aliased GraphQL
+    /// query covering every candidate; GitLab issues one REST call per
+    /// (host, candidate) tuple. Returns `nil` on backend error so the
+    /// reconcile pass can skip the cycle without treating a degraded
+    /// response as "no PRs found".
     private func fetchPRsForReconcile(candidates: [ReconcileCandidate]) async -> [ReconcileBranchMatch]? {
-        // Split each slug into (owner, repo). Skip any we can't parse.
-        var parsed: [(idx: Int, cand: ReconcileCandidate, owner: String, repo: String)] = []
-        for (i, c) in candidates.enumerated() {
-            let parts = c.repoSlug.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: true)
-            guard parts.count == 2 else { continue }
-            parsed.append((i, c, String(parts[0]), String(parts[1])))
-        }
-        guard !parsed.isEmpty else { return [] }
-
-        var queryParts: [String] = []
-        var args: [String] = ["gh", "api", "graphql"]
-        for p in parsed {
-            queryParts.append("""
-              pr\(p.idx): repository(owner: $owner\(p.idx), name: $repo\(p.idx)) {
-                pullRequests(headRefName: $branch\(p.idx), first: 5, orderBy: {field: UPDATED_AT, direction: DESC}) {
-                  nodes { number url state updatedAt headRefName }
-                }
-              }
-            """)
-            args.append(contentsOf: ["-F", "owner\(p.idx)=\(p.owner)"])
-            args.append(contentsOf: ["-F", "repo\(p.idx)=\(p.repo)"])
-            args.append(contentsOf: ["-F", "branch\(p.idx)=\(p.cand.branch)"])
-        }
-        var varDecls: [String] = []
-        for p in parsed {
-            varDecls.append("$owner\(p.idx): String!, $repo\(p.idx): String!, $branch\(p.idx): String!")
-        }
-        let query = """
-        query(\(varDecls.joined(separator: ", "))) {
-        \(queryParts.joined(separator: "\n"))
-          rateLimit { remaining limit resetAt cost }
-        }
-        """
-        args.insert(contentsOf: ["-f", "query=\(query)"], at: 3)
-
-        let result = await shellWithStatus(args: args)
-        if result.exitCode != 0 {
-            if handleGraphQLRateLimit(stderr: result.stderr) { return nil }
-            print("[IssueTracker] Reconcile PR fetch failed (exit \(result.exitCode)): \(result.stderr.prefix(200))")
+        guard !candidates.isEmpty else { return [] }
+        let backend = providerManager.codeBackend(for: .github)!
+        do {
+            let matches = try await backend.findRecentPRsForBranches(
+                Self.dedupedBranchCandidates(candidates)
+            )
+            return Self.fanOutMatches(matches, across: candidates)
+        } catch {
+            handleGitHubBackendError(error, operation: "findRecentPRsForBranches(github)")
             return nil
         }
-        return parseReconcilePRResponse(result.stdout, parsed: parsed)
     }
 
-    private func parseReconcilePRResponse(
-        _ output: String,
-        parsed: [(idx: Int, cand: ReconcileCandidate, owner: String, repo: String)]
-    ) -> [ReconcileBranchMatch]? {
-        guard let data = output.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let dataObj = json["data"] as? [String: Any] else { return nil }
-
-        if let rl = parseRateLimit(dataObj["rateLimit"] as? [String: Any]) {
-            appState.githubRateLimit = rl
-        }
-
-        let dateFormatter = ISO8601DateFormatter()
-        dateFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-
-        var matches: [ReconcileBranchMatch] = []
-        for p in parsed {
-            guard let repoObj = dataObj["pr\(p.idx)"] as? [String: Any],
-                  let prs = repoObj["pullRequests"] as? [String: Any],
-                  let nodes = prs["nodes"] as? [[String: Any]] else { continue }
-            for node in nodes {
-                guard let number = node["number"] as? Int,
-                      let url = node["url"] as? String,
-                      let state = node["state"] as? String else { continue }
-                let updatedAt = (node["updatedAt"] as? String).flatMap { dateFormatter.date(from: $0) }
-                matches.append(ReconcileBranchMatch(
-                    sessionID: p.cand.sessionID,
-                    number: number,
-                    url: url,
-                    state: state,
-                    updatedAt: updatedAt
-                ))
-            }
-        }
-        return matches
-    }
-
-    /// One `glab api` call per (host, candidate). Uses the REST endpoint
-    /// because `glab mr list` at v1.82 lacks `--state` and `--output-format`
-    /// (see repo CLAUDE.md). `glab api` with `GITLAB_HOST` set returns raw
-    /// JSON reliably and supports `source_branch` + `state=all`.
+    /// GitLab equivalent: route through the GitLab `CodeBackend` for the given host.
     private func fetchGitLabMRsForReconcile(
         candidates: [ReconcileCandidate],
         host: String
     ) async -> [ReconcileBranchMatch] {
-        let dateFormatter = ISO8601DateFormatter()
-        dateFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        guard !candidates.isEmpty else { return [] }
+        let backend = providerManager.codeBackend(for: .gitlab, host: host)!
+        do {
+            let matches = try await backend.findRecentPRsForBranches(
+                Self.dedupedBranchCandidates(candidates)
+            )
+            return Self.fanOutMatches(matches, across: candidates)
+        } catch {
+            print("[IssueTracker] Reconcile via backend failed for host \(host): \(error.localizedDescription.prefix(200))")
+            return []
+        }
+    }
 
-        var matches: [ReconcileBranchMatch] = []
-        for candidate in candidates {
-            let encodedSlug = candidate.repoSlug.addingPercentEncoding(
-                withAllowedCharacters: .alphanumerics
-            ) ?? candidate.repoSlug
-            let encodedBranch = candidate.branch.addingPercentEncoding(
-                withAllowedCharacters: .alphanumerics
-            ) ?? candidate.branch
-            let endpoint = "projects/\(encodedSlug)/merge_requests?source_branch=\(encodedBranch)&state=all&per_page=5&order_by=updated_at"
+    /// Project `ReconcileCandidate`s onto the de-duplicated `(repoSlug, branch)`
+    /// pairs the backend needs. Two sessions on the same branch (a duplicated
+    /// session, or reconcile firing before the first session's PR link lands)
+    /// produce a single backend query — we fan the matches back out per
+    /// session in `fanOutMatches`.
+    nonisolated static func dedupedBranchCandidates(_ candidates: [ReconcileCandidate]) -> [BranchCandidate] {
+        var seen: Set<BranchCandidate> = []
+        var out: [BranchCandidate] = []
+        for c in candidates {
+            let bc = BranchCandidate(repoSlug: c.repoSlug, branch: c.branch)
+            if seen.insert(bc).inserted { out.append(bc) }
+        }
+        return out
+    }
 
-            let output: String
-            do {
-                output = try await shell(env: ["GITLAB_HOST": host], cwd: NSHomeDirectory(), "glab", "api", endpoint)
-            } catch {
-                print("[IssueTracker] Reconcile glab api failed for \(candidate.repoSlug)#\(candidate.branch) on \(host): \(error.localizedDescription.prefix(200))")
-                continue
-            }
-            guard let data = output.data(using: .utf8),
-                  let items = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
-                continue
-            }
-            for item in items {
-                guard let number = item["iid"] as? Int,
-                      let url = item["web_url"] as? String else { continue }
-                let rawState = (item["state"] as? String) ?? ""
-                let normalized = Self.normalizeGitLabPRState(rawState)
-                let updatedAt = (item["updated_at"] as? String).flatMap { dateFormatter.date(from: $0) }
-                matches.append(ReconcileBranchMatch(
-                    sessionID: candidate.sessionID,
-                    number: number,
-                    url: url,
-                    state: normalized,
-                    updatedAt: updatedAt
+    /// Each backend `BranchPRMatch` is duplicated for every `ReconcileCandidate`
+    /// that shares its `(repoSlug, branch)`. This preserves the prior
+    /// per-session sessionID-threading even when two sessions point at the
+    /// same branch — collapsing them via `Dictionary(uniqueKeysWithValues:)`
+    /// would either trap or silently drop one session's PR link.
+    nonisolated static func fanOutMatches(
+        _ matches: [BranchPRMatch],
+        across candidates: [ReconcileCandidate]
+    ) -> [ReconcileBranchMatch] {
+        // Group sessions by their (repoSlug, branch) so a single match maps
+        // to every session that owns that key.
+        var sessionsByBranch: [BranchCandidate: [UUID]] = [:]
+        for c in candidates {
+            let bc = BranchCandidate(repoSlug: c.repoSlug, branch: c.branch)
+            sessionsByBranch[bc, default: []].append(c.sessionID)
+        }
+        var out: [ReconcileBranchMatch] = []
+        for match in matches {
+            guard let sids = sessionsByBranch[match.candidate] else { continue }
+            for sid in sids {
+                out.append(ReconcileBranchMatch(
+                    sessionID: sid,
+                    number: match.number,
+                    url: match.url,
+                    state: match.state,
+                    updatedAt: match.updatedAt
                 ))
             }
         }
-        return matches
+        return out
     }
 
     /// Persist the reconciliation decisions. Re-checks `appState.links` at
@@ -1945,18 +1410,19 @@ final class IssueTracker {
         guard await prHasCrowAuthoredCommit(pr: pr) else {
             NSLog("[Crow] crow:merge ignored on %@ — no Crow-Session trailer matching a known session",
                   pr.url as NSString)
-            // Leave the URL in autoMergeInFlight so we don't re-fetch
-            // commits every minute for a permanently-ineligible PR. The
-            // set is in-memory only — restart will re-check, which is
-            // fine for what's a fairly rare label-misuse case.
             return
         }
 
         await ensureMergeLabel(repo: pr.repoNameWithOwner)
 
-        let cmd = #"cd "$TMPDIR" && gh pr merge \#(pr.url) --auto --squash --delete-branch"#
-        let result = await shellWithStatus(args: ["sh", "-c", cmd])
-        if result.exitCode == 0 {
+        let backend = providerManager.codeBackend(for: .github)!
+        guard backend.capabilities.contains(.autoMerge) else {
+            // Capability gate: don't even try if the backend can't enable auto-merge.
+            autoMergeInFlight.remove(pr.url)
+            return
+        }
+        do {
+            try await backend.enableAutoMerge(prURL: pr.url)
             let now = Date()
             if let idx = appState.sessions.firstIndex(where: { $0.id == session.id }) {
                 appState.sessions[idx].autoMergeEnabledAt = now
@@ -1971,10 +1437,10 @@ final class IssueTracker {
             NSLog("[Crow] Auto-merge enabled on %@ (session %@, squash)",
                   pr.url as NSString, session.id.uuidString as NSString)
             onAutoMergeEnabled?(session.id, pr.url, pr.number)
-        } else {
+        } catch {
             autoMergeInFlight.remove(pr.url)
-            NSLog("[Crow] gh pr merge --auto failed for %@ (exit %d): %@",
-                  pr.url as NSString, result.exitCode, String(result.stderr.prefix(300)) as NSString)
+            NSLog("[Crow] enableAutoMerge failed for %@: %@",
+                  pr.url as NSString, error.localizedDescription as NSString)
         }
     }
 
@@ -1991,60 +1457,55 @@ final class IssueTracker {
         guard await prHasCrowAuthoredCommit(pr: pr) else {
             NSLog("[Crow] crow:merge update-branch skipped on %@ — no Crow-Session trailer matching a known session",
                   pr.url as NSString)
-            // Mirror attemptEnableAutoMerge: leave the URL in autoMergeInFlight
-            // so we don't re-fetch commits every minute for an ineligible PR.
             return
         }
 
-        let cmd = #"cd "$TMPDIR" && gh pr update-branch \#(pr.url)"#
-        let result = await shellWithStatus(args: ["sh", "-c", cmd])
-        // Always clear the in-flight marker so the next poll can merge (or
-        // re-update once a new head appears). The per-head attempted key still
-        // prevents re-updating the same head state.
-        autoMergeInFlight.remove(pr.url)
-        if result.exitCode == 0 {
+        let backend = providerManager.codeBackend(for: .github)!
+        defer { autoMergeInFlight.remove(pr.url) }
+        guard backend.capabilities.contains(.updateBranch) else { return }
+        do {
+            try await backend.updateBranch(prURL: pr.url)
             NSLog("[Crow] Updated branch for %@ (session %@, was BEHIND base)",
                   pr.url as NSString, session.id.uuidString as NSString)
-        } else {
-            NSLog("[Crow] gh pr update-branch failed for %@ (exit %d): %@",
-                  pr.url as NSString, result.exitCode, String(result.stderr.prefix(300)) as NSString)
+        } catch {
+            NSLog("[Crow] updateBranch failed for %@: %@",
+                  pr.url as NSString, error.localizedDescription as NSString)
         }
     }
 
     /// Fetch the PR's commits and return true iff at least one carries a
-    /// `Crow-Session: <uuid>` trailer matching a known session. Uses the
-    /// REST `/repos/.../pulls/{N}/commits` endpoint (page-limited; the
-    /// default 30-commit window is plenty for any Crow PR).
+    /// `Crow-Session: <uuid>` trailer matching a known session.
     private func prHasCrowAuthoredCommit(pr: ViewerPR) async -> Bool {
-        let endpoint = "/repos/\(pr.repoNameWithOwner)/pulls/\(pr.number)/commits"
-        let result = await shellWithStatus(args: ["gh", "api", endpoint])
-        guard result.exitCode == 0 else {
-            NSLog("[Crow] gh api %@ failed (exit %d): %@",
-                  endpoint as NSString, result.exitCode,
-                  String(result.stderr.prefix(300)) as NSString)
+        let backend = providerManager.codeBackend(for: .github)!
+        let commits: [CommitInfo]
+        do {
+            commits = try await backend.fetchCrowAuthoredCommits(
+                prURL: pr.url,
+                repoSlug: pr.repoNameWithOwner,
+                prNumber: pr.number
+            )
+        } catch {
+            NSLog("[Crow] fetchCrowAuthoredCommits failed for %@: %@",
+                  pr.url as NSString, error.localizedDescription as NSString)
             return false
         }
-        guard let data = result.stdout.data(using: .utf8),
-              let nodes = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
-            return false
-        }
-        let messages: [String] = nodes.compactMap { ($0["commit"] as? [String: Any])?["message"] as? String }
+        let messages = commits.map(\.message)
         let knownIDs = Set(appState.sessions.map(\.id))
         return Self.crowAuthored(commitMessages: messages, knownSessionIDs: knownIDs)
     }
 
     /// Best-effort: ensure the `crow:merge` label exists in the repo so
-    /// repo owners don't need to pre-create it. `gh label create` fails
-    /// loudly when the label already exists; the failure is harmless and
-    /// not surfaced.
+    /// repo owners don't need to pre-create it. The backend swallows the
+    /// "already exists" failure.
     private func ensureMergeLabel(repo: String) async {
         guard !repo.isEmpty else { return }
-        _ = await shellWithStatus(args: [
-            "gh", "label", "create", Self.autoMergeLabel,
-            "--repo", repo,
-            "--color", "0E8A16",
-            "--description", "Crow: enable auto-merge once mergeable"
-        ])
+        let backend = providerManager.codeBackend(for: .github)!
+        guard backend.capabilities.contains(.autoMergeLabel) else { return }
+        do {
+            try await backend.ensureMergeLabel(repo: repo)
+        } catch {
+            // Best-effort — swallow.
+        }
     }
 
     // MARK: - Auto-Rebase Watcher (CROW-318)
@@ -2112,7 +1573,7 @@ final class IssueTracker {
 
         // Cheap local checks first — a completed/archived session may still
         // carry an open `.pr` link with no worktree to rebase into, and unlike
-        // auto-merge there's no label gate, so avoid spending a `gh api` call
+        // auto-merge there's no label gate, so avoid spending a backend call
         // (Crow-authorship) before discovering there's nothing to do.
         let worktrees = appState.worktrees(for: session.id)
         guard let primary = worktrees.first(where: { $0.isPrimary }) ?? worktrees.first,
@@ -2503,39 +1964,16 @@ final class IssueTracker {
     // MARK: - GitLab
 
     private func fetchGitLabIssues(host: String) async -> [AssignedIssue] {
-        let output: String
+        let backend = providerManager.taskBackend(for: .gitlab, host: host)
         do {
-            // Use `glab api` rather than `glab issue list`: the latter shells
-            // out to `git` even when no repo is involved and aborts with
-            // "fatal: not a git repository" when cwd isn't a git working tree.
-            output = try await shell(
-                env: ["GITLAB_HOST": host],
-                cwd: NSHomeDirectory(),
-                "glab", "api", "issues?scope=assigned_to_me&state=opened&per_page=100"
-            )
+            // Pass includeClosed: false so we don't fire a wasted closed-issues
+            // REST call every 60s — only the open list is consumed by refresh()
+            // for the GitLab path (the closed-diff logic is GitHub-only today).
+            let listing = try await backend.listAssigned(includeClosed: false)
+            return listing.open
         } catch {
             print("[IssueTracker] fetchGitLabIssues(host: \(host)) failed: \(error)")
             return []
-        }
-
-        guard let data = output.data(using: .utf8),
-              let items = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
-
-        return items.compactMap { item -> AssignedIssue? in
-            guard let number = item["iid"] as? Int,
-                  let title = item["title"] as? String,
-                  let url = item["web_url"] as? String else { return nil }
-
-            let state = item["state"] as? String ?? "opened"
-            let labels = (item["labels"] as? [String] ?? []).map { LabelInfo(name: $0) }
-            let refs = item["references"] as? [String: Any]
-            let fullRef = refs?["full"] as? String ?? ""
-
-            return AssignedIssue(
-                id: "gitlab:\(host):\(fullRef)",
-                number: number, title: title, state: state == "opened" ? "open" : state,
-                url: url, repo: fullRef, labels: labels, provider: .gitlab
-            )
         }
     }
 
@@ -2554,128 +1992,24 @@ final class IssueTracker {
         let repoName = parsed.repo
         let number = parsed.number
 
+        let backend = providerManager.taskBackend(for: .github)
+        // Capability-gated UI affordance; the backend method now performs the
+        // GraphQL mutation directly (no more legacy IssueTracker escape-hatch).
+        guard backend.capabilities.contains(.projectBoardStatus) else { return }
+
         appState.isMarkingInReview[sessionID] = true
         defer { appState.isMarkingInReview[sessionID] = false }
 
-        // Step 1: Query the project item ID, project ID, Status field ID, and available options
-        // so we can find the "In Review" option to set.
-        let query = """
-        query($owner: String!, $repo: String!, $number: Int!) {
-          repository(owner: $owner, name: $repo) {
-            issue(number: $number) {
-              projectItems(first: 10) {
-                nodes {
-                  id
-                  project { id }
-                  fieldValueByName(name: "Status") {
-                    ... on ProjectV2ItemFieldSingleSelectValue {
-                      name
-                      field {
-                        ... on ProjectV2SingleSelectField {
-                          id
-                          options { id name }
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-        """
-
-        let queryResult = await shellWithStatus(
-            "gh", "api", "graphql",
-            "-f", "query=\(query)",
-            "-F", "owner=\(owner)",
-            "-F", "repo=\(repoName)",
-            "-F", "number=\(number)"
-        )
-
-        if queryResult.exitCode != 0 {
-            if queryResult.stderr.contains("INSUFFICIENT_SCOPES") || queryResult.stderr.contains("read:project") || queryResult.stderr.contains("project") {
-                reportScopeWarning("project")
-            } else {
-                print("[IssueTracker] GraphQL query failed: \(queryResult.stderr.prefix(200))")
-            }
+        do {
+            try await backend.setTaskStatus(url: ticketURL, status: .inReview)
+        } catch ProviderError.insufficientScope {
+            reportScopeWarning("project")
             return
-        }
-
-        // Parse the query response
-        guard let data = queryResult.stdout.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let dataObj = json["data"] as? [String: Any],
-              let repository = dataObj["repository"] as? [String: Any],
-              let issueObj = repository["issue"] as? [String: Any],
-              let projectItems = issueObj["projectItems"] as? [String: Any],
-              let nodes = projectItems["nodes"] as? [[String: Any]],
-              !nodes.isEmpty else {
-            print("[IssueTracker] Issue \(owner)/\(repoName)#\(number) is not in any GitHub Project")
+        } catch ProviderError.unimplemented(let msg) {
+            print("[IssueTracker] markInReview: \(msg)")
             return
-        }
-
-        // Find a project item that has a Status field with an "In Review" option
-        var itemID: String?
-        var projectID: String?
-        var fieldID: String?
-        var optionID: String?
-
-        for node in nodes {
-            guard let nodeID = node["id"] as? String,
-                  let project = node["project"] as? [String: Any],
-                  let projID = project["id"] as? String,
-                  let fieldValue = node["fieldValueByName"] as? [String: Any],
-                  let field = fieldValue["field"] as? [String: Any],
-                  let fID = field["id"] as? String,
-                  let options = field["options"] as? [[String: Any]] else { continue }
-
-            // Find the "In Review" option (case-insensitive)
-            for option in options {
-                guard let optName = option["name"] as? String,
-                      let optID = option["id"] as? String else { continue }
-                let normalized = optName.lowercased().trimmingCharacters(in: .whitespaces)
-                if normalized == "in review" || normalized == "review" {
-                    itemID = nodeID
-                    projectID = projID
-                    fieldID = fID
-                    optionID = optID
-                    break
-                }
-            }
-            if optionID != nil { break }
-        }
-
-        guard let itemID, let projectID, let fieldID, let optionID else {
-            print("[IssueTracker] No 'In Review' status option found in project for \(owner)/\(repoName)#\(number)")
-            return
-        }
-
-        // Step 2: Mutation to update the Status field to the "In Review" option
-        let mutation = """
-        mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
-          updateProjectV2ItemFieldValue(input: {
-            projectId: $projectId, itemId: $itemId, fieldId: $fieldId,
-            value: { singleSelectOptionId: $optionId }
-          }) { projectV2Item { id } }
-        }
-        """
-
-        let mutationResult = await shellWithStatus(
-            "gh", "api", "graphql",
-            "-f", "query=\(mutation)",
-            "-F", "projectId=\(projectID)",
-            "-F", "itemId=\(itemID)",
-            "-F", "fieldId=\(fieldID)",
-            "-F", "optionId=\(optionID)"
-        )
-
-        if mutationResult.exitCode != 0 {
-            if mutationResult.stderr.contains("INSUFFICIENT_SCOPES") {
-                reportScopeWarning("project")
-            } else {
-                print("[IssueTracker] Failed to update project status: \(mutationResult.stderr.prefix(200))")
-            }
+        } catch {
+            print("[IssueTracker] markInReview failed for \(owner)/\(repoName)#\(number): \(error.localizedDescription.prefix(200))")
             return
         }
 
@@ -2690,93 +2024,5 @@ final class IssueTracker {
 
         // Update local session status to .inReview
         appState.onSetSessionInReview?(sessionID)
-    }
-
-    // MARK: - Shell
-
-    private func shell(env: [String: String] = [:], cwd: String? = nil, _ args: String...) async throws -> String {
-        return try await shell(env: env, cwd: cwd, args: args)
-    }
-
-    private func shell(env: [String: String] = [:], cwd: String? = nil, args: [String]) async throws -> String {
-        currentRefreshGhCalls += 1
-        let args = args
-        let env = env
-        let cwd = cwd
-        return try await Task.detached {
-            let process = Process()
-            let outPipe = Pipe()
-            let errPipe = Pipe()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-            process.arguments = args
-            process.environment = env.isEmpty
-                ? ShellEnvironment.shared.env
-                : ShellEnvironment.shared.merging(env)
-            if let cwd { process.currentDirectoryURL = URL(fileURLWithPath: cwd) }
-            process.standardOutput = outPipe
-            process.standardError = errPipe
-            try process.run()
-            // Read pipes BEFORE waitUntilExit to avoid deadlock when
-            // output exceeds the 64 KB pipe buffer (consolidated GraphQL
-            // responses routinely reach ~86 KB).
-            let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
-            let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
-            process.waitUntilExit()
-            guard process.terminationStatus == 0 else {
-                let stderr = (String(data: errData, encoding: .utf8) ?? "")
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                let cmd = args.joined(separator: " ")
-                let desc = "`\(cmd)` exited \(process.terminationStatus)"
-                    + (stderr.isEmpty ? "" : ": \(stderr)")
-                throw NSError(
-                    domain: "IssueTracker",
-                    code: Int(process.terminationStatus),
-                    userInfo: [NSLocalizedDescriptionKey: desc]
-                )
-            }
-            return String(data: outData, encoding: .utf8) ?? ""
-        }.value
-    }
-
-    private struct ShellResult: Sendable {
-        let stdout: String
-        let stderr: String
-        let exitCode: Int32
-    }
-
-    private func shellWithStatus(_ args: String...) async -> ShellResult {
-        return await shellWithStatus(args: args)
-    }
-
-    private func shellWithStatus(args: [String]) async -> ShellResult {
-        return await shellWithStatus(env: [:], args: args)
-    }
-
-    private func shellWithStatus(env: [String: String], args: [String]) async -> ShellResult {
-        currentRefreshGhCalls += 1
-        let args = args
-        let env = env
-        return await Task.detached {
-            let process = Process()
-            let outPipe = Pipe()
-            let errPipe = Pipe()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-            process.arguments = args
-            process.environment = env.isEmpty
-                ? ShellEnvironment.shared.env
-                : ShellEnvironment.shared.merging(env)
-            process.standardOutput = outPipe
-            process.standardError = errPipe
-            do { try process.run() } catch { return ShellResult(stdout: "", stderr: error.localizedDescription, exitCode: -1) }
-            // Read pipes BEFORE waitUntilExit to avoid pipe-buffer deadlock.
-            let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
-            let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
-            process.waitUntilExit()
-            return ShellResult(
-                stdout: String(data: outData, encoding: .utf8) ?? "",
-                stderr: String(data: errData, encoding: .utf8) ?? "",
-                exitCode: process.terminationStatus
-            )
-        }.value
     }
 }

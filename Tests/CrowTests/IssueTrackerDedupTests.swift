@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import CrowCore
+import CrowProvider
 @testable import Crow
 
 @Suite("IssueTracker PR dedup")
@@ -19,7 +20,7 @@ struct IssueTrackerDedupTests {
         baseRefName: String = "",
         repoNameWithOwner: String = "",
         labels: [LabelInfo] = [],
-        linkedIssueReferences: [IssueTracker.ViewerPR.LinkedIssue] = [],
+        linkedIssueReferences: [LinkedIssueRef] = [],
         checksState: String = "",
         failedCheckNames: [String] = [],
         latestReviewStates: [String] = []

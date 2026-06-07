@@ -316,4 +316,12 @@ public enum ProviderError: Error {
     /// A backend method is part of the protocol but not implemented for this provider yet
     /// (e.g. `StubCorveilTaskBackend` — every method throws this; see ADR 0005).
     case unimplemented(String)
+    /// GitHub `INSUFFICIENT_SCOPES` — the OAuth token is missing a required scope
+    /// (typically `read:project`). Surfaced as a typed error so call sites can
+    /// route to the existing scope-warning UI instead of treating it as a hard
+    /// failure. The associated value is the missing scope name.
+    case insufficientScope(String)
+    /// GitHub GraphQL `RATE_LIMITED`. Callers should skip the cycle and retry
+    /// after the documented reset time.
+    case rateLimited(String)
 }

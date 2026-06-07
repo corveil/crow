@@ -32,13 +32,6 @@ final class BackendsTests: XCTestCase {
     func testGitHubTaskBackendDeclaresCapabilities() {
         let backend = GitHubTaskBackend(shellRunner: FakeShellRunner())
         XCTAssertEqual(backend.provider, .github)
-        // `.projectBoardStatus` declares the UI surface (GitHub Projects v2).
-        // The `setTaskStatus` GraphQL migration is still pending — execution
-        // currently routes through IssueTracker.markInReview via the
-        // onMarkInReview closure, so direct `setTaskStatus` calls on this
-        // backend still throw .unimplemented (asserted by
-        // testGitHubTaskBackendSetTaskStatusThrowsUnimplemented). See ADR 0005
-        // and issue crow#413 for the UI guard migration.
         XCTAssertTrue(backend.capabilities.contains(.projectBoardStatus))
         XCTAssertTrue(backend.capabilities.contains(.batchedQuery))
     }
@@ -94,19 +87,141 @@ final class BackendsTests: XCTestCase {
         XCTAssertTrue(fake.calls.isEmpty)
     }
 
-    func testGitHubTaskBackendSetTaskStatusThrowsUnimplemented() async {
-        let backend = GitHubTaskBackend(shellRunner: FakeShellRunner())
+    func testGitHubTaskBackendListAssignedIssuesParses() async throws {
+        let fake = FakeShellRunner()
+        let json = """
+        {"data":{
+          "openIssues":{"nodes":[
+            {"number":1,"title":"Open one","url":"https://github.com/a/b/issues/1","state":"open",
+             "repository":{"nameWithOwner":"a/b"},
+             "labels":{"nodes":[{"name":"bug","color":"red"}]},
+             "projectItems":{"nodes":[{"fieldValueByName":{"name":"In Progress"}}]}}
+          ]},
+          "closedIssues":{"nodes":[
+            {"number":2,"title":"Closed one","url":"https://github.com/a/b/issues/2","state":"closed",
+             "repository":{"nameWithOwner":"a/b"},"labels":{"nodes":[]}}
+          ]},
+          "rateLimit":{"remaining":4999,"limit":5000,"resetAt":"2026-01-01T00:00:00Z","cost":1}
+        }}
+        """
+        fake.responses = [.success(json)]
+        let backend = GitHubTaskBackend(shellRunner: fake)
+        let listing = try await backend.listAssigned()
+        XCTAssertEqual(listing.open.count, 1)
+        XCTAssertEqual(listing.open[0].title, "Open one")
+        XCTAssertEqual(listing.open[0].projectStatus, .inProgress)
+        XCTAssertEqual(listing.closed.count, 1)
+        XCTAssertEqual(listing.closed[0].projectStatus, .done)  // override for closed
+        XCTAssertEqual(listing.rateLimit?.remaining, 4999)
+        XCTAssertEqual(fake.calls.first?.args[0], "gh")
+        XCTAssertTrue(fake.calls.first?.args.contains("graphql") ?? false)
+    }
+
+    func testGitHubTaskBackendListAssignedRetriesWithoutProjectsOnScopeError() async throws {
+        let fake = FakeShellRunner()
+        fake.responses = [
+            .failure(ShellRunnerError.nonZeroExit(exitCode: 1, output: "GraphQL error: INSUFFICIENT_SCOPES (need read:project)")),
+            .success(#"{"data":{"openIssues":{"nodes":[]},"closedIssues":{"nodes":[]}}}"#)
+        ]
+        let backend = GitHubTaskBackend(shellRunner: fake)
+        let listing = try await backend.listAssigned()
+        XCTAssertEqual(listing.open.count, 0)
+        // The retry call used the no-projects query — query body differs.
+        XCTAssertEqual(fake.calls.count, 2)
+        // Missing-scope is surfaced so callers can keep their warning UI lit.
+        XCTAssertEqual(listing.missingScope, "read:project")
+    }
+
+    func testGitHubTaskBackendSetTaskStatusRunsMutation() async throws {
+        let fake = FakeShellRunner()
+        // First call: lookup. Second call: mutation.
+        let lookup = """
+        {"data":{"repository":{"issue":{"projectItems":{"nodes":[
+          {"id":"ITEM_1","project":{"id":"PROJ_1"},
+           "fieldValueByName":{"name":"Backlog",
+             "field":{"id":"FIELD_1","options":[
+               {"id":"OPT_INREVIEW","name":"In Review"},
+               {"id":"OPT_DONE","name":"Done"}
+             ]}}}
+        ]}}}}}
+        """
+        fake.responses = [.success(lookup), .success(#"{"data":{}}"#)]
+        let backend = GitHubTaskBackend(shellRunner: fake)
+        try await backend.setTaskStatus(url: "https://github.com/a/b/issues/1", status: .inReview)
+        XCTAssertEqual(fake.calls.count, 2)
+        // Mutation call should reference OPT_INREVIEW.
+        let mutationArgs = fake.calls[1].args
+        XCTAssertTrue(mutationArgs.contains("optionId=OPT_INREVIEW"))
+    }
+
+    func testGitHubTaskBackendSetTaskStatusThrowsWhenOptionMissing() async {
+        let fake = FakeShellRunner()
+        // No matching option.
+        fake.responses = [.success(#"{"data":{"repository":{"issue":{"projectItems":{"nodes":[]}}}}}"#)]
+        let backend = GitHubTaskBackend(shellRunner: fake)
         do {
             try await backend.setTaskStatus(url: "https://github.com/a/b/issues/1", status: .inReview)
             XCTFail("expected throw")
         } catch ProviderError.unimplemented {
-            // expected — see ADR 0005, migration deferred
+            // expected
         } catch {
             XCTFail("unexpected error \(error)")
         }
     }
 
+    func testGitHubTaskBackendSetTaskStatusMatchesBareReviewAlias() async throws {
+        // Regression guard: a project board whose Status column is named just
+        // "Review" (no "In ") must still resolve to .inReview, since
+        // TicketStatus(projectBoardName:) treats them as synonyms.
+        let fake = FakeShellRunner()
+        let lookup = """
+        {"data":{"repository":{"issue":{"projectItems":{"nodes":[
+          {"id":"ITEM_1","project":{"id":"PROJ_1"},
+           "fieldValueByName":{"name":"Backlog",
+             "field":{"id":"FIELD_1","options":[
+               {"id":"OPT_REVIEW","name":"Review"},
+               {"id":"OPT_DONE","name":"Done"}
+             ]}}}
+        ]}}}}}
+        """
+        fake.responses = [.success(lookup), .success(#"{"data":{}}"#)]
+        let backend = GitHubTaskBackend(shellRunner: fake)
+        try await backend.setTaskStatus(url: "https://github.com/a/b/issues/1", status: .inReview)
+        XCTAssertEqual(fake.calls.count, 2)
+        XCTAssertTrue(fake.calls[1].args.contains("optionId=OPT_REVIEW"))
+    }
+
+    func testGitHubTaskBackendAssignInvokesGhIssueEdit() async throws {
+        let fake = FakeShellRunner()
+        let backend = GitHubTaskBackend(shellRunner: fake)
+        try await backend.assign(url: "https://github.com/a/b/issues/1", to: "@me")
+        XCTAssertEqual(fake.calls.count, 1)
+        XCTAssertTrue(fake.calls[0].args.contains("--add-assignee"))
+        XCTAssertTrue(fake.calls[0].args.contains("@me"))
+    }
+
+    func testGitHubTaskBackendCreateTaskReturnsParsedURL() async throws {
+        let fake = FakeShellRunner()
+        fake.responses = [.success("Creating issue in acme/api\n\nhttps://github.com/acme/api/issues/99\n")]
+        let backend = GitHubTaskBackend(shellRunner: fake)
+        let info = try await backend.createTask(repo: "acme/api", title: "Hi", body: "There", labels: ["bug"])
+        XCTAssertEqual(info.number, 99)
+        XCTAssertEqual(info.org, "acme")
+        XCTAssertEqual(info.repo, "api")
+        XCTAssertEqual(info.url, "https://github.com/acme/api/issues/99")
+        XCTAssertTrue(fake.calls[0].args.contains("--label"))
+        XCTAssertTrue(fake.calls[0].args.contains("bug"))
+    }
+
     // MARK: - GitHubCodeBackend
+
+    func testGitHubCodeBackendDeclaresCapabilities() {
+        let backend = GitHubCodeBackend(shellRunner: FakeShellRunner())
+        XCTAssertTrue(backend.capabilities.contains(.autoMergeLabel))
+        XCTAssertTrue(backend.capabilities.contains(.batchedPRStates))
+        XCTAssertTrue(backend.capabilities.contains(.autoMerge))
+        XCTAssertTrue(backend.capabilities.contains(.updateBranch))
+    }
 
     func testGitHubCodeBackendLinkedPRParsesJSON() async throws {
         let fake = FakeShellRunner()
@@ -137,6 +252,102 @@ final class BackendsTests: XCTestCase {
         try await backend.ensureMergeLabel(repo: "a/b")
     }
 
+    func testGitHubCodeBackendPRStatesBatchesQuery() async throws {
+        let fake = FakeShellRunner()
+        let json = """
+        {"data":{
+          "pr0":{"pullRequest":{"number":1,"url":"https://github.com/a/b/pull/1","state":"MERGED",
+                 "mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","isDraft":false,
+                 "headRefName":"f","headRefOid":"abc","baseRefName":"main",
+                 "repository":{"nameWithOwner":"a/b"}}}
+        }}
+        """
+        fake.responses = [.success(json)]
+        let backend = GitHubCodeBackend(shellRunner: fake)
+        let ref = PRRef(owner: "a", repo: "b", number: 1)
+        let states = try await backend.prStates(refs: [ref])
+        XCTAssertEqual(states.count, 1)
+        XCTAssertEqual(states[ref]?.state, "MERGED")
+        // One batched call, not per-ref.
+        XCTAssertEqual(fake.calls.count, 1)
+        let args = fake.calls[0].args
+        XCTAssertTrue(args.contains("graphql"))
+    }
+
+    func testGitHubCodeBackendFetchCrowAuthoredCommitsReturnsCommitsWithTrailer() async throws {
+        let fake = FakeShellRunner()
+        let json = """
+        [
+          {"sha":"abc","commit":{"message":"Fix bug\\n\\nCrow-Session: 123"}},
+          {"sha":"def","commit":{"message":"Unrelated change"}}
+        ]
+        """
+        fake.responses = [.success(json)]
+        let backend = GitHubCodeBackend(shellRunner: fake)
+        let commits = try await backend.fetchCrowAuthoredCommits(
+            prURL: "https://github.com/a/b/pull/1",
+            repoSlug: "a/b",
+            prNumber: 1
+        )
+        // Returns ALL commits — caller filters for Crow-Session trailer.
+        XCTAssertEqual(commits.count, 2)
+        XCTAssertEqual(commits[0].sha, "abc")
+        XCTAssertTrue(commits[0].message.contains("Crow-Session"))
+    }
+
+    func testGitHubCodeBackendEnableAutoMergeRunsGhPrMerge() async throws {
+        let fake = FakeShellRunner()
+        let backend = GitHubCodeBackend(shellRunner: fake)
+        try await backend.enableAutoMerge(prURL: "https://github.com/a/b/pull/1")
+        XCTAssertEqual(fake.calls.count, 1)
+        // Direct argv (not sh -c) into NSTemporaryDirectory — no shell
+        // interpolation surface around prURL.
+        XCTAssertEqual(fake.calls[0].args.prefix(3), ArraySlice(["gh", "pr", "merge"]))
+        XCTAssertTrue(fake.calls[0].args.contains("--auto"))
+        XCTAssertTrue(fake.calls[0].args.contains("https://github.com/a/b/pull/1"))
+        XCTAssertEqual(fake.calls[0].cwd, NSTemporaryDirectory())
+    }
+
+    func testGitHubCodeBackendUpdateBranchRunsGhPrUpdateBranch() async throws {
+        let fake = FakeShellRunner()
+        let backend = GitHubCodeBackend(shellRunner: fake)
+        try await backend.updateBranch(prURL: "https://github.com/a/b/pull/1")
+        XCTAssertEqual(fake.calls.count, 1)
+        XCTAssertEqual(fake.calls[0].args, ["gh", "pr", "update-branch", "https://github.com/a/b/pull/1"])
+        XCTAssertEqual(fake.calls[0].cwd, NSTemporaryDirectory())
+    }
+
+    func testGitHubCodeBackendFetchPRMetadataParses() async throws {
+        let fake = FakeShellRunner()
+        fake.responses = [.success(#"{"title":"PR Title","number":7,"headRefName":"f","headRefOid":"abc","baseRefName":"main"}"#)]
+        let backend = GitHubCodeBackend(shellRunner: fake)
+        let meta = try await backend.fetchPRMetadata(prURL: "https://github.com/a/b/pull/7")
+        XCTAssertEqual(meta.title, "PR Title")
+        XCTAssertEqual(meta.number, 7)
+        XCTAssertEqual(meta.headRefName, "f")
+        XCTAssertEqual(meta.baseRefName, "main")
+    }
+
+    func testGitHubCodeBackendFindRecentPRsForBranchesParses() async throws {
+        let fake = FakeShellRunner()
+        let json = """
+        {"data":{
+          "pr0":{"pullRequests":{"nodes":[
+            {"number":7,"url":"https://github.com/a/b/pull/7","state":"OPEN","updatedAt":"2026-01-01T00:00:00Z","headRefName":"feature/x"}
+          ]}}
+        }}
+        """
+        fake.responses = [.success(json)]
+        let backend = GitHubCodeBackend(shellRunner: fake)
+        let matches = try await backend.findRecentPRsForBranches([
+            BranchCandidate(repoSlug: "a/b", branch: "feature/x")
+        ])
+        XCTAssertEqual(matches.count, 1)
+        XCTAssertEqual(matches[0].number, 7)
+        XCTAssertEqual(matches[0].state, "OPEN")
+        XCTAssertEqual(matches[0].candidate.branch, "feature/x")
+    }
+
     // MARK: - GitLab backends
 
     func testGitLabTaskBackendDeclaresNoCapabilities() {
@@ -157,6 +368,63 @@ final class BackendsTests: XCTestCase {
         XCTAssertEqual(fake.calls.first?.env["GITLAB_HOST"], "gitlab.internal.io")
     }
 
+    func testGitLabTaskBackendListAssignedIssuesParses() async throws {
+        let fake = FakeShellRunner()
+        let openJSON = """
+        [{"iid":7,"title":"Open MR","web_url":"https://gitlab.example.com/g/p/-/issues/7","state":"opened",
+          "labels":["bug"],"references":{"full":"g/p#7"}}]
+        """
+        let closedJSON = """
+        [{"iid":3,"title":"Closed","web_url":"https://gitlab.example.com/g/p/-/issues/3","state":"closed",
+          "labels":[],"references":{"full":"g/p#3"}}]
+        """
+        fake.responses = [.success(openJSON), .success(closedJSON)]
+        let backend = GitLabTaskBackend(shellRunner: fake, host: "gitlab.example.com")
+        let listing = try await backend.listAssigned()
+        XCTAssertEqual(listing.open.count, 1)
+        XCTAssertEqual(listing.open[0].title, "Open MR")
+        XCTAssertEqual(listing.open[0].state, "open")
+        XCTAssertEqual(listing.closed.count, 1)
+        XCTAssertEqual(listing.closed[0].projectStatus, .done)
+        XCTAssertNil(listing.rateLimit)  // GitLab doesn't have rate-limit JSON in this shape
+        XCTAssertEqual(fake.calls.count, 2)
+    }
+
+    func testGitLabTaskBackendListAssignedSkipsClosedCallWhenNotRequested() async throws {
+        // Regression guard: passing includeClosed: false must skip the second
+        // REST round-trip. The IssueTracker GitLab path uses this to avoid a
+        // wasted call every 60s — the closed-diff logic is GitHub-only.
+        let fake = FakeShellRunner()
+        let openJSON = #"[{"iid":7,"title":"Open","web_url":"https://gl/g/p/-/issues/7","state":"opened","labels":[],"references":{"full":"g/p#7"}}]"#
+        fake.responses = [.success(openJSON)]
+        let backend = GitLabTaskBackend(shellRunner: fake, host: "gitlab.example.com")
+        let listing = try await backend.listAssigned(includeClosed: false)
+        XCTAssertEqual(listing.open.count, 1)
+        XCTAssertEqual(listing.closed.count, 0)
+        XCTAssertEqual(fake.calls.count, 1)
+    }
+
+    func testGitLabTaskBackendAssignInvokesGlabIssueUpdate() async throws {
+        let fake = FakeShellRunner()
+        let backend = GitLabTaskBackend(shellRunner: fake, host: "gitlab.example.com")
+        try await backend.assign(url: "https://gitlab.example.com/g/p/-/issues/7", to: "alice")
+        XCTAssertEqual(fake.calls.count, 1)
+        XCTAssertTrue(fake.calls[0].args.contains("--assignee"))
+        XCTAssertTrue(fake.calls[0].args.contains("alice"))
+    }
+
+    func testGitLabTaskBackendSetTaskStatusThrowsUnimplemented() async {
+        let backend = GitLabTaskBackend(shellRunner: FakeShellRunner(), host: nil)
+        do {
+            try await backend.setTaskStatus(url: "https://gitlab.example.com/g/p/-/issues/1", status: .inReview)
+            XCTFail("expected throw")
+        } catch ProviderError.unimplemented {
+            // expected
+        } catch {
+            XCTFail("unexpected error \(error)")
+        }
+    }
+
     func testGitLabCodeBackendEnsureMergeLabelThrowsUnimplemented() async {
         let backend = GitLabCodeBackend(shellRunner: FakeShellRunner(), host: nil)
         do {
@@ -169,6 +437,53 @@ final class BackendsTests: XCTestCase {
         }
     }
 
+    func testGitLabCodeBackendEnableAutoMergeThrowsUnimplemented() async {
+        let backend = GitLabCodeBackend(shellRunner: FakeShellRunner(), host: nil)
+        do {
+            try await backend.enableAutoMerge(prURL: "https://gitlab.example.com/g/p/-/merge_requests/1")
+            XCTFail("expected throw")
+        } catch ProviderError.unimplemented {
+            // expected
+        } catch {
+            XCTFail("unexpected error \(error)")
+        }
+    }
+
+    func testGitLabCodeBackendUpdateBranchThrowsUnimplemented() async {
+        let backend = GitLabCodeBackend(shellRunner: FakeShellRunner(), host: nil)
+        do {
+            try await backend.updateBranch(prURL: "https://gitlab.example.com/g/p/-/merge_requests/1")
+            XCTFail("expected throw")
+        } catch ProviderError.unimplemented {
+            // expected
+        } catch {
+            XCTFail("unexpected error \(error)")
+        }
+    }
+
+    func testGitLabCodeBackendPRStatesPerMR() async throws {
+        let fake = FakeShellRunner()
+        let json = #"{"iid":3,"web_url":"https://gitlab.example.com/g/p/-/merge_requests/3","state":"merged","source_branch":"f","target_branch":"main","sha":"abc"}"#
+        fake.responses = [.success(json)]
+        let backend = GitLabCodeBackend(shellRunner: fake, host: "gitlab.example.com")
+        let ref = PRRef(owner: "g", repo: "p", number: 3)
+        let states = try await backend.prStates(refs: [ref])
+        XCTAssertEqual(states.count, 1)
+        XCTAssertEqual(states[ref]?.state, "MERGED")
+        XCTAssertEqual(fake.calls.count, 1)
+    }
+
+    func testGitLabCodeBackendFetchPRMetadataParses() async throws {
+        let fake = FakeShellRunner()
+        let json = #"{"iid":3,"title":"MR","source_branch":"f","sha":"abc","target_branch":"main"}"#
+        fake.responses = [.success(json)]
+        let backend = GitLabCodeBackend(shellRunner: fake, host: "gitlab.example.com")
+        let meta = try await backend.fetchPRMetadata(prURL: "https://gitlab.example.com/g/p/-/merge_requests/3")
+        XCTAssertEqual(meta.title, "MR")
+        XCTAssertEqual(meta.number, 3)
+        XCTAssertEqual(meta.headRefName, "f")
+    }
+
     // MARK: - Stub Corveil
 
     func testStubCorveilTaskBackendThrowsUnimplementedForEveryMethod() async {
@@ -176,8 +491,11 @@ final class BackendsTests: XCTestCase {
         XCTAssertEqual(backend.provider, .corveil)
         XCTAssertTrue(backend.capabilities.isEmpty)
         await XCTAssertThrowsErrorAsync(try await backend.fetchTask(url: "https://corveil.io/t/1"))
+        await XCTAssertThrowsErrorAsync(try await backend.listAssigned())
         await XCTAssertThrowsErrorAsync(try await backend.setLabels(url: "x", add: ["a"], remove: []))
         await XCTAssertThrowsErrorAsync(try await backend.setTaskStatus(url: "x", status: .inReview))
+        await XCTAssertThrowsErrorAsync(try await backend.assign(url: "x", to: "me"))
+        await XCTAssertThrowsErrorAsync(try await backend.createTask(repo: "a/b", title: "t", body: "b", labels: []))
     }
 
     // MARK: - Factory

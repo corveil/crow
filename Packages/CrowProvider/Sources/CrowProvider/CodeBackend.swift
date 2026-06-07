@@ -32,6 +32,45 @@ public protocol CodeBackend: Sendable {
     /// have different label-management semantics, and a missing capability means
     /// "this provider doesn't need the same setup step").
     func ensureMergeLabel(repo: String) async throws
+
+    /// Fetch the viewer's monitored PRs and review requests in one logical
+    /// operation. GitHub batches both into a single GraphQL call; GitLab issues
+    /// two REST calls. Returned together because IssueTracker consumes them
+    /// together — the GraphQL batching is the original motivation for the
+    /// combined return shape (see ADR 0005's "Migration status" note).
+    func listMonitoredPRs() async throws -> MonitoredPRListing
+
+    /// Batched state fetch for a set of PRs. Backends with `.batchedPRStates`
+    /// issue one call; others fall back to per-PR. Returned keyed by `PRRef`
+    /// (not URL) so callers don't have to round-trip through the API's
+    /// canonical URL form to look up their result.
+    func prStates(refs: [PRRef]) async throws -> [PRRef: PRRecord]
+
+    /// Fetch every commit on the PR identified by `prURL` and `repoSlug`.
+    /// Returns the full commit list; the caller filters for the
+    /// `Crow-Session:` trailer to identify Crow-authored commits.
+    func fetchCrowAuthoredCommits(prURL: String, repoSlug: String, prNumber: Int) async throws -> [CommitInfo]
+
+    /// For each `(repoSlug, branch)` candidate, fetch up to 5 recently-updated
+    /// PRs whose head matches `branch`. Used by session reconcile to recover
+    /// dropped PR links. Returns one match per (candidate, PR) — callers run
+    /// `decideReconcileLinks` to pick the best PR per candidate.
+    func findRecentPRsForBranches(_ candidates: [BranchCandidate]) async throws -> [BranchPRMatch]
+
+    /// Enable auto-merge on the PR at `prURL` (squash + delete branch).
+    /// Capability-gated on `.autoMerge`. Backends without the capability throw
+    /// `ProviderError.unimplemented`.
+    func enableAutoMerge(prURL: String) async throws
+
+    /// Trigger a "Update branch" rebase/merge from the base branch on the PR
+    /// at `prURL`. Capability-gated on `.updateBranch`. Backends without the
+    /// capability throw `ProviderError.unimplemented`.
+    func updateBranch(prURL: String) async throws
+
+    /// Fetch the metadata SessionService needs to prep a review clone:
+    /// title, head/base branch names, head commit SHA, number. Issues one
+    /// `gh pr view` / `glab mr view` call.
+    func fetchPRMetadata(prURL: String) async throws -> PRMetadata
 }
 
 /// Optional capabilities a `CodeBackend` may declare.
@@ -45,6 +84,15 @@ public enum CodeCapability: Sendable, Hashable {
     /// which path was taken. Maintained as a capability so a future GitLab REST
     /// API upgrade can flip this on without rewriting callers.
     case batchedPRStates
+
+    /// Supports `gh pr merge --auto` (or equivalent). Gates `enableAutoMerge`.
+    /// GitHub declares this; GitLab does not (the `glab` CLI doesn't expose an
+    /// equivalent "merge when checks pass" toggle).
+    case autoMerge
+
+    /// Supports `gh pr update-branch` (or equivalent). Gates `updateBranch`.
+    /// GitHub declares this; GitLab does not.
+    case updateBranch
 }
 
 /// Minimal PR/MR identity returned from `CodeBackend.linkedPR`.

@@ -1232,19 +1232,13 @@ final class SessionService {
             }
         }
 
-        // Try to fetch issue title — prefer the TaskBackend abstraction (ADR 0005)
-        // when a manager is wired; fall back to inline `gh` for older call paths.
-        if let issueURL = info.url {
-            if let manager = providerManager {
-                let backend = manager.taskBackend(forURL: issueURL)
-                if let ticket = try? await backend.fetchTask(url: issueURL) {
-                    info.title = ticket.title
-                }
-            } else if let output = try? await shell("gh", "issue", "view", issueURL, "--json", "title"),
-               let data = output.data(using: .utf8),
-               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let title = json["title"] as? String {
-                info.title = title
+        // Try to fetch issue title via the TaskBackend abstraction (ADR 0005).
+        // Falls through silently if no `providerManager` is wired or the fetch
+        // fails — title stays whatever the dir-name parser produced.
+        if let issueURL = info.url, let manager = providerManager {
+            let backend = manager.taskBackend(forURL: issueURL)
+            if let ticket = try? await backend.fetchTask(url: issueURL) {
+                info.title = ticket.title
             }
         }
 
@@ -1254,29 +1248,16 @@ final class SessionService {
     /// Check for a pull request on a branch and return a link if found.
     private func findPRLink(branch: String, repoPath: String, sessionID: UUID, provider: Provider) async -> SessionLink? {
         guard let repoSlug = resolveRepoSlug(repoPath: repoPath) else { return nil }
-        // Prefer CodeBackend.linkedPR (ADR 0005) when a manager is wired; fall
-        // back to the inline `gh pr list` shell-out only when no manager is
-        // available — otherwise we'd issue the identical command twice on the
-        // common "no PR exists" path.
-        if let manager = providerManager {
-            guard let backend = manager.codeBackend(for: provider),
-                  let pr = try? await backend.linkedPR(repo: repoSlug, branch: branch) else {
-                return nil
-            }
-            NSLog("[SessionService] Found PR #\(pr.number) for branch '\(branch)'")
-            return SessionLink(sessionID: sessionID, label: "PR #\(pr.number)", url: pr.url, linkType: .pr)
+        // Route through CodeBackend.linkedPR (ADR 0005). Without a wired
+        // providerManager we can't look up a PR; that's the caller's signal
+        // to skip the link.
+        guard let manager = providerManager,
+              let backend = manager.codeBackend(for: provider),
+              let pr = try? await backend.linkedPR(repo: repoSlug, branch: branch) else {
+            return nil
         }
-        guard let prOutput = try? await shell(
-            "gh", "pr", "list", "--repo", repoSlug, "--head", branch,
-            "--state", "all", "--json", "number,url,state", "--limit", "1"
-        ), let prData = prOutput.data(using: .utf8),
-           let prItems = try? JSONSerialization.jsonObject(with: prData) as? [[String: Any]],
-           let pr = prItems.first,
-           let prNum = pr["number"] as? Int,
-           let prURL = pr["url"] as? String else { return nil }
-
-        NSLog("[SessionService] Found PR #\(prNum) for branch '\(branch)'")
-        return SessionLink(sessionID: sessionID, label: "PR #\(prNum)", url: prURL, linkType: .pr)
+        NSLog("[SessionService] Found PR #\(pr.number) for branch '\(branch)'")
+        return SessionLink(sessionID: sessionID, label: "PR #\(pr.number)", url: pr.url, linkType: .pr)
     }
 
     private func recoverOrphan(worktreePath: String, branch: String, repoName: String, repoPath: String) async {
@@ -1499,6 +1480,24 @@ final class SessionService {
         // expanded SKILL.md body (#431).
         let reviewAgentKind = appState.agentKind(for: .review)
         let env = ShellEnvironment.shared.env
+
+        // Fetch PR metadata via the GitHub CodeBackend (ADR 0005) before
+        // dispatching the heavyweight clone work to a detached task. Done
+        // here on the main actor so the providerManager dependency doesn't
+        // need to cross the actor boundary into the detached task.
+        let prMetadata: PRMetadata
+        do {
+            guard let manager = providerManager else {
+                NSLog("[SessionService] No providerManager wired; cannot prepare review for \(prURL)")
+                return nil
+            }
+            let backend = manager.codeBackend(for: .github)!
+            prMetadata = try await backend.fetchPRMetadata(prURL: prURL)
+        } catch {
+            NSLog("[SessionService] Failed to fetch PR metadata for \(prURL): \(error.localizedDescription)")
+            return nil
+        }
+
         let prep: ReviewClonePrep
         do {
             prep = try await Task.detached(priority: .userInitiated) {
@@ -1509,7 +1508,8 @@ final class SessionService {
                     prNumber: prNumber,
                     devRoot: devRoot,
                     env: env,
-                    reviewAgentKind: reviewAgentKind
+                    reviewAgentKind: reviewAgentKind,
+                    prMetadata: prMetadata
                 )
             }.value
         } catch {
@@ -1603,28 +1603,22 @@ final class SessionService {
         prNumber: Int,
         devRoot: String,
         env: [String: String],
-        reviewAgentKind: AgentKind
+        reviewAgentKind: AgentKind,
+        prMetadata: PRMetadata
     ) async throws -> ReviewClonePrep {
-        // Fetch PR metadata
-        let prOutput = try await runShellAsync(env: env, args: [
-            "gh", "pr", "view", prURL,
-            "--json", "title,headRefName,headRefOid,baseRefName,number"
-        ])
-
-        guard let prData = prOutput.data(using: .utf8),
-              let prJSON = try? JSONSerialization.jsonObject(with: prData) as? [String: Any],
-              let prTitle = prJSON["title"] as? String,
-              let headBranch = prJSON["headRefName"] as? String else {
+        let prTitle = prMetadata.title
+        let headBranch = prMetadata.headRefName
+        guard !headBranch.isEmpty else {
             throw NSError(
                 domain: "SessionService",
                 code: -1,
-                userInfo: [NSLocalizedDescriptionKey: "Failed to parse PR metadata for \(prURL)"]
+                userInfo: [NSLocalizedDescriptionKey: "PR metadata missing headRefName for \(prURL)"]
             )
         }
         // `headRefOid` is the SHA the review session is anchored to. Used by
         // the kickoff guard (AppDelegate) as a fallback re-kick signal when
         // the PR head advances without an explicit re-request (CROW-290).
-        let headRefOid = prJSON["headRefOid"] as? String
+        let headRefOid: String? = prMetadata.headRefOid.isEmpty ? nil : prMetadata.headRefOid
 
         let reviewsDir = (devRoot as NSString).appendingPathComponent("crow-reviews")
         let cloneDirName = "\(repoName)-pr-\(prNumber)"

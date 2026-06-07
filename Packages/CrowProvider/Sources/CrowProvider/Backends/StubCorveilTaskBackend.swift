@@ -19,11 +19,23 @@ public struct StubCorveilTaskBackend: TaskBackend {
         throw ProviderError.unimplemented("StubCorveilTaskBackend.fetchTask")
     }
 
+    public func listAssigned(includeClosed: Bool) async throws -> AssignedListing {
+        throw ProviderError.unimplemented("StubCorveilTaskBackend.listAssigned")
+    }
+
     public func setLabels(url: String, add: [String], remove: [String]) async throws {
         throw ProviderError.unimplemented("StubCorveilTaskBackend.setLabels")
     }
 
     public func setTaskStatus(url: String, status: TicketStatus) async throws {
         throw ProviderError.unimplemented("StubCorveilTaskBackend.setTaskStatus")
+    }
+
+    public func assign(url: String, to login: String) async throws {
+        throw ProviderError.unimplemented("StubCorveilTaskBackend.assign")
+    }
+
+    public func createTask(repo: String, title: String, body: String, labels: [String]) async throws -> TicketInfo {
+        throw ProviderError.unimplemented("StubCorveilTaskBackend.createTask")
     }
 }

@@ -13,6 +13,17 @@ private struct FakeCodeBackend: CodeBackend {
     let capabilities: Set<CodeCapability> = []
     func linkedPR(repo: String, branch: String) async throws -> LinkedPR? { nil }
     func ensureMergeLabel(repo: String) async throws {}
+    func listMonitoredPRs() async throws -> MonitoredPRListing {
+        MonitoredPRListing(viewerPRs: [], reviewRequests: [], viewerLogin: "")
+    }
+    func prStates(refs: [PRRef]) async throws -> [PRRef: PRRecord] { [:] }
+    func fetchCrowAuthoredCommits(prURL: String, repoSlug: String, prNumber: Int) async throws -> [CommitInfo] { [] }
+    func findRecentPRsForBranches(_ candidates: [BranchCandidate]) async throws -> [BranchPRMatch] { [] }
+    func enableAutoMerge(prURL: String) async throws {}
+    func updateBranch(prURL: String) async throws {}
+    func fetchPRMetadata(prURL: String) async throws -> PRMetadata {
+        PRMetadata(title: "", number: 0, headRefName: "", headRefOid: "", baseRefName: "")
+    }
 }
 
 @Suite("QuickActionPrompts.mergePR")
