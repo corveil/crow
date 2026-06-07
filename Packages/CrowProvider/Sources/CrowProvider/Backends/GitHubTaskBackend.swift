@@ -132,7 +132,7 @@ public struct GitHubTaskBackend: TaskBackend {
             throw Self.classifyGraphQLError(output)
         }
 
-        guard let resolved = Self.resolveProjectFieldOption(queryOut, target: status.rawValue) else {
+        guard let resolved = Self.resolveProjectFieldOption(queryOut, target: status) else {
             // No project board attached to the issue, OR no matching option
             // for the requested status. Treat as unimplemented so callers can
             // distinguish "feature genuinely not available here" from "shell
@@ -236,9 +236,12 @@ public struct GitHubTaskBackend: TaskBackend {
     }
 
     /// Walk the project-item lookup response and find the (itemID, projectID,
-    /// fieldID, optionID) tuple matching `target` (case-insensitive). Returns
-    /// `nil` if the issue has no project board or no matching option.
-    static func resolveProjectFieldOption(_ output: String, target: String) -> (itemID: String, projectID: String, fieldID: String, optionID: String)? {
+    /// fieldID, optionID) tuple matching `target`. Matching goes through
+    /// `TicketStatus(projectBoardName:)` so column aliases like bare "Review"
+    /// (rather than literal "In Review") map correctly — the column-name
+    /// vocabulary the rest of the app accepts. Returns `nil` if the issue has
+    /// no project board or no aliased match.
+    static func resolveProjectFieldOption(_ output: String, target: TicketStatus) -> (itemID: String, projectID: String, fieldID: String, optionID: String)? {
         guard let data = output.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let dataObj = json["data"] as? [String: Any],
@@ -248,7 +251,6 @@ public struct GitHubTaskBackend: TaskBackend {
               let nodes = projectItems["nodes"] as? [[String: Any]] else {
             return nil
         }
-        let targetLower = target.lowercased()
         for node in nodes {
             guard let itemID = node["id"] as? String,
                   let project = node["project"] as? [String: Any],
@@ -258,9 +260,12 @@ public struct GitHubTaskBackend: TaskBackend {
                   let fieldID = field["id"] as? String,
                   let options = field["options"] as? [[String: Any]] else { continue }
             for option in options {
-                if let name = option["name"] as? String,
-                   name.lowercased() == targetLower,
-                   let optionID = option["id"] as? String {
+                guard let name = option["name"] as? String,
+                      let optionID = option["id"] as? String else { continue }
+                // Route through the aliasing constructor so e.g. "Review",
+                // "in review", or any future synonym in TicketStatus.init
+                // still resolves to .inReview.
+                if TicketStatus(projectBoardName: name) == target {
                     return (itemID, projectID, fieldID, optionID)
                 }
             }

@@ -1044,22 +1044,11 @@ final class IssueTracker {
     private func fetchPRsForReconcile(candidates: [ReconcileCandidate]) async -> [ReconcileBranchMatch]? {
         guard !candidates.isEmpty else { return [] }
         let backend = providerManager.codeBackend(for: .github)!
-        let cands = candidates.map { BranchCandidate(repoSlug: $0.repoSlug, branch: $0.branch) }
-        let cmap: [BranchCandidate: UUID] = Dictionary(
-            uniqueKeysWithValues: zip(cands, candidates.map(\.sessionID))
-        )
         do {
-            let matches = try await backend.findRecentPRsForBranches(cands)
-            return matches.compactMap { m in
-                guard let sid = cmap[m.candidate] else { return nil }
-                return ReconcileBranchMatch(
-                    sessionID: sid,
-                    number: m.number,
-                    url: m.url,
-                    state: m.state,
-                    updatedAt: m.updatedAt
-                )
-            }
+            let matches = try await backend.findRecentPRsForBranches(
+                Self.dedupedBranchCandidates(candidates)
+            )
+            return Self.fanOutMatches(matches, across: candidates)
         } catch {
             handleGitHubBackendError(error, operation: "findRecentPRsForBranches(github)")
             return nil
@@ -1073,26 +1062,62 @@ final class IssueTracker {
     ) async -> [ReconcileBranchMatch] {
         guard !candidates.isEmpty else { return [] }
         let backend = providerManager.codeBackend(for: .gitlab, host: host)!
-        let cands = candidates.map { BranchCandidate(repoSlug: $0.repoSlug, branch: $0.branch) }
-        let cmap: [BranchCandidate: UUID] = Dictionary(
-            uniqueKeysWithValues: zip(cands, candidates.map(\.sessionID))
-        )
         do {
-            let matches = try await backend.findRecentPRsForBranches(cands)
-            return matches.compactMap { m in
-                guard let sid = cmap[m.candidate] else { return nil }
-                return ReconcileBranchMatch(
-                    sessionID: sid,
-                    number: m.number,
-                    url: m.url,
-                    state: m.state,
-                    updatedAt: m.updatedAt
-                )
-            }
+            let matches = try await backend.findRecentPRsForBranches(
+                Self.dedupedBranchCandidates(candidates)
+            )
+            return Self.fanOutMatches(matches, across: candidates)
         } catch {
             print("[IssueTracker] Reconcile via backend failed for host \(host): \(error.localizedDescription.prefix(200))")
             return []
         }
+    }
+
+    /// Project `ReconcileCandidate`s onto the de-duplicated `(repoSlug, branch)`
+    /// pairs the backend needs. Two sessions on the same branch (a duplicated
+    /// session, or reconcile firing before the first session's PR link lands)
+    /// produce a single backend query — we fan the matches back out per
+    /// session in `fanOutMatches`.
+    nonisolated static func dedupedBranchCandidates(_ candidates: [ReconcileCandidate]) -> [BranchCandidate] {
+        var seen: Set<BranchCandidate> = []
+        var out: [BranchCandidate] = []
+        for c in candidates {
+            let bc = BranchCandidate(repoSlug: c.repoSlug, branch: c.branch)
+            if seen.insert(bc).inserted { out.append(bc) }
+        }
+        return out
+    }
+
+    /// Each backend `BranchPRMatch` is duplicated for every `ReconcileCandidate`
+    /// that shares its `(repoSlug, branch)`. This preserves the prior
+    /// per-session sessionID-threading even when two sessions point at the
+    /// same branch — collapsing them via `Dictionary(uniqueKeysWithValues:)`
+    /// would either trap or silently drop one session's PR link.
+    nonisolated static func fanOutMatches(
+        _ matches: [BranchPRMatch],
+        across candidates: [ReconcileCandidate]
+    ) -> [ReconcileBranchMatch] {
+        // Group sessions by their (repoSlug, branch) so a single match maps
+        // to every session that owns that key.
+        var sessionsByBranch: [BranchCandidate: [UUID]] = [:]
+        for c in candidates {
+            let bc = BranchCandidate(repoSlug: c.repoSlug, branch: c.branch)
+            sessionsByBranch[bc, default: []].append(c.sessionID)
+        }
+        var out: [ReconcileBranchMatch] = []
+        for match in matches {
+            guard let sids = sessionsByBranch[match.candidate] else { continue }
+            for sid in sids {
+                out.append(ReconcileBranchMatch(
+                    sessionID: sid,
+                    number: match.number,
+                    url: match.url,
+                    state: match.state,
+                    updatedAt: match.updatedAt
+                ))
+            }
+        }
+        return out
     }
 
     /// Persist the reconciliation decisions. Re-checks `appState.links` at

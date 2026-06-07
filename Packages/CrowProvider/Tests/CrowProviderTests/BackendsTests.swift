@@ -169,6 +169,28 @@ final class BackendsTests: XCTestCase {
         }
     }
 
+    func testGitHubTaskBackendSetTaskStatusMatchesBareReviewAlias() async throws {
+        // Regression guard: a project board whose Status column is named just
+        // "Review" (no "In ") must still resolve to .inReview, since
+        // TicketStatus(projectBoardName:) treats them as synonyms.
+        let fake = FakeShellRunner()
+        let lookup = """
+        {"data":{"repository":{"issue":{"projectItems":{"nodes":[
+          {"id":"ITEM_1","project":{"id":"PROJ_1"},
+           "fieldValueByName":{"name":"Backlog",
+             "field":{"id":"FIELD_1","options":[
+               {"id":"OPT_REVIEW","name":"Review"},
+               {"id":"OPT_DONE","name":"Done"}
+             ]}}}
+        ]}}}}}
+        """
+        fake.responses = [.success(lookup), .success(#"{"data":{}}"#)]
+        let backend = GitHubTaskBackend(shellRunner: fake)
+        try await backend.setTaskStatus(url: "https://github.com/a/b/issues/1", status: .inReview)
+        XCTAssertEqual(fake.calls.count, 2)
+        XCTAssertTrue(fake.calls[1].args.contains("optionId=OPT_REVIEW"))
+    }
+
     func testGitHubTaskBackendAssignInvokesGhIssueEdit() async throws {
         let fake = FakeShellRunner()
         let backend = GitHubTaskBackend(shellRunner: fake)

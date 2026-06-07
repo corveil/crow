@@ -80,6 +80,15 @@ public struct GitHubCodeBackend: CodeBackend {
 
     // MARK: - prStates
 
+    /// `prStates` and `findRecentPRsForBranches` deliberately omit the
+    /// `rateLimit { remaining limit resetAt cost }` block their pre-migration
+    /// IssueTracker counterparts used to carry. The cycle's main consolidated
+    /// poll (`listAssigned` + `listMonitoredPRs`) already refreshes
+    /// `appState.githubRateLimit` every ~60s, so threading rate-limit out
+    /// of these secondary calls only sharpens the soft-threshold accounting
+    /// by a few requests of granularity. Re-add the block and a return-shape
+    /// tuple if that granularity ever starts mattering.
+
     public func prStates(refs: [PRRef]) async throws -> [PRRef: PRRecord] {
         guard !refs.isEmpty else { return [:] }
         var queryParts: [String] = []

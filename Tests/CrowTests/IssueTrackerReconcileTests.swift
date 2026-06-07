@@ -1,5 +1,7 @@
 import Foundation
 import Testing
+import CrowCore
+import CrowProvider
 @testable import Crow
 
 @Suite("IssueTracker reconcile decision")
@@ -154,5 +156,77 @@ struct IssueTrackerRemoteSlugTests {
     @Test func returnsEmptyForUnrecognized() {
         #expect(IssueTracker.extractSlug(fromRemote: "/tmp/local/repo") == "")
         #expect(IssueTracker.extractSlug(fromRemote: "") == "")
+    }
+}
+
+@Suite("IssueTracker reconcile fan-out")
+struct IssueTrackerReconcileFanOutTests {
+
+    private func candidate(_ sid: UUID, _ slug: String, _ branch: String, provider: Provider = .github) -> IssueTracker.ReconcileCandidate {
+        IssueTracker.ReconcileCandidate(
+            sessionID: sid,
+            provider: provider,
+            repoSlug: slug,
+            branch: branch,
+            gitlabHost: nil
+        )
+    }
+
+    @Test func dedupedBranchCandidatesCollapsesDuplicates() {
+        // Regression guard for the @MainActor crash that
+        // `Dictionary(uniqueKeysWithValues:)` triggered: two sessions sharing
+        // a (repoSlug, branch) must produce a single backend query candidate,
+        // not trap on duplicate keys.
+        let s1 = UUID()
+        let s2 = UUID()
+        let cands = [
+            candidate(s1, "acme/api", "feature/x"),
+            candidate(s2, "acme/api", "feature/x"),
+            candidate(s1, "acme/api", "feature/y"),
+        ]
+        let out = IssueTracker.dedupedBranchCandidates(cands)
+        #expect(out.count == 2)
+        #expect(out.contains(BranchCandidate(repoSlug: "acme/api", branch: "feature/x")))
+        #expect(out.contains(BranchCandidate(repoSlug: "acme/api", branch: "feature/y")))
+    }
+
+    @Test func fanOutMatchesEmitsOneRecordPerSessionSharingABranch() {
+        // When two sessions share (repoSlug, branch), a single backend match
+        // must produce one ReconcileBranchMatch per session — collapsing them
+        // to one sessionID would silently drop the PR link for the other.
+        let s1 = UUID()
+        let s2 = UUID()
+        let cands = [
+            candidate(s1, "acme/api", "feature/x"),
+            candidate(s2, "acme/api", "feature/x"),
+        ]
+        let bc = BranchCandidate(repoSlug: "acme/api", branch: "feature/x")
+        let backendMatches = [
+            BranchPRMatch(candidate: bc, number: 42, url: "https://github.com/acme/api/pull/42",
+                          state: "OPEN", updatedAt: nil)
+        ]
+        let fanned = IssueTracker.fanOutMatches(backendMatches, across: cands)
+        #expect(fanned.count == 2)
+        let sids: Set<UUID> = Set(fanned.map(\.sessionID))
+        #expect(sids == [s1, s2])
+        #expect(fanned.allSatisfy { $0.number == 42 })
+        #expect(fanned.allSatisfy { $0.state == "OPEN" })
+    }
+
+    @Test func fanOutMatchesDropsUnknownCandidates() {
+        // A match for a candidate the caller didn't request must not bleed
+        // into the output (defensive: a stale or malformed backend response
+        // shouldn't create phantom sessionIDs).
+        let s1 = UUID()
+        let bc1 = BranchCandidate(repoSlug: "acme/api", branch: "feature/x")
+        let bc2 = BranchCandidate(repoSlug: "acme/api", branch: "feature/y")
+        let backendMatches = [
+            BranchPRMatch(candidate: bc1, number: 1, url: "u1", state: "OPEN", updatedAt: nil),
+            BranchPRMatch(candidate: bc2, number: 2, url: "u2", state: "OPEN", updatedAt: nil),
+        ]
+        let cands = [candidate(s1, "acme/api", "feature/x")]
+        let fanned = IssueTracker.fanOutMatches(backendMatches, across: cands)
+        #expect(fanned.count == 1)
+        #expect(fanned[0].number == 1)
     }
 }
