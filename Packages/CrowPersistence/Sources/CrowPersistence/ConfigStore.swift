@@ -110,7 +110,11 @@ public final class ConfigStore: Sendable {
                 provider: entry.provider,
                 cli: entry.cli,
                 host: entry.host,
-                alwaysInclude: entry.alwaysInclude ?? []
+                alwaysInclude: entry.alwaysInclude ?? [],
+                taskProvider: entry.taskProvider,
+                jiraProjectKey: entry.jiraProjectKey,
+                jiraJQL: entry.jiraJQL,
+                jiraSite: entry.jiraSite
             )
         }
 

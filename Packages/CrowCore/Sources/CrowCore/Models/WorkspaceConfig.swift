@@ -26,12 +26,33 @@ public struct WorkspaceEntry: Codable, Sendable {
     public let cli: String
     public let host: String?
     public let alwaysInclude: [String]?
+    /// Task/ticket provider, independent of the code `provider`. `nil` ⇒ follow
+    /// the code provider (existing behavior). `"jira"` pairs Jira tasks with a
+    /// GitHub/GitLab code backend (ADR 0005). All Jira fields below only apply
+    /// when `taskProvider == "jira"`.
+    public let taskProvider: String?
+    public let jiraProjectKey: String?
+    public let jiraJQL: String?
+    public let jiraSite: String?
 
-    public init(provider: String, cli: String, host: String? = nil, alwaysInclude: [String]? = nil) {
+    public init(
+        provider: String,
+        cli: String,
+        host: String? = nil,
+        alwaysInclude: [String]? = nil,
+        taskProvider: String? = nil,
+        jiraProjectKey: String? = nil,
+        jiraJQL: String? = nil,
+        jiraSite: String? = nil
+    ) {
         self.provider = provider
         self.cli = cli
         self.host = host
         self.alwaysInclude = alwaysInclude
+        self.taskProvider = taskProvider
+        self.jiraProjectKey = jiraProjectKey
+        self.jiraJQL = jiraJQL
+        self.jiraSite = jiraSite
     }
 }
 

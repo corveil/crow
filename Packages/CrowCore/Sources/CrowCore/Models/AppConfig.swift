@@ -178,10 +178,32 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
     public var autoReviewRepos: [String] // repos where review requests auto-create a review session
     public var customInstructions: String? // free-text instructions appended to session prompts
 
+    /// Where this workspace's **tasks/tickets** live, independent of `provider`
+    /// (which is the **code/PR** host). `nil` means "follow the code provider"
+    /// — so existing GitHub-code workspaces keep using GitHub issues, unchanged.
+    /// Set to `"jira"` to pull tickets from Jira while code/PRs stay on GitHub
+    /// (ADR 0005 cross-backend pairing). See `derivedTaskProvider`.
+    public var taskProvider: String?  // "github" | "gitlab" | "jira" | nil
+    /// Jira project key (e.g. "PROPS") — default project for created tickets and
+    /// scoping. Only meaningful when `taskProvider == "jira"`.
+    public var jiraProjectKey: String?
+    /// JQL for this workspace's "my open tickets" board query. Only meaningful
+    /// when `taskProvider == "jira"`; falls back to a sensible default when nil.
+    public var jiraJQL: String?
+    /// Atlassian site host (e.g. "acme.atlassian.net") used to build user-facing
+    /// `…/browse/KEY` URLs. Only meaningful when `taskProvider == "jira"`.
+    public var jiraSite: String?
+
     /// The CLI tool name derived from the current `provider` value.
     /// Unlike `cli` (which may be stale from an old config file), this is always correct.
     public var derivedCLI: String {
         provider == "github" ? "gh" : "glab"
+    }
+
+    /// The effective task-provider string: the explicit `taskProvider` when set,
+    /// otherwise the code `provider` (so existing workspaces are unchanged).
+    public var derivedTaskProvider: String {
+        taskProvider ?? provider
     }
 
     public init(
@@ -192,7 +214,11 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
         host: String? = nil,
         alwaysInclude: [String] = [],
         autoReviewRepos: [String] = [],
-        customInstructions: String? = nil
+        customInstructions: String? = nil,
+        taskProvider: String? = nil,
+        jiraProjectKey: String? = nil,
+        jiraJQL: String? = nil,
+        jiraSite: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -202,6 +228,10 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
         self.alwaysInclude = alwaysInclude
         self.autoReviewRepos = autoReviewRepos
         self.customInstructions = customInstructions
+        self.taskProvider = taskProvider
+        self.jiraProjectKey = jiraProjectKey
+        self.jiraJQL = jiraJQL
+        self.jiraSite = jiraSite
     }
 
     public init(from decoder: Decoder) throws {
@@ -214,10 +244,15 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
         alwaysInclude = try container.decodeIfPresent([String].self, forKey: .alwaysInclude) ?? []
         autoReviewRepos = try container.decodeIfPresent([String].self, forKey: .autoReviewRepos) ?? []
         customInstructions = try container.decodeIfPresent(String.self, forKey: .customInstructions)
+        taskProvider = try container.decodeIfPresent(String.self, forKey: .taskProvider)
+        jiraProjectKey = try container.decodeIfPresent(String.self, forKey: .jiraProjectKey)
+        jiraJQL = try container.decodeIfPresent(String.self, forKey: .jiraJQL)
+        jiraSite = try container.decodeIfPresent(String.self, forKey: .jiraSite)
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, name, provider, cli, host, alwaysInclude, autoReviewRepos, customInstructions
+        case taskProvider, jiraProjectKey, jiraJQL, jiraSite
     }
 
     /// Characters that are unsafe in directory names (workspace names become directory names).

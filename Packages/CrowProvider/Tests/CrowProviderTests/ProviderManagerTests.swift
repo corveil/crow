@@ -81,6 +81,35 @@ struct ProviderManagerTests {
         #expect(result == nil)
     }
 
+    // MARK: - Jira (ADR 0005 task-only provider)
+
+    @Test func detectProviderJiraBrowseURL() async {
+        let result = await manager.detectProvider(from: "https://acme.atlassian.net/browse/PROJ-123")
+        #expect(result.provider == .jira)
+        #expect(result.cli == "acli")
+        #expect(result.host == nil)
+    }
+
+    @Test func parseJiraBrowseURL() {
+        let result = ProviderManager.parseTicketURLComponents("https://acme.atlassian.net/browse/PROJ-123")
+        #expect(result?.org == "PROJ")
+        #expect(result?.repo == "PROJ")
+        #expect(result?.number == 123)
+        #expect(result?.isMR == false)
+    }
+
+    @Test func taskBackendForJiraIsJiraBackend() {
+        let backend = manager.taskBackend(for: .jira)
+        #expect(backend.provider == .jira)
+        #expect(backend is JiraTaskBackend)
+        #expect(backend.capabilities.contains(.projectBoardStatus))
+    }
+
+    @Test func codeBackendForJiraIsNil() {
+        // Jira is task-only — no VCS surface (pairs with a GitHub/GitLab code backend).
+        #expect(manager.codeBackend(for: .jira) == nil)
+    }
+
     // MARK: - detectProvider edge cases
 
     @Test func detectProviderCaseSensitiveHost() async {

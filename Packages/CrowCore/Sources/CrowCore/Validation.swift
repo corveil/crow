@@ -23,9 +23,28 @@ public enum Validation {
     public static func detectProviderFromURL(_ url: String) -> Provider? {
         if url.contains("github.com") {
             return .github
+        } else if url.contains("atlassian.net") || url.contains("/browse/") {
+            // Jira Cloud: https://<site>.atlassian.net/browse/PROJ-123.
+            // Checked before the loose `gitlab` substring match below.
+            return .jira
         } else if url.contains("gitlab.com") || url.contains("gitlab") || url.contains("/-/issues") || url.contains("/-/merge_requests") {
             return .gitlab
         }
         return nil
+    }
+
+    /// Extract a Jira work-item key (e.g. `PROJ-123`) from a browse URL
+    /// (`https://<site>.atlassian.net/browse/PROJ-123`) or return the input
+    /// unchanged when it's already a bare key. Strips any trailing path, query,
+    /// or fragment. Used to build `acli` commands in launcher prompts.
+    public static func jiraKey(from urlOrKey: String) -> String {
+        var token = urlOrKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let r = token.range(of: "/browse/") {
+            token = String(token[r.upperBound...])
+        }
+        if let stop = token.firstIndex(where: { $0 == "/" || $0 == "?" || $0 == "#" }) {
+            token = String(token[..<stop])
+        }
+        return token
     }
 }

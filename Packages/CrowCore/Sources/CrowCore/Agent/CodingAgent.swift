@@ -57,11 +57,17 @@ public protocol CodingAgent: Sendable {
     ) -> String?
 
     /// Build the initial prompt for this agent based on the session context.
+    ///
+    /// `provider` is the **task** provider (where the ticket lives); `codeProvider`
+    /// is the **code** provider (where the PR lives), defaulting to `provider`
+    /// when `nil`. They differ for cross-backend sessions (e.g. Jira task + GitHub
+    /// code) so the ticket fetch and the PR step route to different CLIs (ADR 0005).
     func generatePrompt(
         session: Session,
         worktrees: [SessionWorktree],
         ticketURL: String?,
-        provider: Provider?
+        provider: Provider?,
+        codeProvider: Provider?
     ) async -> String
 
     /// Materialize `prompt` to disk (if needed) and return the shell command

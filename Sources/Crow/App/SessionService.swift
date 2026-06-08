@@ -58,7 +58,13 @@ final class SessionService {
         // Backfill provider from ticketURL for sessions that predate provider tracking
         for i in appState.sessions.indices {
             if appState.sessions[i].provider == nil, let url = appState.sessions[i].ticketURL {
-                appState.sessions[i].provider = Validation.detectProviderFromURL(url)
+                let detected = Validation.detectProviderFromURL(url)
+                appState.sessions[i].provider = detected
+                // Task-only trackers (Jira/Corveil) have no code backend — pair
+                // with GitHub so PR/git flows resolve to a real CodeBackend.
+                if appState.sessions[i].codeProvider == nil, detected?.isTaskOnly == true {
+                    appState.sessions[i].codeProvider = .github
+                }
             }
         }
 
@@ -1264,6 +1270,9 @@ final class SessionService {
         let dirName = (worktreePath as NSString).lastPathComponent
         let ticket = await parseTicketInfo(dirName: dirName, repoPath: repoPath)
 
+        // A task-only tracker (Jira/Corveil) has no code backend — pair it with
+        // GitHub for PR/git flows (the documented Jira-task + GitHub-code case).
+        let codeProvider: Provider? = (ticket.provider?.isTaskOnly ?? false) ? .github : nil
         let session = Session(
             name: dirName,
             status: .active,
@@ -1271,7 +1280,8 @@ final class SessionService {
             ticketURL: ticket.url,
             ticketTitle: ticket.title,
             ticketNumber: ticket.number,
-            provider: ticket.provider
+            provider: ticket.provider,
+            codeProvider: codeProvider
         )
 
         let worktree = SessionWorktree(

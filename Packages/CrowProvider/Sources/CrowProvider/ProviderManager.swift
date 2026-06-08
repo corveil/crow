@@ -22,7 +22,7 @@ public actor ProviderManager {
 
     /// Hand out a ``TaskBackend`` for the given provider. Use the URL-based
     /// variant when only a ticket URL is in hand.
-    public nonisolated func taskBackend(for provider: Provider, host: String? = nil) -> TaskBackend {
+    public nonisolated func taskBackend(for provider: Provider, host: String? = nil, jira: JiraConfig? = nil) -> TaskBackend {
         switch provider {
         case .github:
             return GitHubTaskBackend(shellRunner: shellRunner)
@@ -30,6 +30,8 @@ public actor ProviderManager {
             return GitLabTaskBackend(shellRunner: shellRunner, host: host)
         case .corveil:
             return StubCorveilTaskBackend()
+        case .jira:
+            return JiraTaskBackend(shellRunner: shellRunner, config: jira ?? JiraConfig())
         }
     }
 
@@ -42,9 +44,17 @@ public actor ProviderManager {
             return GitHubCodeBackend(shellRunner: shellRunner)
         case .gitlab:
             return GitLabCodeBackend(shellRunner: shellRunner, host: host)
-        case .corveil:
+        case .corveil, .jira:
+            // Task-only providers — no VCS surface. A Jira-tasked session pairs
+            // with a GitHub/GitLab code backend via `Session.codeProvider`.
             return nil
         }
+    }
+
+    /// Probe `acli` availability for the Jira backend. Delegates to
+    /// `AcliProbe` (CrowCore) so the same check backs the Settings UI picker.
+    public nonisolated func jiraAvailability() async -> JiraAvailability {
+        await AcliProbe.availability(shellRunner: shellRunner)
     }
 
     /// URL-driven `TaskBackend` lookup — detect the provider from `url` and
@@ -60,6 +70,10 @@ public actor ProviderManager {
     nonisolated static func detect(url: String, additionalGitLabHosts: [String]) -> (provider: Provider, cli: String, host: String?) {
         if url.contains("github.com") {
             return (.github, "gh", nil)
+        } else if url.contains("atlassian.net") || url.contains("/browse/") {
+            // Jira Cloud — task-only, driven by `acli`. Checked before the loose
+            // GitLab matching so a Jira browse URL isn't misrouted.
+            return (.jira, "acli", nil)
         } else if url.contains("gitlab.com") {
             return (.gitlab, "glab", "gitlab.com")
         } else if url.contains("corveil.io") {
@@ -101,6 +115,14 @@ public actor ProviderManager {
     public static func parseTicketURLComponents(_ url: String) -> (org: String, repo: String, number: Int, isMR: Bool)? {
         // split(separator:) omits empty subsequences, so "https://host/..." becomes:
         // ["https:", "host", "org", "repo", ...]
+        // Jira: https://<site>.atlassian.net/browse/PROJ-123 (or a bare PROJ-123).
+        // The project key stands in for both org and repo; the numeric suffix is
+        // the issue number. The full key is recoverable as "\(org)-\(number)".
+        if url.contains("atlassian.net") || url.contains("/browse/") {
+            guard let jira = JiraKey.parse(url) else { return nil }
+            return (jira.project, jira.project, jira.number, false)
+        }
+
         let parts = url.split(separator: "/").map(String.init)
         guard parts.count >= 4 else { return nil }
 
@@ -123,9 +145,17 @@ public actor ProviderManager {
         }
     }
 
-    /// Fetch ticket details using gh/glab CLI.
+    /// Fetch ticket details using gh/glab/acli CLI.
     public func fetchTicket(url: String) async throws -> TicketInfo {
         let detected = detectProvider(from: url)
+
+        // Jira parses keys, not org/repo/number paths, and its JSON nests the
+        // title under `fields.summary` — delegate to the backend rather than the
+        // shared gh/glab title extraction below.
+        if detected.provider == .jira {
+            return try await taskBackend(for: .jira).fetchTask(url: url)
+        }
+
         guard let parsed = parseTicketURL(url) else {
             throw ProviderError.invalidURL(url)
         }
@@ -152,6 +182,9 @@ public actor ProviderManager {
         case .corveil:
             // Stub: real Corveil API integration arrives in a follow-up. See ADR 0005.
             throw ProviderError.unimplemented("Corveil ticket fetching not yet implemented")
+        case .jira:
+            // Handled by the early return above (delegated to JiraTaskBackend).
+            throw ProviderError.unimplemented("unreachable: Jira handled before the switch")
         }
 
         // Parse title from JSON output (GitHub returns JSON, GitLab returns text)
@@ -220,8 +253,8 @@ public actor ProviderManager {
                     "--jq", ".[].path_with_namespace"
                 )
                 return Self.nonEmptyLines(out)
-            case .corveil:
-                // Corveil is task-only; no repo listing is meaningful here.
+            case .corveil, .jira:
+                // Task-only providers; no repo listing is meaningful here.
                 return []
             }
         } catch {

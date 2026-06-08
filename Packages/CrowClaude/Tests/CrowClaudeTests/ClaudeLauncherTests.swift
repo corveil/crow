@@ -55,6 +55,28 @@ import Testing
     #expect(!prompt.contains("gh pr create"))
 }
 
+@Test func generatePromptWithJiraTaskAndGitHubCode() async {
+    // Cross-backend session (ADR 0005): Jira task + GitHub code. The ticket is
+    // fetched with `acli`, but the PR step still uses `gh`.
+    let launcher = ClaudeLauncher()
+    let session = Session(name: "test-session", ticketNumber: 7)
+
+    let prompt = await launcher.generatePrompt(
+        session: session,
+        worktrees: [],
+        ticketURL: "https://acme.atlassian.net/browse/PROJ-7",
+        provider: .jira,
+        codeProvider: .github
+    )
+
+    // Ticket step routes through acli with the extracted key.
+    #expect(prompt.contains("acli jira workitem view PROJ-7"))
+    #expect(!prompt.contains("gh issue view"))
+    // PR step routes through the code backend (GitHub).
+    #expect(prompt.contains("gh pr create"))
+    #expect(!prompt.contains("glab mr create"))
+}
+
 @Test func generatePromptWithNilProvider() async {
     let launcher = ClaudeLauncher()
     let session = Session(name: "test-session")

@@ -19,10 +19,26 @@ public enum SessionStatus: String, Codable, Sendable {
 }
 
 /// Git provider type.
+///
+/// Per ADR 0005 a "provider" is really two independent axes — a task tracker
+/// (where the work-unit lives) and a code host (where the PR lives). `.jira` is
+/// a **task-only** provider (no embedded git, like `.corveil`): a Jira-tasked
+/// session pairs with a GitHub/GitLab `CodeBackend` via `Session.codeProvider`.
 public enum Provider: String, Codable, Sendable {
     case github
     case gitlab
     case corveil
+    case jira
+
+    /// Task-only providers have no code/VCS surface (`ProviderManager.codeBackend`
+    /// returns `nil`). A session tracked by one of these resolves its code
+    /// operations through `Session.codeProvider` instead.
+    public var isTaskOnly: Bool {
+        switch self {
+        case .corveil, .jira: return true
+        case .github, .gitlab: return false
+        }
+    }
 }
 
 /// Type of link associated with a session.

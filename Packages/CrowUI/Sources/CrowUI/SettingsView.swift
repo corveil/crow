@@ -314,8 +314,18 @@ public struct SettingsView: View {
                                         .font(.caption)
                                         .padding(.horizontal, 6)
                                         .padding(.vertical, 2)
-                                        .background(ws.provider == "github" ? Color.purple.opacity(0.15) : Color.orange.opacity(0.15))
+                                        .background(Self.providerBadgeColor(ws.provider))
                                         .clipShape(Capsule())
+                                    // Second badge for the task backend, shown only
+                                    // when it diverges from the code backend.
+                                    if ws.derivedTaskProvider != ws.provider {
+                                        Text(ws.derivedTaskProvider)
+                                            .font(.caption)
+                                            .padding(.horizontal, 6)
+                                            .padding(.vertical, 2)
+                                            .background(Self.providerBadgeColor(ws.derivedTaskProvider))
+                                            .clipShape(Capsule())
+                                    }
                                     if let host = ws.host {
                                         Text(host)
                                             .font(.caption)
@@ -532,5 +542,14 @@ public struct SettingsView: View {
             }
         }
         .disabled(AgentRegistry.shared.allAgents().count < 2)
+    }
+
+    /// Tint for a provider badge (code or task backend).
+    static func providerBadgeColor(_ provider: String) -> Color {
+        switch provider {
+        case "github": return Color.purple.opacity(0.15)
+        case "jira": return Color.blue.opacity(0.15)
+        default: return Color.orange.opacity(0.15)  // gitlab / other
+        }
     }
 }

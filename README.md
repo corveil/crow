@@ -30,6 +30,7 @@ A native macOS application for managing AI-powered development sessions. Orchest
 | `claude` | Claude Code — AI coding assistant                             | [claude.ai/download](https://claude.ai/download)      |
 | `tmux`   | Terminal backend for managed sessions (≥ 3.3)                 | `brew install tmux`                                   |
 | `glab`   | GitLab CLI (optional, for GitLab repos)                       | `brew install glab`                                   |
+| `acli`   | Atlassian CLI (optional, for Jira task tracking)              | [developer.atlassian.com/cloud/acli](https://developer.atlassian.com/cloud/acli/guides/install-acli/) |
 
 ## Quick Start
 
@@ -127,6 +128,38 @@ This will:
 - Click a status to filter the list
 - "Start Working" button creates a workspace directly from an issue
 - Issues linked to active sessions show a navigation button
+
+### Jira tasks + GitHub code (cross-backend workspaces)
+
+Per [ADR 0005](docs/adr/0005-task-and-code-backend-protocols.md), a workspace's
+**Task Backend** (where tickets live) is chosen independently of its **Code
+Backend** (where code + PRs live). You can track work in **Jira** while keeping
+code and pull requests on **GitHub** — the task side runs through `acli`, the PR
+side still runs through `gh`.
+
+**Prerequisite — authenticate `acli`:**
+
+```bash
+# Install: https://developer.atlassian.com/cloud/acli/guides/install-acli/
+acli jira auth login
+acli jira auth status   # should print "✓ Authenticated"
+```
+
+**Configure a Jira-task / GitHub-code workspace** (Settings → Workspaces → edit a
+workspace):
+
+- **Code Backend** → `GitHub` (code + PRs stay on GitHub).
+- **Task Backend** → `Jira` (offered only when `acli` is installed + authenticated;
+  an inline hint tells you the fix when it isn't).
+- **Atlassian Site** (e.g. `acme.atlassian.net`) — used to build `…/browse/KEY` links.
+- **Project Key** (e.g. `PROJ`) — default project for created tickets.
+- **My-tickets JQL** (optional) — defaults to
+  `assignee = currentUser() AND statusCategory != Done`.
+
+Settings persist to the workspace entry (`~/.claude/workspace-repos.json` keys:
+`taskProvider`, `jiraProjectKey`, `jiraJQL`, `jiraSite`). Existing GitHub/GitLab
+workspaces are unaffected — when no Task Backend is set, it follows the Code
+Backend (GitHub code ⇒ GitHub issues, as before).
 
 ### PR Status Tracking
 

@@ -16,7 +16,8 @@ public actor CursorLauncher {
         session: Session,
         worktrees: [SessionWorktree],
         ticketURL: String?,
-        provider: Provider?
+        provider: Provider?,
+        codeProvider: Provider? = nil
     ) -> String {
         var lines: [String] = []
         lines.append("Before editing anything, sketch a brief plan covering:")
@@ -47,6 +48,10 @@ public actor CursorLauncher {
             case .gitlab:
                 lines.append("```bash")
                 lines.append("glab issue view \(url) --comments")
+                lines.append("```")
+            case .jira:
+                lines.append("```bash")
+                lines.append("acli jira workitem view \(Validation.jiraKey(from: url)) --fields summary,status,description,comment")
                 lines.append("```")
             case .corveil, nil:
                 lines.append("URL: \(url)")

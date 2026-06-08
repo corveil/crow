@@ -314,12 +314,22 @@ final class IssueTracker {
         guard let devRoot = ConfigStore.loadDevRoot(),
               let config = ConfigStore.loadConfig(devRoot: devRoot) else { return }
 
-        let hasGitHub = config.workspaces.contains(where: { $0.provider == "github" })
+        // Iterate by **task** provider — a workspace's tickets may live somewhere
+        // other than its code host (ADR 0005). A Jira-task / GitHub-code workspace
+        // contributes Jira issues here but still uses the GitHub code path below.
+        let hasGitHub = config.workspaces.contains(where: { $0.derivedTaskProvider == "github" })
         var gitLabHosts: [String] = []
-        for ws in config.workspaces where ws.provider == "gitlab" {
+        for ws in config.workspaces where ws.derivedTaskProvider == "gitlab" {
             if let host = ws.host, !gitLabHosts.contains(host) {
                 gitLabHosts.append(host)
             }
+        }
+        // Collect distinct Jira queries (acli is authed to a single site, so the
+        // site/JQL/project triple is what actually varies).
+        var jiraConfigs: [JiraConfig] = []
+        for ws in config.workspaces where ws.derivedTaskProvider == "jira" {
+            let cfg = JiraConfig(site: ws.jiraSite, projectKey: ws.jiraProjectKey, jql: ws.jiraJQL)
+            if !jiraConfigs.contains(cfg) { jiraConfigs.append(cfg) }
         }
 
         var allIssues: [AssignedIssue] = []
@@ -352,6 +362,12 @@ final class IssueTracker {
         // GitLab — unchanged fan-out (one call per host)
         for host in gitLabHosts {
             let issues = await fetchGitLabIssues(host: host)
+            allIssues.append(contentsOf: issues)
+        }
+
+        // Jira — one search per distinct config (best-effort, like GitLab)
+        for cfg in jiraConfigs {
+            let issues = await fetchJiraIssues(config: cfg)
             allIssues.append(contentsOf: issues)
         }
 
@@ -2035,6 +2051,21 @@ final class IssueTracker {
             return listing.open
         } catch {
             print("[IssueTracker] fetchGitLabIssues(host: \(host)) failed: \(error)")
+            return []
+        }
+    }
+
+    /// Fetch open Jira work items assigned to the user for one workspace config.
+    /// Best-effort (the backend itself degrades to empty on failure), mirroring
+    /// the GitLab path — `includeClosed: false` skips the wasted closed query
+    /// since refresh()'s closed-issue diff is GitHub-only today.
+    private func fetchJiraIssues(config: JiraConfig) async -> [AssignedIssue] {
+        let backend = providerManager.taskBackend(for: .jira, jira: config)
+        do {
+            let listing = try await backend.listAssigned(includeClosed: false)
+            return listing.open
+        } catch {
+            print("[IssueTracker] fetchJiraIssues(project: \(config.projectKey ?? "—")) failed: \(error)")
             return []
         }
     }

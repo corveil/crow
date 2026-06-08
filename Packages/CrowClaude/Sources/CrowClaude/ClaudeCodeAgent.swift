@@ -95,13 +95,15 @@ public struct ClaudeCodeAgent: CodingAgent {
         session: Session,
         worktrees: [SessionWorktree],
         ticketURL: String?,
-        provider: Provider?
+        provider: Provider?,
+        codeProvider: Provider?
     ) async -> String {
         await launcher.generatePrompt(
             session: session,
             worktrees: worktrees,
             ticketURL: ticketURL,
-            provider: provider
+            provider: provider,
+            codeProvider: codeProvider
         )
     }
 

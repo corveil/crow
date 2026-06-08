@@ -1294,7 +1294,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         capturedAppState.sessions[idx].ticketURL = url
                         // Auto-detect provider from URL
                         if capturedAppState.sessions[idx].provider == nil {
-                            capturedAppState.sessions[idx].provider = Validation.detectProviderFromURL(url)
+                            let detected = Validation.detectProviderFromURL(url)
+                            capturedAppState.sessions[idx].provider = detected
+                            // Task-only trackers (Jira/Corveil) have no code
+                            // backend — pair with GitHub for PR/git flows.
+                            if capturedAppState.sessions[idx].codeProvider == nil, detected?.isTaskOnly == true {
+                                capturedAppState.sessions[idx].codeProvider = .github
+                            }
                         }
                     }
                     if let title = params["title"]?.stringValue { capturedAppState.sessions[idx].ticketTitle = title }

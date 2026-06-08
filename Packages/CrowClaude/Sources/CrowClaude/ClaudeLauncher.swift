@@ -6,11 +6,19 @@ public actor ClaudeLauncher {
     public init() {}
 
     /// Generate the initial prompt for Claude Code (same template as /workspace skill).
+    /// - Parameters:
+    ///   - provider: the **task** provider (where the ticket lives) — drives the
+    ///     "study the ticket" fetch command.
+    ///   - codeProvider: the **code** provider (where the PR lives) — drives the
+    ///     "open a PR/MR" step. Defaults to `provider` when `nil`. For a Jira-task
+    ///     + GitHub-code session these differ: the ticket is fetched with `acli`
+    ///     while the PR is still opened with `gh` (ADR 0005 cross-backend pairing).
     public func generatePrompt(
         session: Session,
         worktrees: [SessionWorktree],
         ticketURL: String?,
         provider: Provider?,
+        codeProvider: Provider? = nil,
         customInstructions: String? = nil
     ) -> String {
         // Plan mode is set by the `--permission-mode plan` flag in setup.sh's
@@ -43,6 +51,11 @@ public actor ClaudeLauncher {
                 lines.append("```bash")
                 lines.append("glab issue view \(url) --comments")
                 lines.append("```")
+            case .jira:
+                lines.append("")
+                lines.append("```bash")
+                lines.append("acli jira workitem view \(Validation.jiraKey(from: url)) --fields summary,status,description,comment")
+                lines.append("```")
             case .corveil, nil:
                 lines.append("URL: \(url)")
             }
@@ -62,7 +75,7 @@ public actor ClaudeLauncher {
         } else {
             appendOpenPRStep(
                 to: &lines,
-                provider: provider,
+                provider: codeProvider ?? provider,
                 ticketNumber: session.ticketNumber,
                 hasTicket: ticketURL != nil
             )
@@ -108,7 +121,10 @@ public actor ClaudeLauncher {
                 lines.append("glab mr create --fill --target-branch main")
             }
             lines.append("```")
-        case .corveil, nil:
+        case .jira, .corveil, nil:
+            // Task-only code providers shouldn't reach here — a Jira-tasked
+            // session resolves its `codeProvider` to GitHub/GitLab. Fall back to
+            // a generic instruction if it does.
             lines.append("6. Open a pull request\(suffix)")
         }
     }
@@ -117,6 +133,7 @@ public actor ClaudeLauncher {
     private static func isPullRequestURL(_ url: String) -> Bool {
         url.contains("/pull/") || url.contains("/merge_requests/")
     }
+
 
     /// Write prompt to temp file and return the launch command.
     public func launchCommand(sessionID: UUID, worktreePath: String, prompt: String) throws -> String {
