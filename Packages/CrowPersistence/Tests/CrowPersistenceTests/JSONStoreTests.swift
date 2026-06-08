@@ -213,7 +213,7 @@ import Testing
         headSha: "abc123",
         latestReviewID: "R_kgD0_1"
     )
-    let dedupKey = "\(sessionID.uuidString)|changesRequested|R_kgD0_1|abc123"
+    let dedupKey = "\(sessionID.uuidString)|changesRequested|R_kgD0_1"
     let state = PersistedIssueTrackerState(
         previousPRStatus: [sessionID.uuidString: pr],
         emittedTransitionKeys: [dedupKey]

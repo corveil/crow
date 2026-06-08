@@ -1259,6 +1259,13 @@ final class IssueTracker {
         guard !viewerPRs.isEmpty else { return }
         let byURL = Dictionary(viewerPRs.map { ($0.url, $0) }, uniquingKeysWith: Self.mergePRRecords)
 
+        // Snapshot tracker state up front so we can skip the JSONStore write
+        // when this poll produced no observable change. Polls are quiet most
+        // of the time; without this guard `persistTrackerState` re-reads,
+        // re-encodes, and atomically rewrites `store.json` every 60s.
+        let priorPRStatus = previousPRStatus
+        let priorEmittedKeys = emittedTransitionKeys
+
         var transitions: [PRStatusTransition] = []
         let sessionsWithPRs = appState.sessions.filter { !$0.isManager }
         for session in sessionsWithPRs {
@@ -1273,11 +1280,11 @@ final class IssueTracker {
             // re-entry (approved → changesRequested again, passing → failing on
             // a new commit) can fire even if we previously emitted.
             //
-            // With CROW-456 the `.changesRequested` dedup key is composite
-            // (`session|changesRequested|reviewID|headSha`), so a new review
-            // or new commit naturally produces a different key. This cleanup
-            // bounds the in-memory set: when we leave the bucket entirely we
-            // drop every `changesRequested` entry for this session.
+            // With CROW-456 the `.changesRequested` dedup key is keyed on the
+            // latest CHANGES_REQUESTED review id, so a new formal review
+            // naturally produces a different key. This cleanup bounds the
+            // in-memory set: when we leave the bucket entirely we drop every
+            // `changesRequested` entry for this session.
             if let old = oldStatus {
                 if old.reviewStatus == .changesRequested && newStatus.reviewStatus != .changesRequested {
                     let prefix = "\(session.id.uuidString)|changesRequested|"
@@ -1310,7 +1317,9 @@ final class IssueTracker {
             onPRStatusTransitions?(transitions)
         }
 
-        persistTrackerState()
+        if previousPRStatus != priorPRStatus || emittedTransitionKeys != priorEmittedKeys {
+            persistTrackerState()
+        }
 
         applyAutoMerge(viewerPRs: viewerPRs)
         applyAutoRebase(viewerPRs: viewerPRs)
