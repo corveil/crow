@@ -979,6 +979,23 @@ final class IssueTracker {
         return picks
     }
 
+    /// Route a reconcile candidate to a *code* backend. A task-only provider
+    /// (`.jira`/`.corveil`) has no code surface, so a session tracked by one
+    /// resolves PRs through its `codeProvider` — mirroring the
+    /// `codeProvider ?? provider` convention in `SessionService.findPRLink` and
+    /// `AutoRespondCoordinator`. Falls back to host sniffing when no
+    /// code-bearing provider is recorded (e.g. sessions predating the field).
+    /// Pure — no appState, no I/O.
+    nonisolated static func resolveReconcileProvider(
+        codeProvider: Provider?, provider: Provider?, host: String
+    ) -> (provider: Provider, gitlabHost: String?) {
+        if let p = codeProvider ?? provider, !p.isTaskOnly {
+            return (p, p == .gitlab ? (host.isEmpty ? nil : host) : nil)
+        }
+        if host == "github.com" || host.isEmpty { return (.github, nil) }
+        return (.gitlab, host)
+    }
+
     /// For each non-archived, non-review session missing a `.pr` link with a
     /// resolvable (repoSlug, branch), query the provider directly and upsert
     /// a link when a PR exists on that branch. Runs once per refresh cycle
@@ -1022,21 +1039,15 @@ final class IssueTracker {
             let info = resolveRepoInfo(worktree: primaryWt)
             guard !info.slug.isEmpty else { continue }
 
-            // Provider: prefer the session's recorded provider; fall back to
-            // host sniffing when the session was created before the field
-            // existed or when the host ≠ github.com.
-            let provider: Provider
-            let gitlabHost: String?
-            if let p = session.provider {
-                provider = p
-                gitlabHost = (p == .gitlab) ? (info.host.isEmpty ? nil : info.host) : nil
-            } else if info.host == "github.com" || info.host.isEmpty {
-                provider = .github
-                gitlabHost = nil
-            } else {
-                provider = .gitlab
-                gitlabHost = info.host
-            }
+            // Route by the *code* provider: a Jira/Corveil task-only session
+            // codes against GitHub/GitLab via `codeProvider`, so resolving on
+            // `session.provider` alone (→ `.jira`) would drop the candidate.
+            // Falls back to host sniffing when no code-bearing provider exists.
+            let (provider, gitlabHost) = Self.resolveReconcileProvider(
+                codeProvider: session.codeProvider,
+                provider: session.provider,
+                host: info.host
+            )
 
             // GitLab candidates require a known host — GITLAB_HOST env var is
             // how the glab wrapper picks an auth token. Skip silently rather

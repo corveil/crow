@@ -87,6 +87,64 @@ struct IssueTrackerReconcileDecisionTests {
     }
 }
 
+@Suite("IssueTracker reconcile provider routing")
+struct IssueTrackerReconcileProviderTests {
+    // Regression for #463: a Jira-task + GitHub-code session must route its
+    // reconcile candidate to GitHub via `codeProvider`, not be dropped because
+    // `provider` is the task-only `.jira`.
+    @Test func jiraTaskWithGitHubCodeRoutesToGitHub() {
+        let r = IssueTracker.resolveReconcileProvider(
+            codeProvider: .github, provider: .jira, host: "github.com")
+        #expect(r.provider == .github)
+        #expect(r.gitlabHost == nil)
+    }
+
+    @Test func codeProviderTakesPrecedenceOverTaskProvider() {
+        // Jira-task + GitLab-code: route to GitLab and carry the host.
+        let r = IssueTracker.resolveReconcileProvider(
+            codeProvider: .gitlab, provider: .jira, host: "gitlab.corp.example")
+        #expect(r.provider == .gitlab)
+        #expect(r.gitlabHost == "gitlab.corp.example")
+    }
+
+    @Test func nilProvidersFallBackToHostSniff() {
+        // Sessions predating the provider field rely on host sniffing.
+        let gh = IssueTracker.resolveReconcileProvider(
+            codeProvider: nil, provider: nil, host: "github.com")
+        #expect(gh.provider == .github)
+        #expect(gh.gitlabHost == nil)
+
+        let empty = IssueTracker.resolveReconcileProvider(
+            codeProvider: nil, provider: nil, host: "")
+        #expect(empty.provider == .github)
+
+        let gl = IssueTracker.resolveReconcileProvider(
+            codeProvider: nil, provider: nil, host: "gitlab.internal.example")
+        #expect(gl.provider == .gitlab)
+        #expect(gl.gitlabHost == "gitlab.internal.example")
+    }
+
+    @Test func taskOnlyProviderWithoutCodeProviderFallsBackToHost() {
+        // Defensive: a `.jira` task with no `codeProvider` set must not become
+        // a `.jira` candidate — host sniffing picks the real code backend.
+        let r = IssueTracker.resolveReconcileProvider(
+            codeProvider: nil, provider: .jira, host: "github.com")
+        #expect(r.provider == .github)
+    }
+
+    @Test func plainGitHubAndGitLabSessionsUnaffected() {
+        let gh = IssueTracker.resolveReconcileProvider(
+            codeProvider: nil, provider: .github, host: "github.com")
+        #expect(gh.provider == .github)
+        #expect(gh.gitlabHost == nil)
+
+        let gl = IssueTracker.resolveReconcileProvider(
+            codeProvider: nil, provider: .gitlab, host: "gitlab.com")
+        #expect(gl.provider == .gitlab)
+        #expect(gl.gitlabHost == "gitlab.com")
+    }
+}
+
 @Suite("IssueTracker remote host extraction")
 struct IssueTrackerRemoteHostTests {
     @Test func parsesGitHubSSH() {

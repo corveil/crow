@@ -376,12 +376,16 @@ create_session() {
     log "Using existing session: $SESSION_ID"
   fi
 
-  # Step 2: Set ticket metadata (if URL provided)
-  if [[ -n "$TICKET_URL" && -n "$TICKET_NUMBER" ]]; then
+  # Step 2: Set ticket metadata (if URL provided). The number is optional —
+  # Jira keys (e.g. MAXX-6846) have no standalone numeric id, so gate on the
+  # URL and add --number only when it's actually numeric. (crow set-ticket
+  # accepts --url/--title without --number; a non-numeric --number would make
+  # ArgumentParser reject the whole call and drop url+title too.)
+  if [[ -n "$TICKET_URL" ]]; then
     log "Setting ticket metadata..."
     local ticket_args=(crow set-ticket --session "$SESSION_ID" --url "$TICKET_URL")
     [[ -n "$TICKET_TITLE" ]] && ticket_args+=(--title "$TICKET_TITLE")
-    ticket_args+=(--number "$TICKET_NUMBER")
+    [[ "$TICKET_NUMBER" =~ ^[0-9]+$ ]] && ticket_args+=(--number "$TICKET_NUMBER")
     "${ticket_args[@]}" >/dev/null 2>&1 \
       || log "Warning: set-ticket failed (may already be set)"
   fi
