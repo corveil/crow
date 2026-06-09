@@ -163,6 +163,9 @@ final class IssueTracker {
     /// Guards the GitHub-scope console warning so it fires once per session.
     private var didLogGitHubScopeWarning = false
 
+    /// Guards the GitHub-SAML console warning so it fires once per session.
+    private var didLogGitHubSAMLWarning = false
+
     /// When non-nil and in the future, all polls are skipped.
     private var suspendedUntil: Date?
 
@@ -216,6 +219,29 @@ final class IssueTracker {
             appState.githubScopeWarning = nil
         }
         didLogGitHubScopeWarning = false
+    }
+
+    /// Surface a SAML-enforcement warning: console once per session, UI banner
+    /// every time. Fires when an org's SAML SSO blocks the OAuth token — the
+    /// backend recovers accessible-org tickets and flags the response, so this
+    /// is informational, not fatal.
+    private func reportSAMLWarning() {
+        let msg = "GitHub: an org enforces SAML SSO and your token isn't authorized — its tickets are hidden. "
+            + "Authorize it at github.com/settings/connections, or ignore if you don't use it on this machine."
+        if !didLogGitHubSAMLWarning {
+            print("[IssueTracker] \(msg)")
+            didLogGitHubSAMLWarning = true
+        }
+        appState.githubSAMLWarning = msg
+    }
+
+    /// Drop the SAML warning after a poll with no SAML restriction. Re-arms the
+    /// once-per-session log so a future regression will print again.
+    private func clearSAMLWarning() {
+        if appState.githubSAMLWarning != nil {
+            appState.githubSAMLWarning = nil
+        }
+        didLogGitHubSAMLWarning = false
     }
 
     private func reportRateLimitWarning(resetAt: Date) {
@@ -653,6 +679,16 @@ final class IssueTracker {
         } else {
             clearScopeWarning()
         }
+
+        // The backends recover accessible-org data on SAML enforcement and
+        // flag the listing rather than throwing, so the response is still
+        // assembled above. Light the one-time warning while any org stays
+        // blocked; clear it once a clean poll returns.
+        if assigned.samlRestricted || monitored.samlRestricted {
+            reportSAMLWarning()
+        } else {
+            clearSAMLWarning()
+        }
         return ConsolidatedGitHubResponse(
             openIssues: assigned.open,
             closedIssues: assigned.closed,
@@ -672,6 +708,11 @@ final class IssueTracker {
             reportScopeWarning(scope)
         case ProviderError.rateLimited(let stderr):
             _ = handleGraphQLRateLimit(stderr: stderr)
+        case ProviderError.samlRestricted:
+            // Secondary calls (prStates, findRecentPRsForBranches) don't
+            // recover partial data; route their SAML failures to the same
+            // one-time warning instead of spamming the console each cycle.
+            reportSAMLWarning()
         default:
             print("[IssueTracker] \(operation) failed: \(error.localizedDescription)")
         }

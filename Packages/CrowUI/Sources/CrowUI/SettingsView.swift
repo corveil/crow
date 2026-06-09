@@ -147,6 +147,23 @@ public struct SettingsView: View {
     }
 
     @ViewBuilder
+    private var githubSAMLWarningBanner: some View {
+        if let warning = appState.githubSAMLWarning {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "lock.shield.fill")
+                    .foregroundStyle(.orange)
+                Text(warning)
+                    .font(.caption)
+                    .textSelection(.enabled)
+                Spacer()
+            }
+            .padding(10)
+            .background(Color.orange.opacity(0.12))
+            .cornerRadius(6)
+        }
+    }
+
+    @ViewBuilder
     private var rateLimitWarningBanner: some View {
         if let warning = appState.rateLimitWarning {
             HStack(alignment: .top, spacing: 8) {
@@ -167,6 +184,9 @@ public struct SettingsView: View {
         Form {
             if appState.githubScopeWarning != nil {
                 Section { githubScopeWarningBanner }
+            }
+            if appState.githubSAMLWarning != nil {
+                Section { githubSAMLWarningBanner }
             }
             if appState.rateLimitWarning != nil {
                 Section { rateLimitWarningBanner }

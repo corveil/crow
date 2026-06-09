@@ -132,6 +132,98 @@ final class BackendsTests: XCTestCase {
         XCTAssertEqual(listing.missingScope, "read:project")
     }
 
+    // MARK: - SAML enforcement (graceful degradation)
+
+    func testClassifyGraphQLErrorDetectsSAML() {
+        let blob = #"{"data":{"openIssues":{"nodes":[]}},"errors":[{"type":"FORBIDDEN","message":"Resource protected by organization SAML enforcement. You must grant your OAuth token access to an organization within this enterprise."}]}"#
+        guard case .samlRestricted(let carried) = GitHubTaskBackend.classifyGraphQLError(blob) else {
+            return XCTFail("expected .samlRestricted")
+        }
+        // The full blob is carried so call sites can recover partial data.
+        XCTAssertEqual(carried, blob)
+    }
+
+    func testClassifyGraphQLErrorSAMLTakesPrecedenceOverScope() {
+        // A SAML blob shouldn't be misrouted to the scope branch even if it
+        // happened to mention a scope-ish token.
+        let blob = "Resource protected by organization SAML enforcement"
+        guard case .samlRestricted = GitHubTaskBackend.classifyGraphQLError(blob) else {
+            return XCTFail("expected .samlRestricted")
+        }
+    }
+
+    func testDecodeGraphQLDataExtractsLeadingObjectWithTrailingGhError() {
+        // Merged stdout+stderr: response body followed by gh's error line, plus
+        // a brace inside a string value to exercise the string-aware scanner.
+        let blob = """
+        {"data":{"openIssues":{"nodes":[{"title":"weird }{ title"}]}}}
+        gh: Resource protected by organization SAML enforcement.
+        """
+        let dataObj = GitHubTaskBackend.decodeGraphQLData(blob)
+        XCTAssertNotNil(dataObj)
+        let nodes = ((dataObj?["openIssues"] as? [String: Any])?["nodes"] as? [[String: Any]])
+        XCTAssertEqual(nodes?.first?["title"] as? String, "weird }{ title")
+    }
+
+    func testListAssignedRecoversAccessibleIssuesOnSAML() async throws {
+        // GitHub returns the accessible-org issue in `data` alongside the SAML
+        // `errors` entry; gh exits non-zero and the merged blob carries both,
+        // with gh's error line appended after the body.
+        let blob = """
+        {"data":{
+          "openIssues":{"nodes":[
+            {"number":7,"title":"Accessible","url":"https://github.com/ok/repo/issues/7","state":"open",
+             "repository":{"nameWithOwner":"ok/repo"},"labels":{"nodes":[]}}
+          ]},
+          "closedIssues":{"nodes":[]},
+          "rateLimit":{"remaining":4990,"limit":5000,"resetAt":"2026-01-01T00:00:00Z","cost":1}
+        },"errors":[{"type":"FORBIDDEN","path":["openIssues","nodes",3],"message":"Resource protected by organization SAML enforcement. You must grant your OAuth token access to an organization within this enterprise."}]}
+        gh: Resource protected by organization SAML enforcement. You must grant your OAuth token access to an organization within this enterprise.
+        """
+        let fake = FakeShellRunner()
+        fake.responses = [.failure(ShellRunnerError.nonZeroExit(exitCode: 1, output: blob))]
+        let backend = GitHubTaskBackend(shellRunner: fake)
+        let listing = try await backend.listAssigned()
+        XCTAssertTrue(listing.samlRestricted)
+        XCTAssertEqual(listing.open.count, 1)
+        XCTAssertEqual(listing.open.first?.title, "Accessible")
+        XCTAssertEqual(listing.rateLimit?.remaining, 4990)
+    }
+
+    func testRecoverPartialIssuesEmptyWhenNoJSON() {
+        // gh emitted only an error line, no body — degrade to empty + flagged,
+        // never throw.
+        let listing = GitHubTaskBackend.recoverPartialIssues(
+            fromSAMLBlob: "gh: Resource protected by organization SAML enforcement."
+        )
+        XCTAssertTrue(listing.samlRestricted)
+        XCTAssertTrue(listing.open.isEmpty)
+        XCTAssertTrue(listing.closed.isEmpty)
+    }
+
+    func testListMonitoredPRsRecoversAccessiblePRsOnSAML() async throws {
+        let blob = """
+        {"data":{
+          "viewerPRs":{"pullRequests":{"nodes":[
+            {"number":12,"url":"https://github.com/ok/repo/pull/12","state":"OPEN",
+             "headRefName":"feat","baseRefName":"main","repository":{"nameWithOwner":"ok/repo"}}
+          ]}},
+          "reviewPRs":{"nodes":[]},
+          "viewer":{"login":"me"},
+          "rateLimit":{"remaining":4980,"limit":5000,"resetAt":"2026-01-01T00:00:00Z","cost":1}
+        },"errors":[{"type":"FORBIDDEN","message":"Resource protected by organization SAML enforcement. You must grant your OAuth token access to an organization within this enterprise."}]}
+        gh: Resource protected by organization SAML enforcement. You must grant your OAuth token access to an organization within this enterprise.
+        """
+        let fake = FakeShellRunner()
+        fake.responses = [.failure(ShellRunnerError.nonZeroExit(exitCode: 1, output: blob))]
+        let backend = GitHubCodeBackend(shellRunner: fake)
+        let listing = try await backend.listMonitoredPRs()
+        XCTAssertTrue(listing.samlRestricted)
+        XCTAssertEqual(listing.viewerPRs.count, 1)
+        XCTAssertEqual(listing.viewerPRs.first?.number, 12)
+        XCTAssertEqual(listing.viewerLogin, "me")
+    }
+
     func testGitHubTaskBackendSetTaskStatusRunsMutation() async throws {
         let fake = FakeShellRunner()
         // First call: lookup. Second call: mutation.

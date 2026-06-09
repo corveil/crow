@@ -219,6 +219,12 @@ public final class AppState {
     /// Set by `IssueTracker` when the token lacks a required scope; cleared on next success.
     public var githubScopeWarning: String?
 
+    /// Non-fatal GitHub SAML warning surfaced in Settings. `nil` means no warning.
+    /// Set by `IssueTracker` when an org's SAML enforcement blocks the OAuth
+    /// token (accessible-org tickets still load); cleared on the next poll with
+    /// no SAML restriction.
+    public var githubSAMLWarning: String?
+
     /// Last observed GitHub GraphQL rate-limit snapshot. `nil` before the first
     /// successful query. Populated from the `rateLimit` block on each refresh.
     public var githubRateLimit: GitHubRateLimit?

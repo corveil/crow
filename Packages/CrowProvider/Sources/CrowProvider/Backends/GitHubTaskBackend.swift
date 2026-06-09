@@ -62,12 +62,25 @@ public struct GitHubTaskBackend: TaskBackend {
             let listing = try Self.parseIssuesResponse(output, missingScope: nil)
             return includeClosed ? listing : Self.stripClosed(listing)
         } catch ProviderError.insufficientScope(let scope) {
-            let output = try await runIssuesQuery(
-                query: Self.consolidatedIssuesQueryNoProjects,
-                openQuery: openQuery,
-                closedQuery: closedQuery
-            )
-            let listing = try Self.parseIssuesResponse(output, missingScope: scope)
+            do {
+                let output = try await runIssuesQuery(
+                    query: Self.consolidatedIssuesQueryNoProjects,
+                    openQuery: openQuery,
+                    closedQuery: closedQuery
+                )
+                let listing = try Self.parseIssuesResponse(output, missingScope: scope)
+                return includeClosed ? listing : Self.stripClosed(listing)
+            } catch ProviderError.samlRestricted(let blob) {
+                // Rare: the no-projects retry also hit SAML. Recover what
+                // resolved; the scope warning is sacrificed for this cycle.
+                let listing = Self.recoverPartialIssues(fromSAMLBlob: blob)
+                return includeClosed ? listing : Self.stripClosed(listing)
+            }
+        } catch ProviderError.samlRestricted(let blob) {
+            // An org's SAML enforcement blocked the token. GitHub still
+            // returned the accessible-org issues in `data`; recover them and
+            // flag the listing degraded instead of failing the whole cycle.
+            let listing = Self.recoverPartialIssues(fromSAMLBlob: blob)
             return includeClosed ? listing : Self.stripClosed(listing)
         }
     }
@@ -77,7 +90,8 @@ public struct GitHubTaskBackend: TaskBackend {
             open: listing.open,
             closed: [],
             rateLimit: listing.rateLimit,
-            missingScope: listing.missingScope
+            missingScope: listing.missingScope,
+            samlRestricted: listing.samlRestricted
         )
     }
 
@@ -235,6 +249,13 @@ public struct GitHubTaskBackend: TaskBackend {
     /// and scope failures get their own cases so callers can route them to
     /// dedicated UI; everything else collapses to `.commandFailed`.
     static func classifyGraphQLError(_ stderr: String) -> ProviderError {
+        // Check SAML first: GitHub returns partial `data` alongside the SAML
+        // `errors` entry, so we carry the whole blob to recover accessible-org
+        // results. A SAML blob won't also contain the rate-limit/scope tokens.
+        if stderr.contains("Resource protected by organization SAML enforcement")
+            || stderr.contains("protected by SAML") {
+            return .samlRestricted(stderr)
+        }
         if stderr.contains("RATE_LIMITED") || stderr.contains("API rate limit exceeded") {
             return .rateLimited(stderr)
         }
@@ -378,6 +399,93 @@ public struct GitHubTaskBackend: TaskBackend {
         )
         let rate = parseRateLimit(dataObj["rateLimit"] as? [String: Any])
         return AssignedListing(open: open, closed: closed, rateLimit: rate, missingScope: missingScope)
+    }
+
+    /// Recover the accessible-org issues GitHub returned alongside a SAML
+    /// `errors` entry. `blob` is the merged `gh` stdout+stderr — partial JSON
+    /// body followed by the `gh:` error line — so we extract the leading JSON
+    /// object before parsing. When nothing is recoverable (gh emitted no body),
+    /// returns an empty listing rather than throwing, so the cycle degrades to
+    /// "no tickets, warning shown" instead of failing. Always marks
+    /// `samlRestricted` so callers light the warning UI.
+    static func recoverPartialIssues(fromSAMLBlob blob: String) -> AssignedListing {
+        guard let dataObj = decodeGraphQLData(blob) else {
+            return AssignedListing(open: [], closed: [], rateLimit: nil, samlRestricted: true)
+        }
+        let dateFmt = ISO8601DateFormatter()
+        dateFmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let open = parseIssueNodes(
+            dataObj["openIssues"] as? [String: Any],
+            defaultState: "open",
+            dateFormatter: dateFmt
+        )
+        let closed = parseIssueNodes(
+            dataObj["closedIssues"] as? [String: Any],
+            defaultState: "closed",
+            dateFormatter: dateFmt,
+            projectStatusOverride: .done
+        )
+        let rate = parseRateLimit(dataObj["rateLimit"] as? [String: Any])
+        return AssignedListing(open: open, closed: closed, rateLimit: rate, samlRestricted: true)
+    }
+
+    /// Pull the `data` object out of a `gh api graphql` output blob that may
+    /// have trailing non-JSON text appended — e.g. the `gh: …` error line that
+    /// lands in the same merged stdout+stderr stream after the response body on
+    /// a partial (SAML/FORBIDDEN) failure. Fast path parses the whole string
+    /// (the success case stays zero-overhead); the fallback extracts the first
+    /// balanced top-level `{…}` object and parses that. Returns `json["data"]`,
+    /// or nil if no JSON object is present.
+    static func decodeGraphQLData(_ blob: String) -> [String: Any]? {
+        func dataObject(from string: String) -> [String: Any]? {
+            guard let data = string.data(using: .utf8),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return nil
+            }
+            return json["data"] as? [String: Any]
+        }
+        if let dataObj = dataObject(from: blob) {
+            return dataObj
+        }
+        guard let sliced = firstBalancedJSONObject(in: blob) else { return nil }
+        return dataObject(from: sliced)
+    }
+
+    /// Return the substring spanning the first complete, brace-balanced `{…}`
+    /// object in `blob`, ignoring braces inside JSON strings (and escapes).
+    /// Used to peel the response body off a blob with trailing `gh:` error text.
+    static func firstBalancedJSONObject(in blob: String) -> String? {
+        let chars = Array(blob)
+        guard let start = chars.firstIndex(of: "{") else { return nil }
+        var depth = 0
+        var inString = false
+        var escaped = false
+        var i = start
+        while i < chars.count {
+            let c = chars[i]
+            if inString {
+                if escaped {
+                    escaped = false
+                } else if c == "\\" {
+                    escaped = true
+                } else if c == "\"" {
+                    inString = false
+                }
+            } else {
+                switch c {
+                case "\"": inString = true
+                case "{": depth += 1
+                case "}":
+                    depth -= 1
+                    if depth == 0 {
+                        return String(chars[start...i])
+                    }
+                default: break
+                }
+            }
+            i += 1
+        }
+        return nil
     }
 
     static func parseIssueNodes(

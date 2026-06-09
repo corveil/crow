@@ -357,4 +357,12 @@ public enum ProviderError: Error {
     /// GitHub GraphQL `RATE_LIMITED`. Callers should skip the cycle and retry
     /// after the documented reset time.
     case rateLimited(String)
+    /// GitHub org SAML enforcement on an org the OAuth token isn't authorized
+    /// for. GitHub returns the issues/PRs that *did* resolve from accessible
+    /// orgs in `data`, alongside a `FORBIDDEN`/SAML entry in `errors`; `gh`
+    /// then exits non-zero. The associated value is the FULL merged `gh`
+    /// output blob (partial JSON body + the trailing `gh:` error line) so
+    /// call sites can recover the accessible-org data instead of dropping the
+    /// whole cycle. See `GitHubTaskBackend.recoverPartialIssues`.
+    case samlRestricted(String)
 }

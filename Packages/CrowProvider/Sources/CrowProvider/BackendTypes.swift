@@ -183,17 +183,24 @@ public struct AssignedListing: Sendable {
     /// user knows to refresh their token. The successful path returns the
     /// best-effort data alongside the scope marker; no error is thrown.
     public let missingScope: String?
+    /// True when the response was degraded because an org's SAML enforcement
+    /// blocked the OAuth token. The accessible-org issues GitHub still
+    /// returned are in `open`/`closed`; callers should surface a one-time UI
+    /// warning. Like `missingScope`, no error is thrown for this case.
+    public let samlRestricted: Bool
 
     public init(
         open: [AssignedIssue],
         closed: [AssignedIssue],
         rateLimit: GitHubRateLimit? = nil,
-        missingScope: String? = nil
+        missingScope: String? = nil,
+        samlRestricted: Bool = false
     ) {
         self.open = open
         self.closed = closed
         self.rateLimit = rateLimit
         self.missingScope = missingScope
+        self.samlRestricted = samlRestricted
     }
 }
 
@@ -204,11 +211,16 @@ public struct MonitoredPRListing: Sendable {
     public let reviewRequests: [ReviewRequest]
     public let viewerLogin: String
     public let rateLimit: GitHubRateLimit?
+    /// True when the response was degraded because an org's SAML enforcement
+    /// blocked the OAuth token. The accessible-org PRs/reviews GitHub still
+    /// returned are present; callers should surface a one-time UI warning.
+    public let samlRestricted: Bool
 
-    public init(viewerPRs: [PRRecord], reviewRequests: [ReviewRequest], viewerLogin: String, rateLimit: GitHubRateLimit? = nil) {
+    public init(viewerPRs: [PRRecord], reviewRequests: [ReviewRequest], viewerLogin: String, rateLimit: GitHubRateLimit? = nil, samlRestricted: Bool = false) {
         self.viewerPRs = viewerPRs
         self.reviewRequests = reviewRequests
         self.viewerLogin = viewerLogin
         self.rateLimit = rateLimit
+        self.samlRestricted = samlRestricted
     }
 }

@@ -73,7 +73,14 @@ public struct GitHubCodeBackend: CodeBackend {
                 "-F", "reviewQuery=\(reviewQuery)"
             )
         } catch ShellRunnerError.nonZeroExit(_, let stderr) {
-            throw GitHubTaskBackend.classifyGraphQLError(stderr)
+            let err = GitHubTaskBackend.classifyGraphQLError(stderr)
+            if case .samlRestricted(let blob) = err {
+                // An org's SAML enforcement blocked the token. Recover the
+                // accessible-org PRs/reviews GitHub still returned and flag the
+                // listing degraded instead of failing the whole cycle.
+                return Self.recoverPartialMonitoredPRs(fromSAMLBlob: blob)
+            }
+            throw err
         }
         return try Self.parseMonitoredPRsResponse(output)
     }
@@ -292,6 +299,34 @@ public struct GitHubCodeBackend: CodeBackend {
             reviewRequests: reviewRequests,
             viewerLogin: viewerLogin,
             rateLimit: rate
+        )
+    }
+
+    /// Recover the accessible-org PRs/reviews GitHub returned alongside a SAML
+    /// `errors` entry. Mirrors `GitHubTaskBackend.recoverPartialIssues`: extract
+    /// the leading JSON object from the merged `gh` blob, parse what resolved,
+    /// and mark `samlRestricted`. Degrades to an empty listing (never throws)
+    /// when no body is recoverable.
+    static func recoverPartialMonitoredPRs(fromSAMLBlob blob: String) -> MonitoredPRListing {
+        guard let dataObj = GitHubTaskBackend.decodeGraphQLData(blob) else {
+            return MonitoredPRListing(viewerPRs: [], reviewRequests: [], viewerLogin: "", samlRestricted: true)
+        }
+        let dateFmt = ISO8601DateFormatter()
+        dateFmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let viewerLogin = (dataObj["viewer"] as? [String: Any])?["login"] as? String ?? ""
+        let viewerPRs = parseViewerPRs(dataObj["viewerPRs"] as? [String: Any])
+        let reviewRequests = parseReviewRequests(
+            dataObj["reviewPRs"] as? [String: Any],
+            dateFormatter: dateFmt,
+            viewerLogin: viewerLogin.isEmpty ? nil : viewerLogin
+        )
+        let rate = GitHubTaskBackend.parseRateLimit(dataObj["rateLimit"] as? [String: Any])
+        return MonitoredPRListing(
+            viewerPRs: viewerPRs,
+            reviewRequests: reviewRequests,
+            viewerLogin: viewerLogin,
+            rateLimit: rate,
+            samlRestricted: true
         )
     }
 
