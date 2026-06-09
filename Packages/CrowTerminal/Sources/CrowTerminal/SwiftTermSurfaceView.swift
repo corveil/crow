@@ -65,7 +65,13 @@ public final class SwiftTermSurfaceView: NSView {
         let view = LocalProcessTerminalView(frame: bounds)
         view.autoresizingMask = [.width, .height]
         view.processDelegate = self
+        // OSC 8 hyperlink behavior:
+        //   linkReporting = .explicit — accept OSC 8 sequences (skip URL heuristics)
+        //   linkHighlightMode = .hover — underline on plain hover (default is
+        //   .hoverWithModifier which requires Cmd, defeating the "click a link"
+        //   acceptance criterion in #466).
         view.linkReporting = .explicit
+        view.linkHighlightMode = .hover
         addSubview(view)
         inner = view
 
