@@ -102,8 +102,10 @@ public final class GhosttyApp {
     /// URL schemes Crow will hand to `NSWorkspace.shared.open()` from an OSC 8
     /// click. Anything else (file, javascript, data, vbscript, …) is dropped on
     /// the floor — the URL is still rendered, but clicking it is a no-op. Keep
-    /// this tight; OSC 8 emitters are not always trustworthy.
-    nonisolated private static let allowedURLSchemes: Set<String> = [
+    /// this tight; OSC 8 emitters are not always trustworthy. Exposed at module
+    /// scope so the right-click menu in `GhosttySurfaceView` can gate its "Open
+    /// Link" item against the same allowlist as the action callback.
+    nonisolated static let allowedURLSchemes: Set<String> = [
         "http", "https", "mailto", "ftp", "ftps",
     ]
 
@@ -128,15 +130,23 @@ public final class GhosttyApp {
             return true
         }
         // OSC 8 hover: libghostty reports the mouse entering/leaving a hyperlink
-        // cell. Non-zero `len` = entering, zero = leaving. We don't need the URL
-        // itself — Ghostty tracks it internally and re-emits via OPEN_URL on click.
+        // cell. Non-zero `len` = entering, zero = leaving. The URL bytes ride
+        // along on entry so the right-click "Open Link" menu item can fire
+        // without waiting for a click to re-emit OPEN_URL.
         if action.tag == GHOSTTY_ACTION_MOUSE_OVER_LINK {
             if target.tag == GHOSTTY_TARGET_SURFACE,
                let userdata = ghostty_surface_userdata(target.target.surface) {
-                let hovering = action.action.mouse_over_link.len > 0
+                let payload = action.action.mouse_over_link
+                let url: String? = {
+                    guard payload.len > 0, let ptr = payload.url else { return nil }
+                    return String(
+                        decoding: UnsafeRawBufferPointer(start: ptr, count: Int(payload.len)),
+                        as: UTF8.self
+                    )
+                }()
                 DispatchQueue.main.async {
                     let view = Unmanaged<GhosttySurfaceView>.fromOpaque(userdata).takeUnretainedValue()
-                    view.setHoveringLink(hovering)
+                    view.setHoveringLink(url)
                 }
             }
             return true
