@@ -69,17 +69,16 @@ public final class SwiftTermSurfaceView: NSView {
         addSubview(view)
         inner = view
 
-        // Crow's cockpit command is a flat
-        //   tmux -S <socket> attach-session -t <session>
-        // built in TmuxBackend.cockpitSurface(). Splitting on whitespace is
-        // safe because shellQuote() only wraps strings that contain special
-        // chars, and the cockpit socket path lives in $TMPDIR with no spaces.
-        let raw = command ?? "/bin/zsh"
-        let parts = raw
-            .split(separator: " ", omittingEmptySubsequences: true)
-            .map(String.init)
-        let executable = parts.first ?? "/bin/zsh"
-        let args = Array(parts.dropFirst())
+        // Crow's `command` is shell-quoted (`TmuxBackend.shellQuote` wraps
+        // every arg in single quotes so a path with spaces survives). Ghostty
+        // interprets that string via a shell internally; SwiftTerm's
+        // `startProcess` does fork+exec direct, so splitting on whitespace
+        // would feed it `'/opt/homebrew/bin/tmux'` as the literal executable
+        // name (ENOENT — child exits instantly, terminal renders a blinking
+        // cursor and nothing else). Pipe through `/bin/sh -c` so the quoting
+        // is honored. Falls back to a login shell if no command was given.
+        let executable = "/bin/sh"
+        let args = ["-c", command ?? "/bin/zsh -l"]
 
         let env = Terminal.getEnvironmentVariables()
         view.startProcess(
