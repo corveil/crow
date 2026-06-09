@@ -347,9 +347,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSLog("[Crow] Cursor agent registered")
         }
 
-        // Initialize libghostty
+        // Initialize the terminal renderer.
+        // CROW-466 spike: SwiftTerm replaces libghostty when the renderer flag is on.
+        #if CROW_RENDERER_SWIFTTERM
+        NSLog("[Crow] Initializing SwiftTerm renderer")
+        SwiftTermApp.shared.initialize()
+        #else
         NSLog("[Crow] Initializing Ghostty")
         GhosttyApp.shared.initialize()
+        #endif
 
         // Load config before initializing the terminal backend so any future
         // backend selection knobs can read it.
@@ -499,10 +505,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Ensure manager session exists
         service.ensureManagerSession(devRoot: devRoot)
 
-        // Detect a dead Manager process: Ghostty fires SHOW_CHILD_EXITED when a
-        // surface's child exits. If it's the Manager terminal, surface the
-        // "Manager process exited" banner so the user can restart it in place.
-        GhosttyApp.shared.onChildExited = { [weak self] terminalID, _ in
+        // Detect a dead Manager process: the renderer fires its child-exited
+        // callback when a surface's child exits. If it's the Manager terminal,
+        // surface the "Manager process exited" banner so the user can restart
+        // it in place. CROW-466: identical wiring on both renderer paths.
+        let childExited: (UUID, Int32) -> Void = { [weak self] terminalID, _ in
             guard let self else { return }
             let managerID = AppState.managerSessionID
             if self.appState.terminals(for: managerID).contains(where: { $0.id == terminalID }) {
@@ -510,6 +517,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.appState.managerProcessExited = true
             }
         }
+        #if CROW_RENDERER_SWIFTTERM
+        SwiftTermApp.shared.onChildExited = childExited
+        #else
+        GhosttyApp.shared.onChildExited = childExited
+        #endif
 
         // Wire closures for UI actions
         appState.onDeleteSession = { [weak self, weak service] id in
@@ -1847,7 +1859,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // existing sessions (#330). The crash-watchdog's "Restart tmux server"
         // path still tears it down via the default `shutdown()`.
         TmuxBackend.shared.shutdown(killServer: false)
+        #if CROW_RENDERER_SWIFTTERM
+        SwiftTermApp.shared.shutdown()
+        #else
         GhosttyApp.shared.shutdown()
+        #endif
         NSLog("[Crow] Cleanup complete")
     }
 

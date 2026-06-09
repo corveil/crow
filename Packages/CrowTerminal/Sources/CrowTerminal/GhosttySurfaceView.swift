@@ -1,3 +1,4 @@
+#if !CROW_RENDERER_SWIFTTERM
 import AppKit
 import GhosttyKit
 
@@ -581,3 +582,4 @@ extension GhosttySurfaceView: @preconcurrency NSTextInputClient {
 
     public func characterIndex(for point: NSPoint) -> Int { 0 }
 }
+#endif

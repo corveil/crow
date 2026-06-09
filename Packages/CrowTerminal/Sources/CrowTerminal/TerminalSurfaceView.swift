@@ -1,7 +1,6 @@
 import SwiftUI
 import AppKit
 import CrowCore
-import GhosttyKit
 
 /// SwiftUI wrapper that reuses the shared tmux cockpit `GhosttySurfaceView`.
 ///
@@ -85,7 +84,7 @@ public struct TerminalSurfaceView: NSViewRepresentable {
     /// on autolayout to drive subsequent `setFrameSize` calls — manual
     /// `setFrameSize` here races with autolayout and is unnecessary.
     @MainActor
-    private static func attach(surface: GhosttySurfaceView, to container: NSView) {
+    private static func attach(surface: TerminalSurfaceImpl, to container: NSView) {
         container.addSubview(surface)
         surface.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
@@ -97,7 +96,7 @@ public struct TerminalSurfaceView: NSViewRepresentable {
     }
 
     @MainActor
-    private static func cockpitSurface() -> GhosttySurfaceView? {
+    private static func cockpitSurface() -> TerminalSurfaceImpl? {
         // The cockpit surface is created lazily on first call; subsequent
         // call sites (other tabs) get the same NSView. Returns nil when tmux
         // is unavailable so the container renders blank instead of crashing.

@@ -1,3 +1,4 @@
+#if !CROW_RENDERER_SWIFTTERM
 import AppKit
 import GhosttyKit
 
@@ -154,3 +155,4 @@ public final class GhosttyApp {
         }
     }
 }
+#endif

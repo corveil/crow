@@ -54,7 +54,7 @@ public final class TmuxBackend {
     /// The single embedded surface attached to the cockpit session. Lazy
     /// because libghostty needs an NSWindow before `ghostty_surface_new`
     /// fires.
-    private var sharedSurface: GhosttySurfaceView?
+    private var sharedSurface: TerminalSurfaceImpl?
 
     /// UUID → tmux window index for tabs registered with us.
     private var bindings: [UUID: Int] = [:]
@@ -426,13 +426,13 @@ public final class TmuxBackend {
     /// Return the shared cockpit Ghostty surface, lazily creating it the
     /// first time. The surface attaches to the live tmux session via
     /// `tmux -S … attach-session -t …` as its child command.
-    public func cockpitSurface() throws -> GhosttySurfaceView {
+    public func cockpitSurface() throws -> TerminalSurfaceImpl {
         if let existing = sharedSurface { return existing }
         let ctrl = try ensureRunningServer()
         let attachCommand =
             "\(shellQuote(tmuxBinary)) -S \(shellQuote(ctrl.socketPath)) " +
             "attach-session -t \(shellQuote(ctrl.sessionName))"
-        let view = GhosttySurfaceView(
+        let view = TerminalSurfaceImpl(
             frame: NSRect(x: 0, y: 0, width: 800, height: 600),
             workingDirectory: NSHomeDirectory(),
             command: attachCommand
@@ -459,7 +459,7 @@ public final class TmuxBackend {
     /// from call sites that want to act ONLY when the cockpit is already live
     /// (e.g. SwiftUI's updateNSView re-parent path) — unlike `cockpitSurface()`
     /// this never creates the surface as a side effect.
-    public var existingCockpitSurface: GhosttySurfaceView? {
+    public var existingCockpitSurface: TerminalSurfaceImpl? {
         sharedSurface
     }
 
