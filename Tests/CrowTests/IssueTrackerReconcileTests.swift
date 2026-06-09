@@ -87,6 +87,64 @@ struct IssueTrackerReconcileDecisionTests {
     }
 }
 
+@Suite("IssueTracker reconcile provider routing")
+struct IssueTrackerReconcileProviderTests {
+    // Regression for #463: a Jira-task + GitHub-code session must route its
+    // reconcile candidate to GitHub via `codeProvider`, not be dropped because
+    // `provider` is the task-only `.jira`.
+    @Test func jiraTaskWithGitHubCodeRoutesToGitHub() {
+        let r = IssueTracker.resolveReconcileProvider(
+            codeProvider: .github, provider: .jira, host: "github.com")
+        #expect(r.provider == .github)
+        #expect(r.gitlabHost == nil)
+    }
+
+    @Test func codeProviderTakesPrecedenceOverTaskProvider() {
+        // Jira-task + GitLab-code: route to GitLab and carry the host.
+        let r = IssueTracker.resolveReconcileProvider(
+            codeProvider: .gitlab, provider: .jira, host: "gitlab.corp.example")
+        #expect(r.provider == .gitlab)
+        #expect(r.gitlabHost == "gitlab.corp.example")
+    }
+
+    @Test func nilProvidersFallBackToHostSniff() {
+        // Sessions predating the provider field rely on host sniffing.
+        let gh = IssueTracker.resolveReconcileProvider(
+            codeProvider: nil, provider: nil, host: "github.com")
+        #expect(gh.provider == .github)
+        #expect(gh.gitlabHost == nil)
+
+        let empty = IssueTracker.resolveReconcileProvider(
+            codeProvider: nil, provider: nil, host: "")
+        #expect(empty.provider == .github)
+
+        let gl = IssueTracker.resolveReconcileProvider(
+            codeProvider: nil, provider: nil, host: "gitlab.internal.example")
+        #expect(gl.provider == .gitlab)
+        #expect(gl.gitlabHost == "gitlab.internal.example")
+    }
+
+    @Test func taskOnlyProviderWithoutCodeProviderFallsBackToHost() {
+        // Defensive: a `.jira` task with no `codeProvider` set must not become
+        // a `.jira` candidate — host sniffing picks the real code backend.
+        let r = IssueTracker.resolveReconcileProvider(
+            codeProvider: nil, provider: .jira, host: "github.com")
+        #expect(r.provider == .github)
+    }
+
+    @Test func plainGitHubAndGitLabSessionsUnaffected() {
+        let gh = IssueTracker.resolveReconcileProvider(
+            codeProvider: nil, provider: .github, host: "github.com")
+        #expect(gh.provider == .github)
+        #expect(gh.gitlabHost == nil)
+
+        let gl = IssueTracker.resolveReconcileProvider(
+            codeProvider: nil, provider: .gitlab, host: "gitlab.com")
+        #expect(gl.provider == .gitlab)
+        #expect(gl.gitlabHost == "gitlab.com")
+    }
+}
+
 @Suite("IssueTracker remote host extraction")
 struct IssueTrackerRemoteHostTests {
     @Test func parsesGitHubSSH() {
@@ -226,6 +284,62 @@ struct IssueTrackerReconcileFanOutTests {
         ]
         let cands = [candidate(s1, "acme/api", "feature/x")]
         let fanned = IssueTracker.fanOutMatches(backendMatches, across: cands)
+        #expect(fanned.count == 1)
+        #expect(fanned[0].number == 1)
+    }
+}
+
+@Suite("IssueTracker reconcile key fan-out")
+struct IssueTrackerReconcileKeyFanOutTests {
+
+    private func keyCandidate(_ sid: UUID, _ slug: String, _ key: String) -> IssueTracker.ReconcileKeyCandidate {
+        IssueTracker.ReconcileKeyCandidate(
+            sessionID: sid, provider: .github, repoSlug: slug, key: key, gitlabHost: nil
+        )
+    }
+
+    @Test func dedupedKeyCandidatesCollapsesDuplicates() {
+        // Two sessions on the same (repoSlug, key) — e.g. a duplicated Jira
+        // session — must produce a single backend search.
+        let s1 = UUID(); let s2 = UUID()
+        let cands = [
+            keyCandidate(s1, "acme/api", "MAXX-6859"),
+            keyCandidate(s2, "acme/api", "MAXX-6859"),
+            keyCandidate(s1, "acme/api", "MAXX-6860"),
+        ]
+        let out = IssueTracker.dedupedKeyCandidates(cands)
+        #expect(out.count == 2)
+        #expect(out.contains(KeyCandidate(repoSlug: "acme/api", key: "MAXX-6859")))
+        #expect(out.contains(KeyCandidate(repoSlug: "acme/api", key: "MAXX-6860")))
+    }
+
+    @Test func fanOutKeyMatchesEmitsOnePerSessionSharingAKey() {
+        let s1 = UUID(); let s2 = UUID()
+        let cands = [
+            keyCandidate(s1, "acme/api", "MAXX-6859"),
+            keyCandidate(s2, "acme/api", "MAXX-6859"),
+        ]
+        let kc = KeyCandidate(repoSlug: "acme/api", key: "MAXX-6859")
+        let backendMatches = [
+            KeyPRMatch(candidate: kc, number: 52, url: "https://github.com/acme/api/pull/52",
+                       state: "OPEN", updatedAt: nil)
+        ]
+        let fanned = IssueTracker.fanOutKeyMatches(backendMatches, across: cands)
+        #expect(fanned.count == 2)
+        #expect(Set(fanned.map(\.sessionID)) == [s1, s2])
+        #expect(fanned.allSatisfy { $0.number == 52 && $0.state == "OPEN" })
+    }
+
+    @Test func fanOutKeyMatchesDropsUnknownCandidates() {
+        let s1 = UUID()
+        let known = KeyCandidate(repoSlug: "acme/api", key: "MAXX-6859")
+        let unknown = KeyCandidate(repoSlug: "acme/api", key: "MAXX-9999")
+        let backendMatches = [
+            KeyPRMatch(candidate: known, number: 1, url: "u1", state: "OPEN", updatedAt: nil),
+            KeyPRMatch(candidate: unknown, number: 2, url: "u2", state: "OPEN", updatedAt: nil),
+        ]
+        let cands = [keyCandidate(s1, "acme/api", "MAXX-6859")]
+        let fanned = IssueTracker.fanOutKeyMatches(backendMatches, across: cands)
         #expect(fanned.count == 1)
         #expect(fanned[0].number == 1)
     }

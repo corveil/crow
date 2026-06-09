@@ -658,12 +658,12 @@ struct SessionRow: View {
             }
 
             // Row 4: Issue badge + PR badge + Claude state
-            let hasIssueBadge = session.ticketNumber != nil
-            let hasBadges = hasIssueBadge || prLink != nil || activityState != .idle
+            let issueBadgeLabel = session.ticketBadgeLabel
+            let hasBadges = issueBadgeLabel != nil || prLink != nil || activityState != .idle
             if hasBadges {
                 HStack(spacing: 6) {
-                    if let num = session.ticketNumber {
-                        CapsuleBadge("Issue #\(String(num))", color: CorveilTheme.gold)
+                    if let label = issueBadgeLabel {
+                        CapsuleBadge(label, color: CorveilTheme.gold)
                     }
                     if let pr = prLink {
                         PRBadge(label: pr.label, status: prStatus)

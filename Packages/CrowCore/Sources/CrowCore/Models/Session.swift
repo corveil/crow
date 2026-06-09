@@ -38,6 +38,21 @@ public struct Session: Identifiable, Codable, Sendable {
     /// Claude Code in the devRoot and are excluded from PR/issue tracking.
     public var isManager: Bool { kind == .manager }
 
+    /// Short label for the session's ticket badge/chip, or `nil` when no ticket
+    /// is attached. Jira tickets have no standalone numeric id, so prefer the
+    /// validated key (`MAXX-6859`) parsed from the browse URL; otherwise fall
+    /// back to `Issue #<number>` (GitHub/GitLab) or a bare `Issue` when only a
+    /// URL is known. Keeps the sidebar badge from vanishing on Jira sessions,
+    /// which carry `ticketURL`/`ticketTitle` but a nil `ticketNumber` (CROW-463).
+    public var ticketBadgeLabel: String? {
+        if let url = ticketURL, Validation.isJiraSpec(url), let key = Validation.jiraKey(from: url) {
+            return key
+        }
+        if let num = ticketNumber { return "Issue #\(num)" }
+        if ticketURL != nil { return "Issue" }
+        return nil
+    }
+
     public init(
         id: UUID = UUID(),
         name: String,

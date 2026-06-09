@@ -73,12 +73,15 @@ For each workspace spec, perform the same resolution as `/crow-workspace`:
 > Issue each `gh`/`git` fetch below as a **single, clean invocation** — one command per Bash call, no `cd …`/`echo`/`find` prefix or `| head` pipe — so the allowlist auto-approves it instead of prompting (see CLAUDE.md → "Fetching Ticket / PR Data").
 
 1. **Read config**: `cat {devRoot}/.claude/config.json`
-2. **Detect provider** from URL (see Provider Detection table in `/crow-workspace` skill)
+2. **Detect provider** from URL (see Provider Detection table in `/crow-workspace` skill — includes Jira)
 3. **Scan repos**: Find repos in all configured workspaces
 4. **Match repo**: Score repos against ticket content
-5. **Fetch ticket**: `gh issue view {url} --json title,body,labels` (with `dangerouslyDisableSandbox: true`)
-6. **Check for existing PR**: `gh pr list --repo {owner}/{repo} --search "{issue_number}" --state open --json number,title,headRefName,url --limit 5` (with `dangerouslyDisableSandbox: true`)
-7. **Generate names**: slug, branch, worktree path, session name (following `/crow-workspace` naming conventions)
+5. **Fetch ticket** (provider-specific, with `dangerouslyDisableSandbox: true`):
+   - GitHub: `gh issue view {url} --json title,body,labels`
+   - GitLab: `GITLAB_HOST={host} glab issue view {number} --repo {org/repo} --comments`
+   - Jira (task-only): `acli jira workitem view {key} --json` (title at `.fields.summary`)
+6. **Check for existing PR**: `gh pr list --repo {owner}/{repo} --search "{issue_number}" --state open --json number,title,headRefName,url --limit 5` (with `dangerouslyDisableSandbox: true`). For a Jira-task session this runs against the workspace's configured GitHub/GitLab code repo, not Jira.
+7. **Generate names**: slug, branch, worktree path, session name (following `/crow-workspace` naming conventions). **Jira:** resolve `{ticket_number}` as the **numeric suffix** of the key (`MAXX-6859` → `6859`); `{ticket_url}` is the full `…/browse/{key}` URL; the slug uses the lowercased full key (`{repo}-maxx-6859-{slug}`).
 8. **Compose prompt**: Use the First Prompt Template from `/crow-workspace`
 9. **Write prompt file**: `cat > {devRoot}/.claude/prompts/crow-prompt-{session_name}.md`
 

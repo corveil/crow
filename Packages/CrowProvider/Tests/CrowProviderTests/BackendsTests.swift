@@ -440,6 +440,43 @@ final class BackendsTests: XCTestCase {
         XCTAssertEqual(matches[0].candidate.branch, "feature/x")
     }
 
+    func testGitHubCodeBackendFindPRsMatchingKeysParsesAndFilters() async throws {
+        let fake = FakeShellRunner()
+        // Two PRs returned by gh search: one references MAXX-6859 in its title,
+        // one is a fuzzy match that mentions it nowhere — only the first counts.
+        let json = """
+        [
+          {"number":52,"url":"https://github.com/a/b/pull/52","state":"OPEN","updatedAt":"2026-01-02T00:00:00Z","title":"feat: thing. MAXX-6859","headRefName":"feature/maxx-6859-thing","body":"closes MAXX-6859"},
+          {"number":40,"url":"https://github.com/a/b/pull/40","state":"MERGED","updatedAt":"2026-01-01T00:00:00Z","title":"unrelated","headRefName":"feature/other","body":"no key here"}
+        ]
+        """
+        fake.responses = [.success(json)]
+        let backend = GitHubCodeBackend(shellRunner: fake)
+        let matches = try await backend.findPRsMatchingKeys([
+            KeyCandidate(repoSlug: "a/b", key: "MAXX-6859")
+        ])
+        XCTAssertEqual(matches.count, 1)
+        XCTAssertEqual(matches[0].number, 52)
+        XCTAssertEqual(matches[0].state, "OPEN")
+        XCTAssertEqual(matches[0].candidate.key, "MAXX-6859")
+        // Command shape: gh pr list --search "<key> in:title,body".
+        let args = fake.calls[0].args
+        XCTAssertEqual(Array(args.prefix(3)), ["gh", "pr", "list"])
+        XCTAssertTrue(args.contains("--search"))
+        XCTAssertTrue(args.contains("MAXX-6859 in:title,body"))
+        XCTAssertTrue(args.contains("a/b"))
+    }
+
+    func testGitHubCodeBackendFindPRsMatchingKeysSkipsFailedRepo() async throws {
+        let fake = FakeShellRunner()
+        fake.responses = [.failure(ShellRunnerError.nonZeroExit(exitCode: 1, output: "no auth"))]
+        let backend = GitHubCodeBackend(shellRunner: fake)
+        let matches = try await backend.findPRsMatchingKeys([
+            KeyCandidate(repoSlug: "a/b", key: "MAXX-6859")
+        ])
+        XCTAssertTrue(matches.isEmpty)
+    }
+
     // MARK: - GitLab backends
 
     func testGitLabTaskBackendDeclaresNoCapabilities() {

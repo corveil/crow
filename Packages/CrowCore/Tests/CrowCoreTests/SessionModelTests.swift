@@ -128,6 +128,40 @@ import Testing
     #expect(Session(name: "review", kind: .review).isManager == false)
 }
 
+// MARK: - Ticket Badge Label (CROW-463)
+
+@Test func ticketBadgeLabelGitHubUsesNumber() {
+    let session = Session(
+        name: "gh",
+        ticketURL: "https://github.com/org/repo/issues/42",
+        ticketNumber: 42,
+        provider: .github
+    )
+    #expect(session.ticketBadgeLabel == "Issue #42")
+}
+
+@Test func ticketBadgeLabelJiraUsesKeyDespiteNilNumber() {
+    // Regression for #463: Jira sessions carry a browse URL + title but a nil
+    // ticketNumber, so the badge must derive the key from the URL.
+    let session = Session(
+        name: "max-monorepo-maxx-6859",
+        ticketURL: "https://zitenote.atlassian.net/browse/MAXX-6859",
+        ticketTitle: "MAXX-6859: fold secondary vendor email domains",
+        ticketNumber: nil,
+        provider: .jira
+    )
+    #expect(session.ticketBadgeLabel == "MAXX-6859")
+}
+
+@Test func ticketBadgeLabelFallsBackToIssueWhenOnlyURL() {
+    let session = Session(name: "x", ticketURL: "https://example.test/thing")
+    #expect(session.ticketBadgeLabel == "Issue")
+}
+
+@Test func ticketBadgeLabelNilWhenNoTicket() {
+    #expect(Session(name: "none").ticketBadgeLabel == nil)
+}
+
 // MARK: - Enum Raw Values
 
 @Test func sessionKindRawValues() {

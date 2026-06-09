@@ -120,7 +120,7 @@ public struct SessionDetailView: View {
                 // Issue link
                 if let url = session.ticketURL {
                     LinkChip(
-                        label: session.ticketNumber.map { "Issue #\(String($0))" } ?? "Issue",
+                        label: session.ticketBadgeLabel ?? "Issue",
                         url: url,
                         icon: "link"
                     )

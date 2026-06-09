@@ -150,6 +150,38 @@ public struct BranchPRMatch: Sendable {
     }
 }
 
+/// Input to `CodeBackend.findPRsMatchingKeys` — one (repo, key) tuple, where
+/// `key` is a ticket key (e.g. a Jira key `MAXX-6859`) expected to appear in a
+/// PR's title/body/branch. Lets reconcile recover PR links for task-only
+/// trackers (Jira) whose PR branch doesn't match the session's worktree branch.
+public struct KeyCandidate: Sendable, Hashable {
+    public let repoSlug: String
+    public let key: String
+
+    public init(repoSlug: String, key: String) {
+        self.repoSlug = repoSlug
+        self.key = key
+    }
+}
+
+/// One PR match returned from `findPRsMatchingKeys`, tagged with the candidate
+/// it came from so callers can route the result back to the right session(s).
+public struct KeyPRMatch: Sendable {
+    public let candidate: KeyCandidate
+    public let number: Int
+    public let url: String
+    public let state: String       // "OPEN" / "MERGED" / "CLOSED"
+    public let updatedAt: Date?
+
+    public init(candidate: KeyCandidate, number: Int, url: String, state: String, updatedAt: Date?) {
+        self.candidate = candidate
+        self.number = number
+        self.url = url
+        self.state = state
+        self.updatedAt = updatedAt
+    }
+}
+
 /// PR metadata returned from `CodeBackend.fetchPRMetadata` — the subset
 /// SessionService needs to prep a review clone.
 public struct PRMetadata: Sendable {

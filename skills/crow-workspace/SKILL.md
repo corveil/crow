@@ -90,14 +90,34 @@ GITLAB_HOST=gitlab.example.com glab issue view {number} --repo {org/repo} --comm
 GITLAB_HOST=gitlab.example.com glab mr view {number} --repo {org/repo} --comments
 ```
 
+### Jira (acli)
+`acli` is already authenticated against a single Atlassian site, so it takes a
+bare key (not a URL). Pass the full key (`PROJ-NNN`), not just the numeric suffix.
+```bash
+acli jira workitem view {key} --json   # {key} = MAXX-6859
+```
+The summary is at `.fields.summary`; use it as `{ticket_title}`.
+
 ### Provider Detection from URL
 
 | URL Contains | Provider | CLI | GITLAB_HOST |
 |---|---|---|---|
 | `github.com` | github | gh | - |
+| `atlassian.net` / `/browse/` / bare `PROJ-123` | jira | acli | - |
 | `gitlab.example.com` | gitlab | glab | gitlab.example.com |
 | `gitlab.com` | gitlab | glab | gitlab.com |
 | `gitlab-il2.example.com` | gitlab | glab | gitlab-il2.example.com |
+
+**Jira is task-only** (no code/VCS surface): the ticket lives in Jira while code
+lands in the workspace's configured GitHub/GitLab repo. Detect it *before* the
+loose GitLab match. The Jira key is `PROJ-NNN` (e.g. `MAXX-6859`).
+
+**Resolving `{ticket_number}` for Jira:** Jira keys have no standalone numeric
+id, so use the **numeric suffix** of the key — `MAXX-6859` → `6859`. Pass that as
+`--ticket-number`, the full Atlassian browse URL as `--ticket-url`
+(`https://<site>.atlassian.net/browse/MAXX-6859`), and the summary as
+`--ticket-title`. The worktree/branch/session slug uses the full lowercased key,
+e.g. `{repo}-maxx-6859-{brief_slug}`.
 
 ## PR Detection
 
@@ -225,6 +245,13 @@ gh api repos/{owner}/{repo}/issues/{number}/comments
 ```bash
 GITLAB_HOST={host} glab issue view {number} --repo {org/repo} --comments
 ```
+
+**Jira (acli — task-only):**
+```bash
+acli jira workitem view {key} --json   # {key} = MAXX-6859 (full key, not the suffix)
+```
+Use `.fields.summary` for `{ticket_title}`. The code provider/PR detection below
+still runs against the workspace's configured GitHub/GitLab repo, not Jira.
 
 **If an existing PR was detected for this ticket**, also fetch the PR view so it can be embedded:
 ```bash

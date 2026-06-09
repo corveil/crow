@@ -196,6 +196,60 @@ public struct GitHubCodeBackend: CodeBackend {
         return Self.parseRecentPRsResponse(output, parsed: parsed)
     }
 
+    /// Search each repo for PRs whose title/body references `key` (e.g. a Jira
+    /// key like `MAXX-6859`). One `gh pr list --search` call per candidate
+    /// (the candidate set is small — only Jira-tasked sessions missing a PR
+    /// link). Best-effort per repo: a failing repo is skipped, not fatal.
+    public func findPRsMatchingKeys(_ candidates: [KeyCandidate]) async throws -> [KeyPRMatch] {
+        var out: [KeyPRMatch] = []
+        for c in candidates {
+            guard c.repoSlug.split(separator: "/", maxSplits: 1).count == 2,
+                  !c.key.isEmpty else { continue }
+            let output: String
+            do {
+                output = try await shellRunner.run(
+                    "gh", "pr", "list",
+                    "--repo", c.repoSlug,
+                    "--search", "\(c.key) in:title,body",
+                    "--state", "all",
+                    "--json", "number,url,state,updatedAt,title,headRefName,body",
+                    "--limit", "10"
+                )
+            } catch {
+                continue
+            }
+            out.append(contentsOf: Self.parseKeyPRMatches(output, candidate: c))
+        }
+        return out
+    }
+
+    /// Parse `gh pr list --json …` output into `KeyPRMatch`es. Post-filters to
+    /// PRs where the key actually appears (case-insensitively) in the title,
+    /// body, or head branch — `gh`'s search can be fuzzy, and we only want PRs
+    /// that genuinely reference the ticket.
+    static func parseKeyPRMatches(_ output: String, candidate: KeyCandidate) -> [KeyPRMatch] {
+        guard let data = output.data(using: .utf8),
+              let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
+        let dateFmt = ISO8601DateFormatter()
+        dateFmt.formatOptions = [.withInternetDateTime]
+        let needle = candidate.key.lowercased()
+        var matches: [KeyPRMatch] = []
+        for node in arr {
+            guard let number = node["number"] as? Int,
+                  let url = node["url"] as? String,
+                  let state = node["state"] as? String else { continue }
+            let title = (node["title"] as? String ?? "").lowercased()
+            let body = (node["body"] as? String ?? "").lowercased()
+            let head = (node["headRefName"] as? String ?? "").lowercased()
+            guard title.contains(needle) || body.contains(needle) || head.contains(needle) else { continue }
+            let updatedAt = (node["updatedAt"] as? String).flatMap { dateFmt.date(from: $0) }
+            matches.append(KeyPRMatch(
+                candidate: candidate, number: number, url: url, state: state, updatedAt: updatedAt
+            ))
+        }
+        return matches
+    }
+
     // MARK: - enableAutoMerge / updateBranch
 
     public func enableAutoMerge(prURL: String) async throws {
