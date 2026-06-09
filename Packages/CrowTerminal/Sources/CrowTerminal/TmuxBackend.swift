@@ -352,6 +352,47 @@ public final class TmuxBackend {
         }
     }
 
+    /// Drop the scrollback buffer for terminal `id` via `tmux clear-history`.
+    /// On-screen rows survive — only the off-screen history is wiped — matching
+    /// what macOS Terminal "Clear" and iTerm2 "Clear Buffer" do. Surfaced from
+    /// the right-click context menu in `GhosttySurfaceView`.
+    public func clearHistory(id: UUID) throws {
+        guard let windowIndex = bindings[id] else {
+            throw TmuxBackendError.unknownTerminal(id)
+        }
+        do {
+            let ctrl = try ensureRunningServer()
+            let target = "\(ctrl.sessionName):\(windowIndex)"
+            _ = try ctrl.run(["clear-history", "-t", target])
+        } catch {
+            reportIfTimeout(error)
+            throw error
+        }
+    }
+
+    /// Enter tmux copy-mode and select the entire scrollback for terminal
+    /// `id` — the "Select All" equivalent for a terminal pane. Surfaced from
+    /// the right-click context menu in `GhosttySurfaceView`. After this, Copy
+    /// (or Cmd+C) writes the captured text to the macOS pasteboard via the
+    /// existing `copy-pipe-no-clear` binding.
+    public func selectAll(id: UUID) throws {
+        guard let windowIndex = bindings[id] else {
+            throw TmuxBackendError.unknownTerminal(id)
+        }
+        do {
+            let ctrl = try ensureRunningServer()
+            let target = "\(ctrl.sessionName):\(windowIndex)"
+            // -H makes copy-mode enter without scrolling the screen first.
+            _ = try ctrl.run(["copy-mode", "-H", "-t", target])
+            try ctrl.sendKeys(target: target, keys: ["-X", "history-top"])
+            try ctrl.sendKeys(target: target, keys: ["-X", "begin-selection"])
+            try ctrl.sendKeys(target: target, keys: ["-X", "history-bottom"])
+        } catch {
+            reportIfTimeout(error)
+            throw error
+        }
+    }
+
     /// Destroy the tmux window backing `id` and forget the binding.
     public func destroyTerminal(id: UUID) {
         if let windowIndex = bindings[id] {

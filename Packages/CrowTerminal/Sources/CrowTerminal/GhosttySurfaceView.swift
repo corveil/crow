@@ -7,7 +7,7 @@ public final class GhosttySurfaceView: NSView {
     private var pendingText: [String] = []
     private var markedTextStorage = NSMutableAttributedString()
     private var trackingArea: NSTrackingArea?
-    private var isHoveringLink: Bool = false
+    private var hoveredLinkURL: String?
 
     /// Backoff schedule for retrying createSurface() when ghostty_surface_new returns nil.
     /// 4 retries totalling ~7.5s before declaring permanent failure.
@@ -206,16 +206,20 @@ public final class GhosttySurfaceView: NSView {
     }
 
     /// Toggle the pointing-hand cursor when libghostty reports the mouse is
-    /// hovering an OSC 8 hyperlink. Fed from `GHOSTTY_ACTION_MOUSE_OVER_LINK`
-    /// in `GhosttyApp.handleAction()`.
-    public func setHoveringLink(_ hovering: Bool) {
-        guard isHoveringLink != hovering else { return }
-        isHoveringLink = hovering
-        window?.invalidateCursorRects(for: self)
+    /// hovering an OSC 8 hyperlink, and stash the URL for the right-click
+    /// "Open Link" menu item. Fed from `GHOSTTY_ACTION_MOUSE_OVER_LINK` in
+    /// `GhosttyApp.handleAction()`. Pass `nil` when the mouse leaves the link.
+    public func setHoveringLink(_ url: String?) {
+        guard hoveredLinkURL != url else { return }
+        let wasHovering = hoveredLinkURL != nil
+        hoveredLinkURL = url
+        if wasHovering != (url != nil) {
+            window?.invalidateCursorRects(for: self)
+        }
     }
 
     public override func resetCursorRects() {
-        if isHoveringLink {
+        if hoveredLinkURL != nil {
             addCursorRect(bounds, cursor: .pointingHand)
         }
     }
@@ -347,6 +351,114 @@ public final class GhosttySurfaceView: NSView {
             pasteboard.clearContents()
             pasteboard.setString(str, forType: .string)
         }
+    }
+
+    // MARK: - Right-click context menu
+
+    /// Build a context menu matching macOS terminal conventions: Copy / Paste /
+    /// Select All / Clear / Open Link. Items are enabled/disabled at
+    /// construction time against the current surface state (selection present,
+    /// pasteboard contents, hovered link, known active terminal). Right-click
+    /// position has already driven `mouseMoved` → `MOUSE_OVER_LINK`, so
+    /// `hoveredLinkURL` already reflects what's under the cursor.
+    public override func menu(for event: NSEvent) -> NSMenu? {
+        guard event.type == .rightMouseDown || event.type == .rightMouseUp else {
+            return super.menu(for: event)
+        }
+
+        let menu = NSMenu(title: "Terminal")
+        // AppKit's default `autoenablesItems = true` ignores per-item
+        // `isEnabled` and instead enables anything whose target responds to
+        // its action selector — which would render every item enabled
+        // regardless of selection / pasteboard / hover state. Disable so the
+        // gating below is what users see.
+        menu.autoenablesItems = false
+
+        let hasSelection: Bool = {
+            guard let surface else { return false }
+            return ghostty_surface_has_selection(surface)
+        }()
+        let canPaste = NSPasteboard.general.canReadObject(
+            forClasses: [NSString.self], options: nil
+        )
+        let activeTerminalID = TmuxBackend.shared.activeTerminalID
+        let linkURL: URL? = {
+            guard let raw = hoveredLinkURL,
+                  let url = URL(string: raw),
+                  let scheme = url.scheme?.lowercased(),
+                  GhosttyApp.allowedURLSchemes.contains(scheme) else { return nil }
+            return url
+        }()
+
+        let copyItem = NSMenuItem(
+            title: "Copy", action: #selector(copy(_:)), keyEquivalent: ""
+        )
+        copyItem.target = self
+        copyItem.isEnabled = hasSelection
+        menu.addItem(copyItem)
+
+        let pasteItem = NSMenuItem(
+            title: "Paste", action: #selector(paste(_:)), keyEquivalent: ""
+        )
+        pasteItem.target = self
+        pasteItem.isEnabled = canPaste
+        menu.addItem(pasteItem)
+
+        let selectAllItem = NSMenuItem(
+            title: "Select All",
+            action: #selector(contextSelectAll(_:)),
+            keyEquivalent: ""
+        )
+        selectAllItem.target = self
+        selectAllItem.isEnabled = activeTerminalID != nil
+        menu.addItem(selectAllItem)
+
+        let clearItem = NSMenuItem(
+            title: "Clear",
+            action: #selector(contextClear(_:)),
+            keyEquivalent: ""
+        )
+        clearItem.target = self
+        clearItem.isEnabled = activeTerminalID != nil
+        menu.addItem(clearItem)
+
+        menu.addItem(.separator())
+
+        let openLinkItem = NSMenuItem(
+            title: "Open Link",
+            action: #selector(contextOpenLink(_:)),
+            keyEquivalent: ""
+        )
+        openLinkItem.target = self
+        openLinkItem.representedObject = linkURL
+        openLinkItem.isEnabled = linkURL != nil
+        menu.addItem(openLinkItem)
+
+        return menu
+    }
+
+    @objc private func contextSelectAll(_ sender: Any?) {
+        guard let id = TmuxBackend.shared.activeTerminalID else { return }
+        do {
+            try TmuxBackend.shared.selectAll(id: id)
+        } catch {
+            NSLog("[GhosttySurfaceView] selectAll failed: \(error)")
+        }
+    }
+
+    @objc private func contextClear(_ sender: Any?) {
+        guard let id = TmuxBackend.shared.activeTerminalID else { return }
+        do {
+            try TmuxBackend.shared.clearHistory(id: id)
+        } catch {
+            NSLog("[GhosttySurfaceView] clearHistory failed: \(error)")
+        }
+    }
+
+    @objc private func contextOpenLink(_ sender: Any?) {
+        guard let item = sender as? NSMenuItem,
+              let url = item.representedObject as? URL else { return }
+        NSWorkspace.shared.open(url)
     }
 
     public override func keyUp(with event: NSEvent) {
