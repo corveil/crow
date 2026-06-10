@@ -442,7 +442,7 @@ final class IssueTracker {
                 }
             }
             let allCurrentIDs = Set(reviews.map(\.id))
-            let reviewExcludePatterns = config.defaults.excludeReviewRepos
+            let reviewExcludePatterns = config.effectiveExcludeReviewRepos
             if !reviewExcludePatterns.isEmpty {
                 reviews = reviews.filter { !repoMatchesPatterns($0.repo, patterns: reviewExcludePatterns) }
             }

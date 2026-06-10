@@ -242,6 +242,52 @@ import Testing
     #expect(config.workspaces[0].alwaysInclude.isEmpty)
 }
 
+@Test func workspaceExcludeReviewReposRoundTrip() throws {
+    let config = AppConfig(workspaces: [
+        WorkspaceInfo(name: "Org", excludeReviewRepos: ["org/repo1", "org/*"])
+    ])
+    let data = try JSONEncoder().encode(config)
+    let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+    #expect(decoded.workspaces[0].excludeReviewRepos == ["org/repo1", "org/*"])
+}
+
+@Test func workspaceExcludeReviewReposDefaultsEmptyWhenKeyMissing() throws {
+    // Legacy configs without the key should default to empty (feature off).
+    let json = """
+    {"workspaces": [{"id": "00000000-0000-0000-0000-000000000001", "name": "Org", "provider": "github", "cli": "gh"}]}
+    """.data(using: .utf8)!
+    let config = try JSONDecoder().decode(AppConfig.self, from: json)
+    #expect(config.workspaces[0].excludeReviewRepos.isEmpty)
+}
+
+@Test func effectiveExcludeReviewReposUnionsGlobalAndWorkspaces() {
+    // Effective set is the global default unioned with every workspace's list.
+    var config = AppConfig(workspaces: [
+        WorkspaceInfo(name: "Org1", excludeReviewRepos: ["ws1/repo"]),
+        WorkspaceInfo(name: "Org2"), // empty — contributes nothing
+        WorkspaceInfo(name: "Org3", excludeReviewRepos: ["ws3/*"])
+    ])
+    config.defaults.excludeReviewRepos = ["global/*"]
+
+    let effective = config.effectiveExcludeReviewRepos
+    #expect(effective.contains("global/*"))
+    #expect(effective.contains("ws1/repo"))
+    #expect(effective.contains("ws3/*"))
+
+    // A repo excluded by any workspace (or the global default) is matched.
+    #expect(repoMatchesPatterns("ws1/repo", patterns: effective) == true)
+    #expect(repoMatchesPatterns("global/anything", patterns: effective) == true)
+    #expect(repoMatchesPatterns("ws3/something", patterns: effective) == true)
+    // A repo excluded by no one is not matched.
+    #expect(repoMatchesPatterns("other/repo", patterns: effective) == false)
+}
+
+@Test func effectiveExcludeReviewReposEmptyWhenNothingConfigured() {
+    // No global and no per-workspace exclusions → empty effective set, no filtering.
+    let config = AppConfig(workspaces: [WorkspaceInfo(name: "Org")])
+    #expect(config.effectiveExcludeReviewRepos.isEmpty)
+}
+
 @Test func workspaceCustomInstructionsRoundTrip() throws {
     let config = AppConfig(workspaces: [
         WorkspaceInfo(name: "Org", customInstructions: "Always run npm test before committing")
