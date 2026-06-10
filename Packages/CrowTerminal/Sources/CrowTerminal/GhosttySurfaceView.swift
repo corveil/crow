@@ -603,6 +603,12 @@ public final class GhosttySurfaceView: NSView {
     @objc private func contextOpenInEditor(_ sender: Any?) {
         guard let item = sender as? NSMenuItem,
               let url = item.representedObject as? URL else { return }
+        // v1 limitation: we resolve the file path but drop the line
+        // number `SmartDetect.detectFileLine` parsed. Jumping to a
+        // specific line is editor-specific (txmt://, vscode://, …) and
+        // there is no portable way to pick one without a configurable
+        // editor preference. Opening the file is still useful; line
+        // navigation can be a follow-up once we add an editor setting.
         NSWorkspace.shared.open(url)
     }
 
@@ -739,27 +745,14 @@ public final class GhosttySurfaceView: NSView {
 
     public override func mouseDown(with event: NSEvent) {
         guard let surface else { return }
-
-        // Cmd+click on a live selection: if it looks like a URL or a
-        // path:line reference, open it via the same dispatchers as the
-        // right-click menu (#471 gap 5). Falls through to the libghostty
-        // mouse path otherwise so plain Cmd+click on text still extends
-        // the selection / forwards to apps that asked for it.
-        if event.modifierFlags.contains(.command),
-           let selection = currentSelectionText() {
-            if let url = SmartDetect.detectURL(
-                in: selection, allowedSchemes: GhosttyApp.allowedURLSchemes
-            ) {
-                NSWorkspace.shared.open(url)
-                return
-            }
-            if let fileLine = SmartDetect.detectFileLine(in: selection),
-               let url = resolveFileURL(path: fileLine.path) {
-                NSWorkspace.shared.open(url)
-                return
-            }
-        }
-
+        // Note: smart-detect (gap 5) is intentionally NOT bound to
+        // Cmd+click here. libghostty's C surface doesn't expose
+        // text-at-point, so we can't verify the click landed on the
+        // detected URL — a global "Cmd+click anywhere opens the
+        // selected URL" would override macOS Terminal's
+        // selection-extend convention and surprise the user. The
+        // right-click menu's "Open URL" / "Open in Editor" items
+        // already cover the selection-based flow.
         sendMousePosition(for: event)
         ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_LEFT, translateMods(event.modifierFlags))
     }
