@@ -21,6 +21,7 @@ public struct WorkspaceFormView: View {
     @State private var jiraJQL: String
     @State private var alwaysIncludeText: String
     @State private var autoReviewReposText: String
+    @State private var excludeReviewReposText: String
     @State private var customInstructionsText: String
     @State private var gatewayBaseURL: String
     @State private var gatewayHeadersText: String
@@ -51,6 +52,7 @@ public struct WorkspaceFormView: View {
         self._jiraJQL = State(initialValue: workspace?.jiraJQL ?? "")
         self._alwaysIncludeText = State(initialValue: workspace?.alwaysInclude.joined(separator: ", ") ?? "")
         self._autoReviewReposText = State(initialValue: workspace?.autoReviewRepos.joined(separator: ", ") ?? "")
+        self._excludeReviewReposText = State(initialValue: workspace?.excludeReviewRepos.joined(separator: ", ") ?? "")
         self._customInstructionsText = State(initialValue: workspace?.customInstructions ?? "")
         self._gatewayBaseURL = State(initialValue: workspace?.gateway?.baseURL ?? "")
         self._gatewayHeadersText = State(initialValue: workspace?.gateway.map {
@@ -176,6 +178,12 @@ public struct WorkspaceFormView: View {
                 Text("Comma-separated repos or patterns (e.g. org/repo, org/*). New review requests from matching repos will automatically create a review session.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                TextField("Excluded Review Repos", text: $excludeReviewReposText)
+                    .textFieldStyle(.roundedBorder)
+                Text("Comma-separated repos or patterns (e.g. org/repo, org/*). Review requests from matching repos are hidden from the review board and don't trigger notifications.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Custom Instructions") {
@@ -236,6 +244,7 @@ public struct WorkspaceFormView: View {
     private func buildWorkspace() -> WorkspaceInfo {
         let alwaysInclude = parseCSV(alwaysIncludeText)
         let autoReviewRepos = parseCSV(autoReviewReposText)
+        let excludeReviewRepos = parseCSV(excludeReviewReposText)
         let trimmedInstructions = customInstructionsText.trimmingCharacters(in: .whitespacesAndNewlines)
 
         // Persist taskProvider only when it diverges from the code provider;
@@ -251,6 +260,7 @@ public struct WorkspaceFormView: View {
             host: provider == "gitlab" && !host.isEmpty ? host : nil,
             alwaysInclude: alwaysInclude,
             autoReviewRepos: autoReviewRepos,
+            excludeReviewRepos: excludeReviewRepos,
             customInstructions: trimmedInstructions.isEmpty ? nil : trimmedInstructions,
             taskProvider: resolvedTaskProvider,
             jiraProjectKey: isJira ? nonEmpty(jiraProjectKey) : nil,

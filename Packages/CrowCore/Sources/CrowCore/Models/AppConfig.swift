@@ -66,6 +66,14 @@ public struct AppConfig: Codable, Sendable, Equatable {
     /// apply to non-Manager sessions only (CROW-402).
     public var managerGateway: WorkspaceGateway?
 
+    /// Effective review-exclude patterns: the global `defaults.excludeReviewRepos`
+    /// unioned with every workspace's per-workspace `excludeReviewRepos`. A repo
+    /// excluded by any workspace (or the global default) is hidden from the review
+    /// board. Order is irrelevant — `repoMatchesPatterns` matches on any pattern.
+    public var effectiveExcludeReviewRepos: [String] {
+        defaults.excludeReviewRepos + workspaces.flatMap(\.excludeReviewRepos)
+    }
+
     public init(
         workspaces: [WorkspaceInfo] = [],
         defaults: ConfigDefaults = ConfigDefaults(),
@@ -268,6 +276,7 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
     public var host: String?          // GitLab host (e.g., "gitlab.example.com")
     public var alwaysInclude: [String] // repos to always list in prompt table
     public var autoReviewRepos: [String] // repos where review requests auto-create a review session
+    public var excludeReviewRepos: [String] // repos whose review requests are hidden from the review board
     public var customInstructions: String? // free-text instructions appended to session prompts
     /// Optional AI gateway. When set, `claude` launches into this workspace
     /// inherit `ANTHROPIC_BASE_URL`/`ANTHROPIC_CUSTOM_HEADERS` derived from it;
@@ -312,6 +321,7 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
         host: String? = nil,
         alwaysInclude: [String] = [],
         autoReviewRepos: [String] = [],
+        excludeReviewRepos: [String] = [],
         customInstructions: String? = nil,
         taskProvider: String? = nil,
         jiraProjectKey: String? = nil,
@@ -326,6 +336,7 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
         self.host = host
         self.alwaysInclude = alwaysInclude
         self.autoReviewRepos = autoReviewRepos
+        self.excludeReviewRepos = excludeReviewRepos
         self.customInstructions = customInstructions
         self.taskProvider = taskProvider
         self.jiraProjectKey = jiraProjectKey
@@ -343,6 +354,7 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
         host = try container.decodeIfPresent(String.self, forKey: .host)
         alwaysInclude = try container.decodeIfPresent([String].self, forKey: .alwaysInclude) ?? []
         autoReviewRepos = try container.decodeIfPresent([String].self, forKey: .autoReviewRepos) ?? []
+        excludeReviewRepos = try container.decodeIfPresent([String].self, forKey: .excludeReviewRepos) ?? []
         customInstructions = try container.decodeIfPresent(String.self, forKey: .customInstructions)
         taskProvider = try container.decodeIfPresent(String.self, forKey: .taskProvider)
         jiraProjectKey = try container.decodeIfPresent(String.self, forKey: .jiraProjectKey)
@@ -352,7 +364,7 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, provider, cli, host, alwaysInclude, autoReviewRepos, customInstructions
+        case id, name, provider, cli, host, alwaysInclude, autoReviewRepos, excludeReviewRepos, customInstructions
         case taskProvider, jiraProjectKey, jiraJQL, jiraSite, gateway
     }
 
