@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import CrowCore
 
-@Suite("BinaryOverrides")
+@Suite("BinaryOverrides", .serialized)
 struct BinaryOverridesTests {
     /// Resets the shared override state at the end of the suite so other
     /// tests don't see leaked entries. Each test that mutates state is

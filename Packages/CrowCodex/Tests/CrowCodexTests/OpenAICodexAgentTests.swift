@@ -3,7 +3,7 @@ import Testing
 @testable import CrowCodex
 @testable import CrowCore
 
-@Suite("OpenAICodexAgent")
+@Suite("OpenAICodexAgent", .serialized)
 struct OpenAICodexAgentTests {
     private let agent = OpenAICodexAgent()
 

@@ -18,6 +18,17 @@ public struct CursorAgent: CodingAgent {
     public let iconSystemName: String = "cursorarrow.rays"
     public let supportsRemoteControl: Bool = true
     /// Cursor's CLI binary is named `agent`, not `cursor`.
+    ///
+    /// `agent` is a generic name — CI runner installs (Azure DevOps, TeamCity)
+    /// also ship a binary called `agent`, so the PATH-walk discovery in
+    /// `CodingAgent.findBinary()` can in principle resolve a non-Cursor
+    /// executable on a build machine. If that happens, set
+    /// `defaults.binaries.cursor` to the absolute path of Cursor's CLI in
+    /// `{devRoot}/.claude/config.json` — the explicit override is consulted
+    /// before the PATH walk and pins the resolution. We accept the false-
+    /// positive risk here (CROW-484) because real workstations don't usually
+    /// have a competing `agent` on PATH, and the override knob exists for
+    /// the exotic case.
     public let launchCommandToken: String = "agent"
     public let hookConfigWriter: any HookConfigWriter
     public let stateSignalSource: any StateSignalSource
