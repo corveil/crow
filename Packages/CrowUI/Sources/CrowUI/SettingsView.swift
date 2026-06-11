@@ -35,17 +35,20 @@ public struct SettingsView: View {
     public var onSave: ((String, AppConfig) -> Void)?
     public var onRescaffold: ((String) -> Void)?
     /// Fired when the user commits a new value into the corveil picker
-    /// (Browse confirm or Enter on the TextField), so AppDelegate can
-    /// re-run just `Scaffolder.installCorveilSkill` instead of waiting for
-    /// the next app restart (CROW-490). `nil` argument means "the user
-    /// cleared the field" — the install is a no-op then but the caller
-    /// still gets the signal to clear any stale warning banner.
-    public var onCorveilReinstall: ((String?) -> Void)?
+    /// (Browse confirm, Enter on the TextField) or clicks "Reinstall skill",
+    /// so AppDelegate can re-run just `Scaffolder.installCorveilSkill`
+    /// instead of waiting for the next app restart (CROW-490, CROW-491).
+    /// `nil` argument means "the user cleared the field" — the install is
+    /// a no-op then but the caller still gets the signal to clear any stale
+    /// warning banner. Returns the warning string (`nil` on success) so the
+    /// Reinstall button can show inline `✓ / ✗` feedback; picker-change
+    /// callers may ignore the return.
+    public var onCorveilReinstall: ((String?) async -> String?)?
 
     public init(appState: AppState, devRoot: String, config: AppConfig,
                 onSave: ((String, AppConfig) -> Void)? = nil,
                 onRescaffold: ((String) -> Void)? = nil,
-                onCorveilReinstall: ((String?) -> Void)? = nil) {
+                onCorveilReinstall: ((String?) async -> String?)? = nil) {
         self.appState = appState
         self._devRoot = State(initialValue: devRoot)
         self._config = State(initialValue: config)
@@ -642,7 +645,11 @@ public struct SettingsView: View {
     private func commitCorveilPath() {
         save()
         let path = corveilBinding.wrappedValue
-        onCorveilReinstall?(path.isEmpty ? nil : path)
+        // Picker commits are fire-and-forget — the closure now returns the
+        // install warning, but `corveilSkillInstallWarning` is already
+        // updated inside the closure for the banner, and there is no
+        // inline result line for picker-driven installs.
+        Task { _ = await onCorveilReinstall?(path.isEmpty ? nil : path) }
     }
 
     /// Two-way binding into `config.defaults.binaries["corveil"]` that treats
@@ -687,11 +694,13 @@ public struct SettingsView: View {
     /// the per-launch path (CROW-482), without requiring a restart, a
     /// workspace switch, or re-picking the binary (CROW-491). The common
     /// loop this serves is "I rebuilt corveil locally; install the new
-    /// embedded skill." Goes through `AppState.onReinstallCorveilSkill`
-    /// because SettingsView (CrowUI) can't import the app target where
-    /// `Scaffolder` lives. The closure is async and offloads its blocking
-    /// work to a detached task internally, so awaiting it from the main
-    /// actor doesn't pin the UI for the install timeout.
+    /// embedded skill." Goes through the existing `onCorveilReinstall`
+    /// hook (also used by picker commits, CROW-490) so the click serializes
+    /// behind any in-flight install via `AppDelegate.enqueueCorveilInstall`.
+    /// The closure offloads blocking work to a detached task internally, so
+    /// awaiting it from the main actor doesn't pin the UI for the install
+    /// timeout. `appState.corveilSkillInstallWarning` is already updated
+    /// inside the closure, so we only need to set the inline result line.
     private func reinstallCorveilSkill() {
         let path = corveilBinding.wrappedValue
         guard !path.isEmpty else { return }
@@ -706,7 +715,7 @@ public struct SettingsView: View {
             // print a false `✓ Skill reinstalled` for an install that never
             // ran. Explicit guard inside the Task so we don't capture a
             // non-Sendable closure across the actor boundary.
-            guard let callback = appState.onReinstallCorveilSkill else {
+            guard let callback = onCorveilReinstall else {
                 corveilReinstallResult = "✗ Reinstall unavailable in this build (callback not wired)."
                 corveilReinstalling = false
                 return
@@ -714,16 +723,8 @@ public struct SettingsView: View {
             let warning = await callback(path)
             if let warning {
                 corveilReinstallResult = "✗ \(warning)"
-                // Mirror the launch-time surface so the orange banner at
-                // the top of General also reflects the latest attempt —
-                // keeps a single source of truth for "is corveil broken?"
-                appState.corveilSkillInstallWarning = warning
             } else {
                 corveilReinstallResult = "✓ Skill reinstalled"
-                // A successful manual reinstall clears any stale
-                // launch-time warning — if the user has just made it
-                // work, they shouldn't keep staring at the old banner.
-                appState.corveilSkillInstallWarning = nil
             }
             corveilReinstalling = false
         }
