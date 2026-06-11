@@ -180,68 +180,37 @@ struct Scaffolder {
         // `Pipe()` would block the child if it ever wrote >64KB before exit.
         proc.standardOutput = FileHandle.nullDevice
 
-        // Drain stderr concurrently for the same reason stdout uses
-        // /dev/null: a chatty failure mode (Go panic with stack trace,
-        // assertion dump) can easily exceed the ~64KB pipe buffer, and an
-        // undrained `Pipe()` would block the child on write. The dedicated
-        // reader blocks on `readDataToEndOfFile` (EOF arrives when corveil
-        // exits or post-SIGTERM) and signals a semaphore so we can collect
-        // deterministically.
-        let stderrDrain = PipeDrainer.start(stderrPipe)
-
         do {
             try proc.run()
         } catch {
-            stderrDrain.abandon()
             NSLog("[Scaffolder] corveil launch failed: %@", error.localizedDescription)
             return "Corveil skill install failed — \(error.localizedDescription). Check path in Settings."
         }
 
-        // Wall-clock timeout: poll for completion in short slices so a hung
-        // process gets SIGTERM'd instead of blocking app launch indefinitely.
-        // `waitUntilExit()` has no timeout overload; this is the standard
-        // Foundation workaround.
-        let deadline = Date().addingTimeInterval(Self.corveilInstallTimeout)
-        while proc.isRunning {
-            if Date() >= deadline {
-                proc.terminate()
-                // Give the process up to 500ms to honor SIGTERM before
-                // returning the warning, so we don't leave a zombie behind.
-                let graceDeadline = Date().addingTimeInterval(0.5)
-                while proc.isRunning, Date() < graceDeadline {
-                    Thread.sleep(forTimeInterval: 0.05)
-                }
-                NSLog("[Scaffolder] corveil skill install timed out after %.1fs", Self.corveilInstallTimeout)
-                // Even on timeout, run waitUntilExit so Foundation releases
-                // its internal copy of the stderr writeFD — that's the only
-                // way the bg drain can see EOF and return what little it
-                // captured (see comment above the success-path call below).
-                proc.waitUntilExit()
-                _ = stderrDrain.collect(within: Self.pipeDrainGrace)
-                return "Corveil skill install timed out after \(Int(Self.corveilInstallTimeout))s — binary may be hung. Check path in Settings."
-            }
-            Thread.sleep(forTimeInterval: 0.05)
-        }
-        // `Process` keeps an internal copy of the stderr pipe's write FD that
-        // is only released as part of `waitUntilExit()`'s cleanup. The polling
-        // loop above leaves that copy open, so the bg drain's
-        // `readDataToEndOfFile()` never sees EOF — its collect would time out
-        // empty. `waitUntilExit` is a no-op for the wait itself now (the child
-        // is already gone) but its cleanup releases Foundation's FD copy so
-        // EOF reaches our read end and the drain delivers any captured stderr.
+        // Watchdog: SIGTERM after `corveilInstallTimeout` so a hung binary
+        // unblocks `waitUntilExit`. The watchdog records the timeout so we
+        // can distinguish exit-N from wall-clock kill below. `waitUntilExit`
+        // (not a polling loop) is what triggers Foundation's pipe-write-FD
+        // cleanup, which is the only way the post-exit `readToEnd()` below
+        // reliably sees EOF.
+        let watchdog = ScaffolderTimeoutWatchdog(deadline: Self.corveilInstallTimeout, proc: proc)
+        watchdog.start()
         proc.waitUntilExit()
+        let timedOut = watchdog.cancel()
 
+        if timedOut {
+            NSLog("[Scaffolder] corveil skill install timed out after %.1fs", Self.corveilInstallTimeout)
+            return "Corveil skill install timed out after \(Int(Self.corveilInstallTimeout))s — binary may be hung. Check path in Settings."
+        }
         if proc.terminationStatus != 0 {
-            let stderr = String(data: stderrDrain.collect(within: Self.pipeDrainGrace), encoding: .utf8)?
+            let stderr = (try? stderrPipe.fileHandleForReading.readToEnd())
+                .flatMap { String(data: $0, encoding: .utf8) }?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             NSLog("[Scaffolder] corveil skill install exit=%d stderr=%@",
                   proc.terminationStatus, stderr)
             let detail = stderr.isEmpty ? "exit code \(proc.terminationStatus)" : stderr
             return "Corveil skill install failed — \(detail). Check path in Settings."
         }
-        // Success: drain the (typically empty) stderr to release the worker
-        // thread before returning.
-        _ = stderrDrain.collect(within: Self.pipeDrainGrace)
         NSLog("[Scaffolder] corveil skill installed at %@", target)
         return nil
     }
@@ -252,12 +221,6 @@ struct Scaffolder {
     /// many seconds. 5s is generous for a local subprocess that only writes
     /// one ~10KB file.
     static let corveilInstallTimeout: TimeInterval = 5.0
-
-    /// Bounded post-exit wait for the stderr drain to flush. Once the child
-    /// is gone (or SIGTERM'd), EOF should arrive near-instantly; cap at 1s
-    /// so an uncooperative child that swallowed SIGTERM can't pin startup
-    /// past `corveilInstallTimeout`.
-    static let pipeDrainGrace: TimeInterval = 1.0
 
     // MARK: - Bundled Templates
 
@@ -472,56 +435,43 @@ struct Scaffolder {
     }
 }
 
-/// Background drainer for a `Pipe`. Runs `readDataToEndOfFile()` off the
-/// caller's thread so the child can't pipe-buffer-deadlock against an
-/// unread `Pipe()`, and signals a semaphore on EOF so the caller can
-/// collect deterministically. Mirrors the helper used in
-/// `SettingsView.runCorveilVersion`; duplicated here because Scaffolder
-/// lives in the `Crow` target and SettingsView in `CrowUI` — no shared
-/// internal home today, and the helper is small enough that two copies
-/// beat adding a CrowCore utility just for two callers.
-fileprivate final class PipeDrainer: @unchecked Sendable {
-    private let pipe: Pipe
-    private let acc = DataAccumulator()
-    private let done = DispatchSemaphore(value: 0)
-
-    private init(pipe: Pipe) {
-        self.pipe = pipe
-    }
-
-    static func start(_ pipe: Pipe) -> PipeDrainer {
-        let drainer = PipeDrainer(pipe: pipe)
-        DispatchQueue.global(qos: .utility).async {
-            let data = drainer.pipe.fileHandleForReading.readDataToEndOfFile()
-            if !data.isEmpty {
-                drainer.acc.append(data)
-            }
-            drainer.done.signal()
-        }
-        return drainer
-    }
-
-    func collect(within timeout: TimeInterval) -> Data {
-        _ = done.wait(timeout: .now() + timeout)
-        return acc.snapshot()
-    }
-
-    func abandon() {
-        try? pipe.fileHandleForReading.close()
-    }
-}
-
-private final class DataAccumulator: @unchecked Sendable {
+/// SIGTERM a `Process` after `deadline` seconds if it's still running. Used
+/// to bound `waitUntilExit` without a polling loop (a polling loop on
+/// `proc.isRunning` consumes the exit observation Foundation needs to run
+/// its pipe-write-FD cleanup, so post-exit `readToEnd()` reads return empty).
+/// Mirrors `SettingsView`'s `TimeoutWatchdog`; duplicated here because
+/// Scaffolder and SettingsView live in different targets with no shared
+/// private utility module today, and the helper is small enough that two
+/// copies beat introducing a CrowCore type for two callers.
+fileprivate final class ScaffolderTimeoutWatchdog: @unchecked Sendable {
+    private let proc: Process
+    private let timer: DispatchSourceTimer
     private let lock = NSLock()
-    private var data = Data()
+    private var didFire = false
 
-    func append(_ chunk: Data) {
-        lock.lock(); defer { lock.unlock() }
-        data.append(chunk)
+    init(deadline: TimeInterval, proc: Process) {
+        self.proc = proc
+        self.timer = DispatchSource.makeTimerSource(queue: .global(qos: .userInitiated))
+        self.timer.schedule(deadline: .now() + deadline)
     }
 
-    func snapshot() -> Data {
+    func start() {
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            self.didFire = true
+            self.lock.unlock()
+            if self.proc.isRunning {
+                self.proc.terminate()
+            }
+        }
+        timer.resume()
+    }
+
+    /// Cancel the watchdog. Returns true if it had already fired (timeout).
+    func cancel() -> Bool {
+        timer.cancel()
         lock.lock(); defer { lock.unlock() }
-        return data
+        return didFire
     }
 }

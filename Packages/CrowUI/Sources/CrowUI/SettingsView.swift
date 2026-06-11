@@ -633,17 +633,15 @@ public struct SettingsView: View {
     /// actor and trivially testable. Returns a single-line summary suitable
     /// for inline display.
     ///
-    /// Bounded by `verifyTimeout` so a misbehaving binary that hangs on
-    /// `--version` can't pin the detached Task forever (matches the
-    /// `Scaffolder.installCorveilSkill` install-path timeout). Each pipe is
-    /// drained by a dedicated background reader running
-    /// `readDataToEndOfFile()`, which blocks until the child closes its end.
-    /// Snapshotting waits on a bounded `DispatchSemaphore`, so there's no
-    /// race between the polling thread and an in-flight readability handler:
-    /// either the drain finished cleanly (signal arrived → snapshot is whole)
-    /// or the bounded wait expires and we report what's there. Combined,
-    /// these eliminate both the pipe-buffer deadlock and the EOF tail race
-    /// that `readabilityHandler` introduces.
+    /// Uses `proc.waitUntilExit()` (with a `TimeoutWatchdog` SIGTERM'ing the
+    /// child if it hangs) rather than a polling loop on `proc.isRunning`.
+    /// `waitUntilExit` is the only way to deterministically trigger
+    /// Foundation's pipe-write-FD cleanup; a polling loop leaves Foundation's
+    /// internal copy of the writeFD open and the post-exit reads either hang
+    /// (with a background drain) or return empty (Foundation closes its copy
+    /// on its own internal schedule). Once `waitUntilExit` returns, both
+    /// pipe writers (child + Foundation) have closed, so a synchronous
+    /// `readToEnd()` on each pipe returns immediately with the data.
     nonisolated static func runCorveilVersion(at path: String) -> String {
         let fm = FileManager.default
         guard fm.isExecutableFile(atPath: path) else {
@@ -657,48 +655,22 @@ public struct SettingsView: View {
         proc.standardOutput = outPipe
         proc.standardError = errPipe
 
-        let outDrain = PipeDrainer.start(outPipe)
-        let errDrain = PipeDrainer.start(errPipe)
-
         do {
             try proc.run()
         } catch {
-            outDrain.abandon()
-            errDrain.abandon()
             return "✗ Could not launch: \(error.localizedDescription)"
         }
 
-        // Wall-clock timeout. Poll in 50ms slices so a hung binary is
-        // SIGTERM'd rather than blocking forever; a 500ms grace lets the
-        // process honor SIGTERM before we drop it.
-        let deadline = Date().addingTimeInterval(verifyTimeout)
-        var timedOut = false
-        while proc.isRunning {
-            if Date() >= deadline {
-                proc.terminate()
-                let graceDeadline = Date().addingTimeInterval(0.5)
-                while proc.isRunning, Date() < graceDeadline {
-                    Thread.sleep(forTimeInterval: 0.05)
-                }
-                timedOut = true
-                break
-            }
-            Thread.sleep(forTimeInterval: 0.05)
-        }
-        // `Process` keeps an internal copy of each pipe's write FD that is
-        // only released as part of `waitUntilExit()`'s cleanup. The polling
-        // loop above leaves that internal copy open, so the bg drainers'
-        // `readDataToEndOfFile()` never sees EOF and the snapshot below
-        // returns empty (the test failure that flagged this). `waitUntilExit`
-        // is a no-op for the wait itself at this point (the child is already
-        // gone or being torn down) but its cleanup releases Foundation's FD
-        // copy so EOF is finally delivered to our read ends.
+        // Watchdog: SIGTERM after `verifyTimeout` so a hung binary unblocks
+        // `waitUntilExit` below. The watchdog also records the timeout so we
+        // can distinguish a normal exit-N from a wall-clock kill.
+        let watchdog = TimeoutWatchdog(deadline: verifyTimeout, proc: proc)
+        watchdog.start()
         proc.waitUntilExit()
+        let timedOut = watchdog.cancel()
 
-        let outStr = String(data: outDrain.collect(within: pipeDrainGrace), encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let errStr = String(data: errDrain.collect(within: pipeDrainGrace), encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let outStr = Self.readAll(outPipe)
+        let errStr = Self.readAll(errPipe)
         let combined = [outStr, errStr].filter { !$0.isEmpty }.joined(separator: " — ")
         let snippet = combined.split(separator: "\n").first.map(String.init) ?? combined
 
@@ -712,18 +684,21 @@ public struct SettingsView: View {
         return "✗ \(detail)"
     }
 
+    /// Synchronously read all bytes from a pipe's read end after the child
+    /// has exited (so `readToEnd()` returns immediately). Trims whitespace
+    /// and returns a UTF-8 string.
+    nonisolated static func readAll(_ pipe: Pipe) -> String {
+        let data = (try? pipe.fileHandleForReading.readToEnd()) ?? Data()
+        return String(data: data, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
     /// Wall-clock budget for the "Verify" subprocess. Matches the install
     /// path's `Scaffolder.corveilInstallTimeout` — a corveil that hangs on
     /// `--version` is bounded to the same 5s window as one that hangs on
     /// `skill install`. The Task wrapper runs off the main actor so the UI
     /// stays responsive while this wait elapses.
     nonisolated static let verifyTimeout: TimeInterval = 5.0
-
-    /// Bounded post-exit wait for the pipe drain to flush. Once the child
-    /// is gone (or SIGTERM'd), EOF should arrive near-instantly; cap at 1s
-    /// so an uncooperative child that swallowed SIGTERM can't pin the
-    /// caller past `verifyTimeout`.
-    nonisolated static let pipeDrainGrace: TimeInterval = 1.0
 
     /// One per-action agent picker (Coding/Reviews/Jobs). "Use default"
     /// removes the override; selecting a concrete agent writes the
@@ -763,70 +738,44 @@ public struct SettingsView: View {
     }
 }
 
-/// Background drainer for a `Pipe`. Runs `readDataToEndOfFile()` off the
-/// caller's thread so the child can't pipe-buffer-deadlock against an
-/// unread `Pipe()`, and signals a semaphore on EOF so the caller can
-/// collect deterministically without racing in-flight callbacks.
+/// SIGTERM a `Process` after `deadline` seconds if it's still running. Used
+/// to bound `waitUntilExit` without a polling loop (a polling loop on
+/// `proc.isRunning` defeats Foundation's pipe-write-FD cleanup, which only
+/// runs as part of `waitUntilExit`). `cancel()` stops the timer and reports
+/// whether it had already fired.
 ///
-/// `@unchecked Sendable` is sound because the only writer is the dispatched
-/// closure (single-shot) and the only reader (`collect`) waits on the
-/// semaphore — the signal establishes a happens-before relationship
-/// between the drain's final `acc.append` and the snapshot read.
-fileprivate final class PipeDrainer: @unchecked Sendable {
-    private let pipe: Pipe
-    private let acc = DataAccumulator()
-    private let done = DispatchSemaphore(value: 0)
-
-    private init(pipe: Pipe) {
-        self.pipe = pipe
-    }
-
-    /// Spawn the drain. `readDataToEndOfFile` blocks the worker thread
-    /// until the child closes its write end (clean exit or post-SIGTERM).
-    static func start(_ pipe: Pipe) -> PipeDrainer {
-        let drainer = PipeDrainer(pipe: pipe)
-        DispatchQueue.global(qos: .utility).async {
-            let data = drainer.pipe.fileHandleForReading.readDataToEndOfFile()
-            if !data.isEmpty {
-                drainer.acc.append(data)
-            }
-            drainer.done.signal()
-        }
-        return drainer
-    }
-
-    /// Wait up to `timeout` seconds for the drain to complete, then return
-    /// whatever has been accumulated. Safe to call after `abandon()`.
-    func collect(within timeout: TimeInterval) -> Data {
-        _ = done.wait(timeout: .now() + timeout)
-        return acc.snapshot()
-    }
-
-    /// Close the read end so the drain thread's `readDataToEndOfFile` can
-    /// return immediately. Used when the process never launched and the
-    /// pipe will never see a writer.
-    func abandon() {
-        try? pipe.fileHandleForReading.close()
-    }
-}
-
-/// Lock-serialized `Data` accumulator. Used by `PipeDrainer` so the
-/// background drain thread and the foreground collector share state
-/// without tripping Swift 6 sendable rules. The lock is technically
-/// redundant once `PipeDrainer.collect` waits on the semaphore (the
-/// signal is a happens-before barrier), but it's cheap and keeps the
-/// accumulator safe in isolation.
-private final class DataAccumulator: @unchecked Sendable {
+/// `@unchecked Sendable` is sound here: every member is either immutable
+/// (`proc`, `timer`) or guarded by `lock` (`didFire`). `proc.terminate()`
+/// and `proc.isRunning` are thread-safe per Foundation.
+fileprivate final class TimeoutWatchdog: @unchecked Sendable {
+    private let proc: Process
+    private let timer: DispatchSourceTimer
     private let lock = NSLock()
-    private var data = Data()
+    private var didFire = false
 
-    func append(_ chunk: Data) {
-        lock.lock(); defer { lock.unlock() }
-        data.append(chunk)
+    init(deadline: TimeInterval, proc: Process) {
+        self.proc = proc
+        self.timer = DispatchSource.makeTimerSource(queue: .global(qos: .userInitiated))
+        self.timer.schedule(deadline: .now() + deadline)
     }
 
-    func snapshot() -> Data {
+    func start() {
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            self.didFire = true
+            self.lock.unlock()
+            if self.proc.isRunning {
+                self.proc.terminate()
+            }
+        }
+        timer.resume()
+    }
+
+    /// Cancel the watchdog. Returns true if it had already fired (timeout).
+    func cancel() -> Bool {
+        timer.cancel()
         lock.lock(); defer { lock.unlock() }
-        return data
+        return didFire
     }
 }
