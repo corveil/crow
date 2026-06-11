@@ -180,9 +180,19 @@ struct Scaffolder {
         // `Pipe()` would block the child if it ever wrote >64KB before exit.
         proc.standardOutput = FileHandle.nullDevice
 
+        // Drain stderr concurrently for the same reason stdout uses
+        // /dev/null: a chatty failure mode (Go panic with stack trace,
+        // assertion dump) can easily exceed the ~64KB pipe buffer, and an
+        // undrained `Pipe()` would block the child on write. The dedicated
+        // reader blocks on `readDataToEndOfFile` (EOF arrives when corveil
+        // exits or post-SIGTERM) and signals a semaphore so we can collect
+        // deterministically.
+        let stderrDrain = PipeDrainer.start(stderrPipe)
+
         do {
             try proc.run()
         } catch {
+            stderrDrain.abandon()
             NSLog("[Scaffolder] corveil launch failed: %@", error.localizedDescription)
             return "Corveil skill install failed — \(error.localizedDescription). Check path in Settings."
         }
@@ -202,20 +212,23 @@ struct Scaffolder {
                     Thread.sleep(forTimeInterval: 0.05)
                 }
                 NSLog("[Scaffolder] corveil skill install timed out after %.1fs", Self.corveilInstallTimeout)
+                stderrDrain.abandon()
                 return "Corveil skill install timed out after \(Int(Self.corveilInstallTimeout))s — binary may be hung. Check path in Settings."
             }
             Thread.sleep(forTimeInterval: 0.05)
         }
 
         if proc.terminationStatus != 0 {
-            let stderr = (try? stderrPipe.fileHandleForReading.readToEnd())
-                .flatMap { String(data: $0, encoding: .utf8) }?
+            let stderr = String(data: stderrDrain.collect(within: Self.pipeDrainGrace), encoding: .utf8)?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             NSLog("[Scaffolder] corveil skill install exit=%d stderr=%@",
                   proc.terminationStatus, stderr)
             let detail = stderr.isEmpty ? "exit code \(proc.terminationStatus)" : stderr
             return "Corveil skill install failed — \(detail). Check path in Settings."
         }
+        // Success: drain the (typically empty) stderr to release the worker
+        // thread before returning.
+        _ = stderrDrain.collect(within: Self.pipeDrainGrace)
         NSLog("[Scaffolder] corveil skill installed at %@", target)
         return nil
     }
@@ -226,6 +239,12 @@ struct Scaffolder {
     /// many seconds. 5s is generous for a local subprocess that only writes
     /// one ~10KB file.
     static let corveilInstallTimeout: TimeInterval = 5.0
+
+    /// Bounded post-exit wait for the stderr drain to flush. Once the child
+    /// is gone (or SIGTERM'd), EOF should arrive near-instantly; cap at 1s
+    /// so an uncooperative child that swallowed SIGTERM can't pin startup
+    /// past `corveilInstallTimeout`.
+    static let pipeDrainGrace: TimeInterval = 1.0
 
     // MARK: - Bundled Templates
 
@@ -437,5 +456,59 @@ struct Scaffolder {
             dir = dir.deletingLastPathComponent()
         }
         return nil
+    }
+}
+
+/// Background drainer for a `Pipe`. Runs `readDataToEndOfFile()` off the
+/// caller's thread so the child can't pipe-buffer-deadlock against an
+/// unread `Pipe()`, and signals a semaphore on EOF so the caller can
+/// collect deterministically. Mirrors the helper used in
+/// `SettingsView.runCorveilVersion`; duplicated here because Scaffolder
+/// lives in the `Crow` target and SettingsView in `CrowUI` — no shared
+/// internal home today, and the helper is small enough that two copies
+/// beat adding a CrowCore utility just for two callers.
+fileprivate final class PipeDrainer: @unchecked Sendable {
+    private let pipe: Pipe
+    private let acc = DataAccumulator()
+    private let done = DispatchSemaphore(value: 0)
+
+    private init(pipe: Pipe) {
+        self.pipe = pipe
+    }
+
+    static func start(_ pipe: Pipe) -> PipeDrainer {
+        let drainer = PipeDrainer(pipe: pipe)
+        DispatchQueue.global(qos: .utility).async {
+            let data = drainer.pipe.fileHandleForReading.readDataToEndOfFile()
+            if !data.isEmpty {
+                drainer.acc.append(data)
+            }
+            drainer.done.signal()
+        }
+        return drainer
+    }
+
+    func collect(within timeout: TimeInterval) -> Data {
+        _ = done.wait(timeout: .now() + timeout)
+        return acc.snapshot()
+    }
+
+    func abandon() {
+        try? pipe.fileHandleForReading.close()
+    }
+}
+
+private final class DataAccumulator: @unchecked Sendable {
+    private let lock = NSLock()
+    private var data = Data()
+
+    func append(_ chunk: Data) {
+        lock.lock(); defer { lock.unlock() }
+        data.append(chunk)
+    }
+
+    func snapshot() -> Data {
+        lock.lock(); defer { lock.unlock() }
+        return data
     }
 }

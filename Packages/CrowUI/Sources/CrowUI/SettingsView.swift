@@ -635,10 +635,15 @@ public struct SettingsView: View {
     ///
     /// Bounded by `verifyTimeout` so a misbehaving binary that hangs on
     /// `--version` can't pin the detached Task forever (matches the
-    /// `Scaffolder.installCorveilSkill` install-path timeout). stdout/stderr
-    /// are drained concurrently via readability handlers so a binary that
-    /// emits more than the pipe buffer (~64KB) before exiting can't deadlock
-    /// against the unread pipe.
+    /// `Scaffolder.installCorveilSkill` install-path timeout). Each pipe is
+    /// drained by a dedicated background reader running
+    /// `readDataToEndOfFile()`, which blocks until the child closes its end.
+    /// Snapshotting waits on a bounded `DispatchSemaphore`, so there's no
+    /// race between the polling thread and an in-flight readability handler:
+    /// either the drain finished cleanly (signal arrived → snapshot is whole)
+    /// or the bounded wait expires and we report what's there. Combined,
+    /// these eliminate both the pipe-buffer deadlock and the EOF tail race
+    /// that `readabilityHandler` introduces.
     nonisolated static func runCorveilVersion(at path: String) -> String {
         let fm = FileManager.default
         guard fm.isExecutableFile(atPath: path) else {
@@ -652,29 +657,14 @@ public struct SettingsView: View {
         proc.standardOutput = outPipe
         proc.standardError = errPipe
 
-        // Concurrent drain. The readability handlers run on a Foundation-
-        // managed background queue, so we cannot capture local `var`s — use
-        // a thread-safe reference-typed accumulator that's safe to share.
-        let outAcc = DataAccumulator()
-        let errAcc = DataAccumulator()
-        outPipe.fileHandleForReading.readabilityHandler = { handle in
-            let chunk = handle.availableData
-            if !chunk.isEmpty { outAcc.append(chunk) }
-        }
-        errPipe.fileHandleForReading.readabilityHandler = { handle in
-            let chunk = handle.availableData
-            if !chunk.isEmpty { errAcc.append(chunk) }
-        }
-        // Ensure handlers detach on every exit path so the file handles
-        // close cleanly even if we return early on launch failure.
-        defer {
-            outPipe.fileHandleForReading.readabilityHandler = nil
-            errPipe.fileHandleForReading.readabilityHandler = nil
-        }
+        let outDrain = PipeDrainer.start(outPipe)
+        let errDrain = PipeDrainer.start(errPipe)
 
         do {
             try proc.run()
         } catch {
+            outDrain.abandon()
+            errDrain.abandon()
             return "✗ Could not launch: \(error.localizedDescription)"
         }
 
@@ -696,9 +686,9 @@ public struct SettingsView: View {
             Thread.sleep(forTimeInterval: 0.05)
         }
 
-        let outStr = String(data: outAcc.snapshot(), encoding: .utf8)?
+        let outStr = String(data: outDrain.collect(within: pipeDrainGrace), encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let errStr = String(data: errAcc.snapshot(), encoding: .utf8)?
+        let errStr = String(data: errDrain.collect(within: pipeDrainGrace), encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let combined = [outStr, errStr].filter { !$0.isEmpty }.joined(separator: " — ")
         let snippet = combined.split(separator: "\n").first.map(String.init) ?? combined
@@ -719,6 +709,12 @@ public struct SettingsView: View {
     /// `skill install`. The Task wrapper runs off the main actor so the UI
     /// stays responsive while this wait elapses.
     nonisolated static let verifyTimeout: TimeInterval = 5.0
+
+    /// Bounded post-exit wait for the pipe drain to flush. Once the child
+    /// is gone (or SIGTERM'd), EOF should arrive near-instantly; cap at 1s
+    /// so an uncooperative child that swallowed SIGTERM can't pin the
+    /// caller past `verifyTimeout`.
+    nonisolated static let pipeDrainGrace: TimeInterval = 1.0
 
     /// One per-action agent picker (Coding/Reviews/Jobs). "Use default"
     /// removes the override; selecting a concrete agent writes the
@@ -758,11 +754,59 @@ public struct SettingsView: View {
     }
 }
 
-/// Lock-serialized `Data` accumulator. Used by `SettingsView.runCorveilVersion`
-/// so the off-queue readability handlers can share mutable state with the
-/// polling loop without tripping Swift 6 sendable-capture rules.
-/// `@unchecked Sendable` is sound here because every access goes through
-/// the lock.
+/// Background drainer for a `Pipe`. Runs `readDataToEndOfFile()` off the
+/// caller's thread so the child can't pipe-buffer-deadlock against an
+/// unread `Pipe()`, and signals a semaphore on EOF so the caller can
+/// collect deterministically without racing in-flight callbacks.
+///
+/// `@unchecked Sendable` is sound because the only writer is the dispatched
+/// closure (single-shot) and the only reader (`collect`) waits on the
+/// semaphore — the signal establishes a happens-before relationship
+/// between the drain's final `acc.append` and the snapshot read.
+fileprivate final class PipeDrainer: @unchecked Sendable {
+    private let pipe: Pipe
+    private let acc = DataAccumulator()
+    private let done = DispatchSemaphore(value: 0)
+
+    private init(pipe: Pipe) {
+        self.pipe = pipe
+    }
+
+    /// Spawn the drain. `readDataToEndOfFile` blocks the worker thread
+    /// until the child closes its write end (clean exit or post-SIGTERM).
+    static func start(_ pipe: Pipe) -> PipeDrainer {
+        let drainer = PipeDrainer(pipe: pipe)
+        DispatchQueue.global(qos: .utility).async {
+            let data = drainer.pipe.fileHandleForReading.readDataToEndOfFile()
+            if !data.isEmpty {
+                drainer.acc.append(data)
+            }
+            drainer.done.signal()
+        }
+        return drainer
+    }
+
+    /// Wait up to `timeout` seconds for the drain to complete, then return
+    /// whatever has been accumulated. Safe to call after `abandon()`.
+    func collect(within timeout: TimeInterval) -> Data {
+        _ = done.wait(timeout: .now() + timeout)
+        return acc.snapshot()
+    }
+
+    /// Close the read end so the drain thread's `readDataToEndOfFile` can
+    /// return immediately. Used when the process never launched and the
+    /// pipe will never see a writer.
+    func abandon() {
+        try? pipe.fileHandleForReading.close()
+    }
+}
+
+/// Lock-serialized `Data` accumulator. Used by `PipeDrainer` so the
+/// background drain thread and the foreground collector share state
+/// without tripping Swift 6 sendable rules. The lock is technically
+/// redundant once `PipeDrainer.collect` waits on the semaphore (the
+/// signal is a happens-before barrier), but it's cheap and keeps the
+/// accumulator safe in isolation.
 private final class DataAccumulator: @unchecked Sendable {
     private let lock = NSLock()
     private var data = Data()
