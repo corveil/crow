@@ -275,14 +275,7 @@ public struct SettingsView: View {
                 HStack {
                     TextField("Path to corveil binary", text: corveilBinding)
                         .textFieldStyle(.roundedBorder)
-                        .onSubmit {
-                            save()
-                            // Hot-trigger install on Enter — passes nil if the
-                            // user committed an empty field so callers can
-                            // clear any stale warning banner (CROW-490).
-                            let path = corveilBinding.wrappedValue
-                            onCorveilReinstall?(path.isEmpty ? nil : path)
-                        }
+                        .onSubmit { commitCorveilPath() }
                     Button("Browse...") {
                         let panel = NSOpenPanel()
                         panel.canChooseFiles = true
@@ -290,11 +283,9 @@ public struct SettingsView: View {
                         panel.allowsMultipleSelection = false
                         if panel.runModal() == .OK, let url = panel.url {
                             corveilBinding.wrappedValue = url.path
-                            save()
                             // Clear stale verify result — it's about a previous binary.
                             corveilVerifyResult = nil
-                            // Hot-trigger install on Browse confirm (CROW-490).
-                            onCorveilReinstall?(url.path)
+                            commitCorveilPath()
                         }
                     }
                     Button(corveilVerifying ? "Verifying…" : "Verify") { verifyCorveil() }
@@ -610,6 +601,21 @@ public struct SettingsView: View {
 
     private func save() {
         onSave?(devRoot, config)
+    }
+
+    /// Commit a corveil picker change: persist the config and hot-trigger
+    /// the `/query-corveil` install for the new path (CROW-490). Both
+    /// commit sites (Browse confirm and TextField `onSubmit`) funnel
+    /// through here so the "persist → reinstall" pair stays atomic and
+    /// the `nil`-on-empty rule has a single source of truth. We read the
+    /// path through `corveilBinding.wrappedValue` rather than the raw
+    /// input so the binding's whitespace-trim normalization wins — the
+    /// install closure sees the same string that the next launch's
+    /// scaffolder would see.
+    private func commitCorveilPath() {
+        save()
+        let path = corveilBinding.wrappedValue
+        onCorveilReinstall?(path.isEmpty ? nil : path)
     }
 
     /// Two-way binding into `config.defaults.binaries["corveil"]` that treats
