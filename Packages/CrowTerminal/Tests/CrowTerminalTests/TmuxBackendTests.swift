@@ -225,6 +225,67 @@ struct TmuxBackendTests {
         try backend.sendText(id: id, text: "\n")
     }
 
+    /// Regression for #486: when the user mouse-wheels into copy-mode and
+    /// Crow then issues a programmatic send (Manager paste, auto-respond,
+    /// quick action), the pane must be cancelled out of copy-mode before
+    /// `paste-buffer` runs — otherwise the paste is silently swallowed.
+    @Test func sendTextCancelsCopyModeBeforePaste() throws {
+        let backend = makeBackend()
+        defer { backend.shutdown() }
+
+        let id = UUID()
+        let binding = try backend.registerTerminal(
+            id: id,
+            name: "copy-mode-cancel",
+            cwd: NSHomeDirectory(),
+            command: nil,
+            trackReadiness: false
+        )
+
+        // Force the pane into copy-mode via a side-channel controller.
+        let ctrl = TmuxController(
+            tmuxBinary: discoveredTmuxBinary!,
+            socketPath: backend.socketPath,
+            sessionName: TmuxBackend.cockpitSessionName
+        )
+        let target = "\(TmuxBackend.cockpitSessionName):\(binding.windowIndex)"
+        _ = try ctrl.run(["copy-mode", "-H", "-t", target])
+
+        let inModeBefore = try ctrl.run([
+            "display-message", "-p", "-t", target, "-F", "#{pane_in_mode}"
+        ]).trimmingCharacters(in: .whitespacesAndNewlines)
+        #expect(inModeBefore == "1")
+
+        // sendText should pre-cancel copy-mode so the paste actually lands.
+        try backend.sendText(id: id, text: "PROD2-486-\(UUID().uuidString)")
+
+        let inModeAfter = try ctrl.run([
+            "display-message", "-p", "-t", target, "-F", "#{pane_in_mode}"
+        ]).trimmingCharacters(in: .whitespacesAndNewlines)
+        #expect(inModeAfter == "0")
+    }
+
+    /// Sanity: the if-shell guard around `send-keys -X cancel` must not
+    /// error when the pane is NOT in a mode (the common case). Otherwise
+    /// every send would start failing.
+    @Test func sendTextOnNormalPaneIsUnaffectedByCancelGuard() throws {
+        let backend = makeBackend()
+        defer { backend.shutdown() }
+
+        let id = UUID()
+        _ = try backend.registerTerminal(
+            id: id,
+            name: "no-copy-mode",
+            cwd: NSHomeDirectory(),
+            command: nil,
+            trackReadiness: false
+        )
+
+        // Pane is in its normal state. The new cancel-if-active step should
+        // be a no-op; sendText must still complete cleanly.
+        try backend.sendText(id: id, text: "PROD2-486-normal-\(UUID().uuidString)\n")
+    }
+
     @Test func retryReadinessEmitsTimedOutWhenSentinelMissing() async throws {
         let backend = makeBackend()
         defer { backend.shutdown() }

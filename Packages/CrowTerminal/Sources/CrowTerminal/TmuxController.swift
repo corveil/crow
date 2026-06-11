@@ -239,6 +239,21 @@ public struct TmuxController: Sendable {
         _ = try? run(["delete-buffer", "-b", name])
     }
 
+    /// `tmux if-shell -F -t <target> '#{pane_in_mode}' 'send-keys -t <target> -X cancel'`.
+    ///
+    /// `send-keys -X cancel` errors when the pane isn't in a mode, so the
+    /// `if-shell` guard keeps this a no-op in the common case. Called before
+    /// `paste-buffer` in `TmuxBackend.sendText` so programmatic sends land
+    /// even when the user scrolled the pane into copy-mode (#486): tmux's
+    /// default `WheelUpPane` enters copy-mode, and `paste-buffer` doesn't
+    /// deliver content while the pane is in a mode.
+    public func cancelCopyModeIfActive(target: String) throws {
+        try run([
+            "if-shell", "-F", "-t", target, "#{pane_in_mode}",
+            "send-keys -t \(target) -X cancel",
+        ])
+    }
+
     // MARK: - Diagnostic
 
     /// `tmux capture-pane -p -t <target> -S -<linesBack>`. Returns the
