@@ -26,8 +26,8 @@ public struct JiraConfig: Sendable, Equatable {
 /// `TaskBackend` implementation for Atlassian Jira. Wraps the `acli` CLI.
 ///
 /// Jira is a **task-only** provider (no embedded git) — exactly the "task tracker
-/// with no code surface" shape ADR 0005 carved out, today represented only by the
-/// `StubCorveilTaskBackend`. A Jira-tasked session pairs with a GitHub/GitLab
+/// with no code surface" shape ADR 0005 carved out, today shared with
+/// `CorveilTaskBackend`. A Jira-tasked session pairs with a GitHub/GitLab
 /// `CodeBackend` (resolved via `Session.codeProvider`); `ProviderManager.codeBackend(.jira)`
 /// returns `nil`.
 ///

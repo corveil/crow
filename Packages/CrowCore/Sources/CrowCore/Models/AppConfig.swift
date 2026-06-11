@@ -300,6 +300,11 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
     /// Atlassian site host (e.g. "acme.atlassian.net") used to build user-facing
     /// `…/browse/KEY` URLs. Only meaningful when `taskProvider == "jira"`.
     public var jiraSite: String?
+    /// Self-hosted Corveil host (e.g. "corveil.acme.io") used **only** for URL
+    /// routing in `ProviderManager.detect` — Corveil's own auth/state lives in
+    /// the CLI (`corveil login`, `CORVEIL_URL`), so Crow doesn't pipe it through.
+    /// `nil` is fine: the public `corveil.io` is auto-detected.
+    public var corveilHost: String?
 
     /// The CLI tool name derived from the current `provider` value.
     /// Unlike `cli` (which may be stale from an old config file), this is always correct.
@@ -327,6 +332,7 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
         jiraProjectKey: String? = nil,
         jiraJQL: String? = nil,
         jiraSite: String? = nil,
+        corveilHost: String? = nil,
         gateway: WorkspaceGateway? = nil
     ) {
         self.id = id
@@ -342,6 +348,7 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
         self.jiraProjectKey = jiraProjectKey
         self.jiraJQL = jiraJQL
         self.jiraSite = jiraSite
+        self.corveilHost = corveilHost
         self.gateway = gateway
     }
 
@@ -360,12 +367,13 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
         jiraProjectKey = try container.decodeIfPresent(String.self, forKey: .jiraProjectKey)
         jiraJQL = try container.decodeIfPresent(String.self, forKey: .jiraJQL)
         jiraSite = try container.decodeIfPresent(String.self, forKey: .jiraSite)
+        corveilHost = try container.decodeIfPresent(String.self, forKey: .corveilHost)
         gateway = try container.decodeIfPresent(WorkspaceGateway.self, forKey: .gateway)
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, name, provider, cli, host, alwaysInclude, autoReviewRepos, excludeReviewRepos, customInstructions
-        case taskProvider, jiraProjectKey, jiraJQL, jiraSite, gateway
+        case taskProvider, jiraProjectKey, jiraJQL, jiraSite, corveilHost, gateway
     }
 
     /// Characters that are unsafe in directory names (workspace names become directory names).

@@ -357,6 +357,15 @@ final class IssueTracker {
             let cfg = JiraConfig(site: ws.jiraSite, projectKey: ws.jiraProjectKey, jql: ws.jiraJQL)
             if !jiraConfigs.contains(cfg) { jiraConfigs.append(cfg) }
         }
+        // Collect distinct Corveil configs. The corveil CLI is authed to one
+        // host, so the workspace host (used only for URL routing) is what
+        // varies; we dedupe by host to avoid fanning out to the same authed
+        // session twice.
+        var corveilConfigs: [CorveilConfig] = []
+        for ws in config.workspaces where ws.derivedTaskProvider == "corveil" {
+            let cfg = CorveilConfig(host: ws.corveilHost)
+            if !corveilConfigs.contains(cfg) { corveilConfigs.append(cfg) }
+        }
 
         var allIssues: [AssignedIssue] = []
 
@@ -394,6 +403,12 @@ final class IssueTracker {
         // Jira — one search per distinct config (best-effort, like GitLab)
         for cfg in jiraConfigs {
             let issues = await fetchJiraIssues(config: cfg)
+            allIssues.append(contentsOf: issues)
+        }
+
+        // Corveil — one list per distinct config (best-effort).
+        for cfg in corveilConfigs {
+            let issues = await fetchCorveilIssues(config: cfg)
             allIssues.append(contentsOf: issues)
         }
 
@@ -2234,6 +2249,20 @@ final class IssueTracker {
             return listing.open
         } catch {
             print("[IssueTracker] fetchJiraIssues(project: \(config.projectKey ?? "—")) failed: \(error)")
+            return []
+        }
+    }
+
+    /// Fetch open Corveil tasks assigned to the user for one workspace config.
+    /// Best-effort (the backend itself degrades to empty on failure), mirroring
+    /// the GitLab / Jira paths.
+    private func fetchCorveilIssues(config: CorveilConfig) async -> [AssignedIssue] {
+        let backend = providerManager.taskBackend(for: .corveil, corveil: config)
+        do {
+            let listing = try await backend.listAssigned(includeClosed: false)
+            return listing.open
+        } catch {
+            print("[IssueTracker] fetchCorveilIssues(host: \(config.host ?? "—")) failed: \(error)")
             return []
         }
     }

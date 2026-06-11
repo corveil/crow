@@ -613,20 +613,6 @@ final class BackendsTests: XCTestCase {
         XCTAssertEqual(meta.headRefName, "f")
     }
 
-    // MARK: - Stub Corveil
-
-    func testStubCorveilTaskBackendThrowsUnimplementedForEveryMethod() async {
-        let backend = StubCorveilTaskBackend()
-        XCTAssertEqual(backend.provider, .corveil)
-        XCTAssertTrue(backend.capabilities.isEmpty)
-        await XCTAssertThrowsErrorAsync(try await backend.fetchTask(url: "https://corveil.io/t/1"))
-        await XCTAssertThrowsErrorAsync(try await backend.listAssigned())
-        await XCTAssertThrowsErrorAsync(try await backend.setLabels(url: "x", add: ["a"], remove: []))
-        await XCTAssertThrowsErrorAsync(try await backend.setTaskStatus(url: "x", status: .inReview))
-        await XCTAssertThrowsErrorAsync(try await backend.assign(url: "x", to: "me"))
-        await XCTAssertThrowsErrorAsync(try await backend.createTask(repo: "a/b", title: "t", body: "b", labels: []))
-    }
-
     // MARK: - Factory
 
     func testProviderManagerHandsOutMatchingBackends() async {
