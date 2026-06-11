@@ -228,10 +228,14 @@ struct Scaffolder {
     /// after `corveilInstallTimeout` seconds the process is sent SIGTERM and
     /// the install reports a warning rather than blocking forever.
     ///
-    /// Settings can also call this directly (CROW-490) when the user picks a
-    /// new corveil binary, to avoid the "must restart" gap. Those callers
-    /// dispatch the call off the main thread (`Task.detached`) so the 5s
-    /// worst-case doesn't freeze the Settings window.
+    /// Internal, not private — Settings calls this directly via callbacks
+    /// wired in `AppDelegate.launchMainApp`: when the user picks a new
+    /// corveil binary (CROW-490) and when the user clicks "Reinstall skill"
+    /// (CROW-491). Both avoid the "must restart Crow" gap of the per-launch
+    /// path. SettingsView itself lives in CrowUI and cannot import the app
+    /// target, so closure injection through `AppState` is the only path.
+    /// Settings-side callers dispatch off the main thread (`Task.detached`)
+    /// so the 5s worst-case doesn't freeze the Settings window.
     func installCorveilSkill(_ corveilBinaryPath: String?) -> String? {
         guard let path = corveilBinaryPath?.trimmingCharacters(in: .whitespacesAndNewlines),
               !path.isEmpty else {

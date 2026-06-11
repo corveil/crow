@@ -457,6 +457,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSLog("[Crow] Scaffold update failed: %@", error.localizedDescription)
         }
 
+        // Settings → Corveil CLI → "Reinstall skill" (issue #491). Runs the
+        // same `corveil skill install` flow as the per-launch path, on
+        // demand. Captures `devRoot` (a let) — Scaffolder is a value-type
+        // struct so we construct fresh per click. The closure is async and
+        // offloads the synchronous `Process.waitUntilExit` work to a
+        // detached task; SettingsView awaits this without blocking the
+        // main actor for the install timeout.
+        appState.onReinstallCorveilSkill = { path in
+            await Task.detached(priority: .userInitiated) {
+                let scaffolder = Scaffolder(devRoot: devRoot)
+                return scaffolder.installCorveilSkill(path)
+            }.value
+        }
+
         // Codex-specific dev-root and global config — only when Codex is
         // registered. AGENTS.md goes into devRoot; hooks.json + config.toml
         // go into ~/.codex (or $CODEX_HOME). All idempotent; safe to re-run.

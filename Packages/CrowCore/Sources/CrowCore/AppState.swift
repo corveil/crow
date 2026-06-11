@@ -384,6 +384,16 @@ public final class AppState {
     /// Fire a job immediately, ignoring its enabled flag and schedule (job ID).
     public var onRunJob: ((UUID) -> Void)?
 
+    /// Triggered by Settings → General → Corveil CLI → "Reinstall skill"
+    /// (issue #491). Wired by `AppDelegate.launchMainApp` to construct a
+    /// fresh `Scaffolder` and call `installCorveilSkill(path)` — the same
+    /// flow as the per-launch install, on demand. Returns `nil` on success,
+    /// a user-facing warning string on failure. The closure is `async` so
+    /// the wiring can offload the synchronous `Process.waitUntilExit` work
+    /// to a detached task without the call site blocking the main actor
+    /// for the 5-second install timeout.
+    public var onReinstallCorveilSkill: ((String?) async -> String?)?
+
     // MARK: - Computed Properties
 
     public var selectedSession: Session? {
