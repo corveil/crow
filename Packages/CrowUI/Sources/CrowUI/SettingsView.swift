@@ -18,6 +18,12 @@ public struct SettingsView: View {
     @State private var editingJob: JobConfig?
     /// A pre-filled copy of a job, presented in the form (create mode) to duplicate it.
     @State private var duplicatingJob: JobConfig?
+    /// Live result of the most recent corveil "Verify" run. `nil` until the
+    /// user has clicked Verify at least once this Settings session. Starts
+    /// with `✓` on success, `✗` on failure (CROW-482).
+    @State private var corveilVerifyResult: String?
+    /// True while the Verify button's subprocess is in flight.
+    @State private var corveilVerifying: Bool = false
 
     public var onSave: ((String, AppConfig) -> Void)?
     public var onRescaffold: ((String) -> Void)?
@@ -181,6 +187,23 @@ public struct SettingsView: View {
         }
     }
 
+    @ViewBuilder
+    private var corveilSkillWarningBanner: some View {
+        if let warning = appState.corveilSkillInstallWarning {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                Text(warning)
+                    .font(.caption)
+                    .textSelection(.enabled)
+                Spacer()
+            }
+            .padding(10)
+            .background(Color.orange.opacity(0.12))
+            .cornerRadius(6)
+        }
+    }
+
     private var generalTab: some View {
         Form {
             if appState.githubScopeWarning != nil {
@@ -191,6 +214,9 @@ public struct SettingsView: View {
             }
             if appState.rateLimitWarning != nil {
                 Section { rateLimitWarningBanner }
+            }
+            if appState.corveilSkillInstallWarning != nil {
+                Section { corveilSkillWarningBanner }
             }
             Section("Development Root") {
                 HStack {
@@ -232,6 +258,37 @@ public struct SettingsView: View {
                 perActionAgentPicker(label: "Agent for scheduled jobs", kind: .job)
                 perActionAgentPicker(label: "Agent for Manager", kind: .manager)
                 Text("Per-action overrides. “Use default” falls back to the Default Agent above. Manager changes take effect on next Manager respawn.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Corveil CLI") {
+                HStack {
+                    TextField("Path to corveil binary", text: corveilBinding)
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit { save() }
+                    Button("Browse...") {
+                        let panel = NSOpenPanel()
+                        panel.canChooseFiles = true
+                        panel.canChooseDirectories = false
+                        panel.allowsMultipleSelection = false
+                        if panel.runModal() == .OK, let url = panel.url {
+                            corveilBinding.wrappedValue = url.path
+                            save()
+                            // Clear stale verify result — it's about a previous binary.
+                            corveilVerifyResult = nil
+                        }
+                    }
+                    Button(corveilVerifying ? "Verifying…" : "Verify") { verifyCorveil() }
+                        .disabled(corveilBinding.wrappedValue.isEmpty || corveilVerifying)
+                }
+                if let result = corveilVerifyResult {
+                    Text(result)
+                        .font(.caption)
+                        .foregroundStyle(result.hasPrefix("✓") ? .green : .orange)
+                        .textSelection(.enabled)
+                }
+                Text("On launch, Crow runs `corveil skill install --path` to install the `/query-corveil` slash command into this devRoot. Leave blank to skip.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -537,6 +594,112 @@ public struct SettingsView: View {
         onSave?(devRoot, config)
     }
 
+    /// Two-way binding into `config.defaults.binaries["corveil"]` that treats
+    /// an empty string as "unset" (so the map doesn't accumulate stale empty
+    /// entries when the user clears the field). Trimming happens on commit so
+    /// pasted paths with stray whitespace are normalized.
+    private var corveilBinding: Binding<String> {
+        Binding(
+            get: { config.defaults.binaries["corveil"] ?? "" },
+            set: { newValue in
+                let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                if trimmed.isEmpty {
+                    config.defaults.binaries.removeValue(forKey: "corveil")
+                } else {
+                    config.defaults.binaries["corveil"] = trimmed
+                }
+            }
+        )
+    }
+
+    /// Run `<corveilPath> --version` and surface the result. Lives off the
+    /// main actor so the spinning UI doesn't block. Truncates noisy output
+    /// to keep the inline result line readable.
+    private func verifyCorveil() {
+        let path = corveilBinding.wrappedValue
+        guard !path.isEmpty else { return }
+        corveilVerifying = true
+        corveilVerifyResult = nil
+        Task.detached {
+            let result = SettingsView.runCorveilVersion(at: path)
+            await MainActor.run {
+                corveilVerifyResult = result
+                corveilVerifying = false
+            }
+        }
+    }
+
+    /// Pure helper for `verifyCorveil` — easier to reason about off the main
+    /// actor and trivially testable. Returns a single-line summary suitable
+    /// for inline display.
+    ///
+    /// Uses `proc.waitUntilExit()` (with a `TimeoutWatchdog` SIGTERM'ing the
+    /// child if it hangs) rather than a polling loop on `proc.isRunning`.
+    /// `waitUntilExit` is the only way to deterministically trigger
+    /// Foundation's pipe-write-FD cleanup; a polling loop leaves Foundation's
+    /// internal copy of the writeFD open and the post-exit reads either hang
+    /// (with a background drain) or return empty (Foundation closes its copy
+    /// on its own internal schedule). Once `waitUntilExit` returns, both
+    /// pipe writers (child + Foundation) have closed, so a synchronous
+    /// `readToEnd()` on each pipe returns immediately with the data.
+    nonisolated static func runCorveilVersion(at path: String) -> String {
+        let fm = FileManager.default
+        guard fm.isExecutableFile(atPath: path) else {
+            return "✗ Not executable: \(path)"
+        }
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: path)
+        proc.arguments = ["--version"]
+        let outPipe = Pipe()
+        let errPipe = Pipe()
+        proc.standardOutput = outPipe
+        proc.standardError = errPipe
+
+        do {
+            try proc.run()
+        } catch {
+            return "✗ Could not launch: \(error.localizedDescription)"
+        }
+
+        // Watchdog: SIGTERM after `verifyTimeout` so a hung binary unblocks
+        // `waitUntilExit` below. The watchdog also records the timeout so we
+        // can distinguish a normal exit-N from a wall-clock kill.
+        let watchdog = TimeoutWatchdog(deadline: verifyTimeout, proc: proc)
+        watchdog.start()
+        proc.waitUntilExit()
+        let timedOut = watchdog.cancel()
+
+        let outStr = Self.readAll(outPipe)
+        let errStr = Self.readAll(errPipe)
+        let combined = [outStr, errStr].filter { !$0.isEmpty }.joined(separator: " — ")
+        let snippet = combined.split(separator: "\n").first.map(String.init) ?? combined
+
+        if timedOut {
+            return "✗ Timed out after \(Int(verifyTimeout))s — binary may be hung."
+        }
+        if proc.terminationStatus == 0 {
+            return snippet.isEmpty ? "✓ Verified" : "✓ \(snippet)"
+        }
+        let detail = snippet.isEmpty ? "exit code \(proc.terminationStatus)" : snippet
+        return "✗ \(detail)"
+    }
+
+    /// Synchronously read all bytes from a pipe's read end after the child
+    /// has exited (so `readToEnd()` returns immediately). Trims whitespace
+    /// and returns a UTF-8 string.
+    nonisolated static func readAll(_ pipe: Pipe) -> String {
+        let data = (try? pipe.fileHandleForReading.readToEnd()) ?? Data()
+        return String(data: data, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
+    /// Wall-clock budget for the "Verify" subprocess. Matches the install
+    /// path's `Scaffolder.corveilInstallTimeout` — a corveil that hangs on
+    /// `--version` is bounded to the same 5s window as one that hangs on
+    /// `skill install`. The Task wrapper runs off the main actor so the UI
+    /// stays responsive while this wait elapses.
+    nonisolated static let verifyTimeout: TimeInterval = 5.0
+
     /// One per-action agent picker (Coding/Reviews/Jobs). "Use default"
     /// removes the override; selecting a concrete agent writes the
     /// `config.agentsByKind` entry. Disabled until a second agent is
@@ -572,5 +735,47 @@ public struct SettingsView: View {
         case "jira": return Color.blue.opacity(0.15)
         default: return Color.orange.opacity(0.15)  // gitlab / other
         }
+    }
+}
+
+/// SIGTERM a `Process` after `deadline` seconds if it's still running. Used
+/// to bound `waitUntilExit` without a polling loop (a polling loop on
+/// `proc.isRunning` defeats Foundation's pipe-write-FD cleanup, which only
+/// runs as part of `waitUntilExit`). `cancel()` stops the timer and reports
+/// whether it had already fired.
+///
+/// `@unchecked Sendable` is sound here: every member is either immutable
+/// (`proc`, `timer`) or guarded by `lock` (`didFire`). `proc.terminate()`
+/// and `proc.isRunning` are thread-safe per Foundation.
+fileprivate final class TimeoutWatchdog: @unchecked Sendable {
+    private let proc: Process
+    private let timer: DispatchSourceTimer
+    private let lock = NSLock()
+    private var didFire = false
+
+    init(deadline: TimeInterval, proc: Process) {
+        self.proc = proc
+        self.timer = DispatchSource.makeTimerSource(queue: .global(qos: .userInitiated))
+        self.timer.schedule(deadline: .now() + deadline)
+    }
+
+    func start() {
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            self.didFire = true
+            self.lock.unlock()
+            if self.proc.isRunning {
+                self.proc.terminate()
+            }
+        }
+        timer.resume()
+    }
+
+    /// Cancel the watchdog. Returns true if it had already fired (timeout).
+    func cancel() -> Bool {
+        timer.cancel()
+        lock.lock(); defer { lock.unlock() }
+        return didFire
     }
 }

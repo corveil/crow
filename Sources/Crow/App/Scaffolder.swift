@@ -1,6 +1,14 @@
 import CrowCore
 import Foundation
 
+/// Outcome of a single `Scaffolder.scaffold(...)` run. `warning` is non-nil only
+/// for non-fatal post-scaffold issues (today: a configured `corveil` binary
+/// that's missing/non-executable or whose `skill install` returned non-zero).
+/// Callers surface it via `AppState.corveilSkillInstallWarning`; never fatal.
+struct ScaffoldResult {
+    var warning: String?
+}
+
 /// Creates the devRoot directory structure and copies bundled resources.
 struct Scaffolder {
     let devRoot: String
@@ -10,7 +18,17 @@ struct Scaffolder {
     /// `managerAgentKind` drives `{{CROW_AGENT_DISPLAY_NAME}}` substitution in the
     /// dev-root skill bodies (issue #447). The Manager session is the consumer of
     /// these files, so its agent kind is the right one to bake in.
-    func scaffold(workspaceNames: [String], managerAgentKind: AgentKind = .claudeCode) throws {
+    ///
+    /// `corveilBinaryPath`, when set and executable, triggers a post-scaffold
+    /// `corveil skill install --path {devRoot}/.claude/commands/query-corveil.md`
+    /// so the embedded `/query-corveil` slash command stays in sync with the
+    /// user's locally-built corveil binary (CROW-482). Failures here are
+    /// non-fatal: they are returned as `ScaffoldResult.warning` and never
+    /// throw — the rest of the scaffold has already succeeded by that point.
+    @discardableResult
+    func scaffold(workspaceNames: [String],
+                  managerAgentKind: AgentKind = .claudeCode,
+                  corveilBinaryPath: String? = nil) throws -> ScaffoldResult {
         let fm = FileManager.default
 
         // Create devRoot
@@ -113,7 +131,96 @@ struct Scaffolder {
         // Create prompts directory for crow-workspace prompt files
         let promptsDir = (claudeDir as NSString).appendingPathComponent("prompts")
         try fm.createDirectory(atPath: promptsDir, withIntermediateDirectories: true)
+
+        // Re-install the embedded /query-corveil slash command from the
+        // user-configured corveil binary on every launch (CROW-482). Failure
+        // here is intentionally non-fatal — the rest of the scaffold is done.
+        let warning = installCorveilSkill(corveilBinaryPath)
+        return ScaffoldResult(warning: warning)
     }
+
+    /// Runs `<corveilBinaryPath> skill install --path {devRoot}/.claude/commands/query-corveil.md`
+    /// when the path is set and points at an executable. Returns a short
+    /// user-facing warning string on failure; `nil` on success or when the
+    /// feature is unconfigured (empty/nil path).
+    ///
+    /// `Scaffolder.scaffold(...)` runs on the main thread during
+    /// `applicationDidFinishLaunching`, so a hung corveil binary (wrong
+    /// executable, stdin prompt, etc.) would freeze app startup with no
+    /// window drawn yet. The hard wall-clock timeout bounds the worst case:
+    /// after `corveilInstallTimeout` seconds the process is sent SIGTERM and
+    /// the install reports a warning rather than blocking forever.
+    private func installCorveilSkill(_ corveilBinaryPath: String?) -> String? {
+        guard let path = corveilBinaryPath?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !path.isEmpty else {
+            return nil
+        }
+        let fm = FileManager.default
+        guard fm.isExecutableFile(atPath: path) else {
+            NSLog("[Scaffolder] corveil binary not executable: %@", path)
+            return "Corveil skill install skipped — binary at \(path) is missing or not executable. Check Settings → General → Corveil CLI."
+        }
+
+        let commandsDir = (devRoot as NSString).appendingPathComponent(".claude/commands")
+        do {
+            try fm.createDirectory(atPath: commandsDir, withIntermediateDirectories: true)
+        } catch {
+            NSLog("[Scaffolder] could not create commands dir: %@", error.localizedDescription)
+            return "Corveil skill install failed — could not create .claude/commands directory."
+        }
+        let target = (commandsDir as NSString).appendingPathComponent("query-corveil.md")
+
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: path)
+        proc.arguments = ["skill", "install", "--path", target]
+        let stderrPipe = Pipe()
+        proc.standardError = stderrPipe
+        // Discard stdout explicitly. We don't surface corveil's diagnostic
+        // line, and routing to /dev/null is deadlock-proof — an undrained
+        // `Pipe()` would block the child if it ever wrote >64KB before exit.
+        proc.standardOutput = FileHandle.nullDevice
+
+        do {
+            try proc.run()
+        } catch {
+            NSLog("[Scaffolder] corveil launch failed: %@", error.localizedDescription)
+            return "Corveil skill install failed — \(error.localizedDescription). Check path in Settings."
+        }
+
+        // Watchdog: SIGTERM after `corveilInstallTimeout` so a hung binary
+        // unblocks `waitUntilExit`. The watchdog records the timeout so we
+        // can distinguish exit-N from wall-clock kill below. `waitUntilExit`
+        // (not a polling loop) is what triggers Foundation's pipe-write-FD
+        // cleanup, which is the only way the post-exit `readToEnd()` below
+        // reliably sees EOF.
+        let watchdog = ScaffolderTimeoutWatchdog(deadline: Self.corveilInstallTimeout, proc: proc)
+        watchdog.start()
+        proc.waitUntilExit()
+        let timedOut = watchdog.cancel()
+
+        if timedOut {
+            NSLog("[Scaffolder] corveil skill install timed out after %.1fs", Self.corveilInstallTimeout)
+            return "Corveil skill install timed out after \(Int(Self.corveilInstallTimeout))s — binary may be hung. Check path in Settings."
+        }
+        if proc.terminationStatus != 0 {
+            let stderr = (try? stderrPipe.fileHandleForReading.readToEnd())
+                .flatMap { String(data: $0, encoding: .utf8) }?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            NSLog("[Scaffolder] corveil skill install exit=%d stderr=%@",
+                  proc.terminationStatus, stderr)
+            let detail = stderr.isEmpty ? "exit code \(proc.terminationStatus)" : stderr
+            return "Corveil skill install failed — \(detail). Check path in Settings."
+        }
+        NSLog("[Scaffolder] corveil skill installed at %@", target)
+        return nil
+    }
+
+    /// Wall-clock budget for the per-launch `corveil skill install` run. Tight
+    /// because `Scaffolder.scaffold(...)` runs on the main thread before the
+    /// app window is shown — a hung corveil binary delays first paint by this
+    /// many seconds. 5s is generous for a local subprocess that only writes
+    /// one ~10KB file.
+    static let corveilInstallTimeout: TimeInterval = 5.0
 
     // MARK: - Bundled Templates
 
@@ -325,5 +432,46 @@ struct Scaffolder {
             dir = dir.deletingLastPathComponent()
         }
         return nil
+    }
+}
+
+/// SIGTERM a `Process` after `deadline` seconds if it's still running. Used
+/// to bound `waitUntilExit` without a polling loop (a polling loop on
+/// `proc.isRunning` consumes the exit observation Foundation needs to run
+/// its pipe-write-FD cleanup, so post-exit `readToEnd()` reads return empty).
+/// Mirrors `SettingsView`'s `TimeoutWatchdog`; duplicated here because
+/// Scaffolder and SettingsView live in different targets with no shared
+/// private utility module today, and the helper is small enough that two
+/// copies beat introducing a CrowCore type for two callers.
+fileprivate final class ScaffolderTimeoutWatchdog: @unchecked Sendable {
+    private let proc: Process
+    private let timer: DispatchSourceTimer
+    private let lock = NSLock()
+    private var didFire = false
+
+    init(deadline: TimeInterval, proc: Process) {
+        self.proc = proc
+        self.timer = DispatchSource.makeTimerSource(queue: .global(qos: .userInitiated))
+        self.timer.schedule(deadline: .now() + deadline)
+    }
+
+    func start() {
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            self.didFire = true
+            self.lock.unlock()
+            if self.proc.isRunning {
+                self.proc.terminate()
+            }
+        }
+        timer.resume()
+    }
+
+    /// Cancel the watchdog. Returns true if it had already fired (timeout).
+    func cancel() -> Bool {
+        timer.cancel()
+        lock.lock(); defer { lock.unlock() }
+        return didFire
     }
 }

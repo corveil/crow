@@ -4,6 +4,41 @@ import Testing
 @testable import CrowCore
 @testable import CrowUI
 
+// MARK: - SettingsView.runCorveilVersion (CROW-482)
+
+@Suite("SettingsView.runCorveilVersion")
+struct RunCorveilVersionTests {
+
+    @Test func nonExecutablePathReturnsError() {
+        let result = SettingsView.runCorveilVersion(at: "/this/path/definitely/does/not/exist")
+        #expect(result.hasPrefix("✗ Not executable:"))
+    }
+
+    @Test func emptyPathReturnsError() {
+        // isExecutableFile returns false for "", so the gate still trips.
+        let result = SettingsView.runCorveilVersion(at: "")
+        #expect(result.hasPrefix("✗ Not executable:"))
+    }
+
+    @Test func zeroExitWithNoOutputFormatsAsVerified() {
+        // /usr/bin/true ignores arguments and exits 0 with no stdout/stderr.
+        let result = SettingsView.runCorveilVersion(at: "/usr/bin/true")
+        #expect(result == "✓ Verified")
+    }
+
+    @Test func nonZeroExitWithNoOutputSurfacesExitCode() {
+        // /usr/bin/false ignores arguments and exits 1 with no stdout/stderr.
+        let result = SettingsView.runCorveilVersion(at: "/usr/bin/false")
+        #expect(result == "✗ exit code 1")
+    }
+
+    @Test func zeroExitWithStdoutShowsSnippet() {
+        // /bin/echo --version → exits 0, prints "--version\n" to stdout.
+        let result = SettingsView.runCorveilVersion(at: "/bin/echo")
+        #expect(result == "✓ --version")
+    }
+}
+
 // MARK: - SessionStatus Display Names
 
 @Test func sessionStatusDisplayNames() {

@@ -298,11 +298,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Save devRoot pointer
             try ConfigStore.saveDevRoot(devRoot)
 
-            // Scaffold directory structure
+            // Scaffold directory structure. Don't run the corveil skill install
+            // here — `launchMainApp()` runs `scaffold(...)` again immediately
+            // below, so doing it twice on first-time setup just fires the
+            // subprocess twice with the second result winning.
             let scaffolder = Scaffolder(devRoot: devRoot)
-            try scaffolder.scaffold(
+            _ = try scaffolder.scaffold(
                 workspaceNames: config.workspaces.map(\.name),
-                managerAgentKind: config.agentKind(for: .manager)
+                managerAgentKind: config.agentKind(for: .manager),
+                corveilBinaryPath: nil
             )
 
             // Save config
@@ -403,10 +407,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Update skills and CLAUDE.md on every launch
         let scaffolder = Scaffolder(devRoot: devRoot)
         do {
-            try scaffolder.scaffold(
+            let result = try scaffolder.scaffold(
                 workspaceNames: config.workspaces.map(\.name),
-                managerAgentKind: config.agentKind(for: .manager)
+                managerAgentKind: config.agentKind(for: .manager),
+                corveilBinaryPath: config.defaults.binaries["corveil"]
             )
+            appState.corveilSkillInstallWarning = result.warning
         } catch {
             NSLog("[Crow] Scaffold update failed: %@", error.localizedDescription)
         }
@@ -1068,10 +1074,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             onRescaffold: { [weak self] devRoot in
                 let scaffolder = Scaffolder(devRoot: devRoot)
                 let cfg = self?.appConfig
-                try? scaffolder.scaffold(
-                    workspaceNames: cfg?.workspaces.map(\.name) ?? [],
-                    managerAgentKind: cfg?.agentKind(for: .manager) ?? .claudeCode
-                )
+                do {
+                    let result = try scaffolder.scaffold(
+                        workspaceNames: cfg?.workspaces.map(\.name) ?? [],
+                        managerAgentKind: cfg?.agentKind(for: .manager) ?? .claudeCode,
+                        corveilBinaryPath: cfg?.defaults.binaries["corveil"]
+                    )
+                    // Always assign — clears a stale warning from a prior
+                    // launch when the install now succeeds (`result.warning`
+                    // is `nil` on success or no-op).
+                    self?.appState.corveilSkillInstallWarning = result.warning
+                } catch {
+                    NSLog("[Crow] Re-scaffold failed: %@", error.localizedDescription)
+                    // Replace any existing corveil-install banner with a
+                    // fresh "rescaffold failed" message so the user isn't
+                    // looking at a stale message from a prior launch.
+                    self?.appState.corveilSkillInstallWarning =
+                        "Re-scaffold failed: \(error.localizedDescription)"
+                }
             }
         )
 

@@ -406,11 +406,22 @@ public struct ConfigDefaults: Codable, Sendable, Equatable {
     public var excludeReviewRepos: [String]
     public var excludeTicketRepos: [String]
     public var ignoreReviewLabels: [String]
-    /// Explicit absolute-path overrides for `CodingAgent` binary discovery,
-    /// keyed by `AgentKind.rawValue` (e.g. `"codex"`, `"cursor"`, `"claude-code"`).
-    /// Consulted before the PATH walk in `CodingAgent.findBinary()` — set this
-    /// when discovery doesn't find your install for any reason (exotic Node
-    /// manager, sandboxed PATH, etc.). See CROW-484.
+    /// Absolute-path overrides for executable binaries, keyed by tool name.
+    ///
+    /// Serves two callers that share the same map shape:
+    /// - **Agent binary discovery** (CROW-484): keyed by `AgentKind.rawValue`
+    ///   (`"codex"`, `"cursor"`, `"claude-code"`). `CodingAgent.findBinary()`
+    ///   consults this map before walking PATH — set this when discovery
+    ///   doesn't find your install (exotic Node manager, sandboxed PATH, etc.).
+    /// - **External tool installers** (CROW-482): keyed by tool name (e.g.
+    ///   `"corveil"`) and used by `Scaffolder` to run each tool's own skill
+    ///   installer on launch. The Settings UI currently exposes only the
+    ///   `corveil` slot; the map shape is intentionally generic so future
+    ///   tools (soulstone, tanzanite, …) extend the same field without a
+    ///   schema change.
+    ///
+    /// Agent keys (`claude-code`, `codex`, `cursor`) and tool keys (`corveil`,
+    /// …) don't overlap, so the two callers coexist in one map.
     public var binaries: [String: String]
 
     /// Characters that are invalid in git ref names (see `git check-ref-format`).

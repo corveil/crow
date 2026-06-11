@@ -485,6 +485,31 @@ import Testing
     #expect(config.defaults.ignoreReviewLabels.isEmpty)
 }
 
+// MARK: - defaults.binaries (CROW-482)
+
+@Test func binariesRoundTrip() throws {
+    let config = AppConfig(
+        defaults: ConfigDefaults(binaries: [
+            "corveil": "/Users/jane/dev/corveil/corveil",
+            "soulstone": "/usr/local/bin/soulstone",
+        ])
+    )
+    let data = try JSONEncoder().encode(config)
+    let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+    #expect(decoded.defaults.binaries["corveil"] == "/Users/jane/dev/corveil/corveil")
+    #expect(decoded.defaults.binaries["soulstone"] == "/usr/local/bin/soulstone")
+}
+
+@Test func binariesDefaultsEmptyWhenKeyMissing() throws {
+    // Configs written before CROW-482 don't have `binaries` — they must still
+    // decode cleanly with an empty map (forward compatibility).
+    let json = """
+    {"defaults": {"provider": "github", "cli": "gh", "branchPrefix": "feature/", "excludeDirs": []}}
+    """.data(using: .utf8)!
+    let config = try JSONDecoder().decode(AppConfig.self, from: json)
+    #expect(config.defaults.binaries.isEmpty)
+}
+
 // MARK: - AI gateway (CROW-402)
 
 @Test func workspaceGatewayRoundTrip() throws {

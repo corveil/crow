@@ -233,6 +233,12 @@ public final class AppState {
     /// Set by `IssueTracker` when polling is suspended; cleared on next success.
     public var rateLimitWarning: String?
 
+    /// Non-fatal warning surfaced in Settings when the per-launch
+    /// `corveil skill install` run fails (CROW-482). `nil` means the install
+    /// either succeeded or wasn't attempted (no path configured). Set by
+    /// `AppDelegate.launchMainApp` from the `Scaffolder` result.
+    public var corveilSkillInstallWarning: String?
+
     /// Terminal readiness state per terminal ID.
     public var terminalReadiness: [UUID: TerminalReadiness] = [:]
 
