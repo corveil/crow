@@ -196,13 +196,6 @@ struct Scaffolder {
             NSLog("[Scaffolder] corveil launch failed: %@", error.localizedDescription)
             return "Corveil skill install failed — \(error.localizedDescription). Check path in Settings."
         }
-        // Close the parent's copy of the stderr write end so EOF arrives at
-        // our read end when the child exits. Foundation's `Process` only
-        // closes it as part of `waitUntilExit()`; the polling loop below
-        // uses `isRunning` instead, so without this the drain thread's
-        // `readDataToEndOfFile()` would block past `pipeDrainGrace` and the
-        // failure stderr would be reported as empty.
-        try? stderrPipe.fileHandleForWriting.close()
 
         // Wall-clock timeout: poll for completion in short slices so a hung
         // process gets SIGTERM'd instead of blocking app launch indefinitely.
@@ -219,11 +212,24 @@ struct Scaffolder {
                     Thread.sleep(forTimeInterval: 0.05)
                 }
                 NSLog("[Scaffolder] corveil skill install timed out after %.1fs", Self.corveilInstallTimeout)
-                stderrDrain.abandon()
+                // Even on timeout, run waitUntilExit so Foundation releases
+                // its internal copy of the stderr writeFD — that's the only
+                // way the bg drain can see EOF and return what little it
+                // captured (see comment above the success-path call below).
+                proc.waitUntilExit()
+                _ = stderrDrain.collect(within: Self.pipeDrainGrace)
                 return "Corveil skill install timed out after \(Int(Self.corveilInstallTimeout))s — binary may be hung. Check path in Settings."
             }
             Thread.sleep(forTimeInterval: 0.05)
         }
+        // `Process` keeps an internal copy of the stderr pipe's write FD that
+        // is only released as part of `waitUntilExit()`'s cleanup. The polling
+        // loop above leaves that copy open, so the bg drain's
+        // `readDataToEndOfFile()` never sees EOF — its collect would time out
+        // empty. `waitUntilExit` is a no-op for the wait itself now (the child
+        // is already gone) but its cleanup releases Foundation's FD copy so
+        // EOF reaches our read end and the drain delivers any captured stderr.
+        proc.waitUntilExit()
 
         if proc.terminationStatus != 0 {
             let stderr = String(data: stderrDrain.collect(within: Self.pipeDrainGrace), encoding: .utf8)?
