@@ -73,15 +73,18 @@ public struct CorveilTaskBackend: TaskBackend {
     }
 
     public func listAssigned(includeClosed: Bool) async throws -> AssignedListing {
+        // Corveil's `--status` is an exact match on a single status value, not
+        // "not closed" semantics. To match GitHub (`state:open` = not-closed)
+        // and Jira (`statusCategory != Done`) we fan out across both not-closed
+        // statuses — otherwise a task we just moved to `in_progress` via
+        // `setTaskStatus(.inProgress)` would silently vanish from the assigned
+        // board on the next `IssueTracker.refresh` poll.
         let open: [AssignedIssue]
         do {
-            let openOut = try await run([
-                "corveil", "task", "list",
-                "--assignee", "@me",
-                "--status", "open",
-                "--json",
-            ])
+            let openOut = try await listByStatus("open")
+            let inProgressOut = try await listByStatus("in_progress")
             open = Self.parseAssigned(openOut, host: config.host, statusOverride: nil)
+                + Self.parseAssigned(inProgressOut, host: config.host, statusOverride: nil)
         } catch {
             // Match Jira's degrade-to-empty semantics rather than throwing.
             return AssignedListing(open: [], closed: [])
@@ -93,12 +96,7 @@ public struct CorveilTaskBackend: TaskBackend {
 
         let closed: [AssignedIssue]
         do {
-            let closedOut = try await run([
-                "corveil", "task", "list",
-                "--assignee", "@me",
-                "--status", "closed",
-                "--json",
-            ])
+            let closedOut = try await listByStatus("closed")
             closed = Self.parseAssigned(closedOut, host: config.host, statusOverride: .done)
         } catch {
             return AssignedListing(open: open, closed: [])
@@ -172,6 +170,15 @@ public struct CorveilTaskBackend: TaskBackend {
     }
 
     // MARK: - Helpers
+
+    private func listByStatus(_ status: String) async throws -> String {
+        try await run([
+            "corveil", "task", "list",
+            "--assignee", "@me",
+            "--status", status,
+            "--json",
+        ])
+    }
 
     /// Run a `corveil` invocation, translating shell failures into typed
     /// `ProviderError`s and giving a clear hint when corveil isn't authenticated.

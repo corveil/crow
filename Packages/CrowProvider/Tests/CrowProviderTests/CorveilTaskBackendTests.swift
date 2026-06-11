@@ -98,49 +98,58 @@ final class CorveilTaskBackendTests: XCTestCase {
 
     // MARK: - listAssigned
 
-    func testListAssignedSendsAtMeAndOpenStatus() async throws {
+    func testListAssignedFansOutAcrossOpenAndInProgressForTheOpenHalf() async throws {
+        // Corveil's `--status` is exact-match, not "not closed" — so to match
+        // GitHub/Jira semantics the backend must issue one call for `open` and
+        // one for `in_progress`, merging the results. Without this, a task we
+        // just moved to in_progress via setTaskStatus(.inProgress) would vanish
+        // from the assigned board on the next IssueTracker poll.
         let fake = FakeShellRunner()
-        fake.responses = [.success("""
-        [
-          {"id":"1","title":"Open one","status":"in_progress","labels":["bug","crow:auto"],"url":"https://corveil.io/dashboard/tasks/1"},
-          {"id":"2","title":"Open two","status":"open"}
+        fake.responses = [
+            .success(#"[{"id":"1","title":"Just queued","status":"open"}]"#),
+            .success(#"[{"id":"2","title":"Actively working","status":"in_progress","labels":["bug","crow:auto"],"url":"https://corveil.io/dashboard/tasks/2"}]"#),
         ]
-        """)]
         let b = backend(fake)
         let listing = try await b.listAssigned(includeClosed: false)
 
         XCTAssertEqual(listing.open.count, 2)
         XCTAssertTrue(listing.closed.isEmpty)
-        let first = listing.open[0]
-        XCTAssertEqual(first.id, "corveil:1")
-        XCTAssertEqual(first.number, 1)
-        XCTAssertEqual(first.provider, .corveil)
-        XCTAssertEqual(first.state, "open")
-        XCTAssertEqual(first.projectStatus, .inProgress)
-        XCTAssertEqual(first.url, "https://corveil.io/dashboard/tasks/1")
-        XCTAssertEqual(first.labels.map(\.name), ["bug", "crow:auto"])
-        XCTAssertEqual(listing.open[1].projectStatus, .ready)
 
-        XCTAssertEqual(fake.calls.count, 1)
-        let args = fake.calls[0].args
-        XCTAssertEqual(Array(args.prefix(3)), ["corveil", "task", "list"])
-        XCTAssertTrue(args.contains("--assignee"))
-        XCTAssertEqual(args[args.firstIndex(of: "--assignee")! + 1], "@me")
-        XCTAssertTrue(args.contains("--status"))
-        XCTAssertEqual(args[args.firstIndex(of: "--status")! + 1], "open")
+        XCTAssertEqual(fake.calls.count, 2)
+        for call in fake.calls {
+            let args = call.args
+            XCTAssertEqual(Array(args.prefix(3)), ["corveil", "task", "list"])
+            XCTAssertEqual(args[args.firstIndex(of: "--assignee")! + 1], "@me")
+        }
+        XCTAssertEqual(fake.calls[0].args[fake.calls[0].args.firstIndex(of: "--status")! + 1], "open")
+        XCTAssertEqual(fake.calls[1].args[fake.calls[1].args.firstIndex(of: "--status")! + 1], "in_progress")
+
+        let queued = listing.open.first(where: { $0.id == "corveil:1" })
+        XCTAssertNotNil(queued)
+        XCTAssertEqual(queued?.projectStatus, .ready)
+        XCTAssertEqual(queued?.state, "open")
+
+        let active = listing.open.first(where: { $0.id == "corveil:2" })
+        XCTAssertNotNil(active)
+        XCTAssertEqual(active?.projectStatus, .inProgress)
+        XCTAssertEqual(active?.state, "open")
+        XCTAssertEqual(active?.url, "https://corveil.io/dashboard/tasks/2")
+        XCTAssertEqual(active?.labels.map(\.name), ["bug", "crow:auto"])
     }
 
-    func testListAssignedIssuesSecondCallWhenIncludeClosed() async throws {
+    func testListAssignedIssuesThirdCallWhenIncludeClosed() async throws {
+        // Open half fans out (open + in_progress), then a third call for closed.
         let fake = FakeShellRunner()
         fake.responses = [
+            .success("[]"),
             .success("[]"),
             .success(#"[{"id":"9","title":"Done one","status":"closed"}]"#),
         ]
         let b = backend(fake)
         let listing = try await b.listAssigned(includeClosed: true)
 
-        XCTAssertEqual(fake.calls.count, 2)
-        let closedArgs = fake.calls[1].args
+        XCTAssertEqual(fake.calls.count, 3)
+        let closedArgs = fake.calls[2].args
         XCTAssertEqual(closedArgs[closedArgs.firstIndex(of: "--status")! + 1], "closed")
         XCTAssertEqual(listing.closed.count, 1)
         XCTAssertEqual(listing.closed[0].state, "closed")

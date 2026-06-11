@@ -77,7 +77,7 @@ Method-by-method state as of the #454 PR. "Site" is where the implementation liv
 | `fetchTask` | ✅ | ✅ | ✅ (#495) | shipped #411 |
 | `setLabels` | ✅ | ✅ | ✅ (#495) | shipped #411 |
 | `setTaskStatus` | ✅ (#454) | throws (no cap) | ✅ (#495) | #454 closed the escape-hatch — `IssueTracker.markInReview` no longer runs a parallel GraphQL mutation. Corveil maps `.inReview` → `in_progress` lossily (corveil has no distinct review status). |
-| `listAssigned` | ✅ (#454) | ✅ (#454) | ✅ (#495) | GitHub batches open+closed in one GraphQL call; GitLab issues two REST calls; Corveil uses `--assignee @me --status open` (corveil#1362). |
+| `listAssigned` | ✅ (#454) | ✅ (#454) | ✅ (#495) | GitHub batches open+closed in one GraphQL call; GitLab issues two REST calls; Corveil's `--status` is exact-match, so the open half fans out into two `--assignee @me --status {open,in_progress}` calls (corveil#1362) to match "not closed" semantics. |
 | `assign` | ✅ (#454) | ✅ (#454) | ✅ (#495) | for `setup.sh` and skill flows |
 | `createTask` | ✅ (#454) | ✅ (#454) | ✅ (#495) | for `/crow-create-ticket` |
 
