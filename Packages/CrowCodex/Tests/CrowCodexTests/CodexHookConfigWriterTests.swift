@@ -102,7 +102,8 @@ struct CodexHookConfigWriterTests {
         let toml = try String(contentsOf: codexHome.appendingPathComponent("config.toml"))
         #expect(toml.contains("notify = [\"/opt/homebrew/bin/crow\", \"codex-notify\"]"))
         #expect(toml.contains("[features]"))
-        #expect(toml.contains("codex_hooks = true"))
+        #expect(toml.contains("hooks = true"))
+        #expect(!toml.contains("codex_hooks"), "deprecated codex_hooks key must not be written")
     }
 
     @Test func installGlobalTomlConfigPreservesUserSettings() throws {
@@ -132,6 +133,75 @@ struct CodexHookConfigWriterTests {
         #expect(toml.contains("memories = true"))
         // Crow entries added.
         #expect(toml.contains("notify = "))
-        #expect(toml.contains("codex_hooks = true"))
+        #expect(toml.contains("hooks = true"))
+        #expect(!toml.contains("codex_hooks"), "deprecated codex_hooks key must not be written")
+    }
+
+    @Test func installGlobalTomlConfigMigratesLegacyCodexHooksKey() throws {
+        let codexHome = try makeTempCodexHome()
+        defer { try? FileManager.default.removeItem(at: codexHome) }
+
+        // Pre-seed with the deprecated `codex_hooks` key that pre-fix
+        // installs left behind. The migration should strip it and replace
+        // it with the current `hooks` key.
+        let legacy = """
+        model = "gpt-4o"
+
+        [features]
+        codex_hooks = true
+        memories = true
+        """
+        try legacy.write(
+            toFile: codexHome.appendingPathComponent("config.toml").path,
+            atomically: true, encoding: .utf8
+        )
+
+        try CodexHookConfigWriter.installGlobalTomlConfig(
+            codexHome: codexHome.path,
+            crowPath: "/usr/local/bin/crow"
+        )
+
+        let toml = try String(contentsOf: codexHome.appendingPathComponent("config.toml"))
+        #expect(toml.contains("hooks = true"), "modern hooks key should be present")
+        #expect(!toml.contains("codex_hooks"), "deprecated codex_hooks key should be stripped")
+        // Unrelated user entries survive.
+        #expect(toml.contains("model = \"gpt-4o\""))
+        #expect(toml.contains("memories = true"))
+
+        // Migration is idempotent — re-running produces the same content.
+        try CodexHookConfigWriter.installGlobalTomlConfig(
+            codexHome: codexHome.path,
+            crowPath: "/usr/local/bin/crow"
+        )
+        let second = try String(contentsOf: codexHome.appendingPathComponent("config.toml"))
+        #expect(toml == second)
+    }
+
+    @Test func installGlobalConfigEmitsNoAsyncHooks() throws {
+        // Codex's hook runtime is sync-only; declaring async causes the
+        // entry to be silently skipped at startup, which breaks Crow's
+        // session-state detection. Guard against the regression.
+        let codexHome = try makeTempCodexHome()
+        defer { try? FileManager.default.removeItem(at: codexHome) }
+        try CodexHookConfigWriter.installGlobalConfig(
+            codexHome: codexHome.path,
+            crowPath: "/usr/local/bin/crow"
+        )
+
+        let data = try Data(contentsOf: codexHome.appendingPathComponent("hooks.json"))
+        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        let hooks = json["hooks"] as! [String: Any]
+        for (event, value) in hooks {
+            let entries = value as! [[String: Any]]
+            for outer in entries {
+                let inner = outer["hooks"] as! [[String: Any]]
+                for entry in inner {
+                    #expect(
+                        entry["async"] == nil,
+                        "event \(event) has async flag; Codex silently skips async hooks"
+                    )
+                }
+            }
+        }
     }
 }

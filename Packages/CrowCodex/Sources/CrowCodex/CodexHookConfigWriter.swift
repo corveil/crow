@@ -22,8 +22,12 @@ public struct CodexHookConfigWriter: HookConfigWriter {
         "PermissionRequest",
     ]
 
-    /// Post-execution events safe to run async (fire-and-forget).
-    private static let asyncEvents: Set<String> = ["PostToolUse", "Stop"]
+    /// Events that should run async (fire-and-forget). Codex's hook runtime
+    /// is sync-only as of v0.139.0 — declaring `async = true` causes the
+    /// entry to be silently skipped on startup, which breaks Crow's
+    /// session-state detection. Keep this empty until/unless Codex grows
+    /// real async support upstream.
+    private static let asyncEvents: Set<String> = []
 
     public init() {}
 
@@ -89,9 +93,15 @@ public struct CodexHookConfigWriter: HookConfigWriter {
     }
 
     /// Install or update `<codexHome>/config.toml` with the
-    /// `features.codex_hooks = true` flag and the Crow `notify` line.
+    /// `features.hooks = true` flag and the Crow `notify` line.
     /// Preserves any other user-authored config — minimal line-oriented merge
     /// avoids pulling in a TOML dependency for two simple keys.
+    ///
+    /// Also runs a one-shot migration: legacy installs (Crow before this
+    /// fix, or older Codex versions) wrote `codex_hooks = true` under
+    /// `[features]`. Codex v0.139.0+ renamed the key to `hooks` and emits
+    /// a deprecation warning for the old one — strip it so users converging
+    /// from older configs end up with a single, current entry.
     public static func installGlobalTomlConfig(codexHome: String, crowPath: String) throws {
         try FileManager.default.createDirectory(atPath: codexHome, withIntermediateDirectories: true)
         let tomlPath = (codexHome as NSString).appendingPathComponent("config.toml")
@@ -104,11 +114,14 @@ public struct CodexHookConfigWriter: HookConfigWriter {
 
         let notifyLine = "notify = [\"\(escapeTomlString(crowPath))\", \"codex-notify\"]"
         content = upsertTomlLine(content, key: "notify", line: notifyLine)
+        // Strip the deprecated `codex_hooks` key before writing the modern
+        // `hooks` key so we don't leave both lines behind on migration.
+        content = removeTomlSectionLine(content, section: "features", key: "codex_hooks")
         content = upsertTomlSectionLine(
             content,
             section: "features",
-            key: "codex_hooks",
-            line: "codex_hooks = true"
+            key: "hooks",
+            line: "hooks = true"
         )
 
         try content.write(toFile: tomlPath, atomically: true, encoding: .utf8)
@@ -198,6 +211,40 @@ public struct CodexHookConfigWriter: HookConfigWriter {
         lines.append(sectionHeader)
         lines.append(line)
         return lines.joined(separator: "\n")
+    }
+
+    /// Remove `key = …` from inside `[section]` if present. Returns the
+    /// content unchanged when the section or key is absent — idempotent and
+    /// safe to chain before an `upsertTomlSectionLine` call.
+    static func removeTomlSectionLine(
+        _ content: String,
+        section: String,
+        key: String
+    ) -> String {
+        var lines = content.components(separatedBy: "\n")
+        var sectionStart: Int? = nil
+        var sectionEnd: Int = lines.count
+        let sectionHeader = "[\(section)]"
+        for (i, raw) in lines.enumerated() {
+            let trimmed = raw.trimmingCharacters(in: .whitespaces)
+            if trimmed == sectionHeader {
+                sectionStart = i
+                continue
+            }
+            if let _ = sectionStart, trimmed.hasPrefix("[") && trimmed.hasSuffix("]") {
+                sectionEnd = i
+                break
+            }
+        }
+
+        guard let start = sectionStart else { return content }
+        for i in (start + 1)..<sectionEnd {
+            if lineKey(of: lines[i]) == key {
+                lines.remove(at: i)
+                return lines.joined(separator: "\n")
+            }
+        }
+        return content
     }
 
     /// Extract the bare `key` from a `key = value` TOML line, ignoring
