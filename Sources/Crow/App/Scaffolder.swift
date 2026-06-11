@@ -151,7 +151,7 @@ struct Scaffolder {
     /// after `corveilInstallTimeout` seconds the process is sent SIGTERM and
     /// the install reports a warning rather than blocking forever.
     private func installCorveilSkill(_ corveilBinaryPath: String?) -> String? {
-        guard let path = corveilBinaryPath?.trimmingCharacters(in: .whitespaces),
+        guard let path = corveilBinaryPath?.trimmingCharacters(in: .whitespacesAndNewlines),
               !path.isEmpty else {
             return nil
         }
