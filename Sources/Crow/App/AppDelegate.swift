@@ -53,6 +53,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// replaced.
     private var reviewKickoffTail: Task<Void, Never>?
 
+    /// Tail of the serial corveil-skill-install queue. Settings picker
+    /// commits (`SettingsView.onCorveilReinstall`) chain new installs onto
+    /// this tail so two rapid picks don't race on `query-corveil.md`
+    /// (concurrent `corveil skill install` subprocesses writing the same
+    /// `--path`) or on `corveilSkillInstallWarning` (out-of-order
+    /// completion clobbering a fresher banner with a stale one). The last
+    /// committed path is also the last to write the banner. See the
+    /// CROW-490 review for the race this replaced.
+    private var corveilInstallTail: Task<String?, Never>?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Must be the very first call so the next exit (graceful or not)
         // lands somewhere readable. Also redirects stderr so Swift runtime
@@ -185,6 +195,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 _ = await service.createReviewSession(prURL: url, selectAfterCreate: false)
             }
         }
+    }
+
+    /// Hot-trigger a single `corveil skill install` run for a path the user
+    /// just committed in Settings (CROW-490) or clicked Reinstall on
+    /// (CROW-491). Mirrors the `reviewKickoffTail` pattern: writes to
+    /// `corveilInstallTail` happen on the main actor, and each task awaits
+    /// its predecessor before running, so the last-committed path is also
+    /// the last to update the banner. The blocking subprocess runs in a
+    /// nested `Task.detached` (bounded by `Scaffolder.corveilInstallTimeout`)
+    /// so it can't freeze the Settings window, then the result is assigned
+    /// back on main. `nil` path is a deliberate no-op for the subprocess
+    /// but still clears any stale warning, matching the launch-time
+    /// scaffolder's "always assign" semantics at the `onRescaffold` call site.
+    ///
+    /// Returns the warning produced by this specific call (not whichever
+    /// task happens to be tail). Picker-change callers may ignore it;
+    /// the Reinstall button awaits it to show inline `✓ / ✗` feedback.
+    @MainActor
+    @discardableResult
+    private func enqueueCorveilInstall(path: String?, devRoot: String) async -> String? {
+        let previous = corveilInstallTail
+        let myTask = Task<String?, Never> { @MainActor [weak self] in
+            // Serialize behind any in-flight install. We don't care about the
+            // predecessor's warning — each task reports its own result.
+            _ = await previous?.value
+            let warning = await Task.detached {
+                let scaffolder = Scaffolder(devRoot: devRoot)
+                return scaffolder.installCorveilSkill(path)
+            }.value
+            self?.appState.corveilSkillInstallWarning = warning
+            return warning
+        }
+        corveilInstallTail = myTask
+        return await myTask.value
     }
 
     // MARK: - tmux watchdog alert
@@ -422,6 +466,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } catch {
             NSLog("[Crow] Scaffold update failed: %@", error.localizedDescription)
         }
+
+        // Settings → Corveil CLI → "Reinstall skill" (issue #491) reuses
+        // the existing `onCorveilReinstall` hook wired in `showSettings`,
+        // which already routes through `enqueueCorveilInstall` so the
+        // button click serializes correctly against any in-flight picker
+        // commit (CROW-490). No separate AppState callback needed.
+
 
         // Codex-specific dev-root and global config — only when Codex is
         // registered. AGENTS.md goes into devRoot; hooks.json + config.toml
@@ -1099,6 +1150,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     self?.appState.corveilSkillInstallWarning =
                         "Re-scaffold failed: \(error.localizedDescription)"
                 }
+            },
+            onCorveilReinstall: { [weak self] newPath in
+                // Hot-trigger a single `corveil skill install` run, serialized
+                // through `corveilInstallTail` against any in-flight install
+                // (mirrors the `reviewKickoffTail` pattern). Two paths reach
+                // this closure: the user committing a new path in the picker
+                // (CROW-490) and the user clicking "Reinstall skill" (CROW-491).
+                //
+                // Read `self.devRoot` live, not the launch-time / show-time
+                // capture: `saveSettings(devRoot:config:)` mutates it in the
+                // same Settings window, and the stale capture would silently
+                // install into the previous devRoot while reporting success.
+                guard let self, let currentDevRoot = self.devRoot else { return nil }
+                return await self.enqueueCorveilInstall(path: newPath, devRoot: currentDevRoot)
             }
         )
 

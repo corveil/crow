@@ -837,11 +837,11 @@ launch_codex() {
       die "launch_agent" "codex binary not found at PATH or known locations; provide --agent-binary"
   fi
   log "Resolved codex binary: $bin"
-  # Codex has no prompt-argv form (matches OpenAICodexAgent.autoLaunchCommand
-  # — bare `codex` only). The prompt file is still written; the user can
-  # paste from it into the TUI.
-  log "Note: Codex has no prompt-argv form; prompt file is at $prompt_path (paste manually if needed)."
-  local launch_cmd="cd $WORKTREE_PATH && $bin"
+  # Codex 0.129+ accepts the initial prompt as a positional argv that
+  # pre-fills the TUI composer — same mechanism Cursor's `agent` uses.
+  # The prompt-argv form was deferred in MVP because older Codex CLIs
+  # ignored extra argv; unblocked here (#492).
+  local launch_cmd="cd $WORKTREE_PATH && $bin \"\$(cat $prompt_path)\""
   create_agent_terminal "OpenAI Codex" "$launch_cmd"
 }
 

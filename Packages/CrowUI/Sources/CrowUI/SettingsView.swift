@@ -24,18 +24,37 @@ public struct SettingsView: View {
     @State private var corveilVerifyResult: String?
     /// True while the Verify button's subprocess is in flight.
     @State private var corveilVerifying: Bool = false
+    /// Live result of the most recent "Reinstall skill" click. Shares the
+    /// `✓ … / ✗ …` convention with `corveilVerifyResult` and is rendered in
+    /// the same inline result line (only one operation runs at a time). Set
+    /// to `nil` on path edits so stale results don't outlive a binary swap.
+    @State private var corveilReinstallResult: String?
+    /// True while the Reinstall skill button's subprocess is in flight.
+    @State private var corveilReinstalling: Bool = false
 
     public var onSave: ((String, AppConfig) -> Void)?
     public var onRescaffold: ((String) -> Void)?
+    /// Fired when the user commits a new value into the corveil picker
+    /// (Browse confirm, Enter on the TextField) or clicks "Reinstall skill",
+    /// so AppDelegate can re-run just `Scaffolder.installCorveilSkill`
+    /// instead of waiting for the next app restart (CROW-490, CROW-491).
+    /// `nil` argument means "the user cleared the field" — the install is
+    /// a no-op then but the caller still gets the signal to clear any stale
+    /// warning banner. Returns the warning string (`nil` on success) so the
+    /// Reinstall button can show inline `✓ / ✗` feedback; picker-change
+    /// callers may ignore the return.
+    public var onCorveilReinstall: ((String?) async -> String?)?
 
     public init(appState: AppState, devRoot: String, config: AppConfig,
                 onSave: ((String, AppConfig) -> Void)? = nil,
-                onRescaffold: ((String) -> Void)? = nil) {
+                onRescaffold: ((String) -> Void)? = nil,
+                onCorveilReinstall: ((String?) async -> String?)? = nil) {
         self.appState = appState
         self._devRoot = State(initialValue: devRoot)
         self._config = State(initialValue: config)
         self.onSave = onSave
         self.onRescaffold = onRescaffold
+        self.onCorveilReinstall = onCorveilReinstall
     }
 
     /// Names of all workspaces except the one currently being edited.
@@ -266,29 +285,49 @@ public struct SettingsView: View {
                 HStack {
                     TextField("Path to corveil binary", text: corveilBinding)
                         .textFieldStyle(.roundedBorder)
-                        .onSubmit { save() }
+                        .onSubmit { commitCorveilPath() }
+                        // Typing/pasting a new path into the field (not just
+                        // Browse) also makes prior results stale. Watch the
+                        // binding's source-of-truth — the config dict slot —
+                        // and clear both inline results when it changes.
+                        .onChange(of: config.defaults.binaries["corveil"] ?? "") { _, _ in
+                            corveilVerifyResult = nil
+                            corveilReinstallResult = nil
+                        }
                     Button("Browse...") {
                         let panel = NSOpenPanel()
                         panel.canChooseFiles = true
                         panel.canChooseDirectories = false
                         panel.allowsMultipleSelection = false
                         if panel.runModal() == .OK, let url = panel.url {
+                            // Mutating the binding triggers the .onChange
+                            // above, which clears stale verify/reinstall
+                            // results — no manual clears needed here.
                             corveilBinding.wrappedValue = url.path
-                            save()
-                            // Clear stale verify result — it's about a previous binary.
-                            corveilVerifyResult = nil
+                            commitCorveilPath()
                         }
                     }
                     Button(corveilVerifying ? "Verifying…" : "Verify") { verifyCorveil() }
-                        .disabled(corveilBinding.wrappedValue.isEmpty || corveilVerifying)
+                        .disabled(corveilBinding.wrappedValue.isEmpty || corveilVerifying || corveilReinstalling)
+                    Button(corveilReinstalling ? "Reinstalling…" : "Reinstall skill") {
+                        reinstallCorveilSkill()
+                    }
+                    .disabled(corveilBinding.wrappedValue.isEmpty || corveilVerifying || corveilReinstalling)
+                    .help(corveilBinding.wrappedValue.isEmpty
+                          ? "Set the Corveil CLI path first."
+                          : "Reinstall the bundled /query-corveil skill from this binary — picks up a rebuilt corveil without restarting Crow.")
                 }
-                if let result = corveilVerifyResult {
+                // Single result line — coalesces Verify and Reinstall output.
+                // Only one operation runs at a time (mutual `disabled`), and
+                // newer clicks clear the older result first, so there's no
+                // ambiguity about which click this line refers to.
+                if let result = corveilReinstallResult ?? corveilVerifyResult {
                     Text(result)
                         .font(.caption)
                         .foregroundStyle(result.hasPrefix("✓") ? .green : .orange)
                         .textSelection(.enabled)
                 }
-                Text("On launch, Crow runs `corveil skill install --path` to install the `/query-corveil` slash command into this devRoot. Leave blank to skip.")
+                Text("On launch, Crow runs `corveil skill install --path` to install the `/query-corveil` slash command into this devRoot. Use **Reinstall skill** after rebuilding corveil to pick up the new embedded skill without restarting Crow. Leave blank to skip.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -594,6 +633,25 @@ public struct SettingsView: View {
         onSave?(devRoot, config)
     }
 
+    /// Commit a corveil picker change: persist the config and hot-trigger
+    /// the `/query-corveil` install for the new path (CROW-490). Both
+    /// commit sites (Browse confirm and TextField `onSubmit`) funnel
+    /// through here so the "persist → reinstall" pair stays atomic and
+    /// the `nil`-on-empty rule has a single source of truth. We read the
+    /// path through `corveilBinding.wrappedValue` rather than the raw
+    /// input so the binding's whitespace-trim normalization wins — the
+    /// install closure sees the same string that the next launch's
+    /// scaffolder would see.
+    private func commitCorveilPath() {
+        save()
+        let path = corveilBinding.wrappedValue
+        // Picker commits are fire-and-forget — the closure now returns the
+        // install warning, but `corveilSkillInstallWarning` is already
+        // updated inside the closure for the banner, and there is no
+        // inline result line for picker-driven installs.
+        Task { _ = await onCorveilReinstall?(path.isEmpty ? nil : path) }
+    }
+
     /// Two-way binding into `config.defaults.binaries["corveil"]` that treats
     /// an empty string as "unset" (so the map doesn't accumulate stale empty
     /// entries when the user clears the field). Trimming happens on commit so
@@ -620,12 +678,55 @@ public struct SettingsView: View {
         guard !path.isEmpty else { return }
         corveilVerifying = true
         corveilVerifyResult = nil
+        // Clear the older reinstall result so the coalesced result line
+        // doesn't shadow this verify with stale output.
+        corveilReinstallResult = nil
         Task.detached {
             let result = SettingsView.runCorveilVersion(at: path)
             await MainActor.run {
                 corveilVerifyResult = result
                 corveilVerifying = false
             }
+        }
+    }
+
+    /// Re-run `corveil skill install --path …` on demand — the same flow as
+    /// the per-launch path (CROW-482), without requiring a restart, a
+    /// workspace switch, or re-picking the binary (CROW-491). The common
+    /// loop this serves is "I rebuilt corveil locally; install the new
+    /// embedded skill." Goes through the existing `onCorveilReinstall`
+    /// hook (also used by picker commits, CROW-490) so the click serializes
+    /// behind any in-flight install via `AppDelegate.enqueueCorveilInstall`.
+    /// The closure offloads blocking work to a detached task internally, so
+    /// awaiting it from the main actor doesn't pin the UI for the install
+    /// timeout. `appState.corveilSkillInstallWarning` is already updated
+    /// inside the closure, so we only need to set the inline result line.
+    private func reinstallCorveilSkill() {
+        let path = corveilBinding.wrappedValue
+        guard !path.isEmpty else { return }
+        corveilReinstalling = true
+        corveilReinstallResult = nil
+        // Clear the older verify result so the coalesced result line
+        // doesn't shadow this reinstall with stale output.
+        corveilVerifyResult = nil
+        Task {
+            // Distinguish "closure returned nil (real success)" from "closure
+            // unwired (previews/tests)" — otherwise the unwired case would
+            // print a false `✓ Skill reinstalled` for an install that never
+            // ran. Explicit guard inside the Task so we don't capture a
+            // non-Sendable closure across the actor boundary.
+            guard let callback = onCorveilReinstall else {
+                corveilReinstallResult = "✗ Reinstall unavailable in this build (callback not wired)."
+                corveilReinstalling = false
+                return
+            }
+            let warning = await callback(path)
+            if let warning {
+                corveilReinstallResult = "✗ \(warning)"
+            } else {
+                corveilReinstallResult = "✓ Skill reinstalled"
+            }
+            corveilReinstalling = false
         }
     }
 
