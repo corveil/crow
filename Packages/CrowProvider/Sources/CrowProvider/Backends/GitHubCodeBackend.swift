@@ -252,6 +252,16 @@ public struct GitHubCodeBackend: CodeBackend {
 
     // MARK: - enableAutoMerge / updateBranch
 
+    public func addMergeLabel(prURL: String) async throws {
+        // Direct argv (not `sh -c`) eliminates shell interpolation around
+        // `prURL`; $TMPDIR cwd so gh doesn't infer the repo from the cwd.
+        _ = try await shellRunner.run(
+            args: ["gh", "pr", "edit", prURL, "--add-label", "crow:merge"],
+            env: [:],
+            cwd: NSTemporaryDirectory()
+        )
+    }
+
     public func enableAutoMerge(prURL: String) async throws {
         // Run inside $TMPDIR so gh doesn't pick up the cwd's git config when
         // detecting the repo. Direct argv (not `sh -c`) eliminates any shell

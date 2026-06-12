@@ -845,6 +845,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Task { await tracker?.markInReview(sessionID: id) }
         }
 
+        appState.canAddMergeLabelResolver = { [providerManager] session in
+            guard let provider = session.provider else { return false }
+            return providerManager
+                .codeBackend(for: provider)?
+                .capabilities
+                .contains(.autoMergeLabel) ?? false
+        }
+
+        appState.onAddMergeLabel = { [weak tracker] id in
+            Task { await tracker?.addMergeLabel(sessionID: id) }
+        }
+
         appState.onManualRefresh = { [weak tracker] in
             Task { await tracker?.refresh() }
         }

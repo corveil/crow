@@ -167,6 +167,7 @@ public struct SessionListView: View {
                     .listRowSeparator(.hidden)
                     .listRowBackground(Color.clear)
                     .contextMenu {
+                        addMergeLabelButton(session)
                         Button(role: .destructive) {
                             sessionToDelete = session
                         } label: {
@@ -318,12 +319,31 @@ public struct SessionListView: View {
             .disabled(deleting)
         }
 
+        addMergeLabelButton(session)
+
         Button(role: .destructive) {
             sessionToDelete = session
         } label: {
             Label("Delete", systemImage: "trash")
         }
         .disabled(deleting)
+    }
+
+    /// "Add label crow:merge to PR" — shown only when the session has a PR link
+    /// and its code backend supports the auto-merge label (capability-gated via
+    /// `canAddMergeLabel`). Self-gating so callers can include it unconditionally.
+    @ViewBuilder
+    private func addMergeLabelButton(_ session: Session) -> some View {
+        let hasPR = appState.links(for: session.id).contains(where: { $0.linkType == .pr })
+        if hasPR, appState.canAddMergeLabel(for: session) {
+            Button {
+                appState.onAddMergeLabel?(session.id)
+            } label: {
+                Label("Add label crow:merge to PR", systemImage: "arrow.triangle.merge")
+            }
+            .disabled(appState.isAddingMergeLabel[session.id] == true
+                      || appState.isDeletingSession[session.id] == true)
+        }
     }
 
     private func filteredSessions(_ sessions: [Session]) -> [Session] {

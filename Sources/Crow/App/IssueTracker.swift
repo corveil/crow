@@ -1422,6 +1422,26 @@ final class IssueTracker {
         return ""
     }
 
+    /// Parse the `owner/repo` (or `group/sub/repo`) slug from a PR/MR *web* URL
+    /// such as `https://github.com/owner/repo/pull/123` or
+    /// `https://gitlab.com/group/sub/repo/-/merge_requests/12`. Returns the path
+    /// segments before the `pull` / `merge_requests` / `-` marker, or "" when the
+    /// URL can't be parsed. Distinct from `extractSlug(fromRemote:)`, which
+    /// parses git *remote* URLs (no `/pull/...` suffix).
+    nonisolated static func repoSlug(fromPRURL url: String) -> String {
+        let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let range = trimmed.range(of: #"^https?://[^/]+/"#, options: .regularExpression) else {
+            return ""
+        }
+        let path = String(trimmed[range.upperBound...])
+        var segments: [String] = []
+        for segment in path.split(separator: "/").map(String.init) {
+            if segment == "pull" || segment == "merge_requests" || segment == "-" { break }
+            segments.append(segment)
+        }
+        return segments.joined(separator: "/")
+    }
+
     private func shellSync(_ args: String...) throws -> String {
         let process = Process()
         let outPipe = Pipe()
@@ -2305,5 +2325,30 @@ final class IssueTracker {
 
         // Update local session status to .inReview
         appState.onSetSessionInReview?(sessionID)
+    }
+
+    /// Add the `crow:merge` auto-merge label to a session's PR, ensuring the
+    /// label exists in the repo first. Capability-gated on `.autoMergeLabel`
+    /// (GitHub only today). Mirrors `markInReview`'s in-flight/error handling.
+    func addMergeLabel(sessionID: UUID) async {
+        guard let session = appState.sessions.first(where: { $0.id == sessionID }),
+              let prLink = appState.links(for: sessionID).first(where: { $0.linkType == .pr }),
+              let provider = session.provider,
+              let backend = providerManager.codeBackend(for: provider),
+              backend.capabilities.contains(.autoMergeLabel) else { return }
+
+        appState.isAddingMergeLabel[sessionID] = true
+        defer { appState.isAddingMergeLabel[sessionID] = false }
+
+        let repo = Self.repoSlug(fromPRURL: prLink.url)
+        do {
+            if !repo.isEmpty { try await backend.ensureMergeLabel(repo: repo) }
+            try await backend.addMergeLabel(prURL: prLink.url)
+            NSLog("[Crow] Added crow:merge to %@", prLink.url as NSString)
+        } catch ProviderError.insufficientScope {
+            reportScopeWarning("merge label")
+        } catch {
+            print("[IssueTracker] addMergeLabel failed for \(prLink.url): \(error.localizedDescription.prefix(200))")
+        }
     }
 }

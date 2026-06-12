@@ -65,6 +65,11 @@ public protocol CodeBackend: Sendable {
     /// implementation returns `[]` (no key search); GitHub overrides it.
     func findPRsMatchingKeys(_ candidates: [KeyCandidate]) async throws -> [KeyPRMatch]
 
+    /// Add the `crow:merge` auto-merge label to the PR at `prURL`.
+    /// Capability-gated on `.autoMergeLabel`. Backends without the capability
+    /// inherit the default no-op-throw in the protocol extension below.
+    func addMergeLabel(prURL: String) async throws
+
     /// Enable auto-merge on the PR at `prURL` (squash + delete branch).
     /// Capability-gated on `.autoMerge`. Backends without the capability throw
     /// `ProviderError.unimplemented`.
@@ -87,6 +92,13 @@ public extension CodeBackend {
     /// no-op so a Jira-key reconcile pass degrades to "no matches" rather than
     /// forcing every conformer to implement it.
     func findPRsMatchingKeys(_ candidates: [KeyCandidate]) async throws -> [KeyPRMatch] { [] }
+
+    /// Default: backends without `.autoMergeLabel` can't add the merge label.
+    /// GitHub overrides this; others inherit the throw so a capability-gated
+    /// caller that slips through degrades to an error rather than a silent no-op.
+    func addMergeLabel(prURL: String) async throws {
+        throw ProviderError.unimplemented("addMergeLabel not supported by \(provider)")
+    }
 }
 
 /// Optional capabilities a `CodeBackend` may declare.

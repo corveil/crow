@@ -347,6 +347,9 @@ public final class AppState {
     /// Called to mark a session's ticket as "In Review" on the GitHub Project board.
     public var onMarkInReview: ((UUID) -> Void)?
 
+    /// Called to add the `crow:merge` auto-merge label to a session's PR.
+    public var onAddMergeLabel: ((UUID) -> Void)?
+
     /// Called to update session status to .inReview (persists to store).
     public var onSetSessionInReview: ((UUID) -> Void)?
 
@@ -356,6 +359,10 @@ public final class AppState {
     /// Whether a given session is currently being marked as "In Review" (loading state).
     /// Must be cleaned up when a session is deleted (see `SessionService.deleteSession`).
     public var isMarkingInReview: [UUID: Bool] = [:]
+
+    /// Whether a session's PR is currently being labeled with `crow:merge` (loading state).
+    /// Must be cleaned up when a session is deleted (see `SessionService.deleteSession`).
+    public var isAddingMergeLabel: [UUID: Bool] = [:]
 
     /// Sessions whose async deletion (worktree teardown, branch removal, persistence)
     /// is currently in progress. Set on the main actor at the start of
@@ -462,6 +469,21 @@ public final class AppState {
     /// `session.provider == .github` UI guards. See ADR 0005.
     public func canSetProjectStatus(for session: Session) -> Bool {
         canSetProjectStatusResolver?(session) ?? false
+    }
+
+    /// Resolves whether a session's code backend declares the `.autoMergeLabel`
+    /// capability (i.e. supports adding `crow:merge` to a PR). Wired by
+    /// `AppDelegate` using `ProviderManager.codeBackend(for:)`. CrowUI does not
+    /// depend on CrowProvider, so the capability lookup is injected as a closure
+    /// (same pattern as `canSetProjectStatusResolver`). Defaults to `nil` so
+    /// unwired contexts (tests, previews) treat the capability as absent.
+    public var canAddMergeLabelResolver: ((Session) -> Bool)?
+
+    /// Whether the session's provider supports adding the `crow:merge` label to
+    /// its PR, based on the `CodeBackend` capability set. Used to gate the
+    /// "Add label crow:merge to PR" sidebar context-menu item.
+    public func canAddMergeLabel(for session: Session) -> Bool {
+        canAddMergeLabelResolver?(session) ?? false
     }
 
     public func primaryWorktree(for sessionID: UUID) -> SessionWorktree? {
