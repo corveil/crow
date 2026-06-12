@@ -137,6 +137,49 @@ struct ProviderManagerTests {
         #expect(manager.codeBackend(for: .jira) == nil)
     }
 
+    // MARK: - Corveil (ADR 0005 task-only provider)
+
+    @Test func detectProviderPublicCorveilURL() async {
+        let result = await manager.detectProvider(from: "https://corveil.io/dashboard/tasks/42")
+        #expect(result.provider == .corveil)
+        #expect(result.cli == "corveil")
+        #expect(result.host == nil)
+    }
+
+    @Test func detectProviderSelfHostedCorveilURL() async {
+        let mgr = ProviderManager(additionalCorveilHosts: ["corveil.acme.io"])
+        let result = await mgr.detectProvider(from: "https://corveil.acme.io/dashboard/tasks/137")
+        #expect(result.provider == .corveil)
+        #expect(result.cli == "corveil")
+        #expect(result.host == "corveil.acme.io")
+    }
+
+    @Test func detectProviderMultipleCorveilHosts() async {
+        let mgr = ProviderManager(additionalCorveilHosts: ["corveil.a.com", "corveil.b.com"])
+        let resultA = await mgr.detectProvider(from: "https://corveil.a.com/dashboard/tasks/1")
+        #expect(resultA.host == "corveil.a.com")
+        let resultB = await mgr.detectProvider(from: "https://corveil.b.com/dashboard/tasks/2")
+        #expect(resultB.host == "corveil.b.com")
+    }
+
+    @Test func taskBackendForCorveilIsCorveilBackend() {
+        let backend = manager.taskBackend(for: .corveil)
+        #expect(backend.provider == .corveil)
+        #expect(backend is CorveilTaskBackend)
+        #expect(backend.capabilities.contains(.batchedQuery))
+        #expect(backend.capabilities.contains(.projectBoardStatus))
+    }
+
+    @Test func codeBackendForCorveilIsNil() {
+        // Corveil is task-only — no VCS surface (pairs with a GitHub/GitLab code backend).
+        #expect(manager.codeBackend(for: .corveil) == nil)
+    }
+
+    @Test func taskBackendForCorveilURLDetectsCorveil() {
+        let backend = manager.taskBackend(forURL: "https://corveil.io/dashboard/tasks/42")
+        #expect(backend.provider == .corveil)
+    }
+
     // MARK: - detectProvider edge cases
 
     @Test func detectProviderCaseSensitiveHost() async {

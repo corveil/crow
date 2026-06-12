@@ -19,6 +19,7 @@ public struct WorkspaceFormView: View {
     @State private var jiraSite: String
     @State private var jiraProjectKey: String
     @State private var jiraJQL: String
+    @State private var corveilHost: String
     @State private var alwaysIncludeText: String
     @State private var autoReviewReposText: String
     @State private var excludeReviewReposText: String
@@ -50,6 +51,7 @@ public struct WorkspaceFormView: View {
         self._jiraSite = State(initialValue: workspace?.jiraSite ?? "")
         self._jiraProjectKey = State(initialValue: workspace?.jiraProjectKey ?? "")
         self._jiraJQL = State(initialValue: workspace?.jiraJQL ?? "")
+        self._corveilHost = State(initialValue: workspace?.corveilHost ?? "")
         self._alwaysIncludeText = State(initialValue: workspace?.alwaysInclude.joined(separator: ", ") ?? "")
         self._autoReviewReposText = State(initialValue: workspace?.autoReviewRepos.joined(separator: ", ") ?? "")
         self._excludeReviewReposText = State(initialValue: workspace?.excludeReviewRepos.joined(separator: ", ") ?? "")
@@ -71,6 +73,7 @@ public struct WorkspaceFormView: View {
     }
 
     private var jiraSelected: Bool { taskProvider == "jira" }
+    private var corveilSelected: Bool { taskProvider == "corveil" }
 
     /// Jira is offered only when acli is installed + authenticated, OR when the
     /// workspace already had Jira selected (so an existing choice isn't silently
@@ -142,6 +145,7 @@ public struct WorkspaceFormView: View {
                     if jiraOfferable {
                         Text("Jira").tag("jira")
                     }
+                    Text("Corveil").tag("corveil")
                 }
                 Text("Where tickets / work items live. Defaults to the Code Backend.")
                     .font(.caption)
@@ -161,6 +165,14 @@ public struct WorkspaceFormView: View {
                     TextField("My-tickets JQL (optional)", text: $jiraJQL)
                         .textFieldStyle(.roundedBorder)
                     Text("Leave JQL blank to use: assignee = currentUser() AND statusCategory != Done")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                if corveilSelected {
+                    TextField("Corveil host (e.g., corveil.acme.io — optional)", text: $corveilHost)
+                        .textFieldStyle(.roundedBorder)
+                    Text("Only needed for self-hosted Corveil. Public corveil.io is auto-detected. The CLI authenticates against its own configured host (`corveil login`).")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -251,6 +263,7 @@ public struct WorkspaceFormView: View {
         // otherwise leave nil so the workspace "follows" the code backend.
         let resolvedTaskProvider: String? = (taskProvider == provider) ? nil : taskProvider
         let isJira = taskProvider == "jira"
+        let isCorveil = taskProvider == "corveil"
 
         return WorkspaceInfo(
             id: existingID ?? UUID(),
@@ -266,6 +279,7 @@ public struct WorkspaceFormView: View {
             jiraProjectKey: isJira ? nonEmpty(jiraProjectKey) : nil,
             jiraJQL: isJira ? nonEmpty(jiraJQL) : nil,
             jiraSite: isJira ? nonEmpty(jiraSite) : nil,
+            corveilHost: isCorveil ? nonEmpty(corveilHost) : nil,
             gateway: gatewayForSave
         )
     }

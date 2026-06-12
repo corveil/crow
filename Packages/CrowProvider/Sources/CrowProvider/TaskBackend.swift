@@ -5,7 +5,7 @@ import CrowCore
 ///
 /// `TaskBackend` is paired with a `CodeBackend` (separate protocol — see ADR 0005)
 /// when a session also produces a PR. A Corveil-tasked session that delegates its
-/// PR work to GitHub will use a `StubCorveilTaskBackend` here and a `GitHubCodeBackend`
+/// PR work to GitHub will use a `CorveilTaskBackend` here and a `GitHubCodeBackend`
 /// there. The split exists because tasks (the unit of work) and code (the VCS artifact)
 /// are independent dimensions.
 ///

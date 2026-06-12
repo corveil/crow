@@ -59,9 +59,10 @@ Concrete implementations:
 | `GitHubCodeBackend` | `.github` | `[autoMergeLabel, batchedPRStates, autoMerge, updateBranch]` |
 | `GitLabTaskBackend` | `.gitlab` | `[]` |
 | `GitLabCodeBackend` | `.gitlab` | `[]` |
-| `StubCorveilTaskBackend` | `.corveil` | `[]` — every method throws `.unimplemented` |
+| `JiraTaskBackend` | `.jira` | `[projectBoardStatus]` |
+| `CorveilTaskBackend` | `.corveil` | `[batchedQuery, projectBoardStatus]` |
 
-There is no `StubCorveilCodeBackend` — Corveil has no git. A Corveil-tasked session uses a `.github` or `.gitlab` `CodeBackend`, which is the whole point of the split.
+Corveil and Jira are both task-only providers; neither has a `CodeBackend`. A Corveil-tasked (or Jira-tasked) session uses a `.github` or `.gitlab` `CodeBackend`, which is the whole point of the split.
 
 `Session.provider` remains a single optional field — code looks up both backends from the same value. A follow-up adds `Session.codeProvider: Provider?` once a real Corveil backend is implemented and cross-backend sessions are a working flow, not a theoretical one.
 
@@ -73,12 +74,12 @@ Method-by-method state as of the #454 PR. "Site" is where the implementation liv
 
 | Method | GitHub | GitLab | Corveil | Notes |
 |---|---|---|---|---|
-| `fetchTask` | ✅ | ✅ | throws | shipped #411 |
-| `setLabels` | ✅ | ✅ | throws | shipped #411 |
-| `setTaskStatus` | ✅ (#454) | throws (no cap) | throws | #454 closed the escape-hatch — `IssueTracker.markInReview` no longer runs a parallel GraphQL mutation |
-| `listAssigned` | ✅ (#454) | ✅ (#454) | throws | GitHub batches open+closed in one GraphQL call; GitLab issues two REST calls |
-| `assign` | ✅ (#454) | ✅ (#454) | throws | for `setup.sh` and skill flows |
-| `createTask` | ✅ (#454) | ✅ (#454) | throws | for `/crow-create-ticket` |
+| `fetchTask` | ✅ | ✅ | ✅ (#495) | shipped #411 |
+| `setLabels` | ✅ | ✅ | ✅ (#495) | shipped #411 |
+| `setTaskStatus` | ✅ (#454) | throws (no cap) | ✅ (#495) | #454 closed the escape-hatch — `IssueTracker.markInReview` no longer runs a parallel GraphQL mutation. Corveil maps `.inReview` → `in_progress` lossily (corveil has no distinct review status). |
+| `listAssigned` | ✅ (#454) | ✅ (#454) | ✅ (#495) | GitHub batches open+closed in one GraphQL call; GitLab issues two REST calls; Corveil's `--status` is exact-match, so the open half fans out into two `--assignee @me --status {open,in_progress}` calls (corveil#1362) to match "not closed" semantics. |
+| `assign` | ✅ (#454) | ✅ (#454) | ✅ (#495) | for `setup.sh` and skill flows |
+| `createTask` | ✅ (#454) | ✅ (#454) | ✅ (#495) | for `/crow-create-ticket` |
 
 ### CodeBackend
 
@@ -105,12 +106,14 @@ After #454, `rg '"gh"|"glab"|gh api|glab api' Sources/Crow/App/IssueTracker.swif
 - The parallel GitHub/GitLab halves of `listAssigned`, `prStates`, `findRecentPRsForBranches`, etc. stop sitting in the same file. They moved to their respective backend files where their idioms (batched GraphQL vs per-MR REST) are local concerns, not global ones.
 - Non-coding tasks are no longer an architectural awkwardness. A task without a `CodeBackend` is a normal session; PR-related code paths simply aren't invoked.
 - Capability flags now mean what they say. A backend that declares `.projectBoardStatus` actually implements `setTaskStatus` — no more "the UI guard is the capability but the implementation lives elsewhere."
+- A real `CorveilTaskBackend` (#495) closes the "Corveil is a stub" item from #454's acceptance list. Corveil is now a real task-only provider alongside Jira; both pair with a `.github` or `.gitlab` `CodeBackend` via `Session.codeProvider`.
 
 **Harder / accepted:**
 
 - More indirection: a call to "remove a label" goes through `manager.taskBackend(for:) → setLabels(...)` instead of a direct `gh issue edit` shell-out. Reviewers comparing the diff to the old code path have to follow one extra hop.
 - Capability flags are an enum the maintainer keeps in sync. A new capability is a two-edit change (add the case, declare it on the relevant backend) — easy to forget, hard to catch by build.
 - The `Session.provider == provider` simplification limits cross-backend pairings until the `Session.codeProvider` follow-up lands. Real Corveil work blocks on that ticket.
+- Corveil's status vocabulary (`open` / `in_progress` / `closed`) is shorter than Crow's pipeline (`backlog` / `ready` / `inProgress` / `inReview` / `done`). `setTaskStatus` for `.inReview` maps lossily to `in_progress` on Corveil — the project-board status capability surfaces the "in review" distinction visually instead.
 - `setup.sh` and skill scripts continue to shell `gh`/`glab` directly — they don't run through Swift and stay out of this abstraction. A separate effort once a real Corveil backend exists.
 - The GitHub viewer's consolidated query is now split across two calls (`listAssigned` for issues, `listMonitoredPRs` for PRs + reviews). One extra GraphQL round-trip per polling cycle (negligible against the ~5000/hour rate limit budget). The trade buys clean task/code separation in the protocol surface.
 
@@ -124,7 +127,7 @@ After #454, `rg '"gh"|"glab"|gh api|glab api' Sources/Crow/App/IssueTracker.swif
 
 ## References
 
-- Tickets: [#410](https://github.com/radiusmethod/crow/issues/410) (foundation, closed via #411), [#454](https://github.com/radiusmethod/crow/issues/454) (migration)
+- Tickets: [#410](https://github.com/radiusmethod/crow/issues/410) (foundation, closed via #411), [#454](https://github.com/radiusmethod/crow/issues/454) (migration), [#495](https://github.com/radiusmethod/crow/issues/495) (real Corveil backend)
 - PRs: #411 (foundation), the PR closing #454 (migration)
 - Code:
   - `Packages/CrowProvider/Sources/CrowProvider/TaskBackend.swift`
@@ -133,4 +136,4 @@ After #454, `rg '"gh"|"glab"|gh api|glab api' Sources/Crow/App/IssueTracker.swif
   - `Packages/CrowProvider/Sources/CrowProvider/Backends/`
   - `Packages/CrowProvider/Sources/CrowProvider/ProviderManager.swift`
   - `Packages/CrowCore/Sources/CrowCore/ShellRunner.swift`
-- Follow-up tickets: real Corveil `TaskBackend`, `Session.codeProvider` field for cross-backend pairings, `setup.sh` / skill migration off direct `gh`/`glab`.
+- Follow-up tickets: `Session.codeProvider` field for cross-backend pairings, `setup.sh` / skill migration off direct `gh`/`glab`, PR-merge → task-close auto-link for Corveil (depends on corveil#1365).

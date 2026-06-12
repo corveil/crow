@@ -9,12 +9,21 @@ import CrowCore
 public actor ProviderManager {
     /// Additional GitLab hosts beyond gitlab.com (user-configurable).
     nonisolated private let additionalGitLabHosts: [String]
+    /// Additional Corveil hosts beyond corveil.io (user-configurable per
+    /// workspace via `WorkspaceInfo.corveilHost`). URL detection routes any
+    /// match here to `.corveil`.
+    nonisolated private let additionalCorveilHosts: [String]
 
     /// Subprocess runner shared by all backends this manager hands out.
     nonisolated private let shellRunner: ShellRunner
 
-    public init(additionalGitLabHosts: [String] = [], shellRunner: ShellRunner = ProcessShellRunner()) {
+    public init(
+        additionalGitLabHosts: [String] = [],
+        additionalCorveilHosts: [String] = [],
+        shellRunner: ShellRunner = ProcessShellRunner()
+    ) {
         self.additionalGitLabHosts = additionalGitLabHosts
+        self.additionalCorveilHosts = additionalCorveilHosts
         self.shellRunner = shellRunner
     }
 
@@ -22,14 +31,19 @@ public actor ProviderManager {
 
     /// Hand out a ``TaskBackend`` for the given provider. Use the URL-based
     /// variant when only a ticket URL is in hand.
-    public nonisolated func taskBackend(for provider: Provider, host: String? = nil, jira: JiraConfig? = nil) -> TaskBackend {
+    public nonisolated func taskBackend(
+        for provider: Provider,
+        host: String? = nil,
+        jira: JiraConfig? = nil,
+        corveil: CorveilConfig? = nil
+    ) -> TaskBackend {
         switch provider {
         case .github:
             return GitHubTaskBackend(shellRunner: shellRunner)
         case .gitlab:
             return GitLabTaskBackend(shellRunner: shellRunner, host: host)
         case .corveil:
-            return StubCorveilTaskBackend()
+            return CorveilTaskBackend(shellRunner: shellRunner, config: corveil ?? CorveilConfig())
         case .jira:
             return JiraTaskBackend(shellRunner: shellRunner, config: jira ?? JiraConfig())
         }
@@ -60,14 +74,18 @@ public actor ProviderManager {
     /// URL-driven `TaskBackend` lookup — detect the provider from `url` and
     /// hand back the matching backend.
     public nonisolated func taskBackend(forURL url: String) -> TaskBackend {
-        let detected = Self.detect(url: url, additionalGitLabHosts: additionalGitLabHosts)
+        let detected = Self.detect(url: url, additionalGitLabHosts: additionalGitLabHosts, additionalCorveilHosts: additionalCorveilHosts)
         return taskBackend(for: detected.provider, host: detected.host)
     }
 
     /// Single source of truth for URL → provider detection. The actor-isolated
     /// ``detectProvider(from:)`` and the nonisolated factory paths both delegate
     /// here so the matching logic can never drift.
-    nonisolated static func detect(url: String, additionalGitLabHosts: [String]) -> (provider: Provider, cli: String, host: String?) {
+    nonisolated static func detect(
+        url: String,
+        additionalGitLabHosts: [String],
+        additionalCorveilHosts: [String] = []
+    ) -> (provider: Provider, cli: String, host: String?) {
         if url.contains("github.com") {
             return (.github, "gh", nil)
         } else if Validation.isJiraSpec(url) {
@@ -78,9 +96,11 @@ public actor ProviderManager {
         } else if url.contains("gitlab.com") {
             return (.gitlab, "glab", "gitlab.com")
         } else if url.contains("corveil.io") {
-            // Corveil is task-only (no embedded git, no CLI). Detected so the
-            // stub backend can be exercised end-to-end via URL. See ADR 0005.
-            return (.corveil, "", nil)
+            // Public corveil.io — task-only, driven by `corveil`. See ADR 0005.
+            return (.corveil, "corveil", nil)
+        }
+        for host in additionalCorveilHosts where !host.isEmpty && url.contains(host) {
+            return (.corveil, "corveil", host)
         }
         for host in additionalGitLabHosts {
             if url.contains(host) {
@@ -95,7 +115,7 @@ public actor ProviderManager {
     /// Falls back to `.github` for unrecognized hosts — the `gh` CLI call will fail clearly
     /// if the URL is actually a self-hosted GitLab instance, which is an acceptable failure mode.
     public func detectProvider(from url: String) -> (provider: Provider, cli: String, host: String?) {
-        Self.detect(url: url, additionalGitLabHosts: additionalGitLabHosts)
+        Self.detect(url: url, additionalGitLabHosts: additionalGitLabHosts, additionalCorveilHosts: additionalCorveilHosts)
     }
 
     /// Parse issue/PR number and repo from a ticket URL.
@@ -155,6 +175,11 @@ public actor ProviderManager {
         if detected.provider == .jira {
             return try await taskBackend(for: .jira).fetchTask(url: url)
         }
+        // Corveil ids aren't org/repo/number tuples either; delegate to its
+        // backend the same way Jira does.
+        if detected.provider == .corveil {
+            return try await taskBackend(for: .corveil).fetchTask(url: url)
+        }
 
         guard let parsed = parseTicketURL(url) else {
             throw ProviderError.invalidURL(url)
@@ -180,8 +205,8 @@ public actor ProviderManager {
                 output = try await shell(env: env, cwd: NSHomeDirectory(), "glab", "issue", "view", "\(parsed.number)", "--repo", repoSlug)
             }
         case .corveil:
-            // Stub: real Corveil API integration arrives in a follow-up. See ADR 0005.
-            throw ProviderError.unimplemented("Corveil ticket fetching not yet implemented")
+            // Handled by the early return above (delegated to CorveilTaskBackend).
+            throw ProviderError.unimplemented("unreachable: Corveil handled before the switch")
         case .jira:
             // Handled by the early return above (delegated to JiraTaskBackend).
             throw ProviderError.unimplemented("unreachable: Jira handled before the switch")
@@ -347,7 +372,7 @@ public enum ProviderError: Error {
     case invalidURL(String)
     case commandFailed(String)
     /// A backend method is part of the protocol but not implemented for this provider yet
-    /// (e.g. `StubCorveilTaskBackend` — every method throws this; see ADR 0005).
+    /// (e.g. a capability-gated method on a backend without the capability). See ADR 0005.
     case unimplemented(String)
     /// GitHub `INSUFFICIENT_SCOPES` — the OAuth token is missing a required scope
     /// (typically `read:project`). Surfaced as a typed error so call sites can
