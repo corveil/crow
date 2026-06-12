@@ -45,21 +45,47 @@ public struct OpenAICodexAgent: CodingAgent {
         autoPermissionMode: Bool,
         telemetryPort: UInt16?
     ) -> String? {
-        // Review-on-Codex isn't supported in Phase C — the review skill is
-        // Claude-only. Returning nil tells `SessionService.launchAgent` to
-        // log and skip rather than producing a malformed command.
-        guard session.kind == .work else { return nil }
+        let codexPath = findBinary() ?? "codex"
 
-        // Bare `codex` launch in-app. First-launch prompt delivery happens
-        // in the workspace skill (`crow-workspace/setup.sh launch_codex`),
-        // which passes the prompt file as Codex's positional argv before
-        // handing the terminal off to Crow. In-app re-launches resume the
-        // existing TUI rather than re-running the original prompt — same
-        // shape as `CursorAgent` `.work` (no `--continue` equivalent in MVP).
-        // No env prefix (Codex has no OTEL equivalent), no `--rc` (Codex
-        // doesn't do remote control). The terminal's cwd is already the
-        // worktree path.
-        return "codex\n"
+        switch session.kind {
+        case .work:
+            // Bare `codex` launch — `.work` has no in-app prompt-file
+            // convention (`SessionService.initialPromptFileName` only fires
+            // for `.job`/`.review`). Skill-created `.work` sessions are
+            // seeded by `launch_codex` in `crow-workspace/setup.sh`, which
+            // feeds the prompt at first-launch time via `--command` (#492);
+            // the in-app resume path here just reopens the TUI. No env
+            // prefix (Codex has no OTEL equivalent), no `--continue` (MVP
+            // doesn't auto-resume), no `--rc` (Codex doesn't do remote
+            // control).
+            return "\(codexPath)\n"
+        case .job:
+            // First launch: feed `.crow-job-prompt.md` as the positional
+            // initial message so Codex starts working unattended.
+            // `SessionService.launchAgent` wrote the file before invoking us
+            // and flips `reviewPromptDispatched` (the generic "initial
+            // prompt dispatched" gate) after the command goes out.
+            // Subsequent restarts fall back to bare `codex` — Codex has no
+            // `--continue` equivalent in MVP, so the user just resumes the
+            // TUI rather than re-running the whole prompt (CROW-493).
+            // Mirrors `CursorAgent.autoLaunchCommand`'s `.job` branch.
+            if !session.reviewPromptDispatched {
+                let promptPath = (worktreePath as NSString)
+                    .appendingPathComponent(".crow-job-prompt.md")
+                return "\(codexPath) \"$(cat \(promptPath))\"\n"
+            }
+            return "\(codexPath)\n"
+        case .review:
+            // Review-on-Codex isn't supported in Phase C — the
+            // `/crow-review-pr` skill is Claude-only. Returning nil tells
+            // `SessionService.launchAgent` to log the skip and paste a
+            // user-facing `⚠️` echo.
+            return nil
+        case .manager:
+            // Manager sessions never auto-launch an agent — Crow drives them
+            // externally. Matches `CursorAgent`'s `.manager` contract.
+            return nil
+        }
     }
 
     public func generatePrompt(
