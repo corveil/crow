@@ -217,6 +217,40 @@ struct IssueTrackerRemoteSlugTests {
     }
 }
 
+@Suite("IssueTracker PR-URL slug extraction")
+struct IssueTrackerPRSlugTests {
+    @Test func parsesGitHubPRURL() {
+        #expect(IssueTracker.repoSlug(fromPRURL: "https://github.com/owner/repo/pull/123") == "owner/repo")
+    }
+
+    @Test func parsesGitLabMRURL() {
+        // GitLab MR URLs interpose `/-/` before `merge_requests`; the slug is
+        // everything up to that marker, including nested groups.
+        #expect(
+            IssueTracker.repoSlug(fromPRURL: "https://gitlab.com/group/sub/repo/-/merge_requests/12")
+                == "group/sub/repo"
+        )
+    }
+
+    @Test func ignoresQueryStringAndFragment() {
+        #expect(IssueTracker.repoSlug(fromPRURL: "https://github.com/owner/repo/pull/123?w=1") == "owner/repo")
+        #expect(IssueTracker.repoSlug(fromPRURL: "https://github.com/owner/repo/pull/123#discussion_r1") == "owner/repo")
+    }
+
+    @Test func parsesHTTPScheme() {
+        #expect(IssueTracker.repoSlug(fromPRURL: "http://github.com/owner/repo/pull/9") == "owner/repo")
+    }
+
+    @Test func returnsEmptyForMissingScheme() {
+        #expect(IssueTracker.repoSlug(fromPRURL: "github.com/owner/repo/pull/1") == "")
+    }
+
+    @Test func returnsEmptyForEmptyInput() {
+        #expect(IssueTracker.repoSlug(fromPRURL: "") == "")
+        #expect(IssueTracker.repoSlug(fromPRURL: "   ") == "")
+    }
+}
+
 @Suite("IssueTracker reconcile fan-out")
 struct IssueTrackerReconcileFanOutTests {
 

@@ -2341,12 +2341,17 @@ final class IssueTracker {
         defer { appState.isAddingMergeLabel[sessionID] = false }
 
         let repo = Self.repoSlug(fromPRURL: prLink.url)
+        guard !repo.isEmpty else {
+            // Without a repo slug we can't `ensureMergeLabel`, and the bare
+            // `gh pr edit --add-label` would fail if the label doesn't already
+            // exist. Bail loudly rather than silently half-doing the action.
+            print("[IssueTracker] addMergeLabel: could not parse repo slug from \(prLink.url)")
+            return
+        }
         do {
-            if !repo.isEmpty { try await backend.ensureMergeLabel(repo: repo) }
+            try await backend.ensureMergeLabel(repo: repo)
             try await backend.addMergeLabel(prURL: prLink.url)
             NSLog("[Crow] Added crow:merge to %@", prLink.url as NSString)
-        } catch ProviderError.insufficientScope {
-            reportScopeWarning("merge label")
         } catch {
             print("[IssueTracker] addMergeLabel failed for \(prLink.url): \(error.localizedDescription.prefix(200))")
         }
