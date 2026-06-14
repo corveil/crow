@@ -641,6 +641,13 @@ struct SessionRow: View {
                     RemoteControlBadge(compact: true)
                 }
                 Spacer()
+                if session.autoMergeEnabledAt != nil {
+                    Image(systemName: "arrow.triangle.merge")
+                        .font(.caption)
+                        .foregroundStyle(CorveilTheme.textSecondary)
+                        .help("Auto-merge enabled")
+                        .accessibilityLabel("Auto-merge enabled")
+                }
                 if isDeleting {
                     ProgressView()
                         .controlSize(.small)
