@@ -17,10 +17,33 @@ struct IssueTrackerStalledRefireTests {
     private let shaA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     private let shaB = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 
-    private func meta(emittedSecondsAgo: TimeInterval = 11 * 60, headShaAtEmit: String? = nil) -> EmittedTransitionMeta {
+    private func meta(emittedSecondsAgo: TimeInterval = 11 * 60, headShaAtEmit: String? = nil, reFireCount: Int = 0) -> EmittedTransitionMeta {
         EmittedTransitionMeta(
             emittedAt: now.addingTimeInterval(-emittedSecondsAgo),
-            headShaAtEmit: headShaAtEmit ?? shaA
+            headShaAtEmit: headShaAtEmit ?? shaA,
+            reFireCount: reFireCount
+        )
+    }
+
+    /// Convenience wrapper so each predicate call doesn't have to repeat
+    /// `quietWindow` + `maxRefires`. The defaults match the production
+    /// `IssueTracker.maxStalledRefires`, so the test reads the constant
+    /// (locking against silent cap bumps).
+    private func shouldReFire(
+        meta: EmittedTransitionMeta,
+        currentStatus: PRStatus?,
+        agentActivity: AgentActivityState = .idle,
+        terminalReadiness: TerminalReadiness? = .agentLaunched,
+        maxRefires: Int = IssueTracker.maxStalledRefires
+    ) -> Bool {
+        IssueTracker.shouldReFireStalledChangesRequested(
+            meta: meta,
+            currentStatus: currentStatus,
+            agentActivity: agentActivity,
+            terminalReadiness: terminalReadiness,
+            now: now,
+            quietWindow: quietWindow,
+            maxRefires: maxRefires
         )
     }
 
@@ -49,13 +72,9 @@ struct IssueTrackerStalledRefireTests {
         // The CROW-505 bug repro: PR still in CHANGES_REQUESTED, agent went
         // idle without addressing all findings, head SHA hasn't advanced
         // (agent didn't push), and quiet window has elapsed.
-        #expect(IssueTracker.shouldReFireStalledChangesRequested(
+        #expect(shouldReFire(
             meta: meta(emittedSecondsAgo: quietWindow + 1, headShaAtEmit: shaA),
-            currentStatus: status(sha: shaA),
-            agentActivity: .idle,
-            terminalReadiness: .agentLaunched,
-            now: now,
-            quietWindow: quietWindow
+            currentStatus: status(sha: shaA)
         ))
     }
 
@@ -67,13 +86,9 @@ struct IssueTrackerStalledRefireTests {
         // head SHA, which kills the re-fire. This preserves the CROW-456
         // anti-loop guarantee — the agent's own response push doesn't
         // re-trigger the prompt that told it to push.
-        #expect(!IssueTracker.shouldReFireStalledChangesRequested(
+        #expect(!shouldReFire(
             meta: meta(emittedSecondsAgo: quietWindow + 1, headShaAtEmit: shaA),
-            currentStatus: status(sha: shaB),  // SHA advanced
-            agentActivity: .idle,
-            terminalReadiness: .agentLaunched,
-            now: now,
-            quietWindow: quietWindow
+            currentStatus: status(sha: shaB)  // SHA advanced
         ))
     }
 
@@ -104,13 +119,10 @@ struct IssueTrackerStalledRefireTests {
     func doesNotReFireWhileAgentWorking() {
         // Don't interrupt an agent that's actively working — they may already
         // be addressing the feedback.
-        #expect(!IssueTracker.shouldReFireStalledChangesRequested(
+        #expect(!shouldReFire(
             meta: meta(emittedSecondsAgo: quietWindow + 1, headShaAtEmit: shaA),
             currentStatus: status(sha: shaA),
-            agentActivity: .working,
-            terminalReadiness: .agentLaunched,
-            now: now,
-            quietWindow: quietWindow
+            agentActivity: .working
         ))
     }
 
@@ -118,13 +130,10 @@ struct IssueTrackerStalledRefireTests {
     func doesNotReFireWhileAgentWaiting() {
         // `.waiting` means the agent is blocked on user input — re-firing now
         // would push another prompt into a queue the user is about to answer.
-        #expect(!IssueTracker.shouldReFireStalledChangesRequested(
+        #expect(!shouldReFire(
             meta: meta(emittedSecondsAgo: quietWindow + 1, headShaAtEmit: shaA),
             currentStatus: status(sha: shaA),
-            agentActivity: .waiting,
-            terminalReadiness: .agentLaunched,
-            now: now,
-            quietWindow: quietWindow
+            agentActivity: .waiting
         ))
     }
 
@@ -132,13 +141,10 @@ struct IssueTrackerStalledRefireTests {
     func doesNotReFireWhileAgentDone() {
         // `.done` is the terminal "completed a turn" state — it's followed by
         // a hook reset to `.idle`. Re-firing on `.done` would race.
-        #expect(!IssueTracker.shouldReFireStalledChangesRequested(
+        #expect(!shouldReFire(
             meta: meta(emittedSecondsAgo: quietWindow + 1, headShaAtEmit: shaA),
             currentStatus: status(sha: shaA),
-            agentActivity: .done,
-            terminalReadiness: .agentLaunched,
-            now: now,
-            quietWindow: quietWindow
+            agentActivity: .done
         ))
     }
 
@@ -148,13 +154,9 @@ struct IssueTrackerStalledRefireTests {
     func doesNotReFireBeforeQuietWindowElapsed() {
         // Quiet window: agents can spend 5+ minutes thinking on a hard
         // finding. Don't re-prompt before they've had a chance to act.
-        #expect(!IssueTracker.shouldReFireStalledChangesRequested(
+        #expect(!shouldReFire(
             meta: meta(emittedSecondsAgo: quietWindow - 1, headShaAtEmit: shaA),
-            currentStatus: status(sha: shaA),
-            agentActivity: .idle,
-            terminalReadiness: .agentLaunched,
-            now: now,
-            quietWindow: quietWindow
+            currentStatus: status(sha: shaA)
         ))
     }
 
@@ -165,13 +167,10 @@ struct IssueTrackerStalledRefireTests {
         // A pre-launch terminal (shellReady or earlier) can't be "stalled" —
         // the agent never ran. Wait for the launch to finish first.
         for readiness: TerminalReadiness in [.uninitialized, .surfaceCreated, .shellReady, .timedOut, .failed] {
-            #expect(!IssueTracker.shouldReFireStalledChangesRequested(
+            #expect(!shouldReFire(
                 meta: meta(emittedSecondsAgo: quietWindow + 1, headShaAtEmit: shaA),
                 currentStatus: status(sha: shaA),
-                agentActivity: .idle,
-                terminalReadiness: readiness,
-                now: now,
-                quietWindow: quietWindow
+                terminalReadiness: readiness
             ), "expected no re-fire at readiness \(readiness)")
         }
     }
@@ -179,13 +178,10 @@ struct IssueTrackerStalledRefireTests {
     @Test
     func doesNotReFireWhenTerminalReadinessUnknown() {
         // No managed terminal at all → no readiness entry. Can't re-fire.
-        #expect(!IssueTracker.shouldReFireStalledChangesRequested(
+        #expect(!shouldReFire(
             meta: meta(emittedSecondsAgo: quietWindow + 1, headShaAtEmit: shaA),
             currentStatus: status(sha: shaA),
-            agentActivity: .idle,
-            terminalReadiness: nil,
-            now: now,
-            quietWindow: quietWindow
+            terminalReadiness: nil
         ))
     }
 
@@ -198,13 +194,9 @@ struct IssueTrackerStalledRefireTests {
         // also drops the entry on this transition, but the predicate
         // double-checks.
         for review: PRStatus.ReviewStatus in [.approved, .reviewRequired, .unknown] {
-            #expect(!IssueTracker.shouldReFireStalledChangesRequested(
+            #expect(!shouldReFire(
                 meta: meta(emittedSecondsAgo: quietWindow + 1, headShaAtEmit: shaA),
-                currentStatus: status(review: review, sha: shaA),
-                agentActivity: .idle,
-                terminalReadiness: .agentLaunched,
-                now: now,
-                quietWindow: quietWindow
+                currentStatus: status(review: review, sha: shaA)
             ), "expected no re-fire at review status \(review)")
         }
     }
@@ -216,13 +208,9 @@ struct IssueTrackerStalledRefireTests {
         // A PR that merged while in CHANGES_REQUESTED keeps reviewDecision
         // unchanged, but the re-fire must not prompt the agent to "address
         // review feedback" on a merged PR — there's nothing to push to.
-        #expect(!IssueTracker.shouldReFireStalledChangesRequested(
+        #expect(!shouldReFire(
             meta: meta(emittedSecondsAgo: quietWindow + 1, headShaAtEmit: shaA),
-            currentStatus: status(sha: shaA, isOpen: false, mergeable: .merged),
-            agentActivity: .idle,
-            terminalReadiness: .agentLaunched,
-            now: now,
-            quietWindow: quietWindow
+            currentStatus: status(sha: shaA, isOpen: false, mergeable: .merged)
         ))
     }
 
@@ -231,13 +219,9 @@ struct IssueTrackerStalledRefireTests {
         // Same concern, the more common case: PR closed without merging.
         // `mergeable` stays `.unknown` on closed PRs — only `isOpen` flags
         // this as dead. The reviewer's specific blocker.
-        #expect(!IssueTracker.shouldReFireStalledChangesRequested(
+        #expect(!shouldReFire(
             meta: meta(emittedSecondsAgo: quietWindow + 1, headShaAtEmit: shaA),
-            currentStatus: status(sha: shaA, isOpen: false, mergeable: .unknown),
-            agentActivity: .idle,
-            terminalReadiness: .agentLaunched,
-            now: now,
-            quietWindow: quietWindow
+            currentStatus: status(sha: shaA, isOpen: false, mergeable: .unknown)
         ))
     }
 
@@ -245,13 +229,9 @@ struct IssueTrackerStalledRefireTests {
     func doesNotReFireWhenCurrentStatusMissing() {
         // No persisted PR status for the session → we can't reason about
         // SHA equality or bucket membership. Refuse.
-        #expect(!IssueTracker.shouldReFireStalledChangesRequested(
+        #expect(!shouldReFire(
             meta: meta(emittedSecondsAgo: quietWindow + 1, headShaAtEmit: shaA),
-            currentStatus: nil,
-            agentActivity: .idle,
-            terminalReadiness: .agentLaunched,
-            now: now,
-            quietWindow: quietWindow
+            currentStatus: nil
         ))
     }
 
@@ -260,13 +240,46 @@ struct IssueTrackerStalledRefireTests {
         // Migrated entries from before CROW-505 may have nil headShaAtEmit.
         // Without a baseline we can't prove the author hasn't pushed —
         // refuse rather than risk an unwanted re-fire.
-        #expect(!IssueTracker.shouldReFireStalledChangesRequested(
+        #expect(!shouldReFire(
             meta: EmittedTransitionMeta(emittedAt: now.addingTimeInterval(-(quietWindow + 1)), headShaAtEmit: nil),
+            currentStatus: status(sha: shaA)
+        ))
+    }
+
+    // MARK: - Re-fire cap (CROW-505 review #3)
+
+    @Test
+    func doesNotReFireOncePerEmissionCapReached() {
+        // The whole reason this cap exists: when the agent legitimately
+        // *replies* on the PR instead of pushing (a behavior the
+        // auto-respond prompt itself encourages), SHA stays put and the
+        // agent goes idle. Without a cap the same prompt re-injects every
+        // quiet window forever, potentially producing duplicate reply
+        // comments on the reviewer's PR. After `maxStalledRefires`, refuse
+        // until an edge event creates a new meta entry.
+        #expect(!shouldReFire(
+            meta: meta(
+                emittedSecondsAgo: quietWindow + 1,
+                headShaAtEmit: shaA,
+                reFireCount: IssueTracker.maxStalledRefires
+            ),
+            currentStatus: status(sha: shaA)
+        ))
+    }
+
+    @Test
+    func reFiresWhileUnderCap() {
+        // Count below the cap still permits a re-fire. With the production
+        // cap of 1, only `reFireCount == 0` qualifies — but a customizable
+        // cap (passed explicitly here) lets us verify the < relation.
+        #expect(shouldReFire(
+            meta: meta(
+                emittedSecondsAgo: quietWindow + 1,
+                headShaAtEmit: shaA,
+                reFireCount: 2
+            ),
             currentStatus: status(sha: shaA),
-            agentActivity: .idle,
-            terminalReadiness: .agentLaunched,
-            now: now,
-            quietWindow: quietWindow
+            maxRefires: 3
         ))
     }
 
@@ -396,10 +409,49 @@ struct IssueTrackerStalledRefireWiringTests {
         #expect(transitions[0].sessionID == sid)
         #expect(transitions[0].headSha == shaA)
         #expect(transitions[0].latestReviewID == "R_1")
+        // CROW-505 review #3: synthetic re-fires are tagged so AppDelegate
+        // can suppress the macOS notification while still letting
+        // AutoRespondCoordinator dispatch the re-prompt.
+        #expect(transitions[0].isReFire)
         // emittedAt bumped to `now` so the next poll inside the quiet window
         // doesn't immediately re-fire again.
         #expect(tracker.emittedTransitionMeta[key]?.emittedAt == now)
         #expect(tracker.emittedTransitionMeta[key]?.emittedAt != originalEmittedAt)
+        // CROW-505 review #3: re-fire count incremented so the per-emission
+        // cap eventually shuts the re-fire down even if the agent never
+        // pushes (e.g. legitimately replied instead).
+        #expect(tracker.emittedTransitionMeta[key]?.reFireCount == 1)
+    }
+
+    @Test
+    func secondReFireOnSameMetaIsSuppressedByCap() {
+        // The cap regression test: after one re-fire on a stalled emission
+        // (production `maxStalledRefires = 1`), a subsequent poll under the
+        // same conditions must NOT emit another synthetic transition.
+        // Otherwise an agent that legitimately replied instead of pushing
+        // would receive the identical prompt every quiet window forever.
+        let (tracker, _, key) = makeStalledTracker(toggleOn: true)
+
+        // First re-fire — emits, increments count, refreshes emittedAt.
+        let first = tracker.reFireStalledChangesRequested(now: Date())
+        #expect(first.count == 1)
+        #expect(tracker.emittedTransitionMeta[key]?.reFireCount == 1)
+
+        // Roll the clock past another quiet window so emittedAt is stale
+        // again, then walk the pass — the cap must hold.
+        let laterMeta = EmittedTransitionMeta(
+            emittedAt: Date().addingTimeInterval(-IssueTracker.stalledRefireQuietWindow * 2),
+            headShaAtEmit: shaA,
+            reFireCount: 1
+        )
+        tracker.emittedTransitionMeta[key] = laterMeta
+
+        let second = tracker.reFireStalledChangesRequested(now: Date())
+        #expect(second.isEmpty)
+        // Cap reached → meta is left untouched (no count overflow, no
+        // emittedAt drift) so it remains a stable record of the original
+        // stall until an edge event clears it.
+        #expect(tracker.emittedTransitionMeta[key] == laterMeta)
     }
 
     // MARK: - Review-session gate

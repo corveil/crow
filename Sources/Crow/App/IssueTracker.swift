@@ -185,6 +185,17 @@ final class IssueTracker {
     /// calls for it.
     nonisolated static let stalledRefireQuietWindow: TimeInterval = 10 * 60
 
+    /// Max times a single `.changesRequested` emission may re-fire before
+    /// requiring a real edge event (reviewer rotates `latestReviewID`,
+    /// author pushes, bucket exits) to reset. Capped at 1 so the agent
+    /// receives at most one re-prompt per stall: the auto-respond prompt
+    /// explicitly invites the agent to reply rather than push when a finding
+    /// is unclear or disputed, and a reply is a legitimate terminal state
+    /// the head-SHA gate alone can't recognize. Without this cap the same
+    /// prompt would re-inject every quiet window indefinitely, potentially
+    /// driving duplicate reply comments on the reviewer's PR.
+    nonisolated static let maxStalledRefires: Int = 1
+
     /// Guards the GitHub-scope console warning so it fires once per session.
     private var didLogGitHubScopeWarning = false
 
@@ -1707,7 +1718,8 @@ final class IssueTracker {
                 agentActivity: agentActivity,
                 terminalReadiness: readiness,
                 now: now,
-                quietWindow: Self.stalledRefireQuietWindow
+                quietWindow: Self.stalledRefireQuietWindow,
+                maxRefires: Self.maxStalledRefires
             ) else { continue }
 
             guard let status = currentStatus else { continue }
@@ -1718,21 +1730,27 @@ final class IssueTracker {
                 prNumber: QuickActionPrompts.parsePRNumber(from: prLink.url),
                 headSha: status.headSha,
                 latestReviewID: status.latestReviewID,
-                failedCheckNames: []
+                failedCheckNames: [],
+                isReFire: true
             )
             out.append(synthetic)
-            // Refresh the meta so the next quiet-window clock starts now and we
-            // don't re-fire again on the very next poll.
+            // Refresh emittedAt + bump the count so the next quiet-window
+            // clock starts now and the per-emission cap (CROW-505 review #3)
+            // ratchets toward exhaustion.
+            let newCount = meta.reFireCount + 1
             emittedTransitionMeta[key] = EmittedTransitionMeta(
                 emittedAt: now,
-                headShaAtEmit: status.headSha
+                headShaAtEmit: status.headSha,
+                reFireCount: newCount
             )
             let elapsed = now.timeIntervalSince(meta.emittedAt)
-            NSLog("[IssueTracker] auto-refine re-fired (stalled review) — session=%@, review=%@, sha=%@, elapsed=%.0fs",
+            NSLog("[IssueTracker] auto-refine re-fired (stalled review) — session=%@, review=%@, sha=%@, elapsed=%.0fs, count=%d/%d",
                   sid.uuidString as NSString,
                   (status.latestReviewID ?? "") as NSString,
                   (status.headSha ?? "") as NSString,
-                  elapsed)
+                  elapsed,
+                  newCount,
+                  Self.maxStalledRefires)
         }
         return out
     }
@@ -1741,18 +1759,20 @@ final class IssueTracker {
     /// re-fire. Pure (no AppState) so the conditions can be exercised
     /// independently of the polling loop.
     ///
-    /// Returns `true` only when all four conditions from CROW-505 hold:
-    /// (1) PR still in CHANGES_REQUESTED, (2) agent idle on the managed
-    /// terminal, which must have actually reached `.agentLaunched`,
-    /// (3) head SHA unchanged since dispatch (anti-loop), and (4) quiet
-    /// window elapsed.
+    /// Returns `true` only when all conditions from CROW-505 hold:
+    /// (1) PR still in CHANGES_REQUESTED and still open, (2) agent idle on
+    /// the managed terminal, which must have actually reached
+    /// `.agentLaunched`, (3) head SHA unchanged since dispatch (anti-loop),
+    /// (4) quiet window elapsed, and (5) re-fire count below the cap so a
+    /// legitimate reply-instead-of-push doesn't drive infinite re-prompts.
     nonisolated static func shouldReFireStalledChangesRequested(
         meta: EmittedTransitionMeta,
         currentStatus: PRStatus?,
         agentActivity: AgentActivityState,
         terminalReadiness: TerminalReadiness?,
         now: Date,
-        quietWindow: TimeInterval
+        quietWindow: TimeInterval,
+        maxRefires: Int
     ) -> Bool {
         // (1) PR still in CHANGES_REQUESTED and still OPEN. The `isOpen` check
         // is what stops the re-fire from prompting the agent to "address
@@ -1772,7 +1792,11 @@ final class IssueTracker {
         // conservatively refuse to re-fire.
         guard let metaSha = meta.headShaAtEmit, metaSha == s.headSha else { return false }
         // (4) Quiet window has elapsed.
-        return now.timeIntervalSince(meta.emittedAt) >= quietWindow
+        guard now.timeIntervalSince(meta.emittedAt) >= quietWindow else { return false }
+        // (5) Re-fire cap not yet reached. Edge events (review id rotates,
+        // author pushes, bucket exits, PR closes) clear the entry and reset
+        // the count by virtue of producing a new emission.
+        return meta.reFireCount < maxRefires
     }
 
     /// Parse the session UUID prefix of a dedup key. Returns nil for malformed

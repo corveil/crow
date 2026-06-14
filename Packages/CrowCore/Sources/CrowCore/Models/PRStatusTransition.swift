@@ -35,6 +35,15 @@ public struct PRStatusTransition: Sendable, Equatable {
     public let latestReviewID: String?
     /// Names of failing checks (empty for `.changesRequested`).
     public let failedCheckNames: [String]
+    /// True when this transition is a synthetic re-emission produced by the
+    /// stalled-`.changesRequested` re-fire pass (CROW-505), not a fresh
+    /// edge-detected transition. Consumers route on this to suppress noisy
+    /// downstream effects on re-fires (e.g. AppDelegate skips
+    /// `notifyPRTransition` so the user doesn't get a fresh macOS
+    /// notification every quiet window for the same review). The
+    /// `AutoRespondCoordinator` dispatch still runs — re-prompting the
+    /// stalled agent is the whole point.
+    public let isReFire: Bool
 
     public init(
         kind: Kind,
@@ -43,7 +52,8 @@ public struct PRStatusTransition: Sendable, Equatable {
         prNumber: Int? = nil,
         headSha: String? = nil,
         latestReviewID: String? = nil,
-        failedCheckNames: [String] = []
+        failedCheckNames: [String] = [],
+        isReFire: Bool = false
     ) {
         self.kind = kind
         self.sessionID = sessionID
@@ -52,6 +62,7 @@ public struct PRStatusTransition: Sendable, Equatable {
         self.headSha = headSha
         self.latestReviewID = latestReviewID
         self.failedCheckNames = failedCheckNames
+        self.isReFire = isReFire
     }
 
     /// Stable key used to suppress duplicate fires across polling cycles.
@@ -81,13 +92,36 @@ public struct PRStatusTransition: Sendable, Equatable {
 /// dispatch, which preserves the anti-loop guarantee — a real agent push
 /// advances the head SHA, so re-fire only triggers when the author has not
 /// pushed since the original prompt fired.
+///
+/// `reFireCount` bounds the number of times the same emission may re-fire
+/// before requiring a real edge event (reviewer rotates `latestReviewID`,
+/// author pushes, bucket exits) to reset. Without this cap the re-fire would
+/// loop forever when the agent legitimately *replies* on the PR instead of
+/// pushing — a behavior the auto-respond prompt itself encourages ("If a
+/// comment is unclear or you disagree, leave a reply…"). The reply leaves
+/// the SHA unchanged but is a valid terminal state, not a stall.
 public struct EmittedTransitionMeta: Codable, Sendable, Equatable {
     public var emittedAt: Date
     public var headShaAtEmit: String?
+    public var reFireCount: Int
 
-    public init(emittedAt: Date, headShaAtEmit: String?) {
+    public init(emittedAt: Date, headShaAtEmit: String?, reFireCount: Int = 0) {
         self.emittedAt = emittedAt
         self.headShaAtEmit = headShaAtEmit
+        self.reFireCount = reFireCount
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        emittedAt = try c.decode(Date.self, forKey: .emittedAt)
+        headShaAtEmit = try c.decodeIfPresent(String.self, forKey: .headShaAtEmit)
+        // Backward decode for pre-cap stores: a missing field means the entry
+        // has never been re-fired yet, so 0 is the safe default.
+        reFireCount = try c.decodeIfPresent(Int.self, forKey: .reFireCount) ?? 0
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case emittedAt, headShaAtEmit, reFireCount
     }
 }
 
