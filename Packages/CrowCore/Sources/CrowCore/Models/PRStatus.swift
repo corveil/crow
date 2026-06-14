@@ -16,6 +16,21 @@ public struct PRStatus: Codable, Sendable, Equatable {
     /// CHANGES_REQUESTED review is currently visible, or on providers that
     /// don't expose review IDs in the monitored-PR query (e.g. GitLab).
     public var latestReviewID: String?
+    /// Whether the underlying PR is currently OPEN (as opposed to MERGED or
+    /// closed-unmerged). Distinct from `mergeable == .merged`: a CLOSED PR
+    /// has `mergeable == .unknown` but is still not actionable.
+    ///
+    /// Required by the stalled-`.changesRequested` re-fire pass (CROW-505):
+    /// the standing-state predicate reads `previousPRStatus[sid]` directly
+    /// rather than firing on transition edges, so without this flag a PR
+    /// that merged or closed while in `CHANGES_REQUESTED` (its
+    /// `reviewDecision` doesn't reset on close) would keep re-prompting the
+    /// agent every quiet window to "address review feedback" on a dead PR.
+    /// Defaults to `true` for backward decode — pre-CROW-505 stores have no
+    /// `isOpen` field, and the very next poll rewrites the persisted status
+    /// from the live viewer payload before re-fire is consulted, so the
+    /// transient default never affects an actual re-fire decision.
+    public var isOpen: Bool
 
     public init(
         checksPass: CheckStatus = .unknown,
@@ -23,7 +38,8 @@ public struct PRStatus: Codable, Sendable, Equatable {
         mergeable: MergeStatus = .unknown,
         failedCheckNames: [String] = [],
         headSha: String? = nil,
-        latestReviewID: String? = nil
+        latestReviewID: String? = nil,
+        isOpen: Bool = true
     ) {
         self.checksPass = checksPass
         self.reviewStatus = reviewStatus
@@ -31,6 +47,7 @@ public struct PRStatus: Codable, Sendable, Equatable {
         self.failedCheckNames = failedCheckNames
         self.headSha = headSha
         self.latestReviewID = latestReviewID
+        self.isOpen = isOpen
     }
 
     public init(from decoder: Decoder) throws {
@@ -41,10 +58,11 @@ public struct PRStatus: Codable, Sendable, Equatable {
         failedCheckNames = try c.decodeIfPresent([String].self, forKey: .failedCheckNames) ?? []
         headSha = try c.decodeIfPresent(String.self, forKey: .headSha)
         latestReviewID = try c.decodeIfPresent(String.self, forKey: .latestReviewID)
+        isOpen = try c.decodeIfPresent(Bool.self, forKey: .isOpen) ?? true
     }
 
     private enum CodingKeys: String, CodingKey {
-        case checksPass, reviewStatus, mergeable, failedCheckNames, headSha, latestReviewID
+        case checksPass, reviewStatus, mergeable, failedCheckNames, headSha, latestReviewID, isOpen
     }
 
     public enum CheckStatus: String, Codable, Sendable {

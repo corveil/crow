@@ -27,15 +27,18 @@ struct IssueTrackerStalledRefireTests {
     private func status(
         review: PRStatus.ReviewStatus = .changesRequested,
         sha: String? = nil,
-        reviewID: String? = "R_1"
+        reviewID: String? = "R_1",
+        isOpen: Bool = true,
+        mergeable: PRStatus.MergeStatus = .unknown
     ) -> PRStatus {
         PRStatus(
             checksPass: .pending,
             reviewStatus: review,
-            mergeable: .unknown,
+            mergeable: mergeable,
             failedCheckNames: [],
             headSha: sha ?? shaA,
-            latestReviewID: reviewID
+            latestReviewID: reviewID,
+            isOpen: isOpen
         )
     }
 
@@ -204,6 +207,38 @@ struct IssueTrackerStalledRefireTests {
                 quietWindow: quietWindow
             ), "expected no re-fire at review status \(review)")
         }
+    }
+
+    // MARK: - PR no longer open (CROW-505 review #2)
+
+    @Test
+    func doesNotReFireOnMergedPR() {
+        // A PR that merged while in CHANGES_REQUESTED keeps reviewDecision
+        // unchanged, but the re-fire must not prompt the agent to "address
+        // review feedback" on a merged PR — there's nothing to push to.
+        #expect(!IssueTracker.shouldReFireStalledChangesRequested(
+            meta: meta(emittedSecondsAgo: quietWindow + 1, headShaAtEmit: shaA),
+            currentStatus: status(sha: shaA, isOpen: false, mergeable: .merged),
+            agentActivity: .idle,
+            terminalReadiness: .agentLaunched,
+            now: now,
+            quietWindow: quietWindow
+        ))
+    }
+
+    @Test
+    func doesNotReFireOnClosedUnmergedPR() {
+        // Same concern, the more common case: PR closed without merging.
+        // `mergeable` stays `.unknown` on closed PRs — only `isOpen` flags
+        // this as dead. The reviewer's specific blocker.
+        #expect(!IssueTracker.shouldReFireStalledChangesRequested(
+            meta: meta(emittedSecondsAgo: quietWindow + 1, headShaAtEmit: shaA),
+            currentStatus: status(sha: shaA, isOpen: false, mergeable: .unknown),
+            agentActivity: .idle,
+            terminalReadiness: .agentLaunched,
+            now: now,
+            quietWindow: quietWindow
+        ))
     }
 
     @Test

@@ -1535,6 +1535,17 @@ final class IssueTracker {
                     let prefix = "\(session.id.uuidString)|changesRequested|"
                     emittedTransitionMeta = emittedTransitionMeta.filter { !$0.key.hasPrefix(prefix) }
                 }
+                // CROW-505: a PR that merged or closed-unmerged while in
+                // `CHANGES_REQUESTED` keeps its `reviewDecision` unchanged
+                // (GitHub doesn't reset reviewDecision on close), so the
+                // bucket-exit rearm above never fires for it. Drop the
+                // meta entries explicitly on the open→closed edge so the
+                // map can't accumulate dead entries that the re-fire
+                // predicate has to repeatedly reject.
+                if old.isOpen && !newStatus.isOpen {
+                    let prefix = "\(session.id.uuidString)|changesRequested|"
+                    emittedTransitionMeta = emittedTransitionMeta.filter { !$0.key.hasPrefix(prefix) }
+                }
                 if old.checksPass == .failing && newStatus.checksPass != .failing {
                     if let sha = old.headSha {
                         emittedTransitionMeta.removeValue(forKey: "\(session.id.uuidString)|checksFailing|\(sha)")
@@ -1655,6 +1666,12 @@ final class IssueTracker {
     /// - `emittedTransitionMeta[key].emittedAt` is bumped to `now` so the next
     ///   quiet-window clock starts fresh.
     /// - `NSLog`'d distinctive line so operators can grep for the behavior.
+    ///
+    /// Note on iteration: we mutate `emittedTransitionMeta` during the loop,
+    /// but Swift dictionaries are value types — `for (key, meta) in
+    /// emittedTransitionMeta` iterates over a copy-on-write snapshot taken at
+    /// loop entry, so the in-loop assignment to `self.emittedTransitionMeta`
+    /// doesn't perturb the iteration order or visit set.
     func reFireStalledChangesRequested(now: Date) -> [PRStatusTransition] {
         // Gate on the user-facing `AutoRespondSettings.respondToChangesRequested`
         // toggle. Without this gate a user who explicitly opted out would still
@@ -1737,8 +1754,14 @@ final class IssueTracker {
         now: Date,
         quietWindow: TimeInterval
     ) -> Bool {
-        // (1) PR still in CHANGES_REQUESTED.
-        guard let s = currentStatus, s.reviewStatus == .changesRequested else { return false }
+        // (1) PR still in CHANGES_REQUESTED and still OPEN. The `isOpen` check
+        // is what stops the re-fire from prompting the agent to "address
+        // review feedback" on a merged or closed-unmerged PR: GitHub leaves
+        // `reviewDecision == CHANGES_REQUESTED` on close, so without this
+        // gate a dead PR would re-prompt indefinitely. The re-arm path in
+        // `applyPRStatuses` also drops the meta entry when `isOpen` flips
+        // false; this predicate-level check is defense in depth.
+        guard let s = currentStatus, s.reviewStatus == .changesRequested, s.isOpen else { return false }
         // (2) Agent idle, not actively working / waiting on input.
         guard agentActivity == .idle else { return false }
         // (2b) Managed terminal actually launched the agent. Pre-launch terminals
@@ -2157,7 +2180,8 @@ final class IssueTracker {
             mergeable: mergeStatus,
             failedCheckNames: failedChecks,
             headSha: pr.headRefOid.isEmpty ? nil : pr.headRefOid,
-            latestReviewID: pr.latestReviewID
+            latestReviewID: pr.latestReviewID,
+            isOpen: pr.state == "OPEN"
         )
     }
 
