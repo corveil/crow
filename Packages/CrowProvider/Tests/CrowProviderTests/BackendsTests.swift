@@ -671,9 +671,14 @@ final class BackendsTests: XCTestCase {
         """
         let listing = try GitHubCodeBackend.parseMonitoredPRsResponse(json)
         XCTAssertEqual(listing.viewerPRs.count, 1)
-        let fmt = ISO8601DateFormatter()
-        fmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        XCTAssertEqual(listing.viewerPRs[0].lastChangesRequestedAt, fmt.date(from: "2026-06-07T10:00:00Z"))
+        // Construct the expected instant from epoch seconds — NOT from the
+        // same ISO8601DateFormatter the parser uses. A bug where the
+        // production formatter returns nil (CROW-508 PR #509 review) would
+        // pass the previous version of this assertion because both sides
+        // were nil. Epoch construction eliminates that co-failure mode.
+        // 2026-06-07T10:00:00Z = 1780826400 seconds since 1970.
+        let expected = Date(timeIntervalSince1970: 1780826400)
+        XCTAssertEqual(listing.viewerPRs[0].lastChangesRequestedAt, expected)
     }
 
     func testParseMonitoredPRsLastChangesRequestedAtIsNilWhenNoChangesRequested() throws {
@@ -707,6 +712,33 @@ final class BackendsTests: XCTestCase {
         let listing = try GitHubCodeBackend.parseMonitoredPRsResponse(json)
         XCTAssertEqual(listing.viewerPRs.count, 1)
         XCTAssertNil(listing.viewerPRs[0].lastChangesRequestedAt)
+    }
+
+    /// Locks down GitHub's actual `DateTime` shape (no fractional seconds)
+    /// parsing to a non-nil value. The original CROW-508 patch used
+    /// `[.withInternetDateTime, .withFractionalSeconds]` which is strict
+    /// and rejects this format — feature was silently inert in production.
+    /// PR #509 review caught it. This test will fail loudly if a future
+    /// regression re-introduces the strict formatter.
+    func testParseGitHubDateTimeHandlesNonFractionalISO8601() {
+        // GitHub's actual format — no fraction.
+        let nonFractional = GitHubCodeBackend.parseGitHubDateTime("2026-06-15T01:28:17Z")
+        XCTAssertNotNil(nonFractional)
+        XCTAssertEqual(nonFractional, Date(timeIntervalSince1970: 1781486897))
+    }
+
+    /// Resilience against potential future API drift: a timestamp WITH a
+    /// fractional component must also parse. Both shapes flow through the
+    /// same helper.
+    func testParseGitHubDateTimeAlsoHandlesFractionalISO8601() {
+        let withFraction = GitHubCodeBackend.parseGitHubDateTime("2026-06-15T01:28:17.123Z")
+        XCTAssertNotNil(withFraction)
+    }
+
+    /// Garbage input returns nil, doesn't crash.
+    func testParseGitHubDateTimeReturnsNilForGarbage() {
+        XCTAssertNil(GitHubCodeBackend.parseGitHubDateTime("not a date"))
+        XCTAssertNil(GitHubCodeBackend.parseGitHubDateTime(""))
     }
 
     /// Merge commits (parents.totalCount >= 2) and rebase-style commits
@@ -764,10 +796,11 @@ final class BackendsTests: XCTestCase {
         """
         let listing = try GitHubCodeBackend.parseMonitoredPRsResponse(json)
         XCTAssertEqual(listing.viewerPRs.count, 1)
-        let fmt = ISO8601DateFormatter()
-        fmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        // Only the real fix commit counts; the merge commits are excluded.
-        XCTAssertEqual(listing.viewerPRs[0].lastSubstantiveCommitAt, fmt.date(from: "2026-06-01T00:00:00Z"))
+        // Only the real fix commit counts; merges are excluded. Constructed
+        // from epoch seconds for the same anti-co-failure reason as the
+        // CHANGES_REQUESTED timestamp test above.
+        // 2026-06-01T00:00:00Z = 1780272000.
+        XCTAssertEqual(listing.viewerPRs[0].lastSubstantiveCommitAt, Date(timeIntervalSince1970: 1780272000))
     }
 
     /// Pure helper used by `parsePRNode`. Both Swift and tests share the

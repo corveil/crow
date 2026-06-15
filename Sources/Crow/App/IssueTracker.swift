@@ -1527,6 +1527,16 @@ final class IssueTracker {
         var transitions: [PRStatusTransition] = []
         let now = Date()
         let respondToChangesRequested = respondToChangesRequestedProvider()
+        // Snapshot `seenPRs` BEFORE the loop so the first-observation skip
+        // is consistent for every session this poll, regardless of order.
+        // Two sessions linked to the same PR URL: if we read live state,
+        // session A inserts and session B sees the URL already-seen and
+        // dispatches on the very first poll. With the snapshot, both
+        // sessions see "not seen yet" → both skip, then we record the
+        // URL once. Cooldown still bounds it either way, but the snapshot
+        // matches the documented "first poll for a PR never dispatches"
+        // behavior precisely. (PR #509 review.)
+        let seenPRsAtStart = seenPRs
         let sessionsWithPRs = appState.sessions.filter { !$0.isManager }
         // Collect live PR URLs as we go so we can drop stale entries at the
         // end of the pass. Without this, deleting a session (or its `.pr`
@@ -1555,12 +1565,12 @@ final class IssueTracker {
                 prNumber: pr.number
             ))
 
-            // Stateless "needs refine" rule (CROW-508). Order matters: we
-            // emit BEFORE recording the PR as seen, so the first poll never
-            // dispatches.
+            // Stateless "needs refine" rule (CROW-508). First-observation
+            // skip uses the start-of-poll snapshot so two sessions sharing
+            // a PR can't race each other through the gate.
             if respondToChangesRequested,
                session.kind != .review,
-               seenPRs.contains(prLink.url),
+               seenPRsAtStart.contains(prLink.url),
                PRStatus.needsRefine(
                    status: newStatus,
                    terminalIdle: isManagedTerminalIdle(sessionID: session.id)

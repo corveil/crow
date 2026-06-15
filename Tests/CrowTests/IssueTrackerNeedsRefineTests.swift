@@ -274,6 +274,45 @@ struct IssueTrackerNeedsRefineTests {
         // The live PR still gets recorded normally.
         #expect(tracker.seenPRs.contains(prURL))
     }
+
+    // MARK: - Two sessions sharing a PR URL (Green 2 — review feedback)
+
+    @Test
+    func twoSessionsSharingPRBothSkipFirstObservation() {
+        // Two sessions linked to the same PR within one poll: with naive
+        // ordering, session A inserts into `seenPRs` and session B then sees
+        // the URL already-seen → B dispatches on the very first poll. The
+        // snapshot-at-start guards against that.
+        let state = AppState()
+        let sessionA = Session(name: "session-a", kind: .work)
+        let sessionB = Session(name: "session-b", kind: .work)
+        state.sessions = [sessionA, sessionB]
+        state.links[sessionA.id] = [SessionLink(sessionID: sessionA.id, label: "PR #123", url: prURL, linkType: .pr)]
+        state.links[sessionB.id] = [SessionLink(sessionID: sessionB.id, label: "PR #123", url: prURL, linkType: .pr)]
+        let termA = SessionTerminal(sessionID: sessionA.id, name: "A", cwd: "/tmp", command: "claude", isManaged: true)
+        let termB = SessionTerminal(sessionID: sessionB.id, name: "B", cwd: "/tmp", command: "claude", isManaged: true)
+        state.terminals[sessionA.id] = [termA]
+        state.terminals[sessionB.id] = [termB]
+        state.terminalReadiness[termA.id] = .agentLaunched
+        state.terminalReadiness[termB.id] = .agentLaunched
+
+        let tracker = IssueTracker(appState: state, providerManager: ProviderManager())
+        tracker.respondToChangesRequestedProvider = { true }
+        let captured = TransitionCapture()
+        tracker.onPRStatusTransitions = { captured.append($0) }
+
+        let pr = makeViewerPR(lastChangesRequestedAt: reviewAt, lastSubstantiveCommitAt: beforeReview)
+
+        // Poll 1: both sessions must observe "not seen yet" and skip.
+        tracker.applyPRStatuses(viewerPRs: [pr])
+        #expect(captured.changesRequestedCount == 0)
+        #expect(tracker.seenPRs.contains(prURL))
+
+        // Poll 2: both sessions can dispatch (cooldown is per-PR so only
+        // the first one wins, but the snapshot fix is about poll 1).
+        tracker.applyPRStatuses(viewerPRs: [pr])
+        #expect(captured.changesRequestedCount == 1)
+    }
 }
 
 /// Captures emitted transitions across multiple polls. Class so the test's
