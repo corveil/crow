@@ -778,12 +778,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         tracker.onPRStatusTransitions = { [weak self] transitions in
             guard let self else { return }
             for transition in transitions {
-                // CROW-505 review #3: re-fire transitions skip the macOS
-                // notification so a stalled review doesn't generate a fresh
-                // banner every quiet window for the same review id. The
-                // re-prompt itself (below) is the useful effect; the
-                // notification was pure noise.
-                if transition.isReFire { continue }
+                // Skip the macOS banner on cooldown re-fires: the dispatch
+                // re-prompts the agent (the useful part), but a fresh
+                // banner every 7 min for the same reviewer submission is
+                // pure noise the user already saw the first time.
+                if transition.isCooldownReFire { continue }
                 if let session = self.appState.sessions.first(where: { $0.id == transition.sessionID }) {
                     self.notificationManager?.notifyPRTransition(transition, session: session)
                 }

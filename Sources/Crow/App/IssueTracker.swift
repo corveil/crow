@@ -77,14 +77,11 @@ final class IssueTracker {
     var autoRebaseWatcherEnabledProvider: () -> Bool = { false }
 
     /// Reads the latest `AutoRespondSettings.respondToChangesRequested`
-    /// snapshot on every poll. Used solely to gate the stalled-`.changesRequested`
-    /// re-fire pass (CROW-505): without this gate an opted-out user would still
-    /// see a fresh "Changes Requested" macOS notification every quiet window
-    /// (via `onPRStatusTransitions` → `notifyPRTransition`), even though
-    /// `AutoRespondCoordinator` correctly suppresses the actual dispatch —
-    /// pure notification noise that defeats their opt-out. Defaults to a
-    /// closure returning `false` so the re-fire path stays inert until
-    /// AppDelegate wires it.
+    /// snapshot on every poll. Gates the stateless "needs refine" emission
+    /// (CROW-508) — when the user has opted out, we suppress both the
+    /// notification and the dispatch, so they don't see fresh "Changes
+    /// Requested" banners every cooldown window. Defaults to a closure
+    /// returning `false` so the path stays inert until AppDelegate wires it.
     var respondToChangesRequestedProvider: () -> Bool = { false }
 
     /// Fires after Crow rebased a PR branch and force-pushed it. Wired in
@@ -159,42 +156,47 @@ final class IssueTracker {
     /// the watcher gives up until the head commit changes.
     nonisolated static let maxAutoRebaseFailureRetries = 3
 
-    /// Last observed `PRStatus` per session, used to compute transitions.
-    /// Populated lazily on first observation; that first poll never fires
-    /// transitions (matches the `previousReviewRequestIDs` first-fetch
-    /// behavior so existing PR state isn't replayed at startup).
-    /// Internal (not private) so `@testable` tests can seed it when driving the
-    /// stalled-re-fire pass (CROW-505) without going through a full poll.
+    /// Last observed `PRStatus` per session. Ephemeral (not persisted across
+    /// Crow restarts post-CROW-508): only used for in-process `.checksFailing`
+    /// edge detection. `.changesRequested` no longer reads from this map —
+    /// the stateless `PRStatus.needsRefine` rule derives the answer from the
+    /// PR snapshot on every poll.
+    /// Internal (not private) so `@testable` tests can seed it without going
+    /// through a full poll.
     var previousPRStatus: [UUID: PRStatus] = [:]
 
-    /// Per-emitted-transition metadata keyed by `PRStatusTransition.dedupeKey`,
-    /// used to suppress duplicates across the in-process lifetime and to power
-    /// the stalled `.changesRequested` re-fire pass (CROW-505): each entry
-    /// carries `emittedAt` (quiet-window clock) and `headShaAtEmit` (anti-loop
-    /// guarantee — re-fire only when the author hasn't pushed since dispatch).
-    /// Cleared per-session when we observe the rule "re-arm" (e.g. checks
-    /// move back to passing/pending) so subsequent transitions still fire.
-    /// Internal (not private) for the same `@testable` seeding reason as
-    /// `previousPRStatus`.
-    var emittedTransitionMeta: [String: EmittedTransitionMeta] = [:]
+    /// PR URLs we've observed at least once in this Crow process. First poll
+    /// records the URL but does NOT dispatch — the next poll is the earliest
+    /// the stateless "needs refine" rule can emit. Ephemeral; a Crow restart
+    /// re-arms the skip so a single duplicate prompt across a restart
+    /// (acceptable per CROW-508) is the worst case.
+    var seenPRs: Set<String> = []
 
-    /// Minimum elapsed time before a stalled `.changesRequested` transition can
-    /// re-fire (CROW-505). 10 min ≈ 10 poll cycles — covers Claude Code's
-    /// longest "thinking on a hard finding" gaps before we conclude the agent
-    /// has actually stalled. Constant so we can tune if real-world telemetry
-    /// calls for it.
-    nonisolated static let stalledRefireQuietWindow: TimeInterval = 10 * 60
+    /// Per-PR cooldown clock for "needs refine" dispatches. Keyed by PR URL
+    /// rather than session UUID so that two sessions linked to the same PR
+    /// can't both burn through the cooldown. Ephemeral by design — surviving
+    /// a restart isn't worth the persistence cost (worst case after restart
+    /// is one extra prompt, then the cooldown re-applies).
+    var lastRefineDispatchAt: [String: Date] = [:]
 
-    /// Max times a single `.changesRequested` emission may re-fire before
-    /// requiring a real edge event (reviewer rotates `latestReviewID`,
-    /// author pushes, bucket exits) to reset. Capped at 1 so the agent
-    /// receives at most one re-prompt per stall: the auto-respond prompt
-    /// explicitly invites the agent to reply rather than push when a finding
-    /// is unclear or disputed, and a reply is a legitimate terminal state
-    /// the head-SHA gate alone can't recognize. Without this cap the same
-    /// prompt would re-inject every quiet window indefinitely, potentially
-    /// driving duplicate reply comments on the reviewer's PR.
-    nonisolated static let maxStalledRefires: Int = 1
+    /// Per-PR record of the `lastChangesRequestedAt` we most recently posted
+    /// a macOS notification for. When a cooldown re-fire dispatches for the
+    /// same reviewer submission (same timestamp), the emitted transition
+    /// carries `isCooldownReFire = true` so `AppDelegate.onPRStatusTransitions`
+    /// skips the notification — the agent re-prompt is still useful, but a
+    /// fresh banner every 7 min for the same review is pure noise. A new
+    /// reviewer submission advances `lastChangesRequestedAt`, so the very
+    /// next dispatch is `isCooldownReFire = false` and notifies again.
+    /// Ephemeral; restart cost is one duplicate banner per PR, bounded.
+    var lastNotifiedChangesRequestedAt: [String: Date] = [:]
+
+    /// Minimum gap between consecutive "needs refine" dispatches for the same
+    /// PR (CROW-508). 7 min is a deliberate middle of the 5–10 min range the
+    /// ticket suggested: long enough that an agent thinking through a hard
+    /// finding doesn't get re-prompted mid-thought, short enough that a true
+    /// stall surfaces within ~3 poll cycles. Constant so it can be tuned if
+    /// real-world telemetry calls for it.
+    nonisolated static let needsRefineCooldown: TimeInterval = 7 * 60
 
     /// Guards the GitHub-scope console warning so it fires once per session.
     private var didLogGitHubScopeWarning = false
@@ -214,13 +216,9 @@ final class IssueTracker {
     }
 
     func start() {
-        // Restore cross-restart state from disk before the first poll so the
-        // initial fetch doesn't re-fire transitions we already handled
-        // (CROW-456). Stale entries for sessions that no longer exist are
-        // dropped during hydration.
-        hydratePersistedState()
-
-        // Initial fetch
+        // Initial fetch. Post-CROW-508 the tracker is stateless across
+        // restarts — the "needs refine" rule derives from PR data on every
+        // poll, so there's no `hydratePersistedState` to call here.
         Task { await refresh() }
 
         // Poll on interval
@@ -672,7 +670,8 @@ final class IssueTracker {
             checksState: winner.checksState.isEmpty ? loser.checksState : winner.checksState,
             failedCheckNames: winner.failedCheckNames.isEmpty ? loser.failedCheckNames : winner.failedCheckNames,
             latestReviewStates: winner.latestReviewStates.isEmpty ? loser.latestReviewStates : winner.latestReviewStates,
-            latestReviewID: winner.latestReviewID ?? loser.latestReviewID
+            lastChangesRequestedAt: winner.lastChangesRequestedAt ?? loser.lastChangesRequestedAt,
+            lastSubstantiveCommitAt: winner.lastSubstantiveCommitAt ?? loser.lastSubstantiveCommitAt
         )
     }
 
@@ -906,6 +905,8 @@ final class IssueTracker {
             checksState: pr.checksState,
             failedCheckNames: pr.failedCheckNames,
             latestReviewStates: pr.latestReviewStates,
+            lastChangesRequestedAt: pr.lastChangesRequestedAt,
+            lastSubstantiveCommitAt: pr.lastSubstantiveCommitAt,
             updatedAt: pr.updatedAt
         )
     }
@@ -1509,308 +1510,147 @@ final class IssueTracker {
     // MARK: - PR Status (piggyback)
 
     /// Build `PRStatus` for each session with a `.pr` link by looking up the PR
-    /// in the viewer-PR payload. No extra gh calls.
-    private func applyPRStatuses(viewerPRs: [ViewerPR]) {
+    /// in the viewer-PR payload. No extra gh calls. Emits two kinds of
+    /// transitions:
+    /// - `.checksFailing`: still edge-detected from `previousPRStatus` so a
+    ///   new failing commit only fires once per head.
+    /// - `.changesRequested`: stateless `PRStatus.needsRefine` rule (CROW-508).
+    ///   Compares the latest CHANGES_REQUESTED review timestamp against the
+    ///   latest substantive (non-merge, non-rebase) commit timestamp; emits
+    ///   when the review is newer, gated by managed-terminal-idle, the
+    ///   `respondToChangesRequested` user setting, the first-observation
+    ///   skip (a PR's first poll never dispatches), and a per-PR cooldown.
+    func applyPRStatuses(viewerPRs: [ViewerPR]) {
         guard !viewerPRs.isEmpty else { return }
         let byURL = Dictionary(viewerPRs.map { ($0.url, $0) }, uniquingKeysWith: Self.mergePRRecords)
 
-        // Snapshot tracker state up front so we can skip the JSONStore write
-        // when this poll produced no observable change. Polls are quiet most
-        // of the time; without this guard `persistTrackerState` re-reads,
-        // re-encodes, and atomically rewrites `store.json` every 60s.
-        let priorPRStatus = previousPRStatus
-        let priorEmittedMeta = emittedTransitionMeta
-
         var transitions: [PRStatusTransition] = []
         let now = Date()
+        let respondToChangesRequested = respondToChangesRequestedProvider()
+        // Snapshot `seenPRs` BEFORE the loop so the first-observation skip
+        // is consistent for every session this poll, regardless of order.
+        // Two sessions linked to the same PR URL: if we read live state,
+        // session A inserts and session B sees the URL already-seen and
+        // dispatches on the very first poll. With the snapshot, both
+        // sessions see "not seen yet" → both skip, then we record the
+        // URL once. Cooldown still bounds it either way, but the snapshot
+        // matches the documented "first poll for a PR never dispatches"
+        // behavior precisely. (PR #509 review.)
+        let seenPRsAtStart = seenPRs
         let sessionsWithPRs = appState.sessions.filter { !$0.isManager }
+        // Collect live PR URLs as we go so we can drop stale entries at the
+        // end of the pass. Without this, deleting a session (or its `.pr`
+        // link) leaves its PR URL in `seenPRs`/`lastRefineDispatchAt`/
+        // `lastNotifiedChangesRequestedAt` for the rest of the process —
+        // bounded but not strictly clean.
+        var livePRURLs: Set<String> = []
         for session in sessionsWithPRs {
             let links = appState.links(for: session.id)
             guard let prLink = links.first(where: { $0.linkType == .pr }) else { continue }
             guard let pr = byURL[prLink.url] else { continue }
+            livePRURLs.insert(prLink.url)
 
             let newStatus = buildPRStatus(from: pr)
             let oldStatus = previousPRStatus[session.id]
 
-            // Re-arm rules whose triggering condition has cleared, so a future
-            // re-entry (approved → changesRequested again, passing → failing on
-            // a new commit) can fire even if we previously emitted.
-            //
-            // With CROW-456 the `.changesRequested` dedup key is keyed on the
-            // latest CHANGES_REQUESTED review id, so a new formal review
-            // naturally produces a different key. This cleanup bounds the
-            // in-memory map: when we leave the bucket entirely we drop every
-            // `changesRequested` entry for this session.
-            if let old = oldStatus {
-                if old.reviewStatus == .changesRequested && newStatus.reviewStatus != .changesRequested {
-                    let prefix = "\(session.id.uuidString)|changesRequested|"
-                    emittedTransitionMeta = emittedTransitionMeta.filter { !$0.key.hasPrefix(prefix) }
-                }
-                // CROW-505: a PR that merged or closed-unmerged while in
-                // `CHANGES_REQUESTED` keeps its `reviewDecision` unchanged
-                // (GitHub doesn't reset reviewDecision on close), so the
-                // bucket-exit rearm above never fires for it. Drop the
-                // meta entries explicitly on the open→closed edge so the
-                // map can't accumulate dead entries that the re-fire
-                // predicate has to repeatedly reject.
-                if old.isOpen && !newStatus.isOpen {
-                    let prefix = "\(session.id.uuidString)|changesRequested|"
-                    emittedTransitionMeta = emittedTransitionMeta.filter { !$0.key.hasPrefix(prefix) }
-                }
-                if old.checksPass == .failing && newStatus.checksPass != .failing {
-                    if let sha = old.headSha {
-                        emittedTransitionMeta.removeValue(forKey: "\(session.id.uuidString)|checksFailing|\(sha)")
-                    }
-                }
-            }
-
-            let candidates = PRStatus.transitions(
+            // Checks-failing edge: fire only when transitioning from
+            // non-failing to failing. `transitions(from:to:…)` returns at
+            // most one `.checksFailing` and handles the `old == nil` first-
+            // observation case (only fires if `new` is itself failing).
+            transitions.append(contentsOf: PRStatus.transitions(
                 from: oldStatus,
                 to: newStatus,
                 sessionID: session.id,
                 prURL: prLink.url,
                 prNumber: pr.number
-            )
-            for t in candidates where emittedTransitionMeta[t.dedupeKey] == nil {
-                emittedTransitionMeta[t.dedupeKey] = EmittedTransitionMeta(
-                    emittedAt: now,
-                    headShaAtEmit: newStatus.headSha
-                )
-                transitions.append(t)
+            ))
+
+            // Stateless "needs refine" rule (CROW-508). First-observation
+            // skip uses the start-of-poll snapshot so two sessions sharing
+            // a PR can't race each other through the gate.
+            if respondToChangesRequested,
+               session.kind != .review,
+               seenPRsAtStart.contains(prLink.url),
+               PRStatus.needsRefine(
+                   status: newStatus,
+                   terminalIdle: isManagedTerminalIdle(sessionID: session.id)
+               ),
+               cooldownElapsed(prURL: prLink.url, now: now) {
+                lastRefineDispatchAt[prLink.url] = now
+                // Same-review cooldown re-fire suppresses the macOS
+                // notification (the dispatch + agent prompt are still
+                // valuable; the banner duplicates info the user already
+                // saw). A new reviewer submission advances
+                // `lastChangesRequestedAt`, flipping the flag back off so
+                // the next dispatch notifies.
+                let isCooldownReFire = lastNotifiedChangesRequestedAt[prLink.url] == newStatus.lastChangesRequestedAt
+                if !isCooldownReFire {
+                    lastNotifiedChangesRequestedAt[prLink.url] = newStatus.lastChangesRequestedAt
+                }
+                transitions.append(PRStatusTransition(
+                    kind: .changesRequested,
+                    sessionID: session.id,
+                    prURL: prLink.url,
+                    prNumber: pr.number,
+                    headSha: newStatus.headSha,
+                    failedCheckNames: [],
+                    isCooldownReFire: isCooldownReFire
+                ))
+                NSLog("[IssueTracker] needs-refine fired — session=%@, sha=%@, lastCR=%@, lastCommit=%@, reFire=%@",
+                      session.id.uuidString as NSString,
+                      (newStatus.headSha ?? "") as NSString,
+                      Self.iso(newStatus.lastChangesRequestedAt) as NSString,
+                      Self.iso(newStatus.lastSubstantiveCommitAt) as NSString,
+                      (isCooldownReFire ? "yes" : "no") as NSString)
             }
+            seenPRs.insert(prLink.url)
 
             previousPRStatus[session.id] = newStatus
             appState.prStatus[session.id] = newStatus
         }
 
-        // CROW-505: stalled `.changesRequested` re-fire. After the per-session
-        // pass, walk the emitted-meta map and re-emit any review that has
-        // stalled — agent idle, head SHA unchanged since dispatch, quiet
-        // window elapsed. Anti-loop is preserved by the head-SHA gate: a real
-        // agent push advances `previousPRStatus[sid].headSha`, which kills the
-        // re-fire condition.
-        transitions.append(contentsOf: reFireStalledChangesRequested(now: now))
+        // Prune ephemeral state for PRs no longer linked to any live
+        // session. Cheap (Set intersection / dictionary filter) and keeps
+        // the maps bounded by current PR count rather than lifetime
+        // process activity.
+        if !seenPRs.isEmpty { seenPRs.formIntersection(livePRURLs) }
+        lastRefineDispatchAt = lastRefineDispatchAt.filter { livePRURLs.contains($0.key) }
+        lastNotifiedChangesRequestedAt = lastNotifiedChangesRequestedAt.filter { livePRURLs.contains($0.key) }
 
         if !transitions.isEmpty {
             onPRStatusTransitions?(transitions)
-        }
-
-        if previousPRStatus != priorPRStatus || emittedTransitionMeta != priorEmittedMeta {
-            persistTrackerState()
         }
 
         applyAutoMerge(viewerPRs: viewerPRs)
         applyAutoRebase(viewerPRs: viewerPRs)
     }
 
-    // MARK: - Cross-restart persistence (CROW-456)
-
-    /// Load `previousPRStatus` + `emittedTransitionMeta` from disk on startup.
-    /// Drops entries whose session UUID is no longer present so the in-memory
-    /// state can't grow without bound across long-lived installs.
-    ///
-    /// Migrates pre-CROW-505 stores that only wrote `emittedTransitionKeys`:
-    /// each legacy key gets a meta entry with `emittedAt = now` (starts the
-    /// quiet-window clock fresh — no immediate re-fire flood at upgrade) and
-    /// `headShaAtEmit` sourced from `previousPRStatus` (also persisted), so
-    /// the head-SHA anti-loop gate works on migrated entries too.
-    private func hydratePersistedState() {
-        guard let persisted = JSONStore().data.issueTrackerState else { return }
-        let validSessionIDs = Set(appState.sessions.map(\.id))
-        var restored: [UUID: PRStatus] = [:]
-        for (uuidString, status) in persisted.previousPRStatus {
-            guard let uuid = UUID(uuidString: uuidString), validSessionIDs.contains(uuid) else { continue }
-            restored[uuid] = status
+    /// True when the managed terminal for the session is at agent-launched
+    /// readiness with the agent in `.idle` (not working, waiting on input,
+    /// or already done). Both gates are required: a pre-launch terminal
+    /// can't be "stalled" because the agent never had a chance to run, and
+    /// firing into a busy agent would just interrupt productive work.
+    private func isManagedTerminalIdle(sessionID: UUID) -> Bool {
+        guard let managedTerminal = appState.terminals(for: sessionID).first(where: { $0.isManaged }) else {
+            return false
         }
-        previousPRStatus = restored
-
-        // Keep only entries whose session UUID prefix matches a live session.
-        // Each key has shape "<uuid>|kind|…"; reject anything else.
-        let validUUIDPrefixes = Set(validSessionIDs.map { "\($0.uuidString)|" })
-
-        if let persistedMeta = persisted.emittedTransitionMeta {
-            // CROW-505+: read the rich map directly.
-            emittedTransitionMeta = persistedMeta.filter { entry in
-                validUUIDPrefixes.contains(where: { entry.key.hasPrefix($0) })
-            }
-        } else {
-            // Pre-CROW-505 store — synthesize metadata from the legacy keys.
-            let now = Date()
-            var migrated: [String: EmittedTransitionMeta] = [:]
-            for key in persisted.emittedTransitionKeys
-            where validUUIDPrefixes.contains(where: { key.hasPrefix($0) }) {
-                let sha = Self.parseSessionID(fromDedupKey: key)
-                    .flatMap { restored[$0]?.headSha }
-                migrated[key] = EmittedTransitionMeta(emittedAt: now, headShaAtEmit: sha)
-            }
-            emittedTransitionMeta = migrated
-        }
+        guard appState.terminalReadiness[managedTerminal.id] == .agentLaunched else { return false }
+        return appState.hookState(for: sessionID).activityState == .idle
     }
 
-    /// Persist `previousPRStatus` + `emittedTransitionMeta` after every poll
-    /// that mutated them. `JSONStore.mutate` coalesces writes so this is cheap
-    /// even when transitions are quiet.
-    ///
-    /// Writes both the new map and an empty legacy `emittedTransitionKeys`
-    /// array: older Crow builds that read the array but not the map will see
-    /// no keys and re-fire as if from a fresh install (graceful downgrade).
-    private func persistTrackerState() {
-        let snapshot = PersistedIssueTrackerState(
-            previousPRStatus: Dictionary(uniqueKeysWithValues: previousPRStatus.map { ($0.key.uuidString, $0.value) }),
-            emittedTransitionKeys: [],
-            emittedTransitionMeta: emittedTransitionMeta
-        )
-        JSONStore().mutate { data in
-            data.issueTrackerState = snapshot
-        }
+    /// True when no prior dispatch is recorded for this PR or the cooldown
+    /// has elapsed since the last one. Driven by `needsRefineCooldown`.
+    private func cooldownElapsed(prURL: String, now: Date) -> Bool {
+        guard let last = lastRefineDispatchAt[prURL] else { return true }
+        return now.timeIntervalSince(last) >= Self.needsRefineCooldown
     }
 
-    // MARK: - Stalled `.changesRequested` re-fire (CROW-505)
-
-    /// Re-emit any `.changesRequested` transition whose original auto-respond
-    /// prompt has stalled — agent idle, terminal launched, head SHA unchanged
-    /// since dispatch, and the quiet window has elapsed. Anti-loop guarantee:
-    /// a real agent push advances `previousPRStatus[sid].headSha`, breaking the
-    /// SHA-match condition, so we never re-fire on the agent's own response.
-    ///
-    /// Side effects (only when a re-fire actually emits):
-    /// - `emittedTransitionMeta[key].emittedAt` is bumped to `now` so the next
-    ///   quiet-window clock starts fresh.
-    /// - `NSLog`'d distinctive line so operators can grep for the behavior.
-    ///
-    /// Note on iteration: we mutate `emittedTransitionMeta` during the loop,
-    /// but Swift dictionaries are value types — `for (key, meta) in
-    /// emittedTransitionMeta` iterates over a copy-on-write snapshot taken at
-    /// loop entry, so the in-loop assignment to `self.emittedTransitionMeta`
-    /// doesn't perturb the iteration order or visit set.
-    func reFireStalledChangesRequested(now: Date) -> [PRStatusTransition] {
-        // Gate on the user-facing `AutoRespondSettings.respondToChangesRequested`
-        // toggle. Without this gate a user who explicitly opted out would still
-        // get a fresh `Changes Requested` macOS notification every quiet window
-        // (`onPRStatusTransitions` → `notifyPRTransition` posts unconditionally;
-        // only the actual prompt dispatch is gated downstream in
-        // `AutoRespondCoordinator.handle`) — pure notification noise that
-        // defeats their opt-out. New configs default to `true` post-CROW-505,
-        // so this gate only suppresses behavior for users who deliberately
-        // disabled it.
-        guard respondToChangesRequestedProvider() else { return [] }
-
-        var out: [PRStatusTransition] = []
-        for (key, meta) in emittedTransitionMeta {
-            // Only `.changesRequested` keys re-fire. Checks-failing already
-            // re-arms on a new commit (via the SHA-keyed dedup).
-            guard let sid = Self.parseSessionID(fromDedupKey: key),
-                  Self.parseKind(fromDedupKey: key) == .changesRequested else { continue }
-            guard let session = appState.sessions.first(where: { $0.id == sid }) else { continue }
-            // Skip review sessions for the same reason `AutoRespondCoordinator`
-            // gates them — never commit on behalf of the reviewer.
-            guard session.kind != .review else { continue }
-            guard let prLink = appState.links(for: sid).first(where: { $0.linkType == .pr }) else { continue }
-
-            let currentStatus = previousPRStatus[sid]
-            let agentActivity = appState.hookState(for: sid).activityState
-            let managedTerminal = appState.terminals(for: sid).first(where: { $0.isManaged })
-            let readiness = managedTerminal.flatMap { appState.terminalReadiness[$0.id] }
-
-            guard Self.shouldReFireStalledChangesRequested(
-                meta: meta,
-                currentStatus: currentStatus,
-                agentActivity: agentActivity,
-                terminalReadiness: readiness,
-                now: now,
-                quietWindow: Self.stalledRefireQuietWindow,
-                maxRefires: Self.maxStalledRefires
-            ) else { continue }
-
-            guard let status = currentStatus else { continue }
-            let synthetic = PRStatusTransition(
-                kind: .changesRequested,
-                sessionID: sid,
-                prURL: prLink.url,
-                prNumber: QuickActionPrompts.parsePRNumber(from: prLink.url),
-                headSha: status.headSha,
-                latestReviewID: status.latestReviewID,
-                failedCheckNames: [],
-                isReFire: true
-            )
-            out.append(synthetic)
-            // Refresh emittedAt + bump the count so the next quiet-window
-            // clock starts now and the per-emission cap (CROW-505 review #3)
-            // ratchets toward exhaustion.
-            let newCount = meta.reFireCount + 1
-            emittedTransitionMeta[key] = EmittedTransitionMeta(
-                emittedAt: now,
-                headShaAtEmit: status.headSha,
-                reFireCount: newCount
-            )
-            let elapsed = now.timeIntervalSince(meta.emittedAt)
-            NSLog("[IssueTracker] auto-refine re-fired (stalled review) — session=%@, review=%@, sha=%@, elapsed=%.0fs, count=%d/%d",
-                  sid.uuidString as NSString,
-                  (status.latestReviewID ?? "") as NSString,
-                  (status.headSha ?? "") as NSString,
-                  elapsed,
-                  newCount,
-                  Self.maxStalledRefires)
-        }
-        return out
-    }
-
-    /// Decide whether a stalled `.changesRequested` entry is eligible for
-    /// re-fire. Pure (no AppState) so the conditions can be exercised
-    /// independently of the polling loop.
-    ///
-    /// Returns `true` only when all conditions from CROW-505 hold:
-    /// (1) PR still in CHANGES_REQUESTED and still open, (2) agent idle on
-    /// the managed terminal, which must have actually reached
-    /// `.agentLaunched`, (3) head SHA unchanged since dispatch (anti-loop),
-    /// (4) quiet window elapsed, and (5) re-fire count below the cap so a
-    /// legitimate reply-instead-of-push doesn't drive infinite re-prompts.
-    nonisolated static func shouldReFireStalledChangesRequested(
-        meta: EmittedTransitionMeta,
-        currentStatus: PRStatus?,
-        agentActivity: AgentActivityState,
-        terminalReadiness: TerminalReadiness?,
-        now: Date,
-        quietWindow: TimeInterval,
-        maxRefires: Int
-    ) -> Bool {
-        // (1) PR still in CHANGES_REQUESTED and still OPEN. The `isOpen` check
-        // is what stops the re-fire from prompting the agent to "address
-        // review feedback" on a merged or closed-unmerged PR: GitHub leaves
-        // `reviewDecision == CHANGES_REQUESTED` on close, so without this
-        // gate a dead PR would re-prompt indefinitely. The re-arm path in
-        // `applyPRStatuses` also drops the meta entry when `isOpen` flips
-        // false; this predicate-level check is defense in depth.
-        guard let s = currentStatus, s.reviewStatus == .changesRequested, s.isOpen else { return false }
-        // (2) Agent idle, not actively working / waiting on input.
-        guard agentActivity == .idle else { return false }
-        // (2b) Managed terminal actually launched the agent. Pre-launch terminals
-        // can't be "stalled" — the agent never had a chance to run.
-        guard terminalReadiness == .agentLaunched else { return false }
-        // (3) Head SHA unchanged since we last emitted. A nil baseline (no SHA
-        // known at emit time) can't prove the author hasn't pushed, so we
-        // conservatively refuse to re-fire.
-        guard let metaSha = meta.headShaAtEmit, metaSha == s.headSha else { return false }
-        // (4) Quiet window has elapsed.
-        guard now.timeIntervalSince(meta.emittedAt) >= quietWindow else { return false }
-        // (5) Re-fire cap not yet reached. Edge events (review id rotates,
-        // author pushes, bucket exits, PR closes) clear the entry and reset
-        // the count by virtue of producing a new emission.
-        return meta.reFireCount < maxRefires
-    }
-
-    /// Parse the session UUID prefix of a dedup key. Returns nil for malformed
-    /// keys. The key format is `"<uuid>|<kind>|<discriminator>"`.
-    nonisolated static func parseSessionID(fromDedupKey key: String) -> UUID? {
-        guard let pipe = key.firstIndex(of: "|") else { return nil }
-        return UUID(uuidString: String(key[..<pipe]))
-    }
-
-    /// Parse the kind segment of a dedup key. Returns nil for unrecognized kinds.
-    nonisolated static func parseKind(fromDedupKey key: String) -> PRStatusTransition.Kind? {
-        let parts = key.split(separator: "|", maxSplits: 2, omittingEmptySubsequences: false)
-        guard parts.count >= 2 else { return nil }
-        return PRStatusTransition.Kind(rawValue: String(parts[1]))
+    /// ISO-8601 timestamp string for logging, or "-" for nil.
+    nonisolated static func iso(_ date: Date?) -> String {
+        guard let date else { return "-" }
+        let fmt = ISO8601DateFormatter()
+        fmt.formatOptions = [.withInternetDateTime]
+        return fmt.string(from: date)
     }
 
     // MARK: - Auto-Merge Watcher (CROW-299)
@@ -2204,8 +2044,9 @@ final class IssueTracker {
             mergeable: mergeStatus,
             failedCheckNames: failedChecks,
             headSha: pr.headRefOid.isEmpty ? nil : pr.headRefOid,
-            latestReviewID: pr.latestReviewID,
-            isOpen: pr.state == "OPEN"
+            isOpen: pr.state == "OPEN",
+            lastChangesRequestedAt: pr.lastChangesRequestedAt,
+            lastSubstantiveCommitAt: pr.lastSubstantiveCommitAt
         )
     }
 

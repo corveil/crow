@@ -1,35 +1,14 @@
 import Foundation
 import CrowCore
 
-/// Persisted slice of `IssueTracker` state needed to survive Crow restarts
-/// without re-firing already-handled PR transitions (CROW-456).
-///
-/// `previousPRStatus` is keyed by session UUID string so the on-disk shape
-/// stays plain JSON. `emittedTransitionKeys` is the legacy array of dedup
-/// keys retained for backward read; CROW-505 introduced the richer
-/// `emittedTransitionMeta` map, which is now the source of truth on write.
-/// Older `store.json` files lacking the map are migrated lazily in
-/// `IssueTracker.hydratePersistedState`.
-public struct PersistedIssueTrackerState: Codable, Sendable, Equatable {
-    public var previousPRStatus: [String: PRStatus]
-    public var emittedTransitionKeys: [String]
-    /// Optional for backward compat: pre-CROW-505 stores only wrote
-    /// `emittedTransitionKeys`. Newer stores populate this map and leave
-    /// `emittedTransitionKeys` empty.
-    public var emittedTransitionMeta: [String: EmittedTransitionMeta]?
-
-    public init(
-        previousPRStatus: [String: PRStatus] = [:],
-        emittedTransitionKeys: [String] = [],
-        emittedTransitionMeta: [String: EmittedTransitionMeta]? = nil
-    ) {
-        self.previousPRStatus = previousPRStatus
-        self.emittedTransitionKeys = emittedTransitionKeys
-        self.emittedTransitionMeta = emittedTransitionMeta
-    }
-}
-
 /// Persisted data structure.
+///
+/// The pre-CROW-508 `issueTrackerState` blob (last-observed PR status +
+/// emitted-transition dedup keys / meta) is no longer persisted: the
+/// stateless "needs refine" rule derives the answer from the PR on every
+/// poll, so cross-restart state isn't needed. Older `store.json` files may
+/// still carry that key; JSON decoding silently ignores unknown keys, so
+/// existing stores keep loading cleanly without a migration step.
 public struct StoreData: Codable, Sendable {
     public var sessions: [Session]
     public var worktrees: [SessionWorktree]
@@ -40,26 +19,19 @@ public struct StoreData: Codable, Sendable {
     /// synthesized `Codable` tolerates a missing optional, keeping us backward
     /// compatible and avoiding the corrupt-store backup path.
     public var hookStates: [String: PersistedHookState]?
-    /// Cross-restart cache of last-observed PR statuses + emitted transition
-    /// dedup keys (CROW-456). Optional for backward compatibility with older
-    /// `store.json` files; on first read after upgrade it's nil and the
-    /// tracker behaves as it always did until the next poll persists state.
-    public var issueTrackerState: PersistedIssueTrackerState?
 
     public init(
         sessions: [Session] = [],
         worktrees: [SessionWorktree] = [],
         links: [SessionLink] = [],
         terminals: [SessionTerminal] = [],
-        hookStates: [String: PersistedHookState]? = nil,
-        issueTrackerState: PersistedIssueTrackerState? = nil
+        hookStates: [String: PersistedHookState]? = nil
     ) {
         self.sessions = sessions
         self.worktrees = worktrees
         self.links = links
         self.terminals = terminals
         self.hookStates = hookStates
-        self.issueTrackerState = issueTrackerState
     }
 }
 

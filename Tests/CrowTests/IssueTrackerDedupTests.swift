@@ -24,7 +24,8 @@ struct IssueTrackerDedupTests {
         checksState: String = "",
         failedCheckNames: [String] = [],
         latestReviewStates: [String] = [],
-        latestReviewID: String? = nil
+        lastChangesRequestedAt: Date? = nil,
+        lastSubstantiveCommitAt: Date? = nil
     ) -> IssueTracker.ViewerPR {
         IssueTracker.ViewerPR(
             number: number,
@@ -43,7 +44,8 @@ struct IssueTrackerDedupTests {
             checksState: checksState,
             failedCheckNames: failedCheckNames,
             latestReviewStates: latestReviewStates,
-            latestReviewID: latestReviewID
+            lastChangesRequestedAt: lastChangesRequestedAt,
+            lastSubstantiveCommitAt: lastSubstantiveCommitAt
         )
     }
 
@@ -139,23 +141,35 @@ struct IssueTrackerDedupTests {
         #expect(byURL[url]?.state == "MERGED")
     }
 
-    // MARK: - CROW-456 latestReviewID propagation
+    // MARK: - CROW-508 timestamp propagation
 
-    @Test func mergePRRecordsPrefersWinnerLatestReviewID() {
+    @Test func mergePRRecordsPrefersWinnerLastChangesRequestedAt() {
         // Winner is whichever has the higher-rank state (MERGED beats OPEN).
-        // Forward its latestReviewID; fall back to loser's only when winner's
-        // is nil so we never lose round-2 dedup data during the merge.
+        // Forward its lastChangesRequestedAt; fall back to loser's only when
+        // winner's is nil so the stateless "needs refine" rule never loses
+        // the anchor timestamp during merge.
         let url = "https://github.com/radiusmethod/corveil/pull/201"
-        let openWithID = makeViewerPR(url: url, state: "OPEN", latestReviewID: "R_open")
-        let mergedWithID = makeViewerPR(url: url, state: "MERGED", latestReviewID: "R_merged")
-        #expect(IssueTracker.mergePRRecords(openWithID, mergedWithID).latestReviewID == "R_merged")
-        #expect(IssueTracker.mergePRRecords(mergedWithID, openWithID).latestReviewID == "R_merged")
+        let openTs = Date(timeIntervalSince1970: 1_700_000_000)
+        let mergedTs = Date(timeIntervalSince1970: 1_700_001_000)
+        let open = makeViewerPR(url: url, state: "OPEN", lastChangesRequestedAt: openTs)
+        let merged = makeViewerPR(url: url, state: "MERGED", lastChangesRequestedAt: mergedTs)
+        #expect(IssueTracker.mergePRRecords(open, merged).lastChangesRequestedAt == mergedTs)
+        #expect(IssueTracker.mergePRRecords(merged, open).lastChangesRequestedAt == mergedTs)
     }
 
-    @Test func mergePRRecordsBackfillsLatestReviewIDWhenWinnerLacks() {
+    @Test func mergePRRecordsBackfillsLastChangesRequestedAtWhenWinnerLacks() {
         let url = "https://github.com/radiusmethod/corveil/pull/201"
-        let openWithID = makeViewerPR(url: url, state: "OPEN", latestReviewID: "R_open")
-        let mergedNoID = makeViewerPR(url: url, state: "MERGED")
-        #expect(IssueTracker.mergePRRecords(openWithID, mergedNoID).latestReviewID == "R_open")
+        let openTs = Date(timeIntervalSince1970: 1_700_000_000)
+        let open = makeViewerPR(url: url, state: "OPEN", lastChangesRequestedAt: openTs)
+        let mergedNoTs = makeViewerPR(url: url, state: "MERGED")
+        #expect(IssueTracker.mergePRRecords(open, mergedNoTs).lastChangesRequestedAt == openTs)
+    }
+
+    @Test func mergePRRecordsBackfillsLastSubstantiveCommitAtWhenWinnerLacks() {
+        let url = "https://github.com/radiusmethod/corveil/pull/201"
+        let openTs = Date(timeIntervalSince1970: 1_700_000_000)
+        let open = makeViewerPR(url: url, state: "OPEN", lastSubstantiveCommitAt: openTs)
+        let mergedNoTs = makeViewerPR(url: url, state: "MERGED")
+        #expect(IssueTracker.mergePRRecords(open, mergedNoTs).lastSubstantiveCommitAt == openTs)
     }
 }

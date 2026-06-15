@@ -322,7 +322,17 @@ public struct GitHubCodeBackend: CodeBackend {
                 }
               }
             }
-            latestReviews(first: 5) { nodes { id state submittedAt } }
+            latestReviews(first: 20) { nodes { state submittedAt } }
+            commits(last: 30) {
+              nodes {
+                commit {
+                  oid
+                  messageHeadline
+                  committedDate
+                  parents(first: 2) { totalCount }
+                }
+              }
+            }
           }
         }
       }
@@ -437,17 +447,48 @@ public struct GitHubCodeBackend: CodeBackend {
         }
         let latestReviewNodes = (node["latestReviews"] as? [String: Any])?["nodes"] as? [[String: Any]] ?? []
         let reviewStates = latestReviewNodes.compactMap { $0["state"] as? String }
-        // Pick the round-2 dedup discriminator deterministically: the
-        // CHANGES_REQUESTED review with the latest `submittedAt`. GitHub's
-        // `latestReviews` connection doesn't document a node order, so we
-        // don't rely on it; ISO-8601 with `Z` is lexicographically sortable
-        // when the timezone is consistent (which GitHub guarantees), so a
-        // string `max(by:)` is correct here without parsing dates.
-        // `max(by:)` over an empty filtered array returns `nil`, which threads
-        // through to PRStatus.latestReviewID = nil exactly as required.
-        let latestReviewID = latestReviewNodes
+        // Stateless "needs refine" rule (CROW-508): the latest CHANGES_REQUESTED
+        // submission timestamp anchors "since when does the agent owe a
+        // response?". `latestReviews(first: 20)` is intentionally broad
+        // enough to cover several reviewers' latest reviews without paginating
+        // — GitHub orders that connection by reviewer, not by recency, so a
+        // narrow window could omit the CR we need.
+        //
+        // Parse with `parseGitHubDateTime` (tolerant of both fractional and
+        // non-fractional). GitHub's GraphQL `DateTime` scalar emits
+        // non-fractional ISO-8601 (`2026-06-15T01:28:17Z`), and an
+        // `ISO8601DateFormatter` configured with `.withFractionalSeconds`
+        // returns nil for that shape — silently disabling the rule.
+        let lastChangesRequestedAt = latestReviewNodes
             .filter { ($0["state"] as? String) == "CHANGES_REQUESTED" }
-            .max(by: { ($0["submittedAt"] as? String ?? "") < ($1["submittedAt"] as? String ?? "") })?["id"] as? String
+            .compactMap { ($0["submittedAt"] as? String).flatMap(Self.parseGitHubDateTime) }
+            .max()
+        // Stateless "needs refine" rule (CROW-508): the latest non-merge,
+        // non-rebase commit timestamp anchors "has the agent substantively
+        // responded since the review?". A merge commit (parent count >= 2)
+        // or a commit whose subject starts with `Merge branch|remote-tracking|
+        // pull request` is excluded so the GitHub "Update branch" button
+        // (default merge mode) and routine merges from main can't trick the
+        // rule into thinking the agent pushed a fix.
+        //
+        // Known gap: a real `git rebase` (or "Update with rebase" on the
+        // Update-branch dropdown) rewrites the *committer* date of the
+        // existing feature commits to ~now. Those commits are not merge
+        // commits, so they pass the filter and DO advance
+        // `lastSubstantiveCommitAt` — a false negative the rule accepts as
+        // the cost of avoiding a tree-equals-parents API call per PR per
+        // poll. The ticket calls the tree check optional; we skip it in v1.
+        let commitNodes = (node["commits"] as? [String: Any])?["nodes"] as? [[String: Any]] ?? []
+        let lastSubstantiveCommitAt = commitNodes
+            .compactMap { node -> Date? in
+                guard let commit = node["commit"] as? [String: Any] else { return nil }
+                let parents = (commit["parents"] as? [String: Any])?["totalCount"] as? Int ?? 1
+                if parents >= 2 { return nil }
+                let message = (commit["messageHeadline"] as? String) ?? ""
+                if Self.isMergeCommitMessage(message) { return nil }
+                return (commit["committedDate"] as? String).flatMap(Self.parseGitHubDateTime)
+            }
+            .max()
         return PRRecord(
             number: number,
             url: url,
@@ -465,8 +506,45 @@ public struct GitHubCodeBackend: CodeBackend {
             checksState: checksState,
             failedCheckNames: failedCheckNames,
             latestReviewStates: reviewStates,
-            latestReviewID: latestReviewID
+            lastChangesRequestedAt: lastChangesRequestedAt,
+            lastSubstantiveCommitAt: lastSubstantiveCommitAt
         )
+    }
+
+    /// Decide whether a commit subject line indicates a rebase/merge that
+    /// should NOT advance "agent substantively responded since review".
+    /// Match anchored to the start of the line; the prefix list mirrors what
+    /// `git merge` / GitHub's "Update branch" button produce. Public so
+    /// `parsePRNode` and unit tests share the same definition.
+    nonisolated static func isMergeCommitMessage(_ headline: String) -> Bool {
+        let trimmed = headline.trimmingCharacters(in: .whitespaces)
+        return trimmed.hasPrefix("Merge branch ")
+            || trimmed.hasPrefix("Merge remote-tracking ")
+            || trimmed.hasPrefix("Merge pull request ")
+    }
+
+    /// Parse a GitHub `DateTime` scalar tolerantly. GitHub's GraphQL emits
+    /// the non-fractional ISO-8601 form (`2026-06-15T01:28:17Z`), but
+    /// `ISO8601DateFormatter` configured with `.withFractionalSeconds`
+    /// returns nil for that shape, and the inverse configuration rejects
+    /// any timestamp that DOES carry a fraction. Production code must
+    /// tolerate both — a strict formatter silently disables features that
+    /// depend on parsed timestamps (CROW-508 needsRefine was inert this
+    /// way; see PR #509 review). We try the non-fractional form first
+    /// (matches what GitHub actually emits today), then fall back to
+    /// fractional for resilience against future API drift.
+    ///
+    /// Other call sites in this file still use the brittle pattern (see
+    /// `parseReviewRequests`, `parseStaleMRResponse`, parseStaleStateResponse).
+    /// They're out of scope for this PR but should migrate to this helper
+    /// in a follow-up — same trap, different fields.
+    nonisolated static func parseGitHubDateTime(_ raw: String) -> Date? {
+        let plain = ISO8601DateFormatter()
+        plain.formatOptions = [.withInternetDateTime]
+        if let d = plain.date(from: raw) { return d }
+        let withFraction = ISO8601DateFormatter()
+        withFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return withFraction.date(from: raw)
     }
 
     static func parseReviewRequests(

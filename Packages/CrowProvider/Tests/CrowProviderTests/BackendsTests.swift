@@ -631,14 +631,14 @@ final class BackendsTests: XCTestCase {
         XCTAssertEqual(backend.provider, .corveil)
     }
 
-    // MARK: - parseMonitoredPRsResponse latestReviewID (CROW-456)
+    // MARK: - parseMonitoredPRsResponse timestamps (CROW-508)
 
-    /// `latestReviews` connection has no documented order. The parser must
-    /// pick the CHANGES_REQUESTED review with the latest `submittedAt`, not
-    /// the first one in the array — otherwise round-2 dedup could miss a
-    /// genuine new review (or worse, flip ids across polls and re-fire
-    /// auto-respond for no reviewer action).
-    func testParseMonitoredPRsPicksLatestSubmittedChangesRequestedReview() throws {
+    /// Pre-CROW-508 we picked the latest CR review's *id* for round-2 dedup.
+    /// The stateless "needs refine" rule needs the *timestamp* of that same
+    /// review — anchor for "since when does the agent owe a response?".
+    /// The parser must pick the max `submittedAt` across CHANGES_REQUESTED
+    /// reviews, not the first one in array order.
+    func testParseMonitoredPRsPicksLatestChangesRequestedTimestamp() throws {
         let json = """
         {
           "data": {
@@ -671,48 +671,17 @@ final class BackendsTests: XCTestCase {
         """
         let listing = try GitHubCodeBackend.parseMonitoredPRsResponse(json)
         XCTAssertEqual(listing.viewerPRs.count, 1)
-        XCTAssertEqual(listing.viewerPRs[0].latestReviewID, "R_newest")
+        // Construct the expected instant from epoch seconds — NOT from the
+        // same ISO8601DateFormatter the parser uses. A bug where the
+        // production formatter returns nil (CROW-508 PR #509 review) would
+        // pass the previous version of this assertion because both sides
+        // were nil. Epoch construction eliminates that co-failure mode.
+        // 2026-06-07T10:00:00Z = 1780826400 seconds since 1970.
+        let expected = Date(timeIntervalSince1970: 1780826400)
+        XCTAssertEqual(listing.viewerPRs[0].lastChangesRequestedAt, expected)
     }
 
-    /// When no review has a `submittedAt` (degraded payload), `max(by:)` over
-    /// equal keys still returns an element rather than throwing — verify we
-    /// at least don't crash and we do return one of the CHANGES_REQUESTED ids.
-    func testParseMonitoredPRsLatestReviewIDDegradesGracefullyWithoutSubmittedAt() throws {
-        let json = """
-        {
-          "data": {
-            "viewerPRs": {
-              "pullRequests": {
-                "nodes": [
-                  {
-                    "number": 8,
-                    "url": "https://github.com/a/b/pull/8",
-                    "state": "OPEN",
-                    "reviewDecision": "CHANGES_REQUESTED",
-                    "headRefOid": "abc",
-                    "latestReviews": {
-                      "nodes": [
-                        {"id": "R_a", "state": "CHANGES_REQUESTED"},
-                        {"id": "R_b", "state": "CHANGES_REQUESTED"}
-                      ]
-                    }
-                  }
-                ]
-              }
-            },
-            "reviewPRs": {"nodes": []},
-            "viewer": {"login": "me"},
-            "rateLimit": {"remaining": 5000, "limit": 5000, "resetAt": "2026-06-08T17:00:00Z", "cost": 1}
-          }
-        }
-        """
-        let listing = try GitHubCodeBackend.parseMonitoredPRsResponse(json)
-        XCTAssertEqual(listing.viewerPRs.count, 1)
-        XCTAssertNotNil(listing.viewerPRs[0].latestReviewID)
-        XCTAssertTrue(["R_a", "R_b"].contains(listing.viewerPRs[0].latestReviewID))
-    }
-
-    func testParseMonitoredPRsLatestReviewIDIsNilWhenNoChangesRequested() throws {
+    func testParseMonitoredPRsLastChangesRequestedAtIsNilWhenNoChangesRequested() throws {
         let json = """
         {
           "data": {
@@ -742,7 +711,107 @@ final class BackendsTests: XCTestCase {
         """
         let listing = try GitHubCodeBackend.parseMonitoredPRsResponse(json)
         XCTAssertEqual(listing.viewerPRs.count, 1)
-        XCTAssertNil(listing.viewerPRs[0].latestReviewID)
+        XCTAssertNil(listing.viewerPRs[0].lastChangesRequestedAt)
+    }
+
+    /// Locks down GitHub's actual `DateTime` shape (no fractional seconds)
+    /// parsing to a non-nil value. The original CROW-508 patch used
+    /// `[.withInternetDateTime, .withFractionalSeconds]` which is strict
+    /// and rejects this format — feature was silently inert in production.
+    /// PR #509 review caught it. This test will fail loudly if a future
+    /// regression re-introduces the strict formatter.
+    func testParseGitHubDateTimeHandlesNonFractionalISO8601() {
+        // GitHub's actual format — no fraction.
+        let nonFractional = GitHubCodeBackend.parseGitHubDateTime("2026-06-15T01:28:17Z")
+        XCTAssertNotNil(nonFractional)
+        XCTAssertEqual(nonFractional, Date(timeIntervalSince1970: 1781486897))
+    }
+
+    /// Resilience against potential future API drift: a timestamp WITH a
+    /// fractional component must also parse. Both shapes flow through the
+    /// same helper.
+    func testParseGitHubDateTimeAlsoHandlesFractionalISO8601() {
+        let withFraction = GitHubCodeBackend.parseGitHubDateTime("2026-06-15T01:28:17.123Z")
+        XCTAssertNotNil(withFraction)
+    }
+
+    /// Garbage input returns nil, doesn't crash.
+    func testParseGitHubDateTimeReturnsNilForGarbage() {
+        XCTAssertNil(GitHubCodeBackend.parseGitHubDateTime("not a date"))
+        XCTAssertNil(GitHubCodeBackend.parseGitHubDateTime(""))
+    }
+
+    /// Merge commits (parents.totalCount >= 2) and rebase-style commits
+    /// matching the merge-message prefix list must NOT advance the
+    /// "agent substantively responded" timestamp. Otherwise pressing
+    /// GitHub's "Update branch" button (default merge mode) or rebasing
+    /// onto main with a merge commit would fool the rule into thinking the
+    /// agent pushed a fix.
+    ///
+    /// Known gap (documented in `parsePRNode`): a real `git rebase` rewrites
+    /// the *committer* date of the feature commits themselves. Those commits
+    /// are not merge commits, so they pass the filter and DO advance
+    /// `lastSubstantiveCommitAt`. This test does not cover that path; the
+    /// stateless rule accepts the false negative as the cost of not paying
+    /// for a tree-equals-parents API call per PR per poll.
+    func testParseMonitoredPRsLastSubstantiveCommitExcludesMergeCommits() throws {
+        let json = """
+        {
+          "data": {
+            "viewerPRs": {
+              "pullRequests": {
+                "nodes": [
+                  {
+                    "number": 10,
+                    "url": "https://github.com/a/b/pull/10",
+                    "state": "OPEN",
+                    "reviewDecision": "CHANGES_REQUESTED",
+                    "headRefOid": "abc",
+                    "latestReviews": {"nodes": []},
+                    "commits": {
+                      "nodes": [
+                        {"commit": {"oid": "1", "messageHeadline": "real fix",
+                                    "committedDate": "2026-06-01T00:00:00Z",
+                                    "parents": {"totalCount": 1}}},
+                        {"commit": {"oid": "2", "messageHeadline": "Merge branch 'main' into feature",
+                                    "committedDate": "2026-06-05T00:00:00Z",
+                                    "parents": {"totalCount": 2}}},
+                        {"commit": {"oid": "3", "messageHeadline": "Merge remote-tracking branch 'upstream/main'",
+                                    "committedDate": "2026-06-06T00:00:00Z",
+                                    "parents": {"totalCount": 2}}},
+                        {"commit": {"oid": "4", "messageHeadline": "Merge pull request #99",
+                                    "committedDate": "2026-06-07T00:00:00Z",
+                                    "parents": {"totalCount": 2}}}
+                      ]
+                    }
+                  }
+                ]
+              }
+            },
+            "reviewPRs": {"nodes": []},
+            "viewer": {"login": "me"},
+            "rateLimit": {"remaining": 5000, "limit": 5000, "resetAt": "2026-06-08T17:00:00Z", "cost": 1}
+          }
+        }
+        """
+        let listing = try GitHubCodeBackend.parseMonitoredPRsResponse(json)
+        XCTAssertEqual(listing.viewerPRs.count, 1)
+        // Only the real fix commit counts; merges are excluded. Constructed
+        // from epoch seconds for the same anti-co-failure reason as the
+        // CHANGES_REQUESTED timestamp test above.
+        // 2026-06-01T00:00:00Z = 1780272000.
+        XCTAssertEqual(listing.viewerPRs[0].lastSubstantiveCommitAt, Date(timeIntervalSince1970: 1780272000))
+    }
+
+    /// Pure helper used by `parsePRNode`. Both Swift and tests share the
+    /// same prefix list so a future addition stays in sync.
+    func testIsMergeCommitMessage() {
+        XCTAssertTrue(GitHubCodeBackend.isMergeCommitMessage("Merge branch 'main' into feature/x"))
+        XCTAssertTrue(GitHubCodeBackend.isMergeCommitMessage("Merge remote-tracking branch 'upstream/main'"))
+        XCTAssertTrue(GitHubCodeBackend.isMergeCommitMessage("Merge pull request #42 from foo/bar"))
+        XCTAssertFalse(GitHubCodeBackend.isMergeCommitMessage("merge branch"))                 // case-sensitive prefix
+        XCTAssertFalse(GitHubCodeBackend.isMergeCommitMessage("Merge two records into one"))   // not a merge prefix
+        XCTAssertFalse(GitHubCodeBackend.isMergeCommitMessage("Fix authentication bug"))
     }
 }
 

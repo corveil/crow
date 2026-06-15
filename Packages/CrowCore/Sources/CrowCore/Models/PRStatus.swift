@@ -6,31 +6,26 @@ public struct PRStatus: Codable, Sendable, Equatable {
     public var reviewStatus: ReviewStatus
     public var mergeable: MergeStatus
     public var failedCheckNames: [String]
-    /// Head commit SHA. Used to dedupe per-commit transition events
-    /// (e.g. don't re-fire "checks failing" when the same commit is re-run).
+    /// Head commit SHA. Used to dedupe per-commit `.checksFailing` events
+    /// (don't re-fire when the same commit is re-run).
     public var headSha: String?
-    /// Node ID of the most recent CHANGES_REQUESTED review on this PR, when
-    /// the provider surfaces stable review identifiers. Round-2 dedup uses
-    /// this so a fresh "Request changes" submission re-arms auto-respond
-    /// even when the bucket stays in `.changesRequested`. `nil` when no
-    /// CHANGES_REQUESTED review is currently visible, or on providers that
-    /// don't expose review IDs in the monitored-PR query (e.g. GitLab).
-    public var latestReviewID: String?
     /// Whether the underlying PR is currently OPEN (as opposed to MERGED or
     /// closed-unmerged). Distinct from `mergeable == .merged`: a CLOSED PR
-    /// has `mergeable == .unknown` but is still not actionable.
-    ///
-    /// Required by the stalled-`.changesRequested` re-fire pass (CROW-505):
-    /// the standing-state predicate reads `previousPRStatus[sid]` directly
-    /// rather than firing on transition edges, so without this flag a PR
-    /// that merged or closed while in `CHANGES_REQUESTED` (its
-    /// `reviewDecision` doesn't reset on close) would keep re-prompting the
-    /// agent every quiet window to "address review feedback" on a dead PR.
-    /// Defaults to `true` for backward decode — pre-CROW-505 stores have no
-    /// `isOpen` field, and the very next poll rewrites the persisted status
-    /// from the live viewer payload before re-fire is consulted, so the
-    /// transient default never affects an actual re-fire decision.
+    /// has `mergeable == .unknown` but is still not actionable. Gates
+    /// `needsRefine` so a dead PR can never re-prompt.
     public var isOpen: Bool
+    /// Max `submittedAt` across CHANGES_REQUESTED reviews currently visible
+    /// on the PR. `nil` when no CHANGES_REQUESTED review is present (or the
+    /// provider doesn't surface review timestamps, e.g. GitLab today).
+    /// The stateless "needs refine" rule compares this against
+    /// `lastSubstantiveCommitAt` to decide whether the agent owes a response.
+    public var lastChangesRequestedAt: Date?
+    /// Max `committedDate` across the PR's commits that are NOT rebases or
+    /// merges (parent count < 2 AND message does not start with a merge
+    /// prefix). `nil` when no commit timestamp data is available. Used by
+    /// the stateless rule to know whether the author has substantively
+    /// responded since the latest CHANGES_REQUESTED review.
+    public var lastSubstantiveCommitAt: Date?
 
     public init(
         checksPass: CheckStatus = .unknown,
@@ -38,16 +33,18 @@ public struct PRStatus: Codable, Sendable, Equatable {
         mergeable: MergeStatus = .unknown,
         failedCheckNames: [String] = [],
         headSha: String? = nil,
-        latestReviewID: String? = nil,
-        isOpen: Bool = true
+        isOpen: Bool = true,
+        lastChangesRequestedAt: Date? = nil,
+        lastSubstantiveCommitAt: Date? = nil
     ) {
         self.checksPass = checksPass
         self.reviewStatus = reviewStatus
         self.mergeable = mergeable
         self.failedCheckNames = failedCheckNames
         self.headSha = headSha
-        self.latestReviewID = latestReviewID
         self.isOpen = isOpen
+        self.lastChangesRequestedAt = lastChangesRequestedAt
+        self.lastSubstantiveCommitAt = lastSubstantiveCommitAt
     }
 
     public init(from decoder: Decoder) throws {
@@ -57,12 +54,14 @@ public struct PRStatus: Codable, Sendable, Equatable {
         mergeable = try c.decodeIfPresent(MergeStatus.self, forKey: .mergeable) ?? .unknown
         failedCheckNames = try c.decodeIfPresent([String].self, forKey: .failedCheckNames) ?? []
         headSha = try c.decodeIfPresent(String.self, forKey: .headSha)
-        latestReviewID = try c.decodeIfPresent(String.self, forKey: .latestReviewID)
         isOpen = try c.decodeIfPresent(Bool.self, forKey: .isOpen) ?? true
+        lastChangesRequestedAt = try c.decodeIfPresent(Date.self, forKey: .lastChangesRequestedAt)
+        lastSubstantiveCommitAt = try c.decodeIfPresent(Date.self, forKey: .lastSubstantiveCommitAt)
     }
 
     private enum CodingKeys: String, CodingKey {
-        case checksPass, reviewStatus, mergeable, failedCheckNames, headSha, latestReviewID, isOpen
+        case checksPass, reviewStatus, mergeable, failedCheckNames, headSha, isOpen
+        case lastChangesRequestedAt, lastSubstantiveCommitAt
     }
 
     public enum CheckStatus: String, Codable, Sendable {
@@ -111,5 +110,39 @@ public struct PRStatus: Codable, Sendable, Equatable {
     /// True if there are blockers preventing merge.
     public var hasBlockers: Bool {
         !isMerged && (checksPass == .failing || reviewStatus == .changesRequested || mergeable == .conflicting)
+    }
+
+    /// The stateless "needs refine" rule (CROW-508). Returns `true` when the
+    /// PR is sitting in CHANGES_REQUESTED, is still open, and the agent has
+    /// not made a substantive commit since the latest CHANGES_REQUESTED
+    /// review. `terminalIdle` gates the outer IssueTracker dispatch — keeping
+    /// it as a parameter here makes the rule fully derivable from the PR plus
+    /// terminal state, with no per-session bookkeeping.
+    ///
+    /// The rule is intentionally tolerant of nil timestamps:
+    /// - `lastChangesRequestedAt == nil`: GitHub said `reviewDecision ==
+    ///   CHANGES_REQUESTED` but didn't surface a timestamped CR review (rare;
+    ///   `latestReviews` paginates and can omit one). We refuse to fire — a
+    ///   missing timestamp can't anchor "since when," and a false fire would
+    ///   re-prompt the agent for no reviewer action.
+    /// - `lastSubstantiveCommitAt == nil`: the PR has no qualifying commits
+    ///   yet (or commit data wasn't fetched). Treat as "no response since
+    ///   review" → still needs refine.
+    ///
+    /// Anti-loop is automatic: as soon as the agent makes a non-merge,
+    /// non-rebase commit, `lastSubstantiveCommitAt` advances past
+    /// `lastChangesRequestedAt` and this returns false on the next poll.
+    /// A `Merge branch 'main'` commit does NOT advance the timestamp (it's
+    /// filtered out upstream when computing `lastSubstantiveCommitAt`), so
+    /// the GitHub "Update branch" button can't trick the rule into a false
+    /// negative.
+    public static func needsRefine(status: PRStatus, terminalIdle: Bool) -> Bool {
+        guard terminalIdle else { return false }
+        guard status.reviewStatus == .changesRequested, status.isOpen else { return false }
+        guard let lastReview = status.lastChangesRequestedAt else { return false }
+        if let lastCommit = status.lastSubstantiveCommitAt {
+            return lastCommit < lastReview
+        }
+        return true
     }
 }

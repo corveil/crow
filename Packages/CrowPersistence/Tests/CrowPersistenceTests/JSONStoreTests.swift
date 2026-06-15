@@ -198,61 +198,40 @@ import Testing
     #expect(rl.label == "Issue")
 }
 
-// MARK: - CROW-456 IssueTracker state persistence
+// MARK: - CROW-508 store backward compat
 
-@Test func issueTrackerStateRoundTripsThroughDisk() throws {
+@Test func storeDataIgnoresLegacyIssueTrackerStateBlob() throws {
+    // CROW-508 removed `issueTrackerState` (and `PersistedIssueTrackerState`,
+    // `EmittedTransitionMeta`, etc.) — the stateless "needs refine" rule
+    // derives the answer from the PR on every poll, so no cross-restart
+    // state is needed. Older `store.json` files still carry the blob; the
+    // decoder must ignore the unknown key rather than failing and falling
+    // back to the corrupt-store backup path.
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: dir) }
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
 
-    let sessionID = UUID()
-    let pr = PRStatus(
-        checksPass: .failing,
-        reviewStatus: .changesRequested,
-        mergeable: .mergeable,
-        failedCheckNames: ["lint"],
-        headSha: "abc123",
-        latestReviewID: "R_kgD0_1"
-    )
-    let dedupKey = "\(sessionID.uuidString)|changesRequested|R_kgD0_1"
-    let emittedAt = Date(timeIntervalSince1970: 1_700_000_000)
-    let state = PersistedIssueTrackerState(
-        previousPRStatus: [sessionID.uuidString: pr],
-        emittedTransitionKeys: [dedupKey],
-        emittedTransitionMeta: [dedupKey: EmittedTransitionMeta(emittedAt: emittedAt, headShaAtEmit: "abc123", reFireCount: 2)]
-    )
+    let legacyJSON = """
+    {
+      "sessions": [],
+      "worktrees": [],
+      "links": [],
+      "terminals": [],
+      "issueTrackerState": {
+        "previousPRStatus": {},
+        "emittedTransitionKeys": [],
+        "emittedTransitionMeta": {}
+      }
+    }
+    """
+    try legacyJSON.data(using: .utf8)!.write(to: dir.appendingPathComponent("store.json"))
 
     let store = JSONStore(directory: dir)
-    store.mutate { $0.issueTrackerState = state }
-
-    let reloaded = JSONStore(directory: dir).data.issueTrackerState
-    #expect(reloaded == state)
-    #expect(reloaded?.previousPRStatus[sessionID.uuidString]?.latestReviewID == "R_kgD0_1")
-    #expect(reloaded?.emittedTransitionKeys == [dedupKey])
-    #expect(reloaded?.emittedTransitionMeta?[dedupKey]?.headShaAtEmit == "abc123")
-    #expect(reloaded?.emittedTransitionMeta?[dedupKey]?.emittedAt == emittedAt)
-    // CROW-505 review #3: reFireCount survives the round trip so the
-    // per-emission cap persists across Crow restarts.
-    #expect(reloaded?.emittedTransitionMeta?[dedupKey]?.reFireCount == 2)
-}
-
-@Test func emittedTransitionMetaDecodesLegacyEntryWithoutReFireCount() throws {
-    // Backward compat: pre-cap stores wrote `EmittedTransitionMeta` without
-    // the `reFireCount` field. The decode must default it to 0 so an
-    // upgrade doesn't wedge the re-fire path by inheriting a stale count.
-    // Uses the same `.iso8601` date strategy as `JSONStore` so the test
-    // matches the real on-disk shape.
-    let legacyJSON = #"{"emittedAt": "2023-11-14T22:13:20Z", "headShaAtEmit": "abc123"}"#
-        .data(using: .utf8)!
-    let decoder = JSONDecoder()
-    decoder.dateDecodingStrategy = .iso8601
-    let decoded = try decoder.decode(EmittedTransitionMeta.self, from: legacyJSON)
-    #expect(decoded.headShaAtEmit == "abc123")
-    #expect(decoded.reFireCount == 0)
+    #expect(store.data.sessions.isEmpty)
+    #expect(store.data.worktrees.isEmpty)
 }
 
 @Test func storeDataDecodesWithoutIssueTrackerStateField() throws {
-    // Backward compatibility: older store.json files predate CROW-456 and
-    // won't have the issueTrackerState key. Decoding must still succeed.
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: dir) }
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -268,6 +247,5 @@ import Testing
     try legacyJSON.data(using: .utf8)!.write(to: dir.appendingPathComponent("store.json"))
 
     let store = JSONStore(directory: dir)
-    #expect(store.data.issueTrackerState == nil)
     #expect(store.data.sessions.isEmpty)
 }
