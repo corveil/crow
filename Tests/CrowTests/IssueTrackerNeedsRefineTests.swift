@@ -33,7 +33,7 @@ struct IssueTrackerNeedsRefineTests {
     private func makeTracker(
         respondToChangesRequested: Bool = true,
         readiness: TerminalReadiness = .agentLaunched,
-        agentIdle: Bool = true
+        activityState: AgentActivityState = .idle
     ) -> (tracker: IssueTracker, sessionID: UUID, captured: TransitionCapture) {
         let state = AppState()
         let session = Session(name: "feature/stateless-test", kind: .work)
@@ -50,11 +50,7 @@ struct IssueTrackerNeedsRefineTests {
         )
         state.terminals[session.id] = [terminal]
         state.terminalReadiness[terminal.id] = readiness
-        // Hook state activity defaults to .idle from AppState — set
-        // explicitly when the test wants it busy.
-        if !agentIdle {
-            state.hookState(for: session.id).activityState = .working
-        }
+        state.hookState(for: session.id).activityState = activityState
 
         let tracker = IssueTracker(appState: state, providerManager: ProviderManager())
         tracker.respondToChangesRequestedProvider = { respondToChangesRequested }
@@ -185,11 +181,36 @@ struct IssueTrackerNeedsRefineTests {
 
     @Test
     func busyAgentSuppressesDispatch() {
-        let (tracker, _, captured) = makeTracker(agentIdle: false)
+        let (tracker, _, captured) = makeTracker(activityState: .working)
         tracker.seenPRs.insert(prURL)
         let pr = makeViewerPR(lastChangesRequestedAt: reviewAt, lastSubstantiveCommitAt: beforeReview)
         tracker.applyPRStatuses(viewerPRs: [pr])
         #expect(captured.changesRequestedCount == 0)
+    }
+
+    @Test
+    func waitingAgentSuppressesDispatch() {
+        // `.waiting` means the agent is blocked on input (e.g. a permission
+        // prompt). Refine must not fire — same reasoning as `.working`.
+        let (tracker, _, captured) = makeTracker(activityState: .waiting)
+        tracker.seenPRs.insert(prURL)
+        let pr = makeViewerPR(lastChangesRequestedAt: reviewAt, lastSubstantiveCommitAt: beforeReview)
+        tracker.applyPRStatuses(viewerPRs: [pr])
+        #expect(captured.changesRequestedCount == 0)
+    }
+
+    @Test
+    func doneAgentDispatches() {
+        // CROW-510 regression: after an agent finishes its first top-level
+        // task, the hook state lands on `.done` and stays there until the
+        // next prompt. Refine must dispatch in that state — historically the
+        // gate only accepted `.idle`, so the rule never fired after the
+        // agent's first task.
+        let (tracker, _, captured) = makeTracker(activityState: .done)
+        tracker.seenPRs.insert(prURL)
+        let pr = makeViewerPR(lastChangesRequestedAt: reviewAt, lastSubstantiveCommitAt: beforeReview)
+        tracker.applyPRStatuses(viewerPRs: [pr])
+        #expect(captured.changesRequestedCount == 1)
     }
 
     @Test

@@ -1626,16 +1626,18 @@ final class IssueTracker {
     }
 
     /// True when the managed terminal for the session is at agent-launched
-    /// readiness with the agent in `.idle` (not working, waiting on input,
-    /// or already done). Both gates are required: a pre-launch terminal
-    /// can't be "stalled" because the agent never had a chance to run, and
-    /// firing into a busy agent would just interrupt productive work.
+    /// readiness with the agent available to accept a prompt — either
+    /// `.idle` (fresh, never run) or `.done` (finished a top-level task and
+    /// waiting). `.working` and `.waiting` still gate: firing into a busy
+    /// or blocked agent would interrupt it. A pre-launch terminal also
+    /// gates, because the agent never had a chance to run.
     private func isManagedTerminalIdle(sessionID: UUID) -> Bool {
         guard let managedTerminal = appState.terminals(for: sessionID).first(where: { $0.isManaged }) else {
             return false
         }
         guard appState.terminalReadiness[managedTerminal.id] == .agentLaunched else { return false }
-        return appState.hookState(for: sessionID).activityState == .idle
+        let state = appState.hookState(for: sessionID).activityState
+        return state == .idle || state == .done
     }
 
     /// True when no prior dispatch is recorded for this PR or the cooldown
