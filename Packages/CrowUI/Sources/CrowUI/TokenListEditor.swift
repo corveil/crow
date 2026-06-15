@@ -1,17 +1,20 @@
 import SwiftUI
 import CrowCore
 
-/// Reusable token / chip editor bound to a `[String]`.
+/// Reusable list editor bound to a `[String]`.
 ///
-/// Existing values render as removable gold capsules (styled like ``LinkChip``);
-/// a trailing text field adds new tokens. Tokens commit on Return, on a typed
-/// comma, or when a comma-containing string is pasted and submitted. Input is
-/// trimmed, empty entries are ignored, and exact duplicates (case-sensitive) are
-/// dropped. Backspace in an empty field removes the last chip.
+/// A standard text field plus an **Add** button sit on top; committed values
+/// accumulate as removable gold chips below (styled like ``LinkChip``). This is
+/// the conventional "add to a list" layout — the typing field is kept separate
+/// from the chips so existing entries never get in the way of new input.
 ///
-/// Chips + field wrap across lines via ``FlowLayout``. Binding directly to the
-/// model's existing `[String]` means there is no persistence or schema change —
-/// existing comma-separated configs already decode into the array.
+/// Add by pressing Return or the Add button. Input is split on commas (so a
+/// pasted `a, b, c` becomes three chips), trimmed, de-duplicated (case-sensitive,
+/// exact), and empty entries are ignored. Each chip's `x` removes that entry.
+///
+/// Binding directly to the model's existing `[String]` means there is no
+/// persistence or schema change — existing comma-separated configs already decode
+/// into the array and render as chips.
 public struct TokenListEditor: View {
     @Binding var tokens: [String]
     private let placeholder: String
@@ -21,30 +24,36 @@ public struct TokenListEditor: View {
 
     /// - Parameters:
     ///   - tokens: The backing array of token strings.
-    ///   - placeholder: Prompt shown in the input field when there are no tokens.
+    ///   - placeholder: Prompt shown in the input field.
     public init(tokens: Binding<[String]>, placeholder: String = "Add…") {
         self._tokens = tokens
         self.placeholder = placeholder
     }
 
+    private var canAdd: Bool {
+        !input.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
     public var body: some View {
-        FlowLayout(spacing: 6, lineSpacing: 6) {
-            ForEach(Array(tokens.enumerated()), id: \.offset) { index, token in
-                chip(token, at: index)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                TextField(placeholder, text: $input)
+                    .textFieldStyle(.roundedBorder)
+                    .autocorrectionDisabled()
+                    .focused($fieldFocused)
+                    .onSubmit(commit)
+                Button("Add", action: commit)
+                    .disabled(!canAdd)
             }
-            inputField
+
+            if !tokens.isEmpty {
+                FlowLayout(spacing: 6, lineSpacing: 6) {
+                    ForEach(Array(tokens.enumerated()), id: \.offset) { index, token in
+                        chip(token, at: index)
+                    }
+                }
+            }
         }
-        .padding(6)
-        .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(CorveilTheme.bgCard)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6)
-                        .strokeBorder(CorveilTheme.borderSubtle, lineWidth: 1)
-                )
-        )
-        .contentShape(Rectangle())
-        .onTapGesture { fieldFocused = true }
     }
 
     // MARK: Subviews
@@ -73,37 +82,12 @@ public struct TokenListEditor: View {
         .clipShape(Capsule())
     }
 
-    private var inputField: some View {
-        TextField(tokens.isEmpty ? placeholder : "", text: $input)
-            .textFieldStyle(.plain)
-            .font(.caption)
-            .autocorrectionDisabled()
-            .frame(minWidth: 80)
-            .focused($fieldFocused)
-            .onSubmit { commit() }
-            .onExitCommand { fieldFocused = false }
-            // Catch a typed comma immediately; a paste of "a, b, c" carries no key
-            // event, so its commas are split in commit() on Return instead.
-            .onKeyPress(",") {
-                commit()
-                return .handled
-            }
-            // TextField doesn't report a backspace when already empty (no text
-            // change), so use onKeyPress to remove the last chip in that case.
-            .onKeyPress(.delete) {
-                if input.isEmpty, !tokens.isEmpty {
-                    tokens.removeLast()
-                    return .handled
-                }
-                return .ignored
-            }
-    }
-
     // MARK: Mutation
 
     private func commit() {
         tokens = Self.adding(input, to: tokens)
         input = ""
+        fieldFocused = true   // keep focus for rapid entry
     }
 
     private func remove(at index: Int) {
