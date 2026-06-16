@@ -52,6 +52,8 @@ By default, `setup.sh` writes a per-worktree `.claude/settings.local.json` that 
 
 The worktree's settings.local.json is added to that worktree's per-worktree git exclude list, so it stays local even when the repo's tracked `.gitignore` does not already cover it.
 
+**When authoring commits by hand** (`git commit -m "…"`, heredoc, `git commit --amend`), include both `Crow-Session: <session-uuid>` and `Co-Authored-By: Claude <noreply@anthropic.com>` as trailers at the end of the message. `attribution.commit` only fires for Claude Code's built-in commit flow; hand-rolled commits bypass it. `setup.sh` also installs a per-worktree `prepare-commit-msg` hook (CROW-518) that idempotently appends both trailers when missing — treat that hook as a safety net, not the primary path. Both trailers must be line-anchored at the end of the message; the `crow:merge` auto-merge gate parses `^Crow-Session:\s*<uuid>\s*$` (see `IssueTracker.crowSessionTrailerPattern`).
+
 ## Multi-Workspace Discovery
 
 ### Step 1: Enumerate Workspaces

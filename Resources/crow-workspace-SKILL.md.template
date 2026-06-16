@@ -44,6 +44,12 @@ Configuration is at `{devRoot}/.claude/config.json` (managed by the Crow app). T
 }
 ```
 
+### Commit Attribution Trailers
+
+By default, `setup.sh` writes a per-worktree `.claude/settings.local.json` that overrides Claude Code's `attribution.commit` so commits include a `Crow-Session: <uuid>` trailer alongside the standard `Co-Authored-By: Claude` line. The trailer is a stable handle back to session metadata via `crow get-session <uuid>`. To opt out globally, set `"attributionTrailers": false` at the top level of `{devRoot}/.claude/config.json` (also surfaced in Settings → Automation → Attribution).
+
+**When authoring commits by hand** (`git commit -m "…"`, heredoc, `git commit --amend`), include both `Crow-Session: <session-uuid>` and `Co-Authored-By: Claude <noreply@anthropic.com>` as trailers at the end of the message. `attribution.commit` only fires for Claude Code's built-in commit flow; hand-rolled commits bypass it. `setup.sh` also installs a per-worktree `prepare-commit-msg` hook (CROW-518) that idempotently appends both trailers when missing — treat that hook as a safety net, not the primary path. Both trailers must be line-anchored at the end of the message; the `crow:merge` auto-merge gate parses `^Crow-Session:\s*<uuid>\s*$` (see `IssueTracker.crowSessionTrailerPattern`).
+
 ## Multi-Workspace Discovery
 
 ### Step 1: Enumerate Workspaces

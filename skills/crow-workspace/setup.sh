@@ -593,6 +593,159 @@ Crow-Session: $SESSION_ID"
   fi
 }
 
+# ─── Per-Worktree prepare-commit-msg Hook (CROW-518) ─────────────────────────
+
+# Install a per-worktree `prepare-commit-msg` hook that idempotently appends
+# `Crow-Session: <uuid>` and `Co-Authored-By: Claude` trailers to commit
+# messages when missing. Closes the bypass where Claude Code's
+# `attribution.commit` setting only fires for its own commit flow — hand-rolled
+# `git commit -m`/heredoc commits skip it and produce trailerless commits, which
+# defeats the `crow:merge` auto-merge gate (CROW-518).
+#
+# Worktree-scoped: enables `extensions.worktreeConfig` on the main repo
+# (idempotent, one-time), sets per-worktree `core.hooksPath` to this worktree's
+# gitdir hooks dir, and writes the session id to a `CROW_SESSION_ID` file under
+# the same gitdir. Sibling worktrees of the same repo carry their own session
+# id (or none) and are unaffected.
+install_commit_hook() {
+  if ! is_attribution_trailers_enabled; then
+    log "Attribution trailers disabled via config; removing any prepare-commit-msg hook"
+    remove_commit_hook
+    return
+  fi
+
+  if [[ -z "$SESSION_ID" ]]; then
+    log "Warning: SESSION_ID not set, skipping prepare-commit-msg hook"
+    return
+  fi
+
+  if ! command -v git >/dev/null 2>&1; then
+    log "git not found; skipping prepare-commit-msg hook"
+    return
+  fi
+
+  local worktree_gitdir hooks_dir session_id_file
+  worktree_gitdir=$(git -C "$WORKTREE_PATH" rev-parse --git-dir 2>/dev/null) || {
+    log "Warning: could not resolve worktree gitdir; skipping hook install"
+    return
+  }
+  # `git rev-parse --git-path hooks` resolves to $GIT_COMMON_DIR/hooks (shared
+  # across worktrees by default), which would pollute every sibling worktree.
+  # Compose the per-worktree path off --git-dir instead.
+  hooks_dir="$worktree_gitdir/hooks"
+  session_id_file=$(git -C "$WORKTREE_PATH" rev-parse --git-path CROW_SESSION_ID 2>/dev/null) || {
+    log "Warning: could not resolve CROW_SESSION_ID path; skipping hook install"
+    return
+  }
+
+  # Enable per-worktree config on the main repo (idempotent). Required before
+  # `git config --worktree` writes to a per-worktree `config.worktree` file
+  # instead of falling back to the shared local config.
+  git -C "$WORKTREE_PATH" config --local extensions.worktreeConfig true \
+    >/dev/null 2>&1 || log "Warning: failed to enable extensions.worktreeConfig"
+
+  # Point this worktree at its own hooks dir using an absolute path so the
+  # resolution does not depend on the agent's cwd at commit time.
+  git -C "$WORKTREE_PATH" config --worktree core.hooksPath "$hooks_dir" \
+    >/dev/null 2>&1 || log "Warning: failed to set per-worktree core.hooksPath"
+
+  mkdir -p "$hooks_dir"
+  printf '%s\n' "$SESSION_ID" > "$session_id_file"
+
+  local hook_path="$hooks_dir/prepare-commit-msg"
+  # The hook body is a verbatim heredoc — defined here so it lives in one
+  # place. Resources/crow-workspace-setup.sh.template carries a byte-identical
+  # copy; AttributionSkillTests guards against drift.
+  cat > "$hook_path" <<'CROW_HOOK_EOF'
+#!/bin/sh
+# Crow prepare-commit-msg hook (CROW-518).
+# Idempotently appends `Crow-Session: <uuid>` and `Co-Authored-By: Claude`
+# trailers to commit messages when missing. Resolves the session id from a
+# CROW_SESSION_ID file in this worktree's gitdir, so sibling worktrees that
+# don't carry one are no-ops. Never blocks a commit.
+set -u
+
+COMMIT_MSG_FILE="${1:-}"
+COMMIT_SOURCE="${2:-}"
+
+[ -n "$COMMIT_MSG_FILE" ] && [ -f "$COMMIT_MSG_FILE" ] || exit 0
+
+# Merge / squash messages get crafted server-side later — leave them alone.
+case "$COMMIT_SOURCE" in
+  merge|squash) exit 0 ;;
+esac
+
+SESSION_ID_FILE="$(git rev-parse --git-path CROW_SESSION_ID 2>/dev/null)" || exit 0
+[ -f "$SESSION_ID_FILE" ] || exit 0
+SESSION_ID="$(tr -d '[:space:]' < "$SESSION_ID_FILE" 2>/dev/null)"
+[ -n "$SESSION_ID" ] || exit 0
+
+# Skip when the message body has no non-comment content (`git commit -m ""`
+# or a `# …` template-only file). Without this, an empty commit attempt
+# would grow a body and the resulting "git commit -m ''" no-op-fails path
+# would surface a confusing-looking message.
+if ! grep -vE '^[[:space:]]*#' "$COMMIT_MSG_FILE" 2>/dev/null \
+   | grep -q '[^[:space:]]'; then
+  exit 0
+fi
+
+ADD_CROW=1
+# Skip the Crow-Session trailer when ANY Crow-Session line already exists —
+# preserves a user-typed trailer even if its UUID differs from ours; the
+# crow:merge gate only needs at least one matching known session UUID.
+if grep -qE '^Crow-Session:[[:space:]]' "$COMMIT_MSG_FILE" 2>/dev/null; then
+  ADD_CROW=0
+fi
+
+ADD_COAUTH=1
+if grep -qE '^Co-Authored-By:[[:space:]]*Claude' "$COMMIT_MSG_FILE" 2>/dev/null; then
+  ADD_COAUTH=0
+fi
+
+if [ "$ADD_CROW" -eq 0 ] && [ "$ADD_COAUTH" -eq 0 ]; then
+  exit 0
+fi
+
+# Apply remaining additions in a single interpret-trailers call so the
+# resulting block is blank-line-separated from the body and line-anchored
+# (matches IssueTracker.crowSessionTrailerPattern with .anchorsMatchLines).
+if [ "$ADD_CROW" -eq 1 ] && [ "$ADD_COAUTH" -eq 1 ]; then
+  git interpret-trailers --in-place \
+    --trailer "Crow-Session: $SESSION_ID" \
+    --trailer "Co-Authored-By: Claude <noreply@anthropic.com>" \
+    "$COMMIT_MSG_FILE" 2>/dev/null || true
+elif [ "$ADD_CROW" -eq 1 ]; then
+  git interpret-trailers --in-place \
+    --trailer "Crow-Session: $SESSION_ID" \
+    "$COMMIT_MSG_FILE" 2>/dev/null || true
+elif [ "$ADD_COAUTH" -eq 1 ]; then
+  git interpret-trailers --in-place \
+    --trailer "Co-Authored-By: Claude <noreply@anthropic.com>" \
+    "$COMMIT_MSG_FILE" 2>/dev/null || true
+fi
+
+exit 0
+CROW_HOOK_EOF
+  chmod +x "$hook_path" 2>/dev/null || true
+  log "Installed prepare-commit-msg hook at $hook_path"
+}
+
+# Remove a previously installed prepare-commit-msg hook and its companion
+# CROW_SESSION_ID file. Called when attributionTrailers flips to false so a
+# stale install does not keep adding trailers. Leaves
+# `extensions.worktreeConfig` and `core.hooksPath` alone — both are harmless
+# when the hook file is gone.
+remove_commit_hook() {
+  if ! command -v git >/dev/null 2>&1; then
+    return
+  fi
+  local worktree_gitdir hooks_dir session_id_file
+  worktree_gitdir=$(git -C "$WORKTREE_PATH" rev-parse --git-dir 2>/dev/null) || return
+  hooks_dir="$worktree_gitdir/hooks"
+  session_id_file=$(git -C "$WORKTREE_PATH" rev-parse --git-path CROW_SESSION_ID 2>/dev/null) || return
+  rm -f "$hooks_dir/prepare-commit-msg" "$session_id_file" 2>/dev/null || true
+}
+
 # ─── GitHub Housekeeping (best-effort) ───────────────────────────────────────
 
 github_ops() {
@@ -962,6 +1115,7 @@ main() {
   setup_worktree
   create_session
   write_settings_local
+  install_commit_hook
   github_ops
   write_prompt
   launch_agent

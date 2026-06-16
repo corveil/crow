@@ -250,4 +250,99 @@ struct AttributionSkillTests {
         #expect(!expanded.contains(Self.shellAgentExpression))
         #expect(expanded.contains("Created with Crow via OpenAI Codex"))
     }
+
+    // MARK: - CROW-518: Crow-Session trailer hardening
+
+    private static func liveWorkspaceSkill() throws -> String {
+        let url = repoRoot().appendingPathComponent("skills/crow-workspace/SKILL.md")
+        return try String(contentsOf: url, encoding: .utf8)
+    }
+
+    private static func bundledWorkspaceTemplate() throws -> String {
+        let url = repoRoot().appendingPathComponent("Resources/crow-workspace-SKILL.md.template")
+        return try String(contentsOf: url, encoding: .utf8)
+    }
+
+    private static func liveSetupSh() throws -> String {
+        let url = repoRoot().appendingPathComponent("skills/crow-workspace/setup.sh")
+        return try String(contentsOf: url, encoding: .utf8)
+    }
+
+    private static func bundledSetupTemplate() throws -> String {
+        let url = repoRoot()
+            .appendingPathComponent("Resources/crow-workspace-setup.sh.template")
+        return try String(contentsOf: url, encoding: .utf8)
+    }
+
+    /// Extract the `install_commit_hook` / `remove_commit_hook` block bounded by
+    /// the section headers in setup.sh. The block is heredoc-defined and copied
+    /// verbatim into both the live script and the bundled template; this helper
+    /// pulls the same span out of either so the drift guard can compare bytes.
+    private static func hookBlock(_ haystack: String) -> Substring? {
+        let startMarker = "# ─── Per-Worktree prepare-commit-msg Hook (CROW-518) ─────────────────────────"
+        let endMarker = "# ─── GitHub Housekeeping (best-effort) ───────────────────────────────────────"
+        guard let startRange = haystack.range(of: startMarker),
+              let endRange = haystack.range(of: endMarker, range: startRange.upperBound..<haystack.endIndex)
+        else { return nil }
+        return haystack[startRange.lowerBound..<endRange.upperBound]
+    }
+
+    /// The hook function body lives in ONE canonical place. Both setup.sh and
+    /// the bundled template carry a byte-identical copy. This test is the only
+    /// thing keeping them honest — if a future edit hits one and not the other,
+    /// new worktrees scaffolded from the template will silently lose the fix.
+    @Test func workspaceSetupAndTemplateHookBlocksAreByteIdentical() throws {
+        let live = try Self.liveSetupSh()
+        let bundled = try Self.bundledSetupTemplate()
+        guard let liveBlock = Self.hookBlock(live) else {
+            Issue.record("Could not locate install_commit_hook block in skills/crow-workspace/setup.sh — section header missing or renamed.")
+            return
+        }
+        guard let bundledBlock = Self.hookBlock(bundled) else {
+            Issue.record("Could not locate install_commit_hook block in Resources/crow-workspace-setup.sh.template — section header missing or renamed.")
+            return
+        }
+        #expect(liveBlock == bundledBlock,
+                "install_commit_hook + remove_commit_hook must stay byte-identical between skills/crow-workspace/setup.sh and Resources/crow-workspace-setup.sh.template — the hook body is the load-bearing fix for CROW-518 and a partial copy means new scaffolds will silently lose it.")
+    }
+
+    /// The hook is the safety net, but the worker prompt must still teach the
+    /// agent to include the trailers explicitly. Without this guidance, a single
+    /// careless `git commit -m "…"` against a worktree the hook somehow missed
+    /// (foreign git client, opt-out, racy install) breaks the auto-merge gate.
+    @Test func liveWorkspaceSkillTeachesTrailerRequirement() throws {
+        let body = try Self.liveWorkspaceSkill()
+        #expect(body.contains("Crow-Session: <session-uuid>"),
+                "skills/crow-workspace/SKILL.md must instruct workers to include the Crow-Session trailer in hand-authored commits.")
+        #expect(body.contains("Co-Authored-By: Claude <noreply@anthropic.com>"),
+                "skills/crow-workspace/SKILL.md must instruct workers to include the Co-Authored-By: Claude trailer in hand-authored commits.")
+        #expect(body.contains("prepare-commit-msg"),
+                "skills/crow-workspace/SKILL.md must reference the prepare-commit-msg hook so workers know the safety net exists (CROW-518).")
+    }
+
+    @Test func bundledWorkspaceTemplateTeachesTrailerRequirement() throws {
+        let body = try Self.bundledWorkspaceTemplate()
+        #expect(body.contains("Crow-Session: <session-uuid>"),
+                "Resources/crow-workspace-SKILL.md.template must instruct workers to include the Crow-Session trailer.")
+        #expect(body.contains("Co-Authored-By: Claude <noreply@anthropic.com>"),
+                "Resources/crow-workspace-SKILL.md.template must instruct workers to include the Co-Authored-By: Claude trailer.")
+        #expect(body.contains("prepare-commit-msg"),
+                "Resources/crow-workspace-SKILL.md.template must reference the prepare-commit-msg hook (CROW-518).")
+    }
+
+    /// The Committed footer row is the canonical worker-facing surface for the
+    /// trailer requirement. Guard live + bundled template + Swift constant in
+    /// one shot — `liveAttributionFooterAndBundledTemplateAreByteIdentical` and
+    /// `liveAttributionFooterMatchesSwiftConstant` already enforce equality
+    /// among the three, so this test only needs to assert the content lives in
+    /// one of them.
+    @Test func attributionFooterContainsCommittedRow() throws {
+        let live = try Self.liveAttributionFooter()
+        #expect(live.contains("| Committed"),
+                "FOOTER.md must carry a Committed row teaching the Crow-Session trailer requirement (CROW-518).")
+        #expect(live.contains("Crow-Session: <session-uuid>"),
+                "FOOTER.md Committed row must spell out the Crow-Session trailer literally.")
+        #expect(live.contains("Co-Authored-By: Claude <noreply@anthropic.com>"),
+                "FOOTER.md Committed row must spell out the Co-Authored-By: Claude trailer literally.")
+    }
 }
