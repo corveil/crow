@@ -320,6 +320,11 @@ public struct WorkspaceFormView: View {
         .task {
             jiraAvailability = await AcliProbe.availability()
         }
+        // A previously-fetched status list belongs to the old site/project — drop
+        // it (and any error) when either changes so a stale list can't be applied
+        // to a different project.
+        .onChange(of: jiraSite) { _, _ in clearFetchedStatuses() }
+        .onChange(of: jiraProjectKey) { _, _ in clearFetchedStatuses() }
         .safeAreaInset(edge: .bottom) {
             HStack {
                 Button("Cancel") { dismiss() }
@@ -384,8 +389,7 @@ public struct WorkspaceFormView: View {
     private var statusMapForSave: [String: String]? {
         var result: [String: String] = [:]
         for status in TicketStatus.pipelineStatuses {
-            let trimmed = (jiraStatusMap[status.rawValue] ?? "").trimmingCharacters(in: .whitespaces)
-            if !trimmed.isEmpty { result[status.rawValue] = trimmed }
+            if let name = jiraStatusMap[status.rawValue]?.nonBlank { result[status.rawValue] = name }
         }
         return result.isEmpty ? nil : result
     }
@@ -401,6 +405,12 @@ public struct WorkspaceFormView: View {
     /// Pull the live workflow status names for the configured project into
     /// `fetchedStatuses` (drives the per-row dropdown). Best-effort: surfaces a
     /// caption-level error and leaves the free-text fields untouched on failure.
+    /// Drop a stale fetched-status list (and error) when the site/project changes.
+    private func clearFetchedStatuses() {
+        fetchedStatuses = []
+        fetchStatusesError = nil
+    }
+
     private func fetchJiraStatuses() async {
         guard let fetchStatuses else { return }
         isFetchingStatuses = true

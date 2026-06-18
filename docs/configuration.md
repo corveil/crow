@@ -180,7 +180,7 @@ Jira workflow **status names are configurable per project**, so a project that r
 
 - **Keys** are Crow's pipeline states: `Backlog`, `Ready`, `In Progress`, `In Review`, `Done`. **Values** are the exact Jira workflow status names for that project (case- and spelling-sensitive).
 - **A missing or blank entry falls back to the built-in default:** `Ready` → `To Do`; every other state uses its own name verbatim (`In Progress`, `In Review`, `Done`, `Backlog`). An entirely unset `jiraStatusMap` keeps today's behavior.
-- Both status surfaces consult the map: the in-app **"Mark in review"** transition (`acli`) and the **agent-side** MCP `transitionJiraIssue` flow (the launched session's prompt embeds the map, and the `/crow-workspace` skill also reads it from `config.json`).
+- Both status surfaces consult the map: the in-app **"Mark in review"** transition (`acli`) and the **agent-side** MCP `transitionJiraIssue` flow (the `/crow-workspace` skill reads `jiraStatusMap` from `config.json` before transitioning).
 
 Edit it under **Settings → Workspaces → (a Jira workspace) → Jira Status Mapping**. Each pipeline state gets a field whose placeholder is the current default — leave it blank to keep the default. If an Atlassian MCP credential is configured, **Fetch from Jira** populates per-row dropdowns from the project's live workflow (`GET /rest/api/3/project/{key}/statuses`); otherwise the fields are free-text.
 

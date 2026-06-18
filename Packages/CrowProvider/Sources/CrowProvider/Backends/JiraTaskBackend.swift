@@ -226,11 +226,7 @@ public struct JiraTaskBackend: TaskBackend {
     /// falling back to ``defaultJiraStatusName(for:)``. A blank override entry is
     /// ignored (treated as unset) so an empty Settings field uses the default.
     func jiraStatusName(for status: TicketStatus) -> String {
-        if let mapped = config.statusMap?[status.rawValue],
-           !mapped.trimmingCharacters(in: .whitespaces).isEmpty {
-            return mapped
-        }
-        return Self.defaultJiraStatusName(for: status)
+        config.statusMap?[status.rawValue]?.nonBlank ?? Self.defaultJiraStatusName(for: status)
     }
 
     /// The built-in Crow→Jira status-name defaults, used as the fallback when a

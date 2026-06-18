@@ -18,16 +18,20 @@ public enum JiraStatusFetcher {
     }
 
     /// Build the project-statuses REST URL for a site host + project key.
-    /// Accepts a bare host (`acme.atlassian.net`) or a full `https://…` origin.
+    /// Accepts a bare host (`acme.atlassian.net`) or a full origin. The scheme is
+    /// always forced to **https** — a `jiraSite` typed as `http://…` would
+    /// otherwise send the Atlassian Basic credential in cleartext.
     static func statusesURL(site: String, projectKey: String) -> URL? {
         let trimmedSite = site.trimmingCharacters(in: .whitespaces)
         let trimmedKey = projectKey.trimmingCharacters(in: .whitespaces)
         guard !trimmedSite.isEmpty, !trimmedKey.isEmpty else { return nil }
-        let origin = trimmedSite.hasPrefix("http") ? trimmedSite : "https://\(trimmedSite)"
-        guard let encodedKey = trimmedKey.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else {
+        // Strip any user-supplied scheme (http/https) and always use https.
+        let bareHost = trimmedSite.range(of: "://").map { String(trimmedSite[$0.upperBound...]) } ?? trimmedSite
+        guard !bareHost.isEmpty,
+              let encodedKey = trimmedKey.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else {
             return nil
         }
-        return URL(string: "\(origin)/rest/api/3/project/\(encodedKey)/statuses")
+        return URL(string: "https://\(bareHost)/rest/api/3/project/\(encodedKey)/statuses")
     }
 
     /// Parse the `project/{key}/statuses` JSON payload into a de-duplicated,
@@ -63,6 +67,9 @@ public enum JiraStatusFetcher {
         request.httpMethod = "GET"
         request.setValue(authorization, forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
+        // Click-driven affordance — surface a slow workflow as a timeout error
+        // rather than leaving the button spinning on the default 60s.
+        request.timeoutInterval = 15
 
         do {
             let (data, response) = try await transport(request)

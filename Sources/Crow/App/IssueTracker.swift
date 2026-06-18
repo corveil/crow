@@ -2395,11 +2395,15 @@ final class IssueTracker {
            let ws = jiraWorkspaces.first(where: { $0.jiraProjectKey?.uppercased() == project.uppercased() }) {
             return ws.jiraStatusMap
         }
-        // Then a site-host match (acli is authed to a single site).
-        if let ws = jiraWorkspaces.first(where: { ws in
-            guard let site = ws.jiraSite, !site.isEmpty else { return false }
-            return ticketURL.contains(site)
-        }) {
+        // Then an exact site-host match (acli is authed to a single site). Compare
+        // parsed hosts, not a loose substring, so "acme.atlassian.net" doesn't
+        // match a "dev.acme.atlassian.net" workspace (or vice versa).
+        if let ticketHost = URL(string: ticketURL)?.host,
+           let ws = jiraWorkspaces.first(where: { ws in
+               guard let site = ws.jiraSite, !site.isEmpty else { return false }
+               let siteHost = URL(string: site.hasPrefix("http") ? site : "https://\(site)")?.host ?? site
+               return siteHost.caseInsensitiveCompare(ticketHost) == .orderedSame
+           }) {
             return ws.jiraStatusMap
         }
         // Single Jira workspace with a map → unambiguous; use it.

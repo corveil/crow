@@ -14,6 +14,13 @@ import Foundation
         #expect(url?.absoluteString == "https://acme.atlassian.net/rest/api/3/project/MAXX/statuses")
     }
 
+    @Test func statusesURLForcesHTTPSOnCleartextOrigin() {
+        // A site typed as http:// must be upgraded so the Basic credential is
+        // never sent in cleartext.
+        let url = JiraStatusFetcher.statusesURL(site: "http://acme.atlassian.net", projectKey: "PROPS")
+        #expect(url?.absoluteString == "https://acme.atlassian.net/rest/api/3/project/PROPS/statuses")
+    }
+
     @Test func statusesURLNilForBlankInputs() {
         #expect(JiraStatusFetcher.statusesURL(site: "", projectKey: "PROPS") == nil)
         #expect(JiraStatusFetcher.statusesURL(site: "acme.atlassian.net", projectKey: "  ") == nil)
