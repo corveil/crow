@@ -219,24 +219,36 @@ public struct ClaudeHookConfigWriter: HookConfigWriter {
         }
 
         // --- .mcp.json: the server definition (no secret — references ${env}) ---
-        guard let resolved else {
-            // Only remove a .mcp.json that is ours (just the atlassian server);
-            // leave a user-authored multi-server file alone.
-            if let data = FileManager.default.contents(atPath: mcpPath),
-               let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let servers = parsed["mcpServers"] as? [String: Any],
-               servers.count == 1, servers[atlassianMcpServerName] != nil {
-                try? FileManager.default.removeItem(atPath: mcpPath)
-            }
-            return
-        }
-
         var mcp: [String: Any] = [:]
         if let data = FileManager.default.contents(atPath: mcpPath),
            let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             mcp = parsed
         }
         var servers = mcp["mcpServers"] as? [String: Any] ?? [:]
+
+        guard let resolved else {
+            // Teardown: remove only OUR server entry (its `${env}` reference was
+            // just cleared above), and preserve any user-authored servers. Mirror
+            // the env/enabledMcpjsonServers handling — only delete the file when
+            // nothing of ours or theirs remains. Leaving a dangling `atlassian`
+            // entry behind would warn on next launch (missing env var).
+            guard servers[atlassianMcpServerName] != nil else { return }
+            servers.removeValue(forKey: atlassianMcpServerName)
+            if servers.isEmpty {
+                mcp.removeValue(forKey: "mcpServers")
+            } else {
+                mcp["mcpServers"] = servers
+            }
+            if mcp.isEmpty {
+                try? FileManager.default.removeItem(atPath: mcpPath)
+            } else {
+                if let data = try? JSONSerialization.data(withJSONObject: mcp, options: [.prettyPrinted, .sortedKeys]) {
+                    try? data.write(to: URL(fileURLWithPath: mcpPath))
+                }
+            }
+            return
+        }
+
         servers[atlassianMcpServerName] = [
             "type": "http",
             "url": resolved.endpoint,
