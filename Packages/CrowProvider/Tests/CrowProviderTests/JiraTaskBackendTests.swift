@@ -159,12 +159,37 @@ final class JiraTaskBackendTests: XCTestCase {
         XCTAssertTrue(args.contains("--yes"))
     }
 
-    func testStatusNameMapping() {
-        XCTAssertEqual(JiraTaskBackend.jiraStatusName(for: .ready), "To Do")
-        XCTAssertEqual(JiraTaskBackend.jiraStatusName(for: .inProgress), "In Progress")
-        XCTAssertEqual(JiraTaskBackend.jiraStatusName(for: .inReview), "In Review")
-        XCTAssertEqual(JiraTaskBackend.jiraStatusName(for: .done), "Done")
-        XCTAssertEqual(JiraTaskBackend.jiraStatusName(for: .backlog), "Backlog")
+    func testDefaultStatusNameMapping() {
+        XCTAssertEqual(JiraTaskBackend.defaultJiraStatusName(for: .ready), "To Do")
+        XCTAssertEqual(JiraTaskBackend.defaultJiraStatusName(for: .inProgress), "In Progress")
+        XCTAssertEqual(JiraTaskBackend.defaultJiraStatusName(for: .inReview), "In Review")
+        XCTAssertEqual(JiraTaskBackend.defaultJiraStatusName(for: .done), "Done")
+        XCTAssertEqual(JiraTaskBackend.defaultJiraStatusName(for: .backlog), "Backlog")
+    }
+
+    func testStatusMapOverridesDefault() {
+        let cfg = JiraConfig(statusMap: ["In Progress": "In Development", "In Review": "Code Review"])
+        let b = backend(FakeShellRunner(), config: cfg)
+        // Overridden states use the configured name…
+        XCTAssertEqual(b.jiraStatusName(for: .inProgress), "In Development")
+        XCTAssertEqual(b.jiraStatusName(for: .inReview), "Code Review")
+        // …unmapped states fall back to the built-in defaults.
+        XCTAssertEqual(b.jiraStatusName(for: .ready), "To Do")
+        XCTAssertEqual(b.jiraStatusName(for: .done), "Done")
+    }
+
+    func testStatusMapBlankEntryFallsBackToDefault() {
+        let b = backend(FakeShellRunner(), config: JiraConfig(statusMap: ["In Progress": "   "]))
+        XCTAssertEqual(b.jiraStatusName(for: .inProgress), "In Progress")
+    }
+
+    func testSetTaskStatusUsesMappedNameFromConfig() async throws {
+        let fake = FakeShellRunner()
+        let cfg = JiraConfig(statusMap: ["In Review": "Code Review"])
+        try await backend(fake, config: cfg)
+            .setTaskStatus(url: "https://acme.atlassian.net/browse/PROJ-5", status: .inReview)
+        let args = fake.calls.first?.args ?? []
+        XCTAssertEqual(args[args.firstIndex(of: "--status")! + 1], "Code Review")
     }
 
     // MARK: - assign

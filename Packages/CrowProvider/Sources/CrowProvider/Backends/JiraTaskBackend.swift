@@ -15,11 +15,16 @@ public struct JiraConfig: Sendable, Equatable {
     public let site: String?
     public let projectKey: String?
     public let jql: String?
+    /// Per-workspace Crow→Jira status-name overrides, keyed by ``TicketStatus``
+    /// raw value (e.g. "In Progress" → "In Development"). A missing/blank entry
+    /// falls back to ``JiraTaskBackend/defaultJiraStatusName(for:)``. See #523.
+    public let statusMap: [String: String]?
 
-    public init(site: String? = nil, projectKey: String? = nil, jql: String? = nil) {
+    public init(site: String? = nil, projectKey: String? = nil, jql: String? = nil, statusMap: [String: String]? = nil) {
         self.site = site
         self.projectKey = projectKey
         self.jql = jql
+        self.statusMap = statusMap
     }
 }
 
@@ -126,7 +131,7 @@ public struct JiraTaskBackend: TaskBackend {
         _ = try await run([
             "acli", "jira", "workitem", "transition",
             "--key", parsed.key,
-            "--status", Self.jiraStatusName(for: status),
+            "--status", jiraStatusName(for: status),
             "--yes",
         ])
     }
@@ -216,18 +221,28 @@ public struct JiraTaskBackend: TaskBackend {
             || lower.contains("please login")
     }
 
-    /// Map a Crow pipeline status to a Jira workflow status name. `TicketStatus`
-    /// raw values already match common Jira names ("In Progress", "In Review",
-    /// "Done", "Backlog"); only `.ready` needs a Jira-flavored alias.
+    /// Resolve the Jira workflow status name for a Crow pipeline status, honoring
+    /// the per-workspace ``JiraConfig/statusMap`` override (#523) and otherwise
+    /// falling back to ``defaultJiraStatusName(for:)``. A blank override entry is
+    /// ignored (treated as unset) so an empty Settings field uses the default.
+    func jiraStatusName(for status: TicketStatus) -> String {
+        if let mapped = config.statusMap?[status.rawValue],
+           !mapped.trimmingCharacters(in: .whitespaces).isEmpty {
+            return mapped
+        }
+        return Self.defaultJiraStatusName(for: status)
+    }
+
+    /// The built-in Crow→Jira status-name defaults, used as the fallback when a
+    /// workspace has no per-project override (#523). Delegates to
+    /// ``TicketStatus/defaultJiraStatusName`` (CrowCore) so the Settings UI and
+    /// this live-transition path share one source of truth.
     ///
     /// Best-effort: Jira workflow status names are configurable per project, so a
-    /// transition can still legitimately fail if a project renames its statuses.
-    static func jiraStatusName(for status: TicketStatus) -> String {
-        switch status {
-        case .ready: return "To Do"
-        case .backlog, .inProgress, .inReview, .done, .unknown:
-            return status.rawValue
-        }
+    /// transition can still legitimately fail if a project renames its statuses —
+    /// hence the per-workspace override map.
+    public static func defaultJiraStatusName(for status: TicketStatus) -> String {
+        status.defaultJiraStatusName
     }
 
     // MARK: - JSON parsing

@@ -336,6 +336,26 @@ import Testing
     #expect(config.workspaces[0].customInstructions == nil)
 }
 
+@Test func workspaceJiraStatusMapRoundTrip() throws {
+    let config = AppConfig(workspaces: [
+        WorkspaceInfo(name: "Org", taskProvider: "jira",
+                      jiraStatusMap: ["In Progress": "In Development", "Ready": "To Do"])
+    ])
+    let data = try JSONEncoder().encode(config)
+    let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+    #expect(decoded.workspaces[0].jiraStatusMap?["In Progress"] == "In Development")
+    #expect(decoded.workspaces[0].jiraStatusMap?["Ready"] == "To Do")
+}
+
+@Test func workspaceJiraStatusMapDefaultsNilWhenKeyMissing() throws {
+    // Legacy/non-Jira configs without the key default to nil (use built-in defaults).
+    let json = """
+    {"workspaces": [{"id": "00000000-0000-0000-0000-000000000001", "name": "Org", "provider": "github", "cli": "gh"}]}
+    """.data(using: .utf8)!
+    let config = try JSONDecoder().decode(AppConfig.self, from: json)
+    #expect(config.workspaces[0].jiraStatusMap == nil)
+}
+
 @Test func workspaceNameValidation() {
     // Valid name
     #expect(WorkspaceInfo.validateName("MyOrg", existingNames: []) == nil)

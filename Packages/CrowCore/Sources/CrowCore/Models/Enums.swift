@@ -105,6 +105,20 @@ public enum TicketStatus: String, Codable, Sendable, CaseIterable {
         default: self = .unknown
         }
     }
+
+    /// The built-in Crow→Jira workflow status name for this pipeline status, used
+    /// as the fallback when a workspace has no per-project override (#523). Raw
+    /// values already match common Jira names ("In Progress", "In Review", "Done",
+    /// "Backlog"); only `.ready` needs a Jira-flavored alias ("To Do"). Surfaced
+    /// in CrowCore so both the Settings UI (placeholders) and `JiraTaskBackend`
+    /// (the live transition) share one source of truth.
+    public var defaultJiraStatusName: String {
+        switch self {
+        case .ready: return "To Do"
+        case .backlog, .inProgress, .inReview, .done, .unknown:
+            return rawValue
+        }
+    }
 }
 
 /// Sort order options for the ticket board.

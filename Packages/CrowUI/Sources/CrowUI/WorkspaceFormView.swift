@@ -1,6 +1,13 @@
 import SwiftUI
 import CrowCore
 
+/// Outcome of a Jira live-status fetch for the workspace status-mapping UI (#523):
+/// the workflow status names, or a user-facing error message.
+public enum JiraStatusFetchResult: Sendable {
+    case success([String])
+    case failure(String)
+}
+
 /// Shared form for creating or editing a workspace.
 ///
 /// Used by both the Settings workspace editor and the Setup Wizard.
@@ -19,6 +26,15 @@ public struct WorkspaceFormView: View {
     @State private var jiraSite: String
     @State private var jiraProjectKey: String
     @State private var jiraJQL: String
+    /// Per-pipeline-status Jira workflow name overrides, keyed by
+    /// `TicketStatus.rawValue`. A blank/absent entry uses the built-in default
+    /// (shown as the field's placeholder). See #523.
+    @State private var jiraStatusMap: [String: String]
+    /// Status names fetched from the live Jira workflow (bonus). Empty until the
+    /// operator taps "Fetch from Jira"; surfaced as a dropdown of suggestions.
+    @State private var fetchedStatuses: [String] = []
+    @State private var isFetchingStatuses = false
+    @State private var fetchStatusesError: String?
     @State private var corveilHost: String
     @State private var alwaysInclude: [String]
     @State private var autoReviewRepos: [String]
@@ -33,16 +49,23 @@ public struct WorkspaceFormView: View {
     private let existingID: UUID?
     private let existingNames: [String]
     private let onSave: (WorkspaceInfo) -> Void
+    /// Injected live-status fetcher for the Jira mapping section (#523). Given a
+    /// site host + project key, returns the workflow status names or a
+    /// user-facing error. `nil` (e.g. the Setup Wizard) disables the button.
+    private let fetchStatuses: ((String, String) async -> JiraStatusFetchResult)?
 
     /// - Parameters:
     ///   - workspace: An existing workspace to edit, or `nil` to create a new one.
     ///   - existingNames: Names of other workspaces, used for duplicate detection.
+    ///   - fetchStatuses: Optional fetcher for the Jira status dropdown; `nil` disables it.
     ///   - onSave: Called with the validated `WorkspaceInfo` when the user taps Save/Add.
     public init(
         workspace: WorkspaceInfo? = nil,
         existingNames: [String] = [],
+        fetchStatuses: ((String, String) async -> JiraStatusFetchResult)? = nil,
         onSave: @escaping (WorkspaceInfo) -> Void
     ) {
+        self.fetchStatuses = fetchStatuses
         self.existingID = workspace?.id
         self._name = State(initialValue: workspace?.name ?? "")
         self._provider = State(initialValue: workspace?.provider ?? "github")
@@ -51,6 +74,7 @@ public struct WorkspaceFormView: View {
         self._jiraSite = State(initialValue: workspace?.jiraSite ?? "")
         self._jiraProjectKey = State(initialValue: workspace?.jiraProjectKey ?? "")
         self._jiraJQL = State(initialValue: workspace?.jiraJQL ?? "")
+        self._jiraStatusMap = State(initialValue: workspace?.jiraStatusMap ?? [:])
         self._corveilHost = State(initialValue: workspace?.corveilHost ?? "")
         self._alwaysInclude = State(initialValue: workspace?.alwaysInclude ?? [])
         self._autoReviewRepos = State(initialValue: workspace?.autoReviewRepos ?? [])
@@ -178,6 +202,59 @@ public struct WorkspaceFormView: View {
                 }
             }
 
+            if jiraSelected {
+                Section("Jira Status Mapping") {
+                    Text("Map Crow's pipeline states to this project's Jira workflow status names. Leave a field blank to use the default shown; names must match the project's workflow exactly.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    ForEach(TicketStatus.pipelineStatuses, id: \.self) { status in
+                        HStack(spacing: 8) {
+                            Text(status.rawValue)
+                                .frame(width: 90, alignment: .leading)
+                                .foregroundStyle(.secondary)
+                            TextField(status.defaultJiraStatusName, text: jiraStatusBinding(for: status))
+                                .textFieldStyle(.roundedBorder)
+                            if !fetchedStatuses.isEmpty {
+                                Menu {
+                                    ForEach(fetchedStatuses, id: \.self) { name in
+                                        Button(name) { jiraStatusMap[status.rawValue] = name }
+                                    }
+                                } label: {
+                                    Image(systemName: "chevron.down.circle")
+                                }
+                                .menuStyle(.borderlessButton)
+                                .fixedSize()
+                                .help("Pick from statuses fetched from Jira")
+                            }
+                        }
+                    }
+
+                    HStack {
+                        Button {
+                            Task { await fetchJiraStatuses() }
+                        } label: {
+                            if isFetchingStatuses {
+                                ProgressView().controlSize(.small)
+                            } else {
+                                Label("Fetch from Jira", systemImage: "arrow.down.circle")
+                            }
+                        }
+                        .disabled(isFetchingStatuses || !canFetchStatuses)
+                        if let error = fetchStatusesError {
+                            Text(error)
+                                .font(.caption)
+                                .foregroundStyle(.red)
+                        }
+                    }
+                    Text(canFetchStatuses
+                        ? "Populates a dropdown on each row from this project's live workflow."
+                        : "Set the Atlassian Site + Project Key above and an Atlassian MCP credential in Settings → Automation to fetch live statuses.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
             Section("Repos") {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Always Include Repos")
@@ -282,6 +359,7 @@ public struct WorkspaceFormView: View {
             jiraProjectKey: isJira ? nonEmpty(jiraProjectKey) : nil,
             jiraJQL: isJira ? nonEmpty(jiraJQL) : nil,
             jiraSite: isJira ? nonEmpty(jiraSite) : nil,
+            jiraStatusMap: isJira ? statusMapForSave : nil,
             corveilHost: isCorveil ? nonEmpty(corveilHost) : nil,
             gateway: gatewayForSave
         )
@@ -290,5 +368,50 @@ public struct WorkspaceFormView: View {
     private func nonEmpty(_ text: String) -> String? {
         let trimmed = text.trimmingCharacters(in: .whitespaces)
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    /// A two-way binding for one status's override field. Stores the value as
+    /// typed; `statusMapForSave` trims and drops blanks at save time.
+    private func jiraStatusBinding(for status: TicketStatus) -> Binding<String> {
+        Binding(
+            get: { jiraStatusMap[status.rawValue] ?? "" },
+            set: { jiraStatusMap[status.rawValue] = $0 }
+        )
+    }
+
+    /// The trimmed, non-empty overrides to persist, or `nil` when none are set
+    /// (so the workspace falls back entirely to the built-in defaults).
+    private var statusMapForSave: [String: String]? {
+        var result: [String: String] = [:]
+        for status in TicketStatus.pipelineStatuses {
+            let trimmed = (jiraStatusMap[status.rawValue] ?? "").trimmingCharacters(in: .whitespaces)
+            if !trimmed.isEmpty { result[status.rawValue] = trimmed }
+        }
+        return result.isEmpty ? nil : result
+    }
+
+    /// "Fetch from Jira" is available only when a fetcher is wired and the site +
+    /// project key are filled in (the credential check happens in the fetcher).
+    private var canFetchStatuses: Bool {
+        fetchStatuses != nil
+            && !jiraSite.trimmingCharacters(in: .whitespaces).isEmpty
+            && !jiraProjectKey.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    /// Pull the live workflow status names for the configured project into
+    /// `fetchedStatuses` (drives the per-row dropdown). Best-effort: surfaces a
+    /// caption-level error and leaves the free-text fields untouched on failure.
+    private func fetchJiraStatuses() async {
+        guard let fetchStatuses else { return }
+        isFetchingStatuses = true
+        fetchStatusesError = nil
+        defer { isFetchingStatuses = false }
+        switch await fetchStatuses(jiraSite, jiraProjectKey) {
+        case .success(let names):
+            fetchedStatuses = names
+            if names.isEmpty { fetchStatusesError = "No statuses returned for this project." }
+        case .failure(let message):
+            fetchStatusesError = message
+        }
     }
 }

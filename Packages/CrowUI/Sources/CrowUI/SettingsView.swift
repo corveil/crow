@@ -64,6 +64,34 @@ public struct SettingsView: View {
             .map(\.name)
     }
 
+    /// Fetch a Jira project's live workflow status names for the workspace
+    /// status-mapping dropdown (#523), authenticating with the Atlassian MCP
+    /// credential from Settings → Automation. Runs off the main actor (resolving
+    /// an `op://` token shells out) and maps failures to user-facing copy.
+    private func fetchJiraStatuses(site: String, projectKey: String) async -> JiraStatusFetchResult {
+        let atlassian = config.atlassianMCP
+        return await Task.detached { () -> JiraStatusFetchResult in
+            guard let cfg = atlassian, !cfg.isEmpty,
+                  let resolved = AtlassianMCPResolver.resolve(cfg) else {
+                return .failure("Add an Atlassian MCP credential in Settings → Automation first.")
+            }
+            switch await JiraStatusFetcher.fetchStatusNames(
+                site: site, projectKey: projectKey, authorization: resolved.authorization
+            ) {
+            case .success(let names):
+                return .success(names)
+            case .failure(.badSite):
+                return .failure("Invalid Atlassian site or project key.")
+            case .failure(.http(let code)):
+                return .failure("Jira returned HTTP \(code). Check the credential and project key.")
+            case .failure(.transport(let message)):
+                return .failure("Network error: \(message)")
+            case .failure(.decode):
+                return .failure("Couldn't parse Jira's response.")
+            }
+        }.value
+    }
+
     public var body: some View {
         TabView {
             generalTab
@@ -95,7 +123,8 @@ public struct SettingsView: View {
         .frame(width: 720, height: 480)
         .sheet(isPresented: $isAddingWorkspace) {
             WorkspaceFormView(
-                existingNames: otherWorkspaceNames()
+                existingNames: otherWorkspaceNames(),
+                fetchStatuses: { await fetchJiraStatuses(site: $0, projectKey: $1) }
             ) { ws in
                 config.workspaces.append(ws)
                 save()
@@ -104,7 +133,8 @@ public struct SettingsView: View {
         .sheet(item: $editingWorkspace) { ws in
             WorkspaceFormView(
                 workspace: ws,
-                existingNames: otherWorkspaceNames(excluding: ws.id)
+                existingNames: otherWorkspaceNames(excluding: ws.id),
+                fetchStatuses: { await fetchJiraStatuses(site: $0, projectKey: $1) }
             ) { updated in
                 if let idx = config.workspaces.firstIndex(where: { $0.id == updated.id }) {
                     config.workspaces[idx] = updated

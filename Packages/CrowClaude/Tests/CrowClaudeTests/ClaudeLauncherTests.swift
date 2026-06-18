@@ -176,6 +176,48 @@ import Testing
     #expect(prompt.contains("pushing the branch updates it"))
 }
 
+@Test func generatePromptIncludesJiraStatusMappingBlockWhenConfigured() async {
+    let launcher = ClaudeLauncher()
+    let prompt = await launcher.generatePrompt(
+        session: Session(name: "jira-map", ticketNumber: 6859),
+        worktrees: [],
+        ticketURL: "https://acme.atlassian.net/browse/MAXX-6859",
+        provider: .jira,
+        codeProvider: .github,
+        jiraStatusMap: ["In Progress": "In Development", "In Review": "Code Review"]
+    )
+    #expect(prompt.contains("## Jira Status Mapping"))
+    #expect(prompt.contains("In Progress → In Development"))
+    #expect(prompt.contains("In Review → Code Review"))
+    // Unmapped pipeline states are omitted (they fall back to defaults).
+    #expect(!prompt.contains("Backlog → "))
+}
+
+@Test func generatePromptOmitsJiraStatusMappingBlockWhenUnset() async {
+    let launcher = ClaudeLauncher()
+    let prompt = await launcher.generatePrompt(
+        session: Session(name: "jira-nomap", ticketNumber: 1),
+        worktrees: [],
+        ticketURL: "https://acme.atlassian.net/browse/MAXX-1",
+        provider: .jira,
+        codeProvider: .github
+    )
+    #expect(!prompt.contains("## Jira Status Mapping"))
+}
+
+@Test func generatePromptOmitsJiraStatusMappingForNonJiraProvider() async {
+    // A status map on a non-Jira session must never leak into the prompt.
+    let launcher = ClaudeLauncher()
+    let prompt = await launcher.generatePrompt(
+        session: Session(name: "gh", ticketNumber: 5),
+        worktrees: [],
+        ticketURL: "https://github.com/org/repo/issues/5",
+        provider: .github,
+        jiraStatusMap: ["In Progress": "In Development"]
+    )
+    #expect(!prompt.contains("## Jira Status Mapping"))
+}
+
 @Test func generatePromptDoesNotStartWithPlanSlashCommand() async {
     // Plan mode is set via the `--permission-mode plan` flag in setup.sh,
     // not via a `/plan` slash-command prefix on the prompt body. See

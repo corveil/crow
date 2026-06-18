@@ -20,7 +20,8 @@ public actor ClaudeLauncher {
         ticketURL: String?,
         provider: Provider?,
         codeProvider: Provider? = nil,
-        customInstructions: String? = nil
+        customInstructions: String? = nil,
+        jiraStatusMap: [String: String]? = nil
     ) -> String {
         // Plan mode is set by the `--permission-mode plan` flag in setup.sh's
         // launch_claude(); do not prepend `/plan` here — that token is parsed
@@ -84,6 +85,11 @@ public actor ClaudeLauncher {
             )
         }
 
+        if provider == .jira, let mapping = Self.jiraStatusMappingBlock(jiraStatusMap) {
+            lines.append("")
+            lines.append(mapping)
+        }
+
         if let instructions = customInstructions,
            !instructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             lines.append("")
@@ -93,6 +99,28 @@ public actor ClaudeLauncher {
         }
 
         return lines.joined(separator: "\n")
+    }
+
+    /// Render the per-workspace Crow→Jira status-name overrides (#523) as a prompt
+    /// block so the agent's `transitionJiraIssue` calls use this project's actual
+    /// workflow status names instead of Crow's defaults. Returns `nil` when no
+    /// non-blank overrides are configured (the agent then uses default names).
+    static func jiraStatusMappingBlock(_ statusMap: [String: String]?) -> String? {
+        guard let statusMap else { return nil }
+        // Preserve pipeline order; skip blanks (those fall back to defaults).
+        let rows = TicketStatus.pipelineStatuses.compactMap { status -> String? in
+            guard let name = statusMap[status.rawValue]?.trimmingCharacters(in: .whitespaces),
+                  !name.isEmpty else { return nil }
+            return "- \(status.rawValue) → \(name)"
+        }
+        guard !rows.isEmpty else { return nil }
+        var block = "## Jira Status Mapping"
+        block += "\n"
+        block += "\nWhen transitioning this work item via `transitionJiraIssue`, use this project's"
+        block += " configured Jira workflow status names (not Crow's defaults):"
+        block += "\n"
+        block += "\n" + rows.joined(separator: "\n")
+        return block
     }
 
     /// Append the final "open a PR/MR" instruction, branching on provider.

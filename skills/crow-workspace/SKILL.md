@@ -103,6 +103,15 @@ same MCP tools (`createJiraIssue`, `editJiraIssue`, `transitionJiraIssue`,
 `lookupJiraAccountId`) for any create/assign/transition. (If the MCP isn't
 configured in this environment, fall back to `acli jira workitem view {key} --json`.)
 
+**Status names when transitioning (CROW-523):** Jira workflow status names are
+configurable per project, so before `transitionJiraIssue` consult this workspace's
+`jiraStatusMap` in `{devRoot}/.claude/config.json` — it maps Crow's pipeline states
+(`Backlog` / `Ready` / `In Progress` / `In Review` / `Done`) to this project's actual
+status names. Use the mapped name for the target state; fall back to the Crow default
+(`Ready` → `To Do`, all others use the state name verbatim) for any unmapped state. If
+your prompt already includes a "Jira Status Mapping" section, that is the same map —
+prefer it.
+
 ### Provider Detection from URL
 
 | URL Contains | Provider | CLI | GITLAB_HOST |

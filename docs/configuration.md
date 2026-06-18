@@ -156,6 +156,34 @@ When set, Crow injects the server into launched Jira-task sessions (and the Mana
 
 > **Prerequisite:** an Atlassian **org admin must enable API-token auth for the Rovo MCP Server** for your org, otherwise the headless calls return 401. See [docs/automation.md](automation.md#atlassian-mcp-headless-auth) for the one-time setup. `gh`/`glab` GitHub/GitLab task paths are unaffected.
 
+### Jira status mapping
+
+Jira workflow **status names are configurable per project**, so a project that renames a status (e.g. "In Development" instead of "In Progress") would otherwise make Crow's transitions silently fail. Each Jira workspace can map Crow's pipeline states to that project's concrete Jira status names via the per-workspace **`jiraStatusMap`** field:
+
+```jsonc
+{
+  "workspaces": [
+    {
+      "name": "MyOrg",
+      "taskProvider": "jira",
+      "jiraProjectKey": "PROPS",
+      "jiraStatusMap": {
+        // Crow pipeline state (TicketStatus raw value) → this project's Jira status name
+        "Ready": "To Do",
+        "In Progress": "In Development",
+        "In Review": "Code Review"
+      }
+    }
+  ]
+}
+```
+
+- **Keys** are Crow's pipeline states: `Backlog`, `Ready`, `In Progress`, `In Review`, `Done`. **Values** are the exact Jira workflow status names for that project (case- and spelling-sensitive).
+- **A missing or blank entry falls back to the built-in default:** `Ready` → `To Do`; every other state uses its own name verbatim (`In Progress`, `In Review`, `Done`, `Backlog`). An entirely unset `jiraStatusMap` keeps today's behavior.
+- Both status surfaces consult the map: the in-app **"Mark in review"** transition (`acli`) and the **agent-side** MCP `transitionJiraIssue` flow (the launched session's prompt embeds the map, and the `/crow-workspace` skill also reads it from `config.json`).
+
+Edit it under **Settings → Workspaces → (a Jira workspace) → Jira Status Mapping**. Each pipeline state gets a field whose placeholder is the current default — leave it blank to keep the default. If an Atlassian MCP credential is configured, **Fetch from Jira** populates per-row dropdowns from the project's live workflow (`GET /rest/api/3/project/{key}/statuses`); otherwise the fields are free-text.
+
 ## Manager Terminal
 
 The Manager tab runs Claude Code at the dev root and drives workspace orchestration. Its behavior is controlled by these top-level keys in `{devRoot}/.claude/config.json`:

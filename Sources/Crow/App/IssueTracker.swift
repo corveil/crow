@@ -388,7 +388,7 @@ final class IssueTracker {
         // site/JQL/project triple is what actually varies).
         var jiraConfigs: [JiraConfig] = []
         for ws in config.workspaces where ws.derivedTaskProvider == "jira" {
-            let cfg = JiraConfig(site: ws.jiraSite, projectKey: ws.jiraProjectKey, jql: ws.jiraJQL)
+            let cfg = JiraConfig(site: ws.jiraSite, projectKey: ws.jiraProjectKey, jql: ws.jiraJQL, statusMap: ws.jiraStatusMap)
             if !jiraConfigs.contains(cfg) { jiraConfigs.append(cfg) }
         }
         // Collect distinct Corveil configs. The corveil CLI is authed to one
@@ -2379,6 +2379,33 @@ final class IssueTracker {
     /// Best-effort (the backend itself degrades to empty on failure), mirroring
     /// the GitLab path — `includeClosed: false` skips the wasted closed query
     /// since refresh()'s closed-issue diff is GitHub-only today.
+    /// Resolve the per-workspace Crow→Jira status-name map (#523) for a ticket,
+    /// matching the ticket's Jira project key (then its site host) against the
+    /// configured Jira workspaces. Returns `nil` when no workspace defines a map,
+    /// so `JiraTaskBackend` falls back to its built-in defaults.
+    private static func jiraStatusMap(forTicket ticketURL: String) -> [String: String]? {
+        guard let devRoot = ConfigStore.loadDevRoot(),
+              let config = ConfigStore.loadConfig(devRoot: devRoot) else { return nil }
+        let jiraWorkspaces = config.workspaces.filter {
+            $0.derivedTaskProvider == "jira" && !($0.jiraStatusMap?.isEmpty ?? true)
+        }
+        guard !jiraWorkspaces.isEmpty else { return nil }
+        // Prefer a project-key match (the ticket key's project, e.g. PROPS-12 → PROPS).
+        if let project = Validation.parseJiraKey(ticketURL)?.project,
+           let ws = jiraWorkspaces.first(where: { $0.jiraProjectKey?.uppercased() == project.uppercased() }) {
+            return ws.jiraStatusMap
+        }
+        // Then a site-host match (acli is authed to a single site).
+        if let ws = jiraWorkspaces.first(where: { ws in
+            guard let site = ws.jiraSite, !site.isEmpty else { return false }
+            return ticketURL.contains(site)
+        }) {
+            return ws.jiraStatusMap
+        }
+        // Single Jira workspace with a map → unambiguous; use it.
+        return jiraWorkspaces.count == 1 ? jiraWorkspaces[0].jiraStatusMap : nil
+    }
+
     private func fetchJiraIssues(config: JiraConfig) async -> [AssignedIssue] {
         let backend = providerManager.taskBackend(for: .jira, jira: config)
         do {
@@ -2411,7 +2438,13 @@ final class IssueTracker {
               let ticketURL = session.ticketURL,
               let taskProvider = session.provider else { return }
 
-        let backend = providerManager.taskBackend(for: taskProvider)
+        // For Jira, thread the matching workspace's per-project status-name map
+        // (#523) so the transition honors a renamed workflow ("In Progress" →
+        // "In Development"); other providers ignore the JiraConfig.
+        let jiraConfig: JiraConfig? = (taskProvider == .jira)
+            ? JiraConfig(statusMap: Self.jiraStatusMap(forTicket: ticketURL))
+            : nil
+        let backend = providerManager.taskBackend(for: taskProvider, jira: jiraConfig)
         // Capability-gated across providers: GitHub Projects v2 and Jira workflow
         // transitions both expose `.projectBoardStatus` and implement
         // `setTaskStatus`. GitLab (no capability) returns early.

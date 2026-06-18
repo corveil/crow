@@ -376,6 +376,13 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
     /// Atlassian site host (e.g. "acme.atlassian.net") used to build user-facing
     /// `…/browse/KEY` URLs. Only meaningful when `taskProvider == "jira"`.
     public var jiraSite: String?
+    /// Per-workspace override of the Crow→Jira status-name map. Keys are
+    /// ``TicketStatus`` raw values for the pipeline statuses ("Backlog", "Ready",
+    /// "In Progress", "In Review", "Done"); values are the concrete Jira workflow
+    /// status names for this project. A missing/blank entry falls back to
+    /// ``JiraTaskBackend.defaultJiraStatusName(for:)``. Only meaningful when
+    /// `taskProvider == "jira"`. See #523.
+    public var jiraStatusMap: [String: String]?
     /// Self-hosted Corveil host (e.g. "corveil.acme.io") used **only** for URL
     /// routing in `ProviderManager.detect` — Corveil's own auth/state lives in
     /// the CLI (`corveil login`, `CORVEIL_URL`), so Crow doesn't pipe it through.
@@ -408,6 +415,7 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
         jiraProjectKey: String? = nil,
         jiraJQL: String? = nil,
         jiraSite: String? = nil,
+        jiraStatusMap: [String: String]? = nil,
         corveilHost: String? = nil,
         gateway: WorkspaceGateway? = nil
     ) {
@@ -424,6 +432,7 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
         self.jiraProjectKey = jiraProjectKey
         self.jiraJQL = jiraJQL
         self.jiraSite = jiraSite
+        self.jiraStatusMap = jiraStatusMap
         self.corveilHost = corveilHost
         self.gateway = gateway
     }
@@ -443,13 +452,14 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
         jiraProjectKey = try container.decodeIfPresent(String.self, forKey: .jiraProjectKey)
         jiraJQL = try container.decodeIfPresent(String.self, forKey: .jiraJQL)
         jiraSite = try container.decodeIfPresent(String.self, forKey: .jiraSite)
+        jiraStatusMap = try container.decodeIfPresent([String: String].self, forKey: .jiraStatusMap)
         corveilHost = try container.decodeIfPresent(String.self, forKey: .corveilHost)
         gateway = try container.decodeIfPresent(WorkspaceGateway.self, forKey: .gateway)
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, name, provider, cli, host, alwaysInclude, autoReviewRepos, excludeReviewRepos, customInstructions
-        case taskProvider, jiraProjectKey, jiraJQL, jiraSite, corveilHost, gateway
+        case taskProvider, jiraProjectKey, jiraJQL, jiraSite, jiraStatusMap, corveilHost, gateway
     }
 
     /// Characters that are unsafe in directory names (workspace names become directory names).
