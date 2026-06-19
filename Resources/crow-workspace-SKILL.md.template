@@ -92,30 +92,31 @@ GITLAB_HOST=gitlab.example.com glab issue view {number} --repo {org/repo} --comm
 GITLAB_HOST=gitlab.example.com glab mr view {number} --repo {org/repo} --comments
 ```
 
-### Jira (Atlassian MCP)
-Jira work items are fetched via the **official Atlassian Remote MCP Server**, not
-`acli` (CROW-522). When a workspace is configured for Jira and the Atlassian MCP
-credential is set in Settings → Automation, Crow pre-registers and auto-trusts the
-`atlassian` MCP server in the launched session. Resolve your `cloudId` once with
-`getAccessibleAtlassianResources`, then call `getJiraIssue` for the full key
-(`PROJ-NNN`, e.g. `MAXX-6859`). The summary field is the `{ticket_title}`. Use the
-same MCP tools (`createJiraIssue`, `editJiraIssue`, `transitionJiraIssue`,
-`lookupJiraAccountId`) for any create/assign/transition. (If the MCP isn't
-configured in this environment, fall back to `acli jira workitem view {key} --json`.)
+### Jira (`jira` MCP)
+Jira work items are driven via the **`jira` MCP server** (`sooperset/mcp-atlassian`),
+not `acli` (CROW-528). The `jira` server is configured globally in `~/.claude.json`,
+so it's available and trusted in every launched session — Crow injects nothing.
+Call `jira_get_issue` for the full key (`PROJ-NNN`, e.g. `MAXX-6859`); the `summary`
+field is the `{ticket_title}`. Use the sibling `jira_*` tools for any
+create/assign/update — `jira_create_issue`, `jira_update_issue` (assignee/edits),
+`jira_add_comment`, `jira_get_user_profile` — and the two-step transition flow below.
 
-**Status names when transitioning (CROW-523):** Jira workflow status names are
-configurable per project, so before `transitionJiraIssue` consult this workspace's
-`jiraStatusMap` in `{devRoot}/.claude/config.json` — it maps Crow's pipeline states
+**Transitioning (CROW-523):** `jira_transition_issue` takes a numeric
+`transition_id`, not a status name, and Jira workflow status names are configurable
+per project. So: (1) consult this workspace's `jiraStatusMap` in
+`{devRoot}/.claude/config.json` — it maps Crow's pipeline states
 (`Backlog` / `Ready` / `In Progress` / `In Review` / `Done`) to this project's actual
-status names. Use the mapped name for the target state; fall back to the Crow default
-(`Ready` → `To Do`, all others use the state name verbatim) for any unmapped state.
+status names; fall back to the Crow default (`Ready` → `To Do`, all others verbatim)
+for any unmapped state. (2) Call `jira_get_transitions {key}` and pick the transition
+whose target status matches that mapped name. (3) Call `jira_transition_issue` with
+that `transition_id`.
 
 ### Provider Detection from URL
 
 | URL Contains | Provider | CLI | GITLAB_HOST |
 |---|---|---|---|
 | `github.com` | github | gh | - |
-| `atlassian.net` / `/browse/` / bare `PROJ-123` | jira | Atlassian MCP | - |
+| `atlassian.net` / `/browse/` / bare `PROJ-123` | jira | `jira` MCP | - |
 | `gitlab.example.com` | gitlab | glab | gitlab.example.com |
 | `gitlab.com` | gitlab | glab | gitlab.com |
 | `gitlab-il2.example.com` | gitlab | glab | gitlab-il2.example.com |
@@ -258,13 +259,11 @@ gh api repos/{owner}/{repo}/issues/{number}/comments
 GITLAB_HOST={host} glab issue view {number} --repo {org/repo} --comments
 ```
 
-**Jira (Atlassian MCP — task-only):**
-Fetch the work item via the `atlassian` MCP server: resolve `cloudId` with
-`getAccessibleAtlassianResources`, then `getJiraIssue` for `{key}` (full key, e.g.
-`MAXX-6859` — not the numeric suffix). Use the work item's summary as
-`{ticket_title}`. The code provider/PR detection below still runs against the
-workspace's configured GitHub/GitLab repo, not Jira. (Fallback when MCP is
-unconfigured: `acli jira workitem view {key} --json`, summary at `.fields.summary`.)
+**Jira (`jira` MCP — task-only):**
+Fetch the work item via the `jira` MCP server: call `jira_get_issue` for `{key}`
+(full key, e.g. `MAXX-6859` — not the numeric suffix). Use the work item's `summary`
+as `{ticket_title}`. The code provider/PR detection below still runs against the
+workspace's configured GitHub/GitLab repo, not Jira.
 
 **If an existing PR was detected for this ticket**, also fetch the PR view so it can be embedded:
 ```bash

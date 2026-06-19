@@ -560,15 +560,6 @@ final class SessionService {
             ClaudeHookConfigWriter.writeGatewayEnv(
                 dirPath: worktree.worktreePath, resolved: gatewayResolved)
             gatewayPrefix = ClaudeLaunchArgs.gatewayEnvPrefix(gatewayResolved)
-
-            // CROW-522: inject the Atlassian Remote MCP Server for Jira-task
-            // worktrees so the session creates/assigns/transitions/fetches work
-            // items via MCP instead of acli. Always called (resolved or nil) so a
-            // non-Jira workspace — or one with the MCP unconfigured — clears any
-            // stale .mcp.json/env.
-            ClaudeHookConfigWriter.writeAtlassianMcpConfig(
-                dirPath: worktree.worktreePath,
-                resolved: workspaceAtlassianMCPResolved(for: sessionID))
         }
 
         let rcEnabled = appState.remoteControlEnabled
@@ -806,36 +797,6 @@ final class SessionService {
     private func writeManagerGatewayEnv() {
         guard let devRoot = ConfigStore.loadDevRoot() else { return }
         ClaudeHookConfigWriter.writeGatewayEnv(dirPath: devRoot, resolved: managerGatewayResolved())
-        // CROW-522: the Manager (and cron jobs running at devRoot) get the
-        // Atlassian MCP whenever it's configured, since the Manager isn't bound
-        // to a single workspace.
-        ClaudeHookConfigWriter.writeAtlassianMcpConfig(dirPath: devRoot, resolved: atlassianMCPResolved())
-    }
-
-    /// Resolve the org-wide Atlassian MCP credential (`AppConfig.atlassianMCP`)
-    /// into a launch-ready Authorization header, or nil when unset/empty
-    /// (CROW-522). Used for the Manager and cron sessions at devRoot.
-    private func atlassianMCPResolved() -> AtlassianMCPResolver.Resolved? {
-        guard let devRoot = ConfigStore.loadDevRoot(),
-              let config = ConfigStore.loadConfig(devRoot: devRoot),
-              let mcp = config.atlassianMCP, !mcp.isEmpty
-        else { return nil }
-        return AtlassianMCPResolver.resolve(mcp)
-    }
-
-    /// Resolve the Atlassian MCP credential for a non-Manager session, gated on
-    /// the worktree's workspace using Jira as its task provider (CROW-522).
-    /// Returns nil for non-Jira workspaces or when the MCP is unconfigured.
-    private func workspaceAtlassianMCPResolved(for sessionID: UUID) -> AtlassianMCPResolver.Resolved? {
-        guard let devRoot = ConfigStore.loadDevRoot(),
-              let config = ConfigStore.loadConfig(devRoot: devRoot),
-              let mcp = config.atlassianMCP, !mcp.isEmpty,
-              let worktree = appState.primaryWorktree(for: sessionID),
-              let wsName = Self.workspaceName(forWorktreePath: worktree.worktreePath, devRoot: devRoot),
-              let workspace = config.workspaces.first(where: { $0.name == wsName }),
-              workspace.derivedTaskProvider == "jira"
-        else { return nil }
-        return AtlassianMCPResolver.resolve(mcp)
     }
 
     /// Resolve the Manager's own AI gateway (`AppConfig.managerGateway`) from
@@ -895,9 +856,6 @@ final class SessionService {
         // manual `claude` re-runs in this terminal inherit the same routing. The
         // Manager's cwd is the devRoot.
         ClaudeHookConfigWriter.writeGatewayEnv(dirPath: cwd, resolved: managerGatewayResolved())
-        // CROW-522: inject the Atlassian MCP into the Manager terminal's devRoot
-        // so the Manager can drive Jira via MCP (headless).
-        ClaudeHookConfigWriter.writeAtlassianMcpConfig(dirPath: cwd, resolved: atlassianMCPResolved())
         let rawTerminal = SessionTerminal(
             sessionID: session.id,
             name: session.name,

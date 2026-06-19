@@ -41,21 +41,16 @@ PR #228 split every automation toggle out of General into its own tab. Open **Se
 
   Turn this off if your account reports auto mode as unavailable. Worker sessions and CLI-spawned terminals are unaffected. Takes effect on next app launch — the Manager's stored command is rebuilt on hydration.
 
-### Atlassian MCP (Jira)
+### Jira MCP
 
-`acli` cannot set a Jira assignee (at create or after) and its transitions are unreliable, so every ticket Crow filed landed unassigned. PR #522 routes the **agent-side** Jira flow (create-with-assignee, assign/reassign, transition, fetch, link) through the official **Atlassian Remote MCP Server** instead. Crow's in-app issue-board polling and auto-complete still use `acli` (that path works); only the agent flow moved.
+`acli` cannot set a Jira assignee (at create or after) and its transitions are unreliable, so every ticket Crow filed landed unassigned. The **agent-side** Jira flow (create-with-assignee, assign/reassign, transition, fetch, comment) now routes through the **`jira` MCP server** (`sooperset/mcp-atlassian`, Docker stdio) using the `jira_*` tools. Crow's in-app issue-board polling and auto-complete still use `acli` (that path works); only the agent flow moved.
 
-- **Atlassian MCP (Jira)** — set the endpoint (defaults to `https://mcp.atlassian.com/v1/mcp`), your Atlassian account **email**, and an **API token** (`op://` reference recommended, or plaintext). Crow builds an HTTP Basic `Authorization` header and injects the MCP server into launched Jira-task sessions, the Manager, and cron jobs.
-
-How injection works: for a session whose workspace uses `taskProvider: "jira"` (and the Manager/cron at the dev root), Crow writes a project-root `.mcp.json` registering an `http` server named `atlassian`, pre-trusts it via `enabledMcpjsonServers` in `.claude/settings.local.json`, and stores the resolved `Authorization` value in that file's `env` block (`ATLASSIAN_MCP_AUTHORIZATION`, chmod `0600`) — the `.mcp.json` header is a `${…}` reference, so no secret lands in it. The launched agent (and the migrated `/crow-create-ticket`, `/crow-workspace`, `/crow-batch-workspace` skills) use the MCP tools — `getJiraIssue`, `createJiraIssue`, `editJiraIssue`, `transitionJiraIssue`, `lookupJiraAccountId` — instead of `acli`. Backed by `AppConfig.atlassianMCP`. `gh`/`glab` GitHub/GitLab task paths are untouched.
+The `jira` server is configured **globally** in `~/.claude.json`'s top-level `mcpServers` (Docker stdio with `JIRA_URL` / `JIRA_USERNAME` / `JIRA_API_TOKEN`), so it is auto-loaded and trusted in **every** Claude Code session — worktrees, the Manager, and cron jobs. Crow therefore injects nothing: there is no per-session `.mcp.json` or `enabledMcpjsonServers` entry to write (CROW-528). The launched agent (and the `/crow-create-ticket`, `/crow-workspace`, `/crow-batch-workspace` skills) call the `jira_*` tools — `jira_get_issue`, `jira_create_issue`, `jira_update_issue`, `jira_transition_issue` (+ `jira_get_transitions`), `jira_add_comment`, `jira_get_user_profile` — instead of `acli`. `gh`/`glab` GitHub/GitLab task paths are untouched.
 
 <a id="atlassian-mcp-headless-auth"></a>
-**Headless auth — one-time setup.** The Manager and cron jobs run without a browser, so they use API-token auth (no OAuth consent screen). Two prerequisites:
+**Headless auth — one-time setup.** The `jira` server authenticates with a **personal API token** via the `JIRA_*` env vars in its `~/.claude.json` entry. Create the token at <https://id.atlassian.com> → Security → API tokens and set `JIRA_URL` (your `https://<site>.atlassian.net`), `JIRA_USERNAME` (account email), and `JIRA_API_TOKEN`. The same global config serves the Manager and cron jobs, so no Crow-side credential is needed for the agent flow.
 
-1. An Atlassian **org admin enables API-token auth for the Rovo MCP Server** (organization security settings → Rovo MCP Server). Without this, calls return 401.
-2. Create a **personal API token** at <https://id.atlassian.com> → Security → API tokens, then store it in **Settings → Automation → Atlassian MCP (Jira)** as an `op://` reference (preferred) or plaintext.
-
-Crow sends `Authorization: Basic base64(email:token)`. (A service-account `Bearer` key works too if you'd rather not attribute tickets to a personal account, but the Settings UI is geared to the personal-token Basic flow.)
+> **In-app status fetch.** The "Fetch from Jira" button in **Settings → Workspaces** (the #523 status map) calls Jira's REST API *directly from the Crow app process*, which cannot use the MCP. That one feature uses a small **Settings → Automation → Jira (status fetch)** credential (`JIRA_USERNAME` + an `op://`/plaintext API token), stored in `config.json` as `jiraCredential`. It is unrelated to the agent-side MCP.
 
 ### Auto-respond
 

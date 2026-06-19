@@ -65,15 +65,13 @@ public struct AppConfig: Codable, Sendable, Equatable {
     /// global `~/.zshrc` export doesn't bleed in). Per-workspace `gateway` blocks
     /// apply to non-Manager sessions only (CROW-402).
     public var managerGateway: WorkspaceGateway?
-    /// Optional Atlassian Remote MCP Server credential, shared org-wide (one
-    /// Atlassian account). When set and a session's task provider is Jira — or
-    /// for the Manager/cron sessions — Crow injects the Atlassian MCP server
-    /// into the launched session's `.mcp.json` and pre-trusts it, replacing the
-    /// `acli` agent flow for create/assign/transition/fetch (CROW-522). The API
-    /// token is stored as an `op://` reference (resolved at launch) so it never
-    /// lands at rest in `config.json`. When nil, no MCP is injected and Jira
-    /// sessions fall back to `acli`.
-    public var atlassianMCP: AtlassianMCPConfig?
+    /// Optional Jira REST credential, shared org-wide (one Jira account), used
+    /// only by the in-app status fetch (the #523 workspace status-map dropdown).
+    /// Claude Code sessions get Jira via the global `jira` MCP in `~/.claude.json`,
+    /// so Crow no longer injects any MCP (CROW-528). The API token is stored as an
+    /// `op://` reference (resolved on demand) so it never lands at rest in
+    /// `config.json`. When nil, the "Fetch from Jira" status button is disabled.
+    public var jiraCredential: JiraCredential?
 
     /// Effective review-exclude patterns: the global `defaults.excludeReviewRepos`
     /// unioned with every workspace's per-workspace `excludeReviewRepos`. A repo
@@ -102,7 +100,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         defaultAgentKind: AgentKind = .claudeCode,
         agentsByKind: [String: AgentKind] = [:],
         managerGateway: WorkspaceGateway? = nil,
-        atlassianMCP: AtlassianMCPConfig? = nil
+        jiraCredential: JiraCredential? = nil
     ) {
         self.workspaces = workspaces
         self.defaults = defaults
@@ -122,7 +120,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         self.defaultAgentKind = defaultAgentKind
         self.agentsByKind = agentsByKind
         self.managerGateway = managerGateway
-        self.atlassianMCP = atlassianMCP
+        self.jiraCredential = jiraCredential
     }
 
     public init(from decoder: Decoder) throws {
@@ -145,11 +143,44 @@ public struct AppConfig: Codable, Sendable, Equatable {
         defaultAgentKind = try container.decodeIfPresent(AgentKind.self, forKey: .defaultAgentKind) ?? .claudeCode
         agentsByKind = try container.decodeIfPresent([String: AgentKind].self, forKey: .agentsByKind) ?? [:]
         managerGateway = try container.decodeIfPresent(WorkspaceGateway.self, forKey: .managerGateway)
-        atlassianMCP = try container.decodeIfPresent(AtlassianMCPConfig.self, forKey: .atlassianMCP)
+        if let cred = try container.decodeIfPresent(JiraCredential.self, forKey: .jiraCredential) {
+            jiraCredential = cred
+        } else {
+            // Backward-compat: migrate the pre-CROW-528 `atlassianMCP` block
+            // (email/tokenRef) into the new Jira REST credential. Decoded from a
+            // separate container so the legacy key stays out of `CodingKeys`
+            // (which also drives the synthesized `encode(to:)`).
+            let legacyContainer = try decoder.container(keyedBy: LegacyCodingKeys.self)
+            if let legacy = try legacyContainer.decodeIfPresent(LegacyAtlassianMCP.self, forKey: .atlassianMCP),
+               !legacy.email.isEmpty || !legacy.tokenRef.isEmpty {
+                jiraCredential = JiraCredential(username: legacy.email, tokenRef: legacy.tokenRef)
+            } else {
+                jiraCredential = nil
+            }
+        }
+    }
+
+    /// Pre-CROW-528 shape of the now-removed `atlassianMCP` config, decoded only
+    /// to migrate an existing `config.json` forward to `jiraCredential`.
+    private struct LegacyAtlassianMCP: Decodable {
+        var email: String = ""
+        var tokenRef: String = ""
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            email = try c.decodeIfPresent(String.self, forKey: .email) ?? ""
+            tokenRef = try c.decodeIfPresent(String.self, forKey: .tokenRef) ?? ""
+        }
+        enum CodingKeys: String, CodingKey { case email, tokenRef }
+    }
+
+    /// Decode-only keys for legacy/migrated fields that no longer have a stored
+    /// property (so they must stay out of `CodingKeys`, which drives encoding).
+    private enum LegacyCodingKeys: String, CodingKey {
+        case atlassianMCP
     }
 
     private enum CodingKeys: String, CodingKey {
-        case workspaces, defaults, notifications, sidebar, remoteControlEnabled, managerAutoPermissionMode, jobsAutoPermissionMode, telemetry, autoRespond, attributionTrailers, autoMergeWatcherEnabled, autoCreateWatcherEnabled, autoRebaseWatcherEnabled, cleanup, jobs, defaultAgentKind, agentsByKind, managerGateway, atlassianMCP
+        case workspaces, defaults, notifications, sidebar, remoteControlEnabled, managerAutoPermissionMode, jobsAutoPermissionMode, telemetry, autoRespond, attributionTrailers, autoMergeWatcherEnabled, autoCreateWatcherEnabled, autoRebaseWatcherEnabled, cleanup, jobs, defaultAgentKind, agentsByKind, managerGateway, jiraCredential
     }
 
     /// Resolve the agent that should drive a newly-created session of the
@@ -242,59 +273,45 @@ extension WorkspaceGateway {
     }
 }
 
-/// Atlassian Remote MCP Server credential (CROW-522). Drives the agent-side Jira
-/// flow (create-with-assignee, assign, transition, fetch, link) via the official
-/// MCP server instead of `acli`, in launched sessions, the Manager, and cron jobs.
+/// Jira REST credential used only by the in-app status fetch (CROW-528). The
+/// Crow app process calls Jira's REST API directly (e.g. the #523 workspace
+/// status-map dropdown via ``JiraStatusFetcher``); it cannot use the `jira` MCP,
+/// which only serves Claude Code sessions. Those sessions instead inherit the
+/// global `jira` MCP server from `~/.claude.json`, so Crow no longer injects or
+/// provisions any Jira MCP itself.
 ///
-/// Auth is a **personal API token** sent as HTTP Basic: the launch-time resolver
-/// builds `Authorization: Basic base64("\(email):\(token)")`. `tokenRef` is an
-/// `op://…` 1Password reference (resolved at launch via `op read`) so the token
-/// never lands at rest in `config.json`; a non-`op://` value is treated as a
-/// plaintext token (stored in `config.json`, so warn in the UI).
-///
-/// Note: the Atlassian org admin must first **enable API-token auth for the Rovo
-/// MCP Server**, otherwise the headless calls 401.
-public struct AtlassianMCPConfig: Codable, Sendable, Equatable {
-    /// The remote MCP endpoint. Defaults to Atlassian's recommended `/v1/mcp`.
-    public var endpoint: String
-    /// The Atlassian account email used for HTTP Basic auth.
-    public var email: String
+/// Auth is a **personal API token** sent as HTTP Basic: the resolver builds
+/// `Authorization: Basic base64("\(username):\(token)")`. `tokenRef` is an
+/// `op://…` 1Password reference (resolved via `op read`) so the token never
+/// lands at rest in `config.json`; a non-`op://` value is treated as a plaintext
+/// token (stored in `config.json`, so warn in the UI). The Jira site comes from
+/// the workspace's `jiraSite`, so no endpoint is stored here.
+public struct JiraCredential: Codable, Sendable, Equatable {
+    /// The Jira account email/username used for HTTP Basic auth (`JIRA_USERNAME`).
+    public var username: String
     /// The API token, as an `op://…` reference (preferred) or plaintext.
     public var tokenRef: String
 
-    /// Atlassian's recommended streamable-HTTP endpoint (the legacy `/v1/sse`
-    /// is deprecated after 2026-06-30).
-    public static let defaultEndpoint = "https://mcp.atlassian.com/v1/mcp"
-
-    public init(endpoint: String = AtlassianMCPConfig.defaultEndpoint, email: String, tokenRef: String) {
-        self.endpoint = endpoint
-        self.email = email
+    public init(username: String, tokenRef: String) {
+        self.username = username
         self.tokenRef = tokenRef
     }
 
-    /// Whether this config has enough to inject a server. Both an email and a
-    /// token are required for Basic auth; a blank endpoint falls back to the
-    /// default at resolve time.
+    /// Whether this credential has enough to authenticate. Both a username and a
+    /// token are required for Basic auth.
     public var isEmpty: Bool {
-        email.trimmingCharacters(in: .whitespaces).isEmpty
+        username.trimmingCharacters(in: .whitespaces).isEmpty
             && tokenRef.trimmingCharacters(in: .whitespaces).isEmpty
-    }
-
-    /// The effective endpoint, falling back to the default when blank.
-    public var resolvedEndpoint: String {
-        let trimmed = endpoint.trimmingCharacters(in: .whitespaces)
-        return trimmed.isEmpty ? Self.defaultEndpoint : trimmed
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        endpoint = try container.decodeIfPresent(String.self, forKey: .endpoint) ?? Self.defaultEndpoint
-        email = try container.decodeIfPresent(String.self, forKey: .email) ?? ""
+        username = try container.decodeIfPresent(String.self, forKey: .username) ?? ""
         tokenRef = try container.decodeIfPresent(String.self, forKey: .tokenRef) ?? ""
     }
 
     private enum CodingKeys: String, CodingKey {
-        case endpoint, email, tokenRef
+        case username, tokenRef
     }
 }
 

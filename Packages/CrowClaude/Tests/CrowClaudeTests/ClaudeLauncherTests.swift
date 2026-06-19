@@ -57,7 +57,7 @@ import Testing
 
 @Test func generatePromptWithJiraTaskAndGitHubCode() async {
     // Cross-backend session (ADR 0005): Jira task + GitHub code. The ticket is
-    // fetched via the Atlassian MCP server (CROW-522), but the PR step still
+    // fetched via the `jira` MCP server (CROW-528), but the PR step still
     // uses `gh`.
     let launcher = ClaudeLauncher()
     let session = Session(name: "test-session", ticketNumber: 7)
@@ -70,8 +70,8 @@ import Testing
         codeProvider: .github
     )
 
-    // Ticket step routes through the Atlassian MCP with the extracted key — not acli.
-    #expect(prompt.contains("getJiraIssue"))
+    // Ticket step routes through the `jira` MCP with the extracted key — not acli.
+    #expect(prompt.contains("jira_get_issue"))
     #expect(prompt.contains("PROJ-7"))
     #expect(!prompt.contains("acli jira workitem"))
     #expect(!prompt.contains("gh issue view"))

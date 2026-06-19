@@ -4,11 +4,11 @@ import Foundation
 /// Settings status-mapping UI can offer live names instead of free-text (#523).
 ///
 /// `acli` has no transition/status *list* command and the in-app UI can't reach
-/// the agent-side Atlassian MCP, so this calls the Jira Cloud REST endpoint
+/// the session-side `jira` MCP, so this calls the Jira Cloud REST endpoint
 /// `GET /rest/api/3/project/{projectKey}/statuses` directly, authenticated with
-/// the same Atlassian email + API token used for the MCP server (HTTP Basic).
-/// That endpoint returns every status across the project's issue types — no
-/// sample issue needed.
+/// the Jira username + API token from Settings → Automation (HTTP Basic). That
+/// endpoint returns every status across the project's issue types — no sample
+/// issue needed.
 public enum JiraStatusFetcher {
     public enum FetchError: Error, Equatable {
         case badSite
@@ -53,7 +53,7 @@ public enum JiraStatusFetcher {
 
     /// Fetch the distinct status names for `projectKey` on `site`, authenticated
     /// with `authorization` (a full header value, e.g. `Basic …` from
-    /// ``AtlassianMCPResolver``). Injectable transport for testing.
+    /// ``JiraCredentialResolver``). Injectable transport for testing.
     public static func fetchStatusNames(
         site: String,
         projectKey: String,

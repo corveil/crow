@@ -1,11 +1,11 @@
 # Crow Create Ticket
 
 Create a new ticket (GitHub issue via `gh`, GitLab issue via `glab`, or Jira work item
-via the **Atlassian MCP server**) for a repo/project in the current Crow workspace,
+via the **`jira` MCP server**) for a repo/project in the current Crow workspace,
 assigned to the invoking user and labeled `crow:auto`. For GitHub/GitLab, Crow's
 auto-pickup queue then implements it. (Jira's auto-pickup isn't wired — the label is
 for parity/board visibility — but the work item is created **with an assignee in one
-step**, which `acli` could never do; CROW-522.)
+step**, which `acli` could never do; CROW-528.)
 
 ## Important: Sandbox Bypass
 
@@ -54,10 +54,10 @@ same file used by `/crow-workspace`. It maps each workspace to a provider/cli/ho
 |--------------------------|--------------|-----------------------------|
 | `github` (or unset)      | gh           | —                           |
 | `gitlab`                 | glab         | workspace `host`            |
-| `jira`                   | Atlassian MCP | project `jiraProjectKey`   |
+| `jira`                   | `jira` MCP   | project `jiraProjectKey`   |
 
 When a workspace sets `taskProvider: "jira"`, tasks live in Jira (code/PRs still on the
-workspace's GitHub/GitLab repo). Use the Atlassian MCP tools instead of `gh`/`glab` for
+workspace's GitHub/GitLab repo). Use the `jira_*` MCP tools instead of `gh`/`glab` for
 the steps below.
 
 ## Instructions
@@ -108,9 +108,10 @@ gh api user --jq .login
 GITLAB_HOST={host} glab api user --jq '.username'
 ```
 
-**Jira (Atlassian MCP):** resolve your own Atlassian `accountId` via the MCP — call
-`atlassianUserInfo` (current user) or `lookupJiraAccountId`. You'll pass this
-`accountId` as the assignee when creating the work item.
+**Jira (`jira` MCP):** the assignee is the Jira server's configured account —
+i.e. its `JIRA_USERNAME` email. `jira_create_issue`'s `assignee` param accepts that
+email directly, so no separate account-id lookup is needed. (If you need to confirm
+the resolved account, call `jira_get_user_profile {email}`.)
 
 ### Step 4: Create the issue (assigned + labeled `crow:auto`)
 
@@ -142,13 +143,12 @@ GITLAB_HOST={host} glab issue create --repo {org/repo} \
   --yes
 ```
 
-**Jira (Atlassian MCP):** call `createJiraIssue` with your resolved `cloudId`
-(`getAccessibleAtlassianResources`), the workspace's `jiraProjectKey`, issue type
-`Task`, the `TITLE` as summary, `BODY` (including the attribution footer) as
-description, the `crow:auto` label, **and the assignee `accountId` from Step 3** so the
-work item is created already assigned — the core fix in CROW-522. There is no
-missing-label fallback to run (Step 5 is GitHub/GitLab-only); Jira accepts arbitrary
-labels.
+**Jira (`jira` MCP):** call `jira_create_issue` with `project_key` =
+`jiraProjectKey`, `issue_type` `Task`, `summary` = `TITLE`, `description` = `BODY`
+(including the attribution footer), `assignee` = the email from Step 3, and
+`additional_fields` `{"labels":["crow:auto"]}` — so the work item is created already
+assigned, the core fix in CROW-522. There is no missing-label fallback to run (Step 5
+is GitHub/GitLab-only); Jira accepts arbitrary labels.
 
 ### Step 4b: Attribution (REQUIRED)
 
@@ -192,6 +192,6 @@ the repo, assignee, and `crow:auto` label so they can confirm Crow will pick it 
 - This skill only creates the ticket. Crow's auto-pickup queue (driven by the
   `crow:auto` label) is responsible for starting implementation — do not also set up a
   worktree or session here. Use `/crow-workspace` for that.
-- Assignee is resolved dynamically (`gh api user` / `glab api user` / the Atlassian MCP
-  `atlassianUserInfo` accountId); never hardcode a login or accountId.
+- Assignee is resolved dynamically (`gh api user` / `glab api user` / the `jira` MCP
+  server's configured `JIRA_USERNAME`); never hardcode a login or accountId.
 - All `gh`, `glab`, and `git` commands require `dangerouslyDisableSandbox: true`.

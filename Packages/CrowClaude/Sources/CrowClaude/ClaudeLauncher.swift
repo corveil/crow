@@ -55,9 +55,9 @@ public actor ClaudeLauncher {
             case .jira:
                 lines.append("")
                 if let key = Validation.jiraKey(from: url) {
-                    lines.append("Fetch this work item via the **Atlassian MCP server** (pre-configured for this session): resolve your cloudId with `getAccessibleAtlassianResources`, then call `getJiraIssue` for key `\(key)`. Use the MCP tools — not `acli` — for any Jira create/assign/transition/comment as well.")
+                    lines.append("Fetch this work item via the **`jira` MCP server** (available in this session): call `jira_get_issue` for key `\(key)`. Use the `jira_*` MCP tools — not `acli` — for any Jira create/assign/transition/comment as well.")
                 } else {
-                    lines.append("URL: \(url) — fetch it via the Atlassian MCP server (`getJiraIssue`).")
+                    lines.append("URL: \(url) — fetch it via the `jira` MCP server (`jira_get_issue`).")
                 }
             case .corveil, nil:
                 lines.append("URL: \(url)")

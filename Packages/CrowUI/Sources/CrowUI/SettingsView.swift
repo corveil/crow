@@ -65,23 +65,23 @@ public struct SettingsView: View {
     }
 
     /// Fetch a Jira project's live workflow status names for the workspace
-    /// status-mapping dropdown (#523), authenticating with the Atlassian MCP
-    /// credential from Settings → Automation. Runs off the main actor (resolving
-    /// an `op://` token shells out) and maps failures to user-facing copy.
+    /// status-mapping dropdown (#523), authenticating with the Jira credential
+    /// from Settings → Automation. Runs off the main actor (resolving an `op://`
+    /// token shells out) and maps failures to user-facing copy.
     private func fetchJiraStatuses(site: String, projectKey: String) async -> JiraStatusFetchResult {
-        let atlassian = config.atlassianMCP
+        let credential = config.jiraCredential
         return await Task.detached { () -> JiraStatusFetchResult in
-            guard let cfg = atlassian, !cfg.isEmpty,
-                  let resolved = AtlassianMCPResolver.resolve(cfg) else {
-                return .failure("Add an Atlassian MCP credential in Settings → Automation first.")
+            guard let cred = credential, !cred.isEmpty,
+                  let authorization = JiraCredentialResolver.resolve(cred) else {
+                return .failure("Add a Jira credential in Settings → Automation first.")
             }
             switch await JiraStatusFetcher.fetchStatusNames(
-                site: site, projectKey: projectKey, authorization: resolved.authorization
+                site: site, projectKey: projectKey, authorization: authorization
             ) {
             case .success(let names):
                 return .success(names)
             case .failure(.badSite):
-                return .failure("Invalid Atlassian site or project key.")
+                return .failure("Invalid Jira site or project key.")
             case .failure(.http(let code)):
                 return .failure("Jira returned HTTP \(code). Check the credential and project key.")
             case .failure(.transport(let message)):
@@ -101,7 +101,7 @@ public struct SettingsView: View {
                 remoteControlEnabled: $config.remoteControlEnabled,
                 managerAutoPermissionMode: $config.managerAutoPermissionMode,
                 managerGateway: $config.managerGateway,
-                atlassianMCP: $config.atlassianMCP,
+                jiraCredential: $config.jiraCredential,
                 autoRespond: $config.autoRespond,
                 attributionTrailers: $config.attributionTrailers,
                 autoMergeWatcherEnabled: $config.autoMergeWatcherEnabled,

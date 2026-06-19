@@ -59,14 +59,6 @@ WS_GATEWAY_RESOLVED=false
 TASK_PROVIDER=""
 TASK_PROVIDER_RESOLVED=false
 
-# Resolved Atlassian MCP server for this workspace (populated by
-# resolve_atlassian_mcp_env). WS_MCP_AUTH carries the full `Basic …` header
-# value; it is written only into the owner-only settings.local.json env block.
-WS_MCP_URL=""
-WS_MCP_AUTH=""
-WS_HAS_MCP=false
-WS_MCP_RESOLVED=false
-
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
 log() { echo "[setup.sh] $*" >&2; }
@@ -225,49 +217,6 @@ resolve_task_provider() {
     '.workspaces[]? | select(.name == $name) | (.taskProvider // .provider) // empty' \
     "$config_path" 2>/dev/null) || return 0
   [[ -n "$tp" && "$tp" != "null" ]] && TASK_PROVIDER="$tp"
-}
-
-# Populate WS_MCP_URL / WS_MCP_AUTH and set WS_HAS_MCP=true when this workspace
-# uses Jira tasks AND an Atlassian MCP credential is configured (CROW-522).
-# Builds the HTTP Basic Authorization header from the account email + API token
-# (`op://` token references resolved via `op read`). Idempotent — the expensive
-# `op read` only runs once. Never logs the resolved token or header.
-resolve_atlassian_mcp_env() {
-  [[ "$WS_MCP_RESOLVED" == true ]] && return 0
-  WS_MCP_RESOLVED=true
-
-  resolve_task_provider
-  [[ "$TASK_PROVIDER" == "jira" ]] || return 0
-
-  local config_path="$DEV_ROOT/.claude/config.json"
-  [[ -f "$config_path" ]] || return 0
-  command -v jq >/dev/null 2>&1 || { log "jq not found; skipping Atlassian MCP resolution"; return 0; }
-
-  local mcp
-  mcp=$(jq -c '.atlassianMCP // empty' "$config_path" 2>/dev/null) || return 0
-  [[ -n "$mcp" && "$mcp" != "null" ]] || return 0
-
-  local endpoint email token_ref
-  endpoint=$(jq -r '.endpoint // "https://mcp.atlassian.com/v1/mcp"' <<< "$mcp")
-  email=$(jq -r '.email // ""' <<< "$mcp")
-  token_ref=$(jq -r '.tokenRef // ""' <<< "$mcp")
-  [[ -n "$email" && -n "$token_ref" ]] || { log "Atlassian MCP: email/token not set; skipping"; return 0; }
-
-  local token="$token_ref"
-  if [[ "$token_ref" == op://* ]]; then
-    if ! token=$(op read "$token_ref" 2>/dev/null); then
-      log "Atlassian MCP: failed to resolve API token reference (op read failed); skipping MCP injection"
-      return 0
-    fi
-  fi
-
-  # base64 of "email:token" with no embedded newline (base64 wraps by default).
-  local b64
-  b64=$(printf '%s' "$email:$token" | base64 | tr -d '\n')
-  WS_MCP_URL="$endpoint"
-  WS_MCP_AUTH="Basic $b64"
-  WS_HAS_MCP=true
-  log "Atlassian MCP: injecting $endpoint for this Jira workspace"
 }
 
 # Build the shell prefix that applies (or clears) the gateway env vars on the
@@ -584,10 +533,9 @@ create_session() {
 # regardless of --skip-launch, so any worktree the user later opens with Claude
 # Code picks up both overrides.
 write_settings_local() {
-  # Resolve the gateway and Atlassian MCP first so their blocks are written even
-  # when attribution trailers are disabled.
+  # Resolve the gateway first so its block is written even when attribution
+  # trailers are disabled.
   resolve_gateway_env
-  resolve_atlassian_mcp_env
 
   local want_attribution=false
   if is_attribution_trailers_enabled && [[ -n "$SESSION_ID" ]]; then
@@ -598,8 +546,8 @@ write_settings_local() {
     log "Attribution trailers disabled via config"
   fi
 
-  if [[ "$want_attribution" != true && "$WS_HAS_GATEWAY" != true && "$WS_HAS_MCP" != true ]]; then
-    log "No attribution trailer, gateway, or MCP to write; skipping settings.local.json"
+  if [[ "$want_attribution" != true && "$WS_HAS_GATEWAY" != true ]]; then
+    log "No attribution trailer or gateway to write; skipping settings.local.json"
     return
   fi
 
@@ -641,31 +589,19 @@ Crow-Session: $SESSION_ID"
     --argjson want_gw "$WS_HAS_GATEWAY" \
     --arg base_url "$WS_BASE_URL" \
     --arg headers "$WS_CUSTOM_HEADERS" \
-    --argjson want_mcp "$WS_HAS_MCP" \
-    --arg mcp_auth "$WS_MCP_AUTH" \
     '(if $want_attr then .attribution.commit = $commit else . end)
      | (if $want_gw then .env.ANTHROPIC_BASE_URL = $base_url
-                       | .env.ANTHROPIC_CUSTOM_HEADERS = $headers else . end)
-     | (if $want_mcp then .env.ATLASSIAN_MCP_AUTHORIZATION = $mcp_auth
-                        | .enabledMcpjsonServers = ((.enabledMcpjsonServers // [])
-                            + ["atlassian"] | unique) else . end)' \
+                       | .env.ANTHROPIC_CUSTOM_HEADERS = $headers else . end)' \
     <<< "$base"); then
     die "settings_local" "jq failed to build settings.local.json"
   fi
   printf '%s\n' "$merged" > "$settings_path"
-  # The env block can carry a resolved bearer token / MCP credential, so restrict
-  # the file to owner-only — matching ConfigStore's 0600 on config.json.
+  # The env block can carry a resolved bearer token, so restrict the file to
+  # owner-only — matching ConfigStore's 0600 on config.json.
   chmod 600 "$settings_path" 2>/dev/null || true
 
-  # CROW-522: write a project-root .mcp.json registering the Atlassian Remote MCP
-  # Server. The Authorization header references the env var set above via ${…}
-  # expansion, so the secret stays only in the owner-only settings.local.json.
-  if [[ "$WS_HAS_MCP" == true ]]; then
-    write_mcp_json
-  fi
-
-  if [[ "$WS_HAS_GATEWAY" == true || "$WS_HAS_MCP" == true ]]; then
-    log "Wrote settings.local.json (attribution + gateway/MCP env) to $settings_path (agent: $display_name)"
+  if [[ "$WS_HAS_GATEWAY" == true ]]; then
+    log "Wrote settings.local.json (attribution + gateway env) to $settings_path (agent: $display_name)"
   else
     log "Wrote attribution settings to $settings_path (agent: $display_name)"
   fi
@@ -682,37 +618,6 @@ Crow-Session: $SESSION_ID"
   if ! grep -qxF '.claude/settings.local.json' "$exclude_file" 2>/dev/null; then
     printf '\n# Added by crow setup.sh\n.claude/settings.local.json\n' >> "$exclude_file"
   fi
-  # CROW-522: the Atlassian MCP .mcp.json sits at the worktree root; exclude it
-  # too so a Jira workspace's MCP registration is never accidentally committed.
-  if [[ "$WS_HAS_MCP" == true ]] && ! grep -qxF '.mcp.json' "$exclude_file" 2>/dev/null; then
-    printf '.mcp.json\n' >> "$exclude_file"
-  fi
-}
-
-# Write a project-root .mcp.json registering the Atlassian Remote MCP Server for
-# this Jira workspace (CROW-522). Merges into an existing file, preserving any
-# user-defined servers. The Authorization header is a ${…} reference to the env
-# var in settings.local.json — the resolved secret never lands in this file.
-write_mcp_json() {
-  command -v jq >/dev/null 2>&1 || { log "jq not found; skipping .mcp.json"; return 0; }
-  local mcp_path="$WORKTREE_PATH/.mcp.json"
-  local base="{}"
-  [[ -f "$mcp_path" ]] && base=$(cat "$mcp_path")
-
-  local merged
-  if ! merged=$(jq \
-    --arg url "$WS_MCP_URL" \
-    '.mcpServers.atlassian = {
-        "type": "http",
-        "url": $url,
-        "headers": { "Authorization": "${ATLASSIAN_MCP_AUTHORIZATION}" }
-      }' \
-    <<< "$base"); then
-    log "Warning: jq failed to build .mcp.json; skipping"
-    return 0
-  fi
-  printf '%s\n' "$merged" > "$mcp_path"
-  log "Wrote .mcp.json (Atlassian MCP) to $mcp_path"
 }
 
 # ─── Per-Worktree prepare-commit-msg Hook (CROW-518) ─────────────────────────
@@ -878,7 +783,7 @@ github_ops() {
   # $TICKET_URL is a Jira browse URL, not a GitHub issue — running `gh issue
   # edit`/project-status against it just logs `auto-assign failed`. Skip GitHub
   # issue housekeeping entirely when the task provider is Jira (assignment +
-  # status now happen via the Atlassian MCP in-session).
+  # status now happen via the jira MCP in-session).
   resolve_task_provider
   if [[ "$TASK_PROVIDER" == "jira" ]]; then
     log "Task provider is Jira; skipping GitHub issue auto-assign/project-status"

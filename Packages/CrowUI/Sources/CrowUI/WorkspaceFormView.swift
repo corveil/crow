@@ -182,7 +182,7 @@ public struct WorkspaceFormView: View {
                 }
 
                 if jiraSelected {
-                    TextField("Atlassian Site (e.g., acme.atlassian.net)", text: $jiraSite)
+                    TextField("Jira Site (e.g., acme.atlassian.net)", text: $jiraSite)
                         .textFieldStyle(.roundedBorder)
                     TextField("Project Key (e.g., PROJ)", text: $jiraProjectKey)
                         .textFieldStyle(.roundedBorder)
@@ -249,7 +249,7 @@ public struct WorkspaceFormView: View {
                     }
                     Text(canFetchStatuses
                         ? "Populates a dropdown on each row from this project's live workflow."
-                        : "Set the Atlassian Site + Project Key above and an Atlassian MCP credential in Settings → Automation to fetch live statuses.")
+                        : "Set the Jira Site + Project Key above and a Jira credential in Settings → Automation to fetch live statuses.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

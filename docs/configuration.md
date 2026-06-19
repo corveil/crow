@@ -125,36 +125,28 @@ The Manager session sits at the dev root and isn't bound to a single workspace, 
 
 Same shape, same secret-storage rules, same two-way injection (written to `{devRoot}/.claude/settings.local.json`). Configure it under **Settings → Automation → Manager AI Gateway**. Takes effect on the next app launch.
 
-## Atlassian MCP (Jira)
+## Jira MCP
 
-For workspaces with `taskProvider: "jira"`, Crow drives the **agent-side** Jira flow (create-with-assignee, assign/reassign, transition, fetch, link) through the official **Atlassian Remote MCP Server** instead of `acli`. `acli` cannot set an assignee at create time, so every ticket it filed landed unassigned; the MCP `createJiraIssue` tool sets the assignee in one step. (Crow's in-app issue-board polling and auto-complete still use `acli` — only the agent flow moved.)
+For workspaces with `taskProvider: "jira"`, Crow drives the **agent-side** Jira flow (create-with-assignee, assign/reassign, transition, fetch, comment) through the **`jira` MCP server** (`sooperset/mcp-atlassian`, Docker stdio) using the `jira_*` tools instead of `acli`. `acli` cannot set an assignee at create time, so every ticket it filed landed unassigned; the MCP `jira_create_issue` tool sets the assignee in one step. (Crow's in-app issue-board polling and auto-complete still use `acli` — only the agent flow moved.)
 
-Configure one org-wide credential under **Settings → Automation → Atlassian MCP (Jira)**. It is stored top-level in `config.json`:
-
-```jsonc
-{
-  "atlassianMCP": {
-    "endpoint": "https://mcp.atlassian.com/v1/mcp",
-    "email": "you@example.com",
-    // op:// reference — resolved at launch via the 1Password CLI; kept out of config.json
-    "tokenRef": "op://Private/Atlassian/api_token"
-  }
-}
-```
-
-- **Auth** is a **personal API token** (from <https://id.atlassian.com>) sent as HTTP Basic — Crow builds `Authorization: Basic base64(email:token)` at launch.
-- **`tokenRef`** follows the same secret rules as gateway keys: an `op://` reference (recommended — never written to `config.json`) or a plaintext token (stored `0600`, with a UI warning). The resolved `Authorization` value is cached in the session's owner-only `.claude/settings.local.json` `env` block (`ATLASSIAN_MCP_AUTHORIZATION`) and never logged.
-
-When set, Crow injects the server into launched Jira-task sessions (and the Manager + cron jobs at the dev root) by writing a project-root `.mcp.json` and pre-trusting it via `enabledMcpjsonServers`:
+The `jira` server lives **globally** in `~/.claude.json`'s top-level `mcpServers`, so it is auto-loaded and trusted in every Claude Code session. Crow injects **nothing** — no per-session `.mcp.json` and no `enabledMcpjsonServers` entry (CROW-528):
 
 ```jsonc
-// {worktree-or-devRoot}/.mcp.json — the Authorization references the env var, so no secret lands here
-{ "mcpServers": { "atlassian": { "type": "http",
-    "url": "https://mcp.atlassian.com/v1/mcp",
-    "headers": { "Authorization": "${ATLASSIAN_MCP_AUTHORIZATION}" } } } }
+// ~/.claude.json (user-global) — not written by Crow
+{ "mcpServers": { "jira": {
+    "type": "stdio",
+    "command": "docker",
+    "args": ["run","-i","--rm","-e","JIRA_URL","-e","JIRA_USERNAME","-e","JIRA_API_TOKEN",
+             "ghcr.io/sooperset/mcp-atlassian:latest","--transport","stdio"],
+    "env": { "JIRA_URL": "https://<site>.atlassian.net",
+             "JIRA_USERNAME": "you@example.com",
+             "JIRA_API_TOKEN": "${JIRA_API_KEY}" } } } }
 ```
 
-> **Prerequisite:** an Atlassian **org admin must enable API-token auth for the Rovo MCP Server** for your org, otherwise the headless calls return 401. See [docs/automation.md](automation.md#atlassian-mcp-headless-auth) for the one-time setup. `gh`/`glab` GitHub/GitLab task paths are unaffected.
+- **Auth** is a **personal API token** (from <https://id.atlassian.com>) passed to the container via the `JIRA_*` env vars. The same global config serves worktree sessions, the Manager, and cron jobs.
+- **`gh`/`glab` GitHub/GitLab task paths are unaffected.**
+
+> **In-app status fetch.** The "Fetch from Jira" status-map button (below) is the one Jira feature that runs in the **Crow app process**, which can't use the MCP. It uses a separate small credential under **Settings → Automation → Jira (status fetch)**, stored top-level in `config.json` as `jiraCredential` (`username` + an `op://`/plaintext `tokenRef`, same secret rules as gateway keys). Crow builds `Authorization: Basic base64(username:token)` on demand to call Jira's REST API directly; it is never written to a launched session.
 
 ### Jira status mapping
 
@@ -180,9 +172,9 @@ Jira workflow **status names are configurable per project**, so a project that r
 
 - **Keys** are Crow's pipeline states: `Backlog`, `Ready`, `In Progress`, `In Review`, `Done`. **Values** are the exact Jira workflow status names for that project (case- and spelling-sensitive).
 - **A missing or blank entry falls back to the built-in default:** `Ready` → `To Do`; every other state uses its own name verbatim (`In Progress`, `In Review`, `Done`, `Backlog`). An entirely unset `jiraStatusMap` keeps today's behavior.
-- Both status surfaces consult the map: the in-app **"Mark in review"** transition (`acli`) and the **agent-side** MCP `transitionJiraIssue` flow (the `/crow-workspace` skill reads `jiraStatusMap` from `config.json` before transitioning).
+- Both status surfaces consult the map: the in-app **"Mark in review"** transition (`acli`) and the **agent-side** `jira` MCP flow — the `/crow-workspace` skill reads `jiraStatusMap` from `config.json`, then resolves the mapped status name to a `transition_id` via `jira_get_transitions` before calling `jira_transition_issue`.
 
-Edit it under **Settings → Workspaces → (a Jira workspace) → Jira Status Mapping**. Each pipeline state gets a field whose placeholder is the current default — leave it blank to keep the default. If an Atlassian MCP credential is configured, **Fetch from Jira** populates per-row dropdowns from the project's live workflow (`GET /rest/api/3/project/{key}/statuses`); otherwise the fields are free-text.
+Edit it under **Settings → Workspaces → (a Jira workspace) → Jira Status Mapping**. Each pipeline state gets a field whose placeholder is the current default — leave it blank to keep the default. If a **Jira (status fetch)** credential is configured (Settings → Automation), **Fetch from Jira** populates per-row dropdowns from the project's live workflow (`GET /rest/api/3/project/{key}/statuses`); otherwise the fields are free-text.
 
 ## Manager Terminal
 
