@@ -74,3 +74,31 @@ private let validUUID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
     let cmd = try AddLink.parse(["--session", validUUID, "--label", "Docs", "--url", "https://docs.com"])
     #expect(cmd.type == "custom")
 }
+
+// MARK: - transition-ticket (#529)
+
+@Test func transitionTicketParsesValidArgs() throws {
+    let cmd = try TransitionTicket.parse(["--session", validUUID, "--to", "inProgress"])
+    #expect(cmd.session == validUUID)
+    #expect(cmd.to == "inProgress")
+    try cmd.validate()
+}
+
+@Test func transitionTicketAcceptsCaseInsensitiveStatus() throws {
+    let cmd = try TransitionTicket.parse(["--session", validUUID, "--to", "INREVIEW"])
+    try cmd.validate()
+}
+
+@Test func transitionTicketRejectsUnknownStatus() {
+    #expect(throws: (any Error).self) {
+        let cmd = try TransitionTicket.parse(["--session", validUUID, "--to", "backlog"])
+        try cmd.validate()
+    }
+}
+
+@Test func transitionTicketRejectsInvalidUUID() {
+    #expect(throws: (any Error).self) {
+        let cmd = try TransitionTicket.parse(["--session", "not-a-uuid", "--to", "done"])
+        try cmd.validate()
+    }
+}

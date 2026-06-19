@@ -29,6 +29,8 @@ crow delete-session --session <uuid>            → {"deleted":true}
 crow set-ticket --session <uuid> --url "..." [--title "..."] [--number N]
 crow add-link --session <uuid> --label "Issue" --url "..." --type ticket|pr|repo|custom
 crow list-links --session <uuid>
+crow transition-ticket --session <uuid> --to inProgress|inReview|done   → moves the linked ticket to a pipeline status (Jira honors jiraStatusMap)
+crow resync-jira                                                        → re-sync every Jira ticket's status from its Crow session state
 ```
 
 ### Worktree Commands

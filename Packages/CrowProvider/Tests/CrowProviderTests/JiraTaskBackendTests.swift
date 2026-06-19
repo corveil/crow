@@ -2,6 +2,16 @@ import XCTest
 import CrowCore
 @testable import CrowProvider
 
+/// Thread-safe mutable cell so a `@Sendable` transport closure can record what it
+/// observed without tripping the concurrency checker.
+private final class Box<T>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _value: T
+    init(_ value: T) { _value = value }
+    func set(_ value: T) { lock.lock(); _value = value; lock.unlock() }
+    func get() -> T { lock.lock(); defer { lock.unlock() }; return _value }
+}
+
 /// Exercises `JiraTaskBackend` against `FakeShellRunner` — the ADR 0005
 /// testability bar. Asserts the exact `acli` argv for each method plus the JSON
 /// parsing, key parsing, and status mapping, without spawning real `acli`.
@@ -190,6 +200,66 @@ final class JiraTaskBackendTests: XCTestCase {
             .setTaskStatus(url: "https://acme.atlassian.net/browse/PROJ-5", status: .inReview)
         let args = fake.calls.first?.args ?? []
         XCTAssertEqual(args[args.firstIndex(of: "--status")! + 1], "Code Review")
+    }
+
+    // MARK: - setTaskStatus REST path (#529)
+
+    private static let transitionsJSON = """
+    {"transitions":[
+      {"id":"11","name":"Start","to":{"name":"In Development"}},
+      {"id":"21","name":"Review","to":{"name":"In Review"}},
+      {"id":"31","name":"Resolve","to":{"name":"Done"}}
+    ]}
+    """.data(using: .utf8)!
+
+    /// With an Authorization header + site, transitions go via REST — `acli` is
+    /// never shelled out, and the POST carries the id of the transition whose
+    /// target status matches the mapped name.
+    func testSetTaskStatusUsesRESTWhenCredentialed() async throws {
+        let fake = FakeShellRunner()
+        let postedID = Box<String?>(nil)
+        let cfg = JiraConfig(
+            site: "acme.atlassian.net",
+            statusMap: ["In Progress": "In Development"],
+            authorization: "Basic creds"
+        )
+        let b = JiraTaskBackend(shellRunner: fake, config: cfg, transport: { request in
+            if request.httpMethod == "POST" {
+                let body = try! JSONSerialization.jsonObject(with: request.httpBody ?? Data()) as? [String: Any]
+                postedID.set((body?["transition"] as? [String: Any])?["id"] as? String)
+                return (Data(), HTTPURLResponse(url: request.url!, statusCode: 204, httpVersion: nil, headerFields: nil)!)
+            }
+            return (Self.transitionsJSON, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        })
+        try await b.setTaskStatus(url: "https://acme.atlassian.net/browse/MAXX-7", status: .inProgress)
+        XCTAssertEqual(postedID.get(), "11")
+        XCTAssertTrue(fake.calls.isEmpty, "REST path must not shell out to acli")
+    }
+
+    /// An unreachable target status is a graceful no-op: no POST, no throw, no acli.
+    func testSetTaskStatusRESTGracefulNoOpWhenUnavailable() async throws {
+        let fake = FakeShellRunner()
+        let didPOST = Box<Bool>(false)
+        let cfg = JiraConfig(site: "acme.atlassian.net", authorization: "Basic creds")
+        let b = JiraTaskBackend(shellRunner: fake, config: cfg, transport: { request in
+            if request.httpMethod == "POST" { didPOST.set(true) }
+            return (Self.transitionsJSON, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        })
+        // .backlog → "Backlog", which is not a reachable transition above.
+        try await b.setTaskStatus(url: "https://acme.atlassian.net/browse/MAXX-7", status: .backlog)
+        XCTAssertFalse(didPOST.get())
+        XCTAssertTrue(fake.calls.isEmpty)
+    }
+
+    /// Without an Authorization header, the legacy `acli` path is used (no REST).
+    func testSetTaskStatusFallsBackToAcliWithoutCredential() async throws {
+        let fake = FakeShellRunner()
+        let b = JiraTaskBackend(shellRunner: fake, config: JiraConfig(site: "acme.atlassian.net"), transport: { _ in
+            XCTFail("transport must not be called without a credential")
+            throw ProviderError.commandFailed("unreachable")
+        })
+        try await b.setTaskStatus(url: "https://acme.atlassian.net/browse/PROJ-5", status: .inReview)
+        XCTAssertEqual(Array((fake.calls.first?.args ?? []).prefix(4)), ["acli", "jira", "workitem", "transition"])
     }
 
     // MARK: - closeTask

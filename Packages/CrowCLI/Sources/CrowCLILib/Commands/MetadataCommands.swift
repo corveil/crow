@@ -57,6 +57,52 @@ public struct AddLink: ParsableCommand {
     }
 }
 
+/// Transition a session's linked ticket to a pipeline status (CROW-529).
+///
+/// For Jira this consults the workspace's `jiraStatusMap` and transitions via the
+/// Jira Cloud REST API; for GitHub it moves the Projects-v2 status. `setup.sh`
+/// calls this at session start (`--to inProgress`) so a Jira work item leaves
+/// Backlog — the GitHub-only mutation in `setup.sh` had no Jira equivalent.
+public struct TransitionTicket: ParsableCommand {
+    public static let configuration = CommandConfiguration(commandName: "transition-ticket", abstract: "Transition a session's ticket to a pipeline status")
+    @Option(name: .long, help: "Session UUID") var session: String
+    @Option(name: .long, help: "Target status: inProgress, inReview, or done") var to: String
+
+    public init() {}
+
+    static let allowedStatuses = ["inProgress", "inReview", "done"]
+
+    public func validate() throws {
+        try validateUUID(session, label: "session UUID")
+        let normalized = to.lowercased()
+        guard Self.allowedStatuses.contains(where: { $0.lowercased() == normalized }) else {
+            throw ValidationError("Invalid --to '\(to)' (expected one of: \(Self.allowedStatuses.joined(separator: ", ")))")
+        }
+    }
+
+    public func run() throws {
+        let result = try rpc("transition-ticket", params: [
+            "session_id": .string(session),
+            "to": .string(to),
+        ])
+        printJSON(result)
+    }
+}
+
+/// Re-sync every Jira-backed session's ticket to the status implied by its Crow
+/// session state (CROW-529) — one-shot remediation for tickets stuck in Backlog
+/// because earlier sessions never transitioned them.
+public struct ResyncJira: ParsableCommand {
+    public static let configuration = CommandConfiguration(commandName: "resync-jira", abstract: "Re-sync Jira ticket statuses from Crow session state")
+
+    public init() {}
+
+    public func run() throws {
+        let result = try rpc("resync-jira")
+        printJSON(result)
+    }
+}
+
 /// List all links for a session.
 public struct ListLinks: ParsableCommand {
     public static let configuration = CommandConfiguration(commandName: "list-links", abstract: "List links for a session")

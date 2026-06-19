@@ -1297,12 +1297,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Validation.isValidSessionName(name)
     }
 
+    /// Map a `transition-ticket --to` argument to a pipeline ``TicketStatus``
+    /// (CROW-529). Accepts the camelCase tokens the CLI documents plus a few
+    /// forgiving spellings and the raw status value. Only the three states a
+    /// transition site moves a ticket to are accepted; `nil` for anything else.
+    nonisolated static func ticketStatus(fromArg arg: String) -> TicketStatus? {
+        switch arg.lowercased().replacingOccurrences(of: "-", with: "").replacingOccurrences(of: "_", with: "").replacingOccurrences(of: " ", with: "") {
+        case "inprogress": return .inProgress
+        case "inreview": return .inReview
+        case "done", "completed", "closed": return .done
+        default: return nil
+        }
+    }
+
     private func startSocketServer(store: JSONStore, devRoot: String, sessionService: SessionService) {
         let capturedAppState = appState
         let capturedStore = store
         let capturedNotifManager = notificationManager
         let capturedService = sessionService
         let capturedTelemetryPort = sessionService.telemetryPort
+        // Set in applicationDidFinishLaunching before this runs (CROW-529: the
+        // `transition-ticket` / `resync-jira` verbs drive Jira status moves).
+        let capturedTracker = issueTracker
         let hookDebug = ProcessInfo.processInfo.environment["CROW_HOOK_DEBUG"] == "1"
 
         let router = CommandRouter(handlers: [
@@ -1462,6 +1478,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                     return ["session_id": .string(idStr)]
                 }
+            },
+            "transition-ticket": { @Sendable params in
+                // CROW-529: transition a session's linked ticket to a pipeline
+                // status (honoring jiraStatusMap for Jira). `setup.sh` calls this
+                // at session start to move a Jira work item to its mapped
+                // In-Progress status — the GitHub Projects-v2 mutation setup.sh
+                // already does has no Jira equivalent without this.
+                guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
+                    throw RPCError.invalidParams("session_id required")
+                }
+                guard let toStr = params["to"]?.stringValue,
+                      let status = AppDelegate.ticketStatus(fromArg: toStr) else {
+                    throw RPCError.invalidParams("`to` required (one of: inProgress, inReview, done)")
+                }
+                guard let tracker = capturedTracker else {
+                    throw RPCError.applicationError("Issue tracker not ready")
+                }
+                await tracker.transitionTicket(sessionID: id, to: status)
+                return ["session_id": .string(idStr), "to": .string(status.rawValue)]
+            },
+            "resync-jira": { @Sendable _ in
+                // CROW-529: one-shot remediation for Jira tickets stuck in Backlog
+                // because earlier sessions never transitioned them.
+                guard let tracker = capturedTracker else {
+                    throw RPCError.applicationError("Issue tracker not ready")
+                }
+                let attempted = await tracker.resyncJira()
+                return ["attempted": .int(attempted)]
             },
             "add-worktree": { @Sendable params in
                 guard let idStr = params["session_id"]?.stringValue, let sessionID = UUID(uuidString: idStr),

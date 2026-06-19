@@ -782,8 +782,9 @@ github_ops() {
   # CROW-522: a GitHub-code workspace can track its tasks in Jira. In that case
   # $TICKET_URL is a Jira browse URL, not a GitHub issue — running `gh issue
   # edit`/project-status against it just logs `auto-assign failed`. Skip GitHub
-  # issue housekeeping entirely when the task provider is Jira (assignment +
-  # status now happen via the jira MCP in-session).
+  # issue housekeeping entirely when the task provider is Jira: assignment
+  # happens via the jira MCP in-session, and the Jira In-Progress transition
+  # happens in jira_ops() (CROW-529), not here.
   resolve_task_provider
   if [[ "$TASK_PROVIDER" == "jira" ]]; then
     log "Task provider is Jira; skipping GitHub issue auto-assign/project-status"
@@ -801,6 +802,23 @@ github_ops() {
     log "Setting project status to In progress..."
     set_project_status || log "Warning: project status update failed"
   fi
+}
+
+# CROW-529: session-start status transition for Jira work items. setup.sh owns
+# the GitHub Projects-v2 mutation (set_project_status) but there was no Jira
+# equivalent, so a Jira-tasked session never left Backlog. Delegate to the Crow
+# app — it resolves the mapped In-Progress status (jiraStatusMap, #523), fetches
+# the issue's available transitions, and degrades gracefully when unavailable.
+# Runs for any code provider (a Jira-tasked workspace may be GitHub- or
+# GitLab-coded), so it lives outside github_ops. Best-effort, never fatal.
+jira_ops() {
+  resolve_task_provider
+  [[ "$TASK_PROVIDER" == "jira" ]] || return 0
+  [[ "$SKIP_PROJECT_STATUS" != "true" ]] || return 0
+  [[ -n "$TICKET_URL" && -n "$SESSION_ID" ]] || return 0
+  log "Transitioning Jira work item to In Progress..."
+  crow transition-ticket --session "$SESSION_ID" --to inProgress \
+    || log "Warning: Jira status transition failed (non-fatal)"
 }
 
 set_project_status() {
@@ -1154,6 +1172,7 @@ main() {
   write_settings_local
   install_commit_hook
   github_ops
+  jira_ops
   write_prompt
   launch_agent
   emit_result

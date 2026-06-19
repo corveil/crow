@@ -7,7 +7,7 @@ Crow automates the boring parts of moving a ticket from "assigned" to "merged". 
 A fully automated ticket walks through these stages:
 
 1. **Assignment** — an issue is assigned to you. If it carries the `crow:auto` label *and* the **Auto-launch workspaces** toggle is on (off by default — #312), Crow auto-creates a workspace for it (#211).
-2. **Workspace** — a git worktree is created, ticket metadata is captured, and the issue is moved to "In Progress" on the project board.
+2. **Workspace** — a git worktree is created, ticket metadata is captured, and the issue is moved to "In Progress" on the project board. For **GitHub** this is a Projects v2 status mutation; for **Jira** it transitions the work item to the status `jiraStatusMap` maps `In Progress` → (see [Jira status transitions](#jira-status-transitions)).
 3. **Session** — Claude Code launches in plan mode with the issue context. Worker sessions inherit the configured permission mode; the Manager terminal can launch with `--permission-mode auto` (#189).
 4. **PR open** — when Claude pushes the branch and you open a PR, Crow auto-suggests opening one if you forget (#213).
 5. **Review** — repos that opt in get a review session auto-started when the PR turns reviewable (#209). The review board lets you batch-start, bulk-delete, and filter sessions (#207, #210, #212, #220, #226, #231).
@@ -51,6 +51,26 @@ The `jira` server is configured **globally** in `~/.claude.json`'s top-level `mc
 **Headless auth — one-time setup.** The `jira` server authenticates with a **personal API token** via the `JIRA_*` env vars in its `~/.claude.json` entry. Create the token at <https://id.atlassian.com> → Security → API tokens and set `JIRA_URL` (your `https://<site>.atlassian.net`), `JIRA_USERNAME` (account email), and `JIRA_API_TOKEN`. The same global config serves the Manager and cron jobs, so no Crow-side credential is needed for the agent flow.
 
 > **In-app status fetch.** The "Fetch from Jira" button in **Settings → Workspaces** (the #523 status map) calls Jira's REST API *directly from the Crow app process*, which cannot use the MCP. That one feature uses a small **Settings → Automation → Jira (status fetch)** credential (`JIRA_USERNAME` + an `op://`/plaintext API token), stored in `config.json` as `jiraCredential`. It is unrelated to the agent-side MCP.
+
+<a id="jira-status-transitions"></a>
+**Jira status transitions (app-side).** The MCP above is *agent-side* (it lives in launched Claude sessions). Crow itself also moves a Jira work item through its workflow at three points the app owns — and those run **headless** (Manager, batch, cron), where no agent session is available:
+
+- **Session start → mapped In Progress** — `/crow-workspace` and `/crow-batch-workspace` transition the work item as the worktree is set up (previously a no-op for Jira, so tickets sat in Backlog — #529).
+- **PR opened → mapped In Review** and **mark done → mapped Done** — the same path backs the session-row "Mark in review"/"Mark issue done" actions.
+
+Each transition resolves the target status name via the per-workspace **`jiraStatusMap`** (#523; default `Ready`→`To Do`, others verbatim — e.g. `In Progress`→`In Development` for SecurityScorecard), then calls the Jira Cloud REST API: it **fetches the issue's available transitions first** and only fires one that reaches the mapped status, so an unmapped or currently-unavailable status is a logged **no-op rather than an error**. It reuses the same **Settings → Automation → Jira (status fetch)** credential (`jiraCredential`, HTTP Basic) as the status-map "Fetch from Jira" button above; with no credential configured it falls back to `acli`. This path does **not** depend on the agent-side MCP.
+
+**Re-sync stuck tickets.** To fix Jira tickets left in Backlog by sessions started before this existed, run:
+
+```bash
+crow resync-jira
+```
+
+It walks every Jira-backed session and transitions its ticket to the status implied by the Crow session state (`active`→In Progress, `inReview`→In Review, `completed`→Done). Each move goes through the same graceful-degrade path, so tickets already in the right status are no-ops. You can also move a single session's ticket explicitly:
+
+```bash
+crow transition-ticket --session <uuid> --to inProgress   # or inReview | done
+```
 
 ### Auto-respond
 

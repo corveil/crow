@@ -2379,35 +2379,64 @@ final class IssueTracker {
     /// Best-effort (the backend itself degrades to empty on failure), mirroring
     /// the GitLab path — `includeClosed: false` skips the wasted closed query
     /// since refresh()'s closed-issue diff is GitHub-only today.
-    /// Resolve the per-workspace Crow→Jira status-name map (#523) for a ticket,
-    /// matching the ticket's Jira project key (then its site host) against the
-    /// configured Jira workspaces. Returns `nil` when no workspace defines a map,
-    /// so `JiraTaskBackend` falls back to its built-in defaults.
-    private static func jiraStatusMap(forTicket ticketURL: String) -> [String: String]? {
-        guard let devRoot = ConfigStore.loadDevRoot(),
-              let config = ConfigStore.loadConfig(devRoot: devRoot) else { return nil }
-        let jiraWorkspaces = config.workspaces.filter {
-            $0.derivedTaskProvider == "jira" && !($0.jiraStatusMap?.isEmpty ?? true)
-        }
-        guard !jiraWorkspaces.isEmpty else { return nil }
+    /// Find the configured Jira workspace whose project key (then exact site host,
+    /// then sole-candidate fallback) matches `ticketURL`. Shared by the status-map
+    /// and full-config resolvers so the matching can never drift. `candidates`
+    /// lets callers pre-filter (e.g. to workspaces that define a status map).
+    private static func matchJiraWorkspace(_ candidates: [WorkspaceInfo], forTicket ticketURL: String) -> WorkspaceInfo? {
+        guard !candidates.isEmpty else { return nil }
         // Prefer a project-key match (the ticket key's project, e.g. PROPS-12 → PROPS).
         if let project = Validation.parseJiraKey(ticketURL)?.project,
-           let ws = jiraWorkspaces.first(where: { $0.jiraProjectKey?.uppercased() == project.uppercased() }) {
-            return ws.jiraStatusMap
+           let ws = candidates.first(where: { $0.jiraProjectKey?.uppercased() == project.uppercased() }) {
+            return ws
         }
         // Then an exact site-host match (acli is authed to a single site). Compare
         // parsed hosts, not a loose substring, so "acme.atlassian.net" doesn't
         // match a "dev.acme.atlassian.net" workspace (or vice versa).
         if let ticketHost = URL(string: ticketURL)?.host,
-           let ws = jiraWorkspaces.first(where: { ws in
+           let ws = candidates.first(where: { ws in
                guard let site = ws.jiraSite, !site.isEmpty else { return false }
                let siteHost = URL(string: site.hasPrefix("http") ? site : "https://\(site)")?.host ?? site
                return siteHost.caseInsensitiveCompare(ticketHost) == .orderedSame
            }) {
-            return ws.jiraStatusMap
+            return ws
         }
-        // Single Jira workspace with a map → unambiguous; use it.
-        return jiraWorkspaces.count == 1 ? jiraWorkspaces[0].jiraStatusMap : nil
+        // Single candidate → unambiguous; use it.
+        return candidates.count == 1 ? candidates[0] : nil
+    }
+
+    /// Resolve the per-workspace Crow→Jira status-name map (#523) for a ticket.
+    /// Returns `nil` when no workspace defines a map, so `JiraTaskBackend` falls
+    /// back to its built-in defaults.
+    private static func jiraStatusMap(forTicket ticketURL: String) -> [String: String]? {
+        guard let devRoot = ConfigStore.loadDevRoot(),
+              let config = ConfigStore.loadConfig(devRoot: devRoot) else { return nil }
+        let candidates = config.workspaces.filter {
+            $0.derivedTaskProvider == "jira" && !($0.jiraStatusMap?.isEmpty ?? true)
+        }
+        return matchJiraWorkspace(candidates, forTicket: ticketURL)?.jiraStatusMap
+    }
+
+    /// Build the full ``JiraConfig`` for a ticket: the matching workspace's site /
+    /// project / JQL / status-map (#523) plus the resolved Jira Cloud REST
+    /// `Authorization` header (#529) so `setTaskStatus`/`closeTask` transition via
+    /// REST rather than `acli`. The credential is the org-wide `jiraCredential`
+    /// username + API token (HTTP Basic, #528), the same one the Settings status
+    /// picker uses; nil when unconfigured, leaving the backend on its `acli`
+    /// fallback.
+    static func jiraConfig(forTicket ticketURL: String) -> JiraConfig {
+        guard let devRoot = ConfigStore.loadDevRoot(),
+              let config = ConfigStore.loadConfig(devRoot: devRoot) else { return JiraConfig() }
+        let candidates = config.workspaces.filter { $0.derivedTaskProvider == "jira" }
+        let ws = matchJiraWorkspace(candidates, forTicket: ticketURL)
+        let authorization = config.jiraCredential.flatMap { JiraCredentialResolver.resolve($0) }
+        return JiraConfig(
+            site: ws?.jiraSite,
+            projectKey: ws?.jiraProjectKey,
+            jql: ws?.jiraJQL,
+            statusMap: ws?.jiraStatusMap,
+            authorization: authorization
+        )
     }
 
     private func fetchJiraIssues(config: JiraConfig) async -> [AssignedIssue] {
@@ -2446,7 +2475,7 @@ final class IssueTracker {
         // (#523) so the transition honors a renamed workflow ("In Progress" →
         // "In Development"); other providers ignore the JiraConfig.
         let jiraConfig: JiraConfig? = (taskProvider == .jira)
-            ? JiraConfig(statusMap: Self.jiraStatusMap(forTicket: ticketURL))
+            ? Self.jiraConfig(forTicket: ticketURL)
             : nil
         let backend = providerManager.taskBackend(for: taskProvider, jira: jiraConfig)
         // Capability-gated across providers: GitHub Projects v2 and Jira workflow
@@ -2499,8 +2528,7 @@ final class IssueTracker {
         // GitLab/Corveil self-hosted instances are targeted correctly.
         let backend: TaskBackend
         if taskProvider == .jira {
-            let cfg = JiraConfig(statusMap: Self.jiraStatusMap(forTicket: ticketURL))
-            backend = providerManager.taskBackend(for: .jira, jira: cfg)
+            backend = providerManager.taskBackend(for: .jira, jira: Self.jiraConfig(forTicket: ticketURL))
         } else {
             backend = providerManager.taskBackend(forURL: ticketURL)
         }
@@ -2527,6 +2555,67 @@ final class IssueTracker {
 
         // Flip the Crow session to .completed so the row reflects the closed issue.
         appState.onCompleteSession?(sessionID)
+    }
+
+    // MARK: - Transition ticket (session start, resync)
+
+    /// Transition a session's linked ticket to an explicit pipeline `status`,
+    /// honoring the per-workspace `jiraStatusMap` for Jira (#523/#529). This is the
+    /// app-side entry point for the **session-start → In Progress** transition
+    /// that `setup.sh` delegates here via `crow transition-ticket` — `setup.sh`
+    /// only owns the GitHub Projects-v2 mutation, so a Jira session never moved
+    /// off Backlog before. Capability-gated (`.projectBoardStatus`), so GitLab
+    /// (no board status) is a no-op. Best-effort: auth / unavailable-transition
+    /// failures are logged and swallowed, mirroring `markInReview`.
+    func transitionTicket(sessionID: UUID, to status: TicketStatus) async {
+        guard let session = appState.sessions.first(where: { $0.id == sessionID }),
+              let ticketURL = session.ticketURL,
+              let taskProvider = session.provider else { return }
+
+        let backend: TaskBackend
+        if taskProvider == .jira {
+            backend = providerManager.taskBackend(for: .jira, jira: Self.jiraConfig(forTicket: ticketURL))
+        } else {
+            backend = providerManager.taskBackend(forURL: ticketURL)
+        }
+        guard backend.capabilities.contains(.projectBoardStatus) else { return }
+
+        do {
+            try await backend.setTaskStatus(url: ticketURL, status: status)
+        } catch {
+            print("[IssueTracker] transitionTicket(\(status.rawValue)) failed for \(ticketURL): \(error.localizedDescription.prefix(200))")
+            return
+        }
+
+        if let idx = appState.assignedIssues.firstIndex(where: { $0.url == ticketURL }) {
+            appState.assignedIssues[idx].projectStatus = status
+        }
+        print("[IssueTracker] Transitioned \(ticketURL) to \(status.rawValue)")
+    }
+
+    /// One-shot remediation (#529): walk every Jira-backed session and transition
+    /// its ticket to the status implied by the Crow session state — fixing tickets
+    /// left in Backlog because session-start never transitioned them. Each move
+    /// goes through the same graceful-degrade REST path, so tickets already in the
+    /// right status (or lacking a valid transition) are no-ops. Returns the number
+    /// of sessions it attempted. Drives `crow resync-jira`.
+    @discardableResult
+    func resyncJira() async -> Int {
+        let targets: [(id: UUID, status: TicketStatus)] = appState.sessions.compactMap { session in
+            guard session.provider == .jira, session.ticketURL != nil else { return nil }
+            let status: TicketStatus
+            switch session.status {
+            case .inReview: status = .inReview
+            case .completed, .archived: status = .done
+            case .active, .paused: status = .inProgress
+            }
+            return (session.id, status)
+        }
+        for target in targets {
+            await transitionTicket(sessionID: target.id, to: target.status)
+        }
+        print("[IssueTracker] resyncJira: attempted \(targets.count) Jira session(s)")
+        return targets.count
     }
 
     /// Add the `crow:merge` auto-merge label to a session's PR, ensuring the

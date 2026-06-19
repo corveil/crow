@@ -19,12 +19,19 @@ public struct JiraConfig: Sendable, Equatable {
     /// raw value (e.g. "In Progress" → "In Development"). A missing/blank entry
     /// falls back to ``JiraTaskBackend/defaultJiraStatusName(for:)``. See #523.
     public let statusMap: [String: String]?
+    /// HTTP Basic `Authorization` header (e.g. `Basic …` from
+    /// ``JiraCredentialResolver``) for the Jira Cloud REST transition path (#529).
+    /// When set (together with `site`), `setTaskStatus`/`closeTask` transition via
+    /// ``JiraTransitionClient`` — fetching available transitions and degrading
+    /// gracefully — instead of `acli`. Nil falls back to the legacy `acli` path.
+    public let authorization: String?
 
-    public init(site: String? = nil, projectKey: String? = nil, jql: String? = nil, statusMap: [String: String]? = nil) {
+    public init(site: String? = nil, projectKey: String? = nil, jql: String? = nil, statusMap: [String: String]? = nil, authorization: String? = nil) {
         self.site = site
         self.projectKey = projectKey
         self.jql = jql
         self.statusMap = statusMap
+        self.authorization = authorization
     }
 }
 
@@ -37,8 +44,11 @@ public struct JiraConfig: Sendable, Equatable {
 /// returns `nil`.
 ///
 /// Capabilities: `.projectBoardStatus` — Jira workflow transitions are a real
-/// status concept, wired through `setTaskStatus` via `acli jira workitem transition`.
-/// Not `.batchedQuery` — `acli` has no consolidated multi-item endpoint.
+/// status concept, wired through `setTaskStatus`. When a REST credential is
+/// configured (``JiraConfig/authorization`` + `site`) transitions go via the
+/// Jira Cloud REST API (``JiraTransitionClient``, #529); otherwise they fall
+/// back to `acli jira workitem transition`. Not `.batchedQuery` — `acli` has no
+/// consolidated multi-item endpoint.
 ///
 /// See ADR 0005.
 public struct JiraTaskBackend: TaskBackend {
@@ -47,6 +57,8 @@ public struct JiraTaskBackend: TaskBackend {
 
     private let shellRunner: ShellRunner
     private let config: JiraConfig
+    /// HTTP transport for the REST transition path (#529); injectable for tests.
+    private let transport: @Sendable (URLRequest) async throws -> (Data, URLResponse)
 
     /// Default "my open tickets" query. Overridable per-workspace via `JiraConfig.jql`.
     static let defaultOpenJQL = "assignee = currentUser() AND statusCategory != Done"
@@ -54,9 +66,14 @@ public struct JiraTaskBackend: TaskBackend {
     /// closed-issue removal detection in IssueTracker.
     static let closedJQL = "assignee = currentUser() AND statusCategory = Done AND updated >= -1d"
 
-    public init(shellRunner: ShellRunner, config: JiraConfig = JiraConfig()) {
+    public init(
+        shellRunner: ShellRunner,
+        config: JiraConfig = JiraConfig(),
+        transport: @escaping @Sendable (URLRequest) async throws -> (Data, URLResponse) = { try await URLSession.shared.data(for: $0) }
+    ) {
         self.shellRunner = shellRunner
         self.config = config
+        self.transport = transport
     }
 
     // MARK: - TaskBackend
@@ -128,10 +145,37 @@ public struct JiraTaskBackend: TaskBackend {
 
     public func setTaskStatus(url: String, status: TicketStatus) async throws {
         guard let parsed = JiraKey.parse(url) else { throw ProviderError.invalidURL(url) }
+        let targetName = jiraStatusName(for: status)
+
+        // Preferred path (#529): credentialed Jira Cloud REST. Fetches the
+        // issue's available transitions first, so a target status that isn't a
+        // reachable transition (or an unmapped name) is a logged no-op rather
+        // than a hard error. Independent of `acli` (removed in #528).
+        if let authorization = config.authorization, let site = config.site, !site.isEmpty {
+            let outcome = await JiraTransitionClient.transition(
+                site: site,
+                issueKey: parsed.key,
+                targetStatusName: targetName,
+                authorization: authorization,
+                transport: transport
+            )
+            switch outcome {
+            case .success(.transitioned):
+                return
+            case .success(.noMatchingTransition(let available)):
+                NSLog("[JiraTaskBackend] No transition to \"%@\" available for %@ (reachable: %@); skipping",
+                      targetName, parsed.key, available.isEmpty ? "none" : available.joined(separator: ", "))
+                return
+            case .failure(let error):
+                throw ProviderError.commandFailed("Jira REST transition failed for \(parsed.key): \(error)")
+            }
+        }
+
+        // Legacy fallback: `acli` (pre-#528, or when no REST credential is set).
         _ = try await run([
             "acli", "jira", "workitem", "transition",
             "--key", parsed.key,
-            "--status", jiraStatusName(for: status),
+            "--status", targetName,
             "--yes",
         ])
     }
