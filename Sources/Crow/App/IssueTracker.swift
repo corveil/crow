@@ -405,6 +405,11 @@ final class IssueTracker {
         }
 
         var allIssues: [AssignedIssue] = []
+        // Recently-done count, accumulated across every provider this refresh.
+        // Each provider contributes its 24h closed/Done window; assigned once
+        // at the end so a non-GitHub (e.g. Jira-only) workspace updates it too
+        // instead of leaving a stale value from a prior GitHub-backed refresh.
+        var doneCount = 0
 
         // GitHub — one consolidated GraphQL query
         let ghResult: ConsolidatedGitHubResponse? = hasGitHub ? await runConsolidatedGitHubQuery() : nil
@@ -428,7 +433,7 @@ final class IssueTracker {
             let openIDs = Set(openIssues.map(\.id))
             let uniqueDone = ghResult.closedIssues.filter { !openIDs.contains($0.id) }
             allIssues.append(contentsOf: uniqueDone)
-            appState.doneIssuesLast24h = ghResult.closedIssues.count
+            doneCount += ghResult.closedIssues.count
         }
 
         // GitLab — unchanged fan-out (one call per host)
@@ -437,10 +442,16 @@ final class IssueTracker {
             allIssues.append(contentsOf: issues)
         }
 
-        // Jira — one search per distinct config (best-effort, like GitLab)
+        // Jira — one search per distinct config (best-effort, like GitLab).
+        // Include the recently-Done half (#536): a Jira ticket in its mapped
+        // Done status is a workflow status, not a closed issue, so it only lands
+        // in the board's Done section once its `.done`-mapped issue reaches
+        // `assignedIssues`. Mirror GitHub's open + deduped-closed merge.
         for cfg in jiraConfigs {
-            let issues = await fetchJiraIssues(config: cfg)
-            allIssues.append(contentsOf: issues)
+            let listing = await fetchJiraIssues(config: cfg)
+            let merged = Self.mergeJiraListing(listing)
+            allIssues.append(contentsOf: merged.issues)
+            doneCount += merged.doneCount
         }
 
         // Corveil — one list per distinct config (best-effort).
@@ -450,6 +461,7 @@ final class IssueTracker {
         }
 
         appState.assignedIssues = allIssues
+        appState.doneIssuesLast24h = doneCount
 
         let ticketExcludePatterns = config.defaults.excludeTicketRepos
         let autoCreateCandidates = ticketExcludePatterns.isEmpty
@@ -2463,15 +2475,29 @@ final class IssueTracker {
         )
     }
 
-    private func fetchJiraIssues(config: JiraConfig) async -> [AssignedIssue] {
+    /// Fetch assigned Jira issues for one workspace config, including the
+    /// recently-Done half (#536) so tickets in their mapped Done status surface
+    /// in the board's Done section. Best-effort: degrades to an empty listing on
+    /// failure, mirroring the GitLab / Corveil paths.
+    private func fetchJiraIssues(config: JiraConfig) async -> AssignedListing {
         let backend = providerManager.taskBackend(for: .jira, jira: config)
         do {
-            let listing = try await backend.listAssigned(includeClosed: false)
-            return listing.open
+            return try await backend.listAssigned(includeClosed: true)
         } catch {
             print("[IssueTracker] fetchJiraIssues(project: \(config.projectKey ?? "—")) failed: \(error)")
-            return []
+            return AssignedListing(open: [], closed: [])
         }
+    }
+
+    /// Merge a Jira `AssignedListing` into the board's flat issue list: open
+    /// issues plus the closed (Done) issues deduped by `id` against the open
+    /// set, mirroring the GitHub closed-issue merge. `doneCount` is the full
+    /// closed count (the 24h Done window), matching GitHub's `doneIssuesLast24h`
+    /// semantics — it counts the window, not just the post-dedup remainder.
+    nonisolated static func mergeJiraListing(_ listing: AssignedListing) -> (issues: [AssignedIssue], doneCount: Int) {
+        let openIDs = Set(listing.open.map(\.id))
+        let uniqueDone = listing.closed.filter { !openIDs.contains($0.id) }
+        return (listing.open + uniqueDone, listing.closed.count)
     }
 
     /// Fetch open Corveil tasks assigned to the user for one workspace config.
