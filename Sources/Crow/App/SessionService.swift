@@ -147,6 +147,16 @@ final class SessionService {
                     }
                 }
                 let rebuiltCommand = managerCommand(for: reconciled)
+                // CROW-539: (re)write the Manager's hook config on every launch.
+                // The Manager terminal is adopted here, not recreated, so
+                // createManagerTerminal's hook write doesn't run — without this a
+                // Manager whose terminal predates the hooks never emits events and
+                // its card never lights up. Write to the terminal's own cwd so an
+                // additional Manager running outside the dev root is covered too.
+                // Before writeManagerGatewayEnv() so its 0o600 re-apply is last.
+                if let managerCwd = terminals.first?.cwd {
+                    writeManagerHookConfig(for: reconciled, dirPath: managerCwd)
+                }
                 writeManagerGatewayEnv()
                 // Remote-control bookkeeping reflects what the agent actually
                 // emitted — `supportsRemoteControl` is per-agent capability,
@@ -799,6 +809,31 @@ final class SessionService {
         ClaudeHookConfigWriter.writeGatewayEnv(dirPath: devRoot, resolved: managerGatewayResolved())
     }
 
+    /// Write the Manager's Claude Code hook config into `dirPath`'s
+    /// `.claude/settings.local.json` so `crow hook-event` fires for the Manager
+    /// and its sidebar activity dot lights up (#539). Idempotent. Call it
+    /// wherever the Manager's config is (re)established — terminal creation AND
+    /// the hydrate path — because `createManagerTerminal` is skipped when a
+    /// Manager terminal is merely restored from a prior launch, so a Manager
+    /// that predates hooks (or any existing one) would otherwise never get them.
+    /// Takes effect on the Manager's next `claude` (re)launch, since Claude Code
+    /// reads hooks at startup. Written before any gateway-env write so the
+    /// latter's 0o600 re-apply stays the final write.
+    private func writeManagerHookConfig(for session: Session, dirPath: String) {
+        guard let agent = AgentRegistry.shared.agent(for: session.agentKind),
+              let crowPath = ClaudeHookConfigWriter.findCrowBinary() else { return }
+        do {
+            try agent.hookConfigWriter.writeHookConfig(
+                worktreePath: dirPath,
+                sessionID: session.id,
+                crowPath: crowPath
+            )
+        } catch {
+            NSLog("[SessionService] Failed to write Manager hook config for session %@: %@",
+                  session.id.uuidString, error.localizedDescription)
+        }
+    }
+
     /// Resolve the Manager's own AI gateway (`AppConfig.managerGateway`) from
     /// disk, or nil when unset/empty (CROW-402).
     private func managerGatewayResolved() -> GatewayResolver.Resolved? {
@@ -860,19 +895,7 @@ final class SessionService {
         // gateway-env block below so writeGatewayEnv's 0o600 re-apply (the env
         // can carry a bearer token) is the final write; both merge into the same
         // {devRoot}/.claude/settings.local.json without clobbering each other.
-        if let agent = AgentRegistry.shared.agent(for: session.agentKind),
-           let crowPath = ClaudeHookConfigWriter.findCrowBinary() {
-            do {
-                try agent.hookConfigWriter.writeHookConfig(
-                    worktreePath: cwd,
-                    sessionID: session.id,
-                    crowPath: crowPath
-                )
-            } catch {
-                NSLog("[SessionService] Failed to write Manager hook config for session %@: %@",
-                      session.id.uuidString, error.localizedDescription)
-            }
-        }
+        writeManagerHookConfig(for: session, dirPath: cwd)
         // CROW-402: write the Manager gateway env block to {devRoot}/.claude so
         // manual `claude` re-runs in this terminal inherit the same routing. The
         // Manager's cwd is the devRoot.
