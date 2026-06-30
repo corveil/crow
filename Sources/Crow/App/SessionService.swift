@@ -852,6 +852,27 @@ final class SessionService {
     @discardableResult
     private func createManagerTerminal(session: Session, cwd: String) -> SessionTerminal {
         let command = managerCommand(for: session)
+        // CROW-539: install hook config so `crow hook-event` fires for the
+        // Manager, driving the same activity indicators worker cards get. The
+        // Manager has no worktree and runs at the dev root, so hooks carry the
+        // explicit `--session <managerID>` (writeHookConfig bakes it in) — the
+        // cwd-fallback resolver can't route to the Manager. Written before the
+        // gateway-env block below so writeGatewayEnv's 0o600 re-apply (the env
+        // can carry a bearer token) is the final write; both merge into the same
+        // {devRoot}/.claude/settings.local.json without clobbering each other.
+        if let agent = AgentRegistry.shared.agent(for: session.agentKind),
+           let crowPath = ClaudeHookConfigWriter.findCrowBinary() {
+            do {
+                try agent.hookConfigWriter.writeHookConfig(
+                    worktreePath: cwd,
+                    sessionID: session.id,
+                    crowPath: crowPath
+                )
+            } catch {
+                NSLog("[SessionService] Failed to write Manager hook config for session %@: %@",
+                      session.id.uuidString, error.localizedDescription)
+            }
+        }
         // CROW-402: write the Manager gateway env block to {devRoot}/.claude so
         // manual `claude` re-runs in this terminal inherit the same routing. The
         // Manager's cwd is the devRoot.
