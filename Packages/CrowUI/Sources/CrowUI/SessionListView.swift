@@ -459,10 +459,16 @@ struct ManagerSessionRow: View {
     private var needsAttention: Bool {
         appState.hookState(for: session.id).pendingNotification != nil
     }
+    private var activityState: AgentActivityState {
+        appState.hookState(for: session.id).activityState
+    }
 
     private var backgroundFill: Color {
         if needsAttention {
             return Color.orange.opacity(0.12)
+        }
+        if activityState == .done {
+            return CorveilTheme.bgDone
         }
         return isActive ? CorveilTheme.bgCard : CorveilTheme.bgSurface
     }
@@ -481,6 +487,8 @@ struct ManagerSessionRow: View {
             HStack(spacing: 6) {
                 if needsAttention {
                     AttentionDot(color: Color.orange, accessibilityLabel: "Needs attention")
+                } else if activityState == .working {
+                    AttentionDot(color: Color.green, accessibilityLabel: "Claude working")
                 }
                 Image(systemName: "person.2.fill")
                     .font(.system(size: 11))
@@ -502,6 +510,8 @@ struct ManagerSessionRow: View {
                 Spacer()
                 if isDeleting {
                     ProgressView().controlSize(.small)
+                } else {
+                    AgentActivityBadge(appState: appState, sessionID: session.id)
                 }
             }
             .foregroundStyle(isActive ? CorveilTheme.gold : CorveilTheme.goldDark)
@@ -545,6 +555,74 @@ struct ManagerSessionRow: View {
             appState.onRenameSession?(session.id, trimmed)
         }
         editingSessionID = nil
+    }
+}
+
+// MARK: - Agent Activity Badge
+
+/// Compact inline badge reflecting a session's agent activity, driven by its
+/// `SessionHookState`. Shared by worker `SessionRow` and the Manager card
+/// surfaces (#539) so they stay in lockstep: permission/question attention
+/// badges take precedence, then working (with the active tool name) and done.
+struct AgentActivityBadge: View {
+    let appState: AppState
+    let sessionID: UUID
+
+    private var activityState: AgentActivityState {
+        appState.hookState(for: sessionID).activityState
+    }
+
+    @ViewBuilder
+    var body: some View {
+        let activity = appState.hookState(for: sessionID).lastToolActivity
+        let notification = appState.hookState(for: sessionID).pendingNotification
+
+        if let notification {
+            // Attention badges
+            if notification.notificationType == "permission_prompt" {
+                HStack(spacing: 3) {
+                    Image(systemName: "lock.fill")
+                        .font(.caption2)
+                    Text("Permission")
+                        .font(.caption2)
+                }
+                .foregroundStyle(.orange)
+            } else if notification.notificationType == "question" {
+                HStack(spacing: 3) {
+                    Image(systemName: "questionmark.bubble.fill")
+                        .font(.caption2)
+                    Text("Question")
+                        .font(.caption2)
+                }
+                .foregroundStyle(.orange)
+            }
+        } else {
+            switch activityState {
+            case .working:
+                HStack(spacing: 3) {
+                    Image(systemName: "bolt.fill")
+                        .font(.caption2)
+                    if let activity, activity.isActive {
+                        Text(activity.toolName)
+                            .font(.caption2)
+                    } else {
+                        Text("Working")
+                            .font(.caption2)
+                    }
+                }
+                .foregroundStyle(.orange)
+            case .done:
+                HStack(spacing: 3) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.caption2)
+                    Text("Done")
+                        .font(.caption2)
+                }
+                .foregroundStyle(CorveilTheme.gold)
+            case .waiting, .idle:
+                EmptyView()
+            }
+        }
     }
 }
 
@@ -795,57 +873,8 @@ struct SessionRow: View {
         }
     }
 
-    @ViewBuilder
     private var activityStateBadge: some View {
-        let activity = appState.hookState(for: session.id).lastToolActivity
-        let notification = appState.hookState(for: session.id).pendingNotification
-
-        if let notification {
-            // Attention badges
-            if notification.notificationType == "permission_prompt" {
-                HStack(spacing: 3) {
-                    Image(systemName: "lock.fill")
-                        .font(.caption2)
-                    Text("Permission")
-                        .font(.caption2)
-                }
-                .foregroundStyle(.orange)
-            } else if notification.notificationType == "question" {
-                HStack(spacing: 3) {
-                    Image(systemName: "questionmark.bubble.fill")
-                        .font(.caption2)
-                    Text("Question")
-                        .font(.caption2)
-                }
-                .foregroundStyle(.orange)
-            }
-        } else {
-            switch activityState {
-            case .working:
-                HStack(spacing: 3) {
-                    Image(systemName: "bolt.fill")
-                        .font(.caption2)
-                    if let activity, activity.isActive {
-                        Text(activity.toolName)
-                            .font(.caption2)
-                    } else {
-                        Text("Working")
-                            .font(.caption2)
-                    }
-                }
-                .foregroundStyle(.orange)
-            case .done:
-                HStack(spacing: 3) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.caption2)
-                    Text("Done")
-                        .font(.caption2)
-                }
-                .foregroundStyle(CorveilTheme.gold)
-            case .waiting, .idle:
-                EmptyView()
-            }
-        }
+        AgentActivityBadge(appState: appState, sessionID: session.id)
     }
 
     private var needsAttention: Bool {

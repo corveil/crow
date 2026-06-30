@@ -374,14 +374,29 @@ public struct ManagerReviewsAllowListRow: View {
         appState.hookState(for: AppState.managerSessionID).pendingNotification != nil
     }
 
+    private var managerActivityState: AgentActivityState {
+        appState.hookState(for: AppState.managerSessionID).activityState
+    }
+
+    /// Leading status dot for the Manager pill (#539): orange pulse when the
+    /// Manager needs attention, else a green pulse while it's working, else
+    /// nothing — mirroring the worker card's `agentLaunched` indicator. The pill
+    /// is too narrow for inline state text, so the dot is the whole signal.
+    private var managerLeadingDot: AnyView? {
+        if managerNeedsAttention {
+            return AnyView(AttentionDot(color: Color.orange, accessibilityLabel: "Needs attention"))
+        } else if managerActivityState == .working {
+            return AnyView(AttentionDot(color: Color.green, accessibilityLabel: "Claude working"))
+        }
+        return nil
+    }
+
     private var managerButton: some View {
         sidebarButton(
             title: "Manager",
             isActive: appState.selectedSessionID == AppState.managerSessionID,
             needsAttention: managerNeedsAttention,
-            leading: managerNeedsAttention
-                ? AnyView(AttentionDot(color: Color.orange, accessibilityLabel: "Needs attention"))
-                : nil
+            leading: managerLeadingDot
         ) {
             appState.selectedSessionID = AppState.managerSessionID
         }
