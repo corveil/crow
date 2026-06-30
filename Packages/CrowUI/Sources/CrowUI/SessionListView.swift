@@ -463,21 +463,16 @@ struct ManagerSessionRow: View {
         appState.hookState(for: session.id).activityState
     }
 
+    // Manager cards signal activity with a leading status dot only (#539) —
+    // amber for needs-attention, green while working — rather than the amber/
+    // green card-background glow worker cards use, which reads as heavy on the
+    // always-visible Manager surface. Background/border stay neutral gold.
     private var backgroundFill: Color {
-        if needsAttention {
-            return Color.orange.opacity(0.12)
-        }
-        if activityState == .done {
-            return CorveilTheme.bgDone
-        }
-        return isActive ? CorveilTheme.bgCard : CorveilTheme.bgSurface
+        isActive ? CorveilTheme.bgCard : CorveilTheme.bgSurface
     }
 
     private var borderStroke: Color {
-        if needsAttention {
-            return Color.orange.opacity(0.4)
-        }
-        return isActive ? CorveilTheme.goldDark.opacity(0.6) : CorveilTheme.goldDark.opacity(0.3)
+        isActive ? CorveilTheme.goldDark.opacity(0.6) : CorveilTheme.goldDark.opacity(0.3)
     }
 
     var body: some View {
@@ -510,8 +505,6 @@ struct ManagerSessionRow: View {
                 Spacer()
                 if isDeleting {
                     ProgressView().controlSize(.small)
-                } else {
-                    AgentActivityBadge(appState: appState, sessionID: session.id)
                 }
             }
             .foregroundStyle(isActive ? CorveilTheme.gold : CorveilTheme.goldDark)
@@ -526,7 +519,6 @@ struct ManagerSessionRow: View {
                             .strokeBorder(borderStroke, lineWidth: 1)
                     )
             )
-            .animation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true), value: needsAttention)
             .overlay(alignment: .topTrailing) {
                 if appState.isRemoteControlActive(sessionID: session.id) {
                     RemoteControlBadge(compact: true)
@@ -555,74 +547,6 @@ struct ManagerSessionRow: View {
             appState.onRenameSession?(session.id, trimmed)
         }
         editingSessionID = nil
-    }
-}
-
-// MARK: - Agent Activity Badge
-
-/// Compact inline badge reflecting a session's agent activity, driven by its
-/// `SessionHookState`. Shared by worker `SessionRow` and the Manager card
-/// surfaces (#539) so they stay in lockstep: permission/question attention
-/// badges take precedence, then working (with the active tool name) and done.
-struct AgentActivityBadge: View {
-    let appState: AppState
-    let sessionID: UUID
-
-    private var activityState: AgentActivityState {
-        appState.hookState(for: sessionID).activityState
-    }
-
-    @ViewBuilder
-    var body: some View {
-        let activity = appState.hookState(for: sessionID).lastToolActivity
-        let notification = appState.hookState(for: sessionID).pendingNotification
-
-        if let notification {
-            // Attention badges
-            if notification.notificationType == "permission_prompt" {
-                HStack(spacing: 3) {
-                    Image(systemName: "lock.fill")
-                        .font(.caption2)
-                    Text("Permission")
-                        .font(.caption2)
-                }
-                .foregroundStyle(.orange)
-            } else if notification.notificationType == "question" {
-                HStack(spacing: 3) {
-                    Image(systemName: "questionmark.bubble.fill")
-                        .font(.caption2)
-                    Text("Question")
-                        .font(.caption2)
-                }
-                .foregroundStyle(.orange)
-            }
-        } else {
-            switch activityState {
-            case .working:
-                HStack(spacing: 3) {
-                    Image(systemName: "bolt.fill")
-                        .font(.caption2)
-                    if let activity, activity.isActive {
-                        Text(activity.toolName)
-                            .font(.caption2)
-                    } else {
-                        Text("Working")
-                            .font(.caption2)
-                    }
-                }
-                .foregroundStyle(.orange)
-            case .done:
-                HStack(spacing: 3) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.caption2)
-                    Text("Done")
-                        .font(.caption2)
-                }
-                .foregroundStyle(CorveilTheme.gold)
-            case .waiting, .idle:
-                EmptyView()
-            }
-        }
     }
 }
 
@@ -873,8 +797,57 @@ struct SessionRow: View {
         }
     }
 
+    @ViewBuilder
     private var activityStateBadge: some View {
-        AgentActivityBadge(appState: appState, sessionID: session.id)
+        let activity = appState.hookState(for: session.id).lastToolActivity
+        let notification = appState.hookState(for: session.id).pendingNotification
+
+        if let notification {
+            // Attention badges
+            if notification.notificationType == "permission_prompt" {
+                HStack(spacing: 3) {
+                    Image(systemName: "lock.fill")
+                        .font(.caption2)
+                    Text("Permission")
+                        .font(.caption2)
+                }
+                .foregroundStyle(.orange)
+            } else if notification.notificationType == "question" {
+                HStack(spacing: 3) {
+                    Image(systemName: "questionmark.bubble.fill")
+                        .font(.caption2)
+                    Text("Question")
+                        .font(.caption2)
+                }
+                .foregroundStyle(.orange)
+            }
+        } else {
+            switch activityState {
+            case .working:
+                HStack(spacing: 3) {
+                    Image(systemName: "bolt.fill")
+                        .font(.caption2)
+                    if let activity, activity.isActive {
+                        Text(activity.toolName)
+                            .font(.caption2)
+                    } else {
+                        Text("Working")
+                            .font(.caption2)
+                    }
+                }
+                .foregroundStyle(.orange)
+            case .done:
+                HStack(spacing: 3) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.caption2)
+                    Text("Done")
+                        .font(.caption2)
+                }
+                .foregroundStyle(CorveilTheme.gold)
+            case .waiting, .idle:
+                EmptyView()
+            }
+        }
     }
 
     private var needsAttention: Bool {
