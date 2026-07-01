@@ -13,6 +13,11 @@ public enum OpenCodeLaunchArgs {
 
     private static let helpProbeTimeoutSeconds: TimeInterval = 5
 
+    /// POSIX single-quote escape for paths interpolated into shell commands.
+    public static func shellQuote(_ s: String) -> String {
+        "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
     /// Whether `opencode --help` advertises the TUI `--auto` flag.
     public static func parseTUISupportsAuto(from helpText: String) -> Bool {
         helpText.contains("--auto")
@@ -31,24 +36,40 @@ public enum OpenCodeLaunchArgs {
         return ""
     }
 
-    /// Probe the installed binary once and cache the result.
+    /// Probe the installed binary once and cache the result. Only call when
+    /// an auto-approve suffix is actually needed — each probe spawns a subprocess.
     public static func tuiSupportsAuto(binary: String) -> Bool {
         cacheLock.lock()
-        defer { cacheLock.unlock() }
-        if let cached = tuiAutoFlagCache[binary] { return cached }
+        if let cached = tuiAutoFlagCache[binary] {
+            cacheLock.unlock()
+            return cached
+        }
+        cacheLock.unlock()
+
         let help = (try? runHelp(binary: binary, subcommand: nil)) ?? ""
         let supports = parseTUISupportsAuto(from: help)
+
+        cacheLock.lock()
         tuiAutoFlagCache[binary] = supports
+        cacheLock.unlock()
         return supports
     }
 
-    /// Cached `opencode run --help` text for the installed binary.
+    /// Cached `opencode run --help` text for the installed binary. Only call
+    /// when an auto-approve suffix is actually needed.
     public static func runHelpText(binary: String) -> String {
         cacheLock.lock()
-        defer { cacheLock.unlock() }
-        if let cached = runHelpCache[binary] { return cached }
+        if let cached = runHelpCache[binary] {
+            cacheLock.unlock()
+            return cached
+        }
+        cacheLock.unlock()
+
         let help = (try? runHelp(binary: binary, subcommand: "run")) ?? ""
+
+        cacheLock.lock()
         runHelpCache[binary] = help
+        cacheLock.unlock()
         return help
     }
 
@@ -70,11 +91,10 @@ public enum OpenCodeLaunchArgs {
     }
 
     /// First unattended dispatch: headless `run` consumes the prompt file,
-    /// then `&& opencode --continue` drops into the interactive TUI with a
+    /// then `; opencode --continue` drops into the interactive TUI with a
     /// fresh terminal stdin (not a pipe) so `crow send` keeps working (#547).
-    /// Piping into bare `opencode` or `--prompt` alone were rejected because
-    /// they either don't submit on all builds or bind fd 0 to a pipe that
-    /// breaks keyboard input after EOF.
+    /// Semicolon (not `&&`) so the TUI opens even when `run` exits non-zero,
+    /// preserving a resumable session for follow-up input.
     public static func firstLaunchChainedCommand(
         binary: String,
         promptPath: String,
@@ -82,6 +102,7 @@ public enum OpenCodeLaunchArgs {
         tuiSupportsAuto: Bool,
         runHelpText: String
     ) -> String {
+        let quotedPath = shellQuote(promptPath)
         let runFlags = runAutoApproveSuffix(
             autoPermissionMode: autoPermissionMode,
             runHelpText: runHelpText
@@ -90,8 +111,8 @@ public enum OpenCodeLaunchArgs {
             autoPermissionMode: autoPermissionMode,
             tuiSupportsAuto: tuiSupportsAuto
         )
-        return "\(binary) run \"$(cat \(promptPath))\"\(runFlags)"
-            + " && \(binary) --continue\(continueFlags)\n"
+        return "\(binary) run \"$(cat \(quotedPath))\"\(runFlags)"
+            + "; \(binary) --continue\(continueFlags)\n"
     }
 
     /// Resume the last OpenCode session in the interactive TUI.

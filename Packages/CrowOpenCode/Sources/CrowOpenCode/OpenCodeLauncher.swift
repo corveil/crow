@@ -81,16 +81,13 @@ public actor OpenCodeLauncher {
         try FileManager.default.setAttributes(
             [.posixPermissions: 0o600], ofItemAtPath: promptPath.path)
         let binary = ShellEnvironment.shared.findExecutable("opencode") ?? "opencode"
-        let tuiSupportsAuto = OpenCodeLaunchArgs.tuiSupportsAuto(binary: binary)
-        let runHelp = OpenCodeLaunchArgs.runHelpText(binary: binary)
-        let escapedPrompt = Self.shellEscape(promptPath.path)
         return "cd \(Self.shellEscape(worktreePath)) && "
             + OpenCodeLaunchArgs.firstLaunchChainedCommand(
                 binary: binary,
-                promptPath: escapedPrompt,
+                promptPath: promptPath.path,
                 autoPermissionMode: false,
-                tuiSupportsAuto: tuiSupportsAuto,
-                runHelpText: runHelp
+                tuiSupportsAuto: false,
+                runHelpText: ""
             ).trimmingCharacters(in: .newlines)
             + "\n"
     }

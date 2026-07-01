@@ -14,7 +14,7 @@ import CrowCore
 ///  1. **Initial prompt uses run-then-continue.** Cursor seeds its TUI with
 ///     `agent "<prompt>"`. OpenCode has no positional TUI prompt, so first
 ///     dispatch runs headless `opencode run "$(cat …)"` (consumes the prompt
-///     reliably), then chains `&& opencode --continue` to drop into the
+///     reliably), then chains `; opencode --continue` to drop into the
 ///     interactive TUI with a fresh terminal stdin for `crow send` (#547).
 ///     Bare `opencode`, stdin pipes, and `--prompt` alone were rejected:
 ///     pipes bind fd 0 and break keyboard input; `--prompt` may only pre-fill.
@@ -25,7 +25,7 @@ import CrowCore
 ///
 /// OpenCode has no `--rc`/`--name`/`--permission-mode` analog. The closest
 /// permission knob is `--auto` / `--dangerously-skip-permissions`, probed via
-/// `OpenCodeLaunchArgs` against `opencode --help` and `opencode run --help`.
+/// `OpenCodeLaunchArgs` only for `.job` sessions with auto-permission mode.
 public struct OpenCodeAgent: CodingAgent {
     public let kind: AgentKind = .openCode
     public let displayName: String = "OpenCode"
@@ -81,25 +81,29 @@ public struct OpenCodeAgent: CodingAgent {
             return "\(opencodePath)\n"
         case .job, .review:
             // First launch: headless `run` consumes the prompt file, then
-            // `&& --continue` opens the interactive TUI (#547). Subsequent
+            // `; --continue` opens the interactive TUI (#547). Subsequent
             // restarts skip the headless re-run and resume the TUI only.
-            // Auto-permission jobs pass the run/TUI auto-approve flags when
-            // the installed build advertises them. `reviewPromptDispatched`
-            // gates both kinds.
+            // Capability probes run only for `.job` + autoPermissionMode —
+            // reviews never auto-approve and don't need subprocess `--help`
+            // calls on the main thread. `reviewPromptDispatched` gates both kinds.
             //
             // Review prompts are agent-aware: SessionService.buildReviewPrompt
             // inlines the crow-review-pr SKILL body for OpenCode (same as
             // Cursor) so the CLI gets a self-contained brief — OpenCode has
             // no Crow slash-command engine.
-            let tuiSupportsAuto = OpenCodeLaunchArgs.tuiSupportsAuto(binary: opencodePath)
-            let runHelp = OpenCodeLaunchArgs.runHelpText(binary: opencodePath)
+            let autoForJob = (session.kind == .job) && autoPermissionMode
+            let tuiSupportsAuto = autoForJob
+                ? OpenCodeLaunchArgs.tuiSupportsAuto(binary: opencodePath)
+                : false
+            let runHelp = autoForJob
+                ? OpenCodeLaunchArgs.runHelpText(binary: opencodePath)
+                : ""
             if !session.reviewPromptDispatched {
                 let promptFile = session.kind == .review
                     ? ".crow-review-prompt.md"
                     : ".crow-job-prompt.md"
                 let promptPath = (worktreePath as NSString)
                     .appendingPathComponent(promptFile)
-                let autoForJob = (session.kind == .job) && autoPermissionMode
                 return OpenCodeLaunchArgs.firstLaunchChainedCommand(
                     binary: opencodePath,
                     promptPath: promptPath,
@@ -108,11 +112,14 @@ public struct OpenCodeAgent: CodingAgent {
                     runHelpText: runHelp
                 )
             }
-            let autoOnResume = (session.kind == .job) && autoPermissionMode
+            let autoOnResume = autoForJob
+            let resumeTuiSupportsAuto = autoOnResume
+                ? OpenCodeLaunchArgs.tuiSupportsAuto(binary: opencodePath)
+                : false
             return OpenCodeLaunchArgs.resumeTUICommand(
                 binary: opencodePath,
                 autoPermissionMode: autoOnResume,
-                tuiSupportsAuto: tuiSupportsAuto
+                tuiSupportsAuto: resumeTuiSupportsAuto
             )
         case .manager:
             // Manager sessions never auto-launch an agent — Crow drives them

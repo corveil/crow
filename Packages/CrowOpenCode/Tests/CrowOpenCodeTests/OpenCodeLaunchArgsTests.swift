@@ -58,8 +58,8 @@ struct OpenCodeLaunchArgsTests {
             tuiSupportsAuto: true,
             runHelpText: runHelpWithDangerously
         )
-        #expect(cmd == "/opt/homebrew/bin/opencode run \"$(cat /tmp/wt/.crow-job-prompt.md)\""
-            + " && /opt/homebrew/bin/opencode --continue\n")
+        #expect(cmd == "/opt/homebrew/bin/opencode run \"$(cat '/tmp/wt/.crow-job-prompt.md')\""
+            + "; /opt/homebrew/bin/opencode --continue\n")
         #expect(cmd.contains(" | ") == false)
     }
 
@@ -71,8 +71,8 @@ struct OpenCodeLaunchArgsTests {
             tuiSupportsAuto: true,
             runHelpText: runHelpWithAuto
         )
-        #expect(cmd.contains(" run \"$(cat /tmp/p.md)\" --auto"))
-        #expect(cmd.contains(" && opencode --continue --auto\n"))
+        #expect(cmd.contains(" run \"$(cat '/tmp/p.md')\" --auto"))
+        #expect(cmd.contains("; opencode --continue --auto\n"))
     }
 
     @Test func firstLaunchChainedCommandOmitsUnsupportedAutoFlags() {
@@ -83,7 +83,18 @@ struct OpenCodeLaunchArgsTests {
             tuiSupportsAuto: false,
             runHelpText: tuiHelpWithoutAuto
         )
-        #expect(cmd == "opencode run \"$(cat /tmp/p.md)\" && opencode --continue\n")
+        #expect(cmd == "opencode run \"$(cat '/tmp/p.md')\"; opencode --continue\n")
+    }
+
+    @Test func firstLaunchChainedCommandShellQuotesPromptPath() {
+        let cmd = OpenCodeLaunchArgs.firstLaunchChainedCommand(
+            binary: "opencode",
+            promptPath: "/tmp/my worktree/.crow-job-prompt.md",
+            autoPermissionMode: false,
+            tuiSupportsAuto: false,
+            runHelpText: ""
+        )
+        #expect(cmd.contains("$(cat '/tmp/my worktree/.crow-job-prompt.md')"))
     }
 
     @Test func resumeTUICommandCarriesAutoForResumedJobs() {
