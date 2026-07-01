@@ -1,41 +1,67 @@
 import Foundation
 
-/// Helpers for building OpenCode TUI launch commands. Centralized so
+/// Helpers for building OpenCode launch commands. Centralized so
 /// `OpenCodeAgent`, `OpenCodeLauncher`, and tests share one implementation
-/// of the stdin-pipe seeding form and the `--auto` capability probe (#547).
+/// of the run-then-continue dispatch form and capability probes (#547).
 public enum OpenCodeLaunchArgs {
     private static let cacheLock = NSLock()
-    /// Guarded by `cacheLock`.
-    private nonisolated(unsafe) static var autoFlagCache: [String: Bool] = [:]
+    /// Guarded by `cacheLock`. Keyed by binary path; not invalidated on in-place
+    /// upgrades during a Crow session — acceptable because a wrong answer only
+    /// omits an optional flag, never breaks launch.
+    private nonisolated(unsafe) static var tuiAutoFlagCache: [String: Bool] = [:]
+    private nonisolated(unsafe) static var runHelpCache: [String: String] = [:]
 
-    /// Whether `opencode --help` advertises the TUI `--auto` flag. Older builds
-    /// (e.g. 1.17.x) only expose auto-approve on `opencode run`
-    /// (`--dangerously-skip-permissions`), which Crow intentionally avoids
-    /// because `run` exits to the shell.
+    private static let helpProbeTimeoutSeconds: TimeInterval = 5
+
+    /// Whether `opencode --help` advertises the TUI `--auto` flag.
     public static func parseTUISupportsAuto(from helpText: String) -> Bool {
         helpText.contains("--auto")
+    }
+
+    /// Auto-approve flag for the headless `opencode run` subcommand.
+    public static func runAutoApproveSuffix(
+        autoPermissionMode: Bool,
+        runHelpText: String
+    ) -> String {
+        guard autoPermissionMode else { return "" }
+        if runHelpText.contains("--auto") { return " --auto" }
+        if runHelpText.contains("--dangerously-skip-permissions") {
+            return " --dangerously-skip-permissions"
+        }
+        return ""
     }
 
     /// Probe the installed binary once and cache the result.
     public static func tuiSupportsAuto(binary: String) -> Bool {
         cacheLock.lock()
         defer { cacheLock.unlock() }
-        if let cached = autoFlagCache[binary] { return cached }
-        let help = (try? runHelp(binary: binary)) ?? ""
+        if let cached = tuiAutoFlagCache[binary] { return cached }
+        let help = (try? runHelp(binary: binary, subcommand: nil)) ?? ""
         let supports = parseTUISupportsAuto(from: help)
-        autoFlagCache[binary] = supports
+        tuiAutoFlagCache[binary] = supports
         return supports
     }
 
-    /// Reset the cached `--auto` probe (tests only).
-    internal static func resetAutoFlagCacheForTesting() {
+    /// Cached `opencode run --help` text for the installed binary.
+    public static func runHelpText(binary: String) -> String {
         cacheLock.lock()
         defer { cacheLock.unlock() }
-        autoFlagCache.removeAll()
+        if let cached = runHelpCache[binary] { return cached }
+        let help = (try? runHelp(binary: binary, subcommand: "run")) ?? ""
+        runHelpCache[binary] = help
+        return help
+    }
+
+    /// Reset cached probes (tests only).
+    internal static func resetCachesForTesting() {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        tuiAutoFlagCache.removeAll()
+        runHelpCache.removeAll()
     }
 
     /// TUI auto-approve suffix when the installed build supports `--auto`.
-    public static func autoApproveSuffix(
+    public static func tuiAutoApproveSuffix(
         autoPermissionMode: Bool,
         tuiSupportsAuto: Bool
     ) -> String {
@@ -43,21 +69,29 @@ public enum OpenCodeLaunchArgs {
         return " --auto"
     }
 
-    /// Seed the interactive TUI with a prompt file via stdin pipe. OpenCode's
-    /// docs document piping as a supported way to deliver an initial message;
-    /// `--prompt` only pre-fills the composer on some builds without
-    /// submitting (sst/opencode#3937).
-    public static func seededTUICommand(
+    /// First unattended dispatch: headless `run` consumes the prompt file,
+    /// then `&& opencode --continue` drops into the interactive TUI with a
+    /// fresh terminal stdin (not a pipe) so `crow send` keeps working (#547).
+    /// Piping into bare `opencode` or `--prompt` alone were rejected because
+    /// they either don't submit on all builds or bind fd 0 to a pipe that
+    /// breaks keyboard input after EOF.
+    public static func firstLaunchChainedCommand(
         binary: String,
         promptPath: String,
         autoPermissionMode: Bool,
-        tuiSupportsAuto: Bool
+        tuiSupportsAuto: Bool,
+        runHelpText: String
     ) -> String {
-        let flags = autoApproveSuffix(
+        let runFlags = runAutoApproveSuffix(
+            autoPermissionMode: autoPermissionMode,
+            runHelpText: runHelpText
+        )
+        let continueFlags = tuiAutoApproveSuffix(
             autoPermissionMode: autoPermissionMode,
             tuiSupportsAuto: tuiSupportsAuto
         )
-        return "cat \(promptPath) | \(binary)\(flags)\n"
+        return "\(binary) run \"$(cat \(promptPath))\"\(runFlags)"
+            + " && \(binary) --continue\(continueFlags)\n"
     }
 
     /// Resume the last OpenCode session in the interactive TUI.
@@ -66,20 +100,32 @@ public enum OpenCodeLaunchArgs {
         autoPermissionMode: Bool,
         tuiSupportsAuto: Bool
     ) -> String {
-        let flags = autoApproveSuffix(
+        let flags = tuiAutoApproveSuffix(
             autoPermissionMode: autoPermissionMode,
             tuiSupportsAuto: tuiSupportsAuto
         )
         return "\(binary) --continue\(flags)\n"
     }
 
-    private static func runHelp(binary: String) throws -> String {
+    private static func runHelp(binary: String, subcommand: String?) throws -> String {
         let process = Process()
         let pipe = Pipe()
         process.executableURL = URL(fileURLWithPath: binary)
-        process.arguments = ["--help"]
+        if let subcommand {
+            process.arguments = [subcommand, "--help"]
+        } else {
+            process.arguments = ["--help"]
+        }
         process.standardOutput = pipe
         process.standardError = pipe
+
+        let timeout = DispatchWorkItem { process.terminate() }
+        DispatchQueue.global().asyncAfter(
+            deadline: .now() + helpProbeTimeoutSeconds,
+            execute: timeout
+        )
+        defer { timeout.cancel() }
+
         try process.run()
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()

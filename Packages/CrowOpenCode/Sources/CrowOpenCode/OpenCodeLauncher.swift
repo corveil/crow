@@ -6,7 +6,7 @@ import CrowCore
 /// without Claude-specific slash commands.
 ///
 /// Phase MVP launches `opencode` bare for `.work` (the user types into the
-/// TUI) and uses a stdin pipe into `opencode` for unattended `.job`/`.review`
+/// TUI) and uses run-then-continue for unattended `.job`/`.review`
 /// via `OpenCodeAgent.autoLaunchCommand`, so this type isn't wired into the
 /// auto-launch path yet. It's the parity placeholder a follow-up will use
 /// for an OpenCode-flavored `crow-workspace` skill.
@@ -71,9 +71,9 @@ public actor OpenCodeLauncher {
         return lines.joined(separator: "\n")
     }
 
-    /// Write `prompt` to a temp file and return the launch command. Pipes the
-    /// prompt into the interactive TUI so the session stays resident after
-    /// the first run completes (#547).
+    /// Write `prompt` to a temp file and return the launch command. Runs the
+    /// prompt headlessly, then chains into `--continue` so the session stays
+    /// resident with a fresh terminal stdin (#547).
     public func launchCommand(sessionID: UUID, worktreePath: String, prompt: String) throws -> String {
         let tmpDir = FileManager.default.temporaryDirectory
         let promptPath = tmpDir.appendingPathComponent("crow-opencode-\(sessionID.uuidString)-prompt.md")
@@ -82,12 +82,15 @@ public actor OpenCodeLauncher {
             [.posixPermissions: 0o600], ofItemAtPath: promptPath.path)
         let binary = ShellEnvironment.shared.findExecutable("opencode") ?? "opencode"
         let tuiSupportsAuto = OpenCodeLaunchArgs.tuiSupportsAuto(binary: binary)
+        let runHelp = OpenCodeLaunchArgs.runHelpText(binary: binary)
+        let escapedPrompt = Self.shellEscape(promptPath.path)
         return "cd \(Self.shellEscape(worktreePath)) && "
-            + OpenCodeLaunchArgs.seededTUICommand(
+            + OpenCodeLaunchArgs.firstLaunchChainedCommand(
                 binary: binary,
-                promptPath: Self.shellEscape(promptPath.path),
+                promptPath: escapedPrompt,
                 autoPermissionMode: false,
-                tuiSupportsAuto: tuiSupportsAuto
+                tuiSupportsAuto: tuiSupportsAuto,
+                runHelpText: runHelp
             ).trimmingCharacters(in: .newlines)
             + "\n"
     }

@@ -3,57 +3,87 @@ import Testing
 
 @Suite("OpenCodeLaunchArgs")
 struct OpenCodeLaunchArgsTests {
-    private let helpWithAuto = """
+    private let tuiHelpWithAuto = """
     Options:
       -c, --continue      continue the last session
-          --prompt        prompt to use
           --auto          auto-approve permissions
     """
 
-    private let helpWithoutAuto = """
+    private let tuiHelpWithoutAuto = """
     Options:
       -c, --continue      continue the last session
-          --prompt        prompt to use
+    """
+
+    private let runHelpWithDangerously = """
+    Options:
+      --dangerously-skip-permissions  auto-approve permissions
+    """
+
+    private let runHelpWithAuto = """
+    Options:
+      --auto          auto-approve permissions
     """
 
     @Test func parseTUISupportsAutoWhenAdvertised() {
-        #expect(OpenCodeLaunchArgs.parseTUISupportsAuto(from: helpWithAuto) == true)
+        #expect(OpenCodeLaunchArgs.parseTUISupportsAuto(from: tuiHelpWithAuto) == true)
     }
 
     @Test func parseTUISupportsAutoWhenAbsent() {
-        #expect(OpenCodeLaunchArgs.parseTUISupportsAuto(from: helpWithoutAuto) == false)
+        #expect(OpenCodeLaunchArgs.parseTUISupportsAuto(from: tuiHelpWithoutAuto) == false)
     }
 
-    @Test func seededTUICommandUsesStdinPipe() {
-        let cmd = OpenCodeLaunchArgs.seededTUICommand(
+    @Test func runAutoApproveSuffixUsesDangerouslySkipPermissions() {
+        #expect(
+            OpenCodeLaunchArgs.runAutoApproveSuffix(
+                autoPermissionMode: true,
+                runHelpText: runHelpWithDangerously
+            ) == " --dangerously-skip-permissions"
+        )
+    }
+
+    @Test func runAutoApproveSuffixPrefersAutoWhenAdvertised() {
+        #expect(
+            OpenCodeLaunchArgs.runAutoApproveSuffix(
+                autoPermissionMode: true,
+                runHelpText: runHelpWithAuto + runHelpWithDangerously
+            ) == " --auto"
+        )
+    }
+
+    @Test func firstLaunchChainedCommandUsesRunThenContinue() {
+        let cmd = OpenCodeLaunchArgs.firstLaunchChainedCommand(
             binary: "/opt/homebrew/bin/opencode",
             promptPath: "/tmp/wt/.crow-job-prompt.md",
             autoPermissionMode: false,
-            tuiSupportsAuto: true
+            tuiSupportsAuto: true,
+            runHelpText: runHelpWithDangerously
         )
-        #expect(cmd == "cat /tmp/wt/.crow-job-prompt.md | /opt/homebrew/bin/opencode\n")
-        #expect(cmd.contains(" run ") == false)
-        #expect(cmd.contains("--prompt") == false)
+        #expect(cmd == "/opt/homebrew/bin/opencode run \"$(cat /tmp/wt/.crow-job-prompt.md)\""
+            + " && /opt/homebrew/bin/opencode --continue\n")
+        #expect(cmd.contains(" | ") == false)
     }
 
-    @Test func seededTUICommandAddsAutoWhenSupported() {
-        let cmd = OpenCodeLaunchArgs.seededTUICommand(
+    @Test func firstLaunchChainedCommandAddsRunAndContinueAutoFlags() {
+        let cmd = OpenCodeLaunchArgs.firstLaunchChainedCommand(
             binary: "opencode",
             promptPath: "/tmp/p.md",
             autoPermissionMode: true,
-            tuiSupportsAuto: true
+            tuiSupportsAuto: true,
+            runHelpText: runHelpWithAuto
         )
-        #expect(cmd.hasSuffix("opencode --auto\n"))
+        #expect(cmd.contains(" run \"$(cat /tmp/p.md)\" --auto"))
+        #expect(cmd.contains(" && opencode --continue --auto\n"))
     }
 
-    @Test func seededTUICommandOmitsAutoWhenUnsupported() {
-        let cmd = OpenCodeLaunchArgs.seededTUICommand(
+    @Test func firstLaunchChainedCommandOmitsUnsupportedAutoFlags() {
+        let cmd = OpenCodeLaunchArgs.firstLaunchChainedCommand(
             binary: "opencode",
             promptPath: "/tmp/p.md",
             autoPermissionMode: true,
-            tuiSupportsAuto: false
+            tuiSupportsAuto: false,
+            runHelpText: tuiHelpWithoutAuto
         )
-        #expect(cmd == "cat /tmp/p.md | opencode\n")
+        #expect(cmd == "opencode run \"$(cat /tmp/p.md)\" && opencode --continue\n")
     }
 
     @Test func resumeTUICommandCarriesAutoForResumedJobs() {

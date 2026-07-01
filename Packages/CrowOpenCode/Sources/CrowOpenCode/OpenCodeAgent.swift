@@ -11,22 +11,21 @@ import CrowCore
 /// Two genuine divergences from Cursor, handled below and flagged in
 /// CROW-545 as the closest OpenCode equivalents rather than 1:1 parity:
 ///
-///  1. **Initial prompt seeds the TUI.** Cursor seeds its TUI with an
-///     initial prompt via `agent "<prompt>"` and stays interactive.
-///     OpenCode mirrors that with a stdin pipe into the interactive TUI
-///     (`cat … | opencode`) — the form that stays resident after a run
-///     completes (#547). The headless `opencode run` subcommand drives the
-///     agent to completion and exits, so Crow never uses it for managed
-///     terminals. Piping is preferred over `--prompt` because some builds
-///     only pre-fill the composer with `--prompt` without auto-submitting.
+///  1. **Initial prompt uses run-then-continue.** Cursor seeds its TUI with
+///     `agent "<prompt>"`. OpenCode has no positional TUI prompt, so first
+///     dispatch runs headless `opencode run "$(cat …)"` (consumes the prompt
+///     reliably), then chains `&& opencode --continue` to drop into the
+///     interactive TUI with a fresh terminal stdin for `crow send` (#547).
+///     Bare `opencode`, stdin pipes, and `--prompt` alone were rejected:
+///     pipes bind fd 0 and break keyboard input; `--prompt` may only pre-fill.
 ///  2. **State hooks are a JS plugin, not a `hooks.json`.** OpenCode has no
 ///     command-based hook file; `OpenCodeHookConfigWriter` installs a plugin
 ///     into `~/.config/opencode/plugins/` that shells out to `crow
 ///     hook-event`. See that type for details.
 ///
 /// OpenCode has no `--rc`/`--name`/`--permission-mode` analog. The closest
-/// permission knob is `--auto` on the TUI when the installed build advertises
-/// it in `opencode --help` (probed via `OpenCodeLaunchArgs`).
+/// permission knob is `--auto` / `--dangerously-skip-permissions`, probed via
+/// `OpenCodeLaunchArgs` against `opencode --help` and `opencode run --help`.
 public struct OpenCodeAgent: CodingAgent {
     public let kind: AgentKind = .openCode
     public let displayName: String = "OpenCode"
@@ -81,12 +80,11 @@ public struct OpenCodeAgent: CodingAgent {
             // OpenCode has no `--rc`/`--name` analog anyway.
             return "\(opencodePath)\n"
         case .job, .review:
-            // Jobs and reviews share Cursor's dispatch shape: a pre-written
-            // initial prompt file is piped into the interactive TUI on first
-            // launch so OpenCode starts working unattended (#547). On
-            // subsequent app restarts we resume with `--continue` rather than
-            // re-running the whole prompt. Auto-permission jobs carry `--auto`
-            // on resume when the installed build supports it. `reviewPromptDispatched`
+            // First launch: headless `run` consumes the prompt file, then
+            // `&& --continue` opens the interactive TUI (#547). Subsequent
+            // restarts skip the headless re-run and resume the TUI only.
+            // Auto-permission jobs pass the run/TUI auto-approve flags when
+            // the installed build advertises them. `reviewPromptDispatched`
             // gates both kinds.
             //
             // Review prompts are agent-aware: SessionService.buildReviewPrompt
@@ -94,6 +92,7 @@ public struct OpenCodeAgent: CodingAgent {
             // Cursor) so the CLI gets a self-contained brief — OpenCode has
             // no Crow slash-command engine.
             let tuiSupportsAuto = OpenCodeLaunchArgs.tuiSupportsAuto(binary: opencodePath)
+            let runHelp = OpenCodeLaunchArgs.runHelpText(binary: opencodePath)
             if !session.reviewPromptDispatched {
                 let promptFile = session.kind == .review
                     ? ".crow-review-prompt.md"
@@ -101,11 +100,12 @@ public struct OpenCodeAgent: CodingAgent {
                 let promptPath = (worktreePath as NSString)
                     .appendingPathComponent(promptFile)
                 let autoForJob = (session.kind == .job) && autoPermissionMode
-                return OpenCodeLaunchArgs.seededTUICommand(
+                return OpenCodeLaunchArgs.firstLaunchChainedCommand(
                     binary: opencodePath,
                     promptPath: promptPath,
                     autoPermissionMode: autoForJob,
-                    tuiSupportsAuto: tuiSupportsAuto
+                    tuiSupportsAuto: tuiSupportsAuto,
+                    runHelpText: runHelp
                 )
             }
             let autoOnResume = (session.kind == .job) && autoPermissionMode

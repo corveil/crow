@@ -49,8 +49,7 @@ struct OpenCodeAgentTests {
     }
 
     @Test func autoLaunchCommandJobSessionFirstLaunch() {
-        // First job launch (reviewPromptDispatched == false) pipes the prompt
-        // into the interactive TUI so the session stays resident (#547).
+        // First job launch runs headlessly, then chains into --continue (#547).
         let session = Session(name: "job", kind: .job, agentKind: .openCode)
         let cmd = agent.autoLaunchCommand(
             session: session,
@@ -60,18 +59,17 @@ struct OpenCodeAgentTests {
             telemetryPort: nil
         )
         #expect(cmd != nil)
-        #expect(cmd?.contains("cat ") == true)
-        #expect(cmd?.contains(" | ") == true)
+        #expect(cmd?.contains(" run ") == true)
+        #expect(cmd?.contains(" && ") == true)
+        #expect(cmd?.contains("--continue") == true)
         #expect(cmd?.contains(".crow-job-prompt.md") == true)
         #expect(cmd?.contains(".crow-review-prompt.md") == false)
-        #expect(cmd?.contains(" run ") == false)
-        #expect(cmd?.contains("--prompt") == false)
+        #expect(cmd?.contains(" | ") == false)
         #expect(cmd?.hasSuffix("\n") == true)
     }
 
     @Test func autoLaunchCommandJobSessionAutoPermissionMode() {
-        // `.job` + autoPermissionMode adds `--auto` only when the installed
-        // OpenCode build advertises the TUI flag in `opencode --help`.
+        // `.job` + autoPermissionMode adds run/TUI auto-approve when advertised.
         let session = Session(name: "job", kind: .job, agentKind: .openCode)
         let cmd = agent.autoLaunchCommand(
             session: session,
@@ -80,19 +78,16 @@ struct OpenCodeAgentTests {
             autoPermissionMode: true,
             telemetryPort: nil
         )
-        #expect(cmd?.contains("cat ") == true)
-        #expect(cmd?.contains(" run ") == false)
-        if OpenCodeLaunchArgs.tuiSupportsAuto(binary: agent.findBinary() ?? "opencode") {
-            #expect(cmd?.contains("--auto") == true)
-        } else {
-            #expect(cmd?.contains("--auto") == false)
+        #expect(cmd?.contains(" run ") == true)
+        let runHelp = OpenCodeLaunchArgs.runHelpText(binary: agent.findBinary() ?? "opencode")
+        if runHelp.contains("--auto") {
+            #expect(cmd?.contains(" run ") == true && cmd?.contains(" --auto") == true)
+        } else if runHelp.contains("--dangerously-skip-permissions") {
+            #expect(cmd?.contains("--dangerously-skip-permissions") == true)
         }
     }
 
     @Test func autoLaunchCommandReviewSessionFirstLaunch() {
-        // First review launch pipes the pre-written `.crow-review-prompt.md`
-        // (agent-aware inlined SKILL body — see SessionService.buildReviewPrompt).
-        // Review leaves auto-permission off, so no --auto flag.
         let session = Session(name: "review", kind: .review, agentKind: .openCode)
         let cmd = agent.autoLaunchCommand(
             session: session,
@@ -102,11 +97,12 @@ struct OpenCodeAgentTests {
             telemetryPort: nil
         )
         #expect(cmd != nil)
-        #expect(cmd?.contains("cat ") == true)
+        #expect(cmd?.contains(" run ") == true)
+        #expect(cmd?.contains(" && ") == true)
         #expect(cmd?.contains(".crow-review-prompt.md") == true)
         #expect(cmd?.contains(".crow-job-prompt.md") == false)
         #expect(cmd?.contains("--auto") == false)
-        #expect(cmd?.contains(" run ") == false)
+        #expect(cmd?.contains("--dangerously-skip-permissions") == false)
     }
 
     @Test func autoLaunchCommandReviewSessionSubsequentLaunch() {
