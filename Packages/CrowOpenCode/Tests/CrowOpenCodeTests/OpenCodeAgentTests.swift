@@ -49,8 +49,8 @@ struct OpenCodeAgentTests {
     }
 
     @Test func autoLaunchCommandJobSessionFirstLaunch() {
-        // First job launch (reviewPromptDispatched == false) seeds the
-        // interactive TUI via `opencode --prompt` with the pre-written job prompt.
+        // First job launch (reviewPromptDispatched == false) pipes the prompt
+        // into the interactive TUI so the session stays resident (#547).
         let session = Session(name: "job", kind: .job, agentKind: .openCode)
         let cmd = agent.autoLaunchCommand(
             session: session,
@@ -60,16 +60,18 @@ struct OpenCodeAgentTests {
             telemetryPort: nil
         )
         #expect(cmd != nil)
-        #expect(cmd?.contains(" --prompt ") == true)
+        #expect(cmd?.contains("cat ") == true)
+        #expect(cmd?.contains(" | ") == true)
         #expect(cmd?.contains(".crow-job-prompt.md") == true)
         #expect(cmd?.contains(".crow-review-prompt.md") == false)
         #expect(cmd?.contains(" run ") == false)
+        #expect(cmd?.contains("--prompt") == false)
         #expect(cmd?.hasSuffix("\n") == true)
     }
 
     @Test func autoLaunchCommandJobSessionAutoPermissionMode() {
-        // `.job` + autoPermissionMode adds `--auto` (OpenCode TUI's unattended
-        // auto-approve; the closest analog to Claude's `--permission-mode auto`).
+        // `.job` + autoPermissionMode adds `--auto` only when the installed
+        // OpenCode build advertises the TUI flag in `opencode --help`.
         let session = Session(name: "job", kind: .job, agentKind: .openCode)
         let cmd = agent.autoLaunchCommand(
             session: session,
@@ -78,12 +80,17 @@ struct OpenCodeAgentTests {
             autoPermissionMode: true,
             telemetryPort: nil
         )
-        #expect(cmd?.contains("--auto") == true)
+        #expect(cmd?.contains("cat ") == true)
         #expect(cmd?.contains(" run ") == false)
+        if OpenCodeLaunchArgs.tuiSupportsAuto(binary: agent.findBinary() ?? "opencode") {
+            #expect(cmd?.contains("--auto") == true)
+        } else {
+            #expect(cmd?.contains("--auto") == false)
+        }
     }
 
     @Test func autoLaunchCommandReviewSessionFirstLaunch() {
-        // First review launch passes the pre-written `.crow-review-prompt.md`
+        // First review launch pipes the pre-written `.crow-review-prompt.md`
         // (agent-aware inlined SKILL body — see SessionService.buildReviewPrompt).
         // Review leaves auto-permission off, so no --auto flag.
         let session = Session(name: "review", kind: .review, agentKind: .openCode)
@@ -95,7 +102,7 @@ struct OpenCodeAgentTests {
             telemetryPort: nil
         )
         #expect(cmd != nil)
-        #expect(cmd?.contains(" --prompt ") == true)
+        #expect(cmd?.contains("cat ") == true)
         #expect(cmd?.contains(".crow-review-prompt.md") == true)
         #expect(cmd?.contains(".crow-job-prompt.md") == false)
         #expect(cmd?.contains("--auto") == false)
@@ -118,7 +125,26 @@ struct OpenCodeAgentTests {
         #expect(cmd?.contains(".crow-review-prompt.md") == false)
         #expect(cmd?.contains(" run ") == false)
         #expect(cmd?.contains("--continue") == true)
+        #expect(cmd?.contains("--auto") == false)
         #expect(cmd?.hasSuffix("\n") == true)
+    }
+
+    @Test func autoLaunchCommandJobSessionSubsequentLaunchCarriesAutoWhenSupported() {
+        var session = Session(name: "job", kind: .job, agentKind: .openCode)
+        session.reviewPromptDispatched = true
+        let cmd = agent.autoLaunchCommand(
+            session: session,
+            worktreePath: "/tmp/wt",
+            remoteControlEnabled: false,
+            autoPermissionMode: true,
+            telemetryPort: nil
+        )
+        #expect(cmd?.contains("--continue") == true)
+        if OpenCodeLaunchArgs.tuiSupportsAuto(binary: agent.findBinary() ?? "opencode") {
+            #expect(cmd?.contains("--auto") == true)
+        } else {
+            #expect(cmd?.contains("--auto") == false)
+        }
     }
 
     @Test func autoLaunchCommandManagerSessionUnsupported() {

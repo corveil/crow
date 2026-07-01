@@ -6,7 +6,7 @@ import CrowCore
 /// without Claude-specific slash commands.
 ///
 /// Phase MVP launches `opencode` bare for `.work` (the user types into the
-/// TUI) and uses `opencode --prompt "<prompt>"` for unattended `.job`/`.review`
+/// TUI) and uses a stdin pipe into `opencode` for unattended `.job`/`.review`
 /// via `OpenCodeAgent.autoLaunchCommand`, so this type isn't wired into the
 /// auto-launch path yet. It's the parity placeholder a follow-up will use
 /// for an OpenCode-flavored `crow-workspace` skill.
@@ -71,8 +71,8 @@ public actor OpenCodeLauncher {
         return lines.joined(separator: "\n")
     }
 
-    /// Write `prompt` to a temp file and return the launch command. Uses the
-    /// interactive TUI `--prompt` form so the session stays resident after
+    /// Write `prompt` to a temp file and return the launch command. Pipes the
+    /// prompt into the interactive TUI so the session stays resident after
     /// the first run completes (#547).
     public func launchCommand(sessionID: UUID, worktreePath: String, prompt: String) throws -> String {
         let tmpDir = FileManager.default.temporaryDirectory
@@ -80,7 +80,16 @@ public actor OpenCodeLauncher {
         try prompt.write(to: promptPath, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes(
             [.posixPermissions: 0o600], ofItemAtPath: promptPath.path)
-        return "cd \(Self.shellEscape(worktreePath)) && opencode --prompt \"$(cat \(Self.shellEscape(promptPath.path)))\"\n"
+        let binary = ShellEnvironment.shared.findExecutable("opencode") ?? "opencode"
+        let tuiSupportsAuto = OpenCodeLaunchArgs.tuiSupportsAuto(binary: binary)
+        return "cd \(Self.shellEscape(worktreePath)) && "
+            + OpenCodeLaunchArgs.seededTUICommand(
+                binary: binary,
+                promptPath: Self.shellEscape(promptPath.path),
+                autoPermissionMode: false,
+                tuiSupportsAuto: tuiSupportsAuto
+            ).trimmingCharacters(in: .newlines)
+            + "\n"
     }
 
     private static func shellEscape(_ str: String) -> String {

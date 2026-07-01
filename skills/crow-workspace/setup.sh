@@ -1180,11 +1180,11 @@ launch_opencode() {
       die "launch_agent" "opencode binary not found at PATH or known locations; provide --agent-binary"
   fi
   log "Resolved opencode binary: $bin"
-  # OpenCode: no --permission-mode, no --rc. Seed the interactive TUI with
-  # `--prompt` so the session stays resident after the first run (#547).
+  # OpenCode: no --permission-mode, no --rc. Pipe the prompt into the
+  # interactive TUI so the session stays resident after the first run (#547).
   # This mirrors OpenCodeAgent.autoLaunchCommand's .job/.review branch; the
   # skill flow always feeds the prompt at launch.
-  local launch_cmd="cd $WORKTREE_PATH && $bin --prompt \"\$(cat $prompt_path)\""
+  local launch_cmd="cd $WORKTREE_PATH && cat $prompt_path | $bin"
   create_agent_terminal "OpenCode" "$launch_cmd"
 }
 

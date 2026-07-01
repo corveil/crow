@@ -103,7 +103,7 @@ Crow can drive four coding agents. Which one a session launches is resolved from
 | `claude-code` | Claude Code | `claude` | yes (`--rc --name`) | Always registered; the default. Supports OTEL telemetry and the AI gateway. |
 | `codex` | OpenAI Codex | `codex` | no | Registered when the binary resolves. Global config in `~/.codex`. |
 | `cursor` | Cursor | `agent` | yes (via `crow send`) | Registered when the binary resolves. Global hooks in `~/.cursor`. |
-| `opencode` | OpenCode | `opencode` | yes (via `crow send`) | Registered when the binary resolves. Global state-bridge plugin in `~/.config/opencode/plugins/`. Unattended `job`/`review` dispatch seeds the interactive TUI via `opencode --prompt`; no `--rc`/permission-mode analog (uses `--auto` for auto-approve). |
+| `opencode` | OpenCode | `opencode` | yes (via `crow send`) | Registered when the binary resolves. Global state-bridge plugin in `~/.config/opencode/plugins/`. Unattended `job`/`review` dispatch pipes the prompt into the interactive TUI (`cat … \| opencode`); no `--rc`/permission-mode analog (uses `--auto` when the installed build advertises it). |
 
 Codex, Cursor, and OpenCode are registered only when their CLI binary is found (via `defaults.binaries.<kind>`, then `PATH`, then known install locations) — otherwise they silently stay out of the agent pickers. Claude Code is always available. Configure the default and per-kind overrides in **Settings → Agents**.
 
