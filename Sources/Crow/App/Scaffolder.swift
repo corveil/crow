@@ -231,6 +231,9 @@ struct Scaffolder {
     /// Always materialize `{devRoot}/.claude/bin/crow` pointing at the running
     /// app's own CLI (CROW-552). Independent of `defaults.binaries` so every
     /// agent kind discovers `crow` via the tmux shell wrapper's PATH prepend.
+    /// Runs after `installBinarySymlinks`, so a user-set
+    /// `defaults.binaries["crow"]` is overwritten here by design — the app
+    /// binary always wins for PATH discovery.
     /// Idempotent — re-run on every scaffold pass; only ever owns symlinks.
     private func installCrowCLISymlink(claudeDir: String, appCrowPath: String?) {
         let fm = FileManager.default
@@ -249,9 +252,11 @@ struct Scaffolder {
             return
         }
 
-        if fm.fileExists(atPath: link) {
-            guard let attrs = try? fm.attributesOfItem(atPath: link),
-                  (attrs[.type] as? FileAttributeType) == .typeSymbolicLink else {
+        // Drive off attributesOfItem, not fileExists — the latter follows
+        // symlinks, so a dangling `crow` link (target moved/deleted) looks
+        // absent and we'd skip removal, then createSymbolicLink hits EEXIST.
+        if let attrs = try? fm.attributesOfItem(atPath: link) {
+            guard (attrs[.type] as? FileAttributeType) == .typeSymbolicLink else {
                 NSLog("[Scaffolder] crow exists at %@ but is not a symlink — leaving alone", link)
                 return
             }

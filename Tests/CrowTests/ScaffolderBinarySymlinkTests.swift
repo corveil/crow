@@ -205,6 +205,31 @@ struct ScaffolderBinarySymlinkTests {
         #expect(try FileManager.default.destinationOfSymbolicLink(atPath: crowLink) == secondPath)
     }
 
+    @Test func crowCLISymlinkRepairsDanglingLinkWhenTargetDeleted() throws {
+        let devRoot = try Self.makeTempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+
+        let toolsDir = (devRoot as NSString).appendingPathComponent("_tools")
+        try FileManager.default.createDirectory(atPath: toolsDir, withIntermediateDirectories: true)
+        let firstPath = try Self.makeExecutable(in: toolsDir, name: "crow-old")
+        let secondPath = try Self.makeExecutable(in: toolsDir, name: "crow-new")
+
+        let scaffolder = Scaffolder(devRoot: devRoot)
+        _ = try scaffolder.scaffold(workspaceNames: [], appCrowBinaryPath: firstPath)
+
+        // Simulate the app binary moving (e.g. Crow.app drag to /Applications):
+        // the symlink target is gone but the link inode remains dangling.
+        try FileManager.default.removeItem(atPath: firstPath)
+
+        let crowLink = (devRoot as NSString).appendingPathComponent(".claude/bin/crow")
+        #expect(try FileManager.default.destinationOfSymbolicLink(atPath: crowLink) == firstPath)
+        #expect(!FileManager.default.isExecutableFile(atPath: crowLink))
+
+        _ = try scaffolder.scaffold(workspaceNames: [], appCrowBinaryPath: secondPath)
+        #expect(try FileManager.default.destinationOfSymbolicLink(atPath: crowLink) == secondPath)
+        #expect(FileManager.default.isExecutableFile(atPath: crowLink))
+    }
+
     @Test func nonSymlinkCrowFileInBinDirIsLeftAlone() throws {
         let devRoot = try Self.makeTempDevRoot()
         defer { try? FileManager.default.removeItem(atPath: devRoot) }
