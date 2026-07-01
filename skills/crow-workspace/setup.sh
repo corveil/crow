@@ -1180,9 +1180,10 @@ launch_opencode() {
       die "launch_agent" "opencode binary not found at PATH or known locations; provide --agent-binary"
   fi
   log "Resolved opencode binary: $bin"
-  # OpenCode: headless `run` consumes the prompt, then `&& --continue` opens
-  # the interactive TUI with a fresh terminal stdin (#547).
-  local launch_cmd="cd $WORKTREE_PATH && $bin run \"\$(cat $prompt_path)\"; $bin --continue"
+  # OpenCode: headless `run` consumes the prompt, then `; --continue` opens
+  # the interactive TUI with a fresh terminal stdin (#547). Brace group keeps
+  # both commands gated on a successful `cd`.
+  local launch_cmd="cd $WORKTREE_PATH && { $bin run \"\$(cat $prompt_path)\"; $bin --continue; }"
   create_agent_terminal "OpenCode" "$launch_cmd"
 }
 
