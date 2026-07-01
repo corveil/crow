@@ -26,6 +26,7 @@ public enum CrowAttribution {
         AgentKind.claudeCode.rawValue: "Claude Code",
         AgentKind.cursor.rawValue: "Cursor",
         AgentKind.codex.rawValue: "OpenAI Codex",
+        AgentKind.openCode.rawValue: "OpenCode",
     ]
 
     /// Resolve the display name for `agentKind`, falling back to `defaultAgentDisplayName`.

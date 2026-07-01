@@ -73,6 +73,40 @@ All persistent state lives under `~/Library/Application Support/crow/` (see `Pac
 
 For the full set of automation toggles backed by this config, see [automation.md](automation.md).
 
+## Agent Selection
+
+Crow can drive four coding agents. Which one a session launches is resolved from `config.json`
+(all keys optional; existing configs decode unchanged):
+
+```json
+{
+  "defaultAgentKind": "claude-code",
+  "agentsByKind": {
+    "work": "opencode",
+    "review": "claude-code"
+  },
+  "defaults": {
+    "binaries": {
+      "opencode": "/Users/me/.opencode/bin/opencode",
+      "cursor": "/opt/homebrew/bin/agent"
+    }
+  }
+}
+```
+
+- **`defaultAgentKind`** — the agent used for newly created sessions when no override applies. One of `claude-code`, `codex`, `cursor`, `opencode`. Defaults to `claude-code`.
+- **`agentsByKind`** — per-session-kind overrides, keyed by session kind (`work`, `review`, `job`, `manager`). When a key is present, sessions of that kind use the mapped agent; when absent they fall back to `defaultAgentKind`. Resolution: `agentsByKind[<kind>] ?? defaultAgentKind ?? claude-code`. A session persists the resolved kind and can be overridden per-session at creation time (Create-Session picker or the `crow new-session --agent-kind` / RPC `agent_kind` param).
+- **`defaults.binaries.<kind>`** — absolute-path override for an agent's CLI binary, keyed by agent kind (`claude-code`, `codex`, `cursor`, `opencode`). Consulted before Crow walks `PATH`, so it pins discovery for non-standard installs (nvm/Volta/asdf) or when a token collides with another binary (e.g. Cursor's CLI is named `agent`).
+
+| Kind | Display name | CLI binary | Remote control | Notes |
+| --- | --- | --- | --- | --- |
+| `claude-code` | Claude Code | `claude` | yes (`--rc --name`) | Always registered; the default. Supports OTEL telemetry and the AI gateway. |
+| `codex` | OpenAI Codex | `codex` | no | Registered when the binary resolves. Global config in `~/.codex`. |
+| `cursor` | Cursor | `agent` | yes (via `crow send`) | Registered when the binary resolves. Global hooks in `~/.cursor`. |
+| `opencode` | OpenCode | `opencode` | yes (via `crow send`) | Registered when the binary resolves. Global state-bridge plugin in `~/.config/opencode/plugins/`. Unattended `job`/`review` dispatch runs headless via `opencode run`; no `--rc`/permission-mode analog (uses `--dangerously-skip-permissions` for auto-approve). |
+
+Codex, Cursor, and OpenCode are registered only when their CLI binary is found (via `defaults.binaries.<kind>`, then `PATH`, then known install locations) — otherwise they silently stay out of the agent pickers. Claude Code is always available. Configure the default and per-kind overrides in **Settings → Agents**.
+
 ## AI Gateway
 
 A workspace can route its Claude Code sessions through a proxy/gateway (e.g. an internal LLM gateway) instead of the vanilla Anthropic API, with its own API key. This replaces setting `ANTHROPIC_BASE_URL` / `ANTHROPIC_CUSTOM_HEADERS` globally in your shell — which would force *every* `claude` on the machine through one gateway — with a per-workspace setting Crow manages.

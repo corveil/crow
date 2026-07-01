@@ -160,6 +160,7 @@ agent_display_name() {
     claude-code) echo "Claude Code" ;;
     cursor)      echo "Cursor" ;;
     codex)       echo "OpenAI Codex" ;;
+    opencode)    echo "OpenCode" ;;
     *)           echo "Claude Code" ;;
   esac
 }
@@ -361,7 +362,7 @@ Optional:
   --pr-url <url>             Existing PR URL
   --pr-branch <branch>       Existing PR branch name
   --prompt-content <path>    Path to LLM-written prompt file
-  --agent-kind <kind>        Coding agent: claude-code | cursor | codex.
+  --agent-kind <kind>        Coding agent: claude-code | cursor | codex | opencode.
                              Defaults to agentsByKind["work"] then
                              defaultAgentKind from {devRoot}/.claude/config.json
                              (final fallback: claude-code).
@@ -445,8 +446,8 @@ parse_args() {
   # Validate --agent-kind early so bad values fail fast rather than at launch.
   if [[ -n "$AGENT_KIND" ]]; then
     case "$AGENT_KIND" in
-      claude-code|cursor|codex) ;;
-      *) die "parse_args" "Unknown --agent-kind: $AGENT_KIND (expected claude-code | cursor | codex)" ;;
+      claude-code|cursor|codex|opencode) ;;
+      *) die "parse_args" "Unknown --agent-kind: $AGENT_KIND (expected claude-code | cursor | codex | opencode)" ;;
     esac
   fi
 }
@@ -1164,6 +1165,31 @@ launch_codex() {
   create_agent_terminal "OpenAI Codex" "$launch_cmd"
 }
 
+launch_opencode() {
+  local prompt_path="$1"
+  local override_bin="$2"
+  local bin
+  if [[ -n "$override_bin" ]]; then
+    bin="$override_bin"
+  else
+    bin=$(resolve_binary "opencode" \
+      "/opt/homebrew/bin/opencode" \
+      "/usr/local/bin/opencode" \
+      "$HOME/.local/bin/opencode" \
+      "$HOME/.opencode/bin/opencode") || \
+      die "launch_agent" "opencode binary not found at PATH or known locations; provide --agent-binary"
+  fi
+  log "Resolved opencode binary: $bin"
+  # OpenCode: no --permission-mode, no --rc. Unattended dispatch uses the
+  # HEADLESS `opencode run "<prompt>"` form — OpenCode's positional prompt
+  # lives on the `run` subcommand and drives the agent to completion; it does
+  # NOT seed an interactive TUI the way Cursor's `agent "<prompt>"` does
+  # (CROW-545 gap). This mirrors OpenCodeAgent.autoLaunchCommand's .job/.review
+  # branch; the skill flow always feeds the prompt at launch.
+  local launch_cmd="cd $WORKTREE_PATH && $bin run \"\$(cat $prompt_path)\""
+  create_agent_terminal "OpenCode" "$launch_cmd"
+}
+
 # Shared terminal creation + readiness polling, used by every launch_<kind>.
 # Sets TERMINAL_ID on success. Polls `crow list-terminals` for up to 15s.
 create_agent_terminal() {
@@ -1253,7 +1279,8 @@ launch_agent() {
     claude-code) launch_claude_code "$prompt_path" "$override_bin" ;;
     cursor)      launch_cursor "$prompt_path" "$override_bin" ;;
     codex)       launch_codex "$prompt_path" "$override_bin" ;;
-    *) die "launch_agent" "Unknown agent kind: $kind (expected claude-code | cursor | codex)" ;;
+    opencode)    launch_opencode "$prompt_path" "$override_bin" ;;
+    *) die "launch_agent" "Unknown agent kind: $kind (expected claude-code | cursor | codex | opencode)" ;;
   esac
 }
 

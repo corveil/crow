@@ -2103,10 +2103,15 @@ final class SessionService {
     /// `ProcessInfo.processInfo.arguments[0]`).
     nonisolated static func buildReviewPrompt(prURL: String, prTitle: String, repoSlug: String, prNumber: Int, agentKind: AgentKind) -> String {
         switch agentKind {
-        case .cursor:
+        case .cursor, .openCode:
+            // Cursor and OpenCode both lack a Crow slash-command engine, so
+            // they get the whole crow-review-pr SKILL body inlined into the
+            // prompt file (a self-contained brief). `agentKind` is threaded
+            // through so the posted review footer names the right agent.
             return cursorReviewPrompt(
                 skillBody: Scaffolder.bundledReviewSkill(),
-                prURL: prURL
+                prURL: prURL,
+                agentKind: agentKind
             )
         default:
             // Claude Code (and any future agent with a compatible slash-
@@ -2117,18 +2122,23 @@ final class SessionService {
         }
     }
 
-    /// Apply the Cursor-specific substitutions to a raw `crow-review-pr`
-    /// SKILL body: replace `$ARGUMENTS` with the PR URL, and expand
+    /// Apply the inlined-SKILL substitutions to a raw `crow-review-pr` SKILL
+    /// body for agents without a slash-command engine (Cursor, OpenCode):
+    /// replace `$ARGUMENTS` with the PR URL, and expand
     /// `${CROW_AGENT_DISPLAY_NAME:-…}` / legacy "via Claude Code" wording so the
     /// posted GitHub review identifies the reviewing agent correctly.
+    ///
+    /// `agentKind` defaults to `.cursor` for backward compatibility with the
+    /// original single-agent call site (and its unit test); pass the actual
+    /// kind (e.g. `.openCode`) so the footer names the right agent.
     ///
     /// Split out from `buildReviewPrompt` so unit tests can verify the
     /// substitutions against a known input without depending on the
     /// scaffolder's file-resolution fallback.
-    nonisolated static func cursorReviewPrompt(skillBody: String, prURL: String) -> String {
+    nonisolated static func cursorReviewPrompt(skillBody: String, prURL: String, agentKind: AgentKind = .cursor) -> String {
         CrowAttribution.expandSkillBody(
             skillBody.replacingOccurrences(of: "$ARGUMENTS", with: prURL),
-            agentKind: .cursor
+            agentKind: agentKind
         )
     }
 

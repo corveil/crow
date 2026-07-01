@@ -19,6 +19,9 @@ public struct AgentKind: Hashable, Sendable, Codable, RawRepresentable {
 
     /// The Cursor agent.
     public static let cursor = AgentKind(rawValue: "cursor")
+
+    /// The OpenCode agent (sst/opencode).
+    public static let openCode = AgentKind(rawValue: "opencode")
 }
 
 public extension AgentKind {
