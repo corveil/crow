@@ -103,6 +103,41 @@ import Testing
     #expect(config.autoMergeWatcherEnabled == false)
 }
 
+@Test func appConfigMigratesLegacyAutoRebaseWatcherEnabled() throws {
+    // CROW-551: the top-level `autoRebaseWatcherEnabled` moved into
+    // `autoRespond.autoRebaseAndResolveConflicts`. An existing opt-in carries
+    // forward across the upgrade.
+    let json = #"{"autoRebaseWatcherEnabled": true}"#.data(using: .utf8)!
+    let config = try JSONDecoder().decode(AppConfig.self, from: json)
+    #expect(config.autoRespond.autoRebaseAndResolveConflicts == true)
+
+    // Re-encoding drops the legacy key, so a later opt-out sticks.
+    let reencoded = try JSONEncoder().encode(config)
+    let reencodedJSON = String(data: reencoded, encoding: .utf8)!
+    #expect(!reencodedJSON.contains("autoRebaseWatcherEnabled"))
+}
+
+@Test func appConfigLegacyAutoRebaseWatcherTrueWinsOverExplicitNestedFalse() throws {
+    // Edge case documenting the one-time upgrade semantics: when both keys
+    // coexist, the legacy top-level opt-in ORs into the nested field even if
+    // the nested key is explicitly false. No real pre-CROW-551 config can
+    // have written the nested key, and the legacy key is dropped on the next
+    // encode — so after one save an explicit nested false can no longer be
+    // overridden.
+    let json = #"{"autoRebaseWatcherEnabled": true, "autoRespond": {"autoRebaseAndResolveConflicts": false}}"#
+        .data(using: .utf8)!
+    let config = try JSONDecoder().decode(AppConfig.self, from: json)
+    #expect(config.autoRespond.autoRebaseAndResolveConflicts == true)
+}
+
+@Test func appConfigLegacyAutoRebaseWatcherFalseOrMissingStaysOff() throws {
+    let missing = try JSONDecoder().decode(AppConfig.self, from: #"{"workspaces":[]}"#.data(using: .utf8)!)
+    #expect(missing.autoRespond.autoRebaseAndResolveConflicts == false)
+
+    let explicitOff = try JSONDecoder().decode(AppConfig.self, from: #"{"autoRebaseWatcherEnabled": false}"#.data(using: .utf8)!)
+    #expect(explicitOff.autoRespond.autoRebaseAndResolveConflicts == false)
+}
+
 @Test func appConfigAutoCreateWatcherEnabledRoundTrip() throws {
     var config = AppConfig()
     config.autoCreateWatcherEnabled = true

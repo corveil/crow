@@ -1,3 +1,4 @@
+import CrowClaude
 import CrowCore
 import Foundation
 
@@ -33,11 +34,17 @@ struct Scaffolder {
     /// of `corveil` / `codex` / `cursor` inside spawned agent terminals, so
     /// embedded skills (e.g. `/query-corveil`) resolve to the user-configured
     /// binary instead of whatever happens to be on PATH.
+    ///
+    /// `appCrowBinaryPath` overrides the running app's crow CLI location when
+    /// materializing `{devRoot}/.claude/bin/crow` (CROW-552). Tests inject a
+    /// stand-in executable; production passes `nil` and uses
+    /// `ClaudeHookConfigWriter.appCrowBinary()`.
     @discardableResult
     func scaffold(workspaceNames: [String],
                   managerAgentKind: AgentKind = .claudeCode,
                   corveilBinaryPath: String? = nil,
-                  binaryOverrides: [String: String] = [:]) throws -> ScaffoldResult {
+                  binaryOverrides: [String: String] = [:],
+                  appCrowBinaryPath: String? = nil) throws -> ScaffoldResult {
         let fm = FileManager.default
 
         // Create devRoot
@@ -148,6 +155,7 @@ struct Scaffolder {
         // user rc — so `corveil`, `codex`, `cursor` resolve to the
         // user-configured binary regardless of what's on PATH.
         installBinarySymlinks(binaryOverrides, claudeDir: claudeDir)
+        installCrowCLISymlink(claudeDir: claudeDir, appCrowPath: appCrowBinaryPath)
 
         // Re-install the embedded /query-corveil slash command from the
         // user-configured corveil binary on every launch (CROW-482). Failure
@@ -169,6 +177,10 @@ struct Scaffolder {
     /// - Recreates good links with `removeItem` + `createSymbolicLink`,
     ///   matching `ln -sf` semantics.
     ///
+    /// Symlinks managed outside `defaults.binaries` — never reaped by
+    /// `installBinarySymlinks`, refreshed by their own installer.
+    private static let managedBinarySymlinks: Set<String> = ["crow"]
+
     /// All errors are logged + swallowed; this step is best-effort and must
     /// never fail an otherwise-successful scaffold pass.
     private func installBinarySymlinks(_ overrides: [String: String], claudeDir: String) {
@@ -185,7 +197,7 @@ struct Scaffolder {
         // anything that isn't a symlink — we never want to nuke a real
         // file that someone dropped here by hand.
         let existing = (try? fm.contentsOfDirectory(atPath: binDir)) ?? []
-        for name in existing where overrides[name] == nil {
+        for name in existing where overrides[name] == nil && !Self.managedBinarySymlinks.contains(name) {
             let link = (binDir as NSString).appendingPathComponent(name)
             if let attrs = try? fm.attributesOfItem(atPath: link),
                (attrs[.type] as? FileAttributeType) == .typeSymbolicLink {
@@ -213,6 +225,49 @@ struct Scaffolder {
                 NSLog("[Scaffolder] failed to symlink %@ -> %@: %@",
                       link, trimmed, error.localizedDescription)
             }
+        }
+    }
+
+    /// Always materialize `{devRoot}/.claude/bin/crow` pointing at the running
+    /// app's own CLI (CROW-552). Independent of `defaults.binaries` so every
+    /// agent kind discovers `crow` via the tmux shell wrapper's PATH prepend.
+    /// Runs after `installBinarySymlinks`, so a user-set
+    /// `defaults.binaries["crow"]` is overwritten here by design — the app
+    /// binary always wins for PATH discovery.
+    /// Idempotent — re-run on every scaffold pass; only ever owns symlinks.
+    private func installCrowCLISymlink(claudeDir: String, appCrowPath: String?) {
+        let fm = FileManager.default
+        let binDir = (claudeDir as NSString).appendingPathComponent("bin")
+        let link = (binDir as NSString).appendingPathComponent("crow")
+        let resolved = appCrowPath ?? ClaudeHookConfigWriter.appCrowBinary()
+
+        guard let target = resolved, fm.isExecutableFile(atPath: target) else {
+            if let attrs = try? fm.attributesOfItem(atPath: link),
+               (attrs[.type] as? FileAttributeType) == .typeSymbolicLink {
+                try? fm.removeItem(atPath: link)
+            }
+            if let resolved {
+                NSLog("[Scaffolder] app crow binary not executable at %@ — skipping symlink", resolved)
+            }
+            return
+        }
+
+        // Drive off attributesOfItem, not fileExists — the latter follows
+        // symlinks, so a dangling `crow` link (target moved/deleted) looks
+        // absent and we'd skip removal, then createSymbolicLink hits EEXIST.
+        if let attrs = try? fm.attributesOfItem(atPath: link) {
+            guard (attrs[.type] as? FileAttributeType) == .typeSymbolicLink else {
+                NSLog("[Scaffolder] crow exists at %@ but is not a symlink — leaving alone", link)
+                return
+            }
+            try? fm.removeItem(atPath: link)
+        }
+
+        do {
+            try fm.createSymbolicLink(atPath: link, withDestinationPath: target)
+        } catch {
+            NSLog("[Scaffolder] failed to symlink %@ -> %@: %@",
+                  link, target, error.localizedDescription)
         }
     }
 

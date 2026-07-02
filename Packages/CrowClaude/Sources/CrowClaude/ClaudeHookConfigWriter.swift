@@ -196,14 +196,21 @@ public struct ClaudeHookConfigWriter: HookConfigWriter {
 
     // MARK: - Find crow Binary
 
-    /// Find the crow binary, checking common install locations.
-    public static func findCrowBinary() -> String? {
-        // Check same directory as running executable first (development builds)
+    /// Resolve the running app's own `crow` CLI — the bundled binary in a
+    /// release `.app` (`Contents/MacOS/crow`), or `.build/{config}/crow` in
+    /// dev. Does not consult `{devRoot}/.claude/bin/crow`; use that for
+    /// agent-facing resolution via `findCrowBinary(devRoot:)`.
+    public static func appCrowBinary() -> String? {
+        // Same directory as the running executable (dev + release bundles).
         let execURL = URL(fileURLWithPath: ProcessInfo.processInfo.arguments[0])
-        let buildDir = execURL.deletingLastPathComponent()
-        let devPath = buildDir.appendingPathComponent("crow").path
-        if FileManager.default.isExecutableFile(atPath: devPath) {
-            return devPath
+        let sibling = execURL.deletingLastPathComponent().appendingPathComponent("crow").path
+        if FileManager.default.isExecutableFile(atPath: sibling) {
+            return sibling
+        }
+
+        // Walk the user's login-shell PATH (same order as CodingAgent.findBinary).
+        if let found = ShellEnvironment.shared.findExecutable("crow") {
+            return found
         }
 
         let candidates = [
@@ -217,5 +224,18 @@ public struct ClaudeHookConfigWriter: HookConfigWriter {
             }
         }
         return nil
+    }
+
+    /// Find the `crow` binary agents and hook configs should invoke. Prefers
+    /// `{devRoot}/.claude/bin/crow` when scaffolded and executable (CROW-552),
+    /// then falls back to `appCrowBinary()` and common install locations.
+    public static func findCrowBinary(devRoot: String? = nil) -> String? {
+        if let devRoot {
+            let symlink = (devRoot as NSString).appendingPathComponent(".claude/bin/crow")
+            if FileManager.default.isExecutableFile(atPath: symlink) {
+                return symlink
+            }
+        }
+        return appCrowBinary()
     }
 }

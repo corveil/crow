@@ -38,8 +38,8 @@ import CrowCore
 /// still stands.
 ///
 /// CROW-545 gap: the event *names* are now verified, but the *timing/semantics*
-/// (esp. whether `session.idle` is the right "done" signal for headless
-/// `opencode run`) should still be confirmed empirically at runtime — the same
+/// (esp. whether `session.idle` is the right "done" signal for interactive
+/// TUI sessions) should still be confirmed empirically at runtime — the same
 /// caveat Cursor's writer carries for `afterAgentResponse`.
 ///
 /// Because `HookConfigWriter`'s per-session API doesn't fit OpenCode's

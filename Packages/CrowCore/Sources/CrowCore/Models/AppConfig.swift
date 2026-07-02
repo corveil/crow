@@ -35,12 +35,6 @@ public struct AppConfig: Codable, Sendable, Equatable {
     /// issue. While disabled, the label is left alone so a later opt-in
     /// can still pick up previously-labeled issues.
     public var autoCreateWatcherEnabled: Bool
-    /// When true, the IssueTracker rebases watched Crow-authored PR branches
-    /// onto their base and force-pushes (`--force-with-lease`) whenever they
-    /// fall BEHIND base or become CONFLICTING — no label required (unlike
-    /// `autoMergeWatcherEnabled`). Rebases that hit conflicts are handed to
-    /// the session's Claude terminal. Opt-in: defaults to false (CROW-318).
-    public var autoRebaseWatcherEnabled: Bool
     public var cleanup: CleanupConfig
     /// Scheduled jobs: named sets of prompts that fire automatically on a
     /// schedule, scoped to a repo. Driven by `JobScheduler` (CROW-317).
@@ -94,7 +88,6 @@ public struct AppConfig: Codable, Sendable, Equatable {
         attributionTrailers: Bool = true,
         autoMergeWatcherEnabled: Bool = false,
         autoCreateWatcherEnabled: Bool = false,
-        autoRebaseWatcherEnabled: Bool = false,
         cleanup: CleanupConfig = CleanupConfig(),
         jobs: [JobConfig] = [],
         defaultAgentKind: AgentKind = .claudeCode,
@@ -114,7 +107,6 @@ public struct AppConfig: Codable, Sendable, Equatable {
         self.attributionTrailers = attributionTrailers
         self.autoMergeWatcherEnabled = autoMergeWatcherEnabled
         self.autoCreateWatcherEnabled = autoCreateWatcherEnabled
-        self.autoRebaseWatcherEnabled = autoRebaseWatcherEnabled
         self.cleanup = cleanup
         self.jobs = jobs
         self.defaultAgentKind = defaultAgentKind
@@ -137,7 +129,15 @@ public struct AppConfig: Codable, Sendable, Equatable {
         attributionTrailers = try container.decodeIfPresent(Bool.self, forKey: .attributionTrailers) ?? true
         autoMergeWatcherEnabled = try container.decodeIfPresent(Bool.self, forKey: .autoMergeWatcherEnabled) ?? false
         autoCreateWatcherEnabled = try container.decodeIfPresent(Bool.self, forKey: .autoCreateWatcherEnabled) ?? false
-        autoRebaseWatcherEnabled = try container.decodeIfPresent(Bool.self, forKey: .autoRebaseWatcherEnabled) ?? false
+        // Backward-compat (CROW-551): the pre-CROW-551 top-level
+        // `autoRebaseWatcherEnabled` moved into
+        // `autoRespond.autoRebaseAndResolveConflicts`. Carry an existing opt-in
+        // forward; the legacy key stays out of `CodingKeys`, so the next encode
+        // drops it and a later opt-out sticks.
+        let rebaseLegacyContainer = try decoder.container(keyedBy: LegacyCodingKeys.self)
+        if try rebaseLegacyContainer.decodeIfPresent(Bool.self, forKey: .autoRebaseWatcherEnabled) == true {
+            autoRespond.autoRebaseAndResolveConflicts = true
+        }
         cleanup = try container.decodeIfPresent(CleanupConfig.self, forKey: .cleanup) ?? CleanupConfig()
         jobs = try container.decodeIfPresent([JobConfig].self, forKey: .jobs) ?? []
         defaultAgentKind = try container.decodeIfPresent(AgentKind.self, forKey: .defaultAgentKind) ?? .claudeCode
@@ -177,10 +177,11 @@ public struct AppConfig: Codable, Sendable, Equatable {
     /// property (so they must stay out of `CodingKeys`, which drives encoding).
     private enum LegacyCodingKeys: String, CodingKey {
         case atlassianMCP
+        case autoRebaseWatcherEnabled
     }
 
     private enum CodingKeys: String, CodingKey {
-        case workspaces, defaults, notifications, sidebar, remoteControlEnabled, managerAutoPermissionMode, jobsAutoPermissionMode, telemetry, autoRespond, attributionTrailers, autoMergeWatcherEnabled, autoCreateWatcherEnabled, autoRebaseWatcherEnabled, cleanup, jobs, defaultAgentKind, agentsByKind, managerGateway, jiraCredential
+        case workspaces, defaults, notifications, sidebar, remoteControlEnabled, managerAutoPermissionMode, jobsAutoPermissionMode, telemetry, autoRespond, attributionTrailers, autoMergeWatcherEnabled, autoCreateWatcherEnabled, cleanup, jobs, defaultAgentKind, agentsByKind, managerGateway, jiraCredential
     }
 
     /// Resolve the agent that should drive a newly-created session of the
@@ -335,23 +336,33 @@ public struct AutoRespondSettings: Codable, Sendable, Equatable {
     /// `checksPass == .failing` (keyed on the head SHA, so re-runs of the
     /// same commit don't re-fire).
     public var respondToFailedChecks: Bool
+    /// Auto-rebase Crow-authored PR branches that fall BEHIND base or become
+    /// CONFLICTING: rebase onto base and force-push (`--force-with-lease`);
+    /// when the rebase hits conflicts, inject the fixConflicts prompt into the
+    /// session's managed terminal so Claude resolves them. Force-push-bearing,
+    /// so opt-in: defaults to false (CROW-551; formerly the top-level
+    /// `autoRebaseWatcherEnabled`, CROW-318).
+    public var autoRebaseAndResolveConflicts: Bool
 
     public init(
         respondToChangesRequested: Bool = true,
-        respondToFailedChecks: Bool = false
+        respondToFailedChecks: Bool = false,
+        autoRebaseAndResolveConflicts: Bool = false
     ) {
         self.respondToChangesRequested = respondToChangesRequested
         self.respondToFailedChecks = respondToFailedChecks
+        self.autoRebaseAndResolveConflicts = autoRebaseAndResolveConflicts
     }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         respondToChangesRequested = try c.decodeIfPresent(Bool.self, forKey: .respondToChangesRequested) ?? true
         respondToFailedChecks = try c.decodeIfPresent(Bool.self, forKey: .respondToFailedChecks) ?? false
+        autoRebaseAndResolveConflicts = try c.decodeIfPresent(Bool.self, forKey: .autoRebaseAndResolveConflicts) ?? false
     }
 
     private enum CodingKeys: String, CodingKey {
-        case respondToChangesRequested, respondToFailedChecks
+        case respondToChangesRequested, respondToFailedChecks, autoRebaseAndResolveConflicts
     }
 }
 

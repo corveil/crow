@@ -492,7 +492,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             } catch {
                 NSLog("[Crow] Codex scaffold failed: %@", error.localizedDescription)
             }
-            if let crowPath = ClaudeHookConfigWriter.findCrowBinary() {
+            if let crowPath = ClaudeHookConfigWriter.findCrowBinary(devRoot: devRoot) {
                 let codexHome = ProcessInfo.processInfo.environment["CODEX_HOME"]
                     ?? NSString(string: "~/.codex").expandingTildeInPath
                 do {
@@ -515,7 +515,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             } catch {
                 NSLog("[Crow] Cursor scaffold failed: %@", error.localizedDescription)
             }
-            if let crowPath = ClaudeHookConfigWriter.findCrowBinary() {
+            if let crowPath = ClaudeHookConfigWriter.findCrowBinary(devRoot: devRoot) {
                 let cursorHome = ProcessInfo.processInfo.environment["CURSOR_CONFIG_DIR"]
                     ?? NSString(string: "~/.cursor").expandingTildeInPath
                 do {
@@ -538,7 +538,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             } catch {
                 NSLog("[Crow] OpenCode scaffold failed: %@", error.localizedDescription)
             }
-            if let crowPath = ClaudeHookConfigWriter.findCrowBinary() {
+            if let crowPath = ClaudeHookConfigWriter.findCrowBinary(devRoot: devRoot) {
                 // XDG spec: an empty `XDG_CONFIG_HOME` is treated as unset, so
                 // fall through to ~/.config/opencode rather than a relative path.
                 let xdgConfig = ProcessInfo.processInfo.environment["XDG_CONFIG_HOME"]
@@ -833,8 +833,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         tracker.onAutoMergeEnabled = { [weak self] sessionID, prURL, number in
             self?.notificationManager?.notifyAutoMergeEnabled(prURL: prURL, number: number, sessionID: sessionID)
         }
-        tracker.autoRebaseWatcherEnabledProvider = { [weak self] in
-            self?.appConfig?.autoRebaseWatcherEnabled ?? false
+        tracker.autoRebaseAndResolveConflictsProvider = { [weak self] in
+            self?.appConfig?.autoRespond.autoRebaseAndResolveConflicts ?? false
         }
         tracker.respondToChangesRequestedProvider = { [weak self] in
             self?.appConfig?.autoRespond.respondToChangesRequested ?? false
@@ -1792,7 +1792,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                             agent: agent,
                             sessionID: sessionID,
                             worktreePath: capturedAppState.primaryWorktree(for: sessionID)?.worktreePath,
-                            crowPath: ClaudeHookConfigWriter.findCrowBinary(),
+                            crowPath: ClaudeHookConfigWriter.findCrowBinary(devRoot: devRoot),
                             telemetryPort: capturedTelemetryPort
                         )
                         text = prepared.text

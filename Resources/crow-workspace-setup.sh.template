@@ -45,6 +45,12 @@ BASE_BRANCH=""
 
 # Runtime state
 TERMINAL_ID=""
+CROW_BIN=""
+
+# Cached login-shell PATH (mirrors ShellEnvironment in Packages/CrowCore).
+LOGIN_PATH=""
+LOGIN_PATH_RESOLVED=false
+JQ_MISSING_WARNED=false
 
 # Resolved AI gateway for this workspace (populated by resolve_gateway_env).
 WS_BASE_URL=""
@@ -452,12 +458,216 @@ parse_args() {
   fi
 }
 
+# ─── Binary discovery (mirrors CodingAgent.findBinary / findCrowBinary) ──────
+
+# Resolve the user's login-shell PATH once. Crow terminals get a full PATH via
+# crow-shell-wrapper; external agents (Cursor, Codex, OpenCode) often inherit a
+# minimal PATH, so setup.sh must probe the login shell the same way Crow.app does
+# (ShellEnvironment.resolveFromLoginShell — CROW-484).
+resolve_login_path() {
+  [[ "$LOGIN_PATH_RESOLVED" == true ]] && return 0
+  LOGIN_PATH_RESOLVED=true
+  local shell="${SHELL:-/bin/zsh}" path tmp pid i
+  tmp=$(mktemp)
+  (
+    "$shell" -lc 'echo $PATH' 2>/dev/null \
+      | awk 'NF { line=$0 } END { print line }'
+  ) > "$tmp" 2>&1 &
+  pid=$!
+  i=0
+  while kill -0 "$pid" 2>/dev/null && [[ $i -lt 50 ]]; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    rm -f "$tmp"
+    log "login-shell PATH resolution timed out after 5s; using fallback PATH"
+  else
+    path=$(cat "$tmp" 2>/dev/null || true)
+    rm -f "$tmp"
+    path="${path//[$'\r\n']/}"
+    if [[ -n "$path" ]]; then
+      LOGIN_PATH="$path"
+      return 0
+    fi
+  fi
+  # Fallback: append well-known dirs to inherited PATH (ShellEnvironment.fallbackPATH).
+  local current="${PATH:-/usr/bin:/bin:/usr/sbin:/sbin}"
+  local additions=()
+  local dir
+  for dir in /opt/homebrew/bin /opt/homebrew/sbin /usr/local/bin /usr/local/sbin "$HOME/.local/bin"; do
+    case ":$current:" in *":$dir:"*) ;; *) additions+=("$dir") ;; esac
+  done
+  if [[ ${#additions[@]} -gt 0 ]]; then
+    LOGIN_PATH="${current}:$(IFS=:; echo "${additions[*]}")"
+  else
+    LOGIN_PATH="$current"
+  fi
+}
+
+# Walk a PATH string left-to-right for an executable named $token.
+find_on_path() {
+  local token="$1" path_str="$2" dir candidate
+  [[ -n "$token" && -n "$path_str" ]] || return 1
+  local old_ifs="$IFS"
+  IFS=':'
+  for dir in $path_str; do
+    [[ -n "$dir" ]] || continue
+    candidate="$dir/$token"
+    if [[ -x "$candidate" ]]; then
+      IFS="$old_ifs"
+      echo "$candidate"
+      return 0
+    fi
+  done
+  IFS="$old_ifs"
+  return 1
+}
+
+# Read defaults.binaries.<key> from {devRoot}/.claude/config.json when jq is
+# available. Echoes the trimmed path, or empty when unset / missing / invalid.
+binary_from_config() {
+  local key="$1" config_path="${DEV_ROOT:+$DEV_ROOT/.claude/config.json}"
+  [[ -n "$config_path" && -f "$config_path" ]] || return 0
+  if ! command -v jq >/dev/null 2>&1; then
+    if [[ "$JQ_MISSING_WARNED" != true ]]; then
+      JQ_MISSING_WARNED=true
+      log "warning: $config_path exists but jq is not installed; defaults.binaries.* overrides are ignored"
+    fi
+    return 0
+  fi
+  local configured
+  configured=$(jq -r --arg k "$key" '.defaults.binaries[$k] // empty' \
+    "$config_path" 2>/dev/null) || true
+  configured="${configured#"${configured%%[![:space:]]*}"}"
+  configured="${configured%"${configured##*[![:space:]]}"}"
+  [[ -n "$configured" && "$configured" != "null" ]] && echo "$configured"
+}
+
+# Dev-build crow CLI next to a checked-out crow repo (Swift findCrowBinary's
+# sibling check covers the running CrowApp; setup.sh runs outside the app).
+find_dev_crow_binary() {
+  local candidate ws_dir repo_dir
+  if [[ -n "$DEV_ROOT" ]]; then
+    for ws_dir in "$DEV_ROOT"/*/; do
+      [[ -d "$ws_dir" ]] || continue
+      repo_dir="${ws_dir}crow"
+      [[ -d "$repo_dir/.git" ]] || continue
+      for candidate in "$repo_dir/.build/debug/crow" "$repo_dir/.build/release/crow"; do
+        [[ -x "$candidate" ]] && { echo "$candidate"; return 0; }
+      done
+    done
+  fi
+  for candidate in \
+    "$HOME/Projects/crow/.build/debug/crow" \
+    "$HOME/Projects/crow/.build/release/crow"; do
+    [[ -x "$candidate" ]] && { echo "$candidate"; return 0; }
+  done
+  return 1
+}
+
+# Resolve the crow CLI used for all IPC in this script. Sets CROW_BIN.
+# Order mirrors ClaudeHookConfigWriter.findCrowBinary() + config/symlink farm:
+#   1. defaults.binaries.crow
+#   2. {devRoot}/.claude/bin/crow symlink (CROW-487)
+#   3. login-shell PATH
+#   4. dev-build siblings under workspace clones / ~/Projects/crow
+#   5. known install locations
+#   6. inherited PATH (command -v)
+resolve_crow_binary() {
+  local configured p dev_path
+  configured=$(binary_from_config "crow")
+  if [[ -n "$configured" && -x "$configured" ]]; then
+    CROW_BIN="$configured"
+    return 0
+  fi
+  if [[ -n "$DEV_ROOT" ]]; then
+    p="$DEV_ROOT/.claude/bin/crow"
+    if [[ -x "$p" ]]; then
+      CROW_BIN="$p"
+      return 0
+    fi
+  fi
+  resolve_login_path
+  if [[ -n "$LOGIN_PATH" ]]; then
+    p=$(find_on_path "crow" "$LOGIN_PATH") || true
+    if [[ -n "$p" ]]; then
+      CROW_BIN="$p"
+      return 0
+    fi
+  fi
+  dev_path=$(find_dev_crow_binary) || true
+  if [[ -n "$dev_path" ]]; then
+    CROW_BIN="$dev_path"
+    return 0
+  fi
+  for p in \
+    "$HOME/.local/bin/crow" \
+    "/usr/local/bin/crow" \
+    "/opt/homebrew/bin/crow"; do
+    if [[ -x "$p" ]]; then
+      CROW_BIN="$p"
+      return 0
+    fi
+  done
+  p=$(command -v crow 2>/dev/null) || true
+  if [[ -n "$p" ]]; then
+    CROW_BIN="$p"
+    return 0
+  fi
+  return 1
+}
+
+# Search a list of candidate paths and PATH for the first executable matching
+# $token (or full path). Echoes the resolved path, or empty on failure.
+# Usage: resolve_binary <path_token> <config_key> <candidate1> [candidate2 ...]
+#
+# Discovery order mirrors CodingAgent.findBinary() (CROW-484):
+#   1. defaults.binaries.<config_key>
+#   2. {devRoot}/.claude/bin/<path_token> symlink farm (CROW-487)
+#   3. login-shell PATH walk
+#   4. explicit fallback candidate paths
+#   5. inherited PATH (command -v)
+resolve_binary() {
+  local token="$1" config_key="$2"; shift 2
+  local configured p bin_link
+  configured=$(binary_from_config "$config_key")
+  if [[ -n "$configured" && -x "$configured" ]]; then
+    echo "$configured"
+    return 0
+  fi
+  if [[ -n "$DEV_ROOT" ]]; then
+    bin_link="$DEV_ROOT/.claude/bin/$token"
+    if [[ -x "$bin_link" ]]; then
+      echo "$bin_link"
+      return 0
+    fi
+  fi
+  resolve_login_path
+  if [[ -n "$LOGIN_PATH" ]]; then
+    p=$(find_on_path "$token" "$LOGIN_PATH") || true
+    if [[ -n "$p" ]]; then
+      echo "$p"
+      return 0
+    fi
+  fi
+  for p in "$@"; do
+    [[ -n "$p" && -x "$p" ]] && { echo "$p"; return 0; }
+  done
+  p=$(command -v "$token" 2>/dev/null) || true
+  [[ -n "$p" ]] && { echo "$p"; return 0; }
+  return 1
+}
+
 # ─── Preflight ───────────────────────────────────────────────────────────────
 
 preflight() {
-  if ! command -v crow >/dev/null 2>&1; then
-    die "preflight" "crow binary not found in PATH"
+  if ! resolve_crow_binary; then
+    die "preflight" "crow binary not found; set defaults.binaries.crow in {devRoot}/.claude/config.json or add crow to your shell PATH"
   fi
+  log "Resolved crow binary: $CROW_BIN"
   if ! command -v git >/dev/null 2>&1; then
     die "preflight" "git binary not found in PATH"
   fi
@@ -556,7 +766,7 @@ create_session() {
   if [[ -z "$SESSION_ID" ]]; then
     log "Creating session: $SESSION_NAME"
     local result
-    if ! result=$(crow new-session --name "$SESSION_NAME" 2>&1); then
+    if ! result=$("$CROW_BIN" new-session --name "$SESSION_NAME" 2>&1); then
       die "new_session" "crow new-session failed: $result"
     fi
     SESSION_ID=$(json_val "session_id" <<< "$result")
@@ -575,7 +785,7 @@ create_session() {
   # ArgumentParser reject the whole call and drop url+title too.)
   if [[ -n "$TICKET_URL" ]]; then
     log "Setting ticket metadata..."
-    local ticket_args=(crow set-ticket --session "$SESSION_ID" --url "$TICKET_URL")
+    local ticket_args=("$CROW_BIN" set-ticket --session "$SESSION_ID" --url "$TICKET_URL")
     [[ -n "$TICKET_TITLE" ]] && ticket_args+=(--title "$TICKET_TITLE")
     [[ "$TICKET_NUMBER" =~ ^[0-9]+$ ]] && ticket_args+=(--number "$TICKET_NUMBER")
     "${ticket_args[@]}" >/dev/null 2>&1 \
@@ -584,7 +794,7 @@ create_session() {
 
   # Step 3: Register worktree
   log "Registering worktree..."
-  local wt_args=(crow add-worktree --session "$SESSION_ID"
+  local wt_args=("$CROW_BIN" add-worktree --session "$SESSION_ID"
     --repo "$REPO"
     --repo-path "$REPO_PATH"
     --path "$WORKTREE_PATH"
@@ -598,7 +808,7 @@ create_session() {
   # Step 4: Add ticket link (if URL provided)
   if [[ -n "$TICKET_URL" ]]; then
     log "Adding ticket link..."
-    crow add-link --session "$SESSION_ID" \
+    "$CROW_BIN" add-link --session "$SESSION_ID" \
       --label "Issue" \
       --url "$TICKET_URL" \
       --type ticket >/dev/null 2>&1 \
@@ -608,7 +818,7 @@ create_session() {
   # Step 4a: Add PR link (if PR detected)
   if [[ -n "$PR_URL" && -n "$PR_NUMBER" ]]; then
     log "Adding PR link..."
-    crow add-link --session "$SESSION_ID" \
+    "$CROW_BIN" add-link --session "$SESSION_ID" \
       --label "PR #$PR_NUMBER" \
       --url "$PR_URL" \
       --type pr >/dev/null 2>&1 \
@@ -894,8 +1104,9 @@ github_ops() {
   # CROW-522: a GitHub-code workspace can track its tasks in Jira. In that case
   # $TICKET_URL is a Jira browse URL, not a GitHub issue — running `gh issue
   # edit`/project-status against it just logs `auto-assign failed`. Skip GitHub
-  # issue housekeeping entirely when the task provider is Jira (assignment +
-  # status now happen via the jira MCP in-session).
+  # issue housekeeping entirely when the task provider is Jira: assignment
+  # happens via the jira MCP in-session, and the Jira In-Progress transition
+  # happens in jira_ops() (CROW-529), not here.
   resolve_task_provider
   if [[ "$TASK_PROVIDER" == "jira" ]]; then
     log "Task provider is Jira; skipping GitHub issue auto-assign/project-status"
@@ -913,6 +1124,23 @@ github_ops() {
     log "Setting project status to In progress..."
     set_project_status || log "Warning: project status update failed"
   fi
+}
+
+# CROW-529: session-start status transition for Jira work items. setup.sh owns
+# the GitHub Projects-v2 mutation (set_project_status) but there was no Jira
+# equivalent, so a Jira-tasked session never left Backlog. Delegate to the Crow
+# app — it resolves the mapped In-Progress status (jiraStatusMap, #523), fetches
+# the issue's available transitions, and degrades gracefully when unavailable.
+# Runs for any code provider (a Jira-tasked workspace may be GitHub- or
+# GitLab-coded), so it lives outside github_ops. Best-effort, never fatal.
+jira_ops() {
+  resolve_task_provider
+  [[ "$TASK_PROVIDER" == "jira" ]] || return 0
+  [[ "$SKIP_PROJECT_STATUS" != "true" ]] || return 0
+  [[ -n "$TICKET_URL" && -n "$SESSION_ID" ]] || return 0
+  log "Transitioning Jira work item to In Progress..."
+  "$CROW_BIN" transition-ticket --session "$SESSION_ID" --to inProgress \
+    || log "Warning: Jira status transition failed (non-fatal)"
 }
 
 set_project_status() {
@@ -1041,17 +1269,8 @@ write_prompt() {
 
 # Search a list of candidate paths and PATH for the first executable matching
 # $token (or full path). Echoes the resolved path, or empty on failure.
-# Usage: resolve_binary <token> <candidate1> [candidate2 ...]
-resolve_binary() {
-  local token="$1"; shift
-  local p
-  for p in "$@"; do
-    [[ -n "$p" && -x "$p" ]] && { echo "$p"; return 0; }
-  done
-  p=$(command -v "$token" 2>/dev/null) || true
-  [[ -n "$p" ]] && { echo "$p"; return 0; }
-  return 1
-}
+# Usage: resolve_binary <path_token> <config_key> <candidate1> [candidate2 ...]
+# (Implementation lives in the Binary discovery section above — CROW-484.)
 
 launch_claude_code() {
   local prompt_path="$1"
@@ -1060,11 +1279,11 @@ launch_claude_code() {
   if [[ -n "$override_bin" ]]; then
     bin="$override_bin"
   else
-    bin=$(resolve_binary "claude" \
+    bin=$(resolve_binary "claude" "claude-code" \
       "$HOME/.local/bin/claude" \
       "/usr/local/bin/claude" \
       "/opt/homebrew/bin/claude") || \
-      die "launch_agent" "claude binary not found at PATH or known locations; provide --agent-binary"
+      die "launch_agent" "claude binary not found at PATH or known locations; provide --agent-binary or set defaults.binaries.claude-code in config.json"
   fi
   log "Resolved claude-code binary: $bin"
 
@@ -1109,11 +1328,11 @@ launch_cursor() {
   else
     # Cursor's CLI binary is named `agent`, not `cursor`. Candidate paths
     # mirror CursorAgent.cursorBinaryCandidates in CrowCursor.
-    bin=$(resolve_binary "agent" \
+    bin=$(resolve_binary "agent" "cursor" \
       "/opt/homebrew/bin/agent" \
       "/usr/local/bin/agent" \
       "$HOME/.local/bin/agent") || \
-      die "launch_agent" "cursor binary not found at PATH or known locations; provide --agent-binary"
+      die "launch_agent" "cursor binary not found at PATH or known locations; provide --agent-binary or set defaults.binaries.cursor in config.json"
   fi
   log "Resolved cursor binary: $bin"
   # Cursor: no --permission-mode, no --rc; pass the prompt as argv.
@@ -1132,11 +1351,11 @@ launch_codex() {
   if [[ -n "$override_bin" ]]; then
     bin="$override_bin"
   else
-    bin=$(resolve_binary "codex" \
+    bin=$(resolve_binary "codex" "codex" \
       "/opt/homebrew/bin/codex" \
       "/usr/local/bin/codex" \
       "$HOME/.local/bin/codex") || \
-      die "launch_agent" "codex binary not found at PATH or known locations; provide --agent-binary"
+      die "launch_agent" "codex binary not found at PATH or known locations; provide --agent-binary or set defaults.binaries.codex in config.json"
   fi
   log "Resolved codex binary: $bin"
   # Codex 0.129+ accepts the initial prompt as a positional argv that
@@ -1154,21 +1373,18 @@ launch_opencode() {
   if [[ -n "$override_bin" ]]; then
     bin="$override_bin"
   else
-    bin=$(resolve_binary "opencode" \
+    bin=$(resolve_binary "opencode" "opencode" \
       "/opt/homebrew/bin/opencode" \
       "/usr/local/bin/opencode" \
       "$HOME/.local/bin/opencode" \
       "$HOME/.opencode/bin/opencode") || \
-      die "launch_agent" "opencode binary not found at PATH or known locations; provide --agent-binary"
+      die "launch_agent" "opencode binary not found at PATH or known locations; provide --agent-binary or set defaults.binaries.opencode in config.json"
   fi
   log "Resolved opencode binary: $bin"
-  # OpenCode: no --permission-mode, no --rc. Unattended dispatch uses the
-  # HEADLESS `opencode run "<prompt>"` form — OpenCode's positional prompt
-  # lives on the `run` subcommand and drives the agent to completion; it does
-  # NOT seed an interactive TUI the way Cursor's `agent "<prompt>"` does
-  # (CROW-545 gap). This mirrors OpenCodeAgent.autoLaunchCommand's .job/.review
-  # branch; the skill flow always feeds the prompt at launch.
-  local launch_cmd="cd $WORKTREE_PATH && $bin run \"\$(cat $prompt_path)\""
+  # OpenCode: headless `run` consumes the prompt, then `; --continue` opens
+  # the interactive TUI with a fresh terminal stdin (#547). Brace group keeps
+  # both commands gated on a successful `cd`.
+  local launch_cmd="cd $WORKTREE_PATH && { $bin run \"\$(cat $prompt_path)\"; $bin --continue; }"
   create_agent_terminal "OpenCode" "$launch_cmd"
 }
 
@@ -1180,7 +1396,7 @@ create_agent_terminal() {
 
   log "Creating terminal '$terminal_name' (deferred agent launch via --command)..."
   local term_result
-  if ! term_result=$(crow new-terminal --session "$SESSION_ID" \
+  if ! term_result=$("$CROW_BIN" new-terminal --session "$SESSION_ID" \
     --cwd "$WORKTREE_PATH" \
     --name "$terminal_name" \
     --managed \
@@ -1201,7 +1417,7 @@ create_agent_terminal() {
   log "Terminal created: $TERMINAL_ID"
 
   # Select session
-  crow select-session --session "$SESSION_ID" >/dev/null 2>&1 \
+  "$CROW_BIN" select-session --session "$SESSION_ID" >/dev/null 2>&1 \
     || log "Warning: select-session failed"
 
   # Verify the agent actually started rather than assuming success. Poll the
@@ -1213,7 +1429,7 @@ create_agent_terminal() {
   local readiness="" attempt
   for attempt in $(seq 1 15); do
     local lt_result
-    lt_result=$(crow list-terminals --session "$SESSION_ID" 2>/dev/null) || true
+    lt_result=$("$CROW_BIN" list-terminals --session "$SESSION_ID" 2>/dev/null) || true
     readiness=$(terminal_readiness "$TERMINAL_ID" "$lt_result")
     case "$readiness" in
       agentLaunched|shellReady)
@@ -1292,6 +1508,7 @@ main() {
   write_settings_local
   install_commit_hook
   github_ops
+  jira_ops
   write_prompt
   launch_agent
   emit_result

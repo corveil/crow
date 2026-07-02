@@ -106,7 +106,6 @@ public struct SettingsView: View {
                 attributionTrailers: $config.attributionTrailers,
                 autoMergeWatcherEnabled: $config.autoMergeWatcherEnabled,
                 autoCreateWatcherEnabled: $config.autoCreateWatcherEnabled,
-                autoRebaseWatcherEnabled: $config.autoRebaseWatcherEnabled,
                 onSave: { save() }
             )
                 .tabItem { Label("Automation", systemImage: "bolt.fill") }

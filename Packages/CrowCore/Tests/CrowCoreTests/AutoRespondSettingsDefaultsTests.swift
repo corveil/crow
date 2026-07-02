@@ -44,4 +44,24 @@ struct AutoRespondSettingsDefaultsTests {
         #expect(decoded.respondToChangesRequested == true)
         #expect(decoded.respondToFailedChecks == true)
     }
+
+    // CROW-551: auto-rebase + resolve-conflicts is force-push-bearing, so it
+    // stays opt-in (off by default), unlike respondToChangesRequested.
+    @Test func autoRebaseAndResolveConflictsDefaultsOff() throws {
+        #expect(AutoRespondSettings().autoRebaseAndResolveConflicts == false)
+
+        let json = "{}".data(using: .utf8)!
+        let decoded = try JSONDecoder().decode(AutoRespondSettings.self, from: json)
+        #expect(decoded.autoRebaseAndResolveConflicts == false)
+    }
+
+    @Test func autoRebaseAndResolveConflictsExplicitChoiceIsSticky() throws {
+        let onJSON = #"{"autoRebaseAndResolveConflicts": true}"#.data(using: .utf8)!
+        let on = try JSONDecoder().decode(AutoRespondSettings.self, from: onJSON)
+        #expect(on.autoRebaseAndResolveConflicts == true)
+
+        let offJSON = #"{"autoRebaseAndResolveConflicts": false}"#.data(using: .utf8)!
+        let off = try JSONDecoder().decode(AutoRespondSettings.self, from: offJSON)
+        #expect(off.autoRebaseAndResolveConflicts == false)
+    }
 }

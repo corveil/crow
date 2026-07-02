@@ -14,7 +14,6 @@ public struct AutomationSettingsView: View {
     @Binding var attributionTrailers: Bool
     @Binding var autoMergeWatcherEnabled: Bool
     @Binding var autoCreateWatcherEnabled: Bool
-    @Binding var autoRebaseWatcherEnabled: Bool
     var onSave: (() -> Void)?
 
     @State private var managerGatewayBaseURL: String
@@ -33,7 +32,6 @@ public struct AutomationSettingsView: View {
         attributionTrailers: Binding<Bool>,
         autoMergeWatcherEnabled: Binding<Bool>,
         autoCreateWatcherEnabled: Binding<Bool>,
-        autoRebaseWatcherEnabled: Binding<Bool>,
         onSave: (() -> Void)? = nil
     ) {
         self._defaults = defaults
@@ -45,7 +43,6 @@ public struct AutomationSettingsView: View {
         self._attributionTrailers = attributionTrailers
         self._autoMergeWatcherEnabled = autoMergeWatcherEnabled
         self._autoCreateWatcherEnabled = autoCreateWatcherEnabled
-        self._autoRebaseWatcherEnabled = autoRebaseWatcherEnabled
         self.onSave = onSave
         self._managerGatewayBaseURL = State(initialValue: managerGateway.wrappedValue?.baseURL ?? "")
         self._managerGatewayHeadersText = State(initialValue: managerGateway.wrappedValue.map {
@@ -235,14 +232,6 @@ public struct AutomationSettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
-            Section("Auto-rebase") {
-                Toggle("Auto-rebase Crow-authored PR branches that fall behind or conflict", isOn: $autoRebaseWatcherEnabled)
-                    .onChange(of: autoRebaseWatcherEnabled) { _, _ in onSave?() }
-                Text("When a PR linked to a Crow session falls behind its base or develops conflicts, Crow rebases the session's worktree onto the base and force-pushes with --force-with-lease. No label required. Only PRs whose commits include a Crow-Session trailer matching a known session are eligible. If the rebase hits conflicts, Crow asks the session's Claude Code terminal to resolve them. Off by default.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
             autoRespondSection
         }
         .formStyle(.grouped)
@@ -256,6 +245,11 @@ public struct AutomationSettingsView: View {
             Toggle("Respond to failed CI checks", isOn: $autoRespond.respondToFailedChecks)
                 .onChange(of: autoRespond.respondToFailedChecks) { _, _ in onSave?() }
             Text("When enabled, Crow types an instruction into the session's Claude Code terminal asking Claude to read the review or CI logs and address the issue. Off by default — typing into a terminal unprompted is intrusive.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Toggle("Auto-rebase onto base and resolve conflicts", isOn: $autoRespond.autoRebaseAndResolveConflicts)
+                .onChange(of: autoRespond.autoRebaseAndResolveConflicts) { _, _ in onSave?() }
+            Text("When a Crow-authored PR falls behind its base or develops conflicts, Crow rebases the session's worktree onto the base and force-pushes with --force-with-lease. No label required. Only PRs whose commits include a Crow-Session trailer matching a known session are eligible. If the rebase hits conflicts, Crow asks the session's Claude Code terminal to resolve them. Never applies to review sessions. Off by default.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         } header: {

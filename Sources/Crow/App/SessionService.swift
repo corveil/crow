@@ -328,7 +328,7 @@ final class SessionService {
                 if trackReadiness {
                     // Re-write hook config so the adopted Claude's hooks still
                     // route back to the correct session if the config was lost.
-                    if let crowPath = ClaudeHookConfigWriter.findCrowBinary(),
+                    if let crowPath = ClaudeHookConfigWriter.findCrowBinary(devRoot: ConfigStore.loadDevRoot()),
                        let worktree = appState.primaryWorktree(for: terminal.sessionID) {
                         do {
                             try ClaudeHookConfigWriter().writeHookConfig(
@@ -468,7 +468,7 @@ final class SessionService {
                 agent: agent,
                 sessionID: sessionID,
                 worktreePath: appState.primaryWorktree(for: sessionID)?.worktreePath,
-                crowPath: ClaudeHookConfigWriter.findCrowBinary(),
+                crowPath: ClaudeHookConfigWriter.findCrowBinary(devRoot: ConfigStore.loadDevRoot()),
                 telemetryPort: telemetryPort
             ).text
         }
@@ -544,7 +544,7 @@ final class SessionService {
 
         // Write/refresh hook config (Claude path). Codex's writer is a
         // no-op — its global config was installed once at app launch.
-        if let crowPath = ClaudeHookConfigWriter.findCrowBinary() {
+        if let crowPath = ClaudeHookConfigWriter.findCrowBinary(devRoot: ConfigStore.loadDevRoot()) {
             do {
                 try agent.hookConfigWriter.writeHookConfig(
                     worktreePath: worktree.worktreePath,
@@ -821,7 +821,7 @@ final class SessionService {
     /// latter's 0o600 re-apply stays the final write.
     private func writeManagerHookConfig(for session: Session, dirPath: String) {
         guard let agent = AgentRegistry.shared.agent(for: session.agentKind),
-              let crowPath = ClaudeHookConfigWriter.findCrowBinary() else { return }
+              let crowPath = ClaudeHookConfigWriter.findCrowBinary(devRoot: ConfigStore.loadDevRoot()) else { return }
         do {
             try agent.hookConfigWriter.writeHookConfig(
                 worktreePath: dirPath,

@@ -95,6 +95,27 @@ struct IssueTrackerAutoRebaseTests {
         #expect(!IssueTracker.shouldAttemptAutoRebase(pr: pr))
     }
 
+    // MARK: - Session eligibility (CROW-551)
+
+    /// Review sessions must never be auto-rebased: Crow would be force-pushing
+    /// over someone else's PR under review. Policy gate independent of the
+    /// `autoRebaseAndResolveConflicts` toggle, mirroring
+    /// `AutoRespondCoordinator.shouldSkipReviewSession`.
+    @Test func excludesReviewSessions() {
+        let review = Session(name: "review-crow-42", kind: .review)
+        #expect(!IssueTracker.sessionEligibleForAutoRebase(review))
+    }
+
+    @Test func allowsWorkSessions() {
+        let work = Session(name: "feature-crow-42", kind: .work)
+        #expect(IssueTracker.sessionEligibleForAutoRebase(work))
+    }
+
+    @Test func excludesManagerSession() {
+        let manager = Session(id: AppState.managerSessionID, name: "Manager", kind: .manager)
+        #expect(!IssueTracker.sessionEligibleForAutoRebase(manager))
+    }
+
     // MARK: - Failed-rebase retry policy
 
     @Test func retriesFailuresUnderTheCap() {
