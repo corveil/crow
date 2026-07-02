@@ -60,7 +60,8 @@ public final class PTYProcess: @unchecked Sendable {
 
         var envStrings = ProcessInfo.processInfo.environment.map { "\($0.key)=\($0.value)" }
         if !envStrings.contains(where: { $0.hasPrefix("TERM=") }) {
-            envStrings.append("TERM=xterm-kitty")
+            // xterm-256color is present on stock macOS; xterm-kitty terminfo is not.
+            envStrings.append("TERM=xterm-256color")
         }
         if !envStrings.contains(where: { $0.hasPrefix("COLORTERM=") }) {
             envStrings.append("COLORTERM=truecolor")
@@ -93,16 +94,20 @@ public final class PTYProcess: @unchecked Sendable {
     }
 
     public func resize(rows: UInt16, cols: UInt16) {
-        guard masterFD >= 0 else { return }
-        var win = winsize(ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0)
-        _ = ioctl(masterFD, TIOCSWINSZ, &win)
+        readQueue.async { [rows, cols] in
+            guard self.masterFD >= 0 else { return }
+            var win = winsize(ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0)
+            _ = ioctl(self.masterFD, TIOCSWINSZ, &win)
+        }
     }
 
     public func write(_ data: Data) {
-        guard masterFD >= 0 else { return }
-        data.withUnsafeBytes { buffer in
-            guard let base = buffer.baseAddress else { return }
-            _ = Darwin.write(masterFD, base, buffer.count)
+        readQueue.async {
+            guard self.masterFD >= 0 else { return }
+            data.withUnsafeBytes { buffer in
+                guard let base = buffer.baseAddress else { return }
+                _ = Darwin.write(self.masterFD, base, buffer.count)
+            }
         }
     }
 
@@ -111,22 +116,18 @@ public final class PTYProcess: @unchecked Sendable {
     }
 
     public func terminate() {
-        let pid = childPID
-        if pid > 0 {
-            childPID = -1
-            kill(pid, SIGTERM)
-        }
-
-        if let source = readSource {
-            readSource = nil
-            source.cancel()
-        }
-
-        if pid > 0 {
-            readQueue.async { [weak self] in
+        readQueue.async {
+            let pid = self.childPID
+            if pid > 0 {
+                self.childPID = -1
+                kill(pid, SIGTERM)
                 var status: Int32 = 0
                 waitpid(pid, &status, 0)
-                _ = self
+            }
+
+            if let source = self.readSource {
+                self.readSource = nil
+                source.cancel()
             }
         }
     }
