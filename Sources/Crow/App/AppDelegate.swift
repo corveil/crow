@@ -415,9 +415,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSLog("[Crow] OpenCode agent registered at %@", openCodePath)
         }
 
-        // Initialize libghostty
-        NSLog("[Crow] Initializing Ghostty")
-        GhosttyApp.shared.initialize()
+        // Initialize terminal backend (xterm.js + tmux attach)
+        NSLog("[Crow] Terminal backend ready (xterm.js + tmux)")
 
         NSLog("[Crow] Config loaded (workspaces: %d)", config.workspaces.count)
 
@@ -604,17 +603,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Ensure manager session exists
         service.ensureManagerSession(devRoot: devRoot)
 
-        // Detect a dead Manager process: Ghostty fires SHOW_CHILD_EXITED when a
-        // surface's child exits. If it's the Manager terminal, surface the
-        // "Manager process exited" banner so the user can restart it in place.
-        GhosttyApp.shared.onChildExited = { [weak self] terminalID, _ in
-            guard let self else { return }
-            let managerID = AppState.managerSessionID
-            if self.appState.terminals(for: managerID).contains(where: { $0.id == terminalID }) {
-                NSLog("[Crow] Manager process exited (terminal %@)", terminalID.uuidString)
-                self.appState.managerProcessExited = true
-            }
-        }
+        // Manager process exit detection is not wired for the shared tmux
+        // attach client (cockpit surface). Manager shells run inside tmux
+        // windows, not as the attach process child.
 
         // Wire closures for UI actions
         appState.onDeleteSession = { [weak self, weak service] id in
@@ -1120,7 +1111,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Edit menu — registers the standard cut/copy/paste/select-all/undo
         // selectors on the responder chain so ⌘V and dictation work in SwiftUI
         // text fields (Settings). Routed to the first responder (target nil).
-        // The terminal is unaffected: GhosttySurfaceView.performKeyEquivalent
+        // The terminal is unaffected: XTermSurfaceView.performKeyEquivalent
         // intercepts ⌘V/⌘C at the view level before the main menu sees them. (#512)
         let editMenuItem = NSMenuItem()
         let editMenu = NSMenu(title: "Edit")
@@ -2073,7 +2064,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // existing sessions (#330). The crash-watchdog's "Restart tmux server"
         // path still tears it down via the default `shutdown()`.
         TmuxBackend.shared.shutdown(killServer: false)
-        GhosttyApp.shared.shutdown()
         NSLog("[Crow] Cleanup complete")
     }
 

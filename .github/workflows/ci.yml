@@ -8,42 +8,16 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  ZIG_VERSION: '0.15.2'
-
 jobs:
   test:
     name: Build & Test
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: true
 
       - uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: "16"
-
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: ${{ env.ZIG_VERSION }}
-
-      - name: Get Ghostty submodule SHA
-        id: ghostty-sha
-        run: echo "sha=$(git -C vendor/ghostty rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
-      - name: Cache Ghostty framework
-        id: ghostty-cache
-        uses: actions/cache@v4
-        with:
-          path: Frameworks
-          key: ghostty-${{ runner.os }}-${{ runner.arch }}-${{ steps.ghostty-sha.outputs.sha }}
-
-      - name: Build Ghostty
-        if: steps.ghostty-cache.outputs.cache-hit != 'true'
-        run: |
-          unset ZIG_LOCAL_CACHE_DIR ZIG_GLOBAL_CACHE_DIR
-          make ghostty
 
       - name: Generate build info
         run: bash scripts/generate-build-info.sh

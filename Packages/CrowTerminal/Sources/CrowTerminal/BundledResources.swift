@@ -18,4 +18,13 @@ public enum BundledResources {
     public static var tmuxConfURL: URL? {
         Bundle.module.url(forResource: "crow-tmux", withExtension: "conf")
     }
+
+    /// Path to the xterm.js host page bundled with the terminal surface.
+    public static var terminalHTMLURL: URL? {
+        Bundle.module.url(
+            forResource: "terminal",
+            withExtension: "html",
+            subdirectory: "xterm"
+        )
+    }
 }

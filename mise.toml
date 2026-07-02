@@ -2,24 +2,17 @@
 PROJECT_NAME = "Crow"
 DERIVED_DATA = "{{cwd}}/.derived-data"
 
-[tools]
-zig = "0.15.2"
-
 [tasks.dev]
 description = "Run the app in debug mode"
 run = "swift run CrowApp"
 
 [tasks.build]
-description = "Full build: submodules + ghostty + swift build"
+description = "Full build: swift build"
 run = "make build"
 
 [tasks."build:release"]
-description = "Build release"
-run = "swift build -c release"
-
-[tasks."build:ghostty"]
-description = "Build GhosttyKit XCFramework"
-run = "bash scripts/build-ghostty.sh"
+description = "Build release (universal)"
+run = "swift build -c release --arch arm64 --arch x86_64"
 
 [tasks.test]
 description = "Run all tests"

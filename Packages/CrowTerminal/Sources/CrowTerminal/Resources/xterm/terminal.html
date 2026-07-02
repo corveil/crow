@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="xterm.css">
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #1e1e1e;
+    }
+    #terminal {
+      width: 100%;
+      height: 100%;
+    }
+  </style>
+</head>
+<body>
+  <div id="terminal"></div>
+  <script src="xterm.js"></script>
+  <script src="xterm-addon-fit.js"></script>
+  <script>
+    (function () {
+      function reportError(message) {
+        console.error('Crow:', message);
+        const handlers = window.webkit && window.webkit.messageHandlers;
+        if (handlers && handlers.crowError) {
+          handlers.crowError.postMessage({ message: message });
+        }
+      }
+
+      const handlers = window.webkit && window.webkit.messageHandlers;
+      if (!handlers) {
+        reportError('webkit.messageHandlers missing');
+        return;
+      }
+
+      if (typeof Terminal !== 'function') {
+        reportError('Terminal constructor missing (xterm.js failed to load)');
+        return;
+      }
+      if (typeof FitAddon !== 'object' || typeof FitAddon.FitAddon !== 'function') {
+        reportError('FitAddon constructor missing');
+        return;
+      }
+
+      try {
+        const fitAddon = new FitAddon.FitAddon();
+        const term = new Terminal({
+          cursorBlink: true,
+          fontSize: 14,
+          // Nerd Font first for Claude/Cursor TUI icons; Menlo fallback if not installed.
+          fontFamily: '"MesloLGS NF", "MesloLGS Nerd Font", "JetBrainsMono Nerd Font", "Hack Nerd Font", "FiraCode Nerd Font", Menlo, Monaco, monospace',
+          theme: { background: '#1e1e1e', foreground: '#d4d4d4' },
+          scrollback: 10000,
+          allowTransparency: false,
+        });
+        term.loadAddon(fitAddon);
+        term.open(document.getElementById('terminal'));
+
+        // xterm's hidden textarea triggers WebKit Autofill/Services menus — block only there.
+        if (term.textarea) {
+          term.textarea.setAttribute('autocomplete', 'off');
+          term.textarea.setAttribute('autocorrect', 'off');
+          term.textarea.setAttribute('autocapitalize', 'off');
+          term.textarea.setAttribute('spellcheck', 'false');
+          term.textarea.addEventListener('contextmenu', function (event) {
+            event.preventDefault();
+          }, true);
+        }
+
+        function reportSize() {
+          fitAddon.fit();
+          handlers.crowResize.postMessage({ cols: term.cols, rows: term.rows });
+        }
+
+        window.crowWrite = function (b64) {
+          const bin = atob(b64);
+          const bytes = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) {
+            bytes[i] = bin.charCodeAt(i);
+          }
+          // Pass raw bytes so UTF-8 multibyte sequences (Claude/Cursor TUIs) stay intact.
+          term.write(bytes);
+        };
+
+        window.crowFit = reportSize;
+
+        term.onData(function (data) {
+          handlers.crowInput.postMessage({ data: data });
+        });
+
+        window.addEventListener('resize', reportSize);
+        handlers.crowReady.postMessage({});
+        reportSize();
+      } catch (err) {
+        reportError(String(err));
+      }
+    })();
+  </script>
+</body>
+</html>

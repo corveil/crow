@@ -17,7 +17,7 @@ protocol CockpitSessionStarter {
 ///
 /// Responsibilities:
 ///   - Lazily start a per-app tmux server with the bundled `crow-tmux.conf`.
-///   - Lazily create ONE `GhosttySurfaceView` whose command is
+///   - Lazily create ONE `XTermSurfaceView` whose command is
 ///     `tmux attach-session …` (the "shared cockpit" surface that every
 ///     tmux-backed Crow tab re-parents into).
 ///   - Map terminal UUIDs to tmux window indices.
@@ -54,7 +54,7 @@ public final class TmuxBackend {
     /// The single embedded surface attached to the cockpit session. Lazy
     /// because libghostty needs an NSWindow before `ghostty_surface_new`
     /// fires.
-    private var sharedSurface: GhosttySurfaceView?
+    private var sharedSurface: XTermSurfaceView?
 
     /// UUID → tmux window index for tabs registered with us.
     private var bindings: [UUID: Int] = [:]
@@ -331,7 +331,7 @@ public final class TmuxBackend {
     /// rely on `\n` to submit (quick actions, auto-respond) get pasted but
     /// never submitted (#264). Strip the trailing newline before pasting and
     /// deliver a separate `Enter` via `send-keys` afterwards, mirroring what
-    /// `GhosttySurfaceView.writeText` does with keycode 36.
+    /// a separate `Enter` via `send-keys` afterwards.
     ///
     /// A 50ms delay between the paste and the Enter keystroke gives the TUI
     /// time to process the bracket-end sequence (`\e[201~`). Without this,
@@ -391,7 +391,7 @@ public final class TmuxBackend {
     /// Drop the scrollback buffer for terminal `id` via `tmux clear-history`.
     /// On-screen rows survive — only the off-screen history is wiped — matching
     /// what macOS Terminal "Clear" and iTerm2 "Clear Buffer" do. Surfaced from
-    /// the right-click context menu in `GhosttySurfaceView`.
+    /// the terminal context menu.
     public func clearHistory(id: UUID) throws {
         guard let windowIndex = bindings[id] else {
             throw TmuxBackendError.unknownTerminal(id)
@@ -408,7 +408,7 @@ public final class TmuxBackend {
 
     /// Enter tmux copy-mode and select the entire scrollback for terminal
     /// `id` — the "Select All" equivalent for a terminal pane. Surfaced from
-    /// the right-click context menu in `GhosttySurfaceView`. After this, Copy
+    /// the terminal context menu. After this, Copy
     /// (or Cmd+C) writes the captured text to the macOS pasteboard via the
     /// existing `copy-pipe-no-clear` binding.
     public func selectAll(id: UUID) throws {
@@ -620,35 +620,25 @@ public final class TmuxBackend {
         return reaped
     }
 
-    /// Return the shared cockpit Ghostty surface, lazily creating it the
+    /// Return the shared cockpit xterm surface, lazily creating it the
     /// first time. The surface attaches to the live tmux session via
     /// `tmux -S … attach-session -t …` as its child command.
-    public func cockpitSurface() throws -> GhosttySurfaceView {
+    public func cockpitSurface() throws -> XTermSurfaceView {
         if let existing = sharedSurface { return existing }
         let ctrl = try ensureRunningServer()
         let attachCommand =
             "\(shellQuote(tmuxBinary)) -S \(shellQuote(ctrl.socketPath)) " +
             "attach-session -t \(shellQuote(ctrl.sessionName))"
-        let view = GhosttySurfaceView(
+        let view = XTermSurfaceView(
             frame: NSRect(x: 0, y: 0, width: 800, height: 600),
             workingDirectory: NSHomeDirectory(),
             command: attachCommand
         )
-        // CRITICAL ORDER: cache the view in sharedSurface BEFORE adding it to
-        // a window. addSubview synchronously triggers viewDidMoveToWindow →
-        // createSurface → ghostty_surface_new, which can pump the main runloop
-        // briefly while libghostty's renderer registers. Any re-entrant
-        // cockpitSurface() call during that window must see the cached view
-        // and short-circuit, otherwise it observes sharedSurface == nil and
-        // spawns a second GhosttySurfaceView with the attach command — which
-        // attaches a duplicate tmux client (visible via `tmux list-clients`).
-        // This was the root cause of the duplicate-client bug observed during
-        // PR #229 dogfood.
+        NSLog("[TmuxBackend] created cockpit surface attach=%@", attachCommand)
+        // Cache before SwiftUI re-parents into the visible tab container.
+        // Unlike libghostty, WKWebView must load in a visible window — do not
+        // park in the offscreen window or xterm.js never initializes.
         sharedSurface = view
-        // Park in offscreen window so libghostty's viewDidMoveToWindow
-        // fires and the attach process starts in the background. SwiftUI
-        // re-parents into the real container when a tab becomes visible.
-        offscreenWindow.contentView?.addSubview(view)
         return view
     }
 
@@ -656,7 +646,7 @@ public final class TmuxBackend {
     /// from call sites that want to act ONLY when the cockpit is already live
     /// (e.g. SwiftUI's updateNSView re-parent path) — unlike `cockpitSurface()`
     /// this never creates the surface as a side effect.
-    public var existingCockpitSurface: GhosttySurfaceView? {
+    public var existingCockpitSurface: XTermSurfaceView? {
         sharedSurface
     }
 

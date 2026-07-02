@@ -47,14 +47,7 @@ let package = Package(
                 .copy("Resources/CorveilBrandmark.svg"),
             ],
             linkerSettings: [
-                .linkedFramework("Carbon"),
-                .linkedFramework("Metal"),
-                .linkedFramework("QuartzCore"),
-                .linkedFramework("CoreText"),
-                .linkedFramework("IOSurface"),
                 .linkedFramework("UserNotifications"),
-                .linkedLibrary("c++"),
-                .unsafeFlags(["-Xlinker", "-ld_classic"]),
             ]
         ),
         .executableTarget(

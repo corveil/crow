@@ -7,45 +7,20 @@ on:
 permissions:
   contents: write
 
-env:
-  ZIG_VERSION: '0.15.2'
-
 jobs:
   test:
     name: Test
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: true
 
       - uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: "16"
 
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: ${{ env.ZIG_VERSION }}
-
-      - name: Get Ghostty submodule SHA
-        id: ghostty-sha
-        run: echo "sha=$(git -C vendor/ghostty rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
-      - name: Cache Ghostty framework
-        id: ghostty-cache
-        uses: actions/cache@v4
-        with:
-          path: Frameworks
-          key: ghostty-${{ runner.os }}-${{ runner.arch }}-${{ steps.ghostty-sha.outputs.sha }}
-
-      - name: Build Ghostty
-        if: steps.ghostty-cache.outputs.cache-hit != 'true'
-        run: |
-          unset ZIG_LOCAL_CACHE_DIR ZIG_GLOBAL_CACHE_DIR
-          make ghostty
-
       - name: Run tests
         run: |
+          bash scripts/generate-build-info.sh
           for pkg in Packages/*/; do
             if [ -d "$pkg/Tests" ]; then
               echo "==> Testing $(basename "$pkg")..."
@@ -72,18 +47,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          submodules: recursive
           fetch-depth: 0
 
       - name: Set up Xcode
         uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: '16'
-
-      - name: Install Zig
-        uses: mlugg/setup-zig@v2
-        with:
-          version: ${{ env.ZIG_VERSION }}
 
       - name: Extract version from tag
         run: echo "CROW_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
@@ -97,15 +66,12 @@ jobs:
           KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
           KEYCHAIN_PASSWORD="$(openssl rand -hex 16)"
 
-          # Decode certificate
           echo "$CERTIFICATE_BASE64" | base64 --decode > "$CERTIFICATE_PATH"
 
-          # Create temporary keychain
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
-          # Import certificate
           security import "$CERTIFICATE_PATH" \
             -P "$CERTIFICATE_PASSWORD" \
             -A \
@@ -113,34 +79,14 @@ jobs:
             -f pkcs12 \
             -k "$KEYCHAIN_PATH"
 
-          # Allow codesign to access the keychain without UI prompt
           security set-key-partition-list \
             -S apple-tool:,apple: \
             -k "$KEYCHAIN_PASSWORD" \
             "$KEYCHAIN_PATH"
 
-          # Add to keychain search list
           security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
 
-          # Clean up certificate file
           rm -f "$CERTIFICATE_PATH"
-
-      - name: Get Ghostty submodule SHA
-        id: ghostty-sha
-        run: echo "sha=$(git -C vendor/ghostty rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
-      - name: Cache Ghostty framework
-        id: ghostty-cache
-        uses: actions/cache@v4
-        with:
-          path: Frameworks
-          key: ghostty-${{ runner.os }}-${{ runner.arch }}-${{ steps.ghostty-sha.outputs.sha }}
-
-      - name: Build GhosttyKit
-        if: steps.ghostty-cache.outputs.cache-hit != 'true'
-        run: |
-          unset ZIG_LOCAL_CACHE_DIR ZIG_GLOBAL_CACHE_DIR
-          make ghostty
 
       - name: Bundle Crow.app
         env:
@@ -160,8 +106,13 @@ jobs:
 
       - name: Build CLI
         run: |
-          swift build -c release --product crow
-          cp .build/release/crow crow-cli-macos-arm64
+          swift build -c release --arch arm64 --arch x86_64 --product crow
+          if [ -f .build/apple/Products/Release/crow ]; then
+            cp .build/apple/Products/Release/crow crow-cli-macos-universal
+          else
+            cp .build/release/crow crow-cli-macos-universal
+          fi
+          lipo -info crow-cli-macos-universal
 
       - name: Cleanup keychain
         if: always()
@@ -172,6 +123,6 @@ jobs:
         with:
           files: |
             Crow-${{ env.CROW_VERSION }}.dmg
-            crow-cli-macos-arm64
+            crow-cli-macos-universal
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-') }}

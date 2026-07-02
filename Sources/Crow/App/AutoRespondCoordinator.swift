@@ -131,7 +131,7 @@ final class AutoRespondCoordinator {
 ///   2. Tells Claude how to fetch the relevant context via `gh`/`glab`.
 ///   3. Asks Claude to make local changes and push to update the PR.
 ///
-/// Every prompt is a **single line** ending with `\n`. `GhosttySurfaceView.writeText`
+/// Every prompt is a **single line** ending with `\n`. `TmuxBackend.sendText`
 /// splits on `\n` and emits a synthetic Return key event at each boundary, so
 /// a single-line payload produces exactly one text-write + one Return —
 /// matching the proven pattern used by `crow send "/crow-workspace ...\n"`

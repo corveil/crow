@@ -1,6 +1,6 @@
 # Crow
 
-A native macOS application for managing AI-powered development sessions. Orchestrates git worktrees, Claude Code instances, and GitHub/GitLab issue tracking in a unified interface with an embedded Ghostty terminal.
+A native macOS application for managing AI-powered development sessions. Orchestrates git worktrees, Claude Code instances, and GitHub/GitLab issue tracking in a unified interface with an embedded xterm.js terminal (tmux-backed).
 
 ![Crow — AI-powered development session manager](docs/crow-screenshot.jpeg)
 
@@ -9,7 +9,7 @@ A native macOS application for managing AI-powered development sessions. Orchest
 ### System Requirements
 
 - **macOS 14.0+** (Sonoma or later)
-- **Apple Silicon** (arm64)
+- **Apple Silicon (arm64) or Intel (x86_64)** — release and local builds produce a universal binary
 - **Xcode** with Command Line Tools installed
 
 ### Build Dependencies
@@ -17,8 +17,6 @@ A native macOS application for managing AI-powered development sessions. Orchest
 | Tool             | Version | Purpose                                | Install                                                                  |
 | ---------------- | ------- | -------------------------------------- | ------------------------------------------------------------------------ |
 | Swift            | 6.0+    | Compiler (ships with Xcode)            | `xcode-select --install`                                                 |
-| Zig              | 0.15.2  | Builds the Ghostty terminal framework  | `brew install zig@0.15` or [ziglang.org](https://ziglang.org/download/)  |
-| Metal Toolchain  | bundled | Compiles Ghostty's Metal shaders       | `xcodebuild -downloadComponent MetalToolchain`                           |
 | mise             | latest  | Task runner (optional)                 | `brew install mise`                                                      |
 
 ### Runtime Dependencies
@@ -35,21 +33,18 @@ A native macOS application for managing AI-powered development sessions. Orchest
 ## Quick Start
 
 ```bash
-# 1. Clone with submodules
-git clone --recurse-submodules https://github.com/radiusmethod/crow.git
+# 1. Clone
+git clone https://github.com/radiusmethod/crow.git
 cd crow
 
-# 2. Install the Metal Toolchain (required to compile Ghostty's Metal shaders)
-xcodebuild -downloadComponent MetalToolchain
-
-# 3. Build (submodules + GhosttyKit + swift build in one shot)
+# 2. Build
 make build
 
-# 4. Authenticate GitHub CLI — the write `project` scope is required
+# 3. Authenticate GitHub CLI — the write `project` scope is required
 gh auth login
 gh auth refresh -s project,read:org,repo
 
-# 5. Run
+# 4. Run
 .build/debug/CrowApp
 ```
 
@@ -195,8 +190,8 @@ Crow can drive a ticket from assignment to merged with minimal manual steps. Tog
 ### Terminals
 
 - Rename tabs from the UI or via `crow rename-terminal`
-- GPU-accelerated rendering via Ghostty
-- tmux-backed managed terminals — one shared Ghostty surface attached to a tmux session, so per-session shells stay alive across UI navigation. Requires `tmux ≥ 3.3` (`brew install tmux`); without it, managed terminals don't render. See [docs/architecture.md#terminal-backends](docs/architecture.md#terminal-backends).
+- xterm.js terminal surface in WKWebView
+- tmux-backed managed terminals — one shared surface attached to a tmux session, so per-session shells stay alive across UI navigation. Requires `tmux ≥ 3.3` (`brew install tmux`); without it, managed terminals don't render. See [docs/architecture.md#terminal-backends](docs/architecture.md#terminal-backends).
 
 ### Orphan Recovery
 
