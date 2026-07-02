@@ -717,3 +717,66 @@ struct TmuxBackendConfigPolicyTests {
         #expect(TmuxBackend.shouldReconcile(configMTime: nil, serverStartTime: nil))
     }
 }
+
+/// Policy tests for the Manager exit detector (#558): report an exit only once
+/// the agent was seen running and the window's foreground has fallen back to a
+/// bare login shell. Pure over `managerAgentDidExit`, so no tmux needed.
+@Suite("Manager exit-monitor policy (#558)")
+struct ManagerExitMonitorTests {
+
+    @Test func firesWhenAgentRanThenDroppedToShell() {
+        // The agent (claude/codex/…) exited and the pane fell back to a shell.
+        #expect(TmuxBackend.managerAgentDidExit(paneCommand: "zsh", sawAgentRunning: true))
+        #expect(TmuxBackend.managerAgentDidExit(paneCommand: "-zsh", sawAgentRunning: true))
+        #expect(TmuxBackend.managerAgentDidExit(paneCommand: "bash", sawAgentRunning: true))
+        #expect(TmuxBackend.managerAgentDidExit(paneCommand: "fish", sawAgentRunning: true))
+    }
+
+    @Test func doesNotFireBeforeAgentSeenRunning() {
+        // Startup window: the wrapper shell shows before `claude` launches.
+        #expect(!TmuxBackend.managerAgentDidExit(paneCommand: "zsh", sawAgentRunning: false))
+        #expect(!TmuxBackend.managerAgentDidExit(paneCommand: "bash", sawAgentRunning: false))
+    }
+
+    @Test func doesNotFireWhileAgentRunning() {
+        // A non-shell foreground means the agent (or a child of it) is running.
+        #expect(!TmuxBackend.managerAgentDidExit(paneCommand: "claude", sawAgentRunning: true))
+        #expect(!TmuxBackend.managerAgentDidExit(paneCommand: "node", sawAgentRunning: true))
+        #expect(!TmuxBackend.managerAgentDidExit(paneCommand: "codex", sawAgentRunning: true))
+    }
+
+    @Test func doesNotFireWhenWindowGone() {
+        // nil = display-message failed / window vanished. Covers attach-client
+        // teardown and restart/shutdown — never a false positive.
+        #expect(!TmuxBackend.managerAgentDidExit(paneCommand: nil, sawAgentRunning: true))
+        #expect(!TmuxBackend.managerAgentDidExit(paneCommand: nil, sawAgentRunning: false))
+    }
+
+    // MARK: - advanceExitMonitor (poll-loop state machine)
+
+    @Test func latchesRunningOnNonShellCommand() {
+        // A non-shell foreground latches sawAgentRunning and never fires.
+        #expect(TmuxBackend.advanceExitMonitor(sawAgentRunning: false, sample: "claude") == (true, false))
+        #expect(TmuxBackend.advanceExitMonitor(sawAgentRunning: false, sample: "node") == (true, false))
+        #expect(TmuxBackend.advanceExitMonitor(sawAgentRunning: true, sample: "codex") == (true, false))
+    }
+
+    @Test func firesOnRunThenShellTransition() {
+        // Latched running → bare shell fires and keeps the latch.
+        #expect(TmuxBackend.advanceExitMonitor(sawAgentRunning: true, sample: "zsh") == (true, true))
+        #expect(TmuxBackend.advanceExitMonitor(sawAgentRunning: true, sample: "-zsh") == (true, true))
+    }
+
+    @Test func startupShellDoesNotLatchOrFire() {
+        // Bare shell before the agent ever ran: no latch, no fire.
+        #expect(TmuxBackend.advanceExitMonitor(sawAgentRunning: false, sample: "zsh") == (false, false))
+        #expect(TmuxBackend.advanceExitMonitor(sawAgentRunning: false, sample: "bash") == (false, false))
+    }
+
+    @Test func inconclusiveSamplesPreserveState() {
+        // nil (binding absent / read threw) and "" leave the latch untouched.
+        #expect(TmuxBackend.advanceExitMonitor(sawAgentRunning: true, sample: nil) == (true, false))
+        #expect(TmuxBackend.advanceExitMonitor(sawAgentRunning: false, sample: nil) == (false, false))
+        #expect(TmuxBackend.advanceExitMonitor(sawAgentRunning: true, sample: "") == (true, false))
+    }
+}
