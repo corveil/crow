@@ -434,7 +434,7 @@ final class IssueTracker {
             let openIDs = Set(openIssues.map(\.id))
             let uniqueDone = ghResult.closedIssues.filter { !openIDs.contains($0.id) }
             allIssues.append(contentsOf: uniqueDone)
-            doneCount += ghResult.closedIssues.count
+            doneCount += ghResult.closedTotalCount
         }
 
         // GitLab — unchanged fan-out (one call per host)
@@ -642,6 +642,9 @@ final class IssueTracker {
     private struct ConsolidatedGitHubResponse: Sendable {
         let openIssues: [AssignedIssue]
         let closedIssues: [AssignedIssue]
+        /// True 24h closed total (search `issueCount`) — `closedIssues` holds
+        /// at most the 50 fetched nodes, so the done badge counts this instead.
+        let closedTotalCount: Int
         let viewerPRs: [ViewerPR]
         let reviewRequests: [ReviewRequest]
         let rateLimit: GitHubRateLimit?
@@ -758,6 +761,7 @@ final class IssueTracker {
         return ConsolidatedGitHubResponse(
             openIssues: assigned.open,
             closedIssues: assigned.closed,
+            closedTotalCount: assigned.closedTotalCount,
             viewerPRs: monitored.viewerPRs,
             reviewRequests: monitored.reviewRequests,
             rateLimit: assigned.rateLimit ?? monitored.rateLimit

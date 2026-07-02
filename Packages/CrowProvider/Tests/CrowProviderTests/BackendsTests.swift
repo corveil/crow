@@ -97,7 +97,7 @@ final class BackendsTests: XCTestCase {
              "labels":{"nodes":[{"name":"bug","color":"red"}]},
              "projectItems":{"nodes":[{"fieldValueByName":{"name":"In Progress"}}]}}
           ]},
-          "closedIssues":{"nodes":[
+          "closedIssues":{"issueCount":137,"nodes":[
             {"number":2,"title":"Closed one","url":"https://github.com/a/b/issues/2","state":"closed",
              "repository":{"nameWithOwner":"a/b"},"labels":{"nodes":[]}}
           ]},
@@ -112,9 +112,32 @@ final class BackendsTests: XCTestCase {
         XCTAssertEqual(listing.open[0].projectStatus, .inProgress)
         XCTAssertEqual(listing.closed.count, 1)
         XCTAssertEqual(listing.closed[0].projectStatus, .done)  // override for closed
+        // The total comes from the search connection's issueCount, not the
+        // node page — the done badge must be able to exceed the first: 50 cap.
+        XCTAssertEqual(listing.closedTotalCount, 137)
         XCTAssertEqual(listing.rateLimit?.remaining, 4999)
         XCTAssertEqual(fake.calls.first?.args[0], "gh")
         XCTAssertTrue(fake.calls.first?.args.contains("graphql") ?? false)
+    }
+
+    func testGitHubTaskBackendClosedTotalFallsBackToNodeCount() async throws {
+        let fake = FakeShellRunner()
+        // No issueCount in the response — closedTotalCount falls back to the
+        // fetched node count.
+        let json = """
+        {"data":{
+          "openIssues":{"nodes":[]},
+          "closedIssues":{"nodes":[
+            {"number":2,"title":"Closed one","url":"https://github.com/a/b/issues/2","state":"closed",
+             "repository":{"nameWithOwner":"a/b"},"labels":{"nodes":[]}}
+          ]}
+        }}
+        """
+        fake.responses = [.success(json)]
+        let backend = GitHubTaskBackend(shellRunner: fake)
+        let listing = try await backend.listAssigned()
+        XCTAssertEqual(listing.closed.count, 1)
+        XCTAssertEqual(listing.closedTotalCount, 1)
     }
 
     func testGitHubTaskBackendListAssignedRetriesWithoutProjectsOnScopeError() async throws {
