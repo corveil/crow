@@ -33,6 +33,12 @@ public struct Session: Identifiable, Codable, Sendable {
     // linked PR (CROW-299). Non-nil means the one-shot enable has already
     // run; the auto-merge watcher skips this session on subsequent polls.
     public var autoMergeEnabledAt: Date?
+    // Whether the user has pinned this session to exempt it from the retention
+    // cleanup reaper (CROW-569). Pinned sessions are never auto-archived/deleted
+    // by `cleanup.retentionHours` regardless of age. Applies to any session kind,
+    // including scheduled `job` sessions (the motivating case). Defaults to
+    // `false`; legacy persisted sessions predating this field decode as unpinned.
+    public var pinned: Bool
 
     /// Whether this session is a Manager (orchestration) session. Managers run
     /// Claude Code in the devRoot and are excluded from PR/issue tracking.
@@ -68,7 +74,8 @@ public struct Session: Identifiable, Codable, Sendable {
         updatedAt: Date = Date(),
         reviewPromptDispatched: Bool = false,
         lastReviewedHeadSha: String? = nil,
-        autoMergeEnabledAt: Date? = nil
+        autoMergeEnabledAt: Date? = nil,
+        pinned: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -85,6 +92,7 @@ public struct Session: Identifiable, Codable, Sendable {
         self.reviewPromptDispatched = reviewPromptDispatched
         self.lastReviewedHeadSha = lastReviewedHeadSha
         self.autoMergeEnabledAt = autoMergeEnabledAt
+        self.pinned = pinned
     }
 
     /// Parse a GitHub PR URL (`https://github.com/<owner>/<repo>/pull/<number>`)
@@ -121,5 +129,6 @@ public struct Session: Identifiable, Codable, Sendable {
         reviewPromptDispatched = try container.decodeIfPresent(Bool.self, forKey: .reviewPromptDispatched) ?? true
         lastReviewedHeadSha = try container.decodeIfPresent(String.self, forKey: .lastReviewedHeadSha)
         autoMergeEnabledAt = try container.decodeIfPresent(Date.self, forKey: .autoMergeEnabledAt)
+        pinned = try container.decodeIfPresent(Bool.self, forKey: .pinned) ?? false
     }
 }

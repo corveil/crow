@@ -400,7 +400,7 @@ public struct SettingsView: View {
             Section("Session Cleanup") {
                 Toggle("Auto-delete completed sessions", isOn: $config.cleanup.enabled)
                     .onChange(of: config.cleanup.enabled) { _, _ in save() }
-                Text("Automatically deletes completed and archived sessions after the retention period. Includes worktree and branch cleanup. Manager and virtual tab sessions are never deleted.")
+                Text("Automatically deletes completed and archived sessions after the retention period. Includes worktree and branch cleanup. Manager, virtual tab, and pinned sessions are never deleted.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 

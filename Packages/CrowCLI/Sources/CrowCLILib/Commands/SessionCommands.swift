@@ -120,6 +120,25 @@ public struct SetStatus: ParsableCommand {
     }
 }
 
+/// Pin or unpin a session, exempting it from (or restoring it to) the retention
+/// cleanup reaper.
+public struct SetPinned: ParsableCommand {
+    public static let configuration = CommandConfiguration(commandName: "set-pinned", abstract: "Pin/unpin a session to protect it from auto-cleanup")
+    @Option(name: .long, help: "Session UUID") var session: String
+    @Argument(help: "Pinned state: true or false") var pinned: Bool
+
+    public init() {}
+
+    public func validate() throws {
+        try validateUUID(session, label: "session UUID")
+    }
+
+    public func run() throws {
+        let result = try rpc("set-pinned", params: ["session_id": .string(session), "pinned": .bool(pinned)])
+        printJSON(result)
+    }
+}
+
 /// Delete a session.
 public struct DeleteSession: ParsableCommand {
     public static let configuration = CommandConfiguration(commandName: "delete-session", abstract: "Delete a session")

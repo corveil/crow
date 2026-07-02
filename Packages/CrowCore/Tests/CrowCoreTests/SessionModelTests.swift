@@ -114,6 +114,37 @@ import Testing
     #expect(decoded.lastReviewedHeadSha == "deadbeef")
 }
 
+@Test func sessionBackwardCompatDecodingPinned() throws {
+    // Persisted state.json predating CROW-569 has no `pinned`. Decode must
+    // succeed and default the field to false so legacy sessions remain
+    // eligible for normal auto-cleanup.
+    let id = UUID()
+    let date = Date()
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime]
+    let dateStr = formatter.string(from: date)
+    let json: [String: Any] = [
+        "id": id.uuidString,
+        "name": "legacy",
+        "status": "completed",
+        "kind": "job",
+        "createdAt": dateStr,
+        "updatedAt": dateStr,
+    ]
+    let data = try JSONSerialization.data(withJSONObject: json)
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+    let session = try decoder.decode(Session.self, from: data)
+    #expect(session.pinned == false)
+}
+
+@Test func sessionRoundTripsPinned() throws {
+    let session = Session(name: "pinned-job", kind: .job, pinned: true)
+    let data = try JSONEncoder().encode(session)
+    let decoded = try JSONDecoder().decode(Session.self, from: data)
+    #expect(decoded.pinned == true)
+}
+
 @Test func sessionManagerKindRoundTrip() throws {
     let session = Session(name: "Manager 2", kind: .manager)
     #expect(session.isManager)
