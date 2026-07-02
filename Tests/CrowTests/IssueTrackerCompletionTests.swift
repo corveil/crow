@@ -17,7 +17,7 @@ struct IssueTrackerCompletionTests {
         provider: Provider? = .github,
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
-        pinned: Bool = false
+        locked: Bool = false
     ) -> Session {
         Session(
             id: id,
@@ -28,7 +28,7 @@ struct IssueTrackerCompletionTests {
             provider: provider,
             createdAt: createdAt,
             updatedAt: updatedAt,
-            pinned: pinned
+            locked: locked
         )
     }
 
@@ -488,27 +488,27 @@ struct IssueTrackerCompletionTests {
     }
 
     @Test
-    func pinnedSessionPastRetentionIsNotEligible() {
-        // A pinned completed/job session must survive the reaper regardless of
-        // age (CROW-569). Unpinning restores normal eligibility.
-        let pinned = makeSession(
-            name: "pinned-job",
+    func lockedSessionPastRetentionIsNotEligible() {
+        // A locked completed/job session must survive the reaper regardless of
+        // age (CROW-569/CROW-573). Unlocking restores normal eligibility.
+        let locked = makeSession(
+            name: "locked-job",
             status: .completed,
             kind: .job,
             updatedAt: hoursAgo(48),
-            pinned: true
+            locked: true
         )
-        let unpinned = makeSession(
-            name: "unpinned-job",
+        let unlocked = makeSession(
+            name: "unlocked-job",
             status: .completed,
             kind: .job,
             updatedAt: hoursAgo(48)
         )
         let eligible = IssueTracker.sessionsEligibleForCleanup(
-            sessions: [pinned, unpinned],
+            sessions: [locked, unlocked],
             retentionHours: 24
         )
-        #expect(eligible == [unpinned.id])
+        #expect(eligible == [unlocked.id])
     }
 
     @Test

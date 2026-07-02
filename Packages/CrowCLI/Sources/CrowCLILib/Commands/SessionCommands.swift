@@ -120,12 +120,12 @@ public struct SetStatus: ParsableCommand {
     }
 }
 
-/// Pin or unpin a session, exempting it from (or restoring it to) the retention
-/// cleanup reaper.
-public struct SetPinned: ParsableCommand {
-    public static let configuration = CommandConfiguration(commandName: "set-pinned", abstract: "Pin/unpin a session to protect it from auto-cleanup")
+/// Lock or unlock a session, exempting it from (or restoring it to) the
+/// retention cleanup reaper.
+public struct SetLocked: ParsableCommand {
+    public static let configuration = CommandConfiguration(commandName: "set-locked", abstract: "Lock/unlock a session to protect it from auto-cleanup")
     @Option(name: .long, help: "Session UUID") var session: String
-    @Argument(help: "Pinned state: true or false") var pinned: Bool
+    @Argument(help: "Locked state: true or false") var locked: Bool
 
     public init() {}
 
@@ -134,7 +134,26 @@ public struct SetPinned: ParsableCommand {
     }
 
     public func run() throws {
-        let result = try rpc("set-pinned", params: ["session_id": .string(session), "pinned": .bool(pinned)])
+        let result = try rpc("set-locked", params: ["session_id": .string(session), "locked": .bool(locked)])
+        printJSON(result)
+    }
+}
+
+/// Deprecated alias for `set-locked` (renamed in CROW-573). Hidden from help but
+/// still accepted so existing scripts keep working.
+public struct SetPinned: ParsableCommand {
+    public static let configuration = CommandConfiguration(commandName: "set-pinned", abstract: "Deprecated alias for set-locked", shouldDisplay: false)
+    @Option(name: .long, help: "Session UUID") var session: String
+    @Argument(help: "Locked state: true or false") var pinned: Bool
+
+    public init() {}
+
+    public func validate() throws {
+        try validateUUID(session, label: "session UUID")
+    }
+
+    public func run() throws {
+        let result = try rpc("set-locked", params: ["session_id": .string(session), "locked": .bool(pinned)])
         printJSON(result)
     }
 }

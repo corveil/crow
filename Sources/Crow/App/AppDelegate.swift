@@ -624,8 +624,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appState.onSetSessionActive = { [weak service] id in
             service?.setSessionActive(id: id)
         }
-        appState.onSetPinned = { [weak service] id, pinned in
-            service?.setPinned(id: id, pinned: pinned)
+        appState.onSetLocked = { [weak service] id, locked in
+            service?.setLocked(id: id, locked: locked)
         }
 
         appState.onLaunchAgent = { [weak service] terminalID in
@@ -1439,7 +1439,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         "provider": s.provider.map { .string($0.rawValue) } ?? .null,
                         "created_at": .string(fmt.string(from: s.createdAt)),
                         "updated_at": .string(fmt.string(from: s.updatedAt)),
-                        "pinned": .bool(s.pinned),
+                        "locked": .bool(s.locked),
+                        // Legacy alias (CROW-569 named this `pinned`); kept for
+                        // one release so existing scripts keep working.
+                        "pinned": .bool(s.locked),
                     ]
                 }
             },
@@ -1463,17 +1466,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     return ["session_id": .string(idStr), "status": .string(statusStr)]
                 }
             },
+            "set-locked": { @Sendable params in
+                // Accept the new `locked` param, or the legacy CROW-569 `pinned`
+                // param, so the `set-pinned` alias below can share this handler.
+                guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr),
+                      let locked = params["locked"]?.boolValue ?? params["pinned"]?.boolValue else {
+                    throw RPCError.invalidParams("session_id and locked required")
+                }
+                return try await MainActor.run {
+                    guard capturedAppState.sessions.contains(where: { $0.id == id }) else {
+                        throw RPCError.applicationError("Session not found")
+                    }
+                    capturedService.setLocked(id: id, locked: locked)
+                    return ["session_id": .string(idStr), "locked": .bool(locked)]
+                }
+            },
+            // Deprecated alias for `set-locked` (CROW-569 → CROW-573 rename).
             "set-pinned": { @Sendable params in
                 guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr),
-                      let pinned = params["pinned"]?.boolValue else {
+                      let locked = params["pinned"]?.boolValue ?? params["locked"]?.boolValue else {
                     throw RPCError.invalidParams("session_id and pinned required")
                 }
                 return try await MainActor.run {
                     guard capturedAppState.sessions.contains(where: { $0.id == id }) else {
                         throw RPCError.applicationError("Session not found")
                     }
-                    capturedService.setPinned(id: id, pinned: pinned)
-                    return ["session_id": .string(idStr), "pinned": .bool(pinned)]
+                    capturedService.setLocked(id: id, locked: locked)
+                    return ["session_id": .string(idStr), "locked": .bool(locked)]
                 }
             },
             "delete-session": { @Sendable params in
