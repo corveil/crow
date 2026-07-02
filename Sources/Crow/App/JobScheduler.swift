@@ -28,9 +28,32 @@ final class JobScheduler {
     /// follow-up prompts for a run.
     private let maxLaunchWaitPolls = 60
 
+    /// Grace period after the final prompt is delivered before a run is eligible
+    /// to auto-complete. Prevents catching a stale top-level `.done` from an
+    /// earlier prompt before the agent has picked up the last one (CROW-561).
+    private let finishSettleDelay: TimeInterval = 20
+    /// Safety cap: stop watching a run for completion after this long so a
+    /// blocked/erroring run doesn't linger in memory forever (CROW-561).
+    private let maxWatchDuration: TimeInterval = 12 * 3600
+
     /// Jobs currently being created — guards against a long worktree creation
     /// double-firing on the next tick before `lastRunAt` is persisted.
     private var inFlight: Set<UUID> = []
+
+    /// A job run being watched so its session auto-completes once the agent
+    /// finishes successfully (CROW-561).
+    private struct RunWatch {
+        let terminalID: UUID
+        let startedAt: Date
+        /// Set once the *last* prompt has been delivered; until then the run is
+        /// not yet eligible to be judged finished.
+        var promptsDeliveredAt: Date?
+    }
+
+    /// Active job runs, keyed by session id, awaiting successful-finish detection.
+    /// In-memory only: an app relaunch mid-run drops the watch, reverting that run
+    /// to the pre-CROW-561 "linger until manually completed" behavior.
+    private var watchedRuns: [UUID: RunWatch] = [:]
 
     /// Reads the current job list (from AppDelegate's `appConfig`).
     var jobsProvider: () -> [JobConfig] = { [] }
@@ -61,8 +84,12 @@ final class JobScheduler {
     // MARK: - Tick
 
     private func tick() {
-        guard let devRoot = devRootProvider() else { return }
         let now = Date()
+        // Auto-complete any job runs that have finished successfully. Runs on
+        // every tick regardless of whether jobs are due (CROW-561).
+        checkFinishedRuns(now: now)
+
+        guard let devRoot = devRootProvider() else { return }
         for job in jobsProvider() where job.enabled {
             guard !inFlight.contains(job.id) else { continue }
             let baseline = job.lastRunAt ?? job.createdAt
@@ -92,7 +119,15 @@ final class JobScheduler {
             if let result = await self.sessionService.runJob(captured, devRoot: devRoot) {
                 // Persist run time first so the job isn't re-fired next tick.
                 self.onJobRan(captured.id, Date())
-                self.deliverRemainingPrompts(captured, terminalID: result.terminalID)
+                // Watch this run so its session auto-completes on success (CROW-561).
+                self.watchedRuns[result.sessionID] = RunWatch(
+                    terminalID: result.terminalID,
+                    startedAt: Date(),
+                    promptsDeliveredAt: nil
+                )
+                self.deliverRemainingPrompts(
+                    captured, sessionID: result.sessionID, terminalID: result.terminalID
+                )
             }
         }
     }
@@ -101,15 +136,22 @@ final class JobScheduler {
 
     /// Deliver every prompt after the first non-empty one, once Claude has
     /// launched, spaced by `promptGap`.
-    private func deliverRemainingPrompts(_ job: JobConfig, terminalID: UUID) {
+    private func deliverRemainingPrompts(_ job: JobConfig, sessionID: UUID, terminalID: UUID) {
         let remaining = job.prompts
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
             .dropFirst()
-        guard !remaining.isEmpty else { return }
+        guard !remaining.isEmpty else {
+            // Single-prompt job: the sole prompt launches with the agent, so the
+            // run is fully delivered as soon as the terminal reports launched.
+            waitForAgentLaunched(terminalID: terminalID, polls: 0) { [weak self] in
+                self?.markPromptsDelivered(sessionID: sessionID)
+            }
+            return
+        }
 
         waitForAgentLaunched(terminalID: terminalID, polls: 0) { [weak self] in
-            self?.sendSequentially(Array(remaining), terminalID: terminalID)
+            self?.sendSequentially(Array(remaining), sessionID: sessionID, terminalID: terminalID)
         }
     }
 
@@ -132,18 +174,122 @@ final class JobScheduler {
     /// Send prompts one at a time, waiting `promptGap` before each so they don't
     /// collide with Claude still processing the previous one. Stops if the
     /// terminal disappears (e.g. the session was deleted).
-    private func sendSequentially(_ prompts: [String], terminalID: UUID) {
-        guard !prompts.isEmpty else { return }
+    private func sendSequentially(_ prompts: [String], sessionID: UUID, terminalID: UUID) {
+        guard !prompts.isEmpty else {
+            // Every prompt has been sent — the run is now eligible to finish.
+            markPromptsDelivered(sessionID: sessionID)
+            return
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + promptGap) { [weak self] in
             guard let self else { return }
             guard let terminal = self.appState.terminals.values
                 .flatMap({ $0 })
                 .first(where: { $0.id == terminalID }) else {
                 NSLog("[JobScheduler] terminal \(terminalID) gone; stopping prompt delivery")
+                // Delivery aborted — stop watching this run for completion too.
+                self.watchedRuns[sessionID] = nil
                 return
             }
             TerminalRouter.send(terminal, text: prompts[0] + "\n")
-            self.sendSequentially(Array(prompts.dropFirst()), terminalID: terminalID)
+            self.sendSequentially(Array(prompts.dropFirst()), sessionID: sessionID, terminalID: terminalID)
+        }
+    }
+
+    // MARK: - Auto-complete on finish (CROW-561)
+
+    /// Record that a watched run has had all of its prompts delivered, starting
+    /// the settle window before it can be judged finished.
+    private func markPromptsDelivered(sessionID: UUID) {
+        watchedRuns[sessionID]?.promptsDeliveredAt = Date()
+    }
+
+    /// Auto-complete watched job runs whose agent has finished successfully.
+    ///
+    /// A run completes when, after all its prompts were delivered plus a settle
+    /// window, the agent has emitted a real finish event (`.done`) rather than
+    /// still working, awaiting input / errored (`.waiting`), or never having
+    /// started (`.idle`). Keyed purely on `AgentActivityState`, so it works the
+    /// same across Claude/Codex/Cursor/OpenCode. See `finishDecision`.
+    private func checkFinishedRuns(now: Date) {
+        // Mutating `watchedRuns` inside the loop is safe: `for (_, _) in dict`
+        // iterates a value copy, so the mutation just triggers copy-on-write.
+        for (sessionID, run) in watchedRuns {
+            let decision = Self.finishDecision(
+                now: now,
+                status: appState.sessions.first(where: { $0.id == sessionID })?.status,
+                startedAt: run.startedAt,
+                promptsDeliveredAt: run.promptsDeliveredAt,
+                readiness: appState.terminalReadiness[run.terminalID],
+                activityState: appState.hookState(for: sessionID).activityState,
+                finishSettleDelay: finishSettleDelay,
+                maxWatchDuration: maxWatchDuration
+            )
+            switch decision {
+            case .keepWaiting:
+                continue
+            case .stopWatching:
+                watchedRuns[sessionID] = nil
+            case .complete:
+                sessionService.completeSession(id: sessionID)
+                watchedRuns[sessionID] = nil
+            }
+        }
+    }
+
+    /// What to do with a watched run this tick — pure so it's unit-testable
+    /// without an `AppState`/`SessionService`.
+    enum RunDecision: Equatable {
+        case keepWaiting    // still delivering, inside settle window, or agent busy
+        case stopWatching   // session gone / no longer active / timed out
+        case complete       // finished successfully → mark the session completed
+    }
+
+    /// Decide a watched run's fate from plain inputs. `status == nil` means the
+    /// session no longer exists.
+    ///
+    /// Only `.done` counts as finished. `.idle` deliberately does **not**: across
+    /// every agent kind it is set *only* on a fresh `SessionStart` (the default /
+    /// never-started state), never as a resting state after work. Treating it as
+    /// finished would silently complete failed launches (readiness parks at
+    /// `.agentLaunched` with no agent, so no hook event ever arrives and the state
+    /// stays the default `.idle`), still-booting agents, and TUI agents reasoning
+    /// before their first tool call — the exact "silently completed" outcome this
+    /// feature must avoid. `.done`, by contrast, is only produced by a real finish
+    /// event (Claude/Codex `Stop`, or a TUI `Stop`/`Notification` safety-net),
+    /// which proves the agent actually ran.
+    ///
+    /// Known limitation: OpenCode/Cursor map an error `Notification`
+    /// (e.g. `session.error`) to `.done` when no top-level Stop was recorded, so an
+    /// errored TUI run can complete as "success". Claude/Codex errored runs
+    /// (`StopFailure` → `.waiting`) are correctly left active.
+    static func finishDecision(
+        now: Date,
+        status: SessionStatus?,
+        startedAt: Date,
+        promptsDeliveredAt: Date?,
+        readiness: TerminalReadiness?,
+        activityState: AgentActivityState,
+        finishSettleDelay: TimeInterval,
+        maxWatchDuration: TimeInterval
+    ) -> RunDecision {
+        // Session deleted, or manually moved out of active → stop watching.
+        guard let status, status == .active else { return .stopWatching }
+        // Safety cap so a blocked/erroring run doesn't linger forever.
+        if now.timeIntervalSince(startedAt) >= maxWatchDuration { return .stopWatching }
+        // Not all prompts delivered yet, or still inside the settle window.
+        guard let deliveredAt = promptsDeliveredAt,
+              now.timeIntervalSince(deliveredAt) >= finishSettleDelay else { return .keepWaiting }
+        // The agent must have actually launched.
+        guard readiness == .agentLaunched else { return .keepWaiting }
+
+        switch activityState {
+        case .idle, .working, .waiting:
+            // Not finished: `.idle` is the never-started default, `.working` is
+            // in-progress, `.waiting` is awaiting input or errored. All stay
+            // active so the run surfaces rather than being silently completed.
+            return .keepWaiting
+        case .done:
+            return .complete
         }
     }
 }
