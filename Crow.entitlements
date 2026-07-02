@@ -2,16 +2,9 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <!-- Hardened Runtime: allow unsigned executable memory (Zig-compiled GhosttyKit) -->
-    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
-    <true/>
-
-    <!-- Hardened Runtime: disable library validation (GhosttyKit objects aren't team-signed) -->
-    <key>com.apple.security.cs.disable-library-validation</key>
-    <true/>
-
-    <!-- Hardened Runtime: allow JIT (Metal shader compilation via Ghostty) -->
-    <key>com.apple.security.cs.allow-jit</key>
-    <true/>
+    <!-- No Hardened Runtime exceptions are required: the terminal renders via
+         xterm.js in WKWebView (JS/JIT runs in the out-of-process WebContent
+         process under Apple-provided entitlements), so the app needs no
+         unsigned-executable-memory, library-validation, or JIT exceptions. -->
 </dict>
 </plist>

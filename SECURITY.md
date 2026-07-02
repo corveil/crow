@@ -22,7 +22,7 @@ If you discover a security vulnerability in Crow, please report it by emailing *
 
 The following components are maintained by other projects. Please report vulnerabilities directly to them:
 
-- **Ghostty terminal** — [ghostty-org/ghostty](https://github.com/ghostty-org/ghostty)
+- **xterm.js terminal** — [xtermjs/xterm.js](https://github.com/xtermjs/xterm.js)
 - **Claude Code** — [Anthropic](https://www.anthropic.com/responsible-disclosure-policy)
 - **GitHub CLI (`gh`)** / **GitLab CLI (`glab`)** — Their respective maintainers
 

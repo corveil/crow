@@ -4,12 +4,8 @@
 
 | Problem                                                  | Solution                                                                 |
 | -------------------------------------------------------- | ------------------------------------------------------------------------ |
-| `zig` not found                                          | `brew install zig@0.15` or download from [ziglang.org](https://ziglang.org/download/) |
-| Zig version mismatch                                     | Version **0.15.2** is required (plain `brew install zig` is now 0.16.0 — use `brew install zig@0.15`). Check with `zig version` |
-| Metal toolchain not found                                | Run `xcodebuild -downloadComponent MetalToolchain`                       |
-| Ghostty submodule missing                                | Run `git submodule update --init vendor/ghostty`                         |
-| `swift build` fails with linker errors                   | Build `GhosttyKit` first: `./scripts/build-ghostty.sh` (or just run `make build`) |
-| `make build` reports "Prerequisites OK" then fails later | Run `make clean-all && make build` to force a full rebuild of `Frameworks/` |
+| `swift build` fails on missing `BuildInfo`               | Use `make build` — it generates build info before compiling. Bare `swift build` only works after an initial `make build`. |
+| `make build` fails partway through                       | Run `make clean-all && make build` to force a clean rebuild. |
 
 ## Runtime Issues
 
@@ -19,7 +15,7 @@
 | GitHub API errors / empty issue list                     | Check auth: `gh auth status`. Ensure scopes include `repo`, `read:org`, `project`. If missing, run `gh auth refresh -s project,read:org,repo`. |
 | `INSUFFICIENT_SCOPES` in `[IssueTracker]` stderr         | Run `gh auth refresh -s project`. **`read:project` is NOT sufficient** — the write `project` scope is required to update ticket status via `updateProjectV2ItemFieldValue`. See `Sources/Crow/App/IssueTracker.swift:691-692,768-769`. |
 | Ticket stays "Backlog" when starting a session           | Same as above — the `markInReview` code path requires the write `project` scope |
-| Terminal not starting                                    | Check stderr for `[TmuxBackend]` or `[Ghostty]` messages. Managed terminals run on tmux; if one is stuck, close and reopen it from the session detail header, or use the on-terminal Retry affordance after a readiness timeout. |
+| Terminal not starting                                    | Check stderr for `[TmuxBackend]` or `[XTermSurfaceView]` messages. Managed terminals run on tmux; if one is stuck, close and reopen it from the session detail header, or use the on-terminal Retry affordance after a readiness timeout. |
 | tmux backend not starting                                | tmux is required for managed terminals (#303). If tmux is missing or < 3.3, Crow surfaces a launch alert with a `brew install tmux` hint and managed terminals won't render until tmux is installed. Verify with `tmux -V`, then relaunch Crow. |
 | Issue tracker shows no tickets                           | Verify `gh auth status` shows `repo`, `read:org`, `project` scopes       |
 | GitLab tickets missing                                   | Run `glab auth status --hostname <your-host>`; ensure `GITLAB_HOST` matches what's in `{devRoot}/.claude/config.json`. After #215, Crow silently skips GitLab candidates whose host can't be determined instead of failing the whole reconcile pass — check the workspace's `host` field if a repo isn't being polled. |
@@ -37,7 +33,7 @@ The app logs diagnostic information to stderr with component tags:
 - `[SessionService]` — Orphan detection, session lifecycle changes
 - `[IssueTracker]` — GitHub/GitLab API errors, scope issues, project status queries
 - `[JSONStore]` — Decode failures (store data loss prevention)
-- `[Ghostty]` — Surface creation success/failure
+- `[XTermSurfaceView]` — Surface creation success/failure
 - `[TerminalRouter]` — tmux send/destroy errors when the tmux backend is enabled (#229)
 - `[AppSupportDirectory]` — One-time `rm-ai-ide` → `crow` migration events
 - `[Scaffolder]` — Template file loading (development builds)

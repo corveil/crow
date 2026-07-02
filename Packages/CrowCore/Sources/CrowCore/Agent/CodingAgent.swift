@@ -134,7 +134,7 @@ public extension CodingAgent {
     }
 
     /// Default Manager launch command: invoke the agent's CLI binary by
-    /// name with no extra flags. The terminal backend (tmux/Ghostty) owns
+    /// name with no extra flags. The tmux terminal backend owns
     /// the submitting Enter — return the raw command without a trailing
     /// newline so the convention is uniform across agents (CROW-433 review).
     func managerLaunchCommand(

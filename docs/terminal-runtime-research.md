@@ -1,5 +1,10 @@
 # Terminal Runtime Alternatives: Research & Recommendations
 
+> **Archived / historical.** This is the original #103 investigation and reflects the
+> state when Crow still embedded Ghostty. The terminal now renders via xterm.js in
+> WKWebView over a tmux-backed PTY — see [ADR 0006](adr/0006-universal-macos-binary.md).
+> Kept as-is for the historical record.
+
 **Issue:** [#103 — Investigate: Terminal Alternatives to Ghostty for Background Execution](https://github.com/radiusmethod/crow/issues/103)
 **Date:** 2026-04-06
 
