@@ -3,8 +3,8 @@ import Foundation
 /// Which terminal backend hosts a `SessionTerminal`'s shell.
 ///
 /// tmux is the only backend (#198 → defaulted on in #301 → legacy
-/// per-terminal Ghostty path removed in #303): all terminals share a single
-/// embedded Ghostty surface that's attached to a tmux session, and each
+/// per-terminal path removed in #303): all terminals share a single
+/// embedded xterm.js surface that's attached to a tmux session, and each
 /// terminal is one tmux window inside that session. The enum is retained as
 /// a single-case discriminator so the persisted schema is stable and a
 /// future backend can be added without another migration.
@@ -39,7 +39,7 @@ public struct SessionTerminal: Identifiable, Codable, Sendable {
     public var isManaged: Bool
     public var createdAt: Date
     /// Which backend hosts this terminal. Always `.tmux` since #303; the
-    /// custom decoder maps legacy `"ghostty"` rows forward.
+    /// custom decoder maps legacy/unknown backend strings forward.
     public var backend: TerminalBackend
     /// The tmux window that backs this terminal. Nil only when registration
     /// hasn't happened yet or failed this run.
@@ -79,7 +79,7 @@ public struct SessionTerminal: Identifiable, Codable, Sendable {
         isManaged = try container.decodeIfPresent(Bool.self, forKey: .isManaged) ?? false
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         // tmux is the only backend since #303. Decode the raw string and map
-        // anything that isn't a known case — including legacy `"ghostty"` rows
+        // anything that isn't a known case — including legacy backend values
         // and rows written before this field existed — forward to `.tmux`, so
         // an upgrade never throws on an old store.
         if let raw = try container.decodeIfPresent(String.self, forKey: .backend) {

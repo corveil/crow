@@ -25,11 +25,9 @@ crow/
 │   ├── CrowIPC/                     # Unix socket RPC protocol
 │   ├── CrowPersistence/             # JSON store, config persistence
 │   ├── CrowProvider/                # GitHub/GitLab provider abstraction
-│   ├── CrowTerminal/                # Ghostty terminal surface management
+│   ├── CrowTerminal/                # xterm.js terminal surface management
 │   └── CrowUI/                      # SwiftUI views, Corveil theme
-├── Frameworks/                # Built GhosttyKit (gitignored)
-├── vendor/ghostty/            # Ghostty submodule
-├── scripts/                   # Build helpers (build-ghostty.sh, bundle.sh, …)
+├── scripts/                   # Build/packaging helpers (bundle.sh, sign-and-notarize.sh, …)
 └── skills/                    # Bundled Claude Code skills (crow-workspace, etc.)
 ```
 
@@ -48,7 +46,7 @@ There are two `CrowCLI` directories:
 | **SessionService**        | `Sources/Crow/App/SessionService.swift`            | CRUD for sessions/worktrees/terminals, terminal readiness tracking, orphan recovery on startup                    |
 | **IssueTracker**          | `Sources/Crow/App/IssueTracker.swift`              | Polls GitHub/GitLab every 60 seconds for assigned issues, PR status, project board status, auto-completes merged sessions |
 | **Scaffolder**            | `Sources/Crow/App/Scaffolder.swift`                | First-run devRoot scaffold: `.claude/` + bundled skills + settings.json                                           |
-| **TmuxBackend**           | `Packages/CrowTerminal/.../TmuxBackend.swift`      | The terminal backend (introduced in #229, defaulted on in #301, the only backend since #303). Owns the tmux server and the shared cockpit `GhosttySurfaceView` that renders it |
+| **TmuxBackend**           | `Packages/CrowTerminal/.../TmuxBackend.swift`      | The terminal backend (introduced in #229, defaulted on in #301, the only backend since #303). Owns the tmux server and the shared cockpit `XTermSurfaceView` that renders it |
 | **TerminalRouter**        | `Sources/Crow/App/TerminalRouter.swift`            | Thin facade over `TmuxBackend` for per-terminal `send` / `destroy` / `trackReadiness` |
 | **AutoRespondCoordinator**| `Sources/Crow/App/AutoRespondCoordinator.swift`    | Watches PR review / CI signals and types follow-up instructions into the linked Claude Code terminal (#214)       |
 | **TerminalReadiness**     | `Packages/CrowCore/Sources/CrowCore/Models/Enums.swift:41` | Four-state enum (uninitialized → surfaceCreated → shellReady → claudeLaunched) driving the sidebar status dot |
@@ -63,7 +61,7 @@ There are two `CrowCLI` directories:
 ```
 User clicks session tab
   → SwiftUI renders TerminalSurfaceView
-  → GhosttySurfaceView.createSurface() spawns shell
+  → XTermSurfaceView.createSurface() spawns the shell (via PTYProcess)
   → TerminalManager transitions created → shellReady
   → TerminalReadiness: uninitialized → surfaceCreated → shellReady → claudeLaunched
   → Auto-sends `claude --continue` when shell becomes ready
@@ -102,15 +100,15 @@ User starts a session via /crow-workspace (or clicks "Mark In Review")
 
 See `Sources/Crow/App/IssueTracker.swift:636-774` for the full `markInReview` implementation.
 
-## Why Ghostty?
+## Terminal rendering
 
-Crow embeds [Ghostty](https://ghostty.org) as a terminal emulator via a compiled `libghostty` XCFramework. Ghostty gives each session tab a real GPU-accelerated terminal surface with the same behavior as the standalone Ghostty app, and its C API exposes the `ghostty_surface_t` lifecycle so Crow can track when the shell is ready and auto-launch `claude --continue`. The framework is built from the vendored submodule by `scripts/build-ghostty.sh` (invoked by `make ghostty`).
+Crow renders each session's terminal with [xterm.js](https://xtermjs.org) hosted in a `WKWebView` (`XTermSurfaceView`), backed by a native PTY (`PTYProcess`) whose child command is `tmux attach-session`. The vendored xterm.js assets live under `Packages/CrowTerminal/Sources/CrowTerminal/Resources/xterm/`. The surface lifecycle lets Crow track when the shell is ready and auto-launch `claude --continue`. See [ADR 0006](adr/0006-universal-macos-binary.md) for why this replaced the earlier native terminal surface.
 
 ## Terminal Backends
 
-PR #229 introduced a tmux backend behind a feature flag; #301 made it the default; #303 removed the legacy per-terminal Ghostty path and made tmux the only backend. The Manager session runs on tmux like every other session (#324).
+PR #229 introduced a tmux backend behind a feature flag; #301 made it the default; #303 removed the legacy per-terminal path and made tmux the only backend. The Manager session runs on tmux like every other session (#324).
 
-- **tmux** — a headless PTY plus a tmux server, driven by `TmuxBackend`. Each session terminal corresponds to a tmux window; rendering is decoupled from the window so terminals can spin up before any view is materialized. All visible tabs share a single embedded `GhosttySurfaceView` (the "cockpit") whose child command is `tmux attach-session`, so Ghostty still does the GPU-accelerated rendering. Requires `tmux ≥ 3.3` on `PATH` (`brew install tmux`).
+- **tmux** — a headless PTY plus a tmux server, driven by `TmuxBackend`. Each session terminal corresponds to a tmux window; rendering is decoupled from the window so terminals can spin up before any view is materialized. All visible tabs share a single embedded `XTermSurfaceView` (the "cockpit") whose child command is `tmux attach-session`, so xterm.js in WKWebView renders the shared surface. Requires `tmux ≥ 3.3` on `PATH` (`brew install tmux`).
 
 Per-terminal dispatch happens in `Sources/Crow/App/TerminalRouter.swift`, a thin facade over `TmuxBackend`. `SessionTerminal` still carries a single-case `backend` discriminator (`.tmux`) so the persisted schema is stable and a future backend can be added without another migration.
 

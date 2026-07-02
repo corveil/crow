@@ -5,8 +5,8 @@ import Foundation
 ///
 /// Three classes of crash motivated this (#266):
 ///   1. POSIX signals (SIGABRT/SIGSEGV/SIGBUS/SIGILL/SIGFPE/SIGTRAP) raised
-///      out of SwiftUI's AttributeGraph or libghostty wrappers, which can
-///      vanish the process without producing a `.ips` file.
+///      out of SwiftUI's AttributeGraph or native library wrappers, which
+///      can vanish the process without producing a `.ips` file.
 ///   2. Swift runtime traps (`fatalError`, `precondition`) which print to
 ///      stderr and then `abort()` — stderr is otherwise discarded for
 ///      .app bundles double-clicked from Finder.

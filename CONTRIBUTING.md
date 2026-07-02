@@ -23,14 +23,14 @@ Open a [GitHub Issue](https://github.com/radiusmethod/crow/issues/new?template=f
 See [README.md](README.md#detailed-setup) for full build instructions. The short version:
 
 ```bash
-git clone --recurse-submodules https://github.com/radiusmethod/crow.git
+git clone https://github.com/radiusmethod/crow.git
 cd crow
 make build
 ```
 
-> Always use `make build` for full builds. It handles submodules, the Ghostty
-> framework, and the Swift build. Use `swift build` only for quick iteration
-> after the initial build.
+> Always use `make build` for full builds. It generates build info and runs
+> the Swift build. Use `swift build` only for quick iteration after the
+> initial build.
 
 **Note:** Code signing is not required for development. Unsigned builds work normally for local testing. Official releases are signed and notarized automatically via GitHub Actions.
 
@@ -61,7 +61,7 @@ New functionality should go in the appropriate existing package:
 |---------|-------|
 | `CrowCore` | Data models, observable app state |
 | `CrowUI` | SwiftUI views, theme |
-| `CrowTerminal` | Ghostty terminal surface management |
+| `CrowTerminal` | xterm.js terminal surface management |
 | `CrowGit` | Git operations |
 | `CrowProvider` | GitHub/GitLab provider abstraction |
 | `CrowPersistence` | JSON store, config I/O |

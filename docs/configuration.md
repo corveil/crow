@@ -260,8 +260,8 @@ Worktrees are created **at the same level as the main repo**, not in a `worktree
 
 `TerminalReadiness` (`Packages/CrowCore/Sources/CrowCore/Models/Enums.swift:41`) tracks how far each managed terminal has progressed through startup. The sidebar dot in `Packages/CrowUI/Sources/CrowUI/SessionListView.swift:325-372` reflects the current state:
 
-1. **Gray dot (`uninitialized`)** — `GhosttySurfaceView` exists but `createSurface()` has not been called yet.
-2. **Yellow dot (`surfaceCreated`)** — `ghostty_surface_t` exists, the shell process is spawning.
+1. **Gray dot (`uninitialized`)** — `XTermSurfaceView` exists but `createSurface()` has not been called yet.
+2. **Yellow dot (`surfaceCreated`)** — the xterm.js surface exists and the shell process (`PTYProcess`) is spawning.
 3. **Blue dot (`shellReady`)** — Shell prompt detected (probe file appeared).
 4. **Green dot (`claudeLaunched`)** — `claude --continue` has been sent. The dot shows:
    - Solid green when Claude is idle

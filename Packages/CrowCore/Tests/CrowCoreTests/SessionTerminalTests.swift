@@ -146,10 +146,10 @@ struct SessionTerminalTests {
         #expect(decoded.tmuxBinding == binding)
     }
 
-    /// Legacy rows persisted with `"backend":"ghostty"` (before #303) must
-    /// migrate forward to `.tmux` on load rather than throwing on the
-    /// now-removed enum case.
-    @Test func legacyGhosttyBackendMigratesToTmux() throws {
+    /// Legacy rows persisted with an unrecognized `backend` string (before
+    /// #303 collapsed the enum to a single case) must migrate forward to
+    /// `.tmux` on load rather than throwing on the now-removed enum case.
+    @Test func legacyUnknownBackendMigratesToTmux() throws {
         let json = """
         {
             "id": "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE",
@@ -158,7 +158,7 @@ struct SessionTerminalTests {
             "cwd": "/Users/test",
             "isManaged": false,
             "createdAt": 1700000000,
-            "backend": "ghostty"
+            "backend": "legacy-unknown"
         }
         """.data(using: .utf8)!
 
