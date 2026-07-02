@@ -362,6 +362,10 @@ public final class AppState {
     /// Called to update session status back to .active (persists to store).
     public var onSetSessionActive: ((UUID) -> Void)?
 
+    /// Called to pin/unpin a session, exempting it from the retention cleanup
+    /// reaper. Receives (sessionID, pinned). Persists to store (CROW-569).
+    public var onSetPinned: ((UUID, Bool) -> Void)?
+
     /// Whether a given session is currently being marked as "In Review" (loading state).
     /// Must be cleaned up when a session is deleted (see `SessionService.deleteSession`).
     public var isMarkingInReview: [UUID: Bool] = [:]

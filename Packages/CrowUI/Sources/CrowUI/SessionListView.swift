@@ -331,6 +331,14 @@ public struct SessionListView: View {
 
         addMergeLabelButton(session)
 
+        Button {
+            appState.onSetPinned?(session.id, !session.pinned)
+        } label: {
+            Label(session.pinned ? "Unpin" : "Pin",
+                  systemImage: session.pinned ? "pin.slash" : "pin")
+        }
+        .disabled(deleting)
+
         Button(role: .destructive) {
             sessionToDelete = session
         } label: {
@@ -663,6 +671,13 @@ struct SessionRow: View {
                     RemoteControlBadge(compact: true)
                 }
                 Spacer()
+                if session.pinned {
+                    Image(systemName: "pin.fill")
+                        .font(.caption)
+                        .foregroundStyle(CorveilTheme.textSecondary)
+                        .help("Pinned — exempt from auto-cleanup")
+                        .accessibilityLabel("Pinned")
+                }
                 if session.autoMergeEnabledAt != nil {
                     Image(systemName: "arrow.triangle.merge")
                         .font(.caption)

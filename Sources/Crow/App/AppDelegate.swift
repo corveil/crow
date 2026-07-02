@@ -624,6 +624,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appState.onSetSessionActive = { [weak service] id in
             service?.setSessionActive(id: id)
         }
+        appState.onSetPinned = { [weak service] id, pinned in
+            service?.setPinned(id: id, pinned: pinned)
+        }
 
         appState.onLaunchAgent = { [weak service] terminalID in
             service?.launchAgent(terminalID: terminalID)
@@ -1436,6 +1439,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         "provider": s.provider.map { .string($0.rawValue) } ?? .null,
                         "created_at": .string(fmt.string(from: s.createdAt)),
                         "updated_at": .string(fmt.string(from: s.updatedAt)),
+                        "pinned": .bool(s.pinned),
                     ]
                 }
             },
@@ -1457,6 +1461,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         }
                     }
                     return ["session_id": .string(idStr), "status": .string(statusStr)]
+                }
+            },
+            "set-pinned": { @Sendable params in
+                guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr),
+                      let pinned = params["pinned"]?.boolValue else {
+                    throw RPCError.invalidParams("session_id and pinned required")
+                }
+                return try await MainActor.run {
+                    guard capturedAppState.sessions.contains(where: { $0.id == id }) else {
+                        throw RPCError.applicationError("Session not found")
+                    }
+                    capturedService.setPinned(id: id, pinned: pinned)
+                    return ["session_id": .string(idStr), "pinned": .bool(pinned)]
                 }
             },
             "delete-session": { @Sendable params in

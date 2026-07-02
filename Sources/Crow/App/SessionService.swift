@@ -2198,6 +2198,21 @@ final class SessionService {
         }
     }
 
+    /// Pin or unpin a session to exempt it from (or restore it to) the retention
+    /// cleanup reaper (CROW-569). Deliberately leaves `updatedAt` untouched so the
+    /// retention clock is preserved — unpinning restores the session's original
+    /// age-based eligibility rather than resetting it.
+    func setPinned(id: UUID, pinned: Bool) {
+        if let idx = appState.sessions.firstIndex(where: { $0.id == id }) {
+            appState.sessions[idx].pinned = pinned
+        }
+        store.mutate { data in
+            if let idx = data.sessions.firstIndex(where: { $0.id == id }) {
+                data.sessions[idx].pinned = pinned
+            }
+        }
+    }
+
     func completeSession(id: UUID) {
         updateSessionStatus(id, to: .completed)
     }

@@ -2384,6 +2384,7 @@ final class IssueTracker {
         return sessions.compactMap { session in
             guard !protectedSessionIDs.contains(session.id) else { return nil }
             guard !session.isManager else { return nil }
+            guard !session.pinned else { return nil }
             guard session.status == .completed || session.status == .archived else { return nil }
             guard session.updatedAt < cutoff else { return nil }
             return session.id
