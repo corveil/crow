@@ -78,6 +78,12 @@ public final class TmuxBackend {
     /// `onReadinessChanged` for a tab the user just closed. Issue #282.
     private var readinessTasks: [UUID: [Task<Void, Never>]] = [:]
 
+    /// Poll loop watching the Manager window's foreground command so the
+    /// "Manager process exited" banner reappears under the shared xterm.js
+    /// attach client (#558). At most one runs at a time; re-armed by
+    /// `SessionService` on launch / restart. See `startManagerExitMonitor`.
+    private var managerExitMonitor: Task<Void, Never>?
+
     /// Public for test isolation. Production callers use `.shared`.
     public init() {}
 
@@ -143,6 +149,9 @@ public final class TmuxBackend {
         // cleanup (#282).
         for tasks in readinessTasks.values { tasks.forEach { $0.cancel() } }
         readinessTasks.removeAll()
+        // Stop the Manager exit poll too — its window is gone with the server
+        // (#558). `SessionService` re-arms it after `rebuildAllSurfaces`.
+        stopManagerExitMonitor()
         // Only unlink the per-terminal scratch files when we're actually
         // killing the server. On a clean quit that leaves the server running
         // they must survive so the next launch's `adoptTerminal` can detect
@@ -575,6 +584,20 @@ public final class TmuxBackend {
         return orphanLoginShells.contains(command)
     }
 
+    /// Decide whether the Manager agent has exited, from one poll sample of its
+    /// window's foreground command (#558). Because the agent (`claude …`) runs
+    /// *inside* the window's shell wrapper rather than as the pane's direct
+    /// child, its exit doesn't kill the pane — the foreground just falls back to
+    /// a bare login shell. So we report an exit only once we've seen the agent
+    /// actually running (`sawAgentRunning`, a non-shell foreground) and now see
+    /// a bare login shell. `nil` (window gone / read failed) is never an exit —
+    /// that path also covers teardown, keeping restart/shutdown false-positive
+    /// free. Pure so the transition policy is unit-testable without tmux.
+    nonisolated static func managerAgentDidExit(paneCommand: String?, sawAgentRunning: Bool) -> Bool {
+        guard sawAgentRunning, let command = paneCommand else { return false }
+        return orphanLoginShells.contains(command)
+    }
+
     /// Reap cockpit windows that no live terminal references AND that are
     /// sitting at a bare login shell — leaked windows from a timed-out
     /// `new-window` or a forgotten terminal (#408). `keepWindowIndices` is the
@@ -602,6 +625,66 @@ public final class TmuxBackend {
             NSLog("[Crow] Reaped \(reaped) orphaned bare-shell cockpit window(s) (#408)")
         }
         return reaped
+    }
+
+    // MARK: - Manager exit monitor (#558)
+
+    /// Watch the Manager terminal's tmux window and fire `onExit` the first time
+    /// its foreground command falls back to a bare login shell after the agent
+    /// was seen running — i.e. the Manager's `claude`/`codex`/… process exited.
+    ///
+    /// Under the shared xterm.js cockpit, `XTermSurfaceView.onProcessExit` only
+    /// fires when the whole `tmux attach-session` client dies, so it can't tell
+    /// a per-window agent exit apart (#558). We poll `#{pane_current_command}`
+    /// for the Manager window instead — the same signal the orphan reaper reads.
+    ///
+    /// At most one monitor runs; a second call cancels the first. The poll skips
+    /// samples where the binding is absent (async adopt on launch hasn't landed
+    /// yet) or the `display-message` throws (window gone / server down), so
+    /// attach-client teardown and restart/shutdown never false-positive. Stops
+    /// after firing once; `SessionService` re-arms it on the next Manager launch.
+    public func startManagerExitMonitor(
+        id: UUID,
+        pollInterval: TimeInterval = 3.0,
+        onExit: @escaping @MainActor () -> Void
+    ) {
+        stopManagerExitMonitor()
+        let nanos = UInt64(pollInterval * 1_000_000_000)
+        managerExitMonitor = Task { [weak self] in
+            var sawAgentRunning = false
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: nanos)
+                if Task.isCancelled { return }
+                guard let self else { return }
+                // Read the Manager window's foreground command. A missing
+                // binding or a thrown read is inconclusive (not an exit): skip.
+                guard let windowIndex = self.bindings[id],
+                      let ctrl = self.controller,
+                      let raw = try? ctrl.displayMessage(
+                          target: "\(ctrl.sessionName):\(windowIndex)",
+                          format: "#{pane_current_command}"
+                      )
+                else { continue }
+                let command = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                if Self.orphanLoginShells.contains(command) {
+                    if Self.managerAgentDidExit(paneCommand: command, sawAgentRunning: sawAgentRunning) {
+                        NSLog("[CrowTelemetry manager:exit_detected terminal=\(id) command=\(command)]")
+                        onExit()
+                        return
+                    }
+                    // Bare shell before the agent ever launched (startup window);
+                    // keep watching until we see it running.
+                } else if !command.isEmpty {
+                    sawAgentRunning = true
+                }
+            }
+        }
+    }
+
+    /// Cancel the Manager exit monitor if one is running. Idempotent.
+    public func stopManagerExitMonitor() {
+        managerExitMonitor?.cancel()
+        managerExitMonitor = nil
     }
 
     /// Return the shared cockpit xterm surface, lazily creating it the

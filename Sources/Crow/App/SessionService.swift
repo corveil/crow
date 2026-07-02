@@ -707,6 +707,26 @@ final class SessionService {
         if appState.selectedSessionID == nil {
             appState.selectedSessionID = managerID
         }
+
+        // (Re)arm the exit monitor so the "Manager process exited" banner
+        // reappears under the shared xterm.js cockpit (#558). Covers fresh
+        // launch, hydrate/adopt relaunch, and `restartManager` (which routes
+        // back through here).
+        armManagerExitMonitor()
+    }
+
+    /// Start the `TmuxBackend` poll that flips `appState.managerProcessExited`
+    /// when the Manager's agent process exits (#558). Idempotent — the backend
+    /// cancels any prior monitor. No-op until the Manager terminal row exists;
+    /// the poll itself tolerates the tmux binding being registered slightly
+    /// later by the async `rebuildAllSurfaces` adopt path.
+    private func armManagerExitMonitor() {
+        let managerID = AppState.managerSessionID
+        guard let managerTerminal = appState.terminals(for: managerID).first else { return }
+        TmuxBackend.shared.startManagerExitMonitor(id: managerTerminal.id) { [weak self] in
+            guard let self, !self.appState.managerProcessExited else { return }
+            self.appState.managerProcessExited = true
+        }
     }
 
     /// Relaunch the Manager's `claude` process in place after it has exited
@@ -722,6 +742,11 @@ final class SessionService {
         let terminals = appState.terminals(for: managerID)
         // Fall back to a dead terminal's cwd if the caller's devRoot is empty.
         let resolvedDevRoot = devRoot.isEmpty ? (terminals.first?.cwd ?? devRoot) : devRoot
+
+        // Stop the exit monitor before tearing down the window so the imminent
+        // kill-window isn't mistaken for anything, and the fresh agent launch
+        // is observed from scratch. `ensureManagerSession` re-arms it (#558).
+        TmuxBackend.shared.stopManagerExitMonitor()
 
         for terminal in terminals {
             TerminalRouter.destroy(terminal)
@@ -758,6 +783,10 @@ final class SessionService {
         TmuxBackend.shared.shutdown(killServer: true)
 
         rebuildAllSurfaces(forceRegister: true)
+
+        // `shutdown` cancelled the exit monitor and `rebuildAllSurfaces` doesn't
+        // route through `ensureManagerSession`, so re-arm it here (#558).
+        armManagerExitMonitor()
 
         // Re-assign selection (even to the same values) to force a SwiftUI
         // re-render so TerminalSurfaceView re-creates the destroyed cockpit

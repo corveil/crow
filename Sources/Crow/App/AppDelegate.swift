@@ -416,7 +416,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         // Initialize terminal backend (xterm.js + tmux attach).
-        // Manager process-exit banner is not wired for the shared attach client yet (#558).
+        // Manager process-exit detection is wired via TmuxBackend's exit
+        // monitor, armed by SessionService.ensureManagerSession (#558).
         NSLog("[Crow] Terminal backend ready (xterm.js + tmux)")
 
         NSLog("[Crow] Config loaded (workspaces: %d)", config.workspaces.count)
@@ -603,9 +604,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Ensure manager session exists
         service.ensureManagerSession(devRoot: devRoot)
 
-        // Manager process exit detection is not wired for the shared tmux
-        // attach client (cockpit surface). Manager shells run inside tmux
-        // windows, not as the attach process child.
+        // ensureManagerSession also arms the TmuxBackend Manager exit monitor
+        // that drives the "Manager process exited" banner (#558).
 
         // Wire closures for UI actions
         appState.onDeleteSession = { [weak self, weak service] id in

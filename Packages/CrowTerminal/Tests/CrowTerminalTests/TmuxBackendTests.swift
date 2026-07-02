@@ -717,3 +717,38 @@ struct TmuxBackendConfigPolicyTests {
         #expect(TmuxBackend.shouldReconcile(configMTime: nil, serverStartTime: nil))
     }
 }
+
+/// Policy tests for the Manager exit detector (#558): report an exit only once
+/// the agent was seen running and the window's foreground has fallen back to a
+/// bare login shell. Pure over `managerAgentDidExit`, so no tmux needed.
+@Suite("Manager exit-monitor policy (#558)")
+struct ManagerExitMonitorTests {
+
+    @Test func firesWhenAgentRanThenDroppedToShell() {
+        // The agent (claude/codex/…) exited and the pane fell back to a shell.
+        #expect(TmuxBackend.managerAgentDidExit(paneCommand: "zsh", sawAgentRunning: true))
+        #expect(TmuxBackend.managerAgentDidExit(paneCommand: "-zsh", sawAgentRunning: true))
+        #expect(TmuxBackend.managerAgentDidExit(paneCommand: "bash", sawAgentRunning: true))
+        #expect(TmuxBackend.managerAgentDidExit(paneCommand: "fish", sawAgentRunning: true))
+    }
+
+    @Test func doesNotFireBeforeAgentSeenRunning() {
+        // Startup window: the wrapper shell shows before `claude` launches.
+        #expect(!TmuxBackend.managerAgentDidExit(paneCommand: "zsh", sawAgentRunning: false))
+        #expect(!TmuxBackend.managerAgentDidExit(paneCommand: "bash", sawAgentRunning: false))
+    }
+
+    @Test func doesNotFireWhileAgentRunning() {
+        // A non-shell foreground means the agent (or a child of it) is running.
+        #expect(!TmuxBackend.managerAgentDidExit(paneCommand: "claude", sawAgentRunning: true))
+        #expect(!TmuxBackend.managerAgentDidExit(paneCommand: "node", sawAgentRunning: true))
+        #expect(!TmuxBackend.managerAgentDidExit(paneCommand: "codex", sawAgentRunning: true))
+    }
+
+    @Test func doesNotFireWhenWindowGone() {
+        // nil = display-message failed / window vanished. Covers attach-client
+        // teardown and restart/shutdown — never a false positive.
+        #expect(!TmuxBackend.managerAgentDidExit(paneCommand: nil, sawAgentRunning: true))
+        #expect(!TmuxBackend.managerAgentDidExit(paneCommand: nil, sawAgentRunning: false))
+    }
+}
