@@ -598,6 +598,24 @@ public final class TmuxBackend {
         return orphanLoginShells.contains(command)
     }
 
+    /// Advance the exit-monitor state machine by one poll sample, so the whole
+    /// transition — not just its terminal condition — is unit-testable without
+    /// tmux (#558). `sample` is the window's foreground command, or `nil` when
+    /// the read was inconclusive (binding absent / `display-message` threw /
+    /// window gone). Returns the updated `sawAgentRunning` latch and whether an
+    /// exit should fire. A non-empty non-shell command latches "agent running";
+    /// a bare login shell after that latch fires; `nil` and `""` are no-ops.
+    nonisolated static func advanceExitMonitor(
+        sawAgentRunning: Bool, sample: String?
+    ) -> (sawAgentRunning: Bool, fired: Bool) {
+        guard let command = sample else { return (sawAgentRunning, false) }
+        if orphanLoginShells.contains(command) {
+            return (sawAgentRunning, managerAgentDidExit(paneCommand: command, sawAgentRunning: sawAgentRunning))
+        }
+        if !command.isEmpty { return (true, false) }
+        return (sawAgentRunning, false)
+    }
+
     /// Reap cockpit windows that no live terminal references AND that are
     /// sitting at a bare login shell — leaked windows from a timed-out
     /// `new-window` or a forgotten terminal (#408). `keepWindowIndices` is the
@@ -643,6 +661,16 @@ public final class TmuxBackend {
     /// yet) or the `display-message` throws (window gone / server down), so
     /// attach-client teardown and restart/shutdown never false-positive. Stops
     /// after firing once; `SessionService` re-arms it on the next Manager launch.
+    ///
+    /// The blocking `display-message` runs off the main actor (`Task.detached`)
+    /// and only the `onExit` hop-back touches the UI thread — a perpetual poll
+    /// must never stall AppKit even if the tmux subprocess wedges to its
+    /// watchdog timeout.
+    ///
+    /// Sampling floor: an agent that both launches and exits inside one
+    /// `pollInterval` is never observed running, so `sawAgentRunning` stays
+    /// false and no banner fires. That's an accepted missed-detection inherent
+    /// to polling, not a false positive.
     public func startManagerExitMonitor(
         id: UUID,
         pollInterval: TimeInterval = 3.0,
@@ -656,26 +684,27 @@ public final class TmuxBackend {
                 try? await Task.sleep(nanoseconds: nanos)
                 if Task.isCancelled { return }
                 guard let self else { return }
-                // Read the Manager window's foreground command. A missing
-                // binding or a thrown read is inconclusive (not an exit): skip.
-                guard let windowIndex = self.bindings[id],
-                      let ctrl = self.controller,
-                      let raw = try? ctrl.displayMessage(
-                          target: "\(ctrl.sessionName):\(windowIndex)",
-                          format: "#{pane_current_command}"
-                      )
-                else { continue }
-                let command = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-                if Self.orphanLoginShells.contains(command) {
-                    if Self.managerAgentDidExit(paneCommand: command, sawAgentRunning: sawAgentRunning) {
-                        NSLog("[CrowTelemetry manager:exit_detected terminal=\(id) command=\(command)]")
-                        onExit()
-                        return
-                    }
-                    // Bare shell before the agent ever launched (startup window);
-                    // keep watching until we see it running.
-                } else if !command.isEmpty {
-                    sawAgentRunning = true
+                // Capture the tmux handle + window index on the main actor, then
+                // read `#{pane_current_command}` off it: `TmuxController.run`
+                // blocks on `waitUntilExit()`, so keep that subprocess off the UI
+                // thread. A missing binding/controller yields a `nil` sample (skip).
+                let ctrl = self.controller
+                let windowIndex = self.bindings[id]
+                let raw: String? = await Task.detached { () -> String? in
+                    guard let ctrl, let windowIndex else { return nil }
+                    return try? ctrl.displayMessage(
+                        target: "\(ctrl.sessionName):\(windowIndex)",
+                        format: "#{pane_current_command}"
+                    )
+                }.value
+                let sample = raw?.trimmingCharacters(in: .whitespacesAndNewlines)
+                if Task.isCancelled { return }
+                let (nextSaw, fired) = Self.advanceExitMonitor(sawAgentRunning: sawAgentRunning, sample: sample)
+                sawAgentRunning = nextSaw
+                if fired {
+                    NSLog("[CrowTelemetry manager:exit_detected terminal=\(id) command=\(sample ?? "")]")
+                    onExit()
+                    return
                 }
             }
         }
