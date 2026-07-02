@@ -156,18 +156,18 @@ public final class SocketServer: @unchecked Sendable {
         // request at a time. A full async I/O rewrite would avoid the blocked
         // thread but is out of scope for the current architecture.
         let semaphore = DispatchSemaphore(value: 0)
-        nonisolated(unsafe) var response: JSONRPCResponse?
+        let box = ResponseBox()
         let capturedRouter = router
         let capturedRequest = request
 
         Task {
-            response = await capturedRouter.handle(request: capturedRequest)
+            box.value = await capturedRouter.handle(request: capturedRequest)
             semaphore.signal()
         }
 
         semaphore.wait()
 
-        if let response {
+        if let response = box.value {
             writeResponse(response, to: fd)
         }
     }
@@ -188,6 +188,15 @@ public final class SocketServer: @unchecked Sendable {
             }
         }
     }
+}
+
+/// Single-slot carrier used to hand the async handler's result back across the
+/// semaphore barrier in `handleClient`. Written once inside the `Task` before
+/// `signal()`, read once after `wait()`; the semaphore provides the happens-before
+/// ordering, so unsynchronized access is safe. Marked `@unchecked Sendable` so the
+/// `Task` closure that captures it stays Sendable under Swift 6.2 strict concurrency.
+private final class ResponseBox: @unchecked Sendable {
+    var value: JSONRPCResponse?
 }
 
 public enum SocketError: Error, LocalizedError {
