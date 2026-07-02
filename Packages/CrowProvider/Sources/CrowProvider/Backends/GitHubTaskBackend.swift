@@ -354,6 +354,7 @@ public struct GitHubTaskBackend: TaskBackend {
         }
       }
       closedIssues: search(type: ISSUE, query: $closedQuery, first: 50) {
+        issueCount
         nodes {
           ... on Issue {
             number title url state updatedAt
@@ -378,6 +379,7 @@ public struct GitHubTaskBackend: TaskBackend {
         }
       }
       closedIssues: search(type: ISSUE, query: $closedQuery, first: 50) {
+        issueCount
         nodes {
           ... on Issue {
             number title url state updatedAt
@@ -409,8 +411,12 @@ public struct GitHubTaskBackend: TaskBackend {
             dateFormatter: dateFmt,
             projectStatusOverride: .done
         )
+        // Total matches in the 24h window — `nodes` is capped at `first: 50`,
+        // so the badge count must come from the search connection's
+        // `issueCount` or it saturates at 50 (#562).
+        let closedTotal = (dataObj["closedIssues"] as? [String: Any])?["issueCount"] as? Int
         let rate = parseRateLimit(dataObj["rateLimit"] as? [String: Any])
-        return AssignedListing(open: open, closed: closed, rateLimit: rate, missingScope: missingScope)
+        return AssignedListing(open: open, closed: closed, closedTotalCount: closedTotal, rateLimit: rate, missingScope: missingScope)
     }
 
     /// Recover the accessible-org issues GitHub returned alongside a SAML

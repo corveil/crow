@@ -213,6 +213,11 @@ public struct PRMetadata: Sendable {
 public struct AssignedListing: Sendable {
     public let open: [AssignedIssue]
     public let closed: [AssignedIssue]
+    /// Total recently-closed matches, independent of the page cap on `closed`
+    /// (GitHub's `search` fetches at most 50 nodes but reports the full
+    /// `issueCount`). Falls back to `closed.count` when the backend doesn't
+    /// report a total, so it's always safe to badge from.
+    public let closedTotalCount: Int
     /// GitHub-only; nil for GitLab.
     public let rateLimit: GitHubRateLimit?
     /// When non-nil, the backend completed the call but had to degrade the
@@ -230,12 +235,14 @@ public struct AssignedListing: Sendable {
     public init(
         open: [AssignedIssue],
         closed: [AssignedIssue],
+        closedTotalCount: Int? = nil,
         rateLimit: GitHubRateLimit? = nil,
         missingScope: String? = nil,
         samlRestricted: Bool = false
     ) {
         self.open = open
         self.closed = closed
+        self.closedTotalCount = closedTotalCount ?? closed.count
         self.rateLimit = rateLimit
         self.missingScope = missingScope
         self.samlRestricted = samlRestricted
