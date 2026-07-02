@@ -324,7 +324,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let hostingView = NSHostingView(rootView: wizardView)
-        let window = NSWindow(
+        let window = NoTouchBarWindow(
             contentRect: NSRect(x: 0, y: 0, width: 520, height: 420),
             styleMask: [.titled, .closable],
             backing: .buffered,
@@ -1009,7 +1009,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Close wizard window if it exists, create main window
         window?.close()
 
-        let mainWindow = NSWindow(
+        let mainWindow = NoTouchBarWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1200, height: 800),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
@@ -1159,7 +1159,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let hostingView = NSHostingView(rootView: AboutView())
-        let win = NSWindow(
+        let win = NoTouchBarWindow(
             contentRect: NSRect(x: 0, y: 0, width: 320, height: 380),
             styleMask: [.titled, .closable],
             backing: .buffered,
@@ -1229,7 +1229,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         let hostingView = NSHostingView(rootView: settingsView)
-        let win = NSWindow(
+        let win = NoTouchBarWindow(
             contentRect: NSRect(x: 0, y: 0, width: 720, height: 480),
             styleMask: [.titled, .closable],
             backing: .buffered,
