@@ -5,14 +5,8 @@ This guide walks you from a fresh clone to a running Crow app with GitHub (or Gi
 ## 1. Clone the Repository
 
 ```bash
-git clone --recurse-submodules https://github.com/radiusmethod/crow.git
+git clone https://github.com/radiusmethod/crow.git
 cd crow
-```
-
-If you already cloned without `--recurse-submodules`:
-
-```bash
-git submodule update --init vendor/ghostty
 ```
 
 ## 2. Build
@@ -23,7 +17,7 @@ The one-shot build path uses the Makefile:
 make build
 ```
 
-This runs `setup` (initializes submodules and checks prerequisites), `ghostty` (builds the `GhosttyKit` XCFramework with Zig), and `app` (runs `swift build`). The result is two binaries in `.build/debug/`:
+This runs `setup` (checks Xcode Command Line Tools) and `app` (`swift build`). The result is two binaries in `.build/debug/`:
 
 - `CrowApp` — the main macOS application
 - `crow` — the CLI used by Claude Code sessions
@@ -32,34 +26,28 @@ This runs `setup` (initializes submodules and checks prerequisites), `ghostty` (
 
 | Target       | Purpose                                                                       |
 | ------------ | ----------------------------------------------------------------------------- |
-| `build`      | Full build: submodules + ghostty + `swift build` (default)                    |
-| `setup`      | Init submodules and verify build prerequisites (Zig 0.15.2, Metal toolchain)  |
-| `check`      | Verify all build and runtime prerequisites (includes `gh`, `claude`)          |
-| `ghostty`    | Build the `GhosttyKit.xcframework` only                                       |
-| `app`        | Run `swift build` (debug) without touching ghostty                            |
-| `release`    | Release build + `.app` bundle via `scripts/bundle.sh`                         |
-| `sign`       | Sign, create DMG, and notarize (requires `DEVELOPER_ID_APPLICATION`)          |
+| `build`      | Full build: prerequisites + `swift build` (default)                           |
+| `setup`      | Verify build prerequisites (Xcode CLT)                                        |
+| `check`      | Verify all build and runtime prerequisites (includes `gh`, `claude`, `tmux`)  |
+| `app`        | Run `swift build` (debug)                                                     |
+| `release`    | Universal release build + `.app` bundle via `scripts/bundle.sh`               |
+| `sign`       | Sign, create DMG, and notarize (requires `DEVELOPER_ID_APPLICATION`)         |
 | `install`    | Symlink `crow` + `CrowApp` into `~/.local/bin` (override `BINDIR=`, `CONFIG=`) |
 | `install-app`| Copy `Crow.app` into `/Applications` (run `make release` first)               |
 | `uninstall`  | Remove the `crow` + `CrowApp` symlinks created by `install`                   |
 | `test`       | Run all package tests                                                         |
-| `clean`      | Remove `.build/` (keeps the ghostty framework)                                |
-| `clean-all`  | Remove `.build/` and `Frameworks/` (full rebuild)                             |
+| `clean`      | Remove `.build/`                                                              |
+| `clean-all`  | Remove `.build/` and `Crow.app`                                               |
 | `help`       | Print the target list                                                         |
 
 ### Advanced / Manual Build
 
-If you need finer-grained control, you can run the individual steps that `make build` orchestrates:
-
 ```bash
-# Build the Ghostty framework only (writes Frameworks/GhosttyKit.xcframework)
-./scripts/build-ghostty.sh
-
-# Debug build
+# Debug build (native architecture)
 swift build
 
-# Release build
-swift build -c release
+# Universal release build (arm64 + x86_64)
+swift build -c release --arch arm64 --arch x86_64
 
 # Create the .app bundle from a release build
 ./scripts/bundle.sh
@@ -70,10 +58,8 @@ swift build -c release
 
 **Build troubleshooting:**
 
-- Check Zig: `zig version` must show `0.15.2`
-- Check Metal toolchain: `xcrun -sdk macosx metal --version`
-- Install the Metal toolchain if missing: `xcodebuild -downloadComponent MetalToolchain`
-- If `swift build` fails with linker errors, run `./scripts/build-ghostty.sh` first (or just `make build`)
+- Ensure Xcode CLT: `xcode-select -p`
+- Verify a universal release binary: `lipo -info .build/release/CrowApp` should list both `arm64` and `x86_64`
 
 ### Using mise (Optional)
 
@@ -83,8 +69,7 @@ If you have [`mise`](https://mise.jdx.dev) installed, the predefined tasks in `m
 | --------------------- | ------------------------------------------ |
 | `mise dev`            | `swift run CrowApp`                        |
 | `mise build`          | `make build` (full build)                  |
-| `mise build:release`  | `swift build -c release`                   |
-| `mise build:ghostty`  | `bash scripts/build-ghostty.sh`            |
+| `mise build:release`  | Universal `swift build -c release`         |
 | `mise test`           | `swift test`                               |
 | `mise bundle`         | `bash scripts/bundle.sh`                   |
 | `mise sign`           | Depends on `bundle`, then sign + notarize  |

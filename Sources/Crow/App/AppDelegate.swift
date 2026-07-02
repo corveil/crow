@@ -308,7 +308,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 NSWorkspace.shared.open(url)
             }
         default:
-            break // Continue with Ghostty
+            break // Continue without tmux
         }
     }
 
@@ -415,17 +415,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSLog("[Crow] OpenCode agent registered at %@", openCodePath)
         }
 
-        // Initialize libghostty
-        NSLog("[Crow] Initializing Ghostty")
-        GhosttyApp.shared.initialize()
+        // Initialize terminal backend (xterm.js + tmux attach).
+        // Manager process-exit banner is not wired for the shared attach client yet (#558).
+        NSLog("[Crow] Terminal backend ready (xterm.js + tmux)")
 
         NSLog("[Crow] Config loaded (workspaces: %d)", config.workspaces.count)
 
         // Configure the tmux backend (#198 → defaulted-on in #301 → the only
         // backend since #303). tmux ≥ 3.3 is required for managed terminals;
         // if none is found we log a warning and surface the first-run
-        // onboarding sheet — there is no longer a per-terminal Ghostty
-        // fallback, so terminals won't render until tmux is installed.
+        // onboarding sheet — terminals won't render until tmux is installed.
         //
         // First reap any *legacy* per-PID tmux sockets left by pre-#330 builds
         // (`$TMPDIR/crow-tmux-<pid>.sock` whose owning CrowApp is gone). The
@@ -604,17 +603,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Ensure manager session exists
         service.ensureManagerSession(devRoot: devRoot)
 
-        // Detect a dead Manager process: Ghostty fires SHOW_CHILD_EXITED when a
-        // surface's child exits. If it's the Manager terminal, surface the
-        // "Manager process exited" banner so the user can restart it in place.
-        GhosttyApp.shared.onChildExited = { [weak self] terminalID, _ in
-            guard let self else { return }
-            let managerID = AppState.managerSessionID
-            if self.appState.terminals(for: managerID).contains(where: { $0.id == terminalID }) {
-                NSLog("[Crow] Manager process exited (terminal %@)", terminalID.uuidString)
-                self.appState.managerProcessExited = true
-            }
-        }
+        // Manager process exit detection is not wired for the shared tmux
+        // attach client (cockpit surface). Manager shells run inside tmux
+        // windows, not as the attach process child.
 
         // Wire closures for UI actions
         appState.onDeleteSession = { [weak self, weak service] id in
@@ -697,8 +688,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self, let managerTerminals = self.appState.terminals[AppState.managerSessionID],
                   let managerTerminal = managerTerminals.first else { return }
             // Type the /crow-workspace command into the Manager terminal.
-            // Route through TerminalRouter so it reaches the Manager regardless
-            // of backend (Ghostty or tmux, #314).
+            // Route through TerminalRouter (#314).
             TerminalRouter.send(managerTerminal, text: "/crow-workspace \(issueURL)\n")
             // Switch to Manager tab
             self.appState.selectedSessionID = AppState.managerSessionID
@@ -709,8 +699,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self, let managerTerminals = self.appState.terminals[AppState.managerSessionID],
                   let managerTerminal = managerTerminals.first else { return }
             let urls = issueURLs.joined(separator: " ")
-            // Route through TerminalRouter so it reaches the Manager regardless
-            // of backend (Ghostty or tmux, #314).
+            // Route through TerminalRouter (#314).
             TerminalRouter.send(managerTerminal, text: "/crow-batch-workspace \(urls)\n")
             self.appState.selectedSessionID = AppState.managerSessionID
         }
@@ -1117,11 +1106,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appMenuItem.submenu = appMenu
         mainMenu.addItem(appMenuItem)
 
-        // Edit menu — registers the standard cut/copy/paste/select-all/undo
-        // selectors on the responder chain so ⌘V and dictation work in SwiftUI
-        // text fields (Settings). Routed to the first responder (target nil).
-        // The terminal is unaffected: GhosttySurfaceView.performKeyEquivalent
-        // intercepts ⌘V/⌘C at the view level before the main menu sees them. (#512)
+        // The terminal uses xterm.js in WKWebView; copy/paste is handled by
+        // WebKit/tmux mouse bindings. ⌘F is intercepted in XTermSurfaceView.
+        // Edit menu selectors below apply to SwiftUI text fields (Settings). (#512)
         let editMenuItem = NSMenuItem()
         let editMenu = NSMenu(title: "Edit")
         editMenu.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
@@ -2063,7 +2050,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         socketServer?.stop()
         // Release the single-instance lock as early as possible so a fast
         // quit→relaunch doesn't hit a spurious "Crow is already running" while
-        // the slower Ghostty/tmux teardown below finishes (flock would release
+        // the slower tmux teardown below finishes (flock would release
         // on exit anyway; explicit + early is best).
         if instanceLockFD >= 0 {
             close(instanceLockFD)
@@ -2073,7 +2060,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // existing sessions (#330). The crash-watchdog's "Restart tmux server"
         // path still tears it down via the default `shutdown()`.
         TmuxBackend.shared.shutdown(killServer: false)
-        GhosttyApp.shared.shutdown()
         NSLog("[Crow] Cleanup complete")
     }
 

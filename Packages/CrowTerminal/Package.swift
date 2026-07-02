@@ -14,28 +14,16 @@ let package = Package(
         .target(
             name: "CrowTerminal",
             dependencies: [
-                "GhosttyKit",
                 .product(name: "CrowCore", package: "CrowCore"),
             ],
             resources: [
                 .copy("Resources/crow-shell-wrapper.sh"),
                 .copy("Resources/crow-tmux.conf"),
-            ],
-            swiftSettings: [
-                .unsafeFlags(["-I../../Frameworks/GhosttyKit.xcframework/macos-arm64/Headers"]),
+                .copy("Resources/xterm"),
             ],
             linkerSettings: [
-                .linkedFramework("Carbon"),
-                .linkedFramework("Metal"),
-                .linkedFramework("QuartzCore"),
-                .linkedFramework("CoreText"),
-                .linkedFramework("IOSurface"),
-                .linkedLibrary("c++"),
+                .linkedFramework("WebKit"),
             ]
-        ),
-        .binaryTarget(
-            name: "GhosttyKit",
-            path: "../../Frameworks/GhosttyKit.xcframework"
         ),
         .testTarget(
             name: "CrowTerminalTests",

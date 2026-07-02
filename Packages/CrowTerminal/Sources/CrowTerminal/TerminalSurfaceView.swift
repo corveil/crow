@@ -1,11 +1,10 @@
 import SwiftUI
 import AppKit
 import CrowCore
-import GhosttyKit
 
-/// SwiftUI wrapper that reuses the shared tmux cockpit `GhosttySurfaceView`.
+/// SwiftUI wrapper that reuses the shared tmux cockpit `XTermSurfaceView`.
 ///
-/// All visible-tab views share the same `GhosttySurfaceView` from
+/// All visible-tab views share the same `XTermSurfaceView` from
 /// `TmuxBackend.shared.cockpitSurface()` (#198 → only backend since #303).
 /// Switching tabs re-parents the same NSView and fires
 /// `TmuxBackend.shared.makeActive(id:)` so the attached tmux client jumps
@@ -32,7 +31,7 @@ public struct TerminalSurfaceView: NSViewRepresentable {
         let container = NSView()
         // Attach the shared cockpit surface on the NEXT run-loop turn, never
         // synchronously here. Both `cockpitSurface()` (→ `ensureRunningServer`,
-        // a blocking tmux subprocess) and `ghostty_surface_new()` pump the main
+        // a blocking tmux subprocess) and WKWebView setup can pump the main
         // run loop while they wait. NSHostingView builds this representable
         // *inside* the main window's first synchronous layout (the
         // `window.contentView = hostingView` assignment in AppDelegate), so
@@ -65,12 +64,9 @@ public struct TerminalSurfaceView: NSViewRepresentable {
         DispatchQueue.main.async {
             guard let surface = Self.cockpitSurface() else { return }
             if surface.superview !== container {
-                // addSubview re-parents atomically — no need for an explicit
-                // removeFromSuperview, which would trigger an extra
-                // viewDidMoveToWindow(nil) round-trip and a redundant
-                // ghostty_surface_set_focus(false) on the shared surface.
                 Self.attach(surface: surface, to: container)
             }
+            surface.createSurface()
             try? TmuxBackend.shared.makeActive(id: id)
             if let window = container.window,
                surface.window === window,
@@ -85,7 +81,7 @@ public struct TerminalSurfaceView: NSViewRepresentable {
     /// on autolayout to drive subsequent `setFrameSize` calls — manual
     /// `setFrameSize` here races with autolayout and is unnecessary.
     @MainActor
-    private static func attach(surface: GhosttySurfaceView, to container: NSView) {
+    private static func attach(surface: XTermSurfaceView, to container: NSView) {
         container.addSubview(surface)
         surface.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
@@ -110,7 +106,7 @@ public struct TerminalSurfaceView: NSViewRepresentable {
     }
 
     @MainActor
-    private static func cockpitSurface() -> GhosttySurfaceView? {
+    private static func cockpitSurface() -> XTermSurfaceView? {
         // The cockpit surface is created lazily on first call; subsequent
         // call sites (other tabs) get the same NSView. Returns nil when tmux
         // is unavailable so the container renders blank instead of crashing.

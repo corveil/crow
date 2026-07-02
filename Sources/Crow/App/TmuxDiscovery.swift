@@ -6,7 +6,7 @@ import Foundation
 ///
 /// Crow needs tmux ≥ 3.3 because:
 ///   - `allow-passthrough on` (the option that lets DCS-tmux-wrapped OSC
-///     sequences from `crow-shell-wrapper.sh` reach the embedded Ghostty)
+///     sequences from `crow-shell-wrapper.sh` reach the embedded xterm.js surface)
 ///     was added in 3.3.
 ///   - `new-window -P -F` (used by `TmuxController.newWindow` to print
 ///     the new window index) is older but the print syntax stabilized in

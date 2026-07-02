@@ -8,39 +8,26 @@ concurrency:
   group: cache-warm-${{ github.ref }}
   cancel-in-progress: false
 
-env:
-  ZIG_VERSION: '0.15.2'
-
 jobs:
-  warm-ghostty:
-    name: Warm Ghostty Cache
+  warm-build:
+    name: Warm Swift Build Cache
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: true
 
       - uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: "16"
 
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: ${{ env.ZIG_VERSION }}
-
-      - name: Get Ghostty submodule SHA
-        id: ghostty-sha
-        run: echo "sha=$(git -C vendor/ghostty rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
-      - name: Cache Ghostty framework
-        id: ghostty-cache
+      - name: Cache SwiftPM
         uses: actions/cache@v4
         with:
-          path: Frameworks
-          key: ghostty-${{ runner.os }}-${{ runner.arch }}-${{ steps.ghostty-sha.outputs.sha }}
+          path: |
+            .build
+            ~/Library/Caches/org.swift.swiftpm
+          key: swift-build-${{ runner.os }}-${{ hashFiles('Package.swift', 'Packages/**/Package.swift') }}
 
-      - name: Build Ghostty
-        if: steps.ghostty-cache.outputs.cache-hit != 'true'
+      - name: Build
         run: |
-          unset ZIG_LOCAL_CACHE_DIR ZIG_GLOBAL_CACHE_DIR
-          make ghostty
+          bash scripts/generate-build-info.sh
+          swift build

@@ -2,15 +2,14 @@
 # Bundle Crow into a .app
 #
 # Usage: bash scripts/bundle.sh  (or: make release)
-# Prerequisites: GhosttyKit.xcframework must be built first (run: make ghostty)
 # Output: Crow.app/ in the repo root
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 BUILD_DIR="$ROOT_DIR/.build/release"
+APPLE_RELEASE_DIR="$ROOT_DIR/.build/apple/Products/Release"
 APP_DIR="$ROOT_DIR/Crow.app"
-FRAMEWORKS_DIR="$ROOT_DIR/Frameworks"
 
 # Read version: CROW_VERSION env var takes precedence, then VERSION file
 if [ -n "${CROW_VERSION:-}" ]; then
@@ -32,12 +31,14 @@ fi
 echo "==> Generating build info..."
 bash "$SCRIPT_DIR/generate-build-info.sh"
 
-echo "==> Building release..."
-cd "$ROOT_DIR"
-swift build -c release
+echo "==> Building release (universal: arm64 + x86_64)..."
+swift build -c release --arch arm64 --arch x86_64
 
-if [ ! -f "$BUILD_DIR/CrowApp" ]; then
-    echo "ERROR: Release binary not found at $BUILD_DIR/CrowApp"
+# Dual-arch builds land under .build/apple/Products/Release; single-arch under .build/release.
+if [ -f "$APPLE_RELEASE_DIR/CrowApp" ]; then
+    BUILD_DIR="$APPLE_RELEASE_DIR"
+elif [ ! -f "$BUILD_DIR/CrowApp" ]; then
+    echo "ERROR: Release binary not found at $BUILD_DIR/CrowApp or $APPLE_RELEASE_DIR/CrowApp"
     exit 1
 fi
 
@@ -54,12 +55,6 @@ mkdir -p "$APP_DIR/Contents/Resources"
 # Copy binaries
 cp "$BUILD_DIR/CrowApp" "$APP_DIR/Contents/MacOS/"
 cp "$BUILD_DIR/crow" "$APP_DIR/Contents/MacOS/"
-
-# Copy Ghostty resources if available
-if [ -d "$FRAMEWORKS_DIR/ghostty-resources" ]; then
-    cp -R "$FRAMEWORKS_DIR/ghostty-resources" "$APP_DIR/Contents/Resources/ghostty"
-    echo "    Bundled Ghostty resources"
-fi
 
 # Copy template resources for Scaffolder (CLAUDE.md, SKILL.md, setup.sh, settings)
 for f in "$ROOT_DIR"/Resources/*.template; do

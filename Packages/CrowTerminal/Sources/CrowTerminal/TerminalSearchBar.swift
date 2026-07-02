@@ -181,7 +181,7 @@ public final class TerminalSearchBar: NSView, NSSearchFieldDelegate {
 }
 
 public extension Notification.Name {
-    /// Posted by `GhosttySurfaceView` when the user hits Cmd+F. Observed
+    /// Posted by the terminal surface when the user hits Cmd+F. Observed
     /// by `TerminalSearchBar` to show itself.
     static let terminalBeginSearch = Notification.Name("com.crow.terminal.beginSearch")
 }

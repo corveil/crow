@@ -15,10 +15,6 @@ Sources/CrowCLI/Generated/
 *.dmg
 *.p12
 
-# Frameworks (built locally)
-Frameworks/GhosttyKit.xcframework/
-Frameworks/ghostty-resources/
-
 # IDE
 .swiftpm/
 .idea/

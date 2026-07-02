@@ -60,8 +60,8 @@ public enum AgentActivityState: String, Codable, Sendable {
 /// Terminal surface lifecycle state.
 public enum TerminalReadiness: String, Codable, Sendable, Comparable {
     case failed           // createSurface() exhausted retries; UI shows error overlay with Retry
-    case uninitialized    // GhosttySurfaceView exists but createSurface() not called
-    case surfaceCreated   // ghostty_surface_t exists, shell process spawning
+    case uninitialized    // Surface exists but createSurface() not called
+    case surfaceCreated   // Web surface loaded, shell process spawning
     case timedOut         // Sentinel never appeared within the readiness budget; UI shows Retry
     case shellReady       // Shell prompt detected (probe file appeared)
     case agentLaunched    // Agent launch command has been sent

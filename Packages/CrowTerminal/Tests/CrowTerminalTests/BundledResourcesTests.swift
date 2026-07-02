@@ -27,14 +27,14 @@ struct BundledResourcesTests {
     @Test func tmuxConfHasPassthroughOn() throws {
         // allow-passthrough on must be set at server start (Phase 2a §4
         // finding from #198). Without this, OSC sequences from the wrapper
-        // are consumed by tmux's emulator and never reach Ghostty.
+        // are consumed by tmux's emulator and never reach the xterm.js surface.
         let url = try #require(BundledResources.tmuxConfURL)
         let body = try String(contentsOf: url, encoding: .utf8)
         #expect(body.contains("allow-passthrough on"))
     }
 
     @Test func tmuxConfDisablesStatusBar() throws {
-        // Status bar steals one cell row from the Ghostty surface; Crow
+        // Status bar steals one cell row from the terminal surface; Crow
         // has its own session UI, so we hide tmux's.
         let url = try #require(BundledResources.tmuxConfURL)
         let body = try String(contentsOf: url, encoding: .utf8)

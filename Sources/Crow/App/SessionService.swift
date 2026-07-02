@@ -184,8 +184,8 @@ final class SessionService {
             appState.terminals[session.id] = terminals
 
             // Pre-create terminalReadiness slots for managed work session
-            // terminals so the readiness callbacks (Ghostty's surfaceCreated
-            // and tmux's onReadinessChanged) have something to update. The
+            // terminals so the readiness callbacks (surfaceCreated and
+            // tmux's onReadinessChanged) have something to update. The
             // actual trackReadiness/registerTerminal call happens in
             // rehydrateTerminalSurface below.
             if !session.isManager {
@@ -713,7 +713,7 @@ final class SessionService {
     /// (crash, kill, OOM). The Manager session row and `AppState.managerSessionID`
     /// are preserved — only the dead terminal/surface is torn down and replaced.
     ///
-    /// Tears down the existing Ghostty surface, drops the stale terminal row from
+    /// Tears down the existing terminal surface, drops the stale terminal row from
     /// both memory and disk, clears the exited flag, then re-runs
     /// `ensureManagerSession` which recreates a fresh Manager terminal (new
     /// terminal UUID) using the current remote-control / auto-permission args.
@@ -881,7 +881,7 @@ final class SessionService {
     /// Create the single agent terminal for a Manager session and persist
     /// it. Routes through the same backend-selection path as work sessions
     /// (#314): on tmux this registers a window and pastes the agent command
-    /// into it; on Ghostty it pre-initializes the offscreen surface.
+    /// into it via the shared xterm.js cockpit surface.
     /// `trackReadiness: false` matches the Manager's command-launches-agent
     /// model — no readiness/launchClaude flow.
     @discardableResult
@@ -1502,10 +1502,9 @@ final class SessionService {
         store.mutate { data in data.terminals.removeAll { $0.id == terminalID } }
 
         // Defer the backing destroy so SwiftUI's render pass detaches the
-        // GhosttySurfaceView from the view hierarchy before we free its
-        // underlying `ghostty_surface_t` (or kill the tmux window). Freeing
-        // it while AppKit still holds the view risks a Metal/input callback
-        // landing on a dangling pointer (issue #282).
+        // terminal surface from the view hierarchy before we kill the tmux
+        // window. Destroying while AppKit still holds the view risks a
+        // WebKit callback landing on a freed surface (issue #282).
         //
         // Note: single-tick defer is a conservative first attempt. Neither
         // Combine nor DispatchQueue strictly guarantee ordering against the

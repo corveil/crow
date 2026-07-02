@@ -3,8 +3,8 @@ import Testing
 @testable import CrowCore
 @testable import CrowTerminal
 
-/// Integration tests for `TmuxBackend`'s tmux-side logic. The Ghostty
-/// surface side (`cockpitSurface()`) requires a real NSWindow and is
+/// Integration tests for `TmuxBackend`'s tmux-side logic. The xterm.js
+/// surface side (`cockpitSurface()`) requires a visible NSWindow and is
 /// covered separately by the visual demo path. Skipped automatically
 /// when no tmux binary is present on the host.
 @MainActor

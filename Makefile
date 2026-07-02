@@ -1,8 +1,4 @@
-.PHONY: build setup ghostty app release sign install install-app uninstall clean clean-all check test help
-
-FRAMEWORKS_DIR := Frameworks
-XCFW := $(FRAMEWORKS_DIR)/GhosttyKit.xcframework
-SUBMODULE_MARKER := vendor/ghostty/build.zig
+.PHONY: build setup app release sign install install-app uninstall clean clean-all check test help
 
 # Install destination and build config (override on the command line, e.g.
 # `make install BINDIR=/usr/local/bin` or `make install CONFIG=release`).
@@ -12,64 +8,41 @@ CONFIG    ?= debug
 BUILD_OUT := .build/$(CONFIG)
 
 # Default target
-build: setup ghostty app
+build: setup app
 
 help:
 	@echo "Usage: make [target]"
 	@echo ""
 	@echo "Targets:"
-	@echo "  build      Full build: submodules + ghostty + swift build (default)"
-	@echo "  setup      Init submodules and check build prerequisites"
+	@echo "  build      Full build: check prerequisites + swift build (default)"
+	@echo "  setup      Check build prerequisites"
 	@echo "  check      Verify all build and runtime prerequisites"
 	@echo "  test       Run all package tests"
-	@echo "  ghostty    Build GhosttyKit framework"
 	@echo "  app        Swift build only (debug)"
 	@echo "  release    Release build + .app bundle"
 	@echo "  sign       Sign, create DMG, and notarize (requires DEVELOPER_ID_APPLICATION)"
 	@echo "  install    Symlink crow + CrowApp into ~/.local/bin (override BINDIR=, CONFIG=release)"
 	@echo "  install-app Copy Crow.app into /Applications (run 'make release' first)"
 	@echo "  uninstall  Remove installed crow + CrowApp symlinks"
-	@echo "  clean      Remove .build/ (keeps ghostty framework)"
-	@echo "  clean-all  Remove .build/ and Frameworks/ (full rebuild)"
+	@echo "  clean      Remove .build/"
+	@echo "  clean-all  Remove .build/ and Crow.app"
 	@echo ""
-	@echo "Prerequisites: Zig 0.15.2, Xcode with Metal Toolchain"
+	@echo "Prerequisites: Xcode with Command Line Tools"
 
-# --- Setup ---
-
-$(SUBMODULE_MARKER):
-	git submodule update --init --recursive
-
-setup: $(SUBMODULE_MARKER)
-	@command -v zig >/dev/null 2>&1 || { echo "ERROR: zig not found. Install with: brew install zig@0.15"; exit 1; }
-	@ZIG_VER=$$(zig version); \
-	if [ "$$ZIG_VER" != "0.15.2" ]; then \
-		echo "ERROR: Zig 0.15.2 required, found: $$ZIG_VER. Install with: brew install zig@0.15"; \
-		exit 1; \
-	fi
-	@xcrun -sdk macosx metal --version >/dev/null 2>&1 || { echo "ERROR: Metal Toolchain not installed. Run: xcodebuild -downloadComponent MetalToolchain"; exit 1; }
+setup:
+	@xcode-select -p >/dev/null 2>&1 || { echo "ERROR: Xcode Command Line Tools not installed. Run: xcode-select --install"; exit 1; }
 	@echo "Prerequisites OK"
 
-# --- Ghostty ---
-
-$(XCFW): $(SUBMODULE_MARKER)
-	bash scripts/build-ghostty.sh
-
-ghostty: setup $(XCFW)
-
-# --- App ---
-
-app: $(XCFW)
+app:
 	bash scripts/generate-build-info.sh
-	swift build
+	swift build $(if $(filter release,$(CONFIG)),-c release,)
 
-release: $(XCFW)
+release:
 	bash scripts/generate-build-info.sh
 	bash scripts/bundle.sh
 
 sign: release
 	bash scripts/sign-and-notarize.sh
-
-# --- Install ---
 
 install:
 	@test -x "$(CURDIR)/$(BUILD_OUT)/crow" && test -x "$(CURDIR)/$(BUILD_OUT)/CrowApp" || \
@@ -91,9 +64,7 @@ uninstall:
 	@rm -f "$(BINDIR)/crow" "$(BINDIR)/CrowApp"
 	@echo "Removed crow + CrowApp symlinks from $(BINDIR)"
 
-# --- Test ---
-
-test: $(XCFW)
+test:
 	@for pkg in Packages/*/; do \
 		if [ -d "$$pkg/Tests" ]; then \
 			echo "==> Testing $$(basename $$pkg)..."; \
@@ -103,17 +74,14 @@ test: $(XCFW)
 	@echo "==> Testing root package (CrowTests)..."
 	@swift test
 
-# --- Clean ---
-
 clean:
 	rm -rf .build
 
 clean-all: clean
-	rm -rf $(FRAMEWORKS_DIR)
-
-# --- Check ---
+	rm -rf Crow.app
 
 check: setup
 	@command -v gh >/dev/null 2>&1 || echo "WARNING: gh (GitHub CLI) not found. Install with: brew install gh"
 	@command -v claude >/dev/null 2>&1 || echo "WARNING: claude (Claude Code) not found. Install from: https://claude.ai/download"
+	@command -v tmux >/dev/null 2>&1 || echo "WARNING: tmux not found. Install with: brew install tmux"
 	@echo "All checks complete."
