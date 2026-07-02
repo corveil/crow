@@ -114,10 +114,10 @@ import Testing
     #expect(decoded.lastReviewedHeadSha == "deadbeef")
 }
 
-@Test func sessionBackwardCompatDecodingPinned() throws {
-    // Persisted state.json predating CROW-569 has no `pinned`. Decode must
-    // succeed and default the field to false so legacy sessions remain
-    // eligible for normal auto-cleanup.
+@Test func sessionBackwardCompatDecodingLocked() throws {
+    // Persisted state.json predating CROW-569 has neither `locked` nor the
+    // legacy `pinned` key. Decode must succeed and default to false so legacy
+    // sessions remain eligible for normal auto-cleanup.
     let id = UUID()
     let date = Date()
     let formatter = ISO8601DateFormatter()
@@ -135,14 +135,39 @@ import Testing
     let decoder = JSONDecoder()
     decoder.dateDecodingStrategy = .iso8601
     let session = try decoder.decode(Session.self, from: data)
-    #expect(session.pinned == false)
+    #expect(session.locked == false)
 }
 
-@Test func sessionRoundTripsPinned() throws {
-    let session = Session(name: "pinned-job", kind: .job, pinned: true)
+@Test func sessionDecodesLegacyPinnedKeyAsLocked() throws {
+    // A session locked under CROW-569 was persisted with the `pinned` key.
+    // After the CROW-573 rename it must still decode as locked so users don't
+    // silently lose the protection on upgrade.
+    let id = UUID()
+    let date = Date()
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime]
+    let dateStr = formatter.string(from: date)
+    let json: [String: Any] = [
+        "id": id.uuidString,
+        "name": "legacy-pinned",
+        "status": "completed",
+        "kind": "job",
+        "createdAt": dateStr,
+        "updatedAt": dateStr,
+        "pinned": true,
+    ]
+    let data = try JSONSerialization.data(withJSONObject: json)
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+    let session = try decoder.decode(Session.self, from: data)
+    #expect(session.locked == true)
+}
+
+@Test func sessionRoundTripsLocked() throws {
+    let session = Session(name: "locked-job", kind: .job, locked: true)
     let data = try JSONEncoder().encode(session)
     let decoded = try JSONDecoder().decode(Session.self, from: data)
-    #expect(decoded.pinned == true)
+    #expect(decoded.locked == true)
 }
 
 @Test func sessionManagerKindRoundTrip() throws {
