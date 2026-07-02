@@ -154,6 +154,14 @@ public final class XTermSurfaceView: NSView {
         onSurfaceCreationFailed?()
     }
 
+    fileprivate func handleWebContentProcessTerminated() {
+        log("WebContent process terminated — reloading terminal UI")
+        isWebReady = false
+        pendingOutput.removeAll()
+        loadStarted = false
+        createSurface()
+    }
+
     fileprivate func handleJSError(_ message: String) {
         log("JS error: \(message)")
         onSurfaceCreationFailed?()
@@ -296,6 +304,18 @@ private final class MessageHandler: NSObject, WKScriptMessageHandler {
 private final class NavigationHandler: NSObject, WKNavigationDelegate {
     weak var owner: XTermSurfaceView?
 
+    func webView(
+        _ webView: WKWebView,
+        decidePolicyFor navigationAction: WKNavigationAction,
+        decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
+    ) {
+        if let url = navigationAction.request.url, url.isFileURL {
+            decisionHandler(.allow)
+        } else {
+            decisionHandler(.cancel)
+        }
+    }
+
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         Task { @MainActor in
             owner?.scheduleFit()
@@ -315,6 +335,12 @@ private final class NavigationHandler: NSObject, WKNavigationDelegate {
     ) {
         Task { @MainActor in
             owner?.handleLoadFailure(error.localizedDescription)
+        }
+    }
+
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        Task { @MainActor in
+            owner?.handleWebContentProcessTerminated()
         }
     }
 }
