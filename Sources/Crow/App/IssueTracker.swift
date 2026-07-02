@@ -1947,13 +1947,15 @@ final class IssueTracker {
 
     /// Decide whether `pr` is a candidate for auto-rebase. Pure so unit tests
     /// can exercise it without an `IssueTracker`. Unlike `shouldAttemptAutoMerge`
-    /// there is **no label requirement** and review state is irrelevant — a
-    /// rebase doesn't need approval. Returns true when the PR is OPEN, not a
-    /// draft, and either BEHIND its base or CONFLICTING. Crow-authorship and
-    /// per-head loop-safety are enforced by the caller.
+    /// there is **no label requirement**, and review state and draft-ness are
+    /// irrelevant — a rebase doesn't need approval, and the operation is a
+    /// rebase-onto-base + `--force-with-lease` on the session's own branch,
+    /// never a merge (drafts stay excluded from auto-merge by
+    /// `shouldAttemptAutoMerge`'s own guard). Returns true when the PR is OPEN
+    /// and either BEHIND its base or CONFLICTING. Crow-authorship and per-head
+    /// loop-safety are enforced by the caller.
     nonisolated static func shouldAttemptAutoRebase(pr: ViewerPR) -> Bool {
         guard pr.state == "OPEN" else { return false }
-        guard !pr.isDraft else { return false }
         return pr.mergeStateStatus == "BEHIND" || pr.mergeable == "CONFLICTING"
     }
 

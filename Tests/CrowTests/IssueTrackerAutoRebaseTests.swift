@@ -68,6 +68,19 @@ struct IssueTrackerAutoRebaseTests {
         #expect(IssueTracker.shouldAttemptAutoRebase(pr: pr))
     }
 
+    /// Draft-ness is irrelevant to a rebase (CROW-577): the operation only
+    /// rewrites the session's own branch, it never merges. A draft that has
+    /// fallen behind base is exactly the case the watcher should handle.
+    @Test func acceptsDraftBehindBase() {
+        let pr = makePR(mergeStateStatus: "BEHIND", isDraft: true)
+        #expect(IssueTracker.shouldAttemptAutoRebase(pr: pr))
+    }
+
+    @Test func acceptsDraftConflicting() {
+        let pr = makePR(mergeable: "CONFLICTING", mergeStateStatus: "DIRTY", isDraft: true)
+        #expect(IssueTracker.shouldAttemptAutoRebase(pr: pr))
+    }
+
     // MARK: - Rejects
 
     @Test func rejectsCleanMergeablePR() {
@@ -80,9 +93,18 @@ struct IssueTrackerAutoRebaseTests {
         #expect(!IssueTracker.shouldAttemptAutoRebase(pr: pr))
     }
 
-    @Test func rejectsDraft() {
-        let pr = makePR(mergeStateStatus: "BEHIND", isDraft: true)
-        #expect(!IssueTracker.shouldAttemptAutoRebase(pr: pr))
+    /// Regression (CROW-577): a draft that qualifies for auto-rebase must
+    /// still be excluded from the auto-merge path — `shouldAttemptAutoMerge`
+    /// keeps its own draft guard, so `shouldUpdateBranchBeforeMerge` stays
+    /// false and `applyAutoRebase`'s precedence branch can't hand a draft to
+    /// auto-merge. The `crow:merge` label is present so draft-ness is the
+    /// only thing blocking the merge path.
+    @Test func draftEligibleForRebaseIsStillExcludedFromMergePath() {
+        let pr = makePR(mergeStateStatus: "BEHIND", isDraft: true, labels: [Self.crowMergeLabel])
+        let session = Session(name: "feature-crow-42", kind: .work)
+        #expect(IssueTracker.shouldAttemptAutoRebase(pr: pr))
+        #expect(!IssueTracker.shouldAttemptAutoMerge(pr: pr, session: session))
+        #expect(!IssueTracker.shouldUpdateBranchBeforeMerge(pr: pr, session: session))
     }
 
     @Test func rejectsClosedPR() {
