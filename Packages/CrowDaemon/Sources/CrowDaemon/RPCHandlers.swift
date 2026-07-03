@@ -2,6 +2,7 @@ import CrowCore
 import CrowGit
 import CrowIPC
 import CrowPersistence
+import CrowTerminal
 import Foundation
 
 /// JSON-RPC errors thrown by the daemon's handlers, carrying the right
@@ -26,21 +27,27 @@ enum DaemonRPCError: Error, LocalizedError, RPCErrorCoded {
     }
 }
 
-/// Builds the daemon's `CommandRouter` with the M0 handler set
-/// (`new-session`, `list-sessions`, `add-worktree`). These mirror the
-/// corresponding closures in the macOS app's `AppDelegate.startSocketServer`,
-/// but operate purely on `AppState` + `JSONStore` (+ `GitManager`) with no
-/// AppKit or `SessionService` dependency, so the same domain logic runs on a
-/// headless Linux `crowd` (CROW-581).
+/// Builds the daemon's `CommandRouter`. Handlers mirror the corresponding
+/// closures in the macOS app's `AppDelegate.startSocketServer`, but operate
+/// purely on `AppState` + `JSONStore` (+ `GitManager` / the tmux `cockpit`)
+/// with no AppKit or `SessionService` dependency, so the same domain logic
+/// runs on a headless Linux `crowd` (CROW-581).
+///
+/// Method set:
+/// - M0: `new-session`, `list-sessions`, `add-worktree`.
+/// - M2 (web UI): expanded `list-sessions`, plus `list-terminals`,
+///   `new-terminal`, `close-terminal` (per-session tmux windows).
 ///
 /// `appState` is `@MainActor`-isolated; each handler hops to the main actor for
 /// the in-memory mutation exactly as the app does, keeping the persisted
-/// `store` and the observable `appState` in lockstep.
+/// `store` and the observable `appState` in lockstep. `cockpit` is nil when no
+/// tmux binary was found — terminal handlers then return an application error.
 func makeCommandRouter(
     appState: AppState,
     store: JSONStore,
     git: GitManager,
-    devRoot: String
+    devRoot: String,
+    cockpit: TerminalCockpit?
 ) -> CommandRouter {
     CommandRouter(handlers: [
         "new-session": { params in
@@ -72,16 +79,127 @@ func makeCommandRouter(
             }
         },
 
+        // Expanded for the web UI: enough per session to render the sidebar
+        // rows and the detail header (status/kind/agent/ticket + primary
+        // worktree). PR status, labels, and hook-activity state need RPC the
+        // daemon doesn't expose yet and are omitted.
         "list-sessions": { _ in
-            let sessions = await MainActor.run { appState.sessions }
-            let items: [JSONValue] = sessions.map { session in
-                .object([
-                    "id": .string(session.id.uuidString),
-                    "name": .string(session.name),
-                    "status": .string(session.status.rawValue),
-                ])
+            let items: [JSONValue] = await MainActor.run {
+                appState.sessions.map { session in
+                    var object: [String: JSONValue] = [
+                        "id": .string(session.id.uuidString),
+                        "name": .string(session.name),
+                        "status": .string(session.status.rawValue),
+                        "kind": .string(session.kind.rawValue),
+                        "agent_kind": .string(session.agentKind.rawValue),
+                        "agent_display_name": .string(CrowAttribution.agentDisplayName(for: session.agentKind)),
+                        "locked": .bool(session.locked),
+                        "auto_merge": .bool(session.autoMergeEnabledAt != nil),
+                        "ticket_title": session.ticketTitle.map { .string($0) } ?? .null,
+                        "ticket_url": session.ticketURL.map { .string($0) } ?? .null,
+                        "ticket_badge": session.ticketBadgeLabel.map { .string($0) } ?? .null,
+                        "provider": session.provider.map { .string($0.rawValue) } ?? .null,
+                    ]
+                    if let worktree = appState.primaryWorktree(for: session.id) {
+                        object["repo"] = .string(worktree.repoName)
+                        object["branch"] = .string(worktree.branch)
+                        object["worktree_path"] = .string(worktree.worktreePath)
+                    }
+                    return .object(object)
+                }
             }
             return ["sessions": .array(items)]
+        },
+
+        "list-terminals": { params in
+            guard let idStr = params["session_id"]?.stringValue, let sessionID = UUID(uuidString: idStr) else {
+                throw DaemonRPCError.invalidParams("session_id required")
+            }
+            let items: [JSONValue] = await MainActor.run {
+                appState.terminals(for: sessionID).map { terminal in
+                    .object([
+                        "id": .string(terminal.id.uuidString),
+                        "name": .string(terminal.name),
+                        "managed": .bool(terminal.isManaged),
+                        "window": terminal.tmuxBinding.map { .int($0.windowIndex) } ?? .null,
+                    ])
+                }
+            }
+            return ["terminals": .array(items)]
+        },
+
+        // Create a per-session terminal = a tmux window in the shared cockpit.
+        // Uses the portable `TmuxController.newWindow` directly (no @MainActor
+        // TmuxBackend); readiness/sentinel wiring is app-only and skipped.
+        // Terminals are in-memory for M2 (not persisted): a fresh cockpit has
+        // no windows on restart, so live-only avoids stale-index bugs.
+        "new-terminal": { params in
+            guard let idStr = params["session_id"]?.stringValue, let sessionID = UUID(uuidString: idStr) else {
+                throw DaemonRPCError.invalidParams("session_id required")
+            }
+            guard let cockpit else {
+                throw DaemonRPCError.applicationError("tmux unavailable; terminals are disabled")
+            }
+            let managed = params["managed"]?.boolValue ?? false
+            let resolved = await MainActor.run { () -> (exists: Bool, cwd: String, agentKind: AgentKind)? in
+                guard let session = appState.sessions.first(where: { $0.id == sessionID }) else { return nil }
+                let cwd = appState.primaryWorktree(for: sessionID)?.worktreePath ?? devRoot
+                return (true, cwd, session.agentKind)
+            }
+            guard let resolved else { throw DaemonRPCError.applicationError("Session not found") }
+            // Resolved cwd comes from a worktree already gated at add-worktree,
+            // or devRoot; re-check to stay defensive against tampered stores.
+            guard Validation.isPathWithinRoot(resolved.cwd, root: devRoot) else {
+                throw DaemonRPCError.invalidParams("resolved terminal cwd is outside devRoot")
+            }
+            let name = params["name"]?.stringValue
+                ?? (managed ? CrowAttribution.agentDisplayName(for: resolved.agentKind) : "Shell")
+            // Default to the session's default shell — a guaranteed-live window
+            // like the cockpit anchor. Wrapping in crow-shell-wrapper.sh (OSC
+            // readiness / agent auto-launch) is opt-in via an explicit command
+            // and deferred to a follow-up (it needs sentinel env to stay alive).
+            let command = params["command"]?.stringValue
+            var env: [String: String] = [:]
+            if !resolved.cwd.isEmpty { env["PWD"] = resolved.cwd }
+            if managed {
+                for (key, value) in CrowAttribution.environmentEntries(for: resolved.agentKind) { env[key] = value }
+            }
+            let windowIndex: Int
+            do {
+                windowIndex = try cockpit.controller.newWindow(
+                    name: name, cwd: resolved.cwd, env: env, command: command, timeout: 3.0)
+            } catch {
+                throw DaemonRPCError.applicationError("tmux new-window failed: \(error)")
+            }
+            let terminal = SessionTerminal(
+                sessionID: sessionID, name: name, cwd: resolved.cwd, command: command, isManaged: managed,
+                tmuxBinding: TmuxBinding(
+                    socketPath: cockpit.controller.socketPath,
+                    sessionName: TerminalCockpit.sessionName,
+                    windowIndex: windowIndex))
+            await MainActor.run { appState.terminals[sessionID, default: []].append(terminal) }
+            return [
+                "terminal_id": .string(terminal.id.uuidString),
+                "window": .int(windowIndex),
+                "name": .string(name),
+            ]
+        },
+
+        "close-terminal": { params in
+            guard let idStr = params["session_id"]?.stringValue, let sessionID = UUID(uuidString: idStr),
+                  let tidStr = params["terminal_id"]?.stringValue, let terminalID = UUID(uuidString: tidStr) else {
+                throw DaemonRPCError.invalidParams("session_id and terminal_id required")
+            }
+            let windowIndex: Int? = await MainActor.run {
+                let index = appState.terminals(for: sessionID)
+                    .first(where: { $0.id == terminalID })?.tmuxBinding?.windowIndex
+                appState.terminals[sessionID]?.removeAll { $0.id == terminalID }
+                return index
+            }
+            if let windowIndex, let cockpit {
+                cockpit.controller.killWindow(index: windowIndex)
+            }
+            return ["closed": .bool(true)]
         },
 
         "add-worktree": { params in

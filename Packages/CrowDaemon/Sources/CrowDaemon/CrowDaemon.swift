@@ -31,8 +31,17 @@ public enum CrowDaemon {
         let store = JSONStore()
         let git = GitManager()
         let appState = await seedAppState(from: store)
+
+        // Terminal cockpit (tmux). Optional — RPC still works without tmux, but
+        // the terminal handlers (new-terminal/close-terminal) and `/terminal`
+        // then return an error / are disabled.
+        let cockpit = TerminalCockpit(devRoot: options.devRoot)
+        if cockpit == nil {
+            log("WARNING: tmux not found; /terminal + terminal RPC disabled (set CROW_TMUX to override)")
+        }
+
         let commandRouter = makeCommandRouter(
-            appState: appState, store: store, git: git, devRoot: options.devRoot)
+            appState: appState, store: store, git: git, devRoot: options.devRoot, cockpit: cockpit)
 
         // Unix socket — lets the existing `crow` CLI talk to the daemon.
         let socketServer = SocketServer(socketPath: options.socketPath, router: commandRouter)
@@ -43,21 +52,15 @@ public enum CrowDaemon {
             log("WARNING: socket bind failed (\(error)); continuing with HTTP/WS only")
         }
 
-        // Terminal cockpit (tmux). Optional — RPC still works without tmux.
-        let cockpit = TerminalCockpit(devRoot: options.devRoot)
-        if cockpit == nil {
-            log("WARNING: tmux not found; /terminal disabled (set CROW_TMUX to override)")
-        }
-
         // WebSocket router: JSON-RPC at /rpc, terminal byte-stream at /terminal.
         let wsRouter = Router(context: BasicWebSocketRequestContext.self)
         RPCWebSocketHandler.mount(on: wsRouter, commandRouter: commandRouter)
         if let cockpit { TerminalWebSocket.mount(on: wsRouter, cockpit: cockpit) }
 
-        // HTTP router: terminal page, xterm assets, health.
+        // HTTP router: web UI, xterm assets, health.
         let httpRouter = Router()
         httpRouter.get("/health") { _, _ in "ok" }
-        StaticAssets.mount(on: httpRouter, indexHTML: loadIndexHTML())
+        StaticAssets.mount(on: httpRouter)
 
         let app = Application(
             router: httpRouter,
@@ -82,15 +85,6 @@ public enum CrowDaemon {
             appState.worktrees[session.id] = data.worktrees.filter { $0.sessionID == session.id }
         }
         return appState
-    }
-
-    private static func loadIndexHTML() -> ByteBuffer {
-        if let url = Bundle.module.url(
-            forResource: "terminal", withExtension: "html", subdirectory: "web"),
-            let data = try? Data(contentsOf: url) {
-            return ByteBuffer(bytes: data)
-        }
-        return ByteBuffer(string: "<!doctype html><title>crowd</title><p>terminal.html missing from bundle</p>")
     }
 
     private static func log(_ message: String) {

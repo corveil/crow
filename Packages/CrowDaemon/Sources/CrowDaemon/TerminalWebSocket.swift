@@ -6,9 +6,9 @@ import HummingbirdWebSocket
 import NIOCore
 
 /// Streams a PTY running `tmux attach-session` to xterm.js over a WebSocket
-/// (`/terminal`). Replaces the macOS WKWebView message bus with the same four
+/// (`/terminal`). Replaces the macOS WKWebView message bus with the same
 /// message types: raw PTY bytes out (binary frames), keystrokes in (binary
-/// frames), and a `{"type":"resize",...}` JSON control frame (CROW-581).
+/// frames), and JSON control frames — `resize` and `select-window` (CROW-581).
 enum TerminalWebSocket {
     static func mount(on router: Router<BasicWebSocketRequestContext>, cockpit: TerminalCockpit) {
         router.ws("/terminal") { request, _ in
@@ -50,20 +50,31 @@ enum TerminalWebSocket {
                 outputTask.cancel()
             }
 
-            // Inbound: binary = keystrokes → PTY; text = JSON control (resize).
+            // Inbound: binary = keystrokes → PTY; text = JSON control frame.
             for try await message in inbound.messages(maxSize: 1 << 20) {
                 switch message {
                 case .binary(let buffer):
                     pty.write(Data(buffer.readableBytesView))
                 case .text(let text):
                     guard let data = text.data(using: .utf8),
-                          let control = try? JSONDecoder().decode(TerminalControl.self, from: data),
-                          control.type == "resize" else { continue }
-                    // Floor at 1×1 so a zero/negative request can't drive a
-                    // degenerate tmux resize (CROW-581 review).
-                    pty.resize(
-                        rows: UInt16(clamping: max(1, control.rows ?? 24)),
-                        cols: UInt16(clamping: max(1, control.cols ?? 80)))
+                          let control = try? JSONDecoder().decode(TerminalControl.self, from: data) else { continue }
+                    switch control.type {
+                    case "resize":
+                        // Floor at 1×1 so a zero/negative request can't drive a
+                        // degenerate tmux resize (CROW-581 review).
+                        pty.resize(
+                            rows: UInt16(clamping: max(1, control.rows ?? 24)),
+                            cols: UInt16(clamping: max(1, control.cols ?? 80)))
+                    case "select-window":
+                        // Single shared cockpit: switch the attached client's
+                        // visible window in place, mirroring the desktop's
+                        // `makeActive` → `select-window` on tab switch.
+                        if let window = control.window {
+                            try? cockpit.controller.selectWindow(index: window)
+                        }
+                    default:
+                        break
+                    }
                 }
             }
         }
@@ -74,4 +85,5 @@ private struct TerminalControl: Decodable {
     let type: String
     let rows: Int?
     let cols: Int?
+    let window: Int?
 }
