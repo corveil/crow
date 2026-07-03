@@ -75,6 +75,11 @@ html, body {
 .session-row.selected { border-color: var(--gold); background: #262a2f; }
 .row-top { display: flex; align-items: center; gap: 7px; }
 .dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
+.dot.pulse { animation: crow-pulse 1.5s ease-in-out infinite; }
+@keyframes crow-pulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 currentColor; }
+  50% { opacity: 0.55; box-shadow: 0 0 0 3px transparent; }
+}
 .agent { color: var(--gold); font-size: 12px; }
 .name { color: var(--text-primary); font-weight: 600; font-size: 13px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lock { font-size: 10px; opacity: 0.7; }
@@ -82,7 +87,6 @@ html, body {
 .meta { color: var(--text-muted); font-size: 11px; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .badge {
   display: inline-block;
-  margin-top: 6px;
   padding: 2px 8px;
   border-radius: 10px;
   background: rgba(221, 196, 130, 0.14);
@@ -90,6 +94,8 @@ html, body {
   font-size: 10px;
   font-weight: 600;
 }
+.row-badges { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
+.activity-badge { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; }
 .empty { color: var(--text-muted); padding: 20px 6px; }
 
 /* ---- Detail ---- */
@@ -148,6 +154,8 @@ html, body {
 }
 .action-btn:hover { background: rgba(221, 196, 130, 0.12); }
 .action-btn:active { transform: translateY(1px); }
+.action-btn.action-danger { color: var(--red); border-color: rgba(255, 69, 58, 0.4); }
+.action-btn.action-danger:hover { background: rgba(255, 69, 58, 0.12); }
 #tabbar {
   display: flex;
   align-items: stretch;

@@ -98,13 +98,32 @@ function renderSidebar() {
   if (!shown) root.appendChild(el('div', 'empty', 'No sessions'));
 }
 
+// Sidebar status/activity indicator, mirroring the desktop: for active
+// sessions the dot is driven by hook activity (working / needs-attention /
+// done); otherwise by session status.
+function activityIndicator(s) {
+  if (s.status !== 'active') {
+    return { color: STATUS_COLOR[s.status] || 'var(--text-muted)' };
+  }
+  if (s.attention) {
+    return { color: 'var(--orange)', pulse: true, label: s.attention === 'question' ? 'Question' : 'Permission' };
+  }
+  switch (s.activity) {
+    case 'working': return { color: 'var(--green)', pulse: true, label: 'Working' };
+    case 'waiting': return { color: 'var(--orange)', pulse: true, label: 'Waiting' };
+    case 'done': return { color: 'var(--gold)', label: 'Done' };
+    default: return { color: 'var(--green)' };
+  }
+}
+
 function sessionRow(s) {
   const row = el('div', 'session-row' + (s.id === selectedId ? ' selected' : ''));
   row.onclick = () => selectSession(s.id);
+  const ind = activityIndicator(s);
 
   const top = el('div', 'row-top');
-  const dot = el('span', 'dot');
-  dot.style.background = STATUS_COLOR[s.status] || 'var(--text-muted)';
+  const dot = el('span', 'dot' + (ind.pulse ? ' pulse' : ''));
+  dot.style.background = ind.color;
   top.appendChild(dot);
   top.appendChild(el('span', 'agent', AGENT_GLYPH[s.agent_kind] || '•'));
   top.appendChild(el('span', 'name', s.name));
@@ -113,7 +132,15 @@ function sessionRow(s) {
 
   if (s.ticket_title) row.appendChild(el('div', 'subtle', s.ticket_title));
   if (s.repo) row.appendChild(el('div', 'meta', s.repo + (s.branch ? ' · ' + s.branch : '')));
-  if (s.ticket_badge) row.appendChild(el('span', 'badge', s.ticket_badge));
+
+  const badges = el('div', 'row-badges');
+  if (s.ticket_badge) badges.appendChild(el('span', 'badge', s.ticket_badge));
+  if (ind.label) {
+    const activity = el('span', 'activity-badge', ind.label);
+    activity.style.color = ind.color;
+    badges.appendChild(activity);
+  }
+  if (badges.children.length) row.appendChild(badges);
   return row;
 }
 
@@ -184,6 +211,11 @@ function renderHeader(s) {
     btn.onclick = () => setStatus(s.id, value);
     actions.appendChild(btn);
   }
+  if (s.kind !== 'manager') {
+    const del = el('button', 'action-btn action-danger', 'Delete');
+    del.onclick = () => deleteSession(s.id, s.name);
+    actions.appendChild(del);
+  }
   root.appendChild(actions);
 }
 
@@ -208,6 +240,23 @@ async function renameSession(id, current) {
     if (s) { s.name = name; renderSidebar(); if (id === selectedId) renderHeader(s); }
   } catch (e) {
     if (term) term.write('\r\n\x1b[31m[crow] rename failed: ' + (e.message || e) + '\x1b[0m\r\n');
+  }
+}
+
+async function deleteSession(id, name) {
+  if (!window.confirm('Delete session "' + name + '"? This removes its worktree and terminals.')) return;
+  try {
+    await rpc('delete-session', { session_id: id });
+    sessions = sessions.filter((x) => x.id !== id);
+    if (selectedId === id) {
+      selectedId = null;
+      document.getElementById('app').classList.remove('has-selection');
+      document.getElementById('detail-header').innerHTML = '';
+      document.getElementById('tabbar').innerHTML = '';
+    }
+    renderSidebar();
+  } catch (e) {
+    window.alert('Delete failed: ' + (e.message || e));
   }
 }
 

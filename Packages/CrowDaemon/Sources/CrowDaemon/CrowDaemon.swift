@@ -109,6 +109,15 @@ public enum CrowDaemon {
             appState.terminals[session.id] = data.terminals.filter { $0.sessionID == session.id }
             appState.links[session.id] = data.links.filter { $0.sessionID == session.id }
         }
+        // Restore persisted hook state so the sidebar can show activity dots
+        // (working / needs-attention / done), mirroring the desktop app.
+        if let hookStates = data.hookStates {
+            let liveIDs = Set(appState.sessions.map(\.id))
+            for (key, snapshot) in hookStates {
+                guard let sid = UUID(uuidString: key), liveIDs.contains(sid) else { continue }
+                appState.restoreHookState(snapshot, for: sid)
+            }
+        }
     }
 
     /// Poll `store.json`'s mtime and reload when the desktop app writes it, so

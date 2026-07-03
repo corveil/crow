@@ -133,6 +133,12 @@ func makeCommandRouter(
                             ])
                         })
                     }
+                    // Hook-driven activity (persisted) → sidebar dot parity.
+                    let hook = appState.hookState(for: session.id)
+                    object["activity"] = .string(hook.activityState.rawValue)
+                    if let notification = hook.pendingNotification {
+                        object["attention"] = .string(notification.notificationType)
+                    }
                     return .object(object)
                 }
             }
@@ -320,6 +326,21 @@ func makeCommandRouter(
                 }
                 return ["session_id": .string(idStr), "name": .string(name)]
             }
+        },
+
+        // Delete is forward-only: the app's teardown (worktree removal, tmux
+        // window kill, scheduler cleanup) lives in SessionService, so we don't
+        // attempt a partial local delete when the app isn't running.
+        "delete-session": { params in
+            guard let idStr = params["session_id"]?.stringValue, UUID(uuidString: idStr) != nil else {
+                throw DaemonRPCError.invalidParams("session_id required")
+            }
+            guard let forwardSocket else {
+                throw DaemonRPCError.applicationError("Deleting a session requires the Crow desktop app to be running")
+            }
+            do { return try forwardToApp("delete-session", params, socket: forwardSocket) }
+            catch let error as DaemonRPCError { throw error }
+            catch { throw DaemonRPCError.applicationError("Crow desktop app not reachable; cannot delete session") }
         },
     ])
 }
