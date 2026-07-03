@@ -1,0 +1,65 @@
+import CrowTerminal
+import Foundation
+import Hummingbird
+import HummingbirdWebSocket
+import NIOCore
+
+/// Streams a PTY running `tmux attach-session` to xterm.js over a WebSocket
+/// (`/terminal`). Replaces the macOS WKWebView message bus with the same four
+/// message types: raw PTY bytes out (binary frames), keystrokes in (binary
+/// frames), and a `{"type":"resize",...}` JSON control frame (CROW-581).
+enum TerminalWebSocket {
+    static func mount(on router: Router<BasicWebSocketRequestContext>, cockpit: TerminalCockpit) {
+        router.ws("/terminal") { _, _ in
+            .upgrade()
+        } onUpgrade: { inbound, outbound, _ in
+            // deliverOnMainQueue: false — the daemon has no main run loop, so PTY
+            // output is delivered synchronously on the PTY read queue and bridged
+            // into this async task via an AsyncStream.
+            let pty = PTYProcess(deliverOnMainQueue: false)
+            let (stream, continuation) = AsyncStream<Data>.makeStream()
+            pty.onOutput = { data in continuation.yield(data) }
+            pty.onExit = { _ in continuation.finish() }
+
+            do {
+                try pty.start(command: cockpit.attachCommand(), workingDirectory: nil)
+            } catch {
+                continuation.finish()
+                return
+            }
+
+            // Pump PTY output → binary WebSocket frames.
+            let outputTask = Task {
+                for await chunk in stream {
+                    try await outbound.write(.binary(ByteBuffer(bytes: chunk)))
+                }
+            }
+            defer {
+                pty.terminate()
+                continuation.finish()
+                outputTask.cancel()
+            }
+
+            // Inbound: binary = keystrokes → PTY; text = JSON control (resize).
+            for try await message in inbound.messages(maxSize: 1 << 20) {
+                switch message {
+                case .binary(let buffer):
+                    pty.write(Data(buffer.readableBytesView))
+                case .text(let text):
+                    guard let data = text.data(using: .utf8),
+                          let control = try? JSONDecoder().decode(TerminalControl.self, from: data),
+                          control.type == "resize" else { continue }
+                    pty.resize(
+                        rows: UInt16(clamping: control.rows ?? 24),
+                        cols: UInt16(clamping: control.cols ?? 80))
+                }
+            }
+        }
+    }
+}
+
+private struct TerminalControl: Decodable {
+    let type: String
+    let rows: Int?
+    let cols: Int?
+}
