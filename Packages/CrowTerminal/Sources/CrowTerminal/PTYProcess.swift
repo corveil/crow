@@ -34,17 +34,22 @@ public final class PTYProcess: @unchecked Sendable {
     deinit {
         readSource?.cancel()
         readSource = nil
-        readQueue.sync {
-            if childPID > 0 {
-                let pid = childPID
-                childPID = -1
-                kill(pid, SIGTERM)
-                Self.forceReap(pid)
-            }
-            if masterFD >= 0 {
-                close(masterFD)
-                masterFD = -1
-            }
+        // Do NOT hop onto `readQueue` here. `deinit` can run *on* `readQueue`
+        // when the last strong reference is released by a `readQueue.async`
+        // block (write/resize/terminate all capture `self`), and
+        // `dispatch_sync` onto the current queue traps — the daemon's
+        // short-lived PTYs hit this on disconnect. By `deinit` no other
+        // references or queued self-capturing blocks remain, so this state is
+        // ours to tear down directly without serialization.
+        if childPID > 0 {
+            let pid = childPID
+            childPID = -1
+            kill(pid, SIGTERM)
+            Self.forceReap(pid)
+        }
+        if masterFD >= 0 {
+            close(masterFD)
+            masterFD = -1
         }
     }
 
