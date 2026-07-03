@@ -289,7 +289,9 @@ public final class AppState {
     }
 
     /// Called when the user clicks the sidebar "+" to spawn a new Manager session.
-    public var onCreateManager: (() -> Void)?
+    /// The optional `AgentKind` is a one-shot, per-session agent override chosen
+    /// from the picker menu; `nil` means "use the configured default" (#582).
+    public var onCreateManager: ((AgentKind?) -> Void)?
 
     /// Called when user clicks "Work on" for an assigned issue.
     public var onWorkOnIssue: ((String) -> Void)?  // receives issue URL
