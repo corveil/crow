@@ -54,8 +54,8 @@ public enum CrowDaemon {
 
         // WebSocket router: JSON-RPC at /rpc, terminal byte-stream at /terminal.
         let wsRouter = Router(context: BasicWebSocketRequestContext.self)
-        RPCWebSocketHandler.mount(on: wsRouter, commandRouter: commandRouter)
-        if let cockpit { TerminalWebSocket.mount(on: wsRouter, cockpit: cockpit) }
+        RPCWebSocketHandler.mount(on: wsRouter, commandRouter: commandRouter, boundHost: options.host)
+        if let cockpit { TerminalWebSocket.mount(on: wsRouter, cockpit: cockpit, boundHost: options.host) }
 
         // HTTP router: web UI, xterm assets, health.
         let httpRouter = Router()
@@ -75,14 +75,17 @@ public enum CrowDaemon {
 
     @MainActor
     private static func seedAppState(from store: JSONStore) -> AppState {
-        // Minimal hydration: sessions + their worktrees. The app's fuller
-        // `SessionService.hydrateState` (hook state, terminal migration, agent
-        // wiring) is AppKit-bound and out of scope for the daemon's M0 surface.
+        // Hydrate sessions + their worktrees + terminals from the same
+        // `store.json` the desktop app writes, so `list-sessions`/`list-terminals`
+        // reflect the real sessions and their tmux windows. (The app's fuller
+        // `SessionService.hydrateState` — hook state, migrations, agent wiring —
+        // is AppKit-bound and out of scope for the daemon.)
         let appState = AppState()
         let data = store.data
         appState.sessions = data.sessions
         for session in appState.sessions {
             appState.worktrees[session.id] = data.worktrees.filter { $0.sessionID == session.id }
+            appState.terminals[session.id] = data.terminals.filter { $0.sessionID == session.id }
         }
         return appState
     }

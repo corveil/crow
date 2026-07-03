@@ -33,6 +33,17 @@ import Testing
         #expect(!WebSocketOriginGuard.isLoopbackHost("0.0.0.0"))
         #expect(!WebSocketOriginGuard.isLoopbackHost("192.168.1.5"))
     }
+
+    @Test func trustsOwnBindHostButNotOthers() {
+        // A specific non-loopback bind may serve its own web UI…
+        #expect(WebSocketOriginGuard.isAllowedOrigin("http://100.64.0.5:8787", boundHost: "100.64.0.5"))
+        // …but cross-site origins are still rejected under that bind.
+        #expect(!WebSocketOriginGuard.isAllowedOrigin("https://evil.com", boundHost: "100.64.0.5"))
+        #expect(!WebSocketOriginGuard.isAllowedOrigin("http://192.168.1.9:8787", boundHost: "100.64.0.5"))
+        // A wildcard bind matches no single host — stays loopback-only.
+        #expect(!WebSocketOriginGuard.isAllowedOrigin("http://100.64.0.5:8787", boundHost: "0.0.0.0"))
+        #expect(WebSocketOriginGuard.isAllowedOrigin("http://127.0.0.1:8787", boundHost: "0.0.0.0"))
+    }
 }
 
 @Suite struct StaticAssetGuardTests {

@@ -18,11 +18,20 @@ import Foundation
 enum WebSocketOriginGuard {
     private static let loopbackHosts: Set<String> = ["127.0.0.1", "localhost", "::1"]
 
-    /// Whether a WebSocket upgrade carrying `origin` should be allowed.
-    static func isAllowedOrigin(_ origin: String?) -> Bool {
+    /// Whether a WebSocket upgrade carrying `origin` should be allowed, given
+    /// the daemon's own `boundHost` (`--host`).
+    ///
+    /// Allowed origins: absent/empty (native clients), a loopback host, or a
+    /// host equal to `boundHost` — the latter lets a specific non-loopback bind
+    /// (e.g. a Tailscale/LAN IP) serve its own web UI while still rejecting
+    /// genuinely cross-site origins. A wildcard bind (`0.0.0.0`/`::`) matches no
+    /// single concrete host, so it stays loopback-only.
+    static func isAllowedOrigin(_ origin: String?, boundHost: String = "127.0.0.1") -> Bool {
         guard let origin, !origin.isEmpty else { return true }  // native (non-browser) client
         guard let host = originHost(origin) else { return false }
-        return loopbackHosts.contains(host)
+        if loopbackHosts.contains(host) { return true }
+        let bound = boundHost.lowercased()
+        return bound != "0.0.0.0" && bound != "::" && host == bound
     }
 
     /// Host component of an `Origin` value (`scheme://host[:port]`), lowercased
