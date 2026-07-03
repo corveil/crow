@@ -55,13 +55,14 @@ const STATUS_COLOR = {
 };
 const AGENT_GLYPH = { 'claude-code': '✦', cursor: '▲', codex: '◆', 'open-code': '◇' };
 
-// Sidebar groups, mirroring AppState's computed groupings.
+// Sidebar groups, mirroring AppState's computed groupings. Managers first, as
+// in the desktop app.
 const GROUPS = [
+  { title: 'Managers', match: (s) => s.kind === 'manager' },
   { title: 'Jobs', match: (s) => s.status === 'active' && s.kind === 'job' },
   { title: 'Active', match: (s) => s.status === 'active' && s.kind === 'work' },
   { title: 'Reviews', match: (s) => s.kind === 'review' && s.status !== 'completed' && s.status !== 'archived' },
   { title: 'In Review', match: (s) => s.status === 'inReview' && s.kind !== 'manager' },
-  { title: 'Managers', match: (s) => s.kind === 'manager' },
   { title: 'Completed', match: (s) => (s.status === 'completed' || s.status === 'archived') && s.kind !== 'manager' },
 ];
 

@@ -40,9 +40,26 @@ import Testing
         // …but cross-site origins are still rejected under that bind.
         #expect(!WebSocketOriginGuard.isAllowedOrigin("https://evil.com", boundHost: "100.64.0.5"))
         #expect(!WebSocketOriginGuard.isAllowedOrigin("http://192.168.1.9:8787", boundHost: "100.64.0.5"))
-        // A wildcard bind matches no single host — stays loopback-only.
-        #expect(!WebSocketOriginGuard.isAllowedOrigin("http://100.64.0.5:8787", boundHost: "0.0.0.0"))
+    }
+
+    @Test func wildcardBindTrustsPrivateOriginsOnly() {
+        // 0.0.0.0 is reachable via any local interface: trust LAN/tailnet…
+        #expect(WebSocketOriginGuard.isAllowedOrigin("http://192.168.1.190:8787", boundHost: "0.0.0.0"))
+        #expect(WebSocketOriginGuard.isAllowedOrigin("http://10.1.2.3:8787", boundHost: "0.0.0.0"))
+        #expect(WebSocketOriginGuard.isAllowedOrigin("http://100.100.5.9:8787", boundHost: "0.0.0.0"))
         #expect(WebSocketOriginGuard.isAllowedOrigin("http://127.0.0.1:8787", boundHost: "0.0.0.0"))
+        // …but reject public origins even on a wildcard bind.
+        #expect(!WebSocketOriginGuard.isAllowedOrigin("https://evil.com", boundHost: "0.0.0.0"))
+        #expect(!WebSocketOriginGuard.isAllowedOrigin("http://8.8.8.8", boundHost: "0.0.0.0"))
+    }
+
+    @Test func privateHostClassification() {
+        for host in ["10.0.0.1", "192.168.1.190", "172.16.0.9", "172.31.255.1", "169.254.1.1", "100.64.0.1", "127.0.0.1"] {
+            #expect(WebSocketOriginGuard.isPrivateHost(host), "\(host) should be private")
+        }
+        for host in ["8.8.8.8", "1.1.1.1", "172.32.0.1", "100.128.0.1", "evil.com", "203.0.113.5"] {
+            #expect(!WebSocketOriginGuard.isPrivateHost(host), "\(host) should be public")
+        }
     }
 }
 
