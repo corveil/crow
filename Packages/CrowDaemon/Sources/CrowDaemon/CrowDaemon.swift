@@ -31,6 +31,9 @@ public enum CrowDaemon {
         let store = JSONStore()
         let git = GitManager()
         let appState = await seedAppState(from: store)
+        // Live-reload the store so the web UI reflects the desktop app's writes
+        // (new sessions/status/terminals/links) without a daemon restart.
+        startStoreReloadPoll(store: store, appState: appState)
 
         // Terminal cockpit (tmux). Optional — RPC still works without tmux, but
         // the terminal handlers (new-terminal/close-terminal) and `/terminal`
@@ -40,8 +43,17 @@ public enum CrowDaemon {
             log("WARNING: tmux not found; /terminal + terminal RPC disabled (set CROW_TMUX to override)")
         }
 
+        // Write-actions that mutate session state are forwarded to the desktop
+        // app's socket (the source of truth) so its side effects run and we
+        // never clobber its newer state. When the daemon itself owns the default
+        // socket (app not running), there's no app to forward to — handle
+        // locally instead. (CROW-581)
+        let appSocketPath = SocketServer.defaultSocketPath()
+        let forwardSocket: String? = (appSocketPath == options.socketPath) ? nil : appSocketPath
+
         let commandRouter = makeCommandRouter(
-            appState: appState, store: store, git: git, devRoot: options.devRoot, cockpit: cockpit)
+            appState: appState, store: store, git: git, devRoot: options.devRoot,
+            cockpit: cockpit, forwardSocket: forwardSocket)
 
         // Unix socket — lets the existing `crow` CLI talk to the daemon.
         let socketServer = SocketServer(socketPath: options.socketPath, router: commandRouter)
@@ -75,20 +87,47 @@ public enum CrowDaemon {
 
     @MainActor
     private static func seedAppState(from store: JSONStore) -> AppState {
-        // Hydrate sessions + their worktrees + terminals from the same
-        // `store.json` the desktop app writes, so `list-sessions`/`list-terminals`
-        // reflect the real sessions and their tmux windows. (The app's fuller
-        // `SessionService.hydrateState` — hook state, migrations, agent wiring —
-        // is AppKit-bound and out of scope for the daemon.)
         let appState = AppState()
+        reseed(appState, from: store)
+        return appState
+    }
+
+    /// (Re)populate `appState` from the store snapshot — sessions + their
+    /// worktrees, terminals, and links. Called at boot and by the live-reload
+    /// poll when the desktop app writes `store.json`. (The app's fuller
+    /// `SessionService.hydrateState` — hook state, migrations, agent wiring — is
+    /// AppKit-bound and out of scope for the daemon.)
+    @MainActor
+    private static func reseed(_ appState: AppState, from store: JSONStore) {
         let data = store.data
         appState.sessions = data.sessions
+        appState.worktrees = [:]
+        appState.terminals = [:]
+        appState.links = [:]
         for session in appState.sessions {
             appState.worktrees[session.id] = data.worktrees.filter { $0.sessionID == session.id }
             appState.terminals[session.id] = data.terminals.filter { $0.sessionID == session.id }
             appState.links[session.id] = data.links.filter { $0.sessionID == session.id }
         }
-        return appState
+    }
+
+    /// Poll `store.json`'s mtime and reload when the desktop app writes it, so
+    /// the web UI reflects new sessions/status/terminals/links without a daemon
+    /// restart. Cheap (a stat every 2s) and robust against the atomic renames
+    /// that break fd-based watching.
+    private static func startStoreReloadPoll(store: JSONStore, appState: AppState) {
+        Task {
+            var lastModified = store.storeModificationDate
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(2))
+                let now = store.storeModificationDate
+                if now != lastModified {
+                    lastModified = now
+                    store.reload()
+                    await reseed(appState, from: store)
+                }
+            }
+        }
     }
 
     private static func log(_ message: String) {

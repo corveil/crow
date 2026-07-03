@@ -139,7 +139,10 @@ function renderHeader(s) {
   if (!s) return;
 
   const top = el('div', 'detail-top');
-  top.appendChild(el('div', 'detail-name', s.name));
+  const nameEl = el('div', 'detail-name', s.name);
+  nameEl.title = 'Double-click to rename';
+  nameEl.ondblclick = () => renameSession(s.id, s.name);
+  top.appendChild(nameEl);
   const badge = el('span', 'status-badge', s.status);
   badge.style.color = STATUS_COLOR[s.status] || 'var(--text-muted)';
   top.appendChild(badge);
@@ -171,6 +174,40 @@ function renderHeader(s) {
       row.appendChild(chip);
     }
     root.appendChild(row);
+  }
+
+  // Status actions (forwarded to the desktop app when it's running).
+  const actions = el('div', 'actions-row');
+  for (const [label, value] of [['In Review', 'inReview'], ['Active', 'active'], ['Completed', 'completed']]) {
+    if (s.status === value) continue;
+    const btn = el('button', 'action-btn', label);
+    btn.onclick = () => setStatus(s.id, value);
+    actions.appendChild(btn);
+  }
+  root.appendChild(actions);
+}
+
+// Write-actions. Optimistically update local state, then let the store-reload
+// poll reconcile with the app's authoritative state.
+async function setStatus(id, status) {
+  try {
+    await rpc('set-status', { session_id: id, status });
+    const s = sessions.find((x) => x.id === id);
+    if (s) { s.status = status; renderSidebar(); if (id === selectedId) renderHeader(s); }
+  } catch (e) {
+    if (term) term.write('\r\n\x1b[31m[crow] set-status failed: ' + (e.message || e) + '\x1b[0m\r\n');
+  }
+}
+
+async function renameSession(id, current) {
+  const name = window.prompt('Rename session', current);
+  if (!name || name === current) return;
+  try {
+    await rpc('rename-session', { session_id: id, name });
+    const s = sessions.find((x) => x.id === id);
+    if (s) { s.name = name; renderSidebar(); if (id === selectedId) renderHeader(s); }
+  } catch (e) {
+    if (term) term.write('\r\n\x1b[31m[crow] rename failed: ' + (e.message || e) + '\x1b[0m\r\n');
   }
 }
 

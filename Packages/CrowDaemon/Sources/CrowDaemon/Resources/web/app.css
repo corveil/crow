@@ -134,6 +134,20 @@ html, body {
 .link-chip.link-ticket { color: var(--gold); border-color: var(--border-strong); }
 .link-chip.link-pr { color: var(--blue); border-color: rgba(10, 132, 255, 0.4); }
 .link-chip.link-repo { color: var(--text-secondary); }
+.actions-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.action-btn {
+  padding: 4px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-card);
+  color: var(--gold);
+  font-size: 11px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+}
+.action-btn:hover { background: rgba(221, 196, 130, 0.12); }
+.action-btn:active { transform: translateY(1px); }
 #tabbar {
   display: flex;
   align-items: stretch;

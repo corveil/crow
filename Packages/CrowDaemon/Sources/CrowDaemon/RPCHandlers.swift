@@ -27,6 +27,22 @@ enum DaemonRPCError: Error, LocalizedError, RPCErrorCoded {
     }
 }
 
+/// Forward a write RPC to the desktop app's Unix socket (the source of truth),
+/// so the app applies the mutation with all its side effects (Jira transitions,
+/// notifications) and the daemon never clobbers its state. Throws
+/// `DaemonRPCError` on an app-level error; rethrows the underlying socket error
+/// (connection refused → app not running) so callers can fall back to local
+/// handling (CROW-581).
+private func forwardToApp(
+    _ method: String, _ params: [String: JSONValue], socket: String
+) throws -> [String: JSONValue] {
+    let response = try SocketClient(socketPath: socket).send(method: method, params: params)
+    if let error = response.error {
+        throw DaemonRPCError.applicationError(error.message)
+    }
+    return response.result ?? [:]
+}
+
 /// Builds the daemon's `CommandRouter`. Handlers mirror the corresponding
 /// closures in the macOS app's `AppDelegate.startSocketServer`, but operate
 /// purely on `AppState` + `JSONStore` (+ `GitManager` / the tmux `cockpit`)
@@ -47,7 +63,8 @@ func makeCommandRouter(
     store: JSONStore,
     git: GitManager,
     devRoot: String,
-    cockpit: TerminalCockpit?
+    cockpit: TerminalCockpit?,
+    forwardSocket: String? = nil
 ) -> CommandRouter {
     CommandRouter(handlers: [
         "new-session": { params in
@@ -247,6 +264,61 @@ func makeCommandRouter(
                     "session_id": .string(idStr),
                     "path": .string(path),
                 ]
+            }
+        },
+
+        // Write-actions: forwarded to the desktop app (source of truth) when it's
+        // running, so its side effects run and its newer state isn't clobbered;
+        // handled locally only when the app is off (daemon owns the store then).
+        "set-status": { params in
+            guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr),
+                  let statusStr = params["status"]?.stringValue, let status = SessionStatus(rawValue: statusStr) else {
+                throw DaemonRPCError.invalidParams("session_id and status required")
+            }
+            if let forwardSocket {
+                do { return try forwardToApp("set-status", params, socket: forwardSocket) }
+                catch let error as DaemonRPCError { throw error }
+                catch { /* app not running → fall through to local */ }
+            }
+            return try await MainActor.run {
+                guard let idx = appState.sessions.firstIndex(where: { $0.id == id }) else {
+                    throw DaemonRPCError.applicationError("Session not found")
+                }
+                appState.sessions[idx].status = status
+                appState.sessions[idx].updatedAt = Date()
+                store.mutate { data in
+                    if let i = data.sessions.firstIndex(where: { $0.id == id }) {
+                        data.sessions[i].status = status
+                        data.sessions[i].updatedAt = Date()
+                    }
+                }
+                return ["session_id": .string(idStr), "status": .string(statusStr)]
+            }
+        },
+
+        "rename-session": { params in
+            guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr),
+                  let name = params["name"]?.stringValue else {
+                throw DaemonRPCError.invalidParams("session_id and name required")
+            }
+            guard Validation.isValidSessionName(name) else {
+                throw DaemonRPCError.invalidParams(
+                    "Invalid session name (max \(Validation.maxSessionNameLength) chars, no control characters)")
+            }
+            if let forwardSocket {
+                do { return try forwardToApp("rename-session", params, socket: forwardSocket) }
+                catch let error as DaemonRPCError { throw error }
+                catch { /* app not running → fall through to local */ }
+            }
+            return try await MainActor.run {
+                guard let idx = appState.sessions.firstIndex(where: { $0.id == id }) else {
+                    throw DaemonRPCError.applicationError("Session not found")
+                }
+                appState.sessions[idx].name = name
+                store.mutate { data in
+                    if let i = data.sessions.firstIndex(where: { $0.id == id }) { data.sessions[i].name = name }
+                }
+                return ["session_id": .string(idStr), "name": .string(name)]
             }
         },
     ])

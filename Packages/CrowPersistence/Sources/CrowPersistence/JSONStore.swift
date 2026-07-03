@@ -67,6 +67,31 @@ public final class JSONStore: Sendable {
         return _data
     }
 
+    /// On-disk location of `store.json`. Exposed so a second process (the
+    /// `crowd` daemon) can watch it for external writes and `reload()`
+    /// (CROW-581).
+    public var storeURL: URL { fileURL }
+
+    /// Last-modification date of `store.json`, or nil if it doesn't exist yet.
+    /// Cheap change-detection for a polling reloader.
+    public var storeModificationDate: Date? {
+        (try? FileManager.default.attributesOfItem(atPath: fileURL.path)[.modificationDate]) as? Date
+    }
+
+    /// Re-read `store.json` from disk into the in-memory snapshot, discarding a
+    /// stale cached copy. Used by the daemon to pick up writes made by the
+    /// desktop app (the primary writer) without a restart. A missing or
+    /// undecodable file leaves the current snapshot untouched.
+    public func reload() {
+        guard let data = try? Data(contentsOf: fileURL) else { return }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let decoded = try? decoder.decode(StoreData.self, from: data) else { return }
+        lock.lock()
+        _data = decoded
+        lock.unlock()
+    }
+
     public init(directory: URL? = nil) {
         let dir = directory ?? AppSupportDirectory.url
 
