@@ -117,6 +117,23 @@ html, body {
   font-weight: 600;
   text-transform: capitalize;
 }
+.links-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.link-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 9px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  text-decoration: none;
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  background: var(--bg-card);
+}
+.link-chip:hover { border-color: var(--border-strong); color: var(--text-primary); }
+.link-chip.link-ticket { color: var(--gold); border-color: var(--border-strong); }
+.link-chip.link-pr { color: var(--blue); border-color: rgba(10, 132, 255, 0.4); }
+.link-chip.link-repo { color: var(--text-secondary); }
 #tabbar {
   display: flex;
   align-items: stretch;

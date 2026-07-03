@@ -86,6 +86,7 @@ public enum CrowDaemon {
         for session in appState.sessions {
             appState.worktrees[session.id] = data.worktrees.filter { $0.sessionID == session.id }
             appState.terminals[session.id] = data.terminals.filter { $0.sessionID == session.id }
+            appState.links[session.id] = data.links.filter { $0.sessionID == session.id }
         }
         return appState
     }

@@ -152,6 +152,26 @@ function renderHeader(s) {
   if (s.worktree_path) bits.push(shorten(s.worktree_path));
   if (bits.length) root.appendChild(el('div', 'meta', bits.join(' · ')));
   root.appendChild(el('div', 'meta', 'Agent: ' + (s.agent_display_name || s.agent_kind || '—')));
+
+  // Links row: issue / PR / repo chips, opening in a new tab.
+  const links = (s.links || []).slice();
+  // Ensure an issue chip from the ticket even when no explicit link is stored.
+  if (s.ticket_url && !links.some((l) => l.type === 'ticket')) {
+    links.unshift({ label: s.ticket_badge || 'Issue', url: s.ticket_url, type: 'ticket' });
+  }
+  if (links.length) {
+    const row = el('div', 'links-row');
+    for (const link of links) {
+      const chip = document.createElement('a');
+      chip.className = 'link-chip link-' + (link.type || 'custom');
+      chip.href = link.url;
+      chip.target = '_blank';
+      chip.rel = 'noopener';
+      chip.textContent = link.label || link.type || 'link';
+      row.appendChild(chip);
+    }
+    root.appendChild(row);
+  }
 }
 
 async function refreshTerminals() {

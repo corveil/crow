@@ -105,6 +105,17 @@ func makeCommandRouter(
                         object["branch"] = .string(worktree.branch)
                         object["worktree_path"] = .string(worktree.worktreePath)
                     }
+                    // Issue/PR/repo links for the detail header (from the store).
+                    let links = appState.links(for: session.id)
+                    if !links.isEmpty {
+                        object["links"] = .array(links.map { link in
+                            .object([
+                                "label": .string(link.label),
+                                "url": .string(link.url),
+                                "type": .string(link.linkType.rawValue),
+                            ])
+                        })
+                    }
                     return .object(object)
                 }
             }
