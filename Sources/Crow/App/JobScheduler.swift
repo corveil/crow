@@ -68,6 +68,13 @@ final class JobScheduler {
     }
 
     func start() {
+        // Adopt any already-done job sessions we aren't watching so they still
+        // auto-complete after a relaunch, or if they predate this feature — the
+        // in-memory watch is otherwise lost and the run lingers in `.active`
+        // (CROW-579). Runs post-hydration (`start()` is wired after
+        // `hydrateState`), so restored sessions/terminals are present.
+        reconcileUnwatchedJobs(now: Date())
+
         // First tick after one interval — gives the app a grace period at
         // launch and lets overdue jobs fire shortly after.
         timer = Timer.scheduledTimer(withTimeInterval: tickInterval, repeats: true) { [weak self] _ in
@@ -85,6 +92,9 @@ final class JobScheduler {
 
     private func tick() {
         let now = Date()
+        // Adopt any active job sessions we aren't already watching (relaunched
+        // or predating the feature) so they can auto-complete too (CROW-579).
+        reconcileUnwatchedJobs(now: now)
         // Auto-complete any job runs that have finished successfully. Runs on
         // every tick regardless of whether jobs are due (CROW-561).
         checkFinishedRuns(now: now)
@@ -201,6 +211,55 @@ final class JobScheduler {
     /// the settle window before it can be judged finished.
     private func markPromptsDelivered(sessionID: UUID) {
         watchedRuns[sessionID]?.promptsDeliveredAt = Date()
+    }
+
+    // MARK: - Reconcile unwatched runs (CROW-579)
+
+    /// Adopt any active `.job` session we aren't already watching so it can be
+    /// auto-completed like a run we fired ourselves. Covers runs this process
+    /// never watched: the app was relaunched after the run finished (the
+    /// in-memory `watchedRuns` was lost), or the run predates CROW-566.
+    ///
+    /// The adopted watch stamps both `startedAt` and `promptsDeliveredAt` at
+    /// `now`, which does two things:
+    /// - The run is inside the settle window, so `finishDecision` won't complete
+    ///   it until a later tick when it is *still* at rest — i.e. at rest across a
+    ///   full tick. That guards against completing a multi-prompt job mid-gap.
+    /// - The `maxWatchDuration` cap counts from adoption, not the session's real
+    ///   start, so a days-old predates-the-feature run is still eligible (using
+    ///   its actual start would trip the cap and never complete it).
+    ///
+    /// Sessions already in `watchedRuns` (runs we fired) are skipped so their
+    /// real delivery timestamp / settle timing is never disturbed.
+    private func reconcileUnwatchedJobs(now: Date) {
+        for session in appState.sessions where Self.shouldReconcile(
+            kind: session.kind,
+            status: session.status,
+            alreadyWatched: watchedRuns[session.id] != nil
+        ) {
+            // Need the managed terminal to read readiness/activity; if it's gone
+            // (e.g. the session was torn down mid-run) there's nothing to judge —
+            // leave it `.active` so the anomaly surfaces rather than completing it.
+            guard let terminalID = appState.terminals[session.id]?
+                .first(where: { $0.isManaged })?.id else { continue }
+            watchedRuns[session.id] = RunWatch(
+                terminalID: terminalID,
+                startedAt: now,
+                promptsDeliveredAt: now
+            )
+        }
+    }
+
+    /// Whether an unwatched session should be adopted for finish-watching on
+    /// reconciliation (CROW-579). Pure so it's unit-testable without an
+    /// `AppState`. The stateful caller additionally requires a managed terminal
+    /// to derive readiness.
+    static func shouldReconcile(
+        kind: SessionKind,
+        status: SessionStatus,
+        alreadyWatched: Bool
+    ) -> Bool {
+        kind == .job && status == .active && !alreadyWatched
     }
 
     /// Auto-complete watched job runs whose agent has finished successfully.

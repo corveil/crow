@@ -6,8 +6,9 @@ import CrowCore
 /// Auto-complete decision for finished job runs (CROW-561). A job's session
 /// should transition to `.completed` only when its agent has finished
 /// successfully — every prompt delivered, a settle window elapsed, the agent
-/// launched and now at rest (`.done`/`.idle`) — and never while it is still
-/// working, awaiting input, or errored (`.waiting`).
+/// launched and now at rest (`.done`) — and never while it is still working,
+/// awaiting input, or errored (`.waiting`), nor at the never-started default
+/// (`.idle`).
 @Suite("Job finish decision")
 @MainActor
 struct JobFinishDecisionTests {
