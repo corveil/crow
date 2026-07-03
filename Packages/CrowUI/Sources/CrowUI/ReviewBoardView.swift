@@ -412,27 +412,68 @@ public struct ManagerReviewsAllowListRow: View {
         }
     }
 
+    /// "+" for a new Manager session. When two or more coding agents are
+    /// available (registered in `AgentRegistry` — which only holds agents whose
+    /// CLI resolved via `findBinary()`), the "+" opens an agent-picker menu so
+    /// the user can launch this one session with a specific agent (#582). With a
+    /// single agent there's nothing to pick, so it stays a plain button that
+    /// opens with the configured default.
+    @ViewBuilder
     private var newManagerButton: some View {
-        Button {
-            appState.onCreateManager?()
-        } label: {
-            Image(systemName: "plus")
-                .font(.system(size: 12, weight: .bold))
-                .foregroundStyle(CorveilTheme.goldDark)
-                .frame(width: 28)
-                .padding(.vertical, 8)
-                .background(
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(CorveilTheme.bgSurface)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 6)
-                                .strokeBorder(CorveilTheme.goldDark.opacity(0.3), lineWidth: 1)
-                        )
-                )
+        let agents = AgentRegistry.shared.allAgents()
+        if agents.count >= 2 {
+            Menu {
+                let defaultKind = appState.agentKind(for: .manager)
+                ForEach(agents, id: \.kind) { agent in
+                    Button {
+                        appState.onCreateManager?(agent.kind)
+                    } label: {
+                        // The configured Manager default is pre-marked so it
+                        // reads as the default choice, without changing config.
+                        if agent.kind == defaultKind {
+                            Label("\(agent.displayName) (default)", systemImage: agent.iconSystemName)
+                        } else {
+                            Label(agent.displayName, systemImage: agent.iconSystemName)
+                        }
+                    }
+                }
+            } label: {
+                newManagerLabel
+            }
+            .menuStyle(.button)
+            .menuIndicator(.hidden)
+            .buttonStyle(.plain)
+            .fixedSize()
+            .help("New Manager session")
+            .accessibilityLabel("New Manager session")
+        } else {
+            Button {
+                appState.onCreateManager?(nil)
+            } label: {
+                newManagerLabel
+            }
+            .buttonStyle(.plain)
+            .help("New Manager session")
+            .accessibilityLabel("New Manager session")
         }
-        .buttonStyle(.plain)
-        .help("New Manager session")
-        .accessibilityLabel("New Manager session")
+    }
+
+    /// Shared compact "+" pill used as the label for both the plain button and
+    /// the agent-picker menu variants of `newManagerButton`.
+    private var newManagerLabel: some View {
+        Image(systemName: "plus")
+            .font(.system(size: 12, weight: .bold))
+            .foregroundStyle(CorveilTheme.goldDark)
+            .frame(width: 28)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(CorveilTheme.bgSurface)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .strokeBorder(CorveilTheme.goldDark.opacity(0.3), lineWidth: 1)
+                    )
+            )
     }
 
     /// Shared full-width pill styling for the toggle buttons in this row.

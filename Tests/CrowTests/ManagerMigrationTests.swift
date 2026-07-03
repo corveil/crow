@@ -100,6 +100,48 @@ struct ManagerMigrationTests {
         #expect(!cursorCmd.contains("claude"))
     }
 
+    /// #582: the "+" agent picker passes a one-shot `AgentKind` into
+    /// `createManagerSession`. `resolvedManagerAgentKind` must prefer that
+    /// explicit choice over the configured Manager default.
+    @MainActor
+    @Test
+    func resolvedManagerAgentKindPrefersExplicitOverride() {
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("crow-mgr-resolve-override-\(UUID().uuidString)")
+        let appState = AppState()
+        appState.defaultAgentKind = .claudeCode
+        appState.agentsByKind = ["manager": .claudeCode]
+        let service = SessionService(store: JSONStore(directory: tmp), appState: appState)
+
+        // Explicit pick wins over both agentsByKind["manager"] and the default.
+        #expect(service.resolvedManagerAgentKind(.cursor) == .cursor)
+        // The configured default is left untouched (no config mutation).
+        #expect(appState.agentsByKind["manager"] == .claudeCode)
+        #expect(appState.defaultAgentKind == .claudeCode)
+    }
+
+    /// #582: with no explicit pick (the RPC / single-agent path passes `nil`),
+    /// resolution falls back to `agentsByKind["manager"] ?? defaultAgentKind`,
+    /// preserving the pre-picker behavior.
+    @MainActor
+    @Test
+    func resolvedManagerAgentKindFallsBackToConfigDefault() {
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("crow-mgr-resolve-default-\(UUID().uuidString)")
+        let appState = AppState()
+
+        // Per-action override present → it wins.
+        appState.defaultAgentKind = .claudeCode
+        appState.agentsByKind = ["manager": .cursor]
+        let service = SessionService(store: JSONStore(directory: tmp), appState: appState)
+        #expect(service.resolvedManagerAgentKind(nil) == .cursor)
+
+        // No per-action override → falls through to defaultAgentKind.
+        appState.agentsByKind = [:]
+        appState.defaultAgentKind = .codex
+        #expect(service.resolvedManagerAgentKind(nil) == .codex)
+    }
+
     /// #374: hydrating the Manager rebuilds its claude `command` to refresh the
     /// --rc/--name/--permission-mode flags. That rebuild must NOT drop the
     /// terminal's `tmuxBinding` — if it does, `rehydrateTerminalSurface` can't

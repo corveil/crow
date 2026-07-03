@@ -674,15 +674,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         // Wire create-manager action — spawns an additional Manager session
-        // (auto-named "Manager N") with its own Claude-Code terminal in the devRoot.
-        appState.onCreateManager = { [weak self, weak service] in
+        // (auto-named "Manager N") with its own terminal in the devRoot. The
+        // optional `agentKind` is a one-shot pick from the "+" picker (#582);
+        // nil defers to the configured Manager-agent default.
+        appState.onCreateManager = { [weak self, weak service] agentKind in
             guard let self, let service else { return }
             // Pick the lowest unused "Manager N" so a delete-in-the-middle
             // doesn't produce a duplicate name.
             let existingNames = Set(self.appState.managerSessions.map(\.name))
             var n = 2
             while existingNames.contains("Manager \(n)") { n += 1 }
-            let id = service.createManagerSession(name: "Manager \(n)", cwd: devRoot)
+            let id = service.createManagerSession(name: "Manager \(n)", cwd: devRoot, agentKind: agentKind)
             self.appState.selectedSessionID = id
         }
 
