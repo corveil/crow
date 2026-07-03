@@ -18,6 +18,16 @@ public enum CrowDaemon {
     public static func run(arguments: [String] = CommandLine.arguments) async throws {
         let options = DaemonOptions.parse(arguments)
 
+        // The WS endpoints are unauthenticated; the Origin guard blocks
+        // cross-site browser hijacking but not same-origin/native clients on the
+        // network. Binding beyond loopback exposes git + a shell — warn loudly
+        // (CROW-581 review). Token auth for remote access is a follow-up.
+        if !WebSocketOriginGuard.isLoopbackHost(options.host) {
+            log("WARNING: binding to non-loopback host \(options.host) — /rpc and /terminal are UNAUTHENTICATED. "
+                + "Cross-origin browser requests are rejected, but any same-origin page or native client that can "
+                + "reach this address can run git and open a shell. Use only on trusted networks.")
+        }
+
         let store = JSONStore()
         let git = GitManager()
         let appState = await seedAppState(from: store)
@@ -107,7 +117,16 @@ struct DaemonOptions {
             let flag = arguments[index]
             let next = index + 1 < arguments.count ? arguments[index + 1] : nil
             switch flag {
-            case "--http-port": if let value = next, let port = Int(value) { options.httpPort = port }; index += 1
+            case "--http-port":
+                if let value = next {
+                    if let port = Int(value) {
+                        options.httpPort = port
+                    } else {
+                        FileHandle.standardError.write(Data(
+                            "[crowd] WARNING: ignoring malformed --http-port '\(value)'; using \(options.httpPort)\n".utf8))
+                    }
+                }
+                index += 1
             case "--host": if let value = next { options.host = value }; index += 1
             case "--socket", "--socket-path": if let value = next { options.socketPath = value }; index += 1
             case "--dev-root": if let value = next { options.devRoot = value }; index += 1

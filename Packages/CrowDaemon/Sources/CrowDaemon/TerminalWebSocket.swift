@@ -1,5 +1,6 @@
 import CrowTerminal
 import Foundation
+import HTTPTypes
 import Hummingbird
 import HummingbirdWebSocket
 import NIOCore
@@ -10,9 +11,18 @@ import NIOCore
 /// frames), and a `{"type":"resize",...}` JSON control frame (CROW-581).
 enum TerminalWebSocket {
     static func mount(on router: Router<BasicWebSocketRequestContext>, cockpit: TerminalCockpit) {
-        router.ws("/terminal") { _, _ in
-            .upgrade()
+        router.ws("/terminal") { request, _ in
+            // Reject cross-site upgrades — a plain attach yields an interactive
+            // shell, so an unguarded upgrade is effectively RCE (CROW-581 review).
+            WebSocketOriginGuard.isAllowedOrigin(request.headers[.origin]) ? .upgrade() : .dontUpgrade
         } onUpgrade: { inbound, outbound, _ in
+            // Bound concurrent PTY + tmux attaches.
+            guard TerminalConnectionLimiter.shared.acquire() else {
+                try? await outbound.write(.text("[crow] terminal connection limit reached"))
+                return
+            }
+            defer { TerminalConnectionLimiter.shared.release() }
+
             // deliverOnMainQueue: false — the daemon has no main run loop, so PTY
             // output is delivered synchronously on the PTY read queue and bridged
             // into this async task via an AsyncStream.
@@ -49,9 +59,11 @@ enum TerminalWebSocket {
                     guard let data = text.data(using: .utf8),
                           let control = try? JSONDecoder().decode(TerminalControl.self, from: data),
                           control.type == "resize" else { continue }
+                    // Floor at 1×1 so a zero/negative request can't drive a
+                    // degenerate tmux resize (CROW-581 review).
                     pty.resize(
-                        rows: UInt16(clamping: control.rows ?? 24),
-                        cols: UInt16(clamping: control.cols ?? 80))
+                        rows: UInt16(clamping: max(1, control.rows ?? 24)),
+                        cols: UInt16(clamping: max(1, control.cols ?? 80)))
                 }
             }
         }

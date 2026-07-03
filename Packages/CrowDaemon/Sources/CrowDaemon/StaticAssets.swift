@@ -17,8 +17,7 @@ enum StaticAssets {
         }
         router.get("/xterm/:file") { _, context -> Response in
             // Basename-only guard against path traversal.
-            guard let file = context.parameters.get("file"),
-                  !file.contains("/"), !file.contains("..") else {
+            guard let file = context.parameters.get("file"), isSafeAssetName(file) else {
                 return Response(status: .badRequest)
             }
             guard let dir = BundledResources.xtermDirectoryURL else {
@@ -32,6 +31,13 @@ enum StaticAssets {
                 headers: [.contentType: contentType(for: file)],
                 body: .init(byteBuffer: ByteBuffer(bytes: data)))
         }
+    }
+
+    /// Whether `name` is a safe single path component for `/xterm/*`: non-empty,
+    /// no separators, no `..`. The router decodes percent-escapes before this
+    /// runs, so `%2e%2e`/`%2f` are caught here (CROW-581 review).
+    static func isSafeAssetName(_ name: String) -> Bool {
+        !name.isEmpty && !name.contains("/") && !name.contains("..")
     }
 
     private static func contentType(for file: String) -> String {

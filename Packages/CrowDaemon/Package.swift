@@ -32,5 +32,9 @@ let package = Package(
                 .copy("Resources/web"),
             ]
         ),
+        .testTarget(
+            name: "CrowDaemonTests",
+            dependencies: ["CrowDaemon"]
+        ),
     ]
 )

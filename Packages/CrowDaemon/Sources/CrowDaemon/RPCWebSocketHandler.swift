@@ -1,5 +1,6 @@
 import CrowIPC
 import Foundation
+import HTTPTypes
 import Hummingbird
 import HummingbirdWebSocket
 
@@ -11,8 +12,10 @@ import HummingbirdWebSocket
 /// unlike `SocketServer`, we're already in an async context (CROW-581).
 enum RPCWebSocketHandler {
     static func mount(on router: Router<BasicWebSocketRequestContext>, commandRouter: CommandRouter) {
-        router.ws("/rpc") { _, _ in
-            .upgrade()
+        router.ws("/rpc") { request, _ in
+            // Reject cross-site upgrades — `/rpc` reaches `add-worktree`, which
+            // shells out to git (CROW-581 review).
+            WebSocketOriginGuard.isAllowedOrigin(request.headers[.origin]) ? .upgrade() : .dontUpgrade
         } onUpgrade: { inbound, outbound, _ in
             let decoder = JSONDecoder()
             let encoder = JSONEncoder()
