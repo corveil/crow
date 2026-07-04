@@ -15,9 +15,26 @@ struct TerminalCockpit: Sendable {
 
     init?(devRoot: String) {
         guard let tmux = Self.resolveTmuxBinary() else { return nil }
-        let socketPath = NSTemporaryDirectory() + "crowd-tmux.sock"
-        controller = TmuxController(tmuxBinary: tmux, socketPath: socketPath, sessionName: Self.sessionName)
+        controller = TmuxController(tmuxBinary: tmux, socketPath: Self.tmuxSocketPath(), sessionName: Self.sessionName)
         ensureSession()
+    }
+
+    /// The tmux control socket path — in an owner-only directory rather than
+    /// world-writable `/tmp`. On Linux `NSTemporaryDirectory()` is `/tmp`, where a
+    /// predictable name lets another local user squat the path (DoS) and prevents
+    /// two users from running `crowd` on one host (CROW-581 review). Prefer
+    /// `$XDG_RUNTIME_DIR`, else `~/.local/share/crow` created 0700.
+    static func tmuxSocketPath() -> String {
+        let dir: String
+        if let xdg = ProcessInfo.processInfo.environment["XDG_RUNTIME_DIR"], !xdg.isEmpty {
+            dir = xdg
+        } else {
+            dir = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(".local/share/crow").path
+            try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir)
+        }
+        return (dir as NSString).appendingPathComponent("crowd-tmux.sock")
     }
 
     /// Create the cockpit session (default shell, `crow-tmux.conf` applied) if it

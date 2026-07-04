@@ -1,4 +1,6 @@
-#if canImport(Glibc)
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
 import Glibc
 #endif
 import CrowCore
@@ -34,13 +36,24 @@ public enum CrowDaemon {
         let commandRouter = makeCommandRouter(
             appState: appState, store: store, git: git, devRoot: options.devRoot)
 
-        // Unix socket — lets the existing `crow` CLI talk to the daemon.
-        let socketServer = SocketServer(socketPath: options.socketPath, router: commandRouter)
-        do {
-            try socketServer.start()
-            log("JSON-RPC Unix socket listening at \(options.socketPath)")
-        } catch {
-            log("WARNING: socket bind failed (\(error)); continuing with HTTP/WS only")
+        // Unix socket — lets the existing `crow` CLI talk to the daemon. Refuse
+        // to bind a socket another server already answers on (e.g. the desktop
+        // app's crow.sock): `SocketServer.start()` unlinks unconditionally, so
+        // binding it would hijack the app's CLI channel and dual-write the store
+        // (CROW-581 review). The daemon's default is a distinct `crowd.sock`;
+        // sharing the app's path is explicit via --socket, and even then we
+        // won't steal a live one.
+        if Self.socketInUse(options.socketPath) {
+            log("WARNING: \(options.socketPath) is already in use (another crowd or the Crow app). "
+                + "Not binding the Unix socket to avoid hijacking it — use a distinct --socket. Continuing with HTTP/WS only.")
+        } else {
+            let socketServer = SocketServer(socketPath: options.socketPath, router: commandRouter)
+            do {
+                try socketServer.start()
+                log("JSON-RPC Unix socket listening at \(options.socketPath)")
+            } catch {
+                log("WARNING: socket bind failed (\(error)); continuing with HTTP/WS only")
+            }
         }
 
         // Terminal cockpit (tmux). Optional — RPC still works without tmux.
@@ -96,6 +109,30 @@ public enum CrowDaemon {
     private static func log(_ message: String) {
         FileHandle.standardError.write(Data("[crowd] \(message)\n".utf8))
     }
+
+    /// Whether a live server is already accepting connections on the Unix socket
+    /// at `path` — used to avoid stealing another process's socket. A stale
+    /// socket file (nothing listening) returns false, so normal startup still
+    /// replaces it.
+    private static func socketInUse(_ path: String) -> Bool {
+        guard FileManager.default.fileExists(atPath: path) else { return false }
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else { return false }
+        defer { close(fd) }
+        var addr = sockaddr_un()
+        addr.sun_family = sa_family_t(AF_UNIX)
+        _ = path.withCString { ptr in
+            withUnsafeMutablePointer(to: &addr.sun_path) { p in
+                p.withMemoryRebound(to: CChar.self, capacity: 104) { dest in strlcpy(dest, ptr, 104) }
+            }
+        }
+        let connected = withUnsafePointer(to: &addr) { p in
+            p.withMemoryRebound(to: sockaddr.self, capacity: 1) { sp in
+                connect(fd, sp, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+        return connected == 0
+    }
 }
 
 /// Minimal CLI/env option parsing — kept dependency-free (no argument-parser,
@@ -104,8 +141,16 @@ public enum CrowDaemon {
 struct DaemonOptions {
     var httpPort: Int = 8787
     var host: String = "127.0.0.1"
-    var socketPath: String = SocketServer.defaultSocketPath()
+    var socketPath: String = DaemonOptions.defaultDaemonSocketPath()
     var devRoot: String = FileManager.default.currentDirectoryPath
+
+    /// A DISTINCT default from the app's `crow.sock`, in the same owner-only dir,
+    /// so running `crowd` with defaults never unlinks/steals the desktop app's
+    /// socket. Sharing the app's path is opt-in via `--socket` (CROW-581 review).
+    static func defaultDaemonSocketPath() -> String {
+        let dir = (SocketServer.defaultSocketPath() as NSString).deletingLastPathComponent
+        return (dir as NSString).appendingPathComponent("crowd.sock")
+    }
 
     static func parse(_ arguments: [String]) -> DaemonOptions {
         var options = DaemonOptions()
@@ -130,7 +175,10 @@ struct DaemonOptions {
             case "--host": if let value = next { options.host = value }; index += 1
             case "--socket", "--socket-path": if let value = next { options.socketPath = value }; index += 1
             case "--dev-root": if let value = next { options.devRoot = value }; index += 1
-            default: break
+            default:
+                if flag.hasPrefix("-") {
+                    FileHandle.standardError.write(Data("[crowd] WARNING: ignoring unknown flag '\(flag)'\n".utf8))
+                }
             }
             index += 1
         }
