@@ -158,10 +158,13 @@ function sessionRow(s) {
 // ---------------------------------------------------------------------------
 async function selectSession(id) {
   selectedId = id;
-  document.getElementById('app').classList.add('has-selection');
+  const app = document.getElementById('app');
+  app.classList.add('has-selection');
+  app.classList.remove('mobile-show-sidebar'); // reveal the detail pane on mobile
   renderSidebar();
   renderHeader(sessions.find((x) => x.id === id));
   ensureTerminal();
+  setTimeout(fitTerminal, 50); // detail pane just became visible (mobile) — refit
   await refreshTerminals();
   fetchPR(id);
 }
@@ -312,7 +315,9 @@ async function deleteSession(id, name) {
     sessions = sessions.filter((x) => x.id !== id);
     if (selectedId === id) {
       selectedId = null;
-      document.getElementById('app').classList.remove('has-selection');
+      const app = document.getElementById('app');
+      app.classList.remove('has-selection');
+      app.classList.remove('mobile-show-sidebar');
       document.getElementById('detail-header').innerHTML = '';
       document.getElementById('tabbar').innerHTML = '';
     }
@@ -442,5 +447,8 @@ function selectWindow(win) {
 // ---------------------------------------------------------------------------
 // Boot
 // ---------------------------------------------------------------------------
+document.getElementById('back-to-sidebar').onclick = () => {
+  document.getElementById('app').classList.add('mobile-show-sidebar');
+};
 refreshSessions();
 setInterval(refreshSessions, 3000);

@@ -211,3 +211,44 @@ html, body {
 }
 #app.has-selection #detail-empty { display: none; }
 #app:not(.has-selection) #terminal-wrap { visibility: hidden; }
+
+/* ---- Floating "back to sidebar" hamburger (mobile only) ---- */
+#back-to-sidebar {
+  display: none;
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  z-index: 50;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-card);
+  color: var(--gold);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.45);
+}
+#back-to-sidebar:active { transform: translateY(1px); }
+
+/* ---- Mobile: one pane at a time ----
+   Sidebar shows until a session is selected, then the detail pane takes over
+   with the floating hamburger to return. Tapping the hamburger reveals the
+   sidebar again (mobile-show-sidebar) without dropping the selection. */
+@media (max-width: 720px) {
+  #app { grid-template-columns: 1fr; }
+  #sidebar, #detail { grid-column: 1; grid-row: 1; }
+
+  #app:not(.has-selection) #detail { display: none; }
+
+  #app.has-selection #sidebar { display: none; }
+  #app.has-selection #back-to-sidebar { display: flex; }
+  #app.has-selection #detail-header { padding-left: 60px; }
+
+  #app.has-selection.mobile-show-sidebar #sidebar { display: block; }
+  #app.has-selection.mobile-show-sidebar #detail { display: none; }
+  #app.has-selection.mobile-show-sidebar #back-to-sidebar { display: none; }
+}
