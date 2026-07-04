@@ -1,4 +1,9 @@
+#if canImport(Glibc)
+import Glibc
+import CPty  // exposes openpty(3) from <pty.h>; libc's Glibc module doesn't
+#else
 import Darwin
+#endif
 import Foundation
 
 enum PTYProcessError: Error {
@@ -12,26 +17,39 @@ public final class PTYProcess: @unchecked Sendable {
     private var childPID: pid_t = -1
     private var readSource: DispatchSourceRead?
     private let readQueue = DispatchQueue(label: "com.radiusmethod.crow.pty-read", qos: .userInteractive)
+    /// When true (default), `onOutput`/`onExit` fire on `DispatchQueue.main` —
+    /// what the AppKit surface needs. The headless `crowd` daemon has no main
+    /// run loop pumping that queue, so it constructs with `false` to receive
+    /// callbacks synchronously on `readQueue` and bridge them into its async
+    /// WebSocket loop (CROW-581).
+    private let deliverOnMain: Bool
 
     public var onOutput: ((Data) -> Void)?
     public var onExit: ((Int32) -> Void)?
 
-    public init() {}
+    public init(deliverOnMainQueue: Bool = true) {
+        self.deliverOnMain = deliverOnMainQueue
+    }
 
     deinit {
         readSource?.cancel()
         readSource = nil
-        readQueue.sync {
-            if childPID > 0 {
-                let pid = childPID
-                childPID = -1
-                kill(pid, SIGTERM)
-                Self.forceReap(pid)
-            }
-            if masterFD >= 0 {
-                close(masterFD)
-                masterFD = -1
-            }
+        // Do NOT hop onto `readQueue` here. `deinit` can run *on* `readQueue`
+        // when the last strong reference is released by a `readQueue.async`
+        // block (write/resize/terminate all capture `self`), and
+        // `dispatch_sync` onto the current queue traps — the daemon's
+        // short-lived PTYs hit this on disconnect. By `deinit` no other
+        // references or queued self-capturing blocks remain, so this state is
+        // ours to tear down directly without serialization.
+        if childPID > 0 {
+            let pid = childPID
+            childPID = -1
+            kill(pid, SIGTERM)
+            Self.forceReap(pid)
+        }
+        if masterFD >= 0 {
+            close(masterFD)
+            masterFD = -1
         }
     }
 
@@ -114,7 +132,12 @@ public final class PTYProcess: @unchecked Sendable {
         readQueue.async { [rows, cols] in
             guard self.masterFD >= 0 else { return }
             var win = winsize(ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0)
+            #if canImport(Glibc)
+            // glibc imports the ioctl request as an unsigned long.
+            _ = ioctl(self.masterFD, UInt(TIOCSWINSZ), &win)
+            #else
             _ = ioctl(self.masterFD, TIOCSWINSZ, &win)
+            #endif
         }
     }
 
@@ -123,7 +146,11 @@ public final class PTYProcess: @unchecked Sendable {
             guard self.masterFD >= 0 else { return }
             data.withUnsafeBytes { buffer in
                 guard let base = buffer.baseAddress else { return }
+                #if canImport(Glibc)
+                _ = Glibc.write(self.masterFD, base, buffer.count)
+                #else
                 _ = Darwin.write(self.masterFD, base, buffer.count)
+                #endif
             }
         }
     }
@@ -160,11 +187,17 @@ public final class PTYProcess: @unchecked Sendable {
         source.setEventHandler { [weak self] in
             guard let self, self.masterFD >= 0 else { return }
             var buffer = [UInt8](repeating: 0, count: 65536)
+            #if canImport(Glibc)
+            let count = Glibc.read(self.masterFD, &buffer, buffer.count)
+            #else
             let count = Darwin.read(self.masterFD, &buffer, buffer.count)
+            #endif
             if count > 0 {
                 let data = Data(buffer.prefix(count))
                 let handler = self.onOutput
-                DispatchQueue.main.async {
+                if self.deliverOnMain {
+                    DispatchQueue.main.async { handler?(data) }
+                } else {
                     handler?(data)
                 }
             } else if count == 0 {
@@ -192,7 +225,9 @@ public final class PTYProcess: @unchecked Sendable {
         guard notifyExit else { return }
         let code = Self.decodeExitStatus(status)
         let handler = onExit
-        DispatchQueue.main.async {
+        if deliverOnMain {
+            DispatchQueue.main.async { handler?(code) }
+        } else {
             handler?(code)
         }
     }

@@ -1,4 +1,6 @@
-import AppKit
+#if canImport(AppKit)
+import AppKit  // only for the WKWebView cockpit surface (gated below); Linux uses the daemon's WebSocket terminal instead
+#endif
 import CrowCore
 import Foundation
 
@@ -52,7 +54,9 @@ public final class TmuxBackend {
 
     /// The single embedded surface attached to the cockpit session. Created
     /// lazily on first use; WKWebView must load in a visible window.
+    #if canImport(AppKit)
     private var sharedSurface: XTermSurfaceView?
+    #endif
 
     /// UUID → tmux window index for tabs registered with us.
     private var bindings: [UUID: Int] = [:]
@@ -139,8 +143,10 @@ public final class TmuxBackend {
         if killServer {
             controller?.killServer()
         }
+        #if canImport(AppKit)
         sharedSurface?.destroy()
         sharedSurface = nil
+        #endif
         controller = nil
         bindings.removeAll()
         activeTerminalID = nil
@@ -719,6 +725,7 @@ public final class TmuxBackend {
     /// Return the shared cockpit xterm surface, lazily creating it the
     /// first time. The surface attaches to the live tmux session via
     /// `tmux -S … attach-session -t …` as its child command.
+    #if canImport(AppKit)
     public func cockpitSurface() throws -> XTermSurfaceView {
         if let existing = sharedSurface { return existing }
         let ctrl = try ensureRunningServer()
@@ -745,6 +752,7 @@ public final class TmuxBackend {
     public var existingCockpitSurface: XTermSurfaceView? {
         sharedSurface
     }
+    #endif
 
     /// Whether `id` has a live tmux-window binding. Used by callers that
     /// want to gate a send/destroy/makeActive on "this terminal is actually

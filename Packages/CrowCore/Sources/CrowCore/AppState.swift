@@ -1,4 +1,9 @@
 import Foundation
+// `@Observable` is re-exported by Foundation on Apple platforms, but on Linux
+// the Observation module must be imported explicitly for the macro to resolve.
+// Importing it unconditionally is harmless on macOS and unblocks the headless
+// `crowd` daemon reusing `AppState` on Linux (CROW-581).
+import Observation
 
 /// Check whether a repo name matches any of the given patterns.
 /// Supports exact matches and simple glob patterns with `*` (e.g., `org/*`, `*/repo`).

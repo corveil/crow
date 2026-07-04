@@ -27,4 +27,12 @@ public enum BundledResources {
             subdirectory: "xterm"
         )
     }
+
+    /// Directory holding the bundled xterm.js assets (xterm.js, xterm.css,
+    /// addons). The headless `crowd` daemon serves files from here over HTTP so
+    /// the browser terminal reuses the exact same 6.0.0 assets as the macOS app
+    /// (CROW-581) rather than duplicating them.
+    public static var xtermDirectoryURL: URL? {
+        Bundle.module.url(forResource: "xterm", withExtension: nil)
+    }
 }

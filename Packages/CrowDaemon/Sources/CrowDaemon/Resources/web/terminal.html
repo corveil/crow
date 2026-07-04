@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Crow Terminal</title>
+  <link rel="stylesheet" href="/xterm/xterm.css">
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #1e1e1e;
+    }
+    #terminal {
+      width: 100%;
+      height: 100%;
+    }
+  </style>
+</head>
+<body>
+  <div id="terminal"></div>
+  <script src="/xterm/xterm.js"></script>
+  <script src="/xterm/xterm-addon-fit.js"></script>
+  <script src="/xterm/xterm-addon-image.js"></script>
+  <script>
+    // WebSocket transport variant of CrowTerminal's terminal.html. The xterm.js
+    // config block is copied verbatim so font/scrollback/inline-image behavior
+    // matches the macOS surface; only the WKWebView message bus is swapped for a
+    // WebSocket carrying raw PTY bytes (binary) + a resize control frame (JSON).
+    (function () {
+      if (typeof Terminal !== 'function') {
+        console.error('Crow: Terminal constructor missing (xterm.js failed to load)');
+        return;
+      }
+
+      const fitAddon = new FitAddon.FitAddon();
+      const imageAddon = new ImageAddon.ImageAddon({
+        sixelSupport: true,
+        iipSupport: true,
+        kittySupport: true,
+      });
+      const term = new Terminal({
+        cursorBlink: true,
+        fontSize: 14,
+        fontFamily: '"MesloLGS NF", "MesloLGS Nerd Font", "JetBrainsMono Nerd Font", "Hack Nerd Font", "FiraCode Nerd Font", Menlo, Monaco, monospace',
+        theme: { background: '#1e1e1e', foreground: '#d4d4d4' },
+        scrollback: 10000,
+        allowTransparency: true,
+      });
+      term.loadAddon(fitAddon);
+      term.loadAddon(imageAddon);
+      term.open(document.getElementById('terminal'));
+
+      const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
+      const ws = new WebSocket(proto + '://' + window.location.host + '/terminal');
+      ws.binaryType = 'arraybuffer';
+
+      function sendResize() {
+        fitAddon.fit();
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'resize', rows: term.rows, cols: term.cols }));
+        }
+      }
+
+      ws.onopen = function () {
+        sendResize();
+        // Keystrokes → PTY. Encode as UTF-8 bytes (binary frame) so multibyte
+        // input round-trips exactly like the macOS `term.onData` path.
+        term.onData(function (data) {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(new TextEncoder().encode(data));
+          }
+        });
+      };
+
+      ws.onmessage = function (event) {
+        // Raw PTY bytes (binary). Feed xterm a Uint8Array, never a string, so
+        // UTF-8 multibyte sequences (Claude/Cursor TUIs) stay intact.
+        if (event.data instanceof ArrayBuffer) {
+          term.write(new Uint8Array(event.data));
+        } else {
+          term.write(event.data);
+        }
+      };
+
+      ws.onclose = function () {
+        term.write('\r\n\x1b[31m[crow] terminal disconnected\x1b[0m\r\n');
+      };
+
+      window.addEventListener('resize', sendResize);
+    })();
+  </script>
+</body>
+</html>
