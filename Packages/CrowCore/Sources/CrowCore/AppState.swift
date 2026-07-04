@@ -56,6 +56,12 @@ public final class AppState {
     /// `.review`-kind sessions; manager/work/CLI sessions are unaffected.
     public var reviewAutoPermissionMode: Bool = true
 
+    /// Whether newly launched work coder views start with
+    /// `--permission-mode auto` (auto-accept) instead of plan mode. Mirrors
+    /// `AppConfig.coderViewAutoPermissionMode`. Applies only to `.work`-kind
+    /// sessions; manager/review/job sessions are unaffected (#586).
+    public var coderViewAutoPermissionMode: Bool = false
+
     /// `true` when the Manager's `claude` process has exited (crash, kill, OOM)
     /// and has not yet been restarted. Drives the "Manager process exited" banner
     /// and enables the "Restart Manager" action. Reset when the Manager relaunches.

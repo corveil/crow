@@ -421,7 +421,7 @@ Detect each secondary repo's default branch with the same `gh repo view --json d
 
 IMPORTANT: Always use full absolute paths, never abbreviated (`...`) or home-relative (`~`) paths.
 
-The prompt is written to `{devRoot}/.claude/prompts/crow-prompt-{session_name}.md`. Plan mode is set by the `--permission-mode plan` flag in `setup.sh`'s launch command — do not prepend `/plan` to the prompt body (it would be parsed as a slash command by the receiving session). See issue #313.
+The prompt is written to `{devRoot}/.claude/prompts/crow-prompt-{session_name}.md`. The permission mode is set by the `--permission-mode` flag in `setup.sh`'s launch command — plan mode by default, or auto-accept when the Settings → Automation "Launch new coder views in auto permission mode" toggle is on (#586). Do not prepend `/plan` to the prompt body (it would be parsed as a slash command by the receiving session). See issue #313.
 
 **Repo descriptions for the prompt table:**
 
