@@ -8,6 +8,7 @@ public struct AutomationSettingsView: View {
     @Binding var defaults: ConfigDefaults
     @Binding var remoteControlEnabled: Bool
     @Binding var managerAutoPermissionMode: Bool
+    @Binding var coderViewAutoPermissionMode: Bool
     @Binding var managerGateway: WorkspaceGateway?
     @Binding var jiraCredential: JiraCredential?
     @Binding var autoRespond: AutoRespondSettings
@@ -26,6 +27,7 @@ public struct AutomationSettingsView: View {
         defaults: Binding<ConfigDefaults>,
         remoteControlEnabled: Binding<Bool>,
         managerAutoPermissionMode: Binding<Bool>,
+        coderViewAutoPermissionMode: Binding<Bool>,
         managerGateway: Binding<WorkspaceGateway?>,
         jiraCredential: Binding<JiraCredential?>,
         autoRespond: Binding<AutoRespondSettings>,
@@ -37,6 +39,7 @@ public struct AutomationSettingsView: View {
         self._defaults = defaults
         self._remoteControlEnabled = remoteControlEnabled
         self._managerAutoPermissionMode = managerAutoPermissionMode
+        self._coderViewAutoPermissionMode = coderViewAutoPermissionMode
         self._managerGateway = managerGateway
         self._jiraCredential = jiraCredential
         self._autoRespond = autoRespond
@@ -151,6 +154,14 @@ public struct AutomationSettingsView: View {
                 Toggle("Launch in auto permission mode", isOn: $managerAutoPermissionMode)
                     .onChange(of: managerAutoPermissionMode) { _, _ in onSave?() }
                 Text("Passes --permission-mode auto so the Manager can run crow, gh, and git commands without per-call approval. Requires Claude Code 2.1.83+ on a Max, Team, Enterprise, or API plan with the Anthropic provider. Turn off if your account reports auto mode as unavailable. Takes effect on next app launch.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Coder Views") {
+                Toggle("Launch new coder views in auto permission mode", isOn: $coderViewAutoPermissionMode)
+                    .onChange(of: coderViewAutoPermissionMode) { _, _ in onSave?() }
+                Text("Passes --permission-mode auto so new work coder views start in auto-accept instead of plan mode. Applies to newly kicked-off sessions and to relaunches after an app restart; the Manager and scheduled jobs have their own toggles. Off by default.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

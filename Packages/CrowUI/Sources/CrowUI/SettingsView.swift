@@ -100,6 +100,7 @@ public struct SettingsView: View {
                 defaults: $config.defaults,
                 remoteControlEnabled: $config.remoteControlEnabled,
                 managerAutoPermissionMode: $config.managerAutoPermissionMode,
+                coderViewAutoPermissionMode: $config.coderViewAutoPermissionMode,
                 managerGateway: $config.managerGateway,
                 jiraCredential: $config.jiraCredential,
                 autoRespond: $config.autoRespond,
