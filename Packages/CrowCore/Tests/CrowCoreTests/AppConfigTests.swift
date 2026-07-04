@@ -232,6 +232,30 @@ import Testing
     #expect(config.jobsAutoPermissionMode == true)
 }
 
+@Test func appConfigCoderViewAutoPermissionModeRoundTrip() throws {
+    var config = AppConfig()
+    config.coderViewAutoPermissionMode = true
+
+    let data = try JSONEncoder().encode(config)
+    let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+    #expect(decoded.coderViewAutoPermissionMode == true)
+
+    config.coderViewAutoPermissionMode = false
+    let data2 = try JSONEncoder().encode(config)
+    let decoded2 = try JSONDecoder().decode(AppConfig.self, from: data2)
+    #expect(decoded2.coderViewAutoPermissionMode == false)
+}
+
+@Test func appConfigCoderViewAutoPermissionModeDefaultsFalseWhenKeyMissing() throws {
+    // Unlike the Manager/jobs toggles, coder views default to plan mode —
+    // legacy configs without the key must NOT opt in, so existing work
+    // sessions keep launching in plan mode unless the user flips the
+    // Settings → Automation toggle (#586).
+    let json = #"{"workspaces": [], "remoteControlEnabled": false}"#.data(using: .utf8)!
+    let config = try JSONDecoder().decode(AppConfig.self, from: json)
+    #expect(config.coderViewAutoPermissionMode == false)
+}
+
 @Test func appConfigDecodeWithPartialKeys() throws {
     let json = """
     {"workspaces": [{"id": "00000000-0000-0000-0000-000000000001", "name": "Org", "provider": "github", "cli": "gh", "alwaysInclude": []}]}

@@ -1,0 +1,190 @@
+/* Crow web UI — Settings modal (CROW-581). Reuses the CorveilTheme tokens from
+   app.css (:root) and the shared .action-btn button styles; adds the first
+   modal + form-control styles in the app. */
+
+.settings-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  background: rgba(0, 0, 0, 0.58);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.settings-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(720px, 94vw);
+  max-height: 88vh;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+}
+
+.settings-head {
+  display: flex;
+  align-items: center;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.settings-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--gold);
+  flex: 1;
+}
+.settings-close {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+.settings-close:hover { color: var(--text-primary); }
+
+.settings-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  overflow-x: auto;
+}
+.settings-tab {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 10px 12px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  white-space: nowrap;
+}
+.settings-tab:hover { color: var(--text-primary); }
+.settings-tab.active {
+  color: var(--gold);
+  border-bottom-color: var(--gold);
+}
+
+.settings-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 18px;
+}
+
+.settings-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--border-subtle);
+}
+.settings-foot-spacer { flex: 1; }
+.settings-appdown {
+  font-size: 11px;
+  color: var(--orange);
+  max-width: 60%;
+}
+
+/* -------- form controls (first in the app) -------- */
+
+.st-group {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--gold-dark);
+  margin: 18px 0 8px;
+}
+.st-group:first-child { margin-top: 0; }
+
+.st-field { margin-bottom: 12px; }
+.st-label {
+  display: block;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+.st-help {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 4px;
+  line-height: 1.4;
+}
+
+.st-input,
+.st-select,
+.st-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 9px;
+  background: var(--bg-deep);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 12px;
+}
+.st-textarea { resize: vertical; min-height: 60px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.st-input:focus,
+.st-select:focus,
+.st-textarea:focus { outline: none; border-color: var(--gold); }
+.st-input.st-readonly,
+.st-readonly { opacity: 0.55; cursor: default; }
+
+.st-switch-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  cursor: pointer;
+}
+.st-switch { accent-color: var(--gold); width: 15px; height: 15px; flex: none; }
+.st-switch-label { font-size: 12px; color: var(--text-primary); }
+
+/* -------- list rows (workspaces / jobs) -------- */
+
+.st-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  margin-bottom: 6px;
+  background: var(--bg-card);
+}
+.st-row-main { flex: 1; min-width: 0; }
+.st-row-title { font-size: 12px; font-weight: 600; color: var(--text-primary); }
+.st-row-sub { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.st-row-actions { display: flex; gap: 6px; flex: none; }
+
+.st-add {
+  margin-top: 4px;
+  padding: 6px 12px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--gold);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.st-add:hover { background: rgba(221, 196, 130, 0.1); }
+
+.st-note {
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-card);
+}
+.st-empty { color: var(--text-muted); font-size: 12px; padding: 8px 0; }

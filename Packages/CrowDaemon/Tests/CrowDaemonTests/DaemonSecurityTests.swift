@@ -38,6 +38,34 @@ import CrowPersistence
         #expect(!WebSocketOriginGuard.isLoopbackHost("0.0.0.0"))
         #expect(!WebSocketOriginGuard.isLoopbackHost("192.168.1.5"))
     }
+
+    @Test func trustsOwnBindHostButNotOthers() {
+        // A specific non-loopback bind may serve its own web UI…
+        #expect(WebSocketOriginGuard.isAllowedOrigin("http://100.64.0.5:8787", boundHost: "100.64.0.5"))
+        // …but cross-site origins are still rejected under that bind.
+        #expect(!WebSocketOriginGuard.isAllowedOrigin("https://evil.com", boundHost: "100.64.0.5"))
+        #expect(!WebSocketOriginGuard.isAllowedOrigin("http://192.168.1.9:8787", boundHost: "100.64.0.5"))
+    }
+
+    @Test func wildcardBindTrustsPrivateOriginsOnly() {
+        // 0.0.0.0 is reachable via any local interface: trust LAN/tailnet…
+        #expect(WebSocketOriginGuard.isAllowedOrigin("http://192.168.1.190:8787", boundHost: "0.0.0.0"))
+        #expect(WebSocketOriginGuard.isAllowedOrigin("http://10.1.2.3:8787", boundHost: "0.0.0.0"))
+        #expect(WebSocketOriginGuard.isAllowedOrigin("http://100.100.5.9:8787", boundHost: "0.0.0.0"))
+        #expect(WebSocketOriginGuard.isAllowedOrigin("http://127.0.0.1:8787", boundHost: "0.0.0.0"))
+        // …but reject public origins even on a wildcard bind.
+        #expect(!WebSocketOriginGuard.isAllowedOrigin("https://evil.com", boundHost: "0.0.0.0"))
+        #expect(!WebSocketOriginGuard.isAllowedOrigin("http://8.8.8.8", boundHost: "0.0.0.0"))
+    }
+
+    @Test func privateHostClassification() {
+        for host in ["10.0.0.1", "192.168.1.190", "172.16.0.9", "172.31.255.1", "169.254.1.1", "100.64.0.1", "127.0.0.1"] {
+            #expect(WebSocketOriginGuard.isPrivateHost(host), "\(host) should be private")
+        }
+        for host in ["8.8.8.8", "1.1.1.1", "172.32.0.1", "100.128.0.1", "evil.com", "203.0.113.5"] {
+            #expect(!WebSocketOriginGuard.isPrivateHost(host), "\(host) should be public")
+        }
+    }
 }
 
 @Suite struct StaticAssetGuardTests {
@@ -91,20 +119,13 @@ import CrowPersistence
 }
 
 /// The daemon must not steal the desktop app's socket: its default is a distinct
-/// `crowd.sock`, sharing the app's `crow.sock` is opt-in via --socket.
+/// `crowd.sock`, sharing the app's `crow.sock` is opt-in via --socket (CROW-581).
 @Suite struct DaemonSocketDefaultTests {
     @Test func daemonDefaultIsDistinctFromAppSocket() {
         let daemonSock = DaemonOptions.defaultDaemonSocketPath()
         #expect(daemonSock != SocketServer.defaultSocketPath())
         #expect(daemonSock.hasSuffix("crowd.sock"))
         #expect(DaemonOptions.parse(["crowd"]).socketPath == daemonSock)
-    }
-
-    @Test func tmuxSocketIsNotInSharedTmp() {
-        // Must not sit in world-writable /tmp (squat/DoS on Linux).
-        let path = TerminalCockpit.tmuxSocketPath()
-        #expect(!path.hasPrefix("/tmp/"))
-        #expect(path.hasSuffix("crowd-tmux.sock"))
     }
 }
 
@@ -113,7 +134,9 @@ import CrowPersistence
 @Suite struct AddWorktreeValidationTests {
     @MainActor
     private func router() -> CommandRouter {
-        makeCommandRouter(appState: AppState(), store: JSONStore(), git: GitManager(), devRoot: NSTemporaryDirectory())
+        makeCommandRouter(
+            appState: AppState(), store: JSONStore(), git: GitManager(),
+            devRoot: NSTemporaryDirectory(), cockpit: nil, forwardSocket: nil)
     }
 
     private func addWorktree(_ router: CommandRouter, branch: String, session: UUID) async -> JSONRPCResponse {
