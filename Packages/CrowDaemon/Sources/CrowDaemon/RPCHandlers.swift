@@ -467,10 +467,20 @@ func makeCommandRouter(
         // (CROW-581, desktop-only creds). Only one writer at a time: forward when
         // reachable, else write locally.
         "get-config": { params in
-            if let forwardSocket {
-                do { return try forwardToApp("get-config", params, socket: forwardSocket) }
-                catch let error as DaemonRPCError { throw error }
-                catch { /* app not running → read from disk */ }
+            // Forward to the app when it's reachable AND recognizes the method;
+            // otherwise read {devRoot}/.claude/config.json directly. The fallback
+            // covers both the app being down (socket error) and an app too old to
+            // know get-config (method-not-found) during a daemon-ahead rollout.
+            if let forwardSocket,
+               let response = try? SocketClient(socketPath: forwardSocket).send(method: "get-config", params: params) {
+                if let error = response.error {
+                    if error.code != RPCErrorCode.methodNotFound {
+                        throw DaemonRPCError.applicationError(error.message)
+                    }
+                    // else: old app → fall through to disk
+                } else {
+                    return response.result ?? [:]
+                }
             }
             let config = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
             let stripped = SettingsSecrets.strippedForTransport(config)
@@ -486,10 +496,16 @@ func makeCommandRouter(
                   let incoming = try? JSONDecoder().decode(AppConfig.self, from: data) else {
                 throw DaemonRPCError.invalidParams("config must be a valid AppConfig JSON string")
             }
-            if let forwardSocket {
-                do { return try forwardToApp("set-config", params, socket: forwardSocket) }
-                catch let error as DaemonRPCError { throw error }
-                catch { /* app not running → write to disk */ }
+            if let forwardSocket,
+               let response = try? SocketClient(socketPath: forwardSocket).send(method: "set-config", params: params) {
+                if let error = response.error {
+                    if error.code != RPCErrorCode.methodNotFound {
+                        throw DaemonRPCError.applicationError(error.message)
+                    }
+                    // else: old app → write to disk below
+                } else {
+                    return response.result ?? [:]
+                }
             }
             // The browser can't see or change credentials, so keep whatever is
             // already on disk (nil-current drops any credential shell — see
