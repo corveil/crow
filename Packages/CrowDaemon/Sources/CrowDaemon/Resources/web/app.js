@@ -48,6 +48,14 @@ let sessions = [];
 let selectedId = null;
 let terminals = [];
 let activeTerminal = null; // { id, name, window }
+const prCache = {}; // session id → get-pr-status result
+
+const PR_COLOR = {
+  passing: 'var(--green)', failing: 'var(--red)', pending: 'var(--orange)',
+  approved: 'var(--green)', changesRequested: 'var(--red)', reviewRequired: 'var(--orange)',
+  mergeable: 'var(--green)', conflicting: 'var(--red)', merged: 'var(--gold)',
+  unknown: 'var(--text-muted)',
+};
 
 const STATUS_COLOR = {
   active: 'var(--green)', paused: 'var(--yellow)',
@@ -74,6 +82,7 @@ async function refreshSessions() {
     const res = await rpc('list-sessions');
     sessions = res.sessions || [];
     renderSidebar();
+    if (selectedId) fetchPR(selectedId); // keep the selected session's PR badge live
   } catch (_) { /* transient — next poll retries */ }
 }
 
@@ -154,6 +163,7 @@ async function selectSession(id) {
   renderHeader(sessions.find((x) => x.id === id));
   ensureTerminal();
   await refreshTerminals();
+  fetchPR(id);
 }
 
 function shorten(path) {
@@ -217,6 +227,58 @@ function renderHeader(s) {
     actions.appendChild(del);
   }
   root.appendChild(actions);
+
+  // PR status badge + PR-state-aware quick actions (from get-pr-status).
+  const pr = prCache[s.id];
+  if (pr && pr.has_pr) {
+    const prRow = el('div', 'pr-row');
+    prRow.appendChild(prChip('Checks', pr.checks));
+    prRow.appendChild(prChip('Review', pr.review));
+    prRow.appendChild(prChip('Merge', pr.merge));
+    root.appendChild(prRow);
+
+    const qa = el('div', 'actions-row');
+    if (pr.merge === 'conflicting') qa.appendChild(qaButton('Rebase & Fix', 'fixConflicts', s.id, 'danger'));
+    if (pr.review === 'changesRequested') qa.appendChild(qaButton('Address Review', 'addressChanges', s.id, 'danger'));
+    if (pr.checks === 'failing') qa.appendChild(qaButton('Fix Checks', 'fixChecks', s.id, 'danger'));
+    if (pr.ready_to_merge) qa.appendChild(qaButton('Merge PR', 'mergePR', s.id, 'primary'));
+    if (qa.children.length) root.appendChild(qa);
+  }
+}
+
+function prChip(label, state) {
+  const chip = el('span', 'pr-chip', label + ': ' + state);
+  const color = PR_COLOR[state] || 'var(--text-muted)';
+  chip.style.color = color;
+  chip.style.borderColor = color;
+  return chip;
+}
+
+function qaButton(label, action, id, variant) {
+  const btn = el('button', 'action-btn' + (variant ? ' action-' + variant : ''), label);
+  btn.onclick = () => quickAction(id, action, label);
+  return btn;
+}
+
+// Fetch PR status (forwarded to the app) and re-render the header for it.
+async function fetchPR(id) {
+  try {
+    const pr = await rpc('get-pr-status', { session_id: id });
+    prCache[id] = pr;
+    if (id === selectedId) {
+      const s = sessions.find((x) => x.id === id);
+      if (s) renderHeader(s);
+    }
+  } catch (_) { /* app not running / no PR — leave prior */ }
+}
+
+async function quickAction(id, action, label) {
+  try {
+    await rpc('quick-action', { session_id: id, action });
+    if (term) term.write('\r\n\x1b[33m[crow] dispatched: ' + label + '\x1b[0m\r\n');
+  } catch (e) {
+    if (term) term.write('\r\n\x1b[31m[crow] ' + label + ' failed: ' + (e.message || e) + '\x1b[0m\r\n');
+  }
 }
 
 // Write-actions. Optimistically update local state, then let the store-reload

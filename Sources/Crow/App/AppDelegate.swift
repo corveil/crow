@@ -1446,6 +1446,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     ]
                 }
             },
+            // CROW-581: expose live PR status (in-memory, not persisted) so the
+            // headless daemon / web UI can render a PR badge matching the app.
+            "get-pr-status": { @Sendable params in
+                guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
+                    throw RPCError.invalidParams("session_id required")
+                }
+                return await MainActor.run {
+                    guard let pr = capturedAppState.prStatus[id] else {
+                        return ["has_pr": .bool(false)]
+                    }
+                    return [
+                        "has_pr": .bool(true),
+                        "checks": .string(pr.checksPass.rawValue),
+                        "review": .string(pr.reviewStatus.rawValue),
+                        "merge": .string(pr.mergeable.rawValue),
+                        "is_open": .bool(pr.isOpen),
+                        "is_merged": .bool(pr.isMerged),
+                        "ready_to_merge": .bool(pr.isReadyToMerge),
+                        "has_blockers": .bool(pr.hasBlockers),
+                        "failed_checks": .array(pr.failedCheckNames.map { .string($0) }),
+                    ]
+                }
+            },
+            // CROW-581: trigger a PR-status quick action (fixConflicts /
+            // addressChanges / fixChecks / mergePR) — reuses the existing
+            // `onQuickAction` hook, which pastes the deterministic prompt into
+            // the session's managed agent terminal.
+            "quick-action": { @Sendable params in
+                guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
+                    throw RPCError.invalidParams("session_id required")
+                }
+                guard let actionStr = params["action"]?.stringValue, let action = QuickAction(rawValue: actionStr) else {
+                    throw RPCError.invalidParams("action required (fixConflicts, addressChanges, fixChecks, mergePR)")
+                }
+                await MainActor.run {
+                    capturedAppState.onQuickAction?(id, action)
+                }
+                return ["dispatched": .bool(true), "action": .string(action.rawValue)]
+            },
             "set-status": { @Sendable params in
                 guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr),
                       let statusStr = params["status"]?.stringValue, let status = SessionStatus(rawValue: statusStr) else {

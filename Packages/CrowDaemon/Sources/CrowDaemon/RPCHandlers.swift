@@ -342,5 +342,25 @@ func makeCommandRouter(
             catch let error as DaemonRPCError { throw error }
             catch { throw DaemonRPCError.applicationError("Crow desktop app not reachable; cannot delete session") }
         },
+
+        // Live PR status (checks/review/merge) — in-memory on the app, so
+        // forward-only; report no PR when the app isn't running.
+        "get-pr-status": { params in
+            guard let forwardSocket else { return ["has_pr": .bool(false)] }
+            do { return try forwardToApp("get-pr-status", params, socket: forwardSocket) }
+            catch let error as DaemonRPCError { throw error }
+            catch { return ["has_pr": .bool(false)] }
+        },
+
+        // Trigger a PR quick action — forward-only (needs the app's agent
+        // terminal + coordinator to dispatch the prompt).
+        "quick-action": { params in
+            guard let forwardSocket else {
+                throw DaemonRPCError.applicationError("Quick actions require the Crow desktop app to be running")
+            }
+            do { return try forwardToApp("quick-action", params, socket: forwardSocket) }
+            catch let error as DaemonRPCError { throw error }
+            catch { throw DaemonRPCError.applicationError("Crow desktop app not reachable") }
+        },
     ])
 }

@@ -156,6 +156,22 @@ html, body {
 .action-btn:active { transform: translateY(1px); }
 .action-btn.action-danger { color: var(--red); border-color: rgba(255, 69, 58, 0.4); }
 .action-btn.action-danger:hover { background: rgba(255, 69, 58, 0.12); }
+.action-btn.action-primary {
+  color: #10240f;
+  background: var(--green);
+  border-color: var(--green);
+}
+.action-btn.action-primary:hover { filter: brightness(1.08); }
+.pr-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.pr-chip {
+  padding: 2px 9px;
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: capitalize;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-card);
+}
 #tabbar {
   display: flex;
   align-items: stretch;
