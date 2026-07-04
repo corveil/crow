@@ -248,7 +248,9 @@ function renderHeader(s) {
       chip.href = link.url;
       chip.target = '_blank';
       chip.rel = 'noopener';
-      chip.textContent = link.label || link.type || 'link';
+      // The stored ticket link label is often generic ("Issue"); prefer the
+      // badge (e.g. "Issue #579") so the number shows, like the PR chip does.
+      chip.textContent = (link.type === 'ticket' && s.ticket_badge) || link.label || link.type || 'link';
       row.appendChild(chip);
     }
     root.appendChild(row);
