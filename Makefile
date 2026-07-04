@@ -1,4 +1,4 @@
-.PHONY: build setup app release sign install install-app uninstall clean clean-all check test help
+.PHONY: build setup app release sign install install-app uninstall clean clean-all check test help crowd-dev
 
 # Install destination and build config (override on the command line, e.g.
 # `make install BINDIR=/usr/local/bin` or `make install CONFIG=release`).
@@ -36,6 +36,11 @@ setup:
 app:
 	bash scripts/generate-build-info.sh
 	swift build $(if $(filter release,$(CONFIG)),-c release,)
+
+# Dev hot-reload for the crowd daemon: web UI served live from source (edit +
+# refresh), Swift changes trigger a rebuild + restart. See scripts/crowd-dev.sh.
+crowd-dev:
+	bash scripts/crowd-dev.sh
 
 release:
 	bash scripts/generate-build-info.sh

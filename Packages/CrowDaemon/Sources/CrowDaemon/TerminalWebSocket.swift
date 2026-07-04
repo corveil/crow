@@ -5,16 +5,21 @@ import Hummingbird
 import HummingbirdWebSocket
 import NIOCore
 
-/// Streams a PTY running `tmux attach-session` to xterm.js over a WebSocket
-/// (`/terminal`). Replaces the macOS WKWebView message bus with the same four
-/// message types: raw PTY bytes out (binary frames), keystrokes in (binary
-/// frames), and a `{"type":"resize",...}` JSON control frame (CROW-581).
+/// Streams a PTY attached to a private grouped view of the shared tmux cockpit
+/// to xterm.js over a WebSocket (`/terminal`). Replaces the macOS WKWebView
+/// message bus with the same message types: raw PTY bytes out (binary), input
+/// in (binary), and JSON control frames — `resize` and `select-window`.
+///
+/// Each connection opens its own grouped tmux session, so `select-window` shows
+/// the chosen window without disturbing any other client — including the
+/// running desktop app, which shares the same cockpit (CROW-581).
 enum TerminalWebSocket {
-    static func mount(on router: Router<BasicWebSocketRequestContext>, cockpit: TerminalCockpit) {
+    static func mount(on router: Router<BasicWebSocketRequestContext>, cockpit: TerminalCockpit, boundHost: String) {
         router.ws("/terminal") { request, _ in
             // Reject cross-site upgrades — a plain attach yields an interactive
             // shell, so an unguarded upgrade is effectively RCE (CROW-581 review).
-            WebSocketOriginGuard.isAllowedOrigin(request.headers[.origin]) ? .upgrade() : .dontUpgrade
+            WebSocketOriginGuard.isAllowedOrigin(request.headers[.origin], boundHost: boundHost)
+                ? .upgrade() : .dontUpgrade
         } onUpgrade: { inbound, outbound, _ in
             // Bound concurrent PTY + tmux attaches.
             guard TerminalConnectionLimiter.shared.acquire() else {
@@ -22,6 +27,11 @@ enum TerminalWebSocket {
                 return
             }
             defer { TerminalConnectionLimiter.shared.release() }
+
+            // Private grouped view of the cockpit — independent current-window,
+            // torn down when the browser disconnects.
+            let group = cockpit.openViewSession()
+            defer { cockpit.closeViewSession(group) }
 
             // deliverOnMainQueue: false — the daemon has no main run loop, so PTY
             // output is delivered synchronously on the PTY read queue and bridged
@@ -32,7 +42,7 @@ enum TerminalWebSocket {
             pty.onExit = { _ in continuation.finish() }
 
             do {
-                try pty.start(command: cockpit.attachCommand(), workingDirectory: nil)
+                try pty.start(command: cockpit.attachCommand(group: group), workingDirectory: nil)
             } catch {
                 continuation.finish()
                 return
@@ -50,20 +60,30 @@ enum TerminalWebSocket {
                 outputTask.cancel()
             }
 
-            // Inbound: binary = keystrokes → PTY; text = JSON control (resize).
+            // Inbound: binary = keystrokes → PTY; text = JSON control frame.
             for try await message in inbound.messages(maxSize: 1 << 20) {
                 switch message {
                 case .binary(let buffer):
                     pty.write(Data(buffer.readableBytesView))
                 case .text(let text):
                     guard let data = text.data(using: .utf8),
-                          let control = try? JSONDecoder().decode(TerminalControl.self, from: data),
-                          control.type == "resize" else { continue }
-                    // Floor at 1×1 so a zero/negative request can't drive a
-                    // degenerate tmux resize (CROW-581 review).
-                    pty.resize(
-                        rows: UInt16(clamping: max(1, control.rows ?? 24)),
-                        cols: UInt16(clamping: max(1, control.cols ?? 80)))
+                          let control = try? JSONDecoder().decode(TerminalControl.self, from: data) else { continue }
+                    switch control.type {
+                    case "resize":
+                        // Floor at 1×1 so a zero/negative request can't drive a
+                        // degenerate tmux resize (CROW-581 review).
+                        pty.resize(
+                            rows: UInt16(clamping: max(1, control.rows ?? 24)),
+                            cols: UInt16(clamping: max(1, control.cols ?? 80)))
+                    case "select-window":
+                        // Switch this browser's grouped view to the window; other
+                        // clients (incl. the desktop app) keep their own view.
+                        if let window = control.window {
+                            cockpit.selectWindow(group: group, index: window)
+                        }
+                    default:
+                        break
+                    }
                 }
             }
         }
@@ -74,4 +94,5 @@ private struct TerminalControl: Decodable {
     let type: String
     let rows: Int?
     let cols: Int?
+    let window: Int?
 }
