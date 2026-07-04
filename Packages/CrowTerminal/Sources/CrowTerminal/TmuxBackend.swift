@@ -1,4 +1,6 @@
-import AppKit
+#if canImport(AppKit)
+import AppKit  // only for the WKWebView cockpit surface (gated below); Linux uses the daemon's WebSocket terminal instead
+#endif
 import CrowCore
 import Foundation
 
@@ -65,7 +67,9 @@ public final class TmuxBackend {
 
     /// The single embedded surface attached to the cockpit session. Created
     /// lazily on first use; WKWebView must load in a visible window.
+    #if canImport(AppKit)
     private var sharedSurface: XTermSurfaceView?
+    #endif
 
     /// UUID → tmux window index for tabs registered with us.
     private var bindings: [UUID: Int] = [:]
@@ -153,9 +157,12 @@ public final class TmuxBackend {
         // onProcessExit synchronously, and killServer's waitUntilExit pumps the
         // main run loop — without this order the attach client's death would be
         // delivered mid-shutdown and a deliberate restart would masquerade as
-        // a server crash (#588).
+        // a server crash (#588). Guarded for the Linux daemon build, where the
+        // AppKit surface doesn't exist (b982621).
+        #if canImport(AppKit)
         sharedSurface?.destroy()
         sharedSurface = nil
+        #endif
         if killServer {
             controller?.killServer()
         }
@@ -753,6 +760,7 @@ public final class TmuxBackend {
     /// Return the shared cockpit xterm surface, lazily creating it the
     /// first time. The surface attaches to the live tmux session via
     /// `tmux -S … attach-session -t …` as its child command.
+    #if canImport(AppKit)
     public func cockpitSurface() throws -> XTermSurfaceView {
         if let existing = sharedSurface { return existing }
         let ctrl = try ensureRunningServer()
@@ -788,6 +796,7 @@ public final class TmuxBackend {
     public var existingCockpitSurface: XTermSurfaceView? {
         sharedSurface
     }
+    #endif
 
     /// Destroy only the cockpit attach surface; the server, window bindings,
     /// sentinels and readiness watches all survive. The next `cockpitSurface()`

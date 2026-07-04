@@ -1,3 +1,6 @@
+// Gated: SwiftUI/AppKit terminal tab view, macOS-only (CROW-581). The Linux
+// web UI renders the terminal in the browser, so this file compiles away.
+#if canImport(AppKit)
 import SwiftUI
 import AppKit
 import CrowCore
@@ -134,3 +137,4 @@ public struct TerminalSurfaceView: NSViewRepresentable {
         }
     }
 }
+#endif
