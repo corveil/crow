@@ -2,13 +2,13 @@ import SwiftUI
 import CrowCore
 
 /// Settings view for automation toggles: which repos surface review/ticket activity,
-/// whether new sessions opt into remote control, Manager Terminal and code-review
-/// permission modes, and auto-respond on PR review / CI signals.
+/// whether new sessions opt into remote control, Manager Terminal permission mode,
+/// and auto-respond on PR review / CI signals.
 public struct AutomationSettingsView: View {
     @Binding var defaults: ConfigDefaults
     @Binding var remoteControlEnabled: Bool
     @Binding var managerAutoPermissionMode: Bool
-    @Binding var reviewAutoPermissionMode: Bool
+    @Binding var coderViewAutoPermissionMode: Bool
     @Binding var managerGateway: WorkspaceGateway?
     @Binding var jiraCredential: JiraCredential?
     @Binding var autoRespond: AutoRespondSettings
@@ -27,7 +27,7 @@ public struct AutomationSettingsView: View {
         defaults: Binding<ConfigDefaults>,
         remoteControlEnabled: Binding<Bool>,
         managerAutoPermissionMode: Binding<Bool>,
-        reviewAutoPermissionMode: Binding<Bool>,
+        coderViewAutoPermissionMode: Binding<Bool>,
         managerGateway: Binding<WorkspaceGateway?>,
         jiraCredential: Binding<JiraCredential?>,
         autoRespond: Binding<AutoRespondSettings>,
@@ -39,7 +39,7 @@ public struct AutomationSettingsView: View {
         self._defaults = defaults
         self._remoteControlEnabled = remoteControlEnabled
         self._managerAutoPermissionMode = managerAutoPermissionMode
-        self._reviewAutoPermissionMode = reviewAutoPermissionMode
+        self._coderViewAutoPermissionMode = coderViewAutoPermissionMode
         self._managerGateway = managerGateway
         self._jiraCredential = jiraCredential
         self._autoRespond = autoRespond
@@ -158,10 +158,10 @@ public struct AutomationSettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
-            Section("Code Review") {
-                Toggle("Run code reviews in auto permission mode", isOn: $reviewAutoPermissionMode)
-                    .onChange(of: reviewAutoPermissionMode) { _, _ in onSave?() }
-                Text("Passes --permission-mode auto so review sessions can run their review flow — crow, gh, and git commands — without per-call approval. Turn off to launch reviews in plan mode instead. Applies to newly kicked-off reviews.")
+            Section("Coder Views") {
+                Toggle("Launch new coder views in auto permission mode", isOn: $coderViewAutoPermissionMode)
+                    .onChange(of: coderViewAutoPermissionMode) { _, _ in onSave?() }
+                Text("Passes --permission-mode auto so new work coder views start in auto-accept instead of plan mode. Applies to newly kicked-off sessions and to relaunches after an app restart; the Manager and scheduled jobs have their own toggles. Off by default.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

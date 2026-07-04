@@ -11,11 +11,12 @@ import HummingbirdWebSocket
 /// server uses), and write the ``JSONRPCResponse`` back. No semaphore bridge —
 /// unlike `SocketServer`, we're already in an async context (CROW-581).
 enum RPCWebSocketHandler {
-    static func mount(on router: Router<BasicWebSocketRequestContext>, commandRouter: CommandRouter) {
+    static func mount(on router: Router<BasicWebSocketRequestContext>, commandRouter: CommandRouter, boundHost: String) {
         router.ws("/rpc") { request, _ in
             // Reject cross-site upgrades — `/rpc` reaches `add-worktree`, which
             // shells out to git (CROW-581 review).
-            WebSocketOriginGuard.isAllowedOrigin(request.headers[.origin]) ? .upgrade() : .dontUpgrade
+            WebSocketOriginGuard.isAllowedOrigin(request.headers[.origin], boundHost: boundHost)
+                ? .upgrade() : .dontUpgrade
         } onUpgrade: { inbound, outbound, _ in
             let decoder = JSONDecoder()
             let encoder = JSONEncoder()
