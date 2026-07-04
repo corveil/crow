@@ -1348,7 +1348,59 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let capturedTracker = issueTracker
         let hookDebug = ProcessInfo.processInfo.environment["CROW_HOOK_DEBUG"] == "1"
 
+        // Config read/write for the web Settings modal (CROW-581). Captured as
+        // @Sendable closures so the handlers can reach `self.appConfig`/`devRoot`/
+        // `saveSettings` without a non-Sendable `self` capture in the dict. A web
+        // write funnels through `saveSettings` — the exact same path the desktop
+        // Settings window uses — so the AppState mirror + notification settings
+        // sync identically. Credentials are stripped on read and preserved on
+        // write (the browser can't see or change them; see `SettingsSecrets`).
+        let loadConfigForRPC: @Sendable () async -> (String, AppConfig)? = { [weak self] in
+            await MainActor.run {
+                guard let self, let devRoot = self.devRoot, let config = self.appConfig else { return nil }
+                return (devRoot, config)
+            }
+        }
+        let applyConfigForRPC: @Sendable (AppConfig) async -> AppConfig? = { [weak self] incoming in
+            await MainActor.run {
+                guard let self, let devRoot = self.devRoot, let current = self.appConfig else { return nil }
+                let merged = SettingsSecrets.preservingSecrets(incoming: incoming, current: current)
+                self.saveSettings(devRoot: devRoot, config: merged)
+                return SettingsSecrets.strippedForTransport(merged)
+            }
+        }
+
         let router = CommandRouter(handlers: [
+            // App config for the web Settings modal (CROW-581): the config JSON is
+            // transported as one opaque string so `AppConfig`'s own Codable stays
+            // the single shape authority. Credential values are stripped out /
+            // preserved by `SettingsSecrets` — desktop-only, read-only on web.
+            "get-config": { @Sendable _ in
+                guard let (devRoot, config) = await loadConfigForRPC() else {
+                    throw RPCError.applicationError("Config not loaded yet")
+                }
+                let stripped = SettingsSecrets.strippedForTransport(config)
+                guard let data = try? JSONEncoder().encode(stripped),
+                      let json = String(data: data, encoding: .utf8) else {
+                    throw RPCError.applicationError("Failed to encode config")
+                }
+                return ["config": .string(json), "dev_root": .string(devRoot), "app_running": .bool(true)]
+            },
+            "set-config": { @Sendable params in
+                guard let json = params["config"]?.stringValue,
+                      let data = json.data(using: .utf8),
+                      let incoming = try? JSONDecoder().decode(AppConfig.self, from: data) else {
+                    throw RPCError.invalidParams("config must be a valid AppConfig JSON string")
+                }
+                guard let saved = await applyConfigForRPC(incoming) else {
+                    throw RPCError.applicationError("Config not loaded yet")
+                }
+                guard let outData = try? JSONEncoder().encode(saved),
+                      let outJSON = String(data: outData, encoding: .utf8) else {
+                    throw RPCError.applicationError("Failed to encode config")
+                }
+                return ["config": .string(outJSON), "saved": .bool(true)]
+            },
             "new-session": { @Sendable params in
                 let name = params["name"]?.stringValue ?? "untitled"
                 guard AppDelegate.isValidSessionName(name) else {

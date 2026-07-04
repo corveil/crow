@@ -225,6 +225,11 @@ function navPillRow() {
   plus.title = 'New Manager session';
   plus.onclick = () => createManager();
   row.appendChild(plus);
+
+  const gear = el('button', 'nav-plus', '⚙');
+  gear.title = 'Settings';
+  gear.onclick = () => { if (window.openSettings) window.openSettings(); };
+  row.appendChild(gear);
   return row;
 }
 

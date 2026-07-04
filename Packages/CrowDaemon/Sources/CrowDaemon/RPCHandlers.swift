@@ -458,6 +458,57 @@ func makeCommandRouter(
             catch { return empty }
         },
 
+        // App config (the web Settings modal). Forward to the app when it's
+        // running so its `saveSettings` side effects run (AppState mirror,
+        // notification settings); read/write `{devRoot}/.claude/config.json`
+        // directly when it's off so Settings still work headless (the app picks
+        // up the change on next launch). Credential values are stripped on the
+        // way out and preserved on the way in — never editable from the browser
+        // (CROW-581, desktop-only creds). Only one writer at a time: forward when
+        // reachable, else write locally.
+        "get-config": { params in
+            if let forwardSocket {
+                do { return try forwardToApp("get-config", params, socket: forwardSocket) }
+                catch let error as DaemonRPCError { throw error }
+                catch { /* app not running → read from disk */ }
+            }
+            let config = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
+            let stripped = SettingsSecrets.strippedForTransport(config)
+            guard let data = try? JSONEncoder().encode(stripped),
+                  let json = String(data: data, encoding: .utf8) else {
+                throw DaemonRPCError.applicationError("Failed to encode config")
+            }
+            return ["config": .string(json), "dev_root": .string(devRoot), "app_running": .bool(false)]
+        },
+        "set-config": { params in
+            guard let json = params["config"]?.stringValue,
+                  let data = json.data(using: .utf8),
+                  let incoming = try? JSONDecoder().decode(AppConfig.self, from: data) else {
+                throw DaemonRPCError.invalidParams("config must be a valid AppConfig JSON string")
+            }
+            if let forwardSocket {
+                do { return try forwardToApp("set-config", params, socket: forwardSocket) }
+                catch let error as DaemonRPCError { throw error }
+                catch { /* app not running → write to disk */ }
+            }
+            // The browser can't see or change credentials, so keep whatever is
+            // already on disk (nil-current drops any credential shell — see
+            // SettingsSecrets).
+            let current = ConfigStore.loadConfig(devRoot: devRoot)
+            let merged = SettingsSecrets.preservingSecrets(incoming: incoming, current: current)
+            do {
+                try ConfigStore.saveConfig(merged, devRoot: devRoot)
+            } catch {
+                throw DaemonRPCError.applicationError("Failed to save config: \(error.localizedDescription)")
+            }
+            let stripped = SettingsSecrets.strippedForTransport(merged)
+            guard let outData = try? JSONEncoder().encode(stripped),
+                  let outJSON = String(data: outData, encoding: .utf8) else {
+                throw DaemonRPCError.applicationError("Failed to encode config")
+            }
+            return ["config": .string(outJSON), "saved": .bool(true)]
+        },
+
         // Session/board actions — forward-only (need the app's coordinators).
         "create-manager": { params in
             guard let forwardSocket else {

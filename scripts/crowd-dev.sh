@@ -28,13 +28,15 @@ echo "[crowd-dev] http://127.0.0.1:$PORT  · socket $SOCK · web live from $WEBD
 
 if command -v watchexec >/dev/null 2>&1; then
   echo "[crowd-dev] watchexec: rebuild + restart on *.swift change"
-  exec watchexec -r -e swift $(printf -- '-w %s ' "${WATCH[@]}") -- \
+  WATCH_ARGS=()
+  for w in "${WATCH[@]}"; do WATCH_ARGS+=(-w "$w"); done
+  exec watchexec -r -e swift "${WATCH_ARGS[@]}" -- \
     "swift build --product crowd && ${START_CMD[*]}"
 fi
 
 echo "[crowd-dev] poll mode (install 'watchexec' for instant restarts)"
 PID=""
-cleanup() { [ -n "$PID" ] && kill "$PID" 2>/dev/null || true; exit 0; }
+cleanup() { if [ -n "$PID" ]; then kill "$PID" 2>/dev/null || true; fi; exit 0; }
 trap cleanup INT TERM
 
 # macOS `stat -f`; on Linux swap to `stat -c '%Y %n'`.
@@ -45,7 +47,7 @@ while true; do
   cur="$(snapshot)"
   if [ "$cur" != "$last" ]; then
     last="$cur"
-    [ -n "$PID" ] && kill "$PID" 2>/dev/null || true
+    if [ -n "$PID" ]; then kill "$PID" 2>/dev/null || true; fi
     if swift build --product crowd; then
       "${START_CMD[@]}" &
       PID=$!

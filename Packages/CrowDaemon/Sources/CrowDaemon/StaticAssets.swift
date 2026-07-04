@@ -17,6 +17,9 @@ enum StaticAssets {
         router.get("/index.html") { _, _ in webResponse("index.html", webDir: webDir) }
         router.get("/app.css") { _, _ in webResponse("app.css", webDir: webDir) }
         router.get("/app.js") { _, _ in webResponse("app.js", webDir: webDir) }
+        // Web Settings modal assets (CROW-581) — split out of app.css/app.js.
+        router.get("/settings.css") { _, _ in webResponse("settings.css", webDir: webDir) }
+        router.get("/settings.js") { _, _ in webResponse("settings.js", webDir: webDir) }
         router.get("/brand.svg") { _, _ in webResponse("brand.svg", webDir: webDir) }
         // The standalone single-terminal page from M1, kept for debugging.
         router.get("/terminal.html") { _, _ in webResponse("terminal.html", webDir: webDir) }
