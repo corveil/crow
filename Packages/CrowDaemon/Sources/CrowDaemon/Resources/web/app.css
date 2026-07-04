@@ -144,7 +144,9 @@ html, body {
 .link-chip.link-ticket { color: var(--gold); border-color: var(--border-strong); }
 .link-chip.link-pr { color: var(--blue); border-color: rgba(10, 132, 255, 0.4); }
 .link-chip.link-repo { color: var(--text-secondary); }
-.actions-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.actions-row { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; margin-top: 10px; }
+.meta-row { display: flex; align-items: baseline; gap: 8px; }
+.meta-path { margin-left: auto; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .action-btn {
   padding: 4px 12px;
   border-radius: 6px;

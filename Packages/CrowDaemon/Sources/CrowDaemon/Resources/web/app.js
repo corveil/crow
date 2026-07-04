@@ -426,11 +426,16 @@ function renderHeader(s) {
   root.appendChild(top);
 
   if (s.ticket_title) root.appendChild(el('div', 'subtle', s.ticket_title));
-  const bits = [];
-  if (s.repo) bits.push(s.repo);
-  if (s.branch) bits.push(s.branch);
-  if (s.worktree_path) bits.push(shorten(s.worktree_path));
-  if (bits.length) root.appendChild(el('div', 'meta', bits.join(' · ')));
+  // Repo · branch on the left, worktree path pushed to the right (like the desktop).
+  if (s.repo || s.branch || s.worktree_path) {
+    const metaRow = el('div', 'meta meta-row');
+    const left = [];
+    if (s.repo) left.push(s.repo);
+    if (s.branch) left.push(s.branch);
+    if (left.length) metaRow.appendChild(el('span', null, left.join(' · ')));
+    if (s.worktree_path) metaRow.appendChild(el('span', 'meta-path', shorten(s.worktree_path)));
+    root.appendChild(metaRow);
+  }
   root.appendChild(el('div', 'meta', 'Agent: ' + (s.agent_display_name || s.agent_kind || '—')));
 
   // Links row: issue / PR / repo chips (all gold) + inline PR status.
