@@ -64,6 +64,15 @@ const BOARDS = [
   { key: 'allowlist', title: 'Allowlist', glyph: '⚿' },
 ];
 const PIPELINE = ['All', 'Backlog', 'Ready', 'In Progress', 'In Review', 'Done'];
+// Ticket pipeline status → accent color (mirrors CorveilTheme.TicketStatus.color).
+const TICKET_STATUS_COLOR = {
+  'Backlog': 'var(--text-muted)',
+  'Ready': 'var(--blue)',
+  'In Progress': 'var(--orange)',
+  'In Review': 'var(--purple)',
+  'Done': 'var(--green)',
+  'Unknown': 'var(--text-muted)',
+};
 
 const PR_COLOR = {
   passing: 'var(--green)', failing: 'var(--red)', pending: 'var(--orange)',
@@ -549,7 +558,9 @@ function renderTicketBoard(root) {
 }
 
 function ticketCard(i) {
-  const card = el('div', 'board-card');
+  const card = el('div', 'board-card status-accent');
+  const sc = TICKET_STATUS_COLOR[i.project_status] || 'var(--text-muted)';
+  card.style.borderLeftColor = sc;
   const meta = el('div', 'card-meta');
   meta.appendChild(el('span', 'repo-tag', i.repo));
   meta.appendChild(linkChip('Issue #' + i.number, i.url, 'ticket'));
@@ -560,7 +571,10 @@ function ticketCard(i) {
   card.appendChild(el('div', 'card-title', i.title));
   if (i.labels && i.labels.length) card.appendChild(labelPills(i.labels));
   const foot = el('div', 'card-foot');
-  foot.appendChild(el('span', 'badge', i.project_status));
+  const statusPill = el('span', 'status-pill', i.project_status);
+  statusPill.style.color = sc;
+  statusPill.style.borderColor = sc;
+  foot.appendChild(statusPill);
   if (i.linked_session_id) {
     const go = el('button', 'action-btn', 'Go to Session');
     go.onclick = () => selectSession(i.linked_session_id);

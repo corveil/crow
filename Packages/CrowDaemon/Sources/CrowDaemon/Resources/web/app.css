@@ -262,6 +262,10 @@ html, body {
 #app.board-active #tabbar,
 #app.board-active #terminal-wrap { display: none; }
 
+/* Scroll, but no visible scrollbar. */
+#board, #sidebar { scrollbar-width: none; -ms-overflow-style: none; }
+#board::-webkit-scrollbar, #sidebar::-webkit-scrollbar { width: 0; height: 0; display: none; }
+
 .board-head { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; }
 .board-title { color: var(--gold); font-size: 18px; font-weight: 700; margin-right: auto; }
 .done-chip {
@@ -288,6 +292,8 @@ html, body {
   border-radius: 8px; padding: 10px 12px;
 }
 .board-card:hover { border-color: var(--border-strong); }
+/* Status-colored left accent (JS sets border-left-color per pipeline status). */
+.board-card.status-accent { border-left-width: 3px; padding-left: 10px; }
 .card-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .repo-tag { color: var(--text-muted); font-size: 11px; }
 .card-time { color: var(--text-muted); font-size: 11px; margin-left: auto; }
@@ -306,6 +312,11 @@ html, body {
 .card-foot { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
 .card-foot .badge { text-transform: capitalize; }
 .card-foot .action-btn { margin-left: auto; }
+/* Status-colored pill (JS sets color + border-color per pipeline status). */
+.status-pill {
+  padding: 2px 9px; border-radius: 10px; font-size: 10px; font-weight: 600;
+  border: 1px solid; background: var(--bg-card);
+}
 
 .allow-list { display: flex; flex-direction: column; gap: 4px; }
 .allow-row {
