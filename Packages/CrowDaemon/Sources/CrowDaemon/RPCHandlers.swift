@@ -362,5 +362,79 @@ func makeCommandRouter(
             catch let error as DaemonRPCError { throw error }
             catch { throw DaemonRPCError.applicationError("Crow desktop app not reachable") }
         },
+
+        // Board data (Ticket Board / Reviews / Allowlist) is in-memory on the app
+        // (IssueTracker / AllowListService), so these reads are forward-only.
+        // Return an empty board when the app isn't running or unreachable —
+        // graceful, like get-pr-status — so the web renders empty states, not
+        // errors.
+        "list-tickets": { params in
+            let empty: [String: JSONValue] = [
+                "issues": .array([]), "counts": .object([:]),
+                "done_last_24h": .int(0), "loading": .bool(false),
+            ]
+            guard let forwardSocket else { return empty }
+            do { return try forwardToApp("list-tickets", params, socket: forwardSocket) }
+            catch let error as DaemonRPCError { throw error }
+            catch { return empty }
+        },
+        "list-reviews": { params in
+            let empty: [String: JSONValue] = ["reviews": .array([]), "loading": .bool(false), "unseen": .int(0)]
+            guard let forwardSocket else { return empty }
+            do { return try forwardToApp("list-reviews", params, socket: forwardSocket) }
+            catch let error as DaemonRPCError { throw error }
+            catch { return empty }
+        },
+        "list-allowlist": { params in
+            let empty: [String: JSONValue] = ["entries": .array([]), "loading": .bool(false)]
+            guard let forwardSocket else { return empty }
+            do { return try forwardToApp("list-allowlist", params, socket: forwardSocket) }
+            catch let error as DaemonRPCError { throw error }
+            catch { return empty }
+        },
+
+        // Board actions — forward-only (need the app's coordinators to spawn
+        // workspaces / mutate the global allowlist). Error when the app isn't
+        // running, like quick-action.
+        "work-on-issue": { params in
+            guard let forwardSocket else {
+                throw DaemonRPCError.applicationError("Starting work on an issue requires the Crow desktop app to be running")
+            }
+            do { return try forwardToApp("work-on-issue", params, socket: forwardSocket) }
+            catch let error as DaemonRPCError { throw error }
+            catch { throw DaemonRPCError.applicationError("Crow desktop app not reachable") }
+        },
+        "start-review": { params in
+            guard let forwardSocket else {
+                throw DaemonRPCError.applicationError("Starting a review requires the Crow desktop app to be running")
+            }
+            do { return try forwardToApp("start-review", params, socket: forwardSocket) }
+            catch let error as DaemonRPCError { throw error }
+            catch { throw DaemonRPCError.applicationError("Crow desktop app not reachable") }
+        },
+        "promote-allowlist": { params in
+            guard let forwardSocket else {
+                throw DaemonRPCError.applicationError("Promoting allowlist patterns requires the Crow desktop app to be running")
+            }
+            do { return try forwardToApp("promote-allowlist", params, socket: forwardSocket) }
+            catch let error as DaemonRPCError { throw error }
+            catch { throw DaemonRPCError.applicationError("Crow desktop app not reachable") }
+        },
+        "refresh-tickets": { params in
+            guard let forwardSocket else {
+                throw DaemonRPCError.applicationError("Refreshing tickets requires the Crow desktop app to be running")
+            }
+            do { return try forwardToApp("refresh-tickets", params, socket: forwardSocket) }
+            catch let error as DaemonRPCError { throw error }
+            catch { throw DaemonRPCError.applicationError("Crow desktop app not reachable") }
+        },
+        "refresh-allowlist": { params in
+            guard let forwardSocket else {
+                throw DaemonRPCError.applicationError("Refreshing the allowlist requires the Crow desktop app to be running")
+            }
+            do { return try forwardToApp("refresh-allowlist", params, socket: forwardSocket) }
+            catch let error as DaemonRPCError { throw error }
+            catch { throw DaemonRPCError.applicationError("Crow desktop app not reachable") }
+        },
     ])
 }

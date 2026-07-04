@@ -50,6 +50,21 @@ let terminals = [];
 let activeTerminal = null; // { id, name, window }
 const prCache = {}; // session id → get-pr-status result
 
+// Boards (Ticket Board / Reviews / Allowlist), mirroring the desktop's
+// full-pane boards. Data is forwarded to the desktop app, so it's empty when
+// the app isn't running.
+let selectedBoard = null; // 'tickets' | 'reviews' | 'allowlist' | null
+const boardData = { tickets: null, reviews: null, allowlist: null };
+let ticketFilter = 'In Progress'; // pipeline segment ('All' or a status rawValue)
+let allowlistHideGlobal = false;
+const allowlistSelection = new Set();
+const BOARDS = [
+  { key: 'tickets', title: 'Ticket Board', glyph: '❏' },
+  { key: 'reviews', title: 'Reviews', glyph: '⇄' },
+  { key: 'allowlist', title: 'Allowlist', glyph: '⚿' },
+];
+const PIPELINE = ['All', 'Backlog', 'Ready', 'In Progress', 'In Review', 'Done'];
+
 const PR_COLOR = {
   passing: 'var(--green)', failing: 'var(--red)', pending: 'var(--orange)',
   approved: 'var(--green)', changesRequested: 'var(--red)', reviewRequired: 'var(--orange)',
@@ -97,6 +112,8 @@ function renderSidebar() {
   const root = document.getElementById('sidebar');
   root.innerHTML = '';
   root.appendChild(el('div', 'brand', 'CROW'));
+  root.appendChild(el('div', 'divider', 'Boards'));
+  for (const b of BOARDS) root.appendChild(boardRow(b));
   let shown = 0;
   for (const group of GROUPS) {
     const rows = sessions.filter(group.match);
@@ -105,6 +122,25 @@ function renderSidebar() {
     for (const s of rows) { root.appendChild(sessionRow(s)); shown++; }
   }
   if (!shown) root.appendChild(el('div', 'empty', 'No sessions'));
+}
+
+// A pinned board entry in the sidebar, styled like a session row.
+function boardRow(b) {
+  const row = el('div', 'session-row board-row' + (selectedBoard === b.key ? ' selected' : ''));
+  row.onclick = () => selectBoard(b.key);
+  const top = el('div', 'row-top');
+  top.appendChild(el('span', 'agent', b.glyph));
+  top.appendChild(el('span', 'name', b.title));
+  const badge = boardBadge(b.key);
+  if (badge != null) top.appendChild(el('span', 'badge', String(badge)));
+  row.appendChild(top);
+  return row;
+}
+
+function boardBadge(key) {
+  if (key === 'tickets') { const n = boardData.tickets?.counts?.All; return n ? n : null; }
+  if (key === 'reviews') { const n = boardData.reviews?.unseen; return n ? n : null; }
+  return null;
 }
 
 // Sidebar status/activity indicator, mirroring the desktop: for active
@@ -158,9 +194,11 @@ function sessionRow(s) {
 // ---------------------------------------------------------------------------
 async function selectSession(id) {
   selectedId = id;
+  selectedBoard = null;
   const app = document.getElementById('app');
   app.classList.add('has-selection');
-  app.classList.remove('mobile-show-sidebar'); // reveal the detail pane on mobile
+  app.classList.remove('board-active', 'mobile-show-sidebar'); // leave board, reveal terminal on mobile
+  document.getElementById('board').innerHTML = '';
   renderSidebar();
   renderHeader(sessions.find((x) => x.id === id));
   ensureTerminal();
@@ -386,6 +424,281 @@ async function closeTerminal(t) {
 }
 
 // ---------------------------------------------------------------------------
+// Boards (Ticket Board / Reviews / Allowlist)
+// ---------------------------------------------------------------------------
+function selectBoard(key) {
+  selectedBoard = key;
+  selectedId = null;
+  const app = document.getElementById('app');
+  app.classList.add('has-selection', 'board-active');
+  app.classList.remove('mobile-show-sidebar');
+  document.getElementById('detail-header').innerHTML = '';
+  document.getElementById('tabbar').innerHTML = '';
+  renderSidebar();
+  renderBoard();       // instant paint (may be stale/empty)…
+  refreshBoard(key);   // …then refresh from the app
+}
+
+// Fetch one board; only re-render when the data actually changed so polling
+// doesn't reset scroll/selection while idle.
+async function refreshBoard(key) {
+  const method = key === 'tickets' ? 'list-tickets' : key === 'reviews' ? 'list-reviews' : 'list-allowlist';
+  let data;
+  try { data = await rpc(method); } catch (_) { return; }
+  const changed = JSON.stringify(boardData[key]) !== JSON.stringify(data);
+  boardData[key] = data;
+  if (changed) renderSidebar(); // badge counts
+  if (changed && selectedBoard === key) renderBoard();
+}
+
+function renderBoard() {
+  const root = document.getElementById('board');
+  root.innerHTML = '';
+  if (selectedBoard === 'tickets') renderTicketBoard(root);
+  else if (selectedBoard === 'reviews') renderReviewBoard(root);
+  else if (selectedBoard === 'allowlist') renderAllowlist(root);
+}
+
+// -- shared card helpers --
+function relTime(iso) {
+  if (!iso) return '';
+  const then = Date.parse(iso);
+  if (isNaN(then)) return '';
+  const s = Math.max(0, (Date.now() - then) / 1000);
+  if (s < 60) return 'just now';
+  const m = s / 60; if (m < 60) return Math.floor(m) + 'm';
+  const h = m / 60; if (h < 24) return Math.floor(h) + 'h';
+  const d = h / 24; if (d < 30) return Math.floor(d) + 'd';
+  const mo = d / 30; if (mo < 12) return Math.floor(mo) + 'mo';
+  return Math.floor(mo / 12) + 'y';
+}
+
+function linkChip(text, url, type) {
+  const a = document.createElement('a');
+  a.className = 'link-chip link-' + (type || 'custom');
+  a.href = url; a.target = '_blank'; a.rel = 'noopener';
+  a.textContent = text;
+  return a;
+}
+
+function labelPills(labels) {
+  const wrap = el('div', 'label-row');
+  for (const l of (labels || [])) {
+    const pill = el('span', 'label-pill', l.name);
+    if (l.color) { pill.style.borderColor = '#' + l.color; pill.style.color = '#' + l.color; }
+    wrap.appendChild(pill);
+  }
+  return wrap;
+}
+
+function boardEmpty(msg) {
+  const wrap = el('div', 'board-empty');
+  wrap.appendChild(el('div', null, msg));
+  wrap.appendChild(el('div', 'board-empty-hint', 'Boards require the Crow desktop app to be running.'));
+  return wrap;
+}
+
+// A spawning action (Start Working / Start Review): disable the button, let the
+// new session surface via the sidebar poll.
+async function spawnAction(btn, method, params, label) {
+  btn.disabled = true;
+  const orig = btn.textContent;
+  btn.textContent = 'Starting…';
+  try {
+    await rpc(method, params);
+    btn.textContent = 'Started ✓';
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = orig;
+    window.alert(label + ' failed: ' + (e.message || e));
+  }
+}
+
+// -- Ticket Board --
+function renderTicketBoard(root) {
+  const d = boardData.tickets;
+  const head = el('div', 'board-head');
+  head.appendChild(el('div', 'board-title', 'Ticket Board'));
+  if (d && d.done_last_24h) head.appendChild(el('span', 'done-chip', d.done_last_24h + ' done · 24h'));
+  const refresh = el('button', 'action-btn', 'Refresh');
+  refresh.onclick = () => refreshTickets();
+  head.appendChild(refresh);
+  root.appendChild(head);
+
+  const counts = (d && d.counts) || {};
+  const bar = el('div', 'pipeline');
+  for (const seg of PIPELINE) {
+    const n = seg === 'All' ? (counts.All || 0) : (counts[seg] || 0);
+    const cell = el('div', 'pipe-seg' + (ticketFilter === seg ? ' active' : ''));
+    cell.appendChild(el('span', 'pipe-label', seg));
+    cell.appendChild(el('span', 'pipe-count', String(n)));
+    cell.onclick = () => { ticketFilter = seg; renderBoard(); };
+    bar.appendChild(cell);
+  }
+  root.appendChild(bar);
+
+  let issues = ((d && d.issues) || []).slice();
+  if (ticketFilter !== 'All') issues = issues.filter((i) => i.project_status === ticketFilter);
+  issues.sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''));
+  if (!issues.length) { root.appendChild(boardEmpty('No tickets in this view')); return; }
+  const list = el('div', 'card-list');
+  for (const i of issues) list.appendChild(ticketCard(i));
+  root.appendChild(list);
+}
+
+function ticketCard(i) {
+  const card = el('div', 'board-card');
+  const meta = el('div', 'card-meta');
+  meta.appendChild(el('span', 'repo-tag', i.repo));
+  meta.appendChild(linkChip('Issue #' + i.number, i.url, 'ticket'));
+  if (i.pr_number && i.pr_url) meta.appendChild(linkChip('PR #' + i.pr_number, i.pr_url, 'pr'));
+  const t = relTime(i.updated_at);
+  if (t) meta.appendChild(el('span', 'card-time', t));
+  card.appendChild(meta);
+  card.appendChild(el('div', 'card-title', i.title));
+  if (i.labels && i.labels.length) card.appendChild(labelPills(i.labels));
+  const foot = el('div', 'card-foot');
+  foot.appendChild(el('span', 'badge', i.project_status));
+  if (i.linked_session_id) {
+    const go = el('button', 'action-btn', 'Go to Session');
+    go.onclick = () => selectSession(i.linked_session_id);
+    foot.appendChild(go);
+  } else {
+    const work = el('button', 'action-btn action-primary', 'Start Working');
+    work.onclick = () => spawnAction(work, 'work-on-issue', { url: i.url }, 'Start Working');
+    foot.appendChild(work);
+  }
+  card.appendChild(foot);
+  return card;
+}
+
+async function refreshTickets() {
+  try { await rpc('refresh-tickets'); } catch (_) { /* app down — ignore */ }
+  setTimeout(() => refreshBoard('tickets'), 1200);
+}
+
+// -- Review Board --
+function renderReviewBoard(root) {
+  const d = boardData.reviews;
+  const head = el('div', 'board-head');
+  head.appendChild(el('div', 'board-title', 'Reviews'));
+  const refresh = el('button', 'action-btn', 'Refresh');
+  refresh.onclick = () => refreshBoard('reviews');
+  head.appendChild(refresh);
+  root.appendChild(head);
+
+  const reviews = ((d && d.reviews) || []).slice()
+    .sort((a, b) => (b.requested_at || '').localeCompare(a.requested_at || ''));
+  if (!reviews.length) { root.appendChild(boardEmpty('No review requests')); return; }
+  const list = el('div', 'card-list');
+  for (const r of reviews) list.appendChild(reviewCard(r));
+  root.appendChild(list);
+}
+
+function reviewCard(r) {
+  const card = el('div', 'board-card');
+  const meta = el('div', 'card-meta');
+  meta.appendChild(el('span', 'repo-tag', r.repo));
+  meta.appendChild(linkChip('#' + r.pr_number, r.url, 'pr'));
+  if (r.is_draft) meta.appendChild(el('span', 'draft-badge', 'Draft'));
+  const t = relTime(r.requested_at);
+  if (t) meta.appendChild(el('span', 'card-time', t));
+  card.appendChild(meta);
+  card.appendChild(el('div', 'card-title', r.title));
+  const sub = el('div', 'card-sub');
+  sub.appendChild(el('span', null, '@' + r.author));
+  if (r.head_branch) sub.appendChild(el('span', 'branch-tag', r.head_branch));
+  card.appendChild(sub);
+  if (r.labels && r.labels.length) card.appendChild(labelPills(r.labels));
+  const foot = el('div', 'card-foot');
+  if (r.review_session_id) {
+    const go = el('button', 'action-btn', 'Go to Session');
+    go.onclick = () => selectSession(r.review_session_id);
+    foot.appendChild(go);
+  } else {
+    const rev = el('button', 'action-btn action-primary', 'Start Review');
+    rev.onclick = () => spawnAction(rev, 'start-review', { url: r.url }, 'Start Review');
+    foot.appendChild(rev);
+  }
+  card.appendChild(foot);
+  return card;
+}
+
+// -- Allowlist --
+function renderAllowlist(root) {
+  const d = boardData.allowlist;
+  const head = el('div', 'board-head');
+  head.appendChild(el('div', 'board-title', 'Allowlist'));
+  const hide = el('button', 'action-btn' + (allowlistHideGlobal ? ' active' : ''), allowlistHideGlobal ? 'Show Global' : 'Hide Global');
+  hide.onclick = () => { allowlistHideGlobal = !allowlistHideGlobal; renderBoard(); };
+  head.appendChild(hide);
+  const refresh = el('button', 'action-btn', 'Refresh');
+  refresh.onclick = () => refreshAllowlist();
+  head.appendChild(refresh);
+  const promote = el('button', 'action-btn action-primary', 'Promote to Global (' + allowlistSelection.size + ')');
+  promote.id = 'allow-promote';
+  promote.disabled = allowlistSelection.size === 0;
+  promote.onclick = () => promoteAllowlist([...allowlistSelection]);
+  head.appendChild(promote);
+  root.appendChild(head);
+
+  let entries = ((d && d.entries) || []).slice();
+  if (allowlistHideGlobal) entries = entries.filter((e) => !e.is_global);
+  entries.sort((a, b) => a.pattern.localeCompare(b.pattern));
+  if (!entries.length) { root.appendChild(boardEmpty('No allowlist entries')); return; }
+  const list = el('div', 'allow-list');
+  for (const e of entries) list.appendChild(allowRow(e));
+  root.appendChild(list);
+}
+
+function allowRow(e) {
+  const row = el('div', 'allow-row');
+  if (!e.is_global) {
+    // Only worktree-only patterns are promotable to global.
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.className = 'allow-check';
+    box.checked = allowlistSelection.has(e.pattern);
+    box.onchange = () => {
+      if (box.checked) allowlistSelection.add(e.pattern); else allowlistSelection.delete(e.pattern);
+      const btn = document.getElementById('allow-promote');
+      if (btn) {
+        btn.textContent = 'Promote to Global (' + allowlistSelection.size + ')';
+        btn.disabled = allowlistSelection.size === 0;
+      }
+    };
+    row.appendChild(box);
+  } else {
+    row.appendChild(el('span', 'allow-check-spacer'));
+  }
+  const main = el('div', 'allow-main');
+  main.appendChild(el('code', 'allow-pattern', e.pattern));
+  const badges = el('div', 'allow-badges');
+  if (e.is_global) badges.appendChild(el('span', 'allow-badge-global', 'Global'));
+  for (const name of (e.worktree_session_names || [])) badges.appendChild(el('span', 'allow-chip', name));
+  main.appendChild(badges);
+  row.appendChild(main);
+  return row;
+}
+
+async function promoteAllowlist(patterns) {
+  if (!patterns.length) return;
+  try {
+    await rpc('promote-allowlist', { patterns });
+    allowlistSelection.clear();
+    await rpc('refresh-allowlist').catch(() => {});
+    setTimeout(() => refreshBoard('allowlist'), 800);
+  } catch (e) {
+    window.alert('Promote failed: ' + (e.message || e));
+  }
+}
+
+async function refreshAllowlist() {
+  try { await rpc('refresh-allowlist'); } catch (_) { /* app down — ignore */ }
+  setTimeout(() => refreshBoard('allowlist'), 800);
+}
+
+// ---------------------------------------------------------------------------
 // Terminal (xterm.js on one /terminal WebSocket; switch windows via control frame)
 // ---------------------------------------------------------------------------
 let term = null;
@@ -452,3 +765,10 @@ document.getElementById('back-to-sidebar').onclick = () => {
 };
 refreshSessions();
 setInterval(refreshSessions, 3000);
+// Prefetch ticket/review counts so the sidebar badges show before first open.
+refreshBoard('tickets');
+refreshBoard('reviews');
+// Keep the open ticket/review board fresh (allowlist is manual-refresh only).
+setInterval(() => {
+  if (selectedBoard === 'tickets' || selectedBoard === 'reviews') refreshBoard(selectedBoard);
+}, 6000);

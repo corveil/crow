@@ -1485,6 +1485,123 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 return ["dispatched": .bool(true), "action": .string(action.rawValue)]
             },
+            // CROW-581: board data for the web UI. Ticket/review/allowlist state
+            // lives only in the app's AppState (IssueTracker / AllowListService),
+            // so the daemon forwards these reads here. Results are repo-exclude
+            // filtered but NOT status-filtered/sorted — the web owns pipeline
+            // filtering + sort so it can drive its own segment controls.
+            "list-tickets": { @Sendable _ in
+                await MainActor.run {
+                    let fmt = ISO8601DateFormatter()
+                    let issues: [JSONValue] = capturedAppState.filteredAssignedIssues.map { issue in
+                        // Fold .unknown into .backlog so the web's pipeline buckets
+                        // line up with issueCount(for:) (AppState.effectiveStatus).
+                        let status = issue.projectStatus == .unknown ? TicketStatus.backlog : issue.projectStatus
+                        return .object([
+                            "id": .string(issue.id),
+                            "number": .int(issue.number),
+                            "title": .string(issue.title),
+                            "state": .string(issue.state),
+                            "url": .string(issue.url),
+                            "repo": .string(issue.repo),
+                            "provider": .string(issue.provider.rawValue),
+                            "pr_number": issue.prNumber.map { .int($0) } ?? .null,
+                            "pr_url": issue.prURL.map { .string($0) } ?? .null,
+                            "updated_at": issue.updatedAt.map { .string(fmt.string(from: $0)) } ?? .null,
+                            "project_status": .string(status.rawValue),
+                            "labels": .array(issue.labels.map { .object(["name": .string($0.name), "color": $0.color.map { .string($0) } ?? .null]) }),
+                            "linked_session_id": capturedAppState.linkedSession(for: issue).map { .string($0.id.uuidString) } ?? .null,
+                        ])
+                    }
+                    var counts: [String: JSONValue] = [:]
+                    for status in TicketStatus.pipelineStatuses {
+                        counts[status.rawValue] = .int(capturedAppState.issueCount(for: status))
+                    }
+                    counts["All"] = .int(capturedAppState.filteredAssignedIssues.count)
+                    return [
+                        "issues": .array(issues),
+                        "counts": .object(counts),
+                        "done_last_24h": .int(capturedAppState.doneIssuesLast24h),
+                        "loading": .bool(capturedAppState.isLoadingIssues),
+                    ]
+                }
+            },
+            "list-reviews": { @Sendable _ in
+                await MainActor.run {
+                    let fmt = ISO8601DateFormatter()
+                    let reviews: [JSONValue] = capturedAppState.filteredReviewRequests.map { r in
+                        .object([
+                            "id": .string(r.id),
+                            "pr_number": .int(r.prNumber),
+                            "title": .string(r.title),
+                            "url": .string(r.url),
+                            "repo": .string(r.repo),
+                            "author": .string(r.author),
+                            "head_branch": .string(r.headBranch),
+                            "base_branch": .string(r.baseBranch),
+                            "is_draft": .bool(r.isDraft),
+                            "requested_at": r.requestedAt.map { .string(fmt.string(from: $0)) } ?? .null,
+                            "labels": .array(r.labels.map { .object(["name": .string($0.name), "color": $0.color.map { .string($0) } ?? .null]) }),
+                            "provider": .string(r.provider.rawValue),
+                            "review_session_id": r.reviewSessionID.map { .string($0.uuidString) } ?? .null,
+                        ])
+                    }
+                    return [
+                        "reviews": .array(reviews),
+                        "loading": .bool(capturedAppState.isLoadingReviews),
+                        "unseen": .int(capturedAppState.unseenReviewCount),
+                    ]
+                }
+            },
+            "list-allowlist": { @Sendable _ in
+                await MainActor.run {
+                    let entries: [JSONValue] = capturedAppState.allowEntries.map { e in
+                        .object([
+                            "pattern": .string(e.pattern),
+                            "is_global": .bool(e.isInGlobal),
+                            "worktree_session_names": .array(e.worktreeSessionNames.map { .string($0) }),
+                        ])
+                    }
+                    return [
+                        "entries": .array(entries),
+                        "loading": .bool(capturedAppState.isLoadingAllowList),
+                    ]
+                }
+            },
+            // Board actions — invoke the app's existing callbacks. work-on-issue
+            // and start-review spawn workspaces via the same paths the desktop UI
+            // uses (onWorkOnIssue / onStartReview).
+            "work-on-issue": { @Sendable params in
+                guard let url = params["url"]?.stringValue, !url.isEmpty else {
+                    throw RPCError.invalidParams("url required")
+                }
+                await MainActor.run { capturedAppState.onWorkOnIssue?(url) }
+                return ["ok": .bool(true)]
+            },
+            "start-review": { @Sendable params in
+                guard let url = params["url"]?.stringValue, !url.isEmpty else {
+                    throw RPCError.invalidParams("url required")
+                }
+                await MainActor.run { capturedAppState.onStartReview?(url) }
+                return ["ok": .bool(true)]
+            },
+            "promote-allowlist": { @Sendable params in
+                guard let arr = params["patterns"]?.arrayValue else {
+                    throw RPCError.invalidParams("patterns array required")
+                }
+                let patterns = Set(arr.compactMap { $0.stringValue })
+                guard !patterns.isEmpty else { throw RPCError.invalidParams("patterns array required") }
+                await MainActor.run { capturedAppState.onPromoteToGlobal?(patterns) }
+                return ["ok": .bool(true)]
+            },
+            "refresh-tickets": { @Sendable _ in
+                await MainActor.run { capturedAppState.onManualRefresh?() }
+                return ["ok": .bool(true)]
+            },
+            "refresh-allowlist": { @Sendable _ in
+                await MainActor.run { capturedAppState.onLoadAllowList?() }
+                return ["ok": .bool(true)]
+            },
             "set-status": { @Sendable params in
                 guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr),
                       let statusStr = params["status"]?.stringValue, let status = SessionStatus(rawValue: statusStr) else {

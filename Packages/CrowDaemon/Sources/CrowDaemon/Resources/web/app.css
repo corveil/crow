@@ -251,4 +251,83 @@ html, body {
   #app.has-selection.mobile-show-sidebar #sidebar { display: block; }
   #app.has-selection.mobile-show-sidebar #detail { display: none; }
   #app.has-selection.mobile-show-sidebar #back-to-sidebar { display: none; }
+  /* Board content clears the floating hamburger on mobile. */
+  #app.has-selection.board-active #board { padding-top: 56px; }
 }
+
+/* ---- Boards (Ticket Board / Reviews / Allowlist) ---- */
+#board { display: none; flex: 1; min-height: 0; overflow-y: auto; padding: 16px; }
+#app.board-active #board { display: block; }
+#app.board-active #detail-header,
+#app.board-active #tabbar,
+#app.board-active #terminal-wrap { display: none; }
+
+.board-head { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; }
+.board-title { color: var(--gold); font-size: 18px; font-weight: 700; margin-right: auto; }
+.done-chip {
+  color: var(--gold); background: rgba(221, 196, 130, 0.14);
+  padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600;
+}
+.action-btn.active { background: rgba(221, 196, 130, 0.18); }
+.action-btn:disabled { opacity: 0.4; cursor: default; }
+
+.pipeline { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+.pipe-seg {
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  padding: 6px 12px; min-width: 64px; cursor: pointer;
+  border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-card);
+}
+.pipe-seg:hover { border-color: var(--border-strong); }
+.pipe-seg.active { border-color: var(--gold); background: #262a2f; }
+.pipe-label { font-size: 10px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.4px; }
+.pipe-count { font-size: 16px; font-weight: 700; color: var(--text-primary); }
+
+.card-list { display: flex; flex-direction: column; gap: 8px; }
+.board-card {
+  background: var(--bg-card); border: 1px solid var(--border-subtle);
+  border-radius: 8px; padding: 10px 12px;
+}
+.board-card:hover { border-color: var(--border-strong); }
+.card-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.repo-tag { color: var(--text-muted); font-size: 11px; }
+.card-time { color: var(--text-muted); font-size: 11px; margin-left: auto; }
+.card-title { color: var(--text-primary); font-weight: 600; font-size: 13px; margin-top: 6px; }
+.card-sub { display: flex; flex-wrap: wrap; gap: 8px; color: var(--text-secondary); font-size: 11px; margin-top: 4px; }
+.branch-tag { color: var(--text-muted); font-family: ui-monospace, Menlo, monospace; }
+.draft-badge {
+  color: var(--text-muted); border: 1px solid var(--border-subtle);
+  border-radius: 8px; padding: 1px 6px; font-size: 10px; font-weight: 600;
+}
+.label-row { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+.label-pill {
+  font-size: 10px; padding: 1px 7px; border-radius: 9px;
+  border: 1px solid var(--border-subtle); color: var(--text-secondary);
+}
+.card-foot { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.card-foot .badge { text-transform: capitalize; }
+.card-foot .action-btn { margin-left: auto; }
+
+.allow-list { display: flex; flex-direction: column; gap: 4px; }
+.allow-row {
+  display: flex; align-items: flex-start; gap: 10px; padding: 8px 10px;
+  border: 1px solid var(--border-subtle); border-radius: 6px; background: var(--bg-card);
+}
+.allow-check { margin-top: 3px; accent-color: var(--gold); }
+.allow-check-spacer { width: 13px; flex: 0 0 auto; }
+.allow-main { display: flex; flex-direction: column; gap: 5px; min-width: 0; flex: 1; }
+.allow-pattern {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px;
+  color: var(--text-primary); word-break: break-all;
+}
+.allow-badges { display: flex; flex-wrap: wrap; gap: 5px; }
+.allow-badge-global {
+  font-size: 10px; font-weight: 600; padding: 1px 8px; border-radius: 9px;
+  color: var(--green); border: 1px solid rgba(52, 199, 89, 0.4);
+}
+.allow-chip {
+  font-size: 10px; padding: 1px 8px; border-radius: 9px;
+  color: var(--blue); border: 1px solid rgba(10, 132, 255, 0.35);
+}
+
+.board-empty { color: var(--text-muted); text-align: center; padding: 48px 12px; }
+.board-empty-hint { font-size: 11px; margin-top: 8px; opacity: 0.7; }
