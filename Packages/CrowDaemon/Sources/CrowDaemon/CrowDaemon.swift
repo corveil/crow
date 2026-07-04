@@ -72,7 +72,10 @@ public enum CrowDaemon {
         // HTTP router: web UI, xterm assets, health.
         let httpRouter = Router()
         httpRouter.get("/health") { _, _ in "ok" }
-        StaticAssets.mount(on: httpRouter)
+        StaticAssets.mount(on: httpRouter, webDir: options.webDir)
+        if let webDir = options.webDir {
+            log("serving web UI live from \(webDir) (edit + refresh, no rebuild)")
+        }
 
         let app = Application(
             router: httpRouter,
@@ -152,11 +155,17 @@ struct DaemonOptions {
     var host: String = "127.0.0.1"
     var socketPath: String = SocketServer.defaultSocketPath()
     var devRoot: String = FileManager.default.currentDirectoryPath
+    /// When set, serve web UI files live from this source directory instead of
+    /// the compiled bundle (`--web-dir` / `CROW_WEB_DIR`) — edit + refresh.
+    var webDir: String?
 
     static func parse(_ arguments: [String]) -> DaemonOptions {
         var options = DaemonOptions()
         if let envRoot = ProcessInfo.processInfo.environment["CROW_DEV_ROOT"] {
             options.devRoot = envRoot
+        }
+        if let envWebDir = ProcessInfo.processInfo.environment["CROW_WEB_DIR"] {
+            options.webDir = envWebDir
         }
         var index = 1
         while index < arguments.count {
@@ -176,6 +185,7 @@ struct DaemonOptions {
             case "--host": if let value = next { options.host = value }; index += 1
             case "--socket", "--socket-path": if let value = next { options.socketPath = value }; index += 1
             case "--dev-root": if let value = next { options.devRoot = value }; index += 1
+            case "--web-dir": if let value = next { options.webDir = value }; index += 1
             default: break
             }
             index += 1

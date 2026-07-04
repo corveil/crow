@@ -7,14 +7,18 @@ import NIOCore
 /// resource bundle and the xterm.js 6.0.0 assets (`/xterm/*`) straight out of
 /// `CrowTerminal`'s bundle — so the browser reuses the exact same xterm build
 /// as the macOS app instead of duplicating it (CROW-581).
+///
+/// When `webDir` is set (`--web-dir` / `CROW_WEB_DIR`), the UI files are read
+/// live from that source directory instead of the compiled bundle — edit +
+/// refresh, no rebuild.
 enum StaticAssets {
-    static func mount(on router: Router<BasicRequestContext>) {
-        router.get("/") { _, _ in webResponse("index.html") }
-        router.get("/index.html") { _, _ in webResponse("index.html") }
-        router.get("/app.css") { _, _ in webResponse("app.css") }
-        router.get("/app.js") { _, _ in webResponse("app.js") }
+    static func mount(on router: Router<BasicRequestContext>, webDir: String? = nil) {
+        router.get("/") { _, _ in webResponse("index.html", webDir: webDir) }
+        router.get("/index.html") { _, _ in webResponse("index.html", webDir: webDir) }
+        router.get("/app.css") { _, _ in webResponse("app.css", webDir: webDir) }
+        router.get("/app.js") { _, _ in webResponse("app.js", webDir: webDir) }
         // The standalone single-terminal page from M1, kept for debugging.
-        router.get("/terminal.html") { _, _ in webResponse("terminal.html") }
+        router.get("/terminal.html") { _, _ in webResponse("terminal.html", webDir: webDir) }
 
         router.get("/xterm/:file") { _, context -> Response in
             // Basename-only guard against path traversal.
@@ -36,8 +40,15 @@ enum StaticAssets {
         !name.isEmpty && !name.contains("/") && !name.contains("..")
     }
 
-    /// Load a file from the daemon bundle's `web/` resource directory.
-    private static func webResponse(_ name: String) -> Response {
+    /// Load a web UI file — from `webDir` on disk when set (live/hot-reload),
+    /// otherwise from the daemon bundle's `web/` resource directory.
+    private static func webResponse(_ name: String, webDir: String?) -> Response {
+        if let webDir {
+            let url = URL(fileURLWithPath: webDir).appendingPathComponent(name)
+            if let data = try? Data(contentsOf: url) {
+                return fileResponse(data, name: name)
+            }
+        }
         let base = (name as NSString).deletingPathExtension
         let ext = (name as NSString).pathExtension
         guard let url = Bundle.module.url(forResource: base, withExtension: ext, subdirectory: "web"),
