@@ -38,11 +38,20 @@ import CrowPersistence
         let allow = await router.handle(request: JSONRPCRequest(id: 3, method: "list-allowlist"))
         #expect(allow.error == nil)
         #expect(allow.result?["entries"]?.arrayValue?.isEmpty == true)
+
+        let live = await router.handle(request: JSONRPCRequest(id: 4, method: "list-sessions-live"))
+        #expect(live.error == nil)
+        #expect(live.result?["sessions"]?.objectValue?.isEmpty == true)
     }
 
     @Test @MainActor func boardActionsErrorWhenAppDown() async {
         let router = offlineRouter()
-        for method in ["work-on-issue", "start-review", "promote-allowlist", "refresh-tickets", "refresh-allowlist"] {
+        let actions = [
+            "work-on-issue", "start-review", "promote-allowlist", "refresh-tickets", "refresh-allowlist",
+            "create-manager", "mark-in-review", "mark-issue-done", "complete-session",
+            "set-session-active", "add-merge-label",
+        ]
+        for method in actions {
             let resp = await router.handle(request: JSONRPCRequest(id: 1, method: method))
             #expect(resp.error != nil, "\(method) should error when the app is down")
             #expect(resp.error?.code == RPCErrorCode.applicationError, "\(method) should be an application error")

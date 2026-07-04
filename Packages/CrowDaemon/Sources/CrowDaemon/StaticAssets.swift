@@ -17,6 +17,7 @@ enum StaticAssets {
         router.get("/index.html") { _, _ in webResponse("index.html", webDir: webDir) }
         router.get("/app.css") { _, _ in webResponse("app.css", webDir: webDir) }
         router.get("/app.js") { _, _ in webResponse("app.js", webDir: webDir) }
+        router.get("/brand.svg") { _, _ in webResponse("brand.svg", webDir: webDir) }
         // The standalone single-terminal page from M1, kept for debugging.
         router.get("/terminal.html") { _, _ in webResponse("terminal.html", webDir: webDir) }
 
@@ -69,6 +70,7 @@ enum StaticAssets {
         if file.hasSuffix(".js") { return "text/javascript; charset=utf-8" }
         if file.hasSuffix(".css") { return "text/css; charset=utf-8" }
         if file.hasSuffix(".html") { return "text/html; charset=utf-8" }
+        if file.hasSuffix(".svg") { return "image/svg+xml" }
         return "application/octet-stream"
     }
 }

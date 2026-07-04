@@ -436,5 +436,66 @@ func makeCommandRouter(
             catch let error as DaemonRPCError { throw error }
             catch { throw DaemonRPCError.applicationError("Crow desktop app not reachable") }
         },
+
+        // Batched live per-session state (remote-control + PR) — runtime-only on
+        // the app, so forward-only. Empty map when the app isn't running so the
+        // web keeps rendering its store-derived base list.
+        "list-sessions-live": { params in
+            let empty: [String: JSONValue] = ["sessions": .object([:])]
+            guard let forwardSocket else { return empty }
+            do { return try forwardToApp("list-sessions-live", params, socket: forwardSocket) }
+            catch let error as DaemonRPCError { throw error }
+            catch { return empty }
+        },
+
+        // Session/board actions — forward-only (need the app's coordinators).
+        "create-manager": { params in
+            guard let forwardSocket else {
+                throw DaemonRPCError.applicationError("Creating a manager requires the Crow desktop app to be running")
+            }
+            do { return try forwardToApp("create-manager", params, socket: forwardSocket) }
+            catch let error as DaemonRPCError { throw error }
+            catch { throw DaemonRPCError.applicationError("Crow desktop app not reachable") }
+        },
+        "mark-in-review": { params in
+            guard let forwardSocket else {
+                throw DaemonRPCError.applicationError("Marking in review requires the Crow desktop app to be running")
+            }
+            do { return try forwardToApp("mark-in-review", params, socket: forwardSocket) }
+            catch let error as DaemonRPCError { throw error }
+            catch { throw DaemonRPCError.applicationError("Crow desktop app not reachable") }
+        },
+        "mark-issue-done": { params in
+            guard let forwardSocket else {
+                throw DaemonRPCError.applicationError("Marking the issue done requires the Crow desktop app to be running")
+            }
+            do { return try forwardToApp("mark-issue-done", params, socket: forwardSocket) }
+            catch let error as DaemonRPCError { throw error }
+            catch { throw DaemonRPCError.applicationError("Crow desktop app not reachable") }
+        },
+        "complete-session": { params in
+            guard let forwardSocket else {
+                throw DaemonRPCError.applicationError("Completing a session requires the Crow desktop app to be running")
+            }
+            do { return try forwardToApp("complete-session", params, socket: forwardSocket) }
+            catch let error as DaemonRPCError { throw error }
+            catch { throw DaemonRPCError.applicationError("Crow desktop app not reachable") }
+        },
+        "set-session-active": { params in
+            guard let forwardSocket else {
+                throw DaemonRPCError.applicationError("Reactivating a session requires the Crow desktop app to be running")
+            }
+            do { return try forwardToApp("set-session-active", params, socket: forwardSocket) }
+            catch let error as DaemonRPCError { throw error }
+            catch { throw DaemonRPCError.applicationError("Crow desktop app not reachable") }
+        },
+        "add-merge-label": { params in
+            guard let forwardSocket else {
+                throw DaemonRPCError.applicationError("Adding the merge label requires the Crow desktop app to be running")
+            }
+            do { return try forwardToApp("add-merge-label", params, socket: forwardSocket) }
+            catch let error as DaemonRPCError { throw error }
+            catch { throw DaemonRPCError.applicationError("Crow desktop app not reachable") }
+        },
     ])
 }

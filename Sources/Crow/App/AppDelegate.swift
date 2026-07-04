@@ -1602,6 +1602,84 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 await MainActor.run { capturedAppState.onLoadAllowList?() }
                 return ["ok": .bool(true)]
             },
+            // CROW-581: batched live per-session state (remote-control + PR) —
+            // runtime-only, not in the store, so the daemon forwards here rather
+            // than reading its store-seeded snapshot. One call replaces N
+            // per-session get-pr-status calls and carries RC in the same trip.
+            "list-sessions-live": { @Sendable _ in
+                await MainActor.run {
+                    var out: [String: JSONValue] = [:]
+                    for session in capturedAppState.sessions {
+                        let id = session.id
+                        let available = AgentRegistry.shared.agent(for: session.agentKind)?.supportsRemoteControl ?? false
+                        // Inline of CrowUI's internal isRemoteControlActive: any of
+                        // the session's terminals launched with --rc.
+                        let rcActive = capturedAppState.terminals(for: id)
+                            .contains { capturedAppState.remoteControlActiveTerminals.contains($0.id) }
+                        var entry: [String: JSONValue] = [
+                            "remote_control_active": .bool(rcActive),
+                            "remote_control_available": .bool(available),
+                        ]
+                        if let pr = capturedAppState.prStatus[id] {
+                            entry["pr"] = .object([
+                                "has_pr": .bool(true),
+                                "checks": .string(pr.checksPass.rawValue),
+                                "review": .string(pr.reviewStatus.rawValue),
+                                "merge": .string(pr.mergeable.rawValue),
+                                "is_open": .bool(pr.isOpen),
+                                "is_merged": .bool(pr.isMerged),
+                                "ready_to_merge": .bool(pr.isReadyToMerge),
+                                "has_blockers": .bool(pr.hasBlockers),
+                                "failed_checks": .array(pr.failedCheckNames.map { .string($0) }),
+                            ])
+                        } else {
+                            entry["pr"] = .object(["has_pr": .bool(false)])
+                        }
+                        out[id.uuidString] = .object(entry)
+                    }
+                    return ["sessions": .object(out)]
+                }
+            },
+            // Board/session actions — invoke the app's existing callbacks.
+            "create-manager": { @Sendable _ in
+                await MainActor.run { capturedAppState.onCreateManager?() }
+                return ["ok": .bool(true)]
+            },
+            "mark-in-review": { @Sendable params in
+                guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
+                    throw RPCError.invalidParams("session_id required")
+                }
+                await MainActor.run { capturedAppState.onMarkInReview?(id) }
+                return ["ok": .bool(true)]
+            },
+            "mark-issue-done": { @Sendable params in
+                guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
+                    throw RPCError.invalidParams("session_id required")
+                }
+                await MainActor.run { capturedAppState.onMarkIssueDone?(id) }
+                return ["ok": .bool(true)]
+            },
+            "complete-session": { @Sendable params in
+                guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
+                    throw RPCError.invalidParams("session_id required")
+                }
+                await MainActor.run { capturedAppState.onCompleteSession?(id) }
+                return ["ok": .bool(true)]
+            },
+            "set-session-active": { @Sendable params in
+                guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
+                    throw RPCError.invalidParams("session_id required")
+                }
+                await MainActor.run { capturedAppState.onSetSessionActive?(id) }
+                return ["ok": .bool(true)]
+            },
+            "add-merge-label": { @Sendable params in
+                guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
+                    throw RPCError.invalidParams("session_id required")
+                }
+                await MainActor.run { capturedAppState.onAddMergeLabel?(id) }
+                return ["ok": .bool(true)]
+            },
             "set-status": { @Sendable params in
                 guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr),
                       let statusStr = params["status"]?.stringValue, let status = SessionStatus(rawValue: statusStr) else {
