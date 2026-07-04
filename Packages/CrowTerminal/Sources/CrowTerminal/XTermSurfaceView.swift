@@ -1,3 +1,7 @@
+// Gated: the WKWebView-backed terminal surface is macOS-only. On Linux the
+// `crowd` daemon streams the PTY to a browser xterm.js page over a WebSocket
+// (CROW-581), so this whole file compiles away.
+#if canImport(AppKit)
 import AppKit
 import WebKit
 
@@ -373,3 +377,4 @@ private final class NavigationHandler: NSObject, WKNavigationDelegate {
         }
     }
 }
+#endif
