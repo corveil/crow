@@ -574,9 +574,14 @@ final class SessionService {
 
         let rcEnabled = appState.remoteControlEnabled
         // Jobs are unattended, so opt-in (default-on) auto-permission mode lets
-        // their prompts run crow/gh/git without per-call approval. Scoped to
-        // .job kind so review and other session kinds are unaffected.
-        let autoPermissionMode = (session.kind == .job) && appState.jobsAutoPermissionMode
+        // their prompts run crow/gh/git without per-call approval. Work coder
+        // views get auto mode only via the opt-in (default-off)
+        // coderViewAutoPermissionMode toggle (#586). Review sessions and the
+        // Manager (which has its own managerAutoPermissionMode path) are
+        // unaffected.
+        let autoPermissionMode =
+            (session.kind == .job && appState.jobsAutoPermissionMode) ||
+            (session.kind == .work && appState.coderViewAutoPermissionMode)
         // The agent's autoLaunchCommand mirrors this condition — the initial
         // prompt file is only used on first launch (CROW-224, CROW-317).
         // Compute it here so we know whether to flip `reviewPromptDispatched`
@@ -963,14 +968,26 @@ final class SessionService {
 
     /// Create an additional (non-primary) Manager session in `cwd`. Returns the
     /// new session's id. The terminal is set up by `createManagerTerminal`.
+    ///
+    /// `agentKind` is an optional one-shot override from the "+" picker menu
+    /// (#582): when supplied it wins over the configured default for this
+    /// session only, without mutating `agentsByKind` / `defaultAgentKind`.
+    /// `nil` falls back to the configured Manager agent.
     @discardableResult
-    func createManagerSession(name: String, cwd: String) -> UUID {
-        let agentKind = appState.agentKind(for: .manager)
+    func createManagerSession(name: String, cwd: String, agentKind override: AgentKind? = nil) -> UUID {
+        let agentKind = resolvedManagerAgentKind(override)
         let session = Session(name: name, status: .active, kind: .manager, agentKind: agentKind)
         appState.sessions.append(session)
         store.mutate { $0.sessions.append(session) }
         createManagerTerminal(session: session, cwd: cwd)
         return session.id
+    }
+
+    /// Resolve the agent for a new Manager session: an explicit per-session
+    /// choice wins, otherwise the configured default
+    /// (`agentsByKind["manager"] ?? defaultAgentKind`). Never mutates config.
+    func resolvedManagerAgentKind(_ explicit: AgentKind?) -> AgentKind {
+        explicit ?? appState.agentKind(for: .manager)
     }
 
     // MARK: - Delete Session

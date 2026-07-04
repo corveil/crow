@@ -48,6 +48,23 @@ import Testing
     // Legacy configs should opt in to auto permission mode by default so the
     // Manager benefits without requiring users to re-save settings.
     #expect(loaded?.managerAutoPermissionMode == true)
+    // Coder views are the opposite: default to plan mode unless the user
+    // explicitly opts in (#586).
+    #expect(loaded?.coderViewAutoPermissionMode == false)
+}
+
+@Test func configStoreCoderViewAutoPermissionModeRoundTrip() throws {
+    let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let claudeDir = tmpDir.appendingPathComponent(".claude", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: tmpDir) }
+
+    var config = AppConfig()
+    config.coderViewAutoPermissionMode = true
+    try ConfigStore.saveConfig(config, to: claudeDir)
+
+    let configURL = claudeDir.appendingPathComponent("config.json")
+    let loaded = ConfigStore.loadConfig(from: configURL)
+    #expect(loaded?.coderViewAutoPermissionMode == true)
 }
 
 @Test func configStoreManagerAutoPermissionModeRoundTrip() throws {

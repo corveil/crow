@@ -565,6 +565,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appState.remoteControlEnabled = config.remoteControlEnabled
         appState.managerAutoPermissionMode = config.managerAutoPermissionMode
         appState.jobsAutoPermissionMode = config.jobsAutoPermissionMode
+        appState.coderViewAutoPermissionMode = config.coderViewAutoPermissionMode
         appState.excludeReviewRepos = config.effectiveExcludeReviewRepos
         appState.excludeTicketRepos = config.defaults.excludeTicketRepos
         appState.ignoreReviewLabels = config.defaults.ignoreReviewLabels
@@ -674,15 +675,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         // Wire create-manager action — spawns an additional Manager session
-        // (auto-named "Manager N") with its own Claude-Code terminal in the devRoot.
-        appState.onCreateManager = { [weak self, weak service] in
+        // (auto-named "Manager N") with its own terminal in the devRoot. The
+        // optional `agentKind` is a one-shot pick from the "+" picker (#582);
+        // nil defers to the configured Manager-agent default.
+        appState.onCreateManager = { [weak self, weak service] agentKind in
             guard let self, let service else { return }
             // Pick the lowest unused "Manager N" so a delete-in-the-middle
             // doesn't produce a duplicate name.
             let existingNames = Set(self.appState.managerSessions.map(\.name))
             var n = 2
             while existingNames.contains("Manager \(n)") { n += 1 }
-            let id = service.createManagerSession(name: "Manager \(n)", cwd: devRoot)
+            let id = service.createManagerSession(name: "Manager \(n)", cwd: devRoot, agentKind: agentKind)
             self.appState.selectedSessionID = id
         }
 
@@ -1283,6 +1286,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appState.remoteControlEnabled = config.remoteControlEnabled
         appState.managerAutoPermissionMode = config.managerAutoPermissionMode
         appState.jobsAutoPermissionMode = config.jobsAutoPermissionMode
+        appState.coderViewAutoPermissionMode = config.coderViewAutoPermissionMode
         appState.excludeReviewRepos = config.effectiveExcludeReviewRepos
         appState.excludeTicketRepos = config.defaults.excludeTicketRepos
         appState.ignoreReviewLabels = config.defaults.ignoreReviewLabels
@@ -1648,8 +1652,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             },
             // Board/session actions — invoke the app's existing callbacks.
-            "create-manager": { @Sendable _ in
-                await MainActor.run { capturedAppState.onCreateManager?() }
+            "create-manager": { @Sendable params in
+                // Optional agent override (#583); nil = configured default.
+                let agent = params["agent_kind"]?.stringValue.flatMap { AgentKind(rawValue: $0) }
+                await MainActor.run { capturedAppState.onCreateManager?(agent) }
                 return ["ok": .bool(true)]
             },
             "mark-in-review": { @Sendable params in

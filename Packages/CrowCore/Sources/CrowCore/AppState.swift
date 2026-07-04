@@ -54,6 +54,12 @@ public final class AppState {
     /// Applies only to `.job`-kind sessions; manager/review/CLI sessions are unaffected.
     public var jobsAutoPermissionMode: Bool = true
 
+    /// Whether newly launched work coder views start with
+    /// `--permission-mode auto` (auto-accept) instead of plan mode. Mirrors
+    /// `AppConfig.coderViewAutoPermissionMode`. Applies only to `.work`-kind
+    /// sessions; manager/review/job sessions are unaffected (#586).
+    public var coderViewAutoPermissionMode: Bool = false
+
     /// `true` when the Manager's `claude` process has exited (crash, kill, OOM)
     /// and has not yet been restarted. Drives the "Manager process exited" banner
     /// and enables the "Restart Manager" action. Reset when the Manager relaunches.
@@ -294,7 +300,9 @@ public final class AppState {
     }
 
     /// Called when the user clicks the sidebar "+" to spawn a new Manager session.
-    public var onCreateManager: (() -> Void)?
+    /// The optional `AgentKind` is a one-shot, per-session agent override chosen
+    /// from the picker menu; `nil` means "use the configured default" (#582).
+    public var onCreateManager: ((AgentKind?) -> Void)?
 
     /// Called when user clicks "Work on" for an assigned issue.
     public var onWorkOnIssue: ((String) -> Void)?  // receives issue URL
