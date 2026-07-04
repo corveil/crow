@@ -179,20 +179,19 @@ function ticketsCard() {
   const counts = (boardData.tickets && boardData.tickets.counts) || {};
   const done = (boardData.tickets && boardData.tickets.done_last_24h) || 0;
   const mini = [
-    ['Backlog', counts.Backlog || 0, 'var(--text-muted)'],
-    ['Ready', counts.Ready || 0, 'var(--blue)'],
-    ['In Progress', counts['In Progress'] || 0, 'var(--orange)'],
-    ['In Review', counts['In Review'] || 0, 'var(--purple)'],
-    ['Done · 24h', done, 'var(--green)'],
+    ['Backlog', counts.Backlog || 0, 'var(--text-muted)', 'tray'],
+    ['Ready', counts.Ready || 0, 'var(--blue)', 'flag'],
+    ['In Progress', counts['In Progress'] || 0, 'var(--orange)', 'bolt'],
+    ['In Review', counts['In Review'] || 0, 'var(--purple)', 'eye'],
+    ['Done · 24h', done, 'var(--green)', 'checkCircle'],
   ];
   const row = el('div', 'tickets-counts');
-  for (const [label, n, color] of mini) {
+  for (const [label, n, color, ic] of mini) {
     const cell = el('span', 'tk-count');
     cell.title = label;
-    const dot = el('span', 'tk-dot'); dot.style.background = color;
-    cell.appendChild(dot);
-    const num = el('span', 'tk-n', String(n)); num.style.color = color;
-    cell.appendChild(num);
+    cell.style.color = color;
+    cell.appendChild(icon(ic, 12));
+    cell.appendChild(el('span', 'tk-n', String(n)));
     row.appendChild(cell);
   }
   card.appendChild(row);
@@ -255,6 +254,30 @@ async function createManager() {
 // Sidebar status/activity indicator, mirroring the desktop: for active
 // sessions the dot is driven by hook activity (working / needs-attention /
 // done); otherwise by session status.
+// Small inline-SVG icons (monochrome, inherit currentColor so they take each
+// button's/cell's color) — the web analog of the desktop's SF Symbols.
+const ICONS = {
+  eye: '<path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8Z"/><circle cx="8" cy="8" r="1.8"/>',
+  check: '<path d="M3 8.5l3.2 3.2L13 4.5"/>',
+  uturn: '<path d="M6.5 11H9.5a3 3 0 0 0 0-6H4"/><path d="M6 3 3.5 5.5 6 8"/>',
+  trash: '<path d="M3 4.5h10"/><path d="M6.5 4.5V3h3v1.5"/><path d="M4.8 4.5l.6 8.5h5.2l.6-8.5"/>',
+  merge: '<circle cx="5" cy="3.5" r="1.4"/><circle cx="5" cy="12.5" r="1.4"/><circle cx="11" cy="5.5" r="1.4"/><path d="M5 5v7"/><path d="M11 7a4 4 0 0 1-4 4H5"/>',
+  pencil: '<path d="M10.5 3 13 5.5l-7 7H3.5V10z"/>',
+  warning: '<path d="M8 2.5l6 11H2z"/><path d="M8 6.5v3.2"/><path d="M8 11.6v.2"/>',
+  tray: '<path d="M2.5 4.5h11v7h-11z"/><path d="M2.5 9h3l1 1.5h3L13.5 9"/>',
+  flag: '<path d="M4 2.5v11"/><path d="M4 3.5h7.5L9.8 6 11.5 8.5H4"/>',
+  bolt: '<path d="M9 2 3.5 9H7l-1 5 6.5-7.5H8.5z"/>',
+  checkCircle: '<circle cx="8" cy="8" r="5.8"/><path d="M5.6 8.2 7.3 9.9 10.6 6.2"/>',
+};
+function icon(name, size) {
+  const span = el('span', 'ico');
+  const s = size || 13;
+  span.innerHTML = '<svg width="' + s + '" height="' + s + '" viewBox="0 0 16 16" fill="none" '
+    + 'stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">'
+    + (ICONS[name] || '') + '</svg>';
+  return span;
+}
+
 function activityIndicator(s) {
   if (s.status !== 'active') {
     return { color: STATUS_COLOR[s.status] || 'var(--text-muted)' };
@@ -443,7 +466,8 @@ function renderHeader(s) {
   }
   root.appendChild(el('div', 'meta', 'Agent: ' + (s.agent_display_name || s.agent_kind || '—')));
 
-  // Links row: issue / PR / repo chips (all gold) + inline PR status.
+  // Links + actions on ONE row (issue/PR/repo chips + inline PR status on the
+  // left, action buttons trailing) — matching the desktop detail header.
   const links = (s.links || []).slice();
   if (s.ticket_url && !links.some((l) => l.type === 'ticket')) {
     links.unshift({ label: s.ticket_badge || 'Issue', url: s.ticket_url, type: 'ticket' });
@@ -455,51 +479,41 @@ function renderHeader(s) {
     links.push({ label: livePr.label, url: livePr.url, type: 'pr' });
   }
   const pr = liveFor(s.id).pr;
-  if (links.length || (pr && pr.has_pr)) {
-    const row = el('div', 'links-row');
-    for (const link of links) {
-      const chip = document.createElement('a');
-      chip.className = 'link-chip link-' + (link.type || 'custom');
-      chip.href = link.url;
-      chip.target = '_blank';
-      chip.rel = 'noopener';
-      // Prefer the badge (e.g. "Issue #579") for the ticket chip so the number shows.
-      chip.textContent = (link.type === 'ticket' && s.ticket_badge) || link.label || link.type || 'link';
-      row.appendChild(chip);
-    }
-    if (pr && pr.has_pr) row.appendChild(prStatusInline(pr));
-    root.appendChild(row);
-  }
 
-  // Action row (right-aligned): PR quick-actions, then status transitions + delete.
-  const actions = el('div', 'actions-row');
+  const headerRow = el('div', 'header-row');
+  for (const link of links) {
+    const chip = document.createElement('a');
+    chip.className = 'link-chip link-' + (link.type || 'custom');
+    chip.href = link.url;
+    chip.target = '_blank';
+    chip.rel = 'noopener';
+    chip.textContent = (link.type === 'ticket' && s.ticket_badge) || link.label || link.type || 'link';
+    headerRow.appendChild(chip);
+  }
+  if (pr && pr.has_pr) headerRow.appendChild(prStatusInline(pr));
+
+  // Right-aligned action cluster: PR quick-actions, then status transitions + delete.
+  const actions = el('div', 'actions-cluster');
   if (pr && pr.has_pr && !pr.is_merged) {
-    if (pr.merge === 'conflicting') actions.appendChild(qaButton('Rebase & Fix Conflicts', 'fixConflicts', s.id, 'danger'));
-    if (pr.review === 'changesRequested') actions.appendChild(qaButton('Address Review', 'addressChanges', s.id, 'danger'));
-    if (pr.checks === 'failing') actions.appendChild(qaButton('Fix Checks', 'fixChecks', s.id, 'danger'));
-    if (pr.ready_to_merge) actions.appendChild(qaButton('Merge PR', 'mergePR', s.id, 'primary'));
+    if (pr.merge === 'conflicting') actions.appendChild(qaButton('Rebase & Fix Conflicts', 'fixConflicts', s.id, 'danger', 'merge'));
+    if (pr.review === 'changesRequested') actions.appendChild(qaButton('Address Review', 'addressChanges', s.id, 'danger', 'pencil'));
+    if (pr.checks === 'failing') actions.appendChild(qaButton('Fix Checks', 'fixChecks', s.id, 'danger', 'warning'));
+    if (pr.ready_to_merge) actions.appendChild(qaButton('Merge PR', 'mergePR', s.id, 'primary', 'merge'));
   }
   if (s.kind !== 'manager') {
     if (s.status === 'active' && s.ticket_url) {
-      const b = el('button', 'action-btn', 'In Review');
-      b.onclick = () => sessionAction('mark-in-review', s.id);
-      actions.appendChild(b);
+      actions.appendChild(actionBtn('In Review', 'eye', null, () => sessionAction('mark-in-review', s.id)));
     }
     if (s.status === 'active' || s.status === 'inReview') {
-      const b = el('button', 'action-btn', 'Mark as Completed');
-      b.onclick = () => sessionAction('complete-session', s.id);
-      actions.appendChild(b);
+      actions.appendChild(actionBtn('Mark as Completed', 'check', null, () => sessionAction('complete-session', s.id)));
     }
     if (s.status === 'completed') {
-      const b = el('button', 'action-btn', 'Move to Active');
-      b.onclick = () => sessionAction('set-session-active', s.id);
-      actions.appendChild(b);
+      actions.appendChild(actionBtn('Move to Active', 'uturn', null, () => sessionAction('set-session-active', s.id)));
     }
-    const del = el('button', 'action-btn action-danger', 'Delete');
-    del.onclick = () => deleteSession(s.id, s.name);
-    actions.appendChild(del);
+    actions.appendChild(actionBtn('Delete', 'trash', 'danger', () => deleteSession(s.id, s.name)));
   }
-  if (actions.children.length) root.appendChild(actions);
+  if (actions.children.length) headerRow.appendChild(actions);
+  if (headerRow.children.length) root.appendChild(headerRow);
 }
 
 // Inline PR status, mirroring the desktop PRStatusDetail.
@@ -530,9 +544,20 @@ function prStatusPart(text, color) {
   return part;
 }
 
-function qaButton(label, action, id, variant) {
-  const btn = el('button', 'action-btn' + (variant ? ' action-' + variant : ''), label);
+function qaButton(label, action, id, variant, iconName) {
+  const btn = el('button', 'action-btn' + (variant ? ' action-' + variant : ''), '');
+  if (iconName) btn.appendChild(icon(iconName));
+  btn.appendChild(el('span', null, label));
   btn.onclick = () => quickAction(id, action, label);
+  return btn;
+}
+
+// A detail-header action button with a leading icon + click handler.
+function actionBtn(label, iconName, variant, onclick) {
+  const btn = el('button', 'action-btn' + (variant ? ' action-' + variant : ''), '');
+  if (iconName) btn.appendChild(icon(iconName));
+  btn.appendChild(el('span', null, label));
+  btn.onclick = onclick;
   return btn;
 }
 
@@ -844,6 +869,12 @@ function reviewCard(r) {
 // -- Allowlist --
 function renderAllowlist(root) {
   const d = boardData.allowlist;
+  let entries = ((d && d.entries) || []).slice();
+  if (allowlistHideGlobal) entries = entries.filter((e) => !e.is_global);
+  entries.sort((a, b) => a.pattern.localeCompare(b.pattern));
+  // Only worktree-only patterns are promotable to global.
+  const promotable = entries.filter((e) => !e.is_global).map((e) => e.pattern);
+
   const head = el('div', 'board-head');
   head.appendChild(el('div', 'board-title', 'Allowlist'));
   const hide = el('button', 'action-btn' + (allowlistHideGlobal ? ' active' : ''), allowlistHideGlobal ? 'Show Global' : 'Hide Global');
@@ -852,6 +883,14 @@ function renderAllowlist(root) {
   const refresh = el('button', 'action-btn', 'Refresh');
   refresh.onclick = () => refreshAllowlist();
   head.appendChild(refresh);
+  const selectAll = el('button', 'action-btn', 'Select All');
+  selectAll.disabled = !promotable.length;
+  selectAll.onclick = () => { promotable.forEach((p) => allowlistSelection.add(p)); renderBoard(); };
+  head.appendChild(selectAll);
+  const clearSel = el('button', 'action-btn', 'Clear');
+  clearSel.disabled = allowlistSelection.size === 0;
+  clearSel.onclick = () => { allowlistSelection.clear(); renderBoard(); };
+  head.appendChild(clearSel);
   const promote = el('button', 'action-btn action-primary', 'Promote to Global (' + allowlistSelection.size + ')');
   promote.id = 'allow-promote';
   promote.disabled = allowlistSelection.size === 0;
@@ -859,9 +898,6 @@ function renderAllowlist(root) {
   head.appendChild(promote);
   root.appendChild(head);
 
-  let entries = ((d && d.entries) || []).slice();
-  if (allowlistHideGlobal) entries = entries.filter((e) => !e.is_global);
-  entries.sort((a, b) => a.pattern.localeCompare(b.pattern));
   if (!entries.length) { root.appendChild(boardEmpty('No allowlist entries')); return; }
   const list = el('div', 'allow-list');
   for (const e of entries) list.appendChild(allowRow(e));
