@@ -145,9 +145,17 @@ html, body {
 .link-chip.link-pr { color: var(--blue); border-color: rgba(10, 132, 255, 0.4); }
 .link-chip.link-repo { color: var(--text-secondary); }
 .actions-row { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; margin-top: 10px; }
+/* Detail header: chips + inline PR status on the left, action buttons trailing,
+   all on one row (matching the desktop). */
+.header-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
+.actions-cluster { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-left: auto; }
+.ico { display: inline-flex; align-items: center; flex: 0 0 auto; }
 .meta-row { display: flex; align-items: baseline; gap: 8px; }
 .meta-path { margin-left: auto; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   padding: 4px 12px;
   border-radius: 6px;
   border: 1px solid var(--border-strong);
