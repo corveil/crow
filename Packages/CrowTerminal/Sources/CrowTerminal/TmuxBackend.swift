@@ -874,8 +874,10 @@ public final class TmuxBackend {
     /// call re-attaches to the live session. Used when the attach client died
     /// but the server is still healthy (e.g. the user hit prefix-d) (#588).
     public func recycleCockpitSurface() {
+        #if canImport(AppKit)
         sharedSurface?.destroy()
         sharedSurface = nil
+        #endif
         // A fresh attach lands on the session's current window, which may not
         // match what we last selected — force the next makeActive to actually
         // run select-window instead of short-circuiting.

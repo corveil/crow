@@ -51,7 +51,7 @@ public final class SocketServer: @unchecked Sendable {
         unlink(socketPath)
 
         // Create socket
-        serverFD = socket(AF_UNIX, SOCK_STREAM, 0)
+        serverFD = socket(AF_UNIX, crowSockStream, 0)
         guard serverFD >= 0 else {
             throw SocketError.createFailed(errno)
         }

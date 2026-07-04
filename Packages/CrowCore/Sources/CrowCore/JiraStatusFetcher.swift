@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// Fetches the concrete workflow **status names** for a Jira project, so the
 /// Settings status-mapping UI can offer live names instead of free-text (#523).

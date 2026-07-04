@@ -21,7 +21,14 @@ struct TerminalCockpit: Sendable {
         // and its live session windows rather than spinning up an isolated one.
         let socketPath = Self.appTmuxSocketPath()
         controller = TmuxController(tmuxBinary: tmux, socketPath: socketPath, sessionName: Self.sessionName)
-        ensureSession()
+        // Prime the cockpit off the startup critical path. On Linux the tmux CLI
+        // calls can block indefinitely — `new-session -d` daemonizes a server
+        // that inherits this process's pipe fds, so `Process.waitUntilExit()` /
+        // pipe reads never see EOF (macOS reaps it via the app run loop). The
+        // HTTP/RPC server must bind regardless, so seed the session on a detached
+        // thread; terminals attach lazily once the tmux runtime is hardened.
+        let cockpit = self
+        Thread.detachNewThread { cockpit.ensureSession() }
     }
 
     /// Adopt the app's cockpit if it's already running; otherwise create a bare

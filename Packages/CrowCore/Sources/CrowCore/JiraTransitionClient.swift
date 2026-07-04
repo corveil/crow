@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// Performs a Jira **workflow status transition** via the Jira Cloud REST API,
 /// fetching the issue's available transitions first and only firing one that

@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// Fetches the operator's **assigned Jira work items** for the ticket board via
 /// the Jira Cloud REST API, so the board read-back agrees with Jira (#533).

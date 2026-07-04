@@ -638,7 +638,13 @@ public enum CrowDaemon {
     /// (nothing listening) returns false, so normal startup still replaces it.
     private static func socketInUse(_ path: String) -> Bool {
         guard FileManager.default.fileExists(atPath: path) else { return false }
-        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        // Glibc types SOCK_STREAM as __socket_type, not Int32 — cast for socket(2).
+        #if canImport(Glibc)
+        let sockStream = Int32(SOCK_STREAM.rawValue)
+        #else
+        let sockStream = SOCK_STREAM
+        #endif
+        let fd = socket(AF_UNIX, sockStream, 0)
         guard fd >= 0 else { return false }
         defer { close(fd) }
         var addr = sockaddr_un()

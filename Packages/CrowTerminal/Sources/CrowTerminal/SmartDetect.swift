@@ -18,6 +18,7 @@ public enum SmartDetect {
     ) -> URL? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
+        #if canImport(Darwin)
         let detector = try? NSDataDetector(
             types: NSTextCheckingResult.CheckingType.link.rawValue
         )
@@ -30,6 +31,27 @@ public enum SmartDetect {
             return url
         }
         return nil
+        #else
+        // Linux: swift-corelibs-Foundation ships no NSDataDetector, so fall back
+        // to a scheme-anchored scan. Match `scheme://…` up to whitespace, then
+        // strip the trailing punctuation the system detector also drops so a
+        // URL at the end of a sentence still parses.
+        let pattern = #"[A-Za-z][A-Za-z0-9+.\-]*://[^\s]+"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+        let nsrange = NSRange(trimmed.startIndex..<trimmed.endIndex, in: trimmed)
+        for match in regex.matches(in: trimmed, range: nsrange) {
+            guard let r = Range(match.range, in: trimmed) else { continue }
+            var candidate = String(trimmed[r])
+            while let last = candidate.last, ".,;:!?)]}'\"".contains(last) {
+                candidate.removeLast()
+            }
+            guard let url = URL(string: candidate),
+                  let scheme = url.scheme?.lowercased(),
+                  allowedSchemes.contains(scheme) else { continue }
+            return url
+        }
+        return nil
+        #endif
     }
 
     /// Match `path/to/file.ext:LINE` (optional `:COLUMN`) in a trimmed
