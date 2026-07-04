@@ -48,7 +48,9 @@ let sessions = [];
 let selectedId = null;
 let terminals = [];
 let activeTerminal = null; // { id, name, window }
-const prCache = {}; // session id → get-pr-status result
+// Live per-session state (remote-control + PR) from list-sessions-live, keyed
+// by session id. Runtime-only — empty when the desktop app isn't running.
+let liveById = {};
 
 // Boards (Ticket Board / Reviews / Allowlist), mirroring the desktop's
 // full-pane boards. Data is forwarded to the desktop app, so it's empty when
@@ -58,11 +60,6 @@ const boardData = { tickets: null, reviews: null, allowlist: null };
 let ticketFilter = 'In Progress'; // pipeline segment ('All' or a status rawValue)
 let allowlistHideGlobal = false;
 const allowlistSelection = new Set();
-const BOARDS = [
-  { key: 'tickets', title: 'Ticket Board', glyph: '❏' },
-  { key: 'reviews', title: 'Reviews', glyph: '⇄' },
-  { key: 'allowlist', title: 'Allowlist', glyph: '⚿' },
-];
 const PIPELINE = ['All', 'Backlog', 'Ready', 'In Progress', 'In Review', 'Done'];
 // Ticket pipeline status → accent color (mirrors CorveilTheme.TicketStatus.color).
 const TICKET_STATUS_COLOR = {
@@ -74,23 +71,14 @@ const TICKET_STATUS_COLOR = {
   'Unknown': 'var(--text-muted)',
 };
 
-const PR_COLOR = {
-  passing: 'var(--green)', failing: 'var(--red)', pending: 'var(--orange)',
-  approved: 'var(--green)', changesRequested: 'var(--red)', reviewRequired: 'var(--orange)',
-  mergeable: 'var(--green)', conflicting: 'var(--red)', merged: 'var(--gold)',
-  unknown: 'var(--text-muted)',
-};
-
 const STATUS_COLOR = {
   active: 'var(--green)', paused: 'var(--yellow)',
   inReview: 'var(--gold)', completed: 'var(--gold)', archived: 'var(--text-muted)',
 };
-const AGENT_GLYPH = { 'claude-code': '✦', cursor: '▲', codex: '◆', 'open-code': '◇' };
+const AGENT_GLYPH = { 'claude-code': '✦', cursor: '▲', codex: '◆', 'open-code': '◇', opencode: '◇' };
 
-// Sidebar groups, mirroring AppState's computed groupings. Managers first, as
-// in the desktop app.
+// Sidebar session groups (Managers now live in the nav pill row, not a group).
 const GROUPS = [
-  { title: 'Managers', match: (s) => s.kind === 'manager' },
   { title: 'Jobs', match: (s) => s.status === 'active' && s.kind === 'job' },
   { title: 'Active', match: (s) => s.status === 'active' && s.kind === 'work' },
   { title: 'Reviews', match: (s) => s.kind === 'review' && s.status !== 'completed' && s.status !== 'archived' },
@@ -106,9 +94,24 @@ async function refreshSessions() {
     const res = await rpc('list-sessions');
     sessions = res.sessions || [];
     renderSidebar();
-    if (selectedId) fetchPR(selectedId); // keep the selected session's PR badge live
   } catch (_) { /* transient — next poll retries */ }
 }
+
+// Batched live per-session state (remote-control + PR). Merged into the sidebar
+// rows + detail header; empty when the desktop app isn't running.
+async function refreshLive() {
+  try {
+    const res = await rpc('list-sessions-live');
+    liveById = res.sessions || {};
+  } catch (_) { return; }
+  renderSidebar();
+  if (selectedId) {
+    const s = sessions.find((x) => x.id === selectedId);
+    if (s) renderHeader(s);
+  }
+}
+
+function liveFor(id) { return liveById[id] || {}; }
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -120,9 +123,21 @@ function el(tag, className, text) {
 function renderSidebar() {
   const root = document.getElementById('sidebar');
   root.innerHTML = '';
-  root.appendChild(el('div', 'brand', 'CROW'));
-  root.appendChild(el('div', 'divider', 'Boards'));
-  for (const b of BOARDS) root.appendChild(boardRow(b));
+
+  // Brandmark (the desktop's CorveilBrandmark, served at /brand.svg).
+  const brand = document.createElement('img');
+  brand.id = 'brand-img';
+  brand.src = '/brand.svg';
+  brand.alt = 'Crow';
+  root.appendChild(brand);
+
+  root.appendChild(ticketsCard());
+  root.appendChild(navPillRow());
+
+  // Extra (non-primary) manager sessions render as rows, no section header.
+  const managers = sessions.filter((s) => s.kind === 'manager');
+  for (const m of managers.slice(1)) root.appendChild(sessionRow(m));
+
   let shown = 0;
   for (const group of GROUPS) {
     const rows = sessions.filter(group.match);
@@ -130,26 +145,91 @@ function renderSidebar() {
     root.appendChild(el('div', 'divider', group.title));
     for (const s of rows) { root.appendChild(sessionRow(s)); shown++; }
   }
-  if (!shown) root.appendChild(el('div', 'empty', 'No sessions'));
+  if (!shown && !managers.length) root.appendChild(el('div', 'empty', 'No sessions'));
 }
 
-// A pinned board entry in the sidebar, styled like a session row.
-function boardRow(b) {
-  const row = el('div', 'session-row board-row' + (selectedBoard === b.key ? ' selected' : ''));
-  row.onclick = () => selectBoard(b.key);
-  const top = el('div', 'row-top');
-  top.appendChild(el('span', 'agent', b.glyph));
-  top.appendChild(el('span', 'name', b.title));
-  const badge = boardBadge(b.key);
-  if (badge != null) top.appendChild(el('span', 'badge', String(badge)));
-  row.appendChild(top);
+// Tickets summary card: title + refresh + 5 status mini-counts. Click opens the
+// Ticket Board (TicketBoardSidebarRow).
+function ticketsCard() {
+  const card = el('div', 'tickets-card' + (selectedBoard === 'tickets' ? ' selected' : ''));
+  card.onclick = () => selectBoard('tickets');
+  const head = el('div', 'tickets-head');
+  head.appendChild(el('span', 'tickets-title', 'Tickets'));
+  const refresh = el('button', 'tickets-refresh', '↻');
+  refresh.title = 'Refresh tickets';
+  refresh.onclick = (e) => { e.stopPropagation(); refreshTickets(); };
+  head.appendChild(refresh);
+  card.appendChild(head);
+
+  const counts = (boardData.tickets && boardData.tickets.counts) || {};
+  const done = (boardData.tickets && boardData.tickets.done_last_24h) || 0;
+  const mini = [
+    ['Backlog', counts.Backlog || 0, 'var(--text-muted)'],
+    ['Ready', counts.Ready || 0, 'var(--blue)'],
+    ['In Progress', counts['In Progress'] || 0, 'var(--orange)'],
+    ['In Review', counts['In Review'] || 0, 'var(--purple)'],
+    ['Done · 24h', done, 'var(--green)'],
+  ];
+  const row = el('div', 'tickets-counts');
+  for (const [label, n, color] of mini) {
+    const cell = el('span', 'tk-count');
+    cell.title = label;
+    const dot = el('span', 'tk-dot'); dot.style.background = color;
+    cell.appendChild(dot);
+    const num = el('span', 'tk-n', String(n)); num.style.color = color;
+    cell.appendChild(num);
+    row.appendChild(cell);
+  }
+  card.appendChild(row);
+  return card;
+}
+
+// Reviews / Allowlist / Manager pills + "+" (new manager).
+function navPillRow() {
+  const row = el('div', 'nav-pills');
+
+  const rev = navPill('Reviews', selectedBoard === 'reviews', () => selectBoard('reviews'));
+  const unseen = (boardData.reviews && boardData.reviews.unseen) || 0;
+  if (unseen) rev.appendChild(el('span', 'pill-badge', String(unseen)));
+  row.appendChild(rev);
+
+  row.appendChild(navPill('Allowlist', selectedBoard === 'allowlist', () => selectBoard('allowlist')));
+
+  const primaryManager = sessions.find((s) => s.kind === 'manager');
+  if (primaryManager) {
+    const mgr = navPill('Manager', selectedId === primaryManager.id, () => selectSession(primaryManager.id));
+    const ind = activityIndicator(primaryManager);
+    const dot = el('span', 'pill-dot' + (ind.pulse ? ' pulse' : ''));
+    dot.style.background = ind.color;
+    mgr.insertBefore(dot, mgr.firstChild);
+    if (liveFor(primaryManager.id).remote_control_active) mgr.appendChild(rcGlyph());
+    row.appendChild(mgr);
+  }
+
+  const plus = el('button', 'nav-plus', '+');
+  plus.title = 'New Manager session';
+  plus.onclick = () => createManager();
+  row.appendChild(plus);
   return row;
 }
 
-function boardBadge(key) {
-  if (key === 'tickets') { const n = boardData.tickets?.counts?.All; return n ? n : null; }
-  if (key === 'reviews') { const n = boardData.reviews?.unseen; return n ? n : null; }
-  return null;
+function navPill(label, active, onClick) {
+  const p = el('div', 'nav-pill' + (active ? ' active' : ''));
+  p.appendChild(el('span', 'pill-label', label));
+  p.onclick = onClick;
+  return p;
+}
+
+// Gold antenna glyph = remote-control active (driveable from claude.ai).
+function rcGlyph() {
+  const span = el('span', 'rc-glyph');
+  span.title = 'Remote control active — driveable from claude.ai';
+  span.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 8a8 8 0 0 0 0 8M8 10.5a4 4 0 0 0 0 3M19 8a8 8 0 0 1 0 8M16 10.5a4 4 0 0 1 0 3"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/></svg>';
+  return span;
+}
+
+async function createManager() {
+  try { await rpc('create-manager'); } catch (e) { window.alert('New manager failed: ' + (e.message || e)); }
 }
 
 // Sidebar status/activity indicator, mirroring the desktop: for active
@@ -171,17 +251,31 @@ function activityIndicator(s) {
 }
 
 function sessionRow(s) {
-  const row = el('div', 'session-row' + (s.id === selectedId ? ' selected' : ''));
+  const row = el('div', 'session-row status-accent' + (s.id === selectedId ? ' selected' : ''));
   row.onclick = () => selectSession(s.id);
+  row.oncontextmenu = (e) => showSessionMenu(e, s);
   const ind = activityIndicator(s);
+  // Left accent hue: amber for attention (permission/question), green for done,
+  // neutral otherwise (mirrors the desktop rowBackgroundColor logic).
+  row.style.borderLeftColor = s.attention ? 'var(--orange)'
+    : (s.activity === 'done' ? 'var(--green)' : 'var(--border-subtle)');
 
   const top = el('div', 'row-top');
-  const dot = el('span', 'dot' + (ind.pulse ? ' pulse' : ''));
+  const lead = el('div', 'row-lead');
+  lead.appendChild(el('span', 'agent', AGENT_GLYPH[s.agent_kind] || '•'));
+  lead.appendChild(el('span', 'name', s.name));
+  if (liveFor(s.id).remote_control_active) lead.appendChild(rcGlyph());
+  top.appendChild(lead);
+
+  const trail = el('div', 'row-trail');
+  if (s.locked) trail.appendChild(el('span', 'lock', '🔒'));
+  if (s.auto_merge) { const am = el('span', 'automerge', '⛙'); am.title = 'Auto-merge'; trail.appendChild(am); }
+  // Trailing glowing status dot.
+  const dot = el('span', 'dot glow' + (ind.pulse ? ' pulse' : ''));
   dot.style.background = ind.color;
-  top.appendChild(dot);
-  top.appendChild(el('span', 'agent', AGENT_GLYPH[s.agent_kind] || '•'));
-  top.appendChild(el('span', 'name', s.name));
-  if (s.locked) top.appendChild(el('span', 'lock', '🔒'));
+  dot.style.color = ind.color; // drives the glow ring (box-shadow: currentColor)
+  trail.appendChild(dot);
+  top.appendChild(trail);
   row.appendChild(top);
 
   if (s.ticket_title) row.appendChild(el('div', 'subtle', s.ticket_title));
@@ -199,6 +293,68 @@ function sessionRow(s) {
 }
 
 // ---------------------------------------------------------------------------
+// Session right-click context menu (custom — suppresses the browser default).
+// ---------------------------------------------------------------------------
+function closeContextMenu() {
+  const m = document.querySelector('.ctx-menu');
+  if (m) m.remove();
+}
+
+function showSessionMenu(e, s) {
+  e.preventDefault();
+  closeContextMenu();
+  const menu = el('div', 'ctx-menu');
+  for (const it of sessionMenuItems(s)) {
+    if (it.sep) { menu.appendChild(el('div', 'ctx-sep')); continue; }
+    const item = el('div', 'ctx-item' + (it.danger ? ' ctx-danger' : ''), it.label);
+    item.onclick = (ev) => { ev.stopPropagation(); closeContextMenu(); it.action(); };
+    menu.appendChild(item);
+  }
+  document.body.appendChild(menu);
+  const x = Math.min(e.clientX, window.innerWidth - menu.offsetWidth - 8);
+  const y = Math.min(e.clientY, window.innerHeight - menu.offsetHeight - 8);
+  menu.style.left = Math.max(4, x) + 'px';
+  menu.style.top = Math.max(4, y) + 'px';
+  setTimeout(() => document.addEventListener('click', closeContextMenu, { once: true }), 0);
+}
+
+// Menu items mirror the desktop sessionContextMenu, gated by kind/status/provider/PR.
+function sessionMenuItems(s) {
+  const items = [];
+  const hasPR = (s.links || []).some((l) => l.type === 'pr');
+  if (s.kind === 'manager') {
+    items.push({ label: 'Rename', action: () => renameSession(s.id, s.name) });
+    items.push({ label: 'Delete', danger: true, action: () => deleteSession(s.id, s.name) });
+    return items;
+  }
+  if (s.kind === 'review') {
+    if (hasPR) items.push({ label: 'Add label crow:merge to PR', action: () => sessionAction('add-merge-label', s.id) });
+    items.push({ label: 'Delete', danger: true, action: () => deleteSession(s.id, s.name) });
+    return items;
+  }
+  if (s.status === 'active' && s.ticket_url) {
+    items.push({ label: 'Mark as In Review', action: () => sessionAction('mark-in-review', s.id) });
+  }
+  if ((s.status === 'active' || s.status === 'inReview') && s.ticket_url) {
+    const closes = s.provider === 'github' || s.provider === 'gitlab';
+    items.push({ label: closes ? 'Close Issue' : 'Mark Issue Done', action: () => sessionAction('mark-issue-done', s.id) });
+  }
+  if (s.status === 'active' || s.status === 'inReview') {
+    items.push({ label: 'Mark as Completed', action: () => sessionAction('complete-session', s.id) });
+  }
+  if (hasPR) items.push({ label: 'Add label crow:merge to PR', action: () => sessionAction('add-merge-label', s.id) });
+  items.push({ label: s.locked ? 'Unlock' : 'Lock', action: () => sessionAction('set-locked', s.id, { locked: !s.locked }) });
+  items.push({ sep: true });
+  items.push({ label: 'Delete', danger: true, action: () => deleteSession(s.id, s.name) });
+  return items;
+}
+
+async function sessionAction(method, id, extra) {
+  try { await rpc(method, Object.assign({ session_id: id }, extra || {})); }
+  catch (e) { window.alert(method + ' failed: ' + (e.message || e)); }
+}
+
+// ---------------------------------------------------------------------------
 // Detail + terminal tabs
 // ---------------------------------------------------------------------------
 async function selectSession(id) {
@@ -213,7 +369,7 @@ async function selectSession(id) {
   ensureTerminal();
   setTimeout(fitTerminal, 50); // detail pane just became visible (mobile) — refit
   await refreshTerminals();
-  fetchPR(id);
+  refreshLive();
 }
 
 function shorten(path) {
@@ -230,6 +386,7 @@ function renderHeader(s) {
   nameEl.title = 'Double-click to rename';
   nameEl.ondblclick = () => renameSession(s.id, s.name);
   top.appendChild(nameEl);
+  if (liveFor(s.id).remote_control_active) top.appendChild(rcGlyph());
   const badge = el('span', 'status-badge', s.status);
   badge.style.color = STATUS_COLOR[s.status] || 'var(--text-muted)';
   top.appendChild(badge);
@@ -243,13 +400,13 @@ function renderHeader(s) {
   if (bits.length) root.appendChild(el('div', 'meta', bits.join(' · ')));
   root.appendChild(el('div', 'meta', 'Agent: ' + (s.agent_display_name || s.agent_kind || '—')));
 
-  // Links row: issue / PR / repo chips, opening in a new tab.
+  // Links row: issue / PR / repo chips (all gold) + inline PR status.
   const links = (s.links || []).slice();
-  // Ensure an issue chip from the ticket even when no explicit link is stored.
   if (s.ticket_url && !links.some((l) => l.type === 'ticket')) {
     links.unshift({ label: s.ticket_badge || 'Issue', url: s.ticket_url, type: 'ticket' });
   }
-  if (links.length) {
+  const pr = liveFor(s.id).pr;
+  if (links.length || (pr && pr.has_pr)) {
     const row = el('div', 'links-row');
     for (const link of links) {
       const chip = document.createElement('a');
@@ -257,53 +414,71 @@ function renderHeader(s) {
       chip.href = link.url;
       chip.target = '_blank';
       chip.rel = 'noopener';
-      // The stored ticket link label is often generic ("Issue"); prefer the
-      // badge (e.g. "Issue #579") so the number shows, like the PR chip does.
+      // Prefer the badge (e.g. "Issue #579") for the ticket chip so the number shows.
       chip.textContent = (link.type === 'ticket' && s.ticket_badge) || link.label || link.type || 'link';
       row.appendChild(chip);
     }
+    if (pr && pr.has_pr) row.appendChild(prStatusInline(pr));
     root.appendChild(row);
   }
 
-  // Status actions (forwarded to the desktop app when it's running).
+  // Action row (right-aligned): PR quick-actions, then status transitions + delete.
   const actions = el('div', 'actions-row');
-  for (const [label, value] of [['In Review', 'inReview'], ['Active', 'active'], ['Completed', 'completed']]) {
-    if (s.status === value) continue;
-    const btn = el('button', 'action-btn', label);
-    btn.onclick = () => setStatus(s.id, value);
-    actions.appendChild(btn);
+  if (pr && pr.has_pr && !pr.is_merged) {
+    if (pr.merge === 'conflicting') actions.appendChild(qaButton('Rebase & Fix Conflicts', 'fixConflicts', s.id, 'danger'));
+    if (pr.review === 'changesRequested') actions.appendChild(qaButton('Address Review', 'addressChanges', s.id, 'danger'));
+    if (pr.checks === 'failing') actions.appendChild(qaButton('Fix Checks', 'fixChecks', s.id, 'danger'));
+    if (pr.ready_to_merge) actions.appendChild(qaButton('Merge PR', 'mergePR', s.id, 'primary'));
   }
   if (s.kind !== 'manager') {
+    if (s.status === 'active' && s.ticket_url) {
+      const b = el('button', 'action-btn', 'In Review');
+      b.onclick = () => sessionAction('mark-in-review', s.id);
+      actions.appendChild(b);
+    }
+    if (s.status === 'active' || s.status === 'inReview') {
+      const b = el('button', 'action-btn', 'Mark as Completed');
+      b.onclick = () => sessionAction('complete-session', s.id);
+      actions.appendChild(b);
+    }
+    if (s.status === 'completed') {
+      const b = el('button', 'action-btn', 'Move to Active');
+      b.onclick = () => sessionAction('set-session-active', s.id);
+      actions.appendChild(b);
+    }
     const del = el('button', 'action-btn action-danger', 'Delete');
     del.onclick = () => deleteSession(s.id, s.name);
     actions.appendChild(del);
   }
-  root.appendChild(actions);
-
-  // PR status badge + PR-state-aware quick actions (from get-pr-status).
-  const pr = prCache[s.id];
-  if (pr && pr.has_pr) {
-    const prRow = el('div', 'pr-row');
-    prRow.appendChild(prChip('Checks', pr.checks));
-    prRow.appendChild(prChip('Review', pr.review));
-    prRow.appendChild(prChip('Merge', pr.merge));
-    root.appendChild(prRow);
-
-    const qa = el('div', 'actions-row');
-    if (pr.merge === 'conflicting') qa.appendChild(qaButton('Rebase & Fix', 'fixConflicts', s.id, 'danger'));
-    if (pr.review === 'changesRequested') qa.appendChild(qaButton('Address Review', 'addressChanges', s.id, 'danger'));
-    if (pr.checks === 'failing') qa.appendChild(qaButton('Fix Checks', 'fixChecks', s.id, 'danger'));
-    if (pr.ready_to_merge) qa.appendChild(qaButton('Merge PR', 'mergePR', s.id, 'primary'));
-    if (qa.children.length) root.appendChild(qa);
-  }
+  if (actions.children.length) root.appendChild(actions);
 }
 
-function prChip(label, state) {
-  const chip = el('span', 'pr-chip', label + ': ' + state);
-  const color = PR_COLOR[state] || 'var(--text-muted)';
-  chip.style.color = color;
-  chip.style.borderColor = color;
-  return chip;
+// Inline PR status, mirroring the desktop PRStatusDetail.
+function prStatusInline(pr) {
+  const wrap = el('div', 'pr-status-inline');
+  if (pr.is_merged) { wrap.appendChild(prStatusPart('✔ Merged', 'var(--purple)')); return wrap; }
+  const checks = {
+    passing: ['✔ Checks pass', 'var(--green)'],
+    failing: [(pr.failed_checks && pr.failed_checks.length ? '✕ ' + pr.failed_checks.length + ' failing' : '✕ Checks failing'), 'var(--red)'],
+    pending: ['◷ Checks running', 'var(--orange)'],
+    unknown: ['? No checks', 'var(--text-muted)'],
+  }[pr.checks] || ['? No checks', 'var(--text-muted)'];
+  wrap.appendChild(prStatusPart(checks[0], checks[1]));
+  const review = {
+    approved: ['✔ Approved', 'var(--green)'],
+    changesRequested: ['✕ Changes requested', 'var(--red)'],
+    reviewRequired: ['◷ Needs review', 'var(--orange)'],
+    unknown: ['○ No reviews', 'var(--text-muted)'],
+  }[pr.review] || ['○ No reviews', 'var(--text-muted)'];
+  wrap.appendChild(prStatusPart(review[0], review[1]));
+  if (pr.merge === 'conflicting') wrap.appendChild(prStatusPart('⚠ Conflicts', 'var(--red)'));
+  return wrap;
+}
+
+function prStatusPart(text, color) {
+  const part = el('span', 'pr-stat', text);
+  part.style.color = color;
+  return part;
 }
 
 function qaButton(label, action, id, variant) {
@@ -312,36 +487,13 @@ function qaButton(label, action, id, variant) {
   return btn;
 }
 
-// Fetch PR status (forwarded to the app) and re-render the header for it.
-async function fetchPR(id) {
-  try {
-    const pr = await rpc('get-pr-status', { session_id: id });
-    prCache[id] = pr;
-    if (id === selectedId) {
-      const s = sessions.find((x) => x.id === id);
-      if (s) renderHeader(s);
-    }
-  } catch (_) { /* app not running / no PR — leave prior */ }
-}
-
+// Dispatch a PR quick-action (forwarded to the app's agent terminal).
 async function quickAction(id, action, label) {
   try {
     await rpc('quick-action', { session_id: id, action });
     if (term) term.write('\r\n\x1b[33m[crow] dispatched: ' + label + '\x1b[0m\r\n');
   } catch (e) {
     if (term) term.write('\r\n\x1b[31m[crow] ' + label + ' failed: ' + (e.message || e) + '\x1b[0m\r\n');
-  }
-}
-
-// Write-actions. Optimistically update local state, then let the store-reload
-// poll reconcile with the app's authoritative state.
-async function setStatus(id, status) {
-  try {
-    await rpc('set-status', { session_id: id, status });
-    const s = sessions.find((x) => x.id === id);
-    if (s) { s.status = status; renderSidebar(); if (id === selectedId) renderHeader(s); }
-  } catch (e) {
-    if (term) term.write('\r\n\x1b[31m[crow] set-status failed: ' + (e.message || e) + '\x1b[0m\r\n');
   }
 }
 
@@ -779,9 +931,16 @@ function selectWindow(win) {
 document.getElementById('back-to-sidebar').onclick = () => {
   document.getElementById('app').classList.add('mobile-show-sidebar');
 };
+// Suppress the browser's context menu over the coding pane (xterm keeps its own
+// selection/paste handling).
+document.getElementById('terminal-wrap').addEventListener('contextmenu', (e) => e.preventDefault());
+
 refreshSessions();
+refreshLive();
 setInterval(refreshSessions, 3000);
-// Prefetch ticket/review counts so the sidebar badges show before first open.
+setInterval(refreshLive, 4000);
+// Prefetch ticket/review counts so the sidebar Tickets card + Reviews badge show
+// before first open.
 refreshBoard('tickets');
 refreshBoard('reviews');
 // Keep the open ticket/review board fresh (allowlist is manual-refresh only).

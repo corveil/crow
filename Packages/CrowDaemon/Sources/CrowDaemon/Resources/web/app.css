@@ -342,3 +342,69 @@ html, body {
 
 .board-empty { color: var(--text-muted); text-align: center; padding: 48px 12px; }
 .board-empty-hint { font-size: 11px; margin-top: 8px; opacity: 0.7; }
+
+/* ---- Sidebar: brandmark, Tickets card, nav pills ---- */
+#brand-img { display: block; width: 120px; margin: 6px auto 12px; opacity: 0.7; }
+
+.tickets-card {
+  background: var(--bg-surface); border: 1px solid var(--border-subtle);
+  border-radius: 8px; padding: 8px; margin: 2px 2px 8px; cursor: pointer;
+}
+.tickets-card:hover { border-color: var(--border-strong); }
+.tickets-card.selected { border-color: var(--gold); }
+.tickets-head { display: flex; align-items: center; justify-content: center; position: relative; }
+.tickets-title { color: var(--gold); font-weight: 700; font-size: 13px; }
+.tickets-refresh {
+  position: absolute; right: 0; top: 50%; transform: translateY(-50%);
+  width: 22px; height: 22px; border-radius: 6px; cursor: pointer; line-height: 1;
+  border: 1px solid var(--border-subtle); background: var(--bg-card); color: var(--text-secondary); font-size: 12px;
+}
+.tickets-refresh:hover { color: var(--text-primary); border-color: var(--border-strong); }
+.tickets-counts { display: flex; justify-content: space-between; gap: 6px; margin-top: 8px; padding: 0 2px; }
+.tk-count { display: flex; align-items: center; gap: 3px; }
+.tk-dot { width: 7px; height: 7px; border-radius: 50%; }
+.tk-n { font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+.nav-pills { display: flex; gap: 6px; margin: 0 2px 8px; }
+.nav-pill {
+  flex: 1 1 auto; min-width: 0; display: flex; align-items: center; justify-content: center; gap: 5px;
+  padding: 6px 8px; border-radius: 6px; cursor: pointer;
+  background: var(--bg-surface); border: 1px solid rgba(179, 142, 70, 0.3);
+}
+.nav-pill:hover { border-color: var(--border-strong); }
+.nav-pill.active { background: var(--bg-card); border-color: rgba(179, 142, 70, 0.6); }
+.pill-label { color: var(--gold-dark); font-size: 12px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nav-pill.active .pill-label { color: var(--gold); }
+.pill-badge { padding: 0 6px; border-radius: 8px; font-size: 10px; font-weight: 700; background: rgba(221, 196, 130, 0.2); color: var(--gold); }
+.pill-dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
+.pill-dot.pulse { animation: crow-pulse 1.5s ease-in-out infinite; }
+.nav-plus {
+  flex: 0 0 auto; width: 30px; padding: 6px 0; border-radius: 6px; cursor: pointer; line-height: 1;
+  background: var(--bg-surface); border: 1px solid rgba(179, 142, 70, 0.3); color: var(--gold-dark); font-size: 15px; font-weight: 700;
+}
+.nav-plus:hover { color: var(--gold); border-color: var(--border-strong); }
+
+/* ---- Session row: status-hued left accent, lead/trail split, glowing dot, RC glyph ---- */
+.session-row.status-accent { border-left-width: 3px; padding-left: 8px; }
+.row-lead { display: flex; align-items: center; gap: 7px; flex: 1 1 auto; min-width: 0; }
+.row-trail { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.dot.glow { box-shadow: 0 0 5px 0 currentColor; }
+.rc-glyph { color: var(--gold); display: inline-flex; align-items: center; flex: 0 0 auto; }
+.automerge { font-size: 11px; opacity: 0.75; }
+
+/* ---- Custom right-click context menu ---- */
+.ctx-menu {
+  position: fixed; z-index: 1000; min-width: 190px; padding: 4px;
+  background: var(--bg-card); border: 1px solid var(--border-strong);
+  border-radius: 8px; box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
+}
+.ctx-item { padding: 6px 10px; border-radius: 5px; font-size: 12px; color: var(--text-primary); cursor: pointer; }
+.ctx-item:hover { background: rgba(221, 196, 130, 0.14); }
+.ctx-item.ctx-danger { color: var(--red); }
+.ctx-item.ctx-danger:hover { background: rgba(255, 69, 58, 0.14); }
+.ctx-sep { height: 1px; background: var(--border-subtle); margin: 4px 6px; }
+
+/* ---- Detail header: gold PR chip + inline PR status ---- */
+.link-chip.link-pr { color: var(--gold); border-color: var(--border-strong); }
+.pr-status-inline { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-left: 4px; }
+.pr-stat { font-size: 11px; font-weight: 600; }
