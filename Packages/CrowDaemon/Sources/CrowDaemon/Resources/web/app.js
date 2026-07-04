@@ -298,6 +298,16 @@ function sessionRow(s) {
 
   const badges = el('div', 'row-badges');
   if (s.ticket_badge) badges.appendChild(el('span', 'badge', s.ticket_badge));
+  // PR badge — shown whenever a PR link exists; colored by live status when
+  // available (merged=purple, blockers=red, ready=green, else gold).
+  const prLink = (s.links || []).find((l) => l.type === 'pr');
+  if (prLink) {
+    const color = prBadgeColor(liveFor(s.id).pr);
+    const prb = el('span', 'pr-badge', prLink.label || 'PR');
+    prb.style.color = color;
+    prb.style.borderColor = color;
+    badges.appendChild(prb);
+  }
   if (ind.label) {
     const activity = el('span', 'activity-badge', ind.label);
     activity.style.color = ind.color;
@@ -305,6 +315,14 @@ function sessionRow(s) {
   }
   if (badges.children.length) row.appendChild(badges);
   return row;
+}
+
+function prBadgeColor(pr) {
+  if (!pr || !pr.has_pr) return 'var(--gold)';
+  if (pr.is_merged) return 'var(--purple)';
+  if (pr.has_blockers) return 'var(--red)';
+  if (pr.ready_to_merge) return 'var(--green)';
+  return 'var(--gold)';
 }
 
 // ---------------------------------------------------------------------------
