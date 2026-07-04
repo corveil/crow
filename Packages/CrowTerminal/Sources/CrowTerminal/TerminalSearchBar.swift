@@ -1,3 +1,6 @@
+// Gated: AppKit floating search bar for the macOS terminal surface (CROW-581).
+// Not part of the Linux headless build; compiles away there.
+#if canImport(AppKit)
 import AppKit
 import Foundation
 
@@ -185,3 +188,4 @@ public extension Notification.Name {
     /// by `TerminalSearchBar` to show itself.
     static let terminalBeginSearch = Notification.Name("com.crow.terminal.beginSearch")
 }
+#endif
