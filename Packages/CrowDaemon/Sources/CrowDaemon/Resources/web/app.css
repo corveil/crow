@@ -374,7 +374,7 @@ html, body {
   border: 1px solid var(--border-subtle); background: var(--bg-card); color: var(--text-secondary); font-size: 12px;
 }
 .tickets-refresh:hover { color: var(--text-primary); border-color: var(--border-strong); }
-.tickets-counts { display: flex; justify-content: space-between; gap: 6px; margin-top: 8px; padding: 0 2px; }
+.tickets-counts { display: flex; justify-content: center; gap: 10px; margin-top: 8px; padding: 0 2px; }
 .tk-count { display: flex; align-items: center; gap: 3px; }
 .tk-dot { width: 7px; height: 7px; border-radius: 50%; }
 .tk-n { font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; }
