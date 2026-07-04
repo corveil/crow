@@ -936,8 +936,26 @@ function ensureTerminal() {
   term.onData((data) => {
     if (termWs && termWs.readyState === WebSocket.OPEN) termWs.send(new TextEncoder().encode(data));
   });
+  enableTouchScroll(document.getElementById('terminal'));
   window.addEventListener('resize', fitTerminal);
   connectTerminalWs();
+}
+
+// xterm.js doesn't scroll its scrollback on touch drags — map a one-finger
+// vertical swipe to term.scrollLines so the terminal is scrollable on mobile.
+function enableTouchScroll(node) {
+  let lastY = null;
+  node.addEventListener('touchstart', (e) => {
+    if (e.touches.length === 1) lastY = e.touches[0].clientY;
+  }, { passive: true });
+  node.addEventListener('touchmove', (e) => {
+    if (lastY == null || e.touches.length !== 1 || !term) return;
+    const y = e.touches[0].clientY;
+    const cell = (node.clientHeight / (term.rows || 24)) || 18;
+    const delta = Math.trunc((lastY - y) / cell);
+    if (delta !== 0) { term.scrollLines(delta); lastY = y; }
+  }, { passive: true });
+  node.addEventListener('touchend', () => { lastY = null; }, { passive: true });
 }
 
 function connectTerminalWs() {
