@@ -578,7 +578,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appState.remoteControlEnabled = config.remoteControlEnabled
         appState.managerAutoPermissionMode = config.managerAutoPermissionMode
         appState.jobsAutoPermissionMode = config.jobsAutoPermissionMode
-        appState.reviewAutoPermissionMode = config.reviewAutoPermissionMode
+        appState.coderViewAutoPermissionMode = config.coderViewAutoPermissionMode
         appState.excludeReviewRepos = config.effectiveExcludeReviewRepos
         appState.excludeTicketRepos = config.defaults.excludeTicketRepos
         appState.ignoreReviewLabels = config.defaults.ignoreReviewLabels
@@ -1299,7 +1299,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appState.remoteControlEnabled = config.remoteControlEnabled
         appState.managerAutoPermissionMode = config.managerAutoPermissionMode
         appState.jobsAutoPermissionMode = config.jobsAutoPermissionMode
-        appState.reviewAutoPermissionMode = config.reviewAutoPermissionMode
+        appState.coderViewAutoPermissionMode = config.coderViewAutoPermissionMode
         appState.excludeReviewRepos = config.effectiveExcludeReviewRepos
         appState.excludeTicketRepos = config.defaults.excludeTicketRepos
         appState.ignoreReviewLabels = config.defaults.ignoreReviewLabels
@@ -1537,7 +1537,59 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let capturedTracker = issueTracker
         let hookDebug = ProcessInfo.processInfo.environment["CROW_HOOK_DEBUG"] == "1"
 
+        // Config read/write for the web Settings modal (CROW-581). Captured as
+        // @Sendable closures so the handlers can reach `self.appConfig`/`devRoot`/
+        // `saveSettings` without a non-Sendable `self` capture in the dict. A web
+        // write funnels through `saveSettings` — the exact same path the desktop
+        // Settings window uses — so the AppState mirror + notification settings
+        // sync identically. Credentials are stripped on read and preserved on
+        // write (the browser can't see or change them; see `SettingsSecrets`).
+        let loadConfigForRPC: @Sendable () async -> (String, AppConfig)? = { [weak self] in
+            await MainActor.run {
+                guard let self, let devRoot = self.devRoot, let config = self.appConfig else { return nil }
+                return (devRoot, config)
+            }
+        }
+        let applyConfigForRPC: @Sendable (AppConfig) async -> AppConfig? = { [weak self] incoming in
+            await MainActor.run {
+                guard let self, let devRoot = self.devRoot, let current = self.appConfig else { return nil }
+                let merged = SettingsSecrets.preservingSecrets(incoming: incoming, current: current)
+                self.saveSettings(devRoot: devRoot, config: merged)
+                return SettingsSecrets.strippedForTransport(merged)
+            }
+        }
+
         let router = CommandRouter(handlers: [
+            // App config for the web Settings modal (CROW-581): the config JSON is
+            // transported as one opaque string so `AppConfig`'s own Codable stays
+            // the single shape authority. Credential values are stripped out /
+            // preserved by `SettingsSecrets` — desktop-only, read-only on web.
+            "get-config": { @Sendable _ in
+                guard let (devRoot, config) = await loadConfigForRPC() else {
+                    throw RPCError.applicationError("Config not loaded yet")
+                }
+                let stripped = SettingsSecrets.strippedForTransport(config)
+                guard let data = try? JSONEncoder().encode(stripped),
+                      let json = String(data: data, encoding: .utf8) else {
+                    throw RPCError.applicationError("Failed to encode config")
+                }
+                return ["config": .string(json), "dev_root": .string(devRoot), "app_running": .bool(true)]
+            },
+            "set-config": { @Sendable params in
+                guard let json = params["config"]?.stringValue,
+                      let data = json.data(using: .utf8),
+                      let incoming = try? JSONDecoder().decode(AppConfig.self, from: data) else {
+                    throw RPCError.invalidParams("config must be a valid AppConfig JSON string")
+                }
+                guard let saved = await applyConfigForRPC(incoming) else {
+                    throw RPCError.applicationError("Config not loaded yet")
+                }
+                guard let outData = try? JSONEncoder().encode(saved),
+                      let outJSON = String(data: outData, encoding: .utf8) else {
+                    throw RPCError.applicationError("Failed to encode config")
+                }
+                return ["config": .string(outJSON), "saved": .bool(true)]
+            },
             "new-session": { @Sendable params in
                 let name = params["name"]?.stringValue ?? "untitled"
                 guard AppDelegate.isValidSessionName(name) else {
@@ -1638,6 +1690,249 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         "pinned": .bool(s.locked),
                     ]
                 }
+            },
+            // CROW-581: expose live PR status (in-memory, not persisted) so the
+            // headless daemon / web UI can render a PR badge matching the app.
+            "get-pr-status": { @Sendable params in
+                guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
+                    throw RPCError.invalidParams("session_id required")
+                }
+                return await MainActor.run {
+                    guard let pr = capturedAppState.prStatus[id] else {
+                        return ["has_pr": .bool(false)]
+                    }
+                    return [
+                        "has_pr": .bool(true),
+                        "checks": .string(pr.checksPass.rawValue),
+                        "review": .string(pr.reviewStatus.rawValue),
+                        "merge": .string(pr.mergeable.rawValue),
+                        "is_open": .bool(pr.isOpen),
+                        "is_merged": .bool(pr.isMerged),
+                        "ready_to_merge": .bool(pr.isReadyToMerge),
+                        "has_blockers": .bool(pr.hasBlockers),
+                        "failed_checks": .array(pr.failedCheckNames.map { .string($0) }),
+                    ]
+                }
+            },
+            // CROW-581: trigger a PR-status quick action (fixConflicts /
+            // addressChanges / fixChecks / mergePR) — reuses the existing
+            // `onQuickAction` hook, which pastes the deterministic prompt into
+            // the session's managed agent terminal.
+            "quick-action": { @Sendable params in
+                guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
+                    throw RPCError.invalidParams("session_id required")
+                }
+                guard let actionStr = params["action"]?.stringValue, let action = QuickAction(rawValue: actionStr) else {
+                    throw RPCError.invalidParams("action required (fixConflicts, addressChanges, fixChecks, mergePR)")
+                }
+                await MainActor.run {
+                    capturedAppState.onQuickAction?(id, action)
+                }
+                return ["dispatched": .bool(true), "action": .string(action.rawValue)]
+            },
+            // CROW-581: board data for the web UI. Ticket/review/allowlist state
+            // lives only in the app's AppState (IssueTracker / AllowListService),
+            // so the daemon forwards these reads here. Results are repo-exclude
+            // filtered but NOT status-filtered/sorted — the web owns pipeline
+            // filtering + sort so it can drive its own segment controls.
+            "list-tickets": { @Sendable _ in
+                await MainActor.run {
+                    let fmt = ISO8601DateFormatter()
+                    let issues: [JSONValue] = capturedAppState.filteredAssignedIssues.map { issue in
+                        // Fold .unknown into .backlog so the web's pipeline buckets
+                        // line up with issueCount(for:) (AppState.effectiveStatus).
+                        let status = issue.projectStatus == .unknown ? TicketStatus.backlog : issue.projectStatus
+                        return .object([
+                            "id": .string(issue.id),
+                            "number": .int(issue.number),
+                            "title": .string(issue.title),
+                            "state": .string(issue.state),
+                            "url": .string(issue.url),
+                            "repo": .string(issue.repo),
+                            "provider": .string(issue.provider.rawValue),
+                            "pr_number": issue.prNumber.map { .int($0) } ?? .null,
+                            "pr_url": issue.prURL.map { .string($0) } ?? .null,
+                            "updated_at": issue.updatedAt.map { .string(fmt.string(from: $0)) } ?? .null,
+                            "project_status": .string(status.rawValue),
+                            "labels": .array(issue.labels.map { .object(["name": .string($0.name), "color": $0.color.map { .string($0) } ?? .null]) }),
+                            "linked_session_id": capturedAppState.linkedSession(for: issue).map { .string($0.id.uuidString) } ?? .null,
+                        ])
+                    }
+                    var counts: [String: JSONValue] = [:]
+                    for status in TicketStatus.pipelineStatuses {
+                        counts[status.rawValue] = .int(capturedAppState.issueCount(for: status))
+                    }
+                    counts["All"] = .int(capturedAppState.filteredAssignedIssues.count)
+                    return [
+                        "issues": .array(issues),
+                        "counts": .object(counts),
+                        "done_last_24h": .int(capturedAppState.doneIssuesLast24h),
+                        "loading": .bool(capturedAppState.isLoadingIssues),
+                    ]
+                }
+            },
+            "list-reviews": { @Sendable _ in
+                await MainActor.run {
+                    let fmt = ISO8601DateFormatter()
+                    let reviews: [JSONValue] = capturedAppState.filteredReviewRequests.map { r in
+                        .object([
+                            "id": .string(r.id),
+                            "pr_number": .int(r.prNumber),
+                            "title": .string(r.title),
+                            "url": .string(r.url),
+                            "repo": .string(r.repo),
+                            "author": .string(r.author),
+                            "head_branch": .string(r.headBranch),
+                            "base_branch": .string(r.baseBranch),
+                            "is_draft": .bool(r.isDraft),
+                            "requested_at": r.requestedAt.map { .string(fmt.string(from: $0)) } ?? .null,
+                            "labels": .array(r.labels.map { .object(["name": .string($0.name), "color": $0.color.map { .string($0) } ?? .null]) }),
+                            "provider": .string(r.provider.rawValue),
+                            "review_session_id": r.reviewSessionID.map { .string($0.uuidString) } ?? .null,
+                        ])
+                    }
+                    return [
+                        "reviews": .array(reviews),
+                        "loading": .bool(capturedAppState.isLoadingReviews),
+                        "unseen": .int(capturedAppState.unseenReviewCount),
+                    ]
+                }
+            },
+            "list-allowlist": { @Sendable _ in
+                await MainActor.run {
+                    let entries: [JSONValue] = capturedAppState.allowEntries.map { e in
+                        .object([
+                            "pattern": .string(e.pattern),
+                            "is_global": .bool(e.isInGlobal),
+                            "worktree_session_names": .array(e.worktreeSessionNames.map { .string($0) }),
+                        ])
+                    }
+                    return [
+                        "entries": .array(entries),
+                        "loading": .bool(capturedAppState.isLoadingAllowList),
+                    ]
+                }
+            },
+            // Board actions — invoke the app's existing callbacks. work-on-issue
+            // and start-review spawn workspaces via the same paths the desktop UI
+            // uses (onWorkOnIssue / onStartReview).
+            "work-on-issue": { @Sendable params in
+                guard let url = params["url"]?.stringValue, !url.isEmpty else {
+                    throw RPCError.invalidParams("url required")
+                }
+                await MainActor.run { capturedAppState.onWorkOnIssue?(url) }
+                return ["ok": .bool(true)]
+            },
+            "start-review": { @Sendable params in
+                guard let url = params["url"]?.stringValue, !url.isEmpty else {
+                    throw RPCError.invalidParams("url required")
+                }
+                await MainActor.run { capturedAppState.onStartReview?(url) }
+                return ["ok": .bool(true)]
+            },
+            "promote-allowlist": { @Sendable params in
+                guard let arr = params["patterns"]?.arrayValue else {
+                    throw RPCError.invalidParams("patterns array required")
+                }
+                let patterns = Set(arr.compactMap { $0.stringValue })
+                guard !patterns.isEmpty else { throw RPCError.invalidParams("patterns array required") }
+                await MainActor.run { capturedAppState.onPromoteToGlobal?(patterns) }
+                return ["ok": .bool(true)]
+            },
+            "refresh-tickets": { @Sendable _ in
+                await MainActor.run { capturedAppState.onManualRefresh?() }
+                return ["ok": .bool(true)]
+            },
+            "refresh-allowlist": { @Sendable _ in
+                await MainActor.run { capturedAppState.onLoadAllowList?() }
+                return ["ok": .bool(true)]
+            },
+            // CROW-581: batched live per-session state (remote-control + PR) —
+            // runtime-only, not in the store, so the daemon forwards here rather
+            // than reading its store-seeded snapshot. One call replaces N
+            // per-session get-pr-status calls and carries RC in the same trip.
+            "list-sessions-live": { @Sendable _ in
+                await MainActor.run {
+                    var out: [String: JSONValue] = [:]
+                    for session in capturedAppState.sessions {
+                        let id = session.id
+                        let available = AgentRegistry.shared.agent(for: session.agentKind)?.supportsRemoteControl ?? false
+                        // Inline of CrowUI's internal isRemoteControlActive: any of
+                        // the session's terminals launched with --rc.
+                        let rcActive = capturedAppState.terminals(for: id)
+                            .contains { capturedAppState.remoteControlActiveTerminals.contains($0.id) }
+                        var entry: [String: JSONValue] = [
+                            "remote_control_active": .bool(rcActive),
+                            "remote_control_available": .bool(available),
+                        ]
+                        if let pr = capturedAppState.prStatus[id] {
+                            entry["pr"] = .object([
+                                "has_pr": .bool(true),
+                                "checks": .string(pr.checksPass.rawValue),
+                                "review": .string(pr.reviewStatus.rawValue),
+                                "merge": .string(pr.mergeable.rawValue),
+                                "is_open": .bool(pr.isOpen),
+                                "is_merged": .bool(pr.isMerged),
+                                "ready_to_merge": .bool(pr.isReadyToMerge),
+                                "has_blockers": .bool(pr.hasBlockers),
+                                "failed_checks": .array(pr.failedCheckNames.map { .string($0) }),
+                            ])
+                        } else {
+                            entry["pr"] = .object(["has_pr": .bool(false)])
+                        }
+                        // The session's PR link may live only in memory (derived
+                        // from the linked issue), not in the persisted store the
+                        // daemon reads — surface it so the web shows a PR badge
+                        // wherever the desktop does.
+                        if let prLink = capturedAppState.links(for: id).first(where: { $0.linkType == .pr }) {
+                            entry["pr_link"] = .object(["label": .string(prLink.label), "url": .string(prLink.url)])
+                        }
+                        out[id.uuidString] = .object(entry)
+                    }
+                    return ["sessions": .object(out)]
+                }
+            },
+            // Board/session actions — invoke the app's existing callbacks.
+            "create-manager": { @Sendable params in
+                // Optional agent override (#583); nil = configured default.
+                let agent = params["agent_kind"]?.stringValue.flatMap { AgentKind(rawValue: $0) }
+                await MainActor.run { capturedAppState.onCreateManager?(agent) }
+                return ["ok": .bool(true)]
+            },
+            "mark-in-review": { @Sendable params in
+                guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
+                    throw RPCError.invalidParams("session_id required")
+                }
+                await MainActor.run { capturedAppState.onMarkInReview?(id) }
+                return ["ok": .bool(true)]
+            },
+            "mark-issue-done": { @Sendable params in
+                guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
+                    throw RPCError.invalidParams("session_id required")
+                }
+                await MainActor.run { capturedAppState.onMarkIssueDone?(id) }
+                return ["ok": .bool(true)]
+            },
+            "complete-session": { @Sendable params in
+                guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
+                    throw RPCError.invalidParams("session_id required")
+                }
+                await MainActor.run { capturedAppState.onCompleteSession?(id) }
+                return ["ok": .bool(true)]
+            },
+            "set-session-active": { @Sendable params in
+                guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
+                    throw RPCError.invalidParams("session_id required")
+                }
+                await MainActor.run { capturedAppState.onSetSessionActive?(id) }
+                return ["ok": .bool(true)]
+            },
+            "add-merge-label": { @Sendable params in
+                guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
+                    throw RPCError.invalidParams("session_id required")
+                }
+                await MainActor.run { capturedAppState.onAddMergeLabel?(id) }
+                return ["ok": .bool(true)]
             },
             "set-status": { @Sendable params in
                 guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr),

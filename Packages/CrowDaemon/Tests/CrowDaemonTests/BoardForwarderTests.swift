@@ -1,0 +1,157 @@
+import Foundation
+import Testing
+import CrowCore
+import CrowGit
+import CrowIPC
+import CrowPersistence
+@testable import CrowDaemon
+
+/// Board RPCs (Ticket Board / Reviews / Allowlist) forward to the desktop app,
+/// whose live `AppState` holds the data. This suite pins the **app-down**
+/// contract — no tmux/app/socket needed — so the web UI degrades gracefully:
+/// reads return an empty board, actions surface an application error.
+@Suite struct BoardForwarderTests {
+    /// A router with `forwardSocket: nil` — i.e. the app isn't reachable.
+    @MainActor
+    private func offlineRouter() -> CommandRouter {
+        makeCommandRouter(
+            appState: AppState(),
+            store: JSONStore(),
+            git: GitManager(),
+            devRoot: NSTemporaryDirectory(),
+            cockpit: nil,
+            forwardSocket: nil)
+    }
+
+    @Test @MainActor func readBoardsReturnEmptyWhenAppDown() async {
+        let router = offlineRouter()
+
+        let tickets = await router.handle(request: JSONRPCRequest(id: 1, method: "list-tickets"))
+        #expect(tickets.error == nil)
+        #expect(tickets.result?["issues"]?.arrayValue?.isEmpty == true)
+        #expect(tickets.result?["done_last_24h"]?.intValue == 0)
+
+        let reviews = await router.handle(request: JSONRPCRequest(id: 2, method: "list-reviews"))
+        #expect(reviews.error == nil)
+        #expect(reviews.result?["reviews"]?.arrayValue?.isEmpty == true)
+
+        let allow = await router.handle(request: JSONRPCRequest(id: 3, method: "list-allowlist"))
+        #expect(allow.error == nil)
+        #expect(allow.result?["entries"]?.arrayValue?.isEmpty == true)
+
+        let live = await router.handle(request: JSONRPCRequest(id: 4, method: "list-sessions-live"))
+        #expect(live.error == nil)
+        #expect(live.result?["sessions"]?.objectValue?.isEmpty == true)
+    }
+
+    @Test @MainActor func boardActionsErrorWhenAppDown() async {
+        let router = offlineRouter()
+        let actions = [
+            "work-on-issue", "start-review", "promote-allowlist", "refresh-tickets", "refresh-allowlist",
+            "create-manager", "mark-in-review", "mark-issue-done", "complete-session",
+            "set-session-active", "add-merge-label",
+        ]
+        for method in actions {
+            let resp = await router.handle(request: JSONRPCRequest(id: 1, method: method))
+            #expect(resp.error != nil, "\(method) should error when the app is down")
+            #expect(resp.error?.code == RPCErrorCode.applicationError, "\(method) should be an application error")
+        }
+    }
+}
+
+/// `get-config` / `set-config` back the web Settings modal. Unlike the board
+/// reads (which return empty when the app is down), config falls back to reading
+/// and writing `{devRoot}/.claude/config.json` directly, so Settings work
+/// headless. This suite pins that app-down contract: credential **values** are
+/// stripped on read and preserved (never clobbered) on write.
+@Suite struct ConfigForwarderTests {
+    /// A fresh, isolated devRoot so each test owns its `.claude/config.json`.
+    private func tempDevRoot() -> String {
+        let dir = (NSTemporaryDirectory() as NSString)
+            .appendingPathComponent("crowd-config-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    @MainActor
+    private func offlineRouter(devRoot: String) -> CommandRouter {
+        makeCommandRouter(
+            appState: AppState(), store: JSONStore(), git: GitManager(),
+            devRoot: devRoot, cockpit: nil, forwardSocket: nil)
+    }
+
+    /// A config carrying plaintext secrets, so we can prove they never leave and
+    /// are never clobbered.
+    private func configWithSecrets() -> AppConfig {
+        var c = AppConfig()
+        c.remoteControlEnabled = true
+        c.jiraCredential = JiraCredential(username: "me@corp.com", tokenRef: "PLAINTEXT-JIRA-TOKEN")
+        c.managerGateway = WorkspaceGateway(
+            baseURL: "https://gw.example", customHeaders: ["Authorization": "Bearer GATEWAY-SECRET"])
+        return c
+    }
+
+    private func encode(_ config: AppConfig) throws -> String {
+        String(decoding: try JSONEncoder().encode(config), as: UTF8.self)
+    }
+
+    @Test @MainActor func getConfigStripsSecretsWhenAppDown() async throws {
+        let devRoot = tempDevRoot()
+        try ConfigStore.saveConfig(configWithSecrets(), devRoot: devRoot)
+
+        let resp = await offlineRouter(devRoot: devRoot)
+            .handle(request: JSONRPCRequest(id: 1, method: "get-config"))
+        #expect(resp.error == nil)
+        #expect(resp.result?["app_running"]?.boolValue == false)
+        #expect(resp.result?["dev_root"]?.stringValue == devRoot)
+
+        let json = try #require(resp.result?["config"]?.stringValue)
+        // Plaintext secrets must not appear anywhere in the transported string.
+        #expect(!json.contains("PLAINTEXT-JIRA-TOKEN"))
+        #expect(!json.contains("GATEWAY-SECRET"))
+
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
+        #expect(decoded.jiraCredential?.username == "me@corp.com")   // non-secret kept
+        #expect(decoded.jiraCredential?.tokenRef == "")              // secret stripped
+        #expect(decoded.managerGateway?.baseURL == "https://gw.example")
+        #expect(decoded.managerGateway?.customHeaders["Authorization"] == "")
+        #expect(decoded.remoteControlEnabled == true)
+    }
+
+    @Test @MainActor func getConfigReturnsDefaultWhenNoFile() async throws {
+        let resp = await offlineRouter(devRoot: tempDevRoot())
+            .handle(request: JSONRPCRequest(id: 1, method: "get-config"))
+        #expect(resp.error == nil)
+        let json = try #require(resp.result?["config"]?.stringValue)
+        // Decodes to a valid (default) config — no crash, no error.
+        _ = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
+    }
+
+    @Test @MainActor func setConfigPreservesStoredSecretsWhenAppDown() async throws {
+        let devRoot = tempDevRoot()
+        try ConfigStore.saveConfig(configWithSecrets(), devRoot: devRoot)
+
+        // Simulate a browser: it got the stripped config, flipped a non-secret
+        // toggle, and sent it back with the credential values still blank.
+        var incoming = SettingsSecrets.strippedForTransport(configWithSecrets())
+        incoming.remoteControlEnabled = false
+
+        let resp = await offlineRouter(devRoot: devRoot).handle(request: JSONRPCRequest(
+            id: 1, method: "set-config", params: ["config": .string(try encode(incoming))]))
+        #expect(resp.error == nil)
+        #expect(resp.result?["saved"]?.boolValue == true)
+
+        // On disk: the stored secrets survived; the non-secret edit applied.
+        let saved = try #require(ConfigStore.loadConfig(devRoot: devRoot))
+        #expect(saved.jiraCredential?.tokenRef == "PLAINTEXT-JIRA-TOKEN")
+        #expect(saved.managerGateway?.customHeaders["Authorization"] == "Bearer GATEWAY-SECRET")
+        #expect(saved.remoteControlEnabled == false)
+    }
+
+    @Test @MainActor func setConfigRejectsMalformedConfig() async {
+        let resp = await offlineRouter(devRoot: tempDevRoot()).handle(request: JSONRPCRequest(
+            id: 1, method: "set-config", params: ["config": .string("not-json")]))
+        #expect(resp.error?.code == RPCErrorCode.invalidParams)
+    }
+}
+

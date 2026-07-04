@@ -21,6 +21,12 @@ public struct AppConfig: Codable, Sendable, Equatable {
     /// the review prompt can run `crow`, `gh`, and `git` without per-call
     /// approval. Defaults to true — reviews kick off unattended, like jobs.
     public var reviewAutoPermissionMode: Bool
+    /// When true, newly launched work coder views start with
+    /// `--permission-mode auto` (auto-accept) instead of the default plan
+    /// mode. Applies to `.work` sessions only — Manager and jobs have their
+    /// own toggles. Defaults to false so existing behavior is preserved
+    /// unless the user opts in (#586).
+    public var coderViewAutoPermissionMode: Bool
     public var telemetry: TelemetryConfig
     public var autoRespond: AutoRespondSettings
     /// When true, `setup.sh` writes a per-worktree `.claude/settings.local.json`
@@ -88,6 +94,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         managerAutoPermissionMode: Bool = true,
         jobsAutoPermissionMode: Bool = true,
         reviewAutoPermissionMode: Bool = true,
+        coderViewAutoPermissionMode: Bool = false,
         telemetry: TelemetryConfig = TelemetryConfig(),
         autoRespond: AutoRespondSettings = AutoRespondSettings(),
         attributionTrailers: Bool = true,
@@ -108,6 +115,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         self.managerAutoPermissionMode = managerAutoPermissionMode
         self.jobsAutoPermissionMode = jobsAutoPermissionMode
         self.reviewAutoPermissionMode = reviewAutoPermissionMode
+        self.coderViewAutoPermissionMode = coderViewAutoPermissionMode
         self.telemetry = telemetry
         self.autoRespond = autoRespond
         self.attributionTrailers = attributionTrailers
@@ -131,6 +139,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         managerAutoPermissionMode = try container.decodeIfPresent(Bool.self, forKey: .managerAutoPermissionMode) ?? true
         jobsAutoPermissionMode = try container.decodeIfPresent(Bool.self, forKey: .jobsAutoPermissionMode) ?? true
         reviewAutoPermissionMode = try container.decodeIfPresent(Bool.self, forKey: .reviewAutoPermissionMode) ?? true
+        coderViewAutoPermissionMode = try container.decodeIfPresent(Bool.self, forKey: .coderViewAutoPermissionMode) ?? false
         telemetry = try container.decodeIfPresent(TelemetryConfig.self, forKey: .telemetry) ?? TelemetryConfig()
         autoRespond = try container.decodeIfPresent(AutoRespondSettings.self, forKey: .autoRespond) ?? AutoRespondSettings()
         attributionTrailers = try container.decodeIfPresent(Bool.self, forKey: .attributionTrailers) ?? true
@@ -188,7 +197,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case workspaces, defaults, notifications, sidebar, remoteControlEnabled, managerAutoPermissionMode, jobsAutoPermissionMode, reviewAutoPermissionMode, telemetry, autoRespond, attributionTrailers, autoMergeWatcherEnabled, autoCreateWatcherEnabled, cleanup, jobs, defaultAgentKind, agentsByKind, managerGateway, jiraCredential
+        case workspaces, defaults, notifications, sidebar, remoteControlEnabled, managerAutoPermissionMode, jobsAutoPermissionMode, reviewAutoPermissionMode, coderViewAutoPermissionMode, telemetry, autoRespond, attributionTrailers, autoMergeWatcherEnabled, autoCreateWatcherEnabled, cleanup, jobs, defaultAgentKind, agentsByKind, managerGateway, jiraCredential
     }
 
     /// Resolve the agent that should drive a newly-created session of the
