@@ -243,6 +243,16 @@ func makeCommandRouter(
                   let branch = params["branch"]?.stringValue, !branch.isEmpty else {
                 throw DaemonRPCError.invalidParams("session_id, repo, path, branch required (non-empty)")
             }
+            // Defense-in-depth: a leading-dash branch would be parsed as an option
+            // by `git ls-remote --heads origin <branch>` (option injection).
+            guard !branch.hasPrefix("-") else {
+                throw DaemonRPCError.invalidParams("branch must not start with '-'")
+            }
+            // Don't persist a worktree row for a session that doesn't exist.
+            let sessionExists = await MainActor.run { appState.sessions.contains { $0.id == sessionID } }
+            guard sessionExists else {
+                throw DaemonRPCError.invalidParams("Unknown session_id (no such session)")
+            }
             // Path-traversal guard: worktree + repo paths must live under devRoot.
             guard Validation.isPathWithinRoot(path, root: devRoot) else {
                 throw DaemonRPCError.invalidParams("Worktree path must be within the configured devRoot")

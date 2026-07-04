@@ -1,4 +1,9 @@
+import Foundation
 import Testing
+import CrowCore
+import CrowGit
+import CrowIPC
+import CrowPersistence
 @testable import CrowDaemon
 
 /// Locks down the security-sensitive guards flagged in the CROW-581 review:
@@ -110,5 +115,46 @@ import Testing
         #expect(!limiter.acquire())  // ceiling reached
         limiter.release()
         #expect(limiter.acquire())   // slot freed
+    }
+}
+
+/// The daemon must not steal the desktop app's socket: its default is a distinct
+/// `crowd.sock`, sharing the app's `crow.sock` is opt-in via --socket (CROW-581).
+@Suite struct DaemonSocketDefaultTests {
+    @Test func daemonDefaultIsDistinctFromAppSocket() {
+        let daemonSock = DaemonOptions.defaultDaemonSocketPath()
+        #expect(daemonSock != SocketServer.defaultSocketPath())
+        #expect(daemonSock.hasSuffix("crowd.sock"))
+        #expect(DaemonOptions.parse(["crowd"]).socketPath == daemonSock)
+    }
+}
+
+/// add-worktree input hardening (CROW-581 review): option-injection and orphan
+/// rows. Both checks run before any git/fs work, so no tmux/app is needed.
+@Suite struct AddWorktreeValidationTests {
+    @MainActor
+    private func router() -> CommandRouter {
+        makeCommandRouter(
+            appState: AppState(), store: JSONStore(), git: GitManager(),
+            devRoot: NSTemporaryDirectory(), cockpit: nil, forwardSocket: nil)
+    }
+
+    private func addWorktree(_ router: CommandRouter, branch: String, session: UUID) async -> JSONRPCResponse {
+        await router.handle(request: JSONRPCRequest(id: 1, method: "add-worktree", params: [
+            "session_id": .string(session.uuidString),
+            "repo": .string("acme"),
+            "path": .string(NSTemporaryDirectory() + "wt"),
+            "branch": .string(branch),
+        ]))
+    }
+
+    @Test @MainActor func rejectsLeadingDashBranch() async {
+        let resp = await addWorktree(router(), branch: "--upload-pack=evil", session: UUID())
+        #expect(resp.error?.code == RPCErrorCode.invalidParams)
+    }
+
+    @Test @MainActor func rejectsUnknownSession() async {
+        let resp = await addWorktree(router(), branch: "feature/x", session: UUID())
+        #expect(resp.error?.code == RPCErrorCode.invalidParams)
     }
 }
