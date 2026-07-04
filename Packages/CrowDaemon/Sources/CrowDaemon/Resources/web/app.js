@@ -120,7 +120,22 @@ function el(tag, className, text) {
   return node;
 }
 
+// Signature of everything the sidebar renders — used to skip rebuilds when the
+// poll returns identical data (avoids the repaint/layout jump).
+let lastSidebarSig = null;
+function sidebarSignature() {
+  return JSON.stringify([
+    sessions, liveById, selectedId, selectedBoard,
+    boardData.tickets && boardData.tickets.counts,
+    boardData.tickets && boardData.tickets.done_last_24h,
+    boardData.reviews && boardData.reviews.unseen,
+  ]);
+}
+
 function renderSidebar() {
+  const sig = sidebarSignature();
+  if (sig === lastSidebarSig) return; // nothing changed — don't repaint
+  lastSidebarSig = sig;
   const root = document.getElementById('sidebar');
   root.innerHTML = '';
 

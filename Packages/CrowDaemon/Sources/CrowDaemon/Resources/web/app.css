@@ -344,7 +344,7 @@ html, body {
 .board-empty-hint { font-size: 11px; margin-top: 8px; opacity: 0.7; }
 
 /* ---- Sidebar: brandmark, Tickets card, nav pills ---- */
-#brand-img { display: block; width: 120px; margin: 6px auto 12px; opacity: 0.7; }
+#brand-img { display: block; width: 120px; height: 120px; object-fit: contain; margin: 6px auto 12px; opacity: 0.7; }
 
 .tickets-card {
   background: var(--bg-surface); border: 1px solid var(--border-subtle);
