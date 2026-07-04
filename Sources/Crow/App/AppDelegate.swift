@@ -1635,6 +1635,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         } else {
                             entry["pr"] = .object(["has_pr": .bool(false)])
                         }
+                        // The session's PR link may live only in memory (derived
+                        // from the linked issue), not in the persisted store the
+                        // daemon reads — surface it so the web shows a PR badge
+                        // wherever the desktop does.
+                        if let prLink = capturedAppState.links(for: id).first(where: { $0.linkType == .pr }) {
+                            entry["pr_link"] = .object(["label": .string(prLink.label), "url": .string(prLink.url)])
+                        }
                         out[id.uuidString] = .object(entry)
                     }
                     return ["sessions": .object(out)]

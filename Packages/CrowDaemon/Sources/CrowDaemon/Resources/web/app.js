@@ -298,9 +298,9 @@ function sessionRow(s) {
 
   const badges = el('div', 'row-badges');
   if (s.ticket_badge) badges.appendChild(el('span', 'badge', s.ticket_badge));
-  // PR badge — shown whenever a PR link exists; colored by live status when
-  // available (merged=purple, blockers=red, ready=green, else gold).
-  const prLink = (s.links || []).find((l) => l.type === 'pr');
+  // PR badge — shown whenever a PR link exists (stored, or live from the app
+  // when it's only in memory); colored by live status when available.
+  const prLink = (s.links || []).find((l) => l.type === 'pr') || liveFor(s.id).pr_link;
   if (prLink) {
     const color = prBadgeColor(liveFor(s.id).pr);
     const prb = el('span', 'pr-badge', prLink.label || 'PR');
@@ -437,6 +437,12 @@ function renderHeader(s) {
   const links = (s.links || []).slice();
   if (s.ticket_url && !links.some((l) => l.type === 'ticket')) {
     links.unshift({ label: s.ticket_badge || 'Issue', url: s.ticket_url, type: 'ticket' });
+  }
+  // Add the app's live PR link when it isn't in the stored links (e.g. derived
+  // from the linked issue, not persisted).
+  const livePr = liveFor(s.id).pr_link;
+  if (livePr && !links.some((l) => l.type === 'pr')) {
+    links.push({ label: livePr.label, url: livePr.url, type: 'pr' });
   }
   const pr = liveFor(s.id).pr;
   if (links.length || (pr && pr.has_pr)) {
