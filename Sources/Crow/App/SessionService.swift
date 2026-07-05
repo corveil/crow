@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import CrowClaude
 import CrowCore
+import CrowEngine
 import CrowGit
 import CrowPersistence
 import CrowProvider
