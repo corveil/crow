@@ -44,6 +44,30 @@ private func forwardToApp(
     return response.result ?? [:]
 }
 
+/// App-down local path for the `session.status` transitions (mark-in-review /
+/// complete-session / set-session-active): write the status to both the
+/// observable `appState` and the persisted `store`, exactly like `set-status`.
+/// Runs only when the app isn't forwarding, so there's no two-writer divergence
+/// (CROW-581, M-E). Must be called on the main actor (`appState` isolation).
+@MainActor
+private func setSessionStatusLocally(
+    id: UUID, to status: SessionStatus, appState: AppState, store: JSONStore
+) throws -> [String: JSONValue] {
+    guard let idx = appState.sessions.firstIndex(where: { $0.id == id }) else {
+        throw DaemonRPCError.applicationError("Session not found")
+    }
+    let now = Date()
+    appState.sessions[idx].status = status
+    appState.sessions[idx].updatedAt = now
+    store.mutate { data in
+        if let i = data.sessions.firstIndex(where: { $0.id == id }) {
+            data.sessions[i].status = status
+            data.sessions[i].updatedAt = now
+        }
+    }
+    return ["session_id": .string(id.uuidString), "status": .string(status.rawValue)]
+}
+
 /// Builds the daemon's `CommandRouter`. Handlers mirror the corresponding
 /// closures in the macOS app's `AppDelegate.startSocketServer`, but operate
 /// purely on `AppState` + `JSONStore` (+ `GitManager` / the tmux `cockpit`)
@@ -680,13 +704,22 @@ func makeCommandRouter(
             catch let error as DaemonRPCError { throw error }
             catch { throw DaemonRPCError.applicationError("Crow desktop app not reachable") }
         },
+        // Status transitions mirror `set-status`: forwarded to the app when
+        // running (so its SessionService side effects fire), handled locally
+        // against the store when it's down — a pure `session.status` write, so
+        // no divergence (the local path only runs with the app off). (CROW-581)
         "mark-in-review": { params in
-            guard let forwardSocket else {
-                throw DaemonRPCError.applicationError("Marking in review requires the Crow desktop app to be running")
+            guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
+                throw DaemonRPCError.invalidParams("session_id required")
             }
-            do { return try forwardToApp("mark-in-review", params, socket: forwardSocket) }
-            catch let error as DaemonRPCError { throw error }
-            catch { throw DaemonRPCError.applicationError("Crow desktop app not reachable") }
+            if let forwardSocket {
+                do { return try forwardToApp("mark-in-review", params, socket: forwardSocket) }
+                catch let error as DaemonRPCError { throw error }
+                catch { /* app not running → fall through to local */ }
+            }
+            return try await MainActor.run {
+                try setSessionStatusLocally(id: id, to: .inReview, appState: appState, store: store)
+            }
         },
         "mark-issue-done": { params in
             guard let forwardSocket else {
@@ -697,20 +730,30 @@ func makeCommandRouter(
             catch { throw DaemonRPCError.applicationError("Crow desktop app not reachable") }
         },
         "complete-session": { params in
-            guard let forwardSocket else {
-                throw DaemonRPCError.applicationError("Completing a session requires the Crow desktop app to be running")
+            guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
+                throw DaemonRPCError.invalidParams("session_id required")
             }
-            do { return try forwardToApp("complete-session", params, socket: forwardSocket) }
-            catch let error as DaemonRPCError { throw error }
-            catch { throw DaemonRPCError.applicationError("Crow desktop app not reachable") }
+            if let forwardSocket {
+                do { return try forwardToApp("complete-session", params, socket: forwardSocket) }
+                catch let error as DaemonRPCError { throw error }
+                catch { /* app not running → fall through to local */ }
+            }
+            return try await MainActor.run {
+                try setSessionStatusLocally(id: id, to: .completed, appState: appState, store: store)
+            }
         },
         "set-session-active": { params in
-            guard let forwardSocket else {
-                throw DaemonRPCError.applicationError("Reactivating a session requires the Crow desktop app to be running")
+            guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
+                throw DaemonRPCError.invalidParams("session_id required")
             }
-            do { return try forwardToApp("set-session-active", params, socket: forwardSocket) }
-            catch let error as DaemonRPCError { throw error }
-            catch { throw DaemonRPCError.applicationError("Crow desktop app not reachable") }
+            if let forwardSocket {
+                do { return try forwardToApp("set-session-active", params, socket: forwardSocket) }
+                catch let error as DaemonRPCError { throw error }
+                catch { /* app not running → fall through to local */ }
+            }
+            return try await MainActor.run {
+                try setSessionStatusLocally(id: id, to: .active, appState: appState, store: store)
+            }
         },
         "add-merge-label": { params in
             guard let forwardSocket else {
