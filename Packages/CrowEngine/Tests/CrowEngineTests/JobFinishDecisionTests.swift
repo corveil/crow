@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 import CrowCore
-@testable import Crow
+@testable import CrowEngine
 
 /// Auto-complete decision for finished job runs (CROW-561). A job's session
 /// should transition to `.completed` only when its agent has finished

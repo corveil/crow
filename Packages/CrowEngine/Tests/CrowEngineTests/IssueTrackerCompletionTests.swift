@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 import CrowCore
-@testable import Crow
+@testable import CrowEngine
 
 @Suite("IssueTracker completion decisions")
 struct IssueTrackerCompletionTests {

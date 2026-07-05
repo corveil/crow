@@ -1,6 +1,5 @@
 import Foundation
 import CrowCore
-import CrowEngine
 import CrowProvider
 import CrowTerminal
 
@@ -16,7 +15,7 @@ import CrowTerminal
 /// surface, the coordinator silently skips. The caller still fires the
 /// macOS notification regardless, so the user can act manually.
 @MainActor
-final class AutoRespondCoordinator {
+public final class AutoRespondCoordinator {
     private let appState: AppState
     private let providerManager: ProviderManager
     /// Closure that returns the current `AutoRespondSettings`. Closure rather
@@ -24,13 +23,13 @@ final class AutoRespondCoordinator {
     /// next transition without explicit wiring.
     private let settingsProvider: () -> AutoRespondSettings
 
-    init(appState: AppState, providerManager: ProviderManager, settingsProvider: @escaping () -> AutoRespondSettings) {
+    public init(appState: AppState, providerManager: ProviderManager, settingsProvider: @escaping () -> AutoRespondSettings) {
         self.appState = appState
         self.providerManager = providerManager
         self.settingsProvider = settingsProvider
     }
 
-    func handle(_ transitions: [PRStatusTransition]) {
+    public func handle(_ transitions: [PRStatusTransition]) {
         let cfg = settingsProvider()
         for t in transitions {
             if shouldSkipReviewSession(t) {
@@ -80,7 +79,7 @@ final class AutoRespondCoordinator {
     /// Mirrors `dispatch(_:)` but bypasses the `AutoRespondSettings` toggle —
     /// the click is the user's explicit consent. Resolves the PR URL/number
     /// from the session's `.pr` link.
-    func dispatchManual(action: QuickAction, sessionID: UUID) {
+    public func dispatchManual(action: QuickAction, sessionID: UUID) {
         let terminals = appState.terminals(for: sessionID)
         guard let terminal = terminals.first(where: { $0.isManaged }) else {
             NSLog("[QuickAction] Skipping %@ for session %@: no managed terminal",
@@ -137,7 +136,7 @@ final class AutoRespondCoordinator {
 /// a single-line payload produces exactly one text-write + one Return —
 /// matching the proven pattern used by `crow send "/crow-workspace ...\n"`
 /// (AppDelegate.swift:203).
-enum AutoRespondPrompts {
+public enum AutoRespondPrompts {
     static func build(for transition: PRStatusTransition, codeBackend: CodeBackend) -> String {
         let prRef = transition.prNumber.map { "PR #\($0)" } ?? "the PR"
         let cli = codeBackend.cliName
@@ -180,7 +179,7 @@ enum AutoRespondPrompts {
 /// card. Same single-line + `\n` contract as `AutoRespondPrompts`. The
 /// `addressChanges` and `fixChecks` cases delegate to `AutoRespondPrompts`
 /// so the auto and manual paths share a single source of truth.
-enum QuickActionPrompts {
+public enum QuickActionPrompts {
     static func build(action: QuickAction, codeBackend: CodeBackend, prURL: String, prNumber: Int?) -> String {
         let prRef = prNumber.map { "PR #\($0)" } ?? "the PR"
         let cli = codeBackend.cliName

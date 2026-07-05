@@ -19,6 +19,10 @@ let package = Package(
         .package(path: "../CrowTerminal"),
         .package(path: "../CrowClaude"),
         .package(path: "../CrowIPC"),
+        // Test-only: ManagerMigrationTests registers the other agents.
+        .package(path: "../CrowCodex"),
+        .package(path: "../CrowCursor"),
+        .package(path: "../CrowOpenCode"),
     ],
     targets: [
         .target(
@@ -35,7 +39,19 @@ let package = Package(
         ),
         .testTarget(
             name: "CrowEngineTests",
-            dependencies: ["CrowEngine"]
+            dependencies: [
+                "CrowEngine",
+                "CrowCore",
+                "CrowPersistence",
+                "CrowGit",
+                "CrowProvider",
+                "CrowTerminal",
+                "CrowClaude",
+                "CrowIPC",
+                "CrowCodex",
+                "CrowCursor",
+                "CrowOpenCode",
+            ]
         ),
     ]
 )

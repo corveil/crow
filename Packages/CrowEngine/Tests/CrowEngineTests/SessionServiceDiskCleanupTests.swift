@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import Crow
+@testable import CrowEngine
 
 /// Covers the disk-cleanup branch hit when a review session is deleted.
 /// Regression guard for #305: review clones were being skipped because

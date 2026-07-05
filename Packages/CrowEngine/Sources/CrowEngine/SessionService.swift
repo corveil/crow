@@ -1,7 +1,6 @@
 import Foundation
 import CrowClaude
 import CrowCore
-import CrowEngine
 import CrowGit
 import CrowPersistence
 import CrowProvider
@@ -9,10 +8,10 @@ import CrowTerminal
 
 /// Simplified session service — CRUD only. Orchestration moved to Claude Code via crow CLI.
 @MainActor
-final class SessionService {
+public final class SessionService {
     private let store: JSONStore
     private let appState: AppState
-    let telemetryPort: UInt16?
+    public let telemetryPort: UInt16?
     /// Backend factory for ticket/PR lookups during recovery. Optional so unit-tests
     /// that don't exercise recovery paths needn't construct one. See ADR 0005.
     private let providerManager: ProviderManager?
@@ -32,7 +31,7 @@ final class SessionService {
     /// need not supply one; the macOS app injects a real `AppHostBridge`.
     private let hostBridge: HostBridge
 
-    init(
+    public init(
         store: JSONStore,
         appState: AppState,
         telemetryPort: UInt16? = nil,
@@ -41,8 +40,7 @@ final class SessionService {
         telemetrySessionIDsProvider: (@Sendable () async -> [UUID])? = nil,
         managerUsageProvider: (@Sendable (Date, Date) async -> SessionAnalytics)? = nil,
         hostBridge: HostBridge = NoopHostBridge()
-    ) {
-        self.store = store
+    ) {        self.store = store
         self.appState = appState
         self.telemetryPort = telemetryPort
         self.providerManager = providerManager
@@ -67,7 +65,7 @@ final class SessionService {
 
     // MARK: - Hydrate State from Store
 
-    func hydrateState() {
+    public func hydrateState() {
         let data = store.data
         appState.sessions = data.sessions
         // Mirror persisted analytics snapshots for the scorecard (#710) —
@@ -532,7 +530,7 @@ final class SessionService {
         var text = command
         if let session = appState.sessions.first(where: { $0.id == sessionID }),
            let agent = AgentRegistry.shared.agent(for: session.agentKind) {
-            text = AppDelegate.prepareAgentLaunchText(
+            text = AgentLaunch.prepareAgentLaunchText(
                 command: command,
                 agent: agent,
                 sessionID: sessionID,
@@ -551,7 +549,7 @@ final class SessionService {
     /// transitions out of the Retry overlay, and starts a longer-budget
     /// watch on the backend. Leaves the terminal in `autoLaunchTerminals`
     /// so a successful sentinel fire still triggers `launchAgent`.
-    func retryReadiness(terminalID: UUID) {
+    public func retryReadiness(terminalID: UUID) {
         guard let current = appState.terminalReadiness[terminalID] else { return }
         guard current == .timedOut || current < .shellReady else { return }
         appState.terminalReadiness[terminalID] = .surfaceCreated
@@ -562,7 +560,7 @@ final class SessionService {
     /// log, pane capture, ps tree, sentinel state) and copy it to the
     /// clipboard so a teammate hitting the .timedOut state can paste it
     /// into a comment without screenshot-archaeology (issue #256).
-    func copyDiagnostics(terminalID: UUID) {
+    public func copyDiagnostics(terminalID: UUID) {
         let bundle = TmuxBackend.shared.captureDiagnostics(id: terminalID)
         hostBridge.copyToClipboard(bundle)
         NSLog("[SessionService] copied tmux diagnostics for terminal=\(terminalID) bytes=\(bundle.utf8.count)")
@@ -575,7 +573,7 @@ final class SessionService {
     /// registered this run is never reaped. Call AFTER the async per-terminal
     /// rehydration has settled. Safe: never reaps a window running an agent.
     @MainActor
-    func reapOrphanedCockpitWindows() {
+    public func reapOrphanedCockpitWindows() {
         let keep = Set(appState.terminals.values.flatMap { $0 }.compactMap { $0.tmuxBinding?.windowIndex })
         let n = TmuxBackend.shared.reapUnboundCockpitWindows(keepWindowIndices: keep)
         if n > 0 { NSLog("[SessionService] reaped \(n) orphaned cockpit window(s) at launch (#408)") }
@@ -585,7 +583,7 @@ final class SessionService {
     /// was backgrounded. Called from `NSApplication.didBecomeActiveNotification`
     /// so a user who returns to a long-idle app doesn't have to click
     /// Retry on every review session.
-    func reArmStuckReadinessWatches() {
+    public func reArmStuckReadinessWatches() {
         for (terminalID, state) in appState.terminalReadiness {
             guard appState.autoLaunchTerminals.contains(terminalID) else { continue }
             guard state == .timedOut else { continue }
@@ -597,7 +595,7 @@ final class SessionService {
     /// Auto-launch the session's coding agent in `terminalID`. Dispatches via
     /// the registered `CodingAgent` for the session's `agentKind`, which
     /// builds both the hook configuration and the launch command.
-    func launchAgent(terminalID: UUID) {
+    public func launchAgent(terminalID: UUID) {
         guard appState.terminalReadiness[terminalID] == .shellReady else { return }
         // Only auto-launch for restored/recovered terminals, not brand-new ones
         guard appState.autoLaunchTerminals.remove(terminalID) != nil else { return }
@@ -734,7 +732,7 @@ final class SessionService {
 
     // MARK: - Ensure Manager Session
 
-    func ensureManagerSession(devRoot: String) {
+    public func ensureManagerSession(devRoot: String) {
         let managerID = AppState.managerSessionID
         // Configured Manager agent — used both for new sessions and to
         // refresh an existing Manager whose agent setting changed across
@@ -816,7 +814,7 @@ final class SessionService {
     /// both memory and disk, clears the exited flag, then re-runs
     /// `ensureManagerSession` which recreates a fresh Manager terminal (new
     /// terminal UUID) using the current remote-control / auto-permission args.
-    func restartManager(devRoot: String) {
+    public func restartManager(devRoot: String) {
         let managerID = AppState.managerSessionID
         let terminals = appState.terminals(for: managerID)
         // Fall back to a dead terminal's cwd if the caller's devRoot is empty.
@@ -851,7 +849,7 @@ final class SessionService {
     /// `claude --continue`). The destructive teardown is guarded by a
     /// confirmation alert in `AppDelegate.restartTmuxServer`.
     @MainActor
-    func restartTmuxServer() {
+    public func restartTmuxServer() {
         NSLog("[CrowTelemetry tmux:server_restart_by_user]")
         // A manual restart supersedes any in-flight crash recovery — clear the
         // flag so the crash overlay doesn't linger over the user-driven rebuild.
@@ -1129,7 +1127,7 @@ final class SessionService {
     /// session only, without mutating `agentsByKind` / `defaultAgentKind`.
     /// `nil` falls back to the configured Manager agent.
     @discardableResult
-    func createManagerSession(name: String, cwd: String, agentKind override: AgentKind? = nil) -> UUID {
+    public func createManagerSession(name: String, cwd: String, agentKind override: AgentKind? = nil) -> UUID {
         let agentKind = resolvedManagerAgentKind(override)
         let session = Session(name: name, status: .active, kind: .manager, agentKind: agentKind)
         appState.sessions.append(session)
@@ -1168,7 +1166,7 @@ final class SessionService {
     /// responsive. While cleanup is in flight, `appState.isDeletingSession[id]` is `true`
     /// so the UI can show a spinner. On failure the session is left in place with
     /// `appState.sessionDeletionError[id]` set, allowing the user to retry.
-    func deleteSession(id: UUID) async {
+    public func deleteSession(id: UUID) async {
         guard id != AppState.managerSessionID else { return }
         guard appState.isDeletingSession[id] != true else { return }
 
@@ -1436,7 +1434,7 @@ final class SessionService {
     /// Scan repos for worktrees that exist on disk but have no session in the store.
     /// Re-imports them as active sessions so they appear in the sidebar.
     /// Runs async and may invoke `gh` CLI for ticket/PR metadata (best-effort).
-    func detectOrphanedWorktrees() async {
+    public func detectOrphanedWorktrees() async {
         guard let devRoot = ConfigStore.loadDevRoot(),
               let config = ConfigStore.loadConfig(devRoot: devRoot) else { return }
 
@@ -1600,7 +1598,7 @@ final class SessionService {
     /// workspace's own code provider otherwise — so a Jira-task + GitLab-code
     /// workspace gets `glab`, not a hardcoded `gh`. Falls back to `.github` when
     /// the workspace can't be resolved.
-    static func resolvedCodeProvider(forTask taskProvider: Provider?, worktreePath: String?) -> Provider? {
+    public static func resolvedCodeProvider(forTask taskProvider: Provider?, worktreePath: String?) -> Provider? {
         guard taskProvider?.isTaskOnly == true else { return nil }
         guard let worktreePath else { return .github }
         let workspaceName = ((worktreePath as NSString).deletingLastPathComponent as NSString).lastPathComponent
@@ -1683,7 +1681,7 @@ final class SessionService {
     // MARK: - Terminal Tab Management
 
     /// Add a new plain-shell (unmanaged) terminal tab to a session.
-    func addTerminal(sessionID: UUID) {
+    public func addTerminal(sessionID: UUID) {
         let cwd = appState.primaryWorktree(for: sessionID)?.worktreePath
             ?? FileManager.default.homeDirectoryForCurrentUser.path
         let raw = SessionTerminal(sessionID: sessionID, name: "Shell", cwd: cwd, isManaged: false)
@@ -1694,7 +1692,7 @@ final class SessionService {
     }
 
     /// Close a non-managed terminal tab. Managed terminals cannot be closed individually.
-    func closeTerminal(sessionID: UUID, terminalID: UUID) {
+    public func closeTerminal(sessionID: UUID, terminalID: UUID) {
         guard let terminals = appState.terminals[sessionID],
               let terminal = terminals.first(where: { $0.id == terminalID }),
               !terminal.isManaged else { return }
@@ -1726,7 +1724,7 @@ final class SessionService {
 
     /// Rename a terminal tab. Returns `false` if the terminal was not found or the name is invalid.
     @discardableResult
-    func renameTerminal(sessionID: UUID, terminalID: UUID, name: String) -> Bool {
+    public func renameTerminal(sessionID: UUID, terminalID: UUID, name: String) -> Bool {
         guard Validation.isValidSessionName(name),
               let idx = appState.terminals[sessionID]?.firstIndex(where: { $0.id == terminalID }) else { return false }
         appState.terminals[sessionID]![idx].name = name
@@ -1740,7 +1738,7 @@ final class SessionService {
 
     /// Rename a session. Returns `false` if the session was not found or the name is invalid.
     @discardableResult
-    func renameSession(sessionID: UUID, name: String) -> Bool {
+    public func renameSession(sessionID: UUID, name: String) -> Bool {
         guard Validation.isValidSessionName(name),
               let idx = appState.sessions.firstIndex(where: { $0.id == sessionID }) else { return false }
         appState.sessions[idx].name = name
@@ -1796,7 +1794,7 @@ final class SessionService {
     /// Concurrent writes to `appState.selectedSessionID` from racing kickoffs are
     /// what produced the SwiftUI reentrant-layout crash in #266.
     @discardableResult
-    func createReviewSession(prURL: String, selectAfterCreate: Bool = false) async -> UUID? {
+    public func createReviewSession(prURL: String, selectAfterCreate: Bool = false) async -> UUID? {
         // Universal backstop against duplicate sessions for the same PR. The
         // serial kickoff queue in AppDelegate guarantees that by the time a
         // second `createReviewSession` runs, the first has already appended
@@ -2539,7 +2537,7 @@ final class SessionService {
     /// it to "lock"). Deliberately leaves `updatedAt` untouched so the retention
     /// clock is preserved — unlocking restores the session's original age-based
     /// eligibility rather than resetting it.
-    func setLocked(id: UUID, locked: Bool) {
+    public func setLocked(id: UUID, locked: Bool) {
         if let idx = appState.sessions.firstIndex(where: { $0.id == id }) {
             appState.sessions[idx].locked = locked
         }
@@ -2554,7 +2552,7 @@ final class SessionService {
     /// `nil` clears the tag back to untagged/neutral. The tag feeds
     /// `Session.alignmentWeight`, which is copied onto the analytics snapshot
     /// when the session reaches a terminal status.
-    func setOrgGoal(id: UUID, goal: String?) {
+    public func setOrgGoal(id: UUID, goal: String?) {
         if let idx = appState.sessions.firstIndex(where: { $0.id == id }) {
             appState.sessions[idx].orgGoal = goal
             appState.sessions[idx].updatedAt = Date()
@@ -2567,22 +2565,21 @@ final class SessionService {
         }
     }
 
-    func completeSession(id: UUID) {
-        updateSessionStatus(id, to: .completed)
+    public func completeSession(id: UUID) {        updateSessionStatus(id, to: .completed)
     }
 
-    func setSessionInReview(id: UUID) {
+    public func setSessionInReview(id: UUID) {
         updateSessionStatus(id, to: .inReview)
     }
 
-    func setSessionActive(id: UUID) {
+    public func setSessionActive(id: UUID) {
         updateSessionStatus(id, to: .active)
     }
 
     // MARK: - Persist Current State
 
     /// Sync all in-memory state back to the JSON store on disk.
-    func persistState() {
+    public func persistState() {
         // Snapshot color-driving hook state so a clean quit (this runs from
         // applicationWillTerminate) captures the final state for relaunch (#367).
         let hookSnapshots = appState.allHookStateSnapshots()
@@ -2626,7 +2623,7 @@ final class SessionService {
     // MARK: - Find Claude Binary
 
     /// Standard search paths for the Claude CLI binary, in priority order.
-    nonisolated static let claudeBinaryCandidates = [
+    public nonisolated static let claudeBinaryCandidates = [
         FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/bin/claude").path,
         "/usr/local/bin/claude",
         "/opt/homebrew/bin/claude",
@@ -2661,18 +2658,18 @@ final class SessionService {
     }
 
     /// Check if VS Code CLI is available and cache the result in AppState.
-    func detectVSCode() {
+    public func detectVSCode() {
         appState.vsCodeAvailable = Self.findVSCodeBinary() != nil
     }
 
     /// Open the primary worktree for a session in VS Code (via the host).
-    func openInVSCode(sessionID: UUID) {
+    public func openInVSCode(sessionID: UUID) {
         guard let wt = appState.primaryWorktree(for: sessionID) else { return }
         hostBridge.openInEditor(path: wt.worktreePath)
     }
 
     /// Open a terminal window at the primary worktree path for a session (via the host).
-    func openTerminal(sessionID: UUID) {
+    public func openTerminal(sessionID: UUID) {
         guard let wt = appState.primaryWorktree(for: sessionID) else { return }
         hostBridge.openTerminalWindow(path: wt.worktreePath)
     }
