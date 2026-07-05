@@ -95,43 +95,44 @@
 
     const modal = el('div', 'settings-modal');
     const head = el('div', 'settings-head');
-    head.appendChild(el('div', 'settings-title', subForm ? subFormTitle() : 'Settings'));
+    head.appendChild(el('div', 'settings-title', 'Settings'));
     const close = el('button', 'settings-close', '×');
     close.onclick = () => closeSettings();
     head.appendChild(close);
     modal.appendChild(head);
 
-    if (subForm) {
-      modal.appendChild(renderSubForm());
-    } else {
-      const tabs = el('div', 'settings-tabs');
-      for (const [key, label] of TABS) {
-        const t = el('button', 'settings-tab' + (key === activeTab ? ' active' : ''), label);
-        t.onclick = () => { activeTab = key; render(); };
-        tabs.appendChild(t);
-      }
-      modal.appendChild(tabs);
-
-      const body = el('div', 'settings-body');
-      renderTab(body);
-      modal.appendChild(body);
-
-      const foot = el('div', 'settings-foot');
-      if (!appRunning) {
-        foot.appendChild(el('div', 'settings-appdown',
-          'Desktop app not running — changes save to config.json directly.'));
-      }
-      foot.appendChild(el('div', 'settings-foot-spacer'));
-      const closeBtn = el('button', 'action-btn', 'Close');
-      closeBtn.onclick = () => closeSettings();
-      foot.appendChild(closeBtn);
-      const saveBtn = el('button', 'action-btn action-primary', 'Save');
-      saveBtn.disabled = !dirty;
-      saveBtn.onclick = () => save(saveBtn);
-      foot.appendChild(saveBtn);
-      modal.appendChild(foot);
+    const tabs = el('div', 'settings-tabs');
+    for (const [key, label] of TABS) {
+      const t = el('button', 'settings-tab' + (key === activeTab ? ' active' : ''), label);
+      t.onclick = () => { activeTab = key; render(); };
+      tabs.appendChild(t);
     }
+    modal.appendChild(tabs);
+
+    const body = el('div', 'settings-body');
+    renderTab(body);
+    modal.appendChild(body);
+
+    const foot = el('div', 'settings-foot');
+    if (!appRunning) {
+      foot.appendChild(el('div', 'settings-appdown',
+        'Desktop app unavailable for settings (not running or outdated) — changes save to config.json directly.'));
+    }
+    foot.appendChild(el('div', 'settings-foot-spacer'));
+    const closeBtn = el('button', 'action-btn', 'Close');
+    closeBtn.onclick = () => closeSettings();
+    foot.appendChild(closeBtn);
+    const saveBtn = el('button', 'action-btn action-primary', 'Save');
+    saveBtn.disabled = !dirty;
+    saveBtn.onclick = () => save(saveBtn);
+    foot.appendChild(saveBtn);
+    modal.appendChild(foot);
+
     backdrop.appendChild(modal);
+
+    // Job/workspace editors open as a stacked child modal on top of the main
+    // settings modal, instead of replacing its content in place (#7 / CROW-593).
+    if (subForm) backdrop.appendChild(renderSubFormOverlay());
   }
 
   function renderTab(body) {
@@ -201,15 +202,43 @@
     return field(labelText, sel, opts.help);
   }
 
-  // A newline-delimited list bound to a string[] on obj[key].
+  // An editable chip list bound to a string[] on obj[key] (#7 / CROW-593) —
+  // matches the desktop's token chips instead of a newline textarea. Enter or
+  // comma adds a chip; × or Backspace-on-empty removes one.
   function listField(labelText, obj, key, help) {
-    const ta = el('textarea', 'st-textarea');
-    ta.value = (obj[key] || []).join('\n');
-    ta.oninput = () => {
-      obj[key] = ta.value.split('\n').map((s) => s.trim()).filter(Boolean);
-      markDirty();
-    };
-    return field(labelText, ta, help);
+    obj[key] = obj[key] || [];
+    const box = el('div', 'st-chips');
+    function paint(focusInput) {
+      box.innerHTML = '';
+      for (const val of obj[key]) {
+        const chip = el('span', 'st-chip', val);
+        const x = el('button', 'st-chip-x', '×');
+        x.type = 'button';
+        x.onclick = () => { obj[key] = obj[key].filter((v) => v !== val); markDirty(); paint(true); };
+        chip.appendChild(x);
+        box.appendChild(chip);
+      }
+      const input = el('input', 'st-chip-input');
+      input.placeholder = obj[key].length ? '' : 'Add…';
+      input.onkeydown = (ev) => {
+        if (ev.key === 'Enter' || ev.key === ',') {
+          ev.preventDefault();
+          const v = input.value.trim();
+          if (v && !obj[key].includes(v)) { obj[key].push(v); markDirty(); paint(true); }
+          else { input.value = ''; }
+        } else if (ev.key === 'Backspace' && !input.value && obj[key].length) {
+          obj[key].pop(); markDirty(); paint(true);
+        }
+      };
+      input.onblur = () => {
+        const v = input.value.trim();
+        if (v && !obj[key].includes(v)) { obj[key].push(v); markDirty(); paint(false); }
+      };
+      box.appendChild(input);
+      if (focusInput) input.focus();
+    }
+    paint(false);
+    return field(labelText, box, help);
   }
 
   function readonlyNote(text) { return el('div', 'st-note', text); }
@@ -455,10 +484,25 @@
     return (subForm.isNew ? 'New ' : 'Edit ') + noun;
   }
 
-  function renderSubForm() {
-    const wrap = el('div', 'settings-body');
-    if (subForm.kind === 'workspace') renderWorkspaceForm(wrap);
-    else renderJobForm(wrap);
+  // A stacked child modal (own backdrop, higher z-index) for the job/workspace
+  // editor, layered over the main settings modal (#7 / CROW-593). Its body is a
+  // real `.settings-body` flex child so tall forms scroll instead of clipping.
+  function renderSubFormOverlay() {
+    const overlay = el('div', 'settings-backdrop settings-subform-overlay');
+    overlay.onclick = (ev) => { if (ev.target === overlay) { subForm = null; render(); } };
+
+    const modal = el('div', 'settings-modal');
+    const head = el('div', 'settings-head');
+    head.appendChild(el('div', 'settings-title', subFormTitle()));
+    const close = el('button', 'settings-close', '×');
+    close.onclick = () => { subForm = null; render(); };
+    head.appendChild(close);
+    modal.appendChild(head);
+
+    const body = el('div', 'settings-body');
+    if (subForm.kind === 'workspace') renderWorkspaceForm(body);
+    else renderJobForm(body);
+    modal.appendChild(body);
 
     const foot = el('div', 'settings-foot');
     foot.appendChild(el('div', 'settings-foot-spacer'));
@@ -468,11 +512,10 @@
     const done = el('button', 'action-btn action-primary', subForm.isNew ? 'Add' : 'Done');
     done.onclick = () => commitSubForm();
     foot.appendChild(done);
+    modal.appendChild(foot);
 
-    const container = el('div');
-    container.appendChild(wrap);
-    container.appendChild(foot);
-    return container;
+    overlay.appendChild(modal);
+    return overlay;
   }
 
   function commitSubForm() {

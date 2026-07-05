@@ -13,6 +13,10 @@
   padding: 24px;
 }
 
+/* Job/workspace editor stacked on top of the main settings modal. */
+.settings-subform-overlay { z-index: 2100; }
+
+
 .settings-modal {
   display: flex;
   flex-direction: column;
@@ -138,6 +142,29 @@
 .st-textarea:focus { outline: none; border-color: var(--gold); }
 .st-input.st-readonly,
 .st-readonly { opacity: 0.55; cursor: default; }
+
+/* Chip list (listField) — token editor matching the desktop. */
+.st-chips {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  padding: 6px 8px; min-height: 34px;
+  background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 6px;
+}
+.st-chips:focus-within { border-color: var(--gold); }
+.st-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 2px 6px 2px 9px; border-radius: 12px;
+  background: var(--bg-surface); border: 1px solid var(--border-subtle);
+  font-size: 11px; color: var(--text-primary);
+}
+.st-chip-x {
+  border: none; background: none; cursor: pointer; padding: 0; line-height: 1;
+  color: var(--text-muted); font-size: 14px;
+}
+.st-chip-x:hover { color: var(--red); }
+.st-chip-input {
+  flex: 1; min-width: 90px; border: none; outline: none; background: none;
+  color: var(--text-primary); font-family: inherit; font-size: 12px; padding: 2px;
+}
 
 .st-switch-row {
   display: flex;
