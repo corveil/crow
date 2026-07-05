@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 import CrowCore
-@testable import Crow
+@testable import CrowEngine
 
 /// Locks down which terminals receive a `/rename` slash command when a session
 /// is renamed (#354). The selection is driven by `remoteControlActiveTerminals`

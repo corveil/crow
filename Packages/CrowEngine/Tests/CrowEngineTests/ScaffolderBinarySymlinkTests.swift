@@ -1,7 +1,7 @@
 import CrowCore
 import Foundation
 import Testing
-@testable import Crow
+@testable import CrowEngine
 
 /// Coverage for the per-devroot bin-dir symlink farm that `Scaffolder` builds
 /// from `defaults.binaries` (CROW-487). Combined with the tmux shell wrapper's

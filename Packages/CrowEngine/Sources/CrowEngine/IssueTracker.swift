@@ -15,7 +15,7 @@ import CrowProvider
 /// `rateLimit` block on each response feeds `AppState.githubRateLimit`,
 /// and a soft threshold + 403 detection suspend polling when quotas are low.
 @MainActor
-final class IssueTracker {
+public final class IssueTracker {
     private let appState: AppState
     private let providerManager: ProviderManager
     private var timer: Timer?
@@ -28,54 +28,54 @@ final class IssueTracker {
     typealias ViewerPR = PRRecord
 
     /// Callback for new review request notifications (set by AppDelegate).
-    var onNewReviewRequests: (([ReviewRequest]) -> Void)?
+    public var onNewReviewRequests: (([ReviewRequest]) -> Void)?
 
     /// Fires when a newly assigned issue carries the auto-create label and
     /// has no existing session. Wired in AppDelegate to dispatch the
     /// `onWorkOnIssue` flow and post a notification.
-    var onAutoCreateRequest: ((AssignedIssue) -> Void)?
+    public var onAutoCreateRequest: ((AssignedIssue) -> Void)?
 
     /// Callback fired on every successful review-request refresh with the full
     /// post-cross-reference snapshot (including the first fetch). Used by the
     /// auto-review opt-in path so requests already pending at app launch
     /// trigger a session, not just newly-arrived ones.
-    var onReviewRequestsRefreshed: (([ReviewRequest]) -> Void)?
+    public var onReviewRequestsRefreshed: (([ReviewRequest]) -> Void)?
 
     /// Callback for detected PR status transitions — fires once per
     /// transition, after dedupe. Wired in AppDelegate to drive notifications
     /// and the auto-respond coordinator.
-    var onPRStatusTransitions: (([PRStatusTransition]) -> Void)?
+    public var onPRStatusTransitions: (([PRStatusTransition]) -> Void)?
 
     /// Callback fired to delete a session during auto-cleanup.
     /// Wired in AppDelegate to call `appState.onDeleteSession`.
-    var onDeleteSession: ((UUID) async -> Void)?
+    public var onDeleteSession: ((UUID) async -> Void)?
 
     /// Reads the latest `AppConfig.autoMergeWatcherEnabled` snapshot on
     /// every poll. Closure rather than direct AppConfig binding so toggling
     /// the setting in Settings takes effect on the next refresh without
     /// re-initializing the tracker. Defaults to a closure that returns
     /// `false` so the watcher is inert until AppDelegate wires it (CROW-299).
-    var autoMergeWatcherEnabledProvider: () -> Bool = { false }
+    public var autoMergeWatcherEnabledProvider: () -> Bool = { false }
 
     /// Reads the latest `AppConfig.autoCreateWatcherEnabled` snapshot on
     /// every poll. Closure-based so toggling the setting in Settings takes
     /// effect on the next refresh without re-initializing the tracker.
     /// Defaults to `false` so the `crow:auto`-label automation is inert
     /// until AppDelegate wires it (CROW-312).
-    var autoCreateWatcherEnabledProvider: () -> Bool = { false }
+    public var autoCreateWatcherEnabledProvider: () -> Bool = { false }
 
     /// Fires after Crow has successfully enabled GitHub native auto-merge
     /// on a PR. Wired in AppDelegate to post the user-facing notification.
     /// (The durable audit-log line is `NSLog`'d at the call site so it
     /// lands in Console regardless of notification settings.)
-    var onAutoMergeEnabled: ((UUID, String, Int) -> Void)?
+    public var onAutoMergeEnabled: ((UUID, String, Int) -> Void)?
 
     /// Reads the latest `AutoRespondSettings.autoRebaseAndResolveConflicts`
     /// snapshot on every poll. Closure (not a stored value) so toggling the
     /// setting takes effect on the next refresh. Defaults to a closure
     /// returning `false` so the watcher is inert until AppDelegate wires it
     /// (CROW-318, moved into AutoRespondSettings by CROW-551).
-    var autoRebaseAndResolveConflictsProvider: () -> Bool = { false }
+    public var autoRebaseAndResolveConflictsProvider: () -> Bool = { false }
 
     /// Reads the latest `AutoRespondSettings.respondToChangesRequested`
     /// snapshot on every poll. Gates the stateless "needs refine" emission
@@ -83,16 +83,16 @@ final class IssueTracker {
     /// notification and the dispatch, so they don't see fresh "Changes
     /// Requested" banners every cooldown window. Defaults to a closure
     /// returning `false` so the path stays inert until AppDelegate wires it.
-    var respondToChangesRequestedProvider: () -> Bool = { false }
+    public var respondToChangesRequestedProvider: () -> Bool = { false }
 
     /// Fires after Crow rebased a PR branch and force-pushed it. Wired in
     /// AppDelegate to post a notification.
-    var onAutoRebasePushed: ((UUID, String, Int) -> Void)?
+    public var onAutoRebasePushed: ((UUID, String, Int) -> Void)?
 
     /// Fires when an auto-rebase hit conflicts that need a human/Claude.
     /// Wired in AppDelegate to delegate resolution to the session's Claude
     /// terminal (the `fixConflicts` quick action) and notify.
-    var onAutoRebaseConflicts: ((UUID, String, Int) -> Void)?
+    public var onAutoRebaseConflicts: ((UUID, String, Int) -> Void)?
 
     /// Runs `git rebase` / force-push for the auto-rebase watcher. Owns its
     /// own instance (no `WorkspaceConfig` needed for path-scoped operations).
@@ -211,12 +211,12 @@ final class IssueTracker {
     /// Below this many remaining GraphQL points we proactively skip a cycle.
     private let rateLimitThreshold = 50
 
-    init(appState: AppState, providerManager: ProviderManager) {
+    public init(appState: AppState, providerManager: ProviderManager) {
         self.appState = appState
         self.providerManager = providerManager
     }
 
-    func start() {
+    public func start() {
         // Initial fetch. Post-CROW-508 the tracker is stateless across
         // restarts — the "needs refine" rule derives from PR data on every
         // poll, so there's no `hydratePersistedState` to call here.
@@ -230,7 +230,7 @@ final class IssueTracker {
         }
     }
 
-    func stop() {
+    public func stop() {
         timer?.invalidate()
         timer = nil
     }
@@ -356,7 +356,7 @@ final class IssueTracker {
 
     // MARK: - Refresh
 
-    func refresh() async {
+    public func refresh() async {
         guard !isRefreshing else { return }
         guard shouldPoll() else {
             if let suspendedUntil {
@@ -1146,7 +1146,7 @@ final class IssueTracker {
     /// via the `codeProvider ?? provider ?? .github` convention (ADR 0005) so a
     /// Jira/Corveil-tasked GitHub-code session is gated on GitHub, not on its
     /// task provider (CROW-532). Pure — easily unit-tested.
-    nonisolated static func canAddMergeLabel(session: Session, providerManager: ProviderManager) -> Bool {
+    public nonisolated static func canAddMergeLabel(session: Session, providerManager: ProviderManager) -> Bool {
         let provider = session.codeProvider ?? session.provider ?? .github
         return providerManager.codeBackend(for: provider)?.capabilities.contains(.autoMergeLabel) ?? false
     }
@@ -2536,7 +2536,7 @@ final class IssueTracker {
 
     // MARK: - Mark In Review
 
-    func markInReview(sessionID: UUID) async {
+    public func markInReview(sessionID: UUID) async {
         guard let session = appState.sessions.first(where: { $0.id == sessionID }),
               let ticketURL = session.ticketURL,
               let taskProvider = session.provider else { return }
@@ -2587,7 +2587,7 @@ final class IssueTracker {
     /// completed status), then flip the Crow session to `.completed`. Best-effort:
     /// auth / transition-not-allowed / already-closed failures are logged and
     /// swallowed (no crash). Mirrors `markInReview`'s in-flight/error handling.
-    func markIssueDone(sessionID: UUID) async {
+    public func markIssueDone(sessionID: UUID) async {
         guard let session = appState.sessions.first(where: { $0.id == sessionID }),
               let ticketURL = session.ticketURL,
               let taskProvider = session.provider else { return }
@@ -2637,7 +2637,7 @@ final class IssueTracker {
     /// off Backlog before. Capability-gated (`.projectBoardStatus`), so GitLab
     /// (no board status) is a no-op. Best-effort: auth / unavailable-transition
     /// failures are logged and swallowed, mirroring `markInReview`.
-    func transitionTicket(sessionID: UUID, to status: TicketStatus) async {
+    public func transitionTicket(sessionID: UUID, to status: TicketStatus) async {
         guard let session = appState.sessions.first(where: { $0.id == sessionID }),
               let ticketURL = session.ticketURL,
               let taskProvider = session.provider else { return }
@@ -2670,7 +2670,7 @@ final class IssueTracker {
     /// right status (or lacking a valid transition) are no-ops. Returns the number
     /// of sessions it attempted. Drives `crow resync-jira`.
     @discardableResult
-    func resyncJira() async -> Int {
+    public func resyncJira() async -> Int {
         let targets: [(id: UUID, status: TicketStatus)] = appState.sessions.compactMap { session in
             guard session.provider == .jira, session.ticketURL != nil else { return nil }
             let status: TicketStatus
@@ -2691,7 +2691,7 @@ final class IssueTracker {
     /// Add the `crow:merge` auto-merge label to a session's PR, ensuring the
     /// label exists in the repo first. Capability-gated on `.autoMergeLabel`
     /// (GitHub only today). Mirrors `markInReview`'s in-flight/error handling.
-    func addMergeLabel(sessionID: UUID) async {
+    public func addMergeLabel(sessionID: UUID) async {
         guard let session = appState.sessions.first(where: { $0.id == sessionID }),
               let prLink = appState.links(for: sessionID).first(where: { $0.linkType == .pr }),
               let backend = codeBackend(for: session),

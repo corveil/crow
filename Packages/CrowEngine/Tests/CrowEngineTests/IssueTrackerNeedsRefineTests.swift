@@ -2,7 +2,7 @@ import Foundation
 import Testing
 import CrowCore
 import CrowProvider
-@testable import Crow
+@testable import CrowEngine
 
 /// CROW-508 acceptance tests for the stateless "needs refine" dispatch path
 /// in `IssueTracker`. Drives `applyPRStatuses` end-to-end with fixture

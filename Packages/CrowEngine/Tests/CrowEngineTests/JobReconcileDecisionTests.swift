@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 import CrowCore
-@testable import Crow
+@testable import CrowEngine
 
 /// Reconciliation of unwatched job runs (CROW-579). On startup and each tick,
 /// `JobScheduler` adopts active `.job` sessions it isn't already watching so a

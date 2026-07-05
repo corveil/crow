@@ -2,7 +2,7 @@ import Foundation
 import Testing
 import CrowCore
 import CrowProvider
-@testable import Crow
+@testable import CrowEngine
 
 /// Verifies the policy gate added for #311: review sessions must never
 /// trigger auto-respond automation, regardless of the global

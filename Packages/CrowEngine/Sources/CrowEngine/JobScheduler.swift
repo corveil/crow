@@ -1,6 +1,5 @@
 import Foundation
 import CrowCore
-import CrowEngine
 import CrowTerminal
 
 /// Drives scheduled jobs (CROW-317).
@@ -16,7 +15,7 @@ import CrowTerminal
 /// via `onJobRan` so AppDelegate can persist `lastRunAt`. Keeping the canonical
 /// config in AppDelegate avoids a second source of truth.
 @MainActor
-final class JobScheduler {
+public final class JobScheduler {
     private let appState: AppState
     private let sessionService: SessionService
     private var timer: Timer?
@@ -57,18 +56,18 @@ final class JobScheduler {
     private var watchedRuns: [UUID: RunWatch] = [:]
 
     /// Reads the current job list (from AppDelegate's `appConfig`).
-    var jobsProvider: () -> [JobConfig] = { [] }
+    public var jobsProvider: () -> [JobConfig] = { [] }
     /// Reads the configured dev root.
-    var devRootProvider: () -> String? = { nil }
+    public var devRootProvider: () -> String? = { nil }
     /// Reports a successful run so AppDelegate can persist the job's `lastRunAt`.
-    var onJobRan: (UUID, Date) -> Void = { _, _ in }
+    public var onJobRan: (UUID, Date) -> Void = { _, _ in }
 
-    init(appState: AppState, sessionService: SessionService) {
+    public init(appState: AppState, sessionService: SessionService) {
         self.appState = appState
         self.sessionService = sessionService
     }
 
-    func start() {
+    public func start() {
         // Adopt any already-done job sessions we aren't watching so they still
         // auto-complete after a relaunch, or if they predate this feature — the
         // in-memory watch is otherwise lost and the run lingers in `.active`
@@ -84,7 +83,7 @@ final class JobScheduler {
         timer?.tolerance = tickInterval / 4
     }
 
-    func stop() {
+    public func stop() {
         timer?.invalidate()
         timer = nil
     }
@@ -112,7 +111,7 @@ final class JobScheduler {
     // MARK: - Manual run
 
     /// Fire a job on demand, regardless of its enabled flag or schedule.
-    func runNow(_ jobID: UUID) {
+    public func runNow(_ jobID: UUID) {
         guard let devRoot = devRootProvider() else { return }
         guard let job = jobsProvider().first(where: { $0.id == jobID }) else { return }
         fire(job, devRoot: devRoot)
