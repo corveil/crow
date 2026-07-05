@@ -91,7 +91,8 @@ func makeCommandRouter(
     cockpit: TerminalCockpit?,
     forwardSocket: String? = nil,
     tracker: IssueTracker? = nil,
-    allowList: AllowListService? = nil
+    allowList: AllowListService? = nil,
+    sessionService: SessionService? = nil
 ) -> CommandRouter {
     CommandRouter(handlers: [
         "new-session": { params in
@@ -696,13 +697,33 @@ func makeCommandRouter(
         },
 
         // Session/board actions — forward-only (need the app's coordinators).
+        // Spawning a Manager forwards to the app when it's running (its
+        // SessionService is the source of truth), and runs on the daemon's own
+        // SessionService when the app is down — spawning a real tmux window +
+        // agent on the shared cockpit (ADR 0007; CROW-581, M-E2). Without tmux
+        // (sessionService == nil) it errors, as before.
         "create-manager": { params in
-            guard let forwardSocket else {
-                throw DaemonRPCError.applicationError("Creating a manager requires the Crow desktop app to be running")
+            if let forwardSocket {
+                do { return try forwardToApp("create-manager", params, socket: forwardSocket) }
+                catch let error as DaemonRPCError { throw error }
+                catch { /* app not running → fall through to local spawn */ }
             }
-            do { return try forwardToApp("create-manager", params, socket: forwardSocket) }
-            catch let error as DaemonRPCError { throw error }
-            catch { throw DaemonRPCError.applicationError("Crow desktop app not reachable") }
+            guard let sessionService else {
+                throw DaemonRPCError.applicationError(
+                    "Creating a manager requires either the Crow desktop app or tmux on the daemon host")
+            }
+            let requestedAgentKind = params["agent_kind"]?.stringValue
+                .flatMap { $0.isEmpty ? nil : AgentKind(rawValue: $0) }
+            return await MainActor.run {
+                // Lowest unused "Manager N", matching the app's picker so a
+                // delete-in-the-middle doesn't collide (AppDelegate.onCreateManager).
+                let existing = Set(appState.managerSessions.map(\.name))
+                var n = 2
+                while existing.contains("Manager \(n)") { n += 1 }
+                let id = sessionService.createManagerSession(
+                    name: "Manager \(n)", cwd: devRoot, agentKind: requestedAgentKind)
+                return ["session_id": .string(id.uuidString), "name": .string("Manager \(n)")]
+            }
         },
         // Status transitions mirror `set-status`: forwarded to the app when
         // running (so its SessionService side effects fire), handled locally

@@ -11,6 +11,7 @@ import CrowOpenCode
 import CrowEngine
 import CrowProvider
 import CrowGit
+import CrowTerminal
 import CrowIPC
 import CrowPersistence
 import Foundation
@@ -46,6 +47,10 @@ public enum CrowDaemon {
         // same store-backed binary overrides (CROW-581, M-B).
         await registerAgents(devRoot: options.devRoot)
 
+        // Providers back both the board tracker (M-C) and the spawn engine
+        // (M-E2). Zero-config at construction — it reads gh/glab/config lazily.
+        let providerManager = ProviderManager()
+
         // Boards: the daemon owns the ticket/review + allowlist read layer so
         // those panels work with the app down (CROW-581, M-C). AllowListService
         // is a synchronous disk scan (ready immediately); IssueTracker polls the
@@ -53,7 +58,6 @@ public enum CrowDaemon {
         // run, so we drive it with an explicit async tick (`startBoardPoll`)
         // instead of `tracker.start()`.
         let (tracker, allowList): (IssueTracker, AllowListService) = await MainActor.run {
-            let providerManager = ProviderManager()
             let tracker = IssueTracker(appState: appState, providerManager: providerManager)
             let allowList = AllowListService(appState: appState, devRoot: options.devRoot)
             allowList.scan()
@@ -77,6 +81,27 @@ public enum CrowDaemon {
             log("WARNING: tmux not found; /terminal + terminal RPC disabled (set CROW_TMUX to override)")
         }
 
+        // Host the real SessionService so the daemon can spawn Manager (and
+        // later review/job) workspaces headlessly with the app down (ADR 0007;
+        // CROW-581, M-E2). It drives tmux through the process-global
+        // `TmuxBackend.shared`, which we point at the SAME server the web
+        // terminal (`TerminalCockpit`) uses so spawned windows appear there.
+        // `wireTerminalReadiness` arms the callback that launches the agent once
+        // its tmux window is ready. No tmux → no spawning (nil; spawn RPCs keep
+        // forwarding / erroring).
+        let sessionService: SessionService? = await MainActor.run { () -> SessionService? in
+            guard let cockpit else { return nil }
+            TmuxBackend.shared.configure(
+                tmuxBinary: cockpit.controller.tmuxBinary,
+                socketPath: cockpit.controller.socketPath,
+                crowBinDir: (options.devRoot as NSString).appendingPathComponent(".claude/bin"))
+            let service = SessionService(
+                store: store, appState: appState,
+                providerManager: providerManager, hostBridge: NoopHostBridge())
+            service.wireTerminalReadiness()
+            return service
+        }
+
         // Write-actions that mutate session state are forwarded to the desktop
         // app's socket (the source of truth) so its side effects run and we
         // never clobber its newer state. When the daemon itself owns the default
@@ -87,7 +112,8 @@ public enum CrowDaemon {
 
         let commandRouter = makeCommandRouter(
             appState: appState, store: store, git: git, devRoot: options.devRoot,
-            cockpit: cockpit, forwardSocket: forwardSocket, tracker: tracker, allowList: allowList)
+            cockpit: cockpit, forwardSocket: forwardSocket, tracker: tracker, allowList: allowList,
+            sessionService: sessionService)
 
         // Unix socket — lets the existing `crow` CLI talk to the daemon. Refuse
         // to bind a socket another server already answers on (e.g. the desktop
