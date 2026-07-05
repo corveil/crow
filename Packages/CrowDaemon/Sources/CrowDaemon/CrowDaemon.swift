@@ -59,10 +59,15 @@ public enum CrowDaemon {
             allowList.scan()
             return (tracker, allowList)
         }
-        startBoardPoll(tracker: tracker)
+        // Fan-out hub for server-initiated `changed` nudges over `/rpc`, so
+        // connected clients re-fetch on state change instead of polling
+        // (CROW-581, M-D).
+        let eventHub = EventHub()
+
+        startBoardPoll(tracker: tracker, eventHub: eventHub)
         // Live-reload the store so the web UI reflects the desktop app's writes
         // (new sessions/status/terminals/links) without a daemon restart.
-        startStoreReloadPoll(store: store, appState: appState)
+        startStoreReloadPoll(store: store, appState: appState, eventHub: eventHub)
 
         // Terminal cockpit (tmux). Optional — RPC still works without tmux, but
         // the terminal handlers (new-terminal/close-terminal) and `/terminal`
@@ -105,7 +110,7 @@ public enum CrowDaemon {
 
         // WebSocket router: JSON-RPC at /rpc, terminal byte-stream at /terminal.
         let wsRouter = Router(context: BasicWebSocketRequestContext.self)
-        RPCWebSocketHandler.mount(on: wsRouter, commandRouter: commandRouter, boundHost: options.host)
+        RPCWebSocketHandler.mount(on: wsRouter, commandRouter: commandRouter, eventHub: eventHub, boundHost: options.host)
         if let cockpit { TerminalWebSocket.mount(on: wsRouter, cockpit: cockpit, boundHost: options.host) }
 
         // HTTP router: web UI, xterm assets, health.
@@ -132,10 +137,13 @@ public enum CrowDaemon {
     /// daemon never runs (`app.runService()` drives NIO event loops, not an
     /// AppKit run loop) — so the Timer would never fire. This does the initial
     /// fetch immediately, then polls on the app's 60s cadence (CROW-581, M-C).
-    private static func startBoardPoll(tracker: IssueTracker) {
+    /// Broadcasts a `changed` nudge after each poll so clients re-fetch the
+    /// boards reactively (M-D).
+    private static func startBoardPoll(tracker: IssueTracker, eventHub: EventHub) {
         Task {
             while !Task.isCancelled {
                 await tracker.refresh()
+                await eventHub.broadcast()
                 try? await Task.sleep(nanoseconds: 60 * 1_000_000_000)
             }
         }
@@ -212,8 +220,10 @@ public enum CrowDaemon {
     /// Poll `store.json`'s mtime and reload when the desktop app writes it, so
     /// the web UI reflects new sessions/status/terminals/links without a daemon
     /// restart. Cheap (a stat every 2s) and robust against the atomic renames
-    /// that break fd-based watching.
-    private static func startStoreReloadPoll(store: JSONStore, appState: AppState) {
+    /// that break fd-based watching. Broadcasts a `changed` nudge on the hub so
+    /// connected clients re-fetch immediately instead of waiting for their own
+    /// interval poll (CROW-581, M-D).
+    private static func startStoreReloadPoll(store: JSONStore, appState: AppState, eventHub: EventHub) {
         Task {
             var lastModified = store.storeModificationDate
             while !Task.isCancelled {
@@ -223,6 +233,7 @@ public enum CrowDaemon {
                     lastModified = now
                     store.reload()
                     await reseed(appState, from: store)
+                    await eventHub.broadcast()
                 }
             }
         }
