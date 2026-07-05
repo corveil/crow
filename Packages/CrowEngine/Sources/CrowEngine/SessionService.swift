@@ -428,7 +428,7 @@ public final class SessionService {
     /// (launchClaude) work without backend-specific branches. The tmux backend
     /// skips the `.surfaceCreated` intermediate state — its window is created
     /// synchronously by registerTerminal — so we go straight to `.shellReady`.
-    func wireTerminalReadiness() {
+    public func wireTerminalReadiness() {
         NSLog("[SessionService] wireTerminalReadiness — setting tmux readiness callback")
         TmuxBackend.shared.onReadinessChanged = { [weak self] terminalID, readiness in
             guard let self else { return }
