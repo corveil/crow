@@ -13,6 +13,10 @@ let package = Package(
         .package(path: "../CrowGit"),
         .package(path: "../CrowIPC"),
         .package(path: "../CrowTerminal"),
+        // The headless engine (IssueTracker / AllowListService) + its provider
+        // layer, so the daemon owns the board reads with the app down (CROW-581).
+        .package(path: "../CrowEngine"),
+        .package(path: "../CrowProvider"),
         // Coding agents — the daemon owns its own AgentRegistry so `list-agents`
         // (and future launch gating) works with the desktop app down (CROW-581).
         .package(path: "../CrowClaude"),
@@ -31,6 +35,8 @@ let package = Package(
                 .product(name: "CrowGit", package: "CrowGit"),
                 .product(name: "CrowIPC", package: "CrowIPC"),
                 .product(name: "CrowTerminal", package: "CrowTerminal"),
+                .product(name: "CrowEngine", package: "CrowEngine"),
+                .product(name: "CrowProvider", package: "CrowProvider"),
                 .product(name: "CrowClaude", package: "CrowClaude"),
                 .product(name: "CrowCodex", package: "CrowCodex"),
                 .product(name: "CrowCursor", package: "CrowCursor"),
@@ -48,6 +54,8 @@ let package = Package(
                 "CrowDaemon",
                 .product(name: "CrowCore", package: "CrowCore"),
                 .product(name: "CrowClaude", package: "CrowClaude"),
+                .product(name: "CrowEngine", package: "CrowEngine"),
+                .product(name: "CrowProvider", package: "CrowProvider"),
             ]
         ),
     ]
