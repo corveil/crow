@@ -1,3 +1,11 @@
+---
+name: crow-review-pr
+description: >-
+  Perform a comprehensive code and security review on a GitHub pull request,
+  then post the findings as a PR review. Use when the user invokes
+  /crow-review-pr or asks to review a PR through Crow.
+---
+
 # Crow Review PR
 
 Perform a comprehensive code and security review on a GitHub pull request, then post the findings as a PR review.

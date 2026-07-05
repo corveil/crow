@@ -1,3 +1,12 @@
+---
+name: crow-batch-workspace
+description: >-
+  Set up multiple Crow workspaces in parallel, delegating to crow-workspace's
+  setup.sh for each and firing them simultaneously to cut total setup time. Use
+  when the user invokes /crow-batch-workspace or asks to set up several Crow
+  workspaces at once.
+---
+
 # Crow Batch Workspace Setup Skill
 
 ## Purpose
