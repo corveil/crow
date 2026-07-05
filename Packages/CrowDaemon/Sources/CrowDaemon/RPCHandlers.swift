@@ -405,14 +405,22 @@ func makeCommandRouter(
 
         // Board data (Ticket Board / Reviews / Allowlist) is in-memory on the app
         // (IssueTracker / AllowListService), so these reads are forward-only.
-        // Available coding agents live in the app's AgentRegistry, so this is
-        // forward-only; empty when the app isn't reachable (CROW-593).
-        "list-agents": { params in
-            let empty: [String: JSONValue] = ["agents": .array([])]
-            guard let forwardSocket else { return empty }
-            do { return try forwardToApp("list-agents", params, socket: forwardSocket) }
-            catch let error as DaemonRPCError { throw error }
-            catch { return empty }
+        // Coding agents are registered in the daemon's own AgentRegistry at
+        // startup, so `list-agents` answers locally — no app required (CROW-581).
+        "list-agents": { _ in
+            await MainActor.run {
+                let defaultKind = AgentRegistry.shared.defaultAgent?.kind
+                let items: [JSONValue] = AgentRegistry.shared.allAgents()
+                    .sorted { $0.displayName < $1.displayName }
+                    .map { agent in
+                        .object([
+                            "kind": .string(agent.kind.rawValue),
+                            "name": .string(agent.displayName),
+                            "default": .bool(agent.kind == defaultKind),
+                        ])
+                    }
+                return ["agents": .array(items)]
+            }
         },
         // Return an empty board when the app isn't running or unreachable —
         // graceful, like get-pr-status — so the web renders empty states, not

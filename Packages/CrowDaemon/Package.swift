@@ -13,6 +13,12 @@ let package = Package(
         .package(path: "../CrowGit"),
         .package(path: "../CrowIPC"),
         .package(path: "../CrowTerminal"),
+        // Coding agents — the daemon owns its own AgentRegistry so `list-agents`
+        // (and future launch gating) works with the desktop app down (CROW-581).
+        .package(path: "../CrowClaude"),
+        .package(path: "../CrowCodex"),
+        .package(path: "../CrowCursor"),
+        .package(path: "../CrowOpenCode"),
         .package(url: "https://github.com/hummingbird-project/hummingbird.git", from: "2.0.0"),
         .package(url: "https://github.com/hummingbird-project/hummingbird-websocket.git", from: "2.0.0"),
     ],
@@ -25,6 +31,10 @@ let package = Package(
                 .product(name: "CrowGit", package: "CrowGit"),
                 .product(name: "CrowIPC", package: "CrowIPC"),
                 .product(name: "CrowTerminal", package: "CrowTerminal"),
+                .product(name: "CrowClaude", package: "CrowClaude"),
+                .product(name: "CrowCodex", package: "CrowCodex"),
+                .product(name: "CrowCursor", package: "CrowCursor"),
+                .product(name: "CrowOpenCode", package: "CrowOpenCode"),
                 .product(name: "Hummingbird", package: "hummingbird"),
                 .product(name: "HummingbirdWebSocket", package: "hummingbird-websocket"),
             ],
@@ -34,7 +44,11 @@ let package = Package(
         ),
         .testTarget(
             name: "CrowDaemonTests",
-            dependencies: ["CrowDaemon"]
+            dependencies: [
+                "CrowDaemon",
+                .product(name: "CrowCore", package: "CrowCore"),
+                .product(name: "CrowClaude", package: "CrowClaude"),
+            ]
         ),
     ]
 )
