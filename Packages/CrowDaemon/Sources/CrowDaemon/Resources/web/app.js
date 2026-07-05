@@ -19,6 +19,10 @@ function rpcConnect() {
     ws.onmessage = (event) => {
       let msg;
       try { msg = JSON.parse(event.data); } catch (_) { return; }
+      // Server-initiated notification (no id): a state-change nudge from the
+      // daemon — re-fetch the live surfaces now instead of waiting for the
+      // interval poll (CROW-581, M-D).
+      if (msg.id == null && msg.method === 'changed') { onServerChanged(); return; }
       const waiter = rpcState.pending.get(msg.id);
       if (!waiter) return;
       rpcState.pending.delete(msg.id);
@@ -39,6 +43,25 @@ async function rpc(method, params) {
     ws.send(JSON.stringify({ jsonrpc: '2.0', id, method, params: params || {} }));
     setTimeout(() => { if (rpcState.pending.delete(id)) reject(new Error('rpc timeout: ' + method)); }, 10000);
   });
+}
+
+// The daemon pushes a `changed` notification when its state moves (a new/edited
+// session, or a board poll). Re-fetch the live surfaces on the next tick;
+// bursts coalesce into one refresh, and every fetch is diff-guarded so an
+// unchanged payload repaints nothing (CROW-581, M-D). The interval polls below
+// remain as a slow fallback (and cover runtime PR/RC, which isn't store-backed
+// and so doesn't trigger a nudge).
+let changedNudgeScheduled = false;
+function onServerChanged() {
+  if (changedNudgeScheduled) return;
+  changedNudgeScheduled = true;
+  setTimeout(() => {
+    changedNudgeScheduled = false;
+    refreshSessions();
+    refreshLive();
+    refreshBoard('tickets');
+    refreshBoard('reviews');
+  }, 50);
 }
 
 // ---------------------------------------------------------------------------
@@ -1173,13 +1196,17 @@ document.getElementById('terminal-wrap').addEventListener('contextmenu', (e) => 
 
 refreshSessions();
 refreshLive();
-setInterval(refreshSessions, 3000);
+// Fallback polls — the `changed` push (onServerChanged) drives the common case,
+// so these are relaxed. refreshLive stays brisk: runtime PR/RC state isn't
+// store-backed and so isn't covered by a nudge (CROW-581, M-D).
+setInterval(refreshSessions, 10000);
 setInterval(refreshLive, 4000);
 // Prefetch ticket/review counts so the sidebar Tickets card + Reviews badge show
 // before first open.
 refreshBoard('tickets');
 refreshBoard('reviews');
 // Keep the open ticket/review board fresh (allowlist is manual-refresh only).
+// Slow fallback — board changes are push-driven via the daemon's poll nudge.
 setInterval(() => {
   if (selectedBoard === 'tickets' || selectedBoard === 'reviews') refreshBoard(selectedBoard);
-}, 6000);
+}, 20000);
