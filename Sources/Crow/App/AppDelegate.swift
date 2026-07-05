@@ -3,6 +3,7 @@ import SwiftUI
 import CrowClaude
 import CrowCodex
 import CrowCore
+import CrowEngine
 import CrowCursor
 import CrowGit
 import CrowOpenCode
