@@ -280,7 +280,7 @@ html, body {
 #board, #sidebar { scrollbar-width: none; -ms-overflow-style: none; }
 #board::-webkit-scrollbar, #sidebar::-webkit-scrollbar { width: 0; height: 0; display: none; }
 
-.board-head { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; }
+.board-head { position: sticky; top: 0; z-index: 2; background: var(--bg-deep); display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; padding: 4px 0 8px; }
 .board-title { color: var(--gold); font-size: 18px; font-weight: 700; margin-right: auto; }
 .done-chip {
   color: var(--gold); background: rgba(221, 196, 130, 0.14);
