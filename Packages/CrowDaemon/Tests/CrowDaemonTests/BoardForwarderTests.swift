@@ -2,6 +2,8 @@ import Foundation
 import Testing
 import CrowCore
 import CrowClaude
+import CrowEngine
+import CrowProvider
 import CrowGit
 import CrowIPC
 import CrowPersistence
@@ -79,6 +81,50 @@ import CrowPersistence
             .compactMap { $0.objectValue?["kind"]?.stringValue }
         #expect(kinds.contains(AgentKind.claudeCode.rawValue),
                 "list-agents must serve the locally-registered Claude agent even with the app down")
+    }
+}
+
+/// M-C inversion: when the daemon owns the board services, `list-tickets` /
+/// `list-reviews` / `list-allowlist` answer **locally** off `appState`
+/// (populated by the daemon's own IssueTracker/AllowListService) instead of
+/// forwarding — so the boards work with the app down (CROW-581). The service
+/// instances here are never polled; passing them just flips the router to the
+/// owned-data path.
+@Suite struct LocalBoardTests {
+    @Test @MainActor func listTicketsServesLocalAppStateWhenOwned() async {
+        let appState = AppState()
+        appState.assignedIssues = [
+            AssignedIssue(
+                id: "github:acme/api#7", number: 7, title: "Fix login", state: "open",
+                url: "https://github.com/acme/api/issues/7", repo: "acme/api",
+                provider: .github, projectStatus: .backlog),
+        ]
+        let tracker = IssueTracker(appState: appState, providerManager: ProviderManager())
+        let router = makeCommandRouter(
+            appState: appState, store: JSONStore(), git: GitManager(),
+            devRoot: NSTemporaryDirectory(), cockpit: nil, forwardSocket: nil, tracker: tracker)
+
+        let resp = await router.handle(request: JSONRPCRequest(id: 1, method: "list-tickets"))
+        #expect(resp.error == nil)
+        let issues = resp.result?["issues"]?.arrayValue ?? []
+        #expect(issues.count == 1)
+        #expect(issues.first?.objectValue?["number"]?.intValue == 7)
+    }
+
+    @Test @MainActor func listAllowlistServesLocalAppStateWhenOwned() async {
+        let appState = AppState()
+        appState.allowEntries = [AllowEntry(pattern: "Bash(npm test:*)", sources: [.global])]
+        let allowList = AllowListService(appState: appState, devRoot: NSTemporaryDirectory())
+        let router = makeCommandRouter(
+            appState: appState, store: JSONStore(), git: GitManager(),
+            devRoot: NSTemporaryDirectory(), cockpit: nil, forwardSocket: nil, allowList: allowList)
+
+        let resp = await router.handle(request: JSONRPCRequest(id: 1, method: "list-allowlist"))
+        #expect(resp.error == nil)
+        let entries = resp.result?["entries"]?.arrayValue ?? []
+        #expect(entries.count == 1)
+        #expect(entries.first?.objectValue?["pattern"]?.stringValue == "Bash(npm test:*)")
+        #expect(entries.first?.objectValue?["is_global"]?.boolValue == true)
     }
 }
 
