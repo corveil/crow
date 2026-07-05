@@ -13,6 +13,7 @@
   let appRunning = false;
   let dirty = false;
   let activeTab = 'general';
+  let agents = [];         // [{kind, name, default}] from list-agents (local, not remote)
   let subForm = null;      // { kind: 'workspace'|'job', draft, isNew }
   let backdrop = null;
   let escHandler = null;
@@ -45,6 +46,9 @@
     try { cfg = JSON.parse(res.config || '{}'); } catch (_) { cfg = {}; }
     devRoot = res.dev_root || '';
     appRunning = !!res.app_running;
+    // Local list of available agents for the Default-agent picker (#3 /
+    // CROW-593). Best-effort — empty when the app is down/old.
+    try { const ar = await rpc('list-agents'); agents = (ar && ar.agents) || []; } catch (_) { agents = []; }
     dirty = false;
     subForm = null;
     activeTab = 'general';
@@ -259,8 +263,17 @@
       { readonly: true, help: 'The dev root is fixed for this daemon and managed in the desktop app.' }));
 
     body.appendChild(group('Agent'));
-    body.appendChild(textField('Default agent', cfg, 'defaultAgentKind',
-      { readonly: true, help: 'Agent selection is managed in the desktop app.' }));
+    if (agents.length >= 2) {
+      // Choose the default agent, like the desktop Settings picker. The options
+      // are the locally-available (registered) agents; the launcher gates any
+      // other value back to the default (CROW-593).
+      body.appendChild(selectField('Default agent', cfg, 'defaultAgentKind',
+        agents.map((a) => [a.kind, a.name + (a.default ? ' (default)' : '')]),
+        { help: 'Used for new sessions unless overridden. Install more agent CLIs to add options.' }));
+    } else {
+      body.appendChild(textField('Default agent', cfg, 'defaultAgentKind',
+        { readonly: true, help: 'Only one agent is available. Install another agent CLI (Codex, Cursor, opencode) to choose.' }));
+    }
 
     body.appendChild(group('Corveil CLI'));
     body.appendChild(textField('Path to corveil binary', cfg.defaults.binaries, 'corveil',

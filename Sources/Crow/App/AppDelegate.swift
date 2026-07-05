@@ -1916,7 +1916,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Board/session actions — invoke the app's existing callbacks.
             "create-manager": { @Sendable params in
                 // Optional agent override (#583); nil = configured default.
-                let agent = params["agent_kind"]?.stringValue.flatMap { AgentKind(rawValue: $0) }
+                // Security gate (CROW-593): only honor a kind that is actually
+                // registered in AgentRegistry, so a web/daemon caller can't
+                // request an arbitrary agent. An unknown/unavailable kind falls
+                // back to the configured default (launch is additionally gated
+                // in managerCommand's AgentRegistry fallback).
+                let requested = params["agent_kind"]?.stringValue.flatMap { AgentKind(rawValue: $0) }
+                let agent = requested.flatMap { AgentRegistry.shared.agent(for: $0) != nil ? $0 : nil }
                 await MainActor.run { capturedAppState.onCreateManager?(agent) }
                 return ["ok": .bool(true)]
             },
