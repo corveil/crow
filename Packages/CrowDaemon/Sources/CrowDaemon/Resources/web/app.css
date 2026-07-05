@@ -37,6 +37,7 @@ html, body {
   display: grid;
   grid-template-columns: 350px 1fr;
   height: 100vh;
+  height: 100dvh; /* exclude mobile browser chrome so the last row is reachable */
 }
 
 /* ---- Sidebar ---- */
@@ -44,6 +45,7 @@ html, body {
   background: var(--bg-deep);
   border-right: 1px solid var(--border-subtle);
   overflow-y: auto;
+  min-height: 0; /* grid item must be able to shrink so overflow scrolls */
   padding: 12px 10px 24px;
 }
 .brand {
@@ -140,6 +142,7 @@ html, body {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0; /* let #board's overflow-y actually scroll (grid item default is auto) */
   background: var(--bg-deep);
   position: relative;
 }
@@ -300,6 +303,8 @@ html, body {
   #app.has-selection.mobile-show-sidebar #back-to-sidebar { display: none; }
   /* Board content clears the floating hamburger on mobile. */
   #app.has-selection.board-active #board { padding-top: 56px; }
+  /* Extra room under the last card so it's fully reachable above mobile chrome. */
+  #sidebar { padding-bottom: 64px; }
 }
 
 /* ---- Boards (Ticket Board / Reviews / Allowlist) ---- */
