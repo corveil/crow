@@ -312,6 +312,36 @@ func makeCommandRouter(
             }
         },
 
+        // Lock/unlock a session (protects it from auto-cleanup). Mirrors
+        // `set-status`: forwarded to the app when running, handled locally
+        // otherwise. The web Lock/Unlock action calls this; without it the
+        // daemon returned "unknown method" (CROW-593).
+        "set-locked": { params in
+            guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr),
+                  let locked = params["locked"]?.boolValue else {
+                throw DaemonRPCError.invalidParams("session_id and locked required")
+            }
+            if let forwardSocket {
+                do { return try forwardToApp("set-locked", params, socket: forwardSocket) }
+                catch let error as DaemonRPCError { throw error }
+                catch { /* app not running → fall through to local */ }
+            }
+            return try await MainActor.run {
+                guard let idx = appState.sessions.firstIndex(where: { $0.id == id }) else {
+                    throw DaemonRPCError.applicationError("Session not found")
+                }
+                appState.sessions[idx].locked = locked
+                appState.sessions[idx].updatedAt = Date()
+                store.mutate { data in
+                    if let i = data.sessions.firstIndex(where: { $0.id == id }) {
+                        data.sessions[i].locked = locked
+                        data.sessions[i].updatedAt = Date()
+                    }
+                }
+                return ["session_id": .string(idStr), "locked": .bool(locked)]
+            }
+        },
+
         "rename-session": { params in
             guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr),
                   let name = params["name"]?.stringValue else {
