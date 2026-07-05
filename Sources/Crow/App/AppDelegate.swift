@@ -2403,6 +2403,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 return ["links": .array(items)]
             },
+            "remove-link": { @Sendable params in
+                guard let idStr = params["session_id"]?.stringValue, let sessionID = UUID(uuidString: idStr) else {
+                    throw RPCError.invalidParams("session_id required")
+                }
+                let linkID = params["link_id"]?.stringValue.flatMap { UUID(uuidString: $0) }
+                let url = params["url"]?.stringValue
+                guard linkID != nil || url != nil else {
+                    throw RPCError.invalidParams("link_id or url required")
+                }
+                func matches(_ l: SessionLink) -> Bool {
+                    (linkID != nil && l.id == linkID) || (url != nil && l.url == url)
+                }
+                return await MainActor.run {
+                    let before = capturedAppState.links(for: sessionID).count
+                    if var existing = capturedAppState.links[sessionID] {
+                        existing.removeAll(where: matches)
+                        capturedAppState.links[sessionID] = existing.isEmpty ? nil : existing
+                    }
+                    capturedStore.mutate { data in
+                        data.links.removeAll { $0.sessionID == sessionID && matches($0) }
+                    }
+                    let removed = before - capturedAppState.links(for: sessionID).count
+                    return ["removed": .int(removed)]
+                }
+            },
             "hook-event": { @Sendable params in
                 guard let eventName = params["event_name"]?.stringValue else {
                     throw RPCError.invalidParams("event_name required")
