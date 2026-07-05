@@ -30,6 +30,7 @@ public struct CrowCommand: ParsableCommand {
             Send.self,
             AddLink.self,
             ListLinks.self,
+            RemoveLink.self,
             TransitionTicket.self,
             ResyncJira.self,
             HookEventCmd.self,
