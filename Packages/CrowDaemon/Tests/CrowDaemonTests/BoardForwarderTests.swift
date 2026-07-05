@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import CrowCore
+import CrowClaude
 import CrowGit
 import CrowIPC
 import CrowPersistence
@@ -56,6 +57,28 @@ import CrowPersistence
             #expect(resp.error != nil, "\(method) should error when the app is down")
             #expect(resp.error?.code == RPCErrorCode.applicationError, "\(method) should be an application error")
         }
+    }
+}
+
+/// Unlike the board reads, `list-agents` is **local**: the daemon registers its
+/// own coding agents at startup, so the agent picker works with the desktop app
+/// down (CROW-581, M-B). This pins that inversion — a router with
+/// `forwardSocket: nil` still returns the registered agents.
+@Suite struct AgentsLocalTests {
+    @Test @MainActor func listAgentsIsLocalNotForwarded() async {
+        // Register in this process's registry, as `CrowDaemon.run()` does.
+        AgentRegistry.shared.register(ClaudeCodeAgent())
+
+        let router = makeCommandRouter(
+            appState: AppState(), store: JSONStore(), git: GitManager(),
+            devRoot: NSTemporaryDirectory(), cockpit: nil, forwardSocket: nil)
+
+        let resp = await router.handle(request: JSONRPCRequest(id: 1, method: "list-agents"))
+        #expect(resp.error == nil)
+        let kinds = (resp.result?["agents"]?.arrayValue ?? [])
+            .compactMap { $0.objectValue?["kind"]?.stringValue }
+        #expect(kinds.contains(AgentKind.claudeCode.rawValue),
+                "list-agents must serve the locally-registered Claude agent even with the app down")
     }
 }
 
