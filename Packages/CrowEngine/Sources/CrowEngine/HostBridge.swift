@@ -11,7 +11,7 @@ import CrowIPC
 /// headless process runs the MainActor executor fine (no AppKit run loop
 /// required to *call* these).
 @MainActor
-public protocol HostBridge: AnyObject {
+public protocol HostBridge: AnyObject, Sendable {
     /// Put text on the host clipboard (backs `SessionService.copyDiagnostics`).
     func copyToClipboard(_ text: String)
 
