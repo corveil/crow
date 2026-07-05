@@ -1,5 +1,6 @@
 import Foundation
 import CrowCore
+import CrowEngine
 import CrowTerminal
 
 /// Drives scheduled jobs (CROW-317).

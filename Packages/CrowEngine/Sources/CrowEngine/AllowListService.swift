@@ -3,11 +3,11 @@ import CrowCore
 
 /// Scans worktree and global settings files to aggregate allow-list entries.
 @MainActor
-final class AllowListService {
+public final class AllowListService {
     private let appState: AppState
     private let devRoot: String
 
-    init(appState: AppState, devRoot: String) {
+    public init(appState: AppState, devRoot: String) {
         self.appState = appState
         self.devRoot = devRoot
     }
@@ -15,7 +15,7 @@ final class AllowListService {
     // MARK: - Scan
 
     /// Aggregate allow-list entries from global, workspace, and worktree settings.
-    func scan() {
+    public func scan() {
         appState.isLoadingAllowList = true
         var aggregated: [String: Set<AllowSource>] = [:]
 
@@ -52,7 +52,7 @@ final class AllowListService {
     // MARK: - Promote
 
     /// Write selected patterns to `~/.claude/settings.json`, then re-scan.
-    func promoteToGlobal(patterns: Set<String>) {
+    public func promoteToGlobal(patterns: Set<String>) {
         let fm = FileManager.default
         let claudeDir = fm.homeDirectoryForCurrentUser.appendingPathComponent(".claude")
         let globalPath = claudeDir.appendingPathComponent("settings.json")
