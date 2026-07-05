@@ -35,14 +35,14 @@ struct DeferredLaunchTests {
 
     @Test func registerWithRetrySucceedsFirstTry() throws {
         var calls = 0
-        let result = try AppDelegate.registerWithRetry(attempts: 3) { _ in calls += 1; return 42 }
+        let result = try EngineHelpers.registerWithRetry(attempts: 3) { _ in calls += 1; return 42 }
         #expect(result == 42)
         #expect(calls == 1)
     }
 
     @Test func registerWithRetryRecoversAfterTransientFailures() throws {
         var calls = 0
-        let result = try AppDelegate.registerWithRetry(attempts: 3) { attempt -> Int in
+        let result = try EngineHelpers.registerWithRetry(attempts: 3) { attempt -> Int in
             calls += 1
             if attempt < 2 { throw Boom() }
             return 7
@@ -54,7 +54,7 @@ struct DeferredLaunchTests {
     @Test func registerWithRetryThrowsAfterExhaustion() {
         var calls = 0
         #expect(throws: Boom.self) {
-            try AppDelegate.registerWithRetry(attempts: 3) { _ -> Int in calls += 1; throw Boom() }
+            try EngineHelpers.registerWithRetry(attempts: 3) { _ -> Int in calls += 1; throw Boom() }
         }
         #expect(calls == 3)
     }
