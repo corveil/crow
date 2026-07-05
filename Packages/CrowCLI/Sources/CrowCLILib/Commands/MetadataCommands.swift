@@ -149,3 +149,32 @@ public struct ListLinks: ParsableCommand {
         printJSON(result)
     }
 }
+
+/// Remove a link from a session, identified by its link ID (from `list-links`)
+/// or its URL. There is no way to re-derive links for a live session, so this is
+/// the only way to detach a stale link (e.g. a closed PR) without deleting the
+/// whole session.
+public struct RemoveLink: ParsableCommand {
+    public static let configuration = CommandConfiguration(commandName: "remove-link", abstract: "Remove a link from a session")
+    @Option(name: .long, help: "Session UUID") var session: String
+    @Option(name: .long, help: "Link ID (from list-links)") var id: String?
+    @Option(name: .long, help: "Link URL (alternative to --id)") var url: String?
+
+    public init() {}
+
+    public func validate() throws {
+        try validateUUID(session, label: "session UUID")
+        if let id { try validateUUID(id, label: "link ID") }
+        guard id != nil || url != nil else {
+            throw ValidationError("Provide --id or --url to identify the link to remove")
+        }
+    }
+
+    public func run() throws {
+        var params: [String: JSONValue] = ["session_id": .string(session)]
+        if let id { params["link_id"] = .string(id) }
+        if let url { params["url"] = .string(url) }
+        let result = try rpc("remove-link", params: params)
+        printJSON(result)
+    }
+}
