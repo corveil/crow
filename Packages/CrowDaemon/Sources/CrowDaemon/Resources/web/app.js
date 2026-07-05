@@ -302,6 +302,13 @@ function sessionRow(s) {
   // neutral otherwise (mirrors the desktop rowBackgroundColor logic).
   row.style.borderLeftColor = s.attention ? 'var(--orange)'
     : (s.activity === 'done' ? 'var(--green)' : 'var(--border-subtle)');
+  // Full-card background tint by state, matching the desktop rowBackgroundColor
+  // (orange tint on attention, green tint when done). Left unset when selected
+  // so the gold `.selected` background wins (CROW-593).
+  if (s.id !== selectedId) {
+    row.style.background = s.attention ? 'rgba(230,145,50,0.14)'
+      : (s.activity === 'done' ? 'var(--bg-done)' : '');
+  }
 
   const top = el('div', 'row-top');
   const lead = el('div', 'row-lead');
@@ -673,7 +680,11 @@ function selectBoard(key) {
   document.getElementById('tabbar').innerHTML = '';
   renderSidebar();
   renderBoard();       // instant paint (may be stale/empty)…
-  refreshBoard(key);   // …then refresh from the app
+  // Allowlist is manual-refresh-only (never polled), so a plain list read
+  // returns nothing until the app has scanned. Kick a scan on open so the
+  // section populates without the user having to click Refresh (CROW-593).
+  if (key === 'allowlist') refreshAllowlist();
+  else refreshBoard(key); // …then refresh from the app
 }
 
 // Fetch one board; only re-render when the data actually changed so polling
