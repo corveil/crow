@@ -49,16 +49,60 @@ import CrowPersistence
 
     @Test @MainActor func boardActionsErrorWhenAppDown() async {
         let router = offlineRouter()
+        // Spawn/label actions genuinely need the app's SessionService / gh; they
+        // still error with the app down. (The store-backed status transitions —
+        // mark-in-review / complete-session / set-session-active — now run
+        // locally, so they're covered by LocalStatusTests instead.)
         let actions = [
             "work-on-issue", "start-review", "promote-allowlist", "refresh-tickets", "refresh-allowlist",
-            "create-manager", "mark-in-review", "mark-issue-done", "complete-session",
-            "set-session-active", "add-merge-label",
+            "create-manager", "mark-issue-done", "add-merge-label",
         ]
         for method in actions {
             let resp = await router.handle(request: JSONRPCRequest(id: 1, method: method))
             #expect(resp.error != nil, "\(method) should error when the app is down")
             #expect(resp.error?.code == RPCErrorCode.applicationError, "\(method) should be an application error")
         }
+    }
+}
+
+/// M-E slice: the store-backed session status transitions gained an app-down
+/// local path (mirroring `set-status`), so they work headless. Pure
+/// `session.status` writes — the local path runs only with the app off, so
+/// there's no two-writer divergence (CROW-581).
+@Suite struct LocalStatusTests {
+    @MainActor
+    private func seededRouter() -> (CommandRouter, AppState, Session) {
+        let appState = AppState()
+        let store = JSONStore(directory: URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("crowd-status-\(UUID().uuidString)"))
+        let session = Session(name: "s", kind: .work, agentKind: .claudeCode)
+        appState.sessions = [session]
+        store.mutate { $0.sessions = [session] }
+        let router = makeCommandRouter(
+            appState: appState, store: store, git: GitManager(),
+            devRoot: NSTemporaryDirectory(), cockpit: nil, forwardSocket: nil)
+        return (router, appState, session)
+    }
+
+    @Test @MainActor func statusTransitionsRunLocallyWhenAppDown() async {
+        for (method, expected) in [
+            ("mark-in-review", SessionStatus.inReview),
+            ("complete-session", .completed),
+            ("set-session-active", .active),
+        ] {
+            let (router, appState, session) = seededRouter()
+            let resp = await router.handle(request: JSONRPCRequest(
+                id: 1, method: method, params: ["session_id": .string(session.id.uuidString)]))
+            #expect(resp.error == nil, "\(method) should run locally with the app down")
+            #expect(resp.result?["status"]?.stringValue == expected.rawValue)
+            #expect(appState.sessions.first?.status == expected)
+        }
+    }
+
+    @Test @MainActor func statusTransitionRejectsMissingSessionID() async {
+        let (router, _, _) = seededRouter()
+        let resp = await router.handle(request: JSONRPCRequest(id: 1, method: "mark-in-review"))
+        #expect(resp.error?.code == RPCErrorCode.invalidParams)
     }
 }
 
