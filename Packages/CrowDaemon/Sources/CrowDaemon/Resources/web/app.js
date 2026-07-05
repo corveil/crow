@@ -60,6 +60,10 @@ const boardData = { tickets: null, reviews: null, allowlist: null };
 let ticketFilter = 'In Progress'; // pipeline segment ('All' or a status rawValue)
 let allowlistHideGlobal = false;
 const allowlistSelection = new Set();
+// Session multi-select (#5): toggled by the sidebar checkmark button; holds the
+// ids of sessions ticked for a bulk action (delete).
+let selectionMode = false;
+const selectedSessionIDs = new Set();
 const PIPELINE = ['All', 'Backlog', 'Ready', 'In Progress', 'In Review', 'Done'];
 // Ticket pipeline status → accent color (mirrors CorveilTheme.TicketStatus.color).
 const TICKET_STATUS_COLOR = {
@@ -126,6 +130,7 @@ let lastSidebarSig = null;
 function sidebarSignature() {
   return JSON.stringify([
     sessions, liveById, selectedId, selectedBoard,
+    selectionMode, [...selectedSessionIDs],
     boardData.tickets && boardData.tickets.counts,
     boardData.tickets && boardData.tickets.done_last_24h,
     boardData.reviews && boardData.reviews.unseen,
@@ -148,6 +153,7 @@ function renderSidebar() {
 
   root.appendChild(ticketsCard());
   root.appendChild(navPillRow());
+  if (selectionMode) root.appendChild(bulkActionBar());
 
   // Extra (non-primary) manager sessions render as rows, no section header.
   const managers = sessions.filter((s) => s.kind === 'manager');
@@ -157,10 +163,80 @@ function renderSidebar() {
   for (const group of GROUPS) {
     const rows = sessions.filter(group.match);
     if (!rows.length) continue;
-    root.appendChild(el('div', 'divider', group.title));
+    root.appendChild(selectionMode ? sectionHeader(group.title, rows) : el('div', 'divider', group.title));
     for (const s of rows) { root.appendChild(sessionRow(s)); shown++; }
   }
   if (!shown && !managers.length) root.appendChild(el('div', 'empty', 'No sessions'));
+}
+
+// ---- Multi-select (#5 / CROW-593) ----------------------------------------
+
+function toggleSelect(id) {
+  if (selectedSessionIDs.has(id)) selectedSessionIDs.delete(id);
+  else selectedSessionIDs.add(id);
+  renderSidebar();
+}
+
+// Section divider with a per-section select-all/clear toggle (mirrors the
+// desktop section header checklist button).
+function sectionHeader(title, rows) {
+  const head = el('div', 'divider divider-sel');
+  head.appendChild(el('span', 'divider-label', title));
+  const ids = rows.map((r) => r.id);
+  const allSel = ids.length && ids.every((id) => selectedSessionIDs.has(id));
+  const btn = el('button', 'divider-selall', allSel ? 'Clear' : 'All');
+  btn.title = allSel ? 'Deselect all in section' : 'Select all in section';
+  btn.onclick = (e) => {
+    e.stopPropagation();
+    if (allSel) ids.forEach((id) => selectedSessionIDs.delete(id));
+    else ids.forEach((id) => selectedSessionIDs.add(id));
+    renderSidebar();
+  };
+  head.appendChild(btn);
+  return head;
+}
+
+// "N selected" + cancel + bulk-delete, mirroring the desktop bulkActionBar.
+function bulkActionBar() {
+  const bar = el('div', 'bulk-bar');
+  bar.appendChild(el('span', 'bulk-count', selectedSessionIDs.size + ' selected'));
+  bar.appendChild(el('div', 'bulk-spacer'));
+  const cancel = el('button', 'bulk-x', '✕');
+  cancel.title = 'Cancel selection';
+  cancel.onclick = () => { selectionMode = false; selectedSessionIDs.clear(); renderSidebar(); };
+  bar.appendChild(cancel);
+  if (selectedSessionIDs.size) {
+    const del = el('button', 'bulk-delete', '🗑 (' + selectedSessionIDs.size + ')');
+    del.title = 'Delete selected sessions';
+    del.onclick = () => bulkDeleteSelected();
+    bar.appendChild(del);
+  }
+  return bar;
+}
+
+async function bulkDeleteSelected() {
+  const ids = [...selectedSessionIDs];
+  if (!ids.length) return;
+  if (!window.confirm('Delete ' + ids.length + ' session' + (ids.length === 1 ? '' : 's')
+    + '? This removes their worktrees and terminals.')) return;
+  let failed = 0;
+  for (const id of ids) {
+    try {
+      await rpc('delete-session', { session_id: id });
+      sessions = sessions.filter((x) => x.id !== id);
+      selectedSessionIDs.delete(id);
+    } catch (_) { failed++; }
+  }
+  if (selectedId && !sessions.some((x) => x.id === selectedId)) {
+    selectedId = null;
+    const app = document.getElementById('app');
+    app.classList.remove('has-selection', 'mobile-show-sidebar');
+    document.getElementById('detail-header').innerHTML = '';
+    document.getElementById('tabbar').innerHTML = '';
+  }
+  selectionMode = false;
+  renderSidebar();
+  if (failed) window.alert(failed + ' session(s) could not be deleted.');
 }
 
 // Tickets summary card: title + refresh + 5 status mini-counts. Click opens the
@@ -219,6 +295,11 @@ function navPillRow() {
     if (liveFor(primaryManager.id).remote_control_active) mgr.appendChild(rcGlyph());
     row.appendChild(mgr);
   }
+
+  const selBtn = el('button', 'nav-plus' + (selectionMode ? ' nav-selecting' : ''), selectionMode ? '✕' : '☑');
+  selBtn.title = selectionMode ? 'Cancel selection' : 'Select sessions';
+  selBtn.onclick = () => { selectionMode = !selectionMode; if (!selectionMode) selectedSessionIDs.clear(); renderSidebar(); };
+  row.appendChild(selBtn);
 
   const plus = el('button', 'nav-plus', '+');
   plus.title = 'New Manager session';
@@ -318,8 +399,12 @@ function activityIndicator(s) {
 }
 
 function sessionRow(s) {
-  const row = el('div', 'session-row status-accent' + (s.id === selectedId ? ' selected' : ''));
-  row.onclick = () => selectSession(s.id);
+  const multiSel = selectionMode && selectedSessionIDs.has(s.id);
+  const row = el('div', 'session-row status-accent'
+    + (!selectionMode && s.id === selectedId ? ' selected' : '')
+    + (selectionMode ? ' selecting' : '')
+    + (multiSel ? ' multi-selected' : ''));
+  row.onclick = selectionMode ? (() => toggleSelect(s.id)) : (() => selectSession(s.id));
   row.oncontextmenu = (e) => showSessionMenu(e, s);
   const ind = activityIndicator(s);
   // Left accent hue: amber for attention (permission/question), green for done,
@@ -327,11 +412,24 @@ function sessionRow(s) {
   row.style.borderLeftColor = s.attention ? 'var(--orange)'
     : (s.activity === 'done' ? 'var(--green)' : 'var(--border-subtle)');
   // Full-card background tint by state, matching the desktop rowBackgroundColor
-  // (orange tint on attention, green tint when done). Left unset when selected
-  // so the gold `.selected` background wins (CROW-593).
-  if (s.id !== selectedId) {
+  // (orange tint on attention, green tint when done). Left unset when the row is
+  // selected (single or multi) so the gold selected background wins (CROW-593).
+  if (!multiSel && !(s.id === selectedId && !selectionMode)) {
     row.style.background = s.attention ? 'rgba(230,145,50,0.14)'
       : (s.activity === 'done' ? 'var(--bg-done)' : '');
+  }
+
+  // In multi-select mode a checkbox leads the row; the rest of the content is
+  // wrapped so the checkbox sits left of the stacked body (#5 / CROW-593).
+  let content = row;
+  if (selectionMode) {
+    const cb = el('input', 'row-check');
+    cb.type = 'checkbox';
+    cb.checked = multiSel;
+    cb.onclick = (e) => { e.stopPropagation(); toggleSelect(s.id); };
+    row.appendChild(cb);
+    content = el('div', 'row-body');
+    row.appendChild(content);
   }
 
   const top = el('div', 'row-top');
@@ -350,10 +448,10 @@ function sessionRow(s) {
   dot.style.color = ind.color; // drives the glow ring (box-shadow: currentColor)
   trail.appendChild(dot);
   top.appendChild(trail);
-  row.appendChild(top);
+  content.appendChild(top);
 
-  if (s.ticket_title) row.appendChild(el('div', 'subtle', s.ticket_title));
-  if (s.repo) row.appendChild(el('div', 'meta', s.repo + (s.branch ? ' · ' + s.branch : '')));
+  if (s.ticket_title) content.appendChild(el('div', 'subtle', s.ticket_title));
+  if (s.repo) content.appendChild(el('div', 'meta', s.repo + (s.branch ? ' · ' + s.branch : '')));
 
   const badges = el('div', 'row-badges');
   if (s.ticket_badge) badges.appendChild(el('span', 'badge', s.ticket_badge));
@@ -372,7 +470,7 @@ function sessionRow(s) {
     activity.style.color = ind.color;
     badges.appendChild(activity);
   }
-  if (badges.children.length) row.appendChild(badges);
+  if (badges.children.length) content.appendChild(badges);
   return row;
 }
 
