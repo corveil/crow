@@ -4,6 +4,10 @@ import Darwin
 import Glibc
 #endif
 import CrowCore
+import CrowClaude
+import CrowCodex
+import CrowCursor
+import CrowOpenCode
 import CrowGit
 import CrowIPC
 import CrowPersistence
@@ -33,6 +37,12 @@ public enum CrowDaemon {
         let store = JSONStore()
         let git = GitManager()
         let appState = await seedAppState(from: store)
+
+        // Register coding agents in the daemon's own AgentRegistry so
+        // `list-agents` (and future launch gating) answer locally, with the
+        // desktop app down. Mirrors the app's registration; both hosts read the
+        // same store-backed binary overrides (CROW-581, M-B).
+        await registerAgents(devRoot: options.devRoot)
         // Live-reload the store so the web UI reflects the desktop app's writes
         // (new sessions/status/terminals/links) without a daemon restart.
         startStoreReloadPoll(store: store, appState: appState)
@@ -105,6 +115,39 @@ public enum CrowDaemon {
         let appState = AppState()
         reseed(appState, from: store)
         return appState
+    }
+
+    /// Register the coding agents in this process's `AgentRegistry`, mirroring
+    /// the desktop app's registration (AppDelegate): Claude is always present;
+    /// Codex/Cursor/OpenCode register only when their binary resolves on PATH
+    /// (or a `defaults.binaries.*` override). Reads binary overrides from the
+    /// same on-disk config the app uses so both hosts gate identically
+    /// (CROW-581, M-B).
+    @MainActor
+    private static func registerAgents(devRoot: String) {
+        if let config = ConfigStore.loadConfig(devRoot: devRoot) {
+            BinaryOverrides.shared.set(config.defaults.binaries)
+        }
+
+        AgentRegistry.shared.register(ClaudeCodeAgent())
+
+        let codex = OpenAICodexAgent()
+        if let path = codex.findBinary() {
+            AgentRegistry.shared.register(codex)
+            log("OpenAI Codex agent registered at \(path)")
+        }
+
+        let cursor = CursorAgent()
+        if let path = cursor.findBinary() {
+            AgentRegistry.shared.register(cursor)
+            log("Cursor agent registered at \(path)")
+        }
+
+        let openCode = OpenCodeAgent()
+        if let path = openCode.findBinary() {
+            AgentRegistry.shared.register(openCode)
+            log("OpenCode agent registered at \(path)")
+        }
     }
 
     /// (Re)populate `appState` from the store snapshot — sessions + their
