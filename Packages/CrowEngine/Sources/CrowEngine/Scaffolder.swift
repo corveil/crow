@@ -6,13 +6,14 @@ import Foundation
 /// for non-fatal post-scaffold issues (today: a configured `corveil` binary
 /// that's missing/non-executable or whose `skill install` returned non-zero).
 /// Callers surface it via `AppState.corveilSkillInstallWarning`; never fatal.
-struct ScaffoldResult {
-    var warning: String?
+public struct ScaffoldResult {
+    public var warning: String?
 }
 
 /// Creates the devRoot directory structure and copies bundled resources.
-struct Scaffolder {
+public struct Scaffolder {
     let devRoot: String
+    public init(devRoot: String) { self.devRoot = devRoot }
 
     /// Create the full workspace scaffold.
     ///
@@ -40,7 +41,7 @@ struct Scaffolder {
     /// stand-in executable; production passes `nil` and uses
     /// `ClaudeHookConfigWriter.appCrowBinary()`.
     @discardableResult
-    func scaffold(workspaceNames: [String],
+    public func scaffold(workspaceNames: [String],
                   managerAgentKind: AgentKind = .claudeCode,
                   corveilBinaryPath: String? = nil,
                   binaryOverrides: [String: String] = [:],
@@ -313,7 +314,7 @@ struct Scaffolder {
     /// target, so closure injection through `AppState` is the only path.
     /// Settings-side callers dispatch off the main thread (`Task.detached`)
     /// so the 5s worst-case doesn't freeze the Settings window.
-    func installCorveilSkill(_ corveilBinaryPath: String?) -> String? {
+    public func installCorveilSkill(_ corveilBinaryPath: String?) -> String? {
         guard let path = corveilBinaryPath?.trimmingCharacters(in: .whitespacesAndNewlines),
               !path.isEmpty else {
             return nil
@@ -448,7 +449,7 @@ struct Scaffolder {
     }
 
     /// The crow-review-pr SKILL.md template bundled with the app.
-    static func bundledReviewSkill() -> String {
+    public static func bundledReviewSkill() -> String {
         if let content = loadFromRepo("skills/crow-review-pr/SKILL.md") {
             return content
         }
@@ -526,7 +527,7 @@ struct Scaffolder {
     /// `settings.json` (used as a bundled resource name, not a hint about
     /// the runtime destination — see `scaffold(...)`, which writes this
     /// content to `{devRoot}/.claude/settings.local.json`).
-    static func bundledSettings() -> String {
+    public static func bundledSettings() -> String {
         if let content = loadFromRepo("settings.json") {
             return content
         }

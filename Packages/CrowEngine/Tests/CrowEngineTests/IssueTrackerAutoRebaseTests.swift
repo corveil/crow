@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 import CrowCore
-@testable import Crow
+@testable import CrowEngine
 
 @Suite("IssueTracker auto-rebase watcher (no label required)")
 struct IssueTrackerAutoRebaseTests {

@@ -2387,7 +2387,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                        terminal.isManaged,
                        let session = capturedAppState.sessions.first(where: { $0.id == sessionID }),
                        let agent = AgentRegistry.shared.agent(for: session.agentKind) {
-                        let prepared = AppDelegate.prepareAgentLaunchText(
+                        let prepared = AgentLaunch.prepareAgentLaunchText(
                             command: text,
                             agent: agent,
                             sessionID: sessionID,
@@ -2774,71 +2774,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         throw lastError ?? RPCError.applicationError("registerWithRetry: no attempts run")
-    }
-
-    /// Prepare an agent-launching command for a managed terminal: write the
-    /// per-worktree hook config so the agent's hooks route back to `sessionID`,
-    /// and (for Claude) prepend the OTEL telemetry exporter env vars. Returns
-    /// the final text plus whether `command` actually launches the agent (its
-    /// `launchCommandToken` is present). Single source of truth shared by the
-    /// `send` RPC and the #408 deferred-launch paste so the two never drift.
-    nonisolated static func prepareAgentLaunchText(
-        command: String,
-        agent: any CodingAgent,
-        sessionID: UUID,
-        worktreePath: String?,
-        crowPath: String?,
-        telemetryPort: UInt16?
-    ) -> (text: String, didLaunch: Bool) {
-        guard commandLaunchesToken(command, token: agent.launchCommandToken) else { return (command, false) }
-        if let worktreePath, let crowPath {
-            do {
-                try agent.hookConfigWriter.writeHookConfig(
-                    worktreePath: worktreePath,
-                    sessionID: sessionID,
-                    crowPath: crowPath
-                )
-            } catch {
-                NSLog("[AppDelegate] Failed to write hook config for session %@: %@",
-                      sessionID.uuidString, error.localizedDescription)
-            }
-        }
-        // OTEL telemetry env vars are Claude-specific — Codex has no equivalent
-        // OTLP exporter.
-        guard agent.kind == .claudeCode, let port = telemetryPort else { return (command, true) }
-        let vars = [
-            "CLAUDE_CODE_ENABLE_TELEMETRY=1",
-            "OTEL_METRICS_EXPORTER=otlp",
-            "OTEL_LOGS_EXPORTER=otlp",
-            "OTEL_EXPORTER_OTLP_PROTOCOL=http/json",
-            "OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:\(port)",
-            "OTEL_RESOURCE_ATTRIBUTES=crow.session.id=\(sessionID.uuidString)",
-        ].joined(separator: " ")
-        return ("export \(vars) && \(command)", true)
-    }
-
-    /// Whether `command` invokes `token` as a shell command rather than an
-    /// incidental substring. Anchored at start-of-string, after a shell
-    /// command separator (`;`, `&&`, `||`, `|`, possibly with whitespace),
-    /// or at a path separator (`/`) — the last covers binaries that have
-    /// already been path-resolved (e.g. `resolveClaudeInCommand` rewrites
-    /// bare `claude` to `/opt/homebrew/bin/claude` before this guard runs
-    /// on the deferred-launch path, so without the `/` boundary the guard
-    /// returns early and we'd silently skip per-worktree hook-config writes
-    /// and Claude's OTEL env injection). Bounded on the right by whitespace,
-    /// end-of-string, or a quote.
-    ///
-    /// Plain `command.contains(token)` was fine for Claude (`"claude"`) and
-    /// Codex (`"codex"`), which rarely appear incidentally — but Cursor's
-    /// token is `"agent"`, a common English word that can show up in any
-    /// `crow send` text (e.g. *"refactor the agent registry"*). Without
-    /// anchoring we would flip `terminalReadiness = .agentLaunched` on
-    /// arbitrary prose and `list-terminals` would report the agent had
-    /// started when it hadn't.
-    nonisolated static func commandLaunchesToken(_ command: String, token: String) -> Bool {
-        let escaped = NSRegularExpression.escapedPattern(for: token)
-        let pattern = "(?:^|[;&|]\\s*|/)\(escaped)(?=\\s|$|[\"'])"
-        return command.range(of: pattern, options: .regularExpression) != nil
     }
 
     // MARK: - Claude Binary Resolution

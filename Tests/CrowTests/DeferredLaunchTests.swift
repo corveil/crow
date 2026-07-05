@@ -4,6 +4,7 @@ import CrowCore
 import CrowPersistence
 import CrowTerminal
 @testable import Crow
+@testable import CrowEngine
 
 /// Covers the #408 fix: brand-new managed terminals defer their agent launch
 /// until the shell signals `.shellReady`, instead of blind-pasting into a

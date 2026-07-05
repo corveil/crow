@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 import CrowCore
-@testable import Crow
+@testable import CrowEngine
 
 /// Branch tests for `SessionService.buildReviewPrompt` and the underlying
 /// Cursor substitution helper `cursorReviewPrompt(skillBody:prURL:)` (#431).
