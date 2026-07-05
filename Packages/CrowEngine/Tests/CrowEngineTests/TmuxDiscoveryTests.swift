@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import Crow
+@testable import CrowEngine
 
 @Suite("TmuxDiscovery version parsing")
 struct TmuxDiscoveryTests {
