@@ -1,4 +1,3 @@
-import AppKit
 import Foundation
 import CrowClaude
 import CrowCore
@@ -28,6 +27,10 @@ final class SessionService {
     /// Windowed Manager-session aggregate from telemetry.db for the ungraded
     /// weekly usage bucket (#745). Optional for the same reason.
     private let managerUsageProvider: (@Sendable (Date, Date) async -> SessionAnalytics)?
+    /// Host-only affordances (clipboard, editor/terminal launching, hook
+    /// notifications). Defaults to a headless no-op so tests and the daemon
+    /// need not supply one; the macOS app injects a real `AppHostBridge`.
+    private let hostBridge: HostBridge
 
     init(
         store: JSONStore,
@@ -36,7 +39,8 @@ final class SessionService {
         providerManager: ProviderManager? = nil,
         analyticsProvider: (@Sendable (UUID) async -> SessionAnalytics?)? = nil,
         telemetrySessionIDsProvider: (@Sendable () async -> [UUID])? = nil,
-        managerUsageProvider: (@Sendable (Date, Date) async -> SessionAnalytics)? = nil
+        managerUsageProvider: (@Sendable (Date, Date) async -> SessionAnalytics)? = nil,
+        hostBridge: HostBridge = NoopHostBridge()
     ) {
         self.store = store
         self.appState = appState
@@ -45,6 +49,7 @@ final class SessionService {
         self.analyticsProvider = analyticsProvider
         self.telemetrySessionIDsProvider = telemetrySessionIDsProvider
         self.managerUsageProvider = managerUsageProvider
+        self.hostBridge = hostBridge
     }
 
     /// Upgrade the well-known primary Manager session from `.work` (how it was
@@ -559,8 +564,7 @@ final class SessionService {
     /// into a comment without screenshot-archaeology (issue #256).
     func copyDiagnostics(terminalID: UUID) {
         let bundle = TmuxBackend.shared.captureDiagnostics(id: terminalID)
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(bundle, forType: .string)
+        hostBridge.copyToClipboard(bundle)
         NSLog("[SessionService] copied tmux diagnostics for terminal=\(terminalID) bytes=\(bundle.utf8.count)")
     }
 
@@ -2661,25 +2665,16 @@ final class SessionService {
         appState.vsCodeAvailable = Self.findVSCodeBinary() != nil
     }
 
-    /// Open the primary worktree for a session in VS Code.
+    /// Open the primary worktree for a session in VS Code (via the host).
     func openInVSCode(sessionID: UUID) {
-        guard let codePath = Self.findVSCodeBinary() else { return }
         guard let wt = appState.primaryWorktree(for: sessionID) else { return }
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: codePath)
-        process.arguments = [wt.worktreePath]
-        try? process.run()
+        hostBridge.openInEditor(path: wt.worktreePath)
     }
 
-    /// Open a terminal window at the primary worktree path for a session.
+    /// Open a terminal window at the primary worktree path for a session (via the host).
     func openTerminal(sessionID: UUID) {
         guard let wt = appState.primaryWorktree(for: sessionID) else { return }
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        process.arguments = ["-a", "Terminal", wt.worktreePath]
-        try? process.run()
+        hostBridge.openTerminalWindow(path: wt.worktreePath)
     }
 
     // MARK: - Backend dispatch helpers (#198 follow-up)
