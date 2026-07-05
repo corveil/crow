@@ -1342,19 +1342,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Validation.isValidSessionName(name)
     }
 
-    /// Map a `transition-ticket --to` argument to a pipeline ``TicketStatus``
-    /// (CROW-529). Accepts the camelCase tokens the CLI documents plus a few
-    /// forgiving spellings and the raw status value. Only the three states a
-    /// transition site moves a ticket to are accepted; `nil` for anything else.
-    nonisolated static func ticketStatus(fromArg arg: String) -> TicketStatus? {
-        switch arg.lowercased().replacingOccurrences(of: "-", with: "").replacingOccurrences(of: "_", with: "").replacingOccurrences(of: " ", with: "") {
-        case "inprogress": return .inProgress
-        case "inreview": return .inReview
-        case "done", "completed", "closed": return .done
-        default: return nil
-        }
-    }
-
     private func startSocketServer(store: JSONStore, devRoot: String, sessionService: SessionService) {
         let capturedAppState = appState
         let capturedStore = store
@@ -1887,7 +1874,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     throw RPCError.invalidParams("session_id required")
                 }
                 guard let toStr = params["to"]?.stringValue,
-                      let status = AppDelegate.ticketStatus(fromArg: toStr) else {
+                      let status = EngineHelpers.ticketStatus(fromArg: toStr) else {
                     throw RPCError.invalidParams("`to` required (one of: inProgress, inReview, done)")
                 }
                 guard let tracker = capturedTracker else {
@@ -1969,7 +1956,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     let terminalName = params["name"]?.stringValue ?? defaultName
                     if let cmd = rawCommand, cmd.contains("claude") {
                         let rcEnabled = capturedAppState.remoteControlEnabled
-                        command = AppDelegate.resolveClaudeInCommand(
+                        command = EngineHelpers.resolveClaudeInCommand(
                             cmd,
                             remoteControl: rcEnabled,
                             sessionName: sessionName
@@ -2030,7 +2017,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         // (#408). This runs inside `MainActor.run`, so the budget is
                         // kept tight (2 attempts × 3s) to cap worst-case main-actor
                         // stall at ~6s rather than beachballing concurrent RPCs.
-                        let binding = try AppDelegate.registerWithRetry(attempts: 2) { _ in
+                        let binding = try EngineHelpers.registerWithRetry(attempts: 2) { _ in
                             try TmuxBackend.shared.registerTerminal(
                                 id: terminal.id,
                                 name: terminalName,
@@ -2466,79 +2453,5 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSLog("[Crow] Cleanup complete")
     }
 
-    // MARK: - Terminal Registration
-
-    /// Run `create` up to `attempts` times, returning the first success or
-    /// rethrowing the last error after exhausting all attempts. Window
-    /// registration can transiently fail under load when `new-window` exceeds
-    /// its subprocess timeout (issue #408); a couple of retries turn most of
-    /// those into successes instead of silent window-less terminals. Pure over
-    /// the `create` closure so the retry policy is unit-testable without tmux.
-    nonisolated static func registerWithRetry<T>(
-        attempts: Int,
-        create: (_ attempt: Int) throws -> T
-    ) throws -> T {
-        var lastError: Error?
-        for attempt in 0..<max(1, attempts) {
-            do {
-                return try create(attempt)
-            } catch {
-                lastError = error
-            }
-        }
-        throw lastError ?? RPCError.applicationError("registerWithRetry: no attempts run")
-    }
-
-    // MARK: - Claude Binary Resolution
-
-    /// Replace bare `claude` in a command string with the full path to the real binary,
-    /// skipping the CMUX wrapper. When `remoteControl` is true and the command does not
-    /// already request remote control, also inject `--rc --name '<sessionName>'` immediately
-    /// after the claude path so it sits before any trailing prompt argument.
-    nonisolated static func resolveClaudeInCommand(
-        _ command: String,
-        remoteControl: Bool = false,
-        sessionName: String? = nil
-    ) -> String {
-        for path in SessionService.claudeBinaryCandidates {
-            if FileManager.default.isExecutableFile(atPath: path) {
-                // Only touch commands that start with the bare `claude` token.
-                let rest: String?
-                if command == "claude" {
-                    rest = ""
-                } else if command.hasPrefix("claude ") {
-                    rest = String(command.dropFirst("claude".count)) // " ..."
-                } else {
-                    rest = nil
-                }
-                guard let rest else { return command }
-
-                let wantsRC = remoteControl
-                    && !command.contains("--rc")
-                    && !command.contains("--remote-control")
-                let extra = wantsRC
-                    ? ClaudeLaunchArgs.argsSuffix(remoteControl: true, sessionName: sessionName)
-                    : ""
-                return path + extra + rest
-            }
-        }
-        return command
-    }
 }
 
-enum RPCError: Error, LocalizedError, RPCErrorCoded {
-    case invalidParams(String)
-    case applicationError(String)
-    var rpcErrorCode: Int {
-        switch self {
-        case .invalidParams: RPCErrorCode.invalidParams
-        case .applicationError: RPCErrorCode.applicationError
-        }
-    }
-    var errorDescription: String? {
-        switch self {
-        case .invalidParams(let msg): msg
-        case .applicationError(let msg): msg
-        }
-    }
-}
