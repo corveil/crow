@@ -1920,6 +1920,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 await MainActor.run { capturedAppState.onCreateManager?(agent) }
                 return ["ok": .bool(true)]
             },
+            // Available coding agents for the web's new-manager menu (#2 /
+            // CROW-593). Mirrors the desktop's AgentRegistry-backed picker.
+            "list-agents": { @Sendable _ in
+                await MainActor.run {
+                    let defaultKind = AgentRegistry.shared.defaultAgent?.kind
+                    let items: [JSONValue] = AgentRegistry.shared.allAgents()
+                        .sorted { $0.displayName < $1.displayName }
+                        .map { agent in
+                            .object([
+                                "kind": .string(agent.kind.rawValue),
+                                "name": .string(agent.displayName),
+                                "default": .bool(agent.kind == defaultKind),
+                            ])
+                        }
+                    return ["agents": .array(items)]
+                }
+            },
             "mark-in-review": { @Sendable params in
                 guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
                     throw RPCError.invalidParams("session_id required")

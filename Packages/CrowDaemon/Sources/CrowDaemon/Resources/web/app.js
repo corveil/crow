@@ -222,7 +222,7 @@ function navPillRow() {
 
   const plus = el('button', 'nav-plus', '+');
   plus.title = 'New Manager session';
-  plus.onclick = () => createManager();
+  plus.onclick = () => openNewManagerMenu(plus);
   row.appendChild(plus);
 
   const gear = el('button', 'nav-plus', '⚙');
@@ -247,8 +247,32 @@ function rcGlyph() {
   return span;
 }
 
-async function createManager() {
-  try { await rpc('create-manager'); } catch (e) { window.alert('New manager failed: ' + (e.message || e)); }
+async function createManager(agentKind) {
+  try { await rpc('create-manager', agentKind ? { agent_kind: agentKind } : undefined); }
+  catch (e) { window.alert('New manager failed: ' + (e.message || e)); }
+}
+
+// New-manager "+" button: fetch the available agents and, when there's more
+// than one, pop a context menu to pick which agent to launch (mirrors the
+// desktop AgentRegistry menu). With 0/1 agents, just create with the default.
+async function openNewManagerMenu(anchorEl) {
+  let agents = [];
+  try { const r = await rpc('list-agents'); agents = (r && r.agents) || []; } catch (_) { /* app down */ }
+  if (agents.length < 2) { createManager(agents[0] && agents[0].kind); return; }
+  closeContextMenu();
+  const menu = el('div', 'ctx-menu');
+  for (const a of agents) {
+    const item = el('div', 'ctx-item', (a.name || a.kind) + (a.default ? '   (default)' : ''));
+    item.onclick = (ev) => { ev.stopPropagation(); closeContextMenu(); createManager(a.kind); };
+    menu.appendChild(item);
+  }
+  document.body.appendChild(menu);
+  const rect = anchorEl.getBoundingClientRect();
+  const x = Math.min(rect.left, window.innerWidth - menu.offsetWidth - 8);
+  const y = Math.min(rect.bottom + 4, window.innerHeight - menu.offsetHeight - 8);
+  menu.style.left = Math.max(4, x) + 'px';
+  menu.style.top = Math.max(4, y) + 'px';
+  setTimeout(() => document.addEventListener('click', closeContextMenu, { once: true }), 0);
 }
 
 // Sidebar status/activity indicator, mirroring the desktop: for active
