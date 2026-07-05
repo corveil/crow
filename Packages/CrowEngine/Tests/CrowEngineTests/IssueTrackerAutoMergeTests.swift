@@ -2,7 +2,7 @@ import Foundation
 import Testing
 import CrowCore
 import CrowProvider
-@testable import Crow
+@testable import CrowEngine
 
 @Suite("IssueTracker auto-merge watcher (crow:merge label)")
 struct IssueTrackerAutoMergeTests {

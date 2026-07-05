@@ -4,7 +4,7 @@ import CrowCore
 import CrowClaude
 import CrowCursor
 import CrowPersistence
-@testable import Crow
+@testable import CrowEngine
 
 /// Locks down the legacy primary-Manager migration (#316). Before
 /// SessionKind.manager existed the primary Manager was persisted as `.work`;

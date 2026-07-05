@@ -2,7 +2,7 @@ import Foundation
 import Testing
 import CrowCore
 import CrowProvider
-@testable import Crow
+@testable import CrowEngine
 
 /// CROW-536: Jira tickets in their mapped Done status must reach the board's
 /// Done section. The mapping itself (status name → `.done`) is covered by

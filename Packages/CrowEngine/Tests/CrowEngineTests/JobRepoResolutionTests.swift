@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import Crow
+@testable import CrowEngine
 
 /// Resolution logic for where a job's repo lives on disk (CROW-327). A job's
 /// `repo` is an `owner/repo` slug; the checkout is the slug's last component

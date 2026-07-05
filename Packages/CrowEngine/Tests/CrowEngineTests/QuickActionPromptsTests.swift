@@ -2,7 +2,7 @@ import Foundation
 import Testing
 import CrowCore
 import CrowProvider
-@testable import Crow
+@testable import CrowEngine
 
 /// Minimal `CodeBackend` for prompt-rendering tests — only `provider` and
 /// `cliName` are read by the builders. The other protocol methods are
