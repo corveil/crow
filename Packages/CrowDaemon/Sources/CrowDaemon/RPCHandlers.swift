@@ -1,4 +1,5 @@
 import CrowCore
+import CrowEngine
 import CrowGit
 import CrowIPC
 import CrowPersistence
@@ -64,7 +65,9 @@ func makeCommandRouter(
     git: GitManager,
     devRoot: String,
     cockpit: TerminalCockpit?,
-    forwardSocket: String? = nil
+    forwardSocket: String? = nil,
+    tracker: IssueTracker? = nil,
+    allowList: AllowListService? = nil
 ) -> CommandRouter {
     CommandRouter(handlers: [
         "new-session": { params in
@@ -422,30 +425,107 @@ func makeCommandRouter(
                 return ["agents": .array(items)]
             }
         },
-        // Return an empty board when the app isn't running or unreachable —
-        // graceful, like get-pr-status — so the web renders empty states, not
-        // errors.
-        "list-tickets": { params in
+        // Board reads. When the daemon owns the tracker/allowList (CROW-581 M-C)
+        // they answer locally off `appState` — populated by the daemon's own
+        // IssueTracker/AllowListService — so the boards work with the app down.
+        // Without those services (tests, stripped builds) they fall back to
+        // forwarding to the app / an empty board, like get-pr-status. NOTE: while
+        // both the app and daemon run, each polls its providers → transient
+        // double-polling until the app becomes a pure client (Milestone F).
+        "list-tickets": { _ in
+            if tracker != nil {
+                return await MainActor.run {
+                    let fmt = ISO8601DateFormatter()
+                    let issues: [JSONValue] = appState.filteredAssignedIssues.map { issue in
+                        let status = issue.projectStatus == .unknown ? TicketStatus.backlog : issue.projectStatus
+                        return .object([
+                            "id": .string(issue.id),
+                            "number": .int(issue.number),
+                            "title": .string(issue.title),
+                            "state": .string(issue.state),
+                            "url": .string(issue.url),
+                            "repo": .string(issue.repo),
+                            "provider": .string(issue.provider.rawValue),
+                            "pr_number": issue.prNumber.map { .int($0) } ?? .null,
+                            "pr_url": issue.prURL.map { .string($0) } ?? .null,
+                            "updated_at": issue.updatedAt.map { .string(fmt.string(from: $0)) } ?? .null,
+                            "project_status": .string(status.rawValue),
+                            "labels": .array(issue.labels.map { .object(["name": .string($0.name), "color": $0.color.map { .string($0) } ?? .null]) }),
+                            "linked_session_id": appState.linkedSession(for: issue).map { .string($0.id.uuidString) } ?? .null,
+                        ])
+                    }
+                    var counts: [String: JSONValue] = [:]
+                    for status in TicketStatus.pipelineStatuses {
+                        counts[status.rawValue] = .int(appState.issueCount(for: status))
+                    }
+                    counts["All"] = .int(appState.filteredAssignedIssues.count)
+                    return [
+                        "issues": .array(issues),
+                        "counts": .object(counts),
+                        "done_last_24h": .int(appState.doneIssuesLast24h),
+                        "loading": .bool(appState.isLoadingIssues),
+                    ]
+                }
+            }
             let empty: [String: JSONValue] = [
                 "issues": .array([]), "counts": .object([:]),
                 "done_last_24h": .int(0), "loading": .bool(false),
             ]
             guard let forwardSocket else { return empty }
-            do { return try forwardToApp("list-tickets", params, socket: forwardSocket) }
+            do { return try forwardToApp("list-tickets", [:], socket: forwardSocket) }
             catch let error as DaemonRPCError { throw error }
             catch { return empty }
         },
-        "list-reviews": { params in
+        "list-reviews": { _ in
+            if tracker != nil {
+                return await MainActor.run {
+                    let fmt = ISO8601DateFormatter()
+                    let reviews: [JSONValue] = appState.filteredReviewRequests.map { r in
+                        .object([
+                            "id": .string(r.id),
+                            "pr_number": .int(r.prNumber),
+                            "title": .string(r.title),
+                            "url": .string(r.url),
+                            "repo": .string(r.repo),
+                            "author": .string(r.author),
+                            "head_branch": .string(r.headBranch),
+                            "base_branch": .string(r.baseBranch),
+                            "is_draft": .bool(r.isDraft),
+                            "requested_at": r.requestedAt.map { .string(fmt.string(from: $0)) } ?? .null,
+                            "labels": .array(r.labels.map { .object(["name": .string($0.name), "color": $0.color.map { .string($0) } ?? .null]) }),
+                            "provider": .string(r.provider.rawValue),
+                            "review_session_id": r.reviewSessionID.map { .string($0.uuidString) } ?? .null,
+                        ])
+                    }
+                    return [
+                        "reviews": .array(reviews),
+                        "loading": .bool(appState.isLoadingReviews),
+                        "unseen": .int(appState.unseenReviewCount),
+                    ]
+                }
+            }
             let empty: [String: JSONValue] = ["reviews": .array([]), "loading": .bool(false), "unseen": .int(0)]
             guard let forwardSocket else { return empty }
-            do { return try forwardToApp("list-reviews", params, socket: forwardSocket) }
+            do { return try forwardToApp("list-reviews", [:], socket: forwardSocket) }
             catch let error as DaemonRPCError { throw error }
             catch { return empty }
         },
-        "list-allowlist": { params in
+        "list-allowlist": { _ in
+            if allowList != nil {
+                return await MainActor.run {
+                    let entries: [JSONValue] = appState.allowEntries.map { e in
+                        .object([
+                            "pattern": .string(e.pattern),
+                            "is_global": .bool(e.isInGlobal),
+                            "worktree_session_names": .array(e.worktreeSessionNames.map { .string($0) }),
+                        ])
+                    }
+                    return ["entries": .array(entries), "loading": .bool(appState.isLoadingAllowList)]
+                }
+            }
             let empty: [String: JSONValue] = ["entries": .array([]), "loading": .bool(false)]
             guard let forwardSocket else { return empty }
-            do { return try forwardToApp("list-allowlist", params, socket: forwardSocket) }
+            do { return try forwardToApp("list-allowlist", [:], socket: forwardSocket) }
             catch let error as DaemonRPCError { throw error }
             catch { return empty }
         },
@@ -469,7 +549,18 @@ func makeCommandRouter(
             catch let error as DaemonRPCError { throw error }
             catch { throw DaemonRPCError.applicationError("Crow desktop app not reachable") }
         },
+        // Allowlist writes/refreshes run locally when the daemon owns the
+        // AllowListService (pure disk — no app needed); otherwise forward.
         "promote-allowlist": { params in
+            if let allowList {
+                guard let arr = params["patterns"]?.arrayValue else {
+                    throw DaemonRPCError.invalidParams("patterns array required")
+                }
+                let patterns = Set(arr.compactMap { $0.stringValue })
+                guard !patterns.isEmpty else { throw DaemonRPCError.invalidParams("patterns array required") }
+                await MainActor.run { allowList.promoteToGlobal(patterns: patterns) }
+                return ["ok": .bool(true)]
+            }
             guard let forwardSocket else {
                 throw DaemonRPCError.applicationError("Promoting allowlist patterns requires the Crow desktop app to be running")
             }
@@ -478,6 +569,10 @@ func makeCommandRouter(
             catch { throw DaemonRPCError.applicationError("Crow desktop app not reachable") }
         },
         "refresh-tickets": { params in
+            if let tracker {
+                await tracker.refresh()
+                return ["ok": .bool(true)]
+            }
             guard let forwardSocket else {
                 throw DaemonRPCError.applicationError("Refreshing tickets requires the Crow desktop app to be running")
             }
@@ -486,6 +581,10 @@ func makeCommandRouter(
             catch { throw DaemonRPCError.applicationError("Crow desktop app not reachable") }
         },
         "refresh-allowlist": { params in
+            if let allowList {
+                await MainActor.run { allowList.scan() }
+                return ["ok": .bool(true)]
+            }
             guard let forwardSocket else {
                 throw DaemonRPCError.applicationError("Refreshing the allowlist requires the Crow desktop app to be running")
             }

@@ -8,6 +8,8 @@ import CrowClaude
 import CrowCodex
 import CrowCursor
 import CrowOpenCode
+import CrowEngine
+import CrowProvider
 import CrowGit
 import CrowIPC
 import CrowPersistence
@@ -43,6 +45,21 @@ public enum CrowDaemon {
         // desktop app down. Mirrors the app's registration; both hosts read the
         // same store-backed binary overrides (CROW-581, M-B).
         await registerAgents(devRoot: options.devRoot)
+
+        // Boards: the daemon owns the ticket/review + allowlist read layer so
+        // those panels work with the app down (CROW-581, M-C). AllowListService
+        // is a synchronous disk scan (ready immediately); IssueTracker polls the
+        // providers — its Timer needs a RunLoop.main the headless daemon doesn't
+        // run, so we drive it with an explicit async tick (`startBoardPoll`)
+        // instead of `tracker.start()`.
+        let (tracker, allowList): (IssueTracker, AllowListService) = await MainActor.run {
+            let providerManager = ProviderManager()
+            let tracker = IssueTracker(appState: appState, providerManager: providerManager)
+            let allowList = AllowListService(appState: appState, devRoot: options.devRoot)
+            allowList.scan()
+            return (tracker, allowList)
+        }
+        startBoardPoll(tracker: tracker)
         // Live-reload the store so the web UI reflects the desktop app's writes
         // (new sessions/status/terminals/links) without a daemon restart.
         startStoreReloadPoll(store: store, appState: appState)
@@ -65,7 +82,7 @@ public enum CrowDaemon {
 
         let commandRouter = makeCommandRouter(
             appState: appState, store: store, git: git, devRoot: options.devRoot,
-            cockpit: cockpit, forwardSocket: forwardSocket)
+            cockpit: cockpit, forwardSocket: forwardSocket, tracker: tracker, allowList: allowList)
 
         // Unix socket — lets the existing `crow` CLI talk to the daemon. Refuse
         // to bind a socket another server already answers on (e.g. the desktop
@@ -108,6 +125,20 @@ public enum CrowDaemon {
 
         log("HTTP/WS listening on http://\(options.host):\(options.httpPort) (terminal at /)")
         try await app.runService()
+    }
+
+    /// Drive `IssueTracker.refresh()` on an explicit async tick. The tracker's
+    /// own `start()` schedules a `Timer` on `RunLoop.main`, which the headless
+    /// daemon never runs (`app.runService()` drives NIO event loops, not an
+    /// AppKit run loop) — so the Timer would never fire. This does the initial
+    /// fetch immediately, then polls on the app's 60s cadence (CROW-581, M-C).
+    private static func startBoardPoll(tracker: IssueTracker) {
+        Task {
+            while !Task.isCancelled {
+                await tracker.refresh()
+                try? await Task.sleep(nanoseconds: 60 * 1_000_000_000)
+            }
+        }
     }
 
     @MainActor
