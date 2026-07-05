@@ -1464,12 +1464,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     throw RPCError.invalidParams("Invalid session name (max \(AppDelegate.maxSessionNameLength) chars, no control characters)")
                 }
                 return try await MainActor.run {
-                    guard let idx = capturedAppState.sessions.firstIndex(where: { $0.id == id }) else {
+                    // Route through the service (not a direct name write) so the
+                    // rename also pushes the `/rename <name>` slash command to the
+                    // session's remote-control terminal, keeping the running agent
+                    // and its claude.ai panel label in sync. The web/CLI RPC path
+                    // skipped that before, so a rename only relabeled the box
+                    // (CROW-593).
+                    guard capturedService.renameSession(sessionID: id, name: name) else {
                         throw RPCError.applicationError("Session not found")
-                    }
-                    capturedAppState.sessions[idx].name = name
-                    capturedStore.mutate { data in
-                        if let i = data.sessions.firstIndex(where: { $0.id == id }) { data.sessions[i].name = name }
                     }
                     return ["session_id": .string(idStr), "name": .string(name)]
                 }
