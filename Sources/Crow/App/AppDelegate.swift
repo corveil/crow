@@ -29,6 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var notificationManager: NotificationManager?
     private var autoRespondCoordinator: AutoRespondCoordinator?
     private var allowListService: AllowListService?
+    private var appHostBridge: AppHostBridge?
     private var telemetryService: TelemetryService?
     private var devRoot: String?
     private var appConfig: AppConfig?
@@ -590,6 +591,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // resolves telemetryService lazily — it is created later in launch —
         // and returns nil when telemetry is disabled, so the snapshot writer
         // falls back to the in-memory aggregate (#690).
+        let hostBridge = AppHostBridge()
+        self.appHostBridge = hostBridge
         let service = SessionService(
             store: store,
             appState: appState,
@@ -597,7 +600,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             providerManager: providerManager,
             analyticsProvider: { [weak self] id in
                 await self?.telemetryService?.analytics(for: id)
-            })
+            },
+            hostBridge: hostBridge)
         service.hydrateState()
         self.sessionService = service
         NSLog("[Crow] Session state hydrated (%d sessions)", appState.sessions.count)
@@ -928,6 +932,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Initialize notification manager
         let notifManager = NotificationManager(appState: appState, settings: config.notifications)
         self.notificationManager = notifManager
+        appHostBridge?.notificationManager = notifManager
 
         // Initialize auto-respond coordinator. Reads `autoRespond` lazily from
         // `self.appConfig` so toggles take effect on the next transition.
