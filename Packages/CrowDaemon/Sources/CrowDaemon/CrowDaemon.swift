@@ -287,6 +287,23 @@ public enum CrowDaemon {
         // at the tracker's call site regardless.
         tracker.autoMergeWatcherEnabledProvider = { authority() && (config()?.autoMergeWatcherEnabled ?? false) }
 
+        // Auto-complete on merge/close, and auto-move-to-inReview when a
+        // session's PR opens, run INSIDE the tracker's own refresh via these
+        // `AppState` callbacks (not tracker hooks). The app wires them in
+        // AppDelegate; the daemon must too, or `autoCompleteFinishedSessions`
+        // / `autoCompleteFinishedReviews` compute the right decisions and then
+        // no-op against a nil callback — leaving merged PRs' sessions stuck in
+        // `.active`. Authority-gated so the daemon only drives them with the
+        // app down; while it's up the app's own refresh owns them (CROW-581).
+        appState.onCompleteSession = { id in
+            guard authority() else { return }
+            sessionService.completeSession(id: id)
+        }
+        appState.onSetSessionInReview = { id in
+            guard authority() else { return }
+            sessionService.setSessionInReview(id: id)
+        }
+
         // Auto-cleanup — the retention reaper asks the tracker to delete a
         // session; run the daemon's own SessionService teardown.
         tracker.onDeleteSession = { id in
