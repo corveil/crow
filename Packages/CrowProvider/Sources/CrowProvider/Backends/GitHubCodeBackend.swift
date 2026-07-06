@@ -287,7 +287,7 @@ public struct GitHubCodeBackend: CodeBackend {
     public func fetchPRMetadata(prURL: String) async throws -> PRMetadata {
         let output = try await shellRunner.run(
             "gh", "pr", "view", prURL,
-            "--json", "title,headRefName,headRefOid,baseRefName,number"
+            "--json", "title,headRefName,headRefOid,baseRefName,number,author"
         )
         guard let data = output.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -298,7 +298,8 @@ public struct GitHubCodeBackend: CodeBackend {
             number: (json["number"] as? Int) ?? 0,
             headRefName: (json["headRefName"] as? String) ?? "",
             headRefOid: (json["headRefOid"] as? String) ?? "",
-            baseRefName: (json["baseRefName"] as? String) ?? ""
+            baseRefName: (json["baseRefName"] as? String) ?? "",
+            author: ((json["author"] as? [String: Any])?["login"] as? String) ?? ""
         )
     }
 

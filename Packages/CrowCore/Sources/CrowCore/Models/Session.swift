@@ -42,6 +42,13 @@ public struct Session: Identifiable, Codable, Sendable {
     // under CROW-569 stay locked after upgrade.
     public var locked: Bool
 
+    // PR author login for a `.review` session (e.g. "octocat"), captured at
+    // review-creation from the PR itself. Lets the UI show "PR by @author" even
+    // when the Reviews board (which otherwise carries the author) is empty. Nil
+    // for non-review sessions and for legacy review sessions predating this
+    // field (CROW-593).
+    public var reviewAuthor: String?
+
     /// Whether this session is a Manager (orchestration) session. Managers run
     /// Claude Code in the devRoot and are excluded from PR/issue tracking.
     public var isManager: Bool { kind == .manager }
@@ -77,7 +84,8 @@ public struct Session: Identifiable, Codable, Sendable {
         reviewPromptDispatched: Bool = false,
         lastReviewedHeadSha: String? = nil,
         autoMergeEnabledAt: Date? = nil,
-        locked: Bool = false
+        locked: Bool = false,
+        reviewAuthor: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -95,6 +103,7 @@ public struct Session: Identifiable, Codable, Sendable {
         self.lastReviewedHeadSha = lastReviewedHeadSha
         self.autoMergeEnabledAt = autoMergeEnabledAt
         self.locked = locked
+        self.reviewAuthor = reviewAuthor
     }
 
     /// Parse a GitHub PR URL (`https://github.com/<owner>/<repo>/pull/<number>`)
@@ -131,6 +140,7 @@ public struct Session: Identifiable, Codable, Sendable {
         reviewPromptDispatched = try container.decodeIfPresent(Bool.self, forKey: .reviewPromptDispatched) ?? true
         lastReviewedHeadSha = try container.decodeIfPresent(String.self, forKey: .lastReviewedHeadSha)
         autoMergeEnabledAt = try container.decodeIfPresent(Date.self, forKey: .autoMergeEnabledAt)
+        reviewAuthor = try container.decodeIfPresent(String.self, forKey: .reviewAuthor)
         // CROW-573 renamed `pinned` → `locked`. Prefer the new key, but fall
         // back to the legacy `pinned` key so sessions locked under CROW-569
         // remain locked after upgrade.
