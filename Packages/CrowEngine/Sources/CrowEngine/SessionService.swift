@@ -305,19 +305,35 @@ public final class SessionService {
             let isManagerSession = session.isManager
             let sid = session.id
 
-            if forceRegister, !isManagerSession {
-                // The previous adopt (#367) / launchClaude cleared these; re-arm
-                // so the fresh shell's .shellReady relaunches claude --continue.
+            // Seed managed work terminals' readiness + auto-launch, and on a
+            // forced rebuild clear any stored claude command. `forceRegister`
+            // resets every readiness slot (dead server → the fresh shell's
+            // `.shellReady` relaunches `claude --continue`); the normal adopt
+            // path fills only a MISSING slot, which the headless daemon needs:
+            // it calls `rebuildAllSurfaces` directly rather than via
+            // `hydrateState` (where the app pre-seeds this), and the adopt
+            // branch only promotes an *existing* slot to `.agentLaunched`
+            // (`if terminalReadiness[id] != nil`). Without a non-nil slot the
+            // adopted work terminal's readiness stays nil, so the auto-refine
+            // idle-gate (`IssueTracker.isManagedTerminalIdle`, which requires
+            // `.agentLaunched`) can never become true and "changes requested"
+            // never dispatches with the app down (CROW-581). Only-fill-when-nil
+            // on the normal path so a prior adopt's live `.agentLaunched` isn't
+            // clobbered on a later takeover.
+            if !isManagerSession {
                 for i in terminals.indices where terminals[i].isManaged {
-                    appState.terminalReadiness[terminals[i].id] = .uninitialized
-                    appState.autoLaunchTerminals.insert(terminals[i].id)
-                    // Mirror the hydrate-clear (#374): a managed terminal must
-                    // never re-run a stored claude command verbatim on a
-                    // rebuild — the relaunch goes through autoLaunchCommand
+                    let tid = terminals[i].id
+                    if forceRegister || appState.terminalReadiness[tid] == nil {
+                        appState.terminalReadiness[tid] = .uninitialized
+                        appState.autoLaunchTerminals.insert(tid)
+                    }
+                    // Mirror the hydrate-clear (#374/#588): on a forced rebuild a
+                    // managed terminal must never re-run a stored claude command
+                    // verbatim — the relaunch goes through autoLaunchCommand
                     // (`claude --continue`) instead. In-memory rows are already
                     // nil today (the new-terminal RPC persists nil); this makes
                     // the re-run-the-initial-plan failure impossible (#588).
-                    if let cmd = terminals[i].command, cmd.contains("claude") {
+                    if forceRegister, let cmd = terminals[i].command, cmd.contains("claude") {
                         terminals[i].command = nil
                     }
                 }
