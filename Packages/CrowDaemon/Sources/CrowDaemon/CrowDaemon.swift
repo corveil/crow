@@ -128,6 +128,16 @@ public enum CrowDaemon {
         // adoption of the app's window is needed (ADR 0007; CROW-581, M-E2).
         if forwardSocket == nil, let sessionService {
             await MainActor.run {
+                // Adopt every persisted tmux window into THIS process's binding
+                // map first, so the daemon can actually send to them. The tmux
+                // server outlives the app (#330), so the Manager/work windows are
+                // usually still live with their agents running — re-register the
+                // bindings (or recreate a dead window) rather than spawning
+                // duplicates. Without this, a Manager terminal restored from the
+                // store is an unregistered record and TerminalRouter.send — used
+                // by crow:auto, work-on-issue, start-review and quick-action —
+                // silently fails `isRegistered` (ADR 0007; CROW-581).
+                sessionService.rebuildAllSurfaces()
                 sessionService.ensureManagerSession(devRoot: options.devRoot)
                 // Standalone (app down): the daemon runs the IssueTracker
                 // background automations the app normally owns — crow:auto
