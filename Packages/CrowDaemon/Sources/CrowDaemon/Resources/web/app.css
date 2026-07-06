@@ -311,6 +311,7 @@ html, body {
 #board { display: none; flex: 1; min-height: 0; overflow-y: auto; padding: 16px; }
 #app.board-active #board { display: block; }
 #app.board-active #detail-header,
+#app.board-active #detail-artifacts,
 #app.board-active #tabbar,
 #app.board-active #terminal-wrap { display: none; }
 

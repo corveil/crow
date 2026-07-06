@@ -574,9 +574,22 @@ function showSessionMenu(e, s) {
   setTimeout(() => document.addEventListener('click', closeContextMenu, { once: true }), 0);
 }
 
+// The PR URL for a session, from its stored links or the live PR surface.
+function prUrlForSession(s) {
+  const link = (s.links || []).find((l) => l.type === 'pr');
+  if (link && link.url) return link.url;
+  const live = liveFor(s.id).pr_link;
+  return live && live.url ? live.url : null;
+}
+
 // Menu items mirror the desktop sessionContextMenu, gated by kind/status/provider/PR.
 function sessionMenuItems(s) {
   const items = [];
+  const prUrl = prUrlForSession(s);
+  // Copy-link items first — available for any session with an issue and/or PR.
+  if (s.ticket_url) items.push({ label: 'Copy issue link', action: () => copyToClipboard(s.ticket_url) });
+  if (prUrl) items.push({ label: 'Copy PR link', action: () => copyToClipboard(prUrl) });
+  if (s.ticket_url || prUrl) items.push({ sep: true });
   const hasPR = (s.links || []).some((l) => l.type === 'pr');
   if (s.kind === 'manager') {
     items.push({ label: 'Rename', action: () => renameSession(s.id, s.name) });
