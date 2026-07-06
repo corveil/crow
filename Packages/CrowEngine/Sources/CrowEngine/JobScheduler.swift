@@ -90,7 +90,11 @@ public final class JobScheduler {
 
     // MARK: - Tick
 
-    private func tick() {
+    /// Evaluate jobs once: reconcile/auto-complete watched runs, then fire any
+    /// enabled job that is due. Invoked by the `Timer` in the desktop app, and
+    /// driven directly by an explicit async loop in the headless daemon (which
+    /// has no `RunLoop.main` to run the Timer) (CROW-581).
+    public func tick() {
         let now = Date()
         // Adopt any active job sessions we aren't already watching (relaunched
         // or predating the feature) so they can auto-complete too (CROW-579).
