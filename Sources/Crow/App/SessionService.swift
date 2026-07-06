@@ -239,17 +239,27 @@ final class SessionService {
         wireTerminalReadiness()
 
         for session in appState.sessions {
-            guard let terminals = appState.terminals[session.id] else { continue }
+            guard var terminals = appState.terminals[session.id] else { continue }
             let isManagerSession = session.isManager
             let sid = session.id
 
             if forceRegister, !isManagerSession {
                 // The previous adopt (#367) / launchClaude cleared these; re-arm
                 // so the fresh shell's .shellReady relaunches claude --continue.
-                for terminal in terminals where terminal.isManaged {
-                    appState.terminalReadiness[terminal.id] = .uninitialized
-                    appState.autoLaunchTerminals.insert(terminal.id)
+                for i in terminals.indices where terminals[i].isManaged {
+                    appState.terminalReadiness[terminals[i].id] = .uninitialized
+                    appState.autoLaunchTerminals.insert(terminals[i].id)
+                    // Mirror the hydrate-clear (#374): a managed terminal must
+                    // never re-run a stored claude command verbatim on a
+                    // rebuild — the relaunch goes through autoLaunchCommand
+                    // (`claude --continue`) instead. In-memory rows are already
+                    // nil today (the new-terminal RPC persists nil); this makes
+                    // the re-run-the-initial-plan failure impossible (#588).
+                    if let cmd = terminals[i].command, cmd.contains("claude") {
+                        terminals[i].command = nil
+                    }
                 }
+                appState.terminals[session.id] = terminals
             }
 
             for original in terminals {
@@ -419,6 +429,23 @@ final class SessionService {
                 // automatically when the app returns to the foreground.
                 self.appState.terminalReadiness[terminalID] = .timedOut
             }
+            self.clearCrashRecoveryFlagIfSettled()
+        }
+    }
+
+    /// End the "tmux server crashed — reconnecting…" state once every tracked
+    /// terminal has settled (reached `.shellReady`/beyond, or `.timedOut` —
+    /// which then shows the normal Retry overlay in its crash flavor) (#588).
+    @MainActor
+    private func clearCrashRecoveryFlagIfSettled() {
+        guard appState.tmuxCrashRecovering else { return }
+        let stillPending = appState.terminalReadiness.values.contains {
+            $0 == .uninitialized || $0 == .surfaceCreated
+        }
+        if !stillPending {
+            appState.tmuxCrashRecovering = false
+            crashRecoveryClearFallback?.cancel()
+            crashRecoveryClearFallback = nil
         }
     }
 
@@ -774,6 +801,17 @@ final class SessionService {
     @MainActor
     func restartTmuxServer() {
         NSLog("[CrowTelemetry tmux:server_restart_by_user]")
+        // A manual restart supersedes any in-flight crash recovery — clear the
+        // flag so the crash overlay doesn't linger over the user-driven rebuild.
+        appState.tmuxCrashRecovering = false
+        recycleTmuxServerAndRebuild()
+    }
+
+    /// Shared server-recycle routine: tear down the tmux server and rebuild
+    /// every terminal surface + agent from scratch. Used by the manual menu
+    /// path (`restartTmuxServer`) and crash auto-recovery (#588).
+    @MainActor
+    private func recycleTmuxServerAndRebuild() {
         let savedSelection = appState.selectedSessionID
         let savedActive = appState.activeTerminalID
 
@@ -800,6 +838,71 @@ final class SessionService {
         // surface and re-attaches a fresh tmux client; preserves focus.
         appState.selectedSessionID = savedSelection
         appState.activeTerminalID = savedActive
+    }
+
+    // MARK: - tmux crash auto-recovery (#588)
+
+    /// Wall-clock of the last crash auto-recovery, to debounce a tight
+    /// crash → recover → crash loop (e.g. a broken tmux install).
+    private var lastCrashRecoveryAt: Date?
+
+    /// Force-clears `tmuxCrashRecovering` if readiness callbacks never settle
+    /// (e.g. tmux unconfigured so no terminal was re-registered at all).
+    private var crashRecoveryClearFallback: Task<Void, Never>?
+
+    /// The cockpit attach client exited on its own. Probe the server: dead →
+    /// full crash recovery; alive (user detach / client-only death) → just
+    /// recreate the attach surface and leave every window running.
+    @MainActor
+    func handleCockpitClientExit() {
+        guard !appState.tmuxCrashRecovering else { return }
+        if TmuxBackend.shared.isRunning {
+            NSLog("[CrowTelemetry tmux:cockpit_client_reattach]")
+            TmuxBackend.shared.recycleCockpitSurface()
+            // Same SwiftUI re-render trick as recycleTmuxServerAndRebuild: a
+            // same-value reassignment makes TerminalSurfaceView re-create the
+            // destroyed cockpit surface and re-attach a fresh tmux client.
+            let savedSelection = appState.selectedSessionID
+            let savedActive = appState.activeTerminalID
+            appState.selectedSessionID = savedSelection
+            appState.activeTerminalID = savedActive
+        } else {
+            handleTmuxServerCrash()
+        }
+    }
+
+    /// The tmux server died mid-run. Automatically re-register every terminal
+    /// window and relaunch each session's agent — work/review/job sessions
+    /// resume via `claude --continue` (their initial prompt was already
+    /// dispatched and is never re-pasted); a terminal still holding its
+    /// never-dispatched launch in `pendingLaunchCommands` pastes it exactly
+    /// once, as on first creation. No per-session user clicks required (#588).
+    @MainActor
+    func handleTmuxServerCrash() {
+        guard !appState.tmuxCrashRecovering else { return }
+        if let last = lastCrashRecoveryAt, Date().timeIntervalSince(last) < 10 {
+            NSLog("[CrowTelemetry tmux:server_crash_recovery_debounced]")
+            return
+        }
+        lastCrashRecoveryAt = Date()
+        NSLog("[CrowTelemetry tmux:server_crash_autorecovery]")
+        // Set the flag BEFORE shutdown: the subprocess waits inside the rebuild
+        // pump the main run loop, so a re-entrant crash signal during recovery
+        // must find the guard already up.
+        appState.tmuxCrashRecovering = true
+        recycleTmuxServerAndRebuild()
+
+        // Belt-and-braces: if no readiness callback ever settles the flag
+        // (nothing was re-registered), don't leave the crash overlay up forever.
+        crashRecoveryClearFallback?.cancel()
+        crashRecoveryClearFallback = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 120 * 1_000_000_000)
+            guard let self, !Task.isCancelled else { return }
+            if self.appState.tmuxCrashRecovering {
+                NSLog("[CrowTelemetry tmux:server_crash_recovery_timeout]")
+                self.appState.tmuxCrashRecovering = false
+            }
+        }
     }
 
     /// Build the shell command for a Manager terminal, dispatched through
