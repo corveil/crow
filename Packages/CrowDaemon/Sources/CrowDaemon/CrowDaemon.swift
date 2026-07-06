@@ -41,6 +41,14 @@ public enum CrowDaemon {
         let git = GitManager()
         let appState = await seedAppState(from: store)
 
+        // Where write RPCs forward when the app is up (its default socket). Also
+        // the basis for `daemonIsAuthority`: the daemon drives the background
+        // automations + owns the tmux terminals when it holds this socket
+        // (forwardSocket == nil) OR when that socket isn't answering — i.e. the
+        // desktop app is down (CROW-581).
+        let appSocketPath = SocketServer.defaultSocketPath()
+        let forwardSocket: String? = (appSocketPath == options.socketPath) ? nil : appSocketPath
+
         // Register coding agents in the daemon's own AgentRegistry so
         // `list-agents` (and future launch gating) answer locally, with the
         // desktop app down. Mirrors the app's registration; both hosts read the
@@ -68,7 +76,6 @@ public enum CrowDaemon {
         // (CROW-581, M-D).
         let eventHub = EventHub()
 
-        startBoardPoll(tracker: tracker, eventHub: eventHub)
         // Live-reload the store so the web UI reflects the desktop app's writes
         // (new sessions/status/terminals/links) without a daemon restart.
         startStoreReloadPoll(store: store, appState: appState, eventHub: eventHub)
@@ -108,46 +115,71 @@ public enum CrowDaemon {
             service.wireTerminalReadiness()
             let coordinator = AutoRespondCoordinator(
                 appState: appState, providerManager: providerManager,
-                settingsProvider: { ConfigStore.loadConfig(devRoot: options.devRoot)?.autoRespond ?? AutoRespondSettings() })
+                settingsProvider: {
+                    // Honor the auto-respond toggles only while the daemon is the
+                    // authority (app down); when the app is up it owns auto-respond,
+                    // so return all-false to suppress any daemon-side dispatch —
+                    // covers the ungated checksFailing path too (CROW-581).
+                    guard Self.daemonIsAuthority(forwardSocket: forwardSocket) else {
+                        return AutoRespondSettings(
+                            respondToChangesRequested: false,
+                            respondToFailedChecks: false,
+                            autoRebaseAndResolveConflicts: false)
+                    }
+                    return ConfigStore.loadConfig(devRoot: options.devRoot)?.autoRespond ?? AutoRespondSettings()
+                })
             return (service, coordinator)
         }
 
         // Write-actions that mutate session state are forwarded to the desktop
-        // app's socket (the source of truth) so its side effects run and we
-        // never clobber its newer state. When the daemon itself owns the default
-        // socket (app not running), there's no app to forward to — handle
-        // locally instead. (CROW-581)
-        let appSocketPath = SocketServer.defaultSocketPath()
-        let forwardSocket: String? = (appSocketPath == options.socketPath) ? nil : appSocketPath
+        // app's socket (the source of truth) when it's up; when it's down the
+        // daemon handles them locally. `forwardSocket` was computed above.
 
-        // When standalone (owns the default socket — the app isn't running), the
-        // daemon is the authority, so it ensures the primary Manager exists just
-        // like the app does at launch. That gives `work-on-issue` a live Manager
-        // terminal to drive, and — because the daemon registered the window
-        // itself — it holds the live tmux binding in-process, so no stale-index
-        // adoption of the app's window is needed (ADR 0007; CROW-581, M-E2).
-        if forwardSocket == nil, let sessionService {
+        // Drive the board poll now that sessionService + forwardSocket exist. The
+        // poll also performs the app-down "takeover" (adopt terminals + ensure
+        // the Manager) whenever the daemon becomes the authority (CROW-581).
+        startBoardPoll(
+            tracker: tracker, eventHub: eventHub, sessionService: sessionService,
+            appState: appState, forwardSocket: forwardSocket, devRoot: options.devRoot)
+
+        // Wire the IssueTracker background automations the app normally owns —
+        // crow:auto, auto-respond, auto-merge, auto-rebase, auto-cleanup, review
+        // auto-kickoff. Each self-gates on `daemonIsAuthority` (the app is down),
+        // so wiring them unconditionally is safe: the app owns them while it's up,
+        // and the daemon takes over the moment it isn't reachable. Needs a live
+        // cockpit (terminals to dispatch into) (CROW-581).
+        // Serializes review kickoffs (auto-review + the start-review RPC share
+        // the internal createReviewSession dedupe; a dedicated serializer keeps a
+        // burst of pending review requests from racing duplicate clones).
+        let reviewSerializer = ReviewKickoffSerializer()
+        if let sessionService {
             await MainActor.run {
-                // Adopt every persisted tmux window into THIS process's binding
-                // map first, so the daemon can actually send to them. The tmux
-                // server outlives the app (#330), so the Manager/work windows are
-                // usually still live with their agents running — re-register the
-                // bindings (or recreate a dead window) rather than spawning
-                // duplicates. Without this, a Manager terminal restored from the
-                // store is an unregistered record and TerminalRouter.send — used
-                // by crow:auto, work-on-issue, start-review and quick-action —
-                // silently fails `isRegistered` (ADR 0007; CROW-581).
-                sessionService.rebuildAllSurfaces()
-                sessionService.ensureManagerSession(devRoot: options.devRoot)
-                // Standalone (app down): the daemon runs the IssueTracker
-                // background automations the app normally owns — crow:auto
-                // pickup, auto-respond, auto-merge, auto-rebase, auto-cleanup —
-                // so they keep working headless. Gated to standalone so app-up
-                // doesn't double-drive them (ADR 0007; CROW-581).
                 wireTrackerAutomations(
                     tracker: tracker, appState: appState, sessionService: sessionService,
-                    autoRespond: autoRespond, devRoot: options.devRoot)
+                    autoRespond: autoRespond, forwardSocket: forwardSocket, devRoot: options.devRoot,
+                    reviewSerializer: reviewSerializer)
             }
+        }
+
+        // Scheduled jobs (CROW-317) — run them headless too. `JobScheduler.start()`
+        // uses a `RunLoop.main` Timer the daemon lacks, so build it here and drive
+        // `tick()` from an explicit async loop, gated on authority (CROW-581).
+        if let sessionService {
+            let scheduler = await MainActor.run { () -> JobScheduler in
+                let scheduler = JobScheduler(appState: appState, sessionService: sessionService)
+                scheduler.jobsProvider = { ConfigStore.loadConfig(devRoot: options.devRoot)?.jobs ?? [] }
+                scheduler.devRootProvider = { options.devRoot }
+                scheduler.onJobRan = { jobID, ranAt in
+                    // Jobs (incl. `lastRunAt`) live in config.json, not the store —
+                    // persist there so a fired job isn't re-run on the next tick.
+                    guard var config = ConfigStore.loadConfig(devRoot: options.devRoot),
+                          let idx = config.jobs.firstIndex(where: { $0.id == jobID }) else { return }
+                    config.jobs[idx].lastRunAt = ranAt
+                    try? ConfigStore.saveConfig(config, devRoot: options.devRoot)
+                }
+                return scheduler
+            }
+            startJobPoll(scheduler: scheduler, forwardSocket: forwardSocket)
         }
 
         let commandRouter = makeCommandRouter(
@@ -201,28 +233,32 @@ public enum CrowDaemon {
         try await app.runService()
     }
 
-    /// Wire the IssueTracker's background automation hooks for standalone
-    /// (app-down) operation, mirroring the desktop app's AppDelegate wiring but
-    /// adapted for headless: spawns go to the daemon's Manager terminal /
-    /// SessionService, and macOS notifications are dropped (the daemon has no
-    /// UI). Config-gated behaviors read `{devRoot}/.claude/config.json` fresh on
-    /// each poll so Settings edits take effect. Called only when the app isn't
-    /// running (`forwardSocket == nil`) so the app owns these when it is — no
-    /// double-drive (CROW-581).
+    /// Wire the IssueTracker's background automation hooks, mirroring the desktop
+    /// app's AppDelegate wiring but adapted for headless: spawns go to the
+    /// daemon's Manager terminal / SessionService, macOS notifications are dropped
+    /// (no UI), and every hook additionally self-gates on `daemonIsAuthority`
+    /// (the app is down) so it's safe to wire unconditionally — the app owns these
+    /// while it's running, the daemon takes over the instant it isn't reachable.
+    /// Config-gated behaviors read `{devRoot}/.claude/config.json` fresh each poll
+    /// so Settings edits take effect (CROW-581).
     @MainActor
     private static func wireTrackerAutomations(
         tracker: IssueTracker,
         appState: AppState,
         sessionService: SessionService,
         autoRespond: AutoRespondCoordinator?,
-        devRoot: String
+        forwardSocket: String?,
+        devRoot: String,
+        reviewSerializer: ReviewKickoffSerializer
     ) {
         func config() -> AppConfig? { ConfigStore.loadConfig(devRoot: devRoot) }
+        func authority() -> Bool { daemonIsAuthority(forwardSocket: forwardSocket) }
 
         // crow:auto — run /crow-workspace on the Manager for a newly-labeled
         // assigned issue (the tracker strips the label after, so once-only).
-        tracker.autoCreateWatcherEnabledProvider = { config()?.autoCreateWatcherEnabled ?? false }
+        tracker.autoCreateWatcherEnabledProvider = { authority() && (config()?.autoCreateWatcherEnabled ?? false) }
         tracker.onAutoCreateRequest = { issue in
+            guard authority() else { return }
             guard let managerTerminal = appState.terminals[AppState.managerSessionID]?.first else {
                 log("crow:auto: Manager terminal not ready; dropped \(issue.url)")
                 return
@@ -234,22 +270,60 @@ public enum CrowDaemon {
         // auto-rebase conflict hand-off — both go through the coordinator, which
         // pastes the prompt into the session's managed terminal.
         if let autoRespond {
-            tracker.onPRStatusTransitions = { transitions in autoRespond.handle(transitions) }
+            tracker.onPRStatusTransitions = { transitions in
+                guard authority() else { return }
+                autoRespond.handle(transitions)
+            }
             tracker.onAutoRebaseConflicts = { sessionID, _, _ in
+                guard authority() else { return }
                 autoRespond.dispatchManual(action: .fixConflicts, sessionID: sessionID)
             }
-            tracker.respondToChangesRequestedProvider = { config()?.autoRespond.respondToChangesRequested ?? false }
-            tracker.autoRebaseAndResolveConflictsProvider = { config()?.autoRespond.autoRebaseAndResolveConflicts ?? false }
+            tracker.respondToChangesRequestedProvider = { authority() && (config()?.autoRespond.respondToChangesRequested ?? false) }
+            tracker.autoRebaseAndResolveConflictsProvider = { authority() && (config()?.autoRespond.autoRebaseAndResolveConflicts ?? false) }
         }
 
         // Auto-merge (enable GitHub native auto-merge on eligible Crow PRs). The
         // user-facing notification is dropped headless; the audit line is NSLog'd
         // at the tracker's call site regardless.
-        tracker.autoMergeWatcherEnabledProvider = { config()?.autoMergeWatcherEnabled ?? false }
+        tracker.autoMergeWatcherEnabledProvider = { authority() && (config()?.autoMergeWatcherEnabled ?? false) }
 
         // Auto-cleanup — the retention reaper asks the tracker to delete a
         // session; run the daemon's own SessionService teardown.
-        tracker.onDeleteSession = { id in await sessionService.deleteSession(id: id) }
+        tracker.onDeleteSession = { id in
+            guard authority() else { return }
+            await sessionService.deleteSession(id: id)
+        }
+
+        // Review auto-kickoff — for review requests on repos opted into
+        // `autoReviewRepos`, spawn a review session (mirrors the desktop's
+        // enqueueReviewKickoff). Fires on every refresh so requests pending at
+        // startup are picked up; deduped by a (request, headSHA) fingerprint plus
+        // the persisted reviewSessionID, and serialized so a burst can't race
+        // duplicate clones. `onNewReviewRequests` is notification-only → dropped.
+        var autoReviewed: Set<String> = []
+        tracker.onReviewRequestsRefreshed = { requests in
+            guard authority() else { return }
+            let patterns = (config()?.workspaces ?? []).flatMap { $0.autoReviewRepos }
+            guard !patterns.isEmpty else { return }
+            for request in requests {
+                guard request.reviewSessionID == nil else { continue }
+                guard repoMatchesPatterns(request.repo, patterns: patterns) else { continue }
+                let fingerprint = "\(request.id)\n\(request.headRefOid ?? "")"
+                guard autoReviewed.insert(fingerprint).inserted else { continue }
+                let url = request.url
+                Task { _ = await reviewSerializer.enqueue { await sessionService.createReviewSession(prURL: url, selectAfterCreate: false) } }
+            }
+        }
+    }
+
+    /// The daemon is the automation/terminal authority when it owns the app's
+    /// default socket (`forwardSocket == nil`), or when that socket isn't
+    /// answering — i.e. the desktop app is down. Probed live (a cheap AF_UNIX
+    /// `connect` via `socketInUse`) so the daemon takes over when the app quits
+    /// and backs off when it returns, with no double-drive (CROW-581).
+    static func daemonIsAuthority(forwardSocket: String?) -> Bool {
+        guard let forwardSocket else { return true }
+        return !socketInUse(forwardSocket)
     }
 
     /// Drive `IssueTracker.refresh()` on an explicit async tick. The tracker's
@@ -259,12 +333,54 @@ public enum CrowDaemon {
     /// fetch immediately, then polls on the app's 60s cadence (CROW-581, M-C).
     /// Broadcasts a `changed` nudge after each poll so clients re-fetch the
     /// boards reactively (M-D).
-    private static func startBoardPoll(tracker: IssueTracker, eventHub: EventHub) {
+    ///
+    /// Also performs the app-down TAKEOVER: when the daemon becomes the authority
+    /// it adopts every persisted tmux window into this process (so
+    /// `TerminalRouter.send` / `isRegistered` works) and ensures the Manager —
+    /// once per downtime, released when the app returns so a later downtime
+    /// re-adopts. Runs before `refresh()` so automation dispatches have a live,
+    /// registered Manager to reach.
+    private static func startBoardPoll(
+        tracker: IssueTracker,
+        eventHub: EventHub,
+        sessionService: SessionService?,
+        appState: AppState,
+        forwardSocket: String?,
+        devRoot: String
+    ) {
         Task {
+            var didTakeOver = false
             while !Task.isCancelled {
+                if let sessionService {
+                    let authority = daemonIsAuthority(forwardSocket: forwardSocket)
+                    if authority, !didTakeOver {
+                        await MainActor.run {
+                            sessionService.rebuildAllSurfaces()
+                            sessionService.ensureManagerSession(devRoot: devRoot)
+                        }
+                        didTakeOver = true
+                    } else if !authority {
+                        didTakeOver = false
+                    }
+                }
                 await tracker.refresh()
                 await eventHub.broadcast()
                 try? await Task.sleep(nanoseconds: 60 * 1_000_000_000)
+            }
+        }
+    }
+
+    /// Drive `JobScheduler.tick()` on an explicit async loop (its own Timer needs
+    /// a `RunLoop.main` the daemon lacks), on the scheduler's 30s cadence, gated
+    /// on `daemonIsAuthority` so scheduled jobs fire only when the daemon owns the
+    /// session engine (app down) and never double-fire with the app (CROW-581).
+    private static func startJobPoll(scheduler: JobScheduler, forwardSocket: String?) {
+        Task {
+            while !Task.isCancelled {
+                if daemonIsAuthority(forwardSocket: forwardSocket) {
+                    await MainActor.run { scheduler.tick() }
+                }
+                try? await Task.sleep(nanoseconds: 30 * 1_000_000_000)
             }
         }
     }
