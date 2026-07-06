@@ -111,7 +111,8 @@ func makeCommandRouter(
     tracker: IssueTracker? = nil,
     allowList: AllowListService? = nil,
     sessionService: SessionService? = nil,
-    autoRespond: AutoRespondCoordinator? = nil
+    autoRespond: AutoRespondCoordinator? = nil,
+    jobScheduler: JobScheduler? = nil
 ) -> CommandRouter {
     // Serializes review kickoffs (see start-review) — one per router instance.
     let reviewSerializer = ReviewKickoffSerializer()
@@ -940,16 +941,25 @@ func makeCommandRouter(
             return ["ok": .bool(true)]
         },
 
-        // Run a scheduled job on demand — forward-only: the JobScheduler and the
-        // `onRunJob` hook live in the desktop app's process (the daemon doesn't
-        // run jobs yet), so this needs the app running (CROW-593).
+        // Run a scheduled job on demand. Forwarded to the app when it's running (its
+        // JobScheduler is the source of truth then); with the app down the daemon
+        // runs it on its OWN JobScheduler — spawning the worktree/session/agent
+        // headlessly. Needs tmux (a SessionService-backed scheduler); without one
+        // it errors, as before (ADR 0007; CROW-581, M-E2).
         "run-job": { params in
-            guard let forwardSocket else {
-                throw DaemonRPCError.applicationError("Running a job requires the Crow desktop app to be running")
+            if let forwardSocket {
+                do { return try forwardToApp("run-job", params, socket: forwardSocket) }
+                catch let error as DaemonRPCError { throw error }
+                catch { /* app not running → fall through to local */ }
             }
-            do { return try forwardToApp("run-job", params, socket: forwardSocket) }
-            catch let error as DaemonRPCError { throw error }
-            catch { throw DaemonRPCError.applicationError("Crow desktop app not reachable") }
+            guard let jobScheduler else {
+                throw DaemonRPCError.applicationError("Running a job requires the Crow desktop app or tmux on the daemon host")
+            }
+            guard let idStr = params["job_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
+                throw DaemonRPCError.invalidParams("job_id required")
+            }
+            await MainActor.run { jobScheduler.runNow(id) }
+            return ["ok": .bool(true)]
         },
     ])
 }

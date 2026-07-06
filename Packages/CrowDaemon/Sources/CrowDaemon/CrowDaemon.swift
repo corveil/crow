@@ -164,28 +164,29 @@ public enum CrowDaemon {
         // Scheduled jobs (CROW-317) — run them headless too. `JobScheduler.start()`
         // uses a `RunLoop.main` Timer the daemon lacks, so build it here and drive
         // `tick()` from an explicit async loop, gated on authority (CROW-581).
-        if let sessionService {
-            let scheduler = await MainActor.run { () -> JobScheduler in
-                let scheduler = JobScheduler(appState: appState, sessionService: sessionService)
-                scheduler.jobsProvider = { ConfigStore.loadConfig(devRoot: options.devRoot)?.jobs ?? [] }
-                scheduler.devRootProvider = { options.devRoot }
-                scheduler.onJobRan = { jobID, ranAt in
-                    // Jobs (incl. `lastRunAt`) live in config.json, not the store —
-                    // persist there so a fired job isn't re-run on the next tick.
-                    guard var config = ConfigStore.loadConfig(devRoot: options.devRoot),
-                          let idx = config.jobs.firstIndex(where: { $0.id == jobID }) else { return }
-                    config.jobs[idx].lastRunAt = ranAt
-                    try? ConfigStore.saveConfig(config, devRoot: options.devRoot)
-                }
-                return scheduler
+        // Hoisted out of the `if let sessionService` block so it can also back the
+        // `run-job` RPC's local path via `makeCommandRouter` below (ADR 0007).
+        let jobScheduler: JobScheduler? = await MainActor.run { () -> JobScheduler? in
+            guard let sessionService else { return nil }
+            let scheduler = JobScheduler(appState: appState, sessionService: sessionService)
+            scheduler.jobsProvider = { ConfigStore.loadConfig(devRoot: options.devRoot)?.jobs ?? [] }
+            scheduler.devRootProvider = { options.devRoot }
+            scheduler.onJobRan = { jobID, ranAt in
+                // Jobs (incl. `lastRunAt`) live in config.json, not the store —
+                // persist there so a fired job isn't re-run on the next tick.
+                guard var config = ConfigStore.loadConfig(devRoot: options.devRoot),
+                      let idx = config.jobs.firstIndex(where: { $0.id == jobID }) else { return }
+                config.jobs[idx].lastRunAt = ranAt
+                try? ConfigStore.saveConfig(config, devRoot: options.devRoot)
             }
-            startJobPoll(scheduler: scheduler, forwardSocket: forwardSocket)
+            return scheduler
         }
+        if let jobScheduler { startJobPoll(scheduler: jobScheduler, forwardSocket: forwardSocket) }
 
         let commandRouter = makeCommandRouter(
             appState: appState, store: store, git: git, devRoot: options.devRoot,
             cockpit: cockpit, forwardSocket: forwardSocket, tracker: tracker, allowList: allowList,
-            sessionService: sessionService, autoRespond: autoRespond)
+            sessionService: sessionService, autoRespond: autoRespond, jobScheduler: jobScheduler)
 
         // Unix socket — lets the existing `crow` CLI talk to the daemon. Refuse
         // to bind a socket another server already answers on (e.g. the desktop
