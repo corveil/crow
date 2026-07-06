@@ -63,6 +63,20 @@ struct BundledResourcesTests {
         #expect(body.contains(#"send-keys -X select-line ; run -d0.3 ; send-keys -X copy-pipe-no-clear "pbcopy""#))
     }
 
+    @Test func terminalHTMLHandlesModifiedEnter() throws {
+        // #598: xterm.js sends the same \r for Enter and Shift+Enter, so the
+        // host page must intercept modified Enter and emit distinct sequences
+        // (CSI-u \x1b[13;2u for Shift+Enter, ESC CR for Option+Enter) or
+        // Claude Code submits instead of inserting a newline. The xterm
+        // resources get re-vendored wholesale (see Resources/xterm/VERSION),
+        // so pin the handler's presence against an accidental overwrite.
+        let url = try #require(BundledResources.terminalHTMLURL)
+        let body = try String(contentsOf: url, encoding: .utf8)
+        #expect(body.contains("attachCustomKeyEventHandler"))
+        #expect(body.contains(#"\x1b[13;2u"#))
+        #expect(body.contains(#"\x1b\r"#))
+    }
+
     @Test func tmuxConfHasNoBarePrefixUnbind() throws {
         // #473: a bare `unbind-key -a` (no `-T`) defaults to the prefix
         // table, which is empty/non-existent after the first clear on
