@@ -423,7 +423,8 @@ public final class SessionService {
                 cwd: terminal.cwd,
                 command: terminal.command,
                 trackReadiness: trackReadiness,
-                agentKind: agentKind
+                agentKind: agentKind,
+                extraEnv: Self.artifactsEnv(sessionID: terminal.sessionID)
             )
             var updated = terminal
             updated.tmuxBinding = binding
@@ -441,6 +442,17 @@ public final class SessionService {
     /// (launchClaude) work without backend-specific branches. The tmux backend
     /// skips the `.surfaceCreated` intermediate state — its window is created
     /// synchronously by registerTerminal — so we go straight to `.shellReady`.
+    /// Env handed to every session terminal so agents (and the crow-show-image
+    /// skill) know where to drop images for Crow's viewer, without guessing the
+    /// path or the session id (CROW-593). Shares `ArtifactPaths` with the
+    /// daemon that serves them, so write path == serve path.
+    nonisolated static func artifactsEnv(sessionID: UUID) -> [String: String] {
+        [
+            "CROW_ARTIFACTS_DIR": ArtifactPaths.dir(sessionID: sessionID).path,
+            "CROW_SESSION_ID": sessionID.uuidString,
+        ]
+    }
+
     public func wireTerminalReadiness() {
         NSLog("[SessionService] wireTerminalReadiness — setting tmux readiness callback")
         TmuxBackend.shared.onReadinessChanged = { [weak self] terminalID, readiness in
@@ -2697,7 +2709,8 @@ public final class SessionService {
                 cwd: t.cwd,
                 command: t.command,
                 trackReadiness: trackReadiness,
-                agentKind: agentKind
+                agentKind: agentKind,
+                extraEnv: Self.artifactsEnv(sessionID: t.sessionID)
             )
             t.tmuxBinding = binding
         } catch {

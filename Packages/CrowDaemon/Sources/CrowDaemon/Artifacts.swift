@@ -1,4 +1,5 @@
 import Foundation
+import CrowCore
 import Hummingbird
 import NIOCore
 
@@ -13,16 +14,12 @@ import NIOCore
 enum Artifacts {
     static let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "gif", "webp", "svg"]
 
-    /// Root scratch dir — a sibling of the tmux socket under `$TMPDIR/crow`.
-    static func root() -> URL {
-        let tmp = ProcessInfo.processInfo.environment["TMPDIR"] ?? "/tmp"
-        return URL(fileURLWithPath: tmp).appendingPathComponent("crow/artifacts", isDirectory: true)
-    }
-
     /// A session's dir, or nil if `sessionID` isn't a valid UUID (traversal guard).
+    /// Shares `CrowCore.ArtifactPaths` with the terminal-env injection so the
+    /// serve path and the write path can't drift.
     static func dir(sessionID: String) -> URL? {
-        guard UUID(uuidString: sessionID) != nil else { return nil }
-        return root().appendingPathComponent(sessionID, isDirectory: true)
+        guard let uuid = UUID(uuidString: sessionID) else { return nil }
+        return ArtifactPaths.dir(sessionID: uuid)
     }
 
     /// Image files in a session's dir, newest first.
