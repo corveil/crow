@@ -101,6 +101,38 @@
 
         window.crowFit = reportSize;
 
+        // xterm.js emits the same bare \r for Enter and Shift+Enter, so
+        // Claude Code can't tell them apart and submits on both (#598).
+        // Intercept modified Enter and send a distinct sequence through the
+        // same crowInput bridge:
+        //  - Shift+Enter → CSI-u \x1b[13;2u. crow-tmux.conf's extended-keys
+        //    setup carries it to apps that negotiate extended keys (Claude
+        //    Code → insert newline) and downgrades it to plain \r for apps
+        //    that don't, so nothing leaks into vim/shells.
+        //  - Option+Enter → \x1b\r (ESC CR), Claude Code's other native
+        //    insert-newline chord. macOptionIsMeta stays off so Option-key
+        //    composed characters keep working for regular typing.
+        // Returning false suppresses xterm.js's default \r for every event
+        // phase (keydown/keypress/keyup) of the combo.
+        term.attachCustomKeyEventHandler(function (e) {
+          if (e.key !== 'Enter' || e.ctrlKey || e.metaKey) {
+            return true;
+          }
+          if (e.shiftKey && !e.altKey) {
+            if (e.type === 'keydown') {
+              handlers.crowInput.postMessage({ data: '\x1b[13;2u' });
+            }
+            return false;
+          }
+          if (e.altKey && !e.shiftKey) {
+            if (e.type === 'keydown') {
+              handlers.crowInput.postMessage({ data: '\x1b\r' });
+            }
+            return false;
+          }
+          return true;
+        });
+
         term.onData(function (data) {
           handlers.crowInput.postMessage({ data: data });
         });
