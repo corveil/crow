@@ -736,10 +736,12 @@ function renderHeader(s) {
   root.appendChild(top);
 
   if (s.ticket_title) root.appendChild(el('div', 'subtle', s.ticket_title));
-  // Review sessions: surface the PR author from the matching review request
-  // (only review sessions have a review_session_id that matches).
+  // Review sessions: surface the PR author. Prefer the live review request
+  // (Reviews board), but fall back to the author persisted on the session at
+  // review-creation so it still shows when the board is empty (CROW-593).
   const rev = reviewForSession(s.id);
-  if (rev && rev.author) root.appendChild(el('div', 'subtle', 'PR by @' + rev.author));
+  const reviewAuthor = (rev && rev.author) || s.review_author;
+  if (reviewAuthor) root.appendChild(el('div', 'subtle', 'PR by @' + reviewAuthor));
   // Repo · branch on the left, worktree path pushed to the right (like the desktop).
   if (s.repo || s.branch || s.worktree_path) {
     const metaRow = el('div', 'meta meta-row');
@@ -1278,7 +1280,21 @@ function ensureTerminal() {
   term.onData((data) => {
     if (termWs && termWs.readyState === WebSocket.OPEN) termWs.send(new TextEncoder().encode(data));
   });
+  // Cmd/Ctrl+C copies the selection (falling through to SIGINT when nothing is
+  // selected so Ctrl+C still interrupts); Cmd+V pastes. Lets the browser own
+  // copy/paste instead of tmux's copy-mode.
+  term.attachCustomKeyEventHandler((e) => {
+    if (e.type !== 'keydown') return true;
+    const mod = e.metaKey || e.ctrlKey;
+    if (mod && (e.key === 'c' || e.key === 'C') && term.hasSelection()) {
+      copyToClipboard(term.getSelection());
+      return false;
+    }
+    if (e.metaKey && (e.key === 'v' || e.key === 'V')) { pasteIntoTerminal(); return false; }
+    return true;
+  });
   enableTouchScroll(document.getElementById('terminal'));
+  enableWheelScroll(document.getElementById('terminal'));
   window.addEventListener('resize', fitTerminal);
   connectTerminalWs();
 }
@@ -1298,6 +1314,59 @@ function enableTouchScroll(node) {
     if (delta !== 0) { term.scrollLines(delta); lastY = y; }
   }, { passive: true });
   node.addEventListener('touchend', () => { lastY = null; }, { passive: true });
+}
+
+// Let xterm.js own wheel scrolling in the browser: scroll the local 10k-line
+// scrollback instead of forwarding the wheel to tmux (whose server-global
+// `mouse on` would otherwise drop into copy-mode — janky in a browser). A
+// fullscreen/alternate-screen app (vim, htop) still gets the wheel.
+function enableWheelScroll(node) {
+  node.addEventListener('wheel', (e) => {
+    if (!term) return;
+    const buf = term.buffer && term.buffer.active;
+    if (buf && buf.type === 'alternate') return; // let TUIs handle the wheel
+    term.scrollLines(e.deltaY > 0 ? 3 : -3);
+    e.preventDefault();
+    e.stopPropagation();
+  }, { capture: true, passive: false });
+}
+
+// Paste the browser clipboard into the terminal (writes to the PTY, same path
+// as typing). readText() needs a user gesture — the menu click / Cmd+V is one.
+function pasteIntoTerminal() {
+  if (!(navigator.clipboard && navigator.clipboard.readText)) return;
+  navigator.clipboard.readText().then((text) => {
+    if (text && termWs && termWs.readyState === WebSocket.OPEN) {
+      termWs.send(new TextEncoder().encode(text));
+    }
+  }).catch(() => { /* denied / empty */ });
+}
+
+// Our own right-click menu for the terminal (copy selection / paste / select
+// all / clear) — replaces the browser default, which we suppress. Copy appears
+// only when there's a selection.
+function showTerminalMenu(e) {
+  e.preventDefault();
+  closeContextMenu();
+  if (!term) return;
+  const sel = term.getSelection();
+  const items = [];
+  if (sel) items.push({ label: 'Copy', action: () => copyToClipboard(sel) });
+  items.push({ label: 'Paste', action: pasteIntoTerminal });
+  items.push({ label: 'Select all', action: () => term.selectAll() });
+  items.push({ label: 'Clear', action: () => term.clear() });
+  const menu = el('div', 'ctx-menu');
+  for (const it of items) {
+    const item = el('div', 'ctx-item', it.label);
+    item.onclick = (ev) => { ev.stopPropagation(); closeContextMenu(); it.action(); };
+    menu.appendChild(item);
+  }
+  document.body.appendChild(menu);
+  const x = Math.min(e.clientX, window.innerWidth - menu.offsetWidth - 8);
+  const y = Math.min(e.clientY, window.innerHeight - menu.offsetHeight - 8);
+  menu.style.left = Math.max(4, x) + 'px';
+  menu.style.top = Math.max(4, y) + 'px';
+  setTimeout(() => document.addEventListener('click', closeContextMenu, { once: true }), 0);
 }
 
 function connectTerminalWs() {
@@ -1335,9 +1404,9 @@ function selectWindow(win) {
 document.getElementById('back-to-sidebar').onclick = () => {
   document.getElementById('app').classList.add('mobile-show-sidebar');
 };
-// Suppress the browser's context menu over the coding pane (xterm keeps its own
-// selection/paste handling).
-document.getElementById('terminal-wrap').addEventListener('contextmenu', (e) => e.preventDefault());
+// Our own terminal context menu (copy/paste/select-all/clear) replaces the
+// browser default over the coding pane.
+document.getElementById('terminal-wrap').addEventListener('contextmenu', showTerminalMenu);
 
 refreshSessions();
 refreshLive();
