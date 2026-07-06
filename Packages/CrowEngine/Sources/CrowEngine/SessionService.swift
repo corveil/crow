@@ -278,6 +278,30 @@ public final class SessionService {
     /// so the run loop can service AppKit/SwiftUI between them. Running the loop
     /// synchronously pinned the main actor for seconds on profiles with many
     /// persisted rows (each `registerTerminal` spawns a subprocess) — #293.
+    /// Client-mode surface adoption (ADR 0007; CROW-581, Stage 3b/F). Attach
+    /// in-process to the tmux windows `crowd` created — the terminals in a
+    /// `get-state` snapshot — so they render and take input, WITHOUT ever
+    /// spawning a fresh window or writing the store: `crowd` owns spawning and
+    /// the store in client mode. Only adopts windows this process hasn't
+    /// registered yet, so it's cheap and idempotent to call after every hydrate.
+    /// Unlike `rebuildAllSurfaces`, a failed adopt is logged and skipped (the
+    /// window simply won't render) rather than recreated.
+    @MainActor
+    public func adoptExistingSurfaces() {
+        wireTerminalReadiness()
+        for terminals in appState.terminals.values {
+            for terminal in terminals {
+                guard let binding = terminal.tmuxBinding,
+                      !TmuxBackend.shared.isRegistered(id: terminal.id) else { continue }
+                do {
+                    try TmuxBackend.shared.adoptTerminal(id: terminal.id, binding: binding, trackReadiness: false)
+                } catch {
+                    NSLog("[SessionService] client-mode adopt failed for \(terminal.id): \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
     @MainActor
     public func rebuildAllSurfaces(forceRegister: Bool = false) {
         // Wire BEFORE re-registering so the sentinel's .shellReady is never lost.
