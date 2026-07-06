@@ -35,6 +35,54 @@
     'Basso', 'Blow', 'Bottle', 'Frog', 'Funk', 'Glass', 'Hero', 'Morse',
     'Ping', 'Pop', 'Purr', 'Sosumi', 'Submarine', 'Tink',
   ];
+  // The app plays macOS system sounds (NSSound) that don't exist in a browser,
+  // so the web preview synthesizes a short distinct tone per name via Web Audio
+  // — an approximation, no bundled assets (CROW-593). Each recipe is a list of
+  // { freq, at?, dur?, type? } oscillator steps.
+  const SOUND_TONES = {
+    Basso:     [{ freq: 147, type: 'sawtooth', dur: 0.22 }],
+    Blow:      [{ freq: 523, type: 'sine', dur: 0.18 }],
+    Bottle:    [{ freq: 392, type: 'sine', dur: 0.12 }, { freq: 784, at: 0.08, dur: 0.1 }],
+    Frog:      [{ freq: 196, type: 'square', dur: 0.1 }, { freq: 294, at: 0.1, type: 'square', dur: 0.12 }],
+    Funk:      [{ freq: 220, type: 'triangle', dur: 0.14 }, { freq: 330, at: 0.12, type: 'triangle', dur: 0.14 }],
+    Glass:     [{ freq: 880, type: 'sine', dur: 0.12 }, { freq: 1320, at: 0.06, dur: 0.16 }],
+    Hero:      [{ freq: 523, type: 'sine', dur: 0.12 }, { freq: 784, at: 0.12, dur: 0.18 }],
+    Morse:     [{ freq: 660, type: 'square', dur: 0.08 }, { freq: 660, at: 0.14, type: 'square', dur: 0.08 }],
+    Ping:      [{ freq: 1046, type: 'sine', dur: 0.14 }],
+    Pop:       [{ freq: 440, type: 'sine', dur: 0.07 }],
+    Purr:      [{ freq: 165, type: 'triangle', dur: 0.22 }],
+    Sosumi:    [{ freq: 660, type: 'square', dur: 0.1 }, { freq: 440, at: 0.1, type: 'square', dur: 0.16 }],
+    Submarine: [{ freq: 131, type: 'sine', dur: 0.28 }],
+    Tink:      [{ freq: 1318, type: 'sine', dur: 0.1 }],
+    _default:  [{ freq: 700, type: 'sine', dur: 0.14 }],
+  };
+  let _audioCtx = null;
+  function previewSound(name) {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    try {
+      _audioCtx = _audioCtx || new AC();
+      const ctx = _audioCtx;
+      if (ctx.state === 'suspended') ctx.resume(); // unlocked by the click gesture
+      const recipe = SOUND_TONES[name] || SOUND_TONES._default;
+      const now = ctx.currentTime;
+      for (const step of recipe) {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = step.type || 'sine';
+        osc.frequency.value = step.freq;
+        const t0 = now + (step.at || 0);
+        const dur = step.dur || 0.12;
+        gain.gain.setValueAtTime(0.0001, t0);
+        gain.gain.exponentialRampToValueAtTime(0.2, t0 + 0.012);
+        gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(t0);
+        osc.stop(t0 + dur + 0.03);
+      }
+    } catch (_) { /* Web Audio unavailable */ }
+  }
   const WEEKDAYS = [[1, 'Sun'], [2, 'Mon'], [3, 'Tue'], [4, 'Wed'], [5, 'Thu'], [6, 'Fri'], [7, 'Sat']];
 
   // ---- open / close -------------------------------------------------------
@@ -380,6 +428,27 @@
 
   // ---- Notifications ------------------------------------------------------
 
+  // Sound selector with an inline preview button (Web Audio synth, see
+  // previewSound). Bound to conf.soundName like the desktop picker (CROW-593).
+  function soundField(conf) {
+    const wrap = el('div', 'st-sound-row');
+    const sel = el('select', 'st-select');
+    for (const s of BUILT_IN_SOUNDS) {
+      const o = el('option', null, s);
+      o.value = s;
+      if (conf.soundName === s) o.selected = true;
+      sel.appendChild(o);
+    }
+    sel.onchange = () => { conf.soundName = sel.value; markDirty(); };
+    const btn = el('button', 'action-btn', '▶ Preview');
+    btn.type = 'button';
+    btn.onclick = () => previewSound(sel.value);
+    wrap.appendChild(sel);
+    wrap.appendChild(btn);
+    return field('Sound', wrap,
+      'Preview is a synthesized approximation; the desktop app plays the actual macOS system sound.');
+  }
+
   function renderNotifications(body) {
     cfg.notifications = cfg.notifications || {};
     const n = cfg.notifications;
@@ -393,7 +462,7 @@
       body.appendChild(toggleField('Enabled', conf, 'enabled'));
       body.appendChild(toggleField('Play sound', conf, 'soundEnabled'));
       body.appendChild(toggleField('System notification', conf, 'systemNotificationEnabled'));
-      body.appendChild(selectField('Sound', conf, 'soundName', BUILT_IN_SOUNDS.map((s) => [s, s])));
+      body.appendChild(soundField(conf));
     }
   }
 
