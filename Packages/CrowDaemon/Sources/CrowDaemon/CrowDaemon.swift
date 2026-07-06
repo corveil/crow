@@ -89,8 +89,16 @@ public enum CrowDaemon {
         // `wireTerminalReadiness` arms the callback that launches the agent once
         // its tmux window is ready. No tmux → no spawning (nil; spawn RPCs keep
         // forwarding / erroring).
-        let sessionService: SessionService? = await MainActor.run { () -> SessionService? in
-            guard let cockpit else { return nil }
+        // `autoRespond` backs `quick-action`'s local path — it pastes the
+        // deterministic prompt into a session's managed tmux terminal. Built
+        // alongside SessionService because both need a live cockpit to have a
+        // terminal to send to. Manual quick-actions bypass the
+        // AutoRespondSettings toggles (the click is explicit consent), so the
+        // default settings here are never consulted (CROW-581, M-E).
+        let sessionService: SessionService?
+        let autoRespond: AutoRespondCoordinator?
+        (sessionService, autoRespond) = await MainActor.run { () -> (SessionService?, AutoRespondCoordinator?) in
+            guard let cockpit else { return (nil, nil) }
             TmuxBackend.shared.configure(
                 tmuxBinary: cockpit.controller.tmuxBinary,
                 socketPath: cockpit.controller.socketPath,
@@ -99,7 +107,10 @@ public enum CrowDaemon {
                 store: store, appState: appState,
                 providerManager: providerManager, hostBridge: NoopHostBridge())
             service.wireTerminalReadiness()
-            return service
+            let coordinator = AutoRespondCoordinator(
+                appState: appState, providerManager: providerManager,
+                settingsProvider: { AutoRespondSettings() })
+            return (service, coordinator)
         }
 
         // Write-actions that mutate session state are forwarded to the desktop
@@ -123,7 +134,7 @@ public enum CrowDaemon {
         let commandRouter = makeCommandRouter(
             appState: appState, store: store, git: git, devRoot: options.devRoot,
             cockpit: cockpit, forwardSocket: forwardSocket, tracker: tracker, allowList: allowList,
-            sessionService: sessionService)
+            sessionService: sessionService, autoRespond: autoRespond)
 
         // Unix socket — lets the existing `crow` CLI talk to the daemon. Refuse
         // to bind a socket another server already answers on (e.g. the desktop
