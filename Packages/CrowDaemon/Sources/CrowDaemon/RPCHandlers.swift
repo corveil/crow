@@ -94,7 +94,9 @@ func makeCommandRouter(
     allowList: AllowListService? = nil,
     sessionService: SessionService? = nil
 ) -> CommandRouter {
-    CommandRouter(handlers: [
+    // Serializes review kickoffs (see start-review) — one per router instance.
+    let reviewSerializer = ReviewKickoffSerializer()
+    return CommandRouter(handlers: [
         "new-session": { params in
             let name = params["name"]?.stringValue ?? "untitled"
             guard Validation.isValidSessionName(name) else {
@@ -566,13 +568,31 @@ func makeCommandRouter(
             catch let error as DaemonRPCError { throw error }
             catch { throw DaemonRPCError.applicationError("Crow desktop app not reachable") }
         },
+        // Starting a review forwards to the app when it's running; with the app
+        // down it runs on the daemon's own SessionService — cloning the PR,
+        // scaffolding the review skill, and spawning a tmux window + agent
+        // (ADR 0007; CROW-581, M-E2). Kickoffs are serialized so the internal
+        // dedupe stays race-free. Without tmux it errors, as before.
         "start-review": { params in
-            guard let forwardSocket else {
-                throw DaemonRPCError.applicationError("Starting a review requires the Crow desktop app to be running")
+            if let forwardSocket {
+                do { return try forwardToApp("start-review", params, socket: forwardSocket) }
+                catch let error as DaemonRPCError { throw error }
+                catch { /* app not running → fall through to local spawn */ }
             }
-            do { return try forwardToApp("start-review", params, socket: forwardSocket) }
-            catch let error as DaemonRPCError { throw error }
-            catch { throw DaemonRPCError.applicationError("Crow desktop app not reachable") }
+            guard let sessionService else {
+                throw DaemonRPCError.applicationError(
+                    "Starting a review requires either the Crow desktop app or tmux on the daemon host")
+            }
+            guard let url = params["url"]?.stringValue, !url.isEmpty else {
+                throw DaemonRPCError.invalidParams("url required")
+            }
+            let task = await reviewSerializer.enqueue {
+                await sessionService.createReviewSession(prURL: url, selectAfterCreate: false)
+            }
+            guard let id = await task.value else {
+                throw DaemonRPCError.applicationError("Could not start a review for \(url)")
+            }
+            return ["session_id": .string(id.uuidString)]
         },
         // Allowlist writes/refreshes run locally when the daemon owns the
         // AllowListService (pure disk — no app needed); otherwise forward.
