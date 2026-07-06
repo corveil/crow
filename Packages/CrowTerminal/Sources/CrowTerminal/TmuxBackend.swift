@@ -44,6 +44,19 @@ public final class TmuxBackend {
     /// the caller for normal handling.
     public var onUnresponsive: ((TmuxError) -> Void)?
 
+    /// Fired when the cockpit attach client's PTY exits outside a deliberate
+    /// `shutdown()`/`destroy()` — i.e. the tmux server crashed out from under
+    /// the app, or the user detached the client (#588). Deliberate teardown
+    /// never fires this: `shutdown()` destroys the surface (which nils the
+    /// underlying `onProcessExit`) before touching the server.
+    public var onCockpitExit: ((Int32) -> Void)?
+
+    /// Fired when a cached controller's cockpit session has vanished mid-run —
+    /// the server died while the app was live (#588). A fresh launch (no
+    /// cached controller) never fires this. Secondary, lazy detection: it only
+    /// triggers on the next tmux command; the primary signal is `onCockpitExit`.
+    public var onServerLost: (() -> Void)?
+
     // MARK: - Internal state
 
     /// Created on first use of the backend. Survives until app exit (or a
@@ -136,11 +149,16 @@ public final class TmuxBackend {
         if controller != nil {
             NSLog("[CrowTelemetry tmux:\(killServer ? "server_killed" : "server_detach") bindings=\(bindings.count)]")
         }
+        // Destroy the surface BEFORE kill-server: destroy() nils the surface's
+        // onProcessExit synchronously, and killServer's waitUntilExit pumps the
+        // main run loop — without this order the attach client's death would be
+        // delivered mid-shutdown and a deliberate restart would masquerade as
+        // a server crash (#588).
+        sharedSurface?.destroy()
+        sharedSurface = nil
         if killServer {
             controller?.killServer()
         }
-        sharedSurface?.destroy()
-        sharedSurface = nil
         controller = nil
         bindings.removeAll()
         activeTerminalID = nil
@@ -264,7 +282,7 @@ public final class TmuxBackend {
     /// server (e.g. on app restart with a long-lived session). No new
     /// window is created.
     public func adoptTerminal(id: UUID, binding: TmuxBinding, trackReadiness: Bool) throws {
-        let ctrl = try ensureRunningServer()
+        let (ctrl, serverWasResurrected) = try ensureRunningServerReportingResurrection()
         guard ctrl.socketPath == binding.socketPath, ctrl.sessionName == binding.sessionName else {
             throw TmuxBackendError.bindingMismatch(
                 expected: binding.socketPath + ":" + binding.sessionName,
@@ -273,7 +291,13 @@ public final class TmuxBackend {
         }
         let liveIndices = try ctrl.listWindowIndices()
         guard liveIndices.contains(binding.windowIndex) else {
-            throw TmuxBackendError.windowNotFound(binding.windowIndex)
+            // A binding exists but the server had to be respawned from
+            // scratch: every window is gone, not just this one — the server
+            // crashed (or the machine rebooted) since the binding was made.
+            // Distinguish that from a single closed window (#588).
+            throw serverWasResurrected
+                ? TmuxBackendError.serverCrashed
+                : TmuxBackendError.windowNotFound(binding.windowIndex)
         }
         bindings[id] = binding.windowIndex
         // No sentinel re-fire on adoption — the wrapper's precmd already
@@ -730,6 +754,15 @@ public final class TmuxBackend {
             workingDirectory: NSHomeDirectory(),
             command: attachCommand
         )
+        // The attach client exiting on its own means the server crashed or the
+        // user detached — deliberate teardown goes through destroy(), which
+        // nils onProcessExit first, so this only fires for the unexpected case
+        // (#588). Wired here (not by the caller) so every recreated surface is
+        // automatically re-armed after recovery.
+        view.onProcessExit = { [weak self] code in
+            NSLog("[CrowTelemetry tmux:cockpit_client_exited code=\(code)]")
+            self?.onCockpitExit?(code)
+        }
         NSLog("[TmuxBackend] created cockpit surface attach=%@", attachCommand)
         // Cache before SwiftUI re-parents into the visible tab container.
         // WKWebView must load in a visible window — do not park offscreen or
@@ -746,6 +779,19 @@ public final class TmuxBackend {
         sharedSurface
     }
 
+    /// Destroy only the cockpit attach surface; the server, window bindings,
+    /// sentinels and readiness watches all survive. The next `cockpitSurface()`
+    /// call re-attaches to the live session. Used when the attach client died
+    /// but the server is still healthy (e.g. the user hit prefix-d) (#588).
+    public func recycleCockpitSurface() {
+        sharedSurface?.destroy()
+        sharedSurface = nil
+        // A fresh attach lands on the session's current window, which may not
+        // match what we last selected — force the next makeActive to actually
+        // run select-window instead of short-circuiting.
+        activeTerminalID = nil
+    }
+
     /// Whether `id` has a live tmux-window binding. Used by callers that
     /// want to gate a send/destroy/makeActive on "this terminal is actually
     /// wired up" without relying on the throwing dispatch path.
@@ -756,8 +802,26 @@ public final class TmuxBackend {
     // MARK: - Internal helpers
 
     private func ensureRunningServer() throws -> TmuxController {
-        if let ctrl = controller, ctrl.hasSession() {
-            return ctrl
+        try ensureRunningServerReportingResurrection().ctrl
+    }
+
+    /// Like `ensureRunningServer()`, but also reports whether the cockpit
+    /// session had to be created from scratch (`resurrected == true`) —
+    /// i.e. the server was NOT running when the caller needed it. Callers
+    /// that see a persisted binding fail against a resurrected server know
+    /// the whole server died, not just one window (#588).
+    private func ensureRunningServerReportingResurrection()
+        throws -> (ctrl: TmuxController, resurrected: Bool)
+    {
+        if let ctrl = controller {
+            if ctrl.hasSession() { return (ctrl, false) }
+            // We had a live cockpit this run and it's gone — the server died
+            // mid-run (or is hung past the watchdog; recovery handles both
+            // identically). Fire BEFORE resurrecting so the handler can
+            // observe the dead state; it's reentrancy-guarded and hops to a
+            // later main-actor turn, so recovery never races this call.
+            NSLog("[CrowTelemetry tmux:server_died_midrun bindings=\(bindings.count)]")
+            onServerLost?()
         }
         guard !tmuxBinary.isEmpty, !socketPath.isEmpty else {
             // Backend wasn't configured this run (tmux not discovered).
@@ -783,7 +847,7 @@ public final class TmuxBackend {
         if serverWasAlreadyLive {
             Self.reconcileBundledConfigIfStale(controller: ctrl, configURL: confURL)
         }
-        return ctrl
+        return (ctrl, !serverWasAlreadyLive)
     }
 
     // MARK: - Stale-config reconciliation (#450)
@@ -1203,6 +1267,7 @@ public enum TmuxBackendError: Error, CustomStringConvertible {
     case unknownTerminal(UUID)
     case bindingMismatch(expected: String, actual: String)
     case windowNotFound(Int)
+    case serverCrashed
     case notConfigured
 
     public var description: String {
@@ -1215,6 +1280,8 @@ public enum TmuxBackendError: Error, CustomStringConvertible {
             return "TmuxBackend binding mismatch: expected \(expected), got \(actual)"
         case let .windowNotFound(index):
             return "TmuxBackend: no live window at index \(index)"
+        case .serverCrashed:
+            return "TmuxBackend: tmux server was not running (crashed or rebooted); cockpit was recreated empty"
         case .notConfigured:
             return "TmuxBackend.configure(...) was not called this run (no tmux ≥ 3.3 binary was found)"
         }

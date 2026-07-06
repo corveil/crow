@@ -54,6 +54,12 @@ public final class AppState {
     /// and enables the "Restart Manager" action. Reset when the Manager relaunches.
     public var managerProcessExited: Bool = false
 
+    /// `true` while Crow auto-recovers from a tmux server crash (#588): set at
+    /// detection, cleared once every tracked terminal settles (`.shellReady`
+    /// or `.timedOut`) or by a fallback timeout. Drives the crash-specific
+    /// "tmux server crashed — reconnecting and resuming…" terminal overlay.
+    public var tmuxCrashRecovering: Bool = false
+
     /// The agent seeded into new sessions when the caller doesn't pick one.
     /// Mirrors `AppConfig.defaultAgentKind` so creation flows can read the
     /// current default without a config round-trip.
