@@ -144,6 +144,14 @@ public struct Scaffolder {
         try Self.bundledShowImageSkill()
             .write(toFile: showImageSkillPath, atomically: true, encoding: .utf8)
 
+        // The `/crow-image` slash command — a user-facing front door to the same
+        // Images panel, complementing the crow-show-image skill (CROW-593).
+        let commandsDir = (claudeDir as NSString).appendingPathComponent("commands")
+        try fm.createDirectory(atPath: commandsDir, withIntermediateDirectories: true)
+        let imageCommandPath = (commandsDir as NSString).appendingPathComponent("crow-image.md")
+        try Self.bundledImageCommand()
+            .write(toFile: imageCommandPath, atomically: true, encoding: .utf8)
+
         // Shared attribution footer rules (issue #443)
         let attributionFooterPath = (attributionSkillsDir as NSString).appendingPathComponent("FOOTER.md")
         let attributionFooter = Self.bundledAttributionFooter()
@@ -533,6 +541,30 @@ public struct Scaffolder {
     Supported: PNG, JPG, GIF, WEBP, SVG. The directory is ephemeral (cleared on
     restart) and lives outside the git worktree, so it never pollutes commits.
     """
+
+    /// The `/crow-image` slash command body (user-facing front door to the
+    /// Images panel). Inline fallback keeps it working without repo/template
+    /// (CROW-593).
+    public static func bundledImageCommand() -> String {
+        if let content = loadFromRepo("commands/crow-image.md") {
+            return content
+        }
+        if let url = Bundle.main.url(forResource: "crow-image-command.md", withExtension: "template"),
+           let content = try? String(contentsOf: url) {
+            return content
+        }
+        return """
+        ---
+        description: Show an image in Crow's Images panel — pass the file path as the argument
+        ---
+
+        Make the image at `$ARGUMENTS` visible in Crow's Images panel:
+
+        1. If `CROW_ARTIFACTS_DIR` is empty, this isn't a Crow session — tell the user and stop.
+        2. Otherwise copy `$ARGUMENTS` into `$CROW_ARTIFACTS_DIR` (create it if needed), with a clear filename.
+        3. Confirm the filename and that it now shows in Crow's Images panel.
+        """
+    }
 
     /// The crow-batch-workspace SKILL.md template bundled with the app.
     static func bundledBatchSkill() -> String {
