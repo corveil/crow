@@ -560,13 +560,31 @@ func makeCommandRouter(
         // Board actions — forward-only (need the app's coordinators to spawn
         // workspaces / mutate the global allowlist). Error when the app isn't
         // running, like quick-action.
+        // Work-on-issue types `/crow-workspace <url>` into the primary Manager
+        // terminal and lets that agent do the worktree/session setup. Forwarded
+        // to the app when it's running; with the app down the daemon drives its
+        // OWN Manager window directly — it registered that window, so it holds
+        // the live tmux binding (no stale-index adoption). (ADR 0007; M-E2)
         "work-on-issue": { params in
-            guard let forwardSocket else {
-                throw DaemonRPCError.applicationError("Starting work on an issue requires the Crow desktop app to be running")
+            if let forwardSocket {
+                do { return try forwardToApp("work-on-issue", params, socket: forwardSocket) }
+                catch let error as DaemonRPCError { throw error }
+                catch { /* app not running → fall through to local send */ }
             }
-            do { return try forwardToApp("work-on-issue", params, socket: forwardSocket) }
-            catch let error as DaemonRPCError { throw error }
-            catch { throw DaemonRPCError.applicationError("Crow desktop app not reachable") }
+            guard sessionService != nil else {
+                throw DaemonRPCError.applicationError(
+                    "Working on an issue requires either the Crow desktop app or tmux on the daemon host")
+            }
+            guard let url = params["url"]?.stringValue, !url.isEmpty else {
+                throw DaemonRPCError.invalidParams("url required")
+            }
+            return try await MainActor.run {
+                guard let managerTerminal = appState.terminals[AppState.managerSessionID]?.first else {
+                    throw DaemonRPCError.applicationError("The Manager is still starting — try again in a moment")
+                }
+                TerminalRouter.send(managerTerminal, text: "/crow-workspace \(url)\n")
+                return ["ok": .bool(true)]
+            }
         },
         // Starting a review forwards to the app when it's running; with the app
         // down it runs on the daemon's own SessionService — cloning the PR,
