@@ -81,7 +81,7 @@ let liveById = {};
 // the app isn't running.
 let selectedBoard = null; // 'tickets' | 'reviews' | 'allowlist' | null
 const boardData = { tickets: null, reviews: null, allowlist: null };
-let ticketFilter = 'In Progress'; // pipeline segment ('All' or a status rawValue)
+let ticketFilter = 'All'; // pipeline segment ('All' or a status rawValue); default to All so the board isn't misread as empty when work moves to Done
 let allowlistHideGlobal = false;
 const allowlistSelection = new Set();
 // Session multi-select (#5): toggled by the sidebar checkmark button; holds the
