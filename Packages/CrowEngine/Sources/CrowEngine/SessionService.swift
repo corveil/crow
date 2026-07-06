@@ -937,7 +937,7 @@ public final class SessionService {
     /// full crash recovery; alive (user detach / client-only death) → just
     /// recreate the attach surface and leave every window running.
     @MainActor
-    func handleCockpitClientExit() {
+    public func handleCockpitClientExit() {
         guard !appState.tmuxCrashRecovering else { return }
         if TmuxBackend.shared.isRunning {
             NSLog("[CrowTelemetry tmux:cockpit_client_reattach]")
@@ -961,7 +961,7 @@ public final class SessionService {
     /// never-dispatched launch in `pendingLaunchCommands` pastes it exactly
     /// once, as on first creation. No per-session user clicks required (#588).
     @MainActor
-    func handleTmuxServerCrash() {
+    public func handleTmuxServerCrash() {
         guard !appState.tmuxCrashRecovering else { return }
         if let last = lastCrashRecoveryAt, Date().timeIntervalSince(last) < 10 {
             NSLog("[CrowTelemetry tmux:server_crash_recovery_debounced]")
