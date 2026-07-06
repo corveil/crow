@@ -69,12 +69,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// CROW-490 review for the race this replaced.
     private var corveilInstallTail: Task<String?, Never>?
 
-    /// True when launched as a pure `crowd` client (env `CROW_CLIENT_MODE`): the
-    /// app renders state pushed by `crowd` and routes actions to it over RPC
-    /// instead of running its own engine, socket-server, tracker, and scheduler.
-    /// The strangler flag for Stage F — off by default (local engine) (CROW-581).
+    /// The app is a pure `crowd` client BY DEFAULT (Stage 4/F cutover): it renders
+    /// state pushed by `crowd` and routes actions to it over RPC instead of running
+    /// its own engine, socket-server, tracker, and scheduler. Escape hatch back to
+    /// the legacy in-app engine is `CROW_LOCAL_ENGINE=1` — kept until client mode is
+    /// battle-tested, at which point the legacy path + the daemon's `forwardToApp`
+    /// are retired in a follow-up. Connect-only: `crowd` must be running (the app
+    /// attaches; it does not spawn it) (CROW-581).
     private var isCrowdClientMode: Bool {
-        ProcessInfo.processInfo.environment["CROW_CLIENT_MODE"] != nil
+        ProcessInfo.processInfo.environment["CROW_LOCAL_ENGINE"] == nil
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -1022,6 +1025,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // (host-side; crowd owns spawning + the store). Idempotent (Stage 3b/F).
             client.onHydrated = { [weak service] in service?.adoptExistingSurfaces() }
             client.connect()
+            NSLog("[Crow] crowd-client mode: attaching to %@. If the window stays empty, "
+                + "ensure crowd is running (connect-only) or relaunch with CROW_LOCAL_ENGINE=1.",
+                CrowdClient.defaultURL().absoluteString)
         }
 
         // Start socket server — local-engine mode only. In client mode crowd owns
