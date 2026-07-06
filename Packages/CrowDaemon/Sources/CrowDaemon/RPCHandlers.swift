@@ -165,6 +165,7 @@ func makeCommandRouter(
                         "ticket_url": session.ticketURL.map { .string($0) } ?? .null,
                         "ticket_badge": session.ticketBadgeLabel.map { .string($0) } ?? .null,
                         "provider": session.provider.map { .string($0.rawValue) } ?? .null,
+                        "review_author": session.reviewAuthor.map { .string($0) } ?? .null,
                     ]
                     if let worktree = appState.primaryWorktree(for: session.id) {
                         object["repo"] = .string(worktree.repoName)
@@ -937,6 +938,18 @@ func makeCommandRouter(
             }
             await tracker.addMergeLabel(sessionID: id)
             return ["ok": .bool(true)]
+        },
+
+        // Run a scheduled job on demand — forward-only: the JobScheduler and the
+        // `onRunJob` hook live in the desktop app's process (the daemon doesn't
+        // run jobs yet), so this needs the app running (CROW-593).
+        "run-job": { params in
+            guard let forwardSocket else {
+                throw DaemonRPCError.applicationError("Running a job requires the Crow desktop app to be running")
+            }
+            do { return try forwardToApp("run-job", params, socket: forwardSocket) }
+            catch let error as DaemonRPCError { throw error }
+            catch { throw DaemonRPCError.applicationError("Crow desktop app not reachable") }
         },
     ])
 }
