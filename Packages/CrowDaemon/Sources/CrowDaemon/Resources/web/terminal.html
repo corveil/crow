@@ -18,10 +18,24 @@
       width: 100%;
       height: 100%;
     }
+    /* Our own right-click menu — tmux's mouse menu is suppressed below. */
+    #ctxmenu {
+      position: fixed; z-index: 50; display: none;
+      background: #252526; border: 1px solid #3c3c3c; border-radius: 6px;
+      padding: 4px; min-width: 140px; box-shadow: 0 4px 16px rgba(0,0,0,.4);
+      font: 13px -apple-system, system-ui, sans-serif; color: #d4d4d4; user-select: none;
+    }
+    #ctxmenu button {
+      display: block; width: 100%; text-align: left; background: none; border: 0;
+      color: inherit; padding: 6px 10px; border-radius: 4px; cursor: pointer; font: inherit;
+    }
+    #ctxmenu button:hover { background: #04395e; }
+    #ctxmenu button:disabled { color: #6a6a6a; cursor: default; background: none; }
   </style>
 </head>
 <body>
   <div id="terminal"></div>
+  <div id="ctxmenu"></div>
   <script src="/xterm/xterm.js"></script>
   <script src="/xterm/xterm-addon-fit.js"></script>
   <script src="/xterm/xterm-addon-image.js"></script>
@@ -52,11 +66,87 @@
       });
       term.loadAddon(fitAddon);
       term.loadAddon(imageAddon);
+
+      // The shared tmux server sets `mouse on` (crow-tmux.conf) so the macOS
+      // surface gets wheel-scrollback + drag-copy through tmux copy-mode. In the
+      // browser that's wrong: xterm.js enters mouse-reporting mode, forwards every
+      // click/drag to tmux, and tmux draws its OWN right-click menu and eats
+      // drag-select — so text can't be copied. Swallow the mouse-tracking
+      // DECSET/DECRST toggles (?1000/1002/1003/1006/…) at the parser so xterm.js
+      // never reports the mouse: native selection, our context menu, and
+      // wheel-scroll all work client-side instead (CROW-581). Inner apps that
+      // want the mouse (vim/htop) lose it in the browser — an acceptable trade.
+      const MOUSE_MODES = new Set([1000, 1001, 1002, 1003, 1005, 1006, 1015, 1016]);
+      function swallowMouseMode(params) {
+        const arr = params && params.params ? params.params : params;
+        const len = arr ? arr.length : 0;
+        for (let i = 0; i < len; i++) {
+          const v = arr[i];
+          if (MOUSE_MODES.has(Array.isArray(v) ? v[0] : v)) return true; // handled → drop it
+        }
+        return false; // not a mouse mode → let xterm apply it normally
+      }
+      term.parser.registerCsiHandler({ prefix: '?', final: 'h' }, swallowMouseMode);
+      term.parser.registerCsiHandler({ prefix: '?', final: 'l' }, swallowMouseMode);
+
       term.open(document.getElementById('terminal'));
 
       const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
       const ws = new WebSocket(proto + '://' + window.location.host + '/terminal');
       ws.binaryType = 'arraybuffer';
+
+      function sendToPTY(text) {
+        if (text && ws.readyState === WebSocket.OPEN) {
+          ws.send(new TextEncoder().encode(text));
+        }
+      }
+
+      // Copy/paste. Cross-platform combos that never steal the shell's Ctrl+C
+      // (SIGINT): Cmd+C/V on macOS, Ctrl+Shift+C/V elsewhere. Copy is a no-op
+      // (passes through) when there's no selection.
+      function copySelection() {
+        const sel = term.getSelection();
+        if (sel) { navigator.clipboard.writeText(sel).catch(function () {}); }
+      }
+      function pasteClipboard() {
+        navigator.clipboard.readText().then(sendToPTY).catch(function () {});
+      }
+      term.attachCustomKeyEventHandler(function (e) {
+        if (e.type !== 'keydown') return true;
+        const copyCombo = (e.metaKey && !e.ctrlKey) || (e.ctrlKey && e.shiftKey);
+        if (copyCombo && (e.key === 'c' || e.key === 'C')) {
+          if (term.hasSelection()) { copySelection(); return false; }
+          return true; // no selection → let it through (e.g. Ctrl+C SIGINT)
+        }
+        if (copyCombo && (e.key === 'v' || e.key === 'V')) { pasteClipboard(); return false; }
+        return true;
+      });
+
+      // Custom right-click menu (tmux's is suppressed by the mouse-mode swallow).
+      const menu = document.getElementById('ctxmenu');
+      function hideMenu() { menu.style.display = 'none'; }
+      function addItem(label, enabled, fn) {
+        const b = document.createElement('button');
+        b.textContent = label;
+        b.disabled = !enabled;
+        b.onclick = function () { hideMenu(); fn(); };
+        menu.appendChild(b);
+      }
+      document.getElementById('terminal').addEventListener('contextmenu', function (e) {
+        e.preventDefault();
+        menu.innerHTML = '';
+        const hasSel = term.hasSelection();
+        addItem('Copy', hasSel, copySelection);
+        addItem('Paste', true, pasteClipboard);
+        addItem('Select All', true, function () { term.selectAll(); });
+        addItem('Clear', true, function () { term.clear(); });
+        menu.style.display = 'block';
+        const mw = menu.offsetWidth || 140, mh = menu.offsetHeight || 120;
+        menu.style.left = Math.min(e.clientX, window.innerWidth - mw - 4) + 'px';
+        menu.style.top = Math.min(e.clientY, window.innerHeight - mh - 4) + 'px';
+      });
+      window.addEventListener('click', hideMenu);
+      window.addEventListener('blur', hideMenu);
 
       function sendResize() {
         fitAddon.fit();
