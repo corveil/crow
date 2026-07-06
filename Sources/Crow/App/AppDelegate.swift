@@ -602,7 +602,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let hostBridge = AppHostBridge()
         self.appHostBridge = hostBridge
         let service = SessionService(store: store, appState: appState, telemetryPort: config.telemetry.enabled ? config.telemetry.port : nil, providerManager: providerManager, hostBridge: hostBridge)
-        service.hydrateState()
+        // Client mode gets ALL state from crowd (get-state), not the local store —
+        // so skip the local hydrate (store reads/writes, migrations, gh backfills).
+        // The service is kept only for host-side surface adoption (CROW-581, F).
+        if !isCrowdClientMode { service.hydrateState() }
         self.sessionService = service
         NSLog("[Crow] Session state hydrated (%d sessions)", appState.sessions.count)
 
@@ -1015,6 +1018,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let client = CrowdClient(appState: appState)
             crowdClient = client
             wireCrowdClientActions(appState)
+            // After each hydrate, adopt crowd's tmux windows so terminals render
+            // (host-side; crowd owns spawning + the store). Idempotent (Stage 3b/F).
+            client.onHydrated = { [weak service] in service?.adoptExistingSurfaces() }
             client.connect()
         }
 
