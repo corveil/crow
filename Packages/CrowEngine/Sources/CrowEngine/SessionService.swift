@@ -309,7 +309,7 @@ public final class SessionService {
     /// synchronously pinned the main actor for seconds on profiles with many
     /// persisted rows (each `registerTerminal` spawns a subprocess) — #293.
     @MainActor
-    func rebuildAllSurfaces(forceRegister: Bool = false) {
+    public func rebuildAllSurfaces(forceRegister: Bool = false) {
         // Wire BEFORE re-registering so the sentinel's .shellReady is never lost.
         wireTerminalReadiness()
 
