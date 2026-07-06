@@ -20,4 +20,10 @@ import CrowCore
         #expect(body.contains("name: crow-show-image"))
         #expect(body.contains("CROW_ARTIFACTS_DIR"))
     }
+
+    @Test func imageSlashCommandIsBundled() {
+        let body = Scaffolder.bundledImageCommand()
+        #expect(body.contains("$ARGUMENTS"))
+        #expect(body.contains("CROW_ARTIFACTS_DIR"))
+    }
 }
