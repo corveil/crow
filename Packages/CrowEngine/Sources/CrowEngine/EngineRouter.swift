@@ -407,6 +407,16 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                 await MainActor.run { capturedAppState.onCreateManager?(agent) }
                 return ["ok": .bool(true)]
             },
+            // CROW-593: run a scheduled job on demand from the web Jobs list.
+            // Reuses the app's `onRunJob` hook (bound to `JobScheduler.runNow`),
+            // which fires the job regardless of its enabled flag or schedule.
+            "run-job": { @Sendable params in
+                guard let idStr = params["job_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
+                    throw RPCError.invalidParams("job_id required")
+                }
+                await MainActor.run { capturedAppState.onRunJob?(id) }
+                return ["ok": .bool(true)]
+            },
             // Available coding agents for the web's new-manager menu (#2 /
             // CROW-593). Mirrors the desktop's AgentRegistry-backed picker.
             "list-agents": { @Sendable _ in

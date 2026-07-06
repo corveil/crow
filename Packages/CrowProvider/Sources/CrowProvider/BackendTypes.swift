@@ -196,13 +196,17 @@ public struct PRMetadata: Sendable {
     public let headRefName: String
     public let headRefOid: String
     public let baseRefName: String
+    /// PR author login (e.g. "octocat"). Empty when the provider didn't surface
+    /// it. Used to show "PR by @author" on a review session (CROW-593).
+    public let author: String
 
-    public init(title: String, number: Int, headRefName: String, headRefOid: String, baseRefName: String) {
+    public init(title: String, number: Int, headRefName: String, headRefOid: String, baseRefName: String, author: String = "") {
         self.title = title
         self.number = number
         self.headRefName = headRefName
         self.headRefOid = headRefOid
         self.baseRefName = baseRefName
+        self.author = author
     }
 }
 
