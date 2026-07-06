@@ -514,15 +514,20 @@ function closeContextMenu() {
   if (m) m.remove();
 }
 
-// Right-click a board card → a small menu to copy its link. Reuses the
-// ctx-menu styling; positioned at the cursor like showSessionMenu.
-function showCardMenu(e, url) {
+// Right-click a board card → a small menu to copy its link(s). Pass an array of
+// { label, url }; entries with no url are dropped. Reuses ctx-menu styling,
+// positioned at the cursor like showSessionMenu.
+function showCardMenu(e, items) {
   e.preventDefault();
   closeContextMenu();
+  const links = (items || []).filter((it) => it && it.url);
+  if (!links.length) return;
   const menu = el('div', 'ctx-menu');
-  const item = el('div', 'ctx-item', 'Copy link');
-  item.onclick = (ev) => { ev.stopPropagation(); closeContextMenu(); copyToClipboard(url); };
-  menu.appendChild(item);
+  for (const it of links) {
+    const item = el('div', 'ctx-item', it.label);
+    item.onclick = (ev) => { ev.stopPropagation(); closeContextMenu(); copyToClipboard(it.url); };
+    menu.appendChild(item);
+  }
   document.body.appendChild(menu);
   const x = Math.min(e.clientX, window.innerWidth - menu.offsetWidth - 8);
   const y = Math.min(e.clientY, window.innerHeight - menu.offsetHeight - 8);
@@ -718,11 +723,10 @@ function renderHeader(s) {
   root.appendChild(top);
 
   if (s.ticket_title) root.appendChild(el('div', 'subtle', s.ticket_title));
-  // Review sessions: surface the PR author from the matching review request.
-  if (s.kind === 'review') {
-    const rev = reviewForSession(s.id);
-    if (rev && rev.author) root.appendChild(el('div', 'subtle', 'PR by @' + rev.author));
-  }
+  // Review sessions: surface the PR author from the matching review request
+  // (only review sessions have a review_session_id that matches).
+  const rev = reviewForSession(s.id);
+  if (rev && rev.author) root.appendChild(el('div', 'subtle', 'PR by @' + rev.author));
   // Repo · branch on the left, worktree path pushed to the right (like the desktop).
   if (s.repo || s.branch || s.worktree_path) {
     const metaRow = el('div', 'meta meta-row');
@@ -959,6 +963,12 @@ async function refreshBoard(key) {
   boardData[key] = data;
   if (changed) renderSidebar(); // badge counts
   if (changed && selectedBoard === key) renderBoard();
+  // Reviews carry the PR author shown in the session header — re-render it when
+  // reviews (re)load so a selected review session picks the author up.
+  if (key === 'reviews' && selectedId) {
+    const sel = sessions.find((x) => x.id === selectedId);
+    if (sel) renderHeader(sel);
+  }
 }
 
 function renderBoard() {
@@ -1058,7 +1068,10 @@ function renderTicketBoard(root) {
 
 function ticketCard(i) {
   const card = el('div', 'board-card status-accent');
-  card.oncontextmenu = (e) => showCardMenu(e, i.url);
+  card.oncontextmenu = (e) => showCardMenu(e, [
+    { label: 'Copy issue link', url: i.url },
+    i.pr_url ? { label: 'Copy PR link', url: i.pr_url } : null,
+  ]);
   const sc = TICKET_STATUS_COLOR[i.project_status] || 'var(--text-muted)';
   card.style.borderLeftColor = sc;
   const meta = el('div', 'card-meta');
@@ -1113,7 +1126,7 @@ function renderReviewBoard(root) {
 
 function reviewCard(r) {
   const card = el('div', 'board-card');
-  card.oncontextmenu = (e) => showCardMenu(e, r.url);
+  card.oncontextmenu = (e) => showCardMenu(e, [{ label: 'Copy PR link', url: r.url }]);
   const meta = el('div', 'card-meta');
   meta.appendChild(el('span', 'repo-tag', r.repo));
   meta.appendChild(linkChip('#' + r.pr_number, r.url, 'pr'));
