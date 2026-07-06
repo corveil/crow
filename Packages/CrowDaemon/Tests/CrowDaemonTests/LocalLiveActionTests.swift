@@ -109,12 +109,14 @@ import CrowPersistence
         appState: AppState = AppState(),
         tracker: IssueTracker? = nil,
         sessionService: SessionService? = nil,
-        autoRespond: AutoRespondCoordinator? = nil
+        autoRespond: AutoRespondCoordinator? = nil,
+        jobScheduler: JobScheduler? = nil
     ) -> CommandRouter {
         makeCommandRouter(
             appState: appState, store: JSONStore(), git: GitManager(),
             devRoot: NSTemporaryDirectory(), cockpit: nil, forwardSocket: nil,
-            tracker: tracker, sessionService: sessionService, autoRespond: autoRespond)
+            tracker: tracker, sessionService: sessionService, autoRespond: autoRespond,
+            jobScheduler: jobScheduler)
     }
 
     // MARK: mark-issue-done / add-merge-label
@@ -157,6 +159,28 @@ import CrowPersistence
             params: ["session_id": .string(AppState.managerSessionID.uuidString)]))
         #expect(resp.error?.code == RPCErrorCode.applicationError)
         #expect(resp.error?.message == "Cannot delete manager session")
+    }
+
+    // MARK: run-job
+
+    @Test @MainActor func runJobErrorsWithoutScheduler() async {
+        // App down (forwardSocket nil) and no local JobScheduler → applicationError.
+        let resp = await router().handle(request: JSONRPCRequest(
+            id: 1, method: "run-job", params: ["job_id": .string(UUID().uuidString)]))
+        #expect(resp.error?.code == RPCErrorCode.applicationError)
+    }
+
+    @Test @MainActor func runJobReachesLocalPathAndValidatesJobID() async {
+        // Scheduler present → the local path is entered; a missing job_id is then a
+        // param error (proves we didn't stop at the scheduler guard).
+        let appState = AppState()
+        let service = SessionService(
+            store: JSONStore(), appState: appState,
+            providerManager: ProviderManager(), hostBridge: NoopHostBridge())
+        let scheduler = JobScheduler(appState: appState, sessionService: service)
+        let resp = await router(appState: appState, jobScheduler: scheduler)
+            .handle(request: JSONRPCRequest(id: 1, method: "run-job"))
+        #expect(resp.error?.code == RPCErrorCode.invalidParams)
     }
 
     // MARK: quick-action
