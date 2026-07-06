@@ -27,6 +27,11 @@ final class CrowdClient {
     private var pending: [Int: CheckedContinuation<[String: JSONValue], Error>] = [:]
     private var closed = false
 
+    /// Fired on the main actor after each successful `get-state` hydrate. The app
+    /// uses this in client mode to adopt crowd's tmux windows for rendering
+    /// (Stage 3b/F).
+    var onHydrated: (@MainActor () -> Void)?
+
     /// Resolve `crowd`'s `/rpc` URL. Defaults to loopback:8787 (the daemon's
     /// default HTTP port); override with `CROW_DAEMON_URL` (a full `ws://…/rpc`).
     static func defaultURL() -> URL {
@@ -153,6 +158,7 @@ final class CrowdClient {
             let data = try JSONEncoder().encode(result)
             let snapshot = try JSONDecoder().decode(DaemonStateSnapshot.self, from: data)
             appState.apply(snapshot)
+            onHydrated?()
         } catch {
             NSLog("[CrowdClient] hydrate failed: %@", String(describing: error))
         }
