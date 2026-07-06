@@ -3,6 +3,7 @@ import Testing
 import CrowCore
 import CrowPersistence
 import CrowTerminal
+@testable import CrowEngine
 @testable import Crow
 
 /// Covers the #588 tmux-server-crash auto-recovery: `handleTmuxServerCrash`
