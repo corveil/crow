@@ -287,6 +287,83 @@ func makeCommandRouter(
             return ["closed": .bool(true)]
         },
 
+        // Terminal-surface ops (rename / (re)launch agent / retry readiness /
+        // restart Manager / restart tmux server). Forwarded to the app when it's
+        // running (its SessionService owns the surface); with the app down the
+        // daemon runs them on its OWN SessionService. Needs tmux; without a
+        // SessionService they error, as before (ADR 0007; CROW-581, Stage 3b/F).
+        "rename-terminal": { params in
+            guard let sidStr = params["session_id"]?.stringValue, let sid = UUID(uuidString: sidStr),
+                  let tidStr = params["terminal_id"]?.stringValue, let tid = UUID(uuidString: tidStr),
+                  let name = params["name"]?.stringValue else {
+                throw DaemonRPCError.invalidParams("session_id, terminal_id, name required")
+            }
+            if let forwardSocket {
+                do { return try forwardToApp("rename-terminal", params, socket: forwardSocket) }
+                catch let error as DaemonRPCError { throw error }
+                catch { /* app down → local */ }
+            }
+            guard let sessionService else {
+                throw DaemonRPCError.applicationError("Renaming a terminal requires the Crow desktop app or tmux on the daemon host")
+            }
+            let ok = await MainActor.run { sessionService.renameTerminal(sessionID: sid, terminalID: tid, name: name) }
+            return ["ok": .bool(ok)]
+        },
+        "launch-agent": { params in
+            guard let tidStr = params["terminal_id"]?.stringValue, let tid = UUID(uuidString: tidStr) else {
+                throw DaemonRPCError.invalidParams("terminal_id required")
+            }
+            if let forwardSocket {
+                do { return try forwardToApp("launch-agent", params, socket: forwardSocket) }
+                catch let error as DaemonRPCError { throw error }
+                catch { /* app down → local */ }
+            }
+            guard let sessionService else {
+                throw DaemonRPCError.applicationError("Launching an agent requires the Crow desktop app or tmux on the daemon host")
+            }
+            await MainActor.run { sessionService.launchAgent(terminalID: tid) }
+            return ["ok": .bool(true)]
+        },
+        "retry-readiness": { params in
+            guard let tidStr = params["terminal_id"]?.stringValue, let tid = UUID(uuidString: tidStr) else {
+                throw DaemonRPCError.invalidParams("terminal_id required")
+            }
+            if let forwardSocket {
+                do { return try forwardToApp("retry-readiness", params, socket: forwardSocket) }
+                catch let error as DaemonRPCError { throw error }
+                catch { /* app down → local */ }
+            }
+            guard let sessionService else {
+                throw DaemonRPCError.applicationError("Retrying readiness requires the Crow desktop app or tmux on the daemon host")
+            }
+            await MainActor.run { sessionService.retryReadiness(terminalID: tid) }
+            return ["ok": .bool(true)]
+        },
+        "restart-manager": { params in
+            if let forwardSocket {
+                do { return try forwardToApp("restart-manager", params, socket: forwardSocket) }
+                catch let error as DaemonRPCError { throw error }
+                catch { /* app down → local */ }
+            }
+            guard let sessionService else {
+                throw DaemonRPCError.applicationError("Restarting the Manager requires the Crow desktop app or tmux on the daemon host")
+            }
+            await MainActor.run { sessionService.restartManager(devRoot: devRoot) }
+            return ["ok": .bool(true)]
+        },
+        "restart-tmux-server": { params in
+            if let forwardSocket {
+                do { return try forwardToApp("restart-tmux-server", params, socket: forwardSocket) }
+                catch let error as DaemonRPCError { throw error }
+                catch { /* app down → local */ }
+            }
+            guard let sessionService else {
+                throw DaemonRPCError.applicationError("Restarting the tmux server requires the Crow desktop app or tmux on the daemon host")
+            }
+            await MainActor.run { sessionService.restartTmuxServer() }
+            return ["ok": .bool(true)]
+        },
+
         "add-worktree": { params in
             guard let idStr = params["session_id"]?.stringValue, let sessionID = UUID(uuidString: idStr),
                   let repo = params["repo"]?.stringValue, !repo.isEmpty,
