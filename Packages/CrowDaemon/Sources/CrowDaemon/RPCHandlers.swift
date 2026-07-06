@@ -68,6 +68,24 @@ private func setSessionStatusLocally(
     return ["session_id": .string(id.uuidString), "status": .string(status.rawValue)]
 }
 
+/// The PR-status JSON the app's `makeEngineRouter` emits for a populated
+/// `PRStatus` (the `get-pr-status` body and the per-session `pr` entry in
+/// `list-sessions-live`). Kept in one place so both daemon handlers stay
+/// byte-identical to the app's shape (CROW-581, M-E).
+private func prStatusJSON(_ pr: PRStatus) -> [String: JSONValue] {
+    [
+        "has_pr": .bool(true),
+        "checks": .string(pr.checksPass.rawValue),
+        "review": .string(pr.reviewStatus.rawValue),
+        "merge": .string(pr.mergeable.rawValue),
+        "is_open": .bool(pr.isOpen),
+        "is_merged": .bool(pr.isMerged),
+        "ready_to_merge": .bool(pr.isReadyToMerge),
+        "has_blockers": .bool(pr.hasBlockers),
+        "failed_checks": .array(pr.failedCheckNames.map { .string($0) }),
+    ]
+}
+
 /// Builds the daemon's `CommandRouter`. Handlers mirror the corresponding
 /// closures in the macOS app's `AppDelegate.startSocketServer`, but operate
 /// purely on `AppState` + `JSONStore` (+ `GitManager` / the tmux `cockpit`)
@@ -92,7 +110,8 @@ func makeCommandRouter(
     forwardSocket: String? = nil,
     tracker: IssueTracker? = nil,
     allowList: AllowListService? = nil,
-    sessionService: SessionService? = nil
+    sessionService: SessionService? = nil,
+    autoRespond: AutoRespondCoordinator? = nil
 ) -> CommandRouter {
     // Serializes review kickoffs (see start-review) — one per router instance.
     let reviewSerializer = ReviewKickoffSerializer()
@@ -398,39 +417,73 @@ func makeCommandRouter(
             }
         },
 
-        // Delete is forward-only: the app's teardown (worktree removal, tmux
-        // window kill, scheduler cleanup) lives in SessionService, so we don't
-        // attempt a partial local delete when the app isn't running.
+        // Forwarded to the app when it's running (its SessionService teardown is
+        // the source of truth). With the app down, the daemon runs the same
+        // teardown on its OWN SessionService — worktree/branch cleanup, tmux
+        // window destroy, store removal — guarding the manager session like the
+        // app does. Needs tmux; without a SessionService it errors, as before
+        // (ADR 0007; CROW-581, M-E).
         "delete-session": { params in
-            guard let idStr = params["session_id"]?.stringValue, UUID(uuidString: idStr) != nil else {
+            if let forwardSocket {
+                do { return try forwardToApp("delete-session", params, socket: forwardSocket) }
+                catch let error as DaemonRPCError { throw error }
+                catch { /* app not running → fall through to local teardown */ }
+            }
+            guard let sessionService else {
+                throw DaemonRPCError.applicationError("Deleting a session requires the Crow desktop app or tmux on the daemon host")
+            }
+            guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
                 throw DaemonRPCError.invalidParams("session_id required")
             }
-            guard let forwardSocket else {
-                throw DaemonRPCError.applicationError("Deleting a session requires the Crow desktop app to be running")
+            guard id != AppState.managerSessionID else {
+                throw DaemonRPCError.applicationError("Cannot delete manager session")
             }
-            do { return try forwardToApp("delete-session", params, socket: forwardSocket) }
-            catch let error as DaemonRPCError { throw error }
-            catch { throw DaemonRPCError.applicationError("Crow desktop app not reachable; cannot delete session") }
+            await sessionService.deleteSession(id: id)
+            return ["deleted": .bool(true)]
         },
 
-        // Live PR status (checks/review/merge) — in-memory on the app, so
-        // forward-only; report no PR when the app isn't running.
+        // Live PR status (checks/review/merge). Forwarded to the app when it's
+        // running; with the app down, read the daemon's OWN `appState.prStatus`
+        // — populated by its IssueTracker on every board poll (startBoardPoll) —
+        // so the web renders the same PR badge headless. Same 9-field shape as
+        // the app's makeEngineRouter (CROW-581, M-E).
         "get-pr-status": { params in
-            guard let forwardSocket else { return ["has_pr": .bool(false)] }
-            do { return try forwardToApp("get-pr-status", params, socket: forwardSocket) }
-            catch let error as DaemonRPCError { throw error }
-            catch { return ["has_pr": .bool(false)] }
+            guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
+                throw DaemonRPCError.invalidParams("session_id required")
+            }
+            if let forwardSocket {
+                do { return try forwardToApp("get-pr-status", params, socket: forwardSocket) }
+                catch let error as DaemonRPCError { throw error }
+                catch { /* app not running → fall through to local read */ }
+            }
+            return await MainActor.run {
+                guard let pr = appState.prStatus[id] else { return ["has_pr": .bool(false)] }
+                return prStatusJSON(pr)
+            }
         },
 
-        // Trigger a PR quick action — forward-only (needs the app's agent
-        // terminal + coordinator to dispatch the prompt).
+        // Trigger a PR quick action — forwarded to the app when running; with the
+        // app down the daemon dispatches on its OWN AutoRespondCoordinator, which
+        // pastes the deterministic prompt into the session's managed tmux
+        // terminal (best-effort: silently skips if there's no live sendable
+        // managed terminal, exactly like the app). Needs tmux (ADR 0007; M-E).
         "quick-action": { params in
-            guard let forwardSocket else {
-                throw DaemonRPCError.applicationError("Quick actions require the Crow desktop app to be running")
+            if let forwardSocket {
+                do { return try forwardToApp("quick-action", params, socket: forwardSocket) }
+                catch let error as DaemonRPCError { throw error }
+                catch { /* app not running → fall through to local dispatch */ }
             }
-            do { return try forwardToApp("quick-action", params, socket: forwardSocket) }
-            catch let error as DaemonRPCError { throw error }
-            catch { throw DaemonRPCError.applicationError("Crow desktop app not reachable") }
+            guard let autoRespond else {
+                throw DaemonRPCError.applicationError("Quick actions require the Crow desktop app or tmux on the daemon host")
+            }
+            guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
+                throw DaemonRPCError.invalidParams("session_id required")
+            }
+            guard let actionStr = params["action"]?.stringValue, let action = QuickAction(rawValue: actionStr) else {
+                throw DaemonRPCError.invalidParams("action required (fixConflicts, addressChanges, fixChecks, mergePR)")
+            }
+            await MainActor.run { autoRespond.dispatchManual(action: action, sessionID: id) }
+            return ["dispatched": .bool(true), "action": .string(action.rawValue)]
         },
 
         // Board data (Ticket Board / Reviews / Allowlist) is in-memory on the app
@@ -675,15 +728,38 @@ func makeCommandRouter(
             catch { throw DaemonRPCError.applicationError("Crow desktop app not reachable") }
         },
 
-        // Batched live per-session state (remote-control + PR) — runtime-only on
-        // the app, so forward-only. Empty map when the app isn't running so the
-        // web keeps rendering its store-derived base list.
+        // Batched live per-session state (remote-control + PR + PR link).
+        // Forwarded to the app when running; with the app down the daemon builds
+        // the same map from its OWN appState — prStatus from the board poll, RC
+        // flags from the runtime terminal set, and the (possibly memory-only) PR
+        // link from `links(for:)`. Matches the app's makeEngineRouter shape so the
+        // web shows PR badges wherever the desktop does (CROW-581, M-E).
         "list-sessions-live": { params in
-            let empty: [String: JSONValue] = ["sessions": .object([:])]
-            guard let forwardSocket else { return empty }
-            do { return try forwardToApp("list-sessions-live", params, socket: forwardSocket) }
-            catch let error as DaemonRPCError { throw error }
-            catch { return empty }
+            if let forwardSocket {
+                do { return try forwardToApp("list-sessions-live", params, socket: forwardSocket) }
+                catch let error as DaemonRPCError { throw error }
+                catch { /* app not running → fall through to local build */ }
+            }
+            return await MainActor.run {
+                var out: [String: JSONValue] = [:]
+                for session in appState.sessions {
+                    let id = session.id
+                    let available = AgentRegistry.shared.agent(for: session.agentKind)?.supportsRemoteControl ?? false
+                    let rcActive = appState.terminals(for: id)
+                        .contains { appState.remoteControlActiveTerminals.contains($0.id) }
+                    var entry: [String: JSONValue] = [
+                        "remote_control_active": .bool(rcActive),
+                        "remote_control_available": .bool(available),
+                    ]
+                    entry["pr"] = appState.prStatus[id].map { .object(prStatusJSON($0)) }
+                        ?? .object(["has_pr": .bool(false)])
+                    if let prLink = appState.links(for: id).first(where: { $0.linkType == .pr }) {
+                        entry["pr_link"] = .object(["label": .string(prLink.label), "url": .string(prLink.url)])
+                    }
+                    out[id.uuidString] = .object(entry)
+                }
+                return ["sessions": .object(out)]
+            }
         },
 
         // App config (the web Settings modal). Forward to the app when it's
@@ -799,13 +875,24 @@ func makeCommandRouter(
                 try setSessionStatusLocally(id: id, to: .inReview, appState: appState, store: store)
             }
         },
+        // Provider ticket transition (close / project-board move). Forwarded to
+        // the app when running; with the app down the daemon runs it on its OWN
+        // IssueTracker — a pure provider CLI call (gh/glab/Jira/Corveil), no
+        // terminal needed, fully headless (CROW-581, M-E).
         "mark-issue-done": { params in
-            guard let forwardSocket else {
-                throw DaemonRPCError.applicationError("Marking the issue done requires the Crow desktop app to be running")
+            if let forwardSocket {
+                do { return try forwardToApp("mark-issue-done", params, socket: forwardSocket) }
+                catch let error as DaemonRPCError { throw error }
+                catch { /* app not running → fall through to local */ }
             }
-            do { return try forwardToApp("mark-issue-done", params, socket: forwardSocket) }
-            catch let error as DaemonRPCError { throw error }
-            catch { throw DaemonRPCError.applicationError("Crow desktop app not reachable") }
+            guard let tracker else {
+                throw DaemonRPCError.applicationError("Marking the issue done requires the Crow desktop app or a provider-configured daemon")
+            }
+            guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
+                throw DaemonRPCError.invalidParams("session_id required")
+            }
+            await tracker.markIssueDone(sessionID: id)
+            return ["ok": .bool(true)]
         },
         "complete-session": { params in
             guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
@@ -833,13 +920,23 @@ func makeCommandRouter(
                 try setSessionStatusLocally(id: id, to: .active, appState: appState, store: store)
             }
         },
+        // Add the `crow:merge` label to the session's PR. Forwarded to the app
+        // when running; with the app down the daemon runs it on its OWN
+        // IssueTracker — a pure provider CLI call, fully headless (CROW-581, M-E).
         "add-merge-label": { params in
-            guard let forwardSocket else {
-                throw DaemonRPCError.applicationError("Adding the merge label requires the Crow desktop app to be running")
+            if let forwardSocket {
+                do { return try forwardToApp("add-merge-label", params, socket: forwardSocket) }
+                catch let error as DaemonRPCError { throw error }
+                catch { /* app not running → fall through to local */ }
             }
-            do { return try forwardToApp("add-merge-label", params, socket: forwardSocket) }
-            catch let error as DaemonRPCError { throw error }
-            catch { throw DaemonRPCError.applicationError("Crow desktop app not reachable") }
+            guard let tracker else {
+                throw DaemonRPCError.applicationError("Adding the merge label requires the Crow desktop app or a provider-configured daemon")
+            }
+            guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
+                throw DaemonRPCError.invalidParams("session_id required")
+            }
+            await tracker.addMergeLabel(sessionID: id)
+            return ["ok": .bool(true)]
         },
     ])
 }
