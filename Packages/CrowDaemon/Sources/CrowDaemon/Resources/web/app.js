@@ -514,6 +514,43 @@ function closeContextMenu() {
   if (m) m.remove();
 }
 
+// Right-click a board card → a small menu to copy its link. Reuses the
+// ctx-menu styling; positioned at the cursor like showSessionMenu.
+function showCardMenu(e, url) {
+  e.preventDefault();
+  closeContextMenu();
+  const menu = el('div', 'ctx-menu');
+  const item = el('div', 'ctx-item', 'Copy link');
+  item.onclick = (ev) => { ev.stopPropagation(); closeContextMenu(); copyToClipboard(url); };
+  menu.appendChild(item);
+  document.body.appendChild(menu);
+  const x = Math.min(e.clientX, window.innerWidth - menu.offsetWidth - 8);
+  const y = Math.min(e.clientY, window.innerHeight - menu.offsetHeight - 8);
+  menu.style.left = Math.max(4, x) + 'px';
+  menu.style.top = Math.max(4, y) + 'px';
+  setTimeout(() => document.addEventListener('click', closeContextMenu, { once: true }), 0);
+}
+
+// Clipboard with a legacy fallback (execCommand) for non-secure contexts where
+// navigator.clipboard is unavailable.
+function copyToClipboard(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).catch(() => fallbackCopy(text));
+  } else {
+    fallbackCopy(text);
+  }
+}
+function fallbackCopy(text) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand('copy'); } catch (_) { /* best effort */ }
+  document.body.removeChild(ta);
+}
+
 function showSessionMenu(e, s) {
   e.preventDefault();
   closeContextMenu();
@@ -657,6 +694,13 @@ function shorten(path) {
   return path.replace(/^\/Users\/[^/]+/, '~').replace(/^\/home\/[^/]+/, '~');
 }
 
+// The review request matching a review session (by review_session_id), from the
+// prefetched reviews board — so the session view can show the PR author.
+function reviewForSession(id) {
+  const rs = (boardData.reviews && boardData.reviews.reviews) || [];
+  return rs.find((r) => r.review_session_id === id) || null;
+}
+
 function renderHeader(s) {
   const root = document.getElementById('detail-header');
   root.innerHTML = '';
@@ -674,6 +718,11 @@ function renderHeader(s) {
   root.appendChild(top);
 
   if (s.ticket_title) root.appendChild(el('div', 'subtle', s.ticket_title));
+  // Review sessions: surface the PR author from the matching review request.
+  if (s.kind === 'review') {
+    const rev = reviewForSession(s.id);
+    if (rev && rev.author) root.appendChild(el('div', 'subtle', 'PR by @' + rev.author));
+  }
   // Repo · branch on the left, worktree path pushed to the right (like the desktop).
   if (s.repo || s.branch || s.worktree_path) {
     const metaRow = el('div', 'meta meta-row');
@@ -1009,6 +1058,7 @@ function renderTicketBoard(root) {
 
 function ticketCard(i) {
   const card = el('div', 'board-card status-accent');
+  card.oncontextmenu = (e) => showCardMenu(e, i.url);
   const sc = TICKET_STATUS_COLOR[i.project_status] || 'var(--text-muted)';
   card.style.borderLeftColor = sc;
   const meta = el('div', 'card-meta');
@@ -1063,6 +1113,7 @@ function renderReviewBoard(root) {
 
 function reviewCard(r) {
   const card = el('div', 'board-card');
+  card.oncontextmenu = (e) => showCardMenu(e, r.url);
   const meta = el('div', 'card-meta');
   meta.appendChild(el('span', 'repo-tag', r.repo));
   meta.appendChild(linkChip('#' + r.pr_number, r.url, 'pr'));
