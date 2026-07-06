@@ -206,7 +206,30 @@
     return field(labelText, sel, opts.help);
   }
 
-  // An editable chip list bound to a string[] on obj[key] (#7 / CROW-593) —
+  // Per-action agent override (coding / reviews / jobs / Manager), mirroring the
+  // desktop's four pickers. Bound to cfg.agentsByKind[actionKey]. "Use default"
+  // DELETES the key rather than setting null — `[String: AgentKind]` can't
+  // decode a null value on the Swift side (CROW-593).
+  function agentOverrideField(labelText, actionKey, help) {
+    cfg.agentsByKind = cfg.agentsByKind || {};
+    const sel = el('select', 'st-select');
+    const def = el('option', null, 'Use default');
+    def.value = '';
+    if (cfg.agentsByKind[actionKey] == null) def.selected = true;
+    sel.appendChild(def);
+    for (const a of agents) {
+      const o = el('option', null, a.name);
+      o.value = a.kind;
+      if (cfg.agentsByKind[actionKey] === a.kind) o.selected = true;
+      sel.appendChild(o);
+    }
+    sel.onchange = () => {
+      if (sel.value === '') delete cfg.agentsByKind[actionKey];
+      else cfg.agentsByKind[actionKey] = sel.value;
+      markDirty();
+    };
+    return field(labelText, sel, help);
+  }
   // matches the desktop's token chips instead of a newline textarea. Enter or
   // comma adds a chip; × or Backspace-on-empty removes one.
   function listField(labelText, obj, key, help) {
@@ -270,6 +293,12 @@
       body.appendChild(selectField('Default agent', cfg, 'defaultAgentKind',
         agents.map((a) => [a.kind, a.name + (a.default ? ' (default)' : '')]),
         { help: 'Used for new sessions unless overridden. Install more agent CLIs to add options.' }));
+      // Per-action overrides (coding / reviews / scheduled jobs / Manager),
+      // matching the desktop's four pickers. "Use default" clears the override.
+      body.appendChild(agentOverrideField('Agent for coding', 'work'));
+      body.appendChild(agentOverrideField('Agent for reviews', 'review'));
+      body.appendChild(agentOverrideField('Agent for scheduled jobs', 'job'));
+      body.appendChild(agentOverrideField('Agent for Manager', 'manager'));
     } else {
       body.appendChild(textField('Default agent', cfg, 'defaultAgentKind',
         { readonly: true, help: 'Only one agent is available. Install another agent CLI (Codex, Cursor, opencode) to choose.' }));
@@ -440,6 +469,18 @@
         render();
       };
       row.querySelector('.st-row-actions').insertBefore(dup, row.querySelector('.st-row-actions').firstChild);
+      // Run this job on demand (mirrors the desktop's play button). Acts on the
+      // persisted job, so nudge the user to save pending edits first (CROW-593).
+      const run = el('button', 'action-btn', 'Run now');
+      run.onclick = async () => {
+        if (dirty) { run.textContent = 'Save first'; setTimeout(() => { run.textContent = 'Run now'; }, 1200); return; }
+        run.disabled = true;
+        run.textContent = 'Running…';
+        try { await rpc('run-job', { job_id: job.id }); run.textContent = 'Started ✓'; }
+        catch (e) { run.textContent = 'Failed'; }
+        setTimeout(() => { run.disabled = false; run.textContent = 'Run now'; }, 1500);
+      };
+      row.querySelector('.st-row-actions').insertBefore(run, row.querySelector('.st-row-actions').firstChild);
       body.appendChild(row);
     }
     const add = el('button', 'st-add', '+ Add job');
