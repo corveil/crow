@@ -74,6 +74,9 @@ public struct Scaffolder {
         let attributionSkillsDir = (claudeDir as NSString).appendingPathComponent("skills/crow-attribution")
         try fm.createDirectory(atPath: attributionSkillsDir, withIntermediateDirectories: true)
 
+        let showImageSkillsDir = (claudeDir as NSString).appendingPathComponent("skills/crow-show-image")
+        try fm.createDirectory(atPath: showImageSkillsDir, withIntermediateDirectories: true)
+
         // Create crow-reviews directory for PR review clones
         let reviewsDir = (devRoot as NSString).appendingPathComponent("crow-reviews")
         try fm.createDirectory(atPath: reviewsDir, withIntermediateDirectories: true)
@@ -133,6 +136,13 @@ public struct Scaffolder {
         let createTicketSkillTemplate = Self.bundledCreateTicketSkill()
         try CrowAttribution.expandSkillBody(createTicketSkillTemplate, agentKind: managerAgentKind)
             .write(toFile: createTicketSkillPath, atomically: true, encoding: .utf8)
+
+        // Always overwrite the show-image skill (surfaces generated images in
+        // Crow's Images panel). No attribution expansion — it has no agent
+        // placeholders (CROW-593).
+        let showImageSkillPath = (showImageSkillsDir as NSString).appendingPathComponent("SKILL.md")
+        try Self.bundledShowImageSkill()
+            .write(toFile: showImageSkillPath, atomically: true, encoding: .utf8)
 
         // Shared attribution footer rules (issue #443)
         let attributionFooterPath = (attributionSkillsDir as NSString).appendingPathComponent("FOOTER.md")
@@ -467,6 +477,62 @@ public struct Scaffolder {
         All `gh` commands require `dangerouslyDisableSandbox: true`.
         """
     }
+
+    /// The crow-show-image SKILL.md — surfaces generated images in Crow's Images
+    /// panel via the per-session `$CROW_ARTIFACTS_DIR` (CROW-593). The inline
+    /// fallback is the complete skill, so scaffolding always writes a working
+    /// copy even without the repo file or bundled template.
+    public static func bundledShowImageSkill() -> String {
+        if let content = loadFromRepo("skills/crow-show-image/SKILL.md") {
+            return content
+        }
+        if let url = Bundle.main.url(forResource: "crow-show-image-SKILL.md", withExtension: "template"),
+           let content = try? String(contentsOf: url) {
+            return content
+        }
+        return Self.showImageSkillBody
+    }
+
+    /// Canonical crow-show-image body — kept in code so the inline fallback and
+    /// the repo/template sources stay identical.
+    static let showImageSkillBody = """
+    ---
+    name: crow-show-image
+    description: >-
+      Surface an image you've generated (a diagram, chart, screenshot, or
+      rendered figure) in Crow's Images panel so the user can see it inline.
+      Use whenever you produce a visual artifact worth showing.
+    ---
+
+    # Crow: Show Image
+
+    Make an image you've generated visible in Crow's Images panel (in the session
+    detail), so the user sees it inline instead of just a file path.
+
+    ## When to use
+
+    Use this when you've produced an image the user should see — a diagram you
+    drew, a chart, a screenshot, a rendered figure. Skip it for throwaway or
+    intermediate images the user didn't ask about.
+
+    Only works inside a Crow session, where `CROW_ARTIFACTS_DIR` is set.
+
+    ## How
+
+    1. Confirm you're in a Crow session — `CROW_ARTIFACTS_DIR` must be non-empty.
+       If it's unset, there's no Crow panel to show it in; skip this.
+    2. Copy the image into that directory (create it if needed), with a clear
+       name:
+
+       ```bash
+       mkdir -p "$CROW_ARTIFACTS_DIR" && cp <image> "$CROW_ARTIFACTS_DIR/<name>.png"
+       ```
+
+    3. Tell the user it's viewable in Crow's Images panel.
+
+    Supported: PNG, JPG, GIF, WEBP, SVG. The directory is ephemeral (cleared on
+    restart) and lives outside the git worktree, so it never pollutes commits.
+    """
 
     /// The crow-batch-workspace SKILL.md template bundled with the app.
     static func bundledBatchSkill() -> String {

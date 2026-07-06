@@ -206,6 +206,7 @@ public final class TmuxBackend {
         command: String?,
         trackReadiness: Bool,
         agentKind: AgentKind? = nil,
+        extraEnv: [String: String] = [:],
         newWindowTimeout: TimeInterval = TmuxController.defaultTimeout
     ) throws -> TmuxBinding {
         precondition(!tmuxBinary.isEmpty, "TmuxBackend.configure(...) must be called first")
@@ -241,6 +242,9 @@ public final class TmuxBackend {
             "CROW_SENTINEL": sentinelPath,
             "CROW_WRAPPER_LOG": wrapperLog,
         ]
+        // Caller-supplied vars (e.g. CROW_ARTIFACTS_DIR / CROW_SESSION_ID).
+        // Merged first so the built-ins below always win on any collision.
+        for (key, value) in extraEnv { env[key] = value }
         if let agentKind {
             for (key, value) in CrowAttribution.environmentEntries(for: agentKind) {
                 env[key] = value
