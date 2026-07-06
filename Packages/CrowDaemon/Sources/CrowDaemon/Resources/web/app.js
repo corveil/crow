@@ -61,6 +61,7 @@ function onServerChanged() {
     refreshLive();
     refreshBoard('tickets');
     refreshBoard('reviews');
+    if (selectedId) refreshArtifacts(selectedId);
   }, 50);
 }
 
@@ -583,7 +584,61 @@ async function selectSession(id) {
   setTimeout(fitTerminal, 50); // detail pane just became visible (mobile) — refit
   await refreshTerminals();
   refreshLive();
+  refreshArtifacts(id);
 }
+
+// ---------------------------------------------------------------------------
+// Artifacts — per-session generated images (diagrams/screenshots) the agent
+// dropped in the scratch dir. crowd lists them; the browser GETs each from the
+// sandboxed /artifacts route. A compact strip under the header; click to zoom.
+// ---------------------------------------------------------------------------
+const artifactsBySession = {};
+
+async function refreshArtifacts(id) {
+  try {
+    const res = await rpc('list-artifacts', { session_id: id });
+    artifactsBySession[id] = res.images || [];
+  } catch (_) { artifactsBySession[id] = []; }
+  if (id === selectedId) renderArtifactsStrip();
+}
+
+function renderArtifactsStrip() {
+  const root = document.getElementById('detail-artifacts');
+  if (!root) return;
+  root.innerHTML = '';
+  const images = artifactsBySession[selectedId] || [];
+  if (!images.length) { root.classList.remove('has-images'); return; }
+  root.classList.add('has-images');
+  const label = el('div', 'artifacts-label', 'Images');
+  root.appendChild(label);
+  const strip = el('div', 'artifacts-strip');
+  for (const img of images) {
+    const thumb = el('img', 'artifact-thumb');
+    thumb.src = img.url;
+    thumb.alt = img.name;
+    thumb.title = img.name;
+    thumb.loading = 'lazy';
+    thumb.onclick = () => openLightbox(img.url, img.name);
+    strip.appendChild(thumb);
+  }
+  root.appendChild(strip);
+}
+
+function openLightbox(url, alt) {
+  const box = document.getElementById('lightbox');
+  const img = document.getElementById('lightbox-img');
+  img.src = url;
+  img.alt = alt || '';
+  box.hidden = false;
+}
+
+(function wireLightbox() {
+  const box = document.getElementById('lightbox');
+  if (box) box.onclick = () => { box.hidden = true; document.getElementById('lightbox-img').src = ''; };
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && box && !box.hidden) { box.hidden = true; document.getElementById('lightbox-img').src = ''; }
+  });
+})();
 
 function shorten(path) {
   return path.replace(/^\/Users\/[^/]+/, '~').replace(/^\/home\/[^/]+/, '~');
@@ -1210,3 +1265,6 @@ refreshBoard('reviews');
 setInterval(() => {
   if (selectedBoard === 'tickets' || selectedBoard === 'reviews') refreshBoard(selectedBoard);
 }, 20000);
+// Poll the selected session's images — new files aren't store-backed, so no
+// `changed` nudge fires for them; a light 5s scan makes drops appear live.
+setInterval(() => { if (selectedId) refreshArtifacts(selectedId); }, 5000);

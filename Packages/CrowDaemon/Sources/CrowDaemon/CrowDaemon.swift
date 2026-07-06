@@ -153,6 +153,9 @@ public enum CrowDaemon {
         let httpRouter = Router()
         httpRouter.get("/health") { _, _ in "ok" }
         StaticAssets.mount(on: httpRouter, webDir: options.webDir)
+        // Per-session generated images (diagrams/screenshots an agent dropped
+        // in the scratch dir), served read-only + sandboxed (CROW-593).
+        Artifacts.mount(on: httpRouter)
         if let webDir = options.webDir {
             log("serving web UI live from \(webDir) (edit + refresh, no rebuild)")
         }
