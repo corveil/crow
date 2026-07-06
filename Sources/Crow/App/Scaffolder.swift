@@ -139,10 +139,21 @@ struct Scaffolder {
         try CrowAttribution.expandSkillBody(attributionFooter, agentKind: managerAgentKind)
             .write(toFile: attributionFooterPath, atomically: true, encoding: .utf8)
 
-        // Always overwrite settings.json (permissions for crow, gh, git commands)
-        let settingsPath = (claudeDir as NSString).appendingPathComponent("settings.json")
+        // Write Crow's required permissions to settings.local.json, not
+        // settings.json. settings.json is the user's own file —
+        // Crow never writes it and never has to reconcile with whatever the
+        // user puts there. settings.local.json is Claude Code's local-
+        // override layer: its `permissions.allow` entries are merged with
+        // settings.json's at load time, so crow/gh/git commands still run
+        // without a prompt. `mergeSettings` still guards this file too — a
+        // full overwrite on every launch would just move the "nukes my
+        // customizations" bug from one filename to another. It fills in
+        // only what's missing and leaves the file untouched when there's
+        // nothing to add.
+        let settingsPath = (claudeDir as NSString).appendingPathComponent("settings.local.json")
         let settingsTemplate = Self.bundledSettings()
-        try settingsTemplate.write(toFile: settingsPath, atomically: true, encoding: .utf8)
+        let mergedSettings = Self.mergeSettings(existingPath: settingsPath, template: settingsTemplate)
+        try mergedSettings.write(toFile: settingsPath, atomically: true, encoding: .utf8)
 
         // Create prompts directory for crow-workspace prompt files
         let promptsDir = (claudeDir as NSString).appendingPathComponent("prompts")
@@ -500,7 +511,10 @@ struct Scaffolder {
         return CrowAttribution.sharedFooterInstructions
     }
 
-    /// The settings.json template with pre-approved permissions.
+    /// The pre-approved-permissions template, sourced from the repo's own
+    /// `settings.json` (used as a bundled resource name, not a hint about
+    /// the runtime destination — see `scaffold(...)`, which writes this
+    /// content to `{devRoot}/.claude/settings.local.json`).
     static func bundledSettings() -> String {
         if let content = loadFromRepo("settings.json") {
             return content
@@ -557,6 +571,64 @@ struct Scaffolder {
           }
         }
         """
+    }
+
+    /// Merges `template` into whatever's already on disk at `existingPath`,
+    /// instead of overwriting it. Guarantees:
+    ///
+    /// - `permissions.allow`: the union of the template's and the existing
+    ///   file's entries — any bundled entry the user's file is missing gets
+    ///   appended, but nothing already there is ever removed.
+    /// - Every other top-level key (`outputStyle`, `statusLine`, `hooks`,
+    ///   `env`, a hand-edited `sandbox` block, …): filled in from the
+    ///   template only if the user's file doesn't already have that key.
+    ///   An existing value always wins, even if it differs from the
+    ///   template.
+    ///
+    /// Returns the existing file's contents byte-for-byte, untouched, when
+    /// there's nothing to add — so a user's formatting isn't churned on
+    /// every launch. Falls back to `template` verbatim when there's no
+    /// existing file yet, or it isn't valid JSON.
+    static func mergeSettings(existingPath: String, template: String) -> String {
+        guard let existingData = FileManager.default.contents(atPath: existingPath),
+              let existingString = String(data: existingData, encoding: .utf8),
+              let existingObj = try? JSONSerialization.jsonObject(with: existingData) as? [String: Any],
+              let templateData = template.data(using: .utf8),
+              let templateObj = try? JSONSerialization.jsonObject(with: templateData) as? [String: Any]
+        else {
+            return template
+        }
+
+        var merged = existingObj
+        var changed = false
+
+        for (key, templateValue) in templateObj {
+            if key == "permissions", let templatePerms = templateValue as? [String: Any] {
+                var mergedPerms = merged["permissions"] as? [String: Any] ?? [:]
+                let templateAllow = templatePerms["allow"] as? [String] ?? []
+                let existingAllow = mergedPerms["allow"] as? [String] ?? []
+                let existingSet = Set(existingAllow)
+                let missing = templateAllow.filter { !existingSet.contains($0) }
+                if !missing.isEmpty {
+                    mergedPerms["allow"] = existingAllow + missing
+                    merged["permissions"] = mergedPerms
+                    changed = true
+                }
+            } else if merged[key] == nil {
+                merged[key] = templateValue
+                changed = true
+            }
+        }
+
+        guard changed else { return existingString }
+
+        guard let mergedData = try? JSONSerialization.data(
+            withJSONObject: merged,
+            options: [.prettyPrinted, .sortedKeys]
+        ), let mergedString = String(data: mergedData, encoding: .utf8) else {
+            return existingString
+        }
+        return mergedString
     }
 
     /// Try to load a file from the repo root (for development builds).

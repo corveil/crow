@@ -26,7 +26,7 @@ The crow CLI is safe for concurrent use. Multiple `crow` commands can run simult
 ## Autonomous Execution
 
 This skill runs autonomously without permission prompts because:
-1. All `crow`, `gh`, `glab`, and `git` commands are pre-approved in `{devRoot}/.claude/settings.json`
+1. All `crow`, `gh`, `glab`, and `git` commands are pre-approved in `{devRoot}/.claude/settings.local.json`
 2. All commands use `dangerouslyDisableSandbox: true` (sandbox excludes these binaries)
 3. `setup.sh` is pre-approved via `Bash(bash .claude/skills/crow-workspace/setup.sh *)`
 

@@ -13,7 +13,8 @@ All persistent state lives under `~/Library/Application Support/crow/` (see `Pac
 | `~/.local/share/crow/crow.sock`                                       | Unix socket for CLI ↔ app IPC                                 |
 | `{devRoot}/.claude/config.json`                                       | Workspace configuration (see below)                          |
 | `{devRoot}/.claude/CLAUDE.md`                                         | Manager-tab context with the `crow` CLI reference             |
-| `{devRoot}/.claude/settings.json`                                     | Pre-approved permissions for Claude Code sessions             |
+| `{devRoot}/.claude/settings.local.json`                               | Crow-managed pre-approved permissions, merged on every launch  |
+| `{devRoot}/.claude/settings.json`                                     | The user's own file — Crow never reads or writes it            |
 | `{devRoot}/.claude/prompts/`                                          | Prompt files used by the `/crow-workspace` skill              |
 | `{devRoot}/.claude/skills/crow-workspace/SKILL.md`                    | Workspace setup skill invoked via `/crow-workspace`           |
 | `{devRoot}/.claude/skills/crow-workspace/setup.sh`                    | Deterministic setup script called by the skill                |

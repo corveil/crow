@@ -138,7 +138,7 @@ When you finish the wizard, Crow scaffolds the following under the dev root (see
 ├── crow-reviews/                     # temporary clones for PR reviews
 └── .claude/
     ├── CLAUDE.md                     # manager-tab context (crow CLI reference)
-    ├── settings.json                 # pre-approved permissions for crow/gh/git
+    ├── settings.local.json           # pre-approved permissions for crow/gh/git (settings.json is yours — untouched)
     ├── config.json                   # workspace config (workspaces + defaults)
     ├── prompts/                      # prompt files for crow-workspace sessions
     └── skills/
