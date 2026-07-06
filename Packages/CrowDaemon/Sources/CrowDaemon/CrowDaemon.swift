@@ -89,12 +89,11 @@ public enum CrowDaemon {
         // `wireTerminalReadiness` arms the callback that launches the agent once
         // its tmux window is ready. No tmux → no spawning (nil; spawn RPCs keep
         // forwarding / erroring).
-        // `autoRespond` backs `quick-action`'s local path — it pastes the
-        // deterministic prompt into a session's managed tmux terminal. Built
-        // alongside SessionService because both need a live cockpit to have a
-        // terminal to send to. Manual quick-actions bypass the
-        // AutoRespondSettings toggles (the click is explicit consent), so the
-        // default settings here are never consulted (CROW-581, M-E).
+        // `autoRespond` backs quick-action's local path AND (standalone) the
+        // auto-respond-to-PR-transition automation. Built alongside SessionService
+        // because both need a live cockpit to have a terminal to send to. Manual
+        // quick-actions bypass the AutoRespondSettings toggles; the automation
+        // path honors them, so read them fresh from config (CROW-581, M-E).
         let sessionService: SessionService?
         let autoRespond: AutoRespondCoordinator?
         (sessionService, autoRespond) = await MainActor.run { () -> (SessionService?, AutoRespondCoordinator?) in
@@ -109,7 +108,7 @@ public enum CrowDaemon {
             service.wireTerminalReadiness()
             let coordinator = AutoRespondCoordinator(
                 appState: appState, providerManager: providerManager,
-                settingsProvider: { AutoRespondSettings() })
+                settingsProvider: { ConfigStore.loadConfig(devRoot: options.devRoot)?.autoRespond ?? AutoRespondSettings() })
             return (service, coordinator)
         }
 
@@ -128,7 +127,17 @@ public enum CrowDaemon {
         // itself — it holds the live tmux binding in-process, so no stale-index
         // adoption of the app's window is needed (ADR 0007; CROW-581, M-E2).
         if forwardSocket == nil, let sessionService {
-            await MainActor.run { sessionService.ensureManagerSession(devRoot: options.devRoot) }
+            await MainActor.run {
+                sessionService.ensureManagerSession(devRoot: options.devRoot)
+                // Standalone (app down): the daemon runs the IssueTracker
+                // background automations the app normally owns — crow:auto
+                // pickup, auto-respond, auto-merge, auto-rebase, auto-cleanup —
+                // so they keep working headless. Gated to standalone so app-up
+                // doesn't double-drive them (ADR 0007; CROW-581).
+                wireTrackerAutomations(
+                    tracker: tracker, appState: appState, sessionService: sessionService,
+                    autoRespond: autoRespond, devRoot: options.devRoot)
+            }
         }
 
         let commandRouter = makeCommandRouter(
@@ -180,6 +189,57 @@ public enum CrowDaemon {
 
         log("HTTP/WS listening on http://\(options.host):\(options.httpPort) (terminal at /)")
         try await app.runService()
+    }
+
+    /// Wire the IssueTracker's background automation hooks for standalone
+    /// (app-down) operation, mirroring the desktop app's AppDelegate wiring but
+    /// adapted for headless: spawns go to the daemon's Manager terminal /
+    /// SessionService, and macOS notifications are dropped (the daemon has no
+    /// UI). Config-gated behaviors read `{devRoot}/.claude/config.json` fresh on
+    /// each poll so Settings edits take effect. Called only when the app isn't
+    /// running (`forwardSocket == nil`) so the app owns these when it is — no
+    /// double-drive (CROW-581).
+    @MainActor
+    private static func wireTrackerAutomations(
+        tracker: IssueTracker,
+        appState: AppState,
+        sessionService: SessionService,
+        autoRespond: AutoRespondCoordinator?,
+        devRoot: String
+    ) {
+        func config() -> AppConfig? { ConfigStore.loadConfig(devRoot: devRoot) }
+
+        // crow:auto — run /crow-workspace on the Manager for a newly-labeled
+        // assigned issue (the tracker strips the label after, so once-only).
+        tracker.autoCreateWatcherEnabledProvider = { config()?.autoCreateWatcherEnabled ?? false }
+        tracker.onAutoCreateRequest = { issue in
+            guard let managerTerminal = appState.terminals[AppState.managerSessionID]?.first else {
+                log("crow:auto: Manager terminal not ready; dropped \(issue.url)")
+                return
+            }
+            TerminalRouter.send(managerTerminal, text: "/crow-workspace \(issue.url)\n")
+        }
+
+        // Auto-respond to PR transitions (changes-requested / checks-failing) and
+        // auto-rebase conflict hand-off — both go through the coordinator, which
+        // pastes the prompt into the session's managed terminal.
+        if let autoRespond {
+            tracker.onPRStatusTransitions = { transitions in autoRespond.handle(transitions) }
+            tracker.onAutoRebaseConflicts = { sessionID, _, _ in
+                autoRespond.dispatchManual(action: .fixConflicts, sessionID: sessionID)
+            }
+            tracker.respondToChangesRequestedProvider = { config()?.autoRespond.respondToChangesRequested ?? false }
+            tracker.autoRebaseAndResolveConflictsProvider = { config()?.autoRespond.autoRebaseAndResolveConflicts ?? false }
+        }
+
+        // Auto-merge (enable GitHub native auto-merge on eligible Crow PRs). The
+        // user-facing notification is dropped headless; the audit line is NSLog'd
+        // at the tracker's call site regardless.
+        tracker.autoMergeWatcherEnabledProvider = { config()?.autoMergeWatcherEnabled ?? false }
+
+        // Auto-cleanup — the retention reaper asks the tracker to delete a
+        // session; run the daemon's own SessionService teardown.
+        tracker.onDeleteSession = { id in await sessionService.deleteSession(id: id) }
     }
 
     /// Drive `IssueTracker.refresh()` on an explicit async tick. The tracker's
