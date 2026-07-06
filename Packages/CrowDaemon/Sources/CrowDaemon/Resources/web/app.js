@@ -593,6 +593,7 @@ async function selectSession(id) {
 // sandboxed /artifacts route. A compact strip under the header; click to zoom.
 // ---------------------------------------------------------------------------
 const artifactsBySession = {};
+let artifactsCollapsed = localStorage.getItem('crow.artifacts.collapsed') === '1';
 
 async function refreshArtifacts(id) {
   try {
@@ -609,8 +610,20 @@ function renderArtifactsStrip() {
   const images = artifactsBySession[selectedId] || [];
   if (!images.length) { root.classList.remove('has-images'); return; }
   root.classList.add('has-images');
-  const label = el('div', 'artifacts-label', 'Images');
-  root.appendChild(label);
+  root.classList.toggle('collapsed', artifactsCollapsed);
+
+  // Clickable header — chevron + label + count — toggles the strip.
+  const header = el('div', 'artifacts-header');
+  header.appendChild(el('span', 'artifacts-chevron', '▸')); // ▸ (CSS rotates when open)
+  header.appendChild(el('span', 'artifacts-label', 'Images'));
+  header.appendChild(el('span', 'artifacts-count', String(images.length)));
+  header.onclick = () => {
+    artifactsCollapsed = !artifactsCollapsed;
+    localStorage.setItem('crow.artifacts.collapsed', artifactsCollapsed ? '1' : '0');
+    root.classList.toggle('collapsed', artifactsCollapsed);
+  };
+  root.appendChild(header);
+
   const strip = el('div', 'artifacts-strip');
   for (const img of images) {
     const thumb = el('img', 'artifact-thumb');

@@ -469,13 +469,36 @@ html, body {
   padding: 8px 12px;
   border-bottom: 1px solid var(--border, #2a2a2a);
 }
+.artifacts-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+  margin-bottom: 6px;
+}
+.artifacts-chevron {
+  font-size: 10px;
+  color: var(--text-muted, #888);
+  transition: transform 0.12s ease;
+}
+#detail-artifacts:not(.collapsed) .artifacts-chevron { transform: rotate(90deg); }
 .artifacts-label {
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--text-muted, #888);
-  margin-bottom: 6px;
 }
+.artifacts-count {
+  font-size: 10px;
+  color: var(--text-muted, #888);
+  background: var(--bg-elev, #1b1b1b);
+  border: 1px solid var(--border, #2a2a2a);
+  border-radius: 8px;
+  padding: 0 6px;
+  line-height: 15px;
+}
+#detail-artifacts.collapsed .artifacts-strip { display: none; }
 .artifacts-strip {
   display: flex;
   gap: 8px;
