@@ -1,7 +1,7 @@
 import Foundation
 
 /// Where an allow-list pattern was found.
-public enum AllowSource: Hashable, Sendable {
+public enum AllowSource: Hashable, Sendable, Codable {
     /// Found in `~/.claude/settings.json`.
     case global
     /// Found in a worktree's `.claude/settings.local.json`.
@@ -9,7 +9,7 @@ public enum AllowSource: Hashable, Sendable {
 }
 
 /// An aggregated allow-list entry collected from one or more sources.
-public struct AllowEntry: Identifiable, Hashable, Sendable {
+public struct AllowEntry: Identifiable, Hashable, Sendable, Codable {
     /// The permission pattern string (e.g. `"Bash(npm test:*)"`, `"Read"`).
     public let pattern: String
     /// All locations where this pattern was found.
