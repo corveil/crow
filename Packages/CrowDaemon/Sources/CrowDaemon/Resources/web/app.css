@@ -460,3 +460,56 @@ html, body {
 .link-chip.link-pr { color: var(--gold); border-color: var(--border-strong); }
 .pr-status-inline { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-left: 4px; }
 .pr-stat { font-size: 11px; font-weight: 600; }
+
+/* Artifacts — per-session generated images (CROW-593). Hidden until the
+   session has any; a compact horizontal strip under the detail header. */
+#detail-artifacts { display: none; }
+#detail-artifacts.has-images {
+  display: block;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border, #2a2a2a);
+}
+.artifacts-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted, #888);
+  margin-bottom: 6px;
+}
+.artifacts-strip {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+.artifact-thumb {
+  height: 56px;
+  width: auto;
+  max-width: 120px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid var(--border, #2a2a2a);
+  background: var(--bg-elev, #1b1b1b);
+  cursor: zoom-in;
+  flex: 0 0 auto;
+  transition: border-color 0.12s ease;
+}
+.artifact-thumb:hover { border-color: var(--blue, #4a86e8); }
+
+#lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.82);
+  cursor: zoom-out;
+}
+#lightbox[hidden] { display: none; }
+#lightbox img {
+  max-width: 92vw;
+  max-height: 92vh;
+  border-radius: 8px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+}

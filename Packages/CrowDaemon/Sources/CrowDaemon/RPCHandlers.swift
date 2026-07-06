@@ -452,6 +452,25 @@ func makeCommandRouter(
                 return ["agents": .array(items)]
             }
         },
+        // Per-session generated images from the scratch dir. Local + read-only —
+        // the browser then GETs each `url` from the sandboxed /artifacts route
+        // (CROW-593).
+        "list-artifacts": { params in
+            guard let sessionID = params["session_id"]?.stringValue else {
+                throw DaemonRPCError.invalidParams("session_id required")
+            }
+            let fmt = ISO8601DateFormatter()
+            let images: [JSONValue] = Artifacts.list(sessionID: sessionID).map { item in
+                let encoded = item.name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? item.name
+                return .object([
+                    "name": .string(item.name),
+                    "size": .int(item.size),
+                    "mtime": .string(fmt.string(from: item.mtime)),
+                    "url": .string("/artifacts/\(sessionID)/\(encoded)"),
+                ])
+            }
+            return ["images": .array(images)]
+        },
         // Board reads. When the daemon owns the tracker/allowList (CROW-581 M-C)
         // they answer locally off `appState` — populated by the daemon's own
         // IssueTracker/AllowListService — so the boards work with the app down.
