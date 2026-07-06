@@ -215,7 +215,8 @@ public struct GitLabCodeBackend: CodeBackend {
             number: (item["iid"] as? Int) ?? parsed.number,
             headRefName: (item["source_branch"] as? String) ?? "",
             headRefOid: (item["sha"] as? String) ?? "",
-            baseRefName: (item["target_branch"] as? String) ?? ""
+            baseRefName: (item["target_branch"] as? String) ?? "",
+            author: ((item["author"] as? [String: Any])?["username"] as? String) ?? ""
         )
     }
 

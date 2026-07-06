@@ -66,6 +66,13 @@ public struct Session: Identifiable, Codable, Sendable {
     // and `.unknown` identically as the neutral base.
     public var ticketPriority: TicketPriority?
 
+    // PR author login for a `.review` session (e.g. "octocat"), captured at
+    // review-creation from the PR itself. Lets the UI show "PR by @author" even
+    // when the Reviews board (which otherwise carries the author) is empty. Nil
+    // for non-review sessions and for legacy review sessions predating this
+    // field (CROW-593).
+    public var reviewAuthor: String?
+
     /// Whether this session is a Manager (orchestration) session. Managers run
     /// Claude Code in the devRoot and are excluded from PR/issue tracking.
     public var isManager: Bool { kind == .manager }
@@ -141,7 +148,8 @@ public struct Session: Identifiable, Codable, Sendable {
         agentSessionStartedAt: Date? = nil,
         agentSessionEndedAt: Date? = nil,
         orgGoal: String? = nil,
-        ticketPriority: TicketPriority? = nil
+        ticketPriority: TicketPriority? = nil,
+        reviewAuthor: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -163,6 +171,7 @@ public struct Session: Identifiable, Codable, Sendable {
         self.agentSessionEndedAt = agentSessionEndedAt
         self.orgGoal = orgGoal
         self.ticketPriority = ticketPriority
+        self.reviewAuthor = reviewAuthor
     }
 
     /// Parse a GitHub PR URL (`https://github.com/<owner>/<repo>/pull/<number>`)
@@ -203,10 +212,10 @@ public struct Session: Identifiable, Codable, Sendable {
         agentSessionEndedAt = try container.decodeIfPresent(Date.self, forKey: .agentSessionEndedAt)
         orgGoal = try container.decodeIfPresent(String.self, forKey: .orgGoal)
         ticketPriority = try container.decodeIfPresent(TicketPriority.self, forKey: .ticketPriority)
+        reviewAuthor = try container.decodeIfPresent(String.self, forKey: .reviewAuthor)
         // CROW-573 renamed `pinned` → `locked`. Prefer the new key, but fall
         // back to the legacy `pinned` key so sessions locked under CROW-569
-        // remain locked after upgrade.
-        if let locked = try container.decodeIfPresent(Bool.self, forKey: .locked) {
+        // remain locked after upgrade.        if let locked = try container.decodeIfPresent(Bool.self, forKey: .locked) {
             self.locked = locked
         } else {
             let legacy = try? decoder.container(keyedBy: LegacyCodingKeys.self)

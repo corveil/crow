@@ -63,6 +63,36 @@ public final class SessionService {
         return true
     }
 
+    /// One-time backfill of `reviewAuthor` for legacy review sessions that
+    /// predate the field. For each review session missing an author, re-fetch it
+    /// from the PR (via the stored `.pr` link) and persist. Runs detached and is
+    /// idempotent — after the first fill the value is on disk (CROW-593).
+    private func backfillReviewAuthors() {
+        guard let manager = providerManager else { return }
+        let targets: [(id: UUID, url: String)] = appState.sessions.compactMap { session in
+            guard session.kind == .review, (session.reviewAuthor ?? "").isEmpty,
+                  let link = store.data.links.first(where: { $0.sessionID == session.id && $0.linkType == .pr })
+            else { return nil }
+            return (session.id, link.url)
+        }
+        guard !targets.isEmpty else { return }
+        Task { @MainActor in
+            for target in targets {
+                guard let backend = manager.codeBackend(for: .github),
+                      let meta = try? await backend.fetchPRMetadata(prURL: target.url),
+                      !meta.author.isEmpty else { continue }
+                if let i = appState.sessions.firstIndex(where: { $0.id == target.id }) {
+                    appState.sessions[i].reviewAuthor = meta.author
+                }
+                store.mutate { data in
+                    if let i = data.sessions.firstIndex(where: { $0.id == target.id }) {
+                        data.sessions[i].reviewAuthor = meta.author
+                    }
+                }
+            }
+        }
+    }
+
     // MARK: - Hydrate State from Store
 
     public func hydrateState() {
@@ -104,6 +134,11 @@ public final class SessionService {
                 }
             }
         }
+
+        // One-time backfill: legacy review sessions were persisted before
+        // `reviewAuthor` existed, so they show no author when the Reviews board
+        // is empty. Re-fetch it from the PR and persist, once (CROW-593).
+        backfillReviewAuthors()
 
         // Restore persisted hook state so sidebar status colors reflect the true
         // state immediately on relaunch — before any live hook event arrives.
@@ -1890,7 +1925,8 @@ public final class SessionService {
             agentKind: appState.agentKind(for: .review),
             ticketTitle: prep.prTitle,
             provider: .github,
-            lastReviewedHeadSha: prep.headRefOid
+            lastReviewedHeadSha: prep.headRefOid,
+            reviewAuthor: prMetadata.author.isEmpty ? nil : prMetadata.author
         )
 
         let worktree = SessionWorktree(
