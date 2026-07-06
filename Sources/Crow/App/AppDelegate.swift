@@ -246,6 +246,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor
     private func handleTmuxUnresponsive(error: TmuxError) {
         guard !tmuxUnresponsiveAlertShowing else { return }
+        // Crash auto-recovery is already killing + rebuilding the server; a
+        // transient timeout during that rebuild must not stack a modal alert
+        // on top of it (#588).
+        guard !appState.tmuxCrashRecovering else { return }
         tmuxUnresponsiveAlertShowing = true
         defer { tmuxUnresponsiveAlertShowing = false }
 
@@ -456,6 +460,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
             TmuxBackend.shared.onUnresponsive = { [weak self] error in
                 Task { @MainActor in self?.handleTmuxUnresponsive(error: error) }
+            }
+            // Crash auto-recovery (#588). `sessionService` is looked up at
+            // fire time, so wiring before the service exists is fine (same
+            // pattern as onUnresponsive above).
+            TmuxBackend.shared.onCockpitExit = { [weak self] _ in
+                Task { @MainActor in self?.sessionService?.handleCockpitClientExit() }
+            }
+            TmuxBackend.shared.onServerLost = { [weak self] in
+                Task { @MainActor in self?.sessionService?.handleTmuxServerCrash() }
             }
             NSLog("[Crow] tmux backend configured: binary=\(tmuxBinary) socket=\(socketPath)")
         } else {

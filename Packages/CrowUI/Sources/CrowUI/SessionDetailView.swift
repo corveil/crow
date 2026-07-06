@@ -616,14 +616,19 @@ struct ReadinessAwareTerminal: View {
                 // interactive. Common on cold tmux start + App Nap on a
                 // backgrounded app + heavy zshrc. The user can retry now, or
                 // the app will retry automatically next time it returns to
-                // the foreground.
+                // the foreground. During tmux crash auto-recovery (#588) the
+                // same overlay reads as the crash, not a generic slow shell.
                 VStack(spacing: 10) {
                     Image(systemName: "clock.badge.exclamationmark")
                         .font(.system(size: 28))
                         .foregroundStyle(.yellow)
-                    Text("Terminal didn't become ready in time")
+                    Text(appState.tmuxCrashRecovering
+                        ? "tmux server crashed — reconnecting and resuming…"
+                        : "Terminal didn't become ready in time")
                         .font(.headline)
-                    Text("The shell took longer than expected to start. This usually means the app was backgrounded while a tmux session was warming up.")
+                    Text(appState.tmuxCrashRecovering
+                        ? "Crow is rebuilding this terminal and resuming its agent with claude --continue. If it stays stuck, Retry re-arms the readiness watch."
+                        : "The shell took longer than expected to start. This usually means the app was backgrounded while a tmux session was warming up.")
                         .font(.caption)
                         .foregroundStyle(CorveilTheme.textMuted)
                         .multilineTextAlignment(.center)
@@ -658,7 +663,9 @@ struct ReadinessAwareTerminal: View {
                 VStack(spacing: 8) {
                     ProgressView()
                         .controlSize(.regular)
-                    Text(readiness == .uninitialized ? "Waiting for terminal..." : "Shell starting...")
+                    Text(appState.tmuxCrashRecovering
+                        ? "tmux server crashed — reconnecting and resuming…"
+                        : (readiness == .uninitialized ? "Waiting for terminal..." : "Shell starting..."))
                         .font(.caption)
                         .foregroundStyle(CorveilTheme.textMuted)
                 }

@@ -82,7 +82,19 @@ public struct TerminalSurfaceView: NSViewRepresentable {
     /// `setFrameSize` here races with autolayout and is unnecessary.
     @MainActor
     private static func attach(surface: XTermSurfaceView, to container: NSView) {
-        container.addSubview(surface)
+        // A previous (destroyed) surface may still be parented here — a server
+        // restart/crash-recovery replaces the shared cockpit surface (#588).
+        // Drop the dead view so it doesn't sit over the live one.
+        for stale in container.subviews where stale is XTermSurfaceView && stale !== surface {
+            stale.removeFromSuperview()
+        }
+        // Keep the surface below any existing search bar — a plain addSubview
+        // would stack it on top and hide the bar.
+        if let existingBar = container.subviews.first(where: { $0 is TerminalSearchBar }) {
+            container.addSubview(surface, positioned: .below, relativeTo: existingBar)
+        } else {
+            container.addSubview(surface)
+        }
         surface.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
             surface.leadingAnchor.constraint(equalTo: container.leadingAnchor),
@@ -92,8 +104,12 @@ public struct TerminalSurfaceView: NSViewRepresentable {
         ])
 
         // Float the Cmd+F search bar over the surface (#471 gap 2). Only
-        // install one per container; later re-parents keep the same bar.
-        if container.subviews.contains(where: { $0 is TerminalSearchBar }) == false {
+        // install one per container; later re-parents keep the same bar —
+        // but re-point it at the current surface in case a restart swapped
+        // the cockpit view out from under it.
+        if let bar = container.subviews.first(where: { $0 is TerminalSearchBar }) as? TerminalSearchBar {
+            bar.setHostSurface(surface)
+        } else {
             let bar = TerminalSearchBar(frame: .zero)
             bar.translatesAutoresizingMaskIntoConstraints = false
             bar.setHostSurface(surface)

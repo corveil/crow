@@ -650,6 +650,124 @@ struct TmuxBackendTests {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         #expect(status == "on")
     }
+
+    // MARK: - Server-crash detection (#588)
+
+    /// `shutdown(killServer: true)` on an already-dead server must complete
+    /// (kill-server on a missing socket fails fast and is swallowed) and leave
+    /// the backend able to register fresh windows.
+    @Test func shutdownOnDeadServerCompletesAndRecovers() throws {
+        let socket = sharedSocketPath()
+        let backend = makeBackend(socket: socket)
+        defer { backend.shutdown() }
+
+        _ = try backend.registerTerminal(
+            id: UUID(), name: "victim", cwd: NSHomeDirectory(),
+            command: nil, trackReadiness: false
+        )
+        // Simulate the crash: kill the server out-of-band.
+        killLeftoverServer(socket: socket)
+
+        backend.shutdown(killServer: true)
+
+        let binding = try backend.registerTerminal(
+            id: UUID(), name: "reborn", cwd: NSHomeDirectory(),
+            command: nil, trackReadiness: false
+        )
+        #expect(binding.windowIndex >= 0)
+        #expect(backend.isRunning)
+    }
+
+    /// A cached controller whose session vanished mid-run means the server
+    /// died while the app was live: the next backend call fires `onServerLost`
+    /// exactly once and still self-heals (resurrects the cockpit).
+    @Test func externalKillFiresOnServerLostOnNextCall() throws {
+        let socket = sharedSocketPath()
+        let backend = makeBackend(socket: socket)
+        defer { backend.shutdown() }
+
+        _ = try backend.registerTerminal(
+            id: UUID(), name: "victim", cwd: NSHomeDirectory(),
+            command: nil, trackReadiness: false
+        )
+
+        var fired = 0
+        backend.onServerLost = { fired += 1 }
+
+        killLeftoverServer(socket: socket)
+        _ = try backend.registerTerminal(
+            id: UUID(), name: "after-crash", cwd: NSHomeDirectory(),
+            command: nil, trackReadiness: false
+        )
+        #expect(fired == 1)
+
+        // Healthy server again — further calls must not re-fire.
+        _ = try backend.registerTerminal(
+            id: UUID(), name: "healthy", cwd: NSHomeDirectory(),
+            command: nil, trackReadiness: false
+        )
+        #expect(fired == 1)
+    }
+
+    /// After a server crash, adopting a persisted binding fails with the
+    /// crash-specific error, not the generic single-window `windowNotFound`;
+    /// a single closed window on a healthy server keeps `windowNotFound`.
+    @Test func adoptDistinguishesServerCrashFromMissingWindow() throws {
+        let socket = sharedSocketPath()
+        let backend = makeBackend(socket: socket)
+        defer { backend.shutdown() }
+
+        let id = UUID()
+        let binding = try backend.registerTerminal(
+            id: id, name: "victim", cwd: NSHomeDirectory(),
+            command: nil, trackReadiness: false
+        )
+
+        // Healthy server, one window gone → windowNotFound.
+        backend.destroyTerminal(id: id)
+        do {
+            try backend.adoptTerminal(id: id, binding: binding, trackReadiness: false)
+            Issue.record("adopt of a closed window should throw")
+        } catch let error as TmuxBackendError {
+            guard case .windowNotFound = error else {
+                Issue.record("expected windowNotFound, got \(error)")
+                return
+            }
+        }
+
+        // Whole server gone → serverCrashed.
+        killLeftoverServer(socket: socket)
+        do {
+            try backend.adoptTerminal(id: id, binding: binding, trackReadiness: false)
+            Issue.record("adopt after a server crash should throw")
+        } catch let error as TmuxBackendError {
+            guard case .serverCrashed = error else {
+                Issue.record("expected serverCrashed, got \(error)")
+                return
+            }
+        }
+    }
+
+    /// The light "client died, server alive" path: recycling with no surface
+    /// is a safe no-op that only resets the active-window marker.
+    @Test func recycleCockpitSurfaceIsSafeWithoutSurface() throws {
+        let backend = makeBackend()
+        defer { backend.shutdown() }
+
+        let id = UUID()
+        _ = try backend.registerTerminal(
+            id: id, name: "a", cwd: NSHomeDirectory(),
+            command: nil, trackReadiness: false
+        )
+        try backend.makeActive(id: id)
+        #expect(backend.activeTerminalID == id)
+
+        backend.recycleCockpitSurface()
+
+        #expect(backend.existingCockpitSurface == nil)
+        #expect(backend.activeTerminalID == nil)
+        #expect(backend.isRunning)  // server untouched
+    }
 }
 
 // MARK: - CROW-487 crowBinDir propagation
