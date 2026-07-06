@@ -207,6 +207,32 @@ import CrowPersistence
         #expect(snap.terminalReadiness[tid.uuidString] == .agentLaunched)
     }
 
+    // MARK: terminal-surface ops
+
+    @Test @MainActor func terminalOpsErrorWithoutSessionService() async {
+        let cases: [(String, [String: JSONValue])] = [
+            ("rename-terminal", ["session_id": .string(UUID().uuidString),
+                                 "terminal_id": .string(UUID().uuidString), "name": .string("x")]),
+            ("launch-agent", ["terminal_id": .string(UUID().uuidString)]),
+            ("retry-readiness", ["terminal_id": .string(UUID().uuidString)]),
+            ("restart-manager", [:]),
+            ("restart-tmux-server", [:]),
+        ]
+        for (method, params) in cases {
+            let resp = await router().handle(request: JSONRPCRequest(id: 1, method: method, params: params))
+            #expect(resp.error?.code == RPCErrorCode.applicationError, "\(method) needs a SessionService when app down")
+        }
+    }
+
+    @Test @MainActor func terminalOpsValidateParamsBeforeService() async {
+        // Param validation runs before the service guard → missing ids are a
+        // param error even with no SessionService.
+        for method in ["rename-terminal", "launch-agent", "retry-readiness"] {
+            let resp = await router().handle(request: JSONRPCRequest(id: 1, method: method))
+            #expect(resp.error?.code == RPCErrorCode.invalidParams, "\(method) should validate params")
+        }
+    }
+
     // MARK: quick-action
 
     @Test @MainActor func quickActionErrorsWithoutCoordinator() async {

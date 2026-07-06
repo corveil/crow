@@ -1599,6 +1599,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         appState.onManualRefresh = { [weak self] in self?.crowdClient?.send("refresh-tickets") }
         appState.onLoadAllowList = { [weak self] in self?.crowdClient?.send("refresh-allowlist") }
+
+        // Terminal-surface ops. Terminal I/O (keystrokes/scrollback) stays host-
+        // side over the shared tmux server; only these lifecycle actions RPC to
+        // crowd, which owns spawning/teardown (CROW-581, Stage 3b/F).
+        appState.onAddTerminal = { [weak self] in
+            self?.crowdClient?.send("new-terminal", ["session_id": .string($0.uuidString)])
+        }
+        appState.onCloseTerminal = { [weak self] sessionID, terminalID in
+            self?.crowdClient?.send("close-terminal",
+                ["session_id": .string(sessionID.uuidString), "terminal_id": .string(terminalID.uuidString)])
+        }
+        appState.onRenameTerminal = { [weak self] sessionID, terminalID, name in
+            self?.crowdClient?.send("rename-terminal",
+                ["session_id": .string(sessionID.uuidString),
+                 "terminal_id": .string(terminalID.uuidString), "name": .string(name)])
+        }
+        appState.onLaunchAgent = { [weak self] in
+            self?.crowdClient?.send("launch-agent", ["terminal_id": .string($0.uuidString)])
+        }
+        appState.onRetryReadiness = { [weak self] in
+            self?.crowdClient?.send("retry-readiness", ["terminal_id": .string($0.uuidString)])
+        }
+        appState.onRestartManager = { [weak self] in self?.crowdClient?.send("restart-manager") }
+        appState.onRestartTmuxServer = { [weak self] in self?.crowdClient?.send("restart-tmux-server") }
     }
 
     private func startSocketServer(store: JSONStore, devRoot: String, sessionService: SessionService) {
