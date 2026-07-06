@@ -26,6 +26,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var socketServer: SocketServer?
     private var issueTracker: IssueTracker?
     private var jobScheduler: JobScheduler?
+    /// Connection to a running `crowd` when the app runs in client mode
+    /// (env `CROW_CLIENT_MODE`); nil in the default local-engine mode (CROW-581, F).
+    private var crowdClient: CrowdClient?
     private var notificationManager: NotificationManager?
     private var autoRespondCoordinator: AutoRespondCoordinator?
     private var allowListService: AllowListService?
@@ -65,6 +68,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// committed path is also the last to write the banner. See the
     /// CROW-490 review for the race this replaced.
     private var corveilInstallTail: Task<String?, Never>?
+
+    /// True when launched as a pure `crowd` client (env `CROW_CLIENT_MODE`): the
+    /// app renders state pushed by `crowd` and routes actions to it over RPC
+    /// instead of running its own engine, socket-server, tracker, and scheduler.
+    /// The strangler flag for Stage F — off by default (local engine) (CROW-581).
+    private var isCrowdClientMode: Bool {
+        ProcessInfo.processInfo.environment["CROW_CLIENT_MODE"] != nil
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Must be the very first call so the next exit (graceful or not)
@@ -872,7 +883,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.autoRespondCoordinator?.dispatchManual(action: .fixConflicts, sessionID: sessionID)
             self.notificationManager?.notifyAutoRebaseConflicts(number: number, sessionID: sessionID)
         }
-        tracker.start()
+        // In client mode crowd runs the tracker + its automations; the app must
+        // not also poll or drive them.
+        if !isCrowdClientMode { tracker.start() }
         self.issueTracker = tracker
 
         // Scheduled jobs (CROW-317): fire repo-scoped prompt sets on a schedule.
@@ -882,7 +895,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         scheduler.onJobRan = { [weak self] jobID, ranAt in
             self?.recordJobRun(jobID: jobID, ranAt: ranAt)
         }
-        scheduler.start()
+        if !isCrowdClientMode { scheduler.start() }
         self.jobScheduler = scheduler
 
         // Manual "Run now" — fire a job immediately, regardless of enabled/schedule.
@@ -993,8 +1006,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        // Start socket server
-        startSocketServer(store: store, devRoot: devRoot, sessionService: service)
+        // Client mode: connect to the running crowd and route actions to it,
+        // overriding the local-engine callbacks wired above (crowd is the
+        // authority; the app renders its pushed state). Terminal-surface ops and
+        // host affordances keep their local wiring — terminal I/O stays host-side
+        // and the rest lands in Stage 3b (CROW-581, Stage 3/F).
+        if isCrowdClientMode {
+            let client = CrowdClient(appState: appState)
+            crowdClient = client
+            wireCrowdClientActions(appState)
+            client.connect()
+        }
+
+        // Start socket server — local-engine mode only. In client mode crowd owns
+        // the socket; the app must not also bind crow.sock.
+        if !isCrowdClientMode {
+            startSocketServer(store: store, devRoot: devRoot, sessionService: service)
+        }
 
         // Start telemetry receiver if enabled
         if config.telemetry.enabled {
@@ -1340,6 +1368,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Validate a session name contains no control characters and is within length limits.
     private nonisolated static func isValidSessionName(_ name: String) -> Bool {
         Validation.isValidSessionName(name)
+    }
+
+    /// Route session/board actions to `crowd` over the client connection instead
+    /// of the local engine (client mode). Each maps 1:1 to a daemon RPC. Terminal-
+    /// surface ops (add/close/rename terminal, launch/retry agent, restart) and
+    /// host affordances (open-in-editor, settings, clipboard, sound) keep their
+    /// local wiring — they're host-side or land in Stage 3b (CROW-581, Stage 3/F).
+    @MainActor
+    private func wireCrowdClientActions(_ appState: AppState) {
+        func session(_ id: UUID) -> [String: JSONValue] { ["session_id": .string(id.uuidString)] }
+
+        appState.onCompleteSession = { [weak self] in self?.crowdClient?.send("complete-session", session($0)) }
+        appState.onSetSessionActive = { [weak self] in self?.crowdClient?.send("set-session-active", session($0)) }
+        appState.onSetSessionInReview = { [weak self] in self?.crowdClient?.send("mark-in-review", session($0)) }
+        appState.onMarkInReview = { [weak self] in self?.crowdClient?.send("mark-in-review", session($0)) }
+        appState.onMarkIssueDone = { [weak self] in self?.crowdClient?.send("mark-issue-done", session($0)) }
+        appState.onAddMergeLabel = { [weak self] in self?.crowdClient?.send("add-merge-label", session($0)) }
+        appState.onDeleteSession = { [weak self] id in
+            _ = try await self?.crowdClient?.rpc("delete-session", session(id))
+        }
+        appState.onSetLocked = { [weak self] id, locked in
+            self?.crowdClient?.send("set-locked", ["session_id": .string(id.uuidString), "locked": .bool(locked)])
+        }
+        appState.onRenameSession = { [weak self] id, name in
+            self?.crowdClient?.send("rename-session", ["session_id": .string(id.uuidString), "name": .string(name)])
+        }
+        appState.onCreateManager = { [weak self] kind in
+            var params: [String: JSONValue] = [:]
+            if let kind { params["agent_kind"] = .string(kind.rawValue) }
+            self?.crowdClient?.send("create-manager", params)
+        }
+        appState.onWorkOnIssue = { [weak self] in self?.crowdClient?.send("work-on-issue", ["url": .string($0)]) }
+        appState.onBatchWorkOnIssues = { [weak self] urls in
+            for url in urls { self?.crowdClient?.send("work-on-issue", ["url": .string(url)]) }
+        }
+        appState.onStartReview = { [weak self] in self?.crowdClient?.send("start-review", ["url": .string($0)]) }
+        appState.onBatchStartReview = { [weak self] urls in
+            for url in urls { self?.crowdClient?.send("start-review", ["url": .string(url)]) }
+        }
+        appState.onQuickAction = { [weak self] id, action in
+            self?.crowdClient?.send("quick-action",
+                ["session_id": .string(id.uuidString), "action": .string(action.rawValue)])
+        }
+        appState.onRunJob = { [weak self] in self?.crowdClient?.send("run-job", ["job_id": .string($0.uuidString)]) }
+        appState.onPromoteToGlobal = { [weak self] patterns in
+            self?.crowdClient?.send("promote-allowlist", ["patterns": .array(patterns.map { .string($0) })])
+        }
+        appState.onManualRefresh = { [weak self] in self?.crowdClient?.send("refresh-tickets") }
+        appState.onLoadAllowList = { [weak self] in self?.crowdClient?.send("refresh-allowlist") }
     }
 
     private func startSocketServer(store: JSONStore, devRoot: String, sessionService: SessionService) {
