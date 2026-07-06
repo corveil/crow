@@ -110,6 +110,16 @@ public enum CrowDaemon {
         let appSocketPath = SocketServer.defaultSocketPath()
         let forwardSocket: String? = (appSocketPath == options.socketPath) ? nil : appSocketPath
 
+        // When standalone (owns the default socket — the app isn't running), the
+        // daemon is the authority, so it ensures the primary Manager exists just
+        // like the app does at launch. That gives `work-on-issue` a live Manager
+        // terminal to drive, and — because the daemon registered the window
+        // itself — it holds the live tmux binding in-process, so no stale-index
+        // adoption of the app's window is needed (ADR 0007; CROW-581, M-E2).
+        if forwardSocket == nil, let sessionService {
+            await MainActor.run { sessionService.ensureManagerSession(devRoot: options.devRoot) }
+        }
+
         let commandRouter = makeCommandRouter(
             appState: appState, store: store, git: git, devRoot: options.devRoot,
             cockpit: cockpit, forwardSocket: forwardSocket, tracker: tracker, allowList: allowList,
