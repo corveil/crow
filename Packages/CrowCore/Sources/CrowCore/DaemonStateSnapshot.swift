@@ -80,3 +80,42 @@ public struct DaemonStateSnapshot: Codable, Sendable {
         self.config = config
     }
 }
+
+public extension AppState {
+    /// Replace this `AppState`'s render state with a snapshot pushed by `crowd` —
+    /// the inverse of `DaemonStateSnapshot(appState:)`. Regroups the snapshot's
+    /// flat arrays back into the UUID-keyed maps the UI reads and re-keys the
+    /// string-keyed maps to UUIDs. Used by the macOS crowd-client to hydrate its
+    /// state on connect and on every `changed` push (ADR 0007; CROW-581, Stage 3/F).
+    ///
+    /// Applies only render state; config-derived settings are applied separately
+    /// by the client (via `get-config`) so credential handling stays in one place.
+    @MainActor
+    func apply(_ snapshot: DaemonStateSnapshot) {
+        sessions = snapshot.sessions
+        terminals = Dictionary(grouping: snapshot.terminals, by: \.sessionID)
+        worktrees = Dictionary(grouping: snapshot.worktrees, by: \.sessionID)
+        links = Dictionary(grouping: snapshot.links, by: \.sessionID)
+        terminalReadiness = Dictionary(uniqueKeysWithValues:
+            snapshot.terminalReadiness.compactMap { key, value in
+                UUID(uuidString: key).map { ($0, value) }
+            })
+        prStatus = Dictionary(uniqueKeysWithValues:
+            snapshot.prStatus.compactMap { key, value in
+                UUID(uuidString: key).map { ($0, value) }
+            })
+        reviewRequests = snapshot.reviewRequests
+        assignedIssues = snapshot.assignedIssues
+        allowEntries = snapshot.allowEntries
+        remoteControlActiveTerminals = Set(snapshot.remoteControlActiveTerminals.compactMap { UUID(uuidString: $0) })
+        remoteControlEnabled = snapshot.remoteControlEnabled
+        activeTerminalID = Dictionary(uniqueKeysWithValues:
+            snapshot.activeTerminalID.compactMap { key, value in
+                guard let sid = UUID(uuidString: key), let tid = UUID(uuidString: value) else { return nil }
+                return (sid, tid)
+            })
+        for (key, hookSnapshot) in snapshot.hookStates {
+            if let sid = UUID(uuidString: key) { restoreHookState(hookSnapshot, for: sid) }
+        }
+    }
+}
