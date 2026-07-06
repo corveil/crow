@@ -183,6 +183,30 @@ import CrowPersistence
         #expect(resp.error?.code == RPCErrorCode.invalidParams)
     }
 
+    // MARK: get-state
+
+    @Test @MainActor func getStateReturnsDecodableSnapshotOfLocalAppState() async throws {
+        let appState = AppState()
+        let sid = UUID(), tid = UUID()
+        appState.sessions = [Session(id: sid, name: "feat", kind: .work)]
+        appState.terminals[sid] = [SessionTerminal(
+            id: tid, sessionID: sid, name: "Claude Code", cwd: "/tmp",
+            command: nil, isManaged: true, tmuxBinding: nil)]
+        appState.terminalReadiness[tid] = .agentLaunched
+
+        let resp = await router(appState: appState)
+            .handle(request: JSONRPCRequest(id: 1, method: "get-state"))
+        #expect(resp.error == nil)
+
+        // The whole result IS a DaemonStateSnapshot — a client decodes it directly.
+        let result = try #require(resp.result)
+        let data = try JSONEncoder().encode(result)
+        let snap = try JSONDecoder().decode(DaemonStateSnapshot.self, from: data)
+        #expect(snap.sessions.map(\.id) == [sid])
+        #expect(snap.terminals.map(\.id) == [tid])
+        #expect(snap.terminalReadiness[tid.uuidString] == .agentLaunched)
+    }
+
     // MARK: quick-action
 
     @Test @MainActor func quickActionErrorsWithoutCoordinator() async {

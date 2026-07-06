@@ -764,6 +764,29 @@ func makeCommandRouter(
             }
         },
 
+        // Full render-state snapshot so a rich client (the macOS app) can rebuild
+        // its entire AppState in ONE call, then keep it fresh by re-fetching on
+        // each EventHub `changed` push. Read-only and always local — the daemon's
+        // own AppState is the live view whether or not the desktop app is up, and
+        // there is nothing to forward (ADR 0007; CROW-581, Stage 2 / F). The
+        // response object *is* a `DaemonStateSnapshot` — the client decodes the
+        // whole result into that type.
+        "get-state": { _ in
+            let snapshot = await MainActor.run {
+                DaemonStateSnapshot(appState: appState, config: ConfigStore.loadConfig(devRoot: devRoot))
+            }
+            do {
+                guard case .object(let dict) = try JSONValue(encoding: snapshot) else {
+                    throw DaemonRPCError.applicationError("state snapshot did not encode to an object")
+                }
+                return dict
+            } catch let error as DaemonRPCError {
+                throw error
+            } catch {
+                throw DaemonRPCError.applicationError("Failed to encode state snapshot: \(error)")
+            }
+        },
+
         // App config (the web Settings modal). Forward to the app when it's
         // running so its `saveSettings` side effects run (AppState mirror,
         // notification settings); read/write `{devRoot}/.claude/config.json`
