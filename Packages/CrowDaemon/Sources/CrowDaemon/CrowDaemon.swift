@@ -193,10 +193,37 @@ public enum CrowDaemon {
         }
         if let jobScheduler { startJobPoll(scheduler: jobScheduler, forwardSocket: forwardSocket) }
 
+        // Delegate any method the daemon's curated router doesn't explicitly own
+        // to the app's FULL engine router (hook-event, send, link/ticket ops,
+        // resync-jira, get-session, list-worktrees, …). This makes a "missing
+        // handler" structurally impossible: crowd answers everything the app does,
+        // not a hand-copied subset (ADR 0007; CROW-581). Needs a live
+        // SessionService — its EngineContext is non-optional; with no tmux there's
+        // nothing to fall back to (spawn/terminal RPCs were already disabled).
+        let engineDevRoot = options.devRoot
+        let engineFallback: CommandRouter? = await MainActor.run { () -> CommandRouter? in
+            guard let sessionService else { return nil }
+            let ctx = EngineContext(
+                appState: appState, store: store, sessionService: sessionService,
+                issueTracker: tracker, telemetryPort: nil, devRoot: engineDevRoot,
+                hostBridge: NoopHostBridge(),
+                loadConfig: {
+                    let dr = ConfigStore.loadDevRoot() ?? engineDevRoot
+                    guard let cfg = ConfigStore.loadConfig(devRoot: dr) else { return nil }
+                    return (dr, cfg)
+                },
+                applyConfig: { incoming in
+                    try? ConfigStore.saveConfig(incoming, devRoot: engineDevRoot)
+                    return ConfigStore.loadConfig(devRoot: engineDevRoot)
+                })
+            return makeEngineRouter(ctx)
+        }
+
         let commandRouter = makeCommandRouter(
             appState: appState, store: store, git: git, devRoot: options.devRoot,
             cockpit: cockpit, forwardSocket: forwardSocket, tracker: tracker, allowList: allowList,
-            sessionService: sessionService, autoRespond: autoRespond, jobScheduler: jobScheduler)
+            sessionService: sessionService, autoRespond: autoRespond, jobScheduler: jobScheduler,
+            fallback: engineFallback)
 
         // Unix socket — lets the existing `crow` CLI talk to the daemon. By
         // default this IS the app's well-known `crow.sock` (the daemon owns it in
@@ -588,8 +615,10 @@ struct DaemonOptions {
 
     static func parse(_ arguments: [String]) -> DaemonOptions {
         var options = DaemonOptions()
+        var devRootExplicit = false
         if let envRoot = ProcessInfo.processInfo.environment["CROW_DEV_ROOT"] {
             options.devRoot = envRoot
+            devRootExplicit = true
         }
         if let envWebDir = ProcessInfo.processInfo.environment["CROW_WEB_DIR"] {
             options.webDir = envWebDir
@@ -611,7 +640,12 @@ struct DaemonOptions {
                 index += 1
             case "--host": if let value = next { options.host = value }; index += 1
             case "--socket", "--socket-path": if let value = next { options.socketPath = value }; index += 1
-            case "--dev-root": if let value = next { options.devRoot = value }; index += 1
+            case "--dev-root":
+                if let value = next {
+                    options.devRoot = value
+                    devRootExplicit = true
+                }
+                index += 1
             case "--web-dir": if let value = next { options.webDir = value }; index += 1
             default:
                 if flag.hasPrefix("-") {
@@ -619,6 +653,15 @@ struct DaemonOptions {
                 }
             }
             index += 1
+        }
+        // Match the desktop app: read ~/Library/Application Support/crow/devroot
+        // when no explicit override is supplied (CROW_DEV_ROOT / --dev-root).
+        if !devRootExplicit {
+            if let configured = ConfigStore.loadDevRoot() {
+                options.devRoot = configured
+            } else {
+                options.devRoot = FileManager.default.currentDirectoryPath
+            }
         }
         return options
     }
