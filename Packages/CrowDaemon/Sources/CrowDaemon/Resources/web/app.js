@@ -65,6 +65,21 @@ function onServerChanged() {
   }, 50);
 }
 
+// Sidebar-affecting slice of AppConfig (CROW-581). `set-config` doesn't push a
+// `changed`, so we load this on boot and re-load it when the Settings modal
+// saves (via `window.reloadUIConfig`). Mirrors the desktop's
+// `appState.hideSessionDetails`.
+const uiConfig = { hideSessionDetails: false };
+async function loadUIConfig() {
+  try {
+    const res = await rpc('get-config');
+    const cfg = JSON.parse((res && res.config) || '{}');
+    uiConfig.hideSessionDetails = !!(cfg.sidebar && cfg.sidebar.hideSessionDetails);
+  } catch (_) { /* keep defaults */ }
+  renderSidebar();
+}
+window.reloadUIConfig = loadUIConfig;
+
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
@@ -487,8 +502,10 @@ function sessionRow(s) {
   top.appendChild(trail);
   content.appendChild(top);
 
-  if (s.ticket_title) content.appendChild(el('div', 'subtle', s.ticket_title));
-  if (s.repo) content.appendChild(el('div', 'meta', s.repo + (s.branch ? ' · ' + s.branch : '')));
+  if (!uiConfig.hideSessionDetails) {
+    if (s.ticket_title) content.appendChild(el('div', 'subtle', s.ticket_title));
+    if (s.repo) content.appendChild(el('div', 'meta', s.repo + (s.branch ? ' · ' + s.branch : '')));
+  }
 
   const badges = el('div', 'row-badges');
   if (s.ticket_badge) badges.appendChild(el('span', 'badge', s.ticket_badge));
@@ -1423,6 +1440,7 @@ document.getElementById('terminal-wrap').addEventListener('contextmenu', showTer
 
 refreshSessions();
 refreshLive();
+loadUIConfig();
 // Fallback polls — the `changed` push (onServerChanged) drives the common case,
 // so these are relaxed. refreshLive stays brisk: runtime PR/RC state isn't
 // store-backed and so isn't covered by a nudge (CROW-581, M-D).

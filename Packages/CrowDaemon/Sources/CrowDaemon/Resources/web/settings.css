@@ -94,11 +94,6 @@
   border-top: 1px solid var(--border-subtle);
 }
 .settings-foot-spacer { flex: 1; }
-.settings-appdown {
-  font-size: 11px;
-  color: var(--orange);
-  max-width: 60%;
-}
 
 /* -------- form controls (first in the app) -------- */
 
