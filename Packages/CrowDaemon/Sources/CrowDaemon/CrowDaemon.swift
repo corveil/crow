@@ -37,6 +37,16 @@ public enum CrowDaemon {
                 + "reach this address can run git and open a shell. Use only on trusted networks.")
         }
 
+        // Single-instance guard: refuse to start a SECOND crowd on this socket. A
+        // duplicate would skip the unix bind and orphan `crow.sock` when the first
+        // exits (the multi-`crowd-dev` footgun). Distinct --socket → own lock, so
+        // isolated daemons still run (CROW-581).
+        guard acquireSingleInstanceLock(socketPath: options.socketPath) else {
+            log("Another crowd is already running on \(options.socketPath) — exiting. "
+                + "Only one daemon per socket is allowed (use a distinct --socket for an isolated instance).")
+            exit(1)
+        }
+
         let store = JSONStore()
         let git = GitManager()
         let appState = await seedAppState(from: store)
@@ -188,14 +198,15 @@ public enum CrowDaemon {
             cockpit: cockpit, forwardSocket: forwardSocket, tracker: tracker, allowList: allowList,
             sessionService: sessionService, autoRespond: autoRespond, jobScheduler: jobScheduler)
 
-        // Unix socket — lets the existing `crow` CLI talk to the daemon. Refuse
-        // to bind a socket another server already answers on (e.g. the desktop
-        // app's crow.sock): `SocketServer.start()` unlinks unconditionally, so
-        // binding it would hijack the app's CLI channel (CROW-581 review). The
-        // daemon's default is a distinct crowd.sock; sharing is opt-in via
-        // --socket, and even then we won't steal a live one.
+        // Unix socket — lets the existing `crow` CLI talk to the daemon. By
+        // default this IS the app's well-known `crow.sock` (the daemon owns it in
+        // the client-default world), so refuse to bind when another server already
+        // answers on it (a running legacy app): `SocketServer.start()` unlinks
+        // unconditionally, so binding would hijack that server's CLI channel. The
+        // probe is live, so a *stale* socket file is reclaimed, not skipped
+        // (CROW-581 review).
         if Self.socketInUse(options.socketPath) {
-            log("WARNING: \(options.socketPath) is already in use (another crowd or the Crow app). "
+            log("WARNING: \(options.socketPath) is already in use (another crowd or a legacy Crow app). "
                 + "Not binding the Unix socket to avoid hijacking it — use a distinct --socket. Continuing with HTTP/WS only.")
         } else {
             let socketServer = SocketServer(socketPath: options.socketPath, router: commandRouter)
@@ -519,6 +530,36 @@ public enum CrowDaemon {
         }
         return connected == 0
     }
+
+    /// Held for the process lifetime once acquired — closing the fd drops the
+    /// `flock`, so the OS reclaims the lock automatically on exit or crash.
+    /// `nonisolated(unsafe)`: written once during single-threaded startup, then
+    /// only kept alive; never mutated concurrently.
+    nonisolated(unsafe) private static var singleInstanceLockFD: Int32 = -1
+
+    /// Enforce ONE `crowd` per socket path via an advisory `flock` on
+    /// `<socketPath>.lock`. Without it a second daemon on the same socket sees the
+    /// socket "in use", skips the unix bind, and runs degraded (HTTP-only) — then
+    /// orphans `crow.sock` when the first exits (the multi-`crowd-dev` footgun).
+    /// Distinct `--socket` paths get distinct locks, so isolated daemons still
+    /// coexist. Fails open on lock-file errors (never blocks a daemon over a weird
+    /// lock dir). Returns false when another live crowd already holds this lock
+    /// (CROW-581).
+    static func acquireSingleInstanceLock(socketPath: String) -> Bool {
+        let lockPath = socketPath + ".lock"
+        let fd = lockPath.withCString { open($0, O_CREAT | O_RDWR, 0o600) }
+        guard fd >= 0 else {
+            log("WARNING: could not open lock file \(lockPath) (\(String(cString: strerror(errno)))); "
+                + "continuing without the single-instance guard")
+            return true
+        }
+        if flock(fd, LOCK_EX | LOCK_NB) != 0 {
+            close(fd)
+            return false
+        }
+        singleInstanceLockFD = fd
+        return true
+    }
 }
 
 /// Minimal CLI/env option parsing — kept dependency-free (no argument-parser,
@@ -533,13 +574,16 @@ struct DaemonOptions {
     /// the compiled bundle (`--web-dir` / `CROW_WEB_DIR`) — edit + refresh.
     var webDir: String?
 
-    /// A DISTINCT default from the app's `crow.sock`, in the same owner-only dir,
-    /// so running `crowd` with defaults never unlinks/steals the desktop app's
-    /// socket. The daemon forwards writes to the app's socket; sharing the app's
-    /// path directly is opt-in via `--socket` (CROW-581 review).
+    /// The well-known `crow.sock` — the same path the `crow` CLI, hooks, and
+    /// setup scripts target. In the client-default world (F cutover) the desktop
+    /// app no longer binds this socket, so the daemon owns it and every existing
+    /// CLI consumer reaches `crowd` unchanged (ADR 0007; CROW-581). Sharing the
+    /// path is safe: the bind guard (`socketInUse`, see `run()`) is a live connect
+    /// probe — it refuses to bind only when a *running* legacy app already holds
+    /// it, and reclaims a stale file otherwise. Run an isolated daemon with an
+    /// explicit `--socket` (e.g. a distinct `crowd.sock`) when you must not share.
     static func defaultDaemonSocketPath() -> String {
-        let dir = (SocketServer.defaultSocketPath() as NSString).deletingLastPathComponent
-        return (dir as NSString).appendingPathComponent("crowd.sock")
+        SocketServer.defaultSocketPath()
     }
 
     static func parse(_ arguments: [String]) -> DaemonOptions {
