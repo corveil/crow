@@ -264,6 +264,11 @@ func makeCommandRouter(
                     sessionName: TerminalCockpit.sessionName,
                     windowIndex: windowIndex))
             await MainActor.run { appState.terminals[sessionID, default: []].append(terminal) }
+            // Persist to the store, not just appState: the store-reload poll
+            // (`reseed`) repopulates `appState.terminals` PURELY from `store.json`,
+            // so an appState-only append is wiped on the next tick — leaving the
+            // tmux window orphaned and the session showing no terminal (CROW-581).
+            store.mutate { $0.terminals.append(terminal) }
             return [
                 "terminal_id": .string(terminal.id.uuidString),
                 "window": .int(windowIndex),
@@ -282,6 +287,9 @@ func makeCommandRouter(
                 appState.terminals[sessionID]?.removeAll { $0.id == terminalID }
                 return index
             }
+            // Persist the removal too, else `reseed` resurrects a terminal whose
+            // window we're about to kill (mirror of new-terminal; CROW-581).
+            store.mutate { $0.terminals.removeAll { $0.id == terminalID } }
             if let windowIndex, let cockpit {
                 cockpit.controller.killWindow(index: windowIndex)
             }
