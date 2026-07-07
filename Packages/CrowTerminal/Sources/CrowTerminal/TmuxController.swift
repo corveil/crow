@@ -120,6 +120,23 @@ public struct TmuxController: Sendable {
         }
     }
 
+    /// Like `listWindowCommands` but also returns each window's (pinned) name, so
+    /// the reconciler can positively identify agent windows and guard Managers by
+    /// name without relying on the pane's foreground command (CROW-581).
+    public func listWindows() throws -> [(index: Int, name: String, command: String)] {
+        let out = try run(["list-windows", "-t", sessionName,
+                           "-F", "#{window_index}\t#{window_name}\t#{pane_current_command}"])
+        return out.split(separator: "\n").compactMap { line in
+            let parts = line.split(separator: "\t", maxSplits: 2, omittingEmptySubsequences: false)
+            guard parts.count == 3, let idx = Int(parts[0].trimmingCharacters(in: .whitespaces)) else {
+                return nil
+            }
+            return (idx,
+                    parts[1].trimmingCharacters(in: .whitespaces),
+                    parts[2].trimmingCharacters(in: .whitespaces))
+        }
+    }
+
     // MARK: - Windows
 
     /// `timeout` defaults to the per-call default. Callers spawning a window

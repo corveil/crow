@@ -418,6 +418,14 @@ public enum CrowDaemon {
                     } else if !authority {
                         didTakeOver = false
                     }
+                    // While we're the authority, reconcile terminals ↔ tmux windows
+                    // each tick: prune terminal records whose window is gone and
+                    // reap orphaned windows (targeted-auto, Manager-safe). Runs
+                    // after `rebuildAllSurfaces` on the takeover tick so adopted
+                    // windows are already in the keep-set (CROW-581).
+                    if authority {
+                        await MainActor.run { sessionService.reconcileTerminalSurfaces() }
+                    }
                 }
                 await tracker.refresh()
                 await eventHub.broadcast()
