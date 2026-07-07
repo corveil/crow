@@ -74,6 +74,11 @@ public final class TmuxBackend {
     /// UUID → tmux window index for tabs registered with us.
     private var bindings: [UUID: Int] = [:]
 
+    /// Agent-window indices seen orphaned on the previous reconcile pass — the
+    /// one-pass grace so a window created mid-`new-terminal` (before its binding
+    /// lands) is never reaped (CROW-581).
+    private var orphanGraceWindows: Set<Int> = []
+
     /// Terminal whose tmux window is currently selected, so `makeActive` can
     /// skip a redundant `select-window`. SwiftUI re-runs `updateNSView` (→
     /// `syncSurface` → `makeActive`) repeatedly for the same visible tab;
@@ -638,6 +643,68 @@ public final class TmuxBackend {
     nonisolated static func shouldReapWindow(index: Int, command: String, keep: Set<Int>) -> Bool {
         if keep.contains(index) { return false }
         return orphanLoginShells.contains(command)
+    }
+
+    /// Targeted-auto orphan policy (CROW-581). Reap a cockpit window that no live
+    /// terminal references (`!keep.contains`) when it is either a forgotten bare
+    /// login shell OR a positively-identified coding-agent window (its pinned
+    /// name is one of `agentWindowNames`) that has stayed orphaned across two
+    /// passes (`seenOrphanedLastPass`, the grace). NEVER reaps the session anchor
+    /// (index 0), a bound window, an unknown/infra window, or a **Manager**
+    /// (name contains "manager") — Managers are long-lived and may be unbound.
+    /// Pure so the policy is unit-testable without tmux.
+    nonisolated static func shouldReapOrphanWindow(
+        index: Int, name: String, command: String, keep: Set<Int>,
+        agentWindowNames: Set<String>, seenOrphanedLastPass: Bool
+    ) -> Bool {
+        if index == 0 { return false }
+        if keep.contains(index) { return false }
+        if name.range(of: "manager", options: [.caseInsensitive]) != nil { return false }
+        if orphanLoginShells.contains(command) { return true }
+        if agentWindowNames.contains(name) { return seenOrphanedLastPass }
+        return false
+    }
+
+    /// Live cockpit windows as (index, pinned name, foreground command). `[]` if
+    /// tmux is unavailable or the read fails.
+    public func listCockpitWindows() -> [(index: Int, name: String, command: String)] {
+        guard let ctrl = controller else { return [] }
+        do { return try ctrl.listWindows() }
+        catch { reportIfTimeout(error); return [] }
+    }
+
+    /// Reap orphaned cockpit windows per `shouldReapOrphanWindow` (targeted-auto).
+    /// `keepWindowIndices` are windows referenced by persisted terminals — unioned
+    /// with the in-memory `bindings` so a just-adopted window is never reaped.
+    /// `agentWindowNames` are the display names `new-terminal` pins on managed
+    /// agent windows. Tracks the agent-orphan set for the next pass's grace.
+    /// Best-effort; returns the count reaped (CROW-581).
+    @discardableResult
+    public func reconcileOrphanWindows(keepWindowIndices: Set<Int>, agentWindowNames: Set<String>) -> Int {
+        guard let ctrl = controller else { return 0 }
+        let keep = keepWindowIndices.union(bindings.values)
+        let windows = listCockpitWindows()
+        let previouslyOrphaned = orphanGraceWindows
+        var stillOrphanedAgents: Set<Int> = []
+        var reaped = 0
+        for w in windows {
+            // Agent-named orphans are grace candidates for the next pass.
+            if w.index != 0, !keep.contains(w.index), agentWindowNames.contains(w.name),
+               w.name.range(of: "manager", options: [.caseInsensitive]) == nil {
+                stillOrphanedAgents.insert(w.index)
+            }
+            if Self.shouldReapOrphanWindow(
+                index: w.index, name: w.name, command: w.command, keep: keep,
+                agentWindowNames: agentWindowNames,
+                seenOrphanedLastPass: previouslyOrphaned.contains(w.index)) {
+                ctrl.killWindow(index: w.index)
+                NSLog("[CrowTelemetry tmux:orphan_window_reaped index=\(w.index) name=\(w.name) command=\(w.command)]")
+                reaped += 1
+            }
+        }
+        orphanGraceWindows = stillOrphanedAgents
+        if reaped > 0 { NSLog("[Crow] Reaped \(reaped) orphaned cockpit window(s) (CROW-581)") }
+        return reaped
     }
 
     /// Decide whether the Manager agent has exited, from one poll sample of its
