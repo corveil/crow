@@ -156,6 +156,12 @@ final class SessionService {
                 // Before writeManagerGatewayEnv() so its 0o600 re-apply is last.
                 if let managerCwd = terminals.first?.cwd {
                     writeManagerHookConfig(for: reconciled, dirPath: managerCwd)
+                    // CROW-600: pre-trust the Manager's cwd so a devRoot the
+                    // user hasn't opened Claude Code in before doesn't block
+                    // on the trust dialog. No-ops when already trusted.
+                    if reconciled.agentKind == .claudeCode {
+                        ClaudeTrustSeeder.seedTrust(projectPath: managerCwd)
+                    }
                 }
                 writeManagerGatewayEnv()
                 // Remote-control bookkeeping reflects what the agent actually
@@ -593,6 +599,12 @@ final class SessionService {
         // Claude-specific; the Manager uses `managerGateway` instead.
         var gatewayPrefix = ""
         if agent.kind == .claudeCode {
+            // CROW-600: pre-trust the worktree in ~/.claude.json so the
+            // "Do you trust the files in this folder?" dialog never blocks
+            // an auto-launched session. Trust does not inherit from parent
+            // directories, so every fresh worktree/clone would prompt.
+            ClaudeTrustSeeder.seedTrust(projectPath: worktree.worktreePath)
+
             let gatewayResolved = workspaceGatewayResolved(for: sessionID)
             ClaudeHookConfigWriter.writeGatewayEnv(
                 dirPath: worktree.worktreePath, resolved: gatewayResolved)
@@ -1035,6 +1047,11 @@ final class SessionService {
         // can carry a bearer token) is the final write; both merge into the same
         // {devRoot}/.claude/settings.local.json without clobbering each other.
         writeManagerHookConfig(for: session, dirPath: cwd)
+        // CROW-600: a brand-new devRoot would otherwise block the Manager on
+        // Claude Code's trust dialog. No-ops when already trusted.
+        if session.agentKind == .claudeCode {
+            ClaudeTrustSeeder.seedTrust(projectPath: cwd)
+        }
         // CROW-402: write the Manager gateway env block to {devRoot}/.claude so
         // manual `claude` re-runs in this terminal inherit the same routing. The
         // Manager's cwd is the devRoot.
