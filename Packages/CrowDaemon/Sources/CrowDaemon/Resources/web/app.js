@@ -69,16 +69,186 @@ function onServerChanged() {
 // `changed`, so we load this on boot and re-load it when the Settings modal
 // saves (via `window.reloadUIConfig`). Mirrors the desktop's
 // `appState.hideSessionDetails`.
-const uiConfig = { hideSessionDetails: false };
+const uiConfig = { hideSessionDetails: false, notifications: null };
 async function loadUIConfig() {
   try {
     const res = await rpc('get-config');
     const cfg = JSON.parse((res && res.config) || '{}');
     uiConfig.hideSessionDetails = !!(cfg.sidebar && cfg.sidebar.hideSessionDetails);
+    uiConfig.notifications = parseNotificationSettings(cfg.notifications);
   } catch (_) { /* keep defaults */ }
   renderSidebar();
 }
 window.reloadUIConfig = loadUIConfig;
+
+// ---------------------------------------------------------------------------
+// Notification sounds — mirror the desktop's NotificationManager triggers over
+// the state the web already receives. The app plays macOS NSSound on five
+// events; a browser can't, so we synthesize the same tones the Settings picker
+// auditions (previewSound) and fire them off client-side state transitions
+// (CROW-593). Gating mirrors the app exactly:
+//   play ⇔ !globalMute && evt.enabled && settings.soundEnabled && evt.soundEnabled
+// playing evt.soundName, with the app's 2s per-(session,event) dedup.
+// ---------------------------------------------------------------------------
+
+// NotificationEvent.defaultSound (CrowCore) — used when config omits an event
+// (e.g. changesRequested/checksFailing, absent from the current config.json).
+const DEFAULT_EVENT_SOUND = {
+  taskComplete: 'Glass', agentWaiting: 'Funk', reviewRequested: 'Glass',
+  changesRequested: 'Funk', checksFailing: 'Sosumi',
+};
+
+// Swift encodes `[NotificationEvent: EventNotificationConfig]` as a flat
+// [key, value, key, value, …] array (enum keys aren't String/Int). Fold it back
+// into an object; tolerate an object form too.
+function parseNotificationSettings(n) {
+  n = n || {};
+  const events = {};
+  const es = n.eventSettings;
+  if (Array.isArray(es)) {
+    for (let i = 0; i + 1 < es.length; i += 2) events[es[i]] = es[i + 1] || {};
+  } else if (es && typeof es === 'object') {
+    Object.assign(events, es);
+  }
+  return {
+    globalMute: !!n.globalMute,
+    soundEnabled: n.soundEnabled !== false, // NotificationSettings default: true
+    events,
+  };
+}
+
+// Web Audio tone recipes — kept in sync with settings.js previewSound so an
+// event chime is the exact tone the user auditioned in Settings.
+const SOUND_TONES = {
+  Basso: [{ freq: 147, type: 'sawtooth', dur: 0.22 }],
+  Blow: [{ freq: 523, type: 'sine', dur: 0.18 }],
+  Bottle: [{ freq: 392, type: 'sine', dur: 0.12 }, { freq: 784, at: 0.08, dur: 0.1 }],
+  Frog: [{ freq: 196, type: 'square', dur: 0.1 }, { freq: 294, at: 0.1, type: 'square', dur: 0.12 }],
+  Funk: [{ freq: 220, type: 'triangle', dur: 0.14 }, { freq: 330, at: 0.12, type: 'triangle', dur: 0.14 }],
+  Glass: [{ freq: 880, type: 'sine', dur: 0.12 }, { freq: 1320, at: 0.06, dur: 0.16 }],
+  Hero: [{ freq: 523, type: 'sine', dur: 0.12 }, { freq: 784, at: 0.12, dur: 0.18 }],
+  Morse: [{ freq: 660, type: 'square', dur: 0.08 }, { freq: 660, at: 0.14, type: 'square', dur: 0.08 }],
+  Ping: [{ freq: 1046, type: 'sine', dur: 0.14 }],
+  Pop: [{ freq: 440, type: 'sine', dur: 0.07 }],
+  Purr: [{ freq: 165, type: 'triangle', dur: 0.22 }],
+  Sosumi: [{ freq: 660, type: 'square', dur: 0.1 }, { freq: 440, at: 0.1, type: 'square', dur: 0.16 }],
+  Submarine: [{ freq: 131, type: 'sine', dur: 0.28 }],
+  Tink: [{ freq: 1318, type: 'sine', dur: 0.1 }],
+  _default: [{ freq: 700, type: 'sine', dur: 0.14 }],
+};
+
+const crowSound = (() => {
+  let ctx = null;
+  function ensure() {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return null;
+    if (!ctx) { try { ctx = new AC(); } catch (_) { return null; } }
+    if (ctx.state === 'suspended') ctx.resume(); // no-op once unlocked
+    return ctx;
+  }
+  function play(name) {
+    const c = ensure();
+    if (!c) return;
+    const recipe = SOUND_TONES[name] || SOUND_TONES._default;
+    const now = c.currentTime;
+    for (const step of recipe) {
+      const osc = c.createOscillator(), gain = c.createGain();
+      osc.type = step.type || 'sine';
+      osc.frequency.value = step.freq;
+      const t0 = now + (step.at || 0), dur = step.dur || 0.12;
+      gain.gain.setValueAtTime(0.0001, t0);
+      gain.gain.exponentialRampToValueAtTime(0.2, t0 + 0.012);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+      osc.connect(gain); gain.connect(c.destination);
+      osc.start(t0); osc.stop(t0 + dur + 0.03);
+    }
+  }
+  return { play, unlock: ensure };
+})();
+
+// Web Audio starts suspended until a user gesture (autoplay policy) — unlock on
+// the first interaction so event chimes play thereafter.
+['pointerdown', 'keydown'].forEach((e) =>
+  window.addEventListener(e, () => crowSound.unlock(), { once: true, passive: true }));
+
+// Suppress chimes until the first sessions+live+reviews load settles, so opening
+// the page doesn't replay every already-waiting session / existing review.
+let _soundArmed = false;
+setTimeout(() => { _soundArmed = true; }, 2500);
+
+// Fire an event chime if the notification config allows it, with the app's 2s
+// per-(key,event) dedup. `key` is a session/review id so distinct sessions
+// don't suppress each other.
+const _lastSoundAt = {};
+function playEventSound(event, key) {
+  const N = uiConfig.notifications;
+  if (!N) return;            // config not loaded yet — don't guess the mute state
+  if (N.globalMute) return;
+  if (!N.soundEnabled) return;
+  const cfg = N.events[event] || {};
+  if (cfg.enabled === false) return;       // per-event master toggle
+  if (cfg.soundEnabled === false) return;  // per-event sound toggle
+  const k = (key || '') + '|' + event;
+  const now = Date.now();
+  if (_lastSoundAt[k] && now - _lastSoundAt[k] < 2000) return;
+  _lastSoundAt[k] = now;
+  crowSound.play(cfg.soundName || DEFAULT_EVENT_SOUND[event] || 'Glass');
+}
+
+// Manual test hook. crowTestSound() plays each event once (staggered);
+// crowTestSound('agentWaiting') plays one. Bypasses config/dedup so it's always
+// audible — useful to confirm audio works and hear each configured tone.
+window.crowTestSound = function (event) {
+  const evs = event
+    ? [event]
+    : ['taskComplete', 'agentWaiting', 'reviewRequested', 'changesRequested', 'checksFailing'];
+  evs.forEach((ev, i) => setTimeout(() => {
+    const cfg = (uiConfig.notifications && uiConfig.notifications.events[ev]) || {};
+    const name = cfg.soundName || DEFAULT_EVENT_SOUND[ev] || 'Glass';
+    crowSound.play(name);
+    console.log('[crowSound] test', ev, '→', name);
+  }, i * 700));
+};
+
+// Event detection: diff successive state snapshots. Snapshots always update; the
+// arm gate + per-session "first sighting" guard keep load/new-session appearances
+// from chiming — only genuine transitions do.
+let _prevSessionSnap = null;
+function detectSessionSounds() {
+  const snap = {};
+  for (const s of sessions) {
+    const pr = liveFor(s.id).pr || {};
+    snap[s.id] = {
+      attention: s.attention || '',
+      activity: s.activity || '',
+      // Mirror the desktop PRStatusTransition kinds (gated on not-merged).
+      changes: !pr.is_merged && pr.review === 'changesRequested',
+      checks: !pr.is_merged && pr.checks === 'failing',
+    };
+  }
+  const prevSnap = _prevSessionSnap;
+  _prevSessionSnap = snap;
+  if (!_soundArmed || !prevSnap) return;
+  for (const id in snap) {
+    const prev = prevSnap[id];
+    if (!prev) continue; // first sighting of this session — baseline only
+    const cur = snap[id];
+    if (cur.attention && !prev.attention) playEventSound('agentWaiting', id);
+    if (cur.activity === 'done' && prev.activity !== 'done') playEventSound('taskComplete', id);
+    if (cur.changes && !prev.changes) playEventSound('changesRequested', id);
+    if (cur.checks && !prev.checks) playEventSound('checksFailing', id);
+  }
+}
+
+let _prevReviewIDs = null;
+function detectReviewSounds() {
+  const rs = (boardData.reviews && boardData.reviews.reviews) || [];
+  const ids = new Set(rs.map((r) => r.id).filter(Boolean));
+  const prev = _prevReviewIDs;
+  _prevReviewIDs = ids;
+  if (!_soundArmed || !prev) return;
+  for (const r of rs) if (r.id && !prev.has(r.id)) playEventSound('reviewRequested', r.id);
+}
 
 // ---------------------------------------------------------------------------
 // State
@@ -136,6 +306,7 @@ async function refreshSessions() {
   try {
     const res = await rpc('list-sessions');
     sessions = res.sessions || [];
+    detectSessionSounds();
     renderSidebar();
   } catch (_) { /* transient — next poll retries */ }
 }
@@ -147,6 +318,7 @@ async function refreshLive() {
     const res = await rpc('list-sessions-live');
     liveById = res.sessions || {};
   } catch (_) { return; }
+  detectSessionSounds();
   renderSidebar();
   if (selectedId) {
     const s = sessions.find((x) => x.id === selectedId);
@@ -1006,6 +1178,7 @@ async function refreshBoard(key) {
   try { data = await rpc(method); } catch (_) { return; }
   const changed = JSON.stringify(boardData[key]) !== JSON.stringify(data);
   boardData[key] = data;
+  if (key === 'reviews') detectReviewSounds();
   if (changed) renderSidebar(); // badge counts
   if (changed && selectedBoard === key) renderBoard();
   // Reviews carry the PR author shown in the session header — re-render it when
