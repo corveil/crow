@@ -187,3 +187,67 @@ import CrowPersistence
         #expect(resp.error?.code == RPCErrorCode.invalidParams)
     }
 }
+
+/// Config-derived AppState sync (CROW-581): the desktop app copies these fields
+/// out of config in `AppDelegate`, but headless crowd omitted them — so the
+/// ticket board ignored `defaults.excludeTicketRepos`, and the auto-permission /
+/// remote-control gates never reflected config. `applyConfigToAppState` restores
+/// that sync; these lock in that every field lands and the board actually filters.
+@Suite struct ConfigAppStateSyncTests {
+    private func tmpDevRoot() -> String {
+        let p = NSTemporaryDirectory() + "crow-cfg-\(UUID().uuidString)"
+        try? FileManager.default.createDirectory(atPath: p, withIntermediateDirectories: true)
+        return p
+    }
+
+    @Test @MainActor func appliesExcludeReposAndPermissionGatesFromConfig() throws {
+        let devRoot = tmpDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        // Every value deliberately differs from the AppState default so a passing
+        // assertion proves the field was copied, not left at its zero-value.
+        let cfg = AppConfig(
+            defaults: ConfigDefaults(
+                excludeReviewRepos: ["acme/reviewskip"],
+                excludeTicketRepos: ["acme/legacy", "owner/*"],
+                ignoreReviewLabels: ["wip"]),
+            remoteControlEnabled: true,          // AppState default: false
+            managerAutoPermissionMode: false,    // AppState default: true
+            jobsAutoPermissionMode: false,       // AppState default: true
+            coderViewAutoPermissionMode: true)   // AppState default: false
+        try ConfigStore.saveConfig(cfg, devRoot: devRoot)
+
+        let appState = AppState()
+        CrowDaemon.applyConfigToAppState(appState, devRoot: devRoot)
+
+        #expect(appState.excludeTicketRepos == ["acme/legacy", "owner/*"])
+        #expect(appState.excludeReviewRepos == ["acme/reviewskip"])
+        #expect(appState.ignoreReviewLabels == ["wip"])
+        #expect(appState.remoteControlEnabled == true)
+        #expect(appState.managerAutoPermissionMode == false)
+        #expect(appState.jobsAutoPermissionMode == false)
+        #expect(appState.coderViewAutoPermissionMode == true)
+
+        // The board the daemon serializes is `filteredAssignedIssues`; with the
+        // field populated it now drops the excluded repos (exact + glob) — the
+        // user-visible regression where tickets ignored ignored repos.
+        appState.assignedIssues = [
+            AssignedIssue(id: "1", number: 1, title: "keep", state: "open",
+                          url: "https://x/1", repo: "acme/app", provider: .github),
+            AssignedIssue(id: "2", number: 2, title: "drop-exact", state: "open",
+                          url: "https://x/2", repo: "acme/legacy", provider: .github),
+            AssignedIssue(id: "3", number: 3, title: "drop-glob", state: "open",
+                          url: "https://x/3", repo: "owner/anything", provider: .github),
+        ]
+        #expect(appState.filteredAssignedIssues.map(\.repo) == ["acme/app"])
+    }
+
+    @Test @MainActor func missingConfigLeavesDefaultsUntouched() {
+        // No config.json → the guard returns early; AppState keeps its defaults
+        // rather than being clobbered to empty/false.
+        let appState = AppState()
+        CrowDaemon.applyConfigToAppState(
+            appState, devRoot: NSTemporaryDirectory() + "no-such-\(UUID().uuidString)")
+        #expect(appState.excludeTicketRepos.isEmpty)
+        #expect(appState.managerAutoPermissionMode == true)
+    }
+}
