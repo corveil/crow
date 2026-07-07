@@ -98,6 +98,21 @@ const DEFAULT_EVENT_SOUND = {
   changesRequested: 'Funk', checksFailing: 'Sosumi',
 };
 
+// NotificationEvent.displayName / .description (CrowCore) — reused for the
+// browser-notification title/body so the web matches the desktop wording.
+const EVENT_LABEL = {
+  taskComplete: 'Task Complete', agentWaiting: 'Agent Waiting',
+  reviewRequested: 'Review Requested', changesRequested: 'Changes Requested',
+  checksFailing: 'CI Failing',
+};
+const EVENT_DESC = {
+  taskComplete: 'Claude finished responding',
+  agentWaiting: 'Claude needs your input or permission',
+  reviewRequested: 'Someone requested your review on a PR',
+  changesRequested: 'A reviewer requested changes on your PR',
+  checksFailing: 'CI checks started failing on your PR',
+};
+
 // Swift encodes `[NotificationEvent: EventNotificationConfig]` as a flat
 // [key, value, key, value, …] array (enum keys aren't String/Int). Fold it back
 // into an object; tolerate an object form too.
@@ -113,6 +128,7 @@ function parseNotificationSettings(n) {
   return {
     globalMute: !!n.globalMute,
     soundEnabled: n.soundEnabled !== false, // NotificationSettings default: true
+    systemNotificationsEnabled: n.systemNotificationsEnabled !== false, // default: true
     events,
   };
 }
@@ -210,6 +226,80 @@ window.crowTestSound = function (event) {
   }, i * 700));
 };
 
+// --- Browser notifications (Web Notification API) --------------------------
+// The desktop app posts UNUserNotifications; the web equivalent is the browser
+// Notification API, which also works inside Tauri/Electron once the wrapper
+// grants notification permission. Fires on the same events as sounds, gated on
+// the same config's SYSTEM-notification toggles (systemNotificationsEnabled +
+// per-event enabled/systemNotificationEnabled), with the desktop's focus rule
+// and a 2s per-(session,event) dedup. Permission is requested only from an
+// explicit user action (Settings button) — never auto-prompted (CROW-593).
+
+function notificationsSupported() {
+  return typeof window !== 'undefined' && 'Notification' in window;
+}
+function sessionNameFor(id) {
+  const s = sessions.find((x) => x.id === id);
+  return (s && s.name) || 'Session';
+}
+
+const _lastNotifyAt = {};
+function showEventNotification(event, key) {
+  const N = uiConfig.notifications;
+  if (!N) return;                          // config not loaded — don't guess
+  if (N.globalMute) return;
+  if (!N.systemNotificationsEnabled) return;
+  const cfg = N.events[event] || {};
+  if (cfg.enabled === false) return;               // per-event master toggle
+  if (cfg.systemNotificationEnabled === false) return; // per-event notif toggle
+  if (!notificationsSupported() || Notification.permission !== 'granted') return;
+
+  const isSession = !!sessions.find((x) => x.id === key);
+  // Focus-suppression, mirroring NotificationManager (!appFocused || !visible):
+  // don't ping about the session you're already looking at.
+  if (isSession && document.hasFocus() && selectedId === key) return;
+
+  const k = (key || '') + '|' + event;
+  const now = Date.now();
+  if (_lastNotifyAt[k] && now - _lastNotifyAt[k] < 2000) return;
+  _lastNotifyAt[k] = now;
+
+  const label = EVENT_LABEL[event] || event;
+  const title = isSession ? `${label} — ${sessionNameFor(key)}` : label;
+  try {
+    const n = new Notification(title, { body: EVENT_DESC[event] || '', tag: k, icon: '/brand.svg' });
+    n.onclick = () => {
+      window.focus();
+      if (isSession) { try { selectSession(key); } catch (_) { /* ignore */ } }
+      n.close();
+    };
+  } catch (_) { /* Notification ctor can throw in restricted contexts */ }
+}
+
+// Both channels fire from one call in the detectors below; each self-gates.
+function emitEvent(event, key) {
+  playEventSound(event, key);
+  showEventNotification(event, key);
+}
+
+// Manual test hook, mirroring crowTestSound. crowTestNotify() shows one popup
+// per event (staggered); crowTestNotify('agentWaiting') shows one. Requests
+// permission first if needed. Bypasses config/dedup so it's always visible.
+window.crowTestNotify = function (event) {
+  if (!notificationsSupported()) { console.warn('[crowNotify] Notification API unavailable'); return; }
+  const fire = () => {
+    const evs = event
+      ? [event]
+      : ['taskComplete', 'agentWaiting', 'reviewRequested', 'changesRequested', 'checksFailing'];
+    evs.forEach((ev, i) => setTimeout(() => {
+      try { new Notification(`${EVENT_LABEL[ev] || ev} — test`, { body: EVENT_DESC[ev] || '', tag: 'test|' + ev }); } catch (_) {}
+      console.log('[crowNotify] test', ev);
+    }, i * 900));
+  };
+  if (Notification.permission === 'granted') fire();
+  else Notification.requestPermission().then((p) => { if (p === 'granted') fire(); else console.warn('[crowNotify] permission:', p); });
+};
+
 // Event detection: diff successive state snapshots. Snapshots always update; the
 // arm gate + per-session "first sighting" guard keep load/new-session appearances
 // from chiming — only genuine transitions do.
@@ -233,10 +323,10 @@ function detectSessionSounds() {
     const prev = prevSnap[id];
     if (!prev) continue; // first sighting of this session — baseline only
     const cur = snap[id];
-    if (cur.attention && !prev.attention) playEventSound('agentWaiting', id);
-    if (cur.activity === 'done' && prev.activity !== 'done') playEventSound('taskComplete', id);
-    if (cur.changes && !prev.changes) playEventSound('changesRequested', id);
-    if (cur.checks && !prev.checks) playEventSound('checksFailing', id);
+    if (cur.attention && !prev.attention) emitEvent('agentWaiting', id);
+    if (cur.activity === 'done' && prev.activity !== 'done') emitEvent('taskComplete', id);
+    if (cur.changes && !prev.changes) emitEvent('changesRequested', id);
+    if (cur.checks && !prev.checks) emitEvent('checksFailing', id);
   }
 }
 
@@ -247,7 +337,7 @@ function detectReviewSounds() {
   const prev = _prevReviewIDs;
   _prevReviewIDs = ids;
   if (!_soundArmed || !prev) return;
-  for (const r of rs) if (r.id && !prev.has(r.id)) playEventSound('reviewRequested', r.id);
+  for (const r of rs) if (r.id && !prev.has(r.id)) emitEvent('reviewRequested', r.id);
 }
 
 // ---------------------------------------------------------------------------
