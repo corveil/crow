@@ -175,7 +175,10 @@ function renderSidebar() {
   brand.alt = 'Crow';
   root.appendChild(brand);
 
-  root.appendChild(ticketsCard());
+  const trow = el('div', 'tickets-row');
+  trow.appendChild(ticketsCard());
+  trow.appendChild(sidebarToolsStack());
+  root.appendChild(trow);
   root.appendChild(navPillRow());
   if (selectionMode) root.appendChild(bulkActionBar());
 
@@ -298,6 +301,23 @@ function ticketsCard() {
   return card;
 }
 
+// Settings + Select, stacked vertically to the right of the Tickets card
+// (outside the box): Settings on top, Select below.
+function sidebarToolsStack() {
+  const stack = el('div', 'sidebar-tools');
+  const gear = el('button', 'tk-tool');
+  gear.title = 'Settings';
+  gear.appendChild(icon('gear', 14));
+  gear.onclick = () => { if (window.openSettings) window.openSettings(); };
+  stack.appendChild(gear);
+  const selBtn = el('button', 'tk-tool' + (selectionMode ? ' nav-selecting' : ''));
+  selBtn.title = selectionMode ? 'Cancel selection' : 'Select sessions';
+  selBtn.appendChild(icon(selectionMode ? 'close' : 'checkSquare', 14));
+  selBtn.onclick = () => { selectionMode = !selectionMode; if (!selectionMode) selectedSessionIDs.clear(); renderSidebar(); };
+  stack.appendChild(selBtn);
+  return stack;
+}
+
 // Reviews / Allowlist / Manager pills + "+" (new manager).
 function navPillRow() {
   const row = el('div', 'nav-pills');
@@ -320,20 +340,10 @@ function navPillRow() {
     row.appendChild(mgr);
   }
 
-  const selBtn = el('button', 'nav-plus' + (selectionMode ? ' nav-selecting' : ''), selectionMode ? '✕' : '☑');
-  selBtn.title = selectionMode ? 'Cancel selection' : 'Select sessions';
-  selBtn.onclick = () => { selectionMode = !selectionMode; if (!selectionMode) selectedSessionIDs.clear(); renderSidebar(); };
-  row.appendChild(selBtn);
-
   const plus = el('button', 'nav-plus', '+');
   plus.title = 'New Manager session';
   plus.onclick = () => openNewManagerMenu(plus);
   row.appendChild(plus);
-
-  const gear = el('button', 'nav-plus', '⚙');
-  gear.title = 'Settings';
-  gear.onclick = () => { if (window.openSettings) window.openSettings(); };
-  row.appendChild(gear);
   return row;
 }
 
@@ -397,6 +407,9 @@ const ICONS = {
   flag: '<path d="M4 2.5v11"/><path d="M4 3.5h7.5L9.8 6 11.5 8.5H4"/>',
   bolt: '<path d="M9 2 3.5 9H7l-1 5 6.5-7.5H8.5z"/>',
   checkCircle: '<circle cx="8" cy="8" r="5.8"/><path d="M5.6 8.2 7.3 9.9 10.6 6.2"/>',
+  checkSquare: '<rect x="2.5" y="2.5" width="11" height="11" rx="2"/><path d="M5.5 8.2 7.2 9.9 10.6 6"/>',
+  close: '<path d="M4 4l8 8M12 4l-8 8"/>',
+  gear: '<circle cx="8" cy="8" r="2.1"/><path d="M8 1.6v2.1M8 12.3v2.1M1.6 8h2.1M12.3 8h2.1M3.5 3.5l1.5 1.5M11 11l1.5 1.5M12.5 3.5 11 5M5 11l-1.5 1.5"/>',
 };
 function icon(name, size) {
   const span = el('span', 'ico');

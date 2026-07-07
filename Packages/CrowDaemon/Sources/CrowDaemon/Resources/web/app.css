@@ -413,7 +413,17 @@ html, body {
   border: 1px solid var(--border-subtle); background: var(--bg-card); color: var(--text-secondary); font-size: 12px;
 }
 .tickets-refresh:hover { color: var(--text-primary); border-color: var(--border-strong); }
+.tickets-row { display: flex; align-items: stretch; gap: 6px; margin: 2px 2px 8px; }
+.tickets-row .tickets-card { flex: 1 1 auto; margin: 0; }
+.sidebar-tools { display: flex; flex-direction: column; justify-content: center; gap: 4px; flex: 0 0 auto; }
 .tickets-counts { display: flex; justify-content: center; gap: 10px; margin-top: 8px; padding: 0 2px; }
+.tk-tool {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--border-subtle); background: var(--bg-card); color: var(--text-secondary);
+}
+.tk-tool:hover { color: var(--gold); border-color: var(--border-strong); }
+.tk-tool.nav-selecting { color: var(--red); border-color: var(--red); }
 .tk-count { display: flex; align-items: center; gap: 3px; }
 .tk-dot { width: 7px; height: 7px; border-radius: 50%; }
 .tk-n { font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; }
