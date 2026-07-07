@@ -41,26 +41,27 @@ struct BundledResourcesTests {
         #expect(body.contains("status off"))
     }
 
-    @Test func tmuxConfEnablesMouseWithCopyPipeNoClear() throws {
-        // Mouse must be on so the wheel drives tmux pane scrollback (#452 —
-        // turning mouse off to fix the #445 selection-clear killed wheel
-        // scrollback under tmux). Selection-clear is instead handled by
-        // overriding the copy bindings to use `copy-pipe-no-clear`, which
-        // copies to the macOS pasteboard without exiting copy mode (the
-        // default `copy-pipe-and-cancel` is what wiped the highlight).
-        // Drag is overridden in both copy-mode tables; double/triple
-        // click are overridden in root so word/line selection is
-        // consistent with the drag behavior.
+    @Test func tmuxConfDisablesMouseAndAlternateScreen() throws {
+        // Mouse OFF (CROW-593): `mouse on` made tmux capture the wheel and drop
+        // the pane into copy-mode on every scroll — the "scroll takeover". Off
+        // hands scrolling AND selection to the outer terminal (xterm.js on the
+        // web, native on desktop). Alternate-screen OFF keeps inner TUIs (Claude
+        // Code, Cursor) rendering into the pane's MAIN buffer, so their output
+        // lands in xterm.js's scrollback and the wheel scrolls the window
+        // natively — instead of the alternate buffer falling back to arrow-key
+        // "alternate scroll", which navigates the agent's input history.
         let url = try #require(BundledResources.tmuxConfURL)
         let body = try String(contentsOf: url, encoding: .utf8)
-        #expect(body.contains("set -gs mouse on"))
-        #expect(!body.contains("set -gs mouse off"))
+        #expect(body.contains("set -gs mouse off"))
+        #expect(!body.contains("set -gs mouse on"))
+        #expect(body.contains("set -gs alternate-screen off"))
+        // The mouse copy bindings are retained but dormant (tmux gets no mouse
+        // events while off), so flipping `mouse` back to `on` restores the tuned
+        // #445/#452 selection behavior without re-authoring them.
         #expect(body.contains(#"bind -T copy-mode    MouseDragEnd1Pane send-keys -X copy-pipe-no-clear "pbcopy""#))
         #expect(body.contains(#"bind -T copy-mode-vi MouseDragEnd1Pane send-keys -X copy-pipe-no-clear "pbcopy""#))
         #expect(body.contains("bind -T root DoubleClick1Pane"))
         #expect(body.contains("bind -T root TripleClick1Pane"))
-        #expect(body.contains(#"send-keys -X select-word ; run -d0.3 ; send-keys -X copy-pipe-no-clear "pbcopy""#))
-        #expect(body.contains(#"send-keys -X select-line ; run -d0.3 ; send-keys -X copy-pipe-no-clear "pbcopy""#))
     }
 
     @Test func terminalHTMLHandlesModifiedEnter() throws {
