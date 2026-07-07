@@ -483,11 +483,20 @@
     btn.type = 'button';
     const status = el('span', 'st-perm-status', '');
     function refresh() {
-      const p = supported ? Notification.permission : 'unsupported';
+      if (!supported) { status.textContent = 'Not supported in this browser'; btn.disabled = true; btn.textContent = 'Unavailable'; return; }
+      // The Notification API only works in a secure context (HTTPS or
+      // localhost). Over plain http:// on a LAN IP, Chrome reports 'denied' and
+      // won't prompt — surface that as the real cause, not a user block.
+      if (typeof window !== 'undefined' && window.isSecureContext === false) {
+        status.textContent = 'Needs HTTPS or a localhost URL — this origin (' + location.host + ') is insecure';
+        btn.disabled = true; btn.textContent = 'Unavailable (insecure origin)';
+        return;
+      }
+      const p = Notification.permission;
       status.textContent = 'Permission: ' + p;
-      btn.disabled = !supported || p === 'granted' || p === 'denied';
+      btn.disabled = p === 'granted' || p === 'denied';
       btn.textContent = p === 'granted' ? 'Enabled'
-        : p === 'denied' ? 'Blocked in browser settings'
+        : p === 'denied' ? 'Blocked — re-enable via the site lock icon → Notifications'
         : 'Enable browser notifications';
     }
     btn.onclick = () => { if (supported) Notification.requestPermission().then(refresh); };
