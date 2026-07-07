@@ -1,6 +1,6 @@
 # `crow` CLI Reference
 
-The `crow` CLI communicates with the running Crow app via a Unix socket at `~/.local/share/crow/crow.sock` (override with `CROW_SOCKET`). The app must be running for RPC commands to succeed; `crow setup` is the only subcommand that works without a running app.
+The `crow` CLI communicates over a Unix socket at `~/.local/share/crow/crow.sock` (override with `CROW_SOCKET`). A server must be listening on it for RPC commands to succeed — by default the `crowd` daemon owns this socket (the desktop app is a client of `crowd`); a legacy app run with `CROW_LOCAL_ENGINE=1` binds it instead. `crow setup` is the only subcommand that works with nothing listening.
 
 All commands print JSON to stdout on success. Session and terminal identifiers are full UUIDs (e.g. `a1b2c3d4-e5f6-7890-abcd-ef1234567890`) — short names are not accepted.
 

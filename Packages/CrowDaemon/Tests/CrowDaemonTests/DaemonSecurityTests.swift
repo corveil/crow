@@ -118,14 +118,43 @@ import CrowPersistence
     }
 }
 
-/// The daemon must not steal the desktop app's socket: its default is a distinct
-/// `crowd.sock`, sharing the app's `crow.sock` is opt-in via --socket (CROW-581).
+/// In the client-default world (F cutover) the desktop app no longer binds
+/// `crow.sock`, so the daemon owns it: its default IS the app's well-known
+/// socket, and every existing `crow` CLI consumer reaches `crowd` unchanged. The
+/// bind guard (a live connect probe) still refuses to steal a *running* legacy
+/// app's socket; run an isolated daemon via an explicit `--socket` (CROW-581).
 @Suite struct DaemonSocketDefaultTests {
-    @Test func daemonDefaultIsDistinctFromAppSocket() {
+    @Test func daemonDefaultIsTheWellKnownAppSocket() {
         let daemonSock = DaemonOptions.defaultDaemonSocketPath()
-        #expect(daemonSock != SocketServer.defaultSocketPath())
-        #expect(daemonSock.hasSuffix("crowd.sock"))
+        #expect(daemonSock == SocketServer.defaultSocketPath())
+        #expect(daemonSock.hasSuffix("crow.sock"))
         #expect(DaemonOptions.parse(["crowd"]).socketPath == daemonSock)
+    }
+}
+
+/// One `crowd` per socket: the flock guard makes a duplicate daemon on the same
+/// socket exit instead of half-starting (skipping the unix bind) and orphaning
+/// `crow.sock` when the first dies — the multi-`crowd-dev` footgun (CROW-581).
+@Suite struct SingleInstanceLockTests {
+    private func tmpSocket() -> String {
+        NSTemporaryDirectory() + "crowd-lock-\(UUID().uuidString).sock"
+    }
+
+    @Test func secondAcquireOnSameSocketIsRefused() {
+        let sock = tmpSocket()
+        defer { try? FileManager.default.removeItem(atPath: sock + ".lock") }
+        #expect(CrowDaemon.acquireSingleInstanceLock(socketPath: sock) == true)   // first wins
+        #expect(CrowDaemon.acquireSingleInstanceLock(socketPath: sock) == false)  // duplicate refused
+    }
+
+    @Test func distinctSocketsGetDistinctLocks() {
+        let a = tmpSocket(), b = tmpSocket()
+        defer {
+            try? FileManager.default.removeItem(atPath: a + ".lock")
+            try? FileManager.default.removeItem(atPath: b + ".lock")
+        }
+        #expect(CrowDaemon.acquireSingleInstanceLock(socketPath: a) == true)
+        #expect(CrowDaemon.acquireSingleInstanceLock(socketPath: b) == true)   // isolated daemon coexists
     }
 }
 

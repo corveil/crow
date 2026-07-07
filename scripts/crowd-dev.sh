@@ -11,20 +11,22 @@
 # Uses `watchexec` if installed (fastest); otherwise falls back to a portable
 # mtime poll loop. Install the fast path with: brew install watchexec
 #
-# Env overrides: CROW_HTTP_PORT (8787), CROW_SOCKET ($TMPDIR/crowd.sock),
+# Env overrides: CROW_HTTP_PORT (8787), CROW_SOCKET (~/.local/share/crow/crow.sock),
 # CROW_DEV_ROOT (repo cwd).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+HOST="${CROW_HTTP_HOST:-127.0.0.1}"
 PORT="${CROW_HTTP_PORT:-8787}"
-SOCK="${CROW_SOCKET:-${TMPDIR:-/tmp/}crowd.sock}"
+SOCK="${CROW_SOCKET:-$HOME/.local/share/crow/crow.sock}"
+SOCK="${SOCK/#\~/$HOME}"   # expand a leading ~ (a quoted CROW_SOCKET override won't be tilde-expanded by the shell)
 DEVROOT="${CROW_DEV_ROOT:-$(pwd)}"
 WEBDIR="$(pwd)/Packages/CrowDaemon/Sources/CrowDaemon/Resources/web"
 WATCH=(Packages/CrowDaemon Packages/CrowTerminal Packages/CrowCore Packages/CrowIPC Packages/CrowGit Packages/CrowPersistence Sources/crowd)
 
-START_CMD=(.build/debug/crowd --http-port "$PORT" --socket "$SOCK" --dev-root "$DEVROOT" --web-dir "$WEBDIR")
+START_CMD=(.build/debug/crowd --host "$HOST" --http-port "$PORT" --socket "$SOCK" --dev-root "$DEVROOT" --web-dir "$WEBDIR")
 
-echo "[crowd-dev] http://127.0.0.1:$PORT  · socket $SOCK · web live from $WEBDIR"
+echo "[crowd-dev] http://$HOST:$PORT  · socket $SOCK · web live from $WEBDIR"
 
 if command -v watchexec >/dev/null 2>&1; then
   echo "[crowd-dev] watchexec: rebuild + restart on *.swift change"
