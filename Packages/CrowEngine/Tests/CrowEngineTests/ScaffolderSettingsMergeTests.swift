@@ -1,7 +1,7 @@
 import CrowCore
 import Foundation
 import Testing
-@testable import Crow
+@testable import CrowEngine
 
 /// Coverage for `Scaffolder.mergeSettings`: settings.json used to
 /// be overwritten wholesale on every launch, silently discarding anything a
