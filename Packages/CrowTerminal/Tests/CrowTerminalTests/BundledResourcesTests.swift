@@ -55,6 +55,10 @@ struct BundledResourcesTests {
         #expect(body.contains("set -gs mouse off"))
         #expect(!body.contains("set -gs mouse on"))
         #expect(body.contains("set -gs alternate-screen off"))
+        // Cancel the client's smcup/rmcup so tmux renders into the outer
+        // terminal's main buffer (scrollback), not its alternate buffer — the
+        // load-bearing half of the native-wheel-scroll fix.
+        #expect(body.contains("smcup@:rmcup@"))
         // The mouse copy bindings are retained but dormant (tmux gets no mouse
         // events while off), so flipping `mouse` back to `on` restores the tuned
         // #445/#452 selection behavior without re-authoring them.
