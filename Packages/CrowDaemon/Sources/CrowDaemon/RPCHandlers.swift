@@ -112,7 +112,8 @@ func makeCommandRouter(
     allowList: AllowListService? = nil,
     sessionService: SessionService? = nil,
     autoRespond: AutoRespondCoordinator? = nil,
-    jobScheduler: JobScheduler? = nil
+    jobScheduler: JobScheduler? = nil,
+    fallback: CommandRouter? = nil
 ) -> CommandRouter {
     // Serializes review kickoffs (see start-review) — one per router instance.
     let reviewSerializer = ReviewKickoffSerializer()
@@ -392,10 +393,16 @@ func makeCommandRouter(
             // Unlike the app (which records metadata and lets `setup.sh` create
             // the worktree), the daemon materializes it here via CrowGit — this
             // exercises the reused git layer end-to-end on Linux (CROW-581).
-            do {
-                try await git.createWorktree(repoPath: repoPath, worktreePath: path, branch: branch)
-            } catch {
-                throw DaemonRPCError.applicationError("git worktree add failed: \(error.localizedDescription)")
+            // When setup.sh (or the user) already created the checkout, register
+            // metadata only — do not fail or re-run git worktree add.
+            let gitMarker = (path as NSString).appendingPathComponent(".git")
+            let alreadyMaterialized = FileManager.default.fileExists(atPath: gitMarker)
+            if !alreadyMaterialized {
+                do {
+                    try await git.createWorktree(repoPath: repoPath, worktreePath: path, branch: branch)
+                } catch {
+                    throw DaemonRPCError.applicationError("git worktree add failed: \(error.localizedDescription)")
+                }
             }
             let worktree = SessionWorktree(
                 sessionID: sessionID, repoName: repo, repoPath: repoPath, worktreePath: path,
@@ -1061,5 +1068,5 @@ func makeCommandRouter(
             await MainActor.run { jobScheduler.runNow(id) }
             return ["ok": .bool(true)]
         },
-    ])
+    ], fallback: fallback)
 }
