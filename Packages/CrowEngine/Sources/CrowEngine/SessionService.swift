@@ -653,6 +653,49 @@ public final class SessionService {
         if n > 0 { NSLog("[SessionService] reaped \(n) orphaned cockpit window(s) at launch (#408)") }
     }
 
+    /// Reconcile persisted terminals ↔ live cockpit tmux windows (CROW-581).
+    /// (1) Prune terminal records whose bound tmux window is gone — from BOTH
+    ///     `appState` and the store, else the store-reload poll resurrects a
+    ///     terminal the user can't attach to. (2) Reap orphaned cockpit windows
+    ///     that no terminal references (targeted-auto: forgotten bare shells +
+    ///     recognized agent windows after a one-pass grace, never a Manager).
+    /// Idempotent; meant to run at takeover and on a periodic tick. crowd owns
+    /// this because the desktop app is now a client (ADR 0007).
+    @MainActor
+    public func reconcileTerminalSurfaces() {
+        let liveIndices = Set(TmuxBackend.shared.listCockpitWindows().map(\.index))
+        guard !liveIndices.isEmpty else { return }   // tmux read failed → don't prune blindly
+
+        // (1) Prune dead terminal records.
+        var deadIDs: [UUID] = []
+        for (sessionID, terminals) in appState.terminals {
+            var alive: [SessionTerminal] = []
+            for t in terminals {
+                if let idx = t.tmuxBinding?.windowIndex, !liveIndices.contains(idx) {
+                    deadIDs.append(t.id)
+                } else {
+                    alive.append(t)
+                }
+            }
+            if alive.count != terminals.count {
+                appState.terminals[sessionID] = alive.isEmpty ? nil : alive
+            }
+        }
+        if !deadIDs.isEmpty {
+            let dead = Set(deadIDs)
+            store.mutate { $0.terminals.removeAll { dead.contains($0.id) } }
+            NSLog("[SessionService] pruned \(deadIDs.count) dead terminal record(s) (CROW-581)")
+        }
+
+        // (2) Reap orphaned cockpit windows. Agent window names are exactly what
+        // `new-terminal` pins on managed agent windows, so orphaned agents are
+        // identified positively and the anchor/infra is never touched.
+        let keep = Set(appState.terminals.values.flatMap { $0 }.compactMap { $0.tmuxBinding?.windowIndex })
+        let agentNames = Set([AgentKind.claudeCode, .cursor, .codex, .openCode]
+            .map { CrowAttribution.agentDisplayName(for: $0) })
+        TmuxBackend.shared.reconcileOrphanWindows(keepWindowIndices: keep, agentWindowNames: agentNames)
+    }
+
     /// Re-arm any tmux readiness watches that have stalled while the app
     /// was backgrounded. Called from `NSApplication.didBecomeActiveNotification`
     /// so a user who returns to a long-idle app doesn't have to click
