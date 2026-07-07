@@ -461,6 +461,7 @@
     body.appendChild(toggleField('Mute everything', n, 'globalMute', 'Suppresses all sounds and system notifications.'));
     body.appendChild(toggleField('Enable sound', n, 'soundEnabled'));
     body.appendChild(toggleField('Enable system notifications', n, 'systemNotificationsEnabled'));
+    body.appendChild(browserNotifRow());
 
     for (const [raw, conf] of ensureAllEvents(n)) {
       body.appendChild(group(EVENT_LABELS[raw] || raw));
@@ -469,6 +470,32 @@
       body.appendChild(toggleField('System notification', conf, 'systemNotificationEnabled'));
       body.appendChild(soundField(conf));
     }
+  }
+
+  // Browser-notification permission control. The Notification API needs an
+  // explicit grant; surface the live state + a button to request it (used by
+  // app.js's showEventNotification). Also covers Tauri/Electron webviews
+  // (CROW-593).
+  function browserNotifRow() {
+    const supported = typeof window !== 'undefined' && 'Notification' in window;
+    const wrap = el('div', 'st-sound-row');
+    const btn = el('button', 'action-btn', 'Enable browser notifications');
+    btn.type = 'button';
+    const status = el('span', 'st-perm-status', '');
+    function refresh() {
+      const p = supported ? Notification.permission : 'unsupported';
+      status.textContent = 'Permission: ' + p;
+      btn.disabled = !supported || p === 'granted' || p === 'denied';
+      btn.textContent = p === 'granted' ? 'Enabled'
+        : p === 'denied' ? 'Blocked in browser settings'
+        : 'Enable browser notifications';
+    }
+    btn.onclick = () => { if (supported) Notification.requestPermission().then(refresh); };
+    refresh();
+    wrap.appendChild(btn);
+    wrap.appendChild(status);
+    return field('Browser notifications', wrap,
+      'Grant the browser permission to show desktop popups when a session finishes or needs attention. Also applies inside Tauri/Electron.');
   }
 
   // eventSettings may be a Swift enum-keyed dict (encoded as [k, v, k, v, ...])
