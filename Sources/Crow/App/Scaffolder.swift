@@ -139,10 +139,32 @@ struct Scaffolder {
         try CrowAttribution.expandSkillBody(attributionFooter, agentKind: managerAgentKind)
             .write(toFile: attributionFooterPath, atomically: true, encoding: .utf8)
 
-        // Always overwrite settings.json (permissions for crow, gh, git commands)
-        let settingsPath = (claudeDir as NSString).appendingPathComponent("settings.json")
+        // Write Crow's required permissions to settings.local.json, not
+        // settings.json. settings.json is the user's own file —
+        // Crow never writes it and never has to reconcile with whatever the
+        // user puts there. settings.local.json is Claude Code's local-
+        // override layer: its `permissions.allow` entries are merged with
+        // settings.json's at load time, so crow/gh/git commands still run
+        // without a prompt. `mergeSettings` still guards this file too — a
+        // full overwrite on every launch would just move the "nukes my
+        // customizations" bug from one filename to another. It fills in
+        // only what's missing and reports `.upToDate` when there's nothing
+        // to add, so a steady-state launch skips the write entirely — the
+        // on-disk file (bytes, inode, mtime, mode) is left completely alone.
+        let settingsPath = (claudeDir as NSString).appendingPathComponent("settings.local.json")
         let settingsTemplate = Self.bundledSettings()
-        try settingsTemplate.write(toFile: settingsPath, atomically: true, encoding: .utf8)
+        if case let .write(mergedSettings) = Self.mergeSettings(existingPath: settingsPath, template: settingsTemplate) {
+            try mergedSettings.write(toFile: settingsPath, atomically: true, encoding: .utf8)
+            // `atomically: true` renames a fresh temp file over the target,
+            // which resets its mode to the umask default (~0o644). This same
+            // file's `env` block can carry a resolved gateway bearer token —
+            // ClaudeHookConfigWriter.writeGatewayEnv deliberately restricts
+            // it to owner-only — so re-apply 0o600 here to match that sibling
+            // writer. Without it the Settings → "Re-scaffold" action (which
+            // runs scaffold with no following writeGatewayEnv) would leave a
+            // token-bearing file group/world-readable until the next launch.
+            try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: settingsPath)
+        }
 
         // Create prompts directory for crow-workspace prompt files
         let promptsDir = (claudeDir as NSString).appendingPathComponent("prompts")
@@ -500,7 +522,10 @@ struct Scaffolder {
         return CrowAttribution.sharedFooterInstructions
     }
 
-    /// The settings.json template with pre-approved permissions.
+    /// The pre-approved-permissions template, sourced from the repo's own
+    /// `settings.json` (used as a bundled resource name, not a hint about
+    /// the runtime destination — see `scaffold(...)`, which writes this
+    /// content to `{devRoot}/.claude/settings.local.json`).
     static func bundledSettings() -> String {
         if let content = loadFromRepo("settings.json") {
             return content
@@ -557,6 +582,84 @@ struct Scaffolder {
           }
         }
         """
+    }
+
+    /// Outcome of merging the bundled permissions template into an existing
+    /// `settings.local.json`.
+    ///
+    /// - `.upToDate`: the on-disk file already has everything the template
+    ///   would contribute. The caller skips the write entirely, so the file
+    ///   is left completely alone — bytes, inode, mtime, and its owner-only
+    ///   0o600 mode (which `ClaudeHookConfigWriter.writeGatewayEnv` applies
+    ///   to the token-bearing `env` block) all survive untouched. This is
+    ///   the steady state on every launch after the first.
+    /// - `.write`: the payload must be persisted (a fresh file, or the merge
+    ///   added something). The caller writes it, then re-asserts 0o600.
+    enum SettingsMergeOutcome: Equatable {
+        case upToDate
+        case write(String)
+    }
+
+    /// Merges `template` into whatever's already on disk at `existingPath`,
+    /// instead of overwriting it. Guarantees:
+    ///
+    /// - `permissions.allow`: the union of the template's and the existing
+    ///   file's entries — any bundled entry the user's file is missing gets
+    ///   appended, but nothing already there is ever removed.
+    /// - Every other top-level key (`outputStyle`, `statusLine`, `hooks`,
+    ///   `env`, a hand-edited `sandbox` block, …): filled in from the
+    ///   template only if the user's file doesn't already have that key.
+    ///   An existing value always wins, even if it differs from the
+    ///   template.
+    ///
+    /// Returns `.upToDate` when there's nothing to add, so the caller skips
+    /// the write and a user's formatting (and the file's mode) isn't churned
+    /// on every launch. Returns `.write(template)` verbatim when there's no
+    /// existing file yet, or it isn't valid JSON.
+    static func mergeSettings(existingPath: String, template: String) -> SettingsMergeOutcome {
+        guard let existingData = FileManager.default.contents(atPath: existingPath),
+              String(data: existingData, encoding: .utf8) != nil,
+              let existingObj = try? JSONSerialization.jsonObject(with: existingData) as? [String: Any],
+              let templateData = template.data(using: .utf8),
+              let templateObj = try? JSONSerialization.jsonObject(with: templateData) as? [String: Any]
+        else {
+            return .write(template)
+        }
+
+        var merged = existingObj
+        var changed = false
+
+        for (key, templateValue) in templateObj {
+            if key == "permissions", let templatePerms = templateValue as? [String: Any] {
+                var mergedPerms = merged["permissions"] as? [String: Any] ?? [:]
+                let templateAllow = templatePerms["allow"] as? [String] ?? []
+                let existingAllow = mergedPerms["allow"] as? [String] ?? []
+                let existingSet = Set(existingAllow)
+                let missing = templateAllow.filter { !existingSet.contains($0) }
+                if !missing.isEmpty {
+                    mergedPerms["allow"] = existingAllow + missing
+                    merged["permissions"] = mergedPerms
+                    changed = true
+                }
+            } else if merged[key] == nil {
+                merged[key] = templateValue
+                changed = true
+            }
+        }
+
+        // Nothing to add — leave the on-disk file untouched (skip the write).
+        guard changed else { return .upToDate }
+
+        // Serialization can't realistically fail on a dict we just built from
+        // valid JSON, but if it did there's no better content to write than
+        // what's already there — so skip rather than churn/relax the file.
+        guard let mergedData = try? JSONSerialization.data(
+            withJSONObject: merged,
+            options: [.prettyPrinted, .sortedKeys]
+        ), let mergedString = String(data: mergedData, encoding: .utf8) else {
+            return .upToDate
+        }
+        return .write(mergedString)
     }
 
     /// Try to load a file from the repo root (for development builds).

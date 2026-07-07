@@ -123,6 +123,6 @@ Crow auto-generates certain files into `{devRoot}/.claude/` on launch (see `Scaf
 
 - `CLAUDE.md` — scaffolded from the root `CLAUDE.md`
 - `skills/crow-workspace/SKILL.md` — scaffolded from `Resources/crow-workspace-SKILL.md.template`
-- `settings.json` — always overwritten with pre-approved permissions
+- `settings.local.json` — merged with pre-approved permissions on every launch; `settings.json` is the user's own file and Crow never writes it
 
 **Do not edit the scaffolded copies.** Instead, modify the source files in the repository root or `Resources/` directory.

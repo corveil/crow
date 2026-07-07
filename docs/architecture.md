@@ -45,7 +45,7 @@ There are two `CrowCLI` directories:
 | **AppDelegate**           | `Sources/Crow/App/AppDelegate.swift`               | Initializes the app, creates the main window, starts the IPC socket server and issue tracker                     |
 | **SessionService**        | `Sources/Crow/App/SessionService.swift`            | CRUD for sessions/worktrees/terminals, terminal readiness tracking, orphan recovery on startup                    |
 | **IssueTracker**          | `Sources/Crow/App/IssueTracker.swift`              | Polls GitHub/GitLab every 60 seconds for assigned issues, PR status, project board status, auto-completes merged sessions |
-| **Scaffolder**            | `Sources/Crow/App/Scaffolder.swift`                | First-run devRoot scaffold: `.claude/` + bundled skills + settings.json                                           |
+| **Scaffolder**            | `Sources/Crow/App/Scaffolder.swift`                | First-run devRoot scaffold: `.claude/` + bundled skills + settings.local.json (never touches the user's own settings.json)  |
 | **TmuxBackend**           | `Packages/CrowTerminal/.../TmuxBackend.swift`      | The terminal backend (introduced in #229, defaulted on in #301, the only backend since #303). Owns the tmux server and the shared cockpit `XTermSurfaceView` that renders it |
 | **TerminalRouter**        | `Sources/Crow/App/TerminalRouter.swift`            | Thin facade over `TmuxBackend` for per-terminal `send` / `destroy` / `trackReadiness` |
 | **AutoRespondCoordinator**| `Sources/Crow/App/AutoRespondCoordinator.swift`    | Watches PR review / CI signals and types follow-up instructions into the linked Claude Code terminal (#214)       |
