@@ -10,7 +10,6 @@
 (function () {
   let cfg = null;          // working copy of AppConfig (parsed)
   let devRoot = '';
-  let appRunning = false;
   let dirty = false;
   let activeTab = 'general';
   let agents = [];         // [{kind, name, default}] from list-agents (local, not remote)
@@ -93,7 +92,6 @@
     catch (err) { window.alert('Could not load settings: ' + (err.message || err)); return; }
     try { cfg = JSON.parse(res.config || '{}'); } catch (_) { cfg = {}; }
     devRoot = res.dev_root || '';
-    appRunning = !!res.app_running;
     // Local list of available agents for the Default-agent picker (#3 /
     // CROW-593). Best-effort — empty when the app is down/old.
     try { const ar = await rpc('list-agents'); agents = (ar && ar.agents) || []; } catch (_) { agents = []; }
@@ -124,6 +122,9 @@
       const res = await rpc('set-config', { config: JSON.stringify(cfg) });
       if (res && res.config) { try { cfg = JSON.parse(res.config); } catch (_) { /* keep working copy */ } }
       dirty = false;
+      // set-config doesn't push a `changed`, so nudge the sidebar to re-read
+      // config-driven view options (e.g. Hide session details) immediately.
+      if (window.reloadUIConfig) window.reloadUIConfig();
       btn.textContent = 'Saved ✓';
       setTimeout(() => { if (!dirty && backdrop) render(); }, 700);
     } catch (err) {
@@ -166,10 +167,6 @@
     modal.appendChild(body);
 
     const foot = el('div', 'settings-foot');
-    if (!appRunning) {
-      foot.appendChild(el('div', 'settings-appdown',
-        'Desktop app unavailable for settings (not running or outdated) — changes save to config.json directly.'));
-    }
     foot.appendChild(el('div', 'settings-foot-spacer'));
     const closeBtn = el('button', 'action-btn', 'Close');
     closeBtn.onclick = () => closeSettings();
