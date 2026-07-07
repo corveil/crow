@@ -11,7 +11,7 @@
 
 | Problem                                                  | Solution                                                                 |
 | -------------------------------------------------------- | ------------------------------------------------------------------------ |
-| `crow` CLI: "Connection refused"                         | The Crow app must be running — the CLI communicates via Unix socket at `~/.local/share/crow/crow.sock`. As of #234, `crow hook-event` is a silent no-op when the app is not running, so non-Crow `claude` sessions no longer log noise. |
+| `crow` CLI: "Connection refused"                         | A server must be listening on `~/.local/share/crow/crow.sock`. By default that's the `crowd` daemon (`make crowd-dev`, or run `crowd` with defaults); a legacy app with `CROW_LOCAL_ENGINE=1` binds it instead. A "connection refused" (vs "no such file") means the socket file is stale — start `crowd` and it reclaims it. As of #234, `crow hook-event` is a silent no-op when nothing is listening, so non-Crow `claude` sessions no longer log noise. |
 | GitHub API errors / empty issue list                     | Check auth: `gh auth status`. Ensure scopes include `repo`, `read:org`, `project`. If missing, run `gh auth refresh -s project,read:org,repo`. |
 | `INSUFFICIENT_SCOPES` in `[IssueTracker]` stderr         | Run `gh auth refresh -s project`. **`read:project` is NOT sufficient** — the write `project` scope is required to update ticket status via `updateProjectV2ItemFieldValue`. See `Sources/Crow/App/IssueTracker.swift:691-692,768-769`. |
 | Ticket stays "Backlog" when starting a session           | Same as above — the `markInReview` code path requires the write `project` scope |

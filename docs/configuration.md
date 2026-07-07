@@ -10,7 +10,7 @@ All persistent state lives under `~/Library/Application Support/crow/` (see `Pac
 | --------------------------------------------------------------------- | ------------------------------------------------------------- |
 | `~/Library/Application Support/crow/devroot`                          | Pointer file containing the development root path            |
 | `~/Library/Application Support/crow/store.json`                       | Persisted sessions, worktrees, links, terminals               |
-| `~/.local/share/crow/crow.sock`                                       | Unix socket for CLI ↔ app IPC                                 |
+| `~/.local/share/crow/crow.sock`                                       | Unix socket for CLI ↔ server IPC (owned by `crowd` by default) |
 | `{devRoot}/.claude/config.json`                                       | Workspace configuration (see below)                          |
 | `{devRoot}/.claude/CLAUDE.md`                                         | Manager-tab context with the `crow` CLI reference             |
 | `{devRoot}/.claude/settings.local.json`                               | Crow-managed pre-approved permissions, merged on every launch  |
@@ -242,7 +242,7 @@ Worktrees are created **at the same level as the main repo**, not in a `worktree
 
 | Variable              | Purpose                                                                                            | Default                        |
 | --------------------- | -------------------------------------------------------------------------------------------------- | ------------------------------ |
-| `CROW_SOCKET`         | Override the Unix socket path for CLI ↔ app IPC                                                    | `~/.local/share/crow/crow.sock` |
+| `CROW_SOCKET`         | Override the Unix socket path for CLI ↔ server IPC (also the `crowd` bind path)                    | `~/.local/share/crow/crow.sock` |
 | `TMPDIR`              | Temporary file directory (used by the terminal subsystem)                                          | System default                 |
 | `GITLAB_HOST`         | GitLab instance hostname (set automatically per workspace from `host` in `config.json`)            | —                              |
 | `CROW_HOOK_DEBUG`     | Set to `1` to enable `[hook-event]` debug logging                                                  | unset                          |

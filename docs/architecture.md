@@ -50,7 +50,7 @@ There are two `CrowCLI` directories:
 | **TerminalRouter**        | `Sources/Crow/App/TerminalRouter.swift`            | Thin facade over `TmuxBackend` for per-terminal `send` / `destroy` / `trackReadiness` |
 | **AutoRespondCoordinator**| `Sources/Crow/App/AutoRespondCoordinator.swift`    | Watches PR review / CI signals and types follow-up instructions into the linked Claude Code terminal (#214)       |
 | **TerminalReadiness**     | `Packages/CrowCore/Sources/CrowCore/Models/Enums.swift:41` | Four-state enum (uninitialized → surfaceCreated → shellReady → claudeLaunched) driving the sidebar status dot |
-| **SocketServer**          | `Packages/CrowIPC/`                                | Unix socket server at `~/.local/share/crow/crow.sock` — receives JSON-RPC commands from the `crow` CLI            |
+| **SocketServer**          | `Packages/CrowIPC/`                                | Unix socket server at `~/.local/share/crow/crow.sock` — receives JSON-RPC commands from the `crow` CLI. Owned by the `crowd` daemon by default; by a legacy app under `CROW_LOCAL_ENGINE=1` |
 | **CrowCommand**           | `Packages/CrowCLI/.../CrowCommand.swift`           | ArgumentParser root command registering every subcommand                                                          |
 | **JSONStore**             | `Packages/CrowPersistence/`                        | NSLock-serialized JSON persistence for sessions, worktrees, links, terminals                                      |
 
