@@ -97,3 +97,36 @@ private actor ParamsBox {
     let response = await router.handle(request: request)
     #expect(response.id == 42)
 }
+
+// MARK: - Fallback delegation (CROW-581)
+
+@Test func delegatesUnknownMethodToFallback() async {
+    let engine = CommandRouter(handlers: [
+        "hook-event": { @Sendable _ in ["handled_by": .string("engine")] },
+    ])
+    let daemon = CommandRouter(handlers: [
+        "list-sessions": { @Sendable _ in ["handled_by": .string("daemon")] },
+    ], fallback: engine)
+
+    let resp = await daemon.handle(request: JSONRPCRequest(id: 1, method: "hook-event"))
+    #expect(resp.error == nil)
+    #expect(resp.result?["handled_by"] == .string("engine"))
+}
+
+@Test func primaryHandlerShadowsFallback() async {
+    let engine = CommandRouter(handlers: [
+        "list-sessions": { @Sendable _ in ["handled_by": .string("engine")] },
+    ])
+    let daemon = CommandRouter(handlers: [
+        "list-sessions": { @Sendable _ in ["handled_by": .string("daemon")] },
+    ], fallback: engine)
+
+    let resp = await daemon.handle(request: JSONRPCRequest(id: 1, method: "list-sessions"))
+    #expect(resp.result?["handled_by"] == .string("daemon"))
+}
+
+@Test func unknownWithNoFallbackStillErrors() async {
+    let router = CommandRouter(handlers: ["a": { @Sendable _ in [:] }])
+    let resp = await router.handle(request: JSONRPCRequest(id: 1, method: "nope"))
+    #expect(resp.error?.code == RPCErrorCode.methodNotFound)
+}
