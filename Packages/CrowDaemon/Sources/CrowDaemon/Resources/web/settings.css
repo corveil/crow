@@ -173,6 +173,7 @@
 /* Sound select + inline Preview button share a row. */
 .st-sound-row { display: flex; gap: 8px; align-items: center; }
 .st-sound-row .st-select { flex: 1; }
+.st-perm-status { font-size: 12px; color: var(--text-muted); }
 .st-switch { accent-color: var(--gold); width: 15px; height: 15px; flex: none; }
 .st-switch-label { font-size: 12px; color: var(--text-primary); }
 
