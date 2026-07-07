@@ -50,6 +50,10 @@ public enum CrowDaemon {
         let store = JSONStore()
         let git = GitManager()
         let appState = await seedAppState(from: store)
+        // Apply config-derived AppState fields (rc, auto-permission modes, board
+        // filters) before anything reads them — the board poll's first takeover
+        // rebuilds the Manager terminal from `remoteControlEnabled` (CROW-581).
+        await applyConfigToAppState(appState, devRoot: options.devRoot)
 
         // Where write RPCs forward when the app is up (its default socket). Also
         // the basis for `daemonIsAuthority`: the daemon drives the background
@@ -407,6 +411,11 @@ public enum CrowDaemon {
         Task {
             var didTakeOver = false
             while !Task.isCancelled {
+                // Re-apply config-derived AppState each tick so settings edits
+                // (exclude repos, auto-permission modes, remote control) take
+                // effect within one poll — before the Manager rebuild and the
+                // board refresh below read them (CROW-581).
+                await MainActor.run { applyConfigToAppState(appState, devRoot: devRoot) }
                 if let sessionService {
                     let authority = daemonIsAuthority(forwardSocket: forwardSocket)
                     if authority, !didTakeOver {
@@ -515,6 +524,27 @@ public enum CrowDaemon {
                 appState.restoreHookState(snapshot, for: sid)
             }
         }
+    }
+
+    /// Mirror the config-derived `AppState` fields the desktop app syncs in
+    /// `AppDelegate` (remote-control, the three auto-permission-mode gates, and
+    /// the board exclude/ignore filters). In headless crowd nothing else copies
+    /// these out of `config.json`, so without this: the ticket board ignores
+    /// `defaults.excludeTicketRepos`, and Manager/job/work sessions never see
+    /// their configured auto-permission mode or `--rc`. `reseed` (store-driven)
+    /// leaves these fields untouched, so this is the sole writer — called at boot
+    /// (before the first takeover's `ensureManagerSession`) and each board tick so
+    /// runtime settings edits take effect within one poll (CROW-581).
+    @MainActor
+    static func applyConfigToAppState(_ appState: AppState, devRoot: String) {
+        guard let config = ConfigStore.loadConfig(devRoot: devRoot) else { return }
+        appState.remoteControlEnabled = config.remoteControlEnabled
+        appState.managerAutoPermissionMode = config.managerAutoPermissionMode
+        appState.jobsAutoPermissionMode = config.jobsAutoPermissionMode
+        appState.coderViewAutoPermissionMode = config.coderViewAutoPermissionMode
+        appState.excludeReviewRepos = config.effectiveExcludeReviewRepos
+        appState.excludeTicketRepos = config.defaults.excludeTicketRepos
+        appState.ignoreReviewLabels = config.defaults.ignoreReviewLabels
     }
 
     /// Poll `store.json`'s mtime and reload when the desktop app writes it, so
