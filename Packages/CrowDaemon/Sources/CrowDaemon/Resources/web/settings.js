@@ -30,6 +30,14 @@
     reviewRequested: 'Review Requested', changesRequested: 'Changes Requested',
     checksFailing: 'CI Failing',
   };
+  // Canonical NotificationEvent set + defaults (CrowCore NotificationEvent) —
+  // the config only stores events the user has touched, so we render all five
+  // and materialize any missing ones with their default sound (CROW-593).
+  const EVENT_ORDER = ['taskComplete', 'agentWaiting', 'reviewRequested', 'changesRequested', 'checksFailing'];
+  const EVENT_DEFAULT_SOUND = {
+    taskComplete: 'Glass', agentWaiting: 'Funk', reviewRequested: 'Glass',
+    changesRequested: 'Funk', checksFailing: 'Sosumi',
+  };
   const BUILT_IN_SOUNDS = [
     'Basso', 'Blow', 'Bottle', 'Frog', 'Funk', 'Glass', 'Hero', 'Morse',
     'Ping', 'Pop', 'Purr', 'Sosumi', 'Submarine', 'Tink',
@@ -454,7 +462,7 @@
     body.appendChild(toggleField('Enable sound', n, 'soundEnabled'));
     body.appendChild(toggleField('Enable system notifications', n, 'systemNotificationsEnabled'));
 
-    for (const [raw, conf] of eventEntries(n.eventSettings)) {
+    for (const [raw, conf] of ensureAllEvents(n)) {
       body.appendChild(group(EVENT_LABELS[raw] || raw));
       body.appendChild(toggleField('Enabled', conf, 'enabled'));
       body.appendChild(toggleField('Play sound', conf, 'soundEnabled'));
@@ -474,6 +482,28 @@
       for (const k of Object.keys(es)) out.push([k, es[k]]);
     }
     return out;
+  }
+
+  // Return live [rawValue, configRef] pairs for ALL five canonical events in a
+  // stable order, materializing any the config omits with their default sound.
+  // New entries are pushed into eventSettings (in its existing array/object
+  // shape) so they persist on save without marking the form dirty on open.
+  function ensureAllEvents(n) {
+    const existing = {};
+    for (const [raw, conf] of eventEntries(n.eventSettings)) existing[raw] = conf;
+    if (n.eventSettings == null) n.eventSettings = []; // default to Swift array form
+    const asObject = !Array.isArray(n.eventSettings);
+    for (const raw of EVENT_ORDER) {
+      if (existing[raw]) continue;
+      const conf = {
+        enabled: true, soundEnabled: true, systemNotificationEnabled: true,
+        soundName: EVENT_DEFAULT_SOUND[raw] || 'Glass',
+      };
+      existing[raw] = conf;
+      if (asObject) n.eventSettings[raw] = conf;
+      else n.eventSettings.push(raw, conf);
+    }
+    return EVENT_ORDER.map((raw) => [raw, existing[raw]]);
   }
 
   // ---- Workspaces ---------------------------------------------------------
