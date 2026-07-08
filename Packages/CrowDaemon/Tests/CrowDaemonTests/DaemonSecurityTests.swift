@@ -417,10 +417,54 @@ import CrowPersistence
         #expect(!WebAuthGuard.isLoopbackPeer(nil))
     }
 
+    @Test func localDirectRequiresLoopbackAndNoProxyHeader() {
+        // Loopback peer, no X-Forwarded-For → local-direct (may manage secrets).
+        #expect(WebAuthGuard.isLocalDirect(remoteAddress: peer("127.0.0.1"), forwardedFor: nil))
+        #expect(WebAuthGuard.isLocalDirect(remoteAddress: peer("::1"), forwardedFor: ""))
+        #expect(WebAuthGuard.isLocalDirect(remoteAddress: peer("127.0.0.1"), forwardedFor: "   "))
+        // Loopback peer WITH X-Forwarded-For → a local reverse proxy forwarding a
+        // remote user; NOT local-direct, so the remote user can't manage secrets.
+        #expect(!WebAuthGuard.isLocalDirect(remoteAddress: peer("127.0.0.1"), forwardedFor: "203.0.113.7"))
+        // Non-loopback / unknown peer → never local-direct.
+        #expect(!WebAuthGuard.isLocalDirect(remoteAddress: peer("192.168.1.9"), forwardedFor: nil))
+        #expect(!WebAuthGuard.isLocalDirect(remoteAddress: nil, forwardedFor: nil))
+    }
+
     @Test func cookieParsing() {
         #expect(WebAuthGuard.sessionToken(fromCookie: "a=1; crow_session=abc; b=2") == "abc")
         #expect(WebAuthGuard.sessionToken(fromCookie: "other=x") == nil)
         #expect(WebAuthGuard.sessionToken(fromCookie: nil) == nil)
+    }
+}
+
+/// `SecretRoutes.buildGateway` enforces `WorkspaceGateway`'s both-or-neither
+/// invariant (a base URL and at least one header, or neither) and treats an
+/// empty or `clear` body as "no gateway" (CROW-593).
+@Suite struct SecretGatewayValidationTests {
+    private func body(_ url: String?, _ headers: [String: String]?, clear: Bool? = nil) -> SecretRoutes.GatewayBody {
+        SecretRoutes.GatewayBody(baseURL: url, headers: headers, clear: clear)
+    }
+
+    @Test func bothPresentBuildsGateway() throws {
+        let g = try SecretRoutes.buildGateway(body("https://gw.example", ["X-Api-Key": "k"])).get()
+        #expect(g?.baseURL == "https://gw.example")
+        #expect(g?.customHeaders["X-Api-Key"] == "k")
+    }
+
+    @Test func emptyOrClearMeansNoGateway() throws {
+        #expect(try SecretRoutes.buildGateway(body("", [:])).get() == nil)
+        #expect(try SecretRoutes.buildGateway(nil).get() == nil)
+        // clear wins even when fields are present.
+        #expect(try SecretRoutes.buildGateway(body("https://gw", ["X": "y"], clear: true)).get() == nil)
+    }
+
+    @Test func halfFilledIsRejected() {
+        if case .success = SecretRoutes.buildGateway(body("https://gw", [:])) {
+            Issue.record("baseURL with no headers should be rejected")
+        }
+        if case .success = SecretRoutes.buildGateway(body("", ["X": "y"])) {
+            Issue.record("headers with no baseURL should be rejected")
+        }
     }
 }
 

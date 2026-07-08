@@ -204,6 +204,16 @@ enum WebAuthGuard {
         return false
     }
 
+    /// A **local-direct** peer: a loopback client with no `X-Forwarded-For` —
+    /// a browser at the loopback address, or the machine itself — never a remote
+    /// user forwarded in by a local reverse proxy (which adds that header). This
+    /// is the "local" branch of `authorize`, exposed so callers can gate secret
+    /// writes (the web password, AI gateways) to the local machine (CROW-593).
+    static func isLocalDirect(remoteAddress: SocketAddress?, forwardedFor: String?) -> Bool {
+        let proxied = !(forwardedFor?.trimmingCharacters(in: .whitespaces).isEmpty ?? true)
+        return isLoopbackPeer(remoteAddress) && !proxied
+    }
+
     /// Extract the session token from a `Cookie` header value.
     static func sessionToken(fromCookie header: String?) -> String? {
         guard let header else { return nil }

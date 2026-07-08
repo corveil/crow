@@ -9,8 +9,7 @@ Crow manages AI-powered development sessions. It runs as a background daemon (`c
 ```mermaid
 flowchart TB
     subgraph clients["Clients (pure, no privileged state)"]
-        WEB["Web browser<br/>web UI + xterm.js"]
-        DESKTOP["Desktop app (Tauri)<br/>native window over the web UI"]
+        WEB["Web UI — browser or Tauri window<br/>web UI + xterm.js"]
         CLI["crow CLI"]
     end
 
@@ -30,7 +29,6 @@ flowchart TB
     end
 
     WEB -- "WebSocket: /rpc + /terminal" --> HTTP
-    DESKTOP -- "WebSocket: /rpc + /terminal" --> HTTP
     CLI -- "Unix socket JSON-RPC" --> ENGINE
     HTTP --> ENGINE
     ENGINE --> STORE
@@ -41,10 +39,9 @@ flowchart TB
     BOARDS --> PROV
     BOARDS --> HUB
     HUB -. "push: changed" .-> WEB
-    HUB -. "push: changed" .-> DESKTOP
 ```
 
-`crowd` is the single source of truth — the only store writer, the only spawner, and the owner of terminal + agent lifecycle. Every UI is a **pure client**: it subscribes to `crowd`'s state over the `/rpc` + `/terminal` WebSocket surface, sends JSON-RPC, and renders. Multiple clients (browser tabs, the desktop window, the `crow` CLI, any future UI) attach to one running system at once. Full detail in [docs/architecture.md](docs/architecture.md).
+`crowd` is the single source of truth — the only store writer, the only spawner, and the owner of terminal + agent lifecycle. Every UI is a **pure client**: it subscribes to `crowd`'s state over the `/rpc` + `/terminal` WebSocket surface, sends JSON-RPC, and renders. The **web UI** is the same either way — a browser tab or the **Tauri desktop window**, which just wraps that web UI in a native window and can spawn `crowd` as a sidecar on launch. Multiple clients (browser tabs, the desktop window, the `crow` CLI, any future UI) attach to one running system at once. Full detail in [docs/architecture.md](docs/architecture.md).
 
 ## Prerequisites
 
