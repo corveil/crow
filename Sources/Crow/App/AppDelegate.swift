@@ -578,6 +578,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appState.remoteControlEnabled = config.remoteControlEnabled
         appState.managerAutoPermissionMode = config.managerAutoPermissionMode
         appState.jobsAutoPermissionMode = config.jobsAutoPermissionMode
+        appState.reviewAutoPermissionMode = config.reviewAutoPermissionMode
         appState.excludeReviewRepos = config.effectiveExcludeReviewRepos
         appState.excludeTicketRepos = config.defaults.excludeTicketRepos
         appState.ignoreReviewLabels = config.defaults.ignoreReviewLabels
@@ -1298,6 +1299,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appState.remoteControlEnabled = config.remoteControlEnabled
         appState.managerAutoPermissionMode = config.managerAutoPermissionMode
         appState.jobsAutoPermissionMode = config.jobsAutoPermissionMode
+        appState.reviewAutoPermissionMode = config.reviewAutoPermissionMode
         appState.excludeReviewRepos = config.effectiveExcludeReviewRepos
         appState.excludeTicketRepos = config.defaults.excludeTicketRepos
         appState.ignoreReviewLabels = config.defaults.ignoreReviewLabels

@@ -49,6 +49,12 @@ public final class AppState {
     /// Applies only to `.job`-kind sessions; manager/review/CLI sessions are unaffected.
     public var jobsAutoPermissionMode: Bool = true
 
+    /// Whether code-review sessions start with `--permission-mode auto` so the
+    /// review prompt can run `crow`, `gh`, and `git` without per-call approval.
+    /// Mirrors `AppConfig.reviewAutoPermissionMode`. Applies only to
+    /// `.review`-kind sessions; manager/work/CLI sessions are unaffected.
+    public var reviewAutoPermissionMode: Bool = true
+
     /// `true` when the Manager's `claude` process has exited (crash, kill, OOM)
     /// and has not yet been restarted. Drives the "Manager process exited" banner
     /// and enables the "Restart Manager" action. Reset when the Manager relaunches.

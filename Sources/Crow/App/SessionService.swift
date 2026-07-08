@@ -612,10 +612,14 @@ final class SessionService {
         }
 
         let rcEnabled = appState.remoteControlEnabled
-        // Jobs are unattended, so opt-in (default-on) auto-permission mode lets
-        // their prompts run crow/gh/git without per-call approval. Scoped to
-        // .job kind so review and other session kinds are unaffected.
-        let autoPermissionMode = (session.kind == .job) && appState.jobsAutoPermissionMode
+        // Jobs and reviews are unattended, so opt-in (default-on) auto-permission
+        // mode lets their prompts run crow/gh/git without per-call approval.
+        // Other session kinds (work) are unaffected; the Manager has its own
+        // path via managerAutoPermissionMode.
+        let autoPermissionMode = Self.shouldAutoPermission(
+            kind: session.kind,
+            jobsAuto: appState.jobsAutoPermissionMode,
+            reviewAuto: appState.reviewAutoPermissionMode)
         // The agent's autoLaunchCommand mirrors this condition — the initial
         // prompt file is only used on first launch (CROW-224, CROW-317).
         // Compute it here so we know whether to flip `reviewPromptDispatched`
@@ -2248,6 +2252,21 @@ final class SessionService {
         case .review: return ".crow-review-prompt.md"
         case .job:    return ".crow-job-prompt.md"
         case .work, .manager: return nil
+        }
+    }
+
+    /// Whether a worker session of the given kind launches with
+    /// `--permission-mode auto`. Jobs and reviews are unattended, so each has
+    /// an opt-in (default-on) toggle; `work` sessions never get auto mode, and
+    /// the Manager is launched elsewhere via `managerAutoPermissionMode`.
+    /// `internal` static so the launch decision is unit-testable (CROW-602).
+    nonisolated static func shouldAutoPermission(
+        kind: SessionKind, jobsAuto: Bool, reviewAuto: Bool
+    ) -> Bool {
+        switch kind {
+        case .job:    return jobsAuto
+        case .review: return reviewAuto
+        case .work, .manager: return false
         }
     }
 

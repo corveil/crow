@@ -232,6 +232,29 @@ import Testing
     #expect(config.jobsAutoPermissionMode == true)
 }
 
+@Test func appConfigReviewAutoPermissionModeRoundTrip() throws {
+    var config = AppConfig()
+    config.reviewAutoPermissionMode = false
+
+    let data = try JSONEncoder().encode(config)
+    let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+    #expect(decoded.reviewAutoPermissionMode == false)
+
+    config.reviewAutoPermissionMode = true
+    let data2 = try JSONEncoder().encode(config)
+    let decoded2 = try JSONDecoder().decode(AppConfig.self, from: data2)
+    #expect(decoded2.reviewAutoPermissionMode == true)
+}
+
+@Test func appConfigReviewAutoPermissionModeDefaultsTrueWhenKeyMissing() throws {
+    // Reviews kick off unattended, like jobs — legacy configs without the key
+    // opt in by default so the review flow can run crow/gh/git without
+    // per-call approval, matching the Manager and Jobs toggles' defaults.
+    let json = #"{"workspaces": [], "remoteControlEnabled": false}"#.data(using: .utf8)!
+    let config = try JSONDecoder().decode(AppConfig.self, from: json)
+    #expect(config.reviewAutoPermissionMode == true)
+}
+
 @Test func appConfigDecodeWithPartialKeys() throws {
     let json = """
     {"workspaces": [{"id": "00000000-0000-0000-0000-000000000001", "name": "Org", "provider": "github", "cli": "gh", "alwaysInclude": []}]}
