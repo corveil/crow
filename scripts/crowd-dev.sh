@@ -39,8 +39,11 @@ if command -v watchexec >/dev/null 2>&1; then
   echo "[crowd-dev] watchexec: rebuild + restart on *.swift change"
   WATCH_ARGS=()
   for w in "${WATCH[@]}"; do WATCH_ARGS+=(-w "$w"); done
+  # Pass START_CMD as positional args so array quoting survives — a devRoot or
+  # socket path with spaces/metacharacters must not word-split or get evaluated
+  # (review). watchexec needs a shell for the `&&`, so route through `sh -c`.
   exec watchexec -r -e swift "${WATCH_ARGS[@]}" -- \
-    "swift build --product crowd && ${START_CMD[*]}"
+    sh -c 'swift build --product crowd && exec "$@"' sh "${START_CMD[@]}"
 fi
 
 echo "[crowd-dev] poll mode (install 'watchexec' for instant restarts)"

@@ -50,9 +50,16 @@ enum Artifacts {
             guard let data = try? Data(contentsOf: dir.appendingPathComponent(file)) else {
                 return Response(status: .notFound)
             }
+            var headers: HTTPFields = [.contentType: contentType(for: file), .cacheControl: "no-store"]
+            // SVG can carry inline <script>; served same-origin it would run in
+            // the daemon origin on direct navigation and could drive /rpc. Force a
+            // download so it can never render as a top-level document (review).
+            if (file as NSString).pathExtension.lowercased() == "svg" {
+                headers[.contentDisposition] = "attachment"
+            }
             return Response(
                 status: .ok,
-                headers: [.contentType: contentType(for: file), .cacheControl: "no-store"],
+                headers: headers,
                 body: .init(byteBuffer: ByteBuffer(bytes: data)))
         }
     }

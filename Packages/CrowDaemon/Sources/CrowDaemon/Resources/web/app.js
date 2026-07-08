@@ -1226,6 +1226,9 @@ function renderHeader(s) {
 
   const headerRow = el('div', 'header-row');
   for (const link of links) {
+    // Only render http(s) chips — a prompt-injected link (javascript:/data:)
+    // must never become a clickable href (review).
+    if (!/^https?:\/\//i.test(link.url || '')) continue;
     const chip = document.createElement('a');
     chip.className = 'link-chip link-' + (link.type || 'custom');
     chip.href = link.url;
@@ -1555,9 +1558,12 @@ function relTime(iso) {
 }
 
 function linkChip(text, url, type) {
-  const a = document.createElement('a');
+  // Non-http(s) urls (javascript:/data: from injected data) render as a plain,
+  // non-clickable chip — never an href (review).
+  const safe = /^https?:\/\//i.test(url || '');
+  const a = document.createElement(safe ? 'a' : 'span');
   a.className = 'link-chip link-' + (type || 'custom');
-  a.href = url; a.target = '_blank'; a.rel = 'noopener';
+  if (safe) { a.href = url; a.target = '_blank'; a.rel = 'noopener'; }
   a.textContent = text;
   return a;
 }
@@ -1919,11 +1925,12 @@ function enableWheelScroll(node) {
 // Paste the browser clipboard into the terminal (writes to the PTY, same path
 // as typing). readText() needs a user gesture — the menu click / Cmd+V is one.
 function pasteIntoTerminal() {
-  if (!(navigator.clipboard && navigator.clipboard.readText)) return;
+  if (!term || !(navigator.clipboard && navigator.clipboard.readText)) return;
   navigator.clipboard.readText().then((text) => {
-    if (text && termWs && termWs.readyState === WebSocket.OPEN) {
-      termWs.send(new TextEncoder().encode(text));
-    }
+    // Route through xterm's paste so bracketed-paste mode wraps it when the app
+    // enabled it — otherwise hidden newlines in the clipboard auto-execute in the
+    // shell (review). onData then forwards the (wrapped) bytes to the PTY.
+    if (text) term.paste(text);
   }).catch(() => { /* denied / empty */ });
 }
 
