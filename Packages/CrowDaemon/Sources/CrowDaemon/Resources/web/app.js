@@ -272,7 +272,7 @@ window.crowTestSound = function (event) {
 
 // --- Browser notifications (Web Notification API) --------------------------
 // The desktop app posts UNUserNotifications; the web equivalent is the browser
-// Notification API, which also works inside Tauri/Electron once the wrapper
+// Notification API, which also works inside the Tauri desktop app once the wrapper
 // grants notification permission. Fires on the same events as sounds, gated on
 // the same config's SYSTEM-notification toggles (systemNotificationsEnabled +
 // per-event enabled/systemNotificationEnabled), with the desktop's focus rule

@@ -480,7 +480,7 @@
 
   // Browser-notification permission control. The Notification API needs an
   // explicit grant; surface the live state + a button to request it (used by
-  // app.js's showEventNotification). Also covers Tauri/Electron webviews
+  // app.js's showEventNotification). Also covers the Tauri webview
   // (CROW-593).
   function browserNotifRow() {
     const supported = typeof window !== 'undefined' && 'Notification' in window;
@@ -510,7 +510,7 @@
     wrap.appendChild(btn);
     wrap.appendChild(status);
     return field('Browser notifications', wrap,
-      'Grant the browser permission to show desktop popups when a session finishes or needs attention. Also applies inside Tauri/Electron.');
+      'Grant the browser permission to show desktop popups when a session finishes or needs attention. Also applies inside the Tauri desktop app.');
   }
 
   // eventSettings may be a Swift enum-keyed dict (encoded as [k, v, k, v, ...])

@@ -2,7 +2,7 @@
 
 Crow manages AI-powered development sessions. It runs as a background daemon (`crowd`) with a **browser-based UI**, orchestrating git worktrees, Claude Code instances, and GitHub/GitLab/Jira issue tracking. Each session pairs a git worktree, a tmux-backed Claude Code terminal (streamed to xterm.js in your browser), and ticket metadata — all tracked in a persistent store.
 
-> **Note:** Crow began as a native macOS app. As of [ADR 0007](docs/adr/0007-crowd-sole-authority-clients-only.md) and [ADR 0008](docs/adr/0008-retire-the-macos-app.md), the desktop app has been **retired**: `crowd` is the sole authority and the web UI is the only client. The daemon still runs on a macOS host because it drives `git`, `tmux`, and Claude Code locally.
+> **Note:** Crow began as a native macOS (AppKit) app. As of [ADR 0007](docs/adr/0007-crowd-sole-authority-clients-only.md) and [ADR 0008](docs/adr/0008-retire-the-macos-app.md), that app was **retired**: `crowd` is the sole authority and every UI is a pure client. The browser is the primary UI; an optional thin **[desktop window](#desktop-app-native-window-over-crowd)** (Tauri) over the same web UI is available if you prefer a native window. The daemon still runs on a macOS host because it drives `git`, `tmux`, and Claude Code locally.
 
 ## Architecture at a glance
 
@@ -10,6 +10,7 @@ Crow manages AI-powered development sessions. It runs as a background daemon (`c
 flowchart TB
     subgraph clients["Clients (pure, no privileged state)"]
         WEB["Web browser<br/>web UI + xterm.js"]
+        DESKTOP["Desktop app (Tauri)<br/>native window over the web UI"]
         CLI["crow CLI"]
     end
 
@@ -23,12 +24,13 @@ flowchart TB
 
     subgraph host["Host + backends"]
         TMUX["tmux cockpit"]
-        AGENTS["Claude Code agents"]
+        AGENTS["Coding agents<br/>Claude Code · OpenCode · Cursor · Codex"]
         GIT["git worktrees"]
         PROV["GitHub · GitLab · Jira · Corveil"]
     end
 
     WEB -- "WebSocket: /rpc + /terminal" --> HTTP
+    DESKTOP -- "WebSocket: /rpc + /terminal" --> HTTP
     CLI -- "Unix socket JSON-RPC" --> ENGINE
     HTTP --> ENGINE
     ENGINE --> STORE
@@ -39,24 +41,31 @@ flowchart TB
     BOARDS --> PROV
     BOARDS --> HUB
     HUB -. "push: changed" .-> WEB
+    HUB -. "push: changed" .-> DESKTOP
 ```
 
-`crowd` is the single source of truth — the only store writer, the only spawner, and the owner of terminal + agent lifecycle. Every UI is a **pure client**: it subscribes to `crowd`'s state over the `/rpc` + `/terminal` WebSocket surface, sends JSON-RPC, and renders. Multiple clients (browser tabs, the `crow` CLI, any future UI) attach to one running system at once. Full detail in [docs/architecture.md](docs/architecture.md).
+`crowd` is the single source of truth — the only store writer, the only spawner, and the owner of terminal + agent lifecycle. Every UI is a **pure client**: it subscribes to `crowd`'s state over the `/rpc` + `/terminal` WebSocket surface, sends JSON-RPC, and renders. Multiple clients (browser tabs, the desktop window, the `crow` CLI, any future UI) attach to one running system at once. Full detail in [docs/architecture.md](docs/architecture.md).
 
 ## Prerequisites
 
 ### System Requirements
 
-- **macOS 14.0+** (Sonoma or later) — `crowd` runs `git`, `tmux`, and Claude Code on the host
-- **Xcode** with Command Line Tools installed
+`crowd` is the only process you run, and it drives `git`, `tmux`, and the coding agents on the host — so it needs a Unix-like host:
+
+- **macOS 14.0+** (Sonoma or later), or **Linux** (x86_64 or arm64)
+- A **Swift 6 toolchain** — bundled with Xcode Command Line Tools on macOS, or installed from [swift.org/install](https://www.swift.org/install/) on Linux
 - A modern **web browser** for the UI
+
+> The optional native [desktop app](#desktop-app-native-window-over-crowd) (Tauri) is macOS-only today; on Linux, use the browser UI. On Linux the terminal is streamed to the browser over a WebSocket (the macOS-native terminal surface compiles away).
 
 ### Build Dependencies
 
 | Tool  | Version | Purpose                     | Install                  |
 | ----- | ------- | --------------------------- | ------------------------ |
-| Swift | 6.0+    | Compiler (ships with Xcode) | `xcode-select --install` |
+| Swift | 6.0+    | Compiler — Xcode CLT (macOS) or the swift.org toolchain (Linux) | `xcode-select --install` · [swift.org/install](https://www.swift.org/install/) |
 | mise  | latest  | Task runner (optional)      | `brew install mise`      |
+| Rust  | 1.77+ (arm64) | Compiler for the optional [desktop app](#desktop-app-native-window-over-crowd) (macOS) | [rustup.rs](https://rustup.rs) |
+| Node  | 18+     | Only for `npm run tauri dev` (optional) | `brew install node`      |
 
 ### Runtime Dependencies
 
@@ -69,6 +78,8 @@ flowchart TB
 | `glab`   | GitLab CLI (optional, for GitLab repos)                       | `brew install glab`                                   |
 | `acli`   | Atlassian CLI (optional, for Jira task tracking)              | [developer.atlassian.com/cloud/acli](https://developer.atlassian.com/cloud/acli/guides/install-acli/) |
 
+> Install commands above are macOS/Homebrew; on Linux use your distribution's package manager (e.g. `apt install git tmux`; `gh`/`glab` have their own apt repos). `git` ships with Xcode CLT on macOS. `claude` is the default coding agent — **OpenCode**, **Cursor**, and **Codex** are also supported and selectable per session (Settings → Automation); install whichever agents you use.
+
 ## Quick Start
 
 ```bash
@@ -76,8 +87,9 @@ flowchart TB
 git clone https://github.com/radiusmethod/crow.git
 cd crow
 
-# 2. Build (produces the `crow` CLI and the `crowd` daemon)
-make build
+# 2. Build the `crow` CLI and the `crowd` daemon (Swift toolchain only).
+#    `make build` also builds the optional native desktop app — see "Desktop app" below.
+make daemon
 
 # 3. Authenticate GitHub CLI — the write `project` scope is required
 gh auth login
@@ -92,11 +104,14 @@ gh auth refresh -s project,read:org,repo
 
 `crowd` prints `HTTP/WS listening on http://127.0.0.1:8787` on startup — open that URL in your browser. The first screen guides you through any remaining setup.
 
-For a **hot-reload dev loop** (web assets served live from source, rebuild-and-restart on Swift changes):
+For local daemon development, `make crowd-dev` runs `crowd` with the web UI served live from source — edit `index.html`/`app.css`/`app.js` and just refresh:
 
 ```bash
-make crowd-dev        # serves at http://127.0.0.1:8787, prints the URL
+make crowd-dev                      # stable daemon at http://127.0.0.1:8787
+bash scripts/crowd-dev.sh --watch   # ...and rebuild + restart crowd on Swift changes
 ```
+
+`--watch` restarts the daemon on every change (Swift can't hot-swap), so leave it off when you want a daemon that stays up across edits.
 
 > **Note:** The required GitHub scope is the **write** `project` scope — `read:project` is insufficient because Crow updates ticket status via the `updateProjectV2ItemFieldValue` GraphQL mutation. See [docs/getting-started.md](docs/getting-started.md#3-github-authentication) for details.
 
@@ -121,6 +136,58 @@ Use a different directory with `BINDIR`, e.g. `make install BINDIR=/usr/local/bi
 ### Remote access
 
 `crowd` binds `127.0.0.1:8787` by default, so it's reachable only from the machine it runs on. To reach it from another device, front it with an HTTPS reverse proxy (e.g. [`tailscale serve`](https://tailscale.com/kb/1242/tailscale-serve)) and set a **web password** under **Settings → Web Access**. Non-loopback requests are blocked until a password is set and the connection is HTTPS (CROW-593).
+
+## Desktop app (native window over crowd)
+
+Prefer a native window to a browser tab? `crow-desktop/` is a thin **Tauri** shell that opens a "Crow" window pointed at the same web UI. It doesn't reimplement anything — `crowd` stays the sole authority; the window is just another pure client. Requires the **Rust arm64 toolchain** (see [Build Dependencies](#build-dependencies)).
+
+```bash
+make build     # crow CLI + crowd daemon (Swift) AND the Crow desktop app (Tauri)
+make run       # build, then open the Crow window
+```
+
+`make run` is the modern equivalent of the old `make && ./.build/debug/CrowApp`. On launch the window looks for a `crowd` already listening on `127.0.0.1:8787`:
+
+- **Found** (and it identifies as crowd) → it **reuses** that daemon and leaves it running when you quit the window.
+- **None** → it spawns its own `crowd` from `.build/debug/crowd` and stops that one on quit.
+
+Once built, the binary is self-contained — run it directly without `make`:
+
+```bash
+crow-desktop/src-tauri/target/debug/Crow
+```
+
+> **Toolchain note:** a plain terminal can run under Rosetta (x86_64) and shadow the arm64 Rust with an old x86_64 one. `make app`/`make run` pin the Homebrew + rustup arm64 paths for you; if you invoke `cargo` or `npm` directly, prefix `PATH="/opt/homebrew/bin:$HOME/.cargo/bin:$PATH"`.
+
+### Iterating with the window open
+
+The `make run` window already spawns `crowd` as a sidecar that serves the web UI **live from source**, so for most web/UI work you don't need anything else — edit `index.html`/`app.css`/`app.js` and hit **⌘R** (View → Reload).
+
+Run a standalone `crowd` separately only when you want a daemon that **outlives the window** or is shared by several clients (a browser tab + the window at once). Because the window reuses a crowd already on `:8787` and leaves it running on quit, they compose cleanly:
+
+```bash
+# Terminal 1 — a stable daemon, web served live from source
+make crowd-dev
+
+# Terminal 2 — the window attaches to it (reuses :8787, doesn't own its lifecycle)
+make run          # or, once built: crow-desktop/src-tauri/target/debug/Crow
+```
+
+Quitting the window leaves your `crowd` running. Rebuilding the daemon (`crowd-dev --watch`, or a manual `make daemon` + restart) restarts it — the window keeps its `:8787` target, so just ⌘R once it's back up. Swift can't hot-swap, so any daemon rebuild is a restart; there's no way around that (it's the same reason the Tauri dev loop churns).
+
+- `CROW_HTTP_PORT=NNNN` — match a crowd started on a non-default port so the window reuses it instead of spawning a second daemon on 8787 (which would contend on the same store + tmux cockpit).
+- `CROWD_BIN=/path/to/crowd` — override which `crowd` binary the window spawns when none is already running.
+
+### `npm run tauri dev` (editing the Tauri shell)
+
+When you're changing the **desktop shell itself** (`crow-desktop/src-tauri/`), use Tauri's dev loop, which recompiles and relaunches the Rust on save:
+
+```bash
+cd crow-desktop
+PATH="/opt/homebrew/bin:$HOME/.cargo/bin:$PATH" npm run tauri dev
+```
+
+Handy for Rust/window work, but each relaunch re-runs the launch logic and tears down a `crowd` it spawned — so it churns the daemon. When you're iterating on `crowd` or the web UI (not the Rust shell), prefer plain `make run` (or the `make crowd-dev` + `make run` split above).
 
 ## Documentation
 
