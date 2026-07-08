@@ -29,10 +29,27 @@ enum WebSocketOriginGuard {
     /// interface. Public cross-site origins (e.g. `evil.com`, public IPs) are
     /// always rejected. Non-loopback access stays unauthenticated (warned at
     /// startup); real token auth is a follow-up.
-    static func isAllowedOrigin(_ origin: String?, boundHost: String = "127.0.0.1") -> Bool {
+    static func isAllowedOrigin(
+        _ origin: String?,
+        boundHost: String = "127.0.0.1",
+        forwardedHost: String? = nil,
+        peerIsLoopback: Bool = false
+    ) -> Bool {
         guard let origin, !origin.isEmpty else { return true }  // native (non-browser) client
         guard let host = originHost(origin) else { return false }
         if loopbackHosts.contains(host) { return true }
+        // Behind a trusted local reverse proxy (`tailscale serve` / ngrok): the
+        // browser's Origin is the proxy's public hostname — e.g. a MagicDNS
+        // `*.ts.net` name — never a private-IP literal, so the IP-literal checks
+        // below can't recognize it. The proxy reports the host it served via
+        // `X-Forwarded-Host`, and a *same-origin* upgrade has `Origin` host equal
+        // to it. We honor that header only from a loopback peer — the same trust
+        // assumption `WebAuthGuard` makes — so a direct (non-loopback) client
+        // can't forge it, and a cross-site page routed through the proxy carries a
+        // different Origin than the forwarded host and is still rejected (CROW-593).
+        if peerIsLoopback, let forwarded = forwardedHostName(forwardedHost), host == forwarded {
+            return true
+        }
         let bound = boundHost.lowercased()
         if bound == "0.0.0.0" || bound == "::" {
             // A wildcard bind can be reached via many local interfaces, each
@@ -67,12 +84,24 @@ enum WebSocketOriginGuard {
 
 
     /// Host component of an `Origin` value (`scheme://host[:port]`), lowercased
-    /// with IPv6 brackets stripped. Returns nil for unparseable origins —
-    /// including the opaque `"null"` origin sandboxed frames send — which are
-    /// then rejected.
+    /// with IPv6 brackets and any trailing FQDN dot stripped. Returns nil for
+    /// unparseable origins — including the opaque `"null"` origin sandboxed frames
+    /// send — which are then rejected.
     static func originHost(_ origin: String) -> String? {
         guard let host = URL(string: origin)?.host, !host.isEmpty else { return nil }
-        return host.trimmingCharacters(in: CharacterSet(charactersIn: "[]")).lowercased()
+        let normalized = host.trimmingCharacters(in: CharacterSet(charactersIn: "[]")).lowercased()
+        return normalized.hasSuffix(".") ? String(normalized.dropLast()) : normalized
+    }
+
+    /// Host from an `X-Forwarded-Host` value — the first entry when a proxy chain
+    /// sends a comma list — normalized like `originHost` (port/brackets/trailing
+    /// dot stripped, lowercased). Returns nil when absent/empty, so a request with
+    /// no trusted proxy falls through to the caller's normal origin checks.
+    static func forwardedHostName(_ value: String?) -> String? {
+        guard let first = value?.split(separator: ",").first
+                .map({ $0.trimmingCharacters(in: .whitespaces) }), !first.isEmpty
+        else { return nil }
+        return originHost("http://\(first)")
     }
 
     /// Whether `host` (a daemon `--host` bind value) is a loopback address.

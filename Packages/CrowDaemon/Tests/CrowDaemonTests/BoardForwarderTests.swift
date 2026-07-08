@@ -9,12 +9,12 @@ import CrowIPC
 import CrowPersistence
 @testable import CrowDaemon
 
-/// Board RPCs (Ticket Board / Reviews / Allowlist) forward to the desktop app,
-/// whose live `AppState` holds the data. This suite pins the **app-down**
-/// contract — no tmux/app/socket needed — so the web UI degrades gracefully:
-/// reads return an empty board, actions surface an application error.
+/// Board RPCs (Ticket Board / Reviews / Allowlist) answer locally off the
+/// daemon's own `AppState`. This suite pins the no-provider contract — no
+/// tmux/providers needed — so the web UI degrades gracefully: reads return an
+/// empty board, actions surface an application error.
 @Suite struct BoardForwarderTests {
-    /// A router with `forwardSocket: nil` — i.e. the app isn't reachable.
+    /// A router with no providers / tmux wired.
     @MainActor
     private func offlineRouter() -> CommandRouter {
         makeCommandRouter(
@@ -22,8 +22,7 @@ import CrowPersistence
             store: JSONStore(),
             git: GitManager(),
             devRoot: NSTemporaryDirectory(),
-            cockpit: nil,
-            forwardSocket: nil)
+            cockpit: nil)
     }
 
     @Test @MainActor func readBoardsReturnEmptyWhenAppDown() async {
@@ -80,7 +79,7 @@ import CrowPersistence
         store.mutate { $0.sessions = [session] }
         let router = makeCommandRouter(
             appState: appState, store: store, git: GitManager(),
-            devRoot: NSTemporaryDirectory(), cockpit: nil, forwardSocket: nil)
+            devRoot: NSTemporaryDirectory(), cockpit: nil)
         return (router, appState, session)
     }
 
@@ -108,8 +107,8 @@ import CrowPersistence
 
 /// Unlike the board reads, `list-agents` is **local**: the daemon registers its
 /// own coding agents at startup, so the agent picker works with the desktop app
-/// down (CROW-581, M-B). This pins that inversion — a router with
-/// `forwardSocket: nil` still returns the registered agents.
+/// down (CROW-581, M-B). This pins that inversion — a bare router still
+/// returns the registered agents.
 @Suite struct AgentsLocalTests {
     @Test @MainActor func listAgentsIsLocalNotForwarded() async {
         // Register in this process's registry, as `CrowDaemon.run()` does.
@@ -117,7 +116,7 @@ import CrowPersistence
 
         let router = makeCommandRouter(
             appState: AppState(), store: JSONStore(), git: GitManager(),
-            devRoot: NSTemporaryDirectory(), cockpit: nil, forwardSocket: nil)
+            devRoot: NSTemporaryDirectory(), cockpit: nil)
 
         let resp = await router.handle(request: JSONRPCRequest(id: 1, method: "list-agents"))
         #expect(resp.error == nil)
@@ -146,7 +145,7 @@ import CrowPersistence
         let tracker = IssueTracker(appState: appState, providerManager: ProviderManager())
         let router = makeCommandRouter(
             appState: appState, store: JSONStore(), git: GitManager(),
-            devRoot: NSTemporaryDirectory(), cockpit: nil, forwardSocket: nil, tracker: tracker)
+            devRoot: NSTemporaryDirectory(), cockpit: nil, tracker: tracker)
 
         let resp = await router.handle(request: JSONRPCRequest(id: 1, method: "list-tickets"))
         #expect(resp.error == nil)
@@ -161,7 +160,7 @@ import CrowPersistence
         let allowList = AllowListService(appState: appState, devRoot: NSTemporaryDirectory())
         let router = makeCommandRouter(
             appState: appState, store: JSONStore(), git: GitManager(),
-            devRoot: NSTemporaryDirectory(), cockpit: nil, forwardSocket: nil, allowList: allowList)
+            devRoot: NSTemporaryDirectory(), cockpit: nil, allowList: allowList)
 
         let resp = await router.handle(request: JSONRPCRequest(id: 1, method: "list-allowlist"))
         #expect(resp.error == nil)
@@ -190,7 +189,7 @@ import CrowPersistence
     private func offlineRouter(devRoot: String) -> CommandRouter {
         makeCommandRouter(
             appState: AppState(), store: JSONStore(), git: GitManager(),
-            devRoot: devRoot, cockpit: nil, forwardSocket: nil)
+            devRoot: devRoot, cockpit: nil)
     }
 
     /// A config carrying plaintext secrets, so we can prove they never leave and

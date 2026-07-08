@@ -1,4 +1,6 @@
+import CrowCore
 import CrowIPC
+import CrowPersistence
 import Foundation
 import HTTPTypes
 import Hummingbird
@@ -16,16 +18,30 @@ import HummingbirdWebSocket
 /// they never interleave frames on the socket (CROW-581, M-D).
 enum RPCWebSocketHandler {
     static func mount(
-        on router: Router<BasicWebSocketRequestContext>,
+        on router: Router<CrowWSContext>,
         commandRouter: CommandRouter,
         eventHub: EventHub,
-        boundHost: String
+        boundHost: String,
+        sessions: SessionStore,
+        devRoot: String
     ) {
-        router.ws("/rpc") { request, _ in
-            // Reject cross-site upgrades — `/rpc` reaches `add-worktree`, which
-            // shells out to git (CROW-581 review).
-            WebSocketOriginGuard.isAllowedOrigin(request.headers[.origin], boundHost: boundHost)
-                ? .upgrade() : .dontUpgrade
+        router.ws("/rpc") { request, context in
+            // Reject cross-site upgrades (Origin) AND unauthenticated non-local
+            // access (web password) — `/rpc` reaches `add-worktree`, which shells
+            // out to git (CROW-581 review, CROW-593).
+            let originOK = WebSocketOriginGuard.isAllowedOrigin(
+                request.headers[.origin],
+                boundHost: boundHost,
+                forwardedHost: request.headers[HTTPField.Name("x-forwarded-host")!],
+                peerIsLoopback: WebAuthGuard.isLoopbackPeer(context.remoteAddress))
+            let auth = WebAuthGuard.authorize(
+                remoteAddress: context.remoteAddress,
+                cookieHeader: request.headers[.cookie],
+                forwardedFor: request.headers[HTTPField.Name("x-forwarded-for")!],
+                forwardedProto: request.headers[HTTPField.Name("x-forwarded-proto")!],
+                configProvider: { ConfigStore.loadConfig(devRoot: devRoot) },
+                sessions: sessions)
+            return (originOK && auth.isAuthorized) ? .upgrade() : .dontUpgrade
         } onUpgrade: { inbound, outbound, _ in
             // One outbound channel per connection: RPC responses (from the
             // reader task) and hub notifications (fanned in via `subscribe`)

@@ -9,23 +9,20 @@ import CrowIPC
 import CrowPersistence
 @testable import CrowDaemon
 
-/// M-E slice (CROW-581): the six formerly forward-only handlers gained app-down
-/// local paths off the services the daemon already owns — so the web UI looks
-/// the same app-up or app-down. Reads (`get-pr-status` / `list-sessions-live`)
-/// answer from the daemon's own `appState` (PR status populated by its board
-/// poll); actions (`mark-issue-done` / `add-merge-label` / `delete-session` /
-/// `quick-action`) delegate to the owned IssueTracker / SessionService /
-/// AutoRespondCoordinator, and error clearly when that owning service is absent.
+/// M-E slice (CROW-581): these handlers answer locally off the services the
+/// daemon owns. Reads (`get-pr-status` / `list-sessions-live`) answer from the
+/// daemon's own `appState` (PR status populated by its board poll); actions
+/// (`mark-issue-done` / `add-merge-label` / `delete-session` / `quick-action`)
+/// delegate to the owned IssueTracker / SessionService / AutoRespondCoordinator,
+/// and error clearly when that owning service is absent.
 ///
-/// These suites pin the **app-down** contract (`forwardSocket: nil`). The
-/// forward-when-app-up path is unchanged (forward runs first), so nothing here
-/// exercises a live app socket.
+/// These suites pin the local (no-tmux / no-provider) contract.
 @Suite struct LocalLiveReadTests {
     @MainActor
     private func offlineRouter(appState: AppState) -> CommandRouter {
         makeCommandRouter(
             appState: appState, store: JSONStore(), git: GitManager(),
-            devRoot: NSTemporaryDirectory(), cockpit: nil, forwardSocket: nil)
+            devRoot: NSTemporaryDirectory(), cockpit: nil)
     }
 
     @Test @MainActor func getPRStatusReadsLocalAppStateWhenAppDown() async {
@@ -114,7 +111,7 @@ import CrowPersistence
     ) -> CommandRouter {
         makeCommandRouter(
             appState: appState, store: JSONStore(), git: GitManager(),
-            devRoot: NSTemporaryDirectory(), cockpit: nil, forwardSocket: nil,
+            devRoot: NSTemporaryDirectory(), cockpit: nil,
             tracker: tracker, sessionService: sessionService, autoRespond: autoRespond,
             jobScheduler: jobScheduler)
     }
@@ -164,7 +161,7 @@ import CrowPersistence
     // MARK: run-job
 
     @Test @MainActor func runJobErrorsWithoutScheduler() async {
-        // App down (forwardSocket nil) and no local JobScheduler → applicationError.
+        // No local JobScheduler (no tmux) → applicationError.
         let resp = await router().handle(request: JSONRPCRequest(
             id: 1, method: "run-job", params: ["job_id": .string(UUID().uuidString)]))
         #expect(resp.error?.code == RPCErrorCode.applicationError)
