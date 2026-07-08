@@ -95,14 +95,12 @@ function onServerChanged() {
 // `changed`, so we load this on boot and re-load it when the Settings modal
 // saves (via `window.reloadUIConfig`). Mirrors the desktop's
 // `appState.hideSessionDetails`.
-const uiConfig = { hideSessionDetails: false, notifications: null, webPasswordSet: false, terminalFontFamily: '', terminalWebFontURL: '' };
+const uiConfig = { hideSessionDetails: false, notifications: null, webPasswordSet: false };
 async function loadUIConfig() {
   try {
     const res = await rpc('get-config');
     const cfg = JSON.parse((res && res.config) || '{}');
     uiConfig.hideSessionDetails = !!(cfg.sidebar && cfg.sidebar.hideSessionDetails);
-    uiConfig.terminalFontFamily = (cfg.terminalFontFamily || '').trim();
-    uiConfig.terminalWebFontURL = (cfg.terminalWebFontURL || '').trim();
     uiConfig.notifications = parseNotificationSettings(cfg.notifications);
     // Presence of the (secret-stripped) webAuth block means a web password is set.
     uiConfig.webPasswordSet = !!cfg.webAuth;
@@ -1829,39 +1827,22 @@ async function refreshAllowlist() {
 let term = null;
 let fitAddon = null;
 let searchAddon = null;
-let webFontsAddon = null;
 let termWs = null;
 
-// Default terminal font stack (Nerd Fonts → system monospace), used when the
-// Settings "Font family" field is blank.
+// Terminal font stack: Nerd Fonts → system monospace.
 const DEFAULT_TERM_FONT = '"MesloLGS NF", "MesloLGS Nerd Font", "JetBrainsMono Nerd Font", "Hack Nerd Font", "FiraCode Nerd Font", Menlo, Monaco, monospace';
-
-// Load an arbitrary web-font stylesheet (e.g. a Google Fonts link) so the
-// configured terminal font is available; the web-fonts addon relayouts xterm's
-// glyph metrics once it's ready.
-function ensureWebFontLink(url) {
-  // Require https so an injected config can't load an attacker-controlled
-  // stylesheet (UI spoofing / password-field overlay) into the browser (review #5).
-  if (!url || !/^https:\/\//i.test(url)) return;
-  let link = document.getElementById('crow-webfont');
-  if (!link) { link = document.createElement('link'); link.id = 'crow-webfont'; link.rel = 'stylesheet'; document.head.appendChild(link); }
-  if (link.href !== url) link.href = url;
-  link.onload = () => { if (webFontsAddon) webFontsAddon.loadFonts().then(() => fitTerminal()).catch(() => {}); };
-}
 
 function ensureTerminal() {
   if (term) return;
-  if (uiConfig.terminalWebFontURL) ensureWebFontLink(uiConfig.terminalWebFontURL);
   fitAddon = new FitAddon.FitAddon();
   const imageAddon = new ImageAddon.ImageAddon({ sixelSupport: true, iipSupport: true, kittySupport: true });
   searchAddon = new SearchAddon.SearchAddon();
   const webLinksAddon = new WebLinksAddon.WebLinksAddon();
-  webFontsAddon = new WebFontsAddon.WebFontsAddon();
   // Config block mirrors CrowTerminal/Resources/xterm/terminal.html.
   term = new Terminal({
     cursorBlink: true,
     fontSize: 14,
-    fontFamily: uiConfig.terminalFontFamily || DEFAULT_TERM_FONT,
+    fontFamily: DEFAULT_TERM_FONT,
     theme: { background: '#1e1e1e', foreground: '#d4d4d4' },
     scrollback: 50000,
     allowTransparency: true,
@@ -1870,10 +1851,7 @@ function ensureTerminal() {
   term.loadAddon(imageAddon);
   term.loadAddon(searchAddon);
   term.loadAddon(webLinksAddon);
-  term.loadAddon(webFontsAddon);
   term.open(document.getElementById('terminal'));
-  // Web fonts load asynchronously; relayout xterm + refit once they're ready.
-  webFontsAddon.loadFonts().then(() => fitTerminal()).catch(() => {});
   // WebGL renderer for throughput; must load after open(). Falls back to the
   // default renderer if the GL context is unavailable or gets lost.
   try {

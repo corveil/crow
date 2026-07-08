@@ -369,14 +369,6 @@
     body.appendChild(toggleField('Hide session details', cfg.sidebar, 'hideSessionDetails',
       'Hides ticket title and repo/branch lines in sidebar rows.'));
 
-    body.appendChild(group('Terminal'));
-    body.appendChild(textField('Font family', cfg, 'terminalFontFamily',
-      { placeholder: '"MesloLGS NF", Menlo, monospace',
-        help: 'CSS font-family for the terminal. Leave blank for the default Nerd Font stack.' }));
-    body.appendChild(textField('Web font URL', cfg, 'terminalWebFontURL',
-      { placeholder: 'https://fonts.googleapis.com/css2?family=…',
-        help: 'Optional stylesheet URL (e.g. a Google Fonts link) providing the font above. Loaded before the terminal renders.' }));
-
     body.appendChild(group('Telemetry'));
     body.appendChild(toggleField('Enable session analytics', cfg.telemetry, 'enabled',
       'Collects cost/token/tool metrics via OpenTelemetry. Requires app restart.'));
