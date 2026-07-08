@@ -3,33 +3,24 @@ PROJECT_NAME = "Crow"
 DERIVED_DATA = "{{cwd}}/.derived-data"
 
 [tasks.dev]
-description = "Run the app in debug mode"
-run = "swift run CrowApp"
+description = "Run crowd with the hot-reload dev loop (web served live from source)"
+run = "make crowd-dev"
 
 [tasks.build]
-description = "Full build: swift build"
+description = "Full build: crow + crowd"
 run = "make build"
 
 [tasks."build:release"]
-description = "Build release (universal)"
-run = "swift build -c release --arch arm64 --arch x86_64"
+description = "Release build"
+run = "make build CONFIG=release"
 
 [tasks.test]
-description = "Run all tests"
-run = "swift test"
-
-[tasks.bundle]
-description = "Create .app bundle"
-run = "bash scripts/bundle.sh"
-
-[tasks.sign]
-description = "Sign, create DMG, and notarize (requires DEVELOPER_ID_APPLICATION)"
-depends = ["bundle"]
-run = "bash scripts/sign-and-notarize.sh"
+description = "Run all package tests"
+run = "make test"
 
 [tasks.clean]
 description = "Clean build artifacts"
-run = "rm -rf .build .derived-data Crow.app"
+run = "rm -rf .build .derived-data"
 
 [tasks."xcode:generate"]
 description = "Generate Xcode project"

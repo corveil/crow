@@ -11,9 +11,9 @@
 
 | Problem                                                  | Solution                                                                 |
 | -------------------------------------------------------- | ------------------------------------------------------------------------ |
-| `crow` CLI: "Connection refused"                         | A server must be listening on `~/.local/share/crow/crow.sock`. By default that's the `crowd` daemon (`make crowd-dev`, or run `crowd` with defaults); a legacy app with `CROW_LOCAL_ENGINE=1` binds it instead. A "connection refused" (vs "no such file") means the socket file is stale — start `crowd` and it reclaims it. As of #234, `crow hook-event` is a silent no-op when nothing is listening, so non-Crow `claude` sessions no longer log noise. |
+| `crow` CLI: "Connection refused"                         | A server must be listening on `~/.local/share/crow/crow.sock`. That's the `crowd` daemon (`make crowd-dev`, or run `crowd` with defaults). A "connection refused" (vs "no such file") means the socket file is stale — start `crowd` and it reclaims it. As of #234, `crow hook-event` is a silent no-op when nothing is listening, so non-Crow `claude` sessions no longer log noise. |
 | GitHub API errors / empty issue list                     | Check auth: `gh auth status`. Ensure scopes include `repo`, `read:org`, `project`. If missing, run `gh auth refresh -s project,read:org,repo`. |
-| `INSUFFICIENT_SCOPES` in `[IssueTracker]` stderr         | Run `gh auth refresh -s project`. **`read:project` is NOT sufficient** — the write `project` scope is required to update ticket status via `updateProjectV2ItemFieldValue`. See `Sources/Crow/App/IssueTracker.swift:691-692,768-769`. |
+| `INSUFFICIENT_SCOPES` in `[IssueTracker]` stderr         | Run `gh auth refresh -s project`. **`read:project` is NOT sufficient** — the write `project` scope is required to update ticket status via `updateProjectV2ItemFieldValue`. See `Packages/CrowEngine/Sources/CrowEngine/IssueTracker.swift`. |
 | Ticket stays "Backlog" when starting a session           | Same as above — the `markInReview` code path requires the write `project` scope |
 | Terminal not starting                                    | Check stderr for `[TmuxBackend]` or `[XTermSurfaceView]` messages. Managed terminals run on tmux; if one is stuck, close and reopen it from the session detail header, or use the on-terminal Retry affordance after a readiness timeout. |
 | tmux backend not starting                                | tmux is required for managed terminals (#303). If tmux is missing or < 3.3, Crow surfaces a launch alert with a `brew install tmux` hint and managed terminals won't render until tmux is installed. Verify with `tmux -V`, then relaunch Crow. |
@@ -42,19 +42,15 @@ The app logs diagnostic information to stderr with component tags:
 Run with log filtering to focus on a subsystem:
 
 ```bash
-.build/debug/CrowApp 2>&1 | grep '\[TerminalManager\]\|\[SessionService\]'
+.build/debug/crowd 2>&1 | grep '\[TerminalManager\]\|\[SessionService\]'
 ```
 
 Filter for scope / auth errors while you're iterating on `gh` permissions:
 
 ```bash
-.build/debug/CrowApp 2>&1 | grep '\[IssueTracker\]'
+.build/debug/crowd 2>&1 | grep '\[IssueTracker\]'
 ```
 
-## Quarantine Warnings on an Unsigned Build
+## Unsigned Builds
 
-Developers building from source do not need a signing certificate — `make build` and `make release` produce unsigned but fully functional binaries. If macOS quarantines an unsigned `.app`, remove the quarantine attribute:
-
-```bash
-xattr -cr Crow.app
-```
+Crow builds two command-line binaries — `crow` and `crowd`. Building from source needs no signing certificate: `make build` produces unsigned but fully functional binaries that you run directly from `.build/` (or via the `make install` symlinks). There is no `.app` bundle to notarize or de-quarantine.

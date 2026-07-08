@@ -1,6 +1,6 @@
 # `crow` CLI Reference
 
-The `crow` CLI communicates over a Unix socket at `~/.local/share/crow/crow.sock` (override with `CROW_SOCKET`). A server must be listening on it for RPC commands to succeed — by default the `crowd` daemon owns this socket (the desktop app is a client of `crowd`); a legacy app run with `CROW_LOCAL_ENGINE=1` binds it instead. `crow setup` is the only subcommand that works with nothing listening.
+The `crow` CLI communicates over a Unix socket at `~/.local/share/crow/crow.sock` (override with `CROW_SOCKET`). A server must be listening on it for RPC commands to succeed — the `crowd` daemon owns this socket. `crow setup` is the only subcommand that works with nothing listening.
 
 All commands print JSON to stdout on success. Session and terminal identifiers are full UUIDs (e.g. `a1b2c3d4-e5f6-7890-abcd-ef1234567890`) — short names are not accepted.
 
@@ -56,7 +56,7 @@ crow rename-session --session <uuid> "new-name"
 
 ### `crow select-session`
 
-Make the given session the active tab in the app.
+Make the given session the active session in the web UI.
 
 ```bash
 crow select-session --session <uuid>
@@ -267,7 +267,7 @@ crow send --session <uuid> --terminal <uuid> "claude --continue"$'\n'
 
 ### `crow hook-event`
 
-Forwards a Claude Code hook event (e.g. `Stop`, `Notification`, `PreToolUse`) to the app. The JSON payload is read from stdin and wrapped in an RPC call. This is wired up automatically by Claude Code's hook system — you do not invoke it by hand.
+Forwards a Claude Code hook event (e.g. `Stop`, `Notification`, `PreToolUse`) to `crowd`. The JSON payload is read from stdin and wrapped in an RPC call. This is wired up automatically by Claude Code's hook system — you do not invoke it by hand.
 
 ```bash
 echo '{"tool":"Bash"}' | crow hook-event --session <uuid> --event PreToolUse
@@ -284,10 +284,10 @@ On success it is silent; on error it prints JSON to stdout.
 
 ## Error Responses
 
-When the app returns an RPC error, the command prints JSON of the form:
+When `crowd` returns an RPC error, the command prints JSON of the form:
 
 ```json
 {"error": "..."}
 ```
 
-and exits non-zero. Common causes: the app is not running (socket connection refused), an invalid UUID, or a session/terminal that does not exist.
+and exits non-zero. Common causes: `crowd` is not running (socket connection refused), an invalid UUID, or a session/terminal that does not exist.

@@ -50,7 +50,7 @@ The `jira` server is configured **globally** in `~/.claude.json`'s top-level `mc
 <a id="atlassian-mcp-headless-auth"></a>
 **Headless auth — one-time setup.** The `jira` server authenticates with a **personal API token** via the `JIRA_*` env vars in its `~/.claude.json` entry. Create the token at <https://id.atlassian.com> → Security → API tokens and set `JIRA_URL` (your `https://<site>.atlassian.net`), `JIRA_USERNAME` (account email), and `JIRA_API_TOKEN`. The same global config serves the Manager and cron jobs, so no Crow-side credential is needed for the agent flow.
 
-> **In-app status fetch.** The "Fetch from Jira" button in **Settings → Workspaces** (the #523 status map) calls Jira's REST API *directly from the Crow app process*, which cannot use the MCP. That one feature uses a small **Settings → Automation → Jira (status fetch)** credential (`JIRA_USERNAME` + an `op://`/plaintext API token), stored in `config.json` as `jiraCredential`. It is unrelated to the agent-side MCP.
+> **In-app status fetch.** The "Fetch from Jira" button in **Settings → Workspaces** (the #523 status map) calls Jira's REST API *directly from the crowd process*, which cannot use the MCP. That one feature uses a small **Settings → Automation → Jira (status fetch)** credential (`JIRA_USERNAME` + an `op://`/plaintext API token), stored in `config.json` as `jiraCredential`. It is unrelated to the agent-side MCP.
 
 <a id="jira-status-transitions"></a>
 **Jira status transitions (app-side).** The MCP above is *agent-side* (it lives in launched Claude sessions). Crow itself also moves a Jira work item through its workflow at three points the app owns — and those run **headless** (Manager, batch, cron), where no agent session is available:
@@ -141,12 +141,12 @@ Claude Code's OpenTelemetry exporter is wired up so each session emits standard 
 
 | Concern                          | File                                                                                              |
 | -------------------------------- | ------------------------------------------------------------------------------------------------- |
-| Settings tab UI                  | `Packages/CrowUI/Sources/CrowUI/AutomationSettingsView.swift`                                     |
+| Settings tab UI                  | `Packages/CrowDaemon/Sources/CrowDaemon/Resources/web/settings.js`                                     |
 | Persisted toggles                | `Packages/CrowCore/Sources/CrowCore/Models/AppConfig.swift` (`ConfigDefaults`, `AutoRespondSettings`) |
-| Manager auto-permission decision | `Sources/Crow/App/AppDelegate.swift` (Manager command rebuild)                                    |
-| Auto-create / auto-respond loop  | `Sources/Crow/App/IssueTracker.swift` (60s polling cycle)                                         |
-| Review session auto-start        | `Sources/Crow/App/IssueTracker.swift` + per-workspace flag in `AppConfig`                         |
-| Auto-merge watcher (`crow:merge`)| `Sources/Crow/App/IssueTracker.swift` (`applyAutoMerge`, `extractCrowSessionUUIDs`, `crowAuthored`) |
+| Manager auto-permission decision | `Packages/CrowEngine/Sources/CrowEngine/SessionService.swift` (Manager command rebuild)                                    |
+| Auto-create / auto-respond loop  | `Packages/CrowEngine/Sources/CrowEngine/IssueTracker.swift` (60s polling cycle)                                         |
+| Review session auto-start        | `Packages/CrowEngine/Sources/CrowEngine/IssueTracker.swift` + per-workspace flag in `AppConfig`                         |
+| Auto-merge watcher (`crow:merge`)| `Packages/CrowEngine/Sources/CrowEngine/IssueTracker.swift` (`applyAutoMerge`, `extractCrowSessionUUIDs`, `crowAuthored`) |
 
 ## See also
 
