@@ -252,9 +252,30 @@ window.crowTestSound = function (event) {
 // and a 2s per-(session,event) dedup. Permission is requested only from an
 // explicit user action (Settings button) — never auto-prompted (CROW-593).
 
-function notificationsSupported() {
-  return typeof window !== 'undefined' && 'Notification' in window;
+function inTauri() { return typeof window !== 'undefined' && !!window.__TAURI__; }
+// Native notifications via the Tauri plugin (desktop wrapper). WKWebView has no
+// Web Notification API, so inside the app we route through Tauri instead of
+// `new Notification` (CROW-593 desktop).
+function tauriNotify(title, body) {
+  try {
+    const n = window.__TAURI__ && window.__TAURI__.notification;
+    if (n && n.sendNotification) { n.sendNotification({ title, body }); return true; }
+  } catch (_) { /* ignore */ }
+  return false;
 }
+function notificationsSupported() {
+  return inTauri() || (typeof window !== 'undefined' && 'Notification' in window);
+}
+// In the desktop app, request native notification permission once up front.
+(function requestTauriNotifPermission() {
+  if (!inTauri()) return;
+  try {
+    const n = window.__TAURI__.notification;
+    if (n && n.isPermissionGranted && n.requestPermission) {
+      n.isPermissionGranted().then((granted) => { if (!granted) n.requestPermission(); }).catch(() => {});
+    }
+  } catch (_) { /* ignore */ }
+})();
 function sessionNameFor(id) {
   const s = sessions.find((x) => x.id === id);
   return (s && s.name) || 'Session';
@@ -269,7 +290,8 @@ function showEventNotification(event, key) {
   const cfg = N.events[event] || {};
   if (cfg.enabled === false) return;               // per-event master toggle
   if (cfg.systemNotificationEnabled === false) return; // per-event notif toggle
-  if (!notificationsSupported() || Notification.permission !== 'granted') return;
+  if (!notificationsSupported()) return;
+  if (!inTauri() && Notification.permission !== 'granted') return;
 
   const isSession = !!sessions.find((x) => x.id === key);
   // Focus-suppression, mirroring NotificationManager (!appFocused || !visible):
@@ -290,6 +312,9 @@ function showEventNotification(event, key) {
     if (r && r.repo) body = `${r.repo} — ${body}`;
   }
   try {
+    // In the desktop app, WKWebView lacks the Web Notification API — post via the
+    // Tauri plugin instead. (Click-to-focus below stays web-only.)
+    if (inTauri()) { tauriNotify(`Crow — ${label}`, body); return; }
     // "Crow — <event>" so the source is unmistakable even where the icon can't
     // render; CROW_ICON is a raster data-URL icon (Chrome ignores SVG icons).
     const n = new Notification(`Crow — ${label}`, {
