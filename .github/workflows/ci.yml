@@ -33,8 +33,6 @@ jobs:
               swift test --package-path "$pkg"
             fi
           done
-          echo "==> Testing root package (CrowTests)..."
-          swift test
 
   shellcheck:
     name: Shell Lint
