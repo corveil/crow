@@ -44,3 +44,4 @@ Don't delete the old file. Update its `Status` to `Superseded by NNNN` and point
 | 0005 | [TaskBackend and CodeBackend protocols](./0005-task-and-code-backend-protocols.md) | Proposed | 2026-06-03 |
 | 0006 | [xterm.js terminal renderer (Intel support)](./0006-universal-macos-binary.md) | Accepted | 2026-07-01 |
 | 0007 | [crowd is the sole authority; every UI is a pure client](./0007-crowd-sole-authority-clients-only.md) | Accepted | 2026-07-05 |
+| 0008 | [Retire the macOS app; the web UI is the only client](./0008-retire-the-macos-app.md) | Accepted | 2026-07-07 |
