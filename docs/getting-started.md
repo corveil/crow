@@ -1,6 +1,6 @@
 # Getting Started
 
-This guide walks you from a fresh clone to a running Crow app with GitHub (or GitLab) authentication and a scaffolded workspace.
+This guide walks you from a fresh clone to a running Crow daemon (`crowd`) with GitHub (or GitLab) authentication and a scaffolded workspace.
 
 ## 1. Clone the Repository
 
@@ -17,64 +17,47 @@ The one-shot build path uses the Makefile:
 make build
 ```
 
-This runs `setup` (checks Xcode Command Line Tools) and `app` (`swift build`). The result is two binaries in `.build/debug/`:
+This runs `setup` (checks Xcode Command Line Tools), generates the CLI version file, and `swift build`. The result is two binaries in `.build/debug/`:
 
-- `CrowApp` — the main macOS application
+- `crowd` — the daemon that serves the web UI and owns all state
 - `crow` — the CLI used by Claude Code sessions
 
 ### Makefile Targets
 
 | Target       | Purpose                                                                       |
 | ------------ | ----------------------------------------------------------------------------- |
-| `build`      | Full build: prerequisites + `swift build` (default)                           |
-| `setup`      | Verify build prerequisites (Xcode CLT)                                        |
+| `build`      | Full build: prerequisites + `swift build` — builds `crow` + `crowd` (default) |
+| `setup`      | Verify build prerequisites (Xcode CLT)                                         |
 | `check`      | Verify all build and runtime prerequisites (includes `gh`, `claude`, `tmux`)  |
-| `app`        | Run `swift build` (debug)                                                     |
-| `release`    | Universal release build + `.app` bundle via `scripts/bundle.sh`               |
-| `sign`       | Sign, create DMG, and notarize (requires `DEVELOPER_ID_APPLICATION`)         |
-| `install`    | Symlink `crow` + `CrowApp` into `~/.local/bin` (override `BINDIR=`, `CONFIG=`) |
-| `install-app`| Copy `Crow.app` into `/Applications` (run `make release` first)               |
-| `uninstall`  | Remove the `crow` + `CrowApp` symlinks created by `install`                   |
-| `test`       | Run all package tests                                                         |
-| `clean`      | Remove `.build/`                                                              |
-| `clean-all`  | Remove `.build/` and `Crow.app`                                               |
-| `help`       | Print the target list                                                         |
+| `crowd-dev`  | Hot-reload dev loop for `crowd` (web served live from source)                 |
+| `install`    | Symlink `crow` + `crowd` into `~/.local/bin` (override `BINDIR=`, `CONFIG=`)   |
+| `uninstall`  | Remove the `crow` + `crowd` symlinks created by `install`                      |
+| `test`       | Run all package tests                                                          |
+| `clean`      | Remove `.build/`                                                               |
+| `help`       | Print the target list                                                          |
 
 ### Advanced / Manual Build
 
 ```bash
-# Debug build (native architecture)
+# Debug build
 swift build
 
-# Universal release build (arm64 + x86_64)
-swift build -c release --arch arm64 --arch x86_64
+# Release build
+swift build -c release
 
-# Create the .app bundle from a release build
-./scripts/bundle.sh
-
-# Sign and notarize the bundled .app
-./scripts/sign-and-notarize.sh
+# Build just one product
+swift build --product crowd
+swift build --product crow
 ```
 
 **Build troubleshooting:**
 
 - Ensure Xcode CLT: `xcode-select -p`
-- Verify a universal release binary: `lipo -info .build/release/CrowApp` should list both `arm64` and `x86_64`
+- The `crow` CLI needs a generated `CLIVersion` file. Build via `make build` (which runs `scripts/generate-build-info.sh` first); a bare `swift build` from a clean tree can fail on the missing file. `crowd` has no such dependency.
 
 ### Using mise (Optional)
 
-If you have [`mise`](https://mise.jdx.dev) installed, the predefined tasks in `mise.toml` wrap the same operations:
-
-| Task                  | Runs                                       |
-| --------------------- | ------------------------------------------ |
-| `mise dev`            | `swift run CrowApp`                        |
-| `mise build`          | `make build` (full build)                  |
-| `mise build:release`  | Universal `swift build -c release`         |
-| `mise test`           | `swift test`                               |
-| `mise bundle`         | `bash scripts/bundle.sh`                   |
-| `mise sign`           | Depends on `bundle`, then sign + notarize  |
-| `mise clean`          | `rm -rf .build .derived-data Crow.app`     |
-| `mise xcode:generate` | `swift package generate-xcodeproj`         |
+If you have [`mise`](https://mise.jdx.dev) installed, `mise.toml` wraps the common operations — e.g. `mise build` (→ `make build`) and `mise test`.
 
 ## 3. GitHub Authentication
 
@@ -94,7 +77,7 @@ gh auth status   # verify the scopes above are listed
 | `read:org`     | Resolve org membership so `@me` assignee queries work across org repos                                                                    | `gh search issues --assignee @me`                                                               |
 | `project`      | **Read AND write** GitHub Projects V2 board status — required to update Status to "In Progress" / "In Review"                             | `IssueTracker.swift` `updateProjectStatus()`, the `/crow-workspace` skill when starting a session |
 
-> **Important:** `read:project` is **not** sufficient. The in-code error messages will tell you to run `gh auth refresh -s project` — this is the write `project` scope, which is a superset of `read:project`. See `Sources/Crow/App/IssueTracker.swift:691-692` and `:768-769`.
+> **Important:** `read:project` is **not** sufficient. The in-code error messages will tell you to run `gh auth refresh -s project` — this is the write `project` scope, which is a superset of `read:project`. See `Packages/CrowEngine/Sources/CrowEngine/IssueTracker.swift`.
 >
 > If you see `[IssueTracker] GitHub token missing 'project' scope` in stderr or `INSUFFICIENT_SCOPES` from a GraphQL call, re-run `gh auth refresh -s project` and retry.
 
@@ -119,18 +102,25 @@ glab auth login --hostname gitlab.example.com
 
 Crow will invoke `glab` with `GITLAB_HOST` set from the workspace config. The app does not enforce specific scopes on the GitLab token; check your instance's documentation for what your user account needs.
 
-## 5. First Launch
+## 5. First Run
+
+Configure your development root and workspaces with the CLI setup wizard, then start the daemon:
 
 ```bash
-.build/debug/CrowApp
+.build/debug/crow setup            # prompts interactively
+.build/debug/crow setup --dev-root ~/Dev   # skip the devRoot prompt
+
+.build/debug/crowd                 # serves the web UI
 ```
 
-On first launch, the setup wizard asks for:
+`crowd` prints `HTTP/WS listening on http://127.0.0.1:8787` — open that URL in your browser. (For a hot-reload dev loop with web assets served live from source, use `make crowd-dev` instead.)
+
+The setup wizard asks for:
 
 1. A **development root** directory (e.g. `~/Dev`) — where Crow scaffolds workspaces and stores worktrees.
 2. One or more **workspaces** — each is a subdirectory under the dev root with a name, provider (`github` or `gitlab`), and (for GitLab) a host.
 
-When you finish the wizard, Crow scaffolds the following under the dev root (see `Sources/Crow/App/Scaffolder.swift`):
+Crow scaffolds the following under the dev root (see `Packages/CrowEngine/Sources/CrowEngine/Scaffolder.swift`):
 
 ```
 {devRoot}/
@@ -147,16 +137,9 @@ When you finish the wizard, Crow scaffolds the following under the dev root (see
         └── crow-batch-workspace/     # /crow-batch-workspace skill
 ```
 
-Alternatively, you can scaffold without launching the GUI by running the CLI setup wizard:
-
-```bash
-.build/debug/crow setup            # prompts interactively
-.build/debug/crow setup --dev-root ~/Dev   # skip the devRoot prompt
-```
-
 ## 6. Install (Optional)
 
-Running the binaries by full path (`.build/debug/CrowApp`, `.build/debug/crow`) works, but the Manager terminal and the `/crow-workspace` skill invoke bare `crow ...` — so for day-to-day use you'll want `crow` (and optionally `CrowApp`) on your `PATH`.
+Running the binaries by full path (`.build/debug/crowd`, `.build/debug/crow`) works, but the Manager terminal and the `/crow-workspace` skill invoke bare `crow ...` — so for day-to-day use you'll want `crow` (and `crowd`) on your `PATH`.
 
 ### Put the binaries on PATH
 
@@ -167,7 +150,7 @@ make install
 This symlinks both binaries into `~/.local/bin`:
 
 - `~/.local/bin/crow` → `.build/debug/crow`
-- `~/.local/bin/CrowApp` → `.build/debug/CrowApp`
+- `~/.local/bin/crowd` → `.build/debug/crowd`
 
 If `~/.local/bin` isn't on your `PATH`, `make install` prints a reminder. Add this to your shell rc (e.g. `~/.zshrc`) and restart the shell:
 
@@ -182,7 +165,7 @@ export PATH="$HOME/.local/bin:$PATH"
 | `BINDIR`  | `~/.local/bin`   | `make install BINDIR=/usr/local/bin`     |
 | `CONFIG`  | `debug`          | `make install CONFIG=release`            |
 
-`CONFIG` selects which build directory the symlinks point at — `.build/debug/` (from `make build`) or `.build/release/` (from `make release`). If the chosen binaries don't exist yet, `make install` errors and tells you to build first.
+`CONFIG` selects which build directory the symlinks point at — `.build/debug/` (from `make build`) or `.build/release/` (from `make build CONFIG=release`). If the chosen binaries don't exist yet, `make install` errors and tells you to build first.
 
 ### Rebuilds and re-pointing
 
@@ -190,7 +173,7 @@ Because `install` creates **symlinks** (not copies), `swift build` overwrites th
 
 Re-run `make install` only when:
 
-- You switch debug ↔ release: `make release && make install CONFIG=release`.
+- You switch debug ↔ release: `make build CONFIG=release && make install CONFIG=release`.
 - You ran `make clean` (or `mise clean`), which deletes `.build/` and leaves the symlinks dangling until the next build.
 
 Remove the symlinks at any time:
@@ -199,22 +182,9 @@ Remove the symlinks at any time:
 make uninstall
 ```
 
-### GUI install (`/Applications`)
+### Running crowd as a background service
 
-For a proper `.app` bundle you can launch from Spotlight or the Dock:
-
-```bash
-make release        # produces ./Crow.app
-make install-app    # copies Crow.app into /Applications
-```
-
-Builds from source are unsigned. If macOS quarantines the bundle on first launch, clear the attribute:
-
-```bash
-xattr -cr /Applications/Crow.app
-```
-
-Official signed/notarized builds are available on the [Releases](https://github.com/radiusmethod/crow/releases) page and install without Gatekeeper warnings.
+Crow does not yet ship a launchd/login-item installer, so start `crowd` yourself (a terminal, `tmux`, or your own `launchd` plist). It binds `127.0.0.1:8787` by default; see [Remote access](../README.md#remote-access) to reach it from another device.
 
 ## Next Steps
 

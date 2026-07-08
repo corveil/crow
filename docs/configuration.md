@@ -181,7 +181,7 @@ The `jira` server lives **globally** in `~/.claude.json`'s top-level `mcpServers
 - **Auth** is a **personal API token** (from <https://id.atlassian.com>) passed to the container via the `JIRA_*` env vars. The same global config serves worktree sessions, the Manager, and cron jobs.
 - **`gh`/`glab` GitHub/GitLab task paths are unaffected.**
 
-> **In-app status fetch.** The "Fetch from Jira" status-map button (below) is the one Jira feature that runs in the **Crow app process**, which can't use the MCP. It uses a separate small credential under **Settings → Automation → Jira (status fetch)**, stored top-level in `config.json` as `jiraCredential` (`username` + an `op://`/plaintext `tokenRef`, same secret rules as gateway keys). Crow builds `Authorization: Basic base64(username:token)` on demand to call Jira's REST API directly; it is never written to a launched session.
+> **In-app status fetch.** The "Fetch from Jira" status-map button (below) is the one Jira feature that runs in the **crowd process**, which can't use the MCP. It uses a separate small credential under **Settings → Automation → Jira (status fetch)**, stored top-level in `config.json` as `jiraCredential` (`username` + an `op://`/plaintext `tokenRef`, same secret rules as gateway keys). Crow builds `Authorization: Basic base64(username:token)` on demand to call Jira's REST API directly; it is never written to a launched session.
 
 ### Jira status mapping
 
@@ -259,7 +259,7 @@ Worktrees are created **at the same level as the main repo**, not in a `worktree
 
 ## Terminal Readiness
 
-`TerminalReadiness` (`Packages/CrowCore/Sources/CrowCore/Models/Enums.swift:41`) tracks how far each managed terminal has progressed through startup. The sidebar dot in `Packages/CrowUI/Sources/CrowUI/SessionListView.swift:325-372` reflects the current state:
+`TerminalReadiness` (`Packages/CrowCore/Sources/CrowCore/Models/Enums.swift:41`) tracks how far each managed terminal has progressed through startup. The sidebar dot in `Packages/CrowDaemon/Sources/CrowDaemon/Resources/web/app.js` reflects the current state:
 
 1. **Gray dot (`uninitialized`)** — `XTermSurfaceView` exists but `createSurface()` has not been called yet.
 2. **Yellow dot (`surfaceCreated`)** — the xterm.js surface exists and the shell process (`PTYProcess`) is spawning.
