@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Crow</title>
+    <style>
+      html, body { height: 100%; margin: 0; }
+      body {
+        display: flex; align-items: center; justify-content: center; flex-direction: column;
+        background: #16181B; color: #DDC482;
+        font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+        -webkit-user-select: none; user-select: none;
+      }
+      h1 { font-size: 22px; font-weight: 700; margin: 0 0 14px; letter-spacing: 0.02em; }
+      .row { display: flex; align-items: center; gap: 9px; font-size: 13px; color: #A8A9AE; }
+      .dot {
+        width: 9px; height: 9px; border-radius: 50%; background: #DDC482;
+        box-shadow: 0 0 12px #DDC482; animation: pulse 1.1s ease-in-out infinite;
+      }
+      @keyframes pulse {
+        0%, 100% { opacity: 0.35; transform: scale(0.85); }
+        50% { opacity: 1; transform: scale(1); }
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Crow</h1>
+    <div class="row"><span class="dot"></span> Starting crowd…</div>
+  </body>
+</html>
