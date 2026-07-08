@@ -13,8 +13,13 @@ use std::time::{Duration, Instant};
 use tauri::menu::{AboutMetadataBuilder, MenuBuilder, MenuItemBuilder, SubmenuBuilder};
 use tauri::Manager;
 
-/// Port the sidecar crowd binds (matches crowd's default).
-const PORT: u16 = 8787;
+/// Port the sidecar crowd binds. Honors CROW_HTTP_PORT (matching
+/// scripts/crowd-dev.sh) so launching the app beside a custom-port crowd reuses
+/// it instead of spawning a second daemon on 8787 against the same devRoot
+/// (review #11).
+fn port() -> u16 {
+    std::env::var("CROW_HTTP_PORT").ok().and_then(|s| s.parse().ok()).unwrap_or(8787)
+}
 
 /// Holds the spawned crowd child so we can kill it when the app exits.
 struct Crowd(Mutex<Option<Child>>);
@@ -31,7 +36,7 @@ fn crowd_bin() -> std::path::PathBuf {
 
 /// Whether something is accepting TCP connections on 127.0.0.1:PORT.
 fn port_open() -> bool {
-    match ("127.0.0.1", PORT).to_socket_addrs().ok().and_then(|mut a| a.next()) {
+    match ("127.0.0.1", port()).to_socket_addrs().ok().and_then(|mut a| a.next()) {
         Some(addr) => TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_ok(),
         None => false,
     }
@@ -112,14 +117,21 @@ pub fn run() {
 
             // Reuse an already-running crowd; otherwise spawn our own sidecar.
             if port_open() {
-                eprintln!("[crow-desktop] crowd already listening on {PORT}; reusing it");
+                eprintln!("[crow-desktop] crowd already listening on {}; reusing it", port());
             } else {
                 let bin = crowd_bin();
                 let mut cmd = Command::new(&bin);
                 cmd.arg("--host")
                     .arg("127.0.0.1")
                     .arg("--http-port")
-                    .arg(PORT.to_string());
+                    .arg(port().to_string());
+                // Pass through a custom unix socket so a CROW_SOCKET-configured
+                // crowd doesn't contend on the default socket (review #11).
+                if let Ok(sock) = std::env::var("CROW_SOCKET") {
+                    if !sock.is_empty() {
+                        cmd.arg("--socket").arg(sock);
+                    }
+                }
                 // Dev: serve web assets live from source so UI edits show on reload
                 // (matches `make crowd-dev`). Skipped when the source tree isn't
                 // present (e.g. a release install), where crowd uses its bundle.
@@ -149,7 +161,7 @@ pub fn run() {
             thread::spawn(move || {
                 if wait_for_port(Duration::from_secs(30)) {
                     if let Some(win) = handle.get_webview_window("main") {
-                        match format!("http://127.0.0.1:{PORT}").parse() {
+                        match format!("http://127.0.0.1:{}", port()).parse() {
                             Ok(url) => {
                                 let _ = win.navigate(url);
                             }
@@ -157,7 +169,7 @@ pub fn run() {
                         }
                     }
                 } else {
-                    eprintln!("[crow-desktop] crowd did not come up on {PORT} within 30s");
+                    eprintln!("[crow-desktop] crowd did not come up on {} within 30s", port());
                 }
             });
             Ok(())

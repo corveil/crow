@@ -34,6 +34,15 @@ jobs:
             fi
           done
 
+  desktop:
+    name: Desktop (Tauri) Build
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build crow-desktop (Rust/Tauri)
+        run: cargo build --manifest-path crow-desktop/src-tauri/Cargo.toml
+
   shellcheck:
     name: Shell Lint
     runs-on: ubuntu-latest

@@ -556,6 +556,13 @@ func makeCommandRouter(
             guard let url = params["url"]?.stringValue, !url.isEmpty else {
                 throw DaemonRPCError.invalidParams("url required")
             }
+            // Sent verbatim as Manager keystrokes below — reject anything that
+            // isn't a plain http(s) URL, so newlines/control chars can't inject
+            // extra submitted lines into the agent (review #4).
+            guard url.range(of: #"^https?://[^\s]+$"#, options: .regularExpression) != nil,
+                  !url.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7F }) else {
+                throw DaemonRPCError.invalidParams("url must be a well-formed http(s) URL with no control characters")
+            }
             return try await MainActor.run {
                 guard let managerTerminal = appState.terminals[AppState.managerSessionID]?.first else {
                     throw DaemonRPCError.applicationError("The Manager is still starting — try again in a moment")
