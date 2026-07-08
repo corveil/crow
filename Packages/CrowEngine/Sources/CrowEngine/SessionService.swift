@@ -763,13 +763,15 @@ public final class SessionService {
 
         let rcEnabled = appState.remoteControlEnabled
         // Jobs are unattended, so opt-in (default-on) auto-permission mode lets
-        // their prompts run crow/gh/git without per-call approval. Work coder
-        // views get auto mode only via the opt-in (default-off)
-        // coderViewAutoPermissionMode toggle (#586). Review sessions and the
-        // Manager (which has its own managerAutoPermissionMode path) are
-        // unaffected.
+        // their prompts run crow/gh/git without per-call approval. Review
+        // sessions get the same default-on treatment via
+        // reviewAutoPermissionMode so a kicked-off review runs its prompt flow
+        // unattended. Work coder views get auto mode only via the opt-in
+        // (default-off) coderViewAutoPermissionMode toggle (#586). The Manager
+        // has its own managerAutoPermissionMode path and is unaffected here.
         let autoPermissionMode =
             (session.kind == .job && appState.jobsAutoPermissionMode) ||
+            (session.kind == .review && appState.reviewAutoPermissionMode) ||
             (session.kind == .work && appState.coderViewAutoPermissionMode)
         // The agent's autoLaunchCommand mirrors this condition — the initial
         // prompt file is only used on first launch (CROW-224, CROW-317).

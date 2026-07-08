@@ -408,6 +408,8 @@
       'Passes --permission-mode auto so the Manager can run crow/gh/git without per-call approval. Takes effect on next app launch.'));
     body.appendChild(toggleField('Coder Views: launch new coder views in auto permission mode', cfg, 'coderViewAutoPermissionMode',
       'Passes --permission-mode auto so new work coder views start in auto-accept instead of plan mode. Off by default.'));
+    body.appendChild(toggleField('Code Reviews: launch in auto permission mode', cfg, 'reviewAutoPermissionMode',
+      'Passes --permission-mode auto so a kicked-off code review runs its review flow unattended instead of coming up in plan mode. On by default.'));
 
     body.appendChild(group('Credentials (desktop app)'));
     body.appendChild(readonlyNote('The Manager AI Gateway and Jira credential are managed in the desktop app and are read-only here. '
