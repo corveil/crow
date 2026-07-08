@@ -60,7 +60,6 @@ flowchart TB
 | Tool  | Version | Purpose                     | Install                  |
 | ----- | ------- | --------------------------- | ------------------------ |
 | Swift | 6.0+    | Compiler — Xcode CLT (macOS) or the swift.org toolchain (Linux) | `xcode-select --install` · [swift.org/install](https://www.swift.org/install/) |
-| mise  | latest  | Task runner (optional)      | `brew install mise`      |
 | Rust  | 1.77+ (arm64) | Compiler for the optional [desktop app](#desktop-app-native-window-over-crowd) (macOS) | [rustup.rs](https://rustup.rs) |
 | Node  | 18+     | Only for `npm run tauri dev` (optional) | `brew install node`      |
 
@@ -329,7 +328,7 @@ Crow can drive a ticket from assignment to merged with minimal manual steps. Tog
 ### Testing
 
 ```bash
-make test     # or: swift test --package-path Packages/<name>, or: mise test
+make test     # or: swift test --package-path Packages/<name>
 ```
 
 Tests use the [Swift Testing](https://developer.apple.com/documentation/testing/) framework (`@Test` macros). Test files live under `Packages/*/Tests/`.

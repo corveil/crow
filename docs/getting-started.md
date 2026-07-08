@@ -55,10 +55,6 @@ swift build --product crow
 - Ensure Xcode CLT: `xcode-select -p`
 - The `crow` CLI needs a generated `CLIVersion` file. Build via `make build` (which runs `scripts/generate-build-info.sh` first); a bare `swift build` from a clean tree can fail on the missing file. `crowd` has no such dependency.
 
-### Using mise (Optional)
-
-If you have [`mise`](https://mise.jdx.dev) installed, `mise.toml` wraps the common operations — e.g. `mise build` (→ `make build`) and `mise test`.
-
 ## 3. GitHub Authentication
 
 Crow uses the `gh` CLI to read issues, PRs, and GitHub Projects (V2) board status, and to **write** project board status (moving tickets to "In Progress" / "In Review") via the `updateProjectV2ItemFieldValue` GraphQL mutation.
@@ -174,7 +170,7 @@ Because `install` creates **symlinks** (not copies), `swift build` overwrites th
 Re-run `make install` only when:
 
 - You switch debug ↔ release: `make build CONFIG=release && make install CONFIG=release`.
-- You ran `make clean` (or `mise clean`), which deletes `.build/` and leaves the symlinks dangling until the next build.
+- You ran `make clean`, which deletes `.build/` and leaves the symlinks dangling until the next build.
 
 Remove the symlinks at any time:
 
