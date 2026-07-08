@@ -216,6 +216,11 @@ import CrowPersistence
         #expect(resp.error == nil)
         #expect(resp.result?["app_running"]?.boolValue == false)
         #expect(resp.result?["dev_root"]?.stringValue == devRoot)
+        // First-run gate fields (CROW-605). `configured` reflects the App Support
+        // pointer (machine-global), not the per-test cwd-fallback `dev_root`.
+        #expect(resp.result?["configured"]?.boolValue != nil)
+        let defaultRoot = try #require(resp.result?["default_dev_root"]?.stringValue)
+        #expect(defaultRoot.hasSuffix("/Dev"))
 
         let json = try #require(resp.result?["config"]?.stringValue)
         // Plaintext secrets must not appear anywhere in the transported string.
@@ -263,6 +268,30 @@ import CrowPersistence
     @Test @MainActor func setConfigRejectsMalformedConfig() async {
         let resp = await offlineRouter(devRoot: tempDevRoot()).handle(request: JSONRPCRequest(
             id: 1, method: "set-config", params: ["config": .string("not-json")]))
+        #expect(resp.error?.code == RPCErrorCode.invalidParams)
+    }
+
+    @Test @MainActor func runSetupRejectsWhenAlreadyConfigured() async throws {
+        // Isolate the App Support pointer so we don't touch the developer's real one.
+        // ConfigStore reads a fixed path under Application Support — we can't redirect
+        // it, so this test only covers the "already configured" rejection when a
+        // pointer happens to exist. When none exists, skip.
+        guard ConfigStore.loadDevRoot() != nil else { return }
+        let resp = await offlineRouter(devRoot: tempDevRoot()).handle(request: JSONRPCRequest(
+            id: 1, method: "run-setup",
+            params: [
+                "dev_root": .string("/tmp/crow-605-should-not-create"),
+                "config": .string(try encode(AppConfig())),
+            ]))
+        #expect(resp.error?.code == RPCErrorCode.invalidParams)
+    }
+
+    @Test @MainActor func runSetupRejectsMissingDevRoot() async {
+        // Only meaningful when no pointer exists (otherwise the already-configured
+        // guard fires first). Either way we expect invalidParams.
+        let resp = await offlineRouter(devRoot: tempDevRoot()).handle(request: JSONRPCRequest(
+            id: 1, method: "run-setup",
+            params: ["config": .string("{}")]))
         #expect(resp.error?.code == RPCErrorCode.invalidParams)
     }
 }
