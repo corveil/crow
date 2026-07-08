@@ -277,12 +277,17 @@ public struct TmuxController: Sendable {
 
     // MARK: - Diagnostic
 
-    /// `tmux capture-pane -p -t <target> -S -<linesBack>`. Returns the
-    /// visible pane contents (last `linesBack` lines). Used by the readiness
-    /// timeout diagnostics to show what state the shell got stuck in
-    /// (issue #256).
-    public func capturePane(target: String, linesBack: Int = 200) throws -> String {
-        try run(["capture-pane", "-p", "-t", target, "-S", "-\(linesBack)"])
+    /// `tmux capture-pane -p [-e] -t <target> -S -<linesBack>`. Returns the
+    /// pane contents from `linesBack` lines of history through the current
+    /// screen. Used by the readiness timeout diagnostics to show what state the
+    /// shell got stuck in (issue #256), and — with `escapes: true` (`-e`, which
+    /// keeps SGR/color sequences) — to replay a pane's scrollback into a
+    /// reconnecting web terminal (CROW-606).
+    public func capturePane(target: String, linesBack: Int = 200, escapes: Bool = false) throws -> String {
+        var args = ["capture-pane", "-p"]
+        if escapes { args.append("-e") }
+        args.append(contentsOf: ["-t", target, "-S", "-\(linesBack)"])
+        return try run(args)
     }
 
     /// `tmux display-message -p -t <target> <format>`. Used by the readiness

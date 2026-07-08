@@ -105,4 +105,23 @@ struct TmuxControllerTests {
         // "tmux 3.6a" or similar.
         #expect(version.hasPrefix("tmux "))
     }
+
+    @Test func capturePaneReturnsHistory() throws {
+        let ctrl = makeController()
+        defer {
+            ctrl.killServer()
+            try? FileManager.default.removeItem(atPath: ctrl.socketPath)
+        }
+        // Print three known lines, then keep the pane alive so capture-pane can
+        // read them back out of the pane's scrollback (CROW-606 replay path).
+        try ctrl.newSessionDetached(
+            command: "/bin/sh -c 'printf \"alpha\\nbravo\\ncharlie\\n\"; sleep 60'")
+        // Give the shell a beat to emit before capturing.
+        Thread.sleep(forTimeInterval: 0.3)
+        let out = try ctrl.capturePane(
+            target: "\(ctrl.sessionName):0", linesBack: 1000, escapes: true)
+        #expect(out.contains("alpha"))
+        #expect(out.contains("bravo"))
+        #expect(out.contains("charlie"))
+    }
 }

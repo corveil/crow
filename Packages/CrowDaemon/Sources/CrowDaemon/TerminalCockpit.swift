@@ -58,6 +58,44 @@ struct TerminalCockpit: Sendable {
         _ = try? controller.run(["select-window", "-t", "\(group):\(index)"])
     }
 
+    /// How many lines of pane history to replay on (re)connect. Matched to the
+    /// xterm.js client scrollback (`scrollback: 50000` in app.js) and the tmux
+    /// `history-limit` (crow-tmux.conf) so the full retained history survives a
+    /// crowd restart or browser reload (CROW-606).
+    static let replayLines = 50000
+
+    /// Capture window `index`'s pane scrollback (history + current screen) and
+    /// package it as bytes ready to write into a reconnecting xterm.js buffer.
+    /// Returns `nil` when the capture fails (best-effort — a live-only pane is
+    /// still preferable to dropping the connection). See `replayFrame`.
+    func replayData(group: String, index: Int) -> Data? {
+        guard let raw = try? controller.capturePane(
+            target: "\(group):\(index)", linesBack: Self.replayLines, escapes: true)
+        else { return nil }
+        return Self.replayFrame(from: raw)
+    }
+
+    /// Transform a `capture-pane -pe` blob into a self-contained replay frame for
+    /// xterm.js. Pure (no tmux) so it's unit-testable. Steps:
+    ///   1. strip trailing newlines — `capture-pane` pads a trailing LF that would
+    ///      otherwise push the viewport down one row versus tmux's own redraw;
+    ///   2. convert bare LF → CRLF — `capture-pane` emits `\n` only, and xterm.js
+    ///      treats `\n` as line-feed-without-carriage-return, so raw output would
+    ///      stair-step down the screen;
+    ///   3. prepend `ESC[H ESC[2J ESC[3J` (home + clear screen + clear scrollback)
+    ///      so repeated selects/reconnects REBUILD the buffer rather than stack
+    ///      duplicate copies of the history.
+    /// The blob keeps the current screen at its tail, so tmux's live attach redraw
+    /// repaints those same viewport rows in place — the replayed history lands
+    /// above the live viewport regardless of which write wins the race.
+    static func replayFrame(from raw: String) -> Data {
+        let trimmed = raw.replacingOccurrences(of: "[\r\n]+$", with: "", options: .regularExpression)
+        let crlf = trimmed.replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\n", with: "\r\n")
+        let clear = "\u{1b}[H\u{1b}[2J\u{1b}[3J"
+        return Data((clear + crlf).utf8)
+    }
+
     /// The desktop app's stable tmux socket: `$TMPDIR/crow-tmux.sock` (#330).
     private static func appTmuxSocketPath() -> String {
         if let override = ProcessInfo.processInfo.environment["CROW_TMUX_SOCKET"], !override.isEmpty {

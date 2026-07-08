@@ -94,6 +94,15 @@ enum TerminalWebSocket {
                         // clients (incl. the desktop app) keep their own view.
                         if let window = control.window {
                             cockpit.selectWindow(group: group, index: window)
+                            // Replay the pane's tmux scrollback into the xterm buffer
+                            // so history survives a crowd restart / browser reload —
+                            // the client re-selects its window on every reconnect and
+                            // tab switch (CROW-606). Yield through the same stream the
+                            // PTY writes to, so this serializes with live output on the
+                            // single `outputTask` (no concurrent `outbound` writes).
+                            if let replay = cockpit.replayData(group: group, index: window) {
+                                continuation.yield(replay)
+                            }
                         }
                     default:
                         break
