@@ -729,30 +729,13 @@ func makeCommandRouter(
             return ["config": .string(outJSON), "saved": .bool(true)]
         },
 
-        // Set or clear the web-access password (CROW-593). Reachable only over an
-        // already-authorized surface (the /rpc WS is gated by WebAuthGuard), so a
-        // caller here is either local or a logged-in remote. Hashes the plaintext
-        // with PBKDF2 and persists to config.json; `{clear: true}` removes it.
-        "set-web-password": { params in
-            let clear = params["clear"]?.boolValue == true
-            let password = params["password"]?.stringValue
-            if !clear, (password?.isEmpty ?? true) {
-                throw DaemonRPCError.invalidParams("password must be a non-empty string (or pass clear: true)")
-            }
-            // Load+save under the shared config lock (review #10).
-            let config: AppConfig
-            do {
-                config = try ConfigStore.withConfigLock {
-                    var c = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
-                    c.webAuth = clear ? nil : PasswordHash.make(password: password!)
-                    try ConfigStore.saveConfig(c, devRoot: devRoot)
-                    return c
-                }
-            } catch {
-                throw DaemonRPCError.applicationError("Failed to save config: \(error.localizedDescription)")
-            }
-            return ["saved": .bool(true), "password_set": .bool(config.webAuth != nil)]
-        },
+        // NOTE: the web-access password and AI gateways are secret writes and
+        // are managed via local-only, Origin-checked HTTP POSTs in
+        // `SecretRoutes`, never here. A JSON-RPC method on this shared router is
+        // reachable over the possibly-remote `/rpc` WebSocket and can't tell a
+        // local caller from a logged-in remote one, so it must not carry secret
+        // writes — that would let a remote client change the password that gates
+        // remote access (CROW-593).
 
         // Session/board actions — forward-only (need the app's coordinators).
         // Spawning a Manager forwards to the app when it's running (its

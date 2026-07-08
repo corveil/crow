@@ -255,6 +255,9 @@ public enum CrowDaemon {
         // Web-access password gate + /login + /logout (CROW-593). Added before the
         // asset/board routes so the middleware wraps them.
         WebAuthRoutes.mount(on: httpRouter, sessions: sessions, loginLimiter: loginLimiter, devRoot: options.devRoot, webDir: options.webDir)
+        // Local-only secret management (web password + AI gateways) as
+        // Origin-checked HTTP POSTs, gated to a local-direct peer (CROW-593).
+        SecretRoutes.mount(on: httpRouter, boundHost: options.host, devRoot: options.devRoot)
         StaticAssets.mount(on: httpRouter, webDir: options.webDir)
         // Per-session generated images (diagrams/screenshots an agent dropped
         // in the scratch dir), served read-only + sandboxed (CROW-593).
