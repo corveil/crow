@@ -698,7 +698,19 @@ func makeCommandRouter(
                   let json = String(data: data, encoding: .utf8) else {
                 throw DaemonRPCError.applicationError("Failed to encode config")
             }
-            return ["config": .string(json), "dev_root": .string(devRoot), "app_running": .bool(false)]
+            // `configured` mirrors the desktop's first-run gate
+            // (`ConfigStore.loadDevRoot() == nil`); `dev_root` itself is never
+            // empty (cwd fallback), so it can't detect first-run. `default_dev_root`
+            // lets the web wizard prefill step 1 without knowing $HOME (CROW-605).
+            let defaultDevRoot = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Dev").path
+            return [
+                "config": .string(json),
+                "dev_root": .string(devRoot),
+                "app_running": .bool(false),
+                "configured": .bool(ConfigStore.loadDevRoot() != nil),
+                "default_dev_root": .string(defaultDevRoot),
+            ]
         },
         "set-config": { params in
             guard let json = params["config"]?.stringValue,
@@ -727,6 +739,43 @@ func makeCommandRouter(
                 throw DaemonRPCError.applicationError("Failed to encode config")
             }
             return ["config": .string(outJSON), "saved": .bool(true)]
+        },
+
+        // First-run setup wizard (CROW-605). Scaffolds the chosen dev root,
+        // writes config.json + the App Support pointer, then asks the daemon to
+        // re-exec so every subsystem that captured `devRoot` at startup adopts
+        // the new path. Rejected once a pointer already exists.
+        "run-setup": { params in
+            if ConfigStore.loadDevRoot() != nil {
+                throw DaemonRPCError.invalidParams("Already configured — setup wizard is one-shot")
+            }
+            guard let rawRoot = params["dev_root"]?.stringValue?
+                    .trimmingCharacters(in: .whitespacesAndNewlines),
+                  !rawRoot.isEmpty else {
+                throw DaemonRPCError.invalidParams("dev_root required")
+            }
+            let chosen = expandSetupDevRoot(rawRoot)
+            guard !chosen.isEmpty else {
+                throw DaemonRPCError.invalidParams("dev_root required")
+            }
+            guard let json = params["config"]?.stringValue,
+                  let data = json.data(using: .utf8),
+                  let config = try? JSONDecoder().decode(AppConfig.self, from: data) else {
+                throw DaemonRPCError.invalidParams("config must be a valid AppConfig JSON string")
+            }
+            do {
+                try ConfigStore.withConfigLock {
+                    try Scaffolder(devRoot: chosen).scaffold(
+                        workspaceNames: config.workspaces.map(\.name))
+                    try ConfigStore.saveConfig(config, devRoot: chosen)
+                    try ConfigStore.saveDevRoot(chosen)
+                }
+            } catch {
+                throw DaemonRPCError.applicationError(
+                    "Setup failed: \(error.localizedDescription)")
+            }
+            CrowDaemon.requestReexec()
+            return ["ok": .bool(true), "dev_root": .string(chosen)]
         },
 
         // NOTE: the web-access password and AI gateways are secret writes and
@@ -833,4 +882,16 @@ func makeCommandRouter(
             return ["ok": .bool(true)]
         },
     ], fallback: fallback)
+}
+
+/// Expand a wizard-supplied `dev_root`: leading `~` → home; relative paths
+/// resolve under home. Absolute paths pass through unchanged (CROW-605).
+private func expandSetupDevRoot(_ raw: String) -> String {
+    let home = FileManager.default.homeDirectoryForCurrentUser.path
+    if raw == "~" { return home }
+    if raw.hasPrefix("~/") {
+        return (home as NSString).appendingPathComponent(String(raw.dropFirst(2)))
+    }
+    if (raw as NSString).isAbsolutePath { return raw }
+    return (home as NSString).appendingPathComponent(raw)
 }
