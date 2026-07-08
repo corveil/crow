@@ -469,7 +469,7 @@ import CrowPersistence
         }
     }
 
-    @Test func blankHeaderValuesKeepStoredSecrets() {
+    @Test func blankHeaderValuesKeepStoredSecrets() throws {
         // Local editor prefills stripped keys with empty values; updating only
         // the base URL must not wipe the stored auth header (review Yellow #1).
         let stored = WorkspaceGateway(
@@ -478,33 +478,57 @@ import CrowPersistence
         let incoming = WorkspaceGateway(
             baseURL: "https://new.example",
             customHeaders: ["X-Api-Key": "", "X-Extra": "", "X-New": "fresh"])
-        let merged = SecretRoutes.mergingPreservedHeaders(incoming: incoming, stored: stored)
+        let merged = try SecretRoutes.mergingPreservedHeaders(incoming: incoming, stored: stored).get()
         #expect(merged?.baseURL == "https://new.example")
         #expect(merged?.customHeaders["X-Api-Key"] == "SECRET")
         #expect(merged?.customHeaders["X-Extra"] == "keep-me")
         #expect(merged?.customHeaders["X-New"] == "fresh")
     }
 
-    @Test func blankHeaderWithNoStoredValueIsDropped() {
+    @Test func blankHeaderWithNoStoredValueIsDroppedWhenSiblingRemains() throws {
         let incoming = WorkspaceGateway(
             baseURL: "https://gw.example",
             customHeaders: ["X-Api-Key": "real", "X-Empty": ""])
-        let merged = SecretRoutes.mergingPreservedHeaders(incoming: incoming, stored: nil)
+        let merged = try SecretRoutes.mergingPreservedHeaders(incoming: incoming, stored: nil).get()
         #expect(merged?.customHeaders["X-Api-Key"] == "real")
         #expect(merged?.customHeaders["X-Empty"] == nil)
     }
 
-    @Test func nilIncomingClearsGateway() {
-        let stored = WorkspaceGateway(baseURL: "https://gw", customHeaders: ["X": "y"])
-        #expect(SecretRoutes.mergingPreservedHeaders(incoming: nil, stored: stored) == nil)
+    @Test func allBlankHeadersWithNoStoredSecretAreRejected() {
+        // URL + only blank headers (no stored secret to restore) would encode a
+        // half-filled gateway that AppConfig refuses to decode — wiping the
+        // whole config on the next load (review Red on #623).
+        let incoming = WorkspaceGateway(
+            baseURL: "https://gw.example",
+            customHeaders: ["X-Api-Key": ""])
+        if case .success = SecretRoutes.mergingPreservedHeaders(incoming: incoming, stored: nil) {
+            Issue.record("URL with no keepable headers must be rejected")
+        }
     }
 
-    @Test func nonBlankIncomingValueOverridesStored() {
+    @Test func renamedBlankHeaderWithNoStoredMatchIsRejected() {
+        // Renaming the only header key to a blank-valued new name leaves no
+        // keepable headers after merge — same undecodable shape as above.
+        let stored = WorkspaceGateway(
+            baseURL: "https://gw.example", customHeaders: ["X-Old": "SECRET"])
+        let incoming = WorkspaceGateway(
+            baseURL: "https://gw.example", customHeaders: ["X-New": ""])
+        if case .success = SecretRoutes.mergingPreservedHeaders(incoming: incoming, stored: stored) {
+            Issue.record("renamed blank header with no stored match must be rejected")
+        }
+    }
+
+    @Test func nilIncomingClearsGateway() throws {
+        let stored = WorkspaceGateway(baseURL: "https://gw", customHeaders: ["X": "y"])
+        #expect(try SecretRoutes.mergingPreservedHeaders(incoming: nil, stored: stored).get() == nil)
+    }
+
+    @Test func nonBlankIncomingValueOverridesStored() throws {
         let stored = WorkspaceGateway(
             baseURL: "https://gw", customHeaders: ["X-Api-Key": "OLD"])
         let incoming = WorkspaceGateway(
             baseURL: "https://gw", customHeaders: ["X-Api-Key": "NEW"])
-        let merged = SecretRoutes.mergingPreservedHeaders(incoming: incoming, stored: stored)
+        let merged = try SecretRoutes.mergingPreservedHeaders(incoming: incoming, stored: stored).get()
         #expect(merged?.customHeaders["X-Api-Key"] == "NEW")
     }
 }
