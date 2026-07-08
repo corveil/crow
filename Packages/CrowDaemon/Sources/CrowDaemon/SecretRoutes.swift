@@ -67,7 +67,9 @@ enum SecretRoutes {
                 do {
                     try ConfigStore.withConfigLock {
                         var c = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
-                        c.managerGateway = gateway
+                        // Blank header values mean "keep stored" — the local editor
+                        // prefills stripped keys with empty values (review Yellow #1).
+                        c.managerGateway = mergingPreservedHeaders(incoming: gateway, stored: c.managerGateway)
                         try ConfigStore.saveConfig(c, devRoot: devRoot)
                     }
                     return json(["saved": true, "gateway_set": gateway != nil])
@@ -94,7 +96,8 @@ enum SecretRoutes {
                     let found = try ConfigStore.withConfigLock { () -> Bool in
                         var c = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
                         guard let idx = c.workspaces.firstIndex(where: { $0.id == uid }) else { return false }
-                        c.workspaces[idx].gateway = gateway
+                        c.workspaces[idx].gateway = mergingPreservedHeaders(
+                            incoming: gateway, stored: c.workspaces[idx].gateway)
                         try ConfigStore.saveConfig(c, devRoot: devRoot)
                         return true
                     }
@@ -130,15 +133,45 @@ enum SecretRoutes {
     /// enforcing `WorkspaceGateway`'s both-or-neither invariant: a base URL and
     /// at least one header, or neither. `clear: true` (or an all-empty body)
     /// clears it.
+    ///
+    /// Header *values* may still be blank here — the local editor ships stripped
+    /// keys with empty values. Callers must run the result through
+    /// ``mergingPreservedHeaders(incoming:stored:)`` under the config lock so a
+    /// blank value keeps the currently-stored secret (review Yellow #1 / CROW-593).
     static func buildGateway(_ body: GatewayBody?) -> Result<WorkspaceGateway?, GatewayValidationError> {
         guard let body, body.clear != true else { return .success(nil) }
         let url = (body.baseURL ?? "").trimmingCharacters(in: .whitespaces)
+        // Keep blank-valued headers (keys present) so the merge step can restore
+        // stored secrets; only drop empty *keys*.
         let headers = (body.headers ?? [:]).filter { !$0.key.trimmingCharacters(in: .whitespaces).isEmpty }
         if url.isEmpty && headers.isEmpty { return .success(nil) }
         if url.isEmpty != headers.isEmpty {
             return .failure(GatewayValidationError(message: "a gateway needs both a base URL and at least one header, or neither"))
         }
         return .success(WorkspaceGateway(baseURL: url, customHeaders: headers))
+    }
+
+    /// Merge an incoming gateway (from the local editor) with the currently
+    /// stored one so blank header values mean "keep the stored secret" — matching
+    /// the help text and the `strippedForTransport` contract (review Yellow #1).
+    /// `nil` incoming clears; non-nil with blank values restores from `stored`.
+    static func mergingPreservedHeaders(
+        incoming: WorkspaceGateway?,
+        stored: WorkspaceGateway?
+    ) -> WorkspaceGateway? {
+        guard let incoming else { return nil }
+        var headers = incoming.customHeaders
+        if let stored {
+            for (key, value) in headers where value.trimmingCharacters(in: .whitespaces).isEmpty {
+                if let kept = stored.customHeaders[key], !kept.isEmpty {
+                    headers[key] = kept
+                }
+            }
+        }
+        // Drop keys that are still blank after merge (no stored value to keep /
+        // no stored gateway at all) so we don't persist empty secrets.
+        headers = headers.filter { !$0.value.trimmingCharacters(in: .whitespaces).isEmpty }
+        return WorkspaceGateway(baseURL: incoming.baseURL, customHeaders: headers)
     }
 
     // MARK: - Gating
