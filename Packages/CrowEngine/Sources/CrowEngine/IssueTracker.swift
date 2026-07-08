@@ -121,11 +121,14 @@ public final class IssueTracker {
     nonisolated static let autoMergeLabel = "crow:merge"
 
     /// PR URLs we've already started an auto-merge enable attempt for.
-    /// Cleared on *transient* failure (so the next poll retries). Left set
-    /// on permanent/expected failures (repo disallows auto-merge, missing
-    /// Crow authorship) so we don't re-log every poll. Effectively frozen
-    /// on success once `Session.autoMergeEnabledAt` is persisted, which
-    /// the gating guard checks first.
+    /// Cleared on *transient* `enableAutoMerge` failure (so the next poll
+    /// retries). Left set on permanent/expected outcomes (repo disallows
+    /// auto-merge, missing Crow authorship) so we don't re-log every poll.
+    /// Note: a transient error while *fetching* commits for the authorship
+    /// check also leaves the marker set today (pre-existing); that path
+    /// returns "not Crow-authored" rather than distinguishing fetch failure.
+    /// Effectively frozen on success once `Session.autoMergeEnabledAt` is
+    /// persisted, which the gating guard checks first.
     private var autoMergeInFlight: Set<String> = []
 
     /// Per-head-commit guard for `gh pr update-branch`. Keyed
@@ -1775,10 +1778,12 @@ public final class IssueTracker {
     }
 
     /// True when `gh pr merge --auto` failed for a permanent repo/policy
-    /// reason that will not clear on retry — notably GitHub's
-    /// `enablePullRequestAutoMerge` when the repo has "Allow auto-merge"
-    /// disabled. Transient failures (network, auth blip) return `false`
-    /// so the next poll can try again (CROW-621).
+    /// reason that will not clear on retry — specifically when the repo has
+    /// GitHub "Allow auto-merge" disabled. Keyed on the policy phrase only:
+    /// `gh` embeds the GraphQL mutation name `enablePullRequestAutoMerge` in
+    /// *every* error from that mutation (including transient ones like
+    /// "Pull request is in clean status"), so matching the bare field name
+    /// would freeze retryable cases for the process lifetime (CROW-621).
     nonisolated static func isPermanentAutoMergeFailure(_ error: Error) -> Bool {
         let message: String
         if case ShellRunnerError.nonZeroExit(_, let output) = error {
@@ -1786,8 +1791,7 @@ public final class IssueTracker {
         } else {
             message = error.localizedDescription
         }
-        return message.localizedCaseInsensitiveContains("enablePullRequestAutoMerge")
-            || message.localizedCaseInsensitiveContains("Auto merge is not allowed for this repository")
+        return message.localizedCaseInsensitiveContains("Auto merge is not allowed for this repository")
     }
 
     /// Decide whether a merge candidate should have its branch updated from

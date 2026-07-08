@@ -255,13 +255,24 @@ struct IssueTrackerAutoMergeTests {
         #expect(IssueTracker.isPermanentAutoMergeFailure(error))
     }
 
-    @Test func permanentFailureMatchesCapabilityNameAlone() {
-        // Match on the GraphQL field even if the human-readable phrasing changes.
+    @Test func cleanStatusWithMutationNameIsRetryable() {
+        // `gh` embeds `enablePullRequestAutoMerge` in every error from that
+        // mutation — including when the PR is already mergeable/clean and
+        // auto-merge was requested too late. That is not a permanent repo
+        // policy denial; matching the bare field name would freeze retries.
+        let error = ShellRunnerError.nonZeroExit(
+            exitCode: 1,
+            output: "GraphQL: Pull request is in clean status (enablePullRequestAutoMerge)\n"
+        )
+        #expect(!IssueTracker.isPermanentAutoMergeFailure(error))
+    }
+
+    @Test func bareMutationNameAloneIsNotPermanent() {
         let error = ShellRunnerError.nonZeroExit(
             exitCode: 1,
             output: "GraphQL: Something about enablePullRequestAutoMerge\n"
         )
-        #expect(IssueTracker.isPermanentAutoMergeFailure(error))
+        #expect(!IssueTracker.isPermanentAutoMergeFailure(error))
     }
 
     @Test func transientNetworkFailureIsRetryable() {
