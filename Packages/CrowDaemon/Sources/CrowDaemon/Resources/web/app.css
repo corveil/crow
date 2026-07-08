@@ -503,6 +503,18 @@ html, body {
 }
 .sb-logout:hover { color: var(--gold); border-color: var(--border-strong); }
 .sb-logout:active { transform: translateY(1px); }
+/* Session expired (crowd restart wiped the cookie's token): red status + a Log-in CTA. */
+#statusbar.session-expired .conn-dot { background: var(--red); animation: none; box-shadow: none; }
+#statusbar.session-expired .conn-label { color: var(--red); font-weight: 600; }
+.sb-login {
+  display: inline-flex; align-items: center; justify-content: center;
+  margin-left: 2px; padding: 3px 10px;
+  background: var(--gold); color: var(--bg-deep);
+  border: 1px solid var(--gold); border-radius: 7px;
+  font-weight: 600; cursor: pointer;
+}
+.sb-login:hover { filter: brightness(1.08); }
+.sb-login:active { transform: translateY(1px); }
 .tk-count { display: flex; align-items: center; gap: 3px; }
 .tk-dot { width: 7px; height: 7px; border-radius: 50%; }
 .tk-n { font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; }

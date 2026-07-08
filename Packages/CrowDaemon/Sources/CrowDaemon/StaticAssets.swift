@@ -28,6 +28,10 @@ enum StaticAssets {
         // scripts/generate-build-info.sh. 404s gracefully when absent (the daemon
         // stays buildable without it — CROW-581).
         router.get("/version.json") { _, _ in webResponse("version.json", webDir: webDir) }
+        // Session-validity probe, gated by WebAuthMiddleware: 204 when the session
+        // cookie is valid (or loopback), 401 when it isn't. The web UI polls this on
+        // disconnect to tell "session expired" from "crowd is down" (CROW-593).
+        router.get("/auth/check") { _, _ in Response(status: .noContent) }
         // The standalone single-terminal page from M1, kept for debugging.
         router.get("/terminal.html") { _, _ in webResponse("terminal.html", webDir: webDir) }
 
