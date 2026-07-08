@@ -780,6 +780,11 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                         "name": .string(t.name),
                         "session_id": .string(t.sessionID.uuidString),
                         "managed": .bool(t.isManaged),
+                        // `window` is the tmux window index the web `/terminal` WS
+                        // selects to stream this terminal. The web UI shows a blank
+                        // pane without it (the retired curated daemon handler used
+                        // to provide it — CROW-593 review regression).
+                        "window": t.tmuxBinding.map { .int($0.windowIndex) } ?? .null,
                         "readiness": .string((readiness[t.id] ?? .uninitialized).rawValue),
                     ])
                 }
