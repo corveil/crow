@@ -51,7 +51,11 @@ fn wait_for_port(timeout: Duration) -> bool {
 /// Native menu: a Crow app menu, standard Edit (so copy/paste shortcuts work in
 /// the web UI), a View menu with Reload (handy for a web frontend), and Window.
 fn build_menu(app: &tauri::App) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
-    let about = AboutMetadataBuilder::new().name(Some("Crow")).build();
+    let about = AboutMetadataBuilder::new()
+        .name(Some("Crow"))
+        .version(Some(format!("0.1.0 · {}", env!("CROW_GIT_SHA"))))
+        .icon(app.default_window_icon().cloned())
+        .build();
     let app_menu = SubmenuBuilder::new(app, "Crow")
         .about(Some(about))
         .separator()
