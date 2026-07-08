@@ -89,6 +89,19 @@ public final class ConfigStore: Sendable {
             [.posixPermissions: 0o600], ofItemAtPath: configURL.path)
     }
 
+    /// Serializes `config.json` read-modify-write across concurrent writers
+    /// (set-config / set-web-password / onJobRan) so one save can't clobber
+    /// another writer's just-loaded copy (review #10). Callers wrap their whole
+    /// load → mutate → save in this.
+    private static let configLock = NSLock()
+
+    /// Run `body` while holding the shared config.json write lock.
+    public static func withConfigLock<T>(_ body: () throws -> T) rethrows -> T {
+        configLock.lock()
+        defer { configLock.unlock() }
+        return try body()
+    }
+
     // MARK: - Import from CMUX workspace-repos.json
 
     /// Import config from `~/.claude/workspace-repos.json` (legacy CMUX format).
