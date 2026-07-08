@@ -708,11 +708,16 @@ func makeCommandRouter(
             }
             // The browser can't see or change credentials, so keep whatever is
             // already on disk (nil-current drops any credential shell — see
-            // SettingsSecrets).
-            let current = ConfigStore.loadConfig(devRoot: devRoot)
-            let merged = SettingsSecrets.preservingSecrets(incoming: incoming, current: current)
+            // SettingsSecrets). Load+save under the shared lock so a concurrent
+            // set-web-password / onJobRan can't clobber this write (review #10).
+            let merged: AppConfig
             do {
-                try ConfigStore.saveConfig(merged, devRoot: devRoot)
+                merged = try ConfigStore.withConfigLock {
+                    let current = ConfigStore.loadConfig(devRoot: devRoot)
+                    let m = SettingsSecrets.preservingSecrets(incoming: incoming, current: current)
+                    try ConfigStore.saveConfig(m, devRoot: devRoot)
+                    return m
+                }
             } catch {
                 throw DaemonRPCError.applicationError("Failed to save config: \(error.localizedDescription)")
             }
@@ -729,17 +734,20 @@ func makeCommandRouter(
         // caller here is either local or a logged-in remote. Hashes the plaintext
         // with PBKDF2 and persists to config.json; `{clear: true}` removes it.
         "set-web-password": { params in
-            var config = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
-            if params["clear"]?.boolValue == true {
-                config.webAuth = nil
-            } else {
-                guard let password = params["password"]?.stringValue, !password.isEmpty else {
-                    throw DaemonRPCError.invalidParams("password must be a non-empty string (or pass clear: true)")
-                }
-                config.webAuth = PasswordHash.make(password: password)
+            let clear = params["clear"]?.boolValue == true
+            let password = params["password"]?.stringValue
+            if !clear, (password?.isEmpty ?? true) {
+                throw DaemonRPCError.invalidParams("password must be a non-empty string (or pass clear: true)")
             }
+            // Load+save under the shared config lock (review #10).
+            let config: AppConfig
             do {
-                try ConfigStore.saveConfig(config, devRoot: devRoot)
+                config = try ConfigStore.withConfigLock {
+                    var c = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
+                    c.webAuth = clear ? nil : PasswordHash.make(password: password!)
+                    try ConfigStore.saveConfig(c, devRoot: devRoot)
+                    return c
+                }
             } catch {
                 throw DaemonRPCError.applicationError("Failed to save config: \(error.localizedDescription)")
             }

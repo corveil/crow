@@ -81,10 +81,16 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                       let incoming = try? JSONDecoder().decode(AppConfig.self, from: data) else {
                     throw RPCError.invalidParams("config must be a valid AppConfig JSON string")
                 }
-                guard let saved = await applyConfigForRPC(incoming) else {
+                // Preserve stored secrets the browser can't see, and never echo
+                // them back — mirror the daemon handler so this surface stays safe
+                // if it ever becomes web-facing (review #3).
+                let current = await loadConfigForRPC()?.1
+                let merged = SettingsSecrets.preservingSecrets(incoming: incoming, current: current)
+                guard let saved = await applyConfigForRPC(merged) else {
                     throw RPCError.applicationError("Config not loaded yet")
                 }
-                guard let outData = try? JSONEncoder().encode(saved),
+                let safe = SettingsSecrets.strippedForTransport(saved)
+                guard let outData = try? JSONEncoder().encode(safe),
                       let outJSON = String(data: outData, encoding: .utf8) else {
                     throw RPCError.applicationError("Failed to encode config")
                 }
