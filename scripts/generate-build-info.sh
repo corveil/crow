@@ -22,11 +22,9 @@ fi
 
 # Capture git info (fallback to "dev" if not in a git repo)
 if git -C "$ROOT_DIR" rev-parse HEAD >/dev/null 2>&1; then
-    GIT_SHA=$(git -C "$ROOT_DIR" rev-parse HEAD)
     GIT_SHORT_SHA=$(git -C "$ROOT_DIR" rev-parse --short HEAD)
     BUILD_NUMBER=$(git -C "$ROOT_DIR" rev-list --count HEAD)
 else
-    GIT_SHA="dev"
     GIT_SHORT_SHA="dev"
     BUILD_NUMBER="1"
 fi
