@@ -10,6 +10,7 @@ use std::process::{Child, Command};
 use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
+use tauri::menu::{AboutMetadataBuilder, MenuBuilder, MenuItemBuilder, SubmenuBuilder};
 use tauri::Manager;
 
 /// Port the sidecar crowd binds (matches crowd's default).
@@ -47,24 +48,83 @@ fn wait_for_port(timeout: Duration) -> bool {
     false
 }
 
+/// Native menu: a Crow app menu, standard Edit (so copy/paste shortcuts work in
+/// the web UI), a View menu with Reload (handy for a web frontend), and Window.
+fn build_menu(app: &tauri::App) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
+    let about = AboutMetadataBuilder::new().name(Some("Crow")).build();
+    let app_menu = SubmenuBuilder::new(app, "Crow")
+        .about(Some(about))
+        .separator()
+        .hide()
+        .hide_others()
+        .show_all()
+        .separator()
+        .quit()
+        .build()?;
+    let edit_menu = SubmenuBuilder::new(app, "Edit")
+        .undo()
+        .redo()
+        .separator()
+        .cut()
+        .copy()
+        .paste()
+        .select_all()
+        .build()?;
+    let reload = MenuItemBuilder::with_id("reload", "Reload")
+        .accelerator("CmdOrCtrl+R")
+        .build(app)?;
+    let view_menu = SubmenuBuilder::new(app, "View")
+        .item(&reload)
+        .separator()
+        .fullscreen()
+        .build()?;
+    let window_menu = SubmenuBuilder::new(app, "Window")
+        .minimize()
+        .maximize()
+        .separator()
+        .close_window()
+        .build()?;
+    MenuBuilder::new(app)
+        .items(&[&app_menu, &edit_menu, &view_menu, &window_menu])
+        .build()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(Crowd(Mutex::new(None)))
+        .on_menu_event(|app, event| {
+            if event.id().as_ref() == "reload" {
+                if let Some(win) = app.get_webview_window("main") {
+                    let _ = win.eval("window.location.reload()");
+                }
+            }
+        })
         .setup(|app| {
+            let menu = build_menu(app)?;
+            app.set_menu(menu)?;
+
             // Reuse an already-running crowd; otherwise spawn our own sidecar.
             if port_open() {
                 eprintln!("[crow-desktop] crowd already listening on {PORT}; reusing it");
             } else {
                 let bin = crowd_bin();
-                match Command::new(&bin)
-                    .arg("--host")
+                let mut cmd = Command::new(&bin);
+                cmd.arg("--host")
                     .arg("127.0.0.1")
                     .arg("--http-port")
-                    .arg(PORT.to_string())
-                    .spawn()
-                {
+                    .arg(PORT.to_string());
+                // Dev: serve web assets live from source so UI edits show on reload
+                // (matches `make crowd-dev`). Skipped when the source tree isn't
+                // present (e.g. a release install), where crowd uses its bundle.
+                let web = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../Packages/CrowDaemon/Sources/CrowDaemon/Resources/web");
+                if web.is_dir() {
+                    cmd.arg("--web-dir").arg(&web);
+                }
+                match cmd.spawn() {
                     Ok(child) => {
                         eprintln!(
                             "[crow-desktop] spawned crowd ({}) pid {}",
