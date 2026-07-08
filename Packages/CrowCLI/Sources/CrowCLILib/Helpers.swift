@@ -7,11 +7,12 @@ import Foundation
 /// - Parameters:
 ///   - method: The RPC method name (e.g., "new-session").
 ///   - params: Key-value parameters for the RPC call.
+///   - timeoutSeconds: Read timeout for the response (default 30).
 /// - Returns: The result dictionary from the server response.
 /// - Throws: `ValidationError` if the server returns an error or the socket connection fails.
-public func rpc(_ method: String, params: [String: JSONValue] = [:]) throws -> [String: JSONValue] {
+public func rpc(_ method: String, params: [String: JSONValue] = [:], timeoutSeconds: Int = 30) throws -> [String: JSONValue] {
     let client = SocketClient()
-    let response = try client.send(method: method, params: params)
+    let response = try client.send(method: method, params: params, timeoutSeconds: timeoutSeconds)
     if let error = response.error {
         throw ValidationError("Error \(error.code): \(error.message)")
     }

@@ -13,8 +13,8 @@ import Glibc
 public struct SocketClient: Sendable {
     private let socketPath: String
 
-    /// Read timeout in seconds applied via `SO_RCVTIMEO`.
-    private static let readTimeoutSeconds: Int = 30
+    /// Default read timeout in seconds applied via `SO_RCVTIMEO`.
+    public static let readTimeoutSeconds: Int = 30
 
     public init(socketPath: String? = nil) {
         self.socketPath = socketPath ?? {
@@ -28,10 +28,16 @@ public struct SocketClient: Sendable {
 
     /// Send a JSON-RPC request and return the response.
     ///
-    /// - Throws: `SocketError.timeout` if the server doesn't respond within 30 seconds.
+    /// - Parameter timeoutSeconds: Read timeout; defaults to 30. Slow methods
+    ///   (e.g. `job-run`, which may clone a repo) pass a larger value.
+    /// - Throws: `SocketError.timeout` if the server doesn't respond within the timeout.
     /// - Throws: `SocketError.responseTooLarge` if the response exceeds 1 MB.
     /// - Throws: `SocketError.writeFailed` if sending the request fails.
-    public func send(method: String, params: [String: JSONValue] = [:]) throws -> JSONRPCResponse {
+    public func send(
+        method: String,
+        params: [String: JSONValue] = [:],
+        timeoutSeconds: Int = SocketClient.readTimeoutSeconds
+    ) throws -> JSONRPCResponse {
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else {
             throw SocketError.createFailed(errno)
@@ -59,7 +65,7 @@ public struct SocketClient: Sendable {
         }
 
         // Set read timeout so a hung server doesn't block the CLI indefinitely
-        var timeout = timeval(tv_sec: Self.readTimeoutSeconds, tv_usec: 0)
+        var timeout = timeval(tv_sec: timeoutSeconds, tv_usec: 0)
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
 
         // Send request
