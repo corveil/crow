@@ -275,6 +275,51 @@ public enum CrowDaemon {
 
         log("HTTP/WS listening on http://\(options.host):\(options.httpPort) (terminal at /)")
         try await app.runService()
+        // First-run setup (`run-setup`) asks us to re-exec so the freshly-written
+        // devroot pointer is adopted by every subsystem that captured it at
+        // startup (CROW-605). Hummingbird's runService() returns cleanly on
+        // SIGTERM (NIO closes the TCP listener → port freed); we then drop the
+        // flock and execv the same binary/args.
+        if Self.pendingReexec {
+            Self.reexec(arguments)
+        }
+    }
+
+    /// Set by `run-setup` so `run()` re-execs after graceful shutdown. Written
+    /// from the RPC handler's Task and read once on the main run path after
+    /// `runService()` returns — never mutated concurrently with a read.
+    nonisolated(unsafe) static var pendingReexec = false
+
+    /// Ask the daemon to shut down and re-exec itself (so a newly-written
+    /// `~/Library/Application Support/crow/devroot` pointer is adopted). Delays
+    /// the SIGTERM briefly so the JSON-RPC `ok` result can flush to the client
+    /// before graceful shutdown begins (CROW-605).
+    static func requestReexec() {
+        pendingReexec = true
+        Task {
+            try? await Task.sleep(for: .milliseconds(250))
+            raise(SIGTERM)
+        }
+    }
+
+    /// Close the single-instance lock fd (no `O_CLOEXEC`, so an inherited fd
+    /// would still hold the flock and the re-exec'd image's
+    /// `acquireSingleInstanceLock` would fail), then `execv` the same binary
+    /// and args. Does not return on success.
+    static func reexec(_ argv: [String]) {
+        if singleInstanceLockFD >= 0 {
+            close(singleInstanceLockFD)
+            singleInstanceLockFD = -1
+        }
+        guard let executable = argv.first, !executable.isEmpty else {
+            log("re-exec failed: empty argv")
+            exit(1)
+        }
+        let cArgv: [UnsafeMutablePointer<CChar>?] = argv.map { strdup($0) } + [nil]
+        defer { for p in cArgv where p != nil { free(p) } }
+        execv(executable, cArgv)
+        log("re-exec failed: \(String(cString: strerror(errno)))")
+        exit(1)
     }
 
     /// Wire the IssueTracker's background automation hooks: spawns go to the
