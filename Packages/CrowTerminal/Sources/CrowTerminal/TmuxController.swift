@@ -36,6 +36,12 @@ public struct TmuxController: Sendable {
     /// Run `tmux -S <socket> <args...>`. Returns stdout on exit-0,
     /// throws on non-zero exit with stdout/stderr captured. Throws
     /// `TmuxError.timedOut` if the child doesn't exit within `timeout`.
+    ///
+    /// Stdout/stderr are drained on background threads **while** waiting for
+    /// the child. Reading only after `waitUntilExit` deadlocks once output
+    /// exceeds the ~64 KB pipe buffer — `capture-pane -pe -S -N` for a rich
+    /// TUI pane routinely does, which made CROW-606 web-terminal replay
+    /// silently no-op (`try?` swallowed the timeout).
     @discardableResult
     public func run(_ args: [String], timeout: TimeInterval = TmuxController.defaultTimeout) throws -> String {
         let p = Process()
@@ -47,14 +53,32 @@ public struct TmuxController: Sendable {
         p.standardError = stderr
         try p.run()
 
+        // Drain both pipes concurrently so a large capture can't fill the OS
+        // pipe buffer and stall tmux before it exits. Boxes keep the mutable
+        // Data off the caller's stack so the concurrent readers don't race a
+        // local `var`.
+        final class PipeBox: @unchecked Sendable { var data = Data() }
+        let stdoutBox = PipeBox()
+        let stderrBox = PipeBox()
+        let group = DispatchGroup()
+        group.enter()
+        DispatchQueue.global(qos: .userInitiated).async {
+            stdoutBox.data = stdout.fileHandleForReading.readDataToEndOfFile()
+            group.leave()
+        }
+        group.enter()
+        DispatchQueue.global(qos: .userInitiated).async {
+            stderrBox.data = stderr.fileHandleForReading.readDataToEndOfFile()
+            group.leave()
+        }
+
         let watchdog = ProcessWatchdog(p, timeout: timeout)
         p.waitUntilExit()
         watchdog.cancel()
+        group.wait()
 
-        let stdoutData = stdout.fileHandleForReading.readDataToEndOfFile()
-        let stderrData = stderr.fileHandleForReading.readDataToEndOfFile()
-        let outString = String(data: stdoutData, encoding: .utf8) ?? ""
-        let errString = String(data: stderrData, encoding: .utf8) ?? ""
+        let outString = String(data: stdoutBox.data, encoding: .utf8) ?? ""
+        let errString = String(data: stderrBox.data, encoding: .utf8) ?? ""
 
         if watchdog.didFire {
             throw TmuxError.timedOut(args: args, after: timeout)
@@ -283,7 +307,9 @@ public struct TmuxController: Sendable {
         var args = ["capture-pane", "-p"]
         if escapes { args.append("-e") }
         args.append(contentsOf: ["-t", target, "-S", "-\(linesBack)"])
-        return try run(args)
+        // Rich TUI panes (Claude/Cursor) with escapes can be hundreds of KB;
+        // give the drain room beyond the default 2s CLI budget (CROW-606).
+        return try run(args, timeout: max(TmuxController.defaultTimeout, 10.0))
     }
 
     /// `tmux display-message -p -t <target> <format>`. Used by the readiness
