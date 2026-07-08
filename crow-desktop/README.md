@@ -9,21 +9,47 @@ frontend** — the UI is served by `crowd`, not this project.
 
 ## Run
 
+From the repo root the `Makefile` drives everything (see the main
+[README → Desktop app](../README.md#desktop-app-native-window-over-crowd)):
+
 ```bash
-PATH="/opt/homebrew/bin:$HOME/.cargo/bin:$PATH" npm run tauri dev
+make run        # build crowd + this app, then open the Crow window
 ```
 
-The PATH pin is required: the dev shell runs under Rosetta (x86_64) and would
-otherwise grab an old x86_64 Rust; this uses the arm64 Homebrew toolchain.
+Or run the prebuilt binary directly (equivalent to the old
+`./.build/debug/CrowApp`):
+
+```bash
+make app                                    # build just this app
+crow-desktop/src-tauri/target/debug/Crow    # then launch it
+```
 
 First launch compiles the Rust (~30s), then a **"Crow"** window opens. You do
 **not** need to start `crowd` yourself:
 
-- If a `crowd` is already listening on `127.0.0.1:8787`, the app reuses it.
-- Otherwise it spawns `.build/debug/crowd` (splash → UI once it's up) and kills
+- If a `crowd` is already listening on `127.0.0.1:8787`, the app reuses it and
+  leaves it running when you quit (great for iterating on a `make crowd-dev`
+  daemon in another terminal).
+- Otherwise it spawns `.build/debug/crowd` (splash → UI once it's up) and stops
   that `crowd` when you quit.
 
-Override the crowd binary with `CROWD_BIN=/path/to/crowd`.
+Override the crowd binary with `CROWD_BIN=/path/to/crowd`; match a custom-port
+daemon with `CROW_HTTP_PORT=NNNN`.
+
+### Editing this shell (`npm run tauri dev`)
+
+When you're changing the Rust/Tauri code here, use Tauri's dev loop, which
+recompiles and relaunches on save:
+
+```bash
+PATH="/opt/homebrew/bin:$HOME/.cargo/bin:$PATH" npm run tauri dev
+```
+
+The PATH pin is required: the dev shell can run under Rosetta (x86_64) and would
+otherwise grab an old x86_64 Rust; this uses the arm64 Homebrew/rustup toolchain.
+Because each relaunch re-runs the launch logic (and kills a `crowd` it spawned),
+this churns the daemon — for iterating on `crowd` or the web UI, prefer
+`make crowd-dev` + `make run` instead.
 
 ## How it works
 
