@@ -109,7 +109,9 @@
         if (sel) { navigator.clipboard.writeText(sel).catch(function () {}); }
       }
       function pasteClipboard() {
-        navigator.clipboard.readText().then(sendToPTY).catch(function () {});
+        // Route through xterm so bracketed-paste wraps it — hidden newlines in the
+        // clipboard would otherwise auto-execute in the shell (review).
+        navigator.clipboard.readText().then(function (t) { if (t) term.paste(t); }).catch(function () {});
       }
       term.attachCustomKeyEventHandler(function (e) {
         if (e.type !== 'keydown') return true;
