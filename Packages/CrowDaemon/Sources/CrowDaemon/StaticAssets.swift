@@ -91,7 +91,7 @@ enum StaticAssets {
         // debug-only page. `style-src 'unsafe-inline'` covers xterm's injected
         // renderer styles; blob:/data: cover its canvas/image atlases; `connect-src
         // 'self'` covers the same-origin /rpc + /terminal WebSockets (CROW-593 review).
-        if name == "index.html" {
+        if appliesCSP(to: name) {
             headers[.contentSecurityPolicy] = contentSecurityPolicy
         }
         return Response(
@@ -100,7 +100,12 @@ enum StaticAssets {
             body: .init(byteBuffer: ByteBuffer(bytes: data)))
     }
 
-    private static let contentSecurityPolicy = [
+    /// Whether the Content-Security-Policy is attached to `name`. Scoped to the
+    /// main app page: `login.html` carries an inline script and `terminal.html`
+    /// is a debug-only page, so neither gets it (CROW-593 review).
+    static func appliesCSP(to name: String) -> Bool { name == "index.html" }
+
+    static let contentSecurityPolicy = [
         "default-src 'self'",
         // `wasm-unsafe-eval` lets xterm's image addon compile its Sixel-decoder
         // WebAssembly without enabling arbitrary `eval` (CROW-593 review).
