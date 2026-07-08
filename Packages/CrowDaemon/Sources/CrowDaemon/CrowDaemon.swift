@@ -494,6 +494,12 @@ public enum CrowDaemon {
         appState.excludeReviewRepos = config.effectiveExcludeReviewRepos
         appState.excludeTicketRepos = config.defaults.excludeTicketRepos
         appState.ignoreReviewLabels = config.defaults.ignoreReviewLabels
+        // Configured agent selection. Without this the headless daemon always
+        // resolves the built-in default (.claudeCode) via appState.agentKind(for:),
+        // so the Settings manager/coder agent pickers are ignored on
+        // restart/respawn even though they persist to config (CROW-433 / CROW-581).
+        appState.defaultAgentKind = config.defaultAgentKind
+        appState.agentsByKind = config.agentsByKind
     }
 
     /// Poll `store.json`'s mtime and reload when the desktop app writes it, so
