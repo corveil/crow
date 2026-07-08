@@ -3,8 +3,10 @@
 // AppConfig the desktop app edits. The whole config travels as one opaque JSON
 // string (get-config / set-config), so we JSON.parse it, mutate leaf values in
 // place, and JSON.stringify it back — any Swift encoding shape (incl. the
-// enum-keyed notification dict) round-trips untouched. Credentials are stripped
-// by the daemon/app and shown read-only here (managed in the desktop app).
+// enum-keyed notification dict) round-trips untouched. Credential VALUES are
+// stripped in transport; secrets (the web password and AI gateways) are edited
+// via local-only POSTs (SecretRoutes) and shown read-only from a remote/proxied
+// session (CROW-593).
 //
 // Depends on globals from app.js: `el(tag, className, text)` and `rpc()`.
 (function () {
@@ -16,6 +18,11 @@
   let subForm = null;      // { kind: 'workspace'|'job', draft, isNew }
   let backdrop = null;
   let escHandler = null;
+  // Whether THIS connection may manage secrets (web password, AI gateways).
+  // Set from GET /auth/context when the modal opens: true for a local-direct
+  // browser (loopback, no proxy), false for a proxied/remote session — which
+  // sees those settings read-only (CROW-593).
+  let isLocal = false;
 
   const TABS = [
     ['general', 'General'],
@@ -105,6 +112,10 @@
     // Local list of available agents for the Default-agent picker (#3 /
     // CROW-593). Best-effort — empty when the app is down/old.
     try { const ar = await rpc('list-agents'); agents = (ar && ar.agents) || []; } catch (_) { agents = []; }
+    // Is this connection local-direct? Gates the secret editors (web password,
+    // gateways) — editable locally, read-only when proxied/remote (CROW-593).
+    try { const cr = await fetch('/auth/context'); isLocal = cr.ok ? !!(await cr.json()).local : false; }
+    catch (_) { isLocal = false; }
     dirty = false;
     subForm = null;
     activeTab = 'general';
@@ -327,6 +338,90 @@
 
   function readonlyNote(text) { return el('div', 'st-note', text); }
 
+  // POST a secret-config change to a local-only daemon endpoint (web password,
+  // AI gateways). Resolves with the parsed JSON, throws with the server's error
+  // message on failure (CROW-593).
+  async function postConfig(path, body) {
+    const r = await fetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {}),
+    });
+    if (!r.ok) {
+      let m = 'HTTP ' + r.status;
+      try { const j = await r.json(); if (j && j.error) m = j.error; } catch (_) {}
+      throw new Error(m);
+    }
+    return r.json().catch(() => ({}));
+  }
+
+  // "Name: value" lines <-> header map, matching the desktop app's editor.
+  function parseHeaderLines(text) {
+    const out = {};
+    (text || '').split('\n').forEach((line) => {
+      const i = line.indexOf(':');
+      if (i < 0) return;
+      const k = line.slice(0, i).trim();
+      if (k) out[k] = line.slice(i + 1).trim();
+    });
+    return out;
+  }
+  function headerLines(headers) {
+    return Object.keys(headers || {}).map((k) => k + ': ' + headers[k]).join('\n');
+  }
+
+  // Editable AI-gateway control (base URL + auth headers), used for the Manager
+  // and per-workspace gateways. `current` is the stored gateway
+  // ({baseURL, customHeaders}) or null; `apply(gatewayOrNull)` performs the POST
+  // and returns a Promise. Header VALUES are never sent to the browser (the
+  // daemon strips them), so a set gateway shows its header names with blank
+  // values — re-enter a value to change it. Only rendered on a local connection.
+  function gatewayEditor(current, apply) {
+    const wrap = el('div');
+    const url = el('input', 'st-input');
+    url.type = 'text';
+    url.placeholder = 'https://gateway.example.com';
+    url.value = (current && current.baseURL) || '';
+    wrap.appendChild(field('Base URL', url, 'The AI-gateway endpoint (an Anthropic-compatible proxy).'));
+
+    const ta = el('textarea', 'st-textarea');
+    ta.placeholder = 'X-Api-Key: sk-…\nAnother-Header: value';
+    ta.value = current ? headerLines(current.customHeaders || {}) : '';
+    wrap.appendChild(field('Auth headers', ta,
+      'One per line as "Name: value". Stored on the machine running crowd; re-enter values to change them.'));
+
+    const msg = el('div', 'st-perm-status', '');
+    const rowc = el('div', 'st-sound-row');
+    const saveBtn = el('button', 'action-btn', current ? 'Update gateway' : 'Set gateway');
+    saveBtn.type = 'button';
+    saveBtn.onclick = async () => {
+      const baseURL = url.value.trim();
+      const headers = parseHeaderLines(ta.value);
+      const hasURL = !!baseURL, hasHeaders = Object.keys(headers).length > 0;
+      if (hasURL !== hasHeaders) {
+        msg.textContent = 'Set both a base URL and at least one header, or clear both.';
+        return;
+      }
+      saveBtn.disabled = true; msg.textContent = 'Saving…';
+      try { await apply(hasURL ? { baseURL, customHeaders: headers } : null); }
+      catch (e) { msg.textContent = 'Failed: ' + (e.message || e); saveBtn.disabled = false; }
+    };
+    rowc.appendChild(saveBtn);
+    if (current) {
+      const clearBtn = el('button', 'action-btn', 'Clear gateway');
+      clearBtn.type = 'button';
+      clearBtn.onclick = async () => {
+        if (!await confirmModal('Clear this AI gateway?', { title: 'Clear gateway', okLabel: 'Clear', danger: true })) return;
+        clearBtn.disabled = true; msg.textContent = 'Clearing…';
+        try { await apply(null); } catch (e) { msg.textContent = 'Failed: ' + (e.message || e); clearBtn.disabled = false; }
+      };
+      rowc.appendChild(clearBtn);
+    }
+    wrap.appendChild(rowc);
+    wrap.appendChild(msg);
+    return wrap;
+  }
+
   function parseIntOr(v, fallback) { const n = parseInt(v, 10); return isNaN(n) ? fallback : n; }
 
   // ---- General ------------------------------------------------------------
@@ -411,10 +506,24 @@
     body.appendChild(toggleField('Code Reviews: launch in auto permission mode', cfg, 'reviewAutoPermissionMode',
       'Passes --permission-mode auto so a kicked-off code review runs its review flow unattended instead of coming up in plan mode. On by default.'));
 
-    body.appendChild(group('Credentials (desktop app)'));
-    body.appendChild(readonlyNote('The Manager AI Gateway and Jira credential are managed in the desktop app and are read-only here. '
-      + (cfg.managerGateway && cfg.managerGateway.baseURL ? 'Manager gateway: ' + cfg.managerGateway.baseURL + '. ' : 'No manager gateway set. ')
-      + (cfg.jiraCredential && cfg.jiraCredential.username ? 'Jira user: ' + cfg.jiraCredential.username + '.' : 'No Jira credential set.')));
+    body.appendChild(group('Manager AI gateway'));
+    if (isLocal) {
+      body.appendChild(gatewayEditor(cfg.managerGateway || null, async (g) => {
+        await postConfig('/config/manager-gateway', g ? { baseURL: g.baseURL, headers: g.customHeaders } : { clear: true });
+        cfg.managerGateway = g;
+        render();
+      }));
+    } else {
+      body.appendChild(readonlyNote((cfg.managerGateway && cfg.managerGateway.baseURL
+        ? 'Manager gateway: ' + cfg.managerGateway.baseURL + '. '
+        : 'No Manager gateway set. ')
+        + 'The gateway is editable only from a local browser (on the machine running crowd).'));
+    }
+    // Jira credential stays read-only on the web — its token is an op:// ref
+    // managed outside the browser.
+    body.appendChild(readonlyNote(cfg.jiraCredential && cfg.jiraCredential.username
+      ? 'Jira user: ' + cfg.jiraCredential.username + ' (credential managed outside the web UI).'
+      : 'No Jira credential set.'));
 
     body.appendChild(group('Attribution'));
     body.appendChild(toggleField('Add Crow-Session trailer to commits', cfg, 'attributionTrailers',
@@ -611,42 +720,49 @@
     const isSet = !!cfg.webAuth;
     body.appendChild(group('Web access password'));
     body.appendChild(el('div', 'st-perm-status', isSet
-      ? 'A web password is set — non-local access requires logging in.'
-      : 'No web password set — non-local access is disabled until you set one (set it from localhost).'));
+      ? 'A web password is set — non-local (proxied) access requires logging in.'
+      : 'No web password set — non-local access is disabled until one is set.'));
 
-    const msg = el('div', 'st-perm-status', '');
-    const row = el('div', 'st-sound-row');
-    const input = el('input', 'st-input');
-    input.type = 'password';
-    input.placeholder = isSet ? 'New password' : 'Password';
-    input.autocomplete = 'new-password';
-    const setBtn = el('button', 'action-btn', isSet ? 'Change password' : 'Set password');
-    setBtn.type = 'button';
-    setBtn.onclick = async () => {
-      if (!input.value) { msg.textContent = 'Enter a password.'; return; }
-      setBtn.disabled = true; msg.textContent = 'Saving…';
-      try {
-        await rpc('set-web-password', { password: input.value });
-        cfg.webAuth = { hashB64: '', saltB64: '', iterations: 0 }; // reflect "set" locally
-        input.value = '';
-        render();
-      } catch (e) { msg.textContent = 'Failed: ' + (e.message || e); setBtn.disabled = false; }
-    };
-    row.appendChild(input); row.appendChild(setBtn);
-    body.appendChild(field('Password', row,
-      'Required for non-local (proxied) access. Applies immediately — no Save needed.'));
-    body.appendChild(msg);
-
-    if (isSet) {
-      const rmBtn = el('button', 'action-btn', 'Remove password');
-      rmBtn.type = 'button';
-      rmBtn.onclick = async () => {
-        if (!await confirmModal('Remove the web password? Non-local access will be disabled.', { title: 'Remove password', okLabel: 'Remove', danger: true })) return;
-        rmBtn.disabled = true;
-        try { await rpc('set-web-password', { clear: true }); cfg.webAuth = null; render(); }
-        catch (_) { rmBtn.disabled = false; }
+    if (!isLocal) {
+      body.appendChild(readonlyNote(
+        'The web password can only be set, changed, or removed from a local browser '
+        + '(on the machine running crowd) — never from a remote session, so a remote '
+        + 'client can’t change the password that gates its own access.'));
+    } else {
+      const msg = el('div', 'st-perm-status', '');
+      const row = el('div', 'st-sound-row');
+      const input = el('input', 'st-input');
+      input.type = 'password';
+      input.placeholder = isSet ? 'New password' : 'Password';
+      input.autocomplete = 'new-password';
+      const setBtn = el('button', 'action-btn', isSet ? 'Change password' : 'Set password');
+      setBtn.type = 'button';
+      setBtn.onclick = async () => {
+        if (!input.value) { msg.textContent = 'Enter a password.'; return; }
+        setBtn.disabled = true; msg.textContent = 'Saving…';
+        try {
+          await postConfig('/config/web-password', { password: input.value });
+          cfg.webAuth = { hashB64: '', saltB64: '', iterations: 0 }; // reflect "set" locally
+          input.value = '';
+          render();
+        } catch (e) { msg.textContent = 'Failed: ' + (e.message || e); setBtn.disabled = false; }
       };
-      body.appendChild(field('Remove', rmBtn, 'Deletes the web password; non-local access is then disabled.'));
+      row.appendChild(input); row.appendChild(setBtn);
+      body.appendChild(field('Password', row,
+        'Required for non-local (proxied) access. Applies immediately — no Save needed.'));
+      body.appendChild(msg);
+
+      if (isSet) {
+        const rmBtn = el('button', 'action-btn', 'Remove password');
+        rmBtn.type = 'button';
+        rmBtn.onclick = async () => {
+          if (!await confirmModal('Remove the web password? Non-local access will be disabled.', { title: 'Remove password', okLabel: 'Remove', danger: true })) return;
+          rmBtn.disabled = true;
+          try { await postConfig('/config/web-password', { clear: true }); cfg.webAuth = null; render(); }
+          catch (_) { rmBtn.disabled = false; }
+        };
+        body.appendChild(field('Remove', rmBtn, 'Deletes the web password; non-local access is then disabled.'));
+      }
     }
 
     const outBtn = el('button', 'action-btn', 'Log out');
@@ -909,9 +1025,20 @@
     ta.oninput = () => { d.customInstructions = ta.value; markDirty(); };
     body.appendChild(field('Custom instructions', ta, 'Free-text appended to session prompts.'));
 
-    if (d.gateway) {
-      body.appendChild(group('Gateway (desktop app)'));
-      body.appendChild(readonlyNote('AI gateway ' + (d.gateway.baseURL || '') + ' is managed in the desktop app and read-only here.'));
+    body.appendChild(group('AI gateway'));
+    if (!isLocal) {
+      body.appendChild(readonlyNote((d.gateway && d.gateway.baseURL
+        ? 'AI gateway: ' + d.gateway.baseURL + '. ' : 'No AI gateway set. ')
+        + 'Editable only from a local browser (on the machine running crowd).'));
+    } else if (subForm.isNew) {
+      body.appendChild(readonlyNote('Save this workspace first, then reopen it to set an AI gateway.'));
+    } else {
+      body.appendChild(gatewayEditor(d.gateway || null, async (g) => {
+        await postConfig('/config/workspace-gateway',
+          Object.assign({ workspaceId: d.id }, g ? { baseURL: g.baseURL, headers: g.customHeaders } : { clear: true }));
+        d.gateway = g;
+        render();
+      }));
     }
   }
 
