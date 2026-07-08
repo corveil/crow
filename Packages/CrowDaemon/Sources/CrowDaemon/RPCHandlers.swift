@@ -186,105 +186,6 @@ func makeCommandRouter(
             return ["sessions": .array(items)]
         },
 
-        "list-terminals": { params in
-            guard let idStr = params["session_id"]?.stringValue, let sessionID = UUID(uuidString: idStr) else {
-                throw DaemonRPCError.invalidParams("session_id required")
-            }
-            let items: [JSONValue] = await MainActor.run {
-                appState.terminals(for: sessionID).map { terminal in
-                    .object([
-                        "id": .string(terminal.id.uuidString),
-                        "name": .string(terminal.name),
-                        "managed": .bool(terminal.isManaged),
-                        "window": terminal.tmuxBinding.map { .int($0.windowIndex) } ?? .null,
-                    ])
-                }
-            }
-            return ["terminals": .array(items)]
-        },
-
-        // Create a per-session terminal = a tmux window in the shared cockpit.
-        // Uses the portable `TmuxController.newWindow` directly (no @MainActor
-        // TmuxBackend); readiness/sentinel wiring is app-only and skipped.
-        // Terminals are in-memory for M2 (not persisted): a fresh cockpit has
-        // no windows on restart, so live-only avoids stale-index bugs.
-        "new-terminal": { params in
-            guard let idStr = params["session_id"]?.stringValue, let sessionID = UUID(uuidString: idStr) else {
-                throw DaemonRPCError.invalidParams("session_id required")
-            }
-            guard let cockpit else {
-                throw DaemonRPCError.applicationError("tmux unavailable; terminals are disabled")
-            }
-            let managed = params["managed"]?.boolValue ?? false
-            let resolved = await MainActor.run { () -> (exists: Bool, cwd: String, agentKind: AgentKind)? in
-                guard let session = appState.sessions.first(where: { $0.id == sessionID }) else { return nil }
-                let cwd = appState.primaryWorktree(for: sessionID)?.worktreePath ?? devRoot
-                return (true, cwd, session.agentKind)
-            }
-            guard let resolved else { throw DaemonRPCError.applicationError("Session not found") }
-            // Resolved cwd comes from a worktree already gated at add-worktree,
-            // or devRoot; re-check to stay defensive against tampered stores.
-            guard Validation.isPathWithinRoot(resolved.cwd, root: devRoot) else {
-                throw DaemonRPCError.invalidParams("resolved terminal cwd is outside devRoot")
-            }
-            let name = params["name"]?.stringValue
-                ?? (managed ? CrowAttribution.agentDisplayName(for: resolved.agentKind) : "Shell")
-            // Default to the session's default shell — a guaranteed-live window
-            // like the cockpit anchor. Wrapping in crow-shell-wrapper.sh (OSC
-            // readiness / agent auto-launch) is opt-in via an explicit command
-            // and deferred to a follow-up (it needs sentinel env to stay alive).
-            let command = params["command"]?.stringValue
-            var env: [String: String] = [:]
-            if !resolved.cwd.isEmpty { env["PWD"] = resolved.cwd }
-            if managed {
-                for (key, value) in CrowAttribution.environmentEntries(for: resolved.agentKind) { env[key] = value }
-            }
-            let windowIndex: Int
-            do {
-                windowIndex = try cockpit.controller.newWindow(
-                    name: name, cwd: resolved.cwd, env: env, command: command, timeout: 3.0)
-            } catch {
-                throw DaemonRPCError.applicationError("tmux new-window failed: \(error)")
-            }
-            let terminal = SessionTerminal(
-                sessionID: sessionID, name: name, cwd: resolved.cwd, command: command, isManaged: managed,
-                tmuxBinding: TmuxBinding(
-                    socketPath: cockpit.controller.socketPath,
-                    sessionName: TerminalCockpit.sessionName,
-                    windowIndex: windowIndex))
-            await MainActor.run { appState.terminals[sessionID, default: []].append(terminal) }
-            // Persist to the store, not just appState: the store-reload poll
-            // (`reseed`) repopulates `appState.terminals` PURELY from `store.json`,
-            // so an appState-only append is wiped on the next tick — leaving the
-            // tmux window orphaned and the session showing no terminal (CROW-581).
-            store.mutate { $0.terminals.append(terminal) }
-            return [
-                "terminal_id": .string(terminal.id.uuidString),
-                "window": .int(windowIndex),
-                "name": .string(name),
-            ]
-        },
-
-        "close-terminal": { params in
-            guard let idStr = params["session_id"]?.stringValue, let sessionID = UUID(uuidString: idStr),
-                  let tidStr = params["terminal_id"]?.stringValue, let terminalID = UUID(uuidString: tidStr) else {
-                throw DaemonRPCError.invalidParams("session_id and terminal_id required")
-            }
-            let windowIndex: Int? = await MainActor.run {
-                let index = appState.terminals(for: sessionID)
-                    .first(where: { $0.id == terminalID })?.tmuxBinding?.windowIndex
-                appState.terminals[sessionID]?.removeAll { $0.id == terminalID }
-                return index
-            }
-            // Persist the removal too, else `reseed` resurrects a terminal whose
-            // window we're about to kill (mirror of new-terminal; CROW-581).
-            store.mutate { $0.terminals.removeAll { $0.id == terminalID } }
-            if let windowIndex, let cockpit {
-                cockpit.controller.killWindow(index: windowIndex)
-            }
-            return ["closed": .bool(true)]
-        },
-
         // Terminal-surface ops (rename / (re)launch agent / retry readiness /
         // restart Manager / restart tmux server). Forwarded to the app when it's
         // running (its SessionService owns the surface); with the app down the
@@ -439,36 +340,15 @@ func makeCommandRouter(
                 guard let idx = appState.sessions.firstIndex(where: { $0.id == id }) else {
                     throw DaemonRPCError.applicationError("Session not found")
                 }
+                // Preserve updatedAt — lock/unlock must not reset the auto-cleanup
+                // retention clock (matches the engine's setLocked; review).
                 appState.sessions[idx].locked = locked
-                appState.sessions[idx].updatedAt = Date()
                 store.mutate { data in
                     if let i = data.sessions.firstIndex(where: { $0.id == id }) {
                         data.sessions[i].locked = locked
-                        data.sessions[i].updatedAt = Date()
                     }
                 }
                 return ["session_id": .string(idStr), "locked": .bool(locked)]
-            }
-        },
-
-        "rename-session": { params in
-            guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr),
-                  let name = params["name"]?.stringValue else {
-                throw DaemonRPCError.invalidParams("session_id and name required")
-            }
-            guard Validation.isValidSessionName(name) else {
-                throw DaemonRPCError.invalidParams(
-                    "Invalid session name (max \(Validation.maxSessionNameLength) chars, no control characters)")
-            }
-            return try await MainActor.run {
-                guard let idx = appState.sessions.firstIndex(where: { $0.id == id }) else {
-                    throw DaemonRPCError.applicationError("Session not found")
-                }
-                appState.sessions[idx].name = name
-                store.mutate { data in
-                    if let i = data.sessions.firstIndex(where: { $0.id == id }) { data.sessions[i].name = name }
-                }
-                return ["session_id": .string(idStr), "name": .string(name)]
             }
         },
 
@@ -771,8 +651,14 @@ func makeCommandRouter(
         // response object *is* a `DaemonStateSnapshot` — the client decodes the
         // whole result into that type.
         "get-state": { _ in
-            let snapshot = await MainActor.run {
-                DaemonStateSnapshot(appState: appState, config: ConfigStore.loadConfig(devRoot: devRoot))
+            let snapshot = await MainActor.run { () -> DaemonStateSnapshot in
+                // Strip credentials (Jira token, gateway auth headers, web-password
+                // hash+salt) before sending state to any authenticated /rpc client —
+                // the same treatment get-config applies. Without this, get-state
+                // shipped the raw AppConfig secrets over the wire (review: Red 1).
+                let safeConfig = ConfigStore.loadConfig(devRoot: devRoot)
+                    .map(SettingsSecrets.strippedForTransport)
+                return DaemonStateSnapshot(appState: appState, config: safeConfig)
             }
             do {
                 guard case .object(let dict) = try JSONValue(encoding: snapshot) else {
