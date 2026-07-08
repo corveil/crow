@@ -22,9 +22,10 @@ function setWsConnected(v) {
 }
 
 function rpcConnect() {
-  return new Promise((resolve) => {
+  const p = new Promise((resolve, reject) => {
+    let opened = false;
     const ws = new WebSocket(wsURL('/rpc'));
-    ws.onopen = () => { setWsConnected(true); resolve(ws); };
+    ws.onopen = () => { opened = true; setWsConnected(true); resolve(ws); };
     ws.onmessage = (event) => {
       let msg;
       try { msg = JSON.parse(event.data); } catch (_) { return; }
@@ -38,9 +39,25 @@ function rpcConnect() {
       if (msg.error) waiter.reject(new Error(msg.error.message || 'rpc error'));
       else waiter.resolve(msg.result || {});
     };
-    ws.onclose = () => { setWsConnected(false); rpcState.ready = null; setTimeout(() => { rpcState.ready = rpcConnect(); }, 1000); };
+    ws.onclose = () => {
+      setWsConnected(false);
+      // Fail fast: a socket that closed before opening must reject so `await
+      // rpcState.ready` can't hang when the daemon is down (review #8).
+      if (!opened) reject(new Error('rpc: socket closed before open'));
+      // Reject in-flight rpcs instead of leaving them stuck until the 10s timeout.
+      rpcState.pending.forEach((w) => w.reject(new Error('rpc: connection closed')));
+      rpcState.pending.clear();
+      // Reconnect once — and only if this connection is still the active one, so
+      // an rpc() opened during the window can't leave a duplicate socket that
+      // double-fires `changed` refreshes (review #9).
+      if (rpcState.ready === p) {
+        rpcState.ready = null;
+        setTimeout(() => { if (!rpcState.ready) rpcState.ready = rpcConnect(); }, 1000);
+      }
+    };
     ws.onerror = () => ws.close();
   });
+  return p;
 }
 
 async function rpc(method, params) {
@@ -1823,7 +1840,9 @@ const DEFAULT_TERM_FONT = '"MesloLGS NF", "MesloLGS Nerd Font", "JetBrainsMono N
 // configured terminal font is available; the web-fonts addon relayouts xterm's
 // glyph metrics once it's ready.
 function ensureWebFontLink(url) {
-  if (!url) return;
+  // Require https so an injected config can't load an attacker-controlled
+  // stylesheet (UI spoofing / password-field overlay) into the browser (review #5).
+  if (!url || !/^https:\/\//i.test(url)) return;
   let link = document.getElementById('crow-webfont');
   if (!link) { link = document.createElement('link'); link.id = 'crow-webfont'; link.rel = 'stylesheet'; document.head.appendChild(link); }
   if (link.href !== url) link.href = url;

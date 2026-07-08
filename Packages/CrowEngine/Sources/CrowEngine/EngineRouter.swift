@@ -322,6 +322,13 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                 guard let url = params["url"]?.stringValue, !url.isEmpty else {
                     throw RPCError.invalidParams("url required")
                 }
+                // Mirror the daemon handler: only a plain http(s) URL with no
+                // control chars — the url can reach the Manager as keystrokes
+                // (review #4).
+                guard url.range(of: #"^https?://[^\s]+$"#, options: .regularExpression) != nil,
+                      !url.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7F }) else {
+                    throw RPCError.invalidParams("url must be a well-formed http(s) URL with no control characters")
+                }
                 await MainActor.run { capturedAppState.onWorkOnIssue?(url) }
                 return ["ok": .bool(true)]
             },

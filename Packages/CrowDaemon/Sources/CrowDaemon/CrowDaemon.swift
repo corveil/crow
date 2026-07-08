@@ -55,6 +55,13 @@ public enum CrowDaemon {
         // rebuilds the Manager terminal from `remoteControlEnabled` (CROW-581).
         await applyConfigToAppState(appState, devRoot: options.devRoot)
 
+        // Loud warning: a set web password is bypassed by any loopback forwarder
+        // that omits X-Forwarded-For (ssh -L / socat / cloud port-forward), which
+        // presents as a trusted local peer (review #1; WebAuthGuard.authorize).
+        if ConfigStore.loadConfig(devRoot: options.devRoot)?.webAuth != nil {
+            log("WARNING: a web password is set, but a loopback forwarder that omits X-Forwarded-For (ssh -L, socat, cloud port-forward) is trusted as local and bypasses it — make sure your proxy sets X-Forwarded-For.")
+        }
+
         // Register coding agents in the daemon's own AgentRegistry so
         // `list-agents` (and future launch gating) answer locally, with the
         // desktop app down. Mirrors the app's registration; both hosts read the
@@ -229,6 +236,9 @@ public enum CrowDaemon {
         // Web-access auth (CROW-593): shared session store + login rate limiter,
         // used by the HTTP middleware and both WS-upgrade gates.
         let sessions = SessionStore()
+        // Periodically drop expired login tokens so a long-running daemon doesn't
+        // accrue abandoned sessions (review #2 — SessionStore.prune had no caller).
+        Task { while !Task.isCancelled { try? await Task.sleep(for: .seconds(300)); sessions.prune() } }
         let loginLimiter = LoginRateLimiter()
 
         // WebSocket router: JSON-RPC at /rpc, terminal byte-stream at /terminal.
