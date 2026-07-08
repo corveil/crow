@@ -175,7 +175,22 @@
 .st-sound-row .st-select { flex: 1; }
 .st-sound-row .st-input { flex: 1; }
 .st-perm-status { font-size: 12px; color: var(--text-muted); }
-.st-switch { accent-color: var(--gold); width: 15px; height: 15px; flex: none; }
+.st-switch {
+  appearance: none; -webkit-appearance: none;
+  position: relative; flex: none; cursor: pointer;
+  width: 34px; height: 20px; border-radius: 999px;
+  background: var(--bg-surface); border: 1px solid var(--border-strong);
+  transition: background 0.16s ease, border-color 0.16s ease;
+}
+.st-switch::before {
+  content: ''; position: absolute; top: 2px; left: 2px;
+  width: 14px; height: 14px; border-radius: 50%;
+  background: var(--text-primary);
+  transition: transform 0.16s ease, background 0.16s ease;
+}
+.st-switch:checked { background: var(--gold); border-color: var(--gold); }
+.st-switch:checked::before { transform: translateX(14px); background: var(--bg-deep); }
+.st-switch:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
 .st-switch-label { font-size: 12px; color: var(--text-primary); }
 
 /* -------- list rows (workspaces / jobs) -------- */
