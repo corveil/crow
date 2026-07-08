@@ -121,7 +121,9 @@ public final class IssueTracker {
     nonisolated static let autoMergeLabel = "crow:merge"
 
     /// PR URLs we've already started an auto-merge enable attempt for.
-    /// Cleared on failure (so the next poll retries) and effectively frozen
+    /// Cleared on *transient* failure (so the next poll retries). Left set
+    /// on permanent/expected failures (repo disallows auto-merge, missing
+    /// Crow authorship) so we don't re-log every poll. Effectively frozen
     /// on success once `Session.autoMergeEnabledAt` is persisted, which
     /// the gating guard checks first.
     private var autoMergeInFlight: Set<String> = []
@@ -1772,6 +1774,22 @@ public final class IssueTracker {
         return true
     }
 
+    /// True when `gh pr merge --auto` failed for a permanent repo/policy
+    /// reason that will not clear on retry — notably GitHub's
+    /// `enablePullRequestAutoMerge` when the repo has "Allow auto-merge"
+    /// disabled. Transient failures (network, auth blip) return `false`
+    /// so the next poll can try again (CROW-621).
+    nonisolated static func isPermanentAutoMergeFailure(_ error: Error) -> Bool {
+        let message: String
+        if case ShellRunnerError.nonZeroExit(_, let output) = error {
+            message = output
+        } else {
+            message = error.localizedDescription
+        }
+        return message.localizedCaseInsensitiveContains("enablePullRequestAutoMerge")
+            || message.localizedCaseInsensitiveContains("Auto merge is not allowed for this repository")
+    }
+
     /// Decide whether a merge candidate should have its branch updated from
     /// base *before* merging. True only when the PR is otherwise mergeable
     /// (`shouldAttemptAutoMerge`) but GitHub reports it `BEHIND` its base —
@@ -1838,8 +1856,9 @@ public final class IssueTracker {
 
     /// Verify Crow authorship, lazily ensure the label exists, then enable
     /// auto-merge with squash + delete branch. Idempotent: success persists
-    /// `Session.autoMergeEnabledAt`; failure clears the in-flight marker so
-    /// the next poll retries.
+    /// `Session.autoMergeEnabledAt`. Transient failure clears the in-flight
+    /// marker so the next poll retries; permanent/expected failure (repo
+    /// disallows auto-merge) leaves it set and logs once (CROW-621).
     private func attemptEnableAutoMerge(session: Session, pr: ViewerPR) async {
         guard let backend = codeBackend(for: session) else {
             autoMergeInFlight.remove(pr.url)
@@ -1875,9 +1894,16 @@ public final class IssueTracker {
                   pr.url as NSString, session.id.uuidString as NSString)
             onAutoMergeEnabled?(session.id, pr.url, pr.number)
         } catch {
-            autoMergeInFlight.remove(pr.url)
-            NSLog("[Crow] enableAutoMerge failed for %@: %@",
-                  pr.url as NSString, error.localizedDescription as NSString)
+            if Self.isPermanentAutoMergeFailure(error) {
+                // Leave `autoMergeInFlight` set so subsequent polls skip this
+                // PR instead of re-logging a permanent repo policy failure.
+                NSLog("[Crow] enableAutoMerge skipped for %@ (auto-merge not allowed on repo): %@",
+                      pr.url as NSString, error.localizedDescription as NSString)
+            } else {
+                autoMergeInFlight.remove(pr.url)
+                NSLog("[Crow] enableAutoMerge failed for %@: %@",
+                      pr.url as NSString, error.localizedDescription as NSString)
+            }
         }
     }
 

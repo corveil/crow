@@ -244,6 +244,51 @@ struct IssueTrackerAutoMergeTests {
         ]
         #expect(IssueTracker.crowAuthored(commitMessages: messages, knownSessionIDs: [known]))
     }
+
+    // MARK: - Permanent auto-merge failures (CROW-621)
+
+    @Test func permanentFailureWhenRepoDisallowsAutoMerge() {
+        let error = ShellRunnerError.nonZeroExit(
+            exitCode: 1,
+            output: "GraphQL: Auto merge is not allowed for this repository (enablePullRequestAutoMerge)\n"
+        )
+        #expect(IssueTracker.isPermanentAutoMergeFailure(error))
+    }
+
+    @Test func permanentFailureMatchesCapabilityNameAlone() {
+        // Match on the GraphQL field even if the human-readable phrasing changes.
+        let error = ShellRunnerError.nonZeroExit(
+            exitCode: 1,
+            output: "GraphQL: Something about enablePullRequestAutoMerge\n"
+        )
+        #expect(IssueTracker.isPermanentAutoMergeFailure(error))
+    }
+
+    @Test func transientNetworkFailureIsRetryable() {
+        let error = ShellRunnerError.nonZeroExit(
+            exitCode: 1,
+            output: "error connecting to api.github.com: dial tcp: i/o timeout\n"
+        )
+        #expect(!IssueTracker.isPermanentAutoMergeFailure(error))
+    }
+
+    @Test func transientAuthFailureIsRetryable() {
+        let error = ShellRunnerError.nonZeroExit(
+            exitCode: 1,
+            output: "gh: To get started with GitHub CLI, please run:  gh auth login\n"
+        )
+        #expect(!IssueTracker.isPermanentAutoMergeFailure(error))
+    }
+
+    @Test func permanentFailureAlsoReadsLocalizedDescription() {
+        // Non-ShellRunnerError path still classifies via localizedDescription.
+        struct FakeError: Error, LocalizedError {
+            var errorDescription: String? {
+                "Auto merge is not allowed for this repository"
+            }
+        }
+        #expect(IssueTracker.isPermanentAutoMergeFailure(FakeError()))
+    }
 }
 
 /// CROW-532: the "Add label crow:merge to PR" affordance must gate on the
