@@ -28,7 +28,7 @@ else
   DEVROOT="$(pwd)"
 fi
 WEBDIR="$(pwd)/Packages/CrowDaemon/Sources/CrowDaemon/Resources/web"
-WATCH=(Packages/CrowDaemon Packages/CrowTerminal Packages/CrowCore Packages/CrowIPC Packages/CrowGit Packages/CrowPersistence Sources/crowd)
+WATCH=(Packages/CrowDaemon Packages/CrowEngine Packages/CrowProvider Packages/CrowClaude Packages/CrowTerminal Packages/CrowCore Packages/CrowIPC Packages/CrowGit Packages/CrowPersistence Sources/crowd)
 
 START_CMD=(.build/debug/crowd --host "$HOST" --http-port "$PORT" --socket "$SOCK" --web-dir "$WEBDIR")
 
