@@ -33,3 +33,6 @@ Thumbs.db
 
 # Dependencies
 Package.resolved
+
+# Generated web build info (Settings → About)
+Packages/CrowDaemon/Sources/CrowDaemon/Resources/web/version.json

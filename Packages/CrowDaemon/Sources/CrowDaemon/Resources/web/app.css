@@ -682,3 +682,30 @@ html, body {
 .text-prompt-btn:hover { color: var(--text-primary, #E8E6E1); border-color: var(--gold); }
 .text-prompt-btn.primary { color: var(--gold); border-color: var(--gold); }
 .text-prompt-btn.primary:hover { background: rgba(221, 196, 130, 0.12); }
+
+/* Modal polish (CROW-593): slide-in animation, confirm/alert body, danger btn. */
+@keyframes modal-slide-in {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes modal-backdrop-in { from { opacity: 0; } to { opacity: 1; } }
+.text-prompt-backdrop { animation: modal-backdrop-in 0.14s ease-out; }
+.text-prompt-card { animation: modal-slide-in 0.17s cubic-bezier(0.16, 1, 0.3, 1); }
+.text-prompt-body {
+  font-size: 13px;
+  color: var(--text-secondary, #A8A9AE);
+  line-height: 1.45;
+  margin-bottom: 14px;
+}
+.text-prompt-btn.danger { color: var(--red, #ff453a); border-color: rgba(255, 69, 58, 0.5); }
+.text-prompt-btn.danger:hover { border-color: var(--red, #ff453a); background: rgba(255, 69, 58, 0.12); }
+
+/* The row kebab is a touch affordance — desktop uses right-click. Hide it (and
+   reclaim its reserved row space) on devices with a precise pointer (CROW-593). */
+@media (hover: hover) and (pointer: fine) {
+  .row-kebab { display: none; }
+  .session-row:not(.selecting) { min-height: 0; }
+  .session-row .subtle,
+  .session-row .meta,
+  .session-row .row-badges { padding-right: 0; }
+}

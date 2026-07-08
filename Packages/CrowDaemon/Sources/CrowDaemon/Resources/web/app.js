@@ -588,8 +588,8 @@ function bulkActionBar() {
 async function bulkDeleteSelected() {
   const ids = [...selectedSessionIDs];
   if (!ids.length) return;
-  if (!window.confirm('Delete ' + ids.length + ' session' + (ids.length === 1 ? '' : 's')
-    + '? This removes their worktrees and terminals.')) return;
+  if (!await confirmModal('Delete ' + ids.length + ' session' + (ids.length === 1 ? '' : 's')
+    + '? This removes their worktrees and terminals.', { okLabel: 'Delete', danger: true })) return;
   let failed = 0;
   for (const id of ids) {
     try {
@@ -607,7 +607,7 @@ async function bulkDeleteSelected() {
   }
   selectionMode = false;
   renderSidebar();
-  if (failed) window.alert(failed + ' session(s) could not be deleted.');
+  if (failed) alertModal(failed + ' session(s) could not be deleted.');
 }
 
 // Tickets summary card: title + refresh + 5 status mini-counts. Click opens the
@@ -674,7 +674,7 @@ function renderStatusBar() {
     out.title = 'Log out';
     out.appendChild(icon('logout', 15));
     out.onclick = async () => {
-      if (!window.confirm('Log out of this web session? You’ll need the web password to sign back in.')) return;
+      if (!await confirmModal('Log out of this web session? You’ll need the web password to sign back in.', { title: 'Log out', okLabel: 'Log out' })) return;
       try { await fetch('/logout', { method: 'POST' }); } catch (_) {}
       location.reload();  // now unauthenticated → the auth gate serves the login page
     };
@@ -745,7 +745,7 @@ function rcGlyph() {
 
 async function createManager(agentKind) {
   try { await rpc('create-manager', agentKind ? { agent_kind: agentKind } : undefined); }
-  catch (e) { window.alert('New manager failed: ' + (e.message || e)); }
+  catch (e) { alertModal('New manager failed: ' + (e.message || e)); }
 }
 
 // New-manager "+" button: fetch the available agents and, when there's more
@@ -1042,6 +1042,17 @@ function sessionMenuItems(s) {
   const hasPR = (s.links || []).some((l) => l.type === 'pr');
   if (s.kind === 'manager') {
     items.push({ label: 'Rename', action: () => renameSession(s.id, s.name) });
+    items.push({ sep: true });
+    items.push({ label: 'Restart Manager', action: async () => {
+      if (await confirmModal('Restart the Manager? Its Claude Code session will relaunch.',
+        { title: 'Restart Manager', okLabel: 'Restart' })) sessionAction('restart-manager', s.id);
+    } });
+    items.push({ label: 'Reload tmux config', action: () => sessionAction('reload-tmux-config', s.id) });
+    items.push({ label: 'Reload tmux (restart server)', action: async () => {
+      if (await confirmModal('Restart the tmux server? Terminals across every session are recreated.',
+        { title: 'Reload tmux', okLabel: 'Restart tmux', danger: true })) sessionAction('restart-tmux-server', s.id);
+    } });
+    items.push({ sep: true });
     items.push({ label: 'Delete', danger: true, action: () => deleteSession(s.id, s.name) });
     return items;
   }
@@ -1069,7 +1080,7 @@ function sessionMenuItems(s) {
 
 async function sessionAction(method, id, extra) {
   try { await rpc(method, Object.assign({ session_id: id }, extra || {})); }
-  catch (e) { window.alert(method + ' failed: ' + (e.message || e)); }
+  catch (e) { alertModal(method + ' failed: ' + (e.message || e)); }
 }
 
 // ---------------------------------------------------------------------------
@@ -1313,6 +1324,51 @@ async function quickAction(id, action, label) {
 // dialogs" opt-out, on assorted mobile browsers, and in some remote/secure
 // contexts. window.prompt failing that way meant the rename rpc was never sent
 // (CROW-593). Returns the entered string, or null on cancel/Escape/backdrop.
+// In-page confirm/alert modal → Promise<boolean> (true = OK/confirm). Replaces
+// window.confirm/alert, which render as native chrome (and are jarring inside the
+// desktop wrapper). cancelLabel:null makes it an alert (single OK). (CROW-593)
+function modalDialog({ title, body, okLabel = 'OK', cancelLabel = 'Cancel', danger = false } = {}) {
+  return new Promise((resolve) => {
+    let done = false;
+    const backdrop = el('div', 'text-prompt-backdrop');
+    const card = el('div', 'text-prompt-card');
+    if (title) card.appendChild(el('div', 'text-prompt-title', title));
+    if (body) card.appendChild(el('div', 'text-prompt-body', body));
+    const actions = el('div', 'text-prompt-actions');
+    const ok = el('button', 'text-prompt-btn primary' + (danger ? ' danger' : ''), okLabel);
+    function finish(v) {
+      if (done) return;
+      done = true;
+      document.removeEventListener('keydown', onKey, true);
+      backdrop.remove();
+      resolve(v);
+    }
+    function onKey(e) {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(false); }
+      else if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); finish(true); }
+    }
+    if (cancelLabel != null) {
+      const cancel = el('button', 'text-prompt-btn', cancelLabel);
+      cancel.onclick = () => finish(false);
+      actions.appendChild(cancel);
+    }
+    ok.onclick = () => finish(true);
+    actions.appendChild(ok);
+    card.appendChild(actions);
+    backdrop.appendChild(card);
+    backdrop.addEventListener('mousedown', (e) => { if (e.target === backdrop) finish(false); });
+    document.addEventListener('keydown', onKey, true);
+    document.body.appendChild(backdrop);
+    ok.focus();
+  });
+}
+function confirmModal(body, { title = 'Confirm', okLabel = 'OK', danger = false } = {}) {
+  return modalDialog({ title, body, okLabel, cancelLabel: 'Cancel', danger });
+}
+function alertModal(body, { title = 'Crow' } = {}) {
+  return modalDialog({ title, body, okLabel: 'OK', cancelLabel: null });
+}
+
 function textPrompt(title, current, { placeholder = '', okLabel = 'Save' } = {}) {
   return new Promise((resolve) => {
     let done = false;
@@ -1365,7 +1421,7 @@ async function renameSession(id, current) {
 }
 
 async function deleteSession(id, name) {
-  if (!window.confirm('Delete session "' + name + '"? This removes its worktree and terminals.')) return;
+  if (!await confirmModal('Delete session "' + name + '"? This removes its worktree and terminals.', { okLabel: 'Delete', danger: true })) return;
   try {
     await rpc('delete-session', { session_id: id });
     sessions = sessions.filter((x) => x.id !== id);
@@ -1379,7 +1435,7 @@ async function deleteSession(id, name) {
     }
     renderSidebar();
   } catch (e) {
-    window.alert('Delete failed: ' + (e.message || e));
+    alertModal('Delete failed: ' + (e.message || e));
   }
 }
 
@@ -1539,7 +1595,7 @@ async function spawnAction(btn, method, params, label) {
   } catch (e) {
     btn.disabled = false;
     btn.textContent = orig;
-    window.alert(label + ' failed: ' + (e.message || e));
+    alertModal(label + ' failed: ' + (e.message || e));
   }
 }
 
@@ -1739,7 +1795,7 @@ async function promoteAllowlist(patterns) {
     await rpc('refresh-allowlist').catch(() => {});
     setTimeout(() => refreshBoard('allowlist'), 800);
   } catch (e) {
-    window.alert('Promote failed: ' + (e.message || e));
+    alertModal('Promote failed: ' + (e.message || e));
   }
 }
 

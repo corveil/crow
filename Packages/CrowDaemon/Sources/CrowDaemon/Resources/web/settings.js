@@ -24,6 +24,7 @@
     ['jobs', 'Jobs'],
     ['notifications', 'Notifications'],
     ['webaccess', 'Web access'],
+    ['about', 'About'],
   ];
 
   const EVENT_LABELS = {
@@ -98,7 +99,7 @@
   async function openSettings() {
     let res;
     try { res = await rpc('get-config'); }
-    catch (err) { window.alert('Could not load settings: ' + (err.message || err)); return; }
+    catch (err) { alertModal('Could not load settings: ' + (err.message || err)); return; }
     try { cfg = JSON.parse(res.config || '{}'); } catch (_) { cfg = {}; }
     devRoot = res.dev_root || '';
     // Local list of available agents for the Default-agent picker (#3 /
@@ -110,8 +111,8 @@
     render();
   }
 
-  function closeSettings(force) {
-    if (!force && dirty && !window.confirm('Discard unsaved changes?')) return;
+  async function closeSettings(force) {
+    if (!force && dirty && !(await confirmModal('Discard unsaved changes?', { title: 'Discard changes', okLabel: 'Discard', danger: true }))) return;
     if (escHandler) { document.removeEventListener('keydown', escHandler); escHandler = null; }
     if (backdrop) { backdrop.remove(); backdrop = null; }
     subForm = null;
@@ -139,7 +140,7 @@
     } catch (err) {
       btn.disabled = false;
       btn.textContent = orig;
-      window.alert('Save failed: ' + (err.message || err));
+      alertModal('Save failed: ' + (err.message || err));
     }
   }
 
@@ -200,6 +201,7 @@
     else if (activeTab === 'jobs') renderJobs(body);
     else if (activeTab === 'notifications') renderNotifications(body);
     else if (activeTab === 'webaccess') renderWebAccess(body);
+    else if (activeTab === 'about') renderAbout(body);
   }
 
   // ---- control builders ---------------------------------------------------
@@ -548,6 +550,61 @@
 
   // ---- Web access (CROW-593) ---------------------------------------------
 
+  function renderAbout(body) {
+    const head = el('div', 'st-about-head');
+    const logo = el('img', 'st-about-logo');
+    logo.src = '/brand.svg';
+    logo.alt = 'Crow';
+    const htext = el('div');
+    htext.appendChild(el('div', 'st-about-name', 'Crow'));
+    const ver = el('div', 'st-about-ver', 'Loading version…');
+    htext.appendChild(ver);
+    head.append(logo, htext);
+    body.appendChild(head);
+    body.appendChild(el('div', 'st-help',
+      'AI-powered development session manager. crowd is the sole authority; every UI is a client.'));
+
+    fetch('/version.json').then((r) => (r.ok ? r.json() : null)).then((v) => {
+      if (!v) { ver.textContent = 'Version unavailable'; return; }
+      const parts = ['Version ' + (v.version || '?')];
+      if (v.gitSha) parts.push(v.gitSha);
+      if (v.buildDate) parts.push(v.buildDate);
+      ver.textContent = parts.join(' · ');
+    }).catch(() => { ver.textContent = 'Version unavailable'; });
+
+    // Maintenance actions — the desktop app's old Restart/Reload menu items,
+    // now reachable from any browser (CROW-593).
+    function actBtn(label, labelText, help, run) {
+      const b = el('button', 'action-btn', label);
+      b.type = 'button';
+      b.onclick = run;
+      body.appendChild(field(labelText, b, help));
+    }
+
+    body.appendChild(group('Maintenance'));
+    actBtn('Restart Manager', 'Manager',
+      'Relaunches the Manager’s Claude Code session.', async () => {
+        if (await confirmModal('Restart the Manager? Its Claude Code session will relaunch.',
+          { title: 'Restart Manager', okLabel: 'Restart' })) {
+          try { await rpc('restart-manager', {}); }
+          catch (e) { alertModal('Restart failed: ' + (e.message || e)); }
+        }
+      });
+    actBtn('Reload tmux config', 'tmux config',
+      'Re-applies the bundled tmux config without restarting the server.', async () => {
+        try { await rpc('reload-tmux-config', {}); alertModal('tmux config reloaded.'); }
+        catch (e) { alertModal('Reload failed: ' + (e.message || e)); }
+      });
+    actBtn('Reload tmux (restart server)', 'tmux server',
+      'Kills and restarts the tmux server — terminals across every session are recreated.', async () => {
+        if (await confirmModal('Restart the tmux server? Terminals across every session are recreated.',
+          { title: 'Reload tmux', okLabel: 'Restart tmux', danger: true })) {
+          try { await rpc('restart-tmux-server', {}); }
+          catch (e) { alertModal('Restart failed: ' + (e.message || e)); }
+        }
+      });
+  }
+
   function renderWebAccess(body) {
     const isSet = !!cfg.webAuth;
     body.appendChild(group('Web access password'));
@@ -582,7 +639,7 @@
       const rmBtn = el('button', 'action-btn', 'Remove password');
       rmBtn.type = 'button';
       rmBtn.onclick = async () => {
-        if (!window.confirm('Remove the web password? Non-local access will be disabled.')) return;
+        if (!await confirmModal('Remove the web password? Non-local access will be disabled.', { title: 'Remove password', okLabel: 'Remove', danger: true })) return;
         rmBtn.disabled = true;
         try { await rpc('set-web-password', { clear: true }); cfg.webAuth = null; render(); }
         catch (_) { rmBtn.disabled = false; }
@@ -790,13 +847,13 @@
 
   function commitSubForm() {
     const d = subForm.draft;
-    if (!d.name || !d.name.trim()) { window.alert('Name is required.'); return; }
+    if (!d.name || !d.name.trim()) { alertModal('Name is required.'); return; }
     if (subForm.kind === 'workspace') {
       d.cli = d.provider === 'gitlab' ? 'glab' : 'gh';
       upsertByID(cfg.workspaces, d);
     } else {
       d.prompts = (d.prompts || []).map((p) => p).filter((p) => p != null && p.trim() !== '');
-      if (!d.prompts.length) { window.alert('At least one prompt is required.'); return; }
+      if (!d.prompts.length) { alertModal('At least one prompt is required.'); return; }
       upsertByID(cfg.jobs, d);
     }
     markDirty();
