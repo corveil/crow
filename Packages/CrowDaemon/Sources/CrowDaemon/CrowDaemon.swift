@@ -503,6 +503,7 @@ public enum CrowDaemon {
         appState.remoteControlEnabled = config.remoteControlEnabled
         appState.managerAutoPermissionMode = config.managerAutoPermissionMode
         appState.jobsAutoPermissionMode = config.jobsAutoPermissionMode
+        appState.reviewAutoPermissionMode = config.reviewAutoPermissionMode
         appState.coderViewAutoPermissionMode = config.coderViewAutoPermissionMode
         appState.excludeReviewRepos = config.effectiveExcludeReviewRepos
         appState.excludeTicketRepos = config.defaults.excludeTicketRepos
