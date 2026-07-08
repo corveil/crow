@@ -4,8 +4,7 @@
   "version": "0.1.0",
   "identifier": "com.radiusmethod.crow",
   "build": {
-    "devUrl": "http://127.0.0.1:8787",
-    "frontendDist": "http://127.0.0.1:8787"
+    "frontendDist": "../ui"
   },
   "app": {
     "withGlobalTauri": true,
