@@ -180,8 +180,26 @@ pub fn run() {
             if let tauri::RunEvent::Exit = event {
                 if let Some(state) = app.try_state::<Crowd>() {
                     if let Some(mut child) = state.0.lock().unwrap().take() {
-                        eprintln!("[crow-desktop] killing crowd pid {}", child.id());
-                        let _ = child.kill();
+                        // Graceful shutdown: SIGTERM, wait briefly for crowd to
+                        // flush its store / release tmux + socket, then SIGKILL as a
+                        // fallback, and reap so no zombie is left (review #12).
+                        let pid = child.id();
+                        eprintln!("[crow-desktop] stopping crowd pid {pid} (SIGTERM)");
+                        unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM); }
+                        let deadline = Instant::now() + Duration::from_millis(1500);
+                        loop {
+                            match child.try_wait() {
+                                Ok(Some(_)) => break,
+                                Ok(None) if Instant::now() < deadline => {
+                                    thread::sleep(Duration::from_millis(50));
+                                }
+                                _ => {
+                                    let _ = child.kill();
+                                    break;
+                                }
+                            }
+                        }
+                        let _ = child.wait();
                     }
                 }
             }

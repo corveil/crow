@@ -171,11 +171,14 @@ public enum CrowDaemon {
             scheduler.devRootProvider = { options.devRoot }
             scheduler.onJobRan = { jobID, ranAt in
                 // Jobs (incl. `lastRunAt`) live in config.json, not the store —
-                // persist there so a fired job isn't re-run on the next tick.
-                guard var config = ConfigStore.loadConfig(devRoot: options.devRoot),
-                      let idx = config.jobs.firstIndex(where: { $0.id == jobID }) else { return }
-                config.jobs[idx].lastRunAt = ranAt
-                try? ConfigStore.saveConfig(config, devRoot: options.devRoot)
+                // persist under the shared config lock so a Settings save can't
+                // clobber it (review #10).
+                ConfigStore.withConfigLock {
+                    guard var config = ConfigStore.loadConfig(devRoot: options.devRoot),
+                          let idx = config.jobs.firstIndex(where: { $0.id == jobID }) else { return }
+                    config.jobs[idx].lastRunAt = ranAt
+                    try? ConfigStore.saveConfig(config, devRoot: options.devRoot)
+                }
             }
             return scheduler
         }
