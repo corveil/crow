@@ -85,14 +85,6 @@ public struct AppConfig: Codable, Sendable, Equatable {
     /// the `set-web-password` RPC, never through `set-config`.
     public var webAuth: WebAuthConfig?
 
-    /// Terminal font family (CSS `font-family`) for the xterm.js surface. Empty
-    /// uses the built-in Nerd Font stack; applied client-side (CROW-593).
-    public var terminalFontFamily: String
-    /// Optional stylesheet URL (e.g. a Google Fonts link) that defines the
-    /// terminal web font above; loaded before the terminal renders via the
-    /// xterm web-fonts addon. Empty to skip.
-    public var terminalWebFontURL: String
-
     /// Effective review-exclude patterns: the global `defaults.excludeReviewRepos`
     /// unioned with every workspace's per-workspace `excludeReviewRepos`. A repo
     /// excluded by any workspace (or the global default) is hidden from the review
@@ -122,9 +114,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         agentsByKind: [String: AgentKind] = [:],
         managerGateway: WorkspaceGateway? = nil,
         jiraCredential: JiraCredential? = nil,
-        webAuth: WebAuthConfig? = nil,
-        terminalFontFamily: String = "",
-        terminalWebFontURL: String = ""
+        webAuth: WebAuthConfig? = nil
     ) {
         self.workspaces = workspaces
         self.defaults = defaults
@@ -147,8 +137,6 @@ public struct AppConfig: Codable, Sendable, Equatable {
         self.managerGateway = managerGateway
         self.jiraCredential = jiraCredential
         self.webAuth = webAuth
-        self.terminalFontFamily = terminalFontFamily
-        self.terminalWebFontURL = terminalWebFontURL
     }
 
     public init(from decoder: Decoder) throws {
@@ -197,8 +185,6 @@ public struct AppConfig: Codable, Sendable, Equatable {
             }
         }
         webAuth = try container.decodeIfPresent(WebAuthConfig.self, forKey: .webAuth)
-        terminalFontFamily = try container.decodeIfPresent(String.self, forKey: .terminalFontFamily) ?? ""
-        terminalWebFontURL = try container.decodeIfPresent(String.self, forKey: .terminalWebFontURL) ?? ""
     }
 
     /// Pre-CROW-528 shape of the now-removed `atlassianMCP` config, decoded only
@@ -222,7 +208,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case workspaces, defaults, notifications, sidebar, remoteControlEnabled, managerAutoPermissionMode, jobsAutoPermissionMode, reviewAutoPermissionMode, coderViewAutoPermissionMode, telemetry, autoRespond, attributionTrailers, autoMergeWatcherEnabled, autoCreateWatcherEnabled, cleanup, jobs, defaultAgentKind, agentsByKind, managerGateway, jiraCredential, webAuth, terminalFontFamily, terminalWebFontURL
+        case workspaces, defaults, notifications, sidebar, remoteControlEnabled, managerAutoPermissionMode, jobsAutoPermissionMode, reviewAutoPermissionMode, coderViewAutoPermissionMode, telemetry, autoRespond, attributionTrailers, autoMergeWatcherEnabled, autoCreateWatcherEnabled, cleanup, jobs, defaultAgentKind, agentsByKind, managerGateway, jiraCredential, webAuth
     }
 
     /// Resolve the agent that should drive a newly-created session of the
