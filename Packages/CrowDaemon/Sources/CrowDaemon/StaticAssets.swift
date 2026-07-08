@@ -76,11 +76,40 @@ enum StaticAssets {
     }
 
     private static func fileResponse(_ data: Data, name: String) -> Response {
-        Response(
+        var headers: HTTPFields = [
+            .contentType: contentType(for: name),
+            .xContentTypeOptions: "nosniff",
+        ]
+        // Content-Security-Policy on the main app page. It renders provider-sourced
+        // strings (ticket/PR titles, branches, authors), so a future innerHTML slip
+        // must not be able to pull external script or exfiltrate. Scoped to
+        // index.html — login.html carries an inline script and terminal.html is a
+        // debug-only page. `style-src 'unsafe-inline'` covers xterm's injected
+        // renderer styles; blob:/data: cover its canvas/image atlases; `connect-src
+        // 'self'` covers the same-origin /rpc + /terminal WebSockets (CROW-593 review).
+        if name == "index.html" {
+            headers[.contentSecurityPolicy] = contentSecurityPolicy
+        }
+        return Response(
             status: .ok,
-            headers: [.contentType: contentType(for: name)],
+            headers: headers,
             body: .init(byteBuffer: ByteBuffer(bytes: data)))
     }
+
+    private static let contentSecurityPolicy = [
+        "default-src 'self'",
+        // `wasm-unsafe-eval` lets xterm's image addon compile its Sixel-decoder
+        // WebAssembly without enabling arbitrary `eval` (CROW-593 review).
+        "script-src 'self' 'wasm-unsafe-eval'",
+        "style-src 'self' 'unsafe-inline'",
+        "img-src 'self' data: blob:",
+        "font-src 'self'",
+        "connect-src 'self'",
+        "worker-src 'self' blob:",
+        "object-src 'none'",
+        "base-uri 'none'",
+        "frame-ancestors 'none'",
+    ].joined(separator: "; ")
 
     private static func contentType(for file: String) -> String {
         if file.hasSuffix(".js") { return "text/javascript; charset=utf-8" }
