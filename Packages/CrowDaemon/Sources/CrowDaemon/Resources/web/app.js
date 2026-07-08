@@ -15,6 +15,10 @@ function wsURL(path) {
 // Connection light in the bottom-left status bar tracks the /rpc control socket
 // (CROW-593): green when open, amber while (re)connecting.
 let wsConnected = false;
+// A remote (non-loopback) web session whose cookie is no longer valid — set when a
+// disconnect + /auth/check probe confirms 401 (a crowd restart wiped its in-memory
+// sessions). Stops the reconnect loop and flips the status bar to "Log in" (CROW-593).
+let sessionDead = false;
 function setWsConnected(v) {
   if (wsConnected === v) return;
   wsConnected = v;
@@ -47,12 +51,15 @@ function rpcConnect() {
       // Reject in-flight rpcs instead of leaving them stuck until the 10s timeout.
       rpcState.pending.forEach((w) => w.reject(new Error('rpc: connection closed')));
       rpcState.pending.clear();
+      // A crowd restart wipes its in-memory sessions, so a remote web cookie may now
+      // be invalid — probe and, if so, stop reconnecting and surface "Log in" (CROW-593).
+      handleAuthOnDisconnect();
       // Reconnect once — and only if this connection is still the active one, so
       // an rpc() opened during the window can't leave a duplicate socket that
-      // double-fires `changed` refreshes (review #9).
+      // double-fires `changed` refreshes (review #9). Skipped once the session is dead.
       if (rpcState.ready === p) {
         rpcState.ready = null;
-        setTimeout(() => { if (!rpcState.ready) rpcState.ready = rpcConnect(); }, 1000);
+        setTimeout(() => { if (!rpcState.ready && !sessionDead) rpcState.ready = rpcConnect(); }, 1000);
       }
     };
     ws.onerror = () => ws.close();
@@ -61,6 +68,9 @@ function rpcConnect() {
 }
 
 async function rpc(method, params) {
+  // Session is dead (cookie invalid): don't spin up doomed reconnects — fail fast so
+  // background pollers stop churning and the "Log in" affordance stands (CROW-593).
+  if (sessionDead) throw new Error('session expired — log in');
   if (!rpcState.ready) rpcState.ready = rpcConnect();
   const ws = await rpcState.ready;
   const id = rpcState.nextId++;
@@ -672,19 +682,61 @@ function signedInOverWeb() {
   return uiConfig.webPasswordSet && !loopback;
 }
 
+// Whether the current web-session cookie is invalid. Only meaningful for a remote
+// (non-loopback) session with a web password — loopback is always authorized, so it
+// returns false there. Probes /auth/check, which the auth middleware answers 204 when
+// authorized and 401 when not. Returns true ONLY on a definitive 401: a thrown fetch
+// means crowd is down (not an auth failure), so we keep reconnecting (CROW-593).
+async function sessionExpired() {
+  if (!signedInOverWeb()) return false;
+  try {
+    const res = await fetch('/auth/check', { cache: 'no-store', headers: { Accept: 'application/json' } });
+    return res.status === 401;
+  } catch (_) {
+    return false;
+  }
+}
+
+let authProbeInFlight = false;
+// On a /rpc disconnect, check once whether the session cookie is still valid; if it's
+// gone, mark the session dead so the status bar shows "Log in" and reconnects stop.
+async function handleAuthOnDisconnect() {
+  if (sessionDead || authProbeInFlight) return;
+  authProbeInFlight = true;
+  try {
+    if (await sessionExpired()) {
+      sessionDead = true;
+      renderStatusBar();
+    }
+  } finally {
+    authProbeInFlight = false;
+  }
+}
+
 // Bottom-left status bar: a connection light (the /rpc socket state) plus — on a
 // signed-in remote session only — a logout button. Rebuilt on connect/disconnect
 // and after config loads (CROW-593).
 function renderStatusBar() {
   const bar = document.getElementById('statusbar');
   if (!bar) return;
-  bar.classList.toggle('connected', wsConnected);
-  bar.classList.toggle('disconnected', !wsConnected);
+  bar.classList.toggle('connected', wsConnected && !sessionDead);
+  bar.classList.toggle('disconnected', !wsConnected && !sessionDead);
+  bar.classList.toggle('session-expired', sessionDead);
   const label = bar.querySelector('.conn-label');
-  if (label) label.textContent = wsConnected ? 'Connected' : 'Connecting…';
+  if (label) label.textContent = sessionDead ? 'Session expired' : (wsConnected ? 'Connected' : 'Connecting…');
   const actions = document.getElementById('statusbar-actions');
   if (!actions) return;
   actions.textContent = '';
+  // Session died (a crowd restart wiped the cookie's token): offer an explicit login
+  // instead of looping on "Connecting…" (CROW-593).
+  if (sessionDead) {
+    const login = el('button', 'sb-login', 'Log in');
+    login.type = 'button';
+    login.title = 'Your web session expired — log in again';
+    login.onclick = () => { location.href = '/login'; };
+    actions.appendChild(login);
+    return;
+  }
   if (signedInOverWeb()) {
     const out = el('button', 'sb-logout');
     out.type = 'button';
