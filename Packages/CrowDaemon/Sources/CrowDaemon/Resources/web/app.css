@@ -725,3 +725,182 @@ html, body {
   .session-row .meta,
   .session-row .row-badges { padding-right: 0; }
 }
+
+/* First-run setup wizard (CROW-605) — full-screen overlay over the empty board. */
+#wizard {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(10, 12, 14, 0.92);
+  animation: modal-backdrop-in 0.18s ease-out;
+}
+.wizard-card {
+  width: min(520px, 94vw);
+  min-height: 380px;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.6);
+  padding: 22px 24px 18px;
+  animation: modal-slide-in 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.wizard-card.wizard-setting-up {
+  min-height: 220px;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 10px;
+}
+.wizard-dots {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+.wizard-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  opacity: 0.35;
+}
+.wizard-dot.active {
+  background: var(--gold);
+  opacity: 1;
+}
+.wizard-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.wizard-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+  text-align: center;
+}
+.wizard-sub {
+  font-size: 13px;
+  color: var(--text-secondary);
+  text-align: center;
+  line-height: 1.45;
+  margin-bottom: 4px;
+}
+.wizard-field { display: flex; flex-direction: column; gap: 5px; }
+.wizard-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.wizard-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  background: var(--bg-deep);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 13px;
+}
+.wizard-input:focus { outline: none; border-color: var(--gold); }
+.wizard-empty {
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 12px;
+  padding: 12px 0;
+}
+.wizard-list { display: flex; flex-direction: column; gap: 6px; max-height: 140px; overflow-y: auto; }
+.wizard-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+}
+.wizard-row-info { flex: 1; min-width: 0; }
+.wizard-row-name { font-weight: 600; font-size: 13px; }
+.wizard-row-meta { font-size: 11px; color: var(--text-secondary); }
+.wizard-row-rm {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+.wizard-row-rm:hover { color: var(--red); }
+.wizard-add {
+  align-self: flex-start;
+  border: 1px dashed var(--border-strong);
+  background: transparent;
+  color: var(--gold);
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.wizard-add:hover { background: rgba(221, 196, 130, 0.08); }
+.wizard-add-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+}
+.wizard-add-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.wizard-summary {
+  padding: 14px 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.wizard-summary-row { font-size: 13px; font-weight: 600; word-break: break-all; }
+.wizard-summary-meta { font-size: 12px; color: var(--text-secondary); padding-left: 12px; }
+.wizard-error {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(255, 69, 58, 0.12);
+  border: 1px solid rgba(255, 69, 58, 0.4);
+  color: var(--red);
+  font-size: 12px;
+}
+.wizard-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-subtle);
+}
+.wizard-spinner {
+  width: 28px;
+  height: 28px;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--gold);
+  border-radius: 50%;
+  animation: wizard-spin 0.7s linear infinite;
+  margin-bottom: 6px;
+}
+@keyframes wizard-spin { to { transform: rotate(360deg); } }
