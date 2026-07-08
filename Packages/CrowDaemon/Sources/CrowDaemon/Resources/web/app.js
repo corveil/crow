@@ -520,9 +520,11 @@ const GROUPS = [
 async function refreshSessions() {
   try {
     const res = await rpc('list-sessions');
-    sessions = res.sessions || [];
+    const next = res.sessions || [];
+    const changed = JSON.stringify(sessions) !== JSON.stringify(next);
+    sessions = next;
     sessionsLoaded = true;
-    persistSidebarCache();
+    if (changed) persistSidebarCache();
     detectSessionSounds();
     renderSidebar();
   } catch (_) { /* transient — next poll retries */ }
@@ -559,6 +561,7 @@ function sidebarSignature() {
   return JSON.stringify([
     sessionsLoaded, sessions, liveById, selectedId, selectedBoard,
     selectionMode, [...selectedSessionIDs],
+    uiConfig.hideSessionDetails,
     boardData.tickets && boardData.tickets.counts,
     boardData.tickets && boardData.tickets.done_last_24h,
     boardData.reviews && boardData.reviews.unseen,
@@ -805,6 +808,9 @@ function renderStatusBar() {
     out.onclick = async () => {
       if (!await confirmModal('Log out of this web session? You’ll need the web password to sign back in.', { title: 'Log out', okLabel: 'Log out' })) return;
       try { await fetch('/logout', { method: 'POST' }); } catch (_) {}
+      // Drop cached session/ticket payloads so a shared browser can't read them
+      // after logout of a password-protected remote session (CROW-613 review).
+      try { localStorage.removeItem(SIDEBAR_CACHE_KEY); } catch (_) {}
       location.reload();  // now unauthenticated → the auth gate serves the login page
     };
     actions.appendChild(out);
@@ -2378,9 +2384,17 @@ document.getElementById('back-to-sidebar').onclick = () => {
 document.getElementById('terminal-wrap').addEventListener('contextmenu', showTerminalMenu);
 
 // Paint the left pane immediately — cached last-known layout, or skeleton
-// placeholders — before the first /rpc round-trip (CROW-613).
-restoreSidebarCache();
-renderSidebar();
+// placeholders — before the first /rpc round-trip (CROW-613). A stale-schema
+// cache entry must not abort the rest of boot (polls / refreshSessions).
+try {
+  restoreSidebarCache();
+  renderSidebar();
+} catch (_) {
+  try { localStorage.removeItem(SIDEBAR_CACHE_KEY); } catch (_) {}
+  sessions = [];
+  lastSidebarSig = null;
+  try { renderSidebar(); } catch (_) { /* keep going — RPC refresh will paint */ }
+}
 renderStatusBar();
 
 refreshSessions();
