@@ -30,6 +30,10 @@ public enum SettingsSecrets {
     public static func strippedForTransport(_ config: AppConfig) -> AppConfig {
         var c = config
         if c.jiraCredential != nil { c.jiraCredential?.tokenRef = "" }
+        // Web-access password (CROW-593): blank the hash + salt but keep the block
+        // present, so the read-only web view can show "a password is set" without
+        // ever seeing the hash.
+        if c.webAuth != nil { c.webAuth?.hashB64 = ""; c.webAuth?.saltB64 = "" }
         if let gateway = c.managerGateway { c.managerGateway = stripHeaderValues(gateway) }
         c.workspaces = c.workspaces.map { workspace in
             var w = workspace
@@ -53,6 +57,10 @@ public enum SettingsSecrets {
     public static func preservingSecrets(incoming: AppConfig, current: AppConfig?) -> AppConfig {
         var result = incoming
         result.jiraCredential = current?.jiraCredential
+        // The web password is set/cleared only via the `set-web-password` RPC, never
+        // through `set-config`, so a config round-trip always restores the stored
+        // value (a browser can neither change nor blank it here).
+        result.webAuth = current?.webAuth
         result.managerGateway = current?.managerGateway
         if let current {
             let currentGatewaysByID = Dictionary(

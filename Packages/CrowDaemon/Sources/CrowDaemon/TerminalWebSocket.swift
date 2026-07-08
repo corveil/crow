@@ -1,3 +1,5 @@
+import CrowCore
+import CrowPersistence
 import CrowTerminal
 import Foundation
 import HTTPTypes
@@ -14,12 +16,24 @@ import NIOCore
 /// the chosen window without disturbing any other client — including the
 /// running desktop app, which shares the same cockpit (CROW-581).
 enum TerminalWebSocket {
-    static func mount(on router: Router<BasicWebSocketRequestContext>, cockpit: TerminalCockpit, boundHost: String) {
-        router.ws("/terminal") { request, _ in
-            // Reject cross-site upgrades — a plain attach yields an interactive
-            // shell, so an unguarded upgrade is effectively RCE (CROW-581 review).
-            WebSocketOriginGuard.isAllowedOrigin(request.headers[.origin], boundHost: boundHost)
-                ? .upgrade() : .dontUpgrade
+    static func mount(on router: Router<CrowWSContext>, cockpit: TerminalCockpit, boundHost: String, sessions: SessionStore, devRoot: String) {
+        router.ws("/terminal") { request, context in
+            // Reject cross-site upgrades AND unauthenticated non-local access — a
+            // plain attach yields an interactive shell, so an unguarded upgrade is
+            // effectively RCE (CROW-581 review, CROW-593).
+            let originOK = WebSocketOriginGuard.isAllowedOrigin(
+                request.headers[.origin],
+                boundHost: boundHost,
+                forwardedHost: request.headers[HTTPField.Name("x-forwarded-host")!],
+                peerIsLoopback: WebAuthGuard.isLoopbackPeer(context.remoteAddress))
+            let auth = WebAuthGuard.authorize(
+                remoteAddress: context.remoteAddress,
+                cookieHeader: request.headers[.cookie],
+                forwardedFor: request.headers[HTTPField.Name("x-forwarded-for")!],
+                forwardedProto: request.headers[HTTPField.Name("x-forwarded-proto")!],
+                configProvider: { ConfigStore.loadConfig(devRoot: devRoot) },
+                sessions: sessions)
+            return (originOK && auth.isAuthorized) ? .upgrade() : .dontUpgrade
         } onUpgrade: { inbound, outbound, _ in
             // Bound concurrent PTY + tmux attaches.
             guard TerminalConnectionLimiter.shared.acquire() else {

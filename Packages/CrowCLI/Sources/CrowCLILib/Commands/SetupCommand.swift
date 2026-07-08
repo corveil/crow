@@ -132,7 +132,7 @@ public struct Setup: ParsableCommand {
         print()
         print("Next steps:")
         print("  1. Build:  make build")
-        print("  2. Launch: .build/debug/CrowApp")
+        print("  2. Launch: .build/debug/crowd  (then open the web UI)")
         print("  3. CLI:    crow --help")
     }
 }
