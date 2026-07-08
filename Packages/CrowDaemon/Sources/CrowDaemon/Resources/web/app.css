@@ -282,12 +282,16 @@ html, body {
   position: absolute;
   inset: 0;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 16px;
   color: var(--text-muted);
   font-size: 14px;
   pointer-events: none;
 }
+.empty-brand { width: 96px; height: 96px; opacity: 0.85; }
+.empty-msg { color: var(--text-muted); }
 #app.has-selection #detail-empty { display: none; }
 #app:not(.has-selection) #terminal-wrap { visibility: hidden; }
 
@@ -454,7 +458,7 @@ html, body {
 .tk-tool {
   display: inline-flex; align-items: center; justify-content: center;
   width: 30px; height: 29px; border-radius: 6px; cursor: pointer;
-  border: 1px solid var(--border-subtle); background: var(--bg-card); color: var(--text-secondary);
+  border: 1px solid var(--border-subtle); background: var(--bg-card); color: var(--gold-dark);
 }
 .tk-tool:hover { color: var(--gold); border-color: var(--border-strong); }
 .tk-tool.nav-selecting { color: var(--red); border-color: var(--red); }

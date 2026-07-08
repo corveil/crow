@@ -893,7 +893,9 @@ function sessionRow(s) {
     prb.style.borderColor = color;
     badges.appendChild(prb);
   }
-  if (ind.label) {
+  // Activity badge (Working/Waiting/Done/…) is redundant on managers — they
+  // already show the trailing status dot, and the badge forces a second line.
+  if (ind.label && s.kind !== 'manager') {
     const activity = el('span', 'activity-badge', ind.label);
     activity.style.color = ind.color;
     badges.appendChild(activity);
@@ -1041,17 +1043,9 @@ function sessionMenuItems(s) {
   if (s.ticket_url || prUrl) items.push({ sep: true });
   const hasPR = (s.links || []).some((l) => l.type === 'pr');
   if (s.kind === 'manager') {
+    // Maintenance actions (restart manager / reload tmux) live in Settings → About;
+    // the manager row menu stays minimal: just rename and delete.
     items.push({ label: 'Rename', action: () => renameSession(s.id, s.name) });
-    items.push({ sep: true });
-    items.push({ label: 'Restart Manager', action: async () => {
-      if (await confirmModal('Restart the Manager? Its Claude Code session will relaunch.',
-        { title: 'Restart Manager', okLabel: 'Restart' })) sessionAction('restart-manager', s.id);
-    } });
-    items.push({ label: 'Reload tmux config', action: () => sessionAction('reload-tmux-config', s.id) });
-    items.push({ label: 'Reload tmux (restart server)', action: async () => {
-      if (await confirmModal('Restart the tmux server? Terminals across every session are recreated.',
-        { title: 'Reload tmux', okLabel: 'Restart tmux', danger: true })) sessionAction('restart-tmux-server', s.id);
-    } });
     items.push({ sep: true });
     items.push({ label: 'Delete', danger: true, action: () => deleteSession(s.id, s.name) });
     return items;
@@ -1809,12 +1803,15 @@ async function refreshAllowlist() {
 // ---------------------------------------------------------------------------
 let term = null;
 let fitAddon = null;
+let searchAddon = null;
 let termWs = null;
 
 function ensureTerminal() {
   if (term) return;
   fitAddon = new FitAddon.FitAddon();
   const imageAddon = new ImageAddon.ImageAddon({ sixelSupport: true, iipSupport: true, kittySupport: true });
+  searchAddon = new SearchAddon.SearchAddon();
+  const webLinksAddon = new WebLinksAddon.WebLinksAddon();
   // Config block mirrors CrowTerminal/Resources/xterm/terminal.html.
   term = new Terminal({
     cursorBlink: true,
@@ -1826,7 +1823,16 @@ function ensureTerminal() {
   });
   term.loadAddon(fitAddon);
   term.loadAddon(imageAddon);
+  term.loadAddon(searchAddon);
+  term.loadAddon(webLinksAddon);
   term.open(document.getElementById('terminal'));
+  // WebGL renderer for throughput; must load after open(). Falls back to the
+  // default renderer if the GL context is unavailable or gets lost.
+  try {
+    const webglAddon = new WebglAddon.WebglAddon();
+    webglAddon.onContextLoss(() => webglAddon.dispose());
+    term.loadAddon(webglAddon);
+  } catch (_) { /* WebGL unavailable → canvas/DOM renderer */ }
   term.onData((data) => {
     if (termWs && termWs.readyState === WebSocket.OPEN) termWs.send(new TextEncoder().encode(data));
   });
@@ -1841,6 +1847,12 @@ function ensureTerminal() {
       return false;
     }
     if (e.metaKey && (e.key === 'v' || e.key === 'V')) { pasteIntoTerminal(); return false; }
+    if (e.metaKey && (e.key === 'f' || e.key === 'F')) {
+      textPrompt('Find in terminal', '', { okLabel: 'Find' }).then((q) => {
+        if (q && searchAddon) { try { searchAddon.findNext(q); } catch (_) {} }
+      });
+      return false;
+    }
     return true;
   });
   enableTouchScroll(document.getElementById('terminal'));
