@@ -16,9 +16,9 @@
   <text x="375" y="158" text-anchor="middle" font-size="15" font-weight="700" fill="#0d3a6b">crow CLI</text>
   <text x="375" y="178" text-anchor="middle" font-size="12" fill="#3a5a7a">Unix socket</text>
 
-  <!-- Electron/Tauri future -->
+  <!-- Tauri shell -->
   <rect x="490" y="126" width="230" height="70" rx="10" fill="#f3e9f8" stroke="#7b1fa2" stroke-width="2" stroke-dasharray="7 5"/>
-  <text x="605" y="152" text-anchor="middle" font-size="15" font-weight="700" fill="#5a1370">Electron / Tauri shell</text>
+  <text x="605" y="152" text-anchor="middle" font-size="15" font-weight="700" fill="#5a1370">Tauri shell</text>
   <text x="605" y="172" text-anchor="middle" font-size="12" fill="#6a4080">future — wraps this same web UI</text>
   <text x="605" y="188" text-anchor="middle" font-size="11" fill="#8a6a98">(new, parallel; no Swift rewrite)</text>
 
@@ -97,7 +97,7 @@
   <rect x="60" y="800" width="1080" height="86" rx="14" fill="#eceff1" stroke="#546e7a" stroke-width="3"/>
   <text x="600" y="833" text-anchor="middle" font-size="18" font-weight="700" fill="#324049">Shared tmux server</text>
   <text x="600" y="857" text-anchor="middle" font-size="13.5" fill="#4a5b64">session "crow-cockpit"  ·  $TMPDIR/crow-tmux.sock  —  one physical server; crowd &amp; the Swift app both attach here</text>
-  <text x="600" y="875" text-anchor="middle" font-size="12" fill="#6a7b84">this shared server is what lets a web/Electron client show the Swift app's live terminals — and lets both run side by side</text>
+  <text x="600" y="875" text-anchor="middle" font-size="12" fill="#6a7b84">this shared server is what lets a web/desktop client show the Swift app's live terminals — and lets both run side by side</text>
 
   <!-- ===================== ARROWS ===================== -->
   <defs>
