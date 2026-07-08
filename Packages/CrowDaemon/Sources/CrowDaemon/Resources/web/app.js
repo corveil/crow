@@ -12,10 +12,19 @@ function wsURL(path) {
   return proto + '://' + location.host + path;
 }
 
+// Connection light in the bottom-left status bar tracks the /rpc control socket
+// (CROW-593): green when open, amber while (re)connecting.
+let wsConnected = false;
+function setWsConnected(v) {
+  if (wsConnected === v) return;
+  wsConnected = v;
+  renderStatusBar();
+}
+
 function rpcConnect() {
   return new Promise((resolve) => {
     const ws = new WebSocket(wsURL('/rpc'));
-    ws.onopen = () => resolve(ws);
+    ws.onopen = () => { setWsConnected(true); resolve(ws); };
     ws.onmessage = (event) => {
       let msg;
       try { msg = JSON.parse(event.data); } catch (_) { return; }
@@ -29,7 +38,7 @@ function rpcConnect() {
       if (msg.error) waiter.reject(new Error(msg.error.message || 'rpc error'));
       else waiter.resolve(msg.result || {});
     };
-    ws.onclose = () => { rpcState.ready = null; setTimeout(() => { rpcState.ready = rpcConnect(); }, 1000); };
+    ws.onclose = () => { setWsConnected(false); rpcState.ready = null; setTimeout(() => { rpcState.ready = rpcConnect(); }, 1000); };
     ws.onerror = () => ws.close();
   });
 }
@@ -69,15 +78,18 @@ function onServerChanged() {
 // `changed`, so we load this on boot and re-load it when the Settings modal
 // saves (via `window.reloadUIConfig`). Mirrors the desktop's
 // `appState.hideSessionDetails`.
-const uiConfig = { hideSessionDetails: false, notifications: null };
+const uiConfig = { hideSessionDetails: false, notifications: null, webPasswordSet: false };
 async function loadUIConfig() {
   try {
     const res = await rpc('get-config');
     const cfg = JSON.parse((res && res.config) || '{}');
     uiConfig.hideSessionDetails = !!(cfg.sidebar && cfg.sidebar.hideSessionDetails);
     uiConfig.notifications = parseNotificationSettings(cfg.notifications);
+    // Presence of the (secret-stripped) webAuth block means a web password is set.
+    uiConfig.webPasswordSet = !!cfg.webAuth;
   } catch (_) { /* keep defaults */ }
   renderSidebar();
+  renderStatusBar();
 }
 window.reloadUIConfig = loadUIConfig;
 
@@ -608,13 +620,50 @@ function ticketsCard() {
   return card;
 }
 
+// Whether this is a signed-in *remote* web session: a web password is set and
+// we're reached via a non-loopback host — i.e. through the https proxy, which
+// required a login. Localhost is always trusted without a session, so no logout
+// affordance is shown there (CROW-593).
+function signedInOverWeb() {
+  const h = (location.hostname || '').toLowerCase();
+  const loopback = h === 'localhost' || h === '::1' || h === '' || h.startsWith('127.');
+  return uiConfig.webPasswordSet && !loopback;
+}
+
+// Bottom-left status bar: a connection light (the /rpc socket state) plus — on a
+// signed-in remote session only — a logout button. Rebuilt on connect/disconnect
+// and after config loads (CROW-593).
+function renderStatusBar() {
+  const bar = document.getElementById('statusbar');
+  if (!bar) return;
+  bar.classList.toggle('connected', wsConnected);
+  bar.classList.toggle('disconnected', !wsConnected);
+  const label = bar.querySelector('.conn-label');
+  if (label) label.textContent = wsConnected ? 'Connected' : 'Connecting…';
+  const actions = document.getElementById('statusbar-actions');
+  if (!actions) return;
+  actions.textContent = '';
+  if (signedInOverWeb()) {
+    const out = el('button', 'sb-logout');
+    out.type = 'button';
+    out.title = 'Log out';
+    out.appendChild(icon('logout', 15));
+    out.onclick = async () => {
+      if (!window.confirm('Log out of this web session? You’ll need the web password to sign back in.')) return;
+      try { await fetch('/logout', { method: 'POST' }); } catch (_) {}
+      location.reload();  // now unauthenticated → the auth gate serves the login page
+    };
+    actions.appendChild(out);
+  }
+}
+
 // Settings + Select, stacked vertically to the right of the Tickets card
 // (outside the box): Settings on top, Select below.
 function sidebarToolsStack() {
   const stack = el('div', 'sidebar-tools');
   const gear = el('button', 'tk-tool');
   gear.title = 'Settings';
-  gear.appendChild(icon('gear', 14));
+  gear.appendChild(icon('wrench', 14));
   gear.onclick = () => { if (window.openSettings) window.openSettings(); };
   stack.appendChild(gear);
   const selBtn = el('button', 'tk-tool' + (selectionMode ? ' nav-selecting' : ''));
@@ -716,7 +765,8 @@ const ICONS = {
   checkCircle: '<circle cx="8" cy="8" r="5.8"/><path d="M5.6 8.2 7.3 9.9 10.6 6.2"/>',
   checkSquare: '<rect x="2.5" y="2.5" width="11" height="11" rx="2"/><path d="M5.5 8.2 7.2 9.9 10.6 6"/>',
   close: '<path d="M4 4l8 8M12 4l-8 8"/>',
-  gear: '<circle cx="8" cy="8" r="2.1"/><path d="M8 1.6v2.1M8 12.3v2.1M1.6 8h2.1M12.3 8h2.1M3.5 3.5l1.5 1.5M11 11l1.5 1.5M12.5 3.5 11 5M5 11l-1.5 1.5"/>',
+  wrench: '<path d="M11.8 2.4a2.8 2.8 0 0 0-3.3 3.7L2.9 11.7a1.3 1.3 0 0 0 1.8 1.8l5.6-5.6a2.8 2.8 0 0 0 3.7-3.3l-1.9 1.9-1.6-.4-.4-1.6z"/>',
+  logout: '<path d="M6.5 3.5H3.5v9h3"/><path d="M12.5 8H6.5"/><path d="M10 5.5 12.5 8 10 10.5"/>',
 };
 function icon(name, size) {
   const span = el('span', 'ico');
@@ -750,6 +800,13 @@ function sessionRow(s) {
     + (multiSel ? ' multi-selected' : ''));
   row.onclick = selectionMode ? (() => toggleSelect(s.id)) : (() => selectSession(s.id));
   row.oncontextmenu = (e) => showSessionMenu(e, s);
+  // Touch devices have no right-click: a long-press opens the same menu at the
+  // finger, the standard mobile equivalent (rename/delete were unreachable on
+  // mobile otherwise — CROW-593).
+  attachLongPress(row, (x, y) => {
+    if (selectionMode) return;
+    showSessionMenu({ preventDefault() {}, clientX: x, clientY: y }, s);
+  });
   const ind = activityIndicator(s);
   // Left accent hue: amber for attention (permission/question), green for done,
   // neutral otherwise (mirrors the desktop rowBackgroundColor logic).
@@ -817,6 +874,23 @@ function sessionRow(s) {
     badges.appendChild(activity);
   }
   if (badges.children.length) content.appendChild(badges);
+
+  // Visible actions affordance (tap = same menu as right-click / long-press).
+  // The row reserves a right gutter (.session-row padding-right) so this sits in
+  // the bottom-right corner clear of the status dot, incl. single-line manager
+  // cards. Omitted in multi-select mode, where the checkbox is the action.
+  if (!selectionMode) {
+    const kebab = el('button', 'row-kebab', '⋮');
+    kebab.type = 'button';
+    kebab.title = 'Actions';
+    kebab.setAttribute('aria-label', 'Session actions');
+    kebab.onclick = (e) => {
+      e.stopPropagation();
+      const r = kebab.getBoundingClientRect();
+      showSessionMenu({ preventDefault() {}, clientX: r.right, clientY: r.bottom }, s);
+    };
+    row.appendChild(kebab);
+  }
   return row;
 }
 
@@ -888,12 +962,40 @@ function showSessionMenu(e, s) {
     item.onclick = (ev) => { ev.stopPropagation(); closeContextMenu(); it.action(); };
     menu.appendChild(item);
   }
+  if (!menu.childElementCount) return; // nothing actionable for this session
   document.body.appendChild(menu);
   const x = Math.min(e.clientX, window.innerWidth - menu.offsetWidth - 8);
   const y = Math.min(e.clientY, window.innerHeight - menu.offsetHeight - 8);
   menu.style.left = Math.max(4, x) + 'px';
   menu.style.top = Math.max(4, y) + 'px';
   setTimeout(() => document.addEventListener('click', closeContextMenu, { once: true }), 0);
+}
+
+// Long-press → context-menu bridge for touch devices. Fires `handler(x, y)` at
+// the touch point after ~500ms if the finger hasn't moved (a scroll/drag past a
+// small threshold cancels it), then swallows the trailing click so the row
+// isn't also selected. Desktop right-click keeps its own oncontextmenu path.
+function attachLongPress(node, handler) {
+  let timer = null, sx = 0, sy = 0, fired = false;
+  const clear = () => { if (timer) { clearTimeout(timer); timer = null; } };
+  node.addEventListener('touchstart', (e) => {
+    if (e.touches.length !== 1) { clear(); return; }
+    fired = false;
+    sx = e.touches[0].clientX;
+    sy = e.touches[0].clientY;
+    clear();
+    timer = setTimeout(() => { fired = true; timer = null; handler(sx, sy); }, 500);
+  }, { passive: true });
+  node.addEventListener('touchmove', (e) => {
+    if (!timer) return;
+    const t = e.touches[0];
+    if (Math.abs(t.clientX - sx) > 10 || Math.abs(t.clientY - sy) > 10) clear();
+  }, { passive: true });
+  node.addEventListener('touchend', (e) => {
+    clear();
+    if (fired) { e.preventDefault(); fired = false; } // swallow the emulated click
+  });
+  node.addEventListener('touchcancel', clear, { passive: true });
 }
 
 // The PR URL for a session, from its stored links or the live PR surface.
@@ -1181,8 +1283,52 @@ async function quickAction(id, action, label) {
   }
 }
 
+// In-page single-line text prompt. Replaces window.prompt(), which many browsers
+// silently no-op — returning null — over the web: after a "prevent additional
+// dialogs" opt-out, on assorted mobile browsers, and in some remote/secure
+// contexts. window.prompt failing that way meant the rename rpc was never sent
+// (CROW-593). Returns the entered string, or null on cancel/Escape/backdrop.
+function textPrompt(title, current, { placeholder = '', okLabel = 'Save' } = {}) {
+  return new Promise((resolve) => {
+    let done = false;
+    const backdrop = el('div', 'text-prompt-backdrop');
+    const card = el('div', 'text-prompt-card');
+    const heading = el('div', 'text-prompt-title', title);
+    const input = el('input', 'text-prompt-input');
+    input.type = 'text';
+    input.value = current || '';
+    if (placeholder) input.placeholder = placeholder;
+    const actions = el('div', 'text-prompt-actions');
+    const cancel = el('button', 'text-prompt-btn', 'Cancel');
+    const ok = el('button', 'text-prompt-btn primary', okLabel);
+    actions.append(cancel, ok);
+    card.append(heading, input, actions);
+    backdrop.appendChild(card);
+
+    function finish(value) {
+      if (done) return;
+      done = true;
+      document.removeEventListener('keydown', onKey, true);
+      backdrop.remove();
+      resolve(value);
+    }
+    function onKey(e) {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(null); }
+      else if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); finish(input.value); }
+    }
+    cancel.onclick = () => finish(null);
+    ok.onclick = () => finish(input.value);
+    backdrop.addEventListener('mousedown', (e) => { if (e.target === backdrop) finish(null); });
+    document.addEventListener('keydown', onKey, true);
+    document.body.appendChild(backdrop);
+    input.focus();
+    input.select();
+  });
+}
+
 async function renameSession(id, current) {
-  const name = window.prompt('Rename session', current);
+  const raw = await textPrompt('Rename session', current, { okLabel: 'Rename' });
+  const name = raw == null ? null : raw.trim();
   if (!name || name === current) return;
   try {
     await rpc('rename-session', { session_id: id, name });
@@ -1594,7 +1740,7 @@ function ensureTerminal() {
     fontSize: 14,
     fontFamily: '"MesloLGS NF", "MesloLGS Nerd Font", "JetBrainsMono Nerd Font", "Hack Nerd Font", "FiraCode Nerd Font", Menlo, Monaco, monospace',
     theme: { background: '#1e1e1e', foreground: '#d4d4d4' },
-    scrollback: 10000,
+    scrollback: 50000,
     allowTransparency: true,
   });
   term.loadAddon(fitAddon);
@@ -1639,7 +1785,7 @@ function enableTouchScroll(node) {
   node.addEventListener('touchend', () => { lastY = null; }, { passive: true });
 }
 
-// Let xterm.js own wheel scrolling in the browser: scroll the local 10k-line
+// Let xterm.js own wheel scrolling in the browser: scroll the local 50k-line
 // scrollback instead of forwarding the wheel to tmux (whose server-global
 // `mouse on` would otherwise drop into copy-mode — janky in a browser). A
 // fullscreen/alternate-screen app (vim, htop) still gets the wheel.

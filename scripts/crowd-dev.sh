@@ -21,7 +21,7 @@ PORT="${CROW_HTTP_PORT:-8787}"
 SOCK="${CROW_SOCKET:-$HOME/.local/share/crow/crow.sock}"
 SOCK="${SOCK/#\~/$HOME}"   # expand a leading ~ (a quoted CROW_SOCKET override won't be tilde-expanded by the shell)
 if [[ -n "${CROW_DEV_ROOT:-}" ]]; then
-  DEVROOT="$CROW_DEV_ROOT"
+  DEVROOT="$CROW_DEV_OROT"
 elif [[ -f "$HOME/Library/Application Support/crow/devroot" ]]; then
   DEVROOT="$(tr -d '[:space:]' < "$HOME/Library/Application Support/crow/devroot")"
 else
@@ -32,6 +32,7 @@ WATCH=(Packages/CrowDaemon Packages/CrowTerminal Packages/CrowCore Packages/Crow
 
 START_CMD=(.build/debug/crowd --host "$HOST" --http-port "$PORT" --socket "$SOCK" --web-dir "$WEBDIR")
 
+echo "[crowd-dev] ${START_CMD[*]}"
 echo "[crowd-dev] http://$HOST:$PORT  · socket $SOCK · devRoot $DEVROOT · web live from $WEBDIR"
 
 if command -v watchexec >/dev/null 2>&1; then

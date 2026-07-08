@@ -39,7 +39,7 @@ enum Artifacts {
     }
 
     /// Mount `GET /artifacts/:session/:file`.
-    static func mount(on router: Router<BasicRequestContext>) {
+    static func mount(on router: Router<CrowHTTPContext>) {
         router.get("/artifacts/:session/:file") { _, context -> Response in
             guard let session = context.parameters.get("session"),
                   let dir = dir(sessionID: session),

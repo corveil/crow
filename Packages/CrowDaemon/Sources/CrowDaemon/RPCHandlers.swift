@@ -34,16 +34,6 @@ enum DaemonRPCError: Error, LocalizedError, RPCErrorCoded {
 /// `DaemonRPCError` on an app-level error; rethrows the underlying socket error
 /// (connection refused → app not running) so callers can fall back to local
 /// handling (CROW-581).
-private func forwardToApp(
-    _ method: String, _ params: [String: JSONValue], socket: String
-) throws -> [String: JSONValue] {
-    let response = try SocketClient(socketPath: socket).send(method: method, params: params)
-    if let error = response.error {
-        throw DaemonRPCError.applicationError(error.message)
-    }
-    return response.result ?? [:]
-}
-
 /// App-down local path for the `session.status` transitions (mark-in-review /
 /// complete-session / set-session-active): write the status to both the
 /// observable `appState` and the persisted `store`, exactly like `set-status`.
@@ -107,7 +97,6 @@ func makeCommandRouter(
     git: GitManager,
     devRoot: String,
     cockpit: TerminalCockpit?,
-    forwardSocket: String? = nil,
     tracker: IssueTracker? = nil,
     allowList: AllowListService? = nil,
     sessionService: SessionService? = nil,
@@ -307,13 +296,8 @@ func makeCommandRouter(
                   let name = params["name"]?.stringValue else {
                 throw DaemonRPCError.invalidParams("session_id, terminal_id, name required")
             }
-            if let forwardSocket {
-                do { return try forwardToApp("rename-terminal", params, socket: forwardSocket) }
-                catch let error as DaemonRPCError { throw error }
-                catch { /* app down → local */ }
-            }
             guard let sessionService else {
-                throw DaemonRPCError.applicationError("Renaming a terminal requires the Crow desktop app or tmux on the daemon host")
+                throw DaemonRPCError.applicationError("Renaming a terminal requires tmux on the daemon host")
             }
             let ok = await MainActor.run { sessionService.renameTerminal(sessionID: sid, terminalID: tid, name: name) }
             return ["ok": .bool(ok)]
@@ -322,13 +306,8 @@ func makeCommandRouter(
             guard let tidStr = params["terminal_id"]?.stringValue, let tid = UUID(uuidString: tidStr) else {
                 throw DaemonRPCError.invalidParams("terminal_id required")
             }
-            if let forwardSocket {
-                do { return try forwardToApp("launch-agent", params, socket: forwardSocket) }
-                catch let error as DaemonRPCError { throw error }
-                catch { /* app down → local */ }
-            }
             guard let sessionService else {
-                throw DaemonRPCError.applicationError("Launching an agent requires the Crow desktop app or tmux on the daemon host")
+                throw DaemonRPCError.applicationError("Launching an agent requires tmux on the daemon host")
             }
             await MainActor.run { sessionService.launchAgent(terminalID: tid) }
             return ["ok": .bool(true)]
@@ -337,37 +316,22 @@ func makeCommandRouter(
             guard let tidStr = params["terminal_id"]?.stringValue, let tid = UUID(uuidString: tidStr) else {
                 throw DaemonRPCError.invalidParams("terminal_id required")
             }
-            if let forwardSocket {
-                do { return try forwardToApp("retry-readiness", params, socket: forwardSocket) }
-                catch let error as DaemonRPCError { throw error }
-                catch { /* app down → local */ }
-            }
             guard let sessionService else {
-                throw DaemonRPCError.applicationError("Retrying readiness requires the Crow desktop app or tmux on the daemon host")
+                throw DaemonRPCError.applicationError("Retrying readiness requires tmux on the daemon host")
             }
             await MainActor.run { sessionService.retryReadiness(terminalID: tid) }
             return ["ok": .bool(true)]
         },
         "restart-manager": { params in
-            if let forwardSocket {
-                do { return try forwardToApp("restart-manager", params, socket: forwardSocket) }
-                catch let error as DaemonRPCError { throw error }
-                catch { /* app down → local */ }
-            }
             guard let sessionService else {
-                throw DaemonRPCError.applicationError("Restarting the Manager requires the Crow desktop app or tmux on the daemon host")
+                throw DaemonRPCError.applicationError("Restarting the Manager requires tmux on the daemon host")
             }
             await MainActor.run { sessionService.restartManager(devRoot: devRoot) }
             return ["ok": .bool(true)]
         },
         "restart-tmux-server": { params in
-            if let forwardSocket {
-                do { return try forwardToApp("restart-tmux-server", params, socket: forwardSocket) }
-                catch let error as DaemonRPCError { throw error }
-                catch { /* app down → local */ }
-            }
             guard let sessionService else {
-                throw DaemonRPCError.applicationError("Restarting the tmux server requires the Crow desktop app or tmux on the daemon host")
+                throw DaemonRPCError.applicationError("Restarting the tmux server requires tmux on the daemon host")
             }
             await MainActor.run { sessionService.restartTmuxServer() }
             return ["ok": .bool(true)]
@@ -434,11 +398,6 @@ func makeCommandRouter(
                   let statusStr = params["status"]?.stringValue, let status = SessionStatus(rawValue: statusStr) else {
                 throw DaemonRPCError.invalidParams("session_id and status required")
             }
-            if let forwardSocket {
-                do { return try forwardToApp("set-status", params, socket: forwardSocket) }
-                catch let error as DaemonRPCError { throw error }
-                catch { /* app not running → fall through to local */ }
-            }
             return try await MainActor.run {
                 guard let idx = appState.sessions.firstIndex(where: { $0.id == id }) else {
                     throw DaemonRPCError.applicationError("Session not found")
@@ -463,11 +422,6 @@ func makeCommandRouter(
             guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr),
                   let locked = params["locked"]?.boolValue else {
                 throw DaemonRPCError.invalidParams("session_id and locked required")
-            }
-            if let forwardSocket {
-                do { return try forwardToApp("set-locked", params, socket: forwardSocket) }
-                catch let error as DaemonRPCError { throw error }
-                catch { /* app not running → fall through to local */ }
             }
             return try await MainActor.run {
                 guard let idx = appState.sessions.firstIndex(where: { $0.id == id }) else {
@@ -494,11 +448,6 @@ func makeCommandRouter(
                 throw DaemonRPCError.invalidParams(
                     "Invalid session name (max \(Validation.maxSessionNameLength) chars, no control characters)")
             }
-            if let forwardSocket {
-                do { return try forwardToApp("rename-session", params, socket: forwardSocket) }
-                catch let error as DaemonRPCError { throw error }
-                catch { /* app not running → fall through to local */ }
-            }
             return try await MainActor.run {
                 guard let idx = appState.sessions.firstIndex(where: { $0.id == id }) else {
                     throw DaemonRPCError.applicationError("Session not found")
@@ -518,13 +467,8 @@ func makeCommandRouter(
         // app does. Needs tmux; without a SessionService it errors, as before
         // (ADR 0007; CROW-581, M-E).
         "delete-session": { params in
-            if let forwardSocket {
-                do { return try forwardToApp("delete-session", params, socket: forwardSocket) }
-                catch let error as DaemonRPCError { throw error }
-                catch { /* app not running → fall through to local teardown */ }
-            }
             guard let sessionService else {
-                throw DaemonRPCError.applicationError("Deleting a session requires the Crow desktop app or tmux on the daemon host")
+                throw DaemonRPCError.applicationError("Deleting a session requires tmux on the daemon host")
             }
             guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
                 throw DaemonRPCError.invalidParams("session_id required")
@@ -545,11 +489,6 @@ func makeCommandRouter(
             guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
                 throw DaemonRPCError.invalidParams("session_id required")
             }
-            if let forwardSocket {
-                do { return try forwardToApp("get-pr-status", params, socket: forwardSocket) }
-                catch let error as DaemonRPCError { throw error }
-                catch { /* app not running → fall through to local read */ }
-            }
             return await MainActor.run {
                 guard let pr = appState.prStatus[id] else { return ["has_pr": .bool(false)] }
                 return prStatusJSON(pr)
@@ -562,11 +501,6 @@ func makeCommandRouter(
         // terminal (best-effort: silently skips if there's no live sendable
         // managed terminal, exactly like the app). Needs tmux (ADR 0007; M-E).
         "quick-action": { params in
-            if let forwardSocket {
-                do { return try forwardToApp("quick-action", params, socket: forwardSocket) }
-                catch let error as DaemonRPCError { throw error }
-                catch { /* app not running → fall through to local dispatch */ }
-            }
             guard let autoRespond else {
                 throw DaemonRPCError.applicationError("Quick actions require the Crow desktop app or tmux on the daemon host")
             }
@@ -664,10 +598,7 @@ func makeCommandRouter(
                 "issues": .array([]), "counts": .object([:]),
                 "done_last_24h": .int(0), "loading": .bool(false),
             ]
-            guard let forwardSocket else { return empty }
-            do { return try forwardToApp("list-tickets", [:], socket: forwardSocket) }
-            catch let error as DaemonRPCError { throw error }
-            catch { return empty }
+            return empty
         },
         "list-reviews": { _ in
             if tracker != nil {
@@ -698,10 +629,7 @@ func makeCommandRouter(
                 }
             }
             let empty: [String: JSONValue] = ["reviews": .array([]), "loading": .bool(false), "unseen": .int(0)]
-            guard let forwardSocket else { return empty }
-            do { return try forwardToApp("list-reviews", [:], socket: forwardSocket) }
-            catch let error as DaemonRPCError { throw error }
-            catch { return empty }
+            return empty
         },
         "list-allowlist": { _ in
             if allowList != nil {
@@ -717,10 +645,7 @@ func makeCommandRouter(
                 }
             }
             let empty: [String: JSONValue] = ["entries": .array([]), "loading": .bool(false)]
-            guard let forwardSocket else { return empty }
-            do { return try forwardToApp("list-allowlist", [:], socket: forwardSocket) }
-            catch let error as DaemonRPCError { throw error }
-            catch { return empty }
+            return empty
         },
 
         // Board actions — forward-only (need the app's coordinators to spawn
@@ -732,14 +657,9 @@ func makeCommandRouter(
         // OWN Manager window directly — it registered that window, so it holds
         // the live tmux binding (no stale-index adoption). (ADR 0007; M-E2)
         "work-on-issue": { params in
-            if let forwardSocket {
-                do { return try forwardToApp("work-on-issue", params, socket: forwardSocket) }
-                catch let error as DaemonRPCError { throw error }
-                catch { /* app not running → fall through to local send */ }
-            }
             guard sessionService != nil else {
                 throw DaemonRPCError.applicationError(
-                    "Working on an issue requires either the Crow desktop app or tmux on the daemon host")
+                    "Working on an issue requires tmux on the daemon host")
             }
             guard let url = params["url"]?.stringValue, !url.isEmpty else {
                 throw DaemonRPCError.invalidParams("url required")
@@ -758,14 +678,9 @@ func makeCommandRouter(
         // (ADR 0007; CROW-581, M-E2). Kickoffs are serialized so the internal
         // dedupe stays race-free. Without tmux it errors, as before.
         "start-review": { params in
-            if let forwardSocket {
-                do { return try forwardToApp("start-review", params, socket: forwardSocket) }
-                catch let error as DaemonRPCError { throw error }
-                catch { /* app not running → fall through to local spawn */ }
-            }
             guard let sessionService else {
                 throw DaemonRPCError.applicationError(
-                    "Starting a review requires either the Crow desktop app or tmux on the daemon host")
+                    "Starting a review requires tmux on the daemon host")
             }
             guard let url = params["url"]?.stringValue, !url.isEmpty else {
                 throw DaemonRPCError.invalidParams("url required")
@@ -790,36 +705,21 @@ func makeCommandRouter(
                 await MainActor.run { allowList.promoteToGlobal(patterns: patterns) }
                 return ["ok": .bool(true)]
             }
-            guard let forwardSocket else {
-                throw DaemonRPCError.applicationError("Promoting allowlist patterns requires the Crow desktop app to be running")
-            }
-            do { return try forwardToApp("promote-allowlist", params, socket: forwardSocket) }
-            catch let error as DaemonRPCError { throw error }
-            catch { throw DaemonRPCError.applicationError("Crow desktop app not reachable") }
+            throw DaemonRPCError.applicationError("Promoting allowlist patterns requires a provider-configured daemon")
         },
         "refresh-tickets": { params in
             if let tracker {
                 await tracker.refresh()
                 return ["ok": .bool(true)]
             }
-            guard let forwardSocket else {
-                throw DaemonRPCError.applicationError("Refreshing tickets requires the Crow desktop app to be running")
-            }
-            do { return try forwardToApp("refresh-tickets", params, socket: forwardSocket) }
-            catch let error as DaemonRPCError { throw error }
-            catch { throw DaemonRPCError.applicationError("Crow desktop app not reachable") }
+            throw DaemonRPCError.applicationError("Refreshing tickets requires a provider-configured daemon")
         },
         "refresh-allowlist": { params in
             if let allowList {
                 await MainActor.run { allowList.scan() }
                 return ["ok": .bool(true)]
             }
-            guard let forwardSocket else {
-                throw DaemonRPCError.applicationError("Refreshing the allowlist requires the Crow desktop app to be running")
-            }
-            do { return try forwardToApp("refresh-allowlist", params, socket: forwardSocket) }
-            catch let error as DaemonRPCError { throw error }
-            catch { throw DaemonRPCError.applicationError("Crow desktop app not reachable") }
+            throw DaemonRPCError.applicationError("Refreshing the allowlist requires a provider-configured daemon")
         },
 
         // Batched live per-session state (remote-control + PR + PR link).
@@ -829,11 +729,6 @@ func makeCommandRouter(
         // link from `links(for:)`. Matches the app's makeEngineRouter shape so the
         // web shows PR badges wherever the desktop does (CROW-581, M-E).
         "list-sessions-live": { params in
-            if let forwardSocket {
-                do { return try forwardToApp("list-sessions-live", params, socket: forwardSocket) }
-                catch let error as DaemonRPCError { throw error }
-                catch { /* app not running → fall through to local build */ }
-            }
             return await MainActor.run {
                 var out: [String: JSONValue] = [:]
                 for session in appState.sessions {
@@ -892,17 +787,6 @@ func makeCommandRouter(
             // otherwise read {devRoot}/.claude/config.json directly. The fallback
             // covers both the app being down (socket error) and an app too old to
             // know get-config (method-not-found) during a daemon-ahead rollout.
-            if let forwardSocket,
-               let response = try? SocketClient(socketPath: forwardSocket).send(method: "get-config", params: params) {
-                if let error = response.error {
-                    if error.code != RPCErrorCode.methodNotFound {
-                        throw DaemonRPCError.applicationError(error.message)
-                    }
-                    // else: old app → fall through to disk
-                } else {
-                    return response.result ?? [:]
-                }
-            }
             let config = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
             let stripped = SettingsSecrets.strippedForTransport(config)
             guard let data = try? JSONEncoder().encode(stripped),
@@ -916,17 +800,6 @@ func makeCommandRouter(
                   let data = json.data(using: .utf8),
                   let incoming = try? JSONDecoder().decode(AppConfig.self, from: data) else {
                 throw DaemonRPCError.invalidParams("config must be a valid AppConfig JSON string")
-            }
-            if let forwardSocket,
-               let response = try? SocketClient(socketPath: forwardSocket).send(method: "set-config", params: params) {
-                if let error = response.error {
-                    if error.code != RPCErrorCode.methodNotFound {
-                        throw DaemonRPCError.applicationError(error.message)
-                    }
-                    // else: old app → write to disk below
-                } else {
-                    return response.result ?? [:]
-                }
             }
             // The browser can't see or change credentials, so keep whatever is
             // already on disk (nil-current drops any credential shell — see
@@ -946,6 +819,28 @@ func makeCommandRouter(
             return ["config": .string(outJSON), "saved": .bool(true)]
         },
 
+        // Set or clear the web-access password (CROW-593). Reachable only over an
+        // already-authorized surface (the /rpc WS is gated by WebAuthGuard), so a
+        // caller here is either local or a logged-in remote. Hashes the plaintext
+        // with PBKDF2 and persists to config.json; `{clear: true}` removes it.
+        "set-web-password": { params in
+            var config = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
+            if params["clear"]?.boolValue == true {
+                config.webAuth = nil
+            } else {
+                guard let password = params["password"]?.stringValue, !password.isEmpty else {
+                    throw DaemonRPCError.invalidParams("password must be a non-empty string (or pass clear: true)")
+                }
+                config.webAuth = PasswordHash.make(password: password)
+            }
+            do {
+                try ConfigStore.saveConfig(config, devRoot: devRoot)
+            } catch {
+                throw DaemonRPCError.applicationError("Failed to save config: \(error.localizedDescription)")
+            }
+            return ["saved": .bool(true), "password_set": .bool(config.webAuth != nil)]
+        },
+
         // Session/board actions — forward-only (need the app's coordinators).
         // Spawning a Manager forwards to the app when it's running (its
         // SessionService is the source of truth), and runs on the daemon's own
@@ -953,14 +848,9 @@ func makeCommandRouter(
         // agent on the shared cockpit (ADR 0007; CROW-581, M-E2). Without tmux
         // (sessionService == nil) it errors, as before.
         "create-manager": { params in
-            if let forwardSocket {
-                do { return try forwardToApp("create-manager", params, socket: forwardSocket) }
-                catch let error as DaemonRPCError { throw error }
-                catch { /* app not running → fall through to local spawn */ }
-            }
             guard let sessionService else {
                 throw DaemonRPCError.applicationError(
-                    "Creating a manager requires either the Crow desktop app or tmux on the daemon host")
+                    "Creating a manager requires tmux on the daemon host")
             }
             let requestedAgentKind = params["agent_kind"]?.stringValue
                 .flatMap { $0.isEmpty ? nil : AgentKind(rawValue: $0) }
@@ -983,11 +873,6 @@ func makeCommandRouter(
             guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
                 throw DaemonRPCError.invalidParams("session_id required")
             }
-            if let forwardSocket {
-                do { return try forwardToApp("mark-in-review", params, socket: forwardSocket) }
-                catch let error as DaemonRPCError { throw error }
-                catch { /* app not running → fall through to local */ }
-            }
             return try await MainActor.run {
                 try setSessionStatusLocally(id: id, to: .inReview, appState: appState, store: store)
             }
@@ -997,13 +882,8 @@ func makeCommandRouter(
         // IssueTracker — a pure provider CLI call (gh/glab/Jira/Corveil), no
         // terminal needed, fully headless (CROW-581, M-E).
         "mark-issue-done": { params in
-            if let forwardSocket {
-                do { return try forwardToApp("mark-issue-done", params, socket: forwardSocket) }
-                catch let error as DaemonRPCError { throw error }
-                catch { /* app not running → fall through to local */ }
-            }
             guard let tracker else {
-                throw DaemonRPCError.applicationError("Marking the issue done requires the Crow desktop app or a provider-configured daemon")
+                throw DaemonRPCError.applicationError("Marking the issue done requires a provider-configured daemon")
             }
             guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
                 throw DaemonRPCError.invalidParams("session_id required")
@@ -1015,11 +895,6 @@ func makeCommandRouter(
             guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
                 throw DaemonRPCError.invalidParams("session_id required")
             }
-            if let forwardSocket {
-                do { return try forwardToApp("complete-session", params, socket: forwardSocket) }
-                catch let error as DaemonRPCError { throw error }
-                catch { /* app not running → fall through to local */ }
-            }
             return try await MainActor.run {
                 try setSessionStatusLocally(id: id, to: .completed, appState: appState, store: store)
             }
@@ -1027,11 +902,6 @@ func makeCommandRouter(
         "set-session-active": { params in
             guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
                 throw DaemonRPCError.invalidParams("session_id required")
-            }
-            if let forwardSocket {
-                do { return try forwardToApp("set-session-active", params, socket: forwardSocket) }
-                catch let error as DaemonRPCError { throw error }
-                catch { /* app not running → fall through to local */ }
             }
             return try await MainActor.run {
                 try setSessionStatusLocally(id: id, to: .active, appState: appState, store: store)
@@ -1041,13 +911,8 @@ func makeCommandRouter(
         // when running; with the app down the daemon runs it on its OWN
         // IssueTracker — a pure provider CLI call, fully headless (CROW-581, M-E).
         "add-merge-label": { params in
-            if let forwardSocket {
-                do { return try forwardToApp("add-merge-label", params, socket: forwardSocket) }
-                catch let error as DaemonRPCError { throw error }
-                catch { /* app not running → fall through to local */ }
-            }
             guard let tracker else {
-                throw DaemonRPCError.applicationError("Adding the merge label requires the Crow desktop app or a provider-configured daemon")
+                throw DaemonRPCError.applicationError("Adding the merge label requires a provider-configured daemon")
             }
             guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
                 throw DaemonRPCError.invalidParams("session_id required")
@@ -1062,13 +927,8 @@ func makeCommandRouter(
         // headlessly. Needs tmux (a SessionService-backed scheduler); without one
         // it errors, as before (ADR 0007; CROW-581, M-E2).
         "run-job": { params in
-            if let forwardSocket {
-                do { return try forwardToApp("run-job", params, socket: forwardSocket) }
-                catch let error as DaemonRPCError { throw error }
-                catch { /* app not running → fall through to local */ }
-            }
             guard let jobScheduler else {
-                throw DaemonRPCError.applicationError("Running a job requires the Crow desktop app or tmux on the daemon host")
+                throw DaemonRPCError.applicationError("Running a job requires tmux on the daemon host")
             }
             guard let idStr = params["job_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
                 throw DaemonRPCError.invalidParams("job_id required")
