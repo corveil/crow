@@ -7,3 +7,4 @@
 
 Source: https://www.npmjs.com/package/@xterm/xterm
 Fetched: 2026-07-02 (npm pack, lib/*.js + css/xterm.css); search/web-links/webgl added 2026-07-08
+@xterm/addon-web-fonts 0.1.0
