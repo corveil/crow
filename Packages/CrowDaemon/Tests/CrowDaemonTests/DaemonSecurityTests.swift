@@ -468,6 +468,57 @@ import CrowPersistence
             Issue.record("headers with no baseURL should be rejected")
         }
     }
+
+    @Test func blankHeaderValuesKeepStoredSecrets() {
+        // Local editor prefills stripped keys with empty values; updating only
+        // the base URL must not wipe the stored auth header (review Yellow #1).
+        let stored = WorkspaceGateway(
+            baseURL: "https://old.example",
+            customHeaders: ["X-Api-Key": "SECRET", "X-Extra": "keep-me"])
+        let incoming = WorkspaceGateway(
+            baseURL: "https://new.example",
+            customHeaders: ["X-Api-Key": "", "X-Extra": "", "X-New": "fresh"])
+        let merged = SecretRoutes.mergingPreservedHeaders(incoming: incoming, stored: stored)
+        #expect(merged?.baseURL == "https://new.example")
+        #expect(merged?.customHeaders["X-Api-Key"] == "SECRET")
+        #expect(merged?.customHeaders["X-Extra"] == "keep-me")
+        #expect(merged?.customHeaders["X-New"] == "fresh")
+    }
+
+    @Test func blankHeaderWithNoStoredValueIsDropped() {
+        let incoming = WorkspaceGateway(
+            baseURL: "https://gw.example",
+            customHeaders: ["X-Api-Key": "real", "X-Empty": ""])
+        let merged = SecretRoutes.mergingPreservedHeaders(incoming: incoming, stored: nil)
+        #expect(merged?.customHeaders["X-Api-Key"] == "real")
+        #expect(merged?.customHeaders["X-Empty"] == nil)
+    }
+
+    @Test func nilIncomingClearsGateway() {
+        let stored = WorkspaceGateway(baseURL: "https://gw", customHeaders: ["X": "y"])
+        #expect(SecretRoutes.mergingPreservedHeaders(incoming: nil, stored: stored) == nil)
+    }
+
+    @Test func nonBlankIncomingValueOverridesStored() {
+        let stored = WorkspaceGateway(
+            baseURL: "https://gw", customHeaders: ["X-Api-Key": "OLD"])
+        let incoming = WorkspaceGateway(
+            baseURL: "https://gw", customHeaders: ["X-Api-Key": "NEW"])
+        let merged = SecretRoutes.mergingPreservedHeaders(incoming: incoming, stored: stored)
+        #expect(merged?.customHeaders["X-Api-Key"] == "NEW")
+    }
+}
+
+/// `CrowDaemon.resolvedExecutablePath` must return an absolute path to *this*
+/// process so `reexec` can `execv` after a PATH-launched `crowd` (review Yellow #2).
+@Suite struct ReexecPathResolutionTests {
+    @Test func resolvedExecutablePathIsAbsoluteAndExists() {
+        let path = CrowDaemon.resolvedExecutablePath()
+        #expect(path != nil)
+        guard let path else { return }
+        #expect(path.hasPrefix("/"), "expected absolute path, got \(path)")
+        #expect(FileManager.default.isExecutableFile(atPath: path))
+    }
 }
 
 /// The `webAuth` hash/salt are secrets: blanked on transport (the browser only
