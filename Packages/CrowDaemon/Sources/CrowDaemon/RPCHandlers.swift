@@ -336,6 +336,18 @@ func makeCommandRouter(
             await MainActor.run { sessionService.restartTmuxServer() }
             return ["ok": .bool(true)]
         },
+        // Reload the bundled tmux config into the live server (`tmux source-file`)
+        // without restarting it — windows/sessions are unaffected. Mirrors the old
+        // desktop app's "Reload tmux config" menu item (CROW-593).
+        "reload-tmux-config": { params in
+            guard sessionService != nil else {
+                throw DaemonRPCError.applicationError("Reloading tmux config requires tmux on the daemon host")
+            }
+            if let err = await MainActor.run(body: { TmuxBackend.shared.reloadBundledConfig() }) {
+                throw DaemonRPCError.applicationError(err)
+            }
+            return ["ok": .bool(true)]
+        },
 
         "add-worktree": { params in
             guard let idStr = params["session_id"]?.stringValue, let sessionID = UUID(uuidString: idStr),

@@ -40,3 +40,11 @@ enum CLIVersion {
 EOF
 
 echo "Generated CLI version info (version: $VERSION, build: $BUILD_NUMBER, SHA: $GIT_SHORT_SHA, date: $BUILD_DATE)"
+
+# Emit build info for the web UI's Settings → About tab (served at /version.json).
+WEB_DIR="$ROOT_DIR/Packages/CrowDaemon/Sources/CrowDaemon/Resources/web"
+if [ -d "$WEB_DIR" ]; then
+    cat > "$WEB_DIR/version.json" << EOF
+{"version": "$VERSION", "gitSha": "$GIT_SHORT_SHA", "buildDate": "$BUILD_DATE"}
+EOF
+fi

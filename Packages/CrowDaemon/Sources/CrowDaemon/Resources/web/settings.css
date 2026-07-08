@@ -230,3 +230,13 @@
   background: var(--bg-card);
 }
 .st-empty { color: var(--text-muted); font-size: 12px; padding: 8px 0; }
+
+/* Slide-in polish, matching the in-page dialogs (CROW-593). */
+.settings-backdrop { animation: modal-backdrop-in 0.14s ease-out; }
+.settings-modal { animation: modal-slide-in 0.18s cubic-bezier(0.16, 1, 0.3, 1); }
+
+/* Settings → About tab (CROW-593) */
+.st-about-head { display: flex; align-items: center; gap: 14px; margin: 2px 0 10px; }
+.st-about-logo { width: 46px; height: 46px; flex: 0 0 auto; }
+.st-about-name { font-size: 18px; font-weight: 700; color: var(--gold); line-height: 1.1; }
+.st-about-ver { font-size: 12px; color: var(--text-muted); margin-top: 3px; }

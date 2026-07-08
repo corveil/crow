@@ -24,6 +24,10 @@ enum StaticAssets {
         router.get("/settings.css") { _, _ in webResponse("settings.css", webDir: webDir) }
         router.get("/settings.js") { _, _ in webResponse("settings.js", webDir: webDir) }
         router.get("/brand.svg") { _, _ in webResponse("brand.svg", webDir: webDir) }
+        // Build info for the Settings → About tab, written by
+        // scripts/generate-build-info.sh. 404s gracefully when absent (the daemon
+        // stays buildable without it — CROW-581).
+        router.get("/version.json") { _, _ in webResponse("version.json", webDir: webDir) }
         // The standalone single-terminal page from M1, kept for debugging.
         router.get("/terminal.html") { _, _ in webResponse("terminal.html", webDir: webDir) }
 
@@ -83,6 +87,7 @@ enum StaticAssets {
         if file.hasSuffix(".css") { return "text/css; charset=utf-8" }
         if file.hasSuffix(".html") { return "text/html; charset=utf-8" }
         if file.hasSuffix(".svg") { return "image/svg+xml" }
+        if file.hasSuffix(".json") { return "application/json; charset=utf-8" }
         return "application/octet-stream"
     }
 }
