@@ -21,7 +21,7 @@ PORT="${CROW_HTTP_PORT:-8787}"
 SOCK="${CROW_SOCKET:-$HOME/.local/share/crow/crow.sock}"
 SOCK="${SOCK/#\~/$HOME}"   # expand a leading ~ (a quoted CROW_SOCKET override won't be tilde-expanded by the shell)
 if [[ -n "${CROW_DEV_ROOT:-}" ]]; then
-  DEVROOT="$CROW_DEV_OROT"
+  DEVROOT="$CROW_DEV_ROOT"
 elif [[ -f "$HOME/Library/Application Support/crow/devroot" ]]; then
   DEVROOT="$(tr -d '[:space:]' < "$HOME/Library/Application Support/crow/devroot")"
 else
