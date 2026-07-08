@@ -19,7 +19,10 @@
       <div id="tabbar"></div>
       <div id="terminal-wrap"><div id="terminal"></div></div>
       <div id="board"></div>
-      <div id="detail-empty">Select a session</div>
+      <div id="detail-empty">
+        <img class="empty-brand" src="/brand.svg" alt="Crow">
+        <div class="empty-msg">Select a session</div>
+      </div>
     </main>
   </div>
   <!-- Fixed connection/status bar, bottom-left (CROW-593): a light for the /rpc
@@ -33,6 +36,9 @@
   <script src="/xterm/xterm.js"></script>
   <script src="/xterm/xterm-addon-fit.js"></script>
   <script src="/xterm/xterm-addon-image.js"></script>
+  <script src="/xterm/xterm-addon-search.js"></script>
+  <script src="/xterm/xterm-addon-web-links.js"></script>
+  <script src="/xterm/xterm-addon-webgl.js"></script>
   <script src="/app.js"></script>
   <script src="/settings.js"></script>
 </body>
