@@ -200,3 +200,23 @@
    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
    See the License for the specific language governing permissions and
    limitations under the License.
+
+
+===============================================================================
+Trademarks and Logo
+===============================================================================
+
+The "Crow" name, the Crow logo, and the Corveil brandmark (collectively, the
+"Marks") -- including the logo and brandmark image assets distributed with this
+project (for example, the application icons and brand.svg) -- are trademarks and
+the property of Corveil, Inc. They are NOT open source and are NOT licensed
+under the Apache License, Version 2.0. All rights in the Marks are reserved.
+
+As stated in Section 6 ("Trademarks") of the Apache License above, this License
+grants no permission to use the Marks. You may not use the Crow logo or
+brandmark, or the "Crow" or "Corveil" names, to endorse or promote products, or
+in any way that suggests affiliation with or endorsement by Corveil, Inc.,
+without Corveil, Inc.'s prior written permission. If you fork or redistribute
+this project, replace the logo and brandmark assets with your own.
+
+(C) Corveil, Inc. All rights reserved.
