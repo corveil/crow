@@ -1,4 +1,6 @@
+import Dispatch
 import Foundation
+import HTTPTypes
 import Testing
 import NIOCore
 import CrowCore
@@ -490,3 +492,117 @@ import CrowPersistence
         #expect(merged.webAuth?.saltB64 == "REAL_SALT")
     }
 }
+
+// MARK: - Security surface re-homed from the retired root suite (CROW-607)
+
+/// `WebAuthMiddleware` is the HTTP-side gate: it exempts the login/health/brand
+/// endpoints and runs every other path — crucially `/auth/check`, the web UI's
+/// session-validity probe — through `WebAuthGuard.authorize` (exhaustively
+/// covered in `WebAuthGuardTests`). These lock in the wrapper decisions: the
+/// exempt allowlist and the unauthorized-response selector (login page vs 401).
+@Suite struct WebAuthMiddlewareGatingTests {
+    private typealias MW = WebAuthMiddleware<CrowHTTPContext>
+
+    @Test func exemptsOnlyLoginLogoutHealthAndBrand() {
+        for path in ["/login", "/logout", "/health", "/brand.svg"] {
+            #expect(MW.isAuthExempt(path: path), "\(path) must bypass the auth gate")
+        }
+    }
+
+    @Test func authCheckAndAppRoutesAreGated() {
+        // `/auth/check` is NOT exempt — it flows through `authorize`, so an
+        // unauthenticated remote peer gets 401 rather than a blanket 204. That
+        // routing is the whole point of the probe (CROW-593).
+        #expect(!MW.isAuthExempt(path: "/auth/check"))
+        for path in ["/", "/index.html", "/app.js", "/rpc",
+                     "/config/web-password", "/config/manager-gateway"] {
+            #expect(!MW.isAuthExempt(path: path), "\(path) must be gated")
+        }
+    }
+
+    @Test func servesLoginPageOnlyForNavigationalGET() {
+        // A browser navigation (GET + Accept: text/html) → the login page (200)…
+        #expect(MW.serveLoginPageForUnauthorized(method: .get, accept: "text/html"))
+        #expect(MW.serveLoginPageForUnauthorized(method: .get, accept: "text/html,application/xhtml+xml"))
+        // …but an XHR/fetch GET, a non-GET, or a missing Accept → a bare 401.
+        #expect(!MW.serveLoginPageForUnauthorized(method: .get, accept: "application/json"))
+        #expect(!MW.serveLoginPageForUnauthorized(method: .get, accept: nil))
+        #expect(!MW.serveLoginPageForUnauthorized(method: .post, accept: "text/html"))
+    }
+}
+
+/// The Content-Security-Policy is attached to the provider-data-rendering app
+/// page only, and carries the hardening directives that make a future
+/// innerHTML slip non-exploitable (no external/inline script, no exfiltration)
+/// (CROW-593 review).
+@Suite struct ContentSecurityPolicyTests {
+    @Test func appliesToIndexOnly() {
+        #expect(StaticAssets.appliesCSP(to: "index.html"))
+        // login.html has an inline script; terminal.html is a debug page; the
+        // static assets don't render provider data — none carry the CSP.
+        for name in ["login.html", "terminal.html", "app.js", "app.css", "settings.js", "brand.svg"] {
+            #expect(!StaticAssets.appliesCSP(to: name), "\(name) must not carry the CSP")
+        }
+    }
+
+    @Test func policyCarriesHardeningDirectives() {
+        let csp = StaticAssets.contentSecurityPolicy
+        for directive in [
+            "default-src 'self'",
+            "script-src 'self' 'wasm-unsafe-eval'",   // xterm's Sixel wasm, no arbitrary eval
+            "connect-src 'self'",                      // same-origin /rpc + /terminal WS only
+            "object-src 'none'",
+            "base-uri 'none'",
+            "frame-ancestors 'none'",                  // no clickjacking
+        ] {
+            #expect(csp.contains(directive), "CSP missing: \(directive)")
+        }
+        // No wildcard host or inline-script escape hatch slipped in.
+        #expect(!csp.contains("script-src 'self' 'unsafe-inline'"))
+        #expect(!csp.contains("*"))
+    }
+}
+
+/// `ConfigStore.withConfigLock` serializes the load → mutate → save of
+/// `config.json` so concurrent writers (set-config / set-web-password /
+/// gateway saves / onJobRan) can't clobber each other's just-loaded copy
+/// (CROW-593 review #10).
+@Suite struct ConfigLockConcurrencyTests {
+    /// A shared, deliberately non-atomic read-modify-write under the lock: if the
+    /// lock didn't serialize, concurrent increments would lose updates.
+    @Test func serializesConcurrentCriticalSections() {
+        final class Counter: @unchecked Sendable { var value = 0 }
+        let counter = Counter()
+        let iterations = 2_000
+        DispatchQueue.concurrentPerform(iterations: iterations) { _ in
+            ConfigStore.withConfigLock {
+                let current = counter.value    // RMW window — lossy without the lock
+                counter.value = current + 1
+            }
+        }
+        #expect(counter.value == iterations)
+    }
+
+    /// The real use-case: concurrent load-modify-save against one config.json.
+    /// Every writer's append must survive — the final file has all N entries.
+    @Test func concurrentLoadModifySaveLosesNoUpdates() throws {
+        let devRoot = NSTemporaryDirectory() + "crow-configlock-\(UUID().uuidString)"
+        try FileManager.default.createDirectory(atPath: devRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        try ConfigStore.saveConfig(AppConfig(), devRoot: devRoot)
+
+        let iterations = 100
+        DispatchQueue.concurrentPerform(iterations: iterations) { i in
+            ConfigStore.withConfigLock {
+                var c = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
+                c.defaults.excludeTicketRepos.append("repo-\(i)")
+                try? ConfigStore.saveConfig(c, devRoot: devRoot)
+            }
+        }
+
+        let final = try #require(ConfigStore.loadConfig(devRoot: devRoot))
+        #expect(final.defaults.excludeTicketRepos.count == iterations)
+        #expect(Set(final.defaults.excludeTicketRepos).count == iterations)   // all distinct, none lost
+    }
+}
+

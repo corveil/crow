@@ -58,8 +58,7 @@ struct WebAuthMiddleware<Context: RemoteAddressRequestContext>: RouterMiddleware
         context: Context,
         next: (Request, Context) async throws -> Response
     ) async throws -> Response {
-        let path = request.uri.path
-        if path == "/login" || path == "/logout" || path == "/health" || path == "/brand.svg" {
+        if Self.isAuthExempt(path: request.uri.path) {
             return try await next(request, context)
         }
         let decision = WebAuthGuard.authorize(
@@ -72,9 +71,23 @@ struct WebAuthMiddleware<Context: RemoteAddressRequestContext>: RouterMiddleware
         if decision.isAuthorized {
             return try await next(request, context)
         }
-        if request.method == .get, (request.headers[.accept] ?? "").contains("text/html") {
+        if Self.serveLoginPageForUnauthorized(method: request.method, accept: request.headers[.accept]) {
             return StaticAssets.loginPage(webDir: webDir)
         }
         return Response(status: .unauthorized)
+    }
+
+    /// Paths served without the web-auth gate: the login/logout endpoints, the
+    /// health probe, and the brand asset the login page needs before auth. Every
+    /// other path (incl. `/auth/check`, `/`, `/rpc`, the secret POSTs) is gated.
+    static func isAuthExempt(path: String) -> Bool {
+        path == "/login" || path == "/logout" || path == "/health" || path == "/brand.svg"
+    }
+
+    /// For an unauthorized request, whether to answer with the login page (200)
+    /// rather than a bare 401: only for navigational GETs (an `Accept: text/html`
+    /// GET), so XHR/fetch and WS-adjacent probes still get a clean 401.
+    static func serveLoginPageForUnauthorized(method: HTTPRequest.Method, accept: String?) -> Bool {
+        method == .get && (accept ?? "").contains("text/html")
     }
 }
