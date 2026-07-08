@@ -23,6 +23,7 @@
     ['workspaces', 'Workspaces'],
     ['jobs', 'Jobs'],
     ['notifications', 'Notifications'],
+    ['webaccess', 'Web access'],
   ];
 
   const EVENT_LABELS = {
@@ -198,6 +199,7 @@
     else if (activeTab === 'workspaces') renderWorkspaces(body);
     else if (activeTab === 'jobs') renderJobs(body);
     else if (activeTab === 'notifications') renderNotifications(body);
+    else if (activeTab === 'webaccess') renderWebAccess(body);
   }
 
   // ---- control builders ---------------------------------------------------
@@ -544,6 +546,64 @@
 
   // ---- Workspaces ---------------------------------------------------------
 
+  // ---- Web access (CROW-593) ---------------------------------------------
+
+  function renderWebAccess(body) {
+    const isSet = !!cfg.webAuth;
+    body.appendChild(group('Web access password'));
+    body.appendChild(el('div', 'st-perm-status', isSet
+      ? 'A web password is set — non-local access requires logging in.'
+      : 'No web password set — non-local access is disabled until you set one (set it from localhost).'));
+
+    const msg = el('div', 'st-perm-status', '');
+    const row = el('div', 'st-sound-row');
+    const input = el('input', 'st-input');
+    input.type = 'password';
+    input.placeholder = isSet ? 'New password' : 'Password';
+    input.autocomplete = 'new-password';
+    const setBtn = el('button', 'action-btn', isSet ? 'Change password' : 'Set password');
+    setBtn.type = 'button';
+    setBtn.onclick = async () => {
+      if (!input.value) { msg.textContent = 'Enter a password.'; return; }
+      setBtn.disabled = true; msg.textContent = 'Saving…';
+      try {
+        await rpc('set-web-password', { password: input.value });
+        cfg.webAuth = { hashB64: '', saltB64: '', iterations: 0 }; // reflect "set" locally
+        input.value = '';
+        render();
+      } catch (e) { msg.textContent = 'Failed: ' + (e.message || e); setBtn.disabled = false; }
+    };
+    row.appendChild(input); row.appendChild(setBtn);
+    body.appendChild(field('Password', row,
+      'Required for non-local (proxied) access. Applies immediately — no Save needed.'));
+    body.appendChild(msg);
+
+    if (isSet) {
+      const rmBtn = el('button', 'action-btn', 'Remove password');
+      rmBtn.type = 'button';
+      rmBtn.onclick = async () => {
+        if (!window.confirm('Remove the web password? Non-local access will be disabled.')) return;
+        rmBtn.disabled = true;
+        try { await rpc('set-web-password', { clear: true }); cfg.webAuth = null; render(); }
+        catch (_) { rmBtn.disabled = false; }
+      };
+      body.appendChild(field('Remove', rmBtn, 'Deletes the web password; non-local access is then disabled.'));
+    }
+
+    const outBtn = el('button', 'action-btn', 'Log out');
+    outBtn.type = 'button';
+    outBtn.onclick = async () => {
+      try { await fetch('/logout', { method: 'POST' }); } catch (_) {}
+      location.reload();
+    };
+    body.appendChild(field('Session', outBtn, 'Ends this browser’s login session on this device.'));
+
+    body.appendChild(group('Remote access'));
+    body.appendChild(el('div', 'st-perm-status',
+      'Non-local access must go through an HTTPS proxy (Tailscale serve or ngrok) that forwards to crowd on '
+      + 'localhost — bind crowd to loopback so the proxy is the only way in. Direct plain-http LAN access is denied.'));
+  }
+
   function renderWorkspaces(body) {
     cfg.defaults = cfg.defaults || {};
     cfg.workspaces = cfg.workspaces || [];
@@ -589,7 +649,7 @@
         jobScope(job) + ' · ' + scheduleSummary(job.schedule) + (job.enabled ? '' : ' · disabled'),
         () => { subForm = { kind: 'job', draft: deepCopy(job), isNew: false }; render(); },
         () => { cfg.jobs = cfg.jobs.filter((x) => x.id !== job.id); markDirty(); render(); });
-      const dup = el('button', 'action-btn', 'Duplicate');
+      const dup = iconBtn('copy', 'Duplicate');
       dup.onclick = () => {
         const copy = deepCopy(job);
         copy.id = uuid();
@@ -603,14 +663,13 @@
       row.querySelector('.st-row-actions').insertBefore(dup, row.querySelector('.st-row-actions').firstChild);
       // Run this job on demand (mirrors the desktop's play button). Acts on the
       // persisted job, so nudge the user to save pending edits first (CROW-593).
-      const run = el('button', 'action-btn', 'Run now');
+      const run = iconBtn('play', 'Run now');
       run.onclick = async () => {
-        if (dirty) { run.textContent = 'Save first'; setTimeout(() => { run.textContent = 'Run now'; }, 1200); return; }
-        run.disabled = true;
-        run.textContent = 'Running…';
-        try { await rpc('run-job', { job_id: job.id }); run.textContent = 'Started ✓'; }
-        catch (e) { run.textContent = 'Failed'; }
-        setTimeout(() => { run.disabled = false; run.textContent = 'Run now'; }, 1500);
+        if (dirty) { setRowIcon(run, 'cross'); run.title = 'Save changes first'; setTimeout(() => { setRowIcon(run, 'play'); run.title = 'Run now'; }, 1200); return; }
+        run.disabled = true; run.title = 'Running…'; setRowIcon(run, 'dots');
+        try { await rpc('run-job', { job_id: job.id }); run.title = 'Started'; setRowIcon(run, 'check'); }
+        catch (e) { run.title = 'Failed'; setRowIcon(run, 'cross'); }
+        setTimeout(() => { run.disabled = false; run.title = 'Run now'; setRowIcon(run, 'play'); }, 1500);
       };
       row.querySelector('.st-row-actions').insertBefore(run, row.querySelector('.st-row-actions').firstChild);
       body.appendChild(row);
@@ -648,6 +707,31 @@
 
   // ---- list-row + sub-form scaffolding -----------------------------------
 
+  // Compact row-action icon buttons (CROW-593): a stroked 16px glyph + a hover
+  // tooltip (title) in place of a text label. Same visual language as app.js.
+  const ROW_ICONS = {
+    play: '<path d="M5 3.4 12.6 8 5 12.6z"/>',
+    copy: '<rect x="5.5" y="5.5" width="8" height="8" rx="1.2"/><path d="M3.5 10.5A1 1 0 0 1 2.5 9.5v-6a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1"/>',
+    pencil: '<path d="M10.5 3 13 5.5l-7 7H3.5V10z"/>',
+    trash: '<path d="M3 4.5h10"/><path d="M6.5 4.5V3h3v1.5"/><path d="M4.8 4.5l.6 8.5h5.2l.6-8.5"/>',
+    check: '<path d="M3 8.5l3.2 3.2L13 4.5"/>',
+    cross: '<path d="M4 4l8 8M12 4l-8 8"/>',
+    dots: '<circle cx="4" cy="8" r="0.9"/><circle cx="8" cy="8" r="0.9"/><circle cx="12" cy="8" r="0.9"/>',
+  };
+  function rowIconSVG(name) {
+    return '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" '
+      + 'stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">' + (ROW_ICONS[name] || '') + '</svg>';
+  }
+  function setRowIcon(btn, name) { btn.innerHTML = rowIconSVG(name); }
+  function iconBtn(name, title, extraClass) {
+    const b = el('button', 'st-icon-btn' + (extraClass ? ' ' + extraClass : ''));
+    b.type = 'button';
+    b.title = title;
+    b.setAttribute('aria-label', title);
+    b.innerHTML = rowIconSVG(name);
+    return b;
+  }
+
   function listRow(title, sub, onEdit, onDelete) {
     const row = el('div', 'st-row');
     const main = el('div', 'st-row-main');
@@ -655,10 +739,10 @@
     main.appendChild(el('div', 'st-row-sub', sub));
     row.appendChild(main);
     const actions = el('div', 'st-row-actions');
-    const edit = el('button', 'action-btn', 'Edit');
+    const edit = iconBtn('pencil', 'Edit');
     edit.onclick = onEdit;
     actions.appendChild(edit);
-    const del = el('button', 'action-btn action-danger', 'Delete');
+    const del = iconBtn('trash', 'Delete', 'danger');
     del.onclick = onDelete;
     actions.appendChild(del);
     row.appendChild(actions);

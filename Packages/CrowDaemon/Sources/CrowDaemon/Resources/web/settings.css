@@ -173,6 +173,7 @@
 /* Sound select + inline Preview button share a row. */
 .st-sound-row { display: flex; gap: 8px; align-items: center; }
 .st-sound-row .st-select { flex: 1; }
+.st-sound-row .st-input { flex: 1; }
 .st-perm-status { font-size: 12px; color: var(--text-muted); }
 .st-switch { accent-color: var(--gold); width: 15px; height: 15px; flex: none; }
 .st-switch-label { font-size: 12px; color: var(--text-primary); }
@@ -193,6 +194,18 @@
 .st-row-title { font-size: 12px; font-weight: 600; color: var(--text-primary); }
 .st-row-sub { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
 .st-row-actions { display: flex; gap: 6px; flex: none; }
+.st-icon-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; padding: 0;
+  background: var(--bg-surface); color: var(--text-secondary);
+  border: 1px solid var(--border-subtle); border-radius: 7px; cursor: pointer;
+}
+.st-icon-btn svg { display: block; }
+.st-icon-btn:hover { color: var(--gold); border-color: var(--border-strong); background: rgba(221, 196, 130, 0.10); }
+.st-icon-btn:active { transform: translateY(1px); }
+.st-icon-btn:disabled { opacity: 0.5; cursor: default; }
+.st-icon-btn.danger { color: var(--red); border-color: rgba(255, 69, 58, 0.35); }
+.st-icon-btn.danger:hover { color: var(--red); border-color: var(--red); background: rgba(255, 69, 58, 0.12); }
 
 .st-add {
   margin-top: 4px;

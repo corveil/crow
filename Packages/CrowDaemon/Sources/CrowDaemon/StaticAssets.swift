@@ -12,9 +12,12 @@ import NIOCore
 /// live from that source directory instead of the compiled bundle — edit +
 /// refresh, no rebuild.
 enum StaticAssets {
-    static func mount(on router: Router<BasicRequestContext>, webDir: String? = nil) {
+    static func mount(on router: Router<CrowHTTPContext>, webDir: String? = nil) {
         router.get("/") { _, _ in webResponse("index.html", webDir: webDir) }
         router.get("/index.html") { _, _ in webResponse("index.html", webDir: webDir) }
+        // Login page (CROW-593) — reachable without auth; the auth middleware
+        // also serves it as the fallback for unauthenticated navigational GETs.
+        router.get("/login") { _, _ in webResponse("login.html", webDir: webDir) }
         router.get("/app.css") { _, _ in webResponse("app.css", webDir: webDir) }
         router.get("/app.js") { _, _ in webResponse("app.js", webDir: webDir) }
         // Web Settings modal assets (CROW-581) — split out of app.css/app.js.
@@ -42,6 +45,12 @@ enum StaticAssets {
     /// runs, so `%2e%2e`/`%2f` are caught here (CROW-581 review).
     static func isSafeAssetName(_ name: String) -> Bool {
         !name.isEmpty && !name.contains("/") && !name.contains("..")
+    }
+
+    /// The login page as a 200 response — used by the auth middleware as the
+    /// fallback for unauthenticated navigational GETs (CROW-593).
+    static func loginPage(webDir: String?) -> Response {
+        webResponse("login.html", webDir: webDir)
     }
 
     /// Load a web UI file — from `webDir` on disk when set (live/hot-reload),

@@ -22,6 +22,13 @@
       <div id="detail-empty">Select a session</div>
     </main>
   </div>
+  <!-- Fixed connection/status bar, bottom-left (CROW-593): a light for the /rpc
+       socket state, plus a logout button on signed-in remote sessions. -->
+  <div id="statusbar" class="disconnected">
+    <span class="conn-dot" aria-hidden="true"></span>
+    <span class="conn-label">Connecting…</span>
+    <span id="statusbar-actions"></span>
+  </div>
   <div id="lightbox" hidden><img id="lightbox-img" alt=""></div>
   <script src="/xterm/xterm.js"></script>
   <script src="/xterm/xterm-addon-fit.js"></script>

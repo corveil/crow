@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import NIOCore
 import CrowCore
 import CrowGit
 import CrowIPC
@@ -65,6 +66,37 @@ import CrowPersistence
         for host in ["8.8.8.8", "1.1.1.1", "172.32.0.1", "100.128.0.1", "evil.com", "203.0.113.5"] {
             #expect(!WebSocketOriginGuard.isPrivateHost(host), "\(host) should be public")
         }
+    }
+
+    @Test func trustsProxiedForwardedHostFromLoopbackPeer() {
+        // `tailscale serve` / ngrok: the browser's Origin is the proxy's public
+        // MagicDNS hostname (never an IP literal), and the proxy — a loopback peer
+        // — reports the host it served via `X-Forwarded-Host`. A same-origin
+        // upgrade (Origin host == forwarded host) is allowed even on a wildcard
+        // bind (CROW-593).
+        #expect(WebSocketOriginGuard.isAllowedOrigin(
+            "https://macbook-pro.fin-halfbeak.ts.net", boundHost: "0.0.0.0",
+            forwardedHost: "macbook-pro.fin-halfbeak.ts.net", peerIsLoopback: true))
+        // A forwarded host carrying the standard :443 still matches the Origin host.
+        #expect(WebSocketOriginGuard.isAllowedOrigin(
+            "https://app.example.ts.net", boundHost: "127.0.0.1",
+            forwardedHost: "app.example.ts.net:443", peerIsLoopback: true))
+        // A trailing FQDN dot on either side normalizes away before comparison.
+        #expect(WebSocketOriginGuard.isAllowedOrigin(
+            "https://host.example.ts.net", boundHost: "0.0.0.0",
+            forwardedHost: "host.example.ts.net.", peerIsLoopback: true))
+    }
+
+    @Test func rejectsProxiedOriginMismatchOrUntrustedPeer() {
+        // Cross-site page routed through the proxy: Origin != forwarded host → rejected.
+        #expect(!WebSocketOriginGuard.isAllowedOrigin(
+            "https://evil.com", boundHost: "0.0.0.0",
+            forwardedHost: "macbook-pro.fin-halfbeak.ts.net", peerIsLoopback: true))
+        // A non-loopback peer's `X-Forwarded-Host` is untrusted (it isn't the local
+        // proxy) — a direct tailnet/LAN client can't forge same-origin this way.
+        #expect(!WebSocketOriginGuard.isAllowedOrigin(
+            "https://macbook-pro.fin-halfbeak.ts.net", boundHost: "0.0.0.0",
+            forwardedHost: "macbook-pro.fin-halfbeak.ts.net", peerIsLoopback: false))
     }
 }
 
@@ -165,7 +197,7 @@ import CrowPersistence
     private func router() -> CommandRouter {
         makeCommandRouter(
             appState: AppState(), store: JSONStore(), git: GitManager(),
-            devRoot: NSTemporaryDirectory(), cockpit: nil, forwardSocket: nil)
+            devRoot: NSTemporaryDirectory(), cockpit: nil)
     }
 
     private func addWorktree(_ router: CommandRouter, branch: String, session: UUID) async -> JSONRPCResponse {
@@ -249,5 +281,168 @@ import CrowPersistence
             appState, devRoot: NSTemporaryDirectory() + "no-such-\(UUID().uuidString)")
         #expect(appState.excludeTicketRepos.isEmpty)
         #expect(appState.managerAutoPermissionMode == true)
+    }
+}
+
+// MARK: - Web-access auth (CROW-593)
+
+/// PBKDF2 password hashing: correct/incorrect verify, a fresh random salt per
+/// call, and rejection of malformed stored records.
+@Suite struct PasswordHashTests {
+    @Test func verifiesCorrectRejectsWrong() {
+        // Low iterations keep the test fast; the KDF path is identical.
+        let rec = PasswordHash.make(password: "correct horse", iterations: 2000)
+        #expect(PasswordHash.verify(password: "correct horse", record: rec))
+        #expect(!PasswordHash.verify(password: "Correct horse", record: rec))
+        #expect(!PasswordHash.verify(password: "", record: rec))
+    }
+
+    @Test func distinctSaltsPerHash() {
+        let a = PasswordHash.make(password: "same", iterations: 2000)
+        let b = PasswordHash.make(password: "same", iterations: 2000)
+        #expect(a.saltB64 != b.saltB64)   // fresh random salt each call…
+        #expect(a.hashB64 != b.hashB64)   // …so the derived key differs too
+    }
+
+    @Test func rejectsMalformedRecord() {
+        #expect(!PasswordHash.verify(password: "x",
+            record: WebAuthConfig(hashB64: "", saltB64: "", iterations: 0)))
+        #expect(!PasswordHash.verify(password: "x",
+            record: WebAuthConfig(hashB64: "!!notbase64!!", saltB64: "!!", iterations: 1000)))
+    }
+
+    @Test func constantTimeEqualBasics() {
+        #expect(PasswordHash.constantTimeEqual([1, 2, 3], [1, 2, 3]))
+        #expect(!PasswordHash.constantTimeEqual([1, 2, 3], [1, 2, 4]))
+        #expect(!PasswordHash.constantTimeEqual([1, 2], [1, 2, 3]))   // length mismatch
+    }
+}
+
+@Suite struct SessionStoreTests {
+    @Test func issueValidateRevoke() {
+        let store = SessionStore()
+        let token = store.issue()
+        #expect(store.isValid(token))
+        #expect(!store.isValid("deadbeef"))   // never issued
+        #expect(!store.isValid(nil))
+        store.revoke(token)
+        #expect(!store.isValid(token))         // revoked → gone
+    }
+
+    @Test func expiredTokenIsInvalid() {
+        let store = SessionStore(ttl: -1)      // expires the instant it's issued
+        #expect(!store.isValid(store.issue()))
+    }
+}
+
+@Suite struct LoginRateLimiterTests {
+    @Test func throttlesBurstThenRecovers() {
+        let limiter = LoginRateLimiter(max: 3, window: 60)
+        let t0 = Date(timeIntervalSince1970: 1_000_000)
+        #expect(limiter.allow(now: t0))
+        #expect(limiter.allow(now: t0))
+        #expect(limiter.allow(now: t0))
+        #expect(!limiter.allow(now: t0))                        // ceiling hit
+        #expect(limiter.allow(now: t0.addingTimeInterval(61)))  // window slid past
+    }
+}
+
+/// The per-request/-upgrade authorize() matrix — the crux of the model: local is
+/// always trusted, the gate is inert until a password is set, and once set only a
+/// loopback https proxy with a valid session gets in.
+@Suite struct WebAuthGuardTests {
+    private func peer(_ ip: String) -> SocketAddress? { try? SocketAddress(ipAddress: ip, port: 8787) }
+    private func withPassword() -> AppConfig {
+        var c = AppConfig()
+        c.webAuth = WebAuthConfig(hashB64: "nonempty", saltB64: "s", iterations: 210_000)
+        return c
+    }
+
+    @Test func localLoopbackNoProxyIsTrusted() {
+        // Returns before the config is consulted — hence configProvider = { nil }.
+        let d = WebAuthGuard.authorize(
+            remoteAddress: peer("127.0.0.1"), cookieHeader: nil, forwardedFor: nil, forwardedProto: nil,
+            configProvider: { nil }, sessions: SessionStore())
+        #expect(d.isAuthorized)
+        #expect(d.reason == "local")
+    }
+
+    @Test func noPasswordIsInertForRemote() {
+        // Opt-in: with no password configured a proxied peer is still allowed.
+        let d = WebAuthGuard.authorize(
+            remoteAddress: peer("127.0.0.1"), cookieHeader: nil, forwardedFor: "1.2.3.4", forwardedProto: "https",
+            configProvider: { AppConfig() }, sessions: SessionStore())
+        #expect(d.isAuthorized)
+    }
+
+    @Test func nonLoopbackDeniedOncePasswordSet() {
+        // A direct LAN peer must go through the proxy; denied regardless of headers.
+        let d = WebAuthGuard.authorize(
+            remoteAddress: peer("100.64.0.5"), cookieHeader: nil, forwardedFor: nil, forwardedProto: nil,
+            configProvider: { withPassword() }, sessions: SessionStore())
+        #expect(!d.isAuthorized)
+    }
+
+    @Test func proxiedHttpsWithValidSessionIsAuthorized() {
+        let sessions = SessionStore()
+        let token = sessions.issue()
+        let d = WebAuthGuard.authorize(
+            remoteAddress: peer("127.0.0.1"), cookieHeader: "crow_session=\(token)",
+            forwardedFor: "9.9.9.9", forwardedProto: "https",
+            configProvider: { withPassword() }, sessions: sessions)
+        #expect(d.isAuthorized)
+        #expect(d.reason == "valid session")
+    }
+
+    @Test func proxiedButNotHttpsIsDenied() {
+        let d = WebAuthGuard.authorize(
+            remoteAddress: peer("127.0.0.1"), cookieHeader: nil,
+            forwardedFor: "9.9.9.9", forwardedProto: "http",
+            configProvider: { withPassword() }, sessions: SessionStore())
+        #expect(!d.isAuthorized)
+    }
+
+    @Test func proxiedHttpsWithoutValidSessionIsDenied() {
+        let d = WebAuthGuard.authorize(
+            remoteAddress: peer("127.0.0.1"), cookieHeader: "crow_session=bogus",
+            forwardedFor: "9.9.9.9", forwardedProto: "https",
+            configProvider: { withPassword() }, sessions: SessionStore())
+        #expect(!d.isAuthorized)
+    }
+
+    @Test func loopbackPeerDetection() {
+        #expect(WebAuthGuard.isLoopbackPeer(peer("127.0.0.1")))
+        #expect(WebAuthGuard.isLoopbackPeer(peer("::1")))
+        #expect(!WebAuthGuard.isLoopbackPeer(peer("192.168.1.9")))
+        #expect(!WebAuthGuard.isLoopbackPeer(nil))
+    }
+
+    @Test func cookieParsing() {
+        #expect(WebAuthGuard.sessionToken(fromCookie: "a=1; crow_session=abc; b=2") == "abc")
+        #expect(WebAuthGuard.sessionToken(fromCookie: "other=x") == nil)
+        #expect(WebAuthGuard.sessionToken(fromCookie: nil) == nil)
+    }
+}
+
+/// The `webAuth` hash/salt are secrets: blanked on transport (the browser only
+/// learns "set or not") and restored across a `set-config` that omits them, so a
+/// settings save never wipes the password.
+@Suite struct WebAuthSecretStrippingTests {
+    @Test func stripsHashAndSaltButKeepsPresence() {
+        var cfg = AppConfig()
+        cfg.webAuth = WebAuthConfig(hashB64: "SECRET_HASH", saltB64: "SECRET_SALT", iterations: 210_000)
+        let stripped = SettingsSecrets.strippedForTransport(cfg)
+        #expect(stripped.webAuth != nil)          // presence preserved → UI shows "set"
+        #expect(stripped.webAuth?.hashB64 == "")
+        #expect(stripped.webAuth?.saltB64 == "")
+    }
+
+    @Test func preservesSecretsAcrossBlankedRoundTrip() {
+        var current = AppConfig()
+        current.webAuth = WebAuthConfig(hashB64: "REAL_HASH", saltB64: "REAL_SALT", iterations: 210_000)
+        let incoming = SettingsSecrets.strippedForTransport(current)   // what the browser sends back
+        let merged = SettingsSecrets.preservingSecrets(incoming: incoming, current: current)
+        #expect(merged.webAuth?.hashB64 == "REAL_HASH")
+        #expect(merged.webAuth?.saltB64 == "REAL_SALT")
     }
 }
