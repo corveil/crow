@@ -1995,10 +1995,12 @@ public final class SessionService {
 
     /// Terminals that should receive an agent `/rename` after a Crow session
     /// rename (CROW-629). Decouples session-title sync from the Remote Control
-    /// badge: Managers always forward when the agent supports rename (Cursor /
-    /// Codex / OpenCode have no `--rc` but still expose `/rename`); workers
-    /// stay gated on `remoteControlActiveTerminals` so Claude's claude.ai
-    /// panel label keeps syncing. Pure/`nonisolated` for unit tests.
+    /// badge: Managers forward to command-bearing agent terminals when the
+    /// agent supports rename (Cursor / Codex / OpenCode have no `--rc` but
+    /// still expose `/rename`) — unmanaged Shell tabs (`command == nil`) are
+    /// excluded so `/rename` is not pasted into a live shell; workers stay
+    /// gated on `remoteControlActiveTerminals` so Claude's claude.ai panel
+    /// label keeps syncing. Pure/`nonisolated` for unit tests.
     nonisolated static func agentRenameTargets(
         session: Session,
         terminals: [SessionTerminal],
@@ -2007,7 +2009,10 @@ public final class SessionService {
     ) -> [SessionTerminal] {
         guard supportsRename else { return [] }
         if session.isManager {
-            return terminals
+            // Same discriminator RC bookkeeping uses: only terminals that
+            // launched an agent carry a `command`. Extra Shell tabs must not
+            // receive `/rename` (would run as a bogus shell command).
+            return terminals.filter { $0.command != nil }
         }
         return remoteControlRenameTargets(
             terminals: terminals,

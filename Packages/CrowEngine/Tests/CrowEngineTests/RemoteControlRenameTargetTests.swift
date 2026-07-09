@@ -64,29 +64,42 @@ struct RemoteControlRenameTargetTests {
 @Suite("SessionService.agentRenameTargets")
 struct AgentRenameTargetTests {
 
-    private func terminal(_ id: UUID, sessionID: UUID = UUID()) -> SessionTerminal {
-        SessionTerminal(id: id, sessionID: sessionID, cwd: "/tmp", isManaged: false)
+    private func terminal(
+        _ id: UUID,
+        sessionID: UUID = UUID(),
+        command: String? = nil
+    ) -> SessionTerminal {
+        SessionTerminal(
+            id: id,
+            sessionID: sessionID,
+            cwd: "/tmp",
+            command: command,
+            isManaged: false
+        )
     }
 
     @Test
-    func managerReturnsAllTerminalsWhenRenameSupported() {
+    func managerReturnsCommandBearingTerminalsWhenRenameSupported() {
         let session = Session(name: "Manager", kind: .manager, agentKind: .cursor)
-        let a = UUID()
-        let b = UUID()
-        let terminals = [terminal(a, sessionID: session.id), terminal(b, sessionID: session.id)]
+        let agent = UUID()
+        let shell = UUID()
+        let terminals = [
+            terminal(agent, sessionID: session.id, command: "agent"),
+            terminal(shell, sessionID: session.id, command: nil),
+        ]
         let targets = SessionService.agentRenameTargets(
             session: session,
             terminals: terminals,
             rcActiveTerminals: [],
             supportsRename: true
         )
-        #expect(targets.map(\.id) == [a, b])
+        #expect(targets.map(\.id) == [agent])
     }
 
     @Test
     func managerReturnsEmptyWhenRenameUnsupported() {
         let session = Session(name: "Manager", kind: .manager, agentKind: .cursor)
-        let terminals = [terminal(UUID(), sessionID: session.id)]
+        let terminals = [terminal(UUID(), sessionID: session.id, command: "agent")]
         let targets = SessionService.agentRenameTargets(
             session: session,
             terminals: terminals,
@@ -94,6 +107,24 @@ struct AgentRenameTargetTests {
             supportsRename: false
         )
         #expect(targets.isEmpty)
+    }
+
+    @Test
+    func managerExcludesShellTabsWithoutCommand() {
+        let session = Session(name: "Manager", kind: .manager, agentKind: .claudeCode)
+        let agent = UUID()
+        let shell = UUID()
+        let terminals = [
+            terminal(shell, sessionID: session.id),
+            terminal(agent, sessionID: session.id, command: "claude --rc --name Manager"),
+        ]
+        let targets = SessionService.agentRenameTargets(
+            session: session,
+            terminals: terminals,
+            rcActiveTerminals: [],
+            supportsRename: true
+        )
+        #expect(targets.map(\.id) == [agent])
     }
 
     @Test
