@@ -76,7 +76,39 @@ html, body {
 }
 .divider-selall:hover { color: var(--gold); border-color: var(--gold); }
 .session-row.selecting { display: flex; align-items: flex-start; gap: 8px; }
-.row-check { margin-top: 3px; flex: 0 0 auto; accent-color: var(--gold); cursor: pointer; }
+/* Circular multi-select checkboxes (sidebar + allowlist) — native input kept for
+   keyboard/a11y; appearance stripped so the control reads as a circle (CROW-614). */
+.row-check,
+.allow-check {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  margin: 3px 0 0;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  border: 1.5px solid var(--border-strong);
+  background: transparent;
+  cursor: pointer;
+  vertical-align: top;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.row-check:hover,
+.allow-check:hover { border-color: var(--gold); }
+.row-check:checked,
+.allow-check:checked {
+  background-color: var(--gold);
+  border-color: var(--gold);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath fill='%23121416' stroke='%23121416' stroke-width='0.5' d='M4.7 8.6L2.2 6.1l.9-.9 1.6 1.6 3.7-3.7.9.9z'/%3E%3C/svg%3E");
+  background-size: 10px 10px;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+.row-check:focus-visible,
+.allow-check:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+}
 .row-body { flex: 1 1 auto; min-width: 0; }
 .session-row.multi-selected { border-color: var(--gold); background: rgba(221, 196, 130, 0.12); }
 .bulk-bar {
@@ -165,6 +197,39 @@ html, body {
 }
 .activity-badge { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; }
 .empty { color: var(--text-muted); padding: 20px 6px; }
+
+/* ---- Sidebar skeleton (first paint before list-sessions, CROW-613) ---- */
+.session-row.skeleton-row {
+  cursor: default;
+  pointer-events: none;
+  border-left-color: var(--border-subtle);
+}
+.session-row.skeleton-row:hover { border-color: var(--border-subtle); }
+.skel {
+  display: block;
+  border-radius: 4px;
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.04) 0%,
+    rgba(255, 255, 255, 0.09) 45%,
+    rgba(255, 255, 255, 0.04) 90%
+  );
+  background-size: 200% 100%;
+  animation: crow-skel-shimmer 1.35s ease-in-out infinite;
+  animation-delay: var(--skel-delay, 0s);
+}
+.skel-agent { width: 12px; height: 12px; flex: 0 0 auto; border-radius: 3px; }
+.skel-name { flex: 1 1 auto; height: 12px; max-width: 58%; }
+.skel-dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; margin-left: auto; }
+.skel-subtle { height: 10px; width: 72%; margin-top: 8px; }
+.skel-meta { height: 10px; width: 48%; margin-top: 6px; }
+@keyframes crow-skel-shimmer {
+  0% { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .skel { animation: none; background: rgba(255, 255, 255, 0.06); }
+}
 
 /* ---- Detail ---- */
 #detail {
@@ -414,8 +479,7 @@ html, body {
   display: flex; align-items: flex-start; gap: 10px; padding: 8px 10px;
   border: 1px solid var(--border-subtle); border-radius: 6px; background: var(--bg-card);
 }
-.allow-check { margin-top: 3px; accent-color: var(--gold); }
-.allow-check-spacer { width: 13px; flex: 0 0 auto; }
+.allow-check-spacer { width: 16px; flex: 0 0 auto; }
 .allow-main { display: flex; flex-direction: column; gap: 5px; min-width: 0; flex: 1; }
 .allow-pattern {
   font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px;

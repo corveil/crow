@@ -1,5 +1,6 @@
 #if canImport(Darwin)
 import Darwin
+import MachO
 #elseif canImport(Glibc)
 import Glibc
 #endif
@@ -304,22 +305,64 @@ public enum CrowDaemon {
 
     /// Close the single-instance lock fd (no `O_CLOEXEC`, so an inherited fd
     /// would still hold the flock and the re-exec'd image's
-    /// `acquireSingleInstanceLock` would fail), then `execv` the same binary
+    /// `acquireSingleInstanceLock` would fail), then re-exec the same binary
     /// and args. Does not return on success.
+    ///
+    /// Resolves the real executable path first — `execv(argv[0])` does **not**
+    /// search `PATH`, so a user who ran `crowd` from `~/.local/bin` (the README
+    /// install flow) would hit ENOENT and the daemon would `exit(1)` after the
+    /// first-run wizard instead of restarting (review Yellow #2 / CROW-605).
     static func reexec(_ argv: [String]) {
         if singleInstanceLockFD >= 0 {
             close(singleInstanceLockFD)
             singleInstanceLockFD = -1
         }
-        guard let executable = argv.first, !executable.isEmpty else {
+        guard let argv0 = argv.first, !argv0.isEmpty else {
             log("re-exec failed: empty argv")
             exit(1)
         }
         let cArgv: [UnsafeMutablePointer<CChar>?] = argv.map { strdup($0) } + [nil]
         defer { for p in cArgv where p != nil { free(p) } }
-        execv(executable, cArgv)
-        log("re-exec failed: \(String(cString: strerror(errno)))")
+
+        // Prefer the kernel's view of this process's executable (absolute path),
+        // then a path-shaped argv[0], then `execvp` so a bare `crowd` on PATH still
+        // restarts.
+        if let resolved = resolvedExecutablePath() {
+            execv(resolved, cArgv)
+            log("re-exec failed (execv \(resolved)): \(String(cString: strerror(errno)))")
+        } else if argv0.contains("/") {
+            execv(argv0, cArgv)
+            log("re-exec failed (execv \(argv0)): \(String(cString: strerror(errno)))")
+        } else {
+            execvp(argv0, cArgv)
+            log("re-exec failed (execvp \(argv0)): \(String(cString: strerror(errno)))")
+        }
         exit(1)
+    }
+
+    /// Absolute path of the running `crowd` binary, or `nil` if it can't be
+    /// resolved (caller falls back to `execvp`). Exposed for tests.
+    static func resolvedExecutablePath() -> String? {
+        #if canImport(Darwin)
+        var size: UInt32 = 0
+        _ = _NSGetExecutablePath(nil, &size)
+        guard size > 0 else { return nil }
+        var buf = [CChar](repeating: 0, count: Int(size))
+        guard _NSGetExecutablePath(&buf, &size) == 0 else { return nil }
+        // `_NSGetExecutablePath` may return a relative path; realpath makes it
+        // absolute so a later cwd change can't break the re-exec.
+        var resolved = [CChar](repeating: 0, count: Int(PATH_MAX))
+        guard realpath(buf, &resolved) != nil else { return String(cString: buf) }
+        return String(cString: resolved)
+        #elseif os(Linux)
+        var buf = [CChar](repeating: 0, count: Int(PATH_MAX))
+        let n = readlink("/proc/self/exe", &buf, buf.count - 1)
+        guard n > 0 else { return nil }
+        buf[n] = 0
+        return String(cString: buf)
+        #else
+        return nil
+        #endif
     }
 
     /// Wire the IssueTracker's background automation hooks: spawns go to the

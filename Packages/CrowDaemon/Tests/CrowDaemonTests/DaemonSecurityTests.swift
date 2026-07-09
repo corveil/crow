@@ -468,6 +468,81 @@ import CrowPersistence
             Issue.record("headers with no baseURL should be rejected")
         }
     }
+
+    @Test func blankHeaderValuesKeepStoredSecrets() throws {
+        // Local editor prefills stripped keys with empty values; updating only
+        // the base URL must not wipe the stored auth header (review Yellow #1).
+        let stored = WorkspaceGateway(
+            baseURL: "https://old.example",
+            customHeaders: ["X-Api-Key": "SECRET", "X-Extra": "keep-me"])
+        let incoming = WorkspaceGateway(
+            baseURL: "https://new.example",
+            customHeaders: ["X-Api-Key": "", "X-Extra": "", "X-New": "fresh"])
+        let merged = try SecretRoutes.mergingPreservedHeaders(incoming: incoming, stored: stored).get()
+        #expect(merged?.baseURL == "https://new.example")
+        #expect(merged?.customHeaders["X-Api-Key"] == "SECRET")
+        #expect(merged?.customHeaders["X-Extra"] == "keep-me")
+        #expect(merged?.customHeaders["X-New"] == "fresh")
+    }
+
+    @Test func blankHeaderWithNoStoredValueIsDroppedWhenSiblingRemains() throws {
+        let incoming = WorkspaceGateway(
+            baseURL: "https://gw.example",
+            customHeaders: ["X-Api-Key": "real", "X-Empty": ""])
+        let merged = try SecretRoutes.mergingPreservedHeaders(incoming: incoming, stored: nil).get()
+        #expect(merged?.customHeaders["X-Api-Key"] == "real")
+        #expect(merged?.customHeaders["X-Empty"] == nil)
+    }
+
+    @Test func allBlankHeadersWithNoStoredSecretAreRejected() {
+        // URL + only blank headers (no stored secret to restore) would encode a
+        // half-filled gateway that AppConfig refuses to decode — wiping the
+        // whole config on the next load (review Red on #623).
+        let incoming = WorkspaceGateway(
+            baseURL: "https://gw.example",
+            customHeaders: ["X-Api-Key": ""])
+        if case .success = SecretRoutes.mergingPreservedHeaders(incoming: incoming, stored: nil) {
+            Issue.record("URL with no keepable headers must be rejected")
+        }
+    }
+
+    @Test func renamedBlankHeaderWithNoStoredMatchIsRejected() {
+        // Renaming the only header key to a blank-valued new name leaves no
+        // keepable headers after merge — same undecodable shape as above.
+        let stored = WorkspaceGateway(
+            baseURL: "https://gw.example", customHeaders: ["X-Old": "SECRET"])
+        let incoming = WorkspaceGateway(
+            baseURL: "https://gw.example", customHeaders: ["X-New": ""])
+        if case .success = SecretRoutes.mergingPreservedHeaders(incoming: incoming, stored: stored) {
+            Issue.record("renamed blank header with no stored match must be rejected")
+        }
+    }
+
+    @Test func nilIncomingClearsGateway() throws {
+        let stored = WorkspaceGateway(baseURL: "https://gw", customHeaders: ["X": "y"])
+        #expect(try SecretRoutes.mergingPreservedHeaders(incoming: nil, stored: stored).get() == nil)
+    }
+
+    @Test func nonBlankIncomingValueOverridesStored() throws {
+        let stored = WorkspaceGateway(
+            baseURL: "https://gw", customHeaders: ["X-Api-Key": "OLD"])
+        let incoming = WorkspaceGateway(
+            baseURL: "https://gw", customHeaders: ["X-Api-Key": "NEW"])
+        let merged = try SecretRoutes.mergingPreservedHeaders(incoming: incoming, stored: stored).get()
+        #expect(merged?.customHeaders["X-Api-Key"] == "NEW")
+    }
+}
+
+/// `CrowDaemon.resolvedExecutablePath` must return an absolute path to *this*
+/// process so `reexec` can `execv` after a PATH-launched `crowd` (review Yellow #2).
+@Suite struct ReexecPathResolutionTests {
+    @Test func resolvedExecutablePathIsAbsoluteAndExists() {
+        let path = CrowDaemon.resolvedExecutablePath()
+        #expect(path != nil)
+        guard let path else { return }
+        #expect(path.hasPrefix("/"), "expected absolute path, got \(path)")
+        #expect(FileManager.default.isExecutableFile(atPath: path))
+    }
 }
 
 /// The `webAuth` hash/salt are secrets: blanked on transport (the browser only
@@ -603,6 +678,96 @@ import CrowPersistence
         let final = try #require(ConfigStore.loadConfig(devRoot: devRoot))
         #expect(final.defaults.excludeTicketRepos.count == iterations)
         #expect(Set(final.defaults.excludeTicketRepos).count == iterations)   // all distinct, none lost
+    }
+}
+
+/// Local-direct gates on `/rpc` for write+exec surfaces (review Yellow on #594).
+@Suite struct LocalOnlyRPCGateTests {
+    private func tempDevRoot() -> String {
+        let dir = (NSTemporaryDirectory() as NSString)
+            .appendingPathComponent("crowd-local-rpc-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    private func encode(_ config: AppConfig) throws -> String {
+        String(decoding: try JSONEncoder().encode(config), as: UTF8.self)
+    }
+
+    @Test func runSetupAlwaysDeniedWhenNotLocal() {
+        let req = JSONRPCRequest(id: 1, method: "run-setup", params: [
+            "dev_root": .string("/tmp/x"),
+            "config": .string("{}"),
+        ])
+        #expect(RPCWebSocketHandler.localOnlyDenial(for: req, devRoot: tempDevRoot())
+            == "run-setup is local-only")
+    }
+
+    @Test func setConfigBinariesChangeIsLocalOnly() throws {
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        try ConfigStore.saveConfig(AppConfig(), devRoot: devRoot)
+
+        var incoming = AppConfig()
+        incoming.defaults.binaries = ["claude": "/evil/claude"]
+        let req = JSONRPCRequest(id: 1, method: "set-config", params: [
+            "config": .string(try encode(incoming)),
+        ])
+        #expect(RPCWebSocketHandler.localOnlyDenial(for: req, devRoot: devRoot)
+            == "set-config binaries/jobs is local-only")
+        #expect(RPCWebSocketHandler.setConfigTouchesPrivilegedFields(req, devRoot: devRoot))
+    }
+
+    @Test func setConfigJobsChangeIsLocalOnly() throws {
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        try ConfigStore.saveConfig(AppConfig(), devRoot: devRoot)
+
+        var incoming = AppConfig()
+        incoming.jobs = [
+            JobConfig(name: "nightly", workspace: "ws", repo: "o/r",
+                      prompts: ["do stuff"], schedule: .interval(seconds: 3600)),
+        ]
+        let req = JSONRPCRequest(id: 1, method: "set-config", params: [
+            "config": .string(try encode(incoming)),
+        ])
+        #expect(RPCWebSocketHandler.localOnlyDenial(for: req, devRoot: devRoot)
+            == "set-config binaries/jobs is local-only")
+    }
+
+    @Test func setConfigHarmlessToggleIsAllowedRemotely() throws {
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        var stored = AppConfig()
+        stored.remoteControlEnabled = true
+        try ConfigStore.saveConfig(stored, devRoot: devRoot)
+
+        var incoming = AppConfig()
+        incoming.remoteControlEnabled = false
+        let req = JSONRPCRequest(id: 1, method: "set-config", params: [
+            "config": .string(try encode(incoming)),
+        ])
+        #expect(RPCWebSocketHandler.localOnlyDenial(for: req, devRoot: devRoot) == nil)
+        #expect(!RPCWebSocketHandler.setConfigTouchesPrivilegedFields(req, devRoot: devRoot))
+    }
+
+    @Test func setConfigUnchangedBinariesAndJobsIsAllowed() throws {
+        // Remote editor round-trips the same binaries/jobs it just read — must
+        // not trip the gate (only *changes* are local-only).
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        var stored = AppConfig()
+        stored.defaults.binaries = ["claude": "/usr/local/bin/claude"]
+        stored.jobs = [
+            JobConfig(name: "nightly", workspace: "ws", repo: "o/r",
+                      prompts: ["do stuff"], schedule: .interval(seconds: 3600)),
+        ]
+        try ConfigStore.saveConfig(stored, devRoot: devRoot)
+
+        let req = JSONRPCRequest(id: 1, method: "set-config", params: [
+            "config": .string(try encode(stored)),
+        ])
+        #expect(RPCWebSocketHandler.localOnlyDenial(for: req, devRoot: devRoot) == nil)
     }
 }
 

@@ -161,7 +161,13 @@
     if (!backdrop) {
       backdrop = el('div', 'settings-backdrop');
       backdrop.onclick = (ev) => { if (ev.target === backdrop) closeSettings(); };
-      escHandler = (ev) => { if (ev.key === 'Escape') closeSettings(); };
+      // Escape backs out of the topmost overlay first (sub-form), then Settings —
+      // matching backdrop-click behavior (review Yellow).
+      escHandler = (ev) => {
+        if (ev.key !== 'Escape') return;
+        if (subForm) { subForm = null; render(); return; }
+        closeSettings();
+      };
       document.addEventListener('keydown', escHandler);
       document.body.appendChild(backdrop);
     }
@@ -847,6 +853,18 @@
         setTimeout(() => { run.disabled = false; run.title = 'Run now'; setRowIcon(run, 'play'); }, 1500);
       };
       row.querySelector('.st-row-actions').insertBefore(run, row.querySelector('.st-row-actions').firstChild);
+      // Inline enable/disable (CROW-615) — same dirty/save path as Duplicate/Delete.
+      const enable = el('input', 'st-switch st-row-switch');
+      enable.type = 'checkbox';
+      enable.checked = !!job.enabled;
+      enable.title = job.enabled ? 'Disable job' : 'Enable job';
+      enable.setAttribute('aria-label', enable.title);
+      enable.onchange = () => {
+        job.enabled = enable.checked;
+        markDirty();
+        render();
+      };
+      row.querySelector('.st-row-actions').insertBefore(enable, row.querySelector('.st-row-actions').firstChild);
       body.appendChild(row);
     }
     const add = el('button', 'st-add', '+ Add job');
