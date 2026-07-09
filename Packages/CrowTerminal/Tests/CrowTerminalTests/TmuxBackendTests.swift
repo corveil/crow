@@ -202,9 +202,39 @@ struct TmuxBackendTests {
             trackReadiness: false
         )
 
-        // Trailing \n triggers the paste + separate Enter path (#264/#272).
+        // Trailing \n triggers the paste + settle + Enter path (#264/#272/#631).
         // Verify the full code path executes without throwing.
+        #expect(TmuxBackend.pasteEnterSettleDelay == 0.2)
         let payload = "AUTO-RESPOND-TEST-\(UUID().uuidString)\n"
+        try backend.sendText(id: id, text: payload)
+    }
+
+    @Test func sendTextLargeMultilineWithTrailingNewlineDoesNotThrow() throws {
+        let backend = makeBackend()
+        defer { backend.shutdown() }
+
+        let id = UUID()
+        _ = try backend.registerTerminal(
+            id: id,
+            name: "large-paste-test",
+            cwd: NSHomeDirectory(),
+            command: nil,
+            trackReadiness: false
+        )
+
+        // Large multi-KB pastes are the Cursor #631 failure mode: Enter used
+        // to race bracket-end at 50ms and leave sticky composer text. This
+        // exercises the same paste + settle + Enter path with a realistic
+        // payload size (unit-level: no throw; settle delay is asserted above).
+        var lines: [String] = ["# Workspace Context", ""]
+        for i in 0..<80 {
+            lines.append("| repo-\(i) | /tmp/wt-\(i) | feature/branch-\(i) | desc |")
+        }
+        lines.append("")
+        lines.append("## Instructions")
+        lines.append(String(repeating: "x", count: 2000))
+        let payload = lines.joined(separator: "\n") + "\n"
+        #expect(payload.utf8.count > 2000)
         try backend.sendText(id: id, text: payload)
     }
 

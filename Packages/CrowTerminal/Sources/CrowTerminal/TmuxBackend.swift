@@ -354,23 +354,33 @@ public final class TmuxBackend {
         NSLog("[CrowTelemetry tmux:tab_switch_ms=\(elapsedMS) terminal=\(id)]")
     }
 
+    /// Settle time between `paste-buffer` and the submitting `Enter`.
+    ///
+    /// Bracketed-paste TUIs (Claude Code, Cursor's `agent`) need the
+    /// `\e[201~` bracket-end to finish before Enter arrives. 50ms was enough
+    /// for short Claude auto-respond lines (#272) but large Cursor pastes
+    /// (multi-KB Manager / job prompts) still race: the agent starts working
+    /// while sticky text remains in the composer, looking like a double paste
+    /// (#631). 200ms clears the composer for those payloads without a second
+    /// Enter (which would re-submit leftover text).
+    public static let pasteEnterSettleDelay: TimeInterval = 0.2
+
     /// Send text to `id`'s window via the buffer-paste path. Works for
     /// arbitrary-size payloads (Phase 3 §3 finding: send-keys -l fails
     /// on >10KB; load-buffer + paste-buffer scales to 50KB+ in 133ms).
     ///
-    /// Quirk: Claude Code's TUI enables bracketed-paste mode, which wraps
+    /// Quirk: agent TUIs enable bracketed-paste mode, which wraps
     /// `paste-buffer` output in `\e[200~…\e[201~`. A trailing `\n` inside the
     /// bracket is treated as literal text, not as Enter — so prompts that
     /// rely on `\n` to submit (quick actions, auto-respond) get pasted but
     /// never submitted (#264). Strip the trailing newline before pasting and
-    /// deliver a separate `Enter` via `send-keys` afterwards, mirroring what
-    /// a separate `Enter` via `send-keys` afterwards.
+    /// deliver a separate `Enter` via `send-keys` afterwards.
     ///
-    /// A 50ms delay between the paste and the Enter keystroke gives the TUI
-    /// time to process the bracket-end sequence (`\e[201~`). Without this,
-    /// auto-respond prompts (which fire when the terminal has been idle) can
-    /// race: the Enter arrives before the TUI finishes handling the paste,
-    /// causing it to be silently dropped (#272).
+    /// `pasteEnterSettleDelay` between the paste and the Enter keystroke
+    /// gives the TUI time to process the bracket-end sequence (`\e[201~`).
+    /// Without this, Enter can arrive early: Claude may drop it entirely
+    /// (#272); Cursor may submit but leave the prompt sitting in the input
+    /// box (#631).
     ///
     /// We also pre-cancel copy-mode on the pane before any delivery (#486).
     /// The bundled `crow-tmux.conf` keeps `mouse on` so wheel scrollback
@@ -411,7 +421,7 @@ public final class TmuxBackend {
                 // the Enter key arrives. Only needed when we actually pasted
                 // content — a bare "\n" (Enter-only) needs no delay.
                 if didPaste {
-                    Thread.sleep(forTimeInterval: 0.05)
+                    Thread.sleep(forTimeInterval: Self.pasteEnterSettleDelay)
                 }
                 try ctrl.sendKeys(target: target, keys: ["Enter"])
             }
