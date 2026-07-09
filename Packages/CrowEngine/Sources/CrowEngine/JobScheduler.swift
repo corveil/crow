@@ -114,36 +114,97 @@ public final class JobScheduler {
 
     // MARK: - Manual run
 
+    /// Why a manual run request could not launch (CROW-604).
+    public enum RunNowError: Error, LocalizedError, Equatable {
+        case noDevRoot
+        case jobNotFound
+        case alreadyRunning
+        case launchFailed
+
+        public var errorDescription: String? {
+            switch self {
+            case .noDevRoot: "No dev root configured"
+            case .jobNotFound: "Job not found"
+            case .alreadyRunning: "Job is already running"
+            case .launchFailed: "Failed to launch job (no non-empty prompts, or the repo/worktree could not be prepared)"
+            }
+        }
+    }
+
+    /// The reason a `runNow` request would be rejected, or `nil` if it can
+    /// proceed. Pure so it's unit-testable (like `finishDecision`).
+    public nonisolated static func runNowPrecheck(
+        jobID: UUID, jobs: [JobConfig], devRoot: String?, inFlight: Set<UUID>
+    ) -> RunNowError? {
+        guard devRoot != nil else { return .noDevRoot }
+        guard jobs.contains(where: { $0.id == jobID }) else { return .jobNotFound }
+        guard !inFlight.contains(jobID) else { return .alreadyRunning }
+        return nil
+    }
+
     /// Fire a job on demand, regardless of its enabled flag or schedule.
+    /// Fire-and-forget (Settings UI "Run now"); failures are silently dropped.
     public func runNow(_ jobID: UUID) {
         guard let devRoot = devRootProvider() else { return }
         guard let job = jobsProvider().first(where: { $0.id == jobID }) else { return }
         fire(job, devRoot: devRoot)
     }
 
-    /// Launch one job: guard against double-launch, spin up the worktree/session/
-    /// Claude terminal, persist the run time, then deliver any remaining prompts.
-    /// Shared by `tick()` (scheduled) and `runNow(_:)` (manual).
-    private func fire(_ job: JobConfig, devRoot: String) {
-        guard !inFlight.contains(job.id) else { return }
-        inFlight.insert(job.id)
-        let captured = job
-        Task { @MainActor in
-            defer { self.inFlight.remove(captured.id) }
-            if let result = await self.sessionService.runJob(captured, devRoot: devRoot) {
-                // Persist run time first so the job isn't re-fired next tick.
-                self.onJobRan(captured.id, Date())
-                // Watch this run so its session auto-completes on success (CROW-561).
-                self.watchedRuns[result.sessionID] = RunWatch(
-                    terminalID: result.terminalID,
-                    startedAt: Date(),
-                    promptsDeliveredAt: nil
-                )
-                self.deliverRemainingPrompts(
-                    captured, sessionID: result.sessionID, terminalID: result.terminalID
-                )
-            }
+    /// Fire a job on demand and report the launched session/terminal, so the
+    /// `job run` RPC can return them to the CLI (CROW-604). Same semantics as
+    /// `runNow(_:)` — the enabled flag and schedule are ignored — but launch
+    /// problems surface as `RunNowError` instead of being dropped.
+    public func runNowReporting(_ jobID: UUID) async throws -> (sessionID: UUID, terminalID: UUID) {
+        if let error = Self.runNowPrecheck(
+            jobID: jobID, jobs: jobsProvider(), devRoot: devRootProvider(), inFlight: inFlight
+        ) {
+            throw error
         }
+        guard let devRoot = devRootProvider(),
+              let job = jobsProvider().first(where: { $0.id == jobID }),
+              markInFlight(job.id) else {
+            // Providers changed between the precheck and here — treat as busy.
+            throw RunNowError.alreadyRunning
+        }
+        return try await launchMarked(job, devRoot: devRoot)
+    }
+
+    /// Launch one job: guard against double-launch, then hand off to
+    /// `launchMarked`. Shared by `tick()` (scheduled) and `runNow(_:)` (manual).
+    private func fire(_ job: JobConfig, devRoot: String) {
+        guard markInFlight(job.id) else { return }
+        Task { @MainActor in
+            _ = try? await self.launchMarked(job, devRoot: devRoot)
+        }
+    }
+
+    /// Mark a job as launching. Returns `false` if it already is — the caller
+    /// must not proceed. Synchronous so check-and-insert is atomic on the
+    /// MainActor, closing the double-launch window between two callers.
+    private func markInFlight(_ id: UUID) -> Bool {
+        guard !inFlight.contains(id) else { return false }
+        inFlight.insert(id)
+        return true
+    }
+
+    /// Spin up the worktree/session/Claude terminal, persist the run time, then
+    /// deliver any remaining prompts. Requires a successful `markInFlight`;
+    /// clears the mark when done.
+    private func launchMarked(_ job: JobConfig, devRoot: String) async throws -> (sessionID: UUID, terminalID: UUID) {
+        defer { inFlight.remove(job.id) }
+        guard let result = await sessionService.runJob(job, devRoot: devRoot) else {
+            throw RunNowError.launchFailed
+        }
+        // Persist run time first so the job isn't re-fired next tick.
+        onJobRan(job.id, Date())
+        // Watch this run so its session auto-completes on success (CROW-561).
+        watchedRuns[result.sessionID] = RunWatch(
+            terminalID: result.terminalID,
+            startedAt: Date(),
+            promptsDeliveredAt: nil
+        )
+        deliverRemainingPrompts(job, sessionID: result.sessionID, terminalID: result.terminalID)
+        return result
     }
 
     // MARK: - Multi-prompt delivery (best-effort)

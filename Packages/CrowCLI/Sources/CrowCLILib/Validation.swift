@@ -34,6 +34,30 @@ func validateLinkType(_ value: String) throws {
     }
 }
 
+/// Validate that a job repo is an `owner/repo` slug (nested GitLab groups
+/// allowed). The slug's last component becomes an on-disk folder name, so
+/// path-like components (`.`, `..`, empty) are rejected. Mirrors the server's
+/// check for fast local feedback.
+///
+/// - Throws: `ValidationError` for a bare name or path-like slug.
+func validateRepoSlug(_ value: String) throws {
+    let repo = value.trimmingCharacters(in: .whitespaces)
+    let components = repo.split(separator: "/", omittingEmptySubsequences: false)
+    guard components.count >= 2,
+          components.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else {
+        throw ValidationError("'\(value)' is not a valid repo. Expected an owner/repo slug (e.g. radiusmethod/crow); components must not be empty, '.', or '..'.")
+    }
+}
+
+/// Validate that a job name is not blank after trimming.
+///
+/// - Throws: `ValidationError` for an empty or whitespace-only name.
+func validateJobName(_ value: String) throws {
+    guard !value.trimmingCharacters(in: .whitespaces).isEmpty else {
+        throw ValidationError("--name must not be blank.")
+    }
+}
+
 /// Validate that at least one optional field is provided for set-ticket.
 ///
 /// - Throws: `ValidationError` if all three fields are nil.

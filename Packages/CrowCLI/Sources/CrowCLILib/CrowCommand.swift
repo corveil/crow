@@ -22,6 +22,7 @@ public struct CrowCommand: ParsableCommand {
             HandoffAgent.self,
             DeleteSession.self,
             SetTicket.self,
+            Job.self,
             AddWorktree.self,
             ListWorktrees.self,
             NewTerminal.self,
