@@ -198,6 +198,39 @@ html, body {
 .activity-badge { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; }
 .empty { color: var(--text-muted); padding: 20px 6px; }
 
+/* ---- Sidebar skeleton (first paint before list-sessions, CROW-613) ---- */
+.session-row.skeleton-row {
+  cursor: default;
+  pointer-events: none;
+  border-left-color: var(--border-subtle);
+}
+.session-row.skeleton-row:hover { border-color: var(--border-subtle); }
+.skel {
+  display: block;
+  border-radius: 4px;
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.04) 0%,
+    rgba(255, 255, 255, 0.09) 45%,
+    rgba(255, 255, 255, 0.04) 90%
+  );
+  background-size: 200% 100%;
+  animation: crow-skel-shimmer 1.35s ease-in-out infinite;
+  animation-delay: var(--skel-delay, 0s);
+}
+.skel-agent { width: 12px; height: 12px; flex: 0 0 auto; border-radius: 3px; }
+.skel-name { flex: 1 1 auto; height: 12px; max-width: 58%; }
+.skel-dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; margin-left: auto; }
+.skel-subtle { height: 10px; width: 72%; margin-top: 8px; }
+.skel-meta { height: 10px; width: 48%; margin-top: 6px; }
+@keyframes crow-skel-shimmer {
+  0% { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .skel { animation: none; background: rgba(255, 255, 255, 0.06); }
+}
+
 /* ---- Detail ---- */
 #detail {
   display: flex;
