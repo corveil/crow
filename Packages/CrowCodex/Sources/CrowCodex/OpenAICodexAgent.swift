@@ -128,4 +128,9 @@ public struct OpenAICodexAgent: CodingAgent {
         // command without a trailing newline.
         return findBinary() ?? "codex"
     }
+
+    /// Codex TUI exposes `/rename` for the current thread (CROW-629).
+    public func sessionRenameSlashCommand(newName: String) -> String? {
+        "/rename \(newName)\n"
+    }
 }

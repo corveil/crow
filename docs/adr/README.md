@@ -47,3 +47,4 @@ Don't delete the old file. Update its `Status` to `Superseded by NNNN` and point
 | 0008 | [AI-usage efficiency scorecard](./0008-ai-usage-efficiency-scorecard.md) | Proposed | 2026-07-10 |
 | 0009 | [crowd is the sole authority; every UI is a pure client](./0009-crowd-sole-authority-clients-only.md) | Accepted | 2026-07-05 |
 | 0010 | [Retire the macOS app; the web UI is the only client](./0010-retire-the-macos-app.md) | Accepted | 2026-07-07 |
+| 0011 | [Mid-session agent handoff preserves Crow identity, not chat history](./0011-agent-handoff-preserves-session-not-chat.md) | Accepted | 2026-07-09 |

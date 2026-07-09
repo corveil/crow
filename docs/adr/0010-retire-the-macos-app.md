@@ -6,7 +6,7 @@
 
 ## Context
 
-[ADR 0007](./0007-crowd-sole-authority-clients-only.md) made `crowd` the sole authority and demoted every UI — including the macOS app — to a pure client. Once the app held zero engine/store/spawner/server, its only remaining value was its *native shell*: the AppKit window, SwiftUI views, WKWebView terminal, menu bar, and host affordances (clipboard, open-in-editor, notifications).
+[ADR 0009](./0009-crowd-sole-authority-clients-only.md) made `crowd` the sole authority and demoted every UI — including the macOS app — to a pure client. Once the app held zero engine/store/spawner/server, its only remaining value was its *native shell*: the AppKit window, SwiftUI views, WKWebView terminal, menu bar, and host affordances (clipboard, open-in-editor, notifications).
 
 The CROW-593 web-UI-parity work brought the browser client up to that bar. It renders the same sessions/boards, streams the same tmux terminals via xterm.js over `/terminal`, handles its own clipboard and browser notifications, and gained web-access auth for remote use. With two clients drawing the same state, the macOS app became a second UI to build, test, and keep in sync for no capability the web UI lacked — while still forcing an app rebuild for every UI change and carrying the `forwardToApp` hybrid path plus its two-store reconciliation.
 
@@ -28,5 +28,5 @@ The macOS app is removed. `crowd` plus the **web UI are the only client**. The `
 ## References
 
 - PR: https://github.com/radiusmethod/crow/pull/594 (CROW-593)
-- Related ADRs: [0007](./0007-crowd-sole-authority-clients-only.md) (crowd is the sole authority — this ADR removes its last non-web client), [0006](./0006-universal-macos-binary.md) (xterm.js renderer — still used, now in the browser)
+- Related ADRs: [0009](./0009-crowd-sole-authority-clients-only.md) (crowd is the sole authority — this ADR removes its last non-web client), [0006](./0006-universal-macos-binary.md) (xterm.js renderer — still used, now in the browser)
 - Code: `Packages/CrowDaemon/` (`crowd`), `Packages/CrowEngine/` (host-agnostic engine + `HostBridge`)

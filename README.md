@@ -2,7 +2,7 @@
 
 Crow manages AI-powered development sessions. It runs as a background daemon (`crowd`) with a **browser-based UI**, orchestrating git worktrees, Claude Code instances, and GitHub/GitLab/Jira issue tracking. Each session pairs a git worktree, a tmux-backed Claude Code terminal (streamed to xterm.js in your browser), and ticket metadata — all tracked in a persistent store.
 
-> **Note:** Crow began as a native macOS (AppKit) app. As of [ADR 0007](docs/adr/0007-crowd-sole-authority-clients-only.md) and [ADR 0008](docs/adr/0008-retire-the-macos-app.md), that app was **retired**: `crowd` is the sole authority and every UI is a pure client. The browser is the primary UI; an optional thin **[desktop window](#desktop-app-native-window-over-crowd)** (Tauri) over the same web UI is available if you prefer a native window. The daemon still runs on a macOS host because it drives `git`, `tmux`, and Claude Code locally.
+> **Note:** Crow began as a native macOS (AppKit) app. As of [ADR 0009](docs/adr/0009-crowd-sole-authority-clients-only.md) and [ADR 0010](docs/adr/0010-retire-the-macos-app.md), that app was **retired**: `crowd` is the sole authority and every UI is a pure client. The browser is the primary UI; an optional thin **[desktop window](#desktop-app-native-window-over-crowd)** (Tauri) over the same web UI is available if you prefer a native window. The daemon still runs on a macOS host because it drives `git`, `tmux`, and Claude Code locally.
 
 ## Architecture at a glance
 

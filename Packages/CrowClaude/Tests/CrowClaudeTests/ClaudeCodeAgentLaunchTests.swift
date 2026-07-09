@@ -51,4 +51,8 @@ struct ClaudeCodeAgentLaunchTests {
             #expect(!cmd.contains("$(cat"))
         }
     }
+
+    @Test func sessionRenameSlashCommandIsOptIn() {
+        #expect(agent.sessionRenameSlashCommand(newName: "my-session") == "/rename my-session\n")
+    }
 }

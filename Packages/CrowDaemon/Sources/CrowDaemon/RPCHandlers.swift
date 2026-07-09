@@ -230,6 +230,31 @@ func makeCommandRouter(
             await MainActor.run { sessionService.restartManager(devRoot: devRoot) }
             return ["ok": .bool(true)]
         },
+        // Mid-session agent switch when credits run out (CROW-627). Preserves
+        // session/worktree/ticket; replaces the managed agent terminal and
+        // seeds the incoming agent with a handoff prompt.
+        "handoff-agent": { params in
+            guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr),
+                  let kindStr = params["agent_kind"]?.stringValue, !kindStr.isEmpty else {
+                throw DaemonRPCError.invalidParams("session_id and agent_kind required")
+            }
+            let targetKind = AgentKind(rawValue: kindStr)
+            let note = params["note"]?.stringValue
+            guard let sessionService else {
+                throw DaemonRPCError.applicationError("Agent handoff requires tmux on the daemon host")
+            }
+            do {
+                let terminalID = try await sessionService.handoffAgent(
+                    sessionID: id, to: targetKind, note: note)
+                return [
+                    "session_id": .string(idStr),
+                    "agent_kind": .string(targetKind.rawValue),
+                    "terminal_id": .string(terminalID.uuidString),
+                ]
+            } catch let error as AgentHandoffError {
+                throw DaemonRPCError.applicationError(error.localizedDescription)
+            }
+        },
         "restart-tmux-server": { params in
             guard let sessionService else {
                 throw DaemonRPCError.applicationError("Restarting the tmux server requires tmux on the daemon host")
