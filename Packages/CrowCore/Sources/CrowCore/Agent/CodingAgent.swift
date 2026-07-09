@@ -101,6 +101,12 @@ public protocol CodingAgent: Sendable {
         autoPermissionMode: Bool,
         telemetryPort: UInt16?
     ) -> String
+
+    /// Slash-command text to paste into a running agent TUI so its session
+    /// title matches Crow's rename, or `nil` when the agent has no rename
+    /// surface. Crow sends this after `renameSession` (CROW-629). The default
+    /// is Claude/Cursor/Codex/OpenCode's `/rename <name>` form.
+    func sessionRenameSlashCommand(newName: String) -> String?
 }
 
 public extension CodingAgent {
@@ -144,5 +150,13 @@ public extension CodingAgent {
         telemetryPort: UInt16?
     ) -> String {
         return launchCommandToken
+    }
+
+    /// Default rename slash command shared by Claude Code, Cursor, Codex, and
+    /// OpenCode. Agents without a rename surface override to return `nil`.
+    /// `newName` is already validated (no control characters) by the caller;
+    /// the trailing newline is the Enter keypress that submits the slash cmd.
+    func sessionRenameSlashCommand(newName: String) -> String? {
+        "/rename \(newName)\n"
     }
 }

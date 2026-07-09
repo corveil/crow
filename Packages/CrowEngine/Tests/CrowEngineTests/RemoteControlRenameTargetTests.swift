@@ -57,3 +57,70 @@ struct RemoteControlRenameTargetTests {
         #expect(targets.map(\.id) == [rc])
     }
 }
+
+/// CROW-629: Manager rename forwards `/rename` by agent capability, not by
+/// `--rc` bookkeeping. Cursor/Codex/OpenCode Managers never enter
+/// `remoteControlActiveTerminals` (no `--rc` flag) but still expose `/rename`.
+@Suite("SessionService.agentRenameTargets")
+struct AgentRenameTargetTests {
+
+    private func terminal(_ id: UUID, sessionID: UUID = UUID()) -> SessionTerminal {
+        SessionTerminal(id: id, sessionID: sessionID, cwd: "/tmp", isManaged: false)
+    }
+
+    @Test
+    func managerReturnsAllTerminalsWhenRenameSupported() {
+        let session = Session(name: "Manager", kind: .manager, agentKind: .cursor)
+        let a = UUID()
+        let b = UUID()
+        let terminals = [terminal(a, sessionID: session.id), terminal(b, sessionID: session.id)]
+        let targets = SessionService.agentRenameTargets(
+            session: session,
+            terminals: terminals,
+            rcActiveTerminals: [],
+            supportsRename: true
+        )
+        #expect(targets.map(\.id) == [a, b])
+    }
+
+    @Test
+    func managerReturnsEmptyWhenRenameUnsupported() {
+        let session = Session(name: "Manager", kind: .manager, agentKind: .cursor)
+        let terminals = [terminal(UUID(), sessionID: session.id)]
+        let targets = SessionService.agentRenameTargets(
+            session: session,
+            terminals: terminals,
+            rcActiveTerminals: [],
+            supportsRename: false
+        )
+        #expect(targets.isEmpty)
+    }
+
+    @Test
+    func workerStaysRemoteControlGated() {
+        let session = Session(name: "work", kind: .work, agentKind: .claudeCode)
+        let rc = UUID()
+        let plain = UUID()
+        let terminals = [terminal(plain, sessionID: session.id), terminal(rc, sessionID: session.id)]
+        let targets = SessionService.agentRenameTargets(
+            session: session,
+            terminals: terminals,
+            rcActiveTerminals: [rc],
+            supportsRename: true
+        )
+        #expect(targets.map(\.id) == [rc])
+    }
+
+    @Test
+    func workerReturnsEmptyWithoutRemoteControlEvenWhenRenameSupported() {
+        let session = Session(name: "work", kind: .work, agentKind: .cursor)
+        let terminals = [terminal(UUID(), sessionID: session.id)]
+        let targets = SessionService.agentRenameTargets(
+            session: session,
+            terminals: terminals,
+            rcActiveTerminals: [],
+            supportsRename: true
+        )
+        #expect(targets.isEmpty)
+    }
+}

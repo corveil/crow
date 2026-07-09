@@ -147,11 +147,10 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                 }
                 return try await MainActor.run {
                     // Route through the service (not a direct name write) so the
-                    // rename also pushes the `/rename <name>` slash command to the
-                    // session's remote-control terminal, keeping the running agent
-                    // and its claude.ai panel label in sync. The web/CLI RPC path
-                    // skipped that before, so a rename only relabeled the box
-                    // (CROW-593).
+                    // rename also pushes `/rename <name>` to the running agent
+                    // (Manager terminals for any agent that supports rename;
+                    // Claude `--rc` workers for the claude.ai panel label).
+                    // The web/CLI RPC path skipped that before (CROW-593 / CROW-629).
                     guard capturedService.renameSession(sessionID: id, name: name) else {
                         throw RPCError.applicationError("Session not found")
                     }

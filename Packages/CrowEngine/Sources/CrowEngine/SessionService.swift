@@ -1967,15 +1967,17 @@ public final class SessionService {
                 data.sessions[i].name = name
             }
         }
-        syncRemoteControlName(sessionID: sessionID, newName: name)
+        syncAgentSessionName(sessionID: sessionID, newName: name)
         return true
     }
 
-    /// Terminals to push a Remote-Control `/rename` into for a session: those
-    /// launched with `--rc` (tracked in `remoteControlActiveTerminals`). That's
-    /// the Claude Code instance whose claude.ai panel label is fixed at launch.
-    /// Manager terminals qualify even though they aren't flagged `isManaged`.
-    /// Pure/`nonisolated` so it can be unit-tested without a live app.
+    /// Terminals to push a Remote-Control `/rename` into for a worker session:
+    /// those launched with `--rc` (tracked in `remoteControlActiveTerminals`).
+    /// That's the Claude Code instance whose claude.ai panel label is fixed at
+    /// launch. Manager terminals are handled separately by
+    /// `agentRenameTargets` (CROW-629) so Cursor/Codex/OpenCode Managers get
+    /// `/rename` without being marked RC-active. Pure/`nonisolated` so it can
+    /// be unit-tested without a live app.
     nonisolated static func remoteControlRenameTargets(
         terminals: [SessionTerminal],
         rcActiveTerminals: Set<UUID>
@@ -1983,19 +1985,46 @@ public final class SessionService {
         terminals.filter { rcActiveTerminals.contains($0.id) }
     }
 
-    /// After an in-app rename, push the new name to the running Claude Code via
-    /// its `/rename` slash command so claude.ai's Remote Control panel label
-    /// (fixed at launch via `--name`) stays in sync. No-op when the session has
-    /// no `--rc` terminal, or when a terminal's surface isn't ready to receive.
-    /// The name is already validated (no control characters) by the caller, so
-    /// the trailing newline is the only Enter keypress sent.
-    private func syncRemoteControlName(sessionID: UUID, newName: String) {
-        let targets = Self.remoteControlRenameTargets(
+    /// Terminals that should receive an agent `/rename` after a Crow session
+    /// rename (CROW-629). Decouples session-title sync from the Remote Control
+    /// badge: Managers always forward when the agent supports rename (Cursor /
+    /// Codex / OpenCode have no `--rc` but still expose `/rename`); workers
+    /// stay gated on `remoteControlActiveTerminals` so Claude's claude.ai
+    /// panel label keeps syncing. Pure/`nonisolated` for unit tests.
+    nonisolated static func agentRenameTargets(
+        session: Session,
+        terminals: [SessionTerminal],
+        rcActiveTerminals: Set<UUID>,
+        supportsRename: Bool
+    ) -> [SessionTerminal] {
+        guard supportsRename else { return [] }
+        if session.isManager {
+            return terminals
+        }
+        return remoteControlRenameTargets(
+            terminals: terminals,
+            rcActiveTerminals: rcActiveTerminals
+        )
+    }
+
+    /// After an in-app rename, push the new name to the running agent via its
+    /// `/rename` slash command so the agent session title (and, for Claude
+    /// `--rc`, the claude.ai Remote Control panel label) stays in sync.
+    /// No-op when the agent has no rename surface, the session has no eligible
+    /// terminal, or a terminal's surface isn't ready to receive. The name is
+    /// already validated (no control characters) by the caller.
+    private func syncAgentSessionName(sessionID: UUID, newName: String) {
+        guard let session = appState.sessions.first(where: { $0.id == sessionID }),
+              let slash = AgentRegistry.shared.agent(for: session.agentKind)?
+                .sessionRenameSlashCommand(newName: newName) else { return }
+        let targets = Self.agentRenameTargets(
+            session: session,
             terminals: appState.terminals(for: sessionID),
-            rcActiveTerminals: appState.remoteControlActiveTerminals
+            rcActiveTerminals: appState.remoteControlActiveTerminals,
+            supportsRename: true
         )
         for terminal in targets where TerminalRouter.canSend(terminal) {
-            TerminalRouter.send(terminal, text: "/rename \(newName)\n")
+            TerminalRouter.send(terminal, text: slash)
         }
     }
 
