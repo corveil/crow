@@ -916,7 +916,204 @@ func makeCommandRouter(
             await MainActor.run { jobScheduler.runNow(id) }
             return ["ok": .bool(true)]
         },
+
+        // Job management for `crow job` (CROW-604). Mutating verbs change
+        // `AppConfig.jobs` under the shared config lock — the same source the
+        // scheduler's `jobsProvider` and the web Settings UI read. Write verbs
+        // are local-direct on `/rpc` (see `RPCWebSocketHandler.localOnlyDenial`).
+        "job-list": { _ in
+            let config = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
+            return ["jobs": .array(config.jobs.map { JobRPC.jobJSON($0) })]
+        },
+        "job-get": { params in
+            let id = try jobIDParam(params)
+            let config = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
+            guard let job = config.jobs.first(where: { $0.id == id }) else {
+                throw DaemonRPCError.applicationError("Job not found")
+            }
+            return ["job": JobRPC.jobJSON(job)]
+        },
+        "job-add": { params in
+            try mapJobRPCError {
+                let name = try JobRPC.decodeName(params["name"])
+                guard let workspace = params["workspace"]?.stringValue else {
+                    throw RPCError.invalidParams("workspace required")
+                }
+                let repo = try JobRPC.validateRepoSlug(params["repo"]?.stringValue ?? "")
+                guard let scheduleValue = params["schedule"] else {
+                    throw RPCError.invalidParams("schedule required")
+                }
+                let schedule = try JobRPC.decodeSchedule(scheduleValue)
+                let prompts = try JobRPC.decodePrompts(params["prompts"])
+                let enabled = params["enabled"]?.boolValue ?? true
+                let job = try mutateJobs(devRoot: devRoot) { config -> JobConfig in
+                    try validateJobWorkspace(workspace, config: config)
+                    if let error = JobConfig.validateName(name, existingNames: config.jobs.map(\.name)) {
+                        throw RPCError.invalidParams(error)
+                    }
+                    let job = JobConfig(
+                        name: name, workspace: workspace, repo: repo,
+                        prompts: prompts, schedule: schedule, enabled: enabled)
+                    config.jobs.append(job)
+                    return job
+                }
+                return ["job": JobRPC.jobJSON(job)]
+            }
+        },
+        "job-edit": { params in
+            try mapJobRPCError {
+                let id = try jobIDParam(params)
+                let newSchedule = try params["schedule"].map { try JobRPC.decodeSchedule($0) }
+                let newPrompts = try params["prompts"].map { try JobRPC.decodePrompts($0) }
+                let job = try mutateJobs(devRoot: devRoot) { config -> JobConfig in
+                    guard let idx = config.jobs.firstIndex(where: { $0.id == id }) else {
+                        throw RPCError.applicationError("Job not found")
+                    }
+                    var job = config.jobs[idx]
+                    if params["name"] != nil {
+                        let name = try JobRPC.decodeName(params["name"])
+                        if name != job.name {
+                            let otherNames = config.jobs.filter { $0.id != id }.map(\.name)
+                            if let error = JobConfig.validateName(name, existingNames: otherNames) {
+                                throw RPCError.invalidParams(error)
+                            }
+                            job.name = name
+                        }
+                    }
+                    if let workspace = params["workspace"]?.stringValue {
+                        try validateJobWorkspace(workspace, config: config)
+                        job.workspace = workspace
+                    }
+                    if let repo = params["repo"]?.stringValue {
+                        job.repo = try JobRPC.validateRepoSlug(repo)
+                    }
+                    if let newPrompts { job.prompts = newPrompts }
+                    if let newSchedule { job.schedule = newSchedule }
+                    config.jobs[idx] = job
+                    return job
+                }
+                return ["job": JobRPC.jobJSON(job)]
+            }
+        },
+        "job-enable": { params in
+            try mapJobRPCError {
+                let id = try jobIDParam(params)
+                let job = try mutateJobs(devRoot: devRoot) { config -> JobConfig in
+                    guard let idx = config.jobs.firstIndex(where: { $0.id == id }) else {
+                        throw RPCError.applicationError("Job not found")
+                    }
+                    config.jobs[idx].enabled = true
+                    return config.jobs[idx]
+                }
+                return ["job": JobRPC.jobJSON(job)]
+            }
+        },
+        "job-disable": { params in
+            try mapJobRPCError {
+                let id = try jobIDParam(params)
+                let job = try mutateJobs(devRoot: devRoot) { config -> JobConfig in
+                    guard let idx = config.jobs.firstIndex(where: { $0.id == id }) else {
+                        throw RPCError.applicationError("Job not found")
+                    }
+                    config.jobs[idx].enabled = false
+                    return config.jobs[idx]
+                }
+                return ["job": JobRPC.jobJSON(job)]
+            }
+        },
+        "job-delete": { params in
+            try mapJobRPCError {
+                let id = try jobIDParam(params)
+                try mutateJobs(devRoot: devRoot) { config in
+                    guard config.jobs.contains(where: { $0.id == id }) else {
+                        throw RPCError.applicationError("Job not found")
+                    }
+                    config.jobs.removeAll { $0.id == id }
+                }
+                return ["deleted": .bool(true), "job_id": .string(id.uuidString)]
+            }
+        },
+        "job-duplicate": { params in
+            try mapJobRPCError {
+                let id = try jobIDParam(params)
+                let copy = try mutateJobs(devRoot: devRoot) { config -> JobConfig in
+                    guard let original = config.jobs.first(where: { $0.id == id }) else {
+                        throw RPCError.applicationError("Job not found")
+                    }
+                    let copy = original.duplicated(existingNames: config.jobs.map(\.name))
+                    config.jobs.append(copy)
+                    return copy
+                }
+                return ["job": JobRPC.jobJSON(copy)]
+            }
+        },
+        "job-run": { params in
+            let id = try jobIDParam(params)
+            let config = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
+            guard config.jobs.contains(where: { $0.id == id }) else {
+                throw DaemonRPCError.applicationError("Job not found")
+            }
+            guard let jobScheduler else {
+                throw DaemonRPCError.applicationError("Running a job requires tmux on the daemon host")
+            }
+            do {
+                let result = try await jobScheduler.runNowReporting(id)
+                return [
+                    "job_id": .string(id.uuidString),
+                    "session_id": .string(result.sessionID.uuidString),
+                    "terminal_id": .string(result.terminalID.uuidString),
+                ]
+            } catch let error as JobScheduler.RunNowError {
+                throw DaemonRPCError.applicationError(error.localizedDescription)
+            }
+        },
     ], fallback: fallback)
+}
+
+/// Parse the `job_id` param shared by every id-taking `job-*` method.
+private func jobIDParam(_ params: [String: JSONValue]) throws -> UUID {
+    guard let idStr = params["job_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
+        throw DaemonRPCError.invalidParams("job_id required (UUID)")
+    }
+    return id
+}
+
+private func validateJobWorkspace(_ workspace: String, config: AppConfig) throws {
+    guard config.workspaces.contains(where: { $0.name == workspace }) else {
+        throw RPCError.invalidParams("Unknown workspace '\(workspace)'")
+    }
+}
+
+/// Persist a job-config mutation under the shared lock. Disk write first so a
+/// failed save leaves memory and disk consistent.
+@discardableResult
+private func mutateJobs<T>(devRoot: String, _ transform: (inout AppConfig) throws -> T) throws -> T {
+    try ConfigStore.withConfigLock {
+        var config = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
+        let result = try transform(&config)
+        do {
+            try ConfigStore.saveConfig(config, devRoot: devRoot)
+        } catch {
+            throw RPCError.applicationError("Failed to persist job change: \(error.localizedDescription)")
+        }
+        return result
+    }
+}
+
+/// `JobRPC` throws `RPCError`; map to `DaemonRPCError` for the daemon router.
+private func mapJobRPCError<T>(_ body: () throws -> T) throws -> T {
+    do {
+        return try body()
+    } catch let error as RPCError {
+        switch error {
+        case .invalidParams(let msg): throw DaemonRPCError.invalidParams(msg)
+        case .applicationError(let msg): throw DaemonRPCError.applicationError(msg)
+        }
+    } catch let error as DaemonRPCError {
+        throw error
+    } catch {
+        throw DaemonRPCError.applicationError(error.localizedDescription)
+    }
 }
 
 /// Expand a wizard-supplied `dev_root`: leading `~` → home; relative paths

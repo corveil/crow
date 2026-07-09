@@ -4,15 +4,15 @@ import Foundation
 
 /// Pure decode/encode helpers for the `job-*` RPC handlers (CROW-604).
 ///
-/// Kept out of AppDelegate so the param validation and response shapes are
+/// Kept out of the router so the param validation and response shapes are
 /// unit-testable without a socket (same pattern as `JobScheduler.finishDecision`).
-enum JobRPC {
+public enum JobRPC {
     /// Decode the canonical `JobSchedule` JSON (`{"type":"interval",...}` /
     /// `{"type":"dailyAt",...}`) and range-check it.
     ///
     /// - Throws: `RPCError.invalidParams` on a malformed shape or out-of-range
     ///   values (seconds < 1, hour ∉ 0–23, minute ∉ 0–59, weekdays ⊄ 1–7).
-    static func decodeSchedule(_ value: JSONValue) throws -> JobSchedule {
+    public static func decodeSchedule(_ value: JSONValue) throws -> JobSchedule {
         let schedule: JobSchedule
         do {
             let data = try JSONEncoder().encode(value)
@@ -43,7 +43,7 @@ enum JobRPC {
     /// so the CLI can't create a blank-named job).
     ///
     /// - Throws: `RPCError.invalidParams` when missing or blank after trimming.
-    static func decodeName(_ value: JSONValue?) throws -> String {
+    public static func decodeName(_ value: JSONValue?) throws -> String {
         guard let name = value?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty else {
             throw RPCError.invalidParams("Name is required")
         }
@@ -56,7 +56,7 @@ enum JobRPC {
     /// rejected to keep the checkout inside the workspace folder.
     ///
     /// - Throws: `RPCError.invalidParams` on a bare name or path-like slug.
-    static func validateRepoSlug(_ raw: String) throws -> String {
+    public static func validateRepoSlug(_ raw: String) throws -> String {
         let repo = raw.trimmingCharacters(in: .whitespaces)
         let components = repo.split(separator: "/", omittingEmptySubsequences: false)
         guard components.count >= 2,
@@ -72,7 +72,7 @@ enum JobRPC {
     ///
     /// - Throws: `RPCError.invalidParams` when missing, not an array of
     ///   strings, or all prompts are blank.
-    static func decodePrompts(_ value: JSONValue?) throws -> [String] {
+    public static func decodePrompts(_ value: JSONValue?) throws -> [String] {
         guard let items = value?.arrayValue else {
             throw RPCError.invalidParams("prompts must be an array of strings")
         }
@@ -90,7 +90,7 @@ enum JobRPC {
     /// the model's own `schedule` encoding, plus a computed `next_run_at`
     /// (`null` when the schedule is unsatisfiable). `last_run_at` is omitted
     /// for a job that has never run.
-    static func jobJSON(_ job: JobConfig) -> JSONValue {
+    public static func jobJSON(_ job: JobConfig) -> JSONValue {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.keyEncodingStrategy = .convertToSnakeCase

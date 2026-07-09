@@ -112,6 +112,8 @@ enum RPCWebSocketHandler {
     /// - `set-config` when `defaults.binaries` or `jobs` change: those execute at
     ///   the next agent/job launch (persistent RCE on an unauthenticated
     ///   non-loopback bind). Other `set-config` fields still flow through.
+    /// - `job-add` / `edit` / `enable` / `disable` / `delete` / `duplicate`: same
+    ///   jobs-array write surface as `set-config` jobs (CROW-604).
     static func localOnlyDenial(for request: JSONRPCRequest, devRoot: String) -> String? {
         switch request.method {
         case "run-setup":
@@ -119,6 +121,8 @@ enum RPCWebSocketHandler {
         case "set-config":
             guard setConfigTouchesPrivilegedFields(request, devRoot: devRoot) else { return nil }
             return "set-config binaries/jobs is local-only"
+        case "job-add", "job-edit", "job-enable", "job-disable", "job-delete", "job-duplicate":
+            return "\(request.method) is local-only"
         default:
             return nil
         }
