@@ -115,14 +115,12 @@ public final class JobScheduler {
     // MARK: - Manual run
 
     /// Why a manual run request could not launch (CROW-604).
-    enum RunNowError: Error, LocalizedError, Equatable {
-        case noDevRoot
+    public enum RunNowError: Error, LocalizedError, Equatable {        case noDevRoot
         case jobNotFound
         case alreadyRunning
         case launchFailed
 
-        var errorDescription: String? {
-            switch self {
+        public var errorDescription: String? {            switch self {
             case .noDevRoot: "No dev root configured"
             case .jobNotFound: "Job not found"
             case .alreadyRunning: "Job is already running"
@@ -133,8 +131,7 @@ public final class JobScheduler {
 
     /// The reason a `runNow` request would be rejected, or `nil` if it can
     /// proceed. Pure so it's unit-testable (like `finishDecision`).
-    nonisolated static func runNowPrecheck(
-        jobID: UUID, jobs: [JobConfig], devRoot: String?, inFlight: Set<UUID>
+    public nonisolated static func runNowPrecheck(        jobID: UUID, jobs: [JobConfig], devRoot: String?, inFlight: Set<UUID>
     ) -> RunNowError? {
         guard devRoot != nil else { return .noDevRoot }
         guard jobs.contains(where: { $0.id == jobID }) else { return .jobNotFound }
