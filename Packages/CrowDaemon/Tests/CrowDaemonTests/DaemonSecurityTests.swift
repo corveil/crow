@@ -681,3 +681,93 @@ import CrowPersistence
     }
 }
 
+/// Local-direct gates on `/rpc` for write+exec surfaces (review Yellow on #594).
+@Suite struct LocalOnlyRPCGateTests {
+    private func tempDevRoot() -> String {
+        let dir = (NSTemporaryDirectory() as NSString)
+            .appendingPathComponent("crowd-local-rpc-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    private func encode(_ config: AppConfig) throws -> String {
+        String(decoding: try JSONEncoder().encode(config), as: UTF8.self)
+    }
+
+    @Test func runSetupAlwaysDeniedWhenNotLocal() {
+        let req = JSONRPCRequest(id: 1, method: "run-setup", params: [
+            "dev_root": .string("/tmp/x"),
+            "config": .string("{}"),
+        ])
+        #expect(RPCWebSocketHandler.localOnlyDenial(for: req, devRoot: tempDevRoot())
+            == "run-setup is local-only")
+    }
+
+    @Test func setConfigBinariesChangeIsLocalOnly() throws {
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        try ConfigStore.saveConfig(AppConfig(), devRoot: devRoot)
+
+        var incoming = AppConfig()
+        incoming.defaults.binaries = ["claude": "/evil/claude"]
+        let req = JSONRPCRequest(id: 1, method: "set-config", params: [
+            "config": .string(try encode(incoming)),
+        ])
+        #expect(RPCWebSocketHandler.localOnlyDenial(for: req, devRoot: devRoot)
+            == "set-config binaries/jobs is local-only")
+        #expect(RPCWebSocketHandler.setConfigTouchesPrivilegedFields(req, devRoot: devRoot))
+    }
+
+    @Test func setConfigJobsChangeIsLocalOnly() throws {
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        try ConfigStore.saveConfig(AppConfig(), devRoot: devRoot)
+
+        var incoming = AppConfig()
+        incoming.jobs = [
+            JobConfig(name: "nightly", workspace: "ws", repo: "o/r",
+                      prompts: ["do stuff"], schedule: .interval(seconds: 3600)),
+        ]
+        let req = JSONRPCRequest(id: 1, method: "set-config", params: [
+            "config": .string(try encode(incoming)),
+        ])
+        #expect(RPCWebSocketHandler.localOnlyDenial(for: req, devRoot: devRoot)
+            == "set-config binaries/jobs is local-only")
+    }
+
+    @Test func setConfigHarmlessToggleIsAllowedRemotely() throws {
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        var stored = AppConfig()
+        stored.remoteControlEnabled = true
+        try ConfigStore.saveConfig(stored, devRoot: devRoot)
+
+        var incoming = AppConfig()
+        incoming.remoteControlEnabled = false
+        let req = JSONRPCRequest(id: 1, method: "set-config", params: [
+            "config": .string(try encode(incoming)),
+        ])
+        #expect(RPCWebSocketHandler.localOnlyDenial(for: req, devRoot: devRoot) == nil)
+        #expect(!RPCWebSocketHandler.setConfigTouchesPrivilegedFields(req, devRoot: devRoot))
+    }
+
+    @Test func setConfigUnchangedBinariesAndJobsIsAllowed() throws {
+        // Remote editor round-trips the same binaries/jobs it just read — must
+        // not trip the gate (only *changes* are local-only).
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        var stored = AppConfig()
+        stored.defaults.binaries = ["claude": "/usr/local/bin/claude"]
+        stored.jobs = [
+            JobConfig(name: "nightly", workspace: "ws", repo: "o/r",
+                      prompts: ["do stuff"], schedule: .interval(seconds: 3600)),
+        ]
+        try ConfigStore.saveConfig(stored, devRoot: devRoot)
+
+        let req = JSONRPCRequest(id: 1, method: "set-config", params: [
+            "config": .string(try encode(stored)),
+        ])
+        #expect(RPCWebSocketHandler.localOnlyDenial(for: req, devRoot: devRoot) == nil)
+    }
+}
+

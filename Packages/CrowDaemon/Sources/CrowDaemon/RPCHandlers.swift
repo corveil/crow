@@ -712,6 +712,10 @@ func makeCommandRouter(
                 "default_dev_root": .string(defaultDevRoot),
             ]
         },
+        // Non-secret settings write. `defaults.binaries` and `jobs` are held to
+        // the same local-direct bar as secret writes — the `/rpc` WebSocket
+        // handler rejects those field changes from non-local peers before this
+        // runs (review Yellow). Unix-socket / CLI callers are always local.
         "set-config": { params in
             guard let json = params["config"]?.stringValue,
                   let data = json.data(using: .utf8),
@@ -788,7 +792,9 @@ func makeCommandRouter(
         // reachable over the possibly-remote `/rpc` WebSocket and can't tell a
         // local caller from a logged-in remote one, so it must not carry secret
         // writes — that would let a remote client change the password that gates
-        // remote access (CROW-593).
+        // remote access (CROW-593). The same local-direct bar applies to
+        // `set-config` changes of `defaults.binaries` / `jobs` (gated in
+        // `RPCWebSocketHandler`) — those execute at the next launch.
 
         // Session/board actions — forward-only (need the app's coordinators).
         // Spawning a Manager forwards to the app when it's running (its
