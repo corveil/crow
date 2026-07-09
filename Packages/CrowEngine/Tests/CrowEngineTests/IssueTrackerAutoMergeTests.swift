@@ -244,6 +244,62 @@ struct IssueTrackerAutoMergeTests {
         ]
         #expect(IssueTracker.crowAuthored(commitMessages: messages, knownSessionIDs: [known]))
     }
+
+    // MARK: - Permanent auto-merge failures (CROW-621)
+
+    @Test func permanentFailureWhenRepoDisallowsAutoMerge() {
+        let error = ShellRunnerError.nonZeroExit(
+            exitCode: 1,
+            output: "GraphQL: Auto merge is not allowed for this repository (enablePullRequestAutoMerge)\n"
+        )
+        #expect(IssueTracker.isPermanentAutoMergeFailure(error))
+    }
+
+    @Test func cleanStatusWithMutationNameIsRetryable() {
+        // `gh` embeds `enablePullRequestAutoMerge` in every error from that
+        // mutation — including when the PR is already mergeable/clean and
+        // auto-merge was requested too late. That is not a permanent repo
+        // policy denial; matching the bare field name would freeze retries.
+        let error = ShellRunnerError.nonZeroExit(
+            exitCode: 1,
+            output: "GraphQL: Pull request is in clean status (enablePullRequestAutoMerge)\n"
+        )
+        #expect(!IssueTracker.isPermanentAutoMergeFailure(error))
+    }
+
+    @Test func bareMutationNameAloneIsNotPermanent() {
+        let error = ShellRunnerError.nonZeroExit(
+            exitCode: 1,
+            output: "GraphQL: Something about enablePullRequestAutoMerge\n"
+        )
+        #expect(!IssueTracker.isPermanentAutoMergeFailure(error))
+    }
+
+    @Test func transientNetworkFailureIsRetryable() {
+        let error = ShellRunnerError.nonZeroExit(
+            exitCode: 1,
+            output: "error connecting to api.github.com: dial tcp: i/o timeout\n"
+        )
+        #expect(!IssueTracker.isPermanentAutoMergeFailure(error))
+    }
+
+    @Test func transientAuthFailureIsRetryable() {
+        let error = ShellRunnerError.nonZeroExit(
+            exitCode: 1,
+            output: "gh: To get started with GitHub CLI, please run:  gh auth login\n"
+        )
+        #expect(!IssueTracker.isPermanentAutoMergeFailure(error))
+    }
+
+    @Test func permanentFailureAlsoReadsLocalizedDescription() {
+        // Non-ShellRunnerError path still classifies via localizedDescription.
+        struct FakeError: Error, LocalizedError {
+            var errorDescription: String? {
+                "Auto merge is not allowed for this repository"
+            }
+        }
+        #expect(IssueTracker.isPermanentAutoMergeFailure(FakeError()))
+    }
 }
 
 /// CROW-532: the "Add label crow:merge to PR" affordance must gate on the
