@@ -127,4 +127,10 @@ public struct ClaudeCodeAgent: CodingAgent {
             autoPermissionMode: autoPermissionMode
         )
     }
+
+    /// Claude Code's `/rename` keeps the claude.ai Remote Control panel label
+    /// (and local session title) in sync with Crow (CROW-354 / CROW-629).
+    public func sessionRenameSlashCommand(newName: String) -> String? {
+        "/rename \(newName)\n"
+    }
 }

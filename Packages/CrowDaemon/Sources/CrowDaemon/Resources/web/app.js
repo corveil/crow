@@ -1203,6 +1203,7 @@ function sessionMenuItems(s) {
   }
   if (s.kind === 'review') {
     if (hasPR) items.push({ label: 'Add label crow:merge to PR', action: () => sessionAction('add-merge-label', s.id) });
+    items.push({ label: 'Switch agent…', action: () => openHandoffAgentMenu(s, null) });
     items.push({ label: 'Delete', danger: true, action: () => deleteSession(s.id, s.name) });
     return items;
   }
@@ -1218,9 +1219,52 @@ function sessionMenuItems(s) {
   }
   if (hasPR) items.push({ label: 'Add label crow:merge to PR', action: () => sessionAction('add-merge-label', s.id) });
   items.push({ label: s.locked ? 'Unlock' : 'Lock', action: () => sessionAction('set-locked', s.id, { locked: !s.locked }) });
+  // Mid-session agent switch when credits run out (CROW-627).
+  items.push({ label: 'Switch agent…', action: () => openHandoffAgentMenu(s, null) });
   items.push({ sep: true });
   items.push({ label: 'Delete', danger: true, action: () => deleteSession(s.id, s.name) });
   return items;
+}
+
+async function handoffAgent(sessionId, agentKind) {
+  try {
+    await rpc('handoff-agent', { session_id: sessionId, agent_kind: agentKind });
+    await refreshSessions();
+    if (selectedId === sessionId) {
+      renderHeader(sessions.find((x) => x.id === sessionId));
+      await refreshTerminals();
+    }
+  } catch (e) {
+    alertModal('Switch agent failed: ' + (e.message || e));
+  }
+}
+
+// Pick a different coding agent for an existing work/job session (CROW-627).
+// Reuses the list-agents menu pattern from openNewManagerMenu.
+async function openHandoffAgentMenu(session, anchorEl) {
+  let agents = [];
+  try { const r = await rpc('list-agents'); agents = (r && r.agents) || []; } catch (_) { /* app down */ }
+  const others = agents.filter((a) => a.kind && a.kind !== session.agent_kind);
+  if (!others.length) {
+    alertModal('No other coding agents are available. Install Cursor, Codex, or OpenCode to switch.');
+    return;
+  }
+  closeContextMenu();
+  const menu = el('div', 'ctx-menu');
+  for (const a of others) {
+    const item = el('div', 'ctx-item', 'Hand off to ' + (a.name || a.kind));
+    item.onclick = (ev) => { ev.stopPropagation(); closeContextMenu(); handoffAgent(session.id, a.kind); };
+    menu.appendChild(item);
+  }
+  document.body.appendChild(menu);
+  const rect = (anchorEl && anchorEl.getBoundingClientRect)
+    ? anchorEl.getBoundingClientRect()
+    : { left: 16, bottom: 80, top: 80 };
+  const x = Math.min(rect.left || 16, window.innerWidth - menu.offsetWidth - 8);
+  const y = Math.min((rect.bottom || 80) + 4, window.innerHeight - menu.offsetHeight - 8);
+  menu.style.left = Math.max(4, x) + 'px';
+  menu.style.top = Math.max(4, y) + 'px';
+  setTimeout(() => document.addEventListener('click', closeContextMenu, { once: true }), 0);
 }
 
 async function sessionAction(method, id, extra) {
@@ -1358,6 +1402,14 @@ function renderHeader(s) {
     root.appendChild(metaRow);
   }
   root.appendChild(el('div', 'meta', 'Agent: ' + (s.agent_display_name || s.agent_kind || '—')));
+  // Clickable agent row for non-manager sessions with a worktree (CROW-627).
+  if (s.kind !== 'manager' && s.worktree_path) {
+    const agentMeta = root.lastChild;
+    agentMeta.classList.add('meta-agent');
+    agentMeta.title = 'Switch coding agent (handoff)';
+    agentMeta.style.cursor = 'pointer';
+    agentMeta.onclick = (ev) => { ev.stopPropagation(); openHandoffAgentMenu(s, agentMeta); };
+  }
 
   // Links + actions on ONE row (issue/PR/repo chips + inline PR status on the
   // left, action buttons trailing) — matching the desktop detail header.

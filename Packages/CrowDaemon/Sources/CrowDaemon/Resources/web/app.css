@@ -181,6 +181,7 @@ html, body {
 .lock { font-size: 10px; opacity: 0.7; }
 .subtle { color: var(--text-secondary); font-size: 11px; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .meta { color: var(--text-muted); font-size: 11px; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.meta-agent:hover { color: var(--gold); }
 .badge {
   display: inline-block;
   padding: 2px 8px;

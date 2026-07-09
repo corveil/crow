@@ -62,6 +62,30 @@ private let validUUID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
     }
 }
 
+@Test func handoffAgentParsesArgs() throws {
+    let cmd = try HandoffAgent.parse([
+        "--session", validUUID, "--agent", "cursor", "--note", "hit credit limit",
+    ])
+    #expect(cmd.session == validUUID)
+    #expect(cmd.agent == "cursor")
+    #expect(cmd.note == "hit credit limit")
+    try cmd.validate()
+}
+
+@Test func handoffAgentRejectsEmptyAgent() {
+    #expect(throws: (any Error).self) {
+        let cmd = try HandoffAgent.parse(["--session", validUUID, "--agent", "  "])
+        try cmd.validate()
+    }
+}
+
+@Test func handoffAgentRejectsInvalidUUID() {
+    #expect(throws: (any Error).self) {
+        let cmd = try HandoffAgent.parse(["--session", "not-a-uuid", "--agent", "cursor"])
+        try cmd.validate()
+    }
+}
+
 @Test func addLinkParsesAllArgs() throws {
     let cmd = try AddLink.parse(["--session", validUUID, "--label", "PR", "--url", "https://example.com", "--type", "pr"])
     #expect(cmd.session == validUUID)

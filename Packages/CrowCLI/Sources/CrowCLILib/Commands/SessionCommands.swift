@@ -174,3 +174,41 @@ public struct DeleteSession: ParsableCommand {
         printJSON(result)
     }
 }
+
+/// Hand a session off to a different coding agent mid-flight (CROW-627).
+///
+/// Preserves session identity, worktree, branch, and ticket context. Tears
+/// down the managed agent terminal and launches the target agent with a
+/// handoff prompt. Conversation history does not transfer across agents.
+public struct HandoffAgent: ParsableCommand {
+    public static let configuration = CommandConfiguration(
+        commandName: "handoff-agent",
+        abstract: "Switch a session to a different coding agent (e.g. when credits run out)"
+    )
+    @Option(name: .long, help: "Session UUID") var session: String
+    @Option(name: .long, help: "Target agent kind (claude-code, cursor, codex, opencode)")
+    var agent: String
+    @Option(name: .long, help: "Optional note for the incoming agent about where to resume")
+    var note: String?
+
+    public init() {}
+
+    public func validate() throws {
+        try validateUUID(session, label: "session UUID")
+        guard !agent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw ValidationError("agent must be non-empty (claude-code, cursor, codex, or opencode)")
+        }
+    }
+
+    public func run() throws {
+        var params: [String: JSONValue] = [
+            "session_id": .string(session),
+            "agent_kind": .string(agent),
+        ]
+        if let note, !note.isEmpty {
+            params["note"] = .string(note)
+        }
+        let result = try rpc("handoff-agent", params: params)
+        printJSON(result)
+    }
+}
