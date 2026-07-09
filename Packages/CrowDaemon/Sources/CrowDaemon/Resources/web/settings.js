@@ -161,7 +161,13 @@
     if (!backdrop) {
       backdrop = el('div', 'settings-backdrop');
       backdrop.onclick = (ev) => { if (ev.target === backdrop) closeSettings(); };
-      escHandler = (ev) => { if (ev.key === 'Escape') closeSettings(); };
+      // Escape backs out of the topmost overlay first (sub-form), then Settings —
+      // matching backdrop-click behavior (review Yellow).
+      escHandler = (ev) => {
+        if (ev.key !== 'Escape') return;
+        if (subForm) { subForm = null; render(); return; }
+        closeSettings();
+      };
       document.addEventListener('keydown', escHandler);
       document.body.appendChild(backdrop);
     }
