@@ -943,6 +943,124 @@ public final class SessionService {
         ensureManagerSession(devRoot: resolvedDevRoot)
     }
 
+    /// Switch a non-Manager session to a different coding agent mid-flight
+    /// (CROW-627). Preserves session identity, worktrees, ticket, and links;
+    /// tears down managed agent terminals and recreates one seeded with a
+    /// handoff prompt. Conversation history does not transfer across agents.
+    ///
+    /// Unmanaged "Shell" tabs are left alone. Manager sessions must use
+    /// Settings + `restartManager` instead.
+    @MainActor
+    @discardableResult
+    public func handoffAgent(
+        sessionID: UUID,
+        to targetKind: AgentKind,
+        note: String? = nil
+    ) async throws -> UUID {
+        guard let sessionIdx = appState.sessions.firstIndex(where: { $0.id == sessionID }) else {
+            throw AgentHandoffError.sessionNotFound
+        }
+        var session = appState.sessions[sessionIdx]
+        guard !session.isManager else {
+            throw AgentHandoffError.managerNotSupported
+        }
+        let priorKind = session.agentKind
+        guard priorKind != targetKind else {
+            throw AgentHandoffError.sameAgent
+        }
+        guard let target = AgentRegistry.shared.agent(for: targetKind) else {
+            throw AgentHandoffError.agentNotRegistered(targetKind.rawValue)
+        }
+        guard target.findBinary() != nil else {
+            throw AgentHandoffError.agentBinaryMissing(targetKind.rawValue)
+        }
+        guard let worktree = appState.primaryWorktree(for: sessionID) else {
+            throw AgentHandoffError.noWorktree
+        }
+        let worktrees = appState.worktrees(for: sessionID)
+
+        // Persist the new agent before recreating the terminal so register /
+        // attribution / hooks all see the target kind.
+        session.agentKind = targetKind
+        session.updatedAt = Date()
+        appState.sessions[sessionIdx] = session
+        store.mutate { data in
+            if let i = data.sessions.firstIndex(where: { $0.id == sessionID }) {
+                data.sessions[i].agentKind = targetKind
+                data.sessions[i].updatedAt = session.updatedAt
+            }
+        }
+
+        // Tear down managed agent terminals only — keep unmanaged Shell tabs.
+        let existing = appState.terminals(for: sessionID)
+        let managed = existing.filter(\.isManaged)
+        let unmanaged = existing.filter { !$0.isManaged }
+        for terminal in managed {
+            appState.terminalReadiness.removeValue(forKey: terminal.id)
+            appState.autoLaunchTerminals.remove(terminal.id)
+            appState.pendingLaunchCommands.removeValue(forKey: terminal.id)
+            appState.remoteControlActiveTerminals.remove(terminal.id)
+            TerminalRouter.destroy(terminal)
+        }
+        store.mutate { data in
+            data.terminals.removeAll { $0.sessionID == sessionID && $0.isManaged }
+        }
+
+        let prompt = await AgentHandoff.buildPrompt(
+            from: priorKind,
+            to: target,
+            session: session,
+            worktrees: worktrees,
+            note: note
+        )
+        let launchCommand: String
+        do {
+            launchCommand = try await target.launchCommand(
+                sessionID: sessionID,
+                worktreePath: worktree.worktreePath,
+                prompt: prompt
+            )
+        } catch {
+            throw AgentHandoffError.launchFailed(error.localizedDescription)
+        }
+
+        // Claude-specific prep (trust + gateway) before the new process starts.
+        if target.kind == .claudeCode {
+            ClaudeTrustSeeder.seedTrust(projectPath: worktree.worktreePath)
+            let gatewayResolved = workspaceGatewayResolved(for: sessionID)
+            ClaudeHookConfigWriter.writeGatewayEnv(
+                dirPath: worktree.worktreePath, resolved: gatewayResolved)
+        }
+
+        // Deferred paste on `.shellReady` (#408) — same path as `new-terminal --command`.
+        let raw = SessionTerminal(
+            sessionID: sessionID,
+            name: target.displayName,
+            cwd: worktree.worktreePath,
+            command: nil,
+            isManaged: true
+        )
+        appState.terminalReadiness[raw.id] = .uninitialized
+        appState.pendingLaunchCommands[raw.id] = launchCommand
+        appState.autoLaunchTerminals.insert(raw.id)
+
+        let prepared = prepareTerminal(raw, trackReadiness: true)
+        appState.terminals[sessionID] = unmanaged + [prepared]
+        appState.activeTerminalID[sessionID] = prepared.id
+        store.mutate { data in
+            data.terminals.append(prepared)
+        }
+
+        NSLog(
+            "[CrowTelemetry agent:handoff] session=%@ from=%@ to=%@ terminal=%@",
+            sessionID.uuidString,
+            priorKind.rawValue,
+            targetKind.rawValue,
+            prepared.id.uuidString
+        )
+        return prepared.id
+    }
+
     /// Tear down the tmux server and rebuild every terminal surface from
     /// scratch. Manual recovery for a wedged/leaked cockpit session (#375):
     /// kills the server — every pane's claude included — then re-registers a
