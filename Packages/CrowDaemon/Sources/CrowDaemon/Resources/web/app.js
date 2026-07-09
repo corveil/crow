@@ -1814,6 +1814,7 @@ function renderAllowlist(root) {
   selectAll.onclick = () => { promotable.forEach((p) => allowlistSelection.add(p)); renderBoard(); };
   head.appendChild(selectAll);
   const clearSel = el('button', 'action-btn', 'Clear');
+  clearSel.id = 'allow-clear';
   clearSel.disabled = allowlistSelection.size === 0;
   clearSel.onclick = () => { allowlistSelection.clear(); renderBoard(); };
   head.appendChild(clearSel);
@@ -1840,11 +1841,16 @@ function allowRow(e) {
     box.checked = allowlistSelection.has(e.pattern);
     box.onchange = () => {
       if (box.checked) allowlistSelection.add(e.pattern); else allowlistSelection.delete(e.pattern);
-      const btn = document.getElementById('allow-promote');
-      if (btn) {
-        btn.textContent = 'Promote to Global (' + allowlistSelection.size + ')';
-        btn.disabled = allowlistSelection.size === 0;
+      const empty = allowlistSelection.size === 0;
+      const promote = document.getElementById('allow-promote');
+      if (promote) {
+        promote.textContent = 'Promote to Global (' + allowlistSelection.size + ')';
+        promote.disabled = empty;
       }
+      // Clear was fixed at render time; refresh it here too so ticking the first
+      // row from an empty selection enables Clear (review Yellow).
+      const clear = document.getElementById('allow-clear');
+      if (clear) clear.disabled = empty;
     };
     row.appendChild(box);
   } else {
@@ -2015,6 +2021,7 @@ function showTerminalMenu(e) {
 }
 
 function connectTerminalWs() {
+  if (sessionDead) return; // don't loop after an expired remote cookie (review Yellow)
   termWs = new WebSocket(wsURL('/terminal'));
   termWs.binaryType = 'arraybuffer';
   termWs.onopen = () => {
@@ -2024,7 +2031,10 @@ function connectTerminalWs() {
   termWs.onmessage = (event) => {
     if (event.data instanceof ArrayBuffer) term.write(new Uint8Array(event.data));
   };
-  termWs.onclose = () => { setTimeout(connectTerminalWs, 1000); };
+  termWs.onclose = () => {
+    if (sessionDead) return;
+    setTimeout(connectTerminalWs, 1000);
+  };
   termWs.onerror = () => termWs.close();
 }
 
