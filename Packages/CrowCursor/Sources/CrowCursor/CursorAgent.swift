@@ -143,4 +143,9 @@ public struct CursorAgent: CodingAgent {
         // the cross-agent convention.
         return findBinary() ?? "agent"
     }
+
+    /// Cursor CLI exposes `/rename` for naming sessions (CROW-629).
+    public func sessionRenameSlashCommand(newName: String) -> String? {
+        "/rename \(newName)\n"
+    }
 }

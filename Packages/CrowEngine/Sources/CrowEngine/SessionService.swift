@@ -979,8 +979,34 @@ public final class SessionService {
         }
         let worktrees = appState.worktrees(for: sessionID)
 
-        // Persist the new agent before recreating the terminal so register /
-        // attribution / hooks all see the target kind.
+        // Build the handoff prompt + launch command *before* mutating session
+        // state or destroying terminals. `launchCommand` does real I/O (e.g.
+        // writing a prompt file) and can throw — if we tear down first, a
+        // failure leaves the session half-migrated with no running agent
+        // (CROW-627 review).
+        var sessionForPrompt = session
+        sessionForPrompt.agentKind = targetKind
+        let prompt = await AgentHandoff.buildPrompt(
+            from: priorKind,
+            to: target,
+            session: sessionForPrompt,
+            worktrees: worktrees,
+            note: note
+        )
+        let launchCommand: String
+        do {
+            launchCommand = try await target.launchCommand(
+                sessionID: sessionID,
+                worktreePath: worktree.worktreePath,
+                prompt: prompt
+            )
+        } catch {
+            throw AgentHandoffError.launchFailed(error.localizedDescription)
+        }
+
+        // Persist the new agent only after launch prep succeeds so register /
+        // attribution / hooks all see the target kind, and a failed build
+        // leaves the prior agent untouched.
         session.agentKind = targetKind
         session.updatedAt = Date()
         appState.sessions[sessionIdx] = session
@@ -1004,24 +1030,6 @@ public final class SessionService {
         }
         store.mutate { data in
             data.terminals.removeAll { $0.sessionID == sessionID && $0.isManaged }
-        }
-
-        let prompt = await AgentHandoff.buildPrompt(
-            from: priorKind,
-            to: target,
-            session: session,
-            worktrees: worktrees,
-            note: note
-        )
-        let launchCommand: String
-        do {
-            launchCommand = try await target.launchCommand(
-                sessionID: sessionID,
-                worktreePath: worktree.worktreePath,
-                prompt: prompt
-            )
-        } catch {
-            throw AgentHandoffError.launchFailed(error.localizedDescription)
         }
 
         // Claude-specific prep (trust + gateway) before the new process starts.

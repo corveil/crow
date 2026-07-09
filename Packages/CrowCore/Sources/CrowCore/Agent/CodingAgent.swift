@@ -104,8 +104,9 @@ public protocol CodingAgent: Sendable {
 
     /// Slash-command text to paste into a running agent TUI so its session
     /// title matches Crow's rename, or `nil` when the agent has no rename
-    /// surface. Crow sends this after `renameSession` (CROW-629). The default
-    /// is Claude/Cursor/Codex/OpenCode's `/rename <name>` form.
+    /// surface. Crow sends this after `renameSession` (CROW-629). Opt-in:
+    /// the protocol default returns `nil` so future agents cannot inherit a
+    /// spurious `/rename` paste; Claude/Cursor/Codex/OpenCode override.
     func sessionRenameSlashCommand(newName: String) -> String?
 }
 
@@ -152,11 +153,9 @@ public extension CodingAgent {
         return launchCommandToken
     }
 
-    /// Default rename slash command shared by Claude Code, Cursor, Codex, and
-    /// OpenCode. Agents without a rename surface override to return `nil`.
-    /// `newName` is already validated (no control characters) by the caller;
-    /// the trailing newline is the Enter keypress that submits the slash cmd.
-    func sessionRenameSlashCommand(newName: String) -> String? {
-        "/rename \(newName)\n"
-    }
+    /// Opt-out default: no rename slash command. Agents that expose `/rename`
+    /// (Claude Code, Cursor, Codex, OpenCode) override this. Returning `nil`
+    /// here prevents a future agent from silently inheriting a paste that
+    /// would be sent to the model as a stray prompt (CROW-629 review).
+    func sessionRenameSlashCommand(newName: String) -> String? { nil }
 }

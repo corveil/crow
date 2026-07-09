@@ -13,6 +13,7 @@ struct CursorAgentTests {
         #expect(agent.iconSystemName == "cursorarrow.rays")
         #expect(agent.supportsRemoteControl == true)
         #expect(agent.launchCommandToken == "agent")
+        #expect(agent.sessionRenameSlashCommand(newName: "my-session") == "/rename my-session\n")
     }
 
     @Test func autoLaunchCommandWorkSession() {
