@@ -42,7 +42,14 @@ enum RPCWebSocketHandler {
                 configProvider: { ConfigStore.loadConfig(devRoot: devRoot) },
                 sessions: sessions)
             return (originOK && auth.isAuthorized) ? .upgrade() : .dontUpgrade
-        } onUpgrade: { inbound, outbound, _ in
+        } onUpgrade: { inbound, outbound, wsContext in
+            // Captured at upgrade: first-run `run-setup` is a write+re-exec and
+            // must stay local-direct (loopback, no XFF) like SecretRoutes — on a
+            // non-loopback bind with auth still inert, Origin alone isn't enough
+            // (review Yellow / CROW-605).
+            let localDirect = WebAuthGuard.isLocalDirect(
+                remoteAddress: wsContext.requestContext.remoteAddress,
+                forwardedFor: wsContext.request.headers[HTTPField.Name("x-forwarded-for")!])
             // One outbound channel per connection: RPC responses (from the
             // reader task) and hub notifications (fanned in via `subscribe`)
             // both feed the single writer below.
@@ -71,7 +78,15 @@ enum RPCWebSocketHandler {
                               let request = try? decoder.decode(JSONRPCRequest.self, from: data) else {
                             continue
                         }
-                        let response = await commandRouter.handle(request: request)
+                        let response: JSONRPCResponse
+                        if request.method == "run-setup", !localDirect {
+                            response = .error(
+                                id: request.id,
+                                code: RPCErrorCode.invalidParams,
+                                message: "run-setup is local-only")
+                        } else {
+                            response = await commandRouter.handle(request: request)
+                        }
                         if let out = try? encoder.encode(response), let text = String(data: out, encoding: .utf8) {
                             outCont.yield(text)
                         }
