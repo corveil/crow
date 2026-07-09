@@ -208,7 +208,8 @@
 .st-row-main { flex: 1; min-width: 0; }
 .st-row-title { font-size: 12px; font-weight: 600; color: var(--text-primary); }
 .st-row-sub { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
-.st-row-actions { display: flex; gap: 6px; flex: none; }
+.st-row-actions { display: flex; gap: 6px; flex: none; align-items: center; }
+.st-row-switch { margin-right: 2px; }
 .st-icon-btn {
   display: inline-flex; align-items: center; justify-content: center;
   width: 28px; height: 28px; padding: 0;
