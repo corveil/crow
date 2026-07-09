@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Backfill of merged PRs since the 0.1.0 release, grouped by theme.
 
+### Web UI
+
+- #613 — Left pane paints chrome + skeleton (or cached last-known) session rows on first load before `list-sessions` returns, then swaps in real rows without a blank flash.
+
 ### Automation
 
 - #137 — Session analytics emitted via Claude Code's OpenTelemetry exporter (configure via `CLAUDE_CODE_ENABLE_TELEMETRY` and `OTEL_EXPORTER_OTLP_ENDPOINT`).
