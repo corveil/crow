@@ -124,4 +124,38 @@ struct TmuxControllerTests {
         #expect(out.contains("bravo"))
         #expect(out.contains("charlie"))
     }
+
+    /// Regression for the CROW-606 silent no-op: `run()` used to wait for the
+    /// child to exit *before* draining stdout, so a `capture-pane -pe` larger
+    /// than the ~64 KB pipe buffer deadlocked, hit the 2s watchdog, and
+    /// `TerminalCockpit.replayData`'s `try?` swallowed it — reconnect showed
+    /// live-only. This emits >64 KB of scrollback and asserts capture returns
+    /// the full blob (not a timeout).
+    @Test func capturePaneDrainsLargeStdoutWithoutDeadlock() throws {
+        let ctrl = makeController()
+        let confURL = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("crow-hist-\(UUID().uuidString).conf")
+        defer {
+            ctrl.killServer()
+            try? FileManager.default.removeItem(atPath: ctrl.socketPath)
+            try? FileManager.default.removeItem(at: confURL)
+        }
+        // history-limit is frozen at window birth — bake 50k into the server
+        // conf so the pane can retain the full blob.
+        try "set -gs history-limit 50000\n".write(to: confURL, atomically: true, encoding: .utf8)
+        // 1200 × ~60-char lines ≈ 72 KB — above the ~64 KB pipe buffer.
+        let script = #"/bin/sh -c 'i=0; while [ $i -lt 1200 ]; do printf "LINE-%04d-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX\n" "$i"; i=$((i+1)); done; printf "SENTINEL-DONE\n"; sleep 60'"#
+        try ctrl.newSessionDetached(configPath: confURL.path, command: script)
+        var out = ""
+        let deadline = Date().addingTimeInterval(5)
+        repeat {
+            Thread.sleep(forTimeInterval: 0.2)
+            out = (try? ctrl.capturePane(
+                target: "\(ctrl.sessionName):0", linesBack: 50000, escapes: true)) ?? ""
+        } while !out.contains("SENTINEL-DONE") && Date() < deadline
+        #expect(out.contains("SENTINEL-DONE"))
+        #expect(out.utf8.count > 64 * 1024)
+        #expect(out.contains("LINE-0000-"))
+        #expect(out.contains("LINE-1199-"))
+    }
 }
