@@ -973,6 +973,132 @@ public final class SessionService {
         ensureManagerSession(devRoot: resolvedDevRoot)
     }
 
+    /// Switch a non-Manager session to a different coding agent mid-flight
+    /// (CROW-627). Preserves session identity, worktrees, ticket, and links;
+    /// tears down managed agent terminals and recreates one seeded with a
+    /// handoff prompt. Conversation history does not transfer across agents.
+    ///
+    /// Unmanaged "Shell" tabs are left alone. Manager sessions must use
+    /// Settings + `restartManager` instead.
+    @MainActor
+    @discardableResult
+    public func handoffAgent(
+        sessionID: UUID,
+        to targetKind: AgentKind,
+        note: String? = nil
+    ) async throws -> UUID {
+        guard let sessionIdx = appState.sessions.firstIndex(where: { $0.id == sessionID }) else {
+            throw AgentHandoffError.sessionNotFound
+        }
+        var session = appState.sessions[sessionIdx]
+        guard !session.isManager else {
+            throw AgentHandoffError.managerNotSupported
+        }
+        let priorKind = session.agentKind
+        guard priorKind != targetKind else {
+            throw AgentHandoffError.sameAgent
+        }
+        guard let target = AgentRegistry.shared.agent(for: targetKind) else {
+            throw AgentHandoffError.agentNotRegistered(targetKind.rawValue)
+        }
+        guard target.findBinary() != nil else {
+            throw AgentHandoffError.agentBinaryMissing(targetKind.rawValue)
+        }
+        guard let worktree = appState.primaryWorktree(for: sessionID) else {
+            throw AgentHandoffError.noWorktree
+        }
+        let worktrees = appState.worktrees(for: sessionID)
+
+        // Build the handoff prompt + launch command *before* mutating session
+        // state or destroying terminals. `launchCommand` does real I/O (e.g.
+        // writing a prompt file) and can throw — if we tear down first, a
+        // failure leaves the session half-migrated with no running agent
+        // (CROW-627 review).
+        var sessionForPrompt = session
+        sessionForPrompt.agentKind = targetKind
+        let prompt = await AgentHandoff.buildPrompt(
+            from: priorKind,
+            to: target,
+            session: sessionForPrompt,
+            worktrees: worktrees,
+            note: note
+        )
+        let launchCommand: String
+        do {
+            launchCommand = try await target.launchCommand(
+                sessionID: sessionID,
+                worktreePath: worktree.worktreePath,
+                prompt: prompt
+            )
+        } catch {
+            throw AgentHandoffError.launchFailed(error.localizedDescription)
+        }
+
+        // Persist the new agent only after launch prep succeeds so register /
+        // attribution / hooks all see the target kind, and a failed build
+        // leaves the prior agent untouched.
+        session.agentKind = targetKind
+        session.updatedAt = Date()
+        appState.sessions[sessionIdx] = session
+        store.mutate { data in
+            if let i = data.sessions.firstIndex(where: { $0.id == sessionID }) {
+                data.sessions[i].agentKind = targetKind
+                data.sessions[i].updatedAt = session.updatedAt
+            }
+        }
+
+        // Tear down managed agent terminals only — keep unmanaged Shell tabs.
+        let existing = appState.terminals(for: sessionID)
+        let managed = existing.filter(\.isManaged)
+        let unmanaged = existing.filter { !$0.isManaged }
+        for terminal in managed {
+            appState.terminalReadiness.removeValue(forKey: terminal.id)
+            appState.autoLaunchTerminals.remove(terminal.id)
+            appState.pendingLaunchCommands.removeValue(forKey: terminal.id)
+            appState.remoteControlActiveTerminals.remove(terminal.id)
+            TerminalRouter.destroy(terminal)
+        }
+        store.mutate { data in
+            data.terminals.removeAll { $0.sessionID == sessionID && $0.isManaged }
+        }
+
+        // Claude-specific prep (trust + gateway) before the new process starts.
+        if target.kind == .claudeCode {
+            ClaudeTrustSeeder.seedTrust(projectPath: worktree.worktreePath)
+            let gatewayResolved = workspaceGatewayResolved(for: sessionID)
+            ClaudeHookConfigWriter.writeGatewayEnv(
+                dirPath: worktree.worktreePath, resolved: gatewayResolved)
+        }
+
+        // Deferred paste on `.shellReady` (#408) — same path as `new-terminal --command`.
+        let raw = SessionTerminal(
+            sessionID: sessionID,
+            name: target.displayName,
+            cwd: worktree.worktreePath,
+            command: nil,
+            isManaged: true
+        )
+        appState.terminalReadiness[raw.id] = .uninitialized
+        appState.pendingLaunchCommands[raw.id] = launchCommand
+        appState.autoLaunchTerminals.insert(raw.id)
+
+        let prepared = prepareTerminal(raw, trackReadiness: true)
+        appState.terminals[sessionID] = unmanaged + [prepared]
+        appState.activeTerminalID[sessionID] = prepared.id
+        store.mutate { data in
+            data.terminals.append(prepared)
+        }
+
+        NSLog(
+            "[CrowTelemetry agent:handoff] session=%@ from=%@ to=%@ terminal=%@",
+            sessionID.uuidString,
+            priorKind.rawValue,
+            targetKind.rawValue,
+            prepared.id.uuidString
+        )
+        return prepared.id
+    }
+
     /// Tear down the tmux server and rebuild every terminal surface from
     /// scratch. Manual recovery for a wedged/leaked cockpit session (#375):
     /// kills the server — every pane's claude included — then re-registers a
@@ -1879,15 +2005,17 @@ public final class SessionService {
                 data.sessions[i].name = name
             }
         }
-        syncRemoteControlName(sessionID: sessionID, newName: name)
+        syncAgentSessionName(sessionID: sessionID, newName: name)
         return true
     }
 
-    /// Terminals to push a Remote-Control `/rename` into for a session: those
-    /// launched with `--rc` (tracked in `remoteControlActiveTerminals`). That's
-    /// the Claude Code instance whose claude.ai panel label is fixed at launch.
-    /// Manager terminals qualify even though they aren't flagged `isManaged`.
-    /// Pure/`nonisolated` so it can be unit-tested without a live app.
+    /// Terminals to push a Remote-Control `/rename` into for a worker session:
+    /// those launched with `--rc` (tracked in `remoteControlActiveTerminals`).
+    /// That's the Claude Code instance whose claude.ai panel label is fixed at
+    /// launch. Manager terminals are handled separately by
+    /// `agentRenameTargets` (CROW-629) so Cursor/Codex/OpenCode Managers get
+    /// `/rename` without being marked RC-active. Pure/`nonisolated` so it can
+    /// be unit-tested without a live app.
     nonisolated static func remoteControlRenameTargets(
         terminals: [SessionTerminal],
         rcActiveTerminals: Set<UUID>
@@ -1895,19 +2023,51 @@ public final class SessionService {
         terminals.filter { rcActiveTerminals.contains($0.id) }
     }
 
-    /// After an in-app rename, push the new name to the running Claude Code via
-    /// its `/rename` slash command so claude.ai's Remote Control panel label
-    /// (fixed at launch via `--name`) stays in sync. No-op when the session has
-    /// no `--rc` terminal, or when a terminal's surface isn't ready to receive.
-    /// The name is already validated (no control characters) by the caller, so
-    /// the trailing newline is the only Enter keypress sent.
-    private func syncRemoteControlName(sessionID: UUID, newName: String) {
-        let targets = Self.remoteControlRenameTargets(
+    /// Terminals that should receive an agent `/rename` after a Crow session
+    /// rename (CROW-629). Decouples session-title sync from the Remote Control
+    /// badge: Managers forward to command-bearing agent terminals when the
+    /// agent supports rename (Cursor / Codex / OpenCode have no `--rc` but
+    /// still expose `/rename`) — unmanaged Shell tabs (`command == nil`) are
+    /// excluded so `/rename` is not pasted into a live shell; workers stay
+    /// gated on `remoteControlActiveTerminals` so Claude's claude.ai panel
+    /// label keeps syncing. Pure/`nonisolated` for unit tests.
+    nonisolated static func agentRenameTargets(
+        session: Session,
+        terminals: [SessionTerminal],
+        rcActiveTerminals: Set<UUID>,
+        supportsRename: Bool
+    ) -> [SessionTerminal] {
+        guard supportsRename else { return [] }
+        if session.isManager {
+            // Same discriminator RC bookkeeping uses: only terminals that
+            // launched an agent carry a `command`. Extra Shell tabs must not
+            // receive `/rename` (would run as a bogus shell command).
+            return terminals.filter { $0.command != nil }
+        }
+        return remoteControlRenameTargets(
+            terminals: terminals,
+            rcActiveTerminals: rcActiveTerminals
+        )
+    }
+
+    /// After an in-app rename, push the new name to the running agent via its
+    /// `/rename` slash command so the agent session title (and, for Claude
+    /// `--rc`, the claude.ai Remote Control panel label) stays in sync.
+    /// No-op when the agent has no rename surface, the session has no eligible
+    /// terminal, or a terminal's surface isn't ready to receive. The name is
+    /// already validated (no control characters) by the caller.
+    private func syncAgentSessionName(sessionID: UUID, newName: String) {
+        guard let session = appState.sessions.first(where: { $0.id == sessionID }),
+              let slash = AgentRegistry.shared.agent(for: session.agentKind)?
+                .sessionRenameSlashCommand(newName: newName) else { return }
+        let targets = Self.agentRenameTargets(
+            session: session,
             terminals: appState.terminals(for: sessionID),
-            rcActiveTerminals: appState.remoteControlActiveTerminals
+            rcActiveTerminals: appState.remoteControlActiveTerminals,
+            supportsRename: true
         )
         for terminal in targets where TerminalRouter.canSend(terminal) {
-            TerminalRouter.send(terminal, text: "/rename \(newName)\n")
+            TerminalRouter.send(terminal, text: slash)
         }
     }
 

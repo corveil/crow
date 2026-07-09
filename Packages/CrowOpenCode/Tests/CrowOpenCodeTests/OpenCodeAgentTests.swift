@@ -13,6 +13,7 @@ struct OpenCodeAgentTests {
         #expect(agent.iconSystemName == "chevron.left.forwardslash.chevron.right")
         #expect(agent.supportsRemoteControl == true)
         #expect(agent.launchCommandToken == "opencode")
+        #expect(agent.sessionRenameSlashCommand(newName: "my-session") == "/rename my-session\n")
     }
 
     @Test func autoLaunchCommandWorkSession() {

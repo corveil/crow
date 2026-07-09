@@ -1,6 +1,6 @@
 # Architecture
 
-Crow coordinates AI-assisted development sessions. Each session is a git worktree + a Claude Code terminal + ticket metadata, tracked in a persistent store. The `crowd` daemon is the **sole authority**: it owns the store, spawns workspaces (worktree + tmux window + agent), runs the background automations, and serves the web UI + a JSON-RPC surface. Every interface — the browser UI and the `crow` CLI — is a **pure client** that sends RPCs and renders pushed state. See [ADR 0007](adr/0007-crowd-sole-authority-clients-only.md) (crowd is the sole authority) and [ADR 0008](adr/0008-retire-the-macos-app.md) (the macOS app was retired).
+Crow coordinates AI-assisted development sessions. Each session is a git worktree + a Claude Code terminal + ticket metadata, tracked in a persistent store. The `crowd` daemon is the **sole authority**: it owns the store, spawns workspaces (worktree + tmux window + agent), runs the background automations, and serves the web UI + a JSON-RPC surface. Every interface — the browser UI and the `crow` CLI — is a **pure client** that sends RPCs and renders pushed state. See [ADR 0009](adr/0009-crowd-sole-authority-clients-only.md) (crowd is the sole authority) and [ADR 0010](adr/0010-retire-the-macos-app.md) (the macOS app was retired).
 
 ## System diagram
 
@@ -65,7 +65,7 @@ crow/
 └── skills/                    # Bundled Claude Code skills (crow-workspace, etc.)
 ```
 
-> **History:** the AppKit app (`Sources/Crow`) and its SwiftUI package (`Packages/CrowUI`) were removed when the app was retired ([ADR 0008](adr/0008-retire-the-macos-app.md)). The engine had already been extracted into the host-agnostic `CrowEngine` package during the CROW-581 migration, so `crowd` runs the same session logic the app used to.
+> **History:** the AppKit app (`Sources/Crow`) and its SwiftUI package (`Packages/CrowUI`) were removed when the app was retired ([ADR 0010](adr/0010-retire-the-macos-app.md)). The engine had already been extracted into the host-agnostic `CrowEngine` package during the CROW-581 migration, so `crowd` runs the same session logic the app used to.
 
 ### About `Sources/CrowCLI` vs `Packages/CrowCLI`
 
