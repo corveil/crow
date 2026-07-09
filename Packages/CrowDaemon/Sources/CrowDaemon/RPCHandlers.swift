@@ -745,6 +745,10 @@ func makeCommandRouter(
         // writes config.json + the App Support pointer, then asks the daemon to
         // re-exec so every subsystem that captured `devRoot` at startup adopts
         // the new path. Rejected once a pointer already exists.
+        //
+        // Local-direct only: the `/rpc` WebSocket handler rejects non-local
+        // callers before this runs (review Yellow). Documented here so a future
+        // Unix-socket / CLI path doesn't reintroduce a remote write+re-exec.
         "run-setup": { params in
             if ConfigStore.loadDevRoot() != nil {
                 throw DaemonRPCError.invalidParams("Already configured — setup wizard is one-shot")

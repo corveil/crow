@@ -47,7 +47,15 @@ enum Artifacts {
                   isSafeImageName(file) else {
                 return Response(status: .badRequest)
             }
-            guard let data = try? Data(contentsOf: dir.appendingPathComponent(file)) else {
+            // Resolve symlinks and require the final path stay inside `dir` —
+            // otherwise a planted `shot.png` → `~/.claude/config.json` symlink
+            // would leak secrets that strippedForTransport keeps off every other
+            // transport (review Yellow / CROW-593).
+            let candidate = dir.appendingPathComponent(file)
+            guard let resolved = resolvedPathInside(dir: dir, file: candidate) else {
+                return Response(status: .notFound)
+            }
+            guard let data = try? Data(contentsOf: resolved) else {
                 return Response(status: .notFound)
             }
             var headers: HTTPFields = [.contentType: contentType(for: file), .cacheControl: "no-store"]
@@ -69,6 +77,21 @@ enum Artifacts {
     static func isSafeImageName(_ name: String) -> Bool {
         !name.isEmpty && !name.contains("/") && !name.contains("..")
             && imageExtensions.contains((name as NSString).pathExtension.lowercased())
+    }
+
+    /// Resolve `file` (following symlinks) and return it only when the final
+    /// path is still under `dir`. Rejects dangling / escaping symlinks.
+    static func resolvedPathInside(dir: URL, file: URL) -> URL? {
+        let root = dir.resolvingSymlinksInPath().standardizedFileURL.path
+        let resolved = file.resolvingSymlinksInPath().standardizedFileURL.path
+        // Exact match (file is the dir itself — shouldn't happen) or a child.
+        guard resolved == root || resolved.hasPrefix(root + "/") else { return nil }
+        // The resolved path must still exist as a regular file (not a dir).
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: resolved, isDirectory: &isDir), !isDir.boolValue else {
+            return nil
+        }
+        return URL(fileURLWithPath: resolved)
     }
 
     private static func contentType(for file: String) -> String {
