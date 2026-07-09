@@ -442,6 +442,10 @@ function detectReviewSounds() {
 // State
 // ---------------------------------------------------------------------------
 let sessions = [];
+// False until the first successful list-sessions RPC. While false and sessions
+// are empty, the sidebar paints skeleton placeholders instead of "No sessions"
+// (CROW-613). A localStorage cache can populate `sessions` before that RPC.
+let sessionsLoaded = false;
 let selectedId = null;
 let terminals = [];
 let activeTerminal = null; // { id, name, window }
@@ -454,6 +458,38 @@ let liveById = {};
 // the app isn't running.
 let selectedBoard = null; // 'tickets' | 'reviews' | 'allowlist' | null
 const boardData = { tickets: null, reviews: null, allowlist: null };
+
+// Last-known sidebar layout (sessions + ticket/review badge counts) so first
+// paint isn't blank while /rpc connects (CROW-613).
+const SIDEBAR_CACHE_KEY = 'crow.sidebar.cache';
+// True when boot restored a cache entry (including an empty sessions list) —
+// distinguishes "remembered empty" from a cold start that should show skeletons.
+let sidebarCacheHit = false;
+function clearSidebarCache() {
+  try { localStorage.removeItem(SIDEBAR_CACHE_KEY); } catch (_) {}
+  sidebarCacheHit = false;
+}
+function restoreSidebarCache() {
+  try {
+    const raw = localStorage.getItem(SIDEBAR_CACHE_KEY);
+    if (!raw) return;
+    const data = JSON.parse(raw);
+    if (Array.isArray(data.sessions)) sessions = data.sessions;
+    if (data.tickets) boardData.tickets = data.tickets;
+    if (data.reviews) boardData.reviews = data.reviews;
+    sidebarCacheHit = true;
+  } catch (_) { /* corrupt cache — start empty */ }
+}
+function persistSidebarCache() {
+  try {
+    localStorage.setItem(SIDEBAR_CACHE_KEY, JSON.stringify({
+      sessions,
+      tickets: boardData.tickets,
+      reviews: boardData.reviews,
+    }));
+    sidebarCacheHit = true;
+  } catch (_) { /* quota / private mode */ }
+}
 let ticketFilter = 'All'; // pipeline segment ('All' or a status rawValue); default to All so the board isn't misread as empty when work moves to Done
 let allowlistHideGlobal = false;
 const allowlistSelection = new Set();
@@ -493,7 +529,11 @@ const GROUPS = [
 async function refreshSessions() {
   try {
     const res = await rpc('list-sessions');
-    sessions = res.sessions || [];
+    const next = res.sessions || [];
+    const changed = JSON.stringify(sessions) !== JSON.stringify(next);
+    sessions = next;
+    sessionsLoaded = true;
+    if (changed) persistSidebarCache();
     detectSessionSounds();
     renderSidebar();
   } catch (_) { /* transient — next poll retries */ }
@@ -528,8 +568,9 @@ function el(tag, className, text) {
 let lastSidebarSig = null;
 function sidebarSignature() {
   return JSON.stringify([
-    sessions, liveById, selectedId, selectedBoard,
+    sessionsLoaded, sidebarCacheHit, sessions, liveById, selectedId, selectedBoard,
     selectionMode, [...selectedSessionIDs],
+    uiConfig.hideSessionDetails,
     boardData.tickets && boardData.tickets.counts,
     boardData.tickets && boardData.tickets.done_last_24h,
     boardData.reviews && boardData.reviews.unseen,
@@ -557,6 +598,15 @@ function renderSidebar() {
   root.appendChild(navPillRow());
   if (selectionMode) root.appendChild(bulkActionBar());
 
+  // Cold start only: structured skeleton rows so the left pane isn't blank
+  // while list-sessions is in flight. A cached empty workspace keeps the
+  // remembered "No sessions" state instead of shimmering (CROW-613).
+  if (!sessionsLoaded && !sessions.length && !sidebarCacheHit) {
+    root.appendChild(el('div', 'divider', 'Active'));
+    for (let i = 0; i < 4; i++) root.appendChild(skeletonRow(i));
+    return;
+  }
+
   // Extra (non-primary) manager sessions render as rows, no section header.
   const managers = sessions.filter((s) => s.kind === 'manager');
   for (const m of managers.slice(1)) root.appendChild(sessionRow(m));
@@ -568,7 +618,28 @@ function renderSidebar() {
     root.appendChild(selectionMode ? sectionHeader(group.title, rows) : el('div', 'divider', group.title));
     for (const s of rows) { root.appendChild(sessionRow(s)); shown++; }
   }
-  if (!shown && !managers.length) root.appendChild(el('div', 'empty', 'No sessions'));
+  if ((sessionsLoaded || sidebarCacheHit) && !shown && !managers.length) {
+    root.appendChild(el('div', 'empty', 'No sessions'));
+  }
+}
+
+// Placeholder session card matching .session-row geometry so real rows swap in
+// without a full re-layout jump (CROW-613).
+function skeletonRow(i) {
+  const row = el('div', 'session-row skeleton-row');
+  row.setAttribute('aria-hidden', 'true');
+  // Stagger the shimmer so the column doesn't pulse in lockstep.
+  row.style.setProperty('--skel-delay', ((i % 4) * 0.12) + 's');
+  const top = el('div', 'row-top');
+  top.appendChild(el('span', 'skel skel-agent'));
+  top.appendChild(el('span', 'skel skel-name'));
+  top.appendChild(el('span', 'skel skel-dot'));
+  row.appendChild(top);
+  if (!uiConfig.hideSessionDetails) {
+    row.appendChild(el('div', 'skel skel-subtle'));
+    row.appendChild(el('div', 'skel skel-meta'));
+  }
+  return row;
 }
 
 // ---- Multi-select (#5 / CROW-593) ----------------------------------------
@@ -710,6 +781,10 @@ async function handleAuthOnDisconnect() {
   try {
     if (await sessionExpired()) {
       sessionDead = true;
+      // Parity with explicit logout: drop cached session/ticket payloads when
+      // the remote web cookie dies (crowd restart) so they don't linger in a
+      // shared browser (CROW-613 review).
+      clearSidebarCache();
       renderStatusBar();
     }
   } finally {
@@ -749,6 +824,9 @@ function renderStatusBar() {
     out.onclick = async () => {
       if (!await confirmModal('Log out of this web session? You’ll need the web password to sign back in.', { title: 'Log out', okLabel: 'Log out' })) return;
       try { await fetch('/logout', { method: 'POST' }); } catch (_) {}
+      // Drop cached session/ticket payloads so a shared browser can't read them
+      // after logout of a password-protected remote session (CROW-613 review).
+      clearSidebarCache();
       location.reload();  // now unauthenticated → the auth gate serves the login page
     };
     actions.appendChild(out);
@@ -1595,6 +1673,7 @@ async function refreshBoard(key) {
   try { data = await rpc(method); } catch (_) { return; }
   const changed = JSON.stringify(boardData[key]) !== JSON.stringify(data);
   boardData[key] = data;
+  if (changed && (key === 'tickets' || key === 'reviews')) persistSidebarCache();
   if (key === 'reviews') detectReviewSounds();
   if (changed) renderSidebar(); // badge counts
   if (changed && selectedBoard === key) renderBoard();
@@ -2329,6 +2408,20 @@ document.getElementById('back-to-sidebar').onclick = () => {
 // Our own terminal context menu (copy/paste/select-all/clear) replaces the
 // browser default over the coding pane.
 document.getElementById('terminal-wrap').addEventListener('contextmenu', showTerminalMenu);
+
+// Paint the left pane immediately — cached last-known layout, or skeleton
+// placeholders — before the first /rpc round-trip (CROW-613). A stale-schema
+// cache entry must not abort the rest of boot (polls / refreshSessions).
+try {
+  restoreSidebarCache();
+  renderSidebar();
+} catch (_) {
+  clearSidebarCache();
+  sessions = [];
+  lastSidebarSig = null;
+  try { renderSidebar(); } catch (_) { /* keep going — RPC refresh will paint */ }
+}
+renderStatusBar();
 
 refreshSessions();
 refreshLive();
