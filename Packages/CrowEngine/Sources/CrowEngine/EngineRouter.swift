@@ -147,11 +147,10 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                 }
                 return try await MainActor.run {
                     // Route through the service (not a direct name write) so the
-                    // rename also pushes the `/rename <name>` slash command to the
-                    // session's remote-control terminal, keeping the running agent
-                    // and its claude.ai panel label in sync. The web/CLI RPC path
-                    // skipped that before, so a rename only relabeled the box
-                    // (CROW-593).
+                    // rename also pushes `/rename <name>` to the running agent
+                    // (Manager terminals for any agent that supports rename;
+                    // Claude `--rc` workers for the claude.ai panel label).
+                    // The web/CLI RPC path skipped that before (CROW-593 / CROW-629).
                     guard capturedService.renameSession(sessionID: id, name: name) else {
                         throw RPCError.applicationError("Session not found")
                     }
@@ -186,6 +185,8 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                         "id": .string(s.id.uuidString),
                         "name": .string(s.name),
                         "status": .string(s.status.rawValue),
+                        "agent_kind": .string(s.agentKind.rawValue),
+                        "agent_display_name": .string(CrowAttribution.agentDisplayName(for: s.agentKind)),
                         "ticket_url": s.ticketURL.map { .string($0) } ?? .null,
                         "ticket_title": s.ticketTitle.map { .string($0) } ?? .null,
                         "ticket_number": s.ticketNumber.map { .int($0) } ?? .null,
@@ -500,6 +501,26 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                         }
                     }
                     return ["session_id": .string(idStr), "status": .string(statusStr)]
+                }
+            },
+            // Mid-session agent switch when credits run out (CROW-627).
+            "handoff-agent": { @Sendable params in
+                guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr),
+                      let kindStr = params["agent_kind"]?.stringValue, !kindStr.isEmpty else {
+                    throw RPCError.invalidParams("session_id and agent_kind required")
+                }
+                let targetKind = AgentKind(rawValue: kindStr)
+                let note = params["note"]?.stringValue
+                do {
+                    let terminalID = try await capturedService.handoffAgent(
+                        sessionID: id, to: targetKind, note: note)
+                    return [
+                        "session_id": .string(idStr),
+                        "agent_kind": .string(targetKind.rawValue),
+                        "terminal_id": .string(terminalID.uuidString),
+                    ]
+                } catch let error as AgentHandoffError {
+                    throw RPCError.applicationError(error.localizedDescription)
                 }
             },
             "set-locked": { @Sendable params in

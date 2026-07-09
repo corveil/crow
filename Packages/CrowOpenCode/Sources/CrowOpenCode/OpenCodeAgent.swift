@@ -170,4 +170,9 @@ public struct OpenCodeAgent: CodingAgent {
         // newline to match the cross-agent convention.
         return findBinary() ?? "opencode"
     }
+
+    /// OpenCode TUI exposes `/rename` for the current session (CROW-629).
+    public func sessionRenameSlashCommand(newName: String) -> String? {
+        "/rename \(newName)\n"
+    }
 }

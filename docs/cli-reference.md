@@ -93,6 +93,23 @@ crow set-status --session <uuid> archived
 | `--session`               | yes      | Session UUID                                            |
 | *(positional)* `STATUS`   | yes      | `active`, `paused`, `inReview`, `completed`, `archived` |
 
+### `crow handoff-agent`
+
+Switch a session to a different coding agent mid-flight (e.g. when credits run out). Preserves session identity, worktree, branch, and ticket context. Tears down the managed agent terminal and launches the target agent with a handoff prompt. Conversation history does **not** transfer across agents — see [ADR 0009](adr/0009-agent-handoff-preserves-session-not-chat.md).
+
+```bash
+crow handoff-agent --session <uuid> --agent cursor
+crow handoff-agent --session <uuid> --agent claude-code --note "Hit credit limit; continue from failing tests"
+```
+
+| Flag / Arg    | Required | Description                                              |
+| ------------- | -------- | -------------------------------------------------------- |
+| `--session`   | yes      | Session UUID                                             |
+| `--agent`     | yes      | Target kind: `claude-code`, `cursor`, `codex`, `opencode` |
+| `--note`      | no       | Optional resume note for the incoming agent              |
+
+Returns `{"session_id":"…","agent_kind":"…","terminal_id":"…"}`. Manager sessions are not supported — change the Manager agent in Settings and restart instead.
+
 ### `crow delete-session`
 
 ```bash

@@ -17,6 +17,7 @@ crow select-session --session <uuid>
 crow list-sessions
 crow get-session --session <uuid>
 crow set-status --session <uuid> active|paused|inReview|completed|archived
+crow handoff-agent --session <uuid> --agent cursor [--note "..."]
 crow delete-session --session <uuid>
 ```
 
