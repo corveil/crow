@@ -1322,6 +1322,182 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    // MARK: - Job RPC handlers (CROW-604)
+
+    /// Parse the `job_id` param shared by every id-taking `job-*` method.
+    private nonisolated static func jobID(from params: [String: JSONValue]) throws -> UUID {
+        guard let idStr = params["job_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
+            throw RPCError.invalidParams("job_id required (UUID)")
+        }
+        return id
+    }
+
+    private nonisolated static func validateJobWorkspace(_ workspace: String, config: AppConfig) throws {
+        guard config.workspaces.contains(where: { $0.name == workspace }) else {
+            throw RPCError.invalidParams("Unknown workspace '\(workspace)'")
+        }
+    }
+
+    /// The live config, or a clean RPC error when the app hasn't finished
+    /// launching (e.g. the setup wizard hasn't completed).
+    private func requireJobConfig() throws -> AppConfig {
+        guard let appConfig else {
+            throw RPCError.applicationError("App not fully initialized — no config loaded")
+        }
+        return appConfig
+    }
+
+    /// Canonical job mutation: transform a copy of the live `appConfig`,
+    /// persist it, and only then swap it in as the in-memory config (the same
+    /// source the scheduler's `jobsProvider` and the Settings UI read).
+    /// Persisting first means a failed disk write leaves memory and disk
+    /// consistent — the CLI gets an error and nothing changed.
+    @discardableResult
+    private func mutateJobConfig<T>(_ transform: (inout AppConfig) throws -> T) throws -> T {
+        guard var config = appConfig, let devRoot else {
+            throw RPCError.applicationError("App not fully initialized — no dev root/config loaded")
+        }
+        let result = try transform(&config)
+        do {
+            try ConfigStore.saveConfig(config, devRoot: devRoot)
+        } catch {
+            throw RPCError.applicationError("Failed to persist job change: \(error.localizedDescription)")
+        }
+        self.appConfig = config
+        return result
+    }
+
+    private func handleJobList() throws -> [String: JSONValue] {
+        let config = try requireJobConfig()
+        return ["jobs": .array(config.jobs.map { JobRPC.jobJSON($0) })]
+    }
+
+    private func handleJobGet(id: UUID) throws -> [String: JSONValue] {
+        let config = try requireJobConfig()
+        guard let job = config.jobs.first(where: { $0.id == id }) else {
+            throw RPCError.applicationError("Job not found")
+        }
+        return ["job": JobRPC.jobJSON(job)]
+    }
+
+    private func handleJobAdd(params: [String: JSONValue]) throws -> [String: JSONValue] {
+        let name = try JobRPC.decodeName(params["name"])
+        guard let workspace = params["workspace"]?.stringValue else {
+            throw RPCError.invalidParams("workspace required")
+        }
+        let repo = try JobRPC.validateRepoSlug(params["repo"]?.stringValue ?? "")
+        guard let scheduleValue = params["schedule"] else {
+            throw RPCError.invalidParams("schedule required")
+        }
+        let schedule = try JobRPC.decodeSchedule(scheduleValue)
+        let prompts = try JobRPC.decodePrompts(params["prompts"])
+        let enabled = params["enabled"]?.boolValue ?? true
+        let job = try mutateJobConfig { config -> JobConfig in
+            try Self.validateJobWorkspace(workspace, config: config)
+            if let error = JobConfig.validateName(name, existingNames: config.jobs.map(\.name)) {
+                throw RPCError.invalidParams(error)
+            }
+            let job = JobConfig(
+                name: name, workspace: workspace, repo: repo,
+                prompts: prompts, schedule: schedule, enabled: enabled
+            )
+            config.jobs.append(job)
+            return job
+        }
+        return ["job": JobRPC.jobJSON(job)]
+    }
+
+    /// Patch semantics: only the provided params change; prompts and schedule
+    /// are replaced whole when present. Matches the Settings UI's replace-by-id.
+    private func handleJobEdit(id: UUID, params: [String: JSONValue]) throws -> [String: JSONValue] {
+        let newSchedule = try params["schedule"].map { try JobRPC.decodeSchedule($0) }
+        let newPrompts = try params["prompts"].map { try JobRPC.decodePrompts($0) }
+        let job = try mutateJobConfig { config -> JobConfig in
+            guard let idx = config.jobs.firstIndex(where: { $0.id == id }) else {
+                throw RPCError.applicationError("Job not found")
+            }
+            var job = config.jobs[idx]
+            if params["name"] != nil {
+                let name = try JobRPC.decodeName(params["name"])
+                if name != job.name {
+                    let otherNames = config.jobs.filter { $0.id != id }.map(\.name)
+                    if let error = JobConfig.validateName(name, existingNames: otherNames) {
+                        throw RPCError.invalidParams(error)
+                    }
+                    job.name = name
+                }
+            }
+            if let workspace = params["workspace"]?.stringValue {
+                try Self.validateJobWorkspace(workspace, config: config)
+                job.workspace = workspace
+            }
+            if let repo = params["repo"]?.stringValue {
+                job.repo = try JobRPC.validateRepoSlug(repo)
+            }
+            if let newPrompts { job.prompts = newPrompts }
+            if let newSchedule { job.schedule = newSchedule }
+            config.jobs[idx] = job
+            return job
+        }
+        return ["job": JobRPC.jobJSON(job)]
+    }
+
+    private func handleJobSetEnabled(id: UUID, enabled: Bool) throws -> [String: JSONValue] {
+        let job = try mutateJobConfig { config -> JobConfig in
+            guard let idx = config.jobs.firstIndex(where: { $0.id == id }) else {
+                throw RPCError.applicationError("Job not found")
+            }
+            config.jobs[idx].enabled = enabled
+            return config.jobs[idx]
+        }
+        return ["job": JobRPC.jobJSON(job)]
+    }
+
+    private func handleJobDelete(id: UUID) throws -> [String: JSONValue] {
+        try mutateJobConfig { config in
+            guard config.jobs.contains(where: { $0.id == id }) else {
+                throw RPCError.applicationError("Job not found")
+            }
+            config.jobs.removeAll { $0.id == id }
+        }
+        return ["deleted": .bool(true), "job_id": .string(id.uuidString)]
+    }
+
+    private func handleJobDuplicate(id: UUID) throws -> [String: JSONValue] {
+        let copy = try mutateJobConfig { config -> JobConfig in
+            guard let original = config.jobs.first(where: { $0.id == id }) else {
+                throw RPCError.applicationError("Job not found")
+            }
+            let copy = original.duplicated(existingNames: config.jobs.map(\.name))
+            config.jobs.append(copy)
+            return copy
+        }
+        return ["job": JobRPC.jobJSON(copy)]
+    }
+
+    /// Run a job immediately (ignoring its schedule/enabled flag) and return
+    /// the launched session/terminal ids. `lastRunAt` persistence rides the
+    /// existing `onJobRan` → `recordJobRun` wiring.
+    private func jobRunForCLI(_ id: UUID) async throws -> [String: JSONValue] {
+        let config = try requireJobConfig()
+        guard config.jobs.contains(where: { $0.id == id }) else {
+            throw RPCError.applicationError("Job not found")
+        }
+        guard let jobScheduler else {
+            throw RPCError.applicationError("Job scheduler is not running")
+        }
+        do {
+            let result = try await jobScheduler.runNowReporting(id)
+            return [
+                "job_id": .string(id.uuidString),
+                "session_id": .string(result.sessionID.uuidString),
+                "terminal_id": .string(result.terminalID.uuidString),
+            ]
+        } catch let error as JobScheduler.RunNowError {
+            throw RPCError.applicationError(error.localizedDescription)
+        }
+    }
+
     // MARK: - Socket Server
 
     /// Maximum allowed length for session names.
@@ -2068,6 +2244,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         "event_name": .string(eventName),
                     ]
                 }
+            },
+            // Job management (CROW-604). These read/mutate the *live*
+            // `appConfig` — the same source the scheduler's `jobsProvider` and
+            // the Settings UI use — so `self` is captured weakly and state is
+            // read at call time, never snapshotted at server start.
+            "job-list": { @Sendable [weak self] _ in
+                guard let self else { throw RPCError.applicationError("App is shutting down") }
+                return try await MainActor.run { try self.handleJobList() }
+            },
+            "job-get": { @Sendable [weak self] params in
+                let id = try AppDelegate.jobID(from: params)
+                guard let self else { throw RPCError.applicationError("App is shutting down") }
+                return try await MainActor.run { try self.handleJobGet(id: id) }
+            },
+            "job-add": { @Sendable [weak self] params in
+                guard let self else { throw RPCError.applicationError("App is shutting down") }
+                return try await MainActor.run { try self.handleJobAdd(params: params) }
+            },
+            "job-edit": { @Sendable [weak self] params in
+                let id = try AppDelegate.jobID(from: params)
+                guard let self else { throw RPCError.applicationError("App is shutting down") }
+                return try await MainActor.run { try self.handleJobEdit(id: id, params: params) }
+            },
+            "job-enable": { @Sendable [weak self] params in
+                let id = try AppDelegate.jobID(from: params)
+                guard let self else { throw RPCError.applicationError("App is shutting down") }
+                return try await MainActor.run { try self.handleJobSetEnabled(id: id, enabled: true) }
+            },
+            "job-disable": { @Sendable [weak self] params in
+                let id = try AppDelegate.jobID(from: params)
+                guard let self else { throw RPCError.applicationError("App is shutting down") }
+                return try await MainActor.run { try self.handleJobSetEnabled(id: id, enabled: false) }
+            },
+            "job-delete": { @Sendable [weak self] params in
+                let id = try AppDelegate.jobID(from: params)
+                guard let self else { throw RPCError.applicationError("App is shutting down") }
+                return try await MainActor.run { try self.handleJobDelete(id: id) }
+            },
+            "job-duplicate": { @Sendable [weak self] params in
+                let id = try AppDelegate.jobID(from: params)
+                guard let self else { throw RPCError.applicationError("App is shutting down") }
+                return try await MainActor.run { try self.handleJobDuplicate(id: id) }
+            },
+            "job-run": { @Sendable [weak self] params in
+                let id = try AppDelegate.jobID(from: params)
+                guard let self else { throw RPCError.applicationError("App is shutting down") }
+                // Must await mid-handler (the launch itself), so this hops to
+                // the MainActor via the isolated method instead of MainActor.run.
+                return try await self.jobRunForCLI(id)
             },
         ])
 

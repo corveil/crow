@@ -228,3 +228,46 @@ private func startServer(
         _ = try client.send(method: "test")
     }
 }
+
+@Test func nestedObjectParamsSurviveRoundTrip() throws {
+    // The `job-add`/`job-edit` RPCs send the schedule as a nested JSON object
+    // and prompts as an array (CROW-604) — assert compound JSONValue params
+    // survive client → server → handler → response intact.
+    let path = tempSocketPath()
+    let server = try startServer(path: path, handlers: [
+        "job-add": { @Sendable params in
+            ["schedule": params["schedule"] ?? .null, "prompts": params["prompts"] ?? .null]
+        },
+    ])
+    defer { server.stop(); unlink(path) }
+
+    let schedule = JSONValue.object([
+        "type": .string("dailyAt"),
+        "hour": .int(9),
+        "minute": .int(30),
+        "weekdays": .array([.int(2), .int(6)]),
+    ])
+    let prompts = JSONValue.array([.string("first"), .string("second")])
+    let client = SocketClient(socketPath: path)
+    let response = try client.send(method: "job-add", params: ["schedule": schedule, "prompts": prompts])
+    #expect(response.error == nil)
+    #expect(response.result?["schedule"] == schedule)
+    #expect(response.result?["prompts"] == prompts)
+}
+
+@Test func clientAcceptsPerCallTimeout() throws {
+    // `job run` passes a longer read timeout; a short one must still time out.
+    let path = tempSocketPath()
+    let server = try startServer(path: path, handlers: [
+        "slow": { @Sendable _ in
+            try await Task.sleep(nanoseconds: 60_000_000_000) // 60s
+            return [:]
+        },
+    ])
+    defer { server.stop(); unlink(path) }
+
+    let client = SocketClient(socketPath: path)
+    #expect(throws: SocketError.self) {
+        _ = try client.send(method: "slow", timeoutSeconds: 1)
+    }
+}
