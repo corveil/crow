@@ -79,11 +79,11 @@ enum RPCWebSocketHandler {
                             continue
                         }
                         let response: JSONRPCResponse
-                        if request.method == "run-setup", !localDirect {
+                        if !localDirect, let deny = Self.localOnlyDenial(for: request, devRoot: devRoot) {
                             response = .error(
                                 id: request.id,
                                 code: RPCErrorCode.invalidParams,
-                                message: "run-setup is local-only")
+                                message: deny)
                         } else {
                             response = await commandRouter.handle(request: request)
                         }
@@ -102,5 +102,39 @@ enum RPCWebSocketHandler {
 
             await eventHub.unsubscribe(subscription)
         }
+    }
+
+    /// Methods / fields that must stay local-direct (loopback, no XFF), matching
+    /// `SecretRoutes` — the shared `CommandRouter` can't tell a local Unix-socket
+    /// caller from a remote `/rpc` peer (review Yellow / CROW-593).
+    ///
+    /// - `run-setup`: write+re-exec of an arbitrary `dev_root`.
+    /// - `set-config` when `defaults.binaries` or `jobs` change: those execute at
+    ///   the next agent/job launch (persistent RCE on an unauthenticated
+    ///   non-loopback bind). Other `set-config` fields still flow through.
+    static func localOnlyDenial(for request: JSONRPCRequest, devRoot: String) -> String? {
+        switch request.method {
+        case "run-setup":
+            return "run-setup is local-only"
+        case "set-config":
+            guard setConfigTouchesPrivilegedFields(request, devRoot: devRoot) else { return nil }
+            return "set-config binaries/jobs is local-only"
+        default:
+            return nil
+        }
+    }
+
+    /// True when the incoming `set-config` payload would change agent binary
+    /// overrides or scheduled jobs relative to what's on disk.
+    static func setConfigTouchesPrivilegedFields(_ request: JSONRPCRequest, devRoot: String) -> Bool {
+        guard let json = request.params?["config"]?.stringValue,
+              let data = json.data(using: .utf8),
+              let incoming = try? JSONDecoder().decode(AppConfig.self, from: data) else {
+            // Malformed — let the real handler return invalidParams.
+            return false
+        }
+        let current = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
+        return incoming.defaults.binaries != current.defaults.binaries
+            || incoming.jobs != current.jobs
     }
 }
