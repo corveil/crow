@@ -997,16 +997,13 @@ public final class SessionService {
         let worktrees = appState.worktrees(for: sessionID)
 
         // Build the handoff prompt + launch command *before* mutating session
-        // state or destroying terminals. `launchCommand` does real I/O (e.g.
-        // writing a prompt file) and can throw — if we tear down first, a
-        // failure leaves the session half-migrated with no running agent
-        // (CROW-627 review).
-        var sessionForPrompt = session
-        sessionForPrompt.agentKind = targetKind
+        // state or destroying terminals. `launchCommand` writes a temp prompt
+        // file and can throw on I/O failure — leaving the prior agent running
+        // is far better than a flipped agentKind with no managed pane (review).
         let prompt = await AgentHandoff.buildPrompt(
             from: priorKind,
             to: target,
-            session: sessionForPrompt,
+            session: session,
             worktrees: worktrees,
             note: note
         )
@@ -1019,6 +1016,15 @@ public final class SessionService {
             )
         } catch {
             throw AgentHandoffError.launchFailed(error.localizedDescription)
+        }
+
+        // Claude-specific prep (trust + gateway) before the new process starts.
+        // Idempotent file writes — safe to run before teardown.
+        if target.kind == .claudeCode {
+            ClaudeTrustSeeder.seedTrust(projectPath: worktree.worktreePath)
+            let gatewayResolved = workspaceGatewayResolved(for: sessionID)
+            ClaudeHookConfigWriter.writeGatewayEnv(
+                dirPath: worktree.worktreePath, resolved: gatewayResolved)
         }
 
         // Persist the new agent only after launch prep succeeds so register /
@@ -1047,14 +1053,6 @@ public final class SessionService {
         }
         store.mutate { data in
             data.terminals.removeAll { $0.sessionID == sessionID && $0.isManaged }
-        }
-
-        // Claude-specific prep (trust + gateway) before the new process starts.
-        if target.kind == .claudeCode {
-            ClaudeTrustSeeder.seedTrust(projectPath: worktree.worktreePath)
-            let gatewayResolved = workspaceGatewayResolved(for: sessionID)
-            ClaudeHookConfigWriter.writeGatewayEnv(
-                dirPath: worktree.worktreePath, resolved: gatewayResolved)
         }
 
         // Deferred paste on `.shellReady` (#408) — same path as `new-terminal --command`.
