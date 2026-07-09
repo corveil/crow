@@ -84,6 +84,36 @@ private let jobUUID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
     }
 }
 
+@Test func jobAddRejectsBlankName() {
+    #expect(throws: (any Error).self) {
+        _ = try JobAdd.parse(["--name", "  ", "--workspace", "ws", "--repo", "o/r", "--prompt", "p", "--interval-seconds", "60"])
+    }
+}
+
+@Test func jobAddRejectsBareOrPathLikeRepo() {
+    // repo must be an owner/repo slug; its last component becomes a folder
+    // name, so bare names and path-like components are rejected client-side.
+    for bad in ["api", "foo/..", "../foo", "/repo", "owner/"] {
+        #expect(throws: (any Error).self, "expected '\(bad)' to be rejected") {
+            _ = try JobAdd.parse(["--name", "x", "--workspace", "ws", "--repo", bad, "--prompt", "p", "--interval-seconds", "60"])
+        }
+    }
+}
+
+@Test func jobAddAcceptsNestedGroupRepo() throws {
+    let cmd = try JobAdd.parse(["--name", "x", "--workspace", "ws", "--repo", "group/sub/project", "--prompt", "p", "--interval-seconds", "60"])
+    #expect(cmd.repo == "group/sub/project")
+}
+
+@Test func jobEditRejectsBlankNameAndBadRepo() {
+    #expect(throws: (any Error).self) {
+        _ = try JobEdit.parse(["--id", jobUUID, "--name", "  "])
+    }
+    #expect(throws: (any Error).self) {
+        _ = try JobEdit.parse(["--id", jobUUID, "--repo", "foo/.."])
+    }
+}
+
 @Test func jobEditParsesPartialFields() throws {
     let cmd = try JobEdit.parse(["--id", jobUUID, "--name", "renamed"])
     #expect(cmd.id == jobUUID)

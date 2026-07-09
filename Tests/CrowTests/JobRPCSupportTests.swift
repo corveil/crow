@@ -52,6 +52,37 @@ struct JobRPCSupportTests {
         }
     }
 
+    // MARK: - decodeName
+
+    @Test func decodeNameTrimsWhitespace() throws {
+        #expect(try JobRPC.decodeName(.string("  triage \n")) == "triage")
+    }
+
+    @Test func decodeNameRejectsMissingAndBlank() {
+        #expect(throws: RPCError.self) { _ = try JobRPC.decodeName(nil) }
+        #expect(throws: RPCError.self) { _ = try JobRPC.decodeName(.string("")) }
+        #expect(throws: RPCError.self) { _ = try JobRPC.decodeName(.string("   ")) }
+        #expect(throws: RPCError.self) { _ = try JobRPC.decodeName(.int(7)) }
+    }
+
+    // MARK: - validateRepoSlug
+
+    @Test func validateRepoSlugAcceptsSlugsAndNestedGroups() throws {
+        #expect(try JobRPC.validateRepoSlug("radiusmethod/crow") == "radiusmethod/crow")
+        #expect(try JobRPC.validateRepoSlug("group/sub/project") == "group/sub/project")
+        #expect(try JobRPC.validateRepoSlug("  owner/repo  ") == "owner/repo")
+    }
+
+    @Test func validateRepoSlugRejectsBareNamesAndPathLikeComponents() {
+        // The slug's last component becomes an on-disk folder, so anything
+        // path-like must be rejected before persist.
+        for bad in ["", "   ", "api", "foo/..", "../foo", "foo/.", "./foo", "/repo", "owner/", "a//b"] {
+            #expect(throws: RPCError.self, "expected '\(bad)' to be rejected") {
+                _ = try JobRPC.validateRepoSlug(bad)
+            }
+        }
+    }
+
     // MARK: - decodePrompts
 
     @Test func decodePromptsAcceptsStringArray() throws {

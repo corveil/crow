@@ -38,6 +38,36 @@ enum JobRPC {
         return schedule
     }
 
+    /// Extract and trim a job name, rejecting missing or whitespace-only
+    /// values (the Settings UI validates the trimmed name; mirror that here
+    /// so the CLI can't create a blank-named job).
+    ///
+    /// - Throws: `RPCError.invalidParams` when missing or blank after trimming.
+    static func decodeName(_ value: JSONValue?) throws -> String {
+        guard let name = value?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty else {
+            throw RPCError.invalidParams("Name is required")
+        }
+        return name
+    }
+
+    /// Validate and trim a repo slug. A job's `repo` must be an `owner/repo`
+    /// slug (nested GitLab groups allowed); its last path component becomes an
+    /// on-disk folder name, so path-like components (`.`, `..`, empty) are
+    /// rejected to keep the checkout inside the workspace folder.
+    ///
+    /// - Throws: `RPCError.invalidParams` on a bare name or path-like slug.
+    static func validateRepoSlug(_ raw: String) throws -> String {
+        let repo = raw.trimmingCharacters(in: .whitespaces)
+        let components = repo.split(separator: "/", omittingEmptySubsequences: false)
+        guard components.count >= 2,
+              components.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else {
+            throw RPCError.invalidParams(
+                "repo must be an owner/repo slug (e.g. \"radiusmethod/crow\"); components must not be empty, '.', or '..'"
+            )
+        }
+        return repo
+    }
+
     /// Extract a prompts array, requiring at least one non-empty prompt.
     ///
     /// - Throws: `RPCError.invalidParams` when missing, not an array of

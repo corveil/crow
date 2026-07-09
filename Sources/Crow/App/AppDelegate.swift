@@ -1347,22 +1347,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return appConfig
     }
 
-    /// Canonical job mutation: transform the live in-memory `appConfig` (the
-    /// same source the scheduler's `jobsProvider` and the Settings UI read),
-    /// reassign, then persist. Mirrors `recordJobRun`, but surfaces save
-    /// failures to the CLI instead of just logging them.
+    /// Canonical job mutation: transform a copy of the live `appConfig`,
+    /// persist it, and only then swap it in as the in-memory config (the same
+    /// source the scheduler's `jobsProvider` and the Settings UI read).
+    /// Persisting first means a failed disk write leaves memory and disk
+    /// consistent — the CLI gets an error and nothing changed.
     @discardableResult
     private func mutateJobConfig<T>(_ transform: (inout AppConfig) throws -> T) throws -> T {
         guard var config = appConfig, let devRoot else {
             throw RPCError.applicationError("App not fully initialized — no dev root/config loaded")
         }
         let result = try transform(&config)
-        self.appConfig = config
         do {
             try ConfigStore.saveConfig(config, devRoot: devRoot)
         } catch {
-            throw RPCError.applicationError("Job change applied in memory but failed to persist: \(error.localizedDescription)")
+            throw RPCError.applicationError("Failed to persist job change: \(error.localizedDescription)")
         }
+        self.appConfig = config
         return result
     }
 
@@ -1380,16 +1381,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func handleJobAdd(params: [String: JSONValue]) throws -> [String: JSONValue] {
-        guard let name = params["name"]?.stringValue else {
-            throw RPCError.invalidParams("name required")
-        }
+        let name = try JobRPC.decodeName(params["name"])
         guard let workspace = params["workspace"]?.stringValue else {
             throw RPCError.invalidParams("workspace required")
         }
-        let repo = params["repo"]?.stringValue?.trimmingCharacters(in: .whitespaces) ?? ""
-        guard !repo.isEmpty else {
-            throw RPCError.invalidParams("repo required (owner/repo slug)")
-        }
+        let repo = try JobRPC.validateRepoSlug(params["repo"]?.stringValue ?? "")
         guard let scheduleValue = params["schedule"] else {
             throw RPCError.invalidParams("schedule required")
         }
@@ -1421,23 +1417,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 throw RPCError.applicationError("Job not found")
             }
             var job = config.jobs[idx]
-            if let name = params["name"]?.stringValue, name != job.name {
-                let otherNames = config.jobs.filter { $0.id != id }.map(\.name)
-                if let error = JobConfig.validateName(name, existingNames: otherNames) {
-                    throw RPCError.invalidParams(error)
+            if params["name"] != nil {
+                let name = try JobRPC.decodeName(params["name"])
+                if name != job.name {
+                    let otherNames = config.jobs.filter { $0.id != id }.map(\.name)
+                    if let error = JobConfig.validateName(name, existingNames: otherNames) {
+                        throw RPCError.invalidParams(error)
+                    }
+                    job.name = name
                 }
-                job.name = name
             }
             if let workspace = params["workspace"]?.stringValue {
                 try Self.validateJobWorkspace(workspace, config: config)
                 job.workspace = workspace
             }
             if let repo = params["repo"]?.stringValue {
-                let trimmed = repo.trimmingCharacters(in: .whitespaces)
-                guard !trimmed.isEmpty else {
-                    throw RPCError.invalidParams("repo must not be empty")
-                }
-                job.repo = trimmed
+                job.repo = try JobRPC.validateRepoSlug(repo)
             }
             if let newPrompts { job.prompts = newPrompts }
             if let newSchedule { job.schedule = newSchedule }

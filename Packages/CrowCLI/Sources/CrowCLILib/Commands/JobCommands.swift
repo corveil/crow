@@ -86,6 +86,8 @@ public struct JobAdd: ParsableCommand {
     public init() {}
 
     public func validate() throws {
+        try validateJobName(name)
+        try validateRepoSlug(repo)
         guard try JobScheduleArgs.scheduleJSON(
             intervalSeconds: intervalSeconds, dailyAt: dailyAt, weekdays: weekdays
         ) != nil else {
@@ -123,8 +125,9 @@ public struct JobEdit: ParsableCommand {
         discussion: """
         Only the provided flags change; everything else keeps its value. Any \
         --prompt/--prompt-file replaces the job's whole prompt list, and any \
-        schedule flag replaces the whole schedule. Use enable/disable to toggle \
-        the enabled flag.
+        schedule flag replaces the whole schedule — so changing --weekdays \
+        requires restating --daily-at. Use enable/disable to toggle the \
+        enabled flag.
         """
     )
 
@@ -148,6 +151,8 @@ public struct JobEdit: ParsableCommand {
 
     public func validate() throws {
         try validateUUID(id, label: "job UUID")
+        if let name { try validateJobName(name) }
+        if let repo { try validateRepoSlug(repo) }
         _ = try JobScheduleArgs.scheduleJSON(
             intervalSeconds: intervalSeconds, dailyAt: dailyAt, weekdays: weekdays
         )
