@@ -39,7 +39,6 @@ make build
 ```bash
 make test         # Preferred — runs all package tests
 swift test        # Also works (runs root package tests)
-mise test         # If using mise
 ```
 
 Tests use the Swift Testing framework (`@Test` macros). Currently, tests exist
