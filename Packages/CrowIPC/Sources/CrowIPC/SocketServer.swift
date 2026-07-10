@@ -47,6 +47,11 @@ public final class SocketServer: @unchecked Sendable {
     // MARK: - Start / Stop
 
     public func start() throws {
+        // Writing to a socket whose peer has closed raises SIGPIPE, which by
+        // default terminates the process on Linux. Ignore it so write() returns
+        // EPIPE instead. Idempotent and harmless on Darwin.
+        _ = signal(SIGPIPE, SIG_IGN)
+
         // Remove stale socket
         unlink(socketPath)
 

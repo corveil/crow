@@ -38,6 +38,10 @@ public struct SocketClient: Sendable {
         params: [String: JSONValue] = [:],
         timeoutSeconds: Int = SocketClient.readTimeoutSeconds
     ) throws -> JSONRPCResponse {
+        // Ignore SIGPIPE so a write to a peer-closed socket returns EPIPE
+        // rather than killing the process on Linux. See SocketServer.start().
+        _ = signal(SIGPIPE, SIG_IGN)
+
         let fd = socket(AF_UNIX, crowSockStream, 0)
         guard fd >= 0 else {
             throw SocketError.createFailed(errno)
