@@ -56,7 +56,7 @@ enum RPCWebSocketHandler {
             let (outStream, outCont) = AsyncStream.makeStream(of: String.self)
             let subscription = await eventHub.subscribe(outCont)
 
-            try await withThrowingTaskGroup(of: Void.self) { group in
+            await withThrowingTaskGroup(of: Void.self) { group in
                 // Writer — the sole owner of `outbound`.
                 group.addTask {
                     for await text in outStream {
