@@ -340,6 +340,13 @@ public enum CrowDaemon {
         exit(1)
     }
 
+    /// Decode a null-terminated `[CChar]` C-string buffer into a `String`,
+    /// truncating at the first NUL. Replaces the deprecated `String(cString:)`
+    /// array initializer.
+    private static func decodeCString(_ buf: [CChar]) -> String {
+        String(decoding: buf.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
+    }
+
     /// Absolute path of the running `crowd` binary, or `nil` if it can't be
     /// resolved (caller falls back to `execvp`). Exposed for tests.
     static func resolvedExecutablePath() -> String? {
@@ -352,14 +359,14 @@ public enum CrowDaemon {
         // `_NSGetExecutablePath` may return a relative path; realpath makes it
         // absolute so a later cwd change can't break the re-exec.
         var resolved = [CChar](repeating: 0, count: Int(PATH_MAX))
-        guard realpath(buf, &resolved) != nil else { return String(cString: buf) }
-        return String(cString: resolved)
+        guard realpath(buf, &resolved) != nil else { return decodeCString(buf) }
+        return decodeCString(resolved)
         #elseif os(Linux)
         var buf = [CChar](repeating: 0, count: Int(PATH_MAX))
         let n = readlink("/proc/self/exe", &buf, buf.count - 1)
         guard n > 0 else { return nil }
         buf[n] = 0
-        return String(cString: buf)
+        return decodeCString(buf)
         #else
         return nil
         #endif
