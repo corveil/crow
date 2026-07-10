@@ -2076,6 +2076,7 @@ function ensureTerminal() {
   });
   enableTouchScroll(document.getElementById('terminal'));
   enableWheelScroll(document.getElementById('terminal'));
+  enableImageDrop(document.getElementById('terminal'));
   window.addEventListener('resize', fitTerminal);
   connectTerminalWs();
 }
@@ -2110,6 +2111,66 @@ function enableWheelScroll(node) {
     e.preventDefault();
     e.stopPropagation();
   }, { capture: true, passive: false });
+}
+
+// Drag-and-drop images into the composer (#644). The browser can't read a
+// dropped file's filesystem path (and may be a remote client), so upload the
+// bytes to crowd, which writes them into the session's artifacts dir on the
+// host and returns an absolute path. We then paste that (escaped) path into the
+// terminal — parity with a Finder drop into the standalone Cursor/Claude Code
+// TUIs, which the agents already consume. No trailing newline → the path is
+// inserted, not submitted, so the user can add a prompt before pressing Enter.
+function enableImageDrop(node) {
+  node.addEventListener('dragover', (e) => {
+    // dataTransfer.files is empty during dragover — only .types is populated —
+    // so accept any file drag here and filter to images on drop.
+    if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files')) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+    }
+  });
+  node.addEventListener('drop', (e) => {
+    const files = e.dataTransfer && e.dataTransfer.files;
+    if (!files || !files.length) return; // not a file drop → leave to the browser
+    e.preventDefault();                   // never navigate the app away on a file drop
+    const images = Array.from(files).filter((f) => (f.type || '').startsWith('image/'));
+    if (images.length && selectedId) uploadDroppedImages(images);
+  });
+}
+
+// Backslash-escape whitespace and shell metacharacters, matching what
+// Terminal.app/iTerm insert on a Finder drop (the byte stream the agent TUIs
+// already parse). In practice the artifacts path has none of these, so this is
+// belt-and-suspenders.
+function shellEscapePath(p) {
+  return p.replace(/([\s'"\\$`&|;<>()*?!#~\[\]{}])/g, '\\$1');
+}
+
+async function uploadDroppedImages(images) {
+  const sid = selectedId;
+  const paths = [];
+  for (const file of images) {
+    try {
+      const res = await fetch('/artifacts/' + encodeURIComponent(sid), {
+        method: 'POST',
+        headers: {
+          'Content-Type': file.type,
+          'X-Filename': encodeURIComponent(file.name || 'image'),
+        },
+        body: file,
+        credentials: 'same-origin',
+      });
+      if (!res.ok) continue;
+      const data = await res.json();
+      if (data && data.path) paths.push(shellEscapePath(data.path));
+    } catch (_) { /* skip this file */ }
+  }
+  if (paths.length && term) {
+    term.focus();
+    // Route through xterm's paste so bracketed-paste mode wraps it (same path as
+    // pasteIntoTerminal); onData forwards the wrapped bytes to the PTY.
+    term.paste(paths.join(' ') + ' ');
+  }
 }
 
 // Paste the browser clipboard into the terminal (writes to the PTY, same path
