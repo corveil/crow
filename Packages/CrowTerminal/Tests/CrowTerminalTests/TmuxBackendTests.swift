@@ -93,12 +93,12 @@ struct TmuxBackendTests {
             id: UUID(), name: "anchor", cwd: NSHomeDirectory(),
             command: nil, trackReadiness: false
         )
-        #expect(throws: TmuxBackendError.self) {
-            try backend.makeActive(id: UUID())  // unrelated id
+        await #expect(throws: TmuxBackendError.self) {
+            try await backend.makeActive(id: UUID())  // unrelated id
         }
     }
 
-    @Test func makeActiveTracksActiveTerminal() throws {
+    @Test func makeActiveTracksActiveTerminal() async throws {
         let backend = makeBackend()
         defer { backend.shutdown() }
 
@@ -113,14 +113,14 @@ struct TmuxBackendTests {
             command: nil, trackReadiness: false
         )
 
-        try backend.makeActive(id: a)
+        try await backend.makeActive(id: a)
         #expect(backend.activeTerminalID == a)
         // Re-activating the same terminal is a no-op but must not lose the
         // marker (the dedup path returns early without touching it).
-        try backend.makeActive(id: a)
+        try await backend.makeActive(id: a)
         #expect(backend.activeTerminalID == a)
 
-        try backend.makeActive(id: b)
+        try await backend.makeActive(id: b)
         #expect(backend.activeTerminalID == b)
 
         // Destroying the active terminal clears the marker so a reused window
@@ -129,7 +129,7 @@ struct TmuxBackendTests {
         #expect(backend.activeTerminalID == nil)
     }
 
-    @Test func destroyRemovesBinding() throws {
+    @Test func destroyRemovesBinding() async throws {
         let backend = makeBackend()
         defer { backend.shutdown() }
 
@@ -139,8 +139,8 @@ struct TmuxBackendTests {
             command: nil, trackReadiness: false
         )
         backend.destroyTerminal(id: id)
-        #expect(throws: TmuxBackendError.self) {
-            try backend.makeActive(id: id)  // should now be unknown
+        await #expect(throws: TmuxBackendError.self) {
+            try await backend.makeActive(id: id)  // should now be unknown
         }
     }
 
@@ -780,7 +780,7 @@ struct TmuxBackendTests {
 
     /// The light "client died, server alive" path: recycling with no surface
     /// is a safe no-op that only resets the active-window marker.
-    @Test func recycleCockpitSurfaceIsSafeWithoutSurface() throws {
+    @Test func recycleCockpitSurfaceIsSafeWithoutSurface() async throws {
         let backend = makeBackend()
         defer { backend.shutdown() }
 
@@ -789,7 +789,7 @@ struct TmuxBackendTests {
             id: id, name: "a", cwd: NSHomeDirectory(),
             command: nil, trackReadiness: false
         )
-        try backend.makeActive(id: id)
+        try await backend.makeActive(id: id)
         #expect(backend.activeTerminalID == id)
 
         backend.recycleCockpitSurface()

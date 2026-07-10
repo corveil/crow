@@ -45,10 +45,12 @@ public struct TerminalSurfaceView: NSViewRepresentable {
 
     /// Re-parent the surface if SwiftUI replaced the container, switch the
     /// attached tmux client to this terminal's window, and take first
-    /// responder. Same deferral rationale as `makeNSView`: `makeActive` shells
-    /// out to `tmux select-window` (which pumps the run loop), and updateNSView
-    /// is itself invoked during layout, so doing this work synchronously here
-    /// re-enters layout.
+    /// responder. Same deferral rationale as `makeNSView`: attaching the shared
+    /// surface (`cockpitSurface()` + WKWebView setup) can pump the main run loop,
+    /// and updateNSView is itself invoked during layout, so doing this work
+    /// synchronously here re-enters layout. (`makeActive` is now `async` and runs
+    /// its `select-window` shell-out off the main actor — #653 — so it is fired
+    /// as a detached `Task` inside the deferred block.)
     @MainActor
     public func updateNSView(_ nsView: NSView, context: Context) {
         syncSurface(into: nsView)
@@ -67,7 +69,7 @@ public struct TerminalSurfaceView: NSViewRepresentable {
                 Self.attach(surface: surface, to: container)
             }
             surface.createSurface()
-            try? TmuxBackend.shared.makeActive(id: id)
+            Task { try? await TmuxBackend.shared.makeActive(id: id) }
             if let window = container.window,
                surface.window === window,
                window.firstResponder !== surface {
