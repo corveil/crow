@@ -44,3 +44,4 @@ Don't delete the old file. Update its `Status` to `Superseded by NNNN` and point
 | 0005 | [TaskBackend and CodeBackend protocols](./0005-task-and-code-backend-protocols.md) | Proposed | 2026-06-03 |
 | 0006 | [xterm.js terminal renderer (Intel support)](./0006-universal-macos-binary.md) | Accepted | 2026-07-01 |
 | 0007 | [Swift CI runs on Linux, not macOS](./0007-linux-ci-swift.md) | Accepted | 2026-07-10 |
+| 0008 | [AI-usage efficiency scorecard](./0008-ai-usage-efficiency-scorecard.md) | Proposed | 2026-07-10 |
