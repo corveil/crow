@@ -656,9 +656,21 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                 return ["worktrees": .array(items)]
             },
             "new-terminal": { @Sendable params in
-                guard let idStr = params["session_id"]?.stringValue, let sessionID = UUID(uuidString: idStr),
-                      let cwd = params["cwd"]?.stringValue else {
-                    throw RPCError.invalidParams("session_id and cwd required")
+                guard let idStr = params["session_id"]?.stringValue, let sessionID = UUID(uuidString: idStr) else {
+                    throw RPCError.invalidParams("session_id required")
+                }
+                // cwd is optional (#639): the web UI's "+" add-terminal button
+                // sends only session_id — it can't reliably know the worktree
+                // path. Default to the session's primary worktree — mirroring
+                // SessionService.addTerminal — then devRoot, so the derived
+                // path always satisfies the traversal guard below.
+                let cwd: String
+                if let explicit = params["cwd"]?.stringValue, !explicit.isEmpty {
+                    cwd = explicit
+                } else {
+                    cwd = await MainActor.run {
+                        capturedAppState.primaryWorktree(for: sessionID)?.worktreePath ?? devRoot
+                    }
                 }
                 // Validate cwd is within devRoot to prevent path traversal
                 guard Validation.isPathWithinRoot(cwd, root: devRoot) else {
