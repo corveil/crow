@@ -2076,7 +2076,7 @@ function ensureTerminal() {
   });
   enableTouchScroll(document.getElementById('terminal'));
   enableWheelScroll(document.getElementById('terminal'));
-  enableImageDrop(document.getElementById('terminal'));
+  enableFileDrop(document.getElementById('terminal'));
   window.addEventListener('resize', fitTerminal);
   connectTerminalWs();
 }
@@ -2113,17 +2113,19 @@ function enableWheelScroll(node) {
   }, { capture: true, passive: false });
 }
 
-// Drag-and-drop images into the composer (#644). The browser can't read a
-// dropped file's filesystem path (and may be a remote client), so upload the
-// bytes to crowd, which writes them into the session's artifacts dir on the
-// host and returns an absolute path. We then paste that (escaped) path into the
-// terminal — parity with a Finder drop into the standalone Cursor/Claude Code
-// TUIs, which the agents already consume. No trailing newline → the path is
-// inserted, not submitted, so the user can add a prompt before pressing Enter.
-function enableImageDrop(node) {
+// Drag-and-drop files into the composer (#644 images, #652 any file). The
+// browser can't read a dropped file's filesystem path (and may be a remote
+// client), so upload the bytes to crowd, which writes them into the session's
+// artifacts dir on the host and returns an absolute path. We then paste that
+// (escaped) path into the terminal — parity with a Finder drop into the
+// standalone Cursor/Claude Code TUIs, which the agents already consume. No
+// trailing newline → the path is inserted, not submitted, so the user can add a
+// prompt before pressing Enter. Images additionally surface in the Artifacts
+// panel; other files (source, docs, archives, PDFs) are referenced by path only.
+function enableFileDrop(node) {
   node.addEventListener('dragover', (e) => {
     // dataTransfer.files is empty during dragover — only .types is populated —
-    // so accept any file drag here and filter to images on drop.
+    // so accept any file drag here (all types are handled on drop).
     if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files')) {
       e.preventDefault();
       e.dataTransfer.dropEffect = 'copy';
@@ -2133,8 +2135,7 @@ function enableImageDrop(node) {
     const files = e.dataTransfer && e.dataTransfer.files;
     if (!files || !files.length) return; // not a file drop → leave to the browser
     e.preventDefault();                   // never navigate the app away on a file drop
-    const images = Array.from(files).filter((f) => (f.type || '').startsWith('image/'));
-    if (images.length && selectedId) uploadDroppedImages(images);
+    if (selectedId) uploadDroppedFiles(Array.from(files)); // images + non-images alike
   });
 }
 
@@ -2146,16 +2147,18 @@ function shellEscapePath(p) {
   return p.replace(/([\s'"\\$`&|;<>()*?!#~\[\]{}])/g, '\\$1');
 }
 
-async function uploadDroppedImages(images) {
+async function uploadDroppedFiles(files) {
   const sid = selectedId;
   const paths = [];
-  for (const file of images) {
+  for (const file of files) {
     try {
       const res = await fetch('/artifacts/' + encodeURIComponent(sid), {
         method: 'POST',
         headers: {
-          'Content-Type': file.type,
-          'X-Filename': encodeURIComponent(file.name || 'image'),
+          // Empty for unknown types — the server derives the extension from the
+          // filename, so fall back to a generic binary type.
+          'Content-Type': file.type || 'application/octet-stream',
+          'X-Filename': encodeURIComponent(file.name || 'file'),
         },
         body: file,
         credentials: 'same-origin',
