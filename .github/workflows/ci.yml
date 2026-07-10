@@ -46,7 +46,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/org.swift.swiftpm
-          key: swift-build-Linux-${{ hashFiles('**/Package.swift', '**/Package.resolved') }}
+          key: swift-build-Linux-${{ hashFiles('Package.swift', 'Packages/*/Package.swift') }}
           restore-keys: swift-build-Linux-
 
       # Explicit allow-list of packages that compile on Linux. A new package
