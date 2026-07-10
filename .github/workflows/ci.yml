@@ -54,7 +54,10 @@ jobs:
           for pkg in "${LINUX_PACKAGES[@]}"; do
             echo "==> Building & testing $pkg on Linux..."
             swift build --package-path "Packages/$pkg"
-            swift test  --package-path "Packages/$pkg"
+            # --no-parallel: the CrowIPC socket tests spin up real servers with
+            # blocking I/O; running them in parallel starves each other on the
+            # constrained CI runner and intermittently hits the read timeout.
+            swift test --no-parallel --package-path "Packages/$pkg"
           done
 
   shellcheck:
