@@ -18,6 +18,7 @@ public final class XTermSurfaceView: NSView {
     private var isWebReady = false
     private var isPTYStarted = false
     private var fitDebounceWorkItem: DispatchWorkItem?
+    private var lastFitSize: CGSize = .zero
     private var webContentReloadCount = 0
     private static let maxWebContentReloadAttempts = 3
 
@@ -105,6 +106,7 @@ public final class XTermSurfaceView: NSView {
         loadStarted = false
         pendingOutput.removeAll()
         webContentReloadCount = 0
+        lastFitSize = .zero
         navigationHandler.allowedResourceDirectory = nil
         webView.navigationDelegate = nil
         webView.configuration.userContentController.removeAllScriptMessageHandlers()
@@ -256,9 +258,15 @@ public final class XTermSurfaceView: NSView {
         if window != nil, !loadStarted {
             createSurface()
         }
-        if isWebReady {
-            scheduleFit()
-        }
+        guard isWebReady else { return }
+        // Only fit on a real size change. layout() also fires on tab-switch
+        // reparents and other no-op passes; re-fitting those re-posts the same
+        // cols/rows and SIGWINCHes the agent for nothing (#637).
+        let size = bounds.size
+        guard abs(size.width - lastFitSize.width) >= 1
+                || abs(size.height - lastFitSize.height) >= 1 else { return }
+        lastFitSize = size
+        scheduleFit()
     }
 }
 

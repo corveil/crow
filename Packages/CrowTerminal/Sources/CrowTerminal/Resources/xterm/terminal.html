@@ -17,8 +17,6 @@
       width: 100%;
       height: 100%;
     }
-    /* Jump-to-bottom control (#633): floats over the xterm viewport,
-       styled to the Corveil gold accent (see CorveilTheme.swift). */
     #crow-jump-bottom {
       position: absolute;
       right: 16px;
@@ -118,6 +116,7 @@
           }, true);
         }
 
+
         // Jump-to-bottom control (#633). Long agent/chat output leaves no fast
         // path back to the live edge once you scroll up; show a pill when the
         // viewport is above the bottom and snap back on click. onScroll is the
@@ -144,9 +143,37 @@
         term.onScroll(updateJumpButton);
         term.onRender(updateJumpButton);
 
-        function reportSize() {
+        // Resize path (#637): the agent TUI clobbers when it's SIGWINCH'd
+        // faster than it can redraw, so coalesce bursts and drop no-op resizes.
+        //  - applyFit() fits, then posts crowResize ONLY when cols/rows actually
+        //    changed since the last post. Same-size cycles → zero SIGWINCH.
+        //    (fitAddon.fit() already no-ops xterm's own resize when unchanged;
+        //    the postMessage is what storms the PTY, so we gate that here.)
+        //  - scheduleFit() collapses a drag's rapid resize events to one fit per
+        //    animation frame. Both Swift (window.crowFit) and the DOM resize
+        //    listener route through it.
+        let lastCols = 0;
+        let lastRows = 0;
+        let fitPending = false;
+
+        function applyFit() {
           fitAddon.fit();
-          handlers.crowResize.postMessage({ cols: term.cols, rows: term.rows });
+          if (term.cols !== lastCols || term.rows !== lastRows) {
+            lastCols = term.cols;
+            lastRows = term.rows;
+            handlers.crowResize.postMessage({ cols: term.cols, rows: term.rows });
+          }
+        }
+
+        function scheduleFit() {
+          if (fitPending) {
+            return;
+          }
+          fitPending = true;
+          requestAnimationFrame(function () {
+            fitPending = false;
+            applyFit();
+          });
         }
 
         window.crowWrite = function (b64) {
@@ -159,7 +186,7 @@
           term.write(bytes);
         };
 
-        window.crowFit = reportSize;
+        window.crowFit = scheduleFit;
 
         // xterm.js emits the same bare \r for Enter and Shift+Enter, so
         // Claude Code can't tell them apart and submits on both (#598).
@@ -197,9 +224,16 @@
           handlers.crowInput.postMessage({ data: data });
         });
 
-        window.addEventListener('resize', reportSize);
+        window.addEventListener('resize', scheduleFit);
         handlers.crowReady.postMessage({});
-        reportSize();
+        // Synchronous first fit so the PTY gets a correct initial winsize.
+        applyFit();
+        // The first fit can run with the Menlo fallback before "MesloLGS NF"
+        // loads; once the Nerd Font's cell metrics settle the grid recomputes,
+        // so re-fit and post the (deduped) corrective size. (#637 repro hint 2)
+        if (document.fonts && document.fonts.ready) {
+          document.fonts.ready.then(scheduleFit);
+        }
         updateJumpButton();
       } catch (err) {
         reportError(String(err));
