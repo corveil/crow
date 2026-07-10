@@ -6,21 +6,29 @@ import NIOCore
 
 /// Serves per-session generated images ("artifacts") from an ephemeral scratch
 /// dir outside any git worktree — `$TMPDIR/crow/artifacts/<sessionID>/` — so a
-/// client can view a diagram/screenshot an agent dropped there (CROW-593).
+/// client can view a diagram/screenshot an agent dropped there (CROW-593), and
+/// hosts the write side of a drag-and-drop into the composer (#644 images, #652
+/// any file).
 ///
-/// Read-only and hard-sandboxed: the session segment must be a real UUID and
-/// the file must be a bare image name (no separators, no `..`, allowed
-/// extension only). Combined with the daemon's loopback-only bind, nothing
-/// outside this scratch tree is reachable.
+/// Read-only *serve* side and hard-sandboxed: the session segment must be a real
+/// UUID and the served file must be a bare image name (no separators, no `..`,
+/// image extension only). The *upload* side accepts any file type (#652) but
+/// stores it under a sanitized, traversal-proof name and never serves a
+/// non-image back over HTTP. Combined with the daemon's loopback-only bind,
+/// nothing outside this scratch tree is reachable.
 enum Artifacts {
+    /// Extensions the *serve* route (`GET`) and the Artifacts *panel* recognize
+    /// as images. The upload route accepts far more than this (#652); these are
+    /// only the types rendered back to the client.
     static let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "gif", "webp", "svg"]
 
-    /// Extensions accepted for *dropped* images (drag-and-drop into the composer,
-    /// #644). Deliberately a subset of `imageExtensions`: SVG is script-bearing
-    /// and not a raster the agents consume, so it's kept out of the input path.
-    static let uploadableImageExtensions: Set<String> = ["png", "jpg", "jpeg", "gif", "webp"]
+    /// Raster image types served *inline*. Anything else the serve route hands
+    /// back with `Content-Disposition: attachment` (SVG is script-bearing; the
+    /// rest are generic downloads), so a served file can never render as a
+    /// top-level document in the daemon origin.
+    static let inlineImageExtensions: Set<String> = ["png", "jpg", "jpeg", "gif", "webp"]
 
-    /// Cap for a single dropped image (10 MB). Screenshots blow past the 1 MB
+    /// Cap for a single dropped file (10 MB). Screenshots blow past the 1 MB
     /// WebSocket frame limit, which is why uploads take this dedicated HTTP route
     /// rather than the `/rpc` or `/terminal` sockets.
     static let maxUploadBytes = 10 * 1024 * 1024
@@ -71,11 +79,19 @@ enum Artifacts {
             guard let data = try? Data(contentsOf: resolved) else {
                 return Response(status: .notFound)
             }
-            var headers: HTTPFields = [.contentType: contentType(for: file), .cacheControl: "no-store"]
-            // SVG can carry inline <script>; served same-origin it would run in
-            // the daemon origin on direct navigation and could drive /rpc. Force a
-            // download so it can never render as a top-level document (review).
-            if (file as NSString).pathExtension.lowercased() == "svg" {
+            var headers: HTTPFields = [
+                .contentType: contentType(for: file),
+                .cacheControl: "no-store",
+                // Never let the browser MIME-sniff a served artifact into a
+                // script/HTML context (defense in depth alongside the disposition
+                // below).
+                HTTPField.Name("x-content-type-options")!: "nosniff",
+            ]
+            // Only raster images render inline (the Artifacts panel). Everything
+            // else — SVG (can carry inline <script>) and any non-raster that
+            // reached the serve gate — is forced to download so it can never run
+            // as a top-level document in the daemon origin (review / CROW-593).
+            if !inlineImageExtensions.contains((file as NSString).pathExtension.lowercased()) {
                 headers[.contentDisposition] = "attachment"
             }
             return Response(
@@ -103,18 +119,17 @@ enum Artifacts {
             }
             let filename = request.headers[HTTPField.Name("x-filename")!]
                 .flatMap { $0.removingPercentEncoding ?? $0 }
-            guard let ext = uploadExtension(
-                contentType: request.headers[.contentType], filename: filename) else {
-                return Response(status: .init(code: 415)) // Unsupported Media Type
-            }
-            // `collect(upTo:)` throws when the body exceeds the cap → 413.
+            // Any file type is accepted (#652); the extension is only for a
+            // readable stored name. `collect(upTo:)` throws when the body exceeds
+            // the cap → 413.
+            let ext = uploadExtension(contentType: request.headers[.contentType], filename: filename)
             guard let buffer = try? await request.body.collect(upTo: maxUploadBytes) else {
                 return Response(status: .init(code: 413)) // Content Too Large
             }
             let data = Data(buffer.readableBytesView)
             guard !data.isEmpty else { return Response(status: .badRequest) }
             let name = sanitizedUploadName(filename: filename, ext: ext)
-            guard isSafeImageName(name) else { return Response(status: .badRequest) }
+            guard isSafeUploadName(name) else { return Response(status: .badRequest) }
             do {
                 try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
                 try data.write(to: dir.appendingPathComponent(name), options: .atomic)
@@ -130,11 +145,23 @@ enum Artifacts {
         }
     }
 
-    /// A bare image filename: non-empty, no separators, no `..`, allowed ext.
-    /// The router percent-decodes before this runs, so `%2e%2e`/`%2f` are caught.
+    /// A bare image filename: non-empty, no separators, no `..`, image ext.
+    /// Gate for the *serve* route (`GET`) — only image-extension files are ever
+    /// handed back over HTTP. The router percent-decodes before this runs, so
+    /// `%2e%2e`/`%2f` are caught.
     static func isSafeImageName(_ name: String) -> Bool {
         !name.isEmpty && !name.contains("/") && !name.contains("..")
             && imageExtensions.contains((name as NSString).pathExtension.lowercased())
+    }
+
+    /// A bare stored filename safe to *write* into the scratch dir: non-empty, no
+    /// separators, no `..`. Unlike ``isSafeImageName`` this does not require an
+    /// image extension — ordinary dropped files (source, docs, archives) are
+    /// stored here too (#652). Names always come from ``sanitizedUploadName``,
+    /// which strips everything but `[A-Za-z0-9_-]` from the stem and a validated
+    /// extension, so this is belt-and-suspenders.
+    static func isSafeUploadName(_ name: String) -> Bool {
+        !name.isEmpty && !name.contains("/") && !name.contains("..")
     }
 
     /// Resolve `file` (following symlinks) and return it only when the final
@@ -163,45 +190,62 @@ enum Artifacts {
         }
     }
 
-    // MARK: - Upload helpers (#644)
+    // MARK: - Upload helpers (#644 images, #652 any file)
 
-    /// Resolve a safe, uploadable image extension for a dropped file: the
-    /// filename's own extension when it's a raster we accept, else derived from
-    /// the `Content-Type` media type. `nil` (→ 415) for anything else (incl. SVG,
-    /// PDFs, text). Filename wins so an `image/*` body with a real `.gif` name
-    /// keeps `gif` rather than a content-type guess.
-    static func uploadExtension(contentType: String?, filename: String?) -> String? {
+    /// Resolve a safe storage extension for a dropped file of *any* type (#652).
+    /// The filename's own extension wins when it looks like a real extension
+    /// (`[a-z0-9]`, ≤ 16 chars) — so `shot.png` → `png`, `notes.txt` → `txt`,
+    /// `data.tar.gz` → `gz`. Otherwise fall back to the `Content-Type` image map,
+    /// which recovers the type of a pasted screenshot that arrives with an
+    /// `image/*` body and no filename. Returns `""` (no extension) for
+    /// extensionless files like `Makefile` — the stored name stays safe and the
+    /// pasted host path still resolves. Never returns nil: #652 lifted the
+    /// raster-only 415 gate, so ordinary files are accepted.
+    static func uploadExtension(contentType: String?, filename: String?) -> String {
         if let filename {
             let ext = (filename as NSString).pathExtension.lowercased()
-            if uploadableImageExtensions.contains(ext) { return ext }
+            if isSafeExtension(ext) { return ext }
         }
         // Media type only — strip any `; charset=…`/params.
-        guard let media = contentType?
+        if let media = contentType?
             .split(separator: ";").first?
-            .trimmingCharacters(in: .whitespaces).lowercased() else { return nil }
-        switch media {
-        case "image/png": return "png"
-        case "image/jpeg", "image/jpg": return "jpg"
-        case "image/gif": return "gif"
-        case "image/webp": return "webp"
-        default: return nil
+            .trimmingCharacters(in: .whitespaces).lowercased() {
+            switch media {
+            case "image/png": return "png"
+            case "image/jpeg", "image/jpg": return "jpg"
+            case "image/gif": return "gif"
+            case "image/webp": return "webp"
+            default: break
+            }
         }
+        return ""
     }
 
-    /// A collision-free, traversal-proof name for a dropped image:
-    /// `drop-<8hex>-<sanitized-stem>.<ext>`. The stem keeps only
-    /// `[A-Za-z0-9_-]` from the original filename (spaces/slashes/dots/`..`
-    /// dropped), so the result always satisfies ``isSafeImageName``. The random
-    /// token keeps repeated drops of the same name from overwriting each other.
+    /// A plausible, safe file extension: 1–16 chars of lowercase `[a-z0-9]` only.
+    /// Rejecting `.`, separators, and metacharacters keeps ``sanitizedUploadName``
+    /// from ever producing a name with a separator or `..` via the extension.
+    static func isSafeExtension(_ ext: String) -> Bool {
+        !ext.isEmpty && ext.count <= 16
+            && ext.allSatisfy { ("a"..."z").contains($0) || ("0"..."9").contains($0) }
+    }
+
+    /// A collision-free, traversal-proof name for a dropped file:
+    /// `drop-<8hex>-<sanitized-stem>[.<ext>]`. The stem keeps only `[A-Za-z0-9_-]`
+    /// from the original filename (spaces/slashes/dots/`..` dropped) and the
+    /// extension is re-validated, so the result always satisfies
+    /// ``isSafeUploadName``. A missing/unsafe extension is simply omitted
+    /// (`Makefile` → `drop-<hex>-Makefile`). The random token keeps repeated drops
+    /// of the same name from overwriting each other.
     static func sanitizedUploadName(filename: String?, ext: String) -> String {
         let allowed = CharacterSet(charactersIn:
             "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_")
         let stem = filename.map { ($0 as NSString).lastPathComponent } ?? ""
         let base = (stem as NSString).deletingPathExtension
         let cleaned = String(String.UnicodeScalarView(base.unicodeScalars.filter { allowed.contains($0) }))
-        let safeStem = cleaned.isEmpty ? "image" : String(cleaned.prefix(48))
+        let safeStem = cleaned.isEmpty ? "file" : String(cleaned.prefix(48))
         let token = UUID().uuidString.prefix(8).lowercased()
-        return "drop-\(token)-\(safeStem).\(ext)"
+        let safeExt = isSafeExtension(ext) ? ext : ""
+        return safeExt.isEmpty ? "drop-\(token)-\(safeStem)" : "drop-\(token)-\(safeStem).\(safeExt)"
     }
 
     private static func json(_ dict: [String: Any], status: HTTPResponse.Status = .ok) -> Response {
