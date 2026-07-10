@@ -10,29 +10,60 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # PR Swift build/test runs on Linux to avoid burning macOS Actions minutes.
+  # Swift is provided by the official swift:6 container (no Xcode). We build and
+  # test the Foundation-only packages that compile on Linux — the macOS-only
+  # GUI packages (CrowTerminal / CrowUI leftovers) and CrowTelemetry (Apple
+  # Network.framework) are compiled only by release.yml / the desktop job.
+  # See docs/adr/0010-linux-ci-swift.md.
   test:
     name: Build & Test
-    runs-on: macos-15
+    runs-on: ubuntu-latest
+    container: swift:6.1
+    # Inside a container, Actions defaults the shell to `sh` (dash); force bash
+    # so the array-based package loop below works.
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
 
-      - uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: "16"
+      # Container runs as root; the checkout is owned by a different uid, so
+      # git refuses to operate on it until it's marked safe. generate-build-info
+      # calls `git -C` (with a "dev" fallback), so this just lets it read the SHA.
+      # The identity is required by CrowGit's rebase tests, which run real
+      # `git rebase`/commit in throwaway repos that inherit this global config.
+      - name: Configure git for CI
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global user.email "ci@crow.test"
+          git config --global user.name "Crow CI"
 
+      # Generates CrowCLI's CLIVersion.swift (and the GUI's unused BuildInfo.swift).
       - name: Generate build info
         run: bash scripts/generate-build-info.sh
 
-      - name: Build
-        run: swift build
+      - name: Restore SwiftPM cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/org.swift.swiftpm
+          key: swift-build-Linux-${{ hashFiles('Package.swift', 'Packages/*/Package.swift') }}
+          restore-keys: swift-build-Linux-
 
-      - name: Run tests
+      # Explicit allow-list of packages that compile on Linux. A new package
+      # must be added here consciously; do NOT loop over Packages/*/ — that
+      # would pull in the macOS-only CrowUI / CrowTerminal / CrowTelemetry.
+      - name: Build & test Linux packages
         run: |
-          for pkg in Packages/*/; do
-            if [ -d "$pkg/Tests" ]; then
-              echo "==> Testing $(basename "$pkg")..."
-              swift test --package-path "$pkg"
-            fi
+          LINUX_PACKAGES=(CrowCore CrowIPC CrowClaude CrowCodex CrowCursor \
+                          CrowGit CrowOpenCode CrowPersistence CrowProvider CrowCLI)
+          for pkg in "${LINUX_PACKAGES[@]}"; do
+            echo "==> Building & testing $pkg on Linux..."
+            swift build --package-path "Packages/$pkg"
+            # --no-parallel: the CrowIPC socket tests spin up real servers with
+            # blocking I/O; running them in parallel starves each other on the
+            # constrained CI runner and intermittently hits the read timeout.
+            swift test --no-parallel --package-path "Packages/$pkg"
           done
 
   desktop:

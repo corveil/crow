@@ -46,3 +46,4 @@ Don't delete the old file. Update its `Status` to `Superseded by NNNN` and point
 | 0007 | [crowd is the sole authority; every UI is a pure client](./0007-crowd-sole-authority-clients-only.md) | Accepted | 2026-07-05 |
 | 0008 | [Retire the macOS app; the web UI is the only client](./0008-retire-the-macos-app.md) | Accepted | 2026-07-07 |
 | 0009 | [Mid-session agent handoff preserves Crow identity, not chat history](./0009-agent-handoff-preserves-session-not-chat.md) | Accepted | 2026-07-09 |
+| 0010 | [Swift CI runs on Linux, not macOS](./0010-linux-ci-swift.md) | Accepted | 2026-07-10 |

@@ -47,11 +47,16 @@ public final class SocketServer: @unchecked Sendable {
     // MARK: - Start / Stop
 
     public func start() throws {
+        // Writing to a socket whose peer has closed raises SIGPIPE, which by
+        // default terminates the process on Linux. Ignore it so write() returns
+        // EPIPE instead. Idempotent and harmless on Darwin.
+        _ = signal(SIGPIPE, SIG_IGN)
+
         // Remove stale socket
         unlink(socketPath)
 
         // Create socket
-        serverFD = socket(AF_UNIX, SOCK_STREAM, 0)
+        serverFD = socket(AF_UNIX, crowSockStream, 0)
         guard serverFD >= 0 else {
             throw SocketError.createFailed(errno)
         }
@@ -131,7 +136,11 @@ public final class SocketServer: @unchecked Sendable {
 
         while true {
             let bytesRead = read(fd, &byte, 1)
-            if bytesRead <= 0 { return }
+            if bytesRead < 0 {
+                if errno == EINTR { continue }  // interrupted by signal; retry
+                return
+            }
+            if bytesRead == 0 { return }
             if byte == UInt8(ascii: "\n") { break }
             buffer.append(byte)
             if buffer.count >= Self.maxMessageSize {
@@ -182,7 +191,10 @@ public final class SocketServer: @unchecked Sendable {
             var offset = 0
             while remaining > 0 {
                 let written = write(fd, rawBuffer.baseAddress! + offset, remaining)
-                if written < 0 { return }  // client disconnected
+                if written < 0 {
+                    if errno == EINTR { continue }  // interrupted by signal; retry
+                    return  // client disconnected
+                }
                 offset += written
                 remaining -= written
             }
