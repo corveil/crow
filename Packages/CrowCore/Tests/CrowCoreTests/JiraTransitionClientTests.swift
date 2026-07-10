@@ -1,5 +1,8 @@
 import Testing
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking  // URLRequest/URLResponse live here on Linux
+#endif
 @testable import CrowCore
 
 @Suite struct JiraTransitionClientTests {

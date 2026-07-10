@@ -1,5 +1,8 @@
 import XCTest
 import CrowCore
+#if canImport(FoundationNetworking)
+import FoundationNetworking  // URLRequest/URLResponse live here on Linux
+#endif
 @testable import CrowProvider
 
 /// Thread-safe mutable cell so a `@Sendable` transport closure can record what it
