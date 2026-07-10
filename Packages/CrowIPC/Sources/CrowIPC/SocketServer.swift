@@ -136,7 +136,11 @@ public final class SocketServer: @unchecked Sendable {
 
         while true {
             let bytesRead = read(fd, &byte, 1)
-            if bytesRead <= 0 { return }
+            if bytesRead < 0 {
+                if errno == EINTR { continue }  // interrupted by signal; retry
+                return
+            }
+            if bytesRead == 0 { return }
             if byte == UInt8(ascii: "\n") { break }
             buffer.append(byte)
             if buffer.count >= Self.maxMessageSize {
@@ -187,7 +191,10 @@ public final class SocketServer: @unchecked Sendable {
             var offset = 0
             while remaining > 0 {
                 let written = write(fd, rawBuffer.baseAddress! + offset, remaining)
-                if written < 0 { return }  // client disconnected
+                if written < 0 {
+                    if errno == EINTR { continue }  // interrupted by signal; retry
+                    return  // client disconnected
+                }
                 offset += written
                 remaining -= written
             }

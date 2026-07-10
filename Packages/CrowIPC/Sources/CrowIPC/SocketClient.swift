@@ -84,7 +84,10 @@ public struct SocketClient: Sendable {
             var offset = 0
             while remaining > 0 {
                 let written = write(fd, rawBuffer.baseAddress! + offset, remaining)
-                if written < 0 { return false }
+                if written < 0 {
+                    if errno == EINTR { continue }  // interrupted by signal; retry
+                    return false
+                }
                 offset += written
                 remaining -= written
             }
@@ -98,6 +101,7 @@ public struct SocketClient: Sendable {
         while true {
             let bytesRead = read(fd, &byte, 1)
             if bytesRead < 0 {
+                if errno == EINTR { continue }  // interrupted by signal; retry
                 if errno == EAGAIN || errno == EWOULDBLOCK {
                     throw SocketError.timeout
                 }
