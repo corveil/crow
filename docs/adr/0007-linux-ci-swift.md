@@ -30,6 +30,6 @@ PR CI and cache-warm run on `ubuntu-latest` inside the official `swift:6` contai
 
 ## References
 
-- PR: https://github.com/radiusmethod/crow/pull/ (issue #647)
+- PR: https://github.com/radiusmethod/crow/pull/651 (issue #647)
 - Related ADRs: [0006](./0006-universal-macos-binary.md)
 - Code: `.github/workflows/ci.yml`, `.github/workflows/cache-warm.yml`, `.github/workflows/release.yml`, `scripts/generate-build-info.sh`
