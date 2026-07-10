@@ -82,6 +82,19 @@ struct BundledResourcesTests {
         #expect(body.contains(#"\x1b\r"#))
     }
 
+    @Test func terminalHTMLHasJumpToBottomControl() throws {
+        // #633: a jump-to-bottom control must live in the host page so
+        // scrolling up over long agent output has a fast path back to the
+        // live edge. The xterm resources get re-vendored wholesale (see
+        // Resources/xterm/VERSION), so pin the control's presence against an
+        // accidental overwrite.
+        let url = try #require(BundledResources.terminalHTMLURL)
+        let body = try String(contentsOf: url, encoding: .utf8)
+        #expect(body.contains("crow-jump-bottom"))
+        #expect(body.contains("scrollToBottom"))
+        #expect(body.contains("onScroll"))
+    }
+
     @Test func tmuxConfHasNoBarePrefixUnbind() throws {
         // #473: a bare `unbind-key -a` (no `-T`) defaults to the prefix
         // table, which is empty/non-existent after the first clear on
