@@ -30,8 +30,13 @@ jobs:
       # Container runs as root; the checkout is owned by a different uid, so
       # git refuses to operate on it until it's marked safe. generate-build-info
       # calls `git -C` (with a "dev" fallback), so this just lets it read the SHA.
-      - name: Trust workspace for git
-        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      # The identity is required by CrowGit's rebase tests, which run real
+      # `git rebase`/commit in throwaway repos that inherit this global config.
+      - name: Configure git for CI
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global user.email "ci@crow.test"
+          git config --global user.name "Crow CI"
 
       # Generates CrowCLI's CLIVersion.swift (and the GUI's unused BuildInfo.swift).
       - name: Generate build info
