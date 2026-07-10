@@ -1,4 +1,5 @@
 import Foundation
+import Observation  // @Observable macro — implicit on Apple SDKs, must be explicit on Linux
 
 /// Check whether a repo name matches any of the given patterns.
 /// Supports exact matches and simple glob patterns with `*` (e.g., `org/*`, `*/repo`).
