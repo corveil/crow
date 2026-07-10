@@ -88,7 +88,7 @@ private func startServer(
     defer { server.stop(); unlink(path) }
 
     // Connect manually and send garbage
-    let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+    let fd = socket(AF_UNIX, crowSockStream, 0)
     defer { close(fd) }
 
     var addr = sockaddr_un()
@@ -184,7 +184,7 @@ private func startServer(
     // Use a custom client with a very short timeout for testing.
     // We can't easily override the timeout constant, so we'll test
     // the timeout mechanism by connecting manually with a 1s timeout.
-    let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+    let fd = socket(AF_UNIX, crowSockStream, 0)
     defer { close(fd) }
 
     var addr = sockaddr_un()

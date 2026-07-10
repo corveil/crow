@@ -38,7 +38,11 @@ public struct SocketClient: Sendable {
         params: [String: JSONValue] = [:],
         timeoutSeconds: Int = SocketClient.readTimeoutSeconds
     ) throws -> JSONRPCResponse {
-        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        // Ignore SIGPIPE so a write to a peer-closed socket returns EPIPE
+        // rather than killing the process on Linux. See SocketServer.start().
+        _ = signal(SIGPIPE, SIG_IGN)
+
+        let fd = socket(AF_UNIX, crowSockStream, 0)
         guard fd >= 0 else {
             throw SocketError.createFailed(errno)
         }
@@ -80,7 +84,10 @@ public struct SocketClient: Sendable {
             var offset = 0
             while remaining > 0 {
                 let written = write(fd, rawBuffer.baseAddress! + offset, remaining)
-                if written < 0 { return false }
+                if written < 0 {
+                    if errno == EINTR { continue }  // interrupted by signal; retry
+                    return false
+                }
                 offset += written
                 remaining -= written
             }
@@ -94,6 +101,7 @@ public struct SocketClient: Sendable {
         while true {
             let bytesRead = read(fd, &byte, 1)
             if bytesRead < 0 {
+                if errno == EINTR { continue }  // interrupted by signal; retry
                 if errno == EAGAIN || errno == EWOULDBLOCK {
                     throw SocketError.timeout
                 }

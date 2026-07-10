@@ -1,4 +1,20 @@
 import Foundation
+// Import the platform C library directly for `SOCK_STREAM` rather than relying
+// on Foundation re-exporting it (behavior differs by toolchain), matching the
+// sibling socket files.
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
+
+// On Linux, Glibc types `SOCK_STREAM` as `__socket_type` rather than `Int32`,
+// so `socket(_:_:_:)` needs the raw value. On Darwin it is already `Int32`.
+#if canImport(Glibc)
+let crowSockStream = Int32(SOCK_STREAM.rawValue)
+#else
+let crowSockStream = SOCK_STREAM
+#endif
 
 // MARK: - JSON-RPC 2.0 Protocol Types
 

@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking  // URLRequest/URLResponse/URLSession live here on Linux
+#endif
 import CrowCore
 
 /// Per-workspace Jira configuration threaded into ``JiraTaskBackend``.
