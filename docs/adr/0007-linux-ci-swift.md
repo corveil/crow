@@ -18,8 +18,10 @@ PR CI and cache-warm run on `ubuntu-latest` inside the official `swift:6` contai
 
 - PRs and `main` pushes no longer burn macOS minutes; the only residual macOS cost is `release.yml`, which fires on `v*` tags (infrequent).
 - **The GUI half of the tree (`Crow`/`CrowApp`, `CrowUI`, `CrowTerminal`) and `CrowTelemetry` are no longer compiled on PRs** — a change that breaks them passes PR CI and only fails when a release tag is pushed. This is the accepted trade-off for the minute savings; revisit once #645 makes a Linux-native daemon the build target and more of the tree becomes Linux-buildable.
+- **The root `CrowTests` suite moves from every-PR to release-tag time.** Those tests `@testable import Crow`, and the root `Crow` target imports `CrowTerminal` (AppKit), so they cannot run in the Linux PR lane. They exercise root-target business logic (IssueTracker, Job decisions, Scaffolder, SessionService, …), not just GUI, so to avoid dropping that coverage entirely they now run in `release.yml`'s macOS `test` job at tag time — not on every PR. A logic regression there is caught at release, not on the PR that introduces it.
 - The Linux allow-list in `ci.yml`/`cache-warm.yml` must be updated by hand when a new Linux-compilable package is added. This is deliberate: a glob would silently try to build a new macOS-only package on Linux and turn CI red.
-- `CrowTelemetry` (Apple `Network.framework`, no test target) is excluded; nothing in the allow-list depends on it, so no test coverage is lost today.
+- Only the SwiftPM dependency cache (`~/.cache/org.swift.swiftpm`) is retained, not compiled `.build` products, so each Linux run recompiles the packages from scratch. Acceptable given each package builds under its own `Packages/$pkg/.build`.
+- `CrowTelemetry` (Apple `Network.framework`) is excluded; it has no test target and nothing in the allow-list depends on it, so excluding it costs no test coverage.
 
 ## Alternatives considered
 

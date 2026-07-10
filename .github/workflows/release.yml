@@ -27,6 +27,12 @@ jobs:
               swift test --package-path "$pkg"
             fi
           done
+          # Root CrowTests (Tests/CrowTests) exercise root-target business logic
+          # (IssueTracker, Job, Scaffolder, SessionService, …). The root Crow
+          # target imports CrowTerminal (AppKit), so it can't run in the Linux PR
+          # lane — this macOS job is where those tests run. See docs/adr/0007.
+          echo "==> Testing root package (CrowTests)..."
+          swift test
 
   shellcheck:
     name: Shell Lint
