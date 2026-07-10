@@ -466,7 +466,7 @@ gh api repos/{owner}/{repo}/issues/{number}/comments
 6. Open a pull request linked to the ticket:
 
 ```bash
-gh pr create --title "<summary>" --body "Closes #123" --base {base_branch}
+gh pr create --title "<summary>" --body "Closes #{number}" --base {base_branch}
 ```
 
 ## Custom Instructions
@@ -481,7 +481,9 @@ substitute `defaults` or another workspace's text). If `{custom_instructions}` i
 empty, `null`, or absent, **omit the entire `## Custom Instructions` heading and
 body** so the prompt has no such section.
 
-For GitLab tickets, substitute `glab mr create --title "<summary>" --description "Closes #{number}" --target-branch {base_branch}` on step 6 (use "merge request" instead of "pull request"). When no ticket number is available, drop the body/description and fall back to `gh pr create --fill` / `glab mr create --fill`.
+On step 6, substitute the real ticket number into `{number}` in the PR body (same substitution as `{base_branch}`) so the body reads e.g. `Closes #654` — the closing keyword with the real number is what makes GitHub link the PR to the issue and auto-close it on merge into the default branch. When no ticket number is available, drop the `--body` and fall back to `gh pr create --fill`.
+
+For GitLab tickets, substitute `glab mr create --title "<summary>" --description "Closes #{number}" --target-branch {base_branch}` on step 6 (use "merge request" instead of "pull request"). When no ticket number is available, drop the description and fall back to `glab mr create --fill`.
 
 ### Embedding pre-fetched content
 
