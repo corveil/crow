@@ -19,6 +19,11 @@ jobs:
     name: Build & Test
     runs-on: ubuntu-latest
     container: swift:6.1
+    # Inside a container, Actions defaults the shell to `sh` (dash); force bash
+    # so the array-based package loop below works.
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
 
