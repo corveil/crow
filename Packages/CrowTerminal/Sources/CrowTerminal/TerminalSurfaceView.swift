@@ -48,9 +48,10 @@ public struct TerminalSurfaceView: NSViewRepresentable {
     /// responder. Same deferral rationale as `makeNSView`: attaching the shared
     /// surface (`cockpitSurface()` + WKWebView setup) can pump the main run loop,
     /// and updateNSView is itself invoked during layout, so doing this work
-    /// synchronously here re-enters layout. (`makeActive` is now `async` and runs
-    /// its `select-window` shell-out off the main actor — #653 — so it is fired
-    /// as a detached `Task` inside the deferred block.)
+    /// synchronously here re-enters layout. (`makeActive`'s `select-window`
+    /// shell-out runs synchronously on the main actor but no longer pumps a run
+    /// loop while it waits — #653 — so it no longer re-enters an in-flight
+    /// window animation.)
     @MainActor
     public func updateNSView(_ nsView: NSView, context: Context) {
         syncSurface(into: nsView)
@@ -69,7 +70,7 @@ public struct TerminalSurfaceView: NSViewRepresentable {
                 Self.attach(surface: surface, to: container)
             }
             surface.createSurface()
-            Task { try? await TmuxBackend.shared.makeActive(id: id) }
+            try? TmuxBackend.shared.makeActive(id: id)
             if let window = container.window,
                surface.window === window,
                window.firstResponder !== surface {

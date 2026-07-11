@@ -315,14 +315,17 @@ public final class TmuxBackend {
     /// Bring `id`'s window into focus. Called by the UI when the user
     /// switches tabs.
     ///
-    /// `async` because the blocking `select-window` shell-out runs off the main
-    /// actor (`Task.detached`) — same rationale as `startManagerExitMonitor`.
-    /// `TmuxController.run` no longer pumps the run loop (#653), but shelling out
-    /// on the UI thread would still stall it ~70ms per switch; keeping it off the
-    /// main actor avoids that too. Only the pure value-struct `selectWindow` moves
-    /// off; `ensureRunningServer()` and the `activeTerminalID` record stay on the
-    /// main actor (they touch actor state).
-    public func makeActive(id: UUID) async throws {
+    /// The `select-window` shell-out runs synchronously on the main actor so tab
+    /// switches stay strictly serialized — the dedup guard, the `select-window`,
+    /// and the `activeTerminalID` update are atomic w.r.t. other switches, giving
+    /// last-switch-wins. This is safe even mid-window-open-animation because
+    /// `TmuxController.run` no longer pumps a nested run loop while waiting
+    /// (#653): the main thread blocks on the child without re-entering the
+    /// in-flight CoreAnimation commit that used to SIGSEGV. Deliberately NOT moved
+    /// off the main actor — doing so let two in-flight switches race and could
+    /// leave tmux focused on the wrong window until the next `updateNSView`
+    /// (PR #658 review).
+    public func makeActive(id: UUID) throws {
         guard let windowIndex = bindings[id] else {
             throw TmuxBackendError.unknownTerminal(id)
         }
@@ -330,18 +333,8 @@ public final class TmuxBackend {
         // subprocess (see `activeTerminalID`).
         if id == activeTerminalID { return }
         let start = Date()
-        let ctrl: TmuxController
         do {
-            ctrl = try ensureRunningServer()
-        } catch {
-            reportIfTimeout(error)
-            throw error
-        }
-        do {
-            // `ctrl` is a Sendable value struct + `windowIndex` an Int — both
-            // safe to hand to a detached task. Blocks that task's thread on the
-            // tmux subprocess instead of the UI thread.
-            try await Task.detached { try ctrl.selectWindow(index: windowIndex) }.value
+            try ensureRunningServer().selectWindow(index: windowIndex)
         } catch {
             reportIfTimeout(error)
             throw error
