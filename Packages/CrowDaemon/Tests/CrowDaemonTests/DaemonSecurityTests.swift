@@ -714,11 +714,14 @@ import CrowPersistence
             "config": .string(try encode(incoming)),
         ])
         #expect(RPCWebSocketHandler.localOnlyDenial(for: req, devRoot: devRoot)
-            == "set-config binaries/jobs is local-only")
+            == "set-config binaries is local-only")
         #expect(RPCWebSocketHandler.setConfigTouchesPrivilegedFields(req, devRoot: devRoot))
     }
 
-    @Test func setConfigJobsChangeIsLocalOnly() throws {
+    @Test func setConfigJobsChangeIsAllowedRemotely() throws {
+        // Jobs are no longer a local-only surface (CROW-665): an authenticated
+        // remote session may edit them, so a jobs-only change must NOT trip the
+        // gate. `defaults.binaries` remains local-only (see the test above).
         let devRoot = tempDevRoot()
         defer { try? FileManager.default.removeItem(atPath: devRoot) }
         try ConfigStore.saveConfig(AppConfig(), devRoot: devRoot)
@@ -731,8 +734,8 @@ import CrowPersistence
         let req = JSONRPCRequest(id: 1, method: "set-config", params: [
             "config": .string(try encode(incoming)),
         ])
-        #expect(RPCWebSocketHandler.localOnlyDenial(for: req, devRoot: devRoot)
-            == "set-config binaries/jobs is local-only")
+        #expect(RPCWebSocketHandler.localOnlyDenial(for: req, devRoot: devRoot) == nil)
+        #expect(!RPCWebSocketHandler.setConfigTouchesPrivilegedFields(req, devRoot: devRoot))
     }
 
     @Test func setConfigHarmlessToggleIsAllowedRemotely() throws {

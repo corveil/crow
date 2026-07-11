@@ -463,8 +463,14 @@
     }
 
     body.appendChild(group('Corveil CLI'));
+    // The corveil binary is an absolute local path executed at agent launch, so
+    // it stays local-only (CROW-593/665) — editable only from a local browser and
+    // read-only when proxied/remote, mirroring the web password & AI gateways.
+    // (Scheduled jobs, by contrast, are editable from any authenticated session.)
     body.appendChild(textField('Path to corveil binary', cfg.defaults.binaries, 'corveil',
-      { placeholder: '/path/to/corveil', help: 'Leave blank to skip. Verify/Reinstall are available in the desktop app.' }));
+      isLocal
+        ? { placeholder: '/path/to/corveil', help: 'Leave blank to skip. Verify/Reinstall are available in the desktop app.' }
+        : { readonly: true, help: 'The corveil binary path is editable only from a local browser (on the machine running crowd).' }));
 
     body.appendChild(group('Sidebar'));
     body.appendChild(toggleField('Hide session details', cfg.sidebar, 'hideSessionDetails',
