@@ -497,6 +497,11 @@ const allowlistSelection = new Set();
 // ids of sessions ticked for a bulk action (delete).
 let selectionMode = false;
 const selectedSessionIDs = new Set();
+// Ticket-board multi-select (CROW-660): mirrors the native TicketBoardView
+// multi-select. Toggled by the board's Select button; holds the urls of tickets
+// ticked for the batch "Start Working (N)" action.
+let ticketSelectionMode = false;
+const selectedIssueIDs = new Set();
 const PIPELINE = ['All', 'Backlog', 'Ready', 'In Progress', 'In Review', 'Done'];
 // Ticket pipeline status → accent color (mirrors CorveilTheme.TicketStatus.color).
 const TICKET_STATUS_COLOR = {
@@ -1703,6 +1708,9 @@ async function closeTerminal(t) {
 function selectBoard(key) {
   selectedBoard = key;
   selectedId = null;
+  // Leaving the ticket board (or re-entering) drops any stale ticket selection.
+  ticketSelectionMode = false;
+  selectedIssueIDs.clear();
   const app = document.getElementById('app');
   app.classList.add('has-selection', 'board-active');
   app.classList.remove('mobile-show-sidebar');
@@ -1806,13 +1814,47 @@ async function spawnAction(btn, method, params, label) {
 // -- Ticket Board --
 function renderTicketBoard(root) {
   const d = boardData.tickets;
+  const allIssues = (d && d.issues) || [];
+  // Only tickets without a linked session are startable, so only those are
+  // selectable. Prune any stale selections (refresh/filter may have removed
+  // issues or linked them to a session).
+  const selectableUrls = new Set(allIssues.filter((i) => !i.linked_session_id).map((i) => i.url));
+  for (const url of [...selectedIssueIDs]) if (!selectableUrls.has(url)) selectedIssueIDs.delete(url);
+
   const head = el('div', 'board-head');
   head.appendChild(el('div', 'board-title', 'Ticket Board'));
   if (d && d.done_last_24h) head.appendChild(el('span', 'done-chip', d.done_last_24h + ' done · 24h'));
   const refresh = el('button', 'action-btn', 'Refresh');
   refresh.onclick = () => refreshTickets();
   head.appendChild(refresh);
+  // Select / Cancel toggle (mirrors the native selectToggleButton). Hidden when
+  // there is nothing selectable to start work on.
+  if (selectableUrls.size) {
+    const sel = el('button', 'action-btn' + (ticketSelectionMode ? ' nav-selecting' : ''),
+      ticketSelectionMode ? 'Cancel' : 'Select');
+    sel.onclick = () => {
+      ticketSelectionMode = !ticketSelectionMode;
+      if (!ticketSelectionMode) selectedIssueIDs.clear();
+      renderBoard();
+    };
+    head.appendChild(sel);
+  } else if (ticketSelectionMode) {
+    ticketSelectionMode = false;
+  }
   root.appendChild(head);
+
+  // Batch action bar (mirrors the native batchActionBar): shown while selecting
+  // with at least one ticket ticked.
+  if (ticketSelectionMode && selectedIssueIDs.size) {
+    const bar = el('div', 'bulk-bar');
+    const n = selectedIssueIDs.size;
+    bar.appendChild(el('span', 'bulk-count', n + ' ticket' + (n === 1 ? '' : 's') + ' selected'));
+    bar.appendChild(el('div', 'bulk-spacer'));
+    const start = el('button', 'action-btn action-primary', 'Start Working (' + n + ')');
+    start.onclick = () => startWorkingSelected(start);
+    bar.appendChild(start);
+    root.appendChild(bar);
+  }
 
   const counts = (d && d.counts) || {};
   const bar = el('div', 'pipeline');
@@ -1826,7 +1868,7 @@ function renderTicketBoard(root) {
   }
   root.appendChild(bar);
 
-  let issues = ((d && d.issues) || []).slice();
+  let issues = allIssues.slice();
   if (ticketFilter !== 'All') issues = issues.filter((i) => i.project_status === ticketFilter);
   issues.sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''));
   if (!issues.length) { root.appendChild(boardEmpty('No tickets in this view')); return; }
@@ -1836,13 +1878,27 @@ function renderTicketBoard(root) {
 }
 
 function ticketCard(i) {
-  const card = el('div', 'board-card status-accent');
+  const selectable = !i.linked_session_id;
+  const selecting = ticketSelectionMode && selectable;
+  const isSel = selectedIssueIDs.has(i.url);
+  const card = el('div', 'board-card status-accent'
+    + (selecting ? ' selecting' : '') + (isSel ? ' selected' : ''));
   card.oncontextmenu = (e) => showCardMenu(e, [
     { label: 'Copy issue link', url: i.url },
     i.pr_url ? { label: 'Copy PR link', url: i.pr_url } : null,
   ]);
   const sc = TICKET_STATUS_COLOR[i.project_status] || 'var(--text-muted)';
   card.style.borderLeftColor = sc;
+  // In selection mode a checkbox leads a selectable card and the whole card
+  // toggles selection (mirrors the native TicketCard tap-to-select).
+  if (selecting) {
+    const cb = el('input', 'row-check');
+    cb.type = 'checkbox';
+    cb.checked = isSel;
+    cb.onclick = (e) => { e.stopPropagation(); toggleIssueSelect(i.url); };
+    card.appendChild(cb);
+    card.onclick = () => toggleIssueSelect(i.url);
+  }
   const meta = el('div', 'card-meta');
   meta.appendChild(el('span', 'repo-tag', i.repo));
   meta.appendChild(linkChip('Issue #' + i.number, i.url, 'ticket'));
@@ -1861,13 +1917,41 @@ function ticketCard(i) {
     const go = el('button', 'action-btn', 'Go to Session');
     go.onclick = () => selectSession(i.linked_session_id);
     foot.appendChild(go);
-  } else {
+  } else if (!selecting) {
     const work = el('button', 'action-btn action-primary', 'Start Working');
     work.onclick = () => spawnAction(work, 'work-on-issue', { url: i.url }, 'Start Working');
     foot.appendChild(work);
   }
   card.appendChild(foot);
   return card;
+}
+
+function toggleIssueSelect(url) {
+  if (selectedIssueIDs.has(url)) selectedIssueIDs.delete(url);
+  else selectedIssueIDs.add(url);
+  renderBoard();
+}
+
+// Batch "Start Working (N)": dispatch work-on-issue for each selected ticket
+// (mirrors the native batch action's per-issue dispatch), then clear selection
+// and exit selection mode.
+async function startWorkingSelected(btn) {
+  const urls = ((boardData.tickets && boardData.tickets.issues) || [])
+    .filter((i) => !i.linked_session_id && selectedIssueIDs.has(i.url))
+    .map((i) => i.url);
+  if (!urls.length) return;
+  btn.disabled = true;
+  btn.textContent = 'Starting…';
+  let failed = 0;
+  for (const url of urls) {
+    try { await rpc('work-on-issue', { url }); selectedIssueIDs.delete(url); }
+    catch (_) { failed++; }
+  }
+  selectedIssueIDs.clear();
+  ticketSelectionMode = false;
+  refreshTickets();
+  renderBoard();
+  if (failed) alertModal(failed + ' ticket(s) could not be started.');
 }
 
 async function refreshTickets() {

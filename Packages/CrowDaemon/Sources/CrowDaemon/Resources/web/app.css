@@ -451,6 +451,13 @@ html, body {
 .board-card:hover { border-color: var(--border-strong); }
 /* Status-colored left accent (JS sets border-left-color per pipeline status). */
 .board-card.status-accent { border-left-width: 3px; padding-left: 10px; }
+/* Ticket-board multi-select (CROW-660): whole card toggles selection, checkbox
+   sits top-right, selected card gets the gold accent used elsewhere. */
+.board-card.selecting { position: relative; cursor: pointer; padding-right: 34px; }
+.board-card.selecting .row-check { position: absolute; top: 10px; right: 10px; margin: 0; }
+.board-card.selected { border-color: var(--gold); }
+/* Active Select toggle on a board button reads red, matching .nav-selecting. */
+.action-btn.nav-selecting { color: var(--red); border-color: var(--red); }
 .card-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .repo-tag { color: var(--text-muted); font-size: 11px; }
 .card-time { color: var(--text-muted); font-size: 11px; margin-left: auto; }
