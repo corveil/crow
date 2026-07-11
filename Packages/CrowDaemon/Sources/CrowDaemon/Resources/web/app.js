@@ -2162,6 +2162,15 @@ function ensureTerminal() {
   enableWheelScroll(document.getElementById('terminal'));
   enableFileDrop(document.getElementById('terminal'));
   window.addEventListener('resize', fitTerminal);
+  // Observe the container itself, not just the window: splitter drags / panel
+  // collapses resize the surface without firing a window `resize` (#661). Both
+  // routes funnel through the coalesced, deduped fitTerminal.
+  if (window.ResizeObserver) {
+    new ResizeObserver(fitTerminal).observe(document.getElementById('terminal'));
+  }
+  // The first fit can run with the Menlo fallback before the Nerd Font loads;
+  // once its cell metrics settle the grid recomputes, so re-fit (deduped).
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(fitTerminal);
   connectTerminalWs();
 }
 
@@ -2285,6 +2294,7 @@ function showTerminalMenu(e) {
   items.push({ label: 'Paste', action: pasteIntoTerminal });
   items.push({ label: 'Select all', action: () => term.selectAll() });
   items.push({ label: 'Clear', action: () => term.clear() });
+  items.push({ label: 'Reload terminal', action: reloadTerminal });
   const menu = el('div', 'ctx-menu');
   for (const it of items) {
     const item = el('div', 'ctx-item', it.label);
@@ -2304,7 +2314,12 @@ function connectTerminalWs() {
   termWs = new WebSocket(wsURL('/terminal'));
   termWs.binaryType = 'arraybuffer';
   termWs.onopen = () => {
-    fitTerminal();
+    // A fresh PTY starts at a default winsize, so force the real size through
+    // even if cols/rows match the previous socket, and fit synchronously so the
+    // resize reaches the PTY before the scrollback replay (select-window) below.
+    lastTermCols = 0;
+    lastTermRows = 0;
+    applyTermFit();
     if (activeTerminal) selectWindow(activeTerminal.window);
   };
   termWs.onmessage = (event) => {
@@ -2317,12 +2332,41 @@ function connectTerminalWs() {
   termWs.onerror = () => termWs.close();
 }
 
-function fitTerminal() {
+// Resize path (#661): in a browser the window `resize` event and normal page
+// churn (flexbox, scrollbar appearance, devicePixelRatio changes) fire
+// constantly, so an unguarded fit()+resize storms tmux with SIGWINCH and the
+// grid thrashes into the corruption in the screenshot. Coalesce bursts to one
+// fit per animation frame, drop no-op resizes, and never fit a 0×0/detached
+// container (degenerate proposeDimensions makes a junk grid). Mirrors the
+// desktop surface's applyFit/scheduleFit dedup in
+// CrowTerminal/Resources/xterm/terminal.html.
+let lastTermCols = 0;
+let lastTermRows = 0;
+let fitScheduled = false;
+
+function applyTermFit() {
   if (!term || !fitAddon) return;
-  try { fitAddon.fit(); } catch (_) {}
+  const node = document.getElementById('terminal');
+  if (!node || !node.isConnected || node.clientWidth < 1 || node.clientHeight < 1) return;
+  try { fitAddon.fit(); } catch (_) { return; }
+  // Only tell the PTY when the grid actually changed — a same-size resize is a
+  // needless SIGWINCH that makes the agent TUI re-reflow and clobber (#637).
+  if (term.cols === lastTermCols && term.rows === lastTermRows) return;
+  lastTermCols = term.cols;
+  lastTermRows = term.rows;
   if (termWs && termWs.readyState === WebSocket.OPEN) {
     termWs.send(JSON.stringify({ type: 'resize', rows: term.rows, cols: term.cols }));
   }
+}
+
+// Coalesce a burst of resize/observer events into a single fit per frame. Used
+// by the window `resize` listener and the container ResizeObserver; the WS-open
+// path calls applyTermFit() directly so the PTY winsize is set synchronously
+// before the scrollback replay (select-window).
+function fitTerminal() {
+  if (fitScheduled) return;
+  fitScheduled = true;
+  requestAnimationFrame(() => { fitScheduled = false; applyTermFit(); });
 }
 
 function selectWindow(win) {
@@ -2330,6 +2374,28 @@ function selectWindow(win) {
   if (termWs && termWs.readyState === WebSocket.OPEN) {
     termWs.send(JSON.stringify({ type: 'select-window', window: win }));
   }
+}
+
+// Right-click "Reload terminal" (#661): recover a corrupted/thrashed surface
+// without a full browser refresh. Reset the xterm buffer to drop the mangled
+// grid, then force a clean WebSocket reconnect — the fresh attach re-fits and
+// re-selects the window (onopen), so crowd replays the pane's tmux scrollback
+// and repaints against a now-stable layout. Same recovery a page reload gives,
+// scoped to the terminal surface. Detach the old socket's handlers first so its
+// onclose/onerror can't reconnect or close the new socket (they reference the
+// module-level termWs, which we're about to reassign).
+function reloadTerminal() {
+  if (!term) return;
+  try { term.reset(); } catch (_) {}
+  lastTermCols = 0;
+  lastTermRows = 0;
+  if (termWs) {
+    const old = termWs;
+    old.onopen = old.onmessage = old.onclose = old.onerror = null;
+    try { old.close(); } catch (_) {}
+    termWs = null;
+  }
+  connectTerminalWs();
 }
 
 // ---------------------------------------------------------------------------
