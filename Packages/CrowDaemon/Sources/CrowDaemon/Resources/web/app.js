@@ -1535,12 +1535,6 @@ async function quickAction(id, action, label) {
 function modalDialog({ title, body, okLabel = 'OK', cancelLabel = 'Cancel', danger = false } = {}) {
   return new Promise((resolve) => {
     let done = false;
-    // One dialog at a time: drop any stray *modalDialog* backdrop still on screen
-    // so a double-fired error can't stack two overlapping cards whose text abuts
-    // into one concatenated message (CROW-665). Scoped to modalDialog's own marker
-    // class — `textPrompt` shares `.text-prompt-backdrop` but resolves only via its
-    // own handlers, so removing it here would orphan a live prompt (review Yellow).
-    document.querySelectorAll('.modal-dialog-backdrop').forEach((b) => b.remove());
     const backdrop = el('div', 'text-prompt-backdrop modal-dialog-backdrop');
     const card = el('div', 'text-prompt-card');
     if (title) card.appendChild(el('div', 'text-prompt-title', title));
@@ -1554,6 +1548,7 @@ function modalDialog({ title, body, okLabel = 'OK', cancelLabel = 'Cancel', dang
       backdrop.remove();
       resolve(v);
     }
+    backdrop.__finish = finish;
     function onKey(e) {
       if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(false); }
       else if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); finish(true); }
@@ -1568,6 +1563,17 @@ function modalDialog({ title, body, okLabel = 'OK', cancelLabel = 'Cancel', dang
     card.appendChild(actions);
     backdrop.appendChild(card);
     backdrop.addEventListener('mousedown', (e) => { if (e.target === backdrop) finish(false); });
+    // One dialog at a time: supersede any stray *modalDialog* backdrop still on
+    // screen so a double-fired error can't stack two overlapping cards whose text
+    // abuts into one concatenated message (CROW-665). Finish (resolve as cancel)
+    // each superseded dialog rather than bare-removing it, so its Promise settles
+    // and its capture-phase keydown listener detaches — a plain .remove() orphans
+    // both (review Yellow). Runs before this backdrop is in the DOM, so it only
+    // matches prior dialogs. Scoped to modalDialog's marker class, so a live
+    // `textPrompt` (shares `.text-prompt-backdrop`, resolves only via its own
+    // handlers) is never touched.
+    document.querySelectorAll('.modal-dialog-backdrop')
+      .forEach((b) => (b.__finish ? b.__finish(false) : b.remove()));
     document.addEventListener('keydown', onKey, true);
     document.body.appendChild(backdrop);
     ok.focus();
