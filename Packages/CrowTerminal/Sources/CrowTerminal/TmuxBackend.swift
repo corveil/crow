@@ -314,6 +314,17 @@ public final class TmuxBackend {
 
     /// Bring `id`'s window into focus. Called by the UI when the user
     /// switches tabs.
+    ///
+    /// The `select-window` shell-out runs synchronously on the main actor so tab
+    /// switches stay strictly serialized — the dedup guard, the `select-window`,
+    /// and the `activeTerminalID` update are atomic w.r.t. other switches, giving
+    /// last-switch-wins. This is safe even mid-window-open-animation because
+    /// `TmuxController.run` no longer pumps a nested run loop while waiting
+    /// (#653): the main thread blocks on the child without re-entering the
+    /// in-flight CoreAnimation commit that used to SIGSEGV. Deliberately NOT moved
+    /// off the main actor — doing so let two in-flight switches race and could
+    /// leave tmux focused on the wrong window until the next `updateNSView`
+    /// (PR #658 review).
     public func makeActive(id: UUID) throws {
         guard let windowIndex = bindings[id] else {
             throw TmuxBackendError.unknownTerminal(id)
