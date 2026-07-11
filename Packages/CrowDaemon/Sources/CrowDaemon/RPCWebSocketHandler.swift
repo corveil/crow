@@ -109,27 +109,30 @@ enum RPCWebSocketHandler {
     /// caller from a remote `/rpc` peer (review Yellow / CROW-593).
     ///
     /// - `run-setup`: write+re-exec of an arbitrary `dev_root`.
-    /// - `set-config` when `defaults.binaries` or `jobs` change: those execute at
-    ///   the next agent/job launch (persistent RCE on an unauthenticated
-    ///   non-loopback bind). Other `set-config` fields still flow through.
-    /// - `job-add` / `edit` / `enable` / `disable` / `delete` / `duplicate`: same
-    ///   jobs-array write surface as `set-config` jobs (CROW-604).
+    /// - `set-config` when `defaults.binaries` change: absolute local binary paths
+    ///   that execute at the next agent launch (persistent RCE on an
+    ///   unauthenticated non-loopback bind). Other `set-config` fields flow through.
+    ///
+    /// Scheduled `jobs` are intentionally NOT gated here (CROW-665): the Jobs
+    /// editor is a core web-Settings surface, so an authenticated remote session
+    /// may edit them, matching how the desktop app manages jobs. The `job-*` RPCs
+    /// are likewise un-gated (same jobs-array surface; today only the CLI, which is
+    /// always local, uses them).
     static func localOnlyDenial(for request: JSONRPCRequest, devRoot: String) -> String? {
         switch request.method {
         case "run-setup":
             return "run-setup is local-only"
         case "set-config":
             guard setConfigTouchesPrivilegedFields(request, devRoot: devRoot) else { return nil }
-            return "set-config binaries/jobs is local-only"
-        case "job-add", "job-edit", "job-enable", "job-disable", "job-delete", "job-duplicate":
-            return "\(request.method) is local-only"
+            return "set-config binaries is local-only"
         default:
             return nil
         }
     }
 
     /// True when the incoming `set-config` payload would change agent binary
-    /// overrides or scheduled jobs relative to what's on disk.
+    /// overrides relative to what's on disk. Scheduled `jobs` are no longer
+    /// privileged — an authenticated remote session may edit them (CROW-665).
     static func setConfigTouchesPrivilegedFields(_ request: JSONRPCRequest, devRoot: String) -> Bool {
         guard let json = request.params?["config"]?.stringValue,
               let data = json.data(using: .utf8),
@@ -139,6 +142,5 @@ enum RPCWebSocketHandler {
         }
         let current = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
         return incoming.defaults.binaries != current.defaults.binaries
-            || incoming.jobs != current.jobs
     }
 }

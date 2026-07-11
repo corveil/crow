@@ -1535,6 +1535,11 @@ async function quickAction(id, action, label) {
 function modalDialog({ title, body, okLabel = 'OK', cancelLabel = 'Cancel', danger = false } = {}) {
   return new Promise((resolve) => {
     let done = false;
+    // One dialog at a time: drop any stray backdrop still on screen so a
+    // double-fired error can't stack two overlapping cards whose text abuts into
+    // one concatenated message (CROW-665). These dialogs are always awaited
+    // sequentially, so a leftover here is a duplicate, never a live prompt.
+    document.querySelectorAll('.text-prompt-backdrop').forEach((b) => b.remove());
     const backdrop = el('div', 'text-prompt-backdrop');
     const card = el('div', 'text-prompt-card');
     if (title) card.appendChild(el('div', 'text-prompt-title', title));
