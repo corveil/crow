@@ -45,10 +45,12 @@ public struct TmuxController: Sendable {
         let stderr = Pipe()
         p.standardOutput = stdout
         p.standardError = stderr
+        // Arm the termination signal BEFORE run() (see makeTerminationSignal, #653).
+        let done = makeTerminationSignal(for: p)
         try p.run()
 
         let watchdog = ProcessWatchdog(p, timeout: timeout)
-        p.waitUntilExit()
+        done.wait()
         watchdog.cancel()
 
         let stdoutData = stdout.fileHandleForReading.readDataToEndOfFile()
@@ -188,6 +190,8 @@ public struct TmuxController: Sendable {
         let stderr = Pipe()
         p.standardInput = stdin
         p.standardError = stderr
+        // Arm the termination signal BEFORE run() (see makeTerminationSignal, #653).
+        let done = makeTerminationSignal(for: p)
         try p.run()
 
         let watchdog = ProcessWatchdog(p, timeout: timeout)
@@ -195,7 +199,7 @@ public struct TmuxController: Sendable {
             try stdin.fileHandleForWriting.write(contentsOf: data)
             try stdin.fileHandleForWriting.close()
         } catch {
-            p.waitUntilExit()
+            done.wait()
             watchdog.cancel()
             if watchdog.didFire {
                 throw TmuxError.timedOut(args: args, after: timeout)
@@ -203,7 +207,7 @@ public struct TmuxController: Sendable {
             throw error
         }
 
-        p.waitUntilExit()
+        done.wait()
         watchdog.cancel()
 
         if watchdog.didFire {
@@ -278,8 +282,10 @@ public struct TmuxController: Sendable {
         let out = Pipe()
         p.standardOutput = out
         p.standardError = Pipe()
+        // Arm the termination signal BEFORE run() (see makeTerminationSignal, #653).
+        let done = makeTerminationSignal(for: p)
         guard (try? p.run()) != nil else { return nil }
-        p.waitUntilExit()
+        done.wait()
         guard p.terminationStatus == 0 else { return nil }
         let data = out.fileHandleForReading.readDataToEndOfFile()
         return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -306,6 +312,32 @@ public enum TmuxError: Error, CustomStringConvertible {
             return "tmux \(args.joined(separator: " ")) timed out after \(String(format: "%.1f", after))s"
         }
     }
+}
+
+/// Install a termination signal on `p` and return the semaphore to wait on.
+/// **Must be called before `p.run()`** so the handler is armed before the child
+/// can exit (no lost-wakeup race).
+///
+/// Waiting on the returned semaphore blocks the caller WITHOUT pumping its run
+/// loop. `Process.waitUntilExit()` instead spins a *nested run loop*; on the
+/// main thread that nested loop can service an in-flight CoreAnimation commit
+/// and re-entrantly dealloc an `_NSWindowTransformAnimation` mid-window-open
+/// animation → SIGSEGV (#653). Offloading `waitUntilExit()` to a background
+/// thread does NOT help: `Process` delivers termination via the *launching*
+/// thread's run loop, so a process launched on the main thread (e.g. from the
+/// `@MainActor` `TmuxBackend`) is never observed as exited while the main run
+/// loop is blocked here — a hard deadlock.
+///
+/// `terminationHandler` sidesteps both: Foundation invokes it on its own
+/// background queue, independent of any thread's run loop, so it fires even
+/// while the caller is blocked on the semaphore and never pumps. A
+/// `ProcessWatchdog`'s `terminate()` still unblocks the wait — the killed
+/// child's termination fires the handler. Same pattern as
+/// `SessionService`'s `terminationHandler` continuation.
+private func makeTerminationSignal(for p: Process) -> DispatchSemaphore {
+    let done = DispatchSemaphore(value: 0)
+    p.terminationHandler = { _ in done.signal() }
+    return done
 }
 
 /// One-shot SIGTERM watchdog for a child Process. Schedules a timer
