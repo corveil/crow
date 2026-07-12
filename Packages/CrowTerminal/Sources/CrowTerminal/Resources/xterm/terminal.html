@@ -17,45 +17,14 @@
       width: 100%;
       height: 100%;
     }
-    #crow-jump-bottom {
-      position: absolute;
-      right: 16px;
-      bottom: 16px;
-      width: 34px;
-      height: 34px;
-      padding: 0;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 20px;
-      line-height: 1;
-      color: #ddc482;
-      background: #22262a;
-      border: 1px solid rgba(221, 196, 130, 0.35);
-      border-radius: 17px;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
-      cursor: pointer;
-      z-index: 10;
-      opacity: 1;
-      transition: opacity 0.12s ease;
-    }
-    #crow-jump-bottom:hover {
-      background: #2a2f34;
-      border-color: rgba(221, 196, 130, 0.6);
-    }
-    #crow-jump-bottom.hidden {
-      opacity: 0;
-      visibility: hidden;
-      pointer-events: none;
-    }
   </style>
 </head>
 <body>
   <div id="terminal"></div>
-  <button id="crow-jump-bottom" class="hidden" aria-label="Jump to latest output" title="Jump to bottom">&#9662;</button>
   <script src="xterm.js"></script>
   <script src="xterm-addon-fit.js"></script>
   <script src="xterm-addon-image.js"></script>
+  <script src="xterm-addon-crow-jumpbottom.js"></script>
   <script>
     (function () {
       function reportError(message) {
@@ -84,6 +53,10 @@
         reportError('ImageAddon constructor missing');
         return;
       }
+      if (typeof CrowJumpBottomAddon !== 'object' || typeof CrowJumpBottomAddon.CrowJumpBottomAddon !== 'function') {
+        reportError('CrowJumpBottomAddon constructor missing');
+        return;
+      }
 
       try {
         const fitAddon = new FitAddon.FitAddon();
@@ -104,6 +77,9 @@
         term.loadAddon(fitAddon);
         term.loadAddon(imageAddon);
         term.open(document.getElementById('terminal'));
+        // After open() so the addon can find term.element's container and
+        // anchor its button to the terminal viewport.
+        term.loadAddon(new CrowJumpBottomAddon.CrowJumpBottomAddon());
 
         // xterm's hidden textarea triggers WebKit Autofill/Services menus — block only there.
         if (term.textarea) {
@@ -116,32 +92,6 @@
           }, true);
         }
 
-
-        // Jump-to-bottom control (#633). Long agent/chat output leaves no fast
-        // path back to the live edge once you scroll up; show a pill when the
-        // viewport is above the bottom and snap back on click. onScroll is the
-        // primary trigger (leaving the bottom only ever happens via a user
-        // scroll — new output while pinned auto-scrolls and stays pinned);
-        // onRender is a safety-net re-check.
-        const jumpBtn = document.getElementById('crow-jump-bottom');
-        function atBottom() {
-          const b = term.buffer.active;
-          return b.viewportY >= b.baseY;
-        }
-        function updateJumpButton() {
-          if (jumpBtn) {
-            jumpBtn.classList.toggle('hidden', atBottom());
-          }
-        }
-        if (jumpBtn) {
-          jumpBtn.addEventListener('click', function () {
-            term.scrollToBottom();
-            term.focus(); // restore typing focus stolen by the button
-            updateJumpButton();
-          });
-        }
-        term.onScroll(updateJumpButton);
-        term.onRender(updateJumpButton);
 
         // Resize path (#637): the agent TUI clobbers when it's SIGWINCH'd
         // faster than it can redraw, so coalesce bursts and drop no-op resizes.
@@ -234,7 +184,6 @@
         if (document.fonts && document.fonts.ready) {
           document.fonts.ready.then(scheduleFit);
         }
-        updateJumpButton();
       } catch (err) {
         reportError(String(err));
       }
