@@ -2174,6 +2174,14 @@ function ensureTerminal() {
   enableWheelScroll(document.getElementById('terminal'));
   enableFileDrop(document.getElementById('terminal'));
   window.addEventListener('resize', fitTerminal);
+  // #667: on regaining focus/visibility, this surface reclaims ownership of the
+  // shared tmux window size (re-asserts even if unchanged) — so "window-size
+  // latest" converges to "the surface you most recently focused." Registered
+  // once (ensureTerminal is `if (term) return` guarded).
+  window.addEventListener('focus', takeTerminalOwnership);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) takeTerminalOwnership();
+  });
   // Observe the container itself, not just the window: splitter drags / panel
   // collapses resize the surface without firing a window `resize` (#661). Both
   // routes funnel through the coalesced, deduped fitTerminal.
@@ -2358,6 +2366,14 @@ let fitScheduled = false;
 
 function applyTermFit() {
   if (!term || !fitAddon) return;
+  // #667: a backgrounded surface must not become tmux's "latest" client and
+  // steal the shared window size. Multiple surfaces (Tauri desktop, browser,
+  // phone) share one grouped-session window whose size is `window-size latest`,
+  // so an idle tab that fit()s + resizes on relayout would reflow the window for
+  // the surface actually in use → the garbled rows from #661. Gate here: only
+  // the focused/visible surface owns the size. It re-asserts on regaining focus
+  // via takeTerminalOwnership() (window focus / visibilitychange).
+  if (document.hidden || !document.hasFocus()) return;
   const node = document.getElementById('terminal');
   if (!node || !node.isConnected || node.clientWidth < 1 || node.clientHeight < 1) return;
   try { fitAddon.fit(); } catch (_) { return; }
@@ -2379,6 +2395,18 @@ function fitTerminal() {
   if (fitScheduled) return;
   fitScheduled = true;
   requestAnimationFrame(() => { fitScheduled = false; applyTermFit(); });
+}
+
+// #667: on regaining focus, re-assert this surface's size so it becomes tmux's
+// "latest" client and reclaims the shared window size from whatever background
+// surface last touched it — even if this surface's own grid didn't change (which
+// applyTermFit's lastTermCols/lastTermRows dedup would otherwise swallow). Reset
+// the dedup, then fit; the reset + the visible/focused state let applyTermFit
+// send the resize frame. Wired to window `focus` and document `visibilitychange`.
+function takeTerminalOwnership() {
+  lastTermCols = 0;
+  lastTermRows = 0;
+  applyTermFit();
 }
 
 function selectWindow(win) {
