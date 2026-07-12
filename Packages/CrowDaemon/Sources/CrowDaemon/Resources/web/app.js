@@ -2141,6 +2141,9 @@ function ensureTerminal() {
   term.loadAddon(searchAddon);
   term.loadAddon(webLinksAddon);
   term.open(document.getElementById('terminal'));
+  // Jump-to-bottom pill (#668), shared with the desktop surface. Must load after
+  // open() so the addon can anchor its button to the terminal's container.
+  term.loadAddon(new CrowJumpBottomAddon.CrowJumpBottomAddon());
   // WebGL renderer for throughput; must load after open(). Falls back to the
   // default renderer if the GL context is unavailable or gets lost.
   try {
