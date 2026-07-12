@@ -1690,17 +1690,21 @@ function renderTabs() {
 }
 
 function switchTerminal(t) {
+  // #673: re-clicking the active tab shouldn't tear down the socket/PTY.
+  if (activeTerminal && activeTerminal.id === t.id) { if (term) term.focus(); return; }
   activeTerminal = t;
   renderTabs();
   if (term) term.focus();
-  // #671: mirror reloadTerminal's onopen order — reclaim this surface's size for
-  // the shared tmux window (forced resize), THEN replay. Recovers a mismatched/
-  // stuck-small grid the cheap way, with no socket/PTY teardown. takeTerminalOwnership
-  // resets the applyTermFit dedup so the resize frame is sent even when this surface's
-  // CSS grid is unchanged, re-asserting size on the shared window before select-window
-  // replays the pane at the corrected size.
-  takeTerminalOwnership();
-  selectWindow(t.window);
+  // #673: the cheap resize-then-replay path (#671/#672) — takeTerminalOwnership()
+  // (forced resize) then selectWindow() on the live socket — couldn't recover the
+  // cursor/grid mismatch on switch; the shared grouped-session window stays desynced
+  // and only the heavyweight reload fixes it. Do the full "Reload terminal" recovery
+  // instead: term.reset() + fresh WebSocket reconnect. connectTerminalWs's onopen
+  // re-fits then selectWindow(activeTerminal.window) — set above, so the fresh socket
+  // selects the newly-chosen window — and crowd replays the pane against a stable
+  // layout, identical to right-click "Reload terminal". Correctness over the snappier
+  // in-place path, which proved insufficient.
+  reloadTerminal();
 }
 
 async function addTerminal() {
