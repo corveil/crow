@@ -1667,7 +1667,12 @@ async function refreshTerminals() {
     activeTerminal = terminals[0] || null;
   }
   renderTabs();
-  if (activeTerminal) selectWindow(activeTerminal.window);
+  // #673: session switches funnel through here too (selectSession → refreshTerminals),
+  // changing which window this shared socket shows — same corruption as a terminal-tab
+  // switch. attachWindow reloads only when the window actually changes, so a same-session
+  // background refresh (a "terminals changed" event) stays a no-op and won't tear down
+  // the socket mid-work.
+  if (activeTerminal) attachWindow(activeTerminal.window);
 }
 
 function renderTabs() {
@@ -1690,21 +1695,17 @@ function renderTabs() {
 }
 
 function switchTerminal(t) {
-  // #673: re-clicking the active tab shouldn't tear down the socket/PTY.
-  if (activeTerminal && activeTerminal.id === t.id) { if (term) term.focus(); return; }
   activeTerminal = t;
   renderTabs();
+  // #673: the in-place resize+replay from #672 didn't recover a mismatched grid —
+  // the cursor stayed misaligned from the actual line. Attaching to a different
+  // window now does the full "Reload terminal" recovery (reset + fresh socket)
+  // instead, which is the only path that reliably repaints against a stable
+  // layout. attachWindow only pays that cost when the window actually changes.
+  // (Re-clicking the active tab is a no-op: attachWindow guards on win ===
+  // attachedWindow, superseding #674's id-based early-return guard.)
+  attachWindow(t.window);
   if (term) term.focus();
-  // #673: the cheap resize-then-replay path (#671/#672) — takeTerminalOwnership()
-  // (forced resize) then selectWindow() on the live socket — couldn't recover the
-  // cursor/grid mismatch on switch; the shared grouped-session window stays desynced
-  // and only the heavyweight reload fixes it. Do the full "Reload terminal" recovery
-  // instead: term.reset() + fresh WebSocket reconnect. connectTerminalWs's onopen
-  // re-fits then selectWindow(activeTerminal.window) — set above, so the fresh socket
-  // selects the newly-chosen window — and crowd replays the pane against a stable
-  // layout, identical to right-click "Reload terminal". Correctness over the snappier
-  // in-place path, which proved insufficient.
-  reloadTerminal();
 }
 
 async function addTerminal() {
@@ -2354,7 +2355,12 @@ function connectTerminalWs() {
     lastTermCols = 0;
     lastTermRows = 0;
     applyTermFit();
-    if (activeTerminal) selectWindow(activeTerminal.window);
+    if (activeTerminal) {
+      selectWindow(activeTerminal.window);
+      // Keep the attach bookkeeping truthful after any (re)connect — initial
+      // connect, reloadTerminal, or a dropped-socket auto-reconnect (#673).
+      attachedWindow = activeTerminal.window;
+    }
   };
   termWs.onmessage = (event) => {
     if (event.data instanceof ArrayBuffer) term.write(new Uint8Array(event.data));
@@ -2428,6 +2434,22 @@ function selectWindow(win) {
   if (termWs && termWs.readyState === WebSocket.OPEN) {
     termWs.send(JSON.stringify({ type: 'select-window', window: win }));
   }
+}
+
+// #673: which tmux window this shared surface shows changes on both a terminal-tab
+// switch (switchTerminal) and a session switch (refreshTerminals). A plain
+// selectWindow on the live socket replays the pane but leaves the grid mismatched
+// (cursor off from the actual line) when another surface has reshaped the window —
+// #672's in-place resize+replay wasn't enough. Do the full "Reload terminal"
+// recovery on a real change instead. Only reload when the target window differs
+// from what's attached, so background refreshes / re-clicking the active tab don't
+// tear down the socket mid-work. When the socket isn't open yet, connectTerminalWs's
+// onopen selects this window against a fresh surface anyway — no reload needed.
+let attachedWindow = null;
+function attachWindow(win) {
+  if (win == null || win === attachedWindow) return;
+  attachedWindow = win;
+  if (termWs && termWs.readyState === WebSocket.OPEN) reloadTerminal();
 }
 
 // Right-click "Reload terminal" (#661): recover a corrupted/thrashed surface
