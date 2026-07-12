@@ -1692,8 +1692,15 @@ function renderTabs() {
 function switchTerminal(t) {
   activeTerminal = t;
   renderTabs();
-  selectWindow(t.window);
   if (term) term.focus();
+  // #671: mirror reloadTerminal's onopen order — reclaim this surface's size for
+  // the shared tmux window (forced resize), THEN replay. Recovers a mismatched/
+  // stuck-small grid the cheap way, with no socket/PTY teardown. takeTerminalOwnership
+  // resets the applyTermFit dedup so the resize frame is sent even when this surface's
+  // CSS grid is unchanged, re-asserting size on the shared window before select-window
+  // replays the pane at the corrected size.
+  takeTerminalOwnership();
+  selectWindow(t.window);
 }
 
 async function addTerminal() {
