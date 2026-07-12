@@ -342,8 +342,29 @@ html, body {
 .tab.add { color: var(--gold); font-size: 16px; font-weight: 700; }
 .tab-close { color: var(--text-muted); font-size: 14px; }
 .tab-close:hover { color: var(--red); }
-#terminal-wrap { flex: 1; min-height: 0; background: #1e1e1e; }
+#terminal-wrap { flex: 1; min-height: 0; background: #1e1e1e; position: relative; }
 #terminal { width: 100%; height: 100%; }
+
+/* ---- Terminal skeleton loading overlay (#677) ----
+   Masks the xterm attach/reload window (blank/garbled grid, reflow flash,
+   mid-paint scrollback replay) with the CROW-613 .skel shimmer, restyled as
+   terminal-shaped placeholder lines. #1e1e1e matches the xterm theme
+   (ensureTerminal) so there's no flash-of-wrong-color. */
+#terminal-skeleton {
+  position: absolute;
+  inset: 0;
+  background: #1e1e1e;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  pointer-events: none;          /* never steal input/focus from xterm */
+  opacity: 0;                    /* hidden by default; .loading fades it in/out */
+  transition: opacity 200ms ease;
+  z-index: 3;
+}
+#terminal-wrap.loading #terminal-skeleton { opacity: 1; transition: none; } /* instant show, smooth fade only on hide */
+.term-skel-bar { height: 12px; max-width: 78%; }
 #detail-empty {
   position: absolute;
   inset: 0;
