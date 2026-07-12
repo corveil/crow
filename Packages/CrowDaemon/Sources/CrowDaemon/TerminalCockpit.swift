@@ -28,9 +28,40 @@ struct TerminalCockpit: Sendable {
     /// one (default shell anchor) so the daemon works standalone too. A failed
     /// create surfaces as an attach error in the browser rather than aborting.
     private func ensureSession() {
-        guard !controller.hasSession() else { return }
-        let conf = BundledResources.tmuxConfURL?.path
-        try? controller.newSessionDetached(configPath: conf, env: [:], command: nil)
+        if !controller.hasSession() {
+            let conf = BundledResources.tmuxConfURL?.path
+            try? controller.newSessionDetached(configPath: conf, env: [:], command: nil)
+        }
+        // Reap grouped sessions this or a prior crowd leaked (#667). Runs on
+        // every startup, whether we adopted or created the cockpit.
+        reapOrphanedViewSessions()
+    }
+
+    /// Kill `crowd-web-*` grouped sessions left detached by a prior crowd's
+    /// restart/crash (#667). Each `/terminal` connection creates one via
+    /// `openViewSession` and is supposed to tear it down via
+    /// `defer closeViewSession` (TerminalWebSocket), but a crowd that dies
+    /// mid-connection never runs that defer — while the separate tmux server
+    /// keeps the group alive. These groups carry no persisted state and are
+    /// never re-adopted (a reconnecting browser opens a fresh group), so any
+    /// DETACHED one is pure garbage; leaked groups also pin windows at stale
+    /// sizes and pile up on the shared server across restarts.
+    ///
+    /// Safety: only kill groups with `session_attached == 0`. A live browser
+    /// holds its group attached via the PTY running `attach-session`, so an
+    /// in-use view (even one owned by a concurrent crowd on this shared server)
+    /// is `attached >= 1` and skipped. Best-effort; never throws.
+    private func reapOrphanedViewSessions() {
+        guard let out = try? controller.run(
+            ["list-sessions", "-F", "#{session_name} #{session_attached}"]
+        ) else { return }
+        for line in out.split(separator: "\n") {
+            let parts = line.split(separator: " ")
+            guard parts.count == 2,
+                  parts[0].hasPrefix("crowd-web-"),
+                  parts[1] == "0" else { continue }
+            _ = try? controller.run(["kill-session", "-t", String(parts[0])])
+        }
     }
 
     /// Create an ephemeral grouped session sharing `crow-cockpit`'s windows but
