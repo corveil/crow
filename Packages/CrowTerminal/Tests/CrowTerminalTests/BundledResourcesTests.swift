@@ -82,17 +82,39 @@ struct BundledResourcesTests {
         #expect(body.contains(#"\x1b\r"#))
     }
 
-    @Test func terminalHTMLHasJumpToBottomControl() throws {
-        // #633: a jump-to-bottom control must live in the host page so
-        // scrolling up over long agent output has a fast path back to the
-        // live edge. The xterm resources get re-vendored wholesale (see
-        // Resources/xterm/VERSION), so pin the control's presence against an
-        // accidental overwrite.
+    @Test func terminalHTMLLoadsJumpToBottomAddon() throws {
+        // #668: jump-to-bottom (#633/#635) now lives in a shared xterm.js addon
+        // so the desktop AND web surfaces load one implementation. The host page
+        // must pull in the addon script and load it — pin that wiring against an
+        // accidental overwrite when the xterm resources get re-vendored wholesale
+        // (see Resources/xterm/VERSION). The behavior itself is pinned against
+        // the addon file below.
         let url = try #require(BundledResources.terminalHTMLURL)
+        let body = try String(contentsOf: url, encoding: .utf8)
+        #expect(body.contains("xterm-addon-crow-jumpbottom.js"))
+        #expect(body.contains("CrowJumpBottomAddon"))
+        // The old inline control was deleted in favor of the addon — a stray
+        // `#crow-jump-bottom` id/style would mean the inline copy crept back in.
+        // (The addon script filename is `crow-jumpbottom`, no hyphen, so it
+        // doesn't trip this.)
+        #expect(!body.contains("crow-jump-bottom"))
+    }
+
+    @Test func jumpToBottomAddonIsBundled() throws {
+        // #668: the shared addon file is what actually implements the control
+        // (button + scroll wiring), and the daemon serves this exact file to the
+        // web UI at /xterm/…, so both surfaces stay in sync. Pin its presence and
+        // its load-bearing API surface.
+        let dir = try #require(BundledResources.xtermDirectoryURL)
+        let url = dir.appendingPathComponent("xterm-addon-crow-jumpbottom.js")
+        #expect(FileManager.default.fileExists(atPath: url.path))
         let body = try String(contentsOf: url, encoding: .utf8)
         #expect(body.contains("crow-jump-bottom"))
         #expect(body.contains("scrollToBottom"))
         #expect(body.contains("onScroll"))
+        // Namespaced UMD global matching the vendored addons
+        // (window.FitAddon.FitAddon → window.CrowJumpBottomAddon.CrowJumpBottomAddon).
+        #expect(body.contains("CrowJumpBottomAddon"))
     }
 
     @Test func tmuxConfHasNoBarePrefixUnbind() throws {

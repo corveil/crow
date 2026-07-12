@@ -39,6 +39,7 @@
   <script src="/xterm/xterm.js"></script>
   <script src="/xterm/xterm-addon-fit.js"></script>
   <script src="/xterm/xterm-addon-image.js"></script>
+  <script src="/xterm/xterm-addon-crow-jumpbottom.js"></script>
   <script>
     // WebSocket transport variant of CrowTerminal's terminal.html. The xterm.js
     // config block is copied verbatim so font/scrollback/inline-image behavior
@@ -90,6 +91,9 @@
       term.parser.registerCsiHandler({ prefix: '?', final: 'l' }, swallowMouseMode);
 
       term.open(document.getElementById('terminal'));
+      // Jump-to-bottom pill (#668) — load after open() so it can anchor its
+      // button to the terminal container.
+      term.loadAddon(new CrowJumpBottomAddon.CrowJumpBottomAddon());
 
       const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
       const ws = new WebSocket(proto + '://' + window.location.host + '/terminal');
