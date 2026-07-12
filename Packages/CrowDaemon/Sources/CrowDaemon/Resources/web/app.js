@@ -2129,6 +2129,24 @@ let term = null;
 let fitAddon = null;
 let searchAddon = null;
 let termWs = null;
+let termSkelTimer = null; // #677: safety timeout that clears the skeleton overlay
+
+// Skeleton loading overlay (#677): mask the artifact-prone xterm (re)attach
+// window (blank/garbled grid, reflow flash, mid-paint scrollback replay) with
+// the CROW-613 shimmer. Toggled via a `.loading` class on #terminal-wrap.
+function showTerminalSkeleton() {
+  const wrap = document.getElementById('terminal-wrap');
+  if (wrap) wrap.classList.add('loading');
+  // Never strand the overlay on a quiet PTY that sends no immediate output.
+  clearTimeout(termSkelTimer);
+  termSkelTimer = setTimeout(hideTerminalSkeleton, 1500);
+}
+function hideTerminalSkeleton() {
+  clearTimeout(termSkelTimer);
+  termSkelTimer = null;
+  const wrap = document.getElementById('terminal-wrap');
+  if (wrap) wrap.classList.remove('loading');
+}
 
 // Terminal font stack: Nerd Fonts → system monospace.
 const DEFAULT_TERM_FONT = '"MesloLGS NF", "MesloLGS Nerd Font", "JetBrainsMono Nerd Font", "Hack Nerd Font", "FiraCode Nerd Font", Menlo, Monaco, monospace';
@@ -2152,6 +2170,9 @@ function ensureTerminal() {
   term.loadAddon(imageAddon);
   term.loadAddon(searchAddon);
   term.loadAddon(webLinksAddon);
+  // #677: seed the skeleton before first open() so it covers the initial xterm
+  // layout / first-fit reflow flash; connectTerminalWs() re-arms it below.
+  showTerminalSkeleton();
   term.open(document.getElementById('terminal'));
   // Jump-to-bottom pill (#668), shared with the desktop surface. Must load after
   // open() so the addon can anchor its button to the terminal's container.
@@ -2346,6 +2367,11 @@ function showTerminalMenu(e) {
 
 function connectTerminalWs() {
   if (sessionDead) return; // don't loop after an expired remote cookie (review Yellow)
+  // #677: cover this (re)attach — initial connect, auto-reconnect, and (via
+  // reloadTerminal) the #675 right-click Reload + tab/session switch — with the
+  // skeleton. `painted` gates the hide to the FIRST PTY byte of THIS socket.
+  showTerminalSkeleton();
+  let painted = false;
   termWs = new WebSocket(wsURL('/terminal'));
   termWs.binaryType = 'arraybuffer';
   termWs.onopen = () => {
@@ -2363,13 +2389,19 @@ function connectTerminalWs() {
     }
   };
   termWs.onmessage = (event) => {
-    if (event.data instanceof ArrayBuffer) term.write(new Uint8Array(event.data));
+    if (event.data instanceof ArrayBuffer) {
+      term.write(new Uint8Array(event.data));
+      // Fade the skeleton out once the first real content has landed — rAF so
+      // the hide follows the paint, not precedes it.
+      if (!painted) { painted = true; requestAnimationFrame(hideTerminalSkeleton); }
+    }
   };
   termWs.onclose = () => {
+    hideTerminalSkeleton(); // don't strand the overlay; a reconnect re-shows it
     if (sessionDead) return;
     setTimeout(connectTerminalWs, 1000);
   };
-  termWs.onerror = () => termWs.close();
+  termWs.onerror = () => termWs.close(); // funnels to onclose (hides skeleton)
 }
 
 // Resize path (#661): in a browser the window `resize` event and normal page

@@ -17,7 +17,22 @@
       <header id="detail-header"></header>
       <div id="detail-artifacts"></div>
       <div id="tabbar"></div>
-      <div id="terminal-wrap"><div id="terminal"></div></div>
+      <div id="terminal-wrap"><div id="terminal"></div><!--
+        Skeleton loading overlay (#677): shimmer bars over the terminal area
+        while xterm attaches/reloads, masking the blank/garbled grid + reflow
+        flash + mid-paint scrollback replay. Reuses the CROW-613 .skel shimmer.
+        pointer-events:none so it never steals input/focus from xterm.
+      --><div id="terminal-skeleton" aria-hidden="true">
+          <div class="skel term-skel-bar" style="--skel-delay: 0s; width: 58%"></div>
+          <div class="skel term-skel-bar" style="--skel-delay: .08s; width: 34%"></div>
+          <div class="skel term-skel-bar" style="--skel-delay: .16s; width: 66%"></div>
+          <div class="skel term-skel-bar" style="--skel-delay: .24s; width: 45%"></div>
+          <div class="skel term-skel-bar" style="--skel-delay: .32s; width: 71%"></div>
+          <div class="skel term-skel-bar" style="--skel-delay: .40s; width: 28%"></div>
+          <div class="skel term-skel-bar" style="--skel-delay: .48s; width: 52%"></div>
+          <div class="skel term-skel-bar" style="--skel-delay: .56s; width: 39%"></div>
+          <div class="skel term-skel-bar" style="--skel-delay: .64s; width: 61%"></div>
+      </div></div>
       <div id="board"></div>
       <div id="detail-empty">
         <img class="empty-brand" src="/brand.svg" alt="Crow">
