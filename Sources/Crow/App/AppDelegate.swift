@@ -2185,6 +2185,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     // real change (keeps sidebar colors correct after relaunch — #367).
                     let snapshotBefore = state.persistedSnapshot
 
+                    // Count completed compactions (PostCompact only) for the
+                    // end-of-session analytics snapshot (ADR 0008, #691).
+                    state.noteCompactionEvent(eventName)
+
                     // Append to ring buffer (keep last 50 events per session)
                     state.hookEvents.append(event)
                     if state.hookEvents.count > 50 { state.hookEvents.removeFirst(state.hookEvents.count - 50) }

@@ -693,6 +693,9 @@ public final class SessionHookState {
     public var lastToolActivity: ToolActivity?
     public var hookEvents: [HookEvent] = []
     public var analytics: SessionAnalytics?
+    /// Completed compactions this app run (ADR 0008 follow-up 3). Persisted at
+    /// session end on `SessionAnalyticsSnapshot`, NOT on `PersistedHookState`.
+    public var compactionCount: Int = 0
     /// Timestamp of the most recent top-level Stop / StopFailure for this session.
     /// Used to suppress state elevation from background activity (e.g. the
     /// `awaySummaryEnabled` recap subagent in Claude Code ≥ 2.1.108) that
@@ -701,6 +704,13 @@ public final class SessionHookState {
     public var lastTopLevelStopAt: Date?
 
     public init() {}
+
+    /// ADR 0008: count completed compactions only. `PreCompact` (and any
+    /// failed/aborted compaction, which never emits `PostCompact`) is not
+    /// graded waste.
+    public func noteCompactionEvent(_ eventName: String) {
+        if eventName == "PostCompact" { compactionCount += 1 }
+    }
 }
 
 /// Codable, value-type snapshot of the *color-driving* subset of

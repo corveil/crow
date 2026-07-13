@@ -2390,8 +2390,12 @@ final class SessionService {
             : appState.existingHookState(for: id)?.analytics
         guard let analytics, !analytics.isEmpty else { return }
 
+        // Compaction count only exists on the in-memory hook state — telemetry.db
+        // has no compaction rows — so read it there even when `analytics` came
+        // from the DB provider (#691).
         let snapshot = SessionAnalyticsSnapshot(
-            sessionID: id, endedAt: Date(), status: status, analytics: analytics)
+            sessionID: id, endedAt: Date(), status: status, analytics: analytics,
+            compactionCount: appState.existingHookState(for: id)?.compactionCount ?? 0)
         store.mutate { data in
             var snapshots = data.analyticsSnapshots ?? [:]
             snapshots[id.uuidString] = snapshot
@@ -2458,7 +2462,9 @@ final class SessionService {
                 var snapshots = data.analyticsSnapshots ?? [:]
                 snapshots[key] = SessionAnalyticsSnapshot(
                     sessionID: session.id, endedAt: session.updatedAt,
-                    status: session.status, analytics: analytics)
+                    status: session.status, analytics: analytics,
+                    compactionCount: appState.existingHookState(for: session.id)?
+                        .compactionCount ?? 0)
                 data.analyticsSnapshots = snapshots
             }
         }
