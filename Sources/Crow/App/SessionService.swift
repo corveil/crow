@@ -53,6 +53,9 @@ final class SessionService {
     func hydrateState() {
         let data = store.data
         appState.sessions = data.sessions
+        // Mirror persisted analytics snapshots for the scorecard (#710) —
+        // CrowUI can't read the store, so the view computes from this.
+        appState.analyticsSnapshots = data.analyticsSnapshots ?? [:]
 
         // Migrate a legacy primary Manager (persisted as `.work` before
         // SessionKind.manager existed) to `.manager` BEFORE the per-session loop.
@@ -2429,6 +2432,7 @@ final class SessionService {
             snapshots[id.uuidString] = snapshot
             data.analyticsSnapshots = snapshots
         }
+        appState.analyticsSnapshots[id.uuidString] = snapshot
     }
 
     /// Lock or unlock a session to exempt it from (or restore it to) the
@@ -2497,6 +2501,8 @@ final class SessionService {
                 data.analyticsSnapshots = snapshots
             }
         }
+        // Keep the scorecard mirror in sync with any quit-race backfills.
+        appState.analyticsSnapshots = store.data.analyticsSnapshots ?? [:]
     }
 
     // MARK: - Find Claude Binary

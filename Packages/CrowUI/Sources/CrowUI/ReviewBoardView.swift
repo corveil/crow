@@ -362,12 +362,42 @@ public struct ManagerReviewsAllowListRow: View {
         HStack(spacing: 6) {
             reviewButton
             allowListButton
+            scorecardButton
             if appState.managerSession != nil {
                 managerButton
                 newManagerButton
             }
         }
         .padding(.vertical, 2)
+    }
+
+    /// Compact icon pill (same footprint as the "+" pill — the row is too
+    /// narrow for a fifth text pill) opening the efficiency scorecard (#710).
+    private var scorecardButton: some View {
+        let isActive = appState.selectedSessionID == AppState.scorecardSessionID
+        return Button {
+            appState.selectedSessionID = AppState.scorecardSessionID
+        } label: {
+            Image(systemName: "chart.bar.xaxis")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(isActive ? CorveilTheme.gold : CorveilTheme.goldDark)
+                .frame(width: 28)
+                .padding(.vertical, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(isActive ? CorveilTheme.bgCard : CorveilTheme.bgSurface)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .strokeBorder(
+                                    isActive ? CorveilTheme.goldDark.opacity(0.6) : CorveilTheme.goldDark.opacity(0.3),
+                                    lineWidth: 1
+                                )
+                        )
+                )
+        }
+        .buttonStyle(.plain)
+        .help("Scorecard")
+        .accessibilityLabel("Scorecard")
     }
 
     private var managerNeedsAttention: Bool {

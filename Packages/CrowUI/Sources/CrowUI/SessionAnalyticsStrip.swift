@@ -11,12 +11,12 @@ struct SessionAnalyticsStrip: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            StatChip(icon: "dollarsign.circle", label: "Cost", value: formatCost(analytics.totalCost))
-            StatChip(icon: "text.word.spacing", label: "Tokens", value: formatCount(analytics.totalTokens))
+            StatChip(icon: "dollarsign.circle", label: "Cost", value: AnalyticsFormatting.cost(analytics.totalCost))
+            StatChip(icon: "text.word.spacing", label: "Tokens", value: AnalyticsFormatting.count(analytics.totalTokens))
             StatChip(icon: "wrench", label: "Tools", value: "\(analytics.toolCallCount)")
-            StatChip(icon: "clock", label: "Active", value: formatTime(analytics.activeTimeSeconds))
+            StatChip(icon: "clock", label: "Active", value: AnalyticsFormatting.time(analytics.activeTimeSeconds))
             if let wallClockDuration {
-                StatChip(icon: "timer", label: "Duration", value: formatTime(wallClockDuration))
+                StatChip(icon: "timer", label: "Duration", value: AnalyticsFormatting.time(wallClockDuration))
             }
             if analytics.linesAdded > 0 || analytics.linesRemoved > 0 {
                 StatChip(
@@ -37,40 +37,10 @@ struct SessionAnalyticsStrip: View {
         }
     }
 
-    // MARK: - Formatting
-
-    private func formatCost(_ cost: Double) -> String {
-        if cost < 0.01 && cost > 0 {
-            return "<$0.01"
-        }
-        return String(format: "$%.2f", cost)
-    }
-
-    private func formatCount(_ count: Int) -> String {
-        if count >= 1_000_000 {
-            return String(format: "%.1fM", Double(count) / 1_000_000)
-        } else if count >= 1_000 {
-            return String(format: "%.1fK", Double(count) / 1_000)
-        }
-        return "\(count)"
-    }
-
-    private func formatTime(_ seconds: Double) -> String {
-        let totalSeconds = Int(seconds)
-        if totalSeconds >= 3600 {
-            let hours = totalSeconds / 3600
-            let mins = (totalSeconds % 3600) / 60
-            return "\(hours)h \(mins)m"
-        } else if totalSeconds >= 60 {
-            return "\(totalSeconds / 60)m"
-        } else {
-            return "\(totalSeconds)s"
-        }
-    }
 }
 
 /// A single stat chip with icon, label, and value.
-private struct StatChip: View {
+struct StatChip: View {
     let icon: String
     let label: String
     let value: String
