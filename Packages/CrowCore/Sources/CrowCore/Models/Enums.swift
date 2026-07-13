@@ -94,6 +94,12 @@ public enum TicketStatus: String, Codable, Sendable, CaseIterable {
     /// The pipeline stages shown in the UI (including Done).
     public static let pipelineStatuses: [TicketStatus] = [.backlog, .ready, .inProgress, .inReview, .done]
 
+    /// Fallback status label applied to issues that aren't on a Project board
+    /// (#706). Presence of this label ⇒ the ticket is In Review; the
+    /// Projects-v2 Status field stays authoritative whenever the issue IS on
+    /// a board, and the label is ignored there.
+    public static let inReviewFallbackLabel = "crow:in-review"
+
     /// Initialize from a GitHub/GitLab project board status name (case-insensitive).
     public init(projectBoardName name: String) {
         switch name.lowercased().trimmingCharacters(in: .whitespaces) {
