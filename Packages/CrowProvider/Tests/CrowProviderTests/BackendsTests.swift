@@ -120,6 +120,46 @@ final class BackendsTests: XCTestCase {
         XCTAssertTrue(fake.calls.first?.args.contains("graphql") ?? false)
     }
 
+    func testGitHubTaskBackendParsesInReviewLabelFallback() async throws {
+        let fake = FakeShellRunner()
+        // Open issues: #1 has no project item but carries the fallback label →
+        // .inReview; #2 is on a board AND carries the label → the board wins;
+        // #3 has neither → .unknown. Closed #4 carries the label → .done (the
+        // closed override wins).
+        let json = """
+        {"data":{
+          "openIssues":{"nodes":[
+            {"number":1,"title":"Labelled","url":"https://github.com/a/b/issues/1","state":"open",
+             "repository":{"nameWithOwner":"a/b"},
+             "labels":{"nodes":[{"name":"crow:in-review","color":"FBCA04"}]},
+             "projectItems":{"nodes":[]}},
+            {"number":2,"title":"On board","url":"https://github.com/a/b/issues/2","state":"open",
+             "repository":{"nameWithOwner":"a/b"},
+             "labels":{"nodes":[{"name":"crow:in-review","color":"FBCA04"}]},
+             "projectItems":{"nodes":[{"fieldValueByName":{"name":"In Progress"}}]}},
+            {"number":3,"title":"Plain","url":"https://github.com/a/b/issues/3","state":"open",
+             "repository":{"nameWithOwner":"a/b"},
+             "labels":{"nodes":[{"name":"bug","color":"red"}]},
+             "projectItems":{"nodes":[]}}
+          ]},
+          "closedIssues":{"issueCount":1,"nodes":[
+            {"number":4,"title":"Closed","url":"https://github.com/a/b/issues/4","state":"closed",
+             "repository":{"nameWithOwner":"a/b"},
+             "labels":{"nodes":[{"name":"crow:in-review","color":"FBCA04"}]}}
+          ]},
+          "rateLimit":{"remaining":4999,"limit":5000,"resetAt":"2026-01-01T00:00:00Z","cost":1}
+        }}
+        """
+        fake.responses = [.success(json)]
+        let backend = GitHubTaskBackend(shellRunner: fake)
+        let listing = try await backend.listAssigned()
+        XCTAssertEqual(listing.open.count, 3)
+        XCTAssertEqual(listing.open[0].projectStatus, .inReview)
+        XCTAssertEqual(listing.open[1].projectStatus, .inProgress)
+        XCTAssertEqual(listing.open[2].projectStatus, .unknown)
+        XCTAssertEqual(listing.closed[0].projectStatus, .done)
+    }
+
     func testGitHubTaskBackendClosedTotalFallsBackToNodeCount() async throws {
         let fake = FakeShellRunner()
         // No issueCount in the response — closedTotalCount falls back to the
@@ -271,8 +311,20 @@ final class BackendsTests: XCTestCase {
 
     func testGitHubTaskBackendSetTaskStatusThrowsWhenOptionMissing() async {
         let fake = FakeShellRunner()
-        // No matching option.
-        fake.responses = [.success(#"{"data":{"repository":{"issue":{"projectItems":{"nodes":[]}}}}}"#)]
+        // On a project board, but no option matching the target status — this
+        // stays an unimplemented throw (the label fallback is only for issues
+        // on no board at all).
+        let lookup = """
+        {"data":{"repository":{"issue":{"projectItems":{"nodes":[
+          {"id":"ITEM_1","project":{"id":"PROJ_1"},
+           "fieldValueByName":{"name":"Backlog",
+             "field":{"id":"FIELD_1","options":[
+               {"id":"OPT_BACKLOG","name":"Backlog"},
+               {"id":"OPT_DONE","name":"Done"}
+             ]}}}
+        ]}}}}}
+        """
+        fake.responses = [.success(lookup)]
         let backend = GitHubTaskBackend(shellRunner: fake)
         do {
             try await backend.setTaskStatus(url: "https://github.com/a/b/issues/1", status: .inReview)
@@ -282,6 +334,8 @@ final class BackendsTests: XCTestCase {
         } catch {
             XCTFail("unexpected error \(error)")
         }
+        // No label churn on the on-project path.
+        XCTAssertEqual(fake.calls.count, 1)
     }
 
     func testGitHubTaskBackendSetTaskStatusMatchesBareReviewAlias() async throws {
@@ -304,6 +358,65 @@ final class BackendsTests: XCTestCase {
         try await backend.setTaskStatus(url: "https://github.com/a/b/issues/1", status: .inReview)
         XCTAssertEqual(fake.calls.count, 2)
         XCTAssertTrue(fake.calls[1].args.contains("optionId=OPT_REVIEW"))
+    }
+
+    // No project board at all → the `crow:in-review` label carries the status
+    // instead of a Projects-v2 field (#706).
+    private static let noProjectLookup = #"{"data":{"repository":{"issue":{"projectItems":{"nodes":[]}}}}}"#
+
+    func testGitHubTaskBackendSetTaskStatusFallsBackToLabelWhenNoProject() async throws {
+        let fake = FakeShellRunner()
+        // Lookup (no project items) → label create → issue edit.
+        fake.responses = [.success(Self.noProjectLookup), .success(""), .success("")]
+        let backend = GitHubTaskBackend(shellRunner: fake)
+        try await backend.setTaskStatus(url: "https://github.com/a/b/issues/1", status: .inReview)
+        XCTAssertEqual(fake.calls.count, 3)
+        let createArgs = fake.calls[1].args
+        XCTAssertEqual(Array(createArgs.prefix(4)), ["gh", "label", "create", "crow:in-review"])
+        XCTAssertTrue(createArgs.contains("a/b"))
+        let editArgs = fake.calls[2].args
+        XCTAssertTrue(editArgs.contains("--add-label"))
+        XCTAssertTrue(editArgs.contains("crow:in-review"))
+        XCTAssertFalse(editArgs.contains("--remove-label"))
+    }
+
+    func testGitHubTaskBackendSetTaskStatusFallbackToleratesExistingLabel() async throws {
+        let fake = FakeShellRunner()
+        fake.responses = [
+            .success(Self.noProjectLookup),
+            .failure(ShellRunnerError.nonZeroExit(exitCode: 1, output: "label 'crow:in-review' already exists")),
+            .success("")
+        ]
+        let backend = GitHubTaskBackend(shellRunner: fake)
+        try await backend.setTaskStatus(url: "https://github.com/a/b/issues/1", status: .inReview)
+        XCTAssertEqual(fake.calls.count, 3)
+        XCTAssertTrue(fake.calls[2].args.contains("--add-label"))
+        XCTAssertTrue(fake.calls[2].args.contains("crow:in-review"))
+    }
+
+    func testGitHubTaskBackendSetTaskStatusFallbackRemovesLabelWhenLeavingReview() async throws {
+        let fake = FakeShellRunner()
+        fake.responses = [.success(Self.noProjectLookup), .success("")]
+        let backend = GitHubTaskBackend(shellRunner: fake)
+        try await backend.setTaskStatus(url: "https://github.com/a/b/issues/1", status: .inProgress)
+        // No label create on the way out — just the removal edit.
+        XCTAssertEqual(fake.calls.count, 2)
+        let editArgs = fake.calls[1].args
+        XCTAssertTrue(editArgs.contains("--remove-label"))
+        XCTAssertTrue(editArgs.contains("crow:in-review"))
+        XCTAssertFalse(editArgs.contains("--add-label"))
+    }
+
+    func testGitHubTaskBackendSetTaskStatusFallbackSwallowsMissingLabelOnRemove() async throws {
+        let fake = FakeShellRunner()
+        fake.responses = [
+            .success(Self.noProjectLookup),
+            .failure(ShellRunnerError.nonZeroExit(exitCode: 1, output: "'crow:in-review' not found"))
+        ]
+        let backend = GitHubTaskBackend(shellRunner: fake)
+        // Removal is best-effort: a repo that never entered review has no label.
+        try await backend.setTaskStatus(url: "https://github.com/a/b/issues/1", status: .done)
+        XCTAssertEqual(fake.calls.count, 2)
     }
 
     func testGitHubTaskBackendAssignInvokesGhIssueEdit() async throws {

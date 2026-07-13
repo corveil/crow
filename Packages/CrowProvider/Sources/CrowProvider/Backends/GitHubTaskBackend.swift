@@ -156,12 +156,22 @@ public struct GitHubTaskBackend: TaskBackend {
         }
 
         guard let resolved = Self.resolveProjectFieldOption(queryOut, target: status) else {
-            // No project board attached to the issue, OR no matching option
-            // for the requested status. Treat as unimplemented so callers can
-            // distinguish "feature genuinely not available here" from "shell
-            // failed".
+            if !Self.hasProjectItems(queryOut) {
+                // No project board attached to the issue: represent pipeline
+                // status with the `crow:in-review` fallback label instead
+                // (#706). The label only encodes In Review — any other target
+                // status just clears it (Done is signaled by closing the
+                // issue; In Progress by the active session).
+                try await setInReviewFallbackLabel(
+                    url: url, repo: "\(parsed.org)/\(parsed.repo)", applied: status == .inReview
+                )
+                return
+            }
+            // On a project, but no matching option for the requested status.
+            // Treat as unimplemented so callers can distinguish "feature
+            // genuinely not available here" from "shell failed".
             throw ProviderError.unimplemented(
-                "GitHubTaskBackend.setTaskStatus: issue has no project board or no '\(status.rawValue)' status option"
+                "GitHubTaskBackend.setTaskStatus: issue has no '\(status.rawValue)' status option"
             )
         }
 
@@ -275,6 +285,55 @@ public struct GitHubTaskBackend: TaskBackend {
             return .insufficientScope("read:project")
         }
         return .commandFailed(stderr)
+    }
+
+    /// Apply or clear the `crow:in-review` fallback label on an issue that has
+    /// no project board (#706).
+    private func setInReviewFallbackLabel(url: String, repo: String, applied: Bool) async throws {
+        let label = TicketStatus.inReviewFallbackLabel
+        if applied {
+            try await ensureInReviewLabel(repo: repo)
+            try await setLabels(url: url, add: [label], remove: [])
+        } else {
+            do {
+                try await setLabels(url: url, add: [], remove: [label])
+            } catch ShellRunnerError.nonZeroExit(_, let output)
+                where output.localizedCaseInsensitiveContains("not found") {
+                // Label doesn't exist in the repo (never entered review here);
+                // removal is best-effort.
+            }
+        }
+    }
+
+    /// Ensure the `crow:in-review` fallback label exists in `repo`, mirroring
+    /// `GitHubCodeBackend.ensureMergeLabel`.
+    private func ensureInReviewLabel(repo: String) async throws {
+        do {
+            _ = try await shellRunner.run(
+                "gh", "label", "create", TicketStatus.inReviewFallbackLabel,
+                "--repo", repo,
+                "--color", "FBCA04",
+                "--description", "Crow: in review (no-project status fallback)"
+            )
+        } catch ShellRunnerError.nonZeroExit(_, let output) where output.localizedCaseInsensitiveContains("already exists") {
+            return
+        }
+    }
+
+    /// Whether the project-item lookup response shows the issue on at least
+    /// one Project board. Distinguishes "no board at all" (→ label fallback)
+    /// from "on a board but no matching Status option" (→ unimplemented).
+    static func hasProjectItems(_ output: String) -> Bool {
+        guard let data = output.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let dataObj = json["data"] as? [String: Any],
+              let repo = dataObj["repository"] as? [String: Any],
+              let issue = repo["issue"] as? [String: Any],
+              let projectItems = issue["projectItems"] as? [String: Any],
+              let nodes = projectItems["nodes"] as? [[String: Any]] else {
+            return false
+        }
+        return !nodes.isEmpty
     }
 
     /// Walk the project-item lookup response and find the (itemID, projectID,
@@ -539,6 +598,13 @@ public struct GitHubTaskBackend: TaskBackend {
                         break
                     }
                 }
+            }
+            // Label fallback (#706): when the board yields no status (issue
+            // not on any project), the `crow:in-review` label carries the
+            // In Review state. A board status, when present, wins above.
+            if projectStatusOverride == nil, projectStatus == .unknown,
+               labels.contains(where: { $0.name == TicketStatus.inReviewFallbackLabel }) {
+                projectStatus = .inReview
             }
             return AssignedIssue(
                 id: "github:\(repoName)#\(number)",

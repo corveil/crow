@@ -2726,6 +2726,14 @@ final class IssueTracker {
             appState.assignedIssues[idx].projectStatus = .done
         }
 
+        // Cosmetic cleanup (#706): a closed issue reads as Done regardless, so
+        // drop a lingering no-project `crow:in-review` fallback label. Gated on
+        // the in-memory labels to avoid a gratuitous API call; best-effort.
+        if let issue = appState.assignedIssues.first(where: { $0.url == ticketURL }),
+           issue.labels.contains(where: { $0.name == TicketStatus.inReviewFallbackLabel }) {
+            try? await backend.setLabels(url: ticketURL, add: [], remove: [TicketStatus.inReviewFallbackLabel])
+        }
+
         print("[IssueTracker] Marked issue done: \(ticketURL)")
 
         // Flip the Crow session to .completed so the row reflects the closed issue.
