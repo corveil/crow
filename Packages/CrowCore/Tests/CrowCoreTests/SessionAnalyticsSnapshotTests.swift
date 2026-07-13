@@ -66,6 +66,9 @@ import Testing
     #expect(decoded.analytics.inputTokens == 42)
     #expect(decoded.analytics.isEmpty == false)
     #expect(decoded.compactionCount == 3)
+    // #692 landed after some snapshots were persisted: the wall-clock field is
+    // optional and absent keys decode to nil (open-ended, no bogus duration).
+    #expect(decoded.wallClockDurationSeconds == nil)
 }
 
 // #691 (ADR 0008 follow-up 3): the per-session compaction counter.
@@ -132,4 +135,30 @@ import Testing
     let decoded = try decoder.decode(SessionAnalyticsSnapshot.self, from: Data(json.utf8))
     #expect(decoded.compactionCount == nil)
     #expect(decoded.compactionCount ?? 0 == 0)
+}
+
+// #692 (ADR 0008 follow-up 4): the display-only wall-clock scalar rides the
+// snapshot's documented optional-extension point.
+@Test func snapshotWallClockRoundTrip() throws {
+    let snapshot = SessionAnalyticsSnapshot(
+        sessionID: UUID(),
+        endedAt: Date(timeIntervalSince1970: 1_752_000_000),
+        status: .completed,
+        analytics: SessionAnalytics(activeTimeSeconds: 300),
+        wallClockDurationSeconds: 28_800
+    )
+
+    let encoder = JSONEncoder()
+    encoder.dateEncodingStrategy = .iso8601
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+
+    let decoded = try decoder.decode(
+        SessionAnalyticsSnapshot.self, from: encoder.encode(snapshot))
+    #expect(decoded == snapshot)
+    // Role separation (ADR 0008): wall-clock is display-only context; the
+    // penalty-normalization clock is analytics.activeTimeSeconds. Both persist
+    // independently and an idle-heavy session keeps them far apart.
+    #expect(decoded.wallClockDurationSeconds == 28_800)
+    #expect(decoded.analytics.activeTimeSeconds == 300)
 }

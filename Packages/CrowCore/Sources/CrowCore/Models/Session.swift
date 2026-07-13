@@ -41,6 +41,17 @@ public struct Session: Identifiable, Codable, Sendable {
     // `false`; the decoder also reads the legacy `pinned` key so sessions locked
     // under CROW-569 stay locked after upgrade.
     public var locked: Bool
+    // Agent wall-clock lifecycle stamps (#692, ADR 0008 follow-up 4), recorded
+    // from `SessionStart`/`SessionEnd` hook arrival. DISPLAY-ONLY context:
+    // telemetry's `SessionAnalytics.activeTimeSeconds` is the authoritative
+    // clock for all penalty normalization — never use `wallClockDuration` as a
+    // grading denominator (an idle-overnight session must not launder its
+    // compactions through an inflated denominator).
+    // First `SessionStart` wins; resume/clear/compact starts don't move the origin.
+    public var agentSessionStartedAt: Date?
+    // Last `SessionEnd` wins; cleared by a new `SessionStart` so a resumed
+    // agent never displays a stale finished duration.
+    public var agentSessionEndedAt: Date?
 
     /// Whether this session is a Manager (orchestration) session. Managers run
     /// Claude Code in the devRoot and are excluded from PR/issue tracking.
@@ -61,6 +72,30 @@ public struct Session: Identifiable, Codable, Sendable {
         return nil
     }
 
+    /// Wall-clock span from first `SessionStart` to last `SessionEnd`, or `nil`
+    /// while the session is open-ended (no end yet, non-Claude agents that never
+    /// send `SessionEnd`, or clock skew putting the end before the start).
+    /// DISPLAY-ONLY per ADR 0008: `SessionAnalytics.activeTimeSeconds` is the
+    /// authoritative clock for penalty normalization, never this.
+    public var wallClockDuration: TimeInterval? {
+        guard let start = agentSessionStartedAt, let end = agentSessionEndedAt,
+              end >= start else { return nil }
+        return end.timeIntervalSince(start)
+    }
+
+    /// Stamp a `SessionStart` hook arrival. The first start is the origin and
+    /// is never moved (SessionStart also fires on resume/clear/compact); any
+    /// stale end is cleared so a running agent reads as open-ended again.
+    public mutating func recordAgentSessionStart(at date: Date = Date()) {
+        if agentSessionStartedAt == nil { agentSessionStartedAt = date }
+        agentSessionEndedAt = nil
+    }
+
+    /// Stamp a `SessionEnd` hook arrival. Latest end wins.
+    public mutating func recordAgentSessionEnd(at date: Date = Date()) {
+        agentSessionEndedAt = date
+    }
+
     public init(
         id: UUID = UUID(),
         name: String,
@@ -77,7 +112,9 @@ public struct Session: Identifiable, Codable, Sendable {
         reviewPromptDispatched: Bool = false,
         lastReviewedHeadSha: String? = nil,
         autoMergeEnabledAt: Date? = nil,
-        locked: Bool = false
+        locked: Bool = false,
+        agentSessionStartedAt: Date? = nil,
+        agentSessionEndedAt: Date? = nil
     ) {
         self.id = id
         self.name = name
@@ -95,6 +132,8 @@ public struct Session: Identifiable, Codable, Sendable {
         self.lastReviewedHeadSha = lastReviewedHeadSha
         self.autoMergeEnabledAt = autoMergeEnabledAt
         self.locked = locked
+        self.agentSessionStartedAt = agentSessionStartedAt
+        self.agentSessionEndedAt = agentSessionEndedAt
     }
 
     /// Parse a GitHub PR URL (`https://github.com/<owner>/<repo>/pull/<number>`)
@@ -131,6 +170,8 @@ public struct Session: Identifiable, Codable, Sendable {
         reviewPromptDispatched = try container.decodeIfPresent(Bool.self, forKey: .reviewPromptDispatched) ?? true
         lastReviewedHeadSha = try container.decodeIfPresent(String.self, forKey: .lastReviewedHeadSha)
         autoMergeEnabledAt = try container.decodeIfPresent(Date.self, forKey: .autoMergeEnabledAt)
+        agentSessionStartedAt = try container.decodeIfPresent(Date.self, forKey: .agentSessionStartedAt)
+        agentSessionEndedAt = try container.decodeIfPresent(Date.self, forKey: .agentSessionEndedAt)
         // CROW-573 renamed `pinned` → `locked`. Prefer the new key, but fall
         // back to the legacy `pinned` key so sessions locked under CROW-569
         // remain locked after upgrade.

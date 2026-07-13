@@ -268,4 +268,106 @@ struct SessionServiceAnalyticsSnapshotTests {
         // Non-terminal sessions never snapshot.
         #expect(snapshots?[stillActive.id.uuidString] == nil)
     }
+
+    // MARK: - Wall-clock duration (#692, ADR 0008 follow-up 4)
+
+    // The ADR's role separation: wall-clock duration is display-only context;
+    // analytics.activeTimeSeconds is the authoritative penalty-normalization
+    // clock. An idle-overnight session (8h wall-clock, 20m active) persists
+    // both values distinctly — neither substitutes for the other.
+    @Test
+    func snapshotCarriesWallClockDistinctFromActiveTime() async {
+        let store = Self.tempStore()
+        let appState = AppState()
+        let id = UUID()
+        let start = Date(timeIntervalSince1970: 1_752_000_000)
+        appState.sessions = [Session(
+            id: id, name: "idle-overnight",
+            agentSessionStartedAt: start,
+            agentSessionEndedAt: start.addingTimeInterval(28_800))]
+        let service = SessionService(
+            store: store, appState: appState,
+            analyticsProvider: { _ in Self.sampleAnalytics })
+
+        await service.writeAnalyticsSnapshot(for: id, status: .completed)
+
+        let snapshot = store.data.analyticsSnapshots?[id.uuidString]
+        #expect(snapshot?.wallClockDurationSeconds == 28_800)
+        #expect(snapshot?.analytics.activeTimeSeconds == Self.sampleAnalytics.activeTimeSeconds)
+        #expect(snapshot?.wallClockDurationSeconds != snapshot?.analytics.activeTimeSeconds)
+    }
+
+    // A session that never saw a SessionEnd (non-Claude agents don't send one;
+    // or the agent was killed) still snapshots its analytics — with a nil
+    // wall-clock, never a fabricated one.
+    @Test
+    func openEndedSessionSnapshotsNilWallClock() async {
+        let store = Self.tempStore()
+        let appState = AppState()
+        let id = UUID()
+        appState.sessions = [Session(
+            id: id, name: "open-ended",
+            agentSessionStartedAt: Date(timeIntervalSince1970: 1_752_000_000))]
+        let service = SessionService(
+            store: store, appState: appState,
+            analyticsProvider: { _ in Self.sampleAnalytics })
+
+        await service.writeAnalyticsSnapshot(for: id, status: .completed)
+
+        let snapshot = store.data.analyticsSnapshots?[id.uuidString]
+        #expect(snapshot != nil)
+        #expect(snapshot?.wallClockDurationSeconds == nil)
+    }
+
+    // The quit-race backfill path carries the duration too.
+    @Test
+    func persistStateBackfillCarriesWallClock() async {
+        let store = Self.tempStore()
+        let appState = AppState()
+        let start = Date(timeIntervalSince1970: 1_752_000_000)
+        var ended = Session(
+            id: UUID(), name: "ended-then-quit",
+            agentSessionStartedAt: start,
+            agentSessionEndedAt: start.addingTimeInterval(4_500))
+        ended.status = .completed
+        appState.sessions = [ended]
+        appState.hookState(for: ended.id).analytics = Self.sampleAnalytics
+
+        let service = SessionService(store: store, appState: appState)
+        service.persistState()
+
+        #expect(store.data.analyticsSnapshots?[ended.id.uuidString]?
+            .wallClockDurationSeconds == 4_500)
+    }
+
+    // Both the session's lifecycle stamps and the snapshot's duration copy
+    // must read back after a simulated relaunch.
+    @Test
+    func wallClockSurvivesSimulatedRelaunch() async {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("crow-wallclock-relaunch-\(UUID().uuidString)")
+        let appState = AppState()
+        let id = UUID()
+        let start = Date(timeIntervalSince1970: 1_752_000_000)
+        let session = Session(
+            id: id, name: "durable-duration",
+            agentSessionStartedAt: start,
+            agentSessionEndedAt: start.addingTimeInterval(3_600))
+        appState.sessions = [session]
+        let store = JSONStore(directory: dir)
+        store.mutate { $0.sessions = [session] }
+        let service = SessionService(
+            store: store, appState: appState,
+            analyticsProvider: { _ in Self.sampleAnalytics })
+
+        await service.writeAnalyticsSnapshot(for: id, status: .completed)
+
+        let reloaded = JSONStore(directory: dir)
+        let restored = reloaded.data.sessions.first(where: { $0.id == id })
+        #expect(restored?.agentSessionStartedAt == start)
+        #expect(restored?.agentSessionEndedAt == start.addingTimeInterval(3_600))
+        #expect(restored?.wallClockDuration == 3_600)
+        #expect(reloaded.data.analyticsSnapshots?[id.uuidString]?
+            .wallClockDurationSeconds == 3_600)
+    }
 }

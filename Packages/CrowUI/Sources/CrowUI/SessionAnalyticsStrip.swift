@@ -4,6 +4,10 @@ import CrowCore
 /// Compact horizontal strip of session analytics metrics shown in the session header.
 struct SessionAnalyticsStrip: View {
     let analytics: SessionAnalytics
+    /// Wall-clock span from agent SessionStart to SessionEnd (#692). Display-only
+    /// context beside "Active" — never a grading input. Nil hides the chip
+    /// (open-ended session or agent that never sends SessionEnd).
+    var wallClockDuration: TimeInterval? = nil
 
     var body: some View {
         HStack(spacing: 12) {
@@ -11,6 +15,9 @@ struct SessionAnalyticsStrip: View {
             StatChip(icon: "text.word.spacing", label: "Tokens", value: formatCount(analytics.totalTokens))
             StatChip(icon: "wrench", label: "Tools", value: "\(analytics.toolCallCount)")
             StatChip(icon: "clock", label: "Active", value: formatTime(analytics.activeTimeSeconds))
+            if let wallClockDuration {
+                StatChip(icon: "timer", label: "Duration", value: formatTime(wallClockDuration))
+            }
             if analytics.linesAdded > 0 || analytics.linesRemoved > 0 {
                 StatChip(
                     icon: "chevron.left.forwardslash.chevron.right",

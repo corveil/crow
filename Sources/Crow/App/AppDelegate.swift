@@ -1642,6 +1642,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         "provider": s.provider.map { .string($0.rawValue) } ?? .null,
                         "created_at": .string(fmt.string(from: s.createdAt)),
                         "updated_at": .string(fmt.string(from: s.updatedAt)),
+                        // Agent wall-clock lifecycle (#692). Display-only —
+                        // grading normalizes by telemetry's activeTimeSeconds.
+                        "agent_session_started_at": s.agentSessionStartedAt.map { .string(fmt.string(from: $0)) } ?? .null,
+                        "agent_session_ended_at": s.agentSessionEndedAt.map { .string(fmt.string(from: $0)) } ?? .null,
+                        "wall_clock_seconds": s.wallClockDuration.map { .double($0) } ?? .null,
                         "locked": .bool(s.locked),
                         // Legacy alias (CROW-569 named this `pinned`); kept for
                         // one release so existing scripts keep working.
@@ -2230,6 +2235,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         case .set(let date):
                             state.lastTopLevelStopAt = date
                         }
+                    }
+
+                    // Wall-clock lifecycle stamps (#692, ADR 0008 follow-up 4).
+                    // Display-only context — telemetry's activeTimeSeconds
+                    // remains the authoritative penalty-normalization clock.
+                    if eventName == "SessionStart" || eventName == "SessionEnd" {
+                        capturedService.recordAgentLifecycleEvent(
+                            sessionID: sessionID, eventName: eventName)
                     }
 
                     // Trigger notification/sound for this event

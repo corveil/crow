@@ -30,18 +30,29 @@ public struct SessionAnalyticsSnapshot: Codable, Equatable, Sendable {
     /// (ADR 0008 follow-up 3 — the scorecard's heaviest-weighted penalty).
     /// `nil` in snapshots persisted before #691; treat as 0.
     public var compactionCount: Int?
+    /// Wall-clock span from first `SessionStart` to last `SessionEnd` hook,
+    /// copied from the session's lifecycle stamps at snapshot time (#692, ADR
+    /// 0008 follow-up 4). DISPLAY-ONLY context: `analytics.activeTimeSeconds`
+    /// is the authoritative clock for all penalty normalization — this must
+    /// never be a grading denominator. `nil` for open-ended sessions (no
+    /// `SessionEnd` — e.g. non-Claude agents never send one) and for snapshots
+    /// persisted before this field existed. Telemetry-off sessions get no
+    /// snapshot at all, so their duration lives only on the `Session` row.
+    public var wallClockDurationSeconds: Double?
 
     public init(
         sessionID: UUID,
         endedAt: Date,
         status: SessionStatus,
         analytics: SessionAnalytics,
-        compactionCount: Int? = nil
+        compactionCount: Int? = nil,
+        wallClockDurationSeconds: Double? = nil
     ) {
         self.sessionID = sessionID
         self.endedAt = endedAt
         self.status = status
         self.analytics = analytics
         self.compactionCount = compactionCount
+        self.wallClockDurationSeconds = wallClockDurationSeconds
     }
 }
