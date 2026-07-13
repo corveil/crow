@@ -19,19 +19,26 @@ public struct StoreData: Codable, Sendable {
     /// synthesized `Codable` tolerates a missing optional, keeping us backward
     /// compatible and avoiding the corrupt-store backup path.
     public var hookStates: [String: PersistedHookState]?
+    /// Durable analytics snapshot per ended session, keyed by session UUID
+    /// string (#690, ADR 0008). Optional for the same backward-compat reason
+    /// as `hookStates`. Entries deliberately outlive session deletion — the
+    /// scorecard's trailing-4-week baseline must survive the retention reaper.
+    public var analyticsSnapshots: [String: SessionAnalyticsSnapshot]?
 
     public init(
         sessions: [Session] = [],
         worktrees: [SessionWorktree] = [],
         links: [SessionLink] = [],
         terminals: [SessionTerminal] = [],
-        hookStates: [String: PersistedHookState]? = nil
+        hookStates: [String: PersistedHookState]? = nil,
+        analyticsSnapshots: [String: SessionAnalyticsSnapshot]? = nil
     ) {
         self.sessions = sessions
         self.worktrees = worktrees
         self.links = links
         self.terminals = terminals
         self.hookStates = hookStates
+        self.analyticsSnapshots = analyticsSnapshots
     }
 }
 

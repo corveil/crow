@@ -254,6 +254,35 @@ import Testing
     #expect(repo.links(for: otherSessionID).count == 1)
 }
 
+// #690 (ADR 0008): the analytics snapshot is the scorecard's durable history
+// and must survive session deletion — the retention reaper deletes
+// completed/archived sessions routinely, and cascading would destroy the
+// trailing-4-week baseline.
+@Test func deleteDoesNotCascadeAnalyticsSnapshot() throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    let store = JSONStore(directory: dir)
+    let repo = SessionRepository(store: store)
+
+    let sessionID = UUID()
+    repo.save(Session(id: sessionID, name: "reaped"))
+    let snapshot = SessionAnalyticsSnapshot(
+        sessionID: sessionID,
+        endedAt: Date(timeIntervalSince1970: 1_752_000_000),
+        status: .completed,
+        analytics: SessionAnalytics(promptCount: 5)
+    )
+    store.mutate { data in
+        data.analyticsSnapshots = [sessionID.uuidString: snapshot]
+    }
+
+    repo.delete(id: sessionID)
+
+    #expect(repo.find(id: sessionID) == nil)
+    #expect(store.data.analyticsSnapshots?[sessionID.uuidString] == snapshot)
+}
+
 @Test func deleteIdempotent() throws {
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: dir) }

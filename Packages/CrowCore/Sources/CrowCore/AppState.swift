@@ -285,6 +285,14 @@ public final class AppState {
         return new
     }
 
+    /// Look up a session's hook state without creating one. Use this for
+    /// read-only paths (e.g. snapshotting analytics at session end) so idle
+    /// sessions don't get empty `SessionHookState` objects instantiated —
+    /// which would also leak idle entries into `allHookStateSnapshots()`.
+    public func existingHookState(for sessionID: UUID) -> SessionHookState? {
+        _sessionState[sessionID]
+    }
+
     /// Remove hook state for a deleted session.
     public func removeHookState(for sessionID: UUID) {
         _sessionState.removeValue(forKey: sessionID)
