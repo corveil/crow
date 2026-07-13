@@ -89,11 +89,22 @@ public struct OTLPMetric: Codable, Sendable {
     public let gauge: OTLPGauge?
 }
 
+/// OTLP aggregation temporality (metrics.proto AggregationTemporality).
+public enum OTLPAggregationTemporality: Int, Sendable {
+    case unspecified = 0
+    case delta = 1
+    case cumulative = 2
+}
+
 /// A sum metric (monotonic counter or non-monotonic up-down counter).
 public struct OTLPSum: Codable, Sendable {
     public let dataPoints: [OTLPNumberDataPoint]?
     public let isMonotonic: Bool?
     public let aggregationTemporality: Int?  // 1 = delta, 2 = cumulative
+
+    public var temporality: OTLPAggregationTemporality {
+        OTLPAggregationTemporality(rawValue: aggregationTemporality ?? 0) ?? .unspecified
+    }
 }
 
 /// A gauge metric (point-in-time value).
