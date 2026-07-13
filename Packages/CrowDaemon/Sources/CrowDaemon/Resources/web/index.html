@@ -40,6 +40,17 @@
       </div>
     </main>
   </div>
+  <!-- Session-expired scrim (#679): on a confirmed 401 (sessionDead) this blocks
+       all interaction with #app until re-login. Sits below #statusbar so the
+       statusbar Log in stays reachable; only shown on sessionDead, never on a
+       transient reconnect. -->
+  <div id="session-scrim" hidden>
+    <div class="scrim-card" role="alertdialog" aria-label="Session expired">
+      <div class="scrim-title">Session expired</div>
+      <div class="scrim-msg">Your web session ended. Log in again to continue.</div>
+      <button id="scrim-login" class="scrim-login" type="button">Log in</button>
+    </div>
+  </div>
   <!-- Fixed connection/status bar, bottom-left (CROW-593): a light for the /rpc
        socket state, plus a logout button on signed-in remote sessions. -->
   <div id="statusbar" class="disconnected">
