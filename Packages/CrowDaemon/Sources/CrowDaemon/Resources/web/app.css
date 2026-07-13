@@ -714,6 +714,43 @@ html, body {
 }
 .artifact-thumb:hover { border-color: var(--blue, #4a86e8); }
 
+/* Session-expired scrim (#679): a dimming overlay that blocks all interaction with
+   #app once the web session is confirmed dead (sessionDead). z-index sits between
+   #app content (max ~50) and #statusbar (60) so the statusbar Log in stays above
+   and clickable; the scrim itself also offers a centered Log in. */
+#session-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.6);
+  /* fixed + inset:0 captures every click/keypress aimed at #app beneath it */
+}
+#session-scrim[hidden] { display: none; }
+.scrim-card {
+  width: min(360px, 92vw);
+  text-align: center;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.6);
+  padding: 22px 24px;
+}
+.scrim-title { color: var(--red); font-weight: 700; font-size: 16px; margin-bottom: 6px; }
+.scrim-msg { color: var(--text-secondary); font-size: 13px; margin-bottom: 16px; }
+.scrim-login {
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 7px 20px;
+  background: var(--gold); color: var(--bg-deep);
+  border: 1px solid var(--gold); border-radius: 8px;
+  font-weight: 600; font-size: 13px; cursor: pointer;
+}
+.scrim-login:hover { filter: brightness(1.08); }
+.scrim-login:active { transform: translateY(1px); }
+
 #lightbox {
   position: fixed;
   inset: 0;

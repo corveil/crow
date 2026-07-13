@@ -806,6 +806,11 @@ function renderStatusBar() {
   bar.classList.toggle('connected', wsConnected && !sessionDead);
   bar.classList.toggle('disconnected', !wsConnected && !sessionDead);
   bar.classList.toggle('session-expired', sessionDead);
+  // Full-app scrim (#679): block interaction with #app once the session is
+  // definitively dead. Keyed on sessionDead only — never on a transient
+  // !wsConnected reconnect ("Connecting…"), which self-heals.
+  const scrim = document.getElementById('session-scrim');
+  if (scrim) scrim.hidden = !sessionDead;
   const label = bar.querySelector('.conn-label');
   if (label) label.textContent = sessionDead ? 'Session expired' : (wsConnected ? 'Connected' : 'Connecting…');
   const actions = document.getElementById('statusbar-actions');
@@ -1360,6 +1365,12 @@ function openLightbox(url, alt) {
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && box && !box.hidden) { box.hidden = true; document.getElementById('lightbox-img').src = ''; }
   });
+})();
+
+// Session-expired scrim Log in (#679): reuses the statusbar login handler (~:820).
+(function wireSessionScrim() {
+  const btn = document.getElementById('scrim-login');
+  if (btn) btn.onclick = () => { location.href = '/login'; };
 })();
 
 function shorten(path) {
