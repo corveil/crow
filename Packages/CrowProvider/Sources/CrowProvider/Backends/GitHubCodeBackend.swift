@@ -106,6 +106,7 @@ public struct GitHubCodeBackend: CodeBackend {
                 pullRequest(number: $num\(i)) {
                   number url state mergeable mergeStateStatus reviewDecision isDraft
                   headRefName headRefOid baseRefName
+                  mergeCommit { oid }
                   repository { nameWithOwner }
                 }
               }
@@ -149,6 +150,44 @@ public struct GitHubCodeBackend: CodeBackend {
             let sha = (node["sha"] as? String) ?? ""
             return CommitInfo(sha: sha, message: message)
         }
+    }
+
+    // MARK: - fetchRecentDefaultBranchCommits
+
+    /// Recent default-branch commits for revert detection (#694). Omitting
+    /// the `sha` param makes the endpoint list the default branch. Single
+    /// page of 100 — reverts are recent by definition, and the caller's
+    /// periodic re-scan plus dedupe make coverage incremental on busy repos.
+    public func fetchRecentDefaultBranchCommits(repoSlug: String, since: Date) async throws -> [CommitInfo] {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        let endpoint = "/repos/\(repoSlug)/commits?since=\(formatter.string(from: since))&per_page=100"
+        let output = try await shellRunner.run(args: ["gh", "api", endpoint], env: [:], cwd: nil)
+        guard let data = output.data(using: .utf8),
+              let nodes = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            return []
+        }
+        return nodes.compactMap { node -> CommitInfo? in
+            guard let commit = node["commit"] as? [String: Any],
+                  let message = commit["message"] as? String else { return nil }
+            let sha = (node["sha"] as? String) ?? ""
+            return CommitInfo(sha: sha, message: message)
+        }
+    }
+
+    // MARK: - fetchPRChangedFiles
+
+    /// File paths changed by a PR, for post-merge-fix overlap (#694).
+    /// Single page of 100 paths — the caller caps what it stores anyway,
+    /// and overlap detection only needs a representative set.
+    public func fetchPRChangedFiles(repoSlug: String, prNumber: Int) async throws -> [String] {
+        let endpoint = "/repos/\(repoSlug)/pulls/\(prNumber)/files?per_page=100"
+        let output = try await shellRunner.run(args: ["gh", "api", endpoint], env: [:], cwd: nil)
+        guard let data = output.data(using: .utf8),
+              let nodes = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            return []
+        }
+        return nodes.compactMap { $0["filename"] as? String }
     }
 
     // MARK: - findRecentPRsForBranches
@@ -422,6 +461,7 @@ public struct GitHubCodeBackend: CodeBackend {
         let headRefName = (node["headRefName"] as? String) ?? ""
         let headRefOid = (node["headRefOid"] as? String) ?? ""
         let baseRefName = (node["baseRefName"] as? String) ?? ""
+        let mergeCommitOid = (node["mergeCommit"] as? [String: Any])?["oid"] as? String
         let repoName = (node["repository"] as? [String: Any])?["nameWithOwner"] as? String ?? ""
         let labels = ((node["labels"] as? [String: Any])?["nodes"] as? [[String: Any]])?
             .compactMap { labelNode -> LabelInfo? in
@@ -508,7 +548,8 @@ public struct GitHubCodeBackend: CodeBackend {
             failedCheckNames: failedCheckNames,
             latestReviewStates: reviewStates,
             lastChangesRequestedAt: lastChangesRequestedAt,
-            lastSubstantiveCommitAt: lastSubstantiveCommitAt
+            lastSubstantiveCommitAt: lastSubstantiveCommitAt,
+            mergeCommitOid: mergeCommitOid
         )
     }
 
