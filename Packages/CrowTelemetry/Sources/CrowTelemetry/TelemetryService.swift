@@ -52,6 +52,14 @@ public final class TelemetryService: Sendable {
         await database.sessionAnalytics(for: crowSessionID)
     }
 
+    /// Get per-turn analytics for a Crow session, one record per
+    /// `claude_code.user_prompt` event. Empty when the session's raw rows
+    /// are gone (aged out of retention, or telemetry off) — fall back to
+    /// the `promptCount` average from `analytics(for:)`.
+    public func turnAnalytics(for crowSessionID: UUID) async -> [TurnAnalytics] {
+        await database.turnAnalytics(for: crowSessionID)
+    }
+
     /// Delete all telemetry data for a session (called when session is deleted).
     public func deleteSessionData(for crowSessionID: UUID) async {
         await database.deleteSessionData(for: crowSessionID)

@@ -46,8 +46,9 @@ public enum EfficiencyGrading {
         public static let activeHoursFloor = 0.25
 
         /// Context pressure (`inputTokens / max(1, promptCount)`): a
-        /// per-session average threshold until per-turn data exists (ADR 0008
-        /// follow-up 7).
+        /// per-session average threshold. Per-turn data now exists
+        /// (`TelemetryDatabase.turnAnalytics`, ADR 0008 follow-up 7);
+        /// grading the within-session trend instead is a follow-up.
         public static let contextPressureLightThreshold = 20_000.0  // above → −5
         public static let contextPressureMediumThreshold = 50_000.0 // above → −10
         public static let contextPressureHeavyThreshold = 100_000.0 // above → −15
@@ -280,6 +281,28 @@ public enum EfficiencyGrading {
         case Tuning.gradeDCutoff...: return .d
         default: return .f
         }
+    }
+
+    // MARK: - Per-turn trend
+
+    /// Least-squares slope of per-turn input tokens (tokens per turn) over a
+    /// session's reconstructed turns (`TelemetryDatabase.turnAnalytics`).
+    /// Returns nil below 3 turns — too little signal to call a trend, and the
+    /// caller's cue to fall back to the `inputTokensPerPrompt` average.
+    ///
+    /// Not consumed by `grade()` yet: the average-based context-pressure
+    /// deduction stays; grading the within-session trend (and picking its
+    /// threshold) is the ADR 0008 follow-up.
+    public static func perTurnInputTrendSlope(_ turns: [TurnAnalytics]) -> Double? {
+        guard turns.count >= 3 else { return nil }
+        let n = Double(turns.count)
+        let ys = turns.map { Double($0.inputTokens) }
+        let xs = (0..<turns.count).map(Double.init)
+        let sumX = xs.reduce(0, +)
+        let sumY = ys.reduce(0, +)
+        let sumXY = zip(xs, ys).reduce(0) { $0 + $1.0 * $1.1 }
+        let sumXX = xs.reduce(0) { $0 + $1 * $1 }
+        return (n * sumXY - sumX * sumY) / (n * sumXX - sumX * sumX)
     }
 
     // MARK: - Per-metric deductions
