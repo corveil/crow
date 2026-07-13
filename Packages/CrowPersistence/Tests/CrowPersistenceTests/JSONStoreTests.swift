@@ -249,3 +249,88 @@ import Testing
     let store = JSONStore(directory: dir)
     #expect(store.data.sessions.isEmpty)
 }
+
+// MARK: - Analytics snapshots (#690, ADR 0008)
+
+// The ticket's headline requirement: a persisted end-of-session snapshot
+// survives a simulated relaunch (new store instance over the same directory).
+@Test func analyticsSnapshotsRoundTripAcrossReload() throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    let sessionID = UUID()
+    // Whole-second date: the store encodes dates as ISO8601 (no sub-second).
+    let snapshot = SessionAnalyticsSnapshot(
+        sessionID: sessionID,
+        endedAt: Date(timeIntervalSince1970: 1_752_000_000),
+        status: .completed,
+        analytics: SessionAnalytics(
+            totalCost: 4.2, inputTokens: 1_000, outputTokens: 2_000,
+            activeTimeSeconds: 900, promptCount: 12
+        )
+    )
+
+    let store = JSONStore(directory: dir)
+    store.mutate { data in
+        data.analyticsSnapshots = [sessionID.uuidString: snapshot]
+    }
+
+    let reloaded = JSONStore(directory: dir)
+    #expect(reloaded.data.analyticsSnapshots?[sessionID.uuidString] == snapshot)
+}
+
+// Optional-field backward compat, same contract as `hookStates`: an older
+// store.json without the key must decode with the field nil, never trip the
+// corrupt-store backup path.
+@Test func storeDataDecodesWithoutAnalyticsSnapshotsField() throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+
+    let legacyJSON = """
+    {
+      "sessions": [],
+      "worktrees": [],
+      "links": [],
+      "terminals": []
+    }
+    """
+    try legacyJSON.data(using: .utf8)!.write(to: dir.appendingPathComponent("store.json"))
+
+    let store = JSONStore(directory: dir)
+    #expect(store.data.analyticsSnapshots == nil)
+    #expect(store.data.sessions.isEmpty)
+}
+
+// `SessionService.persistState()` rewrites the live-state fields wholesale on
+// quit; snapshots are not part of live AppState and must survive that rewrite.
+@Test func liveStateRewriteDoesNotClobberAnalyticsSnapshots() throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    let sessionID = UUID()
+    let snapshot = SessionAnalyticsSnapshot(
+        sessionID: sessionID,
+        endedAt: Date(timeIntervalSince1970: 1_752_000_000),
+        status: .archived,
+        analytics: SessionAnalytics(promptCount: 3)
+    )
+
+    let store = JSONStore(directory: dir)
+    store.mutate { data in
+        data.analyticsSnapshots = [sessionID.uuidString: snapshot]
+    }
+
+    // Mirror persistState: rewrite every live-state field, touch nothing else.
+    store.mutate { data in
+        data.sessions = [Session(name: "fresh")]
+        data.worktrees = []
+        data.links = []
+        data.terminals = []
+        data.hookStates = [:]
+    }
+
+    let reloaded = JSONStore(directory: dir)
+    #expect(reloaded.data.analyticsSnapshots?[sessionID.uuidString] == snapshot)
+    #expect(reloaded.data.sessions.count == 1)
+}

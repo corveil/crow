@@ -16,12 +16,23 @@ final class SessionService {
     /// Backend factory for ticket/PR lookups during recovery. Optional so unit-tests
     /// that don't exercise recovery paths needn't construct one. See ADR 0005.
     private let providerManager: ProviderManager?
+    /// Fresh session aggregate from telemetry.db, used when persisting the
+    /// end-of-session analytics snapshot (#690). Optional so unit tests and
+    /// telemetry-off launches fall back to the in-memory aggregate.
+    private let analyticsProvider: (@Sendable (UUID) async -> SessionAnalytics?)?
 
-    init(store: JSONStore, appState: AppState, telemetryPort: UInt16? = nil, providerManager: ProviderManager? = nil) {
+    init(
+        store: JSONStore,
+        appState: AppState,
+        telemetryPort: UInt16? = nil,
+        providerManager: ProviderManager? = nil,
+        analyticsProvider: (@Sendable (UUID) async -> SessionAnalytics?)? = nil
+    ) {
         self.store = store
         self.appState = appState
         self.telemetryPort = telemetryPort
         self.providerManager = providerManager
+        self.analyticsProvider = analyticsProvider
     }
 
     /// Upgrade the well-known primary Manager session from `.work` (how it was
@@ -2347,6 +2358,45 @@ final class SessionService {
                 data.sessions[idx].updatedAt = Date()
             }
         }
+
+        scheduleAnalyticsSnapshot(for: id, status: status)
+    }
+
+    // MARK: - Analytics Snapshot (#690, ADR 0008)
+
+    /// Fire-and-forget trigger for the end-of-session analytics snapshot.
+    /// Internal (not private) because the `set-status` RPC handler mutates
+    /// status directly, bypassing `updateSessionStatus`, and must trigger the
+    /// snapshot itself.
+    func scheduleAnalyticsSnapshot(for id: UUID, status: SessionStatus) {
+        guard status == .completed || status == .archived else { return }
+        Task { await writeAnalyticsSnapshot(for: id, status: status) }
+    }
+
+    /// Persist a durable `SessionAnalyticsSnapshot` when a session reaches a
+    /// terminal status. Prefers a fresh aggregate from telemetry.db — covering
+    /// the relaunch-then-complete gap where the in-memory aggregate is still
+    /// nil — and falls back to `SessionHookState.analytics`. Skips entirely,
+    /// preserving any existing snapshot, when both are nil or empty (telemetry
+    /// disabled, or a session that never produced data — the SQL aggregate is
+    /// all-zeros for unknown sessions, so `isEmpty` is the real guard).
+    func writeAnalyticsSnapshot(for id: UUID, status: SessionStatus) async {
+        guard status == .completed || status == .archived else { return }
+        guard !appState.isManagerSession(id) else { return }
+
+        let fresh = await analyticsProvider?(id)
+        let analytics = (fresh?.isEmpty == false)
+            ? fresh
+            : appState.existingHookState(for: id)?.analytics
+        guard let analytics, !analytics.isEmpty else { return }
+
+        let snapshot = SessionAnalyticsSnapshot(
+            sessionID: id, endedAt: Date(), status: status, analytics: analytics)
+        store.mutate { data in
+            var snapshots = data.analyticsSnapshots ?? [:]
+            snapshots[id.uuidString] = snapshot
+            data.analyticsSnapshots = snapshots
+        }
     }
 
     /// Lock or unlock a session to exempt it from (or restore it to) the
@@ -2392,6 +2442,25 @@ final class SessionService {
             data.terminals = appState.terminals.values.flatMap { $0 }
             data.hookStates = Dictionary(
                 uniqueKeysWithValues: hookSnapshots.map { ($0.key.uuidString, $0.value) })
+
+            // Analytics-snapshot quit-race backfill (#690): a terminal status
+            // transition spawns the snapshot write asynchronously, so a fast
+            // quit can beat it. Backfill synchronously from the in-memory
+            // aggregate — but never overwrite an existing snapshot, which is
+            // DB-derived and at least as fresh.
+            for session in appState.sessions
+            where (session.status == .completed || session.status == .archived)
+                && !session.isManager {
+                let key = session.id.uuidString
+                guard data.analyticsSnapshots?[key] == nil,
+                      let analytics = appState.existingHookState(for: session.id)?.analytics,
+                      !analytics.isEmpty else { continue }
+                var snapshots = data.analyticsSnapshots ?? [:]
+                snapshots[key] = SessionAnalyticsSnapshot(
+                    sessionID: session.id, endedAt: session.updatedAt,
+                    status: session.status, analytics: analytics)
+                data.analyticsSnapshots = snapshots
+            }
         }
     }
 

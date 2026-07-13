@@ -585,8 +585,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appState.defaultAgentKind = config.defaultAgentKind
         appState.agentsByKind = config.agentsByKind
 
-        // Create session service and hydrate state
-        let service = SessionService(store: store, appState: appState, telemetryPort: config.telemetry.enabled ? config.telemetry.port : nil, providerManager: providerManager)
+        // Create session service and hydrate state. The analytics provider
+        // resolves telemetryService lazily — it is created later in launch —
+        // and returns nil when telemetry is disabled, so the snapshot writer
+        // falls back to the in-memory aggregate (#690).
+        let service = SessionService(
+            store: store,
+            appState: appState,
+            telemetryPort: config.telemetry.enabled ? config.telemetry.port : nil,
+            providerManager: providerManager,
+            analyticsProvider: { [weak self] id in
+                await self?.telemetryService?.analytics(for: id)
+            })
         service.hydrateState()
         self.sessionService = service
         NSLog("[Crow] Session state hydrated (%d sessions)", appState.sessions.count)
@@ -1656,6 +1666,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                             data.sessions[i].updatedAt = Date()
                         }
                     }
+                    // This handler mutates status directly (deliberately not
+                    // routed through updateSessionStatus, which would add a
+                    // manager-session guard the RPC never had), so it must
+                    // trigger the end-of-session analytics snapshot itself.
+                    capturedService.scheduleAnalyticsSnapshot(for: id, status: status)
                     return ["session_id": .string(idStr), "status": .string(statusStr)]
                 }
             },
