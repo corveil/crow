@@ -75,6 +75,9 @@ final class CorveilTaskBackendTests: XCTestCase {
         XCTAssertEqual(Array(args.prefix(3)), ["corveil", "task", "get"])
         XCTAssertTrue(args.contains("42"))
         XCTAssertTrue(args.contains("--json"))
+        // #696: Corveil carries no ticket priority/epic — nil, not an error.
+        XCTAssertNil(info.priority)
+        XCTAssertNil(info.parentKey)
     }
 
     func testFetchTaskFallsBackToHostBuiltURLWhenJSONOmitsURL() async throws {

@@ -49,6 +49,10 @@ final class BackendsTests: XCTestCase {
         XCTAssertFalse(info.isMR)
         XCTAssertEqual(fake.calls.first?.args.first, "gh")
         XCTAssertTrue(fake.calls.first?.args.contains("issue") ?? false)
+        // #696: GitHub carries no ticket priority/epic — the fields default to
+        // nil without any backend change (neutral alignment weight downstream).
+        XCTAssertNil(info.priority)
+        XCTAssertNil(info.parentKey)
     }
 
     func testGitHubTaskBackendRejectsPullRequestURL() async {
@@ -670,6 +674,9 @@ final class BackendsTests: XCTestCase {
         XCTAssertEqual(info.provider, .gitlab)
         XCTAssertEqual(fake.calls.first?.args.first, "glab")
         XCTAssertEqual(fake.calls.first?.env["GITLAB_HOST"], "gitlab.internal.io")
+        // #696: GitLab carries no ticket priority/epic — nil, not an error.
+        XCTAssertNil(info.priority)
+        XCTAssertNil(info.parentKey)
     }
 
     func testGitLabTaskBackendListAssignedIssuesParses() async throws {

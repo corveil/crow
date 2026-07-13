@@ -370,4 +370,90 @@ struct SessionServiceAnalyticsSnapshotTests {
         #expect(reloaded.data.analyticsSnapshots?[id.uuidString]?
             .wallClockDurationSeconds == 3_600)
     }
+
+    // MARK: - Alignment weight + org goal (#696, ADR 0008 follow-up 8)
+
+    // A tagged, high-priority session snapshots its alignment weight (the
+    // future v2 multiplicand) and goal at session end.
+    @Test
+    func snapshotCarriesAlignmentWeightAndOrgGoal() async {
+        let store = Self.tempStore()
+        let appState = AppState()
+        let id = UUID()
+        appState.sessions = [Session(
+            id: id, name: "aligned",
+            orgGoal: "Q3 latency KPI", ticketPriority: .high)]
+        let service = SessionService(
+            store: store, appState: appState,
+            analyticsProvider: { _ in Self.sampleAnalytics })
+
+        await service.writeAnalyticsSnapshot(for: id, status: .completed)
+
+        let snapshot = store.data.analyticsSnapshots?[id.uuidString]
+        #expect(snapshot?.alignmentWeight
+            == AlignmentWeight.weight(priority: .high, hasOrgGoal: true))
+        #expect(snapshot?.orgGoal == "Q3 latency KPI")
+    }
+
+    // An untagged session snapshots the exact neutral weight — the
+    // "done ≠ value" fix cannot regress anyone who never tags.
+    @Test
+    func untaggedSessionSnapshotsNeutralWeight() async {
+        let store = Self.tempStore()
+        let appState = AppState()
+        let id = UUID()
+        appState.sessions = [Session(id: id, name: "untagged")]
+        let service = SessionService(
+            store: store, appState: appState,
+            analyticsProvider: { _ in Self.sampleAnalytics })
+
+        await service.writeAnalyticsSnapshot(for: id, status: .completed)
+
+        let snapshot = store.data.analyticsSnapshots?[id.uuidString]
+        #expect(snapshot?.alignmentWeight == AlignmentWeight.neutral)
+        #expect(snapshot?.orgGoal == nil)
+    }
+
+    // The quit-race backfill path carries the alignment fields too.
+    @Test
+    func persistStateBackfillCarriesAlignmentFields() async {
+        let store = Self.tempStore()
+        let appState = AppState()
+        var ended = Session(
+            id: UUID(), name: "aligned-then-quit",
+            orgGoal: "Q3 latency KPI", ticketPriority: .highest)
+        ended.status = .completed
+        appState.sessions = [ended]
+        appState.hookState(for: ended.id).analytics = Self.sampleAnalytics
+
+        let service = SessionService(store: store, appState: appState)
+        service.persistState()
+
+        let snapshot = store.data.analyticsSnapshots?[ended.id.uuidString]
+        #expect(snapshot?.alignmentWeight
+            == AlignmentWeight.weight(priority: .highest, hasOrgGoal: true))
+        #expect(snapshot?.orgGoal == "Q3 latency KPI")
+    }
+
+    // setOrgGoal mutates both live state and the store; clearing goes back to
+    // nil (not empty string) so the weight returns to neutral.
+    @Test
+    func setOrgGoalPersistsAndClears() async {
+        let store = Self.tempStore()
+        let appState = AppState()
+        let id = UUID()
+        let session = Session(id: id, name: "taggable")
+        appState.sessions = [session]
+        store.mutate { $0.sessions = [session] }
+        let service = SessionService(store: store, appState: appState)
+
+        service.setOrgGoal(id: id, goal: "Q3 latency KPI")
+        #expect(appState.sessions[0].orgGoal == "Q3 latency KPI")
+        #expect(store.data.sessions.first(where: { $0.id == id })?.orgGoal == "Q3 latency KPI")
+
+        service.setOrgGoal(id: id, goal: nil)
+        #expect(appState.sessions[0].orgGoal == nil)
+        #expect(store.data.sessions.first(where: { $0.id == id })?.orgGoal == nil)
+        #expect(appState.sessions[0].alignmentWeight == AlignmentWeight.neutral)
+    }
 }

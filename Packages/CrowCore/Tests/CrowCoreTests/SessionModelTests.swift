@@ -170,6 +170,46 @@ import Testing
     #expect(decoded.locked == true)
 }
 
+@Test func sessionBackwardCompatDecodingWithoutAlignmentFields() throws {
+    // Persisted state.json predating #696 has neither `orgGoal` nor
+    // `ticketPriority`. Decode must succeed with nils, and the derived
+    // alignment weight must be exactly neutral — the no-regression guarantee.
+    let id = UUID()
+    let date = Date()
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime]
+    let dateStr = formatter.string(from: date)
+    let json: [String: Any] = [
+        "id": id.uuidString,
+        "name": "legacy",
+        "status": "active",
+        "kind": "work",
+        "createdAt": dateStr,
+        "updatedAt": dateStr,
+    ]
+    let data = try JSONSerialization.data(withJSONObject: json)
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+    let session = try decoder.decode(Session.self, from: data)
+    #expect(session.orgGoal == nil)
+    #expect(session.ticketPriority == nil)
+    #expect(session.alignmentWeight == AlignmentWeight.neutral)
+}
+
+@Test func sessionRoundTripsOrgGoalAndTicketPriority() throws {
+    let session = Session(
+        name: "aligned",
+        orgGoal: "Q3 latency KPI",
+        ticketPriority: .high
+    )
+    let data = try JSONEncoder().encode(session)
+    let decoded = try JSONDecoder().decode(Session.self, from: data)
+    #expect(decoded.orgGoal == "Q3 latency KPI")
+    #expect(decoded.ticketPriority == .high)
+    #expect(decoded.alignmentWeight
+        == AlignmentWeight.weight(priority: .high, hasOrgGoal: true))
+}
+
 @Test func sessionManagerKindRoundTrip() throws {
     let session = Session(name: "Manager 2", kind: .manager)
     #expect(session.isManager)

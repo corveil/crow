@@ -91,7 +91,7 @@ public struct JiraTaskBackend: TaskBackend {
         }
         let output = try await run([
             "acli", "jira", "workitem", "view", parsed.key,
-            "--json", "--fields", "summary,status,description,comment,assignee",
+            "--json", "--fields", "summary,status,description,comment,assignee,priority,parent",
         ])
         let fields = Self.firstFields(output)
         let title = (fields?["summary"] as? String) ?? "Ticket \(parsed.key)"
@@ -102,7 +102,9 @@ public struct JiraTaskBackend: TaskBackend {
             org: parsed.project,
             url: browseURL(for: parsed.key) ?? url,
             provider: .jira,
-            isMR: false
+            isMR: false,
+            priority: Self.priorityName(fields).map { TicketPriority(jiraName: $0) },
+            parentKey: Self.parentInfo(fields).key
         )
     }
 
@@ -297,7 +299,7 @@ public struct JiraTaskBackend: TaskBackend {
             "acli", "jira", "workitem", "search",
             "--jql", jql,
             "--json",
-            "--fields", "key,summary,status,assignee,labels",
+            "--fields", "key,summary,status,assignee,labels,priority,parent",
             "--limit", "\(limit)",
         ])
     }
@@ -370,6 +372,23 @@ public struct JiraTaskBackend: TaskBackend {
         return nil
     }
 
+    /// Priority name from a work item's `fields` dict (`fields.priority.name`).
+    /// Nil-safe: absent for GitHub-style payloads, pre-#696 fixtures, and Jira
+    /// projects without a priority field.
+    static func priorityName(_ fields: [String: Any]?) -> String? {
+        (fields?["priority"] as? [String: Any])?["name"] as? String
+    }
+
+    /// Epic/parent link from a work item's `fields` dict (#696). On Jira Cloud
+    /// `parent` is the unified field for both team- and company-managed
+    /// projects (classic "Epic Link" customfields were migrated into it);
+    /// Server/DC classic epic links don't surface here and degrade to nil.
+    static func parentInfo(_ fields: [String: Any]?) -> (key: String?, summary: String?) {
+        guard let parent = fields?["parent"] as? [String: Any] else { return (nil, nil) }
+        let summary = (parent["fields"] as? [String: Any])?["summary"] as? String
+        return (parent["key"] as? String, summary)
+    }
+
     /// Leniently pull the first integer out of `acli … --count` output, whose
     /// exact shape isn't contract ("96", "96 work items", `{"count":96}` all parse).
     static func firstInt(_ output: String) -> Int? {
@@ -428,6 +447,8 @@ public struct JiraTaskBackend: TaskBackend {
             // Jira labels are plain strings (no color); surface them so
             // label-driven flows (e.g. auto-create) work for Jira too.
             let labels = (fields?["labels"] as? [String] ?? []).map { LabelInfo(name: $0) }
+            let priorityName = Self.priorityName(fields)
+            let parent = Self.parentInfo(fields)
             let url = site.flatMap { s -> String? in
                 let host = s.hasPrefix("http") ? s : "https://\(s)"
                 return "\(host)/browse/\(parsed.key)"
@@ -441,6 +462,10 @@ public struct JiraTaskBackend: TaskBackend {
                 repo: parsed.project,
                 labels: labels,
                 provider: .jira,
+                priority: priorityName.map { TicketPriority(jiraName: $0) },
+                priorityName: priorityName,
+                parentKey: parent.key,
+                parentSummary: parent.summary,
                 projectStatus: status
             )
         }

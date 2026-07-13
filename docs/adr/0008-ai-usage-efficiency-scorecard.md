@@ -114,6 +114,15 @@ Deferred guardrails (explicit non-goals until their data exists): trivial-PR far
 
 No prototype ships with this ADR: the smallest useful one requires persisting the compaction counter (a write-path model change, follow-up 3), which exceeds the read-only bar for a design PR.
 
+### Follow-up 8 addendum (implemented in #696)
+
+The alignment capture shipped with these decisions:
+
+- **Org-goal tag is user-set for v1**: a free-text `Session.orgGoal` set/cleared via `crow set-goal`. Epic-based goal inference is deliberately deferred — but `JiraTaskBackend` now fetches the epic/parent link (`parentKey`/`parentSummary` on `AssignedIssue`, `parentKey` on `TicketInfo`) so the data exists when inference lands.
+- **Priority** rides `AssignedIssue`/`TicketInfo` from the Jira read (both the REST and `acli` paths), normalized to `TicketPriority` (modern Highest…Lowest and classic Blocker…Trivial ladders; unrecognized custom schemes → `.unknown` with the raw name preserved). It reaches the session via `crow set-ticket --priority`; automatic Jira-side priority sync (via IssueTracker's existing ticketURL↔session matching) is a noted follow-up. Jira Cloud's unified `parent` field covers team- and company-managed projects; Server/DC classic epic-link customfields aren't fetched and degrade to nil.
+- **Weight priors** live in `AlignmentWeight` (CrowCore) as named constants — a bonus-above-neutral scheme: untagged/unknown = exactly 1.0 (no pre-existing session regresses), each explicit priority rung > 1.0, an org-goal tag multiplies (×1.5). This yields the rubric ordering high-priority-on-goal > low-priority-off-goal > untagged-neutral: demonstrated alignment is rewarded, absence of data is never punished. Tunable priors, per the grade-bands principle above.
+- **Read-only exposure**: `Session.alignmentWeight` (computed) and `SessionAnalyticsSnapshot.alignmentWeight`/`orgGoal` (persisted at session end, nil = neutral in pre-#696 snapshots). Nothing multiplies it into a live score — that remains follow-up 11.
+
 ## Consequences
 
 - **Goodhart risk is inherent.** Any graded metric will be optimized; the compaction penalty may discourage legitimately long, hard sessions. The tunable-priors + calibration-period framing is the mitigation, and it is binding, not decorative.

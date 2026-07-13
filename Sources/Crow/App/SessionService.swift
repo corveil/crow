@@ -2419,11 +2419,13 @@ final class SessionService {
         // Compaction count only exists on the in-memory hook state — telemetry.db
         // has no compaction rows — so read it there even when `analytics` came
         // from the DB provider (#691).
+        let session = appState.sessions.first(where: { $0.id == id })
         let snapshot = SessionAnalyticsSnapshot(
             sessionID: id, endedAt: Date(), status: status, analytics: analytics,
             compactionCount: appState.existingHookState(for: id)?.compactionCount ?? 0,
-            wallClockDurationSeconds: appState.sessions
-                .first(where: { $0.id == id })?.wallClockDuration)
+            wallClockDurationSeconds: session?.wallClockDuration,
+            alignmentWeight: session?.alignmentWeight,
+            orgGoal: session?.orgGoal)
         store.mutate { data in
             var snapshots = data.analyticsSnapshots ?? [:]
             snapshots[id.uuidString] = snapshot
@@ -2443,6 +2445,23 @@ final class SessionService {
         store.mutate { data in
             if let idx = data.sessions.firstIndex(where: { $0.id == id }) {
                 data.sessions[idx].locked = locked
+            }
+        }
+    }
+
+    /// Set or clear the session's org-goal tag (#696, ADR 0008 follow-up 8).
+    /// `nil` clears the tag back to untagged/neutral. The tag feeds
+    /// `Session.alignmentWeight`, which is copied onto the analytics snapshot
+    /// when the session reaches a terminal status.
+    func setOrgGoal(id: UUID, goal: String?) {
+        if let idx = appState.sessions.firstIndex(where: { $0.id == id }) {
+            appState.sessions[idx].orgGoal = goal
+            appState.sessions[idx].updatedAt = Date()
+        }
+        store.mutate { data in
+            if let idx = data.sessions.firstIndex(where: { $0.id == id }) {
+                data.sessions[idx].orgGoal = goal
+                data.sessions[idx].updatedAt = Date()
             }
         }
     }
@@ -2493,7 +2512,9 @@ final class SessionService {
                     status: session.status, analytics: analytics,
                     compactionCount: appState.existingHookState(for: session.id)?
                         .compactionCount ?? 0,
-                    wallClockDurationSeconds: session.wallClockDuration)
+                    wallClockDurationSeconds: session.wallClockDuration,
+                    alignmentWeight: session.alignmentWeight,
+                    orgGoal: session.orgGoal)
                 data.analyticsSnapshots = snapshots
             }
         }

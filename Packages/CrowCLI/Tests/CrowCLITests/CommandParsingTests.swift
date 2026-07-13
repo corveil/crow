@@ -75,6 +75,58 @@ private let validUUID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
     #expect(cmd.type == "custom")
 }
 
+// MARK: - set-ticket --priority + set-goal (#696)
+
+@Test func setTicketParsesPriority() throws {
+    let cmd = try SetTicket.parse(["--session", validUUID, "--priority", "high"])
+    #expect(cmd.session == validUUID)
+    try cmd.validate() // --priority alone satisfies the has-field rule
+}
+
+@Test func setTicketAcceptsCaseInsensitivePriority() throws {
+    let cmd = try SetTicket.parse(["--session", validUUID, "--priority", "Highest"])
+    try cmd.validate()
+}
+
+@Test func setTicketRejectsBogusPriority() {
+    #expect(throws: (any Error).self) {
+        let cmd = try SetTicket.parse(["--session", validUUID, "--priority", "urgent"])
+        try cmd.validate()
+    }
+}
+
+@Test func setGoalParsesGoal() throws {
+    let cmd = try SetGoal.parse(["--session", validUUID, "--goal", "Q3 latency KPI"])
+    #expect(cmd.session == validUUID)
+    try cmd.validate()
+}
+
+@Test func setGoalParsesClear() throws {
+    let cmd = try SetGoal.parse(["--session", validUUID, "--clear"])
+    try cmd.validate()
+}
+
+@Test func setGoalRejectsGoalWithClear() {
+    #expect(throws: (any Error).self) {
+        let cmd = try SetGoal.parse(["--session", validUUID, "--goal", "x", "--clear"])
+        try cmd.validate()
+    }
+}
+
+@Test func setGoalRejectsNoArgs() {
+    #expect(throws: (any Error).self) {
+        let cmd = try SetGoal.parse(["--session", validUUID])
+        try cmd.validate()
+    }
+}
+
+@Test func setGoalRejectsInvalidUUID() {
+    #expect(throws: (any Error).self) {
+        let cmd = try SetGoal.parse(["--session", "not-a-uuid", "--goal", "x"])
+        try cmd.validate()
+    }
+}
+
 // MARK: - transition-ticket (#529)
 
 @Test func transitionTicketParsesValidArgs() throws {
