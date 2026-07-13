@@ -6,11 +6,11 @@
 
 ## Context
 
-Most AI-usage leaderboards rank by raw spend or token count. That is a perverse incentive: it rewards volume, not value. A context-bloated session that compacted five times and shipped nothing "wins" a spend leaderboard; a tight session that closed a P0 in twenty minutes doesn't register. [#648](https://github.com/radiusmethod/crow/issues/648) asks for a rubric that rates AI usage on **efficiency**, **outcomes**, and **alignment** instead, so Crow can surface a healthier signal.
+Most AI-usage leaderboards rank by raw spend or token count. That is a perverse incentive: it rewards volume, not value. A context-bloated session that compacted five times and shipped nothing "wins" a spend leaderboard; a tight session that closed a P0 in twenty minutes doesn't register. [#648](https://github.com/corveil/crow/issues/648) asks for a rubric that rates AI usage on **efficiency**, **outcomes**, and **alignment** instead, so Crow can surface a healthier signal.
 
 Three metric categories frame the design:
 
-- **A. Efficiency / hygiene** (penalties/normalizers): compaction count, context accumulation (avg input per turn), cache hit ratio, cost-per-outcome, rework.
+- **A. Efficiency / hygiene** (penalties/normalizers): compaction count, context accumulation (avg input per turn), cache hit ratio, cost per shipped session, rework.
 - **B. Outcomes / throughput** (rewards): sessions shipped (v1's headline), then tickets done, PRs merged, merge rate as attribution data lands.
 - **C. Alignment** (weights/flags): does the work ladder up to an org KPI/goal; priority weighting.
 
@@ -87,9 +87,9 @@ The calibration period is binding: if real data says a threshold punishes legiti
 
 ### Anti-gaming guardrails (design-level)
 
-- The headline is **weekly**, and compaction/context penalties are normalized **per active hour** — never per session (splitting one long session into three short ones doesn't reset the denominator) and never per outcome (the ADR's own zero-outcome argument applies to penalties too). Outcomes enter the grade only through the weekly cost-per-outcome metric.
+- The headline is **weekly**, and compaction/context penalties are normalized **per active hour** — never per session (splitting one long session into three short ones doesn't reset the denominator) and never per outcome (the ADR's own zero-outcome argument applies to penalties too). Outcomes enter the grade only through the weekly cost-per-shipped-session metric.
 - The **minimum-sample floor** (< ~5 prompts → ungraded) prevents farming A-grades with trivial sessions.
-- **Cost-per-outcome is computed only at weekly grain**, so outcome-free sessions neither score nor dodge.
+- **Cost per shipped session is computed only at weekly grain**, so outcome-free sessions neither score nor dodge.
 - **No combined number exists in v1** — there is nothing to farm.
 
 Deferred guardrails (explicit non-goals until their data exists): trivial-PR farming detection (needs PR size + rework data), revert/merged-vs-closed-rate signals, alignment-tag misuse.
@@ -134,7 +134,7 @@ No prototype ships with this ADR: the smallest useful one requires persisting th
 
 ## References
 
-- Ticket: [#648](https://github.com/radiusmethod/crow/issues/648)
+- Ticket: [#648](https://github.com/corveil/crow/issues/648)
 - PR: [#657](https://github.com/corveil/crow/pull/657)
 - Related ADRs: [0005](./0005-task-and-code-backend-protocols.md) (backend protocols the throughput/alignment follow-ups build on)
 - Code (verified for the feasibility table):
