@@ -20,6 +20,8 @@ public struct MainContentView: View {
                 AllowListView(appState: appState)
             } else if appState.selectedSessionID == AppState.reviewBoardSessionID {
                 ReviewBoardView(appState: appState)
+            } else if appState.selectedSessionID == AppState.scorecardSessionID {
+                ScorecardView(appState: appState)
             } else if let session = appState.selectedSession {
                 SessionDetailView(session: session, appState: appState)
             } else {

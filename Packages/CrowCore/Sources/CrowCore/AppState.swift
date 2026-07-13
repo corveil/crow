@@ -120,6 +120,9 @@ public final class AppState {
     /// purged on load (multiple Manager sessions replaced standalone terminals).
     nonisolated public static let globalTerminalSessionID = UUID(uuidString: "00000000-0000-0000-0000-000000000004")!
 
+    /// Fixed UUID for the efficiency scorecard tab (ADR 0008 v1, #710).
+    nonisolated public static let scorecardSessionID = UUID(uuidString: "00000000-0000-0000-0000-000000000005")!
+
     /// The primary (back-compat) Manager session identified by the well-known UUID.
     public var managerSession: Session? {
         sessions.first { $0.id == Self.managerSessionID }
@@ -157,6 +160,15 @@ public final class AppState {
 
     /// Sort order for the ticket board.
     public var ticketSortOrder: TicketSortOrder = .updatedDesc
+
+    // MARK: - Scorecard (ADR 0008)
+
+    /// Read-only mirror of the store's persisted per-session analytics
+    /// snapshots, keyed by session UUID string — hydrated by SessionService on
+    /// load and kept in sync as snapshots are written. The efficiency
+    /// scorecard (#710) computes entirely from this; CrowUI cannot read the
+    /// store directly.
+    public var analyticsSnapshots: [String: SessionAnalyticsSnapshot] = [:]
 
     // MARK: - Allowlist
 
@@ -433,7 +445,8 @@ public final class AppState {
     public var selectedSession: Session? {
         guard selectedSessionID != Self.ticketBoardSessionID,
               selectedSessionID != Self.allowListSessionID,
-              selectedSessionID != Self.reviewBoardSessionID else { return nil }
+              selectedSessionID != Self.reviewBoardSessionID,
+              selectedSessionID != Self.scorecardSessionID else { return nil }
         return sessions.first { $0.id == selectedSessionID }
     }
 
