@@ -750,7 +750,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         // Start issue tracker
-        let tracker = IssueTracker(appState: appState, providerManager: providerManager)
+        let tracker = IssueTracker(appState: appState, providerManager: providerManager, store: store)
         tracker.onNewReviewRequests = { [weak self] newRequests in
             for request in newRequests {
                 self?.notificationManager?.notifyReviewRequest(request)

@@ -24,6 +24,11 @@ public struct StoreData: Codable, Sendable {
     /// as `hookStates`. Entries deliberately outlive session deletion — the
     /// scorecard's trailing-4-week baseline must survive the retention reaper.
     public var analyticsSnapshots: [String: SessionAnalyticsSnapshot]?
+    /// Durable PR→session attribution per PR, keyed by PR URL (#693,
+    /// ADR 0008 follow-up 5). Optional for the same backward-compat reason
+    /// as `hookStates`. Entries deliberately outlive session deletion —
+    /// merged-PR-per-window counts must survive the retention reaper.
+    public var prAttributions: [String: PRSessionAttribution]?
 
     public init(
         sessions: [Session] = [],
@@ -31,7 +36,8 @@ public struct StoreData: Codable, Sendable {
         links: [SessionLink] = [],
         terminals: [SessionTerminal] = [],
         hookStates: [String: PersistedHookState]? = nil,
-        analyticsSnapshots: [String: SessionAnalyticsSnapshot]? = nil
+        analyticsSnapshots: [String: SessionAnalyticsSnapshot]? = nil,
+        prAttributions: [String: PRSessionAttribution]? = nil
     ) {
         self.sessions = sessions
         self.worktrees = worktrees
@@ -39,6 +45,7 @@ public struct StoreData: Codable, Sendable {
         self.terminals = terminals
         self.hookStates = hookStates
         self.analyticsSnapshots = analyticsSnapshots
+        self.prAttributions = prAttributions
     }
 }
 

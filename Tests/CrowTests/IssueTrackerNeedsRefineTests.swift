@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import CrowCore
+import CrowPersistence
 import CrowProvider
 @testable import Crow
 
@@ -20,6 +21,12 @@ import CrowProvider
 @Suite("IssueTracker stateless needsRefine (CROW-508)")
 @MainActor
 struct IssueTrackerNeedsRefineTests {
+    private static func tempStore() -> JSONStore {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("crow-needs-refine-\(UUID().uuidString)")
+        return JSONStore(directory: dir)
+    }
+
     private let prURL = "https://github.com/foo/bar/pull/123"
     private let shaA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     private let reviewAt = Date(timeIntervalSince1970: 1_700_000_000)
@@ -52,7 +59,7 @@ struct IssueTrackerNeedsRefineTests {
         state.terminalReadiness[terminal.id] = readiness
         state.hookState(for: session.id).activityState = activityState
 
-        let tracker = IssueTracker(appState: state, providerManager: ProviderManager())
+        let tracker = IssueTracker(appState: state, providerManager: ProviderManager(), store: Self.tempStore())
         tracker.respondToChangesRequestedProvider = { respondToChangesRequested }
 
         let captured = TransitionCapture()
@@ -317,7 +324,7 @@ struct IssueTrackerNeedsRefineTests {
         state.terminalReadiness[termA.id] = .agentLaunched
         state.terminalReadiness[termB.id] = .agentLaunched
 
-        let tracker = IssueTracker(appState: state, providerManager: ProviderManager())
+        let tracker = IssueTracker(appState: state, providerManager: ProviderManager(), store: Self.tempStore())
         tracker.respondToChangesRequestedProvider = { true }
         let captured = TransitionCapture()
         tracker.onPRStatusTransitions = { captured.append($0) }
