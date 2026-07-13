@@ -183,6 +183,47 @@ struct SessionServiceAnalyticsSnapshotTests {
         #expect(snapshot?.status == .completed)
     }
 
+    // #691: two completed compactions persist as 2 on the snapshot and read
+    // back after a simulated relaunch. Routed through noteCompactionEvent —
+    // the hook-handler seam — so PreCompact is exercised as a non-increment.
+    @Test
+    func compactionCountPersistsAndSurvivesSimulatedRelaunch() async {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("crow-compaction-relaunch-\(UUID().uuidString)")
+        let appState = AppState()
+        let id = UUID()
+        appState.sessions = [Session(id: id, name: "compacted-twice")]
+        let hookState = appState.hookState(for: id)
+        hookState.noteCompactionEvent("PreCompact")
+        hookState.noteCompactionEvent("PostCompact")
+        hookState.noteCompactionEvent("PreCompact")
+        hookState.noteCompactionEvent("PostCompact")
+        let service = SessionService(
+            store: JSONStore(directory: dir), appState: appState,
+            analyticsProvider: { _ in Self.sampleAnalytics })
+
+        await service.writeAnalyticsSnapshot(for: id, status: .completed)
+
+        let reloaded = JSONStore(directory: dir)
+        #expect(reloaded.data.analyticsSnapshots?[id.uuidString]?.compactionCount == 2)
+    }
+
+    // #691: a session that never compacted persists an explicit 0.
+    @Test
+    func zeroCompactionsPersistsZero() async {
+        let store = Self.tempStore()
+        let appState = AppState()
+        let id = UUID()
+        appState.sessions = [Session(id: id, name: "never-compacted")]
+        let service = SessionService(
+            store: store, appState: appState,
+            analyticsProvider: { _ in Self.sampleAnalytics })
+
+        await service.writeAnalyticsSnapshot(for: id, status: .completed)
+
+        #expect(store.data.analyticsSnapshots?[id.uuidString]?.compactionCount == 0)
+    }
+
     // Quit-race backfill: a terminal transition's async snapshot write can be
     // beaten by a fast quit; persistState backfills from the in-memory
     // aggregate — but never overwrites an existing snapshot.
@@ -203,6 +244,7 @@ struct SessionServiceAnalyticsSnapshotTests {
 
         appState.sessions = [ended, alreadySnapshotted, stillActive]
         appState.hookState(for: ended.id).analytics = Self.sampleAnalytics
+        appState.hookState(for: ended.id).noteCompactionEvent("PostCompact")
         appState.hookState(for: alreadySnapshotted.id).analytics = Self.sampleAnalytics
         appState.hookState(for: stillActive.id).analytics = Self.sampleAnalytics
 
@@ -216,9 +258,11 @@ struct SessionServiceAnalyticsSnapshotTests {
         service.persistState()
 
         let snapshots = store.data.analyticsSnapshots
-        // Backfilled for the ended session, stamped with its transition time.
+        // Backfilled for the ended session, stamped with its transition time,
+        // carrying the compaction count (#691).
         #expect(snapshots?[ended.id.uuidString]?.analytics == Self.sampleAnalytics)
         #expect(snapshots?[ended.id.uuidString]?.endedAt == ended.updatedAt)
+        #expect(snapshots?[ended.id.uuidString]?.compactionCount == 1)
         // Existing snapshot untouched (DB-derived, at least as fresh).
         #expect(snapshots?[alreadySnapshotted.id.uuidString] == existing)
         // Non-terminal sessions never snapshot.
