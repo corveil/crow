@@ -365,6 +365,21 @@ html, body {
 }
 #terminal-wrap.loading #terminal-skeleton { opacity: 1; transition: none; } /* instant show, smooth fade only on hide */
 .term-skel-bar { height: 12px; max-width: 78%; }
+/* #687: sustained-disconnect state. The overlay is a single steady surface (no
+   strobe); the `.reconnecting` class calms the shimmer bars and reveals a
+   centered "Reconnecting…" caption so it reads as one quiet state. */
+#terminal-reconnect-note {
+  position: absolute;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 13px;
+  letter-spacing: 0.02em;
+}
+#terminal-wrap.reconnecting #terminal-skeleton .skel { opacity: 0.35; }
+#terminal-wrap.reconnecting #terminal-reconnect-note { display: flex; }
 #detail-empty {
   position: absolute;
   inset: 0;

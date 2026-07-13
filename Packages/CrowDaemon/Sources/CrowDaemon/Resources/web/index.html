@@ -32,6 +32,10 @@
           <div class="skel term-skel-bar" style="--skel-delay: .48s; width: 52%"></div>
           <div class="skel term-skel-bar" style="--skel-delay: .56s; width: 39%"></div>
           <div class="skel term-skel-bar" style="--skel-delay: .64s; width: 61%"></div>
+          <!-- #687: steady caption shown (via #terminal-wrap.reconnecting) during
+               a sustained disconnect, so the overlay reads as one calm
+               "Reconnecting…" state instead of a strobing attach shimmer. -->
+          <div id="terminal-reconnect-note" aria-hidden="true">Reconnecting…</div>
       </div></div>
       <div id="board"></div>
       <div id="detail-empty">
