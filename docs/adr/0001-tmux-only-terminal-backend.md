@@ -43,7 +43,7 @@ A single-instance lock at `$TMPDIR/crow-instance.lock` prevents two Crow process
 
 ## References
 
-- PRs: [#229](https://github.com/radiusmethod/crow/pull/229) (feature flag), [#302](https://github.com/radiusmethod/crow/pull/302) (default backend), [#334](https://github.com/radiusmethod/crow/pull/334) (remove legacy Ghostty path), [#324](https://github.com/radiusmethod/crow/pull/324) (Manager on tmux), [#353](https://github.com/radiusmethod/crow/pull/353) (persist across restarts), [#377](https://github.com/radiusmethod/crow/pull/377) (restart-server menu)
+- PRs: [#229](https://github.com/corveil/crow/pull/229) (feature flag), [#302](https://github.com/corveil/crow/pull/302) (default backend), [#334](https://github.com/corveil/crow/pull/334) (remove legacy Ghostty path), [#324](https://github.com/corveil/crow/pull/324) (Manager on tmux), [#353](https://github.com/corveil/crow/pull/353) (persist across restarts), [#377](https://github.com/corveil/crow/pull/377) (restart-server menu)
 - Research: [`docs/terminal-runtime-research.md`](../terminal-runtime-research.md)
 - Code:
   - `Packages/CrowTerminal/Sources/CrowTerminal/TmuxBackend.swift`

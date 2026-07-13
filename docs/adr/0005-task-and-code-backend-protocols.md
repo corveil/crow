@@ -6,7 +6,7 @@
 
 ## Context
 
-Crow integrates with two ticket/PR providers today (`gh` for GitHub, `glab` for GitLab) by shelling out from many call sites scattered across `IssueTracker.swift`, `SessionService.swift`, and `ProviderManager.swift`. An audit in [#410](https://github.com/radiusmethod/crow/issues/410) found three coexisting patterns:
+Crow integrates with two ticket/PR providers today (`gh` for GitHub, `glab` for GitLab) by shelling out from many call sites scattered across `IssueTracker.swift`, `SessionService.swift`, and `ProviderManager.swift`. An audit in [#410](https://github.com/corveil/crow/issues/410) found three coexisting patterns:
 
 1. **Switch-at-callsite**: `switch provider { gh / glab }` inline (e.g. `IssueTracker.swift:493`).
 2. **Parallel implementations**: one fat GitHub function and one fat GitLab function sitting in the same file — conceptually one operation, two halves (e.g. assigned-issue fetch at `IssueTracker.swift:703` and `:2509`).
@@ -127,7 +127,7 @@ After #454, `rg '"gh"|"glab"|gh api|glab api' Sources/Crow/App/IssueTracker.swif
 
 ## References
 
-- Tickets: [#410](https://github.com/radiusmethod/crow/issues/410) (foundation, closed via #411), [#454](https://github.com/radiusmethod/crow/issues/454) (migration), [#495](https://github.com/radiusmethod/crow/issues/495) (real Corveil backend)
+- Tickets: [#410](https://github.com/corveil/crow/issues/410) (foundation, closed via #411), [#454](https://github.com/corveil/crow/issues/454) (migration), [#495](https://github.com/corveil/crow/issues/495) (real Corveil backend)
 - PRs: #411 (foundation), the PR closing #454 (migration)
 - Code:
   - `Packages/CrowProvider/Sources/CrowProvider/TaskBackend.swift`

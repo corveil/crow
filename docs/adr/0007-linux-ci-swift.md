@@ -6,9 +6,9 @@
 
 ## Context
 
-PR CI (`ci.yml`) and the per-`main`-push cache warm (`cache-warm.yml`) ran on `macos-15` with Xcode 16, purely to get a Swift toolchain. macOS GitHub Actions minutes are billed at ~10× Linux, so every PR and every push to `main` paid the macOS premium for Swift work that is mostly Foundation-only. Crow is [web-app-first over a headless daemon](https://github.com/radiusmethod/crow/issues/581), and #118 already began shifting macOS-only cost toward the release pipeline; issue [#647](https://github.com/radiusmethod/crow/issues/647) finishes the job for day-to-day CI.
+PR CI (`ci.yml`) and the per-`main`-push cache warm (`cache-warm.yml`) ran on `macos-15` with Xcode 16, purely to get a Swift toolchain. macOS GitHub Actions minutes are billed at ~10× Linux, so every PR and every push to `main` paid the macOS premium for Swift work that is mostly Foundation-only. Crow is [web-app-first over a headless daemon](https://github.com/corveil/crow/issues/581), and #118 already began shifting macOS-only cost toward the release pipeline; issue [#647](https://github.com/corveil/crow/issues/647) finishes the job for day-to-day CI.
 
-Constraint on the current tree: the daemon Linux build ([#645](https://github.com/radiusmethod/crow/issues/645)) is **not merged**, so there is no `crowd` product here. The root `Package.swift` is `platforms: [.macOS(.v14)]` and its only executables are the AppKit GUI (`Crow`/`CrowApp`) and the `crow` CLI. A root `swift build` therefore compiles the GUI and cannot run on Linux. However, 10 of the 13 sub-packages (`CrowCore`, `CrowIPC`, `CrowClaude`, `CrowCodex`, `CrowCursor`, `CrowGit`, `CrowOpenCode`, `CrowPersistence`, `CrowProvider`, `CrowCLI`) are Foundation-only — they import only Foundation / ArgumentParser / each other, with Darwin↔Glibc socket code already `#if canImport`-guarded — and depend on nothing that reaches AppKit.
+Constraint on the current tree: the daemon Linux build ([#645](https://github.com/corveil/crow/issues/645)) is **not merged**, so there is no `crowd` product here. The root `Package.swift` is `platforms: [.macOS(.v14)]` and its only executables are the AppKit GUI (`Crow`/`CrowApp`) and the `crow` CLI. A root `swift build` therefore compiles the GUI and cannot run on Linux. However, 10 of the 13 sub-packages (`CrowCore`, `CrowIPC`, `CrowClaude`, `CrowCodex`, `CrowCursor`, `CrowGit`, `CrowOpenCode`, `CrowPersistence`, `CrowProvider`, `CrowCLI`) are Foundation-only — they import only Foundation / ArgumentParser / each other, with Darwin↔Glibc socket code already `#if canImport`-guarded — and depend on nothing that reaches AppKit.
 
 ## Decision
 
@@ -32,6 +32,6 @@ PR CI and cache-warm run on `ubuntu-latest` inside the official `swift:6` contai
 
 ## References
 
-- PR: https://github.com/radiusmethod/crow/pull/651 (issue #647)
+- PR: https://github.com/corveil/crow/pull/651 (issue #647)
 - Related ADRs: [0006](./0006-universal-macos-binary.md)
 - Code: `.github/workflows/ci.yml`, `.github/workflows/cache-warm.yml`, `.github/workflows/release.yml`, `scripts/generate-build-info.sh`

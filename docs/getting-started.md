@@ -5,7 +5,7 @@ This guide walks you from a fresh clone to a running Crow app with GitHub (or Gi
 ## 1. Clone the Repository
 
 ```bash
-git clone https://github.com/radiusmethod/crow.git
+git clone https://github.com/corveil/crow.git
 cd crow
 ```
 
@@ -214,7 +214,7 @@ Builds from source are unsigned. If macOS quarantines the bundle on first launch
 xattr -cr /Applications/Crow.app
 ```
 
-Official signed/notarized builds are available on the [Releases](https://github.com/radiusmethod/crow/releases) page and install without Gatekeeper warnings.
+Official signed/notarized builds are available on the [Releases](https://github.com/corveil/crow/releases) page and install without Gatekeeper warnings.
 
 ## Next Steps
 

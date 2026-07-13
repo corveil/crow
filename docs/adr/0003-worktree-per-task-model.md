@@ -39,7 +39,7 @@ The Manager session and other fixed-UUID virtual sessions are exempt from cleanu
 
 ## References
 
-- PRs: [#261](https://github.com/radiusmethod/crow/pull/261) (auto-cleanup of completed sessions)
+- PRs: [#261](https://github.com/corveil/crow/pull/261) (auto-cleanup of completed sessions)
 - Code:
   - `skills/crow-workspace/setup.sh` (creates the worktree and enforces the naming convention)
   - `Packages/CrowCore/Sources/CrowCore/Models/Worktree.swift`
