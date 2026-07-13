@@ -521,10 +521,21 @@ html, body {
 }
 
 .allow-list { display: flex; flex-direction: column; gap: 4px; }
+.allow-filter {
+  width: 100%; box-sizing: border-box; margin-bottom: 8px;
+  padding: 7px 10px; border: 1px solid var(--border-subtle); border-radius: 6px;
+  background: var(--bg-card); color: var(--text-primary); font-size: 12px;
+}
+.allow-filter::placeholder { color: var(--text-muted); }
+.allow-filter:focus { outline: none; border-color: var(--border-strong); }
 .allow-row {
   display: flex; align-items: flex-start; gap: 10px; padding: 8px 10px;
   border: 1px solid var(--border-subtle); border-radius: 6px; background: var(--bg-card);
 }
+/* #701: entries already in the global allowlist render faded/muted (parity with
+   desktop AllowListView: .opacity(0.6) + foregroundStyle(textMuted)). */
+.allow-row.is-global { opacity: 0.6; }
+.allow-row.is-global .allow-pattern { color: var(--text-muted); }
 .allow-check-spacer { width: 16px; flex: 0 0 auto; }
 .allow-main { display: flex; flex-direction: column; gap: 5px; min-width: 0; flex: 1; }
 .allow-pattern {

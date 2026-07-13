@@ -492,6 +492,7 @@ function persistSidebarCache() {
 }
 let ticketFilter = 'All'; // pipeline segment ('All' or a status rawValue); default to All so the board isn't misread as empty when work moves to Done
 let allowlistHideGlobal = false;
+let allowlistFilter = ''; // #701: case-insensitive substring filter on entry pattern
 const allowlistSelection = new Set();
 // Session multi-select (#5): toggled by the sidebar checkmark button; holds the
 // ids of sessions ticked for a bulk action (delete).
@@ -2054,9 +2055,18 @@ function renderAllowlist(root) {
   const d = boardData.allowlist;
   let entries = ((d && d.entries) || []).slice();
   if (allowlistHideGlobal) entries = entries.filter((e) => !e.is_global);
+  // #701: case-insensitive substring filter on pattern (mirrors desktop's
+  // localizedCaseInsensitiveContains). Applied before deriving `promotable` so
+  // Select All and the pruned selection only ever reference visible rows.
+  const filter = allowlistFilter.trim().toLowerCase();
+  if (filter) entries = entries.filter((e) => e.pattern.toLowerCase().includes(filter));
   entries.sort((a, b) => a.pattern.localeCompare(b.pattern));
   // Only worktree-only patterns are promotable to global.
   const promotable = entries.filter((e) => !e.is_global).map((e) => e.pattern);
+  // #701: prune selections for rows hidden by the filter (or no longer promotable)
+  // so Promote can never act on a pattern that isn't visible.
+  const visiblePromotable = new Set(promotable);
+  for (const p of [...allowlistSelection]) if (!visiblePromotable.has(p)) allowlistSelection.delete(p);
 
   const head = el('div', 'board-head');
   head.appendChild(el('div', 'board-title', 'Allowlist'));
@@ -2082,14 +2092,36 @@ function renderAllowlist(root) {
   head.appendChild(promote);
   root.appendChild(head);
 
-  if (!entries.length) { root.appendChild(boardEmpty('No allowlist entries')); return; }
+  // #701: filter bar above the list. The board fully re-renders on each keystroke,
+  // so restore focus + caret after renderBoard() runs (see oninput).
+  const filterInput = document.createElement('input');
+  filterInput.type = 'text';
+  filterInput.className = 'allow-filter';
+  filterInput.placeholder = 'Filter patterns…';
+  filterInput.value = allowlistFilter;
+  filterInput.oninput = () => {
+    allowlistFilter = filterInput.value;
+    renderBoard();
+    requestAnimationFrame(() => {
+      const n = document.querySelector('.allow-filter');
+      if (n) { n.focus(); n.setSelectionRange(n.value.length, n.value.length); }
+    });
+  };
+  root.appendChild(filterInput);
+
+  if (!entries.length) {
+    root.appendChild(boardEmpty(filter ? 'No matching entries' : 'No allowlist entries'));
+    return;
+  }
   const list = el('div', 'allow-list');
   for (const e of entries) list.appendChild(allowRow(e));
   root.appendChild(list);
 }
 
 function allowRow(e) {
-  const row = el('div', 'allow-row');
+  // #701: fade rows already in the global allowlist (parity with desktop AllowListView)
+  // so promotable (non-global) rows stand out as the actionable ones.
+  const row = el('div', 'allow-row' + (e.is_global ? ' is-global' : ''));
   if (!e.is_global) {
     // Only worktree-only patterns are promotable to global.
     const box = document.createElement('input');
