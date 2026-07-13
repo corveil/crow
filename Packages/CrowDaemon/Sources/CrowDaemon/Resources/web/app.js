@@ -493,6 +493,8 @@ function persistSidebarCache() {
 let ticketFilter = 'All'; // pipeline segment ('All' or a status rawValue); default to All so the board isn't misread as empty when work moves to Done
 let allowlistHideGlobal = false;
 let allowlistFilter = ''; // #701: case-insensitive substring filter on entry pattern
+let ticketSearch = ''; // #714: case-insensitive substring on ticket text, composed with ticketFilter
+let reviewSearch = ''; // #714: case-insensitive substring across review text
 const allowlistSelection = new Set();
 // Session multi-select (#5): toggled by the sidebar checkmark button; holds the
 // ids of sessions ticked for a bulk action (delete).
@@ -1855,13 +1857,47 @@ async function spawnAction(btn, method, params, label) {
 }
 
 // -- Ticket Board --
+// #714: shared board filter input (generalized from #701's allowlist filter).
+// The board fully re-renders on each keystroke, so restore focus + caret after
+// renderBoard() by re-querying the recreated input via its `cls`.
+function boardFilterInput(cls, value, placeholder, onValue) {
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'board-filter ' + cls;
+  input.placeholder = placeholder;
+  input.value = value;
+  input.oninput = () => {
+    const selStart = input.selectionStart;
+    const selEnd = input.selectionEnd;
+    onValue(input.value);
+    renderBoard();
+    requestAnimationFrame(() => {
+      const n = document.querySelector('.' + cls);
+      if (n) {
+        n.focus();
+        const len = n.value.length;
+        n.setSelectionRange(Math.min(selStart, len), Math.min(selEnd, len));
+      }
+    });
+  };
+  return input;
+}
+
 function renderTicketBoard(root) {
   const d = boardData.tickets;
   const allIssues = (d && d.issues) || [];
+  // Compose the status pipeline filter (#660) with the #714 search up front so the
+  // Select button, selection pruning, and the list all operate on the same visible
+  // set — no hidden ticket can be started.
+  let issues = allIssues.slice();
+  if (ticketFilter !== 'All') issues = issues.filter((i) => i.project_status === ticketFilter);
+  const q = ticketSearch.trim().toLowerCase();
+  if (q) issues = issues.filter((i) => ticketHaystack(i).includes(q));
+  issues.sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''));
   // Only tickets without a linked session are startable, so only those are
-  // selectable. Prune any stale selections (refresh/filter may have removed
-  // issues or linked them to a session).
-  const selectableUrls = new Set(allIssues.filter((i) => !i.linked_session_id).map((i) => i.url));
+  // selectable. Prune any stale selections against the *visible* set (refresh,
+  // status filter, or search may have removed/hidden/linked issues).
+  const selectableUrls = new Set(issues.filter((i) => !i.linked_session_id).map((i) => i.url));
   for (const url of [...selectedIssueIDs]) if (!selectableUrls.has(url)) selectedIssueIDs.delete(url);
 
   const head = el('div', 'board-head');
@@ -1911,13 +1947,19 @@ function renderTicketBoard(root) {
   }
   root.appendChild(bar);
 
-  let issues = allIssues.slice();
-  if (ticketFilter !== 'All') issues = issues.filter((i) => i.project_status === ticketFilter);
-  issues.sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''));
-  if (!issues.length) { root.appendChild(boardEmpty('No tickets in this view')); return; }
+  // #714: search bar below the pipeline (both act as filters). Composed with the
+  // status segment above; clearing restores the full status-filtered list.
+  root.appendChild(boardFilterInput('ticket-filter', ticketSearch, 'Filter tickets…', (v) => { ticketSearch = v; }));
+
+  if (!issues.length) { root.appendChild(boardEmpty(q ? 'No matching tickets' : 'No tickets in this view')); return; }
   const list = el('div', 'card-list');
   for (const i of issues) list.appendChild(ticketCard(i));
   root.appendChild(list);
+}
+
+// #714: lowercased searchable text for a ticket — title, repo, #number, labels.
+function ticketHaystack(i) {
+  return [i.title, i.repo, '#' + i.number, ...(i.labels || [])].join(' ').toLowerCase();
 }
 
 function ticketCard(i) {
@@ -2012,12 +2054,22 @@ function renderReviewBoard(root) {
   head.appendChild(refresh);
   root.appendChild(head);
 
-  const reviews = ((d && d.reviews) || []).slice()
+  // #714: search bar; clearing restores the full list.
+  root.appendChild(boardFilterInput('review-filter', reviewSearch, 'Filter reviews…', (v) => { reviewSearch = v; }));
+
+  let reviews = ((d && d.reviews) || []).slice()
     .sort((a, b) => (b.requested_at || '').localeCompare(a.requested_at || ''));
-  if (!reviews.length) { root.appendChild(boardEmpty('No review requests')); return; }
+  const q = reviewSearch.trim().toLowerCase();
+  if (q) reviews = reviews.filter((r) => reviewHaystack(r).includes(q));
+  if (!reviews.length) { root.appendChild(boardEmpty(q ? 'No matching reviews' : 'No review requests')); return; }
   const list = el('div', 'card-list');
   for (const r of reviews) list.appendChild(reviewCard(r));
   root.appendChild(list);
+}
+
+// #714: lowercased searchable text for a review — title, repo, @author, #pr_number.
+function reviewHaystack(r) {
+  return [r.title, r.repo, '@' + r.author, '#' + r.pr_number].join(' ').toLowerCase();
 }
 
 function reviewCard(r) {
@@ -2092,31 +2144,9 @@ function renderAllowlist(root) {
   head.appendChild(promote);
   root.appendChild(head);
 
-  // #701: filter bar above the list. The board fully re-renders on each keystroke,
-  // so restore focus + caret after renderBoard() runs (see oninput).
-  const filterInput = document.createElement('input');
-  filterInput.type = 'text';
-  filterInput.className = 'allow-filter';
-  filterInput.placeholder = 'Filter patterns…';
-  filterInput.value = allowlistFilter;
-  filterInput.oninput = () => {
-    allowlistFilter = filterInput.value;
-    // Capture the live caret/selection before the board tears down this input,
-    // then restore it (clamped) on the recreated input so mid-string edits keep
-    // their position instead of jumping to the end.
-    const selStart = filterInput.selectionStart;
-    const selEnd = filterInput.selectionEnd;
-    renderBoard();
-    requestAnimationFrame(() => {
-      const n = document.querySelector('.allow-filter');
-      if (n) {
-        n.focus();
-        const len = n.value.length;
-        n.setSelectionRange(Math.min(selStart, len), Math.min(selEnd, len));
-      }
-    });
-  };
-  root.appendChild(filterInput);
+  // #701/#714: filter bar above the list (shared helper restores focus + caret
+  // across the per-keystroke re-render).
+  root.appendChild(boardFilterInput('allow-filter', allowlistFilter, 'Filter patterns…', (v) => { allowlistFilter = v; }));
 
   if (!entries.length) {
     root.appendChild(boardEmpty(filter ? 'No matching entries' : 'No allowlist entries'));
