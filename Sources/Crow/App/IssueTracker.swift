@@ -453,10 +453,13 @@ final class IssueTracker {
             doneCount += ghResult.closedTotalCount
         }
 
-        // GitLab — unchanged fan-out (one call per host)
+        // GitLab — one call per host; includes the recently-closed half (#697)
+        // so GitLab-backed workspaces count toward doneIssuesLast24h, mirroring
+        // GitHub's open + deduped-closed merge.
         for host in gitLabHosts {
-            let issues = await fetchGitLabIssues(host: host)
-            allIssues.append(contentsOf: issues)
+            let merged = Self.mergeListing(await fetchGitLabIssues(host: host))
+            allIssues.append(contentsOf: merged.issues)
+            doneCount += merged.doneCount
         }
 
         // Jira — one search per distinct config (best-effort, like GitLab).
@@ -466,7 +469,7 @@ final class IssueTracker {
         // `assignedIssues`. Mirror GitHub's open + deduped-closed merge.
         for cfg in jiraConfigs {
             let listing = await fetchJiraIssues(config: cfg)
-            let merged = Self.mergeJiraListing(listing)
+            let merged = Self.mergeListing(listing)
             allIssues.append(contentsOf: merged.issues)
             doneCount += merged.doneCount
         }
@@ -2876,24 +2879,20 @@ final class IssueTracker {
 
     // MARK: - GitLab
 
-    private func fetchGitLabIssues(host: String) async -> [AssignedIssue] {
+    /// Fetch assigned GitLab issues for one host, including the recently-closed
+    /// half (#697) so GitLab-backed workspaces feed the done-count badge.
+    /// Best-effort: degrades to an empty listing on failure, mirroring the
+    /// Jira / Corveil paths.
+    private func fetchGitLabIssues(host: String) async -> AssignedListing {
         let backend = providerManager.taskBackend(for: .gitlab, host: host)
         do {
-            // Pass includeClosed: false so we don't fire a wasted closed-issues
-            // REST call every 60s — only the open list is consumed by refresh()
-            // for the GitLab path (the closed-diff logic is GitHub-only today).
-            let listing = try await backend.listAssigned(includeClosed: false)
-            return listing.open
+            return try await backend.listAssigned(includeClosed: true)
         } catch {
             print("[IssueTracker] fetchGitLabIssues(host: \(host)) failed: \(error)")
-            return []
+            return AssignedListing(open: [], closed: [])
         }
     }
 
-    /// Fetch open Jira work items assigned to the user for one workspace config.
-    /// Best-effort (the backend itself degrades to empty on failure), mirroring
-    /// the GitLab path — `includeClosed: false` skips the wasted closed query
-    /// since refresh()'s closed-issue diff is GitHub-only today.
     /// Find the configured Jira workspace whose project key (then exact site host,
     /// then sole-candidate fallback) matches `ticketURL`. Shared by the status-map
     /// and full-config resolvers so the matching can never drift. `candidates`
@@ -2968,14 +2967,15 @@ final class IssueTracker {
         }
     }
 
-    /// Merge a Jira `AssignedListing` into the board's flat issue list: open
-    /// issues plus the closed (Done) issues deduped by `id` against the open
-    /// set, mirroring the GitHub closed-issue merge. `doneCount` is the
-    /// backend-reported window total (`closedTotalCount`), not the length of
-    /// the capped closed page, so the badge doesn't saturate at the 50-item
-    /// page cap (#572, mirroring GitHub's #562 fix) — and it counts the window,
-    /// not just the post-dedup remainder, matching GitHub's semantics.
-    nonisolated static func mergeJiraListing(_ listing: AssignedListing) -> (issues: [AssignedIssue], doneCount: Int) {
+    /// Merge an `AssignedListing` (Jira #536, GitLab #697) into the board's
+    /// flat issue list: open issues plus the closed (Done) issues deduped by
+    /// `id` against the open set, mirroring the GitHub closed-issue merge.
+    /// `doneCount` is the backend-reported window total (`closedTotalCount`),
+    /// not the length of the capped closed page, so the badge doesn't saturate
+    /// at the 50-item page cap (#572, mirroring GitHub's #562 fix) — and it
+    /// counts the window, not just the post-dedup remainder, matching GitHub's
+    /// semantics.
+    nonisolated static func mergeListing(_ listing: AssignedListing) -> (issues: [AssignedIssue], doneCount: Int) {
         let openIDs = Set(listing.open.map(\.id))
         let uniqueDone = listing.closed.filter { !openIDs.contains($0.id) }
         return (listing.open + uniqueDone, listing.closedTotalCount)

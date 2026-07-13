@@ -47,10 +47,7 @@ public struct GitLabTaskBackend: TaskBackend {
 
     public func listAssigned(includeClosed: Bool) async throws -> AssignedListing {
         // GitLab has no consolidated batched endpoint. One REST call for open;
-        // a second only when `includeClosed` is true (the GitHub-driven
-        // closed-issue diff in IssueTracker doesn't consume the GitLab half,
-        // so the default GitLab caller passes false to skip the wasted
-        // round-trip every poll).
+        // a second only when `includeClosed` is true.
         // Use `glab api` rather than `glab issue list` — the latter shells out
         // to `git` even when no repo is involved and aborts with "fatal: not
         // a git repository" when cwd isn't a git working tree.
@@ -71,16 +68,15 @@ public struct GitLabTaskBackend: TaskBackend {
             return AssignedListing(open: open, closed: [])
         }
 
-        // `closed` is a single `per_page=50` page and `closedTotalCount` falls
-        // back to its length — if this path ever feeds a done-count badge, the
-        // total must come from the `X-Total` header (`glab api -i`) instead,
-        // per the #562/#572 cap fixes. Today IssueTracker only calls GitLab
-        // with `includeClosed: false` and never badges its closed count.
+        // `closed` is a single `per_page=50` page that feeds the done-count
+        // badge (#697), so `closedTotalCount` must be the true window total,
+        // not the capped page length — read it from the `X-Total` response
+        // header (`glab api -i`), per the #562/#572 cap fixes.
         let updatedAfter = Self.updatedAfterString()
         let closedOut: String
         do {
             closedOut = try await shellRunner.run(
-                args: ["glab", "api", "issues?scope=assigned_to_me&state=closed&per_page=50&updated_after=\(updatedAfter)"],
+                args: ["glab", "api", "-i", "issues?scope=assigned_to_me&state=closed&per_page=50&updated_after=\(updatedAfter)"],
                 env: env(),
                 cwd: NSHomeDirectory()
             )
@@ -88,8 +84,31 @@ public struct GitLabTaskBackend: TaskBackend {
             // If the closed query fails, fall back to whatever open we got.
             return AssignedListing(open: open, closed: [])
         }
-        let closed = Self.parseIssues(closedOut, host: host ?? "", projectStatusOverride: .done)
-        return AssignedListing(open: open, closed: closed)
+        let (total, body) = Self.splitTotalHeader(closedOut)
+        let closed = Self.parseIssues(body, host: host ?? "", projectStatusOverride: .done)
+        return AssignedListing(
+            open: open,
+            closed: closed,
+            closedTotalCount: total.map { max($0, closed.count) }
+        )
+    }
+
+    /// Split a `glab api -i` response into the `X-Total` header value and the
+    /// body. Headers end at the first blank line; GitLab omits `X-Total` for
+    /// very expensive counts, in which case (or with no header block at all)
+    /// `total` is nil and `AssignedListing` falls back to the page length.
+    nonisolated static func splitTotalHeader(_ output: String) -> (total: Int?, body: String) {
+        let normalized = output.replacingOccurrences(of: "\r\n", with: "\n")
+        guard let sep = normalized.range(of: "\n\n") else { return (nil, output) }
+        var total: Int?
+        for line in normalized[..<sep.lowerBound].split(separator: "\n") {
+            let parts = line.split(separator: ":", maxSplits: 1)
+            if parts.count == 2,
+               parts[0].trimmingCharacters(in: .whitespaces).lowercased() == "x-total" {
+                total = Int(parts[1].trimmingCharacters(in: .whitespaces))
+            }
+        }
+        return (total, String(normalized[sep.upperBound...]))
     }
 
     public func setLabels(url: String, add: [String], remove: [String]) async throws {

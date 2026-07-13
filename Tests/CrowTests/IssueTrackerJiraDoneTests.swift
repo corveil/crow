@@ -33,7 +33,7 @@ struct IssueTrackerJiraDoneTests {
             ]
         )
 
-        let merged = IssueTracker.mergeJiraListing(listing)
+        let merged = IssueTracker.mergeListing(listing)
 
         // Both Done issues land in the flat list so the board can group them.
         #expect(merged.issues.count == 3)
@@ -52,7 +52,7 @@ struct IssueTrackerJiraDoneTests {
             closed: [issue("PROJ-1", status: .done, state: "closed")]
         )
 
-        let merged = IssueTracker.mergeJiraListing(listing)
+        let merged = IssueTracker.mergeListing(listing)
 
         // Not double-counted in the issue list...
         #expect(merged.issues.count == 1)
@@ -62,7 +62,7 @@ struct IssueTrackerJiraDoneTests {
     }
 
     @Test func emptyListingYieldsNothing() {
-        let merged = IssueTracker.mergeJiraListing(AssignedListing(open: [], closed: []))
+        let merged = IssueTracker.mergeListing(AssignedListing(open: [], closed: []))
         #expect(merged.issues.isEmpty)
         #expect(merged.doneCount == 0)
     }
@@ -80,7 +80,7 @@ struct IssueTrackerJiraDoneTests {
             closedTotalCount: 96
         )
 
-        let merged = IssueTracker.mergeJiraListing(listing)
+        let merged = IssueTracker.mergeListing(listing)
 
         // The flat list still only carries the fetched page…
         #expect(merged.issues.count == 3)
