@@ -38,7 +38,7 @@ The trust scope is explicit: only the Manager. The user can disable Manager auto
 
 ## References
 
-- PRs: [#189](https://github.com/radiusmethod/crow/pull/189) (introduce `managerAutoPermissionMode`, default `true`)
+- PRs: [#189](https://github.com/corveil/crow/pull/189) (introduce `managerAutoPermissionMode`, default `true`)
 - Code:
   - `Packages/CrowCore/Sources/CrowCore/Models/AppConfig.swift`
   - `Packages/CrowCore/Sources/CrowCore/AppState.swift`

@@ -5,7 +5,7 @@
 > WKWebView over a tmux-backed PTY — see [ADR 0006](adr/0006-universal-macos-binary.md).
 > Kept as-is for the historical record.
 
-**Issue:** [#103 — Investigate: Terminal Alternatives to Ghostty for Background Execution](https://github.com/radiusmethod/crow/issues/103)
+**Issue:** [#103 — Investigate: Terminal Alternatives to Ghostty for Background Execution](https://github.com/corveil/crow/issues/103)
 **Date:** 2026-04-06
 
 ## Executive Summary
