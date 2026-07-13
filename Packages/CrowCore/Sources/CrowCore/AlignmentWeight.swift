@@ -1,10 +1,10 @@
 import Foundation
 
 /// Alignment-weight priors (ADR 0008 follow-up 8, category C: does the work
-/// ladder up to an org KPI/goal). The weight is the future multiplicand of the
-/// v2 score (`throughput × efficiency-multiplier × alignment-weight`,
-/// follow-up 11) — this type only *produces* the value; nothing combines it
-/// into a live score yet.
+/// ladder up to an org KPI/goal). The weight is the alignment multiplicand of
+/// the v2 combined score (follow-up 11, #699): `CombinedScore` sums it over a
+/// week's shipped snapshots to form the alignment-weighted throughput factor.
+/// This type only *produces* the value.
 ///
 /// Scheme: bonus-above-neutral. Untagged/unknown work scores exactly
 /// `neutral` (1.0), so every pre-existing session is unaffected; any explicit

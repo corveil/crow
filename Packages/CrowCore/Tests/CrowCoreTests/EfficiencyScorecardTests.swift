@@ -259,6 +259,144 @@ private func weeklyScore(_ week: WeeklyScorecard) -> Int? {
     #expect(model.currentWeekSessions.isEmpty)
 }
 
+// MARK: - v2 combined score wiring (#699)
+
+private func mergedAttribution(
+    prURL: String,
+    mergedAt: Date,
+    reverts: [PRRevertRecord]? = nil
+) -> PRSessionAttribution {
+    PRSessionAttribution(
+        prURL: prURL,
+        repoNameWithOwner: "corveil/crow",
+        prNumber: 1,
+        sessionIDs: [UUID()],
+        state: "MERGED",
+        mergedAt: mergedAt,
+        firstSeenAt: mergedAt.addingTimeInterval(-86_400),
+        updatedAt: mergedAt,
+        reverts: reverts
+    )
+}
+
+// The combined score appears on the current week, built from the week's
+// shipped snapshots and the attributions' rework signals.
+@Test func combinedScoreAppearsOnCurrentWeek() throws {
+    let snapshots = [
+        snapshot(endedAt: date(2026, 7, 13), status: .completed),
+        snapshot(endedAt: date(2026, 7, 14), status: .archived)
+    ]
+    let attributions = [mergedAttribution(
+        prURL: "https://github.com/corveil/crow/pull/1",
+        mergedAt: date(2026, 7, 14),
+        reverts: [PRRevertRecord(
+            revertedCommitSHA: "abc1234", revertCommitSHA: "def5678",
+            detectedAt: date(2026, 7, 15))]
+    )]
+    let model = ScorecardModel.build(
+        snapshots: snapshots, attributions: attributions, now: now, calendar: utc)
+
+    guard case .scored(let factors) = model.currentWeek.combined else {
+        Issue.record("expected scored combined result")
+        return
+    }
+    #expect(factors.shippedCount == 1)
+    #expect(factors.rework.mergedCount == 1)
+    #expect(factors.rework.revertCount == 1)
+    #expect(factors.gradeScore == 100)
+    // hygiene = (1−0.25)¹ × mergeRate factor (rate 1.0 → 1.0) = 0.75
+    #expect(abs(factors.hygieneFactor - 0.75) < 1e-12)
+    #expect(abs(factors.value - 0.75) < 1e-12)
+}
+
+// The v1 surfaces are computed identically with and without attributions —
+// the combined score is an additional surface, never an input to the grade,
+// the shipped count, or their baselines.
+@Test func v1SurfacesUnchangedByAttributions() {
+    let snapshots = [
+        snapshot(endedAt: date(2026, 7, 13), status: .completed, apiErrors: 12, apiRequests: 100, cost: 10),
+        snapshot(
+            endedAt: utc.date(byAdding: .weekOfYear, value: -1, to: currentWeekMonday)!,
+            status: .completed)
+    ]
+    let attributions = [mergedAttribution(
+        prURL: "https://github.com/corveil/crow/pull/1",
+        mergedAt: date(2026, 7, 14),
+        reverts: [PRRevertRecord(
+            revertedCommitSHA: "abc1234", revertCommitSHA: "def5678",
+            detectedAt: date(2026, 7, 15))]
+    )]
+
+    let with = ScorecardModel.build(
+        snapshots: snapshots, attributions: attributions, now: now, calendar: utc)
+    let without = ScorecardModel.build(snapshots: snapshots, now: now, calendar: utc)
+
+    #expect(with.currentWeek.result == without.currentWeek.result)
+    #expect(with.currentWeek.input == without.currentWeek.input)
+    #expect(with.currentWeek.sessionsShipped == without.currentWeek.sessionsShipped)
+    #expect(with.currentWeek.costPerShipped == without.currentWeek.costPerShipped)
+    #expect(with.baseline.medianScore == without.baseline.medianScore)
+    #expect(with.baseline.medianCostPerShipped == without.baseline.medianCostPerShipped)
+    #expect(with.currentWeekSessions == without.currentWeekSessions)
+}
+
+// Weekly grain isolation: an attribution event lands in exactly the week that
+// contains it, not in every week the record is visible from.
+@Test func combinedScoreWeeklyGrainIsolation() throws {
+    let priorMonday = utc.date(byAdding: .weekOfYear, value: -1, to: currentWeekMonday)!
+    let snapshots = [
+        snapshot(endedAt: date(2026, 7, 13), status: .completed),
+        snapshot(endedAt: priorMonday.addingTimeInterval(3600), status: .completed)
+    ]
+    // Merged and reverted in the PRIOR week only.
+    let attributions = [mergedAttribution(
+        prURL: "https://github.com/corveil/crow/pull/1",
+        mergedAt: priorMonday.addingTimeInterval(7200),
+        reverts: [PRRevertRecord(
+            revertedCommitSHA: "abc1234", revertCommitSHA: "def5678",
+            detectedAt: priorMonday.addingTimeInterval(10_800))]
+    )]
+    let model = ScorecardModel.build(
+        snapshots: snapshots, attributions: attributions, now: now, calendar: utc)
+
+    let current = try #require({
+        guard case .scored(let f) = model.currentWeek.combined else { return nil }
+        return f
+    }() as CombinedScore.Factors?)
+    #expect(current.rework == .empty)
+    #expect(current.hygieneFactor == 1.0)
+
+    let prior = try #require({
+        guard case .scored(let f) = model.priorWeeks[0].combined else { return nil }
+        return f
+    }() as CombinedScore.Factors?)
+    #expect(prior.rework.mergedCount == 1)
+    #expect(prior.rework.revertCount == 1)
+}
+
+// The baseline's median combined score includes a scored zero-shipped week —
+// a present zero IS a combined score (unlike cost-per-shipped, which has no
+// value for such a week).
+@Test func baselineMedianCombinedScoreIncludesZeroShippedWeeks() throws {
+    var snapshots: [SessionAnalyticsSnapshot] = []
+    // Week −1: 2 shipped (clean grade 100 → value 2.0). Week −2: 0 shipped
+    // (graded, value 0). Week −3: 1 shipped (value 1.0).
+    for (offset, shippedCount) in [(1, 2), (2, 0), (3, 1)] {
+        let monday = utc.date(byAdding: .weekOfYear, value: -offset, to: currentWeekMonday)!
+        if shippedCount == 0 {
+            snapshots.append(snapshot(endedAt: monday.addingTimeInterval(3600), status: .archived))
+        } else {
+            for index in 0..<shippedCount {
+                snapshots.append(snapshot(
+                    endedAt: monday.addingTimeInterval(Double(index + 1) * 3600),
+                    status: .completed))
+            }
+        }
+    }
+    let model = ScorecardModel.build(snapshots: snapshots, now: now, calendar: utc)
+    #expect(model.baseline.medianCombinedScore == 1.0) // median of {2, 0, 1}
+}
+
 // Displayed-not-graded stats are Σ over the week; churn is Σ removed / Σ added.
 @Test func displayedStatsSumAcrossTheWeek() {
     let snapshots = [

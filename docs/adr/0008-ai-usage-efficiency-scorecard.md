@@ -110,7 +110,7 @@ Deferred guardrails (explicit non-goals until their data exists): trivial-PR far
 | 8 | Alignment / KPI mapping | Extend `JiraTaskBackend` to read priority + epic/parent; org-goal tagging on sessions; alignment weight. Greenfield. | v2 |
 | 9 | GitLab throughput parity | Include GitLab in done-ticket counting. | — |
 | 10 | Cross-machine aggregation + team surface | Prerequisite for any leaderboard; out of scope here. | — |
-| 11 | Combined multiplicative score (v2) | `alignment-weighted throughput × efficiency multiplier`, per-user-per-week. | blocked on 5, 6, 8 |
+| 11 | Combined multiplicative score (v2) | `alignment-weighted throughput × efficiency multiplier`, per-user-per-week. *Implemented (#699):* see the follow-up 11 addendum below. | blocked on 5, 6, 8 — all landed |
 
 No prototype ships with this ADR: the smallest useful one requires persisting the compaction counter (a write-path model change, follow-up 3), which exceeds the read-only bar for a design PR.
 
@@ -122,6 +122,16 @@ The alignment capture shipped with these decisions:
 - **Priority** rides `AssignedIssue`/`TicketInfo` from the Jira read (both the REST and `acli` paths), normalized to `TicketPriority` (modern Highest…Lowest and classic Blocker…Trivial ladders; unrecognized custom schemes → `.unknown` with the raw name preserved). It reaches the session via `crow set-ticket --priority`; automatic Jira-side priority sync (via IssueTracker's existing ticketURL↔session matching) is a noted follow-up. Jira Cloud's unified `parent` field covers team- and company-managed projects; Server/DC classic epic-link customfields aren't fetched and degrade to nil.
 - **Weight priors** live in `AlignmentWeight` (CrowCore) as named constants — a bonus-above-neutral scheme: untagged/unknown = exactly 1.0 (no pre-existing session regresses), each explicit priority rung > 1.0, an org-goal tag multiplies (×1.5). This yields the rubric ordering high-priority-on-goal > low-priority-off-goal > untagged-neutral: demonstrated alignment is rewarded, absence of data is never punished. Tunable priors, per the grade-bands principle above.
 - **Read-only exposure**: `Session.alignmentWeight` (computed) and `SessionAnalyticsSnapshot.alignmentWeight`/`orgGoal` (persisted at session end, nil = neutral in pre-#696 snapshots). Nothing multiplies it into a live score — that remains follow-up 11.
+
+### Follow-up 11 addendum (implemented in #699)
+
+The v2 combined score shipped with these decisions (`CombinedScore` in CrowCore):
+
+- **Formula**: `value = weightedThroughput × efficiencyMultiplier`, decomposing for display as `shipped count × alignment factor × efficiency multiplier`. **Weekly grain only** — there is no session-grain API, by construction (the same structural enforcement `EfficiencyGrading` uses against grade-averaging).
+- **Throughput factor**: Σ `SessionAnalyticsSnapshot.alignmentWeight` (nil = neutral 1.0) over the week's `.completed` snapshots — the alignment-weighted sessions-shipped count. Merged-PR counts were deliberately NOT added to the throughput unit (they'd double-count the session that shipped them); attribution data enters through hygiene instead.
+- **Efficiency multiplier (provably ≤ 1)**: `(weekly grade score / 100) × hygieneFactor`. The grade half reuses the exact score the grade card shows. The hygiene half rolls the #693/#694 attribution records up **whole-machine per week** (half-open ISO-week membership, matching `ScorecardModel` bucketing): `(1 − 0.25)^reverts × (1 − 0.10)^postMergeFixes × (1 − 0.5 × (1 − mergeRate))`, with a nil merge rate (nothing resolved) fully neutral. Constants are tunable priors in `CombinedScore.Tuning`, same calibration rule as the grade bands.
+- **Degenerate cases**: a weekly grade of *insufficient data* passes through (no grade → no multiplier → no score); a graded zero-shipped week scores 0 (a legitimate weekly-grain zero, with a neutral alignment factor so the decomposition identity holds); absence of attribution/alignment data never penalizes.
+- **Surface**: an additional card on the weekly scorecard, always rendered WITH its decomposition; the v1 grade and shipped cards are unchanged. The trailing-4-week baseline gains a median combined score (scored zero-shipped weeks contribute their 0 — a present zero IS a score, unlike cost-per-shipped). Private self-comparison posture unchanged; the view reads a new read-only `AppState.prAttributions` mirror.
 
 ## Consequences
 

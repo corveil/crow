@@ -1,14 +1,16 @@
 import SwiftUI
 import CrowCore
 
-// MARK: - Scorecard View (ADR 0008 v1, #710)
+// MARK: - Scorecard View (ADR 0008, #710 v1 + #699 v2 combined score)
 
 /// Full-pane private efficiency scorecard: the weekly A–F grade with its
-/// coachable deductions, the sessions-shipped throughput count, and the
-/// self-comparison against the user's own trailing 4-week median. Read-only —
-/// computed from the persisted snapshots mirrored on
-/// `appState.analyticsSnapshots`. The grade and the shipped count are separate
-/// surfaces; nothing on this screen combines them into one number.
+/// coachable deductions, the sessions-shipped throughput count, the v2
+/// combined multiplicative score, and the self-comparison against the user's
+/// own trailing 4-week median. Read-only — computed from the persisted
+/// snapshots mirrored on `appState.analyticsSnapshots` plus the PR
+/// attributions on `appState.prAttributions`. The grade and the shipped count
+/// remain separate surfaces; the combined score is an additional card that
+/// decomposes into its factors rather than replacing either.
 public struct ScorecardView: View {
     @Bindable var appState: AppState
 
@@ -19,6 +21,7 @@ public struct ScorecardView: View {
     private var model: ScorecardModel {
         ScorecardModel.build(
             snapshots: Array(appState.analyticsSnapshots.values),
+            attributions: Array(appState.prAttributions.values),
             now: Date(),
             calendar: .current
         )
@@ -72,6 +75,7 @@ public struct ScorecardView: View {
                     shippedCard(model.currentWeek)
                 }
 
+                combinedCard(model.currentWeek)
                 baselineSection(model)
                 displayedStatsSection(model.currentWeek)
 
@@ -188,6 +192,58 @@ public struct ScorecardView: View {
         }
     }
 
+    // MARK: Combined score (ADR 0008 v2, #699)
+
+    /// The v2 multiplicative score, always shown WITH its decomposition —
+    /// the number is only trustworthy while it stays explainable.
+    private func combinedCard(_ week: WeeklyScorecard) -> some View {
+        card {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Combined Score (v2)")
+                    .font(.caption)
+                    .foregroundStyle(CorveilTheme.textSecondary)
+
+                switch week.combined {
+                case .scored(let factors):
+                    Text(String(format: "%.1f", factors.value))
+                        .font(.system(size: 44, weight: .bold, design: .rounded))
+                        .foregroundStyle(CorveilTheme.gold)
+
+                    Text("\(factors.shippedCount) shipped × \(String(format: "%.2f", factors.alignmentFactor)) alignment × \(String(format: "%.2f", factors.efficiencyMultiplier)) efficiency")
+                        .font(.system(size: 12, weight: .medium))
+                        .monospacedDigit()
+
+                    Text("efficiency = grade \(factors.gradeScore)/100 × hygiene \(String(format: "%.2f", factors.hygieneFactor))\(Self.hygieneDetail(factors.rework))")
+                        .font(.caption2)
+                        .monospacedDigit()
+                        .foregroundStyle(CorveilTheme.textMuted)
+
+                    Text("Alignment-weighted throughput × efficiency, weekly grain — bad hygiene multiplies the score down and can't be bought back with volume. Same private self-comparison posture and tunable priors as the grade.")
+                        .font(.caption2)
+                        .foregroundStyle(CorveilTheme.textMuted)
+                case .insufficientData(let prompts):
+                    insufficientDataBlock(prompts: prompts)
+                }
+            }
+        }
+    }
+
+    /// Compact rework readout appended to the hygiene line — empty when the
+    /// week has no rework signals, so a clean week reads clean.
+    static func hygieneDetail(_ rework: CombinedScore.WeeklyRework) -> String {
+        var parts: [String] = []
+        if rework.revertCount > 0 {
+            parts.append("\(rework.revertCount) revert\(rework.revertCount == 1 ? "" : "s")")
+        }
+        if rework.postMergeFixCount > 0 {
+            parts.append("\(rework.postMergeFixCount) post-merge fix\(rework.postMergeFixCount == 1 ? "" : "es")")
+        }
+        if let mergeRate = rework.mergeRate, mergeRate < 1 {
+            parts.append(String(format: "%.0f%% merge rate", mergeRate * 100))
+        }
+        return parts.isEmpty ? "" : "  (\(parts.joined(separator: ", ")))"
+    }
+
     // MARK: Baseline (vs. your normal)
 
     @ViewBuilder
@@ -241,6 +297,12 @@ public struct ScorecardView: View {
                             comparisonRow(
                                 name: "Cost/shipped", current: cost, baseline: median,
                                 higherIsBetter: false) { AnalyticsFormatting.cost($0) }
+                        }
+                        if let median = baseline.medianCombinedScore,
+                           case .scored(let factors) = model.currentWeek.combined {
+                            comparisonRow(
+                                name: "Combined score", current: factors.value, baseline: median,
+                                higherIsBetter: true) { String(format: "%.1f", $0) }
                         }
                     }
                 }
@@ -318,6 +380,16 @@ public struct ScorecardView: View {
                             .font(.system(size: 12))
                             .monospacedDigit()
                             .foregroundStyle(CorveilTheme.textSecondary)
+                        Text({
+                            if case .scored(let factors) = week.combined {
+                                return String(format: "%.1f", factors.value)
+                            }
+                            return "—"
+                        }())
+                            .font(.system(size: 12))
+                            .monospacedDigit()
+                            .foregroundStyle(CorveilTheme.textMuted)
+                            .help("Combined score (v2)")
                         Text(AnalyticsFormatting.cost(week.totalCost))
                             .font(.system(size: 12))
                             .monospacedDigit()
