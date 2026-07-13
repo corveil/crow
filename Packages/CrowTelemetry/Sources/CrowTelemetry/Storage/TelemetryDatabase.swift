@@ -254,6 +254,88 @@ public actor TelemetryDatabase {
         return analytics
     }
 
+    /// Reconstruct per-turn analytics for a Crow session by segmenting
+    /// token/cost metric rows between successive `claude_code.user_prompt`
+    /// events (ADR 0008 follow-up 7). Returns one record per prompt event,
+    /// in turn order; rows timestamped before the first prompt fold into
+    /// turn 0, so per-field sums across turns match `sessionAnalytics`.
+    /// Returns an empty array when the session has no prompt events (rows
+    /// aged out of retention, or telemetry off) — callers fall back to the
+    /// `promptCount` average.
+    public func turnAnalytics(for crowSessionID: UUID) -> [TurnAnalytics] {
+        let sid = crowSessionID.uuidString
+
+        let eventSQL = """
+            SELECT id, timestamp_ns, received_at FROM events
+            WHERE crow_session_id = ? AND event_name = 'claude_code.user_prompt'
+            ORDER BY id
+            """
+        var eventStmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, eventSQL, -1, &eventStmt, nil) == SQLITE_OK else { return [] }
+
+        var boundaries: [(t: Double, id: Int64)] = []
+        sqlite3_bind_text(eventStmt, 1, (sid as NSString).utf8String, -1, nil)
+        while sqlite3_step(eventStmt) == SQLITE_ROW {
+            let id = sqlite3_column_int64(eventStmt, 0)
+            let ns = sqlite3_column_text(eventStmt, 1).map { String(cString: $0) }
+            let receivedAt = sqlite3_column_double(eventStmt, 2)
+            boundaries.append((timestampSeconds(ns: ns, receivedAt: receivedAt), id))
+        }
+        sqlite3_finalize(eventStmt)
+
+        guard !boundaries.isEmpty else { return [] }
+        boundaries.sort { ($0.t, $0.id) < ($1.t, $1.id) }
+        let boundaryTimes = boundaries.map(\.t)
+
+        let metricSQL = """
+            SELECT metric_name, value, json_extract(attributes_json, '$.type'), timestamp_ns, received_at
+            FROM metrics
+            WHERE crow_session_id = ? AND metric_name IN ('claude_code.token.usage', 'claude_code.cost.usage')
+            ORDER BY id
+            """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, metricSQL, -1, &stmt, nil) == SQLITE_OK else { return [] }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_text(stmt, 1, (sid as NSString).utf8String, -1, nil)
+
+        // Sum as doubles per turn and truncate once at the end, matching the
+        // Int(SUM(...)) behavior of sessionAnalytics.
+        struct Sums { var input = 0.0, output = 0.0, cacheRead = 0.0, cacheCreation = 0.0, cost = 0.0 }
+        var sums = [Sums](repeating: Sums(), count: boundaries.count)
+
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            guard let namePtr = sqlite3_column_text(stmt, 0) else { continue }
+            let name = String(cString: namePtr)
+            let value = sqlite3_column_double(stmt, 1)
+            let type = sqlite3_column_text(stmt, 2).map { String(cString: $0) }
+            let ns = sqlite3_column_text(stmt, 3).map { String(cString: $0) }
+            let receivedAt = sqlite3_column_double(stmt, 4)
+            let index = turnIndex(
+                for: timestampSeconds(ns: ns, receivedAt: receivedAt),
+                boundaryTimes: boundaryTimes
+            )
+            switch (name, type) {
+            case ("claude_code.cost.usage", _): sums[index].cost += value
+            case ("claude_code.token.usage", "input"): sums[index].input += value
+            case ("claude_code.token.usage", "output"): sums[index].output += value
+            case ("claude_code.token.usage", "cacheRead"): sums[index].cacheRead += value
+            case ("claude_code.token.usage", "cacheCreation"): sums[index].cacheCreation += value
+            default: break
+            }
+        }
+
+        return sums.enumerated().map { index, turn in
+            TurnAnalytics(
+                turnIndex: index,
+                inputTokens: Int(turn.input),
+                outputTokens: Int(turn.output),
+                cacheReadTokens: Int(turn.cacheRead),
+                cacheCreationTokens: Int(turn.cacheCreation),
+                cost: turn.cost
+            )
+        }
+    }
+
     // MARK: - Cleanup
 
     /// Delete all telemetry data for a session.
@@ -278,6 +360,27 @@ public actor TelemetryDatabase {
     @discardableResult
     private func execute(_ sql: String) -> Bool {
         sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK
+    }
+
+    /// One ordering key shared by event and metric rows: the OTLP
+    /// `timeUnixNano` when present, else the ingest wall clock. Both are
+    /// wall-clock-near-now, so their sub-second skew is irrelevant at turn
+    /// granularity.
+    private func timestampSeconds(ns: String?, receivedAt: Double) -> Double {
+        if let ns, let value = Int64(ns) { return Double(value) / 1_000_000_000 }
+        return receivedAt
+    }
+
+    /// Index of the last boundary at or before `t`; rows earlier than the
+    /// first boundary fold into turn 0.
+    private func turnIndex(for t: Double, boundaryTimes: [Double]) -> Int {
+        var low = 0
+        var high = boundaryTimes.count
+        while low < high {
+            let mid = (low + high) / 2
+            if boundaryTimes[mid] <= t { low = mid + 1 } else { high = mid }
+        }
+        return max(0, low - 1)
     }
 
     /// Sum of stored delta rows for one exact series (null-safe attribute match).
