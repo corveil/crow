@@ -2148,22 +2148,33 @@ let fitAddon = null;
 let searchAddon = null;
 let termWs = null;
 let termSkelTimer = null; // #677: safety timeout that clears the skeleton overlay
+let termReconnectDelay = 1000; // #687: backoff between reconnect attempts (ms), reset on open
 
 // Skeleton loading overlay (#677): mask the artifact-prone xterm (re)attach
 // window (blank/garbled grid, reflow flash, mid-paint scrollback replay) with
 // the CROW-613 shimmer. Toggled via a `.loading` class on #terminal-wrap.
+// Idempotent (#687): a sustained reconnect loop re-enters this per attempt, so
+// no-op when already up — re-adding `.loading` would restart the shimmer and, in
+// the old code, re-arm the safety auto-hide, producing the strobe. The safety
+// auto-hide now lives in connectTerminalWs's `onopen` (connected-but-quiet PTY
+// case only), never in the connecting/reconnecting path.
 function showTerminalSkeleton() {
   const wrap = document.getElementById('terminal-wrap');
-  if (wrap) wrap.classList.add('loading');
-  // Never strand the overlay on a quiet PTY that sends no immediate output.
-  clearTimeout(termSkelTimer);
-  termSkelTimer = setTimeout(hideTerminalSkeleton, 1500);
+  if (!wrap || wrap.classList.contains('loading')) return;
+  wrap.classList.add('loading');
 }
 function hideTerminalSkeleton() {
   clearTimeout(termSkelTimer);
   termSkelTimer = null;
   const wrap = document.getElementById('terminal-wrap');
-  if (wrap) wrap.classList.remove('loading');
+  if (wrap) wrap.classList.remove('loading', 'reconnecting');
+}
+// #687: switch the overlay to a calm, steady "Reconnecting…" treatment during a
+// sustained disconnect (distinct from the brief attach shimmer). Cleared on a
+// successful (re)attach (onopen) and on hide.
+function setTerminalReconnecting(on) {
+  const wrap = document.getElementById('terminal-wrap');
+  if (wrap) wrap.classList.toggle('reconnecting', on);
 }
 
 // Terminal font stack: Nerd Fonts → system monospace.
@@ -2384,7 +2395,7 @@ function showTerminalMenu(e) {
 }
 
 function connectTerminalWs() {
-  if (sessionDead) return; // don't loop after an expired remote cookie (review Yellow)
+  if (sessionDead) { hideTerminalSkeleton(); return; } // don't loop after an expired remote cookie (review Yellow); clear any overlay so the #679 scrim owns the screen
   // #677: cover this (re)attach — initial connect, auto-reconnect, and (via
   // reloadTerminal) the #675 right-click Reload + tab/session switch — with the
   // skeleton. `painted` gates the hide to the FIRST PTY byte of THIS socket.
@@ -2393,6 +2404,15 @@ function connectTerminalWs() {
   termWs = new WebSocket(wsURL('/terminal'));
   termWs.binaryType = 'arraybuffer';
   termWs.onopen = () => {
+    // Connected — this is the brief attach case, not a reconnect loop. Drop the
+    // steady "Reconnecting…" treatment, reset the backoff, and (only now) arm
+    // the safety auto-hide so the overlay never strands on a quiet PTY that
+    // sends no immediate output. #687: this timer must NOT live in
+    // showTerminalSkeleton, or it re-fires during the disconnect loop → strobe.
+    setTerminalReconnecting(false);
+    termReconnectDelay = 1000;
+    clearTimeout(termSkelTimer);
+    termSkelTimer = setTimeout(hideTerminalSkeleton, 1500);
     // A fresh PTY starts at a default winsize, so force the real size through
     // even if cols/rows match the previous socket, and fit synchronously so the
     // resize reaches the PTY before the scrollback replay (select-window) below.
@@ -2415,11 +2435,22 @@ function connectTerminalWs() {
     }
   };
   termWs.onclose = () => {
-    hideTerminalSkeleton(); // don't strand the overlay; a reconnect re-shows it
-    if (sessionDead) return;
-    setTimeout(connectTerminalWs, 1000);
+    // #687: a sustained disconnect must show ONE steady overlay, not strobe. So
+    // don't hide here — keep the overlay up (idempotent showTerminalSkeleton is
+    // a no-op if already loading) and switch it to the calm "Reconnecting…"
+    // state; it clears on the first painted byte once reconnected. Only cancel
+    // the connected-quiet safety auto-hide so it can't fire mid-loop and blank
+    // the overlay. A dead session still stops reconnecting and hands off to the
+    // #679 expired scrim.
+    clearTimeout(termSkelTimer);
+    termSkelTimer = null;
+    if (sessionDead) { hideTerminalSkeleton(); return; }
+    setTerminalReconnecting(true);
+    showTerminalSkeleton();
+    setTimeout(connectTerminalWs, termReconnectDelay);
+    termReconnectDelay = Math.min(termReconnectDelay * 2, 10000);
   };
-  termWs.onerror = () => termWs.close(); // funnels to onclose (hides skeleton)
+  termWs.onerror = () => termWs.close(); // funnels to onclose (keeps overlay up)
 }
 
 // Resize path (#661): in a browser the window `resize` event and normal page
