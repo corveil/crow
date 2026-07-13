@@ -53,6 +53,17 @@ struct IssueTrackerPRAttributionTests {
         "feat: thing\n\nCrow-Session: \(uuid.uuidString)\n"
     }
 
+    /// Wrap plain messages as `CommitInfo`s (#694 changed
+    /// `recordPRAttribution` to take commits so it can store SHAs; these
+    /// tests only exercise the message-derived behavior).
+    private func commits(_ messages: String...) -> [CommitInfo] {
+        messages.map { CommitInfo(sha: "", message: $0) }
+    }
+
+    private func commits(_ messages: [String]) -> [CommitInfo] {
+        messages.map { CommitInfo(sha: "", message: $0) }
+    }
+
     private let t0 = Date(timeIntervalSince1970: 1_752_000_000)
     private let t1 = Date(timeIntervalSince1970: 1_752_000_600)
 
@@ -67,7 +78,7 @@ struct IssueTrackerPRAttributionTests {
 
         tracker.recordPRAttribution(
             pr: pr,
-            commitMessages: [message(for: a), "fix: no trailer\n", message(for: b), message(for: a)],
+            commits: commits(message(for: a), "fix: no trailer\n", message(for: b), message(for: a)),
             now: t0)
 
         let attribution = store.data.prAttributions?[pr.url]
@@ -85,7 +96,7 @@ struct IssueTrackerPRAttributionTests {
 
         tracker.recordPRAttribution(
             pr: makePR(),
-            commitMessages: ["fix: external contribution\n\nCo-Authored-By: Someone\n"],
+            commits: commits("fix: external contribution\n\nCo-Authored-By: Someone\n"),
             now: t0)
 
         #expect(store.data.prAttributions?.isEmpty ?? true)
@@ -101,7 +112,7 @@ struct IssueTrackerPRAttributionTests {
         let pr = makePR()
         let messages = [message(for: unknown)]
 
-        tracker.recordPRAttribution(pr: pr, commitMessages: messages, now: t0)
+        tracker.recordPRAttribution(pr: pr, commits: commits(messages), now: t0)
 
         #expect(store.data.prAttributions?[pr.url]?.sessionIDs == [unknown])
         #expect(!IssueTracker.crowAuthored(commitMessages: messages, knownSessionIDs: [UUID()]))
@@ -114,9 +125,9 @@ struct IssueTrackerPRAttributionTests {
         let b = UUID()
         let pr = makePR()
 
-        tracker.recordPRAttribution(pr: pr, commitMessages: [message(for: a)], now: t0)
+        tracker.recordPRAttribution(pr: pr, commits: commits(message(for: a)), now: t0)
         // A rebase dropped the commit carrying `a`; a new commit carries `b`.
-        tracker.recordPRAttribution(pr: pr, commitMessages: [message(for: b)], now: t1)
+        tracker.recordPRAttribution(pr: pr, commits: commits(message(for: b)), now: t1)
 
         let attribution = store.data.prAttributions?[pr.url]
         #expect(attribution?.sessionIDs == [a, b])
@@ -130,8 +141,8 @@ struct IssueTrackerPRAttributionTests {
         let a = UUID()
         let pr = makePR()
 
-        tracker.recordPRAttribution(pr: pr, commitMessages: [message(for: a)], now: t0)
-        tracker.recordPRAttribution(pr: pr, commitMessages: [message(for: a)], now: t1)
+        tracker.recordPRAttribution(pr: pr, commits: commits(message(for: a)), now: t0)
+        tracker.recordPRAttribution(pr: pr, commits: commits(message(for: a)), now: t1)
 
         // Nothing material changed, so updatedAt must still be the first write.
         #expect(store.data.prAttributions?[pr.url]?.updatedAt == t0)
@@ -143,7 +154,7 @@ struct IssueTrackerPRAttributionTests {
         let store = Self.tempStore()
         let tracker = makeTracker(store: store)
         let pr = makePR()
-        tracker.recordPRAttribution(pr: pr, commitMessages: [message(for: UUID())], now: t0)
+        tracker.recordPRAttribution(pr: pr, commits: commits(message(for: UUID())), now: t0)
 
         tracker.updatePRAttributions(viewerPRs: [makePR(state: "MERGED")], now: t1)
         var attribution = store.data.prAttributions?[pr.url]
@@ -161,7 +172,7 @@ struct IssueTrackerPRAttributionTests {
         let store = Self.tempStore()
         let tracker = makeTracker(store: store)
         let pr = makePR()
-        tracker.recordPRAttribution(pr: pr, commitMessages: [message(for: UUID())], now: t0)
+        tracker.recordPRAttribution(pr: pr, commits: commits(message(for: UUID())), now: t0)
 
         tracker.updatePRAttributions(viewerPRs: [makePR(state: "CLOSED")], now: t1)
 
@@ -191,7 +202,7 @@ struct IssueTrackerPRAttributionTests {
         let sessionID = UUID()
         let pr = makePR()
 
-        tracker.recordPRAttribution(pr: pr, commitMessages: [message(for: sessionID)], now: t0)
+        tracker.recordPRAttribution(pr: pr, commits: commits(message(for: sessionID)), now: t0)
         tracker.updatePRAttributions(viewerPRs: [makePR(state: "MERGED")], now: t1)
 
         // Reload from disk to prove the rollup works across relaunch.

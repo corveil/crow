@@ -51,6 +51,19 @@ public protocol CodeBackend: Sendable {
     /// `Crow-Session:` trailer to identify Crow-authored commits.
     func fetchCrowAuthoredCommits(prURL: String, repoSlug: String, prNumber: Int) async throws -> [CommitInfo]
 
+    /// Fetch recent commits on the repo's default branch, newest first,
+    /// committed at or after `since`. Used by revert detection (#694) to
+    /// spot `This reverts commit <sha>` messages targeting session-attributed
+    /// commits, including reverts pushed directly or merged by others. The
+    /// default implementation returns `[]` (no scan); GitHub overrides it.
+    func fetchRecentDefaultBranchCommits(repoSlug: String, since: Date) async throws -> [CommitInfo]
+
+    /// Fetch the file paths changed by the PR `prNumber` in `repoSlug`.
+    /// Used by post-merge-fix detection (#694) to compute file overlap
+    /// between a merged PR and later attributed PRs. The default
+    /// implementation returns `[]` (no file listing); GitHub overrides it.
+    func fetchPRChangedFiles(repoSlug: String, prNumber: Int) async throws -> [String]
+
     /// For each `(repoSlug, branch)` candidate, fetch up to 5 recently-updated
     /// PRs whose head matches `branch`. Used by session reconcile to recover
     /// dropped PR links. Returns one match per (candidate, PR) — callers run
@@ -92,6 +105,16 @@ public extension CodeBackend {
     /// no-op so a Jira-key reconcile pass degrades to "no matches" rather than
     /// forcing every conformer to implement it.
     func findPRsMatchingKeys(_ candidates: [KeyCandidate]) async throws -> [KeyPRMatch] { [] }
+
+    /// Default: no default-branch commit scan. GitHub overrides this; others
+    /// (GitLab today, Corveil stub) inherit the no-op so revert detection
+    /// degrades to "no branch scan" rather than forcing every conformer to
+    /// implement it.
+    func fetchRecentDefaultBranchCommits(repoSlug: String, since: Date) async throws -> [CommitInfo] { [] }
+
+    /// Default: no changed-file listing. GitHub overrides this; others inherit
+    /// the no-op so post-merge-fix detection degrades to "no overlap data".
+    func fetchPRChangedFiles(repoSlug: String, prNumber: Int) async throws -> [String] { [] }
 
     /// Default: backends without `.autoMergeLabel` can't add the merge label.
     /// GitHub overrides this; others inherit the throw so a capability-gated

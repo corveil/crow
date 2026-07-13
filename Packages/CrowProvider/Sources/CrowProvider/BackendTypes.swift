@@ -60,6 +60,11 @@ public struct PRRecord: Sendable {
     public let lastSubstantiveCommitAt: Date?
     /// Used by reconcile tie-breaking when multiple non-OPEN PRs exist on the same branch.
     public let updatedAt: Date?
+    /// SHA of the merge/squash commit on the base branch. Populated only by
+    /// queries that fetch `mergeCommit { oid }` (the stale-PR state query) and
+    /// only once the PR is MERGED; `nil` otherwise. Revert-detection anchor
+    /// (#694): a revert of a squash-merged PR names this SHA, not a branch SHA.
+    public let mergeCommitOid: String?
 
     public init(
         number: Int,
@@ -80,7 +85,8 @@ public struct PRRecord: Sendable {
         latestReviewStates: [String] = [],
         lastChangesRequestedAt: Date? = nil,
         lastSubstantiveCommitAt: Date? = nil,
-        updatedAt: Date? = nil
+        updatedAt: Date? = nil,
+        mergeCommitOid: String? = nil
     ) {
         self.number = number
         self.url = url
@@ -101,6 +107,7 @@ public struct PRRecord: Sendable {
         self.lastChangesRequestedAt = lastChangesRequestedAt
         self.lastSubstantiveCommitAt = lastSubstantiveCommitAt
         self.updatedAt = updatedAt
+        self.mergeCommitOid = mergeCommitOid
     }
 }
 

@@ -557,6 +557,75 @@ final class BackendsTests: XCTestCase {
         XCTAssertTrue(commits[0].message.contains("Crow-Session"))
     }
 
+    // MARK: - Rework / merge-rate backend surface (#694)
+
+    func testGitHubCodeBackendPRStatesParsesMergeCommitOidAndToleratesAbsence() async throws {
+        let fake = FakeShellRunner()
+        let json = """
+        {"data":{
+          "pr0":{"pullRequest":{"number":1,"url":"https://github.com/a/b/pull/1","state":"MERGED",
+                 "mergeCommit":{"oid":"0123456789abcdef"},
+                 "repository":{"nameWithOwner":"a/b"}}},
+          "pr1":{"pullRequest":{"number":2,"url":"https://github.com/a/b/pull/2","state":"OPEN",
+                 "mergeCommit":null,
+                 "repository":{"nameWithOwner":"a/b"}}}
+        }}
+        """
+        fake.responses = [.success(json)]
+        let backend = GitHubCodeBackend(shellRunner: fake)
+        let merged = PRRef(owner: "a", repo: "b", number: 1)
+        let open = PRRef(owner: "a", repo: "b", number: 2)
+        let states = try await backend.prStates(refs: [merged, open])
+        XCTAssertEqual(states[merged]?.mergeCommitOid, "0123456789abcdef")
+        XCTAssertNil(states[open]?.mergeCommitOid)
+        // The query now requests the merge commit.
+        XCTAssertTrue(fake.calls[0].args.contains { $0.contains("mergeCommit { oid }") })
+    }
+
+    func testGitHubCodeBackendFetchRecentDefaultBranchCommitsBuildsSinceEndpointAndParses() async throws {
+        let fake = FakeShellRunner()
+        let json = """
+        [
+          {"sha":"beef123","commit":{"message":"Revert \\"x\\"\\n\\nThis reverts commit abc1234."}},
+          {"sha":"feed456","commit":{"message":"feat: y"}}
+        ]
+        """
+        fake.responses = [.success(json)]
+        let backend = GitHubCodeBackend(shellRunner: fake)
+        let commits = try await backend.fetchRecentDefaultBranchCommits(
+            repoSlug: "a/b",
+            since: Date(timeIntervalSince1970: 1_752_000_000)
+        )
+        XCTAssertEqual(commits.count, 2)
+        XCTAssertEqual(commits[0].sha, "beef123")
+        XCTAssertTrue(commits[0].message.contains("This reverts commit"))
+        XCTAssertEqual(fake.calls.count, 1)
+        let endpoint = fake.calls[0].args.last ?? ""
+        XCTAssertTrue(endpoint.hasPrefix("/repos/a/b/commits?since=2025-07-08T"))
+        XCTAssertTrue(endpoint.contains("per_page=100"))
+    }
+
+    func testGitHubCodeBackendFetchPRChangedFilesParsesFilenames() async throws {
+        let fake = FakeShellRunner()
+        fake.responses = [.success(#"[{"filename":"Sources/App/Foo.swift"},{"filename":"README.md"},{"status":"no filename key"}]"#)]
+        let backend = GitHubCodeBackend(shellRunner: fake)
+        let files = try await backend.fetchPRChangedFiles(repoSlug: "a/b", prNumber: 7)
+        XCTAssertEqual(files, ["Sources/App/Foo.swift", "README.md"])
+        XCTAssertEqual(fake.calls[0].args.last, "/repos/a/b/pulls/7/files?per_page=100")
+    }
+
+    func testNonGitHubBackendsInheritReworkFetchNoOps() async throws {
+        // GitLab inherits the protocol defaults — revert scan and file
+        // overlap degrade to no data, no calls.
+        let fake = FakeShellRunner()
+        let backend = GitLabCodeBackend(shellRunner: fake, host: nil)
+        let commits = try await backend.fetchRecentDefaultBranchCommits(repoSlug: "a/b", since: Date())
+        let files = try await backend.fetchPRChangedFiles(repoSlug: "a/b", prNumber: 1)
+        XCTAssertTrue(commits.isEmpty)
+        XCTAssertTrue(files.isEmpty)
+        XCTAssertTrue(fake.calls.isEmpty)
+    }
+
     func testGitHubCodeBackendEnableAutoMergeRunsGhPrMerge() async throws {
         let fake = FakeShellRunner()
         let backend = GitHubCodeBackend(shellRunner: fake)
