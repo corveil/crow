@@ -132,7 +132,7 @@ public enum JiraSearchClient {
         site: String,
         jql: String,
         authorization: String,
-        fields: [String] = ["key", "summary", "status", "labels"],
+        fields: [String] = ["key", "summary", "status", "labels", "priority", "parent"],
         maxResults: Int = 100,
         transport: (URLRequest) async throws -> (Data, URLResponse) = { try await URLSession.shared.data(for: $0) }
     ) async -> Result<[[String: Any]], FetchError> {

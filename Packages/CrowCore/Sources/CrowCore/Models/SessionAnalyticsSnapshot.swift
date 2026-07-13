@@ -39,6 +39,15 @@ public struct SessionAnalyticsSnapshot: Codable, Equatable, Sendable {
     /// persisted before this field existed. Telemetry-off sessions get no
     /// snapshot at all, so their duration lives only on the `Session` row.
     public var wallClockDurationSeconds: Double?
+    /// Alignment weight at snapshot time (#696, ADR 0008 follow-up 8) — the
+    /// multiplicand the v2 combined score consumes (follow-up 11; nothing
+    /// multiplies it yet). Copied from `Session.alignmentWeight`. `nil` in
+    /// snapshots persisted before #696; treat as neutral 1.0.
+    public var alignmentWeight: Double?
+    /// Org-goal tag at snapshot time (#696). Kept alongside the weight so
+    /// weekly rollups can group by goal after the session record is reaped.
+    /// `nil` = untagged or pre-#696 snapshot.
+    public var orgGoal: String?
 
     public init(
         sessionID: UUID,
@@ -46,7 +55,9 @@ public struct SessionAnalyticsSnapshot: Codable, Equatable, Sendable {
         status: SessionStatus,
         analytics: SessionAnalytics,
         compactionCount: Int? = nil,
-        wallClockDurationSeconds: Double? = nil
+        wallClockDurationSeconds: Double? = nil,
+        alignmentWeight: Double? = nil,
+        orgGoal: String? = nil
     ) {
         self.sessionID = sessionID
         self.endedAt = endedAt
@@ -54,5 +65,7 @@ public struct SessionAnalyticsSnapshot: Codable, Equatable, Sendable {
         self.analytics = analytics
         self.compactionCount = compactionCount
         self.wallClockDurationSeconds = wallClockDurationSeconds
+        self.alignmentWeight = alignmentWeight
+        self.orgGoal = orgGoal
     }
 }

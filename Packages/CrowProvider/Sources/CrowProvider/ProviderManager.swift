@@ -382,6 +382,28 @@ public struct TicketInfo: Sendable {
     public let url: String
     public let provider: Provider
     public let isMR: Bool
+    /// Normalized ticket priority (#696, ADR 0008 follow-up 8). Only Jira
+    /// surfaces one today; nil for GitHub/GitLab/Corveil tickets.
+    public let priority: TicketPriority?
+    /// Epic/parent work-item key (Jira Cloud unified `parent` field). Fetched
+    /// for future epic-based goal inference; unused by the v1 alignment weight.
+    public let parentKey: String?
+
+    public init(
+        number: Int, title: String, repo: String, org: String, url: String,
+        provider: Provider, isMR: Bool,
+        priority: TicketPriority? = nil, parentKey: String? = nil
+    ) {
+        self.number = number
+        self.title = title
+        self.repo = repo
+        self.org = org
+        self.url = url
+        self.provider = provider
+        self.isMR = isMR
+        self.priority = priority
+        self.parentKey = parentKey
+    }
 }
 
 public enum ProviderError: Error {

@@ -104,3 +104,60 @@ import Foundation
         try validateSetTicketHasField(url: nil, title: nil, number: nil)
     }
 }
+
+@Test func setTicketWithPriorityAloneAccepted() throws {
+    // #696: --priority alone satisfies the has-field rule.
+    try validateSetTicketHasField(url: nil, title: nil, number: nil, priority: "high")
+}
+
+// MARK: - Ticket Priority Validation (#696)
+
+@Test func allValidTicketPrioritiesAccepted() throws {
+    for priority in ["highest", "high", "medium", "low", "lowest"] {
+        try validateTicketPriority(priority)
+    }
+}
+
+@Test func ticketPriorityIsCaseInsensitive() throws {
+    try validateTicketPriority("Highest")
+    try validateTicketPriority("HIGH")
+}
+
+@Test func invalidTicketPriorityRejected() {
+    #expect(throws: (any Error).self) {
+        try validateTicketPriority("urgent")
+    }
+    #expect(throws: (any Error).self) {
+        // `unknown` is the internal neutral, not a CLI-settable rung.
+        try validateTicketPriority("unknown")
+    }
+}
+
+// MARK: - Set Goal Validation (#696)
+
+@Test func setGoalWithGoalAccepted() throws {
+    try validateSetGoal(goal: "Q3 latency KPI", clear: false)
+}
+
+@Test func setGoalClearAccepted() throws {
+    try validateSetGoal(goal: nil, clear: true)
+}
+
+@Test func setGoalRejectsGoalAndClearTogether() {
+    #expect(throws: (any Error).self) {
+        try validateSetGoal(goal: "Q3 latency KPI", clear: true)
+    }
+}
+
+@Test func setGoalRejectsNeitherGoalNorClear() {
+    #expect(throws: (any Error).self) {
+        try validateSetGoal(goal: nil, clear: false)
+    }
+}
+
+@Test func setGoalRejectsBlankGoal() {
+    // A whitespace goal would silently fail to earn the on-goal multiplier.
+    #expect(throws: (any Error).self) {
+        try validateSetGoal(goal: "   ", clear: false)
+    }
+}

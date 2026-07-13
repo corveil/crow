@@ -58,3 +58,44 @@ import Testing
     )
     #expect(issue.projectStatus == .unknown)
 }
+
+// #696: priority + epic/parent ride the model as additive optionals.
+
+@Test func assignedIssueRoundTripsPriorityAndParent() throws {
+    let issue = AssignedIssue(
+        id: "jira:MAXX-1", number: 1, title: "T", state: "open",
+        url: "https://acme.atlassian.net/browse/MAXX-1", repo: "MAXX",
+        provider: .jira,
+        priority: .high, priorityName: "Critical",
+        parentKey: "MAXX-100", parentSummary: "Q3 latency epic"
+    )
+    let data = try JSONEncoder().encode(issue)
+    let decoded = try JSONDecoder().decode(AssignedIssue.self, from: data)
+    #expect(decoded.priority == .high)
+    #expect(decoded.priorityName == "Critical")
+    #expect(decoded.parentKey == "MAXX-100")
+    #expect(decoded.parentSummary == "Q3 latency epic")
+}
+
+@Test func assignedIssueLegacyJSONWithoutAlignmentFieldsDecodes() throws {
+    // Persisted AppState predating #696 has none of the new keys; synthesized
+    // Codable must surface them as nil, not fail.
+    let json: [String: Any] = [
+        "id": "github:o/r#7",
+        "number": 7,
+        "title": "Legacy",
+        "state": "open",
+        "url": "https://github.com/o/r/issues/7",
+        "repo": "o/r",
+        "labels": [],
+        "provider": "github",
+        "projectStatus": "In Progress",
+    ]
+    let data = try JSONSerialization.data(withJSONObject: json)
+    let decoded = try JSONDecoder().decode(AssignedIssue.self, from: data)
+    #expect(decoded.priority == nil)
+    #expect(decoded.priorityName == nil)
+    #expect(decoded.parentKey == nil)
+    #expect(decoded.parentSummary == nil)
+    #expect(decoded.projectStatus == .inProgress)
+}

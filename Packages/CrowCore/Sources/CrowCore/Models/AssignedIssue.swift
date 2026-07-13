@@ -15,6 +15,18 @@ public struct AssignedIssue: Identifiable, Codable, Sendable {
     /// URL of the linked pull request, if any.
     public var prURL: String?
     public var updatedAt: Date?
+    /// Normalized ticket priority (#696, ADR 0008 follow-up 8). Only Jira
+    /// surfaces one today; nil for GitHub/GitLab/Corveil issues and for
+    /// records persisted before this field existed.
+    public var priority: TicketPriority?
+    /// Raw tracker priority name (e.g. Jira "Critical"), preserved so custom
+    /// priority schemes that normalize to `.unknown` stay inspectable.
+    public var priorityName: String?
+    /// Epic/parent work-item key (Jira Cloud unified `parent` field). Fetched
+    /// for future epic-based goal inference; unused by the v1 alignment weight.
+    public var parentKey: String?
+    /// Epic/parent summary, when the tracker provides it.
+    public var parentSummary: String?
     /// Pipeline status from the GitHub/GitLab project board.
     public var projectStatus: TicketStatus
 
@@ -22,7 +34,9 @@ public struct AssignedIssue: Identifiable, Codable, Sendable {
         id: String, number: Int, title: String, state: String,
         url: String, repo: String, labels: [LabelInfo] = [],
         provider: Provider, prNumber: Int? = nil, prURL: String? = nil,
-        updatedAt: Date? = nil, projectStatus: TicketStatus = .unknown
+        updatedAt: Date? = nil, priority: TicketPriority? = nil,
+        priorityName: String? = nil, parentKey: String? = nil,
+        parentSummary: String? = nil, projectStatus: TicketStatus = .unknown
     ) {
         self.id = id
         self.number = number
@@ -35,6 +49,10 @@ public struct AssignedIssue: Identifiable, Codable, Sendable {
         self.prNumber = prNumber
         self.prURL = prURL
         self.updatedAt = updatedAt
+        self.priority = priority
+        self.priorityName = priorityName
+        self.parentKey = parentKey
+        self.parentSummary = parentSummary
         self.projectStatus = projectStatus
     }
 }

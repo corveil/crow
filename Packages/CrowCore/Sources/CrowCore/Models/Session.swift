@@ -52,6 +52,19 @@ public struct Session: Identifiable, Codable, Sendable {
     // Last `SessionEnd` wins; cleared by a new `SessionStart` so a resumed
     // agent never displays a stale finished duration.
     public var agentSessionEndedAt: Date?
+    // Org goal/KPI this session's work ladders up to (#696, ADR 0008
+    // follow-up 8, category C). V1 is deliberately user-driven: a free-text
+    // tag set via `crow set-goal`. Inferring the goal from the ticket's
+    // epic/parent link is deferred — the Jira backend now fetches the parent
+    // key/summary so the data exists when inference lands. Nil (or blank)
+    // means untagged: the alignment weight stays neutral.
+    public var orgGoal: String?
+    // Normalized priority of the linked ticket, set via `crow set-ticket
+    // --priority` (#696). Captured once at set time — Jira-side priority
+    // changes don't sync back yet (noted follow-up in ADR 0008). Nil for
+    // sessions without a priority signal; the alignment weight treats nil
+    // and `.unknown` identically as the neutral base.
+    public var ticketPriority: TicketPriority?
 
     /// Whether this session is a Manager (orchestration) session. Managers run
     /// Claude Code in the devRoot and are excluded from PR/issue tracking.
@@ -81,6 +94,18 @@ public struct Session: Identifiable, Codable, Sendable {
         guard let start = agentSessionStartedAt, let end = agentSessionEndedAt,
               end >= start else { return nil }
         return end.timeIntervalSince(start)
+    }
+
+    /// Alignment weight for this session's work (#696, ADR 0008 follow-up 8):
+    /// the value the future v2 multiplicative score consumes (follow-up 11 —
+    /// nothing combines it into a live score yet). Derived from the ticket
+    /// priority and the org-goal tag via ``AlignmentWeight``; untagged
+    /// sessions compute exactly `AlignmentWeight.neutral` (1.0). A blank or
+    /// whitespace-only `orgGoal` counts as untagged, so an empty tag can't
+    /// buy the on-goal multiplier.
+    public var alignmentWeight: Double {
+        let goal = (orgGoal ?? "").trimmingCharacters(in: .whitespaces)
+        return AlignmentWeight.weight(priority: ticketPriority, hasOrgGoal: !goal.isEmpty)
     }
 
     /// Stamp a `SessionStart` hook arrival. The first start is the origin and
@@ -114,7 +139,9 @@ public struct Session: Identifiable, Codable, Sendable {
         autoMergeEnabledAt: Date? = nil,
         locked: Bool = false,
         agentSessionStartedAt: Date? = nil,
-        agentSessionEndedAt: Date? = nil
+        agentSessionEndedAt: Date? = nil,
+        orgGoal: String? = nil,
+        ticketPriority: TicketPriority? = nil
     ) {
         self.id = id
         self.name = name
@@ -134,6 +161,8 @@ public struct Session: Identifiable, Codable, Sendable {
         self.locked = locked
         self.agentSessionStartedAt = agentSessionStartedAt
         self.agentSessionEndedAt = agentSessionEndedAt
+        self.orgGoal = orgGoal
+        self.ticketPriority = ticketPriority
     }
 
     /// Parse a GitHub PR URL (`https://github.com/<owner>/<repo>/pull/<number>`)
@@ -172,6 +201,8 @@ public struct Session: Identifiable, Codable, Sendable {
         autoMergeEnabledAt = try container.decodeIfPresent(Date.self, forKey: .autoMergeEnabledAt)
         agentSessionStartedAt = try container.decodeIfPresent(Date.self, forKey: .agentSessionStartedAt)
         agentSessionEndedAt = try container.decodeIfPresent(Date.self, forKey: .agentSessionEndedAt)
+        orgGoal = try container.decodeIfPresent(String.self, forKey: .orgGoal)
+        ticketPriority = try container.decodeIfPresent(TicketPriority.self, forKey: .ticketPriority)
         // CROW-573 renamed `pinned` → `locked`. Prefer the new key, but fall
         // back to the legacy `pinned` key so sessions locked under CROW-569
         // remain locked after upgrade.

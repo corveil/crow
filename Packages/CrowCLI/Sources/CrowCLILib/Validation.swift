@@ -60,9 +60,43 @@ func validateJobName(_ value: String) throws {
 
 /// Validate that at least one optional field is provided for set-ticket.
 ///
-/// - Throws: `ValidationError` if all three fields are nil.
-func validateSetTicketHasField(url: String?, title: String?, number: Int?) throws {
-    guard url != nil || title != nil || number != nil else {
-        throw ValidationError("At least one of --url, --title, or --number is required.")
+/// - Throws: `ValidationError` if all four fields are nil.
+func validateSetTicketHasField(url: String?, title: String?, number: Int?, priority: String? = nil) throws {
+    guard url != nil || title != nil || number != nil || priority != nil else {
+        throw ValidationError("At least one of --url, --title, --number, or --priority is required.")
+    }
+}
+
+/// Valid ticket priority values accepted by `set-ticket --priority` (#696).
+/// Matches CrowCore's `TicketPriority` ladder minus `unknown` (clearing back
+/// to unknown isn't a CLI operation).
+let validTicketPriorities = ["highest", "high", "medium", "low", "lowest"]
+
+/// Validate that a string is a recognized ticket priority, case-insensitively.
+///
+/// - Throws: `ValidationError` if not one of: highest, high, medium, low, lowest.
+func validateTicketPriority(_ value: String) throws {
+    guard validTicketPriorities.contains(value.lowercased()) else {
+        throw ValidationError("'\(value)' is not a valid priority. Expected one of: \(validTicketPriorities.joined(separator: ", "))")
+    }
+}
+
+/// Validate the set-goal argument shape: exactly one of `--goal`/`--clear`,
+/// and a provided goal must not be blank (a whitespace goal would silently
+/// fail to earn the on-goal alignment multiplier).
+///
+/// - Throws: `ValidationError` on both, neither, or a blank goal.
+func validateSetGoal(goal: String?, clear: Bool) throws {
+    switch (goal, clear) {
+    case (.some, true):
+        throw ValidationError("--goal and --clear are mutually exclusive.")
+    case (nil, false):
+        throw ValidationError("Exactly one of --goal or --clear is required.")
+    case (.some(let goal), false):
+        guard !goal.trimmingCharacters(in: .whitespaces).isEmpty else {
+            throw ValidationError("--goal must not be blank.")
+        }
+    case (nil, true):
+        break
     }
 }

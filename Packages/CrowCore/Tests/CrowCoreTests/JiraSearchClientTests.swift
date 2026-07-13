@@ -84,6 +84,26 @@ import FoundationNetworking  // URLRequest/URLResponse live here on Linux
         #expect(issues.count == 2)
     }
 
+    @Test func fetchAssignedDefaultFieldsIncludePriorityAndParent() async {
+        // #696: the default field set must request priority + parent so the
+        // alignment capture rides the standard board read.
+        let result = await JiraSearchClient.fetchAssigned(
+            site: "acme.atlassian.net",
+            jql: "assignee = currentUser()",
+            authorization: "Basic creds",
+            transport: { request in
+                let query = request.url?.query ?? ""
+                #expect(query.contains("fields=key,summary,status,labels,priority,parent"))
+                let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                return (Self.searchPayload, response)
+            }
+        )
+        guard case .success = result else {
+            Issue.record("expected success, got \(result)")
+            return
+        }
+    }
+
     @Test func fetchAssignedFailsOnNon2xx() async {
         let result = await JiraSearchClient.fetchAssigned(
             site: "acme.atlassian.net",

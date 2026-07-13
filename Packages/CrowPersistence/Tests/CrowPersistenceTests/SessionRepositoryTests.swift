@@ -157,7 +157,9 @@ import Testing
         ticketTitle: "Fix the bug",
         ticketNumber: 42,
         provider: .github,
-        codeProvider: .gitlab
+        codeProvider: .gitlab,
+        orgGoal: "Q3 latency KPI",
+        ticketPriority: .high
     )
     repo.save(session)
 
@@ -168,6 +170,10 @@ import Testing
     #expect(found?.provider == .github)
     #expect(found?.codeProvider == .gitlab)
     #expect(found?.status == .inReview)
+    // #696: the org-goal tag + ticket priority persist and read back.
+    #expect(found?.orgGoal == "Q3 latency KPI")
+    #expect(found?.ticketPriority == .high)
+    #expect(found?.alignmentWeight == AlignmentWeight.weight(priority: .high, hasOrgGoal: true))
 }
 
 @Test func statusUpdateRoundTrip() throws {

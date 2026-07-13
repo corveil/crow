@@ -162,3 +162,53 @@ import Testing
     #expect(decoded.wallClockDurationSeconds == 28_800)
     #expect(decoded.analytics.activeTimeSeconds == 300)
 }
+
+// #696 (ADR 0008 follow-up 8): alignment weight + org goal ride the snapshot's
+// documented optional-extension point.
+@Test func snapshotAlignmentFieldsRoundTrip() throws {
+    let snapshot = SessionAnalyticsSnapshot(
+        sessionID: UUID(),
+        endedAt: Date(timeIntervalSince1970: 1_752_000_000),
+        status: .completed,
+        analytics: SessionAnalytics(promptCount: 1),
+        alignmentWeight: AlignmentWeight.weight(priority: .high, hasOrgGoal: true),
+        orgGoal: "Q3 latency KPI"
+    )
+
+    let encoder = JSONEncoder()
+    encoder.dateEncodingStrategy = .iso8601
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+
+    let decoded = try decoder.decode(
+        SessionAnalyticsSnapshot.self, from: encoder.encode(snapshot))
+    #expect(decoded == snapshot)
+    #expect(decoded.alignmentWeight
+        == AlignmentWeight.weight(priority: .high, hasOrgGoal: true))
+    #expect(decoded.orgGoal == "Q3 latency KPI")
+}
+
+// Snapshots persisted before #696 have neither key — they must keep decoding,
+// with the absent weight surfacing as nil (treated as neutral 1.0).
+@Test func snapshotWithoutAlignmentFieldsDecodesAsNil() throws {
+    let json = """
+    {
+      "sessionID": "A1B2C3D4-E5F6-7890-ABCD-EF1234567890",
+      "endedAt": "2026-07-13T00:00:00Z",
+      "status": "completed",
+      "analytics": {
+        "totalCost": 0, "inputTokens": 42, "outputTokens": 0,
+        "cacheReadTokens": 0, "cacheCreationTokens": 0, "activeTimeSeconds": 0,
+        "linesAdded": 0, "linesRemoved": 0, "commitCount": 0,
+        "promptCount": 0, "toolCallCount": 0, "apiRequestCount": 0,
+        "apiErrorCount": 0
+      }
+    }
+    """
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+    let decoded = try decoder.decode(SessionAnalyticsSnapshot.self, from: Data(json.utf8))
+    #expect(decoded.alignmentWeight == nil)
+    #expect(decoded.orgGoal == nil)
+    #expect(decoded.alignmentWeight ?? AlignmentWeight.neutral == 1.0)
+}

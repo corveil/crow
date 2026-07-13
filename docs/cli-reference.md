@@ -107,10 +107,11 @@ Deletes the session metadata. Sessions on protected branches (main/master/develo
 
 ### `crow set-ticket`
 
-Attach ticket metadata (URL, title, number) to a session. At least one of `--url`, `--title`, or `--number` must be provided.
+Attach ticket metadata (URL, title, number, priority) to a session. At least one of `--url`, `--title`, `--number`, or `--priority` must be provided.
 
 ```bash
 crow set-ticket --session <uuid> --url "https://github.com/org/repo/issues/123" --title "Fix bug" --number 123
+crow set-ticket --session <uuid> --priority high
 ```
 
 | Flag         | Required | Description    |
@@ -119,8 +120,26 @@ crow set-ticket --session <uuid> --url "https://github.com/org/repo/issues/123" 
 | `--url`      | no¹      | Ticket URL     |
 | `--title`    | no¹      | Ticket title   |
 | `--number`   | no¹      | Ticket number  |
+| `--priority` | no¹      | Ticket priority: `highest`, `high`, `medium`, `low`, or `lowest` (case-insensitive). Feeds the session's alignment weight (ADR 0008 follow-up 8). |
 
-¹ At least one of `--url`, `--title`, `--number` is required.
+¹ At least one of `--url`, `--title`, `--number`, `--priority` is required.
+
+### `crow set-goal`
+
+Set or clear the org-goal tag on a session — the org goal/KPI the session's work ladders up to (ADR 0008 follow-up 8). The tag feeds the session's alignment weight, read back via `crow get-session` (`org_goal`, `ticket_priority`, `alignment_weight`). Exactly one of `--goal` or `--clear` is required.
+
+```bash
+crow set-goal --session <uuid> --goal "Q3 latency KPI"
+crow set-goal --session <uuid> --clear
+```
+
+| Flag        | Required | Description                                  |
+| ----------- | -------- | -------------------------------------------- |
+| `--session` | yes      | Session UUID                                 |
+| `--goal`    | no²      | Org goal/KPI tag (free text, non-blank)      |
+| `--clear`   | no²      | Clear the tag (back to neutral weight)       |
+
+² Exactly one of `--goal`, `--clear` is required.
 
 ### `crow add-link`
 

@@ -4,21 +4,23 @@ import Foundation
 
 // MARK: - Metadata Commands
 
-/// Set ticket metadata (URL, title, number) for a session.
+/// Set ticket metadata (URL, title, number, priority) for a session.
 ///
-/// At least one of `--url`, `--title`, or `--number` must be provided.
+/// At least one of `--url`, `--title`, `--number`, or `--priority` must be provided.
 public struct SetTicket: ParsableCommand {
     public static let configuration = CommandConfiguration(commandName: "set-ticket", abstract: "Set ticket metadata")
     @Option(name: .long, help: "Session UUID") var session: String
     @Option(name: .long, help: "Ticket URL") var url: String?
     @Option(name: .long, help: "Ticket title") var title: String?
     @Option(name: .long, help: "Ticket number") var number: Int?
+    @Option(name: .long, help: "Ticket priority: highest, high, medium, low, or lowest") var priority: String?
 
     public init() {}
 
     public func validate() throws {
         try validateUUID(session, label: "session UUID")
-        try validateSetTicketHasField(url: url, title: title, number: number)
+        try validateSetTicketHasField(url: url, title: title, number: number, priority: priority)
+        if let priority { try validateTicketPriority(priority) }
     }
 
     public func run() throws {
@@ -26,7 +28,35 @@ public struct SetTicket: ParsableCommand {
         if let url { params["url"] = .string(url) }
         if let title { params["title"] = .string(title) }
         if let number { params["number"] = .int(number) }
+        if let priority { params["priority"] = .string(priority) }
         let result = try rpc("set-ticket", params: params)
+        printJSON(result)
+    }
+}
+
+/// Set or clear the org-goal tag on a session (#696, ADR 0008 follow-up 8).
+///
+/// The tag marks which org goal/KPI the session's work ladders up to; it feeds
+/// the session's alignment weight. Exactly one of `--goal` or `--clear` is
+/// required.
+public struct SetGoal: ParsableCommand {
+    public static let configuration = CommandConfiguration(commandName: "set-goal", abstract: "Set or clear the org-goal tag on a session")
+    @Option(name: .long, help: "Session UUID") var session: String
+    @Option(name: .long, help: "Org goal/KPI this session's work ladders up to") var goal: String?
+    @Flag(name: .long, help: "Clear the org-goal tag") var clear: Bool = false
+
+    public init() {}
+
+    public func validate() throws {
+        try validateUUID(session, label: "session UUID")
+        try validateSetGoal(goal: goal, clear: clear)
+    }
+
+    public func run() throws {
+        var params: [String: JSONValue] = ["session_id": .string(session)]
+        if let goal { params["goal"] = .string(goal) }
+        if clear { params["clear"] = .bool(true) }
+        let result = try rpc("set-goal", params: params)
         printJSON(result)
     }
 }

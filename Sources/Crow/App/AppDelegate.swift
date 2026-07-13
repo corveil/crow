@@ -1647,6 +1647,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         "agent_session_started_at": s.agentSessionStartedAt.map { .string(fmt.string(from: $0)) } ?? .null,
                         "agent_session_ended_at": s.agentSessionEndedAt.map { .string(fmt.string(from: $0)) } ?? .null,
                         "wall_clock_seconds": s.wallClockDuration.map { .double($0) } ?? .null,
+                        // Alignment/KPI mapping (#696). `alignment_weight` is a
+                        // read value for the future v2 score — nothing combines
+                        // it into a live score yet (ADR 0008 follow-up 11).
+                        "org_goal": s.orgGoal.map { .string($0) } ?? .null,
+                        "ticket_priority": s.ticketPriority.map { .string($0.rawValue) } ?? .null,
+                        "alignment_weight": .double(s.alignmentWeight),
                         "locked": .bool(s.locked),
                         // Legacy alias (CROW-569 named this `pinned`); kept for
                         // one release so existing scripts keep working.
@@ -1742,10 +1748,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                     if let title = params["title"]?.stringValue { capturedAppState.sessions[idx].ticketTitle = title }
                     if let num = params["number"]?.intValue { capturedAppState.sessions[idx].ticketNumber = num }
+                    if let priority = params["priority"]?.stringValue {
+                        capturedAppState.sessions[idx].ticketPriority = TicketPriority(jiraName: priority)
+                    }
                     capturedStore.mutate { data in
                         if let i = data.sessions.firstIndex(where: { $0.id == id }) { data.sessions[i] = capturedAppState.sessions[idx] }
                     }
                     return ["session_id": .string(idStr)]
+                }
+            },
+            "set-goal": { @Sendable params in
+                // #696 (ADR 0008 follow-up 8): tag a session with the org
+                // goal/KPI its work ladders up to, feeding the alignment weight.
+                guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
+                    throw RPCError.invalidParams("session_id required")
+                }
+                let clear = params["clear"]?.boolValue ?? false
+                let goal = params["goal"]?.stringValue?.trimmingCharacters(in: .whitespaces)
+                guard clear || !(goal ?? "").isEmpty else {
+                    throw RPCError.invalidParams("goal (non-blank) or clear required")
+                }
+                return try await MainActor.run {
+                    guard capturedAppState.sessions.contains(where: { $0.id == id }) else {
+                        throw RPCError.applicationError("Session not found")
+                    }
+                    let newGoal = clear ? nil : goal
+                    capturedService.setOrgGoal(id: id, goal: newGoal)
+                    return ["session_id": .string(idStr), "goal": newGoal.map { .string($0) } ?? .null]
                 }
             },
             "transition-ticket": { @Sendable params in

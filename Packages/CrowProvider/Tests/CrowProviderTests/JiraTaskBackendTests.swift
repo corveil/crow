@@ -72,6 +72,78 @@ final class JiraTaskBackendTests: XCTestCase {
         XCTAssertTrue(args.contains("--fields"))
     }
 
+    // MARK: - Priority + epic/parent read (#696, ADR 0008 follow-up 8)
+
+    func testFetchTaskRequestsAndParsesPriorityAndParent() async throws {
+        let fake = FakeShellRunner()
+        fake.responses = [.success("""
+        [{"key":"PROJ-42","fields":{
+          "summary":"Fix the thing",
+          "priority":{"name":"Critical"},
+          "parent":{"key":"PROJ-100","fields":{"summary":"Q3 latency epic"}}
+        }}]
+        """)]
+        let b = backend(fake, config: JiraConfig(site: "acme.atlassian.net"))
+        let info = try await b.fetchTask(url: "https://acme.atlassian.net/browse/PROJ-42")
+
+        XCTAssertEqual(info.priority, .high) // classic "Critical" normalizes to high
+        XCTAssertEqual(info.parentKey, "PROJ-100")
+
+        let args = fake.calls.first?.args ?? []
+        let fields = args[args.firstIndex(of: "--fields")! + 1]
+        XCTAssertTrue(fields.contains("priority"), "view --fields must request priority; got \(fields)")
+        XCTAssertTrue(fields.contains("parent"), "view --fields must request parent; got \(fields)")
+    }
+
+    func testFetchTaskWithoutPriorityOrParentIsNil() async throws {
+        // Pre-#696-shaped payload (and projects without priority/epics):
+        // absent fields degrade to nil, never throw.
+        let fake = FakeShellRunner()
+        fake.responses = [.success(#"[{"key":"PROJ-42","fields":{"summary":"Fix the thing"}}]"#)]
+        let info = try await backend(fake).fetchTask(url: "PROJ-42")
+        XCTAssertNil(info.priority)
+        XCTAssertNil(info.parentKey)
+    }
+
+    func testListAssignedAcliParsesPriorityAndParent() async throws {
+        let fake = FakeShellRunner()
+        fake.responses = [.success("""
+        [
+          {"key":"PROJ-1","fields":{
+            "summary":"Aligned one",
+            "status":{"name":"In Progress","statusCategory":{"key":"indeterminate"}},
+            "priority":{"name":"Highest"},
+            "parent":{"key":"PROJ-100","fields":{"summary":"Q3 latency epic"}}
+          }},
+          {"key":"PROJ-2","fields":{
+            "summary":"Custom-scheme two",
+            "status":{"name":"To Do","statusCategory":{"key":"new"}},
+            "priority":{"name":"P0 — Drop Everything"}
+          }}
+        ]
+        """)]
+        let listing = try await backend(fake).listAssigned(includeClosed: false)
+
+        let first = listing.open[0]
+        XCTAssertEqual(first.priority, .highest)
+        XCTAssertEqual(first.priorityName, "Highest")
+        XCTAssertEqual(first.parentKey, "PROJ-100")
+        XCTAssertEqual(first.parentSummary, "Q3 latency epic")
+
+        // An unrecognized custom priority name normalizes to .unknown but the
+        // raw name is preserved; no parent → nil.
+        let second = listing.open[1]
+        XCTAssertEqual(second.priority, .unknown)
+        XCTAssertEqual(second.priorityName, "P0 — Drop Everything")
+        XCTAssertNil(second.parentKey)
+        XCTAssertNil(second.parentSummary)
+
+        let args = fake.calls[0].args
+        let fields = args[args.firstIndex(of: "--fields")! + 1]
+        XCTAssertTrue(fields.contains("priority"), "search --fields must request priority; got \(fields)")
+        XCTAssertTrue(fields.contains("parent"), "search --fields must request parent; got \(fields)")
+    }
+
     func testFetchTaskRejectsUnparseableURL() async {
         do {
             _ = try await backend(FakeShellRunner()).fetchTask(url: "https://acme.atlassian.net/browse/")
@@ -231,7 +303,7 @@ final class JiraTaskBackendTests: XCTestCase {
             statusMap: ["In Progress": "In Development"],
             authorization: "Basic creds"
         )
-        let payload = #"{"issues":[{"key":"MAXX-1","fields":{"summary":"Dev one","status":{"name":"In Development","statusCategory":{"key":"indeterminate"}},"labels":["bug"]}}]}"#.data(using: .utf8)!
+        let payload = #"{"issues":[{"key":"MAXX-1","fields":{"summary":"Dev one","status":{"name":"In Development","statusCategory":{"key":"indeterminate"}},"labels":["bug"],"priority":{"name":"High"},"parent":{"key":"MAXX-90","fields":{"summary":"Epic"}}}}]}"#.data(using: .utf8)!
         let b = JiraTaskBackend(shellRunner: fake, config: cfg, transport: { request in
             sawGET.set(true)
             XCTAssertEqual(request.httpMethod, "GET")
@@ -247,6 +319,11 @@ final class JiraTaskBackendTests: XCTestCase {
         XCTAssertEqual(listing.open[0].projectStatus, .inProgress)
         XCTAssertEqual(listing.open[0].url, "https://acme.atlassian.net/browse/MAXX-1")
         XCTAssertEqual(listing.open[0].labels.map(\.name), ["bug"])
+        // #696: priority + parent ride the REST read too.
+        XCTAssertEqual(listing.open[0].priority, .high)
+        XCTAssertEqual(listing.open[0].priorityName, "High")
+        XCTAssertEqual(listing.open[0].parentKey, "MAXX-90")
+        XCTAssertEqual(listing.open[0].parentSummary, "Epic")
     }
 
     /// A REST failure degrades to an empty listing (like GitLab) without throwing.
