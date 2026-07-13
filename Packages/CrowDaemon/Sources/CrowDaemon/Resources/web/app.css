@@ -521,13 +521,13 @@ html, body {
 }
 
 .allow-list { display: flex; flex-direction: column; gap: 4px; }
-.allow-filter {
+.board-filter {
   width: 100%; box-sizing: border-box; margin-bottom: 8px;
   padding: 7px 10px; border: 1px solid var(--border-subtle); border-radius: 6px;
   background: var(--bg-card); color: var(--text-primary); font-size: 12px;
 }
-.allow-filter::placeholder { color: var(--text-muted); }
-.allow-filter:focus { outline: none; border-color: var(--border-strong); }
+.board-filter::placeholder { color: var(--text-muted); }
+.board-filter:focus { outline: none; border-color: var(--border-strong); }
 .allow-row {
   display: flex; align-items: flex-start; gap: 10px; padding: 8px 10px;
   border: 1px solid var(--border-subtle); border-radius: 6px; background: var(--bg-card);
