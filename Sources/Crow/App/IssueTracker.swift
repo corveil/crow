@@ -18,6 +18,12 @@ import CrowProvider
 final class IssueTracker {
     private let appState: AppState
     private let providerManager: ProviderManager
+    /// Shared store instance (injected by AppDelegate). PR attributions have
+    /// no `appState` mirror, so they MUST be written through the same
+    /// `JSONStore` that `SessionService` mutates — an ad-hoc `JSONStore()`
+    /// write would be clobbered by the next mutation of the shared
+    /// instance's older in-memory snapshot.
+    private let store: JSONStore
     private var timer: Timer?
     private let pollInterval: TimeInterval = 60 // 1 minute
     private var isRefreshing = false
@@ -211,9 +217,10 @@ final class IssueTracker {
     /// Below this many remaining GraphQL points we proactively skip a cycle.
     private let rateLimitThreshold = 50
 
-    init(appState: AppState, providerManager: ProviderManager) {
+    init(appState: AppState, providerManager: ProviderManager, store: JSONStore = JSONStore()) {
         self.appState = appState
         self.providerManager = providerManager
+        self.store = store
     }
 
     func start() {
@@ -495,6 +502,7 @@ final class IssueTracker {
             let allKnownPRs = Self.dedupedByURL(ghResult.viewerPRs + stalePRs)
 
             applyPRStatuses(viewerPRs: allKnownPRs)
+            updatePRAttributions(viewerPRs: allKnownPRs)
 
             // Review requests (search result) + cross-reference with review sessions
             appState.isLoadingReviews = true
@@ -1796,6 +1804,102 @@ final class IssueTracker {
         return false
     }
 
+    /// Merge freshly parsed trailer UUIDs into the PR's attribution record
+    /// (#693). Returns the record to persist, or nil when no write is
+    /// needed: no trailers and no existing record, or nothing material
+    /// changed since the last capture. `sessionIDs` is a monotonic ordered
+    /// union — IDs observed once are never dropped, even if a rebase removes
+    /// the commit that carried them. All parsed UUIDs are kept, known
+    /// session or not; the auto-merge gate's known-session filter is a
+    /// separate concern (`crowAuthored`). Pure so unit tests can exercise
+    /// the merge without spinning up an `IssueTracker`.
+    nonisolated static func capturedAttribution(
+        existing: PRSessionAttribution?,
+        pr: ViewerPR,
+        parsedSessionIDs: [UUID],
+        now: Date
+    ) -> PRSessionAttribution? {
+        guard var attribution = existing else {
+            guard !parsedSessionIDs.isEmpty else { return nil }
+            var deduped: [UUID] = []
+            for id in parsedSessionIDs where !deduped.contains(id) { deduped.append(id) }
+            return PRSessionAttribution(
+                prURL: pr.url,
+                repoNameWithOwner: pr.repoNameWithOwner,
+                prNumber: pr.number,
+                sessionIDs: deduped,
+                state: pr.state,
+                mergedAt: pr.state == "MERGED" ? now : nil,
+                firstSeenAt: now,
+                updatedAt: now
+            )
+        }
+        for id in parsedSessionIDs where !attribution.sessionIDs.contains(id) {
+            attribution.sessionIDs.append(id)
+        }
+        attribution.state = pr.state
+        if pr.state == "MERGED" && attribution.mergedAt == nil {
+            attribution.mergedAt = now
+        }
+        guard attribution.sessionIDs != existing?.sessionIDs
+            || attribution.state != existing?.state
+            || attribution.mergedAt != existing?.mergedAt else { return nil }
+        attribution.updatedAt = now
+        return attribution
+    }
+
+    /// Refresh the state of already-attributed PRs from a polled PR list
+    /// (#693). Returns only the entries that changed; `mergedAt` is stamped
+    /// once, at the first MERGED observation, and never moved. Never creates
+    /// entries — attribution requires a trailer parse, which happens in
+    /// `recordPRAttribution`. Pure for testability.
+    nonisolated static func attributionStateUpdates(
+        existing: [String: PRSessionAttribution],
+        prs: [ViewerPR],
+        now: Date
+    ) -> [String: PRSessionAttribution] {
+        var updates: [String: PRSessionAttribution] = [:]
+        for pr in prs {
+            guard let updated = capturedAttribution(
+                existing: existing[pr.url], pr: pr, parsedSessionIDs: [], now: now
+            ) else { continue }
+            updates[pr.url] = updated
+        }
+        return updates
+    }
+
+    /// Persist the PR→session mapping parsed from `commitMessages` (#693).
+    /// Called from `prHasCrowAuthoredCommit` so attribution rides along with
+    /// the existing trailer parse; the gate's boolean result is unaffected.
+    func recordPRAttribution(pr: ViewerPR, commitMessages: [String], now: Date = Date()) {
+        let parsed = commitMessages.flatMap(Self.extractCrowSessionUUIDs)
+        let existing = store.data.prAttributions?[pr.url]
+        guard let attribution = Self.capturedAttribution(
+            existing: existing, pr: pr, parsedSessionIDs: parsed, now: now
+        ) else { return }
+        store.mutate { data in
+            var attributions = data.prAttributions ?? [:]
+            attributions[pr.url] = attribution
+            data.prAttributions = attributions
+        }
+    }
+
+    /// Update stored attribution state from a refresh cycle's PR list
+    /// (#693). Once merged, a PR leaves the auto-merge/rebase flow (the
+    /// only place commits are fetched), so state transitions — and the
+    /// observed merge timestamp — are recorded here instead.
+    func updatePRAttributions(viewerPRs: [ViewerPR], now: Date = Date()) {
+        let existing = store.data.prAttributions ?? [:]
+        guard !existing.isEmpty else { return }
+        let updates = Self.attributionStateUpdates(existing: existing, prs: viewerPRs, now: now)
+        guard !updates.isEmpty else { return }
+        store.mutate { data in
+            var attributions = data.prAttributions ?? [:]
+            for (url, attribution) in updates { attributions[url] = attribution }
+            data.prAttributions = attributions
+        }
+    }
+
     /// Per-refresh entry point. Picks candidate (session, PR) pairs and
     /// kicks off the async enable flow once each. No-op when the global
     /// `autoMergeWatcherEnabled` setting is off.
@@ -1926,6 +2030,7 @@ final class IssueTracker {
             return false
         }
         let messages = commits.map(\.message)
+        recordPRAttribution(pr: pr, commitMessages: messages)
         let knownIDs = Set(appState.sessions.map(\.id))
         return Self.crowAuthored(commitMessages: messages, knownSessionIDs: knownIDs)
     }

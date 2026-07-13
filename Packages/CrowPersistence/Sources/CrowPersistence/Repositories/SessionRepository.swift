@@ -30,6 +30,8 @@ public struct SessionRepository: Sendable {
     /// Delete a session and all related data (worktrees, links, terminals) in a single atomic mutation.
     /// `analyticsSnapshots` is deliberately NOT cascaded: the scorecard's
     /// trailing-4-week baseline must survive session deletion (ADR 0008, #690).
+    /// `prAttributions` is likewise NOT cascaded: merged-PR-per-window counts
+    /// must survive session deletion (ADR 0008, #693).
     public func delete(id: UUID) {
         store.mutate { data in
             data.sessions.removeAll { $0.id == id }
