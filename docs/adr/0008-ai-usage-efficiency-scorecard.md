@@ -11,7 +11,7 @@ Most AI-usage leaderboards rank by raw spend or token count. That is a perverse 
 Three metric categories frame the design:
 
 - **A. Efficiency / hygiene** (penalties/normalizers): compaction count, context accumulation (avg input per turn), cache hit ratio, cost-per-outcome, rework.
-- **B. Outcomes / throughput** (rewards): tickets done, PRs merged, merge rate.
+- **B. Outcomes / throughput** (rewards): sessions shipped (v1's headline), then tickets done, PRs merged, merge rate as attribution data lands.
 - **C. Alignment** (weights/flags): does the work ladder up to an org KPI/goal; priority weighting.
 
 ### Data feasibility (verified against the code)
@@ -45,14 +45,14 @@ Crow rates AI usage with **two separate surfaces — a per-session A–F efficie
 
 The **efficiency grade** is a penalty-point deduction from 100 within a single unit, mapped to A–F bands. Every deduction is labeled with its cause, so the grade is a coachable sentence, not a number: *"C — 3 compactions (−15), 12% API error rate (−10)."* Additive arithmetic is fine *inside* the grade because everything is the same unit (penalty points) and each deduction is independently explainable.
 
-The **throughput surface** is plain counts (tickets done, sessions that shipped) shown alongside — never multiplied into the grade in v1.
+The **throughput surface** is a plain count — **sessions shipped** in v1, with ticket/PR counts joining once attribution data exists (follow-ups 5–6) — shown alongside, never multiplied into the grade in v1.
 
 The strawman from #648 — `throughput × efficiency-multiplier × alignment-weight` — is the right **v2** shape, and this ADR names its trigger conditions: adopt it **only after** PR→session attribution (follow-up 5), rework tracking (6), and alignment tagging (8) exist and the headline unit is per-user-per-week. Multiplicative is correct *then* because it makes waste un-buyable with volume — an additive combination lets high throughput mask terrible hygiene, which recreates the raw-spend-leaderboard failure with extra steps. It is wrong *now* because at session grain the throughput factor is usually zero, producing unstable, unexplainable scores.
 
 ### Unit, window, surface
 
 - **Unit:** the **session** is the atomic graded unit — it is the natural grain of every verified field. Sessions with fewer than ~5 prompts are shown as *insufficient data*, not graded.
-- **Window:** the headline view is a **weekly rollup** (smooths small samples, absorbs session-splitting); per-session grades are the drill-down.
+- **Window:** the headline view is a **weekly rollup** (smooths small samples, absorbs session-splitting); per-session grades are the drill-down. The weekly grade **re-aggregates raw numerators and denominators** across the week's sessions (Σ compactions / Σ active hours, Σ input tokens / Σ prompts, …) — it is *not* an average of per-session grades, which would let many short clean sessions dilute one disastrous one and reintroduce the session-splitting incentive.
 - **Surface:** a **private scorecard, not a leaderboard**. The comparison baseline is the user's own trailing 4-week median — "this week vs. your normal." A leaderboard of one user is meaningless, and leaderboards maximize gaming incentive for minimum informational value. The intended audience of the grade is **the user themself**; this is a design constraint, and any future team leaderboard proposal must supersede this ADR explicitly rather than quietly repurposing the scorecard as a surveillance instrument.
 
 ### v1 metrics (all formulas from verified fields)
@@ -63,7 +63,7 @@ The strawman from #648 — `throughput × efficiency-multiplier × alignment-wei
 | Context pressure | `inputTokens / max(1, promptCount)` | graded |
 | Cache hit ratio | `cacheReadTokens / max(1, inputTokens + cacheCreationTokens)` | graded |
 | API error rate | `apiErrorCount / max(1, apiRequestCount)` | graded |
-| Cost per done ticket | weekly grain only: `Σ totalCost / max(1, sessionsShipped)` | graded (weekly) |
+| Cost per shipped session | weekly grain only: `Σ totalCost / sessionsShipped`; a week with `sessionsShipped == 0` is **not graded** on this metric (shown as "insufficient outcomes"), never divided by 1 | graded (weekly) |
 | Session outcome flag | ticket reached done via `markIssueDone` / status → `.completed` | throughput surface |
 | Sessions shipped (week) | count of outcome-flagged sessions in the window, derived from persisted per-session snapshots (follow-up 2) | throughput surface — the weekly headline |
 | Churn hint | `linesRemoved / max(1, linesAdded)` | informational only (too weak as a rework proxy to grade) |
