@@ -758,7 +758,8 @@ final class BackendsTests: XCTestCase {
         [{"iid":3,"title":"Closed","web_url":"https://gitlab.example.com/g/p/-/issues/3","state":"closed",
           "labels":[],"references":{"full":"g/p#3"}}]
         """
-        fake.responses = [.success(openJSON), .success(closedJSON)]
+        let closedResponse = "HTTP/2.0 200 OK\nContent-Type: application/json\nX-Total: 137\n\n" + closedJSON
+        fake.responses = [.success(openJSON), .success(closedResponse)]
         let backend = GitLabTaskBackend(shellRunner: fake, host: "gitlab.example.com")
         let listing = try await backend.listAssigned()
         XCTAssertEqual(listing.open.count, 1)
@@ -766,14 +767,58 @@ final class BackendsTests: XCTestCase {
         XCTAssertEqual(listing.open[0].state, "open")
         XCTAssertEqual(listing.closed.count, 1)
         XCTAssertEqual(listing.closed[0].projectStatus, .done)
+        // #697: the done badge uses the X-Total window total, not the capped page.
+        XCTAssertEqual(listing.closedTotalCount, 137)
         XCTAssertNil(listing.rateLimit)  // GitLab doesn't have rate-limit JSON in this shape
         XCTAssertEqual(fake.calls.count, 2)
+        XCTAssertTrue(fake.calls[1].args.contains("-i"))
+    }
+
+    func testGitLabTaskBackendClosedTotalFallsBackToPageCountWithoutHeader() async throws {
+        let fake = FakeShellRunner()
+        let openJSON = "[]"
+        let closedJSON = #"[{"iid":3,"title":"Closed","web_url":"https://gl/g/p/-/issues/3","state":"closed","labels":[],"references":{"full":"g/p#3"}}]"#
+        // Headers present but no X-Total (GitLab omits it for expensive counts).
+        let closedResponse = "HTTP/2.0 200 OK\nContent-Type: application/json\n\n" + closedJSON
+        fake.responses = [.success(openJSON), .success(closedResponse)]
+        let backend = GitLabTaskBackend(shellRunner: fake, host: "gitlab.example.com")
+        let listing = try await backend.listAssigned()
+        XCTAssertEqual(listing.closed.count, 1)
+        XCTAssertEqual(listing.closedTotalCount, 1)
+    }
+
+    func testGitLabTaskBackendClosedCallFailureKeepsOpen() async throws {
+        let fake = FakeShellRunner()
+        let openJSON = #"[{"iid":7,"title":"Open","web_url":"https://gl/g/p/-/issues/7","state":"opened","labels":[],"references":{"full":"g/p#7"}}]"#
+        fake.responses = [.success(openJSON), .failure(ShellRunnerError.nonZeroExit(exitCode: 1, output: "boom"))]
+        let backend = GitLabTaskBackend(shellRunner: fake, host: "gitlab.example.com")
+        let listing = try await backend.listAssigned()
+        XCTAssertEqual(listing.open.count, 1)
+        XCTAssertEqual(listing.closed.count, 0)
+        XCTAssertEqual(listing.closedTotalCount, 0)
+    }
+
+    func testGitLabSplitTotalHeader() {
+        // CRLF endings + case-insensitive header name.
+        let crlf = "HTTP/2.0 200 OK\r\nx-total: 42\r\n\r\n[{\"iid\":1}]"
+        let parsedCRLF = GitLabTaskBackend.splitTotalHeader(crlf)
+        XCTAssertEqual(parsedCRLF.total, 42)
+        XCTAssertEqual(parsedCRLF.body, "[{\"iid\":1}]")
+
+        // No blank line → treated as bare body, no total.
+        let bare = #"[{"iid":1}]"#
+        let parsedBare = GitLabTaskBackend.splitTotalHeader(bare)
+        XCTAssertNil(parsedBare.total)
+        XCTAssertEqual(parsedBare.body, bare)
+
+        // Non-numeric X-Total is ignored.
+        let junk = "HTTP/2.0 200 OK\nX-Total: lots\n\n[]"
+        XCTAssertNil(GitLabTaskBackend.splitTotalHeader(junk).total)
     }
 
     func testGitLabTaskBackendListAssignedSkipsClosedCallWhenNotRequested() async throws {
         // Regression guard: passing includeClosed: false must skip the second
-        // REST round-trip. The IssueTracker GitLab path uses this to avoid a
-        // wasted call every 60s — the closed-diff logic is GitHub-only.
+        // REST round-trip for callers that only need the open list.
         let fake = FakeShellRunner()
         let openJSON = #"[{"iid":7,"title":"Open","web_url":"https://gl/g/p/-/issues/7","state":"opened","labels":[],"references":{"full":"g/p#7"}}]"#
         fake.responses = [.success(openJSON)]
