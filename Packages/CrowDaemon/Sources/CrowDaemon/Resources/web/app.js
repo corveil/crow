@@ -1678,6 +1678,13 @@ async function refreshTerminals() {
 function renderTabs() {
   const bar = document.getElementById('tabbar');
   bar.innerHTML = '';
+  // #680: managers are a single terminal — no tabs, no "+", no "×". Leaving
+  // #tabbar empty lets the `#tabbar:empty { display:none }` rule (app.css)
+  // collapse it so no empty strip sits above the manager terminal. (This also
+  // moots the stale-tab naming bug: a renamed manager session has no tab to go
+  // stale, since tabs are labeled from the terminal name, not the session name.)
+  const sel = sessions.find((x) => x.id === selectedId);
+  if (sel && sel.kind === 'manager') return;
   for (const t of terminals) {
     const tab = el('div', 'tab' + (activeTerminal && t.id === activeTerminal.id ? ' active' : ''));
     const label = el('span', null, t.name);
