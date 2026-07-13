@@ -2101,10 +2101,19 @@ function renderAllowlist(root) {
   filterInput.value = allowlistFilter;
   filterInput.oninput = () => {
     allowlistFilter = filterInput.value;
+    // Capture the live caret/selection before the board tears down this input,
+    // then restore it (clamped) on the recreated input so mid-string edits keep
+    // their position instead of jumping to the end.
+    const selStart = filterInput.selectionStart;
+    const selEnd = filterInput.selectionEnd;
     renderBoard();
     requestAnimationFrame(() => {
       const n = document.querySelector('.allow-filter');
-      if (n) { n.focus(); n.setSelectionRange(n.value.length, n.value.length); }
+      if (n) {
+        n.focus();
+        const len = n.value.length;
+        n.setSelectionRange(Math.min(selStart, len), Math.min(selEnd, len));
+      }
     });
   };
   root.appendChild(filterInput);
