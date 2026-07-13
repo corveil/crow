@@ -181,16 +181,28 @@ public final class OTLPReceiver: Sendable {
             for scope in scopeMetrics {
                 guard let metrics = scope.metrics else { continue }
                 for metric in metrics {
-                    let dataPoints = metric.sum?.dataPoints ?? metric.gauge?.dataPoints ?? []
-                    for point in dataPoints {
-                        let attributesJSON = encodeAttributes(point.attributes)
-                        await database.insertMetric(
-                            crowSessionID: crowSessionID,
-                            metricName: metric.name,
-                            value: point.numericValue,
-                            attributesJSON: attributesJSON,
-                            timestampNs: point.timeUnixNano
-                        )
+                    if let sum = metric.sum {
+                        for point in sum.dataPoints ?? [] {
+                            await database.insertMetric(
+                                crowSessionID: crowSessionID,
+                                metricName: metric.name,
+                                value: point.numericValue,
+                                attributesJSON: encodeAttributes(point.attributes),
+                                timestampNs: point.timeUnixNano,
+                                temporality: sum.temporality,
+                                isMonotonic: sum.isMonotonic
+                            )
+                        }
+                    } else if let gauge = metric.gauge {
+                        for point in gauge.dataPoints ?? [] {
+                            await database.insertMetric(
+                                crowSessionID: crowSessionID,
+                                metricName: metric.name,
+                                value: point.numericValue,
+                                attributesJSON: encodeAttributes(point.attributes),
+                                timestampNs: point.timeUnixNano
+                            )
+                        }
                     }
                 }
             }
