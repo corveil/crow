@@ -82,7 +82,7 @@ For each workspace spec, perform the same resolution as `/crow-workspace`:
    - Jira (task-only): fetch via the `jira` MCP server (`jira_get_issue {key}`); title is the work item `summary`.
 6. **Check for existing PR**: `gh pr list --repo {owner}/{repo} --search "{issue_number}" --state open --json number,title,headRefName,url --limit 5` (with `dangerouslyDisableSandbox: true`). For a Jira-task session this runs against the workspace's configured GitHub/GitLab code repo, not Jira.
 7. **Generate names**: slug, branch, worktree path, session name (following `/crow-workspace` naming conventions). **Jira:** resolve `{ticket_number}` as the **numeric suffix** of the key (`MAXX-6859` → `6859`); `{ticket_url}` is the full `…/browse/{key}` URL; the slug uses the lowercased full key (`{repo}-maxx-6859-{slug}`).
-8. **Compose prompt**: Use the First Prompt Template from `/crow-workspace`
+8. **Compose prompt**: Use the First Prompt Template from `/crow-workspace`. Resolve `{custom_instructions}` from the **matched** workspace's `workspaces["{workspace}"].customInstructions` in the config read in step 1 (not `defaults`, not another workspace) and append a verbatim `## Custom Instructions` section when non-empty — exactly per `/crow-workspace`'s **Resolve custom instructions** step and **First Prompt Template**.
 9. **Write prompt file**: `cat > {devRoot}/.claude/prompts/crow-prompt-{session_name}.md`
 
 This phase is sequential because each resolution involves LLM reasoning (scoring repos, generating slugs). It's fast (~2-3 seconds per workspace).

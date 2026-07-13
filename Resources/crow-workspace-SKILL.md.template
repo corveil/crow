@@ -307,6 +307,17 @@ Store the result as `{base_branch}` for substitution into Step 2 and into the pr
 
 Render the fetched content into the prompt template per the formatting rules in **First Prompt Template** below.
 
+**Resolve custom instructions (required before writing the prompt).** Read the
+**matched** workspace's entry in `{devRoot}/.claude/config.json` —
+`workspaces["{workspace}"].customInstructions`, where `{workspace}` is the same
+value passed to `setup.sh --workspace` — and store it as `{custom_instructions}`.
+This must be the matched workspace's own field: **do not** read `defaults`, **do
+not** use another workspace's value, and **do not** copy the example strings shown
+in the config sample above (`"Always run …"` / `null`). If the field is `null`,
+absent, or empty after trimming, treat `{custom_instructions}` as empty (no
+section). This value feeds the `## Custom Instructions` block of the prompt
+template (see **First Prompt Template** below).
+
 #### Step 1: Write the prompt file
 
 The LLM writes the prompt content (see template below — with the pre-fetched ticket/PR content embedded) to a file:
@@ -460,10 +471,15 @@ gh pr create --title "<summary>" --body "Closes #123" --base {base_branch}
 
 ## Custom Instructions
 
-{workspace customInstructions text — include verbatim}
+{custom_instructions}
 ~~~
 
-If the workspace config contains a non-empty `customInstructions` field, append a `## Custom Instructions` section at the end of the prompt with its contents verbatim. Omit this section entirely if the field is absent, null, or empty.
+Fill the `## Custom Instructions` block with `{custom_instructions}` — the
+**matched** workspace's `customInstructions` resolved above — included **verbatim**
+(preserve markdown, code fences, line breaks; do not summarize, reword, or
+substitute `defaults` or another workspace's text). If `{custom_instructions}` is
+empty, `null`, or absent, **omit the entire `## Custom Instructions` heading and
+body** so the prompt has no such section.
 
 For GitLab tickets, substitute `glab mr create --title "<summary>" --description "Closes #{number}" --target-branch {base_branch}` on step 6 (use "merge request" instead of "pull request"). When no ticket number is available, drop the body/description and fall back to `gh pr create --fill` / `glab mr create --fill`.
 
