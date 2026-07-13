@@ -386,8 +386,10 @@ html, body {
 #back-to-sidebar {
   display: none;
   position: fixed;
-  top: 12px;
-  left: 12px;
+  /* Offset by the device safe area so the ☰ clears notches / rounded corners and
+     the status bar on notched phones (viewport-fit=cover). env() → 0 elsewhere. */
+  top: calc(12px + env(safe-area-inset-top));
+  left: calc(12px + env(safe-area-inset-left));
   z-index: 50;
   width: 40px;
   height: 40px;
@@ -416,15 +418,15 @@ html, body {
 
   #app.has-selection #sidebar { display: none; }
   #app.has-selection #back-to-sidebar { display: flex; }
-  #app.has-selection #detail-header { padding-left: 60px; }
+  #app.has-selection #detail-header { padding-left: calc(60px + env(safe-area-inset-left)); }
 
   #app.has-selection.mobile-show-sidebar #sidebar { display: block; }
   #app.has-selection.mobile-show-sidebar #detail { display: none; }
   #app.has-selection.mobile-show-sidebar #back-to-sidebar { display: none; }
-  /* Board content clears the floating hamburger on mobile. */
-  #app.has-selection.board-active #board { padding-top: 56px; }
-  /* Extra room under the last card so it's fully reachable above mobile chrome. */
-  #sidebar { padding-bottom: 64px; }
+  /* Board content clears the floating hamburger on mobile (incl. its safe-area top). */
+  #app.has-selection.board-active #board { padding-top: calc(56px + env(safe-area-inset-top)); }
+  /* Extra room under the last card so it's fully reachable above mobile chrome / home indicator. */
+  #sidebar { padding-bottom: calc(64px + env(safe-area-inset-bottom)); }
   /* The status bar would overlap the fullscreen terminal on mobile — show it only
      while the sidebar is the visible view. */
   #statusbar { display: none; }
@@ -559,8 +561,9 @@ html, body {
 /* ---- Fixed connection/status bar (bottom-left, CROW-593) ---- */
 #statusbar {
   position: fixed;
-  left: 0;
-  bottom: 0;
+  /* Clear the home indicator / rounded corners under viewport-fit=cover. */
+  left: env(safe-area-inset-left);
+  bottom: env(safe-area-inset-bottom);
   z-index: 60;
   display: flex;
   align-items: center;
