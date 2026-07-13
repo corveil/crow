@@ -233,7 +233,7 @@ public struct SessionDetailView: View {
             // Row 4: Session Analytics (if telemetry data exists)
             if let analytics = appState.hookState(for: session.id).analytics {
                 Divider().overlay(CorveilTheme.borderSubtle).padding(.horizontal, 16)
-                SessionAnalyticsStrip(analytics: analytics)
+                SessionAnalyticsStrip(analytics: analytics, wallClockDuration: session.wallClockDuration)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 6)
             }

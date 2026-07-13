@@ -2362,6 +2362,32 @@ final class SessionService {
         scheduleAnalyticsSnapshot(for: id, status: status)
     }
 
+    /// Stamp agent `SessionStart`/`SessionEnd` wall-clock timestamps on the
+    /// session (#692, ADR 0008 follow-up 4). Display-only context —
+    /// `activeTimeSeconds` from telemetry stays the penalty-normalization
+    /// clock. Like `setLocked`, deliberately leaves `updatedAt` untouched so
+    /// the retention clock is unaffected. These events are rare (agent
+    /// launch/exit), so the unconditional store write is cheap.
+    func recordAgentLifecycleEvent(sessionID: UUID, eventName: String, at date: Date = Date()) {
+        guard eventName == "SessionStart" || eventName == "SessionEnd" else { return }
+
+        func apply(_ session: inout Session) {
+            if eventName == "SessionStart" {
+                session.recordAgentSessionStart(at: date)
+            } else {
+                session.recordAgentSessionEnd(at: date)
+            }
+        }
+        if let idx = appState.sessions.firstIndex(where: { $0.id == sessionID }) {
+            apply(&appState.sessions[idx])
+        }
+        store.mutate { data in
+            if let idx = data.sessions.firstIndex(where: { $0.id == sessionID }) {
+                apply(&data.sessions[idx])
+            }
+        }
+    }
+
     // MARK: - Analytics Snapshot (#690, ADR 0008)
 
     /// Fire-and-forget trigger for the end-of-session analytics snapshot.
@@ -2395,7 +2421,9 @@ final class SessionService {
         // from the DB provider (#691).
         let snapshot = SessionAnalyticsSnapshot(
             sessionID: id, endedAt: Date(), status: status, analytics: analytics,
-            compactionCount: appState.existingHookState(for: id)?.compactionCount ?? 0)
+            compactionCount: appState.existingHookState(for: id)?.compactionCount ?? 0,
+            wallClockDurationSeconds: appState.sessions
+                .first(where: { $0.id == id })?.wallClockDuration)
         store.mutate { data in
             var snapshots = data.analyticsSnapshots ?? [:]
             snapshots[id.uuidString] = snapshot
@@ -2464,7 +2492,8 @@ final class SessionService {
                     sessionID: session.id, endedAt: session.updatedAt,
                     status: session.status, analytics: analytics,
                     compactionCount: appState.existingHookState(for: session.id)?
-                        .compactionCount ?? 0)
+                        .compactionCount ?? 0,
+                    wallClockDurationSeconds: session.wallClockDuration)
                 data.analyticsSnapshots = snapshots
             }
         }
