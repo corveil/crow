@@ -80,7 +80,7 @@ public enum CrowDaemon {
         // run, so we drive it with an explicit async tick (`startBoardPoll`)
         // instead of `tracker.start()`.
         let (tracker, allowList): (IssueTracker, AllowListService) = await MainActor.run {
-            let tracker = IssueTracker(appState: appState, providerManager: providerManager)
+            let tracker = IssueTracker(appState: appState, providerManager: providerManager, store: store)
             let allowList = AllowListService(appState: appState, devRoot: options.devRoot)
             allowList.scan()
             return (tracker, allowList)
