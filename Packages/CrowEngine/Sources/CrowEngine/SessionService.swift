@@ -31,7 +31,8 @@ public final class SessionService {
         providerManager: ProviderManager? = nil,
         analyticsProvider: (@Sendable (UUID) async -> SessionAnalytics?)? = nil,
         hostBridge: HostBridge = NoopHostBridge()
-    ) {        self.store = store
+    ) {
+        self.store = store
         self.appState = appState
         self.telemetryPort = telemetryPort
         self.providerManager = providerManager
