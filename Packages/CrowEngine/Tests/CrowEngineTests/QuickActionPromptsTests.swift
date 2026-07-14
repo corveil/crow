@@ -53,3 +53,29 @@ struct QuickActionPromptsTests {
         #expect(prompt.hasSuffix("\n"))
     }
 }
+
+/// A manual quick action must report whether it actually reached the agent so
+/// the web UI stops echoing a false "dispatched" for silent no-ops (#730).
+@Suite("AutoRespondCoordinator.dispatchManual")
+@MainActor
+struct DispatchManualResultTests {
+
+    @Test func skipsWithNoManagedTerminalWhenSessionHasNone() {
+        let appState = AppState()
+        let session = Session(name: "s", kind: .work, agentKind: .claudeCode)
+        appState.sessions = [session]
+        let coordinator = AutoRespondCoordinator(
+            appState: appState, providerManager: ProviderManager(),
+            settingsProvider: { AutoRespondSettings() })
+        #expect(coordinator.dispatchManual(action: .mergePR, sessionID: session.id) == .noManagedTerminal)
+    }
+
+    @Test func skipReasonIsNilOnlyWhenSent() {
+        #expect(QuickActionDispatchResult.sent.isSent)
+        #expect(QuickActionDispatchResult.sent.skipReason == nil)
+        for result in [QuickActionDispatchResult.noManagedTerminal, .surfaceNotReady, .noPRLink] {
+            #expect(!result.isSent)
+            #expect(result.skipReason?.isEmpty == false)
+        }
+    }
+}

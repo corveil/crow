@@ -18,3 +18,31 @@ public enum QuickAction: String, Sendable, Equatable {
     /// `isReadyToMerge` — merge the PR.
     case mergePR
 }
+
+/// Outcome of a manual `dispatchManual(action:sessionID:)` attempt. Lets callers
+/// (the daemon `quick-action` handler, the web UI) report honestly instead of
+/// assuming success: `dispatchManual` silently skips — NSLog only — when there's
+/// no managed terminal, the terminal surface isn't ready, or the session has no
+/// PR link, which previously surfaced as a false "dispatched" echo (#730).
+public enum QuickActionDispatchResult: Sendable, Equatable {
+    /// The prompt was pasted into the session's managed agent terminal.
+    case sent
+    /// The session has no managed terminal to send the prompt to.
+    case noManagedTerminal
+    /// The managed terminal exists but its surface isn't initialized yet.
+    case surfaceNotReady
+    /// The session has no `.pr` link, so there's no PR to act on.
+    case noPRLink
+
+    public var isSent: Bool { self == .sent }
+
+    /// User-facing reason a manual dispatch was skipped; `nil` when actually sent.
+    public var skipReason: String? {
+        switch self {
+        case .sent:              return nil
+        case .noManagedTerminal: return "no active agent terminal for this session"
+        case .surfaceNotReady:   return "the agent terminal isn't ready yet"
+        case .noPRLink:          return "this session has no linked PR"
+        }
+    }
+}
