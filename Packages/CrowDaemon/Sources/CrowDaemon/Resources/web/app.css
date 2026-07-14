@@ -1063,3 +1063,105 @@ html, body {
   margin-bottom: 6px;
 }
 @keyframes wizard-spin { to { transform: rotate(360deg); } }
+
+/* ---- Scorecard (ADR 0008 web parity, #721) ---- */
+.score-weeklabel { color: var(--text-secondary); font-size: 12px; }
+.score-banner {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 8px 12px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+  margin-bottom: 14px;
+}
+.score-wrap { display: flex; flex-direction: column; gap: 14px; padding-bottom: 24px; }
+.score-row { display: flex; gap: 12px; flex-wrap: wrap; }
+.score-row > .score-card { flex: 1 1 220px; }
+.score-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 12px;
+}
+.score-card-label { color: var(--text-secondary); font-size: 12px; margin-bottom: 10px; }
+.score-sub { color: var(--text-secondary); font-size: 12px; margin-top: 6px; }
+.score-muted { color: var(--text-muted); font-size: 12px; margin-top: 6px; line-height: 1.45; }
+
+.score-grade-row { display: flex; align-items: baseline; gap: 10px; }
+.score-grade-letter { font-size: 44px; font-weight: 800; line-height: 1; }
+.score-grade-num { font-size: 15px; font-weight: 500; color: var(--text-secondary); }
+.score-big-gold { font-size: 44px; font-weight: 800; color: var(--gold); line-height: 1.05; }
+
+.score-deductions { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.score-deduction-line { display: flex; align-items: baseline; gap: 8px; }
+.score-deduction-label { font-size: 12px; font-weight: 500; flex: 1; }
+.score-deduction-points { font-size: 12px; font-weight: 700; color: var(--red); font-variant-numeric: tabular-nums; }
+.score-deduction-hint { font-size: 11px; color: var(--text-muted); margin-top: 1px; line-height: 1.4; }
+
+.score-decomp { font-size: 12px; font-weight: 500; margin-top: 8px; font-variant-numeric: tabular-nums; }
+.score-decomp-sub { font-size: 11px; color: var(--text-muted); margin-top: 4px; font-variant-numeric: tabular-nums; }
+
+.score-insufficient { margin-top: 4px; }
+.score-insufficient-title { font-size: 20px; font-weight: 600; color: var(--text-secondary); }
+
+.score-comparisons { display: flex; flex-direction: column; gap: 6px; }
+.score-comparison { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.score-comparison-name { color: var(--text-secondary); flex: 1; }
+.score-comparison-current { font-weight: 600; font-variant-numeric: tabular-nums; }
+.score-comparison-baseline { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.score-comparison-arrow { font-size: 11px; font-weight: 700; }
+.score-comparison-arrow.good { color: var(--green); }
+.score-comparison-arrow.bad { color: var(--red); }
+.score-comparison-arrow.flat { color: var(--text-muted); }
+
+.score-chips { display: flex; gap: 12px; flex-wrap: wrap; }
+.score-chip {
+  display: flex; flex-direction: column; gap: 2px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 6px 10px;
+  min-width: 72px;
+}
+.score-chip-label { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.score-chip-value { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+.score-prior { display: flex; flex-direction: column; gap: 6px; }
+.score-prior-row { display: flex; align-items: center; gap: 10px; font-size: 12px; }
+.score-prior-week { color: var(--text-secondary); }
+.score-prior-shipped { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--text-secondary); }
+.score-prior-combined { color: var(--text-muted); font-variant-numeric: tabular-nums; min-width: 30px; text-align: right; }
+.score-prior-cost { color: var(--text-muted); font-variant-numeric: tabular-nums; min-width: 56px; text-align: right; }
+
+.score-sessions { display: flex; flex-direction: column; gap: 8px; }
+.score-session { display: flex; flex-direction: column; gap: 3px; padding: 2px 0; }
+.score-session-line { display: flex; align-items: center; gap: 8px; }
+.score-session-date { font-size: 12px; color: var(--text-secondary); }
+.score-session-spacer { flex: 1; }
+.score-session-stat { font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.score-session-deductions { font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.score-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px;
+  border-radius: 5px;
+  font-size: 12px; font-weight: 700;
+  background: var(--bg-surface);
+}
+.score-badge.muted { color: var(--text-muted); }
+.score-shipped-pill {
+  font-size: 10px; font-weight: 500;
+  padding: 1px 6px; border-radius: 10px;
+  background: rgba(52, 199, 89, 0.15); color: var(--green);
+}
+
+.score-empty {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 10px; text-align: center;
+  padding: 48px 24px;
+  color: var(--text-secondary);
+}
+.score-empty-title { font-size: 16px; font-weight: 600; color: var(--text-primary); }
+.score-empty-msg { font-size: 13px; max-width: 460px; line-height: 1.5; }

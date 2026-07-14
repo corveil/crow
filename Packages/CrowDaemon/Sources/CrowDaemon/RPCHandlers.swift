@@ -704,6 +704,41 @@ func makeCommandRouter(
             }
         },
 
+        // Private efficiency scorecard (ADR 0008; web parity #721). The desktop
+        // `ScorecardView` reads `ScorecardModel` off `appState.analyticsSnapshots`
+        // + `appState.prAttributions` directly; the web has no Swift value types,
+        // so we build the ONE Core `ScorecardModel.build(...)` here and ship its
+        // flattened `ScorecardDTO`. Building server-side is what guarantees the
+        // web grade/throughput/combined/baseline can never drift from desktop —
+        // there is no JS re-implementation of the grading to keep in sync.
+        // Read-only and always local (same posture as get-state).
+        "get-scorecard": { _ in
+            let dto = await MainActor.run { () -> ScorecardDTO in
+                let model = ScorecardModel.build(
+                    snapshots: Array(appState.analyticsSnapshots.values),
+                    attributions: Array(appState.prAttributions.values),
+                    now: Date(),
+                    calendar: .current
+                )
+                let telemetryEnabled = ConfigStore.loadConfig(devRoot: devRoot)?.telemetry.enabled ?? false
+                return ScorecardDTO(
+                    model,
+                    telemetryEnabled: telemetryEnabled,
+                    snapshotCount: appState.analyticsSnapshots.count
+                )
+            }
+            do {
+                guard case .object(let dict) = try JSONValue(encoding: dto) else {
+                    throw DaemonRPCError.applicationError("scorecard did not encode to an object")
+                }
+                return dict
+            } catch let error as DaemonRPCError {
+                throw error
+            } catch {
+                throw DaemonRPCError.applicationError("Failed to encode scorecard: \(error)")
+            }
+        },
+
         // App config (the web Settings modal). Forward to the app when it's
         // running so its `saveSettings` side effects run (AppState mirror,
         // notification settings); read/write `{devRoot}/.claude/config.json`
