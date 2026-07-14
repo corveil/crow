@@ -56,6 +56,9 @@ final class SessionService {
         // Mirror persisted analytics snapshots for the scorecard (#710) —
         // CrowUI can't read the store, so the view computes from this.
         appState.analyticsSnapshots = data.analyticsSnapshots ?? [:]
+        // Same for PR attributions: the v2 combined score's hygiene factor
+        // (#699) reads this mirror; IssueTracker resyncs it after writes.
+        appState.prAttributions = data.prAttributions ?? [:]
 
         // Migrate a legacy primary Manager (persisted as `.work` before
         // SessionKind.manager existed) to `.manager` BEFORE the per-session loop.

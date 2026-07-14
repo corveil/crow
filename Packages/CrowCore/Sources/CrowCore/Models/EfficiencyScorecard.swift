@@ -9,9 +9,11 @@ public enum CostPerShipped: Equatable, Sendable {
 }
 
 /// One week of the scorecard: the re-aggregated efficiency grade, the
-/// sessions-shipped throughput count, and the displayed-not-graded context
-/// stats. Grade and throughput are separate surfaces — nothing here combines
-/// them (no combined number exists in v1, ADR 0008).
+/// sessions-shipped throughput count, the displayed-not-graded context
+/// stats, and — since #699 — the v2 combined score. Grade and throughput
+/// remain their own separate surfaces (the v1 anti-averaging invariants
+/// still hold); the combined score is an ADDITIONAL surface built on top of
+/// them, never a replacement (ADR 0008 follow-up 11).
 public struct WeeklyScorecard: Equatable, Sendable {
     public let weekStart: Date
     /// Grade over the week's summed raws (`EfficiencyGrading.weeklyInput`),
@@ -31,6 +33,9 @@ public struct WeeklyScorecard: Equatable, Sendable {
     /// `Σ linesRemoved / max(1, Σ linesAdded)` — informational only, too weak
     /// as a rework proxy to grade (ADR 0008).
     public let churnHint: Double
+    /// The v2 combined multiplicative score (#699):
+    /// alignment-weighted throughput × efficiency multiplier, weekly grain.
+    public let combined: CombinedScore.WeeklyResult
 }
 
 /// The user's own trailing 4-week medians — the private "this week vs. your
@@ -48,6 +53,10 @@ public struct ScorecardBaseline: Equatable, Sendable {
     /// Median over prior weeks that actually shipped (zero-shipped weeks have
     /// no cost-per-shipped value to enter the median).
     public let medianCostPerShipped: Double?
+    /// Median combined score over the scored prior weeks (#699). Unlike
+    /// cost-per-shipped, a scored zero-shipped week contributes its 0 — a
+    /// present zero IS a combined score.
+    public let medianCombinedScore: Double?
 
     public static let empty = ScorecardBaseline(
         weeksAvailable: 0,
@@ -56,7 +65,8 @@ public struct ScorecardBaseline: Equatable, Sendable {
         medianInputTokensPerPrompt: nil,
         medianCacheHitRatio: nil,
         medianApiErrorRate: nil,
-        medianCostPerShipped: nil
+        medianCostPerShipped: nil,
+        medianCombinedScore: nil
     )
 }
 
@@ -74,10 +84,10 @@ public struct SessionGradeRow: Equatable, Sendable, Identifiable {
     public let wallClockDurationSeconds: Double?
 }
 
-/// The read-only scorecard model (ADR 0008 v1): built from persisted
-/// `SessionAnalyticsSnapshot`s, pure and deterministic — `now` and the
-/// calendar's time zone are injected, and nothing here reads a store or a
-/// clock.
+/// The read-only scorecard model (ADR 0008; v1 surfaces plus the v2 combined
+/// score): built from persisted `SessionAnalyticsSnapshot`s and PR
+/// attributions, pure and deterministic — `now` and the calendar's time zone
+/// are injected, and nothing here reads a store or a clock.
 public struct ScorecardModel: Equatable, Sendable {
     public let currentWeek: WeeklyScorecard
     /// Up to the trailing 4 weeks, newest first; weeks with no snapshots are
@@ -91,9 +101,12 @@ public struct ScorecardModel: Equatable, Sendable {
     /// the historical baseline doesn't shift with the user's locale) in the
     /// injected calendar's time zone, grades the current week over summed
     /// raws, and computes the trailing-4-week median baseline from the prior
-    /// weeks.
+    /// weeks. `attributions` (the persisted PR→session store, #693/#694)
+    /// feeds only the v2 combined score's hygiene factor — every v1 surface
+    /// is computed exactly as before, with or without it.
     public static func build(
         snapshots: [SessionAnalyticsSnapshot],
+        attributions: [PRSessionAttribution] = [],
         now: Date,
         calendar: Calendar
     ) -> ScorecardModel {
@@ -104,7 +117,9 @@ public struct ScorecardModel: Equatable, Sendable {
             ?? DateInterval(start: now, duration: 7 * 86_400)
 
         let currentSnapshots = snapshots.filter { contains(currentInterval, $0.endedAt) }
-        let currentWeek = weeklyScorecard(weekStart: currentInterval.start, snapshots: currentSnapshots)
+        let currentWeek = weeklyScorecard(
+            week: currentInterval, snapshots: currentSnapshots, attributions: attributions
+        )
 
         var priorWeeks: [WeeklyScorecard] = []
         for offset in 1...EfficiencyGrading.Tuning.baselineWeekCount {
@@ -114,7 +129,9 @@ public struct ScorecardModel: Equatable, Sendable {
             else { continue }
             let weekSnapshots = snapshots.filter { contains(interval, $0.endedAt) }
             guard !weekSnapshots.isEmpty else { continue }
-            priorWeeks.append(weeklyScorecard(weekStart: interval.start, snapshots: weekSnapshots))
+            priorWeeks.append(weeklyScorecard(
+                week: interval, snapshots: weekSnapshots, attributions: attributions
+            ))
         }
 
         let rows = currentSnapshots
@@ -147,8 +164,13 @@ public struct ScorecardModel: Equatable, Sendable {
 
     // MARK: - Weekly rollup
 
-    static func weeklyScorecard(weekStart: Date, snapshots: [SessionAnalyticsSnapshot]) -> WeeklyScorecard {
+    static func weeklyScorecard(
+        week: DateInterval,
+        snapshots: [SessionAnalyticsSnapshot],
+        attributions: [PRSessionAttribution]
+    ) -> WeeklyScorecard {
         let input = EfficiencyGrading.weeklyInput(summing: snapshots)
+        let result = EfficiencyGrading.grade(input)
         let shipped = input.costContext?.sessionsShipped ?? 0
         let totalCost = input.costContext?.totalCost ?? 0
 
@@ -160,8 +182,8 @@ public struct ScorecardModel: Equatable, Sendable {
         let linesRemoved = snapshots.reduce(0) { $0 + $1.analytics.linesRemoved }
 
         return WeeklyScorecard(
-            weekStart: weekStart,
-            result: EfficiencyGrading.grade(input),
+            weekStart: week.start,
+            result: result,
             input: input,
             sessionsShipped: shipped,
             costPerShipped: costPerShipped,
@@ -169,7 +191,12 @@ public struct ScorecardModel: Equatable, Sendable {
             totalCost: totalCost,
             activeTimeSeconds: input.activeTimeSeconds,
             commitCount: snapshots.reduce(0) { $0 + $1.analytics.commitCount },
-            churnHint: Double(linesRemoved) / Double(max(1, linesAdded))
+            churnHint: Double(linesRemoved) / Double(max(1, linesAdded)),
+            combined: CombinedScore.weeklyScore(
+                snapshots: snapshots,
+                gradeResult: result,
+                rework: CombinedScore.weeklyRework(attributions: attributions, week: week)
+            )
         )
     }
 
@@ -184,6 +211,7 @@ public struct ScorecardModel: Equatable, Sendable {
         var cacheRatios: [Double] = []
         var errorRates: [Double] = []
         var costsPerShipped: [Double] = []
+        var combinedScores: [Double] = []
 
         for week in priorWeeks {
             guard case .graded(let score, _, _) = week.result else { continue }
@@ -195,6 +223,9 @@ public struct ScorecardModel: Equatable, Sendable {
             if case .graded(let cost) = week.costPerShipped {
                 costsPerShipped.append(cost)
             }
+            if case .scored(let factors) = week.combined {
+                combinedScores.append(factors.value)
+            }
         }
 
         return ScorecardBaseline(
@@ -204,7 +235,8 @@ public struct ScorecardModel: Equatable, Sendable {
             medianInputTokensPerPrompt: median(contextPressures),
             medianCacheHitRatio: median(cacheRatios),
             medianApiErrorRate: median(errorRates),
-            medianCostPerShipped: median(costsPerShipped)
+            medianCostPerShipped: median(costsPerShipped),
+            medianCombinedScore: median(combinedScores)
         )
     }
 

@@ -170,6 +170,13 @@ public final class AppState {
     /// store directly.
     public var analyticsSnapshots: [String: SessionAnalyticsSnapshot] = [:]
 
+    /// Read-only mirror of the store's persisted PR→session attributions
+    /// (#693/#694), keyed by PR URL — hydrated by SessionService on load and
+    /// resynced by IssueTracker after every attribution write. The v2
+    /// combined score (#699) computes its weekly rework/hygiene factor from
+    /// this; CrowUI cannot read the store directly.
+    public var prAttributions: [String: PRSessionAttribution] = [:]
+
     // MARK: - Allowlist
 
     /// Aggregated allow-list entries from all worktrees.

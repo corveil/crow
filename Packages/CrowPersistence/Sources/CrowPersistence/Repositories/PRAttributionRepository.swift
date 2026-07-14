@@ -68,11 +68,13 @@ public struct PRAttributionRepository: Sendable {
 }
 
 /// Per-session rework/merge-rate read values over a window (#694, ADR 0008
-/// follow-up 6). Category-A efficiency signal inputs for the scorecard and
-/// the v2 combined score (follow-up 11) — this type only carries the
-/// numbers; grading/weighting lives with the (future) consumer. The churn
-/// hint (`SessionAnalytics.linesAdded/linesRemoved`) intentionally stays
-/// separate and informational-only.
+/// follow-up 6). Category-A efficiency signal inputs — this type only
+/// carries the numbers; grading/weighting lives with the consumer. The v2
+/// combined score (follow-up 11, #699) consumes the same attribution records
+/// at whole-machine weekly grain via `CombinedScore.weeklyRework` in CrowCore
+/// (this per-session type is the drill-down counterpart). The churn hint
+/// (`SessionAnalytics.linesAdded/linesRemoved`) intentionally stays separate
+/// and informational-only.
 public struct SessionReworkMetrics: Equatable, Sendable {
     /// Attributed PRs whose merge was observed inside the window.
     public let mergedCount: Int

@@ -18,11 +18,13 @@ import CrowProvider
 final class IssueTracker {
     private let appState: AppState
     private let providerManager: ProviderManager
-    /// Shared store instance (injected by AppDelegate). PR attributions have
-    /// no `appState` mirror, so they MUST be written through the same
-    /// `JSONStore` that `SessionService` mutates — an ad-hoc `JSONStore()`
-    /// write would be clobbered by the next mutation of the shared
-    /// instance's older in-memory snapshot.
+    /// Shared store instance (injected by AppDelegate). PR attributions MUST
+    /// be written through the same `JSONStore` that `SessionService` mutates
+    /// — an ad-hoc `JSONStore()` write would be clobbered by the next
+    /// mutation of the shared instance's older in-memory snapshot. Every
+    /// attribution write is followed by `syncPRAttributionMirror()` so the
+    /// read-only `appState.prAttributions` mirror (the v2 combined score's
+    /// input, #699) stays current.
     private let store: JSONStore
     private var timer: Timer?
     private let pollInterval: TimeInterval = 60 // 1 minute
@@ -1918,6 +1920,12 @@ final class IssueTracker {
         return updates
     }
 
+    /// Resync the read-only AppState mirror after a `prAttributions`
+    /// mutation, so the scorecard's v2 combined score (#699) sees the write.
+    private func syncPRAttributionMirror() {
+        appState.prAttributions = store.data.prAttributions ?? [:]
+    }
+
     /// Persist the PR→session mapping parsed from the PR's commits (#693).
     /// Called from `prHasCrowAuthoredCommit` so attribution rides along with
     /// the existing trailer parse; the gate's boolean result is unaffected.
@@ -1955,6 +1963,7 @@ final class IssueTracker {
             }
             data.prAttributions = attributions
         }
+        syncPRAttributionMirror()
     }
 
     /// Update stored attribution state from a refresh cycle's PR list
@@ -1971,6 +1980,7 @@ final class IssueTracker {
             for (url, attribution) in updates { attributions[url] = attribution }
             data.prAttributions = attributions
         }
+        syncPRAttributionMirror()
     }
 
     // MARK: - Rework / merge-rate metrics (#694, ADR 0008 follow-up 6)
@@ -2184,6 +2194,7 @@ final class IssueTracker {
                 attributions[attribution.prURL] = target
                 data.prAttributions = attributions
             }
+            syncPRAttributionMirror()
         }
     }
 
@@ -2235,6 +2246,7 @@ final class IssueTracker {
                 }
                 data.prAttributions = attributions
             }
+            syncPRAttributionMirror()
         }
     }
 
@@ -2257,6 +2269,7 @@ final class IssueTracker {
             }
             data.prAttributions = attributions
         }
+        syncPRAttributionMirror()
     }
 
     /// Per-refresh entry point. Picks candidate (session, PR) pairs and

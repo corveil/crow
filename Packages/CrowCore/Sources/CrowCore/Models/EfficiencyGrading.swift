@@ -11,8 +11,11 @@ import Foundation
 /// structurally impossible here — no API accepts grades as input — which is
 /// how the ADR's anti-session-splitting rollup rule is enforced.
 ///
-/// The grade and the sessions-shipped throughput count are separate surfaces;
-/// no combined number exists in v1 (ADR 0008).
+/// The grade and the sessions-shipped throughput count are separate surfaces.
+/// The v2 combined score (#699, `CombinedScore`) is an additional weekly
+/// surface built ON these — it consumes the weekly grade's score, never
+/// changes how it is computed, and the anti-averaging invariant above still
+/// holds.
 public enum EfficiencyGrading {
 
     // MARK: - Tuning
