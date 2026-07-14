@@ -42,7 +42,8 @@ public struct SocketClient: Sendable {
         // rather than killing the process on Linux. See SocketServer.start().
         _ = signal(SIGPIPE, SIG_IGN)
 
-        let fd = socket(AF_UNIX, crowSockStream, 0)        guard fd >= 0 else {
+        let fd = socket(AF_UNIX, crowSockStream, 0)
+        guard fd >= 0 else {
             throw SocketError.createFailed(errno)
         }
         defer { close(fd) }
