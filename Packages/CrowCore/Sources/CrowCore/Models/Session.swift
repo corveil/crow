@@ -215,7 +215,8 @@ public struct Session: Identifiable, Codable, Sendable {
         reviewAuthor = try container.decodeIfPresent(String.self, forKey: .reviewAuthor)
         // CROW-573 renamed `pinned` → `locked`. Prefer the new key, but fall
         // back to the legacy `pinned` key so sessions locked under CROW-569
-        // remain locked after upgrade.        if let locked = try container.decodeIfPresent(Bool.self, forKey: .locked) {
+        // remain locked after upgrade.
+        if let locked = try container.decodeIfPresent(Bool.self, forKey: .locked) {
             self.locked = locked
         } else {
             let legacy = try? decoder.container(keyedBy: LegacyCodingKeys.self)
