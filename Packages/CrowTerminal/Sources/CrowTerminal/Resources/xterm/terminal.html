@@ -24,6 +24,7 @@
   <script src="xterm.js"></script>
   <script src="xterm-addon-fit.js"></script>
   <script src="xterm-addon-image.js"></script>
+  <script src="xterm-addon-crow-jumpbottom.js"></script>
   <script>
     (function () {
       function reportError(message) {
@@ -52,6 +53,10 @@
         reportError('ImageAddon constructor missing');
         return;
       }
+      if (typeof CrowJumpBottomAddon !== 'object' || typeof CrowJumpBottomAddon.CrowJumpBottomAddon !== 'function') {
+        reportError('CrowJumpBottomAddon constructor missing');
+        return;
+      }
 
       try {
         const fitAddon = new FitAddon.FitAddon();
@@ -72,6 +77,9 @@
         term.loadAddon(fitAddon);
         term.loadAddon(imageAddon);
         term.open(document.getElementById('terminal'));
+        // After open() so the addon can find term.element's container and
+        // anchor its button to the terminal viewport.
+        term.loadAddon(new CrowJumpBottomAddon.CrowJumpBottomAddon());
 
         // xterm's hidden textarea triggers WebKit Autofill/Services menus — block only there.
         if (term.textarea) {
@@ -83,6 +91,7 @@
             event.preventDefault();
           }, true);
         }
+
 
         // Resize path (#637): the agent TUI clobbers when it's SIGWINCH'd
         // faster than it can redraw, so coalesce bursts and drop no-op resizes.

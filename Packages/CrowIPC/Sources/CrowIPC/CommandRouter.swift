@@ -12,12 +12,22 @@ public final class CommandRouter: Sendable {
 
     private let handlers: [String: Handler]
 
-    public init(handlers: [String: Handler]) {
+    /// Optional next router consulted when this one has no handler for a method.
+    /// Lets a curated router (e.g. the daemon's) delegate everything it doesn't
+    /// explicitly own to a fuller one (the engine surface) so a method can never
+    /// be silently missing (CROW-581).
+    private let fallback: CommandRouter?
+
+    public init(handlers: [String: Handler], fallback: CommandRouter? = nil) {
         self.handlers = handlers
+        self.fallback = fallback
     }
 
     public func handle(request: JSONRPCRequest) async -> JSONRPCResponse {
         guard let handler = handlers[request.method] else {
+            if let fallback {
+                return await fallback.handle(request: request)
+            }
             return .error(id: request.id, code: RPCErrorCode.methodNotFound, message: "Unknown method: \(request.method)")
         }
 

@@ -1,0 +1,258 @@
+/* Crow web UI — Settings modal (CROW-581). Reuses the CorveilTheme tokens from
+   app.css (:root) and the shared .action-btn button styles; adds the first
+   modal + form-control styles in the app. */
+
+.settings-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  background: rgba(0, 0, 0, 0.58);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+/* Job/workspace editor stacked on top of the main settings modal. */
+.settings-subform-overlay { z-index: 2100; }
+
+
+.settings-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(720px, 94vw);
+  /* Fixed height so the modal is one consistent size regardless of which tab /
+     how much content is shown; the body (.settings-body) scrolls instead of the
+     whole modal growing and shrinking (CROW-593). */
+  height: min(660px, 90vh);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+}
+
+.settings-head {
+  display: flex;
+  align-items: center;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.settings-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--gold);
+  flex: 1;
+}
+.settings-close {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+.settings-close:hover { color: var(--text-primary); }
+
+.settings-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  overflow-x: auto;
+}
+.settings-tab {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 10px 12px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  white-space: nowrap;
+}
+.settings-tab:hover { color: var(--text-primary); }
+.settings-tab.active {
+  color: var(--gold);
+  border-bottom-color: var(--gold);
+}
+
+.settings-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 18px;
+}
+
+.settings-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--border-subtle);
+}
+.settings-foot-spacer { flex: 1; }
+
+/* -------- form controls (first in the app) -------- */
+
+.st-group {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--gold-dark);
+  margin: 18px 0 8px;
+}
+.st-group:first-child { margin-top: 0; }
+
+.st-field { margin-bottom: 12px; }
+.st-label {
+  display: block;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+.st-help {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 4px;
+  line-height: 1.4;
+}
+
+.st-input,
+.st-select,
+.st-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 9px;
+  background: var(--bg-deep);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 12px;
+}
+.st-textarea { resize: vertical; min-height: 60px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.st-input:focus,
+.st-select:focus,
+.st-textarea:focus { outline: none; border-color: var(--gold); }
+.st-input.st-readonly,
+.st-readonly { opacity: 0.55; cursor: default; }
+
+/* Chip list (listField) — token editor matching the desktop. */
+.st-chips {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  padding: 6px 8px; min-height: 34px;
+  background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 6px;
+}
+.st-chips:focus-within { border-color: var(--gold); }
+.st-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 2px 6px 2px 9px; border-radius: 12px;
+  background: var(--bg-surface); border: 1px solid var(--border-subtle);
+  font-size: 11px; color: var(--text-primary);
+}
+.st-chip-x {
+  border: none; background: none; cursor: pointer; padding: 0; line-height: 1;
+  color: var(--text-muted); font-size: 14px;
+}
+.st-chip-x:hover { color: var(--red); }
+.st-chip-input {
+  flex: 1; min-width: 90px; border: none; outline: none; background: none;
+  color: var(--text-primary); font-family: inherit; font-size: 12px; padding: 2px;
+}
+
+.st-switch-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  cursor: pointer;
+}
+/* Sound select + inline Preview button share a row. */
+.st-sound-row { display: flex; gap: 8px; align-items: center; }
+.st-sound-row .st-select { flex: 1; }
+.st-sound-row .st-input { flex: 1; }
+.st-perm-status { font-size: 12px; color: var(--text-muted); }
+.st-switch {
+  appearance: none; -webkit-appearance: none;
+  position: relative; flex: none; cursor: pointer;
+  width: 34px; height: 20px; border-radius: 999px;
+  background: var(--bg-surface); border: 1px solid var(--border-strong);
+  transition: background 0.16s ease, border-color 0.16s ease;
+}
+.st-switch::before {
+  content: ''; position: absolute; top: 2px; left: 2px;
+  width: 14px; height: 14px; border-radius: 50%;
+  background: var(--text-primary);
+  transition: transform 0.16s ease, background 0.16s ease;
+}
+.st-switch:checked { background: var(--gold); border-color: var(--gold); }
+.st-switch:checked::before { transform: translateX(14px); background: var(--bg-deep); }
+.st-switch:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+.st-switch-label { font-size: 12px; color: var(--text-primary); }
+
+/* -------- list rows (workspaces / jobs) -------- */
+
+.st-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  margin-bottom: 6px;
+  background: var(--bg-card);
+}
+.st-row-main { flex: 1; min-width: 0; }
+.st-row-title { font-size: 12px; font-weight: 600; color: var(--text-primary); }
+.st-row-sub { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.st-row-actions { display: flex; gap: 6px; flex: none; align-items: center; }
+.st-row-switch { margin-right: 2px; }
+.st-icon-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; padding: 0;
+  background: var(--bg-surface); color: var(--text-secondary);
+  border: 1px solid var(--border-subtle); border-radius: 7px; cursor: pointer;
+}
+.st-icon-btn svg { display: block; }
+.st-icon-btn:hover { color: var(--gold); border-color: var(--border-strong); background: rgba(221, 196, 130, 0.10); }
+.st-icon-btn:active { transform: translateY(1px); }
+.st-icon-btn:disabled { opacity: 0.5; cursor: default; }
+.st-icon-btn.danger { color: var(--red); border-color: rgba(255, 69, 58, 0.35); }
+.st-icon-btn.danger:hover { color: var(--red); border-color: var(--red); background: rgba(255, 69, 58, 0.12); }
+
+.st-add {
+  margin-top: 4px;
+  padding: 6px 12px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--gold);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.st-add:hover { background: rgba(221, 196, 130, 0.1); }
+
+.st-note {
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-card);
+}
+.st-empty { color: var(--text-muted); font-size: 12px; padding: 8px 0; }
+
+/* Slide-in polish, matching the in-page dialogs (CROW-593). */
+.settings-backdrop { animation: modal-backdrop-in 0.14s ease-out; }
+.settings-modal { animation: modal-slide-in 0.18s cubic-bezier(0.16, 1, 0.3, 1); }
+
+/* Settings → About tab (CROW-593) */
+.st-about-head { display: flex; align-items: center; gap: 14px; margin: 2px 0 10px; }
+.st-about-logo { width: 46px; height: 46px; flex: 0 0 auto; }
+.st-about-name { font-size: 18px; font-weight: 700; color: var(--gold); line-height: 1.1; }
+.st-about-ver { font-size: 12px; color: var(--text-muted); margin-top: 3px; }

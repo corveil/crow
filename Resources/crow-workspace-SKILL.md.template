@@ -421,7 +421,7 @@ Detect each secondary repo's default branch with the same `gh repo view --json d
 
 IMPORTANT: Always use full absolute paths, never abbreviated (`...`) or home-relative (`~`) paths.
 
-The prompt is written to `{devRoot}/.claude/prompts/crow-prompt-{session_name}.md`. Plan mode is set by the `--permission-mode plan` flag in `setup.sh`'s launch command — do not prepend `/plan` to the prompt body (it would be parsed as a slash command by the receiving session). See issue #313.
+The prompt is written to `{devRoot}/.claude/prompts/crow-prompt-{session_name}.md`. The permission mode is set by the `--permission-mode` flag in `setup.sh`'s launch command — plan mode by default, or auto-accept when the Settings → Automation "Launch new coder views in auto permission mode" toggle is on (#586). Do not prepend `/plan` to the prompt body (it would be parsed as a slash command by the receiving session). See issue #313.
 
 **Repo descriptions for the prompt table:**
 
@@ -466,7 +466,7 @@ gh api repos/{owner}/{repo}/issues/{number}/comments
 6. Open a pull request linked to the ticket:
 
 ```bash
-gh pr create --title "<summary>" --body "Closes #123" --base {base_branch}
+gh pr create --title "<summary>" --body "Closes #{number}" --base {base_branch}
 ```
 
 ## Custom Instructions
@@ -481,7 +481,9 @@ substitute `defaults` or another workspace's text). If `{custom_instructions}` i
 empty, `null`, or absent, **omit the entire `## Custom Instructions` heading and
 body** so the prompt has no such section.
 
-For GitLab tickets, substitute `glab mr create --title "<summary>" --description "Closes #{number}" --target-branch {base_branch}` on step 6 (use "merge request" instead of "pull request"). When no ticket number is available, drop the body/description and fall back to `gh pr create --fill` / `glab mr create --fill`.
+On step 6, substitute the real ticket number into `{number}` in the PR body (same substitution as `{base_branch}`) so the body reads e.g. `Closes #654` — the closing keyword with the real number is what makes GitHub link the PR to the issue and auto-close it on merge into the default branch. When no ticket number is available, drop the `--body` and fall back to `gh pr create --fill`.
+
+For GitLab tickets, substitute `glab mr create --title "<summary>" --description "Closes #{number}" --target-branch {base_branch}` on step 6 (use "merge request" instead of "pull request"). When no ticket number is available, drop the description and fall back to `glab mr create --fill`.
 
 ### Embedding pre-fetched content
 

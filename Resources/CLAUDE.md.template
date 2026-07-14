@@ -14,6 +14,7 @@ crow select-session --session <uuid>            → {"session_id":"..."}
 crow list-sessions                              → {"sessions":[...]}
 crow get-session --session <uuid>               → {id, name, status, ticket_url, ...}
 crow set-status --session <uuid> active|completed|archived
+crow handoff-agent --session <uuid> --agent cursor [--note "..."] → {"session_id":"...","agent_kind":"...","terminal_id":"..."}
 crow delete-session --session <uuid>            → {"deleted":true}
 ```
 

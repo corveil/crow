@@ -13,6 +13,7 @@ struct OpenAICodexAgentTests {
         #expect(agent.iconSystemName == "terminal.fill")
         #expect(agent.supportsRemoteControl == false)
         #expect(agent.launchCommandToken == "codex")
+        #expect(agent.sessionRenameSlashCommand(newName: "my-session") == "/rename my-session\n")
     }
 
     @Test func autoLaunchCommandWorkSession() {
