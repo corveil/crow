@@ -1,6 +1,6 @@
 # 0008 — AI-usage efficiency scorecard (rate usage by efficiency + outcomes, not spend)
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-07-10
 - **Deciders:** @dhilgaertner, @dgershman
 
