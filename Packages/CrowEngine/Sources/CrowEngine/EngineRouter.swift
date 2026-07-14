@@ -592,6 +592,31 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                     return ["session_id": .string(idStr)]
                 }
             },
+            // Set or clear the org-goal tag on a session (#723; ADR 0008
+            // follow-up 8). The data model + `SessionService.setOrgGoal` and the
+            // `crow set-goal` CLI shipped with #696, but no RPC ever routed the
+            // method — this wires the CLI socket *and* the web WebSocket (both
+            // share this router) to the mutator. `clear` wins over `goal`; a
+            // blank/whitespace goal is treated as a clear so an empty tag can't
+            // buy the on-goal alignment multiplier.
+            "set-goal": { @Sendable params in
+                guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
+                    throw RPCError.invalidParams("session_id required")
+                }
+                let clear = params["clear"]?.boolValue ?? false
+                let goal: String? = {
+                    if clear { return nil }
+                    let trimmed = (params["goal"]?.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                    return trimmed.isEmpty ? nil : trimmed
+                }()
+                return try await MainActor.run {
+                    guard capturedAppState.sessions.contains(where: { $0.id == id }) else {
+                        throw RPCError.applicationError("Session not found")
+                    }
+                    capturedService.setOrgGoal(id: id, goal: goal)
+                    return ["session_id": .string(idStr), "org_goal": goal.map { .string($0) } ?? .null]
+                }
+            },
             "transition-ticket": { @Sendable params in
                 // CROW-529: transition a session's linked ticket to a pipeline
                 // status (honoring jiraStatusMap for Jira). `setup.sh` calls this

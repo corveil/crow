@@ -1047,6 +1047,13 @@ function sessionRow(s) {
 
   const badges = el('div', 'row-badges');
   if (s.ticket_badge) badges.appendChild(el('span', 'badge', s.ticket_badge));
+  // Light org-goal indicator (#723) — glyph only to keep the card compact; the
+  // full goal text lives in the tooltip and the detail header.
+  if (s.org_goal) {
+    const g = el('span', 'badge goal-badge', '🎯');
+    g.title = 'Goal: ' + s.org_goal;
+    badges.appendChild(g);
+  }
   // PR badge — shown whenever a PR link exists (stored, or live from the app
   // when it's only in memory); colored by live status when available.
   const prLink = (s.links || []).find((l) => l.type === 'pr') || liveFor(s.id).pr_link;
@@ -1205,6 +1212,13 @@ function sessionMenuItems(s) {
   if (s.ticket_url) items.push({ label: 'Copy issue link', action: () => copyToClipboard(s.ticket_url) });
   if (prUrl) items.push({ label: 'Copy PR link', action: () => copyToClipboard(prUrl) });
   if (s.ticket_url || prUrl) items.push({ sep: true });
+  // Org-goal tagging (#723) — any non-manager session can ladder its work up to
+  // an org KPI/goal. Managers are excluded from PR/issue tracking, so no goal.
+  if (s.kind !== 'manager') {
+    items.push({ label: s.org_goal ? 'Edit org goal…' : 'Set org goal…', action: () => setSessionGoal(s.id, s.org_goal) });
+    if (s.org_goal) items.push({ label: 'Clear org goal', action: () => clearSessionGoal(s.id) });
+    items.push({ sep: true });
+  }
   const hasPR = (s.links || []).some((l) => l.type === 'pr');
   if (s.kind === 'manager') {
     // Maintenance actions (restart manager / reload tmux) live in Settings → About;
@@ -1404,6 +1418,16 @@ function renderHeader(s) {
   root.appendChild(top);
 
   if (s.ticket_title) root.appendChild(el('div', 'subtle', s.ticket_title));
+  // Org-goal tag (#723) — click to edit/clear. Only rendered when tagged; the
+  // menu's "Set org goal…" is the entry point for untagged sessions.
+  if (s.org_goal) {
+    const goalRow = el('div', 'meta meta-goal');
+    goalRow.appendChild(el('span', 'goal-badge', '🎯 ' + s.org_goal));
+    goalRow.title = 'Org goal — click to edit';
+    goalRow.style.cursor = 'pointer';
+    goalRow.onclick = (ev) => { ev.stopPropagation(); setSessionGoal(s.id, s.org_goal); };
+    root.appendChild(goalRow);
+  }
   // Review sessions: surface the PR author. Prefer the live review request
   // (Reviews board), but fall back to the author persisted on the session at
   // review-creation so it still shows when the board is empty (CROW-593).
@@ -1648,6 +1672,33 @@ async function renameSession(id, current) {
     if (s) { s.name = name; renderSidebar(); if (id === selectedId) renderHeader(s); }
   } catch (e) {
     if (term) term.write('\r\n\x1b[31m[crow] rename failed: ' + (e.message || e) + '\x1b[0m\r\n');
+  }
+}
+
+// Set or update a session's org-goal tag (#723). Prompts free-text; an empty
+// value clears the tag (parity with `crow set-goal --clear`). Updates the local
+// session so the sidebar badge + detail header reflect it without a refetch.
+async function setSessionGoal(id, current) {
+  const raw = await textPrompt(current ? 'Edit org goal' : 'Set org goal', current || '',
+    { placeholder: 'e.g. Q3 latency KPI', okLabel: 'Save' });
+  if (raw == null) return; // cancelled
+  const goal = raw.trim();
+  try {
+    await rpc('set-goal', goal ? { session_id: id, goal } : { session_id: id, clear: true });
+    const s = sessions.find((x) => x.id === id);
+    if (s) { s.org_goal = goal || null; renderSidebar(); if (id === selectedId) renderHeader(s); }
+  } catch (e) {
+    alertModal('Set goal failed: ' + (e.message || e));
+  }
+}
+
+async function clearSessionGoal(id) {
+  try {
+    await rpc('set-goal', { session_id: id, clear: true });
+    const s = sessions.find((x) => x.id === id);
+    if (s) { s.org_goal = null; renderSidebar(); if (id === selectedId) renderHeader(s); }
+  } catch (e) {
+    alertModal('Clear goal failed: ' + (e.message || e));
   }
 }
 

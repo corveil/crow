@@ -157,6 +157,14 @@ func makeCommandRouter(
                         "ticket_badge": session.ticketBadgeLabel.map { .string($0) } ?? .null,
                         "provider": session.provider.map { .string($0.rawValue) } ?? .null,
                         "review_author": session.reviewAuthor.map { .string($0) } ?? .null,
+                        // Org-goal tag + alignment inputs (#723; ADR 0008
+                        // follow-up 8). `org_goal` drives the web tag display;
+                        // `ticket_priority` and the computed `alignment_weight`
+                        // are surfaced for parity with the model (untagged
+                        // sessions weight exactly 1.0).
+                        "org_goal": session.orgGoal.map { .string($0) } ?? .null,
+                        "ticket_priority": session.ticketPriority.map { .string($0.rawValue) } ?? .null,
+                        "alignment_weight": .double(session.alignmentWeight),
                     ]
                     if let worktree = appState.primaryWorktree(for: session.id) {
                         object["repo"] = .string(worktree.repoName)
