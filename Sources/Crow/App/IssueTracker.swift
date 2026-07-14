@@ -228,7 +228,7 @@ final class IssueTracker {
     /// fails; a restart retries, which is the desired recovery path.
     private var changedFilesFetchAttempted: Set<String> = []
 
-    init(appState: AppState, providerManager: ProviderManager, store: JSONStore = JSONStore()) {
+    init(appState: AppState, providerManager: ProviderManager, store: JSONStore) {
         self.appState = appState
         self.providerManager = providerManager
         self.store = store
@@ -1060,7 +1060,11 @@ final class IssueTracker {
         }
 
         guard !newLinks.isEmpty else { return }
-        JSONStore().mutate { data in
+        // Route through the shared, injected `store` — never a throwaway
+        // `JSONStore()`. A fresh instance reads its own (possibly stale) disk
+        // snapshot and its full-store write can silently clobber a session
+        // another writer just added (#728).
+        store.mutate { data in
             data.links.append(contentsOf: newLinks)
         }
     }
@@ -1479,7 +1483,11 @@ final class IssueTracker {
         }
 
         guard !newLinks.isEmpty else { return }
-        JSONStore().mutate { data in
+        // Route through the shared, injected `store` — never a throwaway
+        // `JSONStore()`. A fresh instance reads its own (possibly stale) disk
+        // snapshot and its full-store write can silently clobber a session
+        // another writer just added (#728).
+        store.mutate { data in
             data.links.append(contentsOf: newLinks)
         }
     }
@@ -2341,7 +2349,10 @@ final class IssueTracker {
                 appState.sessions[idx].autoMergeEnabledAt = now
                 appState.sessions[idx].updatedAt = now
             }
-            JSONStore().mutate { data in
+            // Shared `store`, not a throwaway `JSONStore()`: this writes
+            // `data.sessions` from a snapshot, so a stale fresh instance here
+            // is the most direct session-clobber vector (#728).
+            store.mutate { data in
                 if let idx = data.sessions.firstIndex(where: { $0.id == session.id }) {
                     data.sessions[idx].autoMergeEnabledAt = now
                     data.sessions[idx].updatedAt = now
