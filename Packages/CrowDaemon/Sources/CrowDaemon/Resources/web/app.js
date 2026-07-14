@@ -1530,10 +1530,19 @@ function actionBtn(label, iconName, variant, onclick) {
   return btn;
 }
 
-// Dispatch a PR quick-action (forwarded to the app's agent terminal).
+// Dispatch a PR quick-action (forwarded to the app's agent terminal). Echo
+// "dispatched" ONLY when the prompt actually reached the agent: the daemon
+// returns `dispatched:false` + a reason when it silently skips (no managed
+// terminal / surface not ready / no PR link), so show that instead of a false
+// success. Genuine RPC failures (app/tmux down, bad action) hit the catch (#730).
 async function quickAction(id, action, label) {
   try {
-    await rpc('quick-action', { session_id: id, action });
+    const res = await rpc('quick-action', { session_id: id, action });
+    if (res && res.dispatched === false) {
+      const reason = res.reason || 'no active agent terminal for this session';
+      if (term) term.write('\r\n\x1b[33m[crow] ' + label + " couldn't run — " + reason + '\x1b[0m\r\n');
+      return;
+    }
     if (term) term.write('\r\n\x1b[33m[crow] dispatched: ' + label + '\x1b[0m\r\n');
   } catch (e) {
     if (term) term.write('\r\n\x1b[31m[crow] ' + label + ' failed: ' + (e.message || e) + '\x1b[0m\r\n');

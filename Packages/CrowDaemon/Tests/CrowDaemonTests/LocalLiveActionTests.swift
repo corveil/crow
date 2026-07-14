@@ -249,9 +249,9 @@ import CrowPersistence
         #expect(resp.error?.code == RPCErrorCode.invalidParams)   // missing/invalid action
     }
 
-    @Test @MainActor func quickActionDispatchesLocallyWhenCoordinatorPresent() async {
-        // No managed terminal → dispatchManual silently skips, but the handler
-        // still returns the dispatched shape (the app behaves identically).
+    @Test @MainActor func quickActionReportsSkipWhenNoManagedTerminal() async {
+        // No managed terminal → dispatchManual skips; the handler must report that
+        // faithfully as dispatched:false + a reason, not a false "dispatched" (#730).
         let appState = AppState()
         let session = Session(name: "s", kind: .work, agentKind: .claudeCode)
         appState.sessions = [session]
@@ -262,7 +262,8 @@ import CrowPersistence
             id: 1, method: "quick-action",
             params: ["session_id": .string(session.id.uuidString), "action": .string("mergePR")]))
         #expect(resp.error == nil)
-        #expect(resp.result?["dispatched"]?.boolValue == true)
+        #expect(resp.result?["dispatched"]?.boolValue == false)
+        #expect(resp.result?["reason"]?.stringValue?.isEmpty == false)
         #expect(resp.result?["action"]?.stringValue == "mergePR")
     }
 }

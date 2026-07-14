@@ -427,7 +427,14 @@ func makeCommandRouter(
             guard let actionStr = params["action"]?.stringValue, let action = QuickAction(rawValue: actionStr) else {
                 throw DaemonRPCError.invalidParams("action required (fixConflicts, addressChanges, fixChecks, mergePR)")
             }
-            await MainActor.run { autoRespond.dispatchManual(action: action, sessionID: id) }
+            // `dispatchManual` silently skips (no managed terminal / surface not
+            // ready / no PR link); report that faithfully as `dispatched:false`
+            // + a reason instead of a false success, so the web UI can surface an
+            // actionable message rather than echoing "dispatched" (#730).
+            let result = await MainActor.run { autoRespond.dispatchManual(action: action, sessionID: id) }
+            if let reason = result.skipReason {
+                return ["dispatched": .bool(false), "action": .string(action.rawValue), "reason": .string(reason)]
+            }
             return ["dispatched": .bool(true), "action": .string(action.rawValue)]
         },
 
