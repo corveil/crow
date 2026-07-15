@@ -178,14 +178,10 @@ pub fn run() {
                         cmd.arg("--socket").arg(sock);
                     }
                 }
-                // Dev: serve web assets live from source so UI edits show on reload
-                // (matches `make crowd-dev`). Skipped when the source tree isn't
-                // present (e.g. a release install), where crowd uses its bundle.
-                let web = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("../../Packages/CrowDaemon/Sources/CrowDaemon/Resources/web");
-                if web.is_dir() {
-                    cmd.arg("--web-dir").arg(&web);
-                }
+                // No --web-dir: the sidecar serves the frozen web assets baked
+                // into crowd's resource bundle at `make daemon` time, so UI edits
+                // don't show until an explicit rebuild. For live-from-source web
+                // editing, use `make crowd-dev` (which passes --web-dir).
                 match cmd.spawn() {
                     Ok(child) => {
                         eprintln!(
