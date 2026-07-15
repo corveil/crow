@@ -676,6 +676,26 @@ func makeCommandRouter(
                     if let prLink = appState.links(for: id).first(where: { $0.linkType == .pr }) {
                         entry["pr_link"] = .object(["label": .string(prLink.label), "url": .string(prLink.url)])
                     }
+                    // Per-session analytics strip (CROW-722). Prefer the live
+                    // in-memory hook aggregate (open sessions); fall back to the
+                    // durable end-of-session snapshot (terminal sessions). Mirrors
+                    // `writeAnalyticsSnapshot`'s own source preference. Never for the
+                    // Manager, and never an all-zeros aggregate — the web renders
+                    // the strip only when this key is present (chips-only empty
+                    // state), so absence IS the empty state.
+                    if !appState.isManagerSession(id) {
+                        let dto: SessionAnalyticsDTO?
+                        if let live = appState.existingHookState(for: id)?.analytics, !live.isEmpty {
+                            dto = SessionAnalyticsDTO(live: live, wallClockDuration: session.wallClockDuration)
+                        } else if let snapshot = appState.analyticsSnapshots[id.uuidString] {
+                            dto = SessionAnalyticsDTO(snapshot: snapshot)
+                        } else {
+                            dto = nil
+                        }
+                        if let dto, let encoded = try? JSONValue(encoding: dto) {
+                            entry["analytics"] = encoded
+                        }
+                    }
                     out[id.uuidString] = .object(entry)
                 }
                 return ["sessions": .object(out)]
