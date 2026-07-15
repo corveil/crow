@@ -1682,11 +1682,8 @@ async function setSessionGoal(id, current) {
   const raw = await textPrompt(current ? 'Edit org goal' : 'Set org goal', current || '',
     { placeholder: 'e.g. Q3 latency KPI', okLabel: 'Save' });
   if (raw == null) return; // cancelled
-  const goal = raw.trim();
   try {
-    await rpc('set-goal', goal ? { session_id: id, goal } : { session_id: id, clear: true });
-    const s = sessions.find((x) => x.id === id);
-    if (s) { s.org_goal = goal || null; renderSidebar(); if (id === selectedId) renderHeader(s); }
+    await applyOrgGoal(id, raw.trim());
   } catch (e) {
     alertModal('Set goal failed: ' + (e.message || e));
   }
@@ -1694,12 +1691,21 @@ async function setSessionGoal(id, current) {
 
 async function clearSessionGoal(id) {
   try {
-    await rpc('set-goal', { session_id: id, clear: true });
-    const s = sessions.find((x) => x.id === id);
-    if (s) { s.org_goal = null; renderSidebar(); if (id === selectedId) renderHeader(s); }
+    await applyOrgGoal(id, '');
   } catch (e) {
     alertModal('Clear goal failed: ' + (e.message || e));
   }
+}
+
+// Shared org-goal mutation: a non-empty `goal` sets it, an empty string clears
+// it (RPC gets `{goal}` or `{clear:true}` — never a blank goal, which the
+// handler rejects). Reflects the change locally so the sidebar + header update
+// without a refetch; `alignment_weight` is server-computed and refreshes on the
+// next `list-sessions` poll (nothing renders it client-side).
+async function applyOrgGoal(id, goal) {
+  await rpc('set-goal', goal ? { session_id: id, goal } : { session_id: id, clear: true });
+  const s = sessions.find((x) => x.id === id);
+  if (s) { s.org_goal = goal || null; renderSidebar(); if (id === selectedId) renderHeader(s); }
 }
 
 async function deleteSession(id, name) {

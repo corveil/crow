@@ -596,22 +596,43 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
             // follow-up 8). The data model + `SessionService.setOrgGoal` and the
             // `crow set-goal` CLI shipped with #696, but no RPC ever routed the
             // method — this wires the CLI socket *and* the web WebSocket (both
-            // share this router) to the mutator. `clear` wins over `goal`; a
-            // blank/whitespace goal is treated as a clear so an empty tag can't
-            // buy the on-goal alignment multiplier.
+            // share this router) to the mutator.
+            //
+            // Enforcement mirrors the CLI's `validateSetGoal` (CrowCLI
+            // Validation.swift) so the two surfaces agree on ONE contract:
+            // reject both, neither, and a blank goal. The CLI's `validate()`
+            // guards only the CLI path, so for the web this RPC is the sole
+            // enforcement point — a missing/typo'd param must error, not
+            // silently wipe an existing tag. (The web only ever sends `{goal}`
+            // or `{clear:true}` — app.js `setSessionGoal` — so this rejects
+            // nothing it emits.) Managers are excluded per the same product
+            // rule the web menu applies: orchestration sessions don't ladder up
+            // to an org KPI, so the goal doesn't apply.
             "set-goal": { @Sendable params in
                 guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
                     throw RPCError.invalidParams("session_id required")
                 }
                 let clear = params["clear"]?.boolValue ?? false
-                let goal: String? = {
-                    if clear { return nil }
-                    let trimmed = (params["goal"]?.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                    return trimmed.isEmpty ? nil : trimmed
-                }()
+                let rawGoal = params["goal"]?.stringValue
+                switch (rawGoal, clear) {
+                case (.some, true):
+                    throw RPCError.invalidParams("`goal` and `clear` are mutually exclusive")
+                case (nil, false):
+                    throw RPCError.invalidParams("Exactly one of `goal` or `clear` is required")
+                case (.some(let g), false) where g.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty:
+                    throw RPCError.invalidParams("`goal` must not be blank")
+                default:
+                    break
+                }
+                let goal: String? = clear
+                    ? nil
+                    : rawGoal!.trimmingCharacters(in: .whitespacesAndNewlines)
                 return try await MainActor.run {
-                    guard capturedAppState.sessions.contains(where: { $0.id == id }) else {
+                    guard let session = capturedAppState.sessions.first(where: { $0.id == id }) else {
                         throw RPCError.applicationError("Session not found")
+                    }
+                    guard session.kind != .manager else {
+                        throw RPCError.applicationError("Org goals don't apply to the manager session")
                     }
                     capturedService.setOrgGoal(id: id, goal: goal)
                     return ["session_id": .string(idStr), "org_goal": goal.map { .string($0) } ?? .null]

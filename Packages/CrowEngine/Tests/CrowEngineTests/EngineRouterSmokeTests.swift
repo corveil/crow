@@ -93,11 +93,11 @@ struct EngineRouterSmokeTests {
     /// #723 (ADR 0008 follow-up 8): the `set-goal` data model, `SessionService`
     /// mutator, and `crow set-goal` CLI all shipped with #696, but no RPC ever
     /// routed the method — so the whole path silently no-op'd with nothing to
-    /// catch it. This locks in the newly-wired route (`EngineRouter.swift`),
-    /// including the two normalization rules a missing test would let regress:
-    /// `clear` wins over `goal`, and a blank/whitespace goal is treated as a
-    /// clear (so an empty tag can't buy the on-goal alignment multiplier).
-    @Test("set-goal reaches the mutator; clear wins over goal; blank goal clears")
+    /// catch it. This locks in the newly-wired route (`EngineRouter.swift`) and
+    /// its contract, which mirrors the CLI's `validateSetGoal`: reject both /
+    /// neither / a blank goal (so a missing or typo'd param can't silently wipe
+    /// an existing tag), and exclude the manager session.
+    @Test("set-goal routes to the mutator and enforces the CLI's validation contract")
     func setGoalRoutesToMutator() async throws {
         let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("crow-engine-smoke-\(UUID().uuidString)")
@@ -105,9 +105,12 @@ struct EngineRouterSmokeTests {
         let store = JSONStore(directory: tmp)
         let service = SessionService(store: store, appState: appState, hostBridge: NoopHostBridge())
 
-        let session = Session(name: "goal-test")   // orgGoal defaults to nil
+        let session = Session(name: "goal-test")   // default kind .work; orgGoal nil
         appState.sessions.append(session)
         let id = session.id
+        // A manager session — org goals don't apply to orchestration sessions.
+        let manager = Session(name: "manager", kind: .manager)
+        appState.sessions.append(manager)
 
         let ctx = EngineContext(
             appState: appState,
@@ -129,32 +132,47 @@ struct EngineRouterSmokeTests {
             appState.sessions.first(where: { $0.id == id })?.orgGoal
         }
 
-        // 1. Route reaches the mutator: a goal is set on the session.
+        // Route reaches the mutator: a goal is set on the session.
         let set = await handle(["session_id": .string(id.uuidString), "goal": .string("Q3 revenue")])
         #expect(set.error == nil)
         #expect(currentGoal() == "Q3 revenue")
 
-        // 2. `clear` wins over `goal`, even when both are supplied.
-        let cleared = await handle([
-            "session_id": .string(id.uuidString),
-            "clear": .bool(true),
-            "goal": .string("ignored"),
-        ])
+        // `clear: true` clears the tag.
+        let cleared = await handle(["session_id": .string(id.uuidString), "clear": .bool(true)])
         #expect(cleared.error == nil)
         #expect(currentGoal() == nil)
 
-        // 3. A blank/whitespace goal normalizes to a clear (re-set first so the
-        //    nil assertion proves the blank cleared it, not that it was already nil).
-        _ = await handle(["session_id": .string(id.uuidString), "goal": .string("temp")])
-        #expect(currentGoal() == "temp")
-        let blanked = await handle(["session_id": .string(id.uuidString), "goal": .string("   ")])
-        #expect(blanked.error == nil)
-        #expect(currentGoal() == nil)
+        // Contract (mirrors CLI `validateSetGoal`) — each malformed shape is
+        // rejected *without* mutating. Re-set a goal so we can prove the
+        // rejected calls leave it untouched rather than clearing it.
+        _ = await handle(["session_id": .string(id.uuidString), "goal": .string("keep me")])
+        #expect(currentGoal() == "keep me")
 
-        // 4. An unknown session is rejected before mutating (the guard's
-        //    `applicationError` path), not silently no-op'd.
+        // both goal + clear → mutually exclusive.
+        let both = await handle([
+            "session_id": .string(id.uuidString), "clear": .bool(true), "goal": .string("x"),
+        ])
+        #expect(both.error != nil)
+        #expect(currentGoal() == "keep me")
+
+        // neither goal nor clear → exactly-one-required (the silent-wipe bug).
+        let neither = await handle(["session_id": .string(id.uuidString)])
+        #expect(neither.error != nil)
+        #expect(currentGoal() == "keep me")
+
+        // blank/whitespace goal → rejected (an empty tag can't buy the on-goal
+        // alignment multiplier).
+        let blank = await handle(["session_id": .string(id.uuidString), "goal": .string("   ")])
+        #expect(blank.error != nil)
+        #expect(currentGoal() == "keep me")
+
+        // Unknown session → applicationError, not a silent no-op.
         let missing = await handle(["session_id": .string(UUID().uuidString), "goal": .string("x")])
-        #expect(missing.error != nil)
         #expect(missing.error?.message == "Session not found")
+
+        // Manager session → rejected; org goals don't apply to orchestration.
+        let mgr = await handle(["session_id": .string(manager.id.uuidString), "goal": .string("x")])
+        #expect(mgr.error != nil)
+        #expect(appState.sessions.first(where: { $0.id == manager.id })?.orgGoal == nil)
     }
 }
