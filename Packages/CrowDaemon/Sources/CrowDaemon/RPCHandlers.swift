@@ -157,6 +157,14 @@ func makeCommandRouter(
                         "ticket_badge": session.ticketBadgeLabel.map { .string($0) } ?? .null,
                         "provider": session.provider.map { .string($0.rawValue) } ?? .null,
                         "review_author": session.reviewAuthor.map { .string($0) } ?? .null,
+                        // Org-goal tag (#723; ADR 0008 follow-up 8) — drives the
+                        // web tag display (sidebar badge + detail header). The
+                        // computed `alignment_weight` / `ticket_priority` are
+                        // intentionally NOT sent: nothing on the web renders
+                        // them today, so shipping them in every poll to every
+                        // client was dead payload. A future consumer (scorecard
+                        // / session strip) can add them back alongside its use.
+                        "org_goal": session.orgGoal.map { .string($0) } ?? .null,
                     ]
                     if let worktree = appState.primaryWorktree(for: session.id) {
                         object["repo"] = .string(worktree.repoName)
