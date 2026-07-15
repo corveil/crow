@@ -89,4 +89,72 @@ struct EngineRouterSmokeTests {
         // traversal guard — proving cwd was derived from the primary worktree.
         #expect(response.error?.message == "Terminal cwd must be within the configured devRoot")
     }
+
+    /// #723 (ADR 0008 follow-up 8): the `set-goal` data model, `SessionService`
+    /// mutator, and `crow set-goal` CLI all shipped with #696, but no RPC ever
+    /// routed the method — so the whole path silently no-op'd with nothing to
+    /// catch it. This locks in the newly-wired route (`EngineRouter.swift`),
+    /// including the two normalization rules a missing test would let regress:
+    /// `clear` wins over `goal`, and a blank/whitespace goal is treated as a
+    /// clear (so an empty tag can't buy the on-goal alignment multiplier).
+    @Test("set-goal reaches the mutator; clear wins over goal; blank goal clears")
+    func setGoalRoutesToMutator() async throws {
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("crow-engine-smoke-\(UUID().uuidString)")
+        let appState = AppState()
+        let store = JSONStore(directory: tmp)
+        let service = SessionService(store: store, appState: appState, hostBridge: NoopHostBridge())
+
+        let session = Session(name: "goal-test")   // orgGoal defaults to nil
+        appState.sessions.append(session)
+        let id = session.id
+
+        let ctx = EngineContext(
+            appState: appState,
+            store: store,
+            sessionService: service,
+            issueTracker: nil,
+            telemetryPort: nil,
+            devRoot: tmp.path,
+            hostBridge: NoopHostBridge(),
+            loadConfig: { nil },
+            applyConfig: { _ in nil }
+        )
+        let router = makeEngineRouter(ctx)
+
+        func handle(_ params: [String: JSONValue]) async -> JSONRPCResponse {
+            await router.handle(request: JSONRPCRequest(id: 1, method: "set-goal", params: params))
+        }
+        func currentGoal() -> String? {
+            appState.sessions.first(where: { $0.id == id })?.orgGoal
+        }
+
+        // 1. Route reaches the mutator: a goal is set on the session.
+        let set = await handle(["session_id": .string(id.uuidString), "goal": .string("Q3 revenue")])
+        #expect(set.error == nil)
+        #expect(currentGoal() == "Q3 revenue")
+
+        // 2. `clear` wins over `goal`, even when both are supplied.
+        let cleared = await handle([
+            "session_id": .string(id.uuidString),
+            "clear": .bool(true),
+            "goal": .string("ignored"),
+        ])
+        #expect(cleared.error == nil)
+        #expect(currentGoal() == nil)
+
+        // 3. A blank/whitespace goal normalizes to a clear (re-set first so the
+        //    nil assertion proves the blank cleared it, not that it was already nil).
+        _ = await handle(["session_id": .string(id.uuidString), "goal": .string("temp")])
+        #expect(currentGoal() == "temp")
+        let blanked = await handle(["session_id": .string(id.uuidString), "goal": .string("   ")])
+        #expect(blanked.error == nil)
+        #expect(currentGoal() == nil)
+
+        // 4. An unknown session is rejected before mutating (the guard's
+        //    `applicationError` path), not silently no-op'd.
+        let missing = await handle(["session_id": .string(UUID().uuidString), "goal": .string("x")])
+        #expect(missing.error != nil)
+        #expect(missing.error?.message == "Session not found")
+    }
 }
