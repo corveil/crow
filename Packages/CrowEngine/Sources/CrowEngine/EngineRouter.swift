@@ -197,6 +197,10 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                         // Legacy alias (CROW-569 named this `pinned`); kept for
                         // one release so existing scripts keep working.
                         "pinned": .bool(s.locked),
+                        // Org-goal tag (#723) — surfaced here so `crow
+                        // get-session` reflects a goal set from the web (read
+                        // parity for the write path this PR wired).
+                        "org_goal": s.orgGoal.map { .string($0) } ?? .null,
                     ]
                 }
             },
@@ -598,16 +602,21 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
             // method — this wires the CLI socket *and* the web WebSocket (both
             // share this router) to the mutator.
             //
-            // Enforcement mirrors the CLI's `validateSetGoal` (CrowCLI
-            // Validation.swift) so the two surfaces agree on ONE contract:
-            // reject both, neither, and a blank goal. The CLI's `validate()`
-            // guards only the CLI path, so for the web this RPC is the sole
-            // enforcement point — a missing/typo'd param must error, not
-            // silently wipe an existing tag. (The web only ever sends `{goal}`
-            // or `{clear:true}` — app.js `setSessionGoal` — so this rejects
-            // nothing it emits.) Managers are excluded per the same product
-            // rule the web menu applies: orchestration sessions don't ladder up
-            // to an org KPI, so the goal doesn't apply.
+            // The goal/clear/blank rules mirror the CLI's `validateSetGoal`
+            // (CrowCLI Validation.swift) so the two surfaces agree on ONE
+            // contract: reject both, neither, and a blank goal. The CLI's
+            // `validate()` guards only the CLI path, so for the web this RPC is
+            // the sole enforcement point — a missing/typo'd param must error,
+            // not silently wipe an existing tag. (The web only ever sends
+            // `{goal}` or `{clear:true}` — app.js `setSessionGoal` — so this
+            // rejects nothing it emits.) The goal string is additionally held to
+            // the same `isValidSessionName` bound (≤256 chars, no control
+            // characters) as the sibling free-text handlers (`new-session`
+            // above, `rename-session` via `SessionService`), since this newly
+            // exposes a free-text field to an authenticated *remote* web client
+            // that gets re-broadcast in every `list-sessions` payload. Managers
+            // are excluded — a server-side-only rule (not from the CLI) matching
+            // the web menu: orchestration sessions don't ladder up to an org KPI.
             "set-goal": { @Sendable params in
                 guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
                     throw RPCError.invalidParams("session_id required")
@@ -627,6 +636,9 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                 let goal: String? = clear
                     ? nil
                     : rawGoal!.trimmingCharacters(in: .whitespacesAndNewlines)
+                if let goal, !Validation.isValidSessionName(goal) {
+                    throw RPCError.invalidParams("Invalid goal (max \(Validation.maxSessionNameLength) chars, no control characters)")
+                }
                 return try await MainActor.run {
                     guard let session = capturedAppState.sessions.first(where: { $0.id == id }) else {
                         throw RPCError.applicationError("Session not found")

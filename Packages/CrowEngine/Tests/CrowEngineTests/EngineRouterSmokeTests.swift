@@ -166,6 +166,22 @@ struct EngineRouterSmokeTests {
         #expect(blank.error != nil)
         #expect(currentGoal() == "keep me")
 
+        // Over-length goal → rejected by the same `isValidSessionName` bound the
+        // sibling handlers keep (a remote web client can't persist a
+        // multi-megabyte tag that rides every list-sessions payload).
+        let tooLong = await handle([
+            "session_id": .string(id.uuidString), "goal": .string(String(repeating: "a", count: 257)),
+        ])
+        #expect(tooLong.error != nil)
+        #expect(currentGoal() == "keep me")
+
+        // Control characters in the goal → rejected (no escape sequences).
+        let control = await handle([
+            "session_id": .string(id.uuidString), "goal": .string("bad\u{07}goal"),
+        ])
+        #expect(control.error != nil)
+        #expect(currentGoal() == "keep me")
+
         // Unknown session → applicationError, not a silent no-op.
         let missing = await handle(["session_id": .string(UUID().uuidString), "goal": .string("x")])
         #expect(missing.error?.message == "Session not found")

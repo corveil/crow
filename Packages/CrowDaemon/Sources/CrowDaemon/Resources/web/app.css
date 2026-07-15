@@ -197,11 +197,13 @@ html, body {
   font-size: 10px; font-weight: 600; border: 1px solid; background: var(--bg-surface);
 }
 .activity-badge { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; }
-/* Org-goal tag (#723): the sidebar glyph reuses .badge sizing; the detail-header
-   .meta-goal row shows the full text and turns gold on hover to read as clickable. */
+/* Org-goal tag (#723): the sidebar glyph reuses .badge sizing (non-clickable);
+   the detail-header .meta-goal row shows the full text and turns gold on hover
+   to read as clickable. `cursor` inherits, so the clickable header pill needs
+   its own `pointer` to beat the sidebar glyph's `default` below. */
 .goal-badge { cursor: default; }
 .meta-goal { display: flex; align-items: center; }
-.meta-goal .goal-badge { color: var(--gold); background: rgba(221, 196, 130, 0.14); border-radius: 10px; padding: 2px 8px; font-size: 11px; }
+.meta-goal .goal-badge { color: var(--gold); background: rgba(221, 196, 130, 0.14); border-radius: 10px; padding: 2px 8px; font-size: 11px; cursor: pointer; }
 .meta-goal:hover .goal-badge { background: rgba(221, 196, 130, 0.24); }
 .empty { color: var(--text-muted); padding: 20px 6px; }
 

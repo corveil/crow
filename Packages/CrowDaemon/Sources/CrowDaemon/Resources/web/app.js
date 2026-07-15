@@ -1700,8 +1700,7 @@ async function clearSessionGoal(id) {
 // Shared org-goal mutation: a non-empty `goal` sets it, an empty string clears
 // it (RPC gets `{goal}` or `{clear:true}` — never a blank goal, which the
 // handler rejects). Reflects the change locally so the sidebar + header update
-// without a refetch; `alignment_weight` is server-computed and refreshes on the
-// next `list-sessions` poll (nothing renders it client-side).
+// without a refetch.
 async function applyOrgGoal(id, goal) {
   await rpc('set-goal', goal ? { session_id: id, goal } : { session_id: id, clear: true });
   const s = sessions.find((x) => x.id === id);
