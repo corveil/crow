@@ -301,9 +301,9 @@ struct PipelineSegment: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 6) {
-                Circle()
-                    .fill(status.color)
-                    .frame(width: 8, height: 8)
+                Image(systemName: status.icon)
+                    .font(.callout)
+                    .foregroundStyle(status.color)
                 Text(status.rawValue)
                     .font(.callout)
                     .fontWeight(isSelected ? .semibold : .regular)
@@ -613,11 +613,11 @@ public struct TicketBoardSidebarRow: View {
             }
             HStack(spacing: 8) {
                 Spacer(minLength: 0)
-                StatusCount(icon: "tray", color: CorveilTheme.textMuted, count: appState.issueCount(for: .backlog))
-                StatusCount(icon: "flag.fill", color: .blue, count: appState.issueCount(for: .ready))
-                StatusCount(icon: "bolt.fill", color: .orange, count: appState.issueCount(for: .inProgress))
-                StatusCount(icon: "eye.fill", color: .purple, count: appState.issueCount(for: .inReview))
-                StatusCount(icon: "checkmark.circle.fill", color: .green, count: appState.doneIssuesLast24h)
+                StatusCount(icon: TicketStatus.backlog.icon, color: TicketStatus.backlog.color, count: appState.issueCount(for: .backlog))
+                StatusCount(icon: TicketStatus.ready.icon, color: TicketStatus.ready.color, count: appState.issueCount(for: .ready))
+                StatusCount(icon: TicketStatus.inProgress.icon, color: TicketStatus.inProgress.color, count: appState.issueCount(for: .inProgress))
+                StatusCount(icon: TicketStatus.inReview.icon, color: TicketStatus.inReview.color, count: appState.issueCount(for: .inReview))
+                StatusCount(icon: TicketStatus.done.icon, color: TicketStatus.done.color, count: appState.doneIssuesLast24h)
                 Spacer(minLength: 0)
             }
         }

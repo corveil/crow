@@ -57,6 +57,15 @@ struct RunCorveilVersionTests {
     }
 }
 
+@Test func ticketStatusIcons() {
+    #expect(TicketStatus.backlog.icon == "tray")
+    #expect(TicketStatus.ready.icon == "flag.fill")
+    #expect(TicketStatus.inProgress.icon == "bolt.fill")
+    #expect(TicketStatus.inReview.icon == "eye.fill")
+    #expect(TicketStatus.done.icon == "checkmark.circle.fill")
+    #expect(TicketStatus.unknown.icon == "questionmark.circle")
+}
+
 // MARK: - PR Check/Review Status Extensions
 
 @Test func checkStatusIcons() {

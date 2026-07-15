@@ -154,6 +154,18 @@ extension TicketStatus {
         case .unknown: .secondary
         }
     }
+
+    /// Canonical SF Symbol for each pipeline stage.
+    public var icon: String {
+        switch self {
+        case .backlog: "tray"
+        case .ready: "flag.fill"
+        case .inProgress: "bolt.fill"
+        case .inReview: "eye.fill"
+        case .done: "checkmark.circle.fill"
+        case .unknown: "questionmark.circle"
+        }
+    }
 }
 
 extension SessionStatus {
