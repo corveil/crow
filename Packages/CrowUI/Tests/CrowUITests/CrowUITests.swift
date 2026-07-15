@@ -64,6 +64,11 @@ struct RunCorveilVersionTests {
     #expect(TicketStatus.inReview.icon == "eye.fill")
     #expect(TicketStatus.done.icon == "checkmark.circle.fill")
     #expect(TicketStatus.unknown.icon == "questionmark.circle")
+
+    // Each status must map to a distinct icon — catches a copy-paste bug
+    // (two statuses sharing a glyph) that exact-string matching alone can't.
+    let icons = TicketStatus.allCases.map(\.icon)
+    #expect(Set(icons).count == icons.count)
 }
 
 // MARK: - PR Check/Review Status Extensions

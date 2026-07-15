@@ -268,7 +268,7 @@ struct AllPipelineSegment: View {
         Button(action: action) {
             HStack(spacing: 6) {
                 Image(systemName: "square.grid.2x2")
-                    .font(.system(size: 8))
+                    .font(.callout)
                     .foregroundStyle(CorveilTheme.gold)
                 Text("All")
                     .font(.callout)
@@ -613,11 +613,11 @@ public struct TicketBoardSidebarRow: View {
             }
             HStack(spacing: 8) {
                 Spacer(minLength: 0)
-                StatusCount(icon: TicketStatus.backlog.icon, color: TicketStatus.backlog.color, count: appState.issueCount(for: .backlog))
-                StatusCount(icon: TicketStatus.ready.icon, color: TicketStatus.ready.color, count: appState.issueCount(for: .ready))
-                StatusCount(icon: TicketStatus.inProgress.icon, color: TicketStatus.inProgress.color, count: appState.issueCount(for: .inProgress))
-                StatusCount(icon: TicketStatus.inReview.icon, color: TicketStatus.inReview.color, count: appState.issueCount(for: .inReview))
-                StatusCount(icon: TicketStatus.done.icon, color: TicketStatus.done.color, count: appState.doneIssuesLast24h)
+                StatusCount(status: .backlog, count: appState.issueCount(for: .backlog))
+                StatusCount(status: .ready, count: appState.issueCount(for: .ready))
+                StatusCount(status: .inProgress, count: appState.issueCount(for: .inProgress))
+                StatusCount(status: .inReview, count: appState.issueCount(for: .inReview))
+                StatusCount(status: .done, count: appState.doneIssuesLast24h)
                 Spacer(minLength: 0)
             }
         }
@@ -665,6 +665,14 @@ struct StatusCount: View {
     let icon: String
     let color: Color
     let count: Int
+
+    /// Derive icon + color from a single `TicketStatus` so the pair can't drift
+    /// — the same source-of-truth guarantee the pipeline row relies on.
+    init(status: TicketStatus, count: Int) {
+        self.icon = status.icon
+        self.color = status.color
+        self.count = count
+    }
 
     var body: some View {
         HStack(spacing: 3) {
