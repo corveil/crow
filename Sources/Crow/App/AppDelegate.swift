@@ -582,8 +582,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appState.excludeReviewRepos = config.effectiveExcludeReviewRepos
         appState.excludeTicketRepos = config.defaults.excludeTicketRepos
         appState.ignoreReviewLabels = config.defaults.ignoreReviewLabels
-        appState.defaultAgentKind = config.defaultAgentKind
-        appState.agentsByKind = config.agentsByKind
+        appState.applyAgentConfig(config)
 
         // Create session service and hydrate state. The analytics provider
         // resolves telemetryService lazily — it is created later in launch —
@@ -1313,8 +1312,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appState.excludeReviewRepos = config.effectiveExcludeReviewRepos
         appState.excludeTicketRepos = config.defaults.excludeTicketRepos
         appState.ignoreReviewLabels = config.defaults.ignoreReviewLabels
-        appState.defaultAgentKind = config.defaultAgentKind
-        appState.agentsByKind = config.agentsByKind
+        appState.applyAgentConfig(config)
     }
 
     /// Record a job's run time in the canonical `appConfig` and persist it, so
