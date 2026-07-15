@@ -10,9 +10,9 @@
 # Note: Swift can't be hot-swapped into a running process, so `--watch` tears
 # down and respawns the daemon on every change — the same "the server restarts"
 # tradeoff as the Tauri dev loop. Prefer the default (no --watch) when you want a
-# daemon that stays up across edits. And note `make run` already spawns `crowd`
-# with live web assets as a sidecar, so for most UI work you don't need this
-# script at all.
+# daemon that stays up across edits. Note that `make run` spawns its `crowd`
+# sidecar serving the *frozen* bundle-baked web assets (no live reload), so this
+# script is what you want when you need live-from-source web editing.
 #
 # Always binds 127.0.0.1 (loopback only) — front it with an HTTPS reverse proxy
 # for remote access. Env overrides: CROW_HTTP_PORT (8787),
