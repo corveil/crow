@@ -249,9 +249,9 @@ import CrowPersistence
         #expect(resp.error?.code == RPCErrorCode.invalidParams)   // missing/invalid action
     }
 
-    @Test @MainActor func quickActionDispatchesLocallyWhenCoordinatorPresent() async {
-        // No managed terminal → dispatchManual silently skips, but the handler
-        // still returns the dispatched shape (the app behaves identically).
+    @Test @MainActor func quickActionReportsSkipWhenNoManagedTerminal() async {
+        // No managed terminal → dispatchManual skips; the handler must report that
+        // faithfully as dispatched:false + a reason, not a false "dispatched" (#730).
         let appState = AppState()
         let session = Session(name: "s", kind: .work, agentKind: .claudeCode)
         appState.sessions = [session]
@@ -262,7 +262,85 @@ import CrowPersistence
             id: 1, method: "quick-action",
             params: ["session_id": .string(session.id.uuidString), "action": .string("mergePR")]))
         #expect(resp.error == nil)
-        #expect(resp.result?["dispatched"]?.boolValue == true)
+        #expect(resp.result?["dispatched"]?.boolValue == false)
+        #expect(resp.result?["reason"]?.stringValue?.isEmpty == false)
         #expect(resp.result?["action"]?.stringValue == "mergePR")
+    }
+}
+
+/// CROW-722: `list-sessions-live` carries a per-session analytics strip resolved
+/// server-side (live hook aggregate → durable snapshot). These pin the resolution
+/// branch the DTO's own tests don't reach — the empty-state omission, the Manager
+/// exclusion, and that `CrowDaemon.reseed` mirrors persisted snapshots so a
+/// session that completed before this daemon process started still renders its
+/// strip (the snapshot half was dead before #736's reseed fix).
+@Suite struct SessionAnalyticsStripLiveTests {
+    @MainActor
+    private func router(appState: AppState, store: JSONStore) -> CommandRouter {
+        makeCommandRouter(
+            appState: appState, store: store, git: GitManager(),
+            devRoot: NSTemporaryDirectory(), cockpit: nil)
+    }
+
+    private func snapshot(for id: UUID, cost: Double = 2.5) -> SessionAnalyticsSnapshot {
+        SessionAnalyticsSnapshot(
+            sessionID: id, endedAt: Date(), status: .completed,
+            analytics: SessionAnalytics(totalCost: cost, inputTokens: 40, outputTokens: 60, toolCallCount: 9),
+            wallClockDurationSeconds: 7200)
+    }
+
+    /// JSONValue decodes whole-number Doubles as `.int` (Int is tried first), so
+    /// read numbers as int-or-double rather than pinning the case.
+    private func num(_ v: JSONValue?) -> Double? {
+        v?.doubleValue ?? v?.intValue.map(Double.init)
+    }
+
+    @Test @MainActor func reseedMirrorsSnapshotsSoStripRendersAfterRestart() async {
+        AgentRegistry.shared.register(ClaudeCodeAgent())
+        // A session that completed before this daemon started: its snapshot lives
+        // in store.json, but a fresh appState is empty until reseed mirrors it.
+        let session = Session(name: "s", kind: .work, agentKind: .claudeCode)
+        let store = JSONStore()
+        store.mutate { data in
+            data.sessions = [session]
+            data.analyticsSnapshots = [session.id.uuidString: snapshot(for: session.id)]
+        }
+        let appState = AppState()
+        CrowDaemon.reseed(appState, from: store)
+        #expect(appState.analyticsSnapshots[session.id.uuidString] != nil)
+
+        let resp = await router(appState: appState, store: store)
+            .handle(request: JSONRPCRequest(id: 1, method: "list-sessions-live"))
+        let a = resp.result?["sessions"]?.objectValue?[session.id.uuidString]?.objectValue?["analytics"]?.objectValue
+        #expect(a?["source"]?.stringValue == "snapshot")
+        #expect(num(a?["totalCost"]) == 2.5)
+        #expect(num(a?["totalTokens"]) == 100) // 40 + 60
+        #expect(num(a?["toolCallCount"]) == 9)
+        #expect(num(a?["wallClockDurationSeconds"]) == 7200)
+    }
+
+    @Test @MainActor func omitsAnalyticsWhenNoLiveOrSnapshot() async {
+        AgentRegistry.shared.register(ClaudeCodeAgent())
+        let session = Session(name: "s", kind: .work, agentKind: .claudeCode)
+        let appState = AppState()
+        appState.sessions = [session]
+        let resp = await router(appState: appState, store: JSONStore())
+            .handle(request: JSONRPCRequest(id: 1, method: "list-sessions-live"))
+        let entry = resp.result?["sessions"]?.objectValue?[session.id.uuidString]?.objectValue
+        #expect(entry != nil)
+        #expect(entry?["analytics"] == nil) // absence IS the empty state
+    }
+
+    @Test @MainActor func excludesManagerEvenWithSnapshot() async {
+        AgentRegistry.shared.register(ClaudeCodeAgent())
+        let manager = Session(name: "m", kind: .manager, agentKind: .claudeCode)
+        let appState = AppState()
+        appState.sessions = [manager]
+        appState.analyticsSnapshots[manager.id.uuidString] = snapshot(for: manager.id)
+        let resp = await router(appState: appState, store: JSONStore())
+            .handle(request: JSONRPCRequest(id: 1, method: "list-sessions-live"))
+        let entry = resp.result?["sessions"]?.objectValue?[manager.id.uuidString]?.objectValue
+        #expect(entry != nil)
+        #expect(entry?["analytics"] == nil)
     }
 }

@@ -98,6 +98,45 @@ import Testing
     #expect(reloaded.data.links.count == iterations)
 }
 
+// Regression guard for #728: two *distinct* writers race on the ONE shared
+// instance — one appends sessions (the `SessionService` role), the other
+// appends links (the `IssueTracker` role). Each touches only its own
+// collection, mirroring the real race where an IssueTracker refresh wrote a
+// link while a session was being created. Before the fix, IssueTracker used a
+// throwaway `JSONStore()` whose stale full-store snapshot dropped the session;
+// with a single shared instance, `lock` + `writeSeq` serialize both writers
+// and every session must survive on disk.
+@Test func concurrentSessionAndLinkWritersLoseNoSession() throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    let store = JSONStore(directory: dir)
+    let count = 200
+    let expectedSessions = count / 2
+
+    DispatchQueue.concurrentPerform(iterations: count) { i in
+        if i.isMultiple(of: 2) {
+            // SessionService role: create a session.
+            store.mutate { $0.sessions.append(Session(name: "s-\(i)")) }
+        } else {
+            // IssueTracker role: append a PR link (formerly a throwaway write).
+            store.mutate {
+                $0.links.append(SessionLink(
+                    sessionID: UUID(), label: "PR #\(i)",
+                    url: "https://example.com/\(i)", linkType: .pr
+                ))
+            }
+        }
+    }
+
+    #expect(store.data.sessions.count == expectedSessions)
+
+    // No session may be lost after a reload from disk either.
+    let reloaded = JSONStore(directory: dir)
+    #expect(reloaded.data.sessions.count == expectedSessions)
+    #expect(reloaded.data.links.count == count - expectedSessions)
+}
+
 // The final mutation in a rapid burst must always be the one persisted —
 // write coalescing may drop intermediate snapshots but never the latest (#304).
 @Test func lastMutationInBurstIsPersisted() throws {

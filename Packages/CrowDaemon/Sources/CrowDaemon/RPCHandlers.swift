@@ -435,7 +435,14 @@ func makeCommandRouter(
             guard let actionStr = params["action"]?.stringValue, let action = QuickAction(rawValue: actionStr) else {
                 throw DaemonRPCError.invalidParams("action required (fixConflicts, addressChanges, fixChecks, mergePR)")
             }
-            await MainActor.run { autoRespond.dispatchManual(action: action, sessionID: id) }
+            // `dispatchManual` silently skips (no managed terminal / surface not
+            // ready / no PR link); report that faithfully as `dispatched:false`
+            // + a reason instead of a false success, so the web UI can surface an
+            // actionable message rather than echoing "dispatched" (#730).
+            let result = await MainActor.run { autoRespond.dispatchManual(action: action, sessionID: id) }
+            if let reason = result.skipReason {
+                return ["dispatched": .bool(false), "action": .string(action.rawValue), "reason": .string(reason)]
+            }
             return ["dispatched": .bool(true), "action": .string(action.rawValue)]
         },
 
@@ -677,6 +684,26 @@ func makeCommandRouter(
                     if let prLink = appState.links(for: id).first(where: { $0.linkType == .pr }) {
                         entry["pr_link"] = .object(["label": .string(prLink.label), "url": .string(prLink.url)])
                     }
+                    // Per-session analytics strip (CROW-722). Prefer the live
+                    // in-memory hook aggregate (open sessions); fall back to the
+                    // durable end-of-session snapshot (terminal sessions). Mirrors
+                    // `writeAnalyticsSnapshot`'s own source preference. Never for the
+                    // Manager, and never an all-zeros aggregate — the web renders
+                    // the strip only when this key is present (chips-only empty
+                    // state), so absence IS the empty state.
+                    if !appState.isManagerSession(id) {
+                        let dto: SessionAnalyticsDTO?
+                        if let live = appState.existingHookState(for: id)?.analytics, !live.isEmpty {
+                            dto = SessionAnalyticsDTO(live: live, wallClockDuration: session.wallClockDuration)
+                        } else if let snapshot = appState.analyticsSnapshots[id.uuidString] {
+                            dto = SessionAnalyticsDTO(snapshot: snapshot)
+                        } else {
+                            dto = nil
+                        }
+                        if let dto, let encoded = try? JSONValue(encoding: dto) {
+                            entry["analytics"] = encoded
+                        }
+                    }
                     out[id.uuidString] = .object(entry)
                 }
                 return ["sessions": .object(out)]
@@ -709,6 +736,41 @@ func makeCommandRouter(
                 throw error
             } catch {
                 throw DaemonRPCError.applicationError("Failed to encode state snapshot: \(error)")
+            }
+        },
+
+        // Private efficiency scorecard (ADR 0008; web parity #721). The desktop
+        // `ScorecardView` reads `ScorecardModel` off `appState.analyticsSnapshots`
+        // + `appState.prAttributions` directly; the web has no Swift value types,
+        // so we build the ONE Core `ScorecardModel.build(...)` here and ship its
+        // flattened `ScorecardDTO`. Building server-side is what guarantees the
+        // web grade/throughput/combined/baseline can never drift from desktop —
+        // there is no JS re-implementation of the grading to keep in sync.
+        // Read-only and always local (same posture as get-state).
+        "get-scorecard": { _ in
+            let dto = await MainActor.run { () -> ScorecardDTO in
+                let model = ScorecardModel.build(
+                    snapshots: Array(appState.analyticsSnapshots.values),
+                    attributions: Array(appState.prAttributions.values),
+                    now: Date(),
+                    calendar: .current
+                )
+                let telemetryEnabled = ConfigStore.loadConfig(devRoot: devRoot)?.telemetry.enabled ?? false
+                return ScorecardDTO(
+                    model,
+                    telemetryEnabled: telemetryEnabled,
+                    snapshotCount: appState.analyticsSnapshots.count
+                )
+            }
+            do {
+                guard case .object(let dict) = try JSONValue(encoding: dto) else {
+                    throw DaemonRPCError.applicationError("scorecard did not encode to an object")
+                }
+                return dict
+            } catch let error as DaemonRPCError {
+                throw error
+            } catch {
+                throw DaemonRPCError.applicationError("Failed to encode scorecard: \(error)")
             }
         },
 

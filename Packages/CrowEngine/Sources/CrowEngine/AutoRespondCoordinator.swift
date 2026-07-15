@@ -78,23 +78,26 @@ public final class AutoRespondCoordinator {
     /// Manually dispatch a quick action triggered by a session-card button click.
     /// Mirrors `dispatch(_:)` but bypasses the `AutoRespondSettings` toggle —
     /// the click is the user's explicit consent. Resolves the PR URL/number
-    /// from the session's `.pr` link.
-    public func dispatchManual(action: QuickAction, sessionID: UUID) {
+    /// from the session's `.pr` link. Returns whether the prompt was actually
+    /// sent (or why it was skipped) so callers report honestly instead of
+    /// assuming success (#730).
+    @discardableResult
+    public func dispatchManual(action: QuickAction, sessionID: UUID) -> QuickActionDispatchResult {
         let terminals = appState.terminals(for: sessionID)
         guard let terminal = terminals.first(where: { $0.isManaged }) else {
             NSLog("[QuickAction] Skipping %@ for session %@: no managed terminal",
                   action.rawValue, sessionID.uuidString)
-            return
+            return .noManagedTerminal
         }
         guard TerminalRouter.canSend(terminal) else {
             NSLog("[QuickAction] Skipping %@ for session %@: terminal surface not initialized",
                   action.rawValue, sessionID.uuidString)
-            return
+            return .surfaceNotReady
         }
         guard let prLink = appState.links(for: sessionID).first(where: { $0.linkType == .pr }) else {
             NSLog("[QuickAction] Skipping %@ for session %@: no PR link",
                   action.rawValue, sessionID.uuidString)
-            return
+            return .noPRLink
         }
 
         let prNumber = QuickActionPrompts.parsePRNumber(from: prLink.url)
@@ -107,6 +110,7 @@ public final class AutoRespondCoordinator {
         NSLog("[QuickAction] Sending %@ prompt to terminal %@ (%d chars)",
               action.rawValue, terminal.id.uuidString, prompt.count)
         TerminalRouter.send(terminal, text: prompt)
+        return .sent
     }
 
     /// Resolve the `CodeBackend` to use for a session's prompt rendering.
