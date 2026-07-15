@@ -1682,8 +1682,10 @@ async function setSessionGoal(id, current) {
   const raw = await textPrompt(current ? 'Edit org goal' : 'Set org goal', current || '',
     { placeholder: 'e.g. Q3 latency KPI', okLabel: 'Save' });
   if (raw == null) return; // cancelled
+  const goal = raw.trim();
+  if (goal === (current || '')) return; // unchanged (or empty on an untagged session) — skip the write
   try {
-    await applyOrgGoal(id, raw.trim());
+    await applyOrgGoal(id, goal);
   } catch (e) {
     alertModal('Set goal failed: ' + (e.message || e));
   }

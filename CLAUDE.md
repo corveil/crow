@@ -28,6 +28,7 @@ crow delete-session --session <uuid>            → {"deleted":true}
 ### Metadata Commands
 ```
 crow set-ticket --session <uuid> --url "..." [--title "..."] [--number N]
+crow set-goal --session <uuid> --goal "..." | --clear                  → tag the session's org goal/KPI (feeds alignment weight; exactly one of --goal/--clear)
 crow add-link --session <uuid> --label "Issue" --url "..." --type ticket|pr|repo|custom
 crow list-links --session <uuid>
 crow transition-ticket --session <uuid> --to inProgress|inReview|done   → moves the linked ticket to a pipeline status (Jira honors jiraStatusMap)

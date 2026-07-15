@@ -197,10 +197,17 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                         // Legacy alias (CROW-569 named this `pinned`); kept for
                         // one release so existing scripts keep working.
                         "pinned": .bool(s.locked),
-                        // Org-goal tag (#723) — surfaced here so `crow
-                        // get-session` reflects a goal set from the web (read
-                        // parity for the write path this PR wired).
+                        // Org-goal tag + alignment inputs (#723; ADR 0008
+                        // follow-up 8) — surfaced here so `crow get-session`
+                        // reflects a goal set from the web and matches the
+                        // documented read-back contract (docs/cli-reference.md).
+                        // Unlike the web `list-sessions` poll (which sends only
+                        // `org_goal`), this is a deliberate single-session read,
+                        // so the computed `alignment_weight` + `ticket_priority`
+                        // ride along too.
                         "org_goal": s.orgGoal.map { .string($0) } ?? .null,
+                        "ticket_priority": s.ticketPriority.map { .string($0.rawValue) } ?? .null,
+                        "alignment_weight": .double(s.alignmentWeight),
                     ]
                 }
             },
@@ -623,21 +630,28 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                 }
                 let clear = params["clear"]?.boolValue ?? false
                 let rawGoal = params["goal"]?.stringValue
+                // Bind `goal` in-pattern (no force-unwrap): the switch is
+                // exhaustive over (goal?, clear), and the only arm that yields a
+                // value validates it — blank rejected, then the same
+                // `isValidSessionName` bound (≤256 chars, no control chars) the
+                // sibling free-text handlers keep.
+                let goal: String?
                 switch (rawGoal, clear) {
                 case (.some, true):
                     throw RPCError.invalidParams("`goal` and `clear` are mutually exclusive")
                 case (nil, false):
                     throw RPCError.invalidParams("Exactly one of `goal` or `clear` is required")
-                case (.some(let g), false) where g.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty:
-                    throw RPCError.invalidParams("`goal` must not be blank")
-                default:
-                    break
-                }
-                let goal: String? = clear
-                    ? nil
-                    : rawGoal!.trimmingCharacters(in: .whitespacesAndNewlines)
-                if let goal, !Validation.isValidSessionName(goal) {
-                    throw RPCError.invalidParams("Invalid goal (max \(Validation.maxSessionNameLength) chars, no control characters)")
+                case (.some(let g), false):
+                    let trimmed = g.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !trimmed.isEmpty else {
+                        throw RPCError.invalidParams("`goal` must not be blank")
+                    }
+                    guard Validation.isValidSessionName(trimmed) else {
+                        throw RPCError.invalidParams("Invalid goal (max \(Validation.maxSessionNameLength) chars, no control characters)")
+                    }
+                    goal = trimmed
+                case (nil, true):
+                    goal = nil
                 }
                 return try await MainActor.run {
                     guard let session = capturedAppState.sessions.first(where: { $0.id == id }) else {
