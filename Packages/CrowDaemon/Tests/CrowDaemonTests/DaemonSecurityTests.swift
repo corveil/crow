@@ -247,7 +247,9 @@ import CrowPersistence
             remoteControlEnabled: true,          // AppState default: false
             managerAutoPermissionMode: false,    // AppState default: true
             jobsAutoPermissionMode: false,       // AppState default: true
-            coderViewAutoPermissionMode: true)   // AppState default: false
+            coderViewAutoPermissionMode: true,   // AppState default: false
+            defaultAgentKind: .cursor,           // AppState default: .claudeCode
+            agentsByKind: ["job": .codex])       // AppState default: [:]
         try ConfigStore.saveConfig(cfg, devRoot: devRoot)
 
         let appState = AppState()
@@ -260,6 +262,15 @@ import CrowPersistence
         #expect(appState.managerAutoPermissionMode == false)
         #expect(appState.jobsAutoPermissionMode == false)
         #expect(appState.coderViewAutoPermissionMode == true)
+        // Agent selection must land too, via the `applyAgentConfig` choke point
+        // wired into `applyConfigToAppState`. This is the guard for CROW-733: a
+        // launched job resolves its agent live through `agentKind(for: .job)`, so
+        // deleting that daemon call site reintroduces the stale-agent bug — and
+        // only this disk→config→state assertion (not the direct-setter unit tests)
+        // fails when it is removed.
+        #expect(appState.defaultAgentKind == .cursor)
+        #expect(appState.agentsByKind == ["job": .codex])
+        #expect(appState.agentKind(for: .job) == .codex)
 
         // The board the daemon serializes is `filteredAssignedIssues`; with the
         // field populated it now drops the excluded repos (exact + glob) — the
