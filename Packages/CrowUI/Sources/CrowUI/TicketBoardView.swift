@@ -268,7 +268,7 @@ struct AllPipelineSegment: View {
         Button(action: action) {
             HStack(spacing: 6) {
                 Image(systemName: "square.grid.2x2")
-                    .font(.callout)
+                    .font(.system(size: 8))
                     .foregroundStyle(CorveilTheme.gold)
                 Text("All")
                     .font(.callout)
@@ -301,9 +301,9 @@ struct PipelineSegment: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 6) {
-                Image(systemName: status.icon)
-                    .font(.callout)
-                    .foregroundStyle(status.color)
+                Circle()
+                    .fill(status.color)
+                    .frame(width: 8, height: 8)
                 Text(status.rawValue)
                     .font(.callout)
                     .fontWeight(isSelected ? .semibold : .regular)
@@ -613,11 +613,11 @@ public struct TicketBoardSidebarRow: View {
             }
             HStack(spacing: 8) {
                 Spacer(minLength: 0)
-                StatusCount(status: .backlog, count: appState.issueCount(for: .backlog))
-                StatusCount(status: .ready, count: appState.issueCount(for: .ready))
-                StatusCount(status: .inProgress, count: appState.issueCount(for: .inProgress))
-                StatusCount(status: .inReview, count: appState.issueCount(for: .inReview))
-                StatusCount(status: .done, count: appState.doneIssuesLast24h)
+                StatusCount(icon: "tray", color: CorveilTheme.textMuted, count: appState.issueCount(for: .backlog))
+                StatusCount(icon: "flag.fill", color: .blue, count: appState.issueCount(for: .ready))
+                StatusCount(icon: "bolt.fill", color: .orange, count: appState.issueCount(for: .inProgress))
+                StatusCount(icon: "eye.fill", color: .purple, count: appState.issueCount(for: .inReview))
+                StatusCount(icon: "checkmark.circle.fill", color: .green, count: appState.doneIssuesLast24h)
                 Spacer(minLength: 0)
             }
         }
@@ -665,14 +665,6 @@ struct StatusCount: View {
     let icon: String
     let color: Color
     let count: Int
-
-    /// Derive icon + color from a single `TicketStatus` so the pair can't drift
-    /// — the same source-of-truth guarantee the pipeline row relies on.
-    init(status: TicketStatus, count: Int) {
-        self.icon = status.icon
-        self.color = status.color
-        self.count = count
-    }
 
     var body: some View {
         HStack(spacing: 3) {
