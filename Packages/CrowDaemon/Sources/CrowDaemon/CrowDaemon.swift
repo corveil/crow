@@ -617,8 +617,10 @@ public enum CrowDaemon {
         // resolves the built-in default (.claudeCode) via appState.agentKind(for:),
         // so the Settings manager/coder agent pickers are ignored on
         // restart/respawn even though they persist to config (CROW-433 / CROW-581).
-        appState.defaultAgentKind = config.defaultAgentKind
-        appState.agentsByKind = config.agentsByKind
+        // Route through the single choke point so no field is silently missed on
+        // any sync path and the next launched job resolves the just-saved agent
+        // without a config reload (CROW-733).
+        appState.applyAgentConfig(config)
     }
 
     /// Poll `store.json`'s mtime and reload when the desktop app writes it, so
