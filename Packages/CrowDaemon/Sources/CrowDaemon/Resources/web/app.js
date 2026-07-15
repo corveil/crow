@@ -1432,6 +1432,11 @@ function renderHeader(s) {
     agentMeta.onclick = (ev) => { ev.stopPropagation(); openHandoffAgentMenu(s, agentMeta); };
   }
 
+  // Per-session analytics strip (CROW-722): cost / tokens / tools / active time,
+  // mirroring the desktop SessionAnalyticsStrip. Sits between the session context
+  // rows and the links/actions row.
+  renderSessionAnalyticsStrip(s, root);
+
   // Links + actions on ONE row (issue/PR/repo chips + inline PR status on the
   // left, action buttons trailing) — matching the desktop detail header.
   const links = (s.links || []).slice();
@@ -1483,6 +1488,34 @@ function renderHeader(s) {
   }
   if (actions.children.length) headerRow.appendChild(actions);
   if (headerRow.children.length) root.appendChild(headerRow);
+}
+
+// Per-session analytics strip (CROW-722) — cost / tokens / tools / active time,
+// mirroring the desktop SessionAnalyticsStrip. Chips-only: appends nothing when
+// there's no analytics (telemetry off, or nothing recorded yet) or for the
+// Manager session, so absence is the empty state. Source (live hook aggregate vs.
+// end-of-session snapshot) is resolved server-side in list-sessions-live.
+function renderSessionAnalyticsStrip(s, root) {
+  if (s.kind === 'manager') return;
+  const a = liveFor(s.id).analytics;
+  if (!a) return;
+  const strip = el('div', 'analytics-strip');
+  strip.appendChild(statChipEl('Cost', fmtCost(a.totalCost)));
+  strip.appendChild(statChipEl('Tokens', fmtCount(a.totalTokens)));
+  strip.appendChild(statChipEl('Tools', String(a.toolCallCount)));
+  strip.appendChild(statChipEl('Active', fmtTime(a.activeTimeSeconds)));
+  if (a.wallClockDurationSeconds != null) {
+    strip.appendChild(statChipEl('Duration', fmtTime(a.wallClockDurationSeconds)));
+  }
+  if (a.linesAdded || a.linesRemoved) {
+    strip.appendChild(statChipEl('Lines', '+' + a.linesAdded + ' −' + a.linesRemoved));
+  }
+  if (a.apiErrorCount > 0) {
+    const chip = statChipEl('Errors', String(a.apiErrorCount));
+    chip.classList.add('chip-error');
+    strip.appendChild(chip);
+  }
+  root.appendChild(strip);
 }
 
 // Inline PR status, mirroring the desktop PRStatusDetail.

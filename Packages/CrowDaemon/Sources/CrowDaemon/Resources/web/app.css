@@ -1128,6 +1128,18 @@ html, body {
 .score-chip-label { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
 .score-chip-value { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
 
+/* Per-session analytics strip in the detail header (CROW-722). Reuses the
+   scorecard's statChipEl DOM but renders compact and unboxed — matching the
+   desktop SessionAnalyticsStrip and the header's .meta density, not the boxed
+   scorecard cards. */
+.analytics-strip { display: flex; gap: 14px; flex-wrap: wrap; align-items: baseline; margin-top: 6px; }
+.analytics-strip .score-chip {
+  flex-direction: row; align-items: baseline; gap: 4px;
+  background: none; border: none; border-radius: 0; padding: 0; min-width: 0;
+}
+.analytics-strip .score-chip-value { font-size: 11px; }
+.analytics-strip .chip-error .score-chip-value { color: var(--red); }
+
 .score-prior { display: flex; flex-direction: column; gap: 6px; }
 .score-prior-row { display: flex; align-items: center; gap: 10px; font-size: 12px; }
 .score-prior-week { color: var(--text-secondary); }

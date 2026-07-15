@@ -564,7 +564,7 @@ public enum CrowDaemon {
     /// `SessionService.hydrateState` — hook state, migrations, agent wiring — is
     /// AppKit-bound and out of scope for the daemon.)
     @MainActor
-    private static func reseed(_ appState: AppState, from store: JSONStore) {
+    static func reseed(_ appState: AppState, from store: JSONStore) {
         let data = store.data
         appState.sessions = data.sessions
         appState.worktrees = [:]
@@ -584,6 +584,13 @@ public enum CrowDaemon {
                 appState.restoreHookState(snapshot, for: sid)
             }
         }
+        // Mirror persisted analytics snapshots so the per-session strip
+        // (CROW-722) and the scorecard (#724) survive a daemon restart. Both read
+        // `appState.analyticsSnapshots`, and nothing else populates it in crowd —
+        // `SessionService.hydrateState` (the app's fuller restore) is AppKit-bound
+        // and never runs here, so without this the snapshot fallback is dead for
+        // any session that completed before this daemon process started (#736 review).
+        appState.analyticsSnapshots = data.analyticsSnapshots ?? [:]
     }
 
     /// Mirror the config-derived `AppState` fields the desktop app syncs in
