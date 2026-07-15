@@ -90,6 +90,16 @@ public final class AppState {
         return agentsByKind[sessionKind.rawValue] ?? defaultAgentKind
     }
 
+    /// Mirror the agent-selection config (`defaultAgentKind` + `agentsByKind`)
+    /// into runtime state so `agentKind(for:)` resolves the just-saved value
+    /// without a config reload (CROW-733). The single choke point every
+    /// config→state sync site funnels through, so no save path can leave the
+    /// mirror stale.
+    public func applyAgentConfig(_ config: AppConfig) {
+        defaultAgentKind = config.defaultAgentKind
+        agentsByKind = config.agentsByKind
+    }
+
     /// Terminal IDs whose Claude Code was launched with `--rc` — drives the
     /// per-session indicator badge. Survives toggle changes so existing sessions
     /// keep showing the badge until they're restarted.
