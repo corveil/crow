@@ -506,7 +506,10 @@ const selectedSessionIDs = new Set();
 let ticketSelectionMode = false;
 const selectedIssueIDs = new Set();
 const PIPELINE = ['All', 'Backlog', 'Ready', 'In Progress', 'In Review', 'Done'];
-// Ticket pipeline status → accent color (mirrors CorveilTheme.TicketStatus.color).
+// Ticket pipeline status → accent color, keyed by CrowCore TicketStatus.rawValue.
+// Paired with TICKET_STATUS_ICON below as the single source of truth for the pipeline
+// headings and the sidebar counts, so a category's icon + color can't drift between the
+// two (web reland of #732; the SwiftUI TicketStatus.color extension is gone on this branch).
 const TICKET_STATUS_COLOR = {
   'Backlog': 'var(--text-muted)',
   'Ready': 'var(--blue)',
@@ -514,6 +517,16 @@ const TICKET_STATUS_COLOR = {
   'In Review': 'var(--purple)',
   'Done': 'var(--green)',
   'Unknown': 'var(--text-muted)',
+};
+// Ticket pipeline status → glyph name in ICONS (the SF-symbol equivalents #734 used).
+// Same keys as TICKET_STATUS_COLOR, so the pair stays in lockstep.
+const TICKET_STATUS_ICON = {
+  'Backlog': 'tray',
+  'Ready': 'flag',
+  'In Progress': 'bolt',
+  'In Review': 'eye',
+  'Done': 'checkCircle',
+  'Unknown': 'help',
 };
 
 const STATUS_COLOR = {
@@ -735,19 +748,22 @@ function ticketsCard() {
 
   const counts = (boardData.tickets && boardData.tickets.counts) || {};
   const done = (boardData.tickets && boardData.tickets.done_last_24h) || 0;
+  // [label, count, statusKey] — color + icon derive from the shared TICKET_STATUS_*
+  // maps keyed by statusKey, so the sidebar counts can't drift from the pipeline
+  // headings (web reland of #732). Done shows the last-24h count under its own label.
   const mini = [
-    ['Backlog', counts.Backlog || 0, 'var(--text-muted)', 'tray'],
-    ['Ready', counts.Ready || 0, 'var(--blue)', 'flag'],
-    ['In Progress', counts['In Progress'] || 0, 'var(--orange)', 'bolt'],
-    ['In Review', counts['In Review'] || 0, 'var(--purple)', 'eye'],
-    ['Done · 24h', done, 'var(--green)', 'checkCircle'],
+    ['Backlog', counts.Backlog || 0, 'Backlog'],
+    ['Ready', counts.Ready || 0, 'Ready'],
+    ['In Progress', counts['In Progress'] || 0, 'In Progress'],
+    ['In Review', counts['In Review'] || 0, 'In Review'],
+    ['Done · 24h', done, 'Done'],
   ];
   const row = el('div', 'tickets-counts');
-  for (const [label, n, color, ic] of mini) {
+  for (const [label, n, statusKey] of mini) {
     const cell = el('span', 'tk-count');
     cell.title = label;
-    cell.style.color = color;
-    cell.appendChild(icon(ic, 12));
+    cell.style.color = TICKET_STATUS_COLOR[statusKey] || 'var(--text-muted)';
+    cell.appendChild(icon(TICKET_STATUS_ICON[statusKey], 12));
     cell.appendChild(el('span', 'tk-n', String(n)));
     row.appendChild(cell);
   }
@@ -958,6 +974,7 @@ const ICONS = {
   close: '<path d="M4 4l8 8M12 4l-8 8"/>',
   wrench: '<path d="M11.8 2.4a2.8 2.8 0 0 0-3.3 3.7L2.9 11.7a1.3 1.3 0 0 0 1.8 1.8l5.6-5.6a2.8 2.8 0 0 0 3.7-3.3l-1.9 1.9-1.6-.4-.4-1.6z"/>',
   logout: '<path d="M6.5 3.5H3.5v9h3"/><path d="M12.5 8H6.5"/><path d="M10 5.5 12.5 8 10 10.5"/>',
+  help: '<circle cx="8" cy="8" r="5.8"/><path d="M6.3 6.5a1.7 1.7 0 1 1 2.4 1.6c-.5.3-.7.6-.7 1.1v.3"/><path d="M8 11.3v.15"/>',
 };
 function icon(name, size) {
   const span = el('span', 'ico');
@@ -2292,6 +2309,13 @@ function renderTicketBoard(root) {
   for (const seg of PIPELINE) {
     const n = seg === 'All' ? (counts.All || 0) : (counts[seg] || 0);
     const cell = el('div', 'pipe-seg' + (ticketFilter === seg ? ' active' : ''));
+    // Category icon + color from the shared maps, so each heading matches the sidebar
+    // count for the same status (web reland of #732). 'All' stays label-only.
+    if (seg !== 'All' && TICKET_STATUS_ICON[seg]) {
+      const ic = icon(TICKET_STATUS_ICON[seg], 14);
+      ic.style.color = TICKET_STATUS_COLOR[seg] || 'var(--text-muted)';
+      cell.appendChild(ic);
+    }
     cell.appendChild(el('span', 'pipe-label', seg));
     cell.appendChild(el('span', 'pipe-count', String(n)));
     cell.onclick = () => { ticketFilter = seg; renderBoard(); };
