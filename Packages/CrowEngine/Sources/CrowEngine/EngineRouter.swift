@@ -197,6 +197,17 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                         // Legacy alias (CROW-569 named this `pinned`); kept for
                         // one release so existing scripts keep working.
                         "pinned": .bool(s.locked),
+                        // Org-goal tag + alignment inputs (#723; ADR 0008
+                        // follow-up 8) — surfaced here so `crow get-session`
+                        // reflects a goal set from the web and matches the
+                        // documented read-back contract (docs/cli-reference.md).
+                        // Unlike the web `list-sessions` poll (which sends only
+                        // `org_goal`), this is a deliberate single-session read,
+                        // so the computed `alignment_weight` + `ticket_priority`
+                        // ride along too.
+                        "org_goal": s.orgGoal.map { .string($0) } ?? .null,
+                        "ticket_priority": s.ticketPriority.map { .string($0.rawValue) } ?? .null,
+                        "alignment_weight": .double(s.alignmentWeight),
                     ]
                 }
             },
@@ -590,6 +601,67 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                         if let i = data.sessions.firstIndex(where: { $0.id == id }) { data.sessions[i] = capturedAppState.sessions[idx] }
                     }
                     return ["session_id": .string(idStr)]
+                }
+            },
+            // Set or clear the org-goal tag on a session (#723; ADR 0008
+            // follow-up 8). The data model + `SessionService.setOrgGoal` and the
+            // `crow set-goal` CLI shipped with #696, but no RPC ever routed the
+            // method — this wires the CLI socket *and* the web WebSocket (both
+            // share this router) to the mutator.
+            //
+            // The goal/clear/blank rules mirror the CLI's `validateSetGoal`
+            // (CrowCLI Validation.swift) so the two surfaces agree on ONE
+            // contract: reject both, neither, and a blank goal. The CLI's
+            // `validate()` guards only the CLI path, so for the web this RPC is
+            // the sole enforcement point — a missing/typo'd param must error,
+            // not silently wipe an existing tag. (The web only ever sends
+            // `{goal}` or `{clear:true}` — app.js `setSessionGoal` — so this
+            // rejects nothing it emits.) The goal string is additionally held to
+            // the same `isValidSessionName` bound (≤256 chars, no control
+            // characters) as the sibling free-text handlers (`new-session`
+            // above, `rename-session` via `SessionService`), since this newly
+            // exposes a free-text field to an authenticated *remote* web client
+            // that gets re-broadcast in every `list-sessions` payload. Managers
+            // are excluded — a server-side-only rule (not from the CLI) matching
+            // the web menu: orchestration sessions don't ladder up to an org KPI.
+            "set-goal": { @Sendable params in
+                guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
+                    throw RPCError.invalidParams("session_id required")
+                }
+                let clear = params["clear"]?.boolValue ?? false
+                let rawGoal = params["goal"]?.stringValue
+                // Bind `goal` in-pattern (no force-unwrap): the switch is
+                // exhaustive over (goal?, clear), and the only arm that yields a
+                // value validates it — blank rejected, then the same
+                // `isValidSessionName` bound (≤256 chars, no control chars) the
+                // sibling free-text handlers keep.
+                let goal: String?
+                switch (rawGoal, clear) {
+                case (.some, true):
+                    throw RPCError.invalidParams("`goal` and `clear` are mutually exclusive")
+                case (nil, false):
+                    throw RPCError.invalidParams("Exactly one of `goal` or `clear` is required")
+                case (.some(let g), false):
+                    let trimmed = g.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !trimmed.isEmpty else {
+                        throw RPCError.invalidParams("`goal` must not be blank")
+                    }
+                    guard Validation.isValidSessionName(trimmed) else {
+                        throw RPCError.invalidParams("Invalid goal (max \(Validation.maxSessionNameLength) chars, no control characters)")
+                    }
+                    goal = trimmed
+                case (nil, true):
+                    goal = nil
+                }
+                return try await MainActor.run {
+                    guard let session = capturedAppState.sessions.first(where: { $0.id == id }) else {
+                        throw RPCError.applicationError("Session not found")
+                    }
+                    guard session.kind != .manager else {
+                        throw RPCError.applicationError("Org goals don't apply to the manager session")
+                    }
+                    capturedService.setOrgGoal(id: id, goal: goal)
+                    return ["session_id": .string(idStr), "org_goal": goal.map { .string($0) } ?? .null]
                 }
             },
             "transition-ticket": { @Sendable params in
