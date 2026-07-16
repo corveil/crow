@@ -177,6 +177,32 @@ public final class AppState {
     /// this; CrowUI cannot read the store directly.
     public var prAttributions: [String: PRSessionAttribution] = [:]
 
+    /// Read-only mirror of the store's persisted Manager weekly usage rollups
+    /// (#745), keyed by week-start "yyyy-MM-dd" — hydrated by SessionService
+    /// on load and resynced by `refreshManagerUsage`. Rendered by the
+    /// scorecard as a separate, ungraded bucket; CrowUI cannot read the store
+    /// directly.
+    public var managerUsageWeekly: [String: ManagerWeeklyUsage] = [:]
+
+    /// Live telemetry capture health (#745): refreshed at launch and on
+    /// manual rebuild, with `lastReceivedAt` bumped as data arrives. Nil when
+    /// telemetry is disabled or hasn't started.
+    public var telemetryCaptureStatus: TelemetryCaptureStatus?
+
+    /// Diagnostics for snapshot writes skipped because analytics read empty
+    /// (#745 item 3) — surfaces the previously silent drop in
+    /// `writeAnalyticsSnapshot`. Ephemeral; resets each launch.
+    public var analyticsSnapshotSkipCount: Int = 0
+    public var lastAnalyticsSnapshotSkipAt: Date?
+
+    /// Manual "Rebuild scorecard" action (#745): backfills snapshots from
+    /// telemetry.db and refreshes the Manager rollups + capture status.
+    /// AppDelegate wires this to its `rebuildScorecard()`.
+    public var onRebuildScorecard: (() async -> Void)?
+    /// True while a rebuild is running; drives the scorecard button's
+    /// spinner/disabled state.
+    public var isRebuildingScorecard: Bool = false
+
     // MARK: - Allowlist
 
     /// Aggregated allow-list entries from all worktrees.

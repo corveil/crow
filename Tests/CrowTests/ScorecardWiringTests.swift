@@ -79,4 +79,51 @@ struct ScorecardWiringTests {
         #expect(appState.analyticsSnapshots[ended.id.uuidString]?.analytics
             == Self.sampleAnalytics)
     }
+
+    // #745: the telemetry.db backfill is a snapshot write path too — the
+    // mirror the scorecard renders from must pick its snapshots up.
+    @Test
+    func telemetryBackfillUpdatesTheMirror() async {
+        let store = Self.tempStore()
+        let appState = AppState()
+        var ended = Session(id: UUID(), name: "backfilled")
+        ended.status = .completed
+        appState.sessions = [ended]
+        let service = SessionService(
+            store: store, appState: appState,
+            analyticsProvider: { _ in Self.sampleAnalytics },
+            telemetrySessionIDsProvider: { [id = ended.id] in [id] })
+
+        await service.backfillAnalyticsSnapshots()
+
+        #expect(appState.analyticsSnapshots[ended.id.uuidString]
+            == store.data.analyticsSnapshots?[ended.id.uuidString])
+        #expect(appState.analyticsSnapshots[ended.id.uuidString]?.analytics
+            == Self.sampleAnalytics)
+    }
+
+    // #745: the Manager weekly rollups ride the same mirror pattern —
+    // hydrated on load, resynced after a refresh.
+    @Test
+    func hydrateStatePopulatesManagerUsageMirror() {
+        let store = Self.tempStore()
+        let weekStart = Date(timeIntervalSince1970: 1_752_400_000)
+        let rollup = ManagerWeeklyUsage(
+            weekStart: weekStart, analytics: Self.sampleAnalytics)
+        store.mutate { $0.managerUsageWeekly = ["2026-07-13": rollup] }
+
+        let appState = AppState()
+        let service = SessionService(store: store, appState: appState)
+        service.hydrateState()
+
+        #expect(appState.managerUsageWeekly == ["2026-07-13": rollup])
+    }
+
+    @Test
+    func hydrateStateWithNoManagerUsageLeavesMirrorEmpty() {
+        let appState = AppState()
+        let service = SessionService(store: Self.tempStore(), appState: appState)
+        service.hydrateState()
+        #expect(appState.managerUsageWeekly.isEmpty)
+    }
 }

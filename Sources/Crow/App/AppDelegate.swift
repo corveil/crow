@@ -596,6 +596,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             providerManager: providerManager,
             analyticsProvider: { [weak self] id in
                 await self?.telemetryService?.analytics(for: id)
+            },
+            telemetrySessionIDsProvider: { [weak self] in
+                await self?.telemetryService?.sessionIDs() ?? []
+            },
+            managerUsageProvider: { [weak self] start, end in
+                await self?.telemetryService?.analytics(
+                    for: AppState.managerSessionID, receivedBetween: start, end: end)
+                    ?? SessionAnalytics()
             })
         service.hydrateState()
         self.sessionService = service
@@ -988,6 +996,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appState.onShowSettings = { [weak self] in
             self?.showSettings()
         }
+        appState.onRebuildScorecard = { [weak self] in
+            await self?.rebuildScorecard()
+        }
         appState.onSoundMutedChanged = { [weak self] muted in
             self?.appConfig?.notifications.globalMute = muted
             if let settings = self?.appConfig?.notifications {
@@ -1011,6 +1022,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         Task {
                             guard let analytics = await self.telemetryService?.analytics(for: sessionID) else { return }
                             self.appState.hookState(for: sessionID).analytics = analytics
+                            // Keep the scorecard's capture-status line live
+                            // without re-querying the DB; the exact session
+                            // count refreshes at launch/rebuild (#745).
+                            self.appState.telemetryCaptureStatus = TelemetryCaptureStatus(
+                                sessionCount: max(self.appState.telemetryCaptureStatus?.sessionCount ?? 0, 1),
+                                lastReceivedAt: Date())
                         }
                     }
                 )
@@ -1019,6 +1036,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Task {
                     do {
                         try await telemetry.start()
+                        // Backfill before pruning so sessions whose rows are
+                        // about to age out still produce snapshots (#745).
+                        await self.rebuildScorecard()
                         await telemetry.pruneOldData(retentionDays: retentionDays)
                     } catch {
                         NSLog("[Crow] Failed to start telemetry service: %@", error.localizedDescription)
@@ -1094,6 +1114,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupMenu()
 
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    // MARK: - Scorecard rebuild (#745)
+
+    /// One entry point for both the launch-time and the manual "Rebuild
+    /// scorecard" paths: backfill missing snapshots from telemetry.db,
+    /// recompute the Manager weekly rollups, and refresh the live
+    /// capture-status mirror. Safe to re-run — the backfill never touches
+    /// existing snapshots and the Manager refresh is a merge-only upsert.
+    private func rebuildScorecard() async {
+        appState.isRebuildingScorecard = true
+        defer { appState.isRebuildingScorecard = false }
+        await sessionService?.backfillAnalyticsSnapshots()
+        await sessionService?.refreshManagerUsage()
+        if let status = await telemetryService?.captureStatus() {
+            appState.telemetryCaptureStatus = status
+        }
     }
 
     // MARK: - Settings

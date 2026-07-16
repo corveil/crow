@@ -20,19 +20,30 @@ final class SessionService {
     /// end-of-session analytics snapshot (#690). Optional so unit tests and
     /// telemetry-off launches fall back to the in-memory aggregate.
     private let analyticsProvider: (@Sendable (UUID) async -> SessionAnalytics?)?
+    /// Crow session IDs with telemetry rows in telemetry.db, driving the
+    /// snapshot backfill (#745). Optional so unit tests and telemetry-off
+    /// launches make the backfill a no-op.
+    private let telemetrySessionIDsProvider: (@Sendable () async -> [UUID])?
+    /// Windowed Manager-session aggregate from telemetry.db for the ungraded
+    /// weekly usage bucket (#745). Optional for the same reason.
+    private let managerUsageProvider: (@Sendable (Date, Date) async -> SessionAnalytics)?
 
     init(
         store: JSONStore,
         appState: AppState,
         telemetryPort: UInt16? = nil,
         providerManager: ProviderManager? = nil,
-        analyticsProvider: (@Sendable (UUID) async -> SessionAnalytics?)? = nil
+        analyticsProvider: (@Sendable (UUID) async -> SessionAnalytics?)? = nil,
+        telemetrySessionIDsProvider: (@Sendable () async -> [UUID])? = nil,
+        managerUsageProvider: (@Sendable (Date, Date) async -> SessionAnalytics)? = nil
     ) {
         self.store = store
         self.appState = appState
         self.telemetryPort = telemetryPort
         self.providerManager = providerManager
         self.analyticsProvider = analyticsProvider
+        self.telemetrySessionIDsProvider = telemetrySessionIDsProvider
+        self.managerUsageProvider = managerUsageProvider
     }
 
     /// Upgrade the well-known primary Manager session from `.work` (how it was
@@ -59,6 +70,8 @@ final class SessionService {
         // Same for PR attributions: the v2 combined score's hygiene factor
         // (#699) reads this mirror; IssueTracker resyncs it after writes.
         appState.prAttributions = data.prAttributions ?? [:]
+        // And the Manager weekly usage rollups (#745) for the ungraded bucket.
+        appState.managerUsageWeekly = data.managerUsageWeekly ?? [:]
 
         // Migrate a legacy primary Manager (persisted as `.work` before
         // SessionKind.manager existed) to `.manager` BEFORE the per-session loop.
@@ -2408,11 +2421,14 @@ final class SessionService {
     /// Persist a durable `SessionAnalyticsSnapshot` when a session reaches a
     /// terminal status. Prefers a fresh aggregate from telemetry.db — covering
     /// the relaunch-then-complete gap where the in-memory aggregate is still
-    /// nil — and falls back to `SessionHookState.analytics`. Skips entirely,
-    /// preserving any existing snapshot, when both are nil or empty (telemetry
-    /// disabled, or a session that never produced data — the SQL aggregate is
-    /// all-zeros for unknown sessions, so `isEmpty` is the real guard).
-    func writeAnalyticsSnapshot(for id: UUID, status: SessionStatus) async {
+    /// nil — and falls back to `SessionHookState.analytics`. Skips (with a
+    /// diagnostic, #745), preserving any existing snapshot, when both are nil
+    /// or empty (telemetry disabled, or a session that never produced data —
+    /// the SQL aggregate is all-zeros for unknown sessions, so `isEmpty` is
+    /// the real guard). `endedAt` defaults to now for live transitions; the
+    /// backfill passes the session's `updatedAt` so historical sessions land
+    /// in their true week instead of the current one.
+    func writeAnalyticsSnapshot(for id: UUID, status: SessionStatus, endedAt: Date? = nil) async {
         guard status == .completed || status == .archived else { return }
         guard !appState.isManagerSession(id) else { return }
 
@@ -2420,14 +2436,21 @@ final class SessionService {
         let analytics = (fresh?.isEmpty == false)
             ? fresh
             : appState.existingHookState(for: id)?.analytics
-        guard let analytics, !analytics.isEmpty else { return }
+        guard let analytics, !analytics.isEmpty else {
+            NSLog(
+                "[SessionService] Skipped analytics snapshot for %@ (%@): no telemetry data — telemetry disabled, not restarted since enabling, or the session produced none",
+                id.uuidString, status.rawValue)
+            appState.analyticsSnapshotSkipCount += 1
+            appState.lastAnalyticsSnapshotSkipAt = Date()
+            return
+        }
 
         // Compaction count only exists on the in-memory hook state — telemetry.db
         // has no compaction rows — so read it there even when `analytics` came
         // from the DB provider (#691).
         let session = appState.sessions.first(where: { $0.id == id })
         let snapshot = SessionAnalyticsSnapshot(
-            sessionID: id, endedAt: Date(), status: status, analytics: analytics,
+            sessionID: id, endedAt: endedAt ?? Date(), status: status, analytics: analytics,
             compactionCount: appState.existingHookState(for: id)?.compactionCount ?? 0,
             wallClockDurationSeconds: session?.wallClockDuration,
             alignmentWeight: session?.alignmentWeight,
@@ -2438,6 +2461,86 @@ final class SessionService {
             data.analyticsSnapshots = snapshots
         }
         appState.analyticsSnapshots[id.uuidString] = snapshot
+    }
+
+    /// Rebuild missing analytics snapshots from telemetry.db (#745): the
+    /// one-shot write at a terminal transition means sessions recorded before
+    /// snapshotting existed — or whose write raced a quit — never surface on
+    /// the scorecard. Runs at launch (before retention pruning) and from the
+    /// manual "Rebuild scorecard" action. Idempotent: existing snapshots are
+    /// never touched, so re-runs are no-ops. Skips orphaned telemetry
+    /// sessions (no Crow session record — their status/endedAt would be
+    /// fabricated), non-terminal sessions (they snapshot at completion), and
+    /// the Manager session (tracked by `refreshManagerUsage` instead). The
+    /// empty-analytics guard in `writeAnalyticsSnapshot` still applies.
+    /// Returns the number of snapshots written.
+    @discardableResult
+    func backfillAnalyticsSnapshots() async -> Int {
+        guard let telemetrySessionIDsProvider else { return 0 }
+        var written = 0
+        for id in await telemetrySessionIDsProvider() {
+            let key = id.uuidString
+            guard store.data.analyticsSnapshots?[key] == nil else { continue }
+            guard let session = appState.sessions.first(where: { $0.id == id }),
+                  session.status == .completed || session.status == .archived,
+                  !session.isManager else { continue }
+            // updatedAt, not now: the session ended historically and must
+            // bucket into its true week (mirrors the quit-race backfill).
+            await writeAnalyticsSnapshot(for: id, status: session.status, endedAt: session.updatedAt)
+            if store.data.analyticsSnapshots?[key] != nil { written += 1 }
+        }
+        if written > 0 {
+            NSLog("[SessionService] Backfilled %d analytics snapshot(s) from telemetry.db", written)
+        }
+        return written
+    }
+
+    /// Week-start key for the persisted Manager rollups ("yyyy-MM-dd").
+    private static let weekKeyFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = .current
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter
+    }()
+
+    /// Recompute the Manager session's ungraded weekly usage rollups from
+    /// telemetry.db (#745) — the Manager session never reaches a terminal
+    /// status, so it can't produce a `SessionAnalyticsSnapshot`. Covers the
+    /// current week plus the trailing baseline window. Merge-only: weeks with
+    /// no telemetry rows are skipped rather than zeroed (absence usually
+    /// means the rows aged out of retention), so persisted rollups survive
+    /// pruning. Known bounded edge: the oldest still-covered week can be
+    /// partially pruned mid-week, briefly dipping its recomputed total; it
+    /// self-corrects once the week ages out entirely.
+    func refreshManagerUsage(now: Date = Date()) async {
+        guard let managerUsageProvider else { return }
+        // ISO-8601 weeks in the current timezone — the same bucketing
+        // ScorecardModel.build uses, so the Manager card's weeks line up
+        // with the graded weeks.
+        var calendar = Calendar(identifier: .iso8601)
+        calendar.timeZone = .current
+        guard let currentWeek = calendar.dateInterval(of: .weekOfYear, for: now) else { return }
+
+        var updates: [String: ManagerWeeklyUsage] = [:]
+        for offset in 0...EfficiencyGrading.Tuning.baselineWeekCount {
+            guard let weekDate = calendar.date(
+                      byAdding: .weekOfYear, value: -offset, to: currentWeek.start),
+                  let interval = calendar.dateInterval(of: .weekOfYear, for: weekDate)
+            else { continue }
+            let analytics = await managerUsageProvider(interval.start, interval.end)
+            guard !analytics.isEmpty else { continue }
+            updates[Self.weekKeyFormatter.string(from: interval.start)] =
+                ManagerWeeklyUsage(weekStart: interval.start, analytics: analytics)
+        }
+
+        guard !updates.isEmpty else { return }
+        store.mutate { data in
+            var rollups = data.managerUsageWeekly ?? [:]
+            for (key, value) in updates { rollups[key] = value }
+            data.managerUsageWeekly = rollups
+        }
+        appState.managerUsageWeekly = store.data.managerUsageWeekly ?? [:]
     }
 
     /// Lock or unlock a session to exempt it from (or restore it to) the

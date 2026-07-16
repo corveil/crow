@@ -52,6 +52,25 @@ public final class TelemetryService: Sendable {
         await database.sessionAnalytics(for: crowSessionID)
     }
 
+    /// Get analytics for a Crow session restricted to rows ingested in the
+    /// half-open window [start, end). Feeds the Manager weekly rollups (#745).
+    public func analytics(
+        for crowSessionID: UUID, receivedBetween start: Date, end: Date
+    ) async -> SessionAnalytics {
+        await database.sessionAnalytics(for: crowSessionID, receivedBetween: start, end: end)
+    }
+
+    /// Distinct Crow session IDs with any telemetry rows, for the scorecard
+    /// snapshot backfill (#745).
+    public func sessionIDs() async -> [UUID] {
+        await database.sessionIDs()
+    }
+
+    /// Live capture health for the scorecard's status line (#745).
+    public func captureStatus() async -> TelemetryCaptureStatus {
+        await database.captureStatus()
+    }
+
     /// Get per-turn analytics for a Crow session, one record per
     /// `claude_code.user_prompt` event. Empty when the session's raw rows
     /// are gone (aged out of retention, or telemetry off) — fall back to

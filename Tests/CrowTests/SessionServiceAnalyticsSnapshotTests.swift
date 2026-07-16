@@ -456,4 +456,248 @@ struct SessionServiceAnalyticsSnapshotTests {
         #expect(store.data.sessions.first(where: { $0.id == id })?.orgGoal == nil)
         #expect(appState.sessions[0].alignmentWeight == AlignmentWeight.neutral)
     }
+
+    // MARK: - Telemetry.db backfill (#745)
+
+    // The core #745 fix: a session recorded in telemetry.db before
+    // snapshotting existed (or whose write raced a quit) backfills without
+    // being re-run — stamped with its historical updatedAt, not now, so it
+    // buckets into its true week.
+    @Test
+    func backfillWritesSnapshotForCompletedSessionWithTelemetry() async {
+        let store = Self.tempStore()
+        let appState = AppState()
+        var ended = Session(id: UUID(), name: "recorded-before-snapshots")
+        ended.status = .completed
+        ended.updatedAt = Date(timeIntervalSince1970: 1_752_100_000)
+        appState.sessions = [ended]
+        let service = SessionService(
+            store: store, appState: appState,
+            analyticsProvider: { _ in Self.sampleAnalytics },
+            telemetrySessionIDsProvider: { [id = ended.id] in [id] })
+
+        let written = await service.backfillAnalyticsSnapshots()
+
+        #expect(written == 1)
+        let snapshot = store.data.analyticsSnapshots?[ended.id.uuidString]
+        #expect(snapshot?.analytics == Self.sampleAnalytics)
+        #expect(snapshot?.status == .completed)
+        #expect(snapshot?.endedAt == ended.updatedAt)
+        #expect(appState.analyticsSnapshots[ended.id.uuidString] == snapshot)
+    }
+
+    // Idempotent and never downgrading: an existing snapshot is never
+    // touched, even when the provider now reads different (e.g. partially
+    // pruned) analytics — and a re-run after a successful backfill is a no-op.
+    @Test
+    func backfillIsIdempotentAndNeverDowngrades() async {
+        let store = Self.tempStore()
+        let appState = AppState()
+        var ended = Session(id: UUID(), name: "already-snapshotted")
+        ended.status = .completed
+        appState.sessions = [ended]
+        let existing = SessionAnalyticsSnapshot(
+            sessionID: ended.id, endedAt: Date(timeIntervalSince1970: 1_752_000_000),
+            status: .completed, analytics: Self.sampleAnalytics, compactionCount: 3)
+        store.mutate { $0.analyticsSnapshots = [ended.id.uuidString: existing] }
+        let service = SessionService(
+            store: store, appState: appState,
+            analyticsProvider: { _ in SessionAnalytics(promptCount: 1) },
+            telemetrySessionIDsProvider: { [id = ended.id] in [id] })
+
+        let first = await service.backfillAnalyticsSnapshots()
+        let second = await service.backfillAnalyticsSnapshots()
+
+        #expect(first == 0)
+        #expect(second == 0)
+        #expect(store.data.analyticsSnapshots?[ended.id.uuidString] == existing)
+    }
+
+    // Orphaned telemetry sessions (record deleted — status/endedAt would be
+    // fabricated), the Manager session, and non-terminal sessions all skip.
+    @Test
+    func backfillSkipsOrphansManagerAndNonTerminal() async {
+        let store = Self.tempStore()
+        let appState = AppState()
+        let orphanID = UUID()
+        var active = Session(id: UUID(), name: "still-running")
+        active.status = .active
+        appState.sessions = [
+            active,
+            Session(id: AppState.managerSessionID, name: "Manager", kind: .manager),
+        ]
+        let service = SessionService(
+            store: store, appState: appState,
+            analyticsProvider: { _ in Self.sampleAnalytics },
+            telemetrySessionIDsProvider: { [activeID = active.id] in
+                [orphanID, AppState.managerSessionID, activeID]
+            })
+
+        let written = await service.backfillAnalyticsSnapshots()
+
+        #expect(written == 0)
+        #expect(store.data.analyticsSnapshots == nil)
+    }
+
+    // A backfill candidate whose rows aged out of retention reads an
+    // all-zeros aggregate — handled gracefully: no snapshot, no crash, and
+    // the skip surfaces on the diagnostic counter rather than silently.
+    @Test
+    func backfillHandlesAgedOutSessionGracefully() async {
+        let store = Self.tempStore()
+        let appState = AppState()
+        var ended = Session(id: UUID(), name: "aged-out")
+        ended.status = .archived
+        appState.sessions = [ended]
+        let service = SessionService(
+            store: store, appState: appState,
+            analyticsProvider: { _ in SessionAnalytics() },
+            telemetrySessionIDsProvider: { [id = ended.id] in [id] })
+
+        let written = await service.backfillAnalyticsSnapshots()
+
+        #expect(written == 0)
+        #expect(store.data.analyticsSnapshots == nil)
+        #expect(appState.analyticsSnapshotSkipCount == 1)
+    }
+
+    // Telemetry-off launches (nil providers) make the backfill a no-op.
+    @Test
+    func backfillWithoutProviderIsNoOp() async {
+        let store = Self.tempStore()
+        let appState = AppState()
+        let service = SessionService(store: store, appState: appState)
+
+        let written = await service.backfillAnalyticsSnapshots()
+
+        #expect(written == 0)
+        #expect(store.data.analyticsSnapshots == nil)
+    }
+
+    // MARK: - Skip diagnostic (#745 item 3)
+
+    // The previously silent empty-analytics skip now surfaces: counter and
+    // timestamp move, and the existing snapshot-preserving behavior holds.
+    @Test
+    func emptyAnalyticsSkipIncrementsDiagnostics() async {
+        let store = Self.tempStore()
+        let appState = AppState()
+        let id = UUID()
+        appState.sessions = [Session(id: id, name: "telemetry-off")]
+        let service = SessionService(store: store, appState: appState)
+
+        #expect(appState.analyticsSnapshotSkipCount == 0)
+        #expect(appState.lastAnalyticsSnapshotSkipAt == nil)
+
+        await service.writeAnalyticsSnapshot(for: id, status: .completed)
+        await service.writeAnalyticsSnapshot(for: id, status: .archived)
+
+        #expect(appState.analyticsSnapshotSkipCount == 2)
+        #expect(appState.lastAnalyticsSnapshotSkipAt != nil)
+    }
+
+    // Guard-rejected calls (non-terminal, Manager) are not "skips" — the
+    // diagnostic counts only completions that wanted a snapshot and had no
+    // data.
+    @Test
+    func guardRejectionsDoNotCountAsSkips() async {
+        let store = Self.tempStore()
+        let appState = AppState()
+        let id = UUID()
+        appState.sessions = [
+            Session(id: id, name: "in-flight"),
+            Session(id: AppState.managerSessionID, name: "Manager", kind: .manager),
+        ]
+        let service = SessionService(store: store, appState: appState)
+
+        await service.writeAnalyticsSnapshot(for: id, status: .active)
+        await service.writeAnalyticsSnapshot(for: AppState.managerSessionID, status: .completed)
+
+        #expect(appState.analyticsSnapshotSkipCount == 0)
+    }
+
+    // MARK: - Manager weekly usage (#745 item 2)
+
+    private nonisolated static func isoWeekStart(containing date: Date) -> Date {
+        var calendar = Calendar(identifier: .iso8601)
+        calendar.timeZone = .current
+        return calendar.dateInterval(of: .weekOfYear, for: date)!.start
+    }
+
+    private nonisolated static func weekKey(_ weekStart: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = .current
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: weekStart)
+    }
+
+    // Merge-only semantics: weeks the DB still covers are (re)written; a
+    // persisted rollup for a week that aged out of telemetry retention is
+    // never deleted or zeroed. Re-running converges (idempotent).
+    @Test
+    func refreshManagerUsageMergesWithoutDeletingAgedOutWeeks() async {
+        let store = Self.tempStore()
+        let appState = AppState()
+        let now = Date(timeIntervalSince1970: 1_752_600_000)
+        let currentWeekStart = Self.isoWeekStart(containing: now)
+        // A rollup 10 weeks back — far outside the refresh window.
+        let agedOutStart = Self.isoWeekStart(
+            containing: now.addingTimeInterval(-10 * 7 * 86_400))
+        let agedOut = ManagerWeeklyUsage(
+            weekStart: agedOutStart, analytics: Self.sampleAnalytics)
+        store.mutate { $0.managerUsageWeekly = [Self.weekKey(agedOutStart): agedOut] }
+
+        // Provider has data for the current week only; trailing weeks read
+        // empty (pruned) and must be skipped, not zeroed.
+        let service = SessionService(
+            store: store, appState: appState,
+            managerUsageProvider: { [currentWeekStart] start, end in
+                (start..<end).contains(currentWeekStart)
+                    ? Self.sampleAnalytics : SessionAnalytics()
+            })
+
+        await service.refreshManagerUsage(now: now)
+        await service.refreshManagerUsage(now: now)
+
+        let rollups = store.data.managerUsageWeekly
+        #expect(rollups?.count == 2)
+        #expect(rollups?[Self.weekKey(agedOutStart)] == agedOut)
+        #expect(rollups?[Self.weekKey(currentWeekStart)]?.analytics == Self.sampleAnalytics)
+        #expect(rollups?[Self.weekKey(currentWeekStart)]?.weekStart == currentWeekStart)
+        #expect(appState.managerUsageWeekly == rollups)
+    }
+
+    // An entirely empty telemetry window writes nothing at all.
+    @Test
+    func refreshManagerUsageSkipsWhenAllWeeksEmpty() async {
+        let store = Self.tempStore()
+        let appState = AppState()
+        let service = SessionService(
+            store: store, appState: appState,
+            managerUsageProvider: { _, _ in SessionAnalytics() })
+
+        await service.refreshManagerUsage()
+
+        #expect(store.data.managerUsageWeekly == nil)
+        #expect(appState.managerUsageWeekly.isEmpty)
+    }
+
+    // The refresh covers the current week plus the trailing baseline window,
+    // querying half-open ISO-week intervals.
+    @Test
+    func refreshManagerUsageCoversBaselineWindow() async {
+        let store = Self.tempStore()
+        let appState = AppState()
+        let now = Date(timeIntervalSince1970: 1_752_600_000)
+        let service = SessionService(
+            store: store, appState: appState,
+            managerUsageProvider: { _, _ in Self.sampleAnalytics })
+
+        await service.refreshManagerUsage(now: now)
+
+        let rollups = store.data.managerUsageWeekly
+        #expect(rollups?.count == EfficiencyGrading.Tuning.baselineWeekCount + 1)
+        #expect(rollups?[Self.weekKey(Self.isoWeekStart(containing: now))] != nil)
+    }
 }

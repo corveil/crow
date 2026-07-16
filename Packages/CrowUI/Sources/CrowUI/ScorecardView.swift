@@ -35,7 +35,11 @@ public struct ScorecardView: View {
                 storageKey: "helpDismissed_scorecard"
             )
             Divider()
-            if appState.analyticsSnapshots.isEmpty {
+            // Manager-only data still shows the content pane: the grade card
+            // renders "insufficient data" gracefully with zero snapshots, and
+            // hiding captured Manager usage behind the empty state would
+            // repeat the invisibility this gate is meant to fix (#745).
+            if appState.analyticsSnapshots.isEmpty && appState.managerUsageWeekly.isEmpty {
                 emptyState
             } else {
                 content
@@ -53,15 +57,52 @@ public struct ScorecardView: View {
                 .font(.system(size: 18, weight: .bold))
                 .foregroundStyle(CorveilTheme.gold)
 
+            Text(captureStatusText)
+                .font(.caption)
+                .foregroundStyle(CorveilTheme.textMuted)
+
             Spacer()
 
             Text(Self.weekRangeLabel(model.currentWeek.weekStart))
                 .font(.caption)
                 .foregroundStyle(CorveilTheme.textSecondary)
+
+            rebuildButton
         }
         .padding(.horizontal)
         .padding(.vertical, 10)
         .background(CorveilTheme.bgSurface)
+    }
+
+    /// One-line telemetry capture health (#745), shared by the header and the
+    /// empty state. Nil `telemetryCaptureStatus` means telemetry is disabled
+    /// or hasn't started this launch.
+    private var captureStatusText: String {
+        guard let status = appState.telemetryCaptureStatus else {
+            return "Telemetry not capturing — enable it in Settings, then restart Crow"
+        }
+        return "Telemetry capturing — \(status.sessionCount) session\(status.sessionCount == 1 ? "" : "s") recorded"
+    }
+
+    /// Manual backfill from telemetry.db (#745): rebuilds snapshots for
+    /// sessions recorded before snapshotting existed, without re-running them.
+    @ViewBuilder
+    private var rebuildButton: some View {
+        if appState.onRebuildScorecard != nil {
+            Button {
+                Task { await appState.onRebuildScorecard?() }
+            } label: {
+                if appState.isRebuildingScorecard {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Label("Rebuild", systemImage: "arrow.clockwise")
+                        .font(.caption)
+                }
+            }
+            .disabled(appState.isRebuildingScorecard)
+            .help("Rebuild scorecard data from the local telemetry database")
+        }
     }
 
     // MARK: Content
@@ -79,6 +120,10 @@ public struct ScorecardView: View {
                 baselineSection(model)
                 displayedStatsSection(model.currentWeek)
 
+                if !appState.managerUsageWeekly.isEmpty {
+                    managerUsageSection
+                }
+
                 if !model.priorWeeks.isEmpty {
                     priorWeeksSection(model.priorWeeks)
                 }
@@ -93,9 +138,26 @@ public struct ScorecardView: View {
 
     private var emptyState: some View {
         ContentUnavailableView {
-            Label("No Session Data Yet", systemImage: "chart.bar.xaxis")
+            Label("No Scorecard Data Yet", systemImage: "chart.bar.xaxis")
         } description: {
-            Text("The scorecard is computed from analytics snapshots written when sessions complete or archive. Snapshots require Claude Code telemetry, which is off by default — enable it in Settings, then finish a session.")
+            VStack(spacing: 8) {
+                Text("The scorecard grades regular sessions from analytics snapshots. To get data here: enable Claude Code telemetry in Settings and restart Crow, run a non-Manager session, then mark it Completed or Archived. A weekly grade needs at least \(EfficiencyGrading.Tuning.minimumGradablePromptCount) prompts. The Manager session is never graded — its usage appears in its own ungraded section once captured.")
+                Text(captureStatusText)
+                    .foregroundStyle(CorveilTheme.textSecondary)
+                if appState.analyticsSnapshotSkipCount > 0 {
+                    Text("\(appState.analyticsSnapshotSkipCount) session completion\(appState.analyticsSnapshotSkipCount == 1 ? "" : "s") this launch had no telemetry data to snapshot.")
+                        .foregroundStyle(CorveilTheme.textMuted)
+                }
+            }
+        } actions: {
+            if appState.onRebuildScorecard != nil {
+                VStack(spacing: 6) {
+                    rebuildButton
+                    Text("Sessions already recorded in the local telemetry database can be rebuilt into the scorecard without re-running them.")
+                        .font(.caption2)
+                        .foregroundStyle(CorveilTheme.textMuted)
+                }
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -357,6 +419,48 @@ public struct ScorecardView: View {
                              value: String(format: "%.2f", week.churnHint))
                     Spacer()
                 }
+            }
+        }
+    }
+
+    // MARK: Manager usage (ungraded bucket, #745)
+
+    /// Weekly telemetry rollups for the always-on Manager session, shown for
+    /// visibility only — never graded and never part of the baseline
+    /// (ADR 0008 addendum). View-local formatting over the persisted mirror;
+    /// deliberately not routed through `ScorecardModel`, which stays pure
+    /// over completion snapshots.
+    private var managerUsageSection: some View {
+        let weeks = appState.managerUsageWeekly.values
+            .sorted { $0.weekStart > $1.weekStart }
+        return card {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Manager Usage (ungraded)")
+                    .font(.caption)
+                    .foregroundStyle(CorveilTheme.textSecondary)
+                ForEach(weeks, id: \.weekStart) { week in
+                    HStack {
+                        Text(Self.weekRangeLabel(week.weekStart))
+                            .font(.system(size: 12))
+                            .foregroundStyle(CorveilTheme.textSecondary)
+                        Spacer()
+                        Text("\(week.analytics.promptCount) prompt\(week.analytics.promptCount == 1 ? "" : "s")")
+                            .font(.system(size: 12))
+                            .monospacedDigit()
+                            .foregroundStyle(CorveilTheme.textSecondary)
+                        Text("\(AnalyticsFormatting.count(week.analytics.totalTokens)) tokens")
+                            .font(.system(size: 12))
+                            .monospacedDigit()
+                            .foregroundStyle(CorveilTheme.textMuted)
+                        Text(AnalyticsFormatting.cost(week.analytics.totalCost))
+                            .font(.system(size: 12))
+                            .monospacedDigit()
+                            .foregroundStyle(CorveilTheme.textMuted)
+                    }
+                }
+                Text("The always-on Manager session never completes, so its usage is tracked here directly from telemetry — visibility only, never graded.")
+                    .font(.caption2)
+                    .foregroundStyle(CorveilTheme.textMuted)
             }
         }
     }
