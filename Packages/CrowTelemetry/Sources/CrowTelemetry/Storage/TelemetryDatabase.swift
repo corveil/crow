@@ -115,7 +115,8 @@ public actor TelemetryDatabase {
 
     /// Insert a metric datapoint, normalizing CUMULATIVE sums to deltas so that
     /// downstream SUM() aggregation stays correct. DELTA sums and gauges
-    /// (`.unspecified`) are stored as-is.
+    /// (`.unspecified`) are stored as-is. `receivedAt` is injectable so tests
+    /// can exercise the `received_at`-windowed queries and retention pruning.
     public func insertMetric(
         crowSessionID: UUID,
         metricName: String,
@@ -123,7 +124,8 @@ public actor TelemetryDatabase {
         attributesJSON: String?,
         timestampNs: String?,
         temporality: OTLPAggregationTemporality = .unspecified,
-        isMonotonic: Bool? = nil
+        isMonotonic: Bool? = nil,
+        receivedAt: Date = Date()
     ) {
         var insertValue = value
         if temporality == .cumulative {
@@ -175,17 +177,20 @@ public actor TelemetryDatabase {
         } else {
             sqlite3_bind_null(stmt, 5)
         }
-        sqlite3_bind_double(stmt, 6, Date().timeIntervalSince1970)
+        sqlite3_bind_double(stmt, 6, receivedAt.timeIntervalSince1970)
         sqlite3_step(stmt)
     }
 
+    /// `receivedAt` is injectable so tests can exercise the
+    /// `received_at`-windowed queries and retention pruning.
     public func insertEvent(
         crowSessionID: UUID,
         eventName: String,
         body: String?,
         attributesJSON: String?,
         severityNumber: Int?,
-        timestampNs: String?
+        timestampNs: String?,
+        receivedAt: Date = Date()
     ) {
         let sql = """
             INSERT INTO events (crow_session_id, event_name, body, attributes_json, severity_number, timestamp_ns, received_at)
@@ -217,7 +222,7 @@ public actor TelemetryDatabase {
         } else {
             sqlite3_bind_null(stmt, 6)
         }
-        sqlite3_bind_double(stmt, 7, Date().timeIntervalSince1970)
+        sqlite3_bind_double(stmt, 7, receivedAt.timeIntervalSince1970)
         sqlite3_step(stmt)
     }
 
@@ -225,31 +230,95 @@ public actor TelemetryDatabase {
 
     /// Compute aggregated analytics for a Crow session.
     public func sessionAnalytics(for crowSessionID: UUID) -> SessionAnalytics {
-        let sid = crowSessionID.uuidString
+        aggregateAnalytics(session: crowSessionID.uuidString, window: nil)
+    }
+
+    /// Windowed variant over `received_at` (ingest time — rows arrive within
+    /// seconds of the activity, so it's an acceptable proxy for event time).
+    /// Half-open [start, end), matching `ScorecardModel`'s week membership.
+    /// Feeds the Manager-session weekly rollups (#745).
+    public func sessionAnalytics(
+        for crowSessionID: UUID, receivedBetween start: Date, end: Date
+    ) -> SessionAnalytics {
+        aggregateAnalytics(
+            session: crowSessionID.uuidString,
+            window: (start.timeIntervalSince1970, end.timeIntervalSince1970))
+    }
+
+    /// Distinct Crow session IDs with any telemetry rows, for the scorecard
+    /// snapshot backfill (#745). Rows whose id doesn't parse as a UUID are
+    /// dropped. Driven off `metrics`/`events` rather than `session_map`, which
+    /// outlives retention pruning and would list aged-out sessions.
+    public func sessionIDs() -> [UUID] {
+        let sql = "SELECT crow_session_id FROM metrics UNION SELECT crow_session_id FROM events"
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+        defer { sqlite3_finalize(stmt) }
+
+        var ids: [UUID] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            if let ptr = sqlite3_column_text(stmt, 0),
+               let id = UUID(uuidString: String(cString: ptr)) {
+                ids.append(id)
+            }
+        }
+        return ids
+    }
+
+    /// Cheap health probe backing the scorecard's live capture-status line
+    /// (#745): how many sessions have telemetry rows, and when the newest
+    /// row arrived.
+    public func captureStatus() -> TelemetryCaptureStatus {
+        let sql = """
+            SELECT COUNT(DISTINCT crow_session_id), MAX(received_at)
+            FROM (SELECT crow_session_id, received_at FROM metrics
+                  UNION ALL SELECT crow_session_id, received_at FROM events)
+            """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            return TelemetryCaptureStatus(sessionCount: 0, lastReceivedAt: nil)
+        }
+        defer { sqlite3_finalize(stmt) }
+
+        guard sqlite3_step(stmt) == SQLITE_ROW else {
+            return TelemetryCaptureStatus(sessionCount: 0, lastReceivedAt: nil)
+        }
+        let count = Int(sqlite3_column_int(stmt, 0))
+        let lastReceivedAt: Date? = sqlite3_column_type(stmt, 1) == SQLITE_NULL
+            ? nil
+            : Date(timeIntervalSince1970: sqlite3_column_double(stmt, 1))
+        return TelemetryCaptureStatus(sessionCount: count, lastReceivedAt: lastReceivedAt)
+    }
+
+    /// Shared aggregator behind both `sessionAnalytics` variants; a nil window
+    /// keeps the original un-windowed behavior byte-for-byte.
+    private func aggregateAnalytics(
+        session sid: String, window: (start: Double, end: Double)?
+    ) -> SessionAnalytics {
         var analytics = SessionAnalytics()
 
         // Aggregate metrics
-        analytics.totalCost = sumMetric("claude_code.cost.usage", session: sid)
+        analytics.totalCost = sumMetric("claude_code.cost.usage", session: sid, window: window)
 
         // Token breakdown by type attribute
-        analytics.inputTokens = Int(sumMetricWithAttribute("claude_code.token.usage", attrKey: "type", attrValue: "input", session: sid))
-        analytics.outputTokens = Int(sumMetricWithAttribute("claude_code.token.usage", attrKey: "type", attrValue: "output", session: sid))
-        analytics.cacheReadTokens = Int(sumMetricWithAttribute("claude_code.token.usage", attrKey: "type", attrValue: "cacheRead", session: sid))
-        analytics.cacheCreationTokens = Int(sumMetricWithAttribute("claude_code.token.usage", attrKey: "type", attrValue: "cacheCreation", session: sid))
+        analytics.inputTokens = Int(sumMetricWithAttribute("claude_code.token.usage", attrKey: "type", attrValue: "input", session: sid, window: window))
+        analytics.outputTokens = Int(sumMetricWithAttribute("claude_code.token.usage", attrKey: "type", attrValue: "output", session: sid, window: window))
+        analytics.cacheReadTokens = Int(sumMetricWithAttribute("claude_code.token.usage", attrKey: "type", attrValue: "cacheRead", session: sid, window: window))
+        analytics.cacheCreationTokens = Int(sumMetricWithAttribute("claude_code.token.usage", attrKey: "type", attrValue: "cacheCreation", session: sid, window: window))
 
-        analytics.activeTimeSeconds = sumMetric("claude_code.active_time.total", session: sid)
+        analytics.activeTimeSeconds = sumMetric("claude_code.active_time.total", session: sid, window: window)
 
         // Lines of code by type attribute
-        analytics.linesAdded = Int(sumMetricWithAttribute("claude_code.lines_of_code.count", attrKey: "type", attrValue: "added", session: sid))
-        analytics.linesRemoved = Int(sumMetricWithAttribute("claude_code.lines_of_code.count", attrKey: "type", attrValue: "removed", session: sid))
+        analytics.linesAdded = Int(sumMetricWithAttribute("claude_code.lines_of_code.count", attrKey: "type", attrValue: "added", session: sid, window: window))
+        analytics.linesRemoved = Int(sumMetricWithAttribute("claude_code.lines_of_code.count", attrKey: "type", attrValue: "removed", session: sid, window: window))
 
-        analytics.commitCount = Int(sumMetric("claude_code.commit.count", session: sid))
+        analytics.commitCount = Int(sumMetric("claude_code.commit.count", session: sid, window: window))
 
         // Count events by type
-        analytics.promptCount = countEvents("claude_code.user_prompt", session: sid)
-        analytics.toolCallCount = countEvents("claude_code.tool_result", session: sid)
-        analytics.apiRequestCount = countEvents("claude_code.api_request", session: sid)
-        analytics.apiErrorCount = countEvents("claude_code.api_error", session: sid)
+        analytics.promptCount = countEvents("claude_code.user_prompt", session: sid, window: window)
+        analytics.toolCallCount = countEvents("claude_code.tool_result", session: sid, window: window)
+        analytics.apiRequestCount = countEvents("claude_code.api_request", session: sid, window: window)
+        analytics.apiErrorCount = countEvents("claude_code.api_error", session: sid, window: window)
 
         return analytics
     }
@@ -408,14 +477,30 @@ public actor TelemetryDatabase {
         return 0
     }
 
-    private func sumMetric(_ name: String, session: String) -> Double {
-        let sql = "SELECT COALESCE(SUM(value), 0) FROM metrics WHERE crow_session_id = ? AND metric_name = ?"
+    /// Half-open `received_at` filter appended to the aggregate queries when a
+    /// window is given; binds start/end at `index` and `index + 1`.
+    private static let windowClause = " AND received_at >= ? AND received_at < ?"
+
+    private func bindWindow(
+        _ stmt: OpaquePointer?, _ window: (start: Double, end: Double)?, at index: Int32
+    ) {
+        guard let window else { return }
+        sqlite3_bind_double(stmt, index, window.start)
+        sqlite3_bind_double(stmt, index + 1, window.end)
+    }
+
+    private func sumMetric(
+        _ name: String, session: String, window: (start: Double, end: Double)? = nil
+    ) -> Double {
+        var sql = "SELECT COALESCE(SUM(value), 0) FROM metrics WHERE crow_session_id = ? AND metric_name = ?"
+        if window != nil { sql += Self.windowClause }
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return 0 }
         defer { sqlite3_finalize(stmt) }
 
         sqlite3_bind_text(stmt, 1, (session as NSString).utf8String, -1, nil)
         sqlite3_bind_text(stmt, 2, (name as NSString).utf8String, -1, nil)
+        bindWindow(stmt, window, at: 3)
 
         if sqlite3_step(stmt) == SQLITE_ROW {
             return sqlite3_column_double(stmt, 0)
@@ -427,15 +512,17 @@ public actor TelemetryDatabase {
         _ name: String,
         attrKey: String,
         attrValue: String,
-        session: String
+        session: String,
+        window: (start: Double, end: Double)? = nil
     ) -> Double {
         // Filter metrics where the JSON attributes contain the specified key-value pair.
         // Uses json_extract for exact matching.
-        let sql = """
+        var sql = """
             SELECT COALESCE(SUM(value), 0) FROM metrics
             WHERE crow_session_id = ? AND metric_name = ?
             AND json_extract(attributes_json, '$.' || ?) = ?
             """
+        if window != nil { sql += Self.windowClause }
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return 0 }
         defer { sqlite3_finalize(stmt) }
@@ -444,6 +531,7 @@ public actor TelemetryDatabase {
         sqlite3_bind_text(stmt, 2, (name as NSString).utf8String, -1, nil)
         sqlite3_bind_text(stmt, 3, (attrKey as NSString).utf8String, -1, nil)
         sqlite3_bind_text(stmt, 4, (attrValue as NSString).utf8String, -1, nil)
+        bindWindow(stmt, window, at: 5)
 
         if sqlite3_step(stmt) == SQLITE_ROW {
             return sqlite3_column_double(stmt, 0)
@@ -451,14 +539,18 @@ public actor TelemetryDatabase {
         return 0
     }
 
-    private func countEvents(_ eventName: String, session: String) -> Int {
-        let sql = "SELECT COUNT(*) FROM events WHERE crow_session_id = ? AND event_name = ?"
+    private func countEvents(
+        _ eventName: String, session: String, window: (start: Double, end: Double)? = nil
+    ) -> Int {
+        var sql = "SELECT COUNT(*) FROM events WHERE crow_session_id = ? AND event_name = ?"
+        if window != nil { sql += Self.windowClause }
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return 0 }
         defer { sqlite3_finalize(stmt) }
 
         sqlite3_bind_text(stmt, 1, (session as NSString).utf8String, -1, nil)
         sqlite3_bind_text(stmt, 2, (eventName as NSString).utf8String, -1, nil)
+        bindWindow(stmt, window, at: 3)
 
         if sqlite3_step(stmt) == SQLITE_ROW {
             return Int(sqlite3_column_int(stmt, 0))

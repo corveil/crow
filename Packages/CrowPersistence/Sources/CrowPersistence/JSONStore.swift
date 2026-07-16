@@ -29,6 +29,12 @@ public struct StoreData: Codable, Sendable {
     /// as `hookStates`. Entries deliberately outlive session deletion —
     /// merged-PR-per-window counts must survive the retention reaper.
     public var prAttributions: [String: PRSessionAttribution]?
+    /// Manager-session weekly usage rollups (#745), keyed by week-start
+    /// "yyyy-MM-dd". Optional for the same backward-compat reason as
+    /// `hookStates`. Merge-only: weeks that age out of telemetry retention
+    /// keep their persisted values; only weeks the DB still covers are
+    /// overwritten.
+    public var managerUsageWeekly: [String: ManagerWeeklyUsage]?
 
     public init(
         sessions: [Session] = [],
@@ -37,7 +43,8 @@ public struct StoreData: Codable, Sendable {
         terminals: [SessionTerminal] = [],
         hookStates: [String: PersistedHookState]? = nil,
         analyticsSnapshots: [String: SessionAnalyticsSnapshot]? = nil,
-        prAttributions: [String: PRSessionAttribution]? = nil
+        prAttributions: [String: PRSessionAttribution]? = nil,
+        managerUsageWeekly: [String: ManagerWeeklyUsage]? = nil
     ) {
         self.sessions = sessions
         self.worktrees = worktrees
@@ -46,6 +53,7 @@ public struct StoreData: Codable, Sendable {
         self.hookStates = hookStates
         self.analyticsSnapshots = analyticsSnapshots
         self.prAttributions = prAttributions
+        self.managerUsageWeekly = managerUsageWeekly
     }
 }
 
