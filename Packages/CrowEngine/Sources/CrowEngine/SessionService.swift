@@ -380,6 +380,48 @@ public final class SessionService {
         }
     }
 
+    /// Cold-start terminal takeover for the headless daemon (CROW-747). Probes
+    /// whether the tmux cockpit session survived, then restores accordingly:
+    ///
+    ///   - **Cockpit alive** — a warm `crowd` restart: the daemon process
+    ///     bounced but tmux and its windows kept running, so each agent is still
+    ///     live in its pane. Adopt the surviving windows in place via
+    ///     `rebuildAllSurfaces(forceRegister: false)`; nothing is relaunched.
+    ///   - **Cockpit gone** — a machine reboot or `tmux kill-server`: the server
+    ///     and every window (and the agent process inside each) were destroyed,
+    ///     but session metadata persisted to disk. Recreate each persisted
+    ///     terminal's window and relaunch its session's agent via
+    ///     `rebuildAllSurfaces(forceRegister: true)` — the same
+    ///     recreate-and-relaunch machinery the mid-run crash auto-recovery uses
+    ///     (#588). The relaunch routes through `launchAgent →
+    ///     agent.autoLaunchCommand` keyed on the session's `agentKind`, so every
+    ///     supported agent resumes per its own rules (Claude via `--continue`,
+    ///     Cursor/Codex/OpenCode via their equivalents; branches an agent marks
+    ///     unsupported simply stay unlaunched).
+    ///
+    /// Correct against the warm-restart regression the ticket warns about:
+    /// `forceRegister: true` is gated on the server actually being gone, so a
+    /// live pane is never re-registered and no agent is double-launched into a
+    /// running one. Returns whether the recreate path was taken (for tests).
+    @MainActor
+    @discardableResult
+    public func takeOverTerminalSurfaces() -> Bool {
+        let recreate = Self.shouldRecreateSurfacesOnTakeover(
+            cockpitSessionIsLive: TmuxBackend.shared.cockpitSessionIsLive())
+        NSLog(recreate
+            ? "[CrowTelemetry takeover:recreate] tmux cockpit gone (reboot/kill-server) — recreating windows + relaunching agents (CROW-747)"
+            : "[CrowTelemetry takeover:adopt] tmux cockpit alive — adopting surviving surfaces in place")
+        rebuildAllSurfaces(forceRegister: recreate)
+        return recreate
+    }
+
+    /// Pure takeover policy (CROW-747): recreate + relaunch when the cockpit
+    /// session did NOT survive (reboot / server kill), adopt when it did (warm
+    /// crowd restart). Split out so the decision is unit-testable without tmux.
+    nonisolated static func shouldRecreateSurfacesOnTakeover(cockpitSessionIsLive: Bool) -> Bool {
+        !cockpitSessionIsLive
+    }
+
     /// Commit the result of a per-terminal rehydration task back to
     /// `appState.terminals`, locating the row by ID since the array may
     /// have shifted while the task awaited. If the `tmuxBinding` changed
