@@ -798,6 +798,68 @@ struct TmuxBackendTests {
         #expect(backend.activeTerminalID == nil)
         #expect(backend.isRunning)  // server untouched
     }
+
+    // MARK: - CROW-747 cold-start takeover signal
+
+    /// `cockpitSessionIsLive()` is the adopt-vs-recreate probe the daemon uses
+    /// at cold start. It must track the real server state on the socket, not the
+    /// cached controller: false before anything is created, true once the cockpit
+    /// exists, and false again after the server is killed out-of-band (the
+    /// machine-reboot / `tmux kill-server` case that CROW-747 recreates from).
+    @Test func cockpitSessionIsLiveReflectsServerState() throws {
+        let backend = makeBackend()
+        defer { backend.shutdown() }
+
+        // Nothing created yet → no cockpit session on the socket.
+        #expect(!backend.cockpitSessionIsLive())
+
+        _ = try backend.registerTerminal(
+            id: UUID(), name: "probe", cwd: NSHomeDirectory(),
+            command: nil, trackReadiness: false
+        )
+        #expect(backend.cockpitSessionIsLive())
+
+        // Server killed out-of-band (reboot proxy) → probe reports gone without
+        // resurrecting it (unlike `ensureRunningServer`).
+        killLeftoverServer(socket: backend.socketPath)
+        #expect(!backend.cockpitSessionIsLive())
+    }
+
+    /// A fresh backend (no cached controller — the daemon-boot case) still reads
+    /// the socket directly: it reports the cockpit live when a prior process left
+    /// the server running (warm crowd restart → adopt), and gone once that server
+    /// is torn down (cold start → recreate). Guards `isRunning`'s blind spot,
+    /// which is false at boot regardless because `controller` is nil.
+    @Test func cockpitSessionIsLiveOnFreshBackendReadsSocket() throws {
+        let socket = sharedSocketPath()
+        let backendA = makeBackend(socket: socket)
+        _ = try backendA.registerTerminal(
+            id: UUID(), name: "persist", cwd: NSHomeDirectory(),
+            command: nil, trackReadiness: false
+        )
+        // Warm restart: leave the server running.
+        backendA.shutdown(killServer: false)
+
+        // Brand-new backend on the same socket, controller not yet created.
+        let backendB = makeBackend(socket: socket)
+        #expect(backendB.isRunning == false)          // cached-controller view is blind at boot
+        #expect(backendB.cockpitSessionIsLive())      // socket probe sees the live server
+
+        // Cold start: tear the server down out-of-band (the probe never cached a
+        // controller, so `backendB.shutdown` couldn't — that non-side-effect is
+        // the point). A fresh backend must then see the cockpit gone.
+        killLeftoverServer(socket: socket)
+        let backendC = makeBackend(socket: socket)
+        defer { backendC.shutdown() }
+        #expect(!backendC.cockpitSessionIsLive())
+    }
+
+    /// Not-configured backends never claim a live cockpit — `takeOverTerminalSurfaces`
+    /// falls back to the recreate branch, which no-ops safely when tmux is absent.
+    @Test func cockpitSessionIsLiveFalseWhenUnconfigured() {
+        let backend = TmuxBackend()  // no configure(...)
+        #expect(!backend.cockpitSessionIsLive())
+    }
 }
 
 // MARK: - CROW-487 crowBinDir propagation

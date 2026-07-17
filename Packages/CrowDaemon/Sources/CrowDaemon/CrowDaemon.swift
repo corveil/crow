@@ -466,10 +466,13 @@ public enum CrowDaemon {
     /// Broadcasts a `changed` nudge after each poll so clients re-fetch the
     /// boards reactively (M-D).
     ///
-    /// Also performs the terminal TAKEOVER: on the first tick it adopts every
+    /// Also performs the terminal TAKEOVER: on the first tick it restores every
     /// persisted tmux window into this process (so `TerminalRouter.send` /
-    /// `isRegistered` works) and ensures the Manager. Runs before `refresh()` so
-    /// automation dispatches have a live, registered Manager to reach.
+    /// `isRegistered` works) and ensures the Manager. On a warm crowd restart
+    /// the windows are still alive and it adopts them; on a cold start (reboot /
+    /// `tmux kill-server`) it recreates them and relaunches each session's agent
+    /// (CROW-747). Runs before `refresh()` so automation dispatches have a live,
+    /// registered Manager to reach.
     private static func startBoardPoll(
         tracker: IssueTracker,
         eventHub: EventHub,
@@ -488,16 +491,31 @@ public enum CrowDaemon {
                 if let sessionService {
                     if !didTakeOver {
                         await MainActor.run {
-                            sessionService.rebuildAllSurfaces()
+                            // CROW-747: on a genuine cold start (machine reboot
+                            // or `tmux kill-server`) the cockpit session and
+                            // every agent are gone; recreate each persisted
+                            // terminal's window and relaunch its session's agent
+                            // (Claude `--continue`, Cursor/Codex/OpenCode
+                            // equivalents). On a warm crowd restart the windows
+                            // are still live and this adopts them in place —
+                            // gated on the cockpit-alive probe so a live pane is
+                            // never re-registered or double-launched.
+                            sessionService.takeOverTerminalSurfaces()
                             sessionService.ensureManagerSession(devRoot: devRoot)
                         }
                         didTakeOver = true
+                        // Skip reconcile on the takeover tick: the per-terminal
+                        // window recreate above is dispatched as async @MainActor
+                        // tasks whose fresh bindings haven't landed yet, so
+                        // pruning now would drop the very records we're about to
+                        // resurrect (CROW-747). Reconcile runs on every
+                        // subsequent tick, once those tasks have settled.
+                    } else {
+                        // Reconcile terminals ↔ tmux windows each tick: prune
+                        // terminal records whose window is gone and reap orphaned
+                        // windows (targeted-auto, Manager-safe).
+                        await MainActor.run { sessionService.reconcileTerminalSurfaces() }
                     }
-                    // Reconcile terminals ↔ tmux windows each tick: prune terminal
-                    // records whose window is gone and reap orphaned windows
-                    // (targeted-auto, Manager-safe). Runs after `rebuildAllSurfaces`
-                    // on the takeover tick so adopted windows are in the keep-set.
-                    await MainActor.run { sessionService.reconcileTerminalSurfaces() }
                 }
                 await tracker.refresh()
                 await eventHub.broadcast()

@@ -143,6 +143,30 @@ public final class TmuxBackend {
     /// quit left the server running at the stable socket — see #330.
     public var isRunning: Bool { controller?.hasSession() ?? false }
 
+    /// Probe whether the cockpit tmux session is live on the socket *right now*,
+    /// WITHOUT creating it — unlike `ensureRunningServer`, which resurrects an
+    /// empty cockpit as a side effect. Used at daemon cold start to choose
+    /// between adopting surviving windows (warm `crowd` restart) and recreating
+    /// + relaunching them (machine reboot / `tmux kill-server`) — CROW-747.
+    ///
+    /// Distinct from `isRunning`: that reads the *cached* `controller`, which is
+    /// `nil` at daemon boot even when the server is alive, so it can't answer
+    /// the cold-start question. This constructs a throwaway `TmuxController`
+    /// when none is cached and runs `has-session` against the socket directly.
+    /// The throwaway is deliberately NOT cached — populating `controller` with a
+    /// session-less handle would make the next `ensureRunningServer` spuriously
+    /// fire `onServerLost` (it treats a cached controller whose session vanished
+    /// as a mid-run crash). Returns `false` when tmux wasn't configured this run.
+    public func cockpitSessionIsLive() -> Bool {
+        guard !tmuxBinary.isEmpty, !socketPath.isEmpty else { return false }
+        let ctrl = controller ?? TmuxController(
+            tmuxBinary: tmuxBinary,
+            socketPath: socketPath,
+            sessionName: TmuxBackend.cockpitSessionName
+        )
+        return ctrl.hasSession()
+    }
+
     /// Detach this Crow process from the tmux backend, resetting in-memory
     /// state. Used by app quit and by the crash-watchdog (PROD #5).
     ///
