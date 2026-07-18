@@ -47,6 +47,11 @@ public struct AssignedIssue: Identifiable, Codable, Sendable {
     public var checksState: String?
     /// Names of failing CI checks on the linked PR, for the checks tooltip (#751).
     public var failedCheckNames: [String]?
+    /// Count of merge requests referencing this issue (GitLab `merge_requests_count`).
+    /// **Not** part of the board payload — an in-memory hint used only to skip the
+    /// per-issue related-MR lookup when it's zero, bounding GitLab poll fan-out
+    /// (#751). nil when unknown (GitHub, or older records).
+    public var mergeRequestsCount: Int?
 
     public init(
         id: String, number: Int, title: String, state: String,
@@ -57,7 +62,8 @@ public struct AssignedIssue: Identifiable, Codable, Sendable {
         parentSummary: String? = nil, projectStatus: TicketStatus = .unknown,
         body: String? = nil, author: String? = nil, createdAt: Date? = nil,
         commentsCount: Int? = nil, prState: String? = nil,
-        checksState: String? = nil, failedCheckNames: [String]? = nil
+        checksState: String? = nil, failedCheckNames: [String]? = nil,
+        mergeRequestsCount: Int? = nil
     ) {
         self.id = id
         self.number = number
@@ -82,5 +88,6 @@ public struct AssignedIssue: Identifiable, Codable, Sendable {
         self.prState = prState
         self.checksState = checksState
         self.failedCheckNames = failedCheckNames
+        self.mergeRequestsCount = mergeRequestsCount
     }
 }

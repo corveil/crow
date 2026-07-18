@@ -2972,17 +2972,30 @@ public final class IssueTracker {
         }
     }
 
+    /// Hard cap on how many GitLab issues get the (up to 2 REST calls each)
+    /// related-MR lookup per host per poll, so one large assigned-issue queue
+    /// can't stall the ~60s cycle or burn API quota (#751 review).
+    private static let maxGitLabMREnrich = 25
+
     /// Attach linked-MR state + CI checks to open GitLab issues for the board's
     /// inline PR badges (#751). GitLab has no consolidated issue↔MR query like
     /// GitHub's `closingIssuesReferences`, so this is a best-effort per-issue
-    /// lookup (up to two REST calls each) bounded to the *open* issues only;
-    /// any failure leaves the fields nil and the card degrades gracefully.
+    /// lookup (up to two REST calls each). Fan-out is bounded two ways: issues
+    /// GitLab reports have zero MRs (`merge_requests_count == 0`) skip the round
+    /// trip entirely, and the rest are capped at `maxGitLabMREnrich`. Any
+    /// failure leaves the fields nil and the card degrades gracefully.
     private func enrichGitLabMRStatus(_ issues: [AssignedIssue], host: String) async -> [AssignedIssue] {
         guard let backend = providerManager.codeBackend(for: .gitlab, host: host) as? GitLabCodeBackend else {
             return issues
         }
         var result = issues
+        var budget = Self.maxGitLabMREnrich
+        var skippedForBudget = 0
         for idx in result.indices where result[idx].state == "open" {
+            // GitLab already told us there are no MRs → no point looking one up.
+            if result[idx].mergeRequestsCount == 0 { continue }
+            if budget <= 0 { skippedForBudget += 1; continue }
+            budget -= 1
             guard let rec = try? await backend.linkedMRStatus(
                 repoSlug: result[idx].repo, issueNumber: result[idx].number
             ) else { continue }
@@ -2990,6 +3003,9 @@ public final class IssueTracker {
             result[idx].prURL = rec.url
             result[idx].prState = rec.isDraft ? "draft" : rec.state.lowercased()
             result[idx].checksState = rec.checksState.isEmpty ? nil : rec.checksState
+        }
+        if skippedForBudget > 0 {
+            print("[IssueTracker] enrichGitLabMRStatus(host: \(host)): capped MR enrichment at \(Self.maxGitLabMREnrich); \(skippedForBudget) issue(s) left un-enriched this cycle")
         }
         return result
     }

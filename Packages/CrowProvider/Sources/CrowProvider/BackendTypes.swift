@@ -130,6 +130,24 @@ public enum IssueBody {
     }
 }
 
+/// Tolerant ISO-8601 parsing shared across backends (#751). Providers are
+/// inconsistent about fractional seconds — GitHub GraphQL emits the plain form
+/// (`2026-06-15T01:28:17Z`) while GitLab/others may include `.SSS`. A formatter
+/// pinned to one shape silently returns nil for the other (the CROW-508 trap;
+/// see `GitHubCodeBackend.parseGitHubDateTime`), which quietly disables any
+/// feature that depends on the parsed date. Try plain first, then fractional.
+public enum IssueDate {
+    public static func parse(_ raw: String?) -> Date? {
+        guard let raw else { return nil }
+        let plain = ISO8601DateFormatter()
+        plain.formatOptions = [.withInternetDateTime]
+        if let d = plain.date(from: raw) { return d }
+        let withFraction = ISO8601DateFormatter()
+        withFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return withFraction.date(from: raw)
+    }
+}
+
 /// An issue reference linked from a PR/MR via "closes #N" or equivalent.
 public struct LinkedIssueRef: Sendable {
     public let number: Int
