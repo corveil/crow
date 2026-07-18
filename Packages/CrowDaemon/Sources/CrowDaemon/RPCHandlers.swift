@@ -88,6 +88,12 @@ private func launchHostProcess(_ executable: String, _ arguments: [String]) thro
     let proc = Process()
     proc.executableURL = URL(fileURLWithPath: executable)
     proc.arguments = arguments
+    // Reap the child: `code` / `/usr/bin/open` exit almost immediately, and
+    // Foundation only harvests the zombie once a `terminationHandler` or
+    // `waitUntilExit()` is attached. Without this the long-lived `crowd`
+    // daemon would accumulate defunct entries (matches the `terminationHandler`
+    // pattern already used in TmuxController / SessionService — review Yellow).
+    proc.terminationHandler = { _ in }
     try proc.run()
 }
 
@@ -502,7 +508,9 @@ func makeCommandRouter(
             }
             #if os(macOS)
             do {
-                try launchHostProcess("/usr/bin/open", ["-a", "Terminal", path])
+                // `--` terminates option parsing so an unusual worktree path can
+                // never be read as an `open` flag (defense in depth; review Green).
+                try launchHostProcess("/usr/bin/open", ["-a", "Terminal", "--", path])
             } catch {
                 throw DaemonRPCError.applicationError("Failed to open Terminal: \(error.localizedDescription)")
             }

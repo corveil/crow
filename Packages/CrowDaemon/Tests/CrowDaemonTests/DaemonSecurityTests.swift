@@ -714,6 +714,18 @@ import CrowPersistence
             == "run-setup is local-only")
     }
 
+    @Test func openHostAppsAreLocalOnly() {
+        // The host-launch RPCs spawn a GUI app (`code` / `/usr/bin/open`) on the
+        // daemon host — a remote `/rpc` peer must never reach them (CROW-749).
+        for method in ["open-in-vscode", "open-terminal"] {
+            let req = JSONRPCRequest(id: 1, method: method, params: [
+                "session_id": .string(UUID().uuidString),
+            ])
+            #expect(RPCWebSocketHandler.localOnlyDenial(for: req, devRoot: tempDevRoot())
+                == "opening host apps is local-only")
+        }
+    }
+
     @Test func setConfigBinariesChangeIsLocalOnly() throws {
         let devRoot = tempDevRoot()
         defer { try? FileManager.default.removeItem(atPath: devRoot) }

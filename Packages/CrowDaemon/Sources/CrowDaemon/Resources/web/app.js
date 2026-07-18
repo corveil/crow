@@ -105,7 +105,7 @@ function onServerChanged() {
 // `changed`, so we load this on boot and re-load it when the Settings modal
 // saves (via `window.reloadUIConfig`). Mirrors the desktop's
 // `appState.hideSessionDetails`.
-const uiConfig = { hideSessionDetails: false, notifications: null, webPasswordSet: false, vsCodeAvailable: false };
+const uiConfig = { hideSessionDetails: false, notifications: null, webPasswordSet: false, vsCodeAvailable: false, isLocal: false };
 async function loadUIConfig() {
   try {
     const res = await rpc('get-config');
@@ -117,6 +117,14 @@ async function loadUIConfig() {
     // Host capability: whether the VS Code `code` CLI is installed. Gates the
     // "Open in VS Code" detail-header button (CROW-749).
     uiConfig.vsCodeAvailable = !!(res && res.vs_code_available);
+    // Is this a local-direct connection? The host-action buttons (Open in VS
+    // Code / Open Terminal) launch apps on the daemon host and are loopback-gated
+    // server-side, so hide them from proxied/remote sessions where they'd only
+    // fail — same `/auth/context` signal the Settings secret editors use (CROW-749).
+    try {
+      const cr = await fetch('/auth/context', { cache: 'no-store' });
+      uiConfig.isLocal = cr.ok ? !!(await cr.json()).local : false;
+    } catch (_) { uiConfig.isLocal = false; }
     // First-run gate: pointer absent → show the setup wizard (CROW-605).
     if (res && res.configured === false && !document.getElementById('wizard')) {
       showWizard(res.default_dev_root || '');
@@ -1548,12 +1556,13 @@ function renderHeader(s) {
   }
   if (s.kind !== 'manager') {
     // Open the primary worktree on the host (native "Open in VS Code" / "Open
-    // Terminal"; CROW-749). VS Code needs the `code` CLI installed; both need a
-    // worktree. Loopback-gated on the daemon.
-    if (s.worktree_path && uiConfig.vsCodeAvailable) {
+    // Terminal"; CROW-749). These launch apps on the daemon host, so they're
+    // loopback-gated server-side and only shown to a local-direct session. VS
+    // Code additionally needs the `code` CLI installed; both need a worktree.
+    if (uiConfig.isLocal && s.worktree_path && uiConfig.vsCodeAvailable) {
       actions.appendChild(actionBtn('Open in VS Code', 'code', null, () => sessionAction('open-in-vscode', s.id)));
     }
-    if (s.worktree_path) {
+    if (uiConfig.isLocal && s.worktree_path) {
       actions.appendChild(actionBtn('Open Terminal', 'terminal', null, () => sessionAction('open-terminal', s.id)));
     }
     // In Review — active + linked ticket + a project-board-capable provider

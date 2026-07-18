@@ -346,3 +346,33 @@ struct CanAddMergeLabelTests {
         #expect(!IssueTracker.canAddMergeLabel(session: s, providerManager: providerManager))
     }
 }
+
+/// CROW-749: the "In Review" button gates on the session's **task** backend
+/// declaring `.projectBoardStatus` — GitHub Projects v2 / Jira yes, GitLab no
+/// (ADR 0005). Restores the retired native `canSetProjectStatus` gate.
+@Suite("canSetProjectStatus — gates on task backend project-board capability")
+struct CanSetProjectStatusTests {
+    private let providerManager = ProviderManager()
+
+    private func session(provider: Provider?) -> Session {
+        Session(id: UUID(), name: "s", provider: provider)
+    }
+
+    @Test func gitHubTaskCanSetStatus() {
+        #expect(IssueTracker.canSetProjectStatus(session: session(provider: .github), providerManager: providerManager))
+    }
+
+    @Test func jiraTaskCanSetStatus() {
+        #expect(IssueTracker.canSetProjectStatus(session: session(provider: .jira), providerManager: providerManager))
+    }
+
+    @Test func gitLabTaskCannotSetStatus() {
+        // GitLab declares no `.projectBoardStatus` capability.
+        #expect(!IssueTracker.canSetProjectStatus(session: session(provider: .gitlab), providerManager: providerManager))
+    }
+
+    @Test func noProviderCannotSetStatus() {
+        // A provider-less session (e.g. the Manager) is never eligible.
+        #expect(!IssueTracker.canSetProjectStatus(session: session(provider: nil), providerManager: providerManager))
+    }
+}
