@@ -105,7 +105,7 @@ function onServerChanged() {
 // `changed`, so we load this on boot and re-load it when the Settings modal
 // saves (via `window.reloadUIConfig`). Mirrors the desktop's
 // `appState.hideSessionDetails`.
-const uiConfig = { hideSessionDetails: false, notifications: null, webPasswordSet: false };
+const uiConfig = { hideSessionDetails: false, notifications: null, webPasswordSet: false, vsCodeAvailable: false };
 async function loadUIConfig() {
   try {
     const res = await rpc('get-config');
@@ -114,6 +114,9 @@ async function loadUIConfig() {
     uiConfig.notifications = parseNotificationSettings(cfg.notifications);
     // Presence of the (secret-stripped) webAuth block means a web password is set.
     uiConfig.webPasswordSet = !!cfg.webAuth;
+    // Host capability: whether the VS Code `code` CLI is installed. Gates the
+    // "Open in VS Code" detail-header button (CROW-749).
+    uiConfig.vsCodeAvailable = !!(res && res.vs_code_available);
     // First-run gate: pointer absent → show the setup wizard (CROW-605).
     if (res && res.configured === false && !document.getElementById('wizard')) {
       showWizard(res.default_dev_root || '');
@@ -975,6 +978,8 @@ const ICONS = {
   wrench: '<path d="M11.8 2.4a2.8 2.8 0 0 0-3.3 3.7L2.9 11.7a1.3 1.3 0 0 0 1.8 1.8l5.6-5.6a2.8 2.8 0 0 0 3.7-3.3l-1.9 1.9-1.6-.4-.4-1.6z"/>',
   logout: '<path d="M6.5 3.5H3.5v9h3"/><path d="M12.5 8H6.5"/><path d="M10 5.5 12.5 8 10 10.5"/>',
   help: '<circle cx="8" cy="8" r="5.8"/><path d="M6.3 6.5a1.7 1.7 0 1 1 2.4 1.6c-.5.3-.7.6-.7 1.1v.3"/><path d="M8 11.3v.15"/>',
+  code: '<path d="M6 5 2.5 8 6 11"/><path d="M10 5l3.5 3-3.5 3"/>',
+  terminal: '<rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M4.5 6.5 6.5 8l-2 1.5"/><path d="M8 9.5h3"/>',
 };
 function icon(name, size) {
   const span = el('span', 'ico');
@@ -1253,7 +1258,7 @@ function sessionMenuItems(s) {
     items.push({ label: 'Delete', danger: true, action: () => deleteSession(s.id, s.name) });
     return items;
   }
-  if (s.status === 'active' && s.ticket_url) {
+  if (s.status === 'active' && s.ticket_url && s.can_set_project_status) {
     items.push({ label: 'Mark as In Review', action: () => sessionAction('mark-in-review', s.id) });
   }
   if ((s.status === 'active' || s.status === 'inReview') && s.ticket_url) {
@@ -1316,6 +1321,26 @@ async function openHandoffAgentMenu(session, anchorEl) {
 async function sessionAction(method, id, extra) {
   try { await rpc(method, Object.assign({ session_id: id }, extra || {})); }
   catch (e) { alertModal(method + ' failed: ' + (e.message || e)); }
+}
+
+// "In Review" with an in-flight spinner — mirrors native's ProgressView swap
+// while `isMarkingInReview` (CROW-749). On success the status transition pushes
+// a re-render that drops the button (status leaves `active`); on error we
+// restore the button and surface the failure.
+async function markInReviewAction(btn, id) {
+  if (!btn || btn.disabled) return;
+  btn.disabled = true;
+  const saved = btn.innerHTML;
+  btn.innerHTML = '';
+  btn.appendChild(el('span', 'action-spinner'));
+  try {
+    await rpc('mark-in-review', { session_id: id });
+    // Leave the button disabled: the ensuing state push re-renders the header.
+  } catch (e) {
+    btn.disabled = false;
+    btn.innerHTML = saved;
+    alertModal('mark-in-review failed: ' + (e.message || e));
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1510,14 +1535,32 @@ function renderHeader(s) {
   // Right-aligned action cluster: PR quick-actions, then status transitions + delete.
   const actions = el('div', 'actions-cluster');
   if (pr && pr.has_pr && !pr.is_merged) {
-    if (pr.merge === 'conflicting') actions.appendChild(qaButton('Rebase & Fix Conflicts', 'fixConflicts', s.id, 'danger', 'merge'));
-    if (pr.review === 'changesRequested') actions.appendChild(qaButton('Address Review', 'addressChanges', s.id, 'danger', 'pencil'));
-    if (pr.checks === 'failing') actions.appendChild(qaButton('Fix Checks', 'fixChecks', s.id, 'danger', 'warning'));
-    if (pr.ready_to_merge) actions.appendChild(qaButton('Merge PR', 'mergePR', s.id, 'primary', 'merge'));
+    // Quick-actions dispatch a prompt into the session's managed Claude Code
+    // terminal — disable them when there is none (native `canDispatchQuickAction`;
+    // CROW-749). `can_dispatch` is absent until the daemon ships it, so treat only
+    // an explicit `false` as "no terminal".
+    const canDispatch = liveFor(s.id).can_dispatch !== false;
+    const qaOpts = { disabled: !canDispatch, title: canDispatch ? '' : 'No managed Claude Code terminal in this session' };
+    if (pr.merge === 'conflicting') actions.appendChild(qaButton('Rebase & Fix Conflicts', 'fixConflicts', s.id, 'danger', 'merge', qaOpts));
+    if (pr.review === 'changesRequested') actions.appendChild(qaButton('Address Review', 'addressChanges', s.id, 'danger', 'pencil', qaOpts));
+    if (pr.checks === 'failing') actions.appendChild(qaButton('Fix Checks', 'fixChecks', s.id, 'danger', 'warning', qaOpts));
+    if (pr.ready_to_merge) actions.appendChild(qaButton('Merge PR', 'mergePR', s.id, 'primary', 'merge', qaOpts));
   }
   if (s.kind !== 'manager') {
-    if (s.status === 'active' && s.ticket_url) {
-      actions.appendChild(actionBtn('In Review', 'eye', null, () => sessionAction('mark-in-review', s.id)));
+    // Open the primary worktree on the host (native "Open in VS Code" / "Open
+    // Terminal"; CROW-749). VS Code needs the `code` CLI installed; both need a
+    // worktree. Loopback-gated on the daemon.
+    if (s.worktree_path && uiConfig.vsCodeAvailable) {
+      actions.appendChild(actionBtn('Open in VS Code', 'code', null, () => sessionAction('open-in-vscode', s.id)));
+    }
+    if (s.worktree_path) {
+      actions.appendChild(actionBtn('Open Terminal', 'terminal', null, () => sessionAction('open-terminal', s.id)));
+    }
+    // In Review — active + linked ticket + a project-board-capable provider
+    // (native `canSetProjectStatus`). In-flight: swap to a spinner until the
+    // status transition lands and the re-render drops the button (CROW-749).
+    if (s.status === 'active' && s.ticket_url && s.can_set_project_status) {
+      actions.appendChild(actionBtn('In Review', 'eye', null, (ev) => markInReviewAction(ev.currentTarget, s.id)));
     }
     if (s.status === 'active' || s.status === 'inReview') {
       actions.appendChild(actionBtn('Mark as Completed', 'check', null, () => sessionAction('complete-session', s.id)));
@@ -1587,11 +1630,15 @@ function prStatusPart(text, color) {
   return part;
 }
 
-function qaButton(label, action, id, variant, iconName) {
+function qaButton(label, action, id, variant, iconName, opts) {
   const btn = el('button', 'action-btn' + (variant ? ' action-' + variant : ''), '');
   if (iconName) btn.appendChild(icon(iconName));
   btn.appendChild(el('span', null, label));
   btn.onclick = () => quickAction(id, action, label);
+  // Disabled state (no managed Claude Code terminal to dispatch into) mirrors
+  // native's `canDispatchQuickAction` gate; `.action-btn:disabled` styles it.
+  if (opts && opts.disabled) btn.disabled = true;
+  if (opts && opts.title) btn.title = opts.title;
   return btn;
 }
 

@@ -1073,6 +1073,17 @@ html, body {
 }
 @keyframes wizard-spin { to { transform: rotate(360deg); } }
 
+/* In-flight spinner for detail-header action buttons (In Review; CROW-749). */
+.action-spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--gold);
+  border-radius: 50%;
+  animation: wizard-spin 0.7s linear infinite;
+}
+
 /* ---- Scorecard (ADR 0008 web parity, #721) ---- */
 .score-weeklabel { color: var(--text-secondary); font-size: 12px; }
 .score-banner {

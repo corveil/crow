@@ -76,6 +76,21 @@ private func prStatusJSON(_ pr: PRStatus) -> [String: JSONValue] {
     ]
 }
 
+/// Launch a detached GUI process on the daemon host (open the worktree in VS
+/// Code / a Terminal window). Fire-and-forget: we don't wait for the app to
+/// exit, we only surface a launch failure. Backs the `open-in-vscode` /
+/// `open-terminal` RPCs, which restore the retired native `SessionDetailView`'s
+/// "Open in VS Code" / "Open Terminal" buttons now that the web UI is the sole
+/// client (ADR 0007). The daemon uses a `NoopHostBridge`, so the old
+/// `SessionService.openInVSCode/openTerminal` do nothing here — the handler
+/// launches the process itself (CROW-749).
+private func launchHostProcess(_ executable: String, _ arguments: [String]) throws {
+    let proc = Process()
+    proc.executableURL = URL(fileURLWithPath: executable)
+    proc.arguments = arguments
+    try proc.run()
+}
+
 /// Builds the daemon's `CommandRouter`. Handlers mirror the corresponding
 /// closures in the macOS app's `AppDelegate.startSocketServer`, but operate
 /// purely on `AppState` + `JSONStore` (+ `GitManager` / the tmux `cockpit`)
@@ -165,6 +180,10 @@ func makeCommandRouter(
                         // client was dead payload. A future consumer (scorecard
                         // / session strip) can add them back alongside its use.
                         "org_goal": session.orgGoal.map { .string($0) } ?? .null,
+                        // Project-board "In Review" permission gate — mirrors the
+                        // retired native `canSetProjectStatus(for:)` (GitHub/Jira
+                        // yes, GitLab no). Gates the web "In Review" button (CROW-749).
+                        "can_set_project_status": .bool(tracker?.canSetProjectStatus(for: session) ?? false),
                     ]
                     if let worktree = appState.primaryWorktree(for: session.id) {
                         object["repo"] = .string(worktree.repoName)
@@ -446,6 +465,53 @@ func makeCommandRouter(
             return ["dispatched": .bool(true), "action": .string(action.rawValue)]
         },
 
+        // Open the session's primary worktree in VS Code on the daemon host —
+        // restores the retired native "Open in VS Code" button (CROW-749). Gated
+        // to loopback callers in `RPCWebSocketHandler.localOnlyDenial` since it
+        // launches a GUI app on the host. Shown by the web only when the `code`
+        // CLI is present (see `vs_code_available` in get-config).
+        "open-in-vscode": { params in
+            guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
+                throw DaemonRPCError.invalidParams("session_id required")
+            }
+            let path = await MainActor.run { appState.primaryWorktree(for: id)?.worktreePath }
+            guard let path else {
+                throw DaemonRPCError.applicationError("No worktree for session")
+            }
+            guard let code = SessionService.findVSCodeBinary() else {
+                throw DaemonRPCError.applicationError("VS Code CLI not found")
+            }
+            do {
+                try launchHostProcess(code, [path])
+            } catch {
+                throw DaemonRPCError.applicationError("Failed to launch VS Code: \(error.localizedDescription)")
+            }
+            return ["opened": .bool(true)]
+        },
+
+        // Open a host Terminal window at the session's primary worktree —
+        // restores the retired native "Open Terminal" button (CROW-749). macOS
+        // only (native used NSWorkspace); loopback-gated like `open-in-vscode`.
+        "open-terminal": { params in
+            guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
+                throw DaemonRPCError.invalidParams("session_id required")
+            }
+            let path = await MainActor.run { appState.primaryWorktree(for: id)?.worktreePath }
+            guard let path else {
+                throw DaemonRPCError.applicationError("No worktree for session")
+            }
+            #if os(macOS)
+            do {
+                try launchHostProcess("/usr/bin/open", ["-a", "Terminal", path])
+            } catch {
+                throw DaemonRPCError.applicationError("Failed to open Terminal: \(error.localizedDescription)")
+            }
+            return ["opened": .bool(true)]
+            #else
+            throw DaemonRPCError.applicationError("Opening a host terminal is only supported on macOS")
+            #endif
+        },
+
         // Board data (Ticket Board / Reviews / Allowlist) is in-memory on the app
         // (IssueTracker / AllowListService), so these reads are forward-only.
         // Coding agents are registered in the daemon's own AgentRegistry at
@@ -678,6 +744,10 @@ func makeCommandRouter(
                     var entry: [String: JSONValue] = [
                         "remote_control_active": .bool(rcActive),
                         "remote_control_available": .bool(available),
+                        // PR quick-actions need a managed Claude Code terminal to
+                        // dispatch into — mirrors native `canDispatchQuickAction`.
+                        // The web disables the quick-action buttons when false (CROW-749).
+                        "can_dispatch": .bool(appState.terminals(for: id).contains { $0.isManaged }),
                     ]
                     entry["pr"] = appState.prStatus[id].map { .object(prStatusJSON($0)) }
                         ?? .object(["has_pr": .bool(false)])
@@ -805,6 +875,11 @@ func makeCommandRouter(
                 "app_running": .bool(false),
                 "configured": .bool(ConfigStore.loadDevRoot() != nil),
                 "default_dev_root": .string(defaultDevRoot),
+                // Host capability: is the VS Code `code` CLI installed? Gates the
+                // web "Open in VS Code" button, mirroring native `vsCodeAvailable`.
+                // Computed here (not off `sessionService`) so it's independent of
+                // tmux presence (CROW-749).
+                "vs_code_available": .bool(SessionService.findVSCodeBinary() != nil),
             ]
         },
         // Non-secret settings write. `defaults.binaries` is held to the same
