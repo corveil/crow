@@ -449,6 +449,13 @@ public final class IssueTracker {
                     }) {
                         openIssues[idx].prNumber = pr.number
                         openIssues[idx].prURL = pr.url
+                        // Surface PR health inline on the board (#751): PRRecord
+                        // already carries these from monitoredPRsQuery, so no
+                        // extra fetch. A draft PR reports "draft"; otherwise the
+                        // normalized state lowercased ("open"/"merged"/"closed").
+                        openIssues[idx].prState = pr.isDraft ? "draft" : pr.state.lowercased()
+                        openIssues[idx].checksState = pr.checksState.isEmpty ? nil : pr.checksState
+                        openIssues[idx].failedCheckNames = pr.failedCheckNames.isEmpty ? nil : pr.failedCheckNames
                     }
                 }
             }
@@ -465,7 +472,8 @@ public final class IssueTracker {
         // GitHub's open + deduped-closed merge.
         for host in gitLabHosts {
             let merged = Self.mergeListing(await fetchGitLabIssues(host: host))
-            allIssues.append(contentsOf: merged.issues)
+            let enriched = await enrichGitLabMRStatus(merged.issues, host: host)
+            allIssues.append(contentsOf: enriched)
             doneCount += merged.doneCount
         }
 
@@ -2962,6 +2970,28 @@ public final class IssueTracker {
             print("[IssueTracker] fetchGitLabIssues(host: \(host)) failed: \(error)")
             return AssignedListing(open: [], closed: [])
         }
+    }
+
+    /// Attach linked-MR state + CI checks to open GitLab issues for the board's
+    /// inline PR badges (#751). GitLab has no consolidated issue↔MR query like
+    /// GitHub's `closingIssuesReferences`, so this is a best-effort per-issue
+    /// lookup (up to two REST calls each) bounded to the *open* issues only;
+    /// any failure leaves the fields nil and the card degrades gracefully.
+    private func enrichGitLabMRStatus(_ issues: [AssignedIssue], host: String) async -> [AssignedIssue] {
+        guard let backend = providerManager.codeBackend(for: .gitlab, host: host) as? GitLabCodeBackend else {
+            return issues
+        }
+        var result = issues
+        for idx in result.indices where result[idx].state == "open" {
+            guard let rec = try? await backend.linkedMRStatus(
+                repoSlug: result[idx].repo, issueNumber: result[idx].number
+            ) else { continue }
+            result[idx].prNumber = rec.number
+            result[idx].prURL = rec.url
+            result[idx].prState = rec.isDraft ? "draft" : rec.state.lowercased()
+            result[idx].checksState = rec.checksState.isEmpty ? nil : rec.checksState
+        }
+        return result
     }
 
     /// Find the configured Jira workspace whose project key (then exact site host,

@@ -211,6 +211,8 @@ public struct GitLabTaskBackend: TaskBackend {
     static func parseIssues(_ output: String, host: String, projectStatusOverride: TicketStatus?) -> [AssignedIssue] {
         guard let data = output.data(using: .utf8),
               let items = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
+        let dateFmt = ISO8601DateFormatter()
+        dateFmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return items.compactMap { item -> AssignedIssue? in
             guard let number = item["iid"] as? Int,
                   let title = item["title"] as? String,
@@ -219,6 +221,13 @@ public struct GitLabTaskBackend: TaskBackend {
             let labels = (item["labels"] as? [String] ?? []).map { LabelInfo(name: $0) }
             let refs = item["references"] as? [String: Any]
             let fullRef = refs?["full"] as? String ?? ""
+            // Richer detail for the board (#751) — the REST issues payload
+            // already carries these, so no extra call.
+            let author = (item["author"] as? [String: Any])?["username"] as? String
+            let createdAt = (item["created_at"] as? String).flatMap { dateFmt.date(from: $0) }
+            let updatedAt = (item["updated_at"] as? String).flatMap { dateFmt.date(from: $0) }
+            let commentsCount = item["user_notes_count"] as? Int
+            let body = (item["description"] as? String).flatMap(IssueBody.cap)
             return AssignedIssue(
                 id: "gitlab:\(host):\(fullRef)",
                 number: number,
@@ -228,7 +237,12 @@ public struct GitLabTaskBackend: TaskBackend {
                 repo: fullRef,
                 labels: labels,
                 provider: .gitlab,
-                projectStatus: projectStatusOverride ?? .unknown
+                updatedAt: updatedAt,
+                projectStatus: projectStatusOverride ?? .unknown,
+                body: body,
+                author: author,
+                createdAt: createdAt,
+                commentsCount: commentsCount
             )
         }
     }

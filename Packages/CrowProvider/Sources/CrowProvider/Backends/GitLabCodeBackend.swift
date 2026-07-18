@@ -126,6 +126,65 @@ public struct GitLabCodeBackend: CodeBackend {
         )
     }
 
+    /// Best-effort linked-MR status for an issue, for the board's inline PR
+    /// state + CI badges (#751). Finds the first open related MR (falling back
+    /// to the most recent), then reads its head-pipeline CI rollup. Returns nil
+    /// when the issue has no related MR or the call fails. Costs up to two REST
+    /// calls per issue (related MRs, then the single MR for its pipeline), so
+    /// callers should bound how many issues they enrich. The returned
+    /// `PRRecord` populates only `number`/`url`/`state`/`isDraft`/`checksState`.
+    public func linkedMRStatus(repoSlug: String, issueNumber: Int) async throws -> PRRecord? {
+        let encodedSlug = repoSlug.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? repoSlug
+        let relatedEndpoint = "projects/\(encodedSlug)/issues/\(issueNumber)/related_merge_requests"
+        let output = try await shellRunner.run(
+            args: ["glab", "api", relatedEndpoint],
+            env: env(),
+            cwd: NSHomeDirectory()
+        )
+        guard let data = output.data(using: .utf8),
+              let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            return nil
+        }
+        // Prefer an open MR (the one whose health matters); else the first listed.
+        let opened = arr.first { ($0["state"] as? String) == "opened" }
+        guard let mr = opened ?? arr.first,
+              let iid = mr["iid"] as? Int,
+              let webURL = mr["web_url"] as? String else {
+            return nil
+        }
+        let state = Self.normalizeState((mr["state"] as? String) ?? "")
+        let isDraft = (mr["draft"] as? Bool) ?? (mr["work_in_progress"] as? Bool) ?? false
+
+        // CI rollup: the list payload omits pipelines, so read the single-MR
+        // endpoint's head_pipeline. Best-effort — a missing/empty pipeline just
+        // leaves checksState blank.
+        var checksState = ""
+        let mrEndpoint = "projects/\(encodedSlug)/merge_requests/\(iid)"
+        if let mrOut = try? await shellRunner.run(args: ["glab", "api", mrEndpoint], env: env(), cwd: NSHomeDirectory()),
+           let mrData = mrOut.data(using: .utf8),
+           let mrObj = try? JSONSerialization.jsonObject(with: mrData) as? [String: Any] {
+            let pipeline = (mrObj["head_pipeline"] as? [String: Any]) ?? (mrObj["pipeline"] as? [String: Any])
+            if let status = pipeline?["status"] as? String {
+                checksState = Self.mapPipelineStatus(status)
+            }
+        }
+        return PRRecord(number: iid, url: webURL, state: state, isDraft: isDraft, checksState: checksState)
+    }
+
+    /// Normalize a GitLab pipeline status to the provider-agnostic checks
+    /// vocabulary shared with GitHub (`SUCCESS`/`FAILURE`/`PENDING`/`ERROR`).
+    /// `skipped`/unknown map to `""` (no checks shown).
+    static func mapPipelineStatus(_ raw: String) -> String {
+        switch raw {
+        case "success": return "SUCCESS"
+        case "failed": return "FAILURE"
+        case "running", "pending", "created", "preparing", "waiting_for_resource",
+             "scheduled", "manual": return "PENDING"
+        case "canceled": return "ERROR"
+        default: return ""
+        }
+    }
+
     public func fetchCrowAuthoredCommits(prURL: String, repoSlug: String, prNumber: Int) async throws -> [CommitInfo] {
         let encodedSlug = repoSlug.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? repoSlug
         let endpoint = "projects/\(encodedSlug)/merge_requests/\(prNumber)/commits"

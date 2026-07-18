@@ -275,6 +275,13 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                             "updated_at": issue.updatedAt.map { .string(fmt.string(from: $0)) } ?? .null,
                             "project_status": .string(status.rawValue),
                             "labels": .array(issue.labels.map { .object(["name": .string($0.name), "color": $0.color.map { .string($0) } ?? .null]) }),
+                            // Richer board detail (#751) — all optional/back-compatible.
+                            "body": issue.body.map { .string($0) } ?? .null,
+                            "author": issue.author.map { .string($0) } ?? .null,
+                            "created_at": issue.createdAt.map { .string(fmt.string(from: $0)) } ?? .null,
+                            "comments_count": issue.commentsCount.map { .int($0) } ?? .null,
+                            "pr_state": issue.prState.map { .string($0) } ?? .null,
+                            "checks": issue.checksState.map { .object(["state": .string($0), "failed": .array((issue.failedCheckNames ?? []).map { .string($0) })]) } ?? .null,
                             "linked_session_id": capturedAppState.linkedSession(for: issue).map { .string($0.id.uuidString) } ?? .null,
                         ])
                     }

@@ -399,7 +399,9 @@ public struct GitHubTaskBackend: TaskBackend {
       openIssues: search(type: ISSUE, query: $openQuery, first: 100) {
         nodes {
           ... on Issue {
-            number title url state updatedAt
+            number title url state updatedAt createdAt bodyText
+            author { login }
+            comments { totalCount }
             repository { nameWithOwner }
             labels(first: 20) { nodes { name color } }
             projectItems(first: 10) {
@@ -416,7 +418,9 @@ public struct GitHubTaskBackend: TaskBackend {
         issueCount
         nodes {
           ... on Issue {
-            number title url state updatedAt
+            number title url state updatedAt createdAt bodyText
+            author { login }
+            comments { totalCount }
             repository { nameWithOwner }
             labels(first: 20) { nodes { name color } }
           }
@@ -431,7 +435,9 @@ public struct GitHubTaskBackend: TaskBackend {
       openIssues: search(type: ISSUE, query: $openQuery, first: 100) {
         nodes {
           ... on Issue {
-            number title url state updatedAt
+            number title url state updatedAt createdAt bodyText
+            author { login }
+            comments { totalCount }
             repository { nameWithOwner }
             labels(first: 20) { nodes { name color } }
           }
@@ -441,7 +447,9 @@ public struct GitHubTaskBackend: TaskBackend {
         issueCount
         nodes {
           ... on Issue {
-            number title url state updatedAt
+            number title url state updatedAt createdAt bodyText
+            author { login }
+            comments { totalCount }
             repository { nameWithOwner }
             labels(first: 20) { nodes { name color } }
           }
@@ -587,6 +595,13 @@ public struct GitHubTaskBackend: TaskBackend {
             if let dateStr = node["updatedAt"] as? String {
                 updatedAt = dateFormatter.date(from: dateStr)
             }
+            var createdAt: Date?
+            if let dateStr = node["createdAt"] as? String {
+                createdAt = dateFormatter.date(from: dateStr)
+            }
+            let author = (node["author"] as? [String: Any])?["login"] as? String
+            let commentsCount = (node["comments"] as? [String: Any])?["totalCount"] as? Int
+            let body = (node["bodyText"] as? String).flatMap(IssueBody.cap)
             var projectStatus: TicketStatus = projectStatusOverride ?? .unknown
             if projectStatusOverride == nil,
                let projectItems = node["projectItems"] as? [String: Any],
@@ -616,7 +631,11 @@ public struct GitHubTaskBackend: TaskBackend {
                 labels: labels,
                 provider: .github,
                 updatedAt: updatedAt,
-                projectStatus: projectStatus
+                projectStatus: projectStatus,
+                body: body,
+                author: author,
+                createdAt: createdAt,
+                commentsCount: commentsCount
             )
         }
     }

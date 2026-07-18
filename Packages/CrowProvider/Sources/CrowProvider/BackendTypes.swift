@@ -111,6 +111,25 @@ public struct PRRecord: Sendable {
     }
 }
 
+/// Issue-body helpers shared across provider backends (#751). The board only
+/// needs an excerpt plus an "expand" affordance, so the body is capped here to
+/// bound the RPC payload rather than shipping arbitrarily long issue bodies.
+public enum IssueBody {
+    /// Max stored body length. Comfortably covers a card excerpt plus an
+    /// inline expand without unbounded payload growth.
+    public static let maxLength = 2000
+
+    /// Trim whitespace and cap to `maxLength`, appending an ellipsis when
+    /// truncated. Returns nil for an empty/whitespace-only body so the card
+    /// renders no description block.
+    public static func cap(_ raw: String) -> String? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        guard trimmed.count > maxLength else { return trimmed }
+        return String(trimmed.prefix(maxLength)) + "…"
+    }
+}
+
 /// An issue reference linked from a PR/MR via "closes #N" or equivalent.
 public struct LinkedIssueRef: Sendable {
     public let number: Int
