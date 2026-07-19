@@ -1190,6 +1190,23 @@ public final class IssueTracker {
         return providerManager.codeBackend(for: provider)?.capabilities.contains(.autoMergeLabel) ?? false
     }
 
+    /// Whether `session` may be moved to a project-board "In Review" status —
+    /// i.e. its **task** backend declares `.projectBoardStatus`. Mirrors the
+    /// retired native `AppState.canSetProjectStatus(for:)` (GitHub Projects v2 /
+    /// Jira: yes; GitLab: no — ADR 0005), which gated the "In Review" button.
+    /// Restores that gate for the web UI (CROW-749). Pure — unit-tested like
+    /// `canAddMergeLabel`.
+    public nonisolated static func canSetProjectStatus(session: Session, providerManager: ProviderManager) -> Bool {
+        guard let provider = session.provider else { return false }
+        return providerManager.taskBackend(for: provider).capabilities.contains(.projectBoardStatus)
+    }
+
+    /// Instance convenience over ``canSetProjectStatus(session:providerManager:)``
+    /// using this tracker's provider manager — the daemon's `list-sessions` gate.
+    public func canSetProjectStatus(for session: Session) -> Bool {
+        Self.canSetProjectStatus(session: session, providerManager: providerManager)
+    }
+
     /// For each non-archived, non-review session missing a `.pr` link with a
     /// resolvable (repoSlug, branch), query the provider directly and upsert
     /// a link when a PR exists on that branch. Runs once per refresh cycle
