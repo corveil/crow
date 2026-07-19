@@ -2779,6 +2779,59 @@ public final class IssueTracker {
         return CompletionResult(completions: decisions, floorGuardTriggered: false)
     }
 
+    /// The reviewer-side auto-kickoff decision for a single review request,
+    /// mirroring the legacy `AppDelegate.onReviewRequestsRefreshed` guard
+    /// (retired in the headless-engine migration, ADR 0008). Pure so the
+    /// daemon's imperative shell (repo-pattern filter, SHA fingerprint dedup,
+    /// clone serializer) stays thin and this branch is unit-testable.
+    ///
+    /// - `.create`: no session exists for this PR yet — spawn a review session.
+    /// - `.reReview`: a linked session exists but the PR head advanced past the
+    ///   SHA it last reviewed (author pushed / force-pushed after a first pass).
+    ///   The stale session is completed and a fresh one spun up against the new
+    ///   head (CROW-290 keys each head as its own round; CROW-406's
+    ///   `existingByPR` guards the clone window). Carries the stale session ID
+    ///   so the caller tears it down before enqueuing.
+    /// - `.skip`: a session already covers this PR at the current head.
+    public enum ReviewKickoffAction: Equatable {
+        case skip
+        case create
+        case reReview(staleSessionID: UUID)
+    }
+
+    /// - Parameters:
+    ///   - reviewSessionID: the `ReviewRequest`'s cross-referenced session, or
+    ///     nil until `IssueTracker` repopulates it (lags the actual session by
+    ///     up to one refresh).
+    ///   - headRefOid: the PR's current head SHA (nil when unfetched — never
+    ///     re-reviews on a missing head).
+    ///   - linkedSession: the session resolved from `reviewSessionID`.
+    ///   - existingByPRSessionID: `AppState.existingReviewSession(forPRURL:)` —
+    ///     the authoritative link-based lookup that catches an in-flight kickoff
+    ///     before `reviewSessionID` is written back.
+    nonisolated public static func reviewKickoffAction(
+        reviewSessionID: UUID?,
+        headRefOid: String?,
+        linkedSession: Session?,
+        existingByPRSessionID: UUID?
+    ) -> ReviewKickoffAction {
+        // B-fallback: linked session exists but its last-reviewed head is
+        // stale relative to the PR's current head → re-review the new head.
+        let shaAdvanced = linkedSession != nil
+            && headRefOid != nil
+            && linkedSession?.lastReviewedHeadSha != headRefOid
+        if shaAdvanced, let staleID = reviewSessionID {
+            return .reReview(staleSessionID: staleID)
+        }
+        // Create only when nothing already covers this PR (belt-and-suspenders:
+        // the lagging `reviewSessionID` cross-ref plus the authoritative
+        // link-based lookup, so the ~10s clone window can't double-kick).
+        if reviewSessionID == nil && existingByPRSessionID == nil {
+            return .create
+        }
+        return .skip
+    }
+
     /// Decide which review sessions should be auto-completed. Three rules:
     ///   1. Viewer has submitted a formal review (APPROVED / CHANGES_REQUESTED
     ///      / DISMISSED) at a time strictly after `session.createdAt`. This

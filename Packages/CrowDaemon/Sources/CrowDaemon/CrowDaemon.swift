@@ -467,15 +467,40 @@ public enum CrowDaemon {
         // startup are picked up; deduped by a (request, headSHA) fingerprint plus
         // the persisted reviewSessionID, and serialized so a burst can't race
         // duplicate clones. `onNewReviewRequests` is notification-only → dropped.
+        //
+        // Two kickoff conditions, ported from the legacy `AppDelegate` the
+        // headless migration dropped (ADR 0008 / CROW-756): (A) no session yet →
+        // create; (B) a linked session's `lastReviewedHeadSha` is stale vs. the
+        // PR's current head → complete the stale round and re-review the new head
+        // (force-push, or round-2 commits landing before Signal A —
+        // `decideReviewCompletions` rule 1 — completed round 1). The SHA-keyed
+        // fingerprint makes each head its own round so B isn't blocked by A.
         var autoReviewed: Set<String> = []
         tracker.onReviewRequestsRefreshed = { requests in
             let patterns = (config()?.workspaces ?? []).flatMap { $0.autoReviewRepos }
             guard !patterns.isEmpty else { return }
             for request in requests {
-                guard request.reviewSessionID == nil else { continue }
                 guard repoMatchesPatterns(request.repo, patterns: patterns) else { continue }
+                let linkedSession = request.reviewSessionID.flatMap { id in
+                    appState.sessions.first(where: { $0.id == id })
+                }
+                let action = IssueTracker.reviewKickoffAction(
+                    reviewSessionID: request.reviewSessionID,
+                    headRefOid: request.headRefOid,
+                    linkedSession: linkedSession,
+                    existingByPRSessionID: appState.existingReviewSession(forPRURL: request.url)?.id
+                )
+                guard action != .skip else { continue }
+                // SHA-keyed dedup: a new head is a fresh round; an unchanged head
+                // never re-kicks (also guards the in-flight clone window before
+                // the session's link/reviewSessionID land).
                 let fingerprint = "\(request.id)\n\(request.headRefOid ?? "")"
                 guard autoReviewed.insert(fingerprint).inserted else { continue }
+                // B-fallback: tear down the stale round-1 session before enqueuing
+                // so `reviewSessions` doesn't double up for this PR.
+                if case let .reReview(staleID) = action {
+                    appState.onCompleteSession?(staleID)
+                }
                 let url = request.url
                 Task { _ = await reviewSerializer.enqueue { await sessionService.createReviewSession(prURL: url, selectAfterCreate: false) } }
             }
