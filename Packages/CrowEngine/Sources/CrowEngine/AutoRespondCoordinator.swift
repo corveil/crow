@@ -83,6 +83,20 @@ public final class AutoRespondCoordinator {
     /// assuming success (#730).
     @discardableResult
     public func dispatchManual(action: QuickAction, sessionID: UUID) -> QuickActionDispatchResult {
+        let session = appState.sessions.first(where: { $0.id == sessionID })
+
+        // Reviewer policy on the manual path (#757). The auto path already gates
+        // this via `shouldSkipReviewSession`; `dispatchManual` never did, so a
+        // reviewer clicking "Address Review" would have Crow committing to the
+        // branch under review — exactly what CROW-551 forbids. Refuse the
+        // code-modifying actions on review sessions; `reReview` is the correct
+        // reviewer affordance and stays allowed.
+        if session?.kind == .review, action.modifiesCodeUnderReview {
+            NSLog("[QuickAction] Refusing %@ for session %@: review session must not modify the branch under review",
+                  action.rawValue, sessionID.uuidString)
+            return .forbiddenOnReviewSession
+        }
+
         let terminals = appState.terminals(for: sessionID)
         guard let terminal = terminals.first(where: { $0.isManaged }) else {
             NSLog("[QuickAction] Skipping %@ for session %@: no managed terminal",
@@ -105,7 +119,8 @@ public final class AutoRespondCoordinator {
             action: action,
             codeBackend: resolveCodeBackend(forSessionID: sessionID),
             prURL: prLink.url,
-            prNumber: prNumber
+            prNumber: prNumber,
+            lastReviewedHeadSha: session?.lastReviewedHeadSha
         )
         NSLog("[QuickAction] Sending %@ prompt to terminal %@ (%d chars)",
               action.rawValue, terminal.id.uuidString, prompt.count)
@@ -184,7 +199,7 @@ public enum AutoRespondPrompts {
 /// `addressChanges` and `fixChecks` cases delegate to `AutoRespondPrompts`
 /// so the auto and manual paths share a single source of truth.
 public enum QuickActionPrompts {
-    static func build(action: QuickAction, codeBackend: CodeBackend, prURL: String, prNumber: Int?) -> String {
+    static func build(action: QuickAction, codeBackend: CodeBackend, prURL: String, prNumber: Int?, lastReviewedHeadSha: String? = nil) -> String {
         let prRef = prNumber.map { "PR #\($0)" } ?? "the PR"
         let cli = codeBackend.cliName
 
@@ -228,7 +243,56 @@ public enum QuickActionPrompts {
                 mergeHint = "Run `\(cli) pr view \(prURL)` to verify the PR is in the expected state, then `cd \"$TMPDIR\" && \(cli) pr merge \(prURL) --squash --delete-branch` to merge. The `cd` keeps `gh`'s post-merge git cleanup (which runs in the CWD) from tripping when `main` is checked out in another worktree. If the repo uses a different merge strategy, adjust accordingly."
             }
             return "Merge \(prRef) (\(prURL)). \(mergeHint)\n"
+
+        case .reReview:
+            // Delegate to the shared re-review prompt so the manual button and
+            // #756's automatic head-advance re-review can't drift.
+            return reReviewPrompt(
+                codeBackend: codeBackend,
+                prURL: prURL,
+                prNumber: prNumber,
+                lastReviewedHeadSha: lastReviewedHeadSha
+            )
         }
+    }
+
+    /// Shared reviewer re-review prompt. Used by BOTH the manual **Re-review**
+    /// quick action (#757, via `build(action: .reReview, …)`) and the automatic
+    /// head-advance re-review (#756) — a single source of truth so the two paths
+    /// can't drift. Re-runs the review on the author's latest head and posts a
+    /// fresh verdict, exactly like `crow-review-pr`.
+    ///
+    /// Agent-agnostic (Cursor is the live repro, PR #753) and CLI-driven rather
+    /// than a slash command, so it works for agents without a Crow command
+    /// engine. Explicitly forbids editing code / committing / pushing: a
+    /// reviewer must never touch the branch under review (CROW-551).
+    ///
+    /// `lastReviewedHeadSha` scopes the diff to what changed since the previous
+    /// review when known; falls back to the full PR when it's `nil`.
+    static func reReviewPrompt(codeBackend: CodeBackend, prURL: String, prNumber: Int?, lastReviewedHeadSha: String?) -> String {
+        let prRef = prNumber.map { "PR #\($0)" } ?? "the PR"
+        let cli = codeBackend.cliName
+
+        // Scope-to-new-changes hint, only when we know the prior head.
+        let sinceHint: String
+        if let sha = lastReviewedHeadSha, !sha.isEmpty {
+            let short = String(sha.prefix(12))
+            sinceHint = "Focus on what changed since your last review with `git diff \(short)..HEAD` (review the whole PR if that range is empty or the SHA is missing locally)."
+        } else {
+            sinceHint = "Review the whole PR."
+        }
+
+        let syncHint: String
+        let reviewHint: String
+        if codeBackend.provider == .gitlab {
+            syncHint = "Run `\(cli) mr checkout \(prURL)` (then `git pull`) to sync your local checkout to the author's latest head."
+            reviewHint = "Post a fresh verdict with `\(cli) mr note`/approval per the crow-review-pr skill — never a bare comment."
+        } else {
+            syncHint = "Run `\(cli) pr checkout \(prURL)` to sync your local checkout to the author's latest head."
+            reviewHint = "Post a fresh verdict with `\(cli) pr review \(prURL) --request-changes` or `--approve` (never `--comment`), following the crow-review-pr skill's format and verdict rules."
+        }
+
+        return "The author pushed new changes to \(prRef) (\(prURL)) since your last review. Re-review it. \(syncHint) \(sinceHint) \(reviewHint) You are the reviewer: do NOT modify code, commit, or push — never touch the branch under review; only read, review, and post the review.\n"
     }
 
     /// Extract the trailing numeric segment from a PR/MR URL (e.g.
