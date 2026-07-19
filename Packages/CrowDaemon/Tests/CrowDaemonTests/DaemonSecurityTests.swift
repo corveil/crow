@@ -192,6 +192,39 @@ import CrowPersistence
     }
 }
 
+/// One writer of `store.json`, regardless of `--socket` (#759). The socket lock
+/// above is keyed to the socket path, but the store lives at a fixed app-support
+/// location — so a distinct `--socket` alone does NOT isolate the store. This
+/// store-scoped flock rejects a second acquirer for the same store directory,
+/// while two daemons pointed at genuinely separate store directories coexist.
+@Suite struct StoreWriterLockTests {
+    private func tmpStoreDir() -> URL {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("crow-store-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    @Test func secondAcquireForSameStoreDirIsRefused() {
+        let dir = tmpStoreDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        // First writer wins; a second one — even launched with a *distinct*
+        // --socket — is refused because it targets the same store directory.
+        #expect(CrowDaemon.acquireStoreWriterLock(storeDirectory: dir) == true)
+        #expect(CrowDaemon.acquireStoreWriterLock(storeDirectory: dir) == false)
+    }
+
+    @Test func separateStoreDirsCoexist() {
+        let a = tmpStoreDir(), b = tmpStoreDir()
+        defer {
+            try? FileManager.default.removeItem(at: a)
+            try? FileManager.default.removeItem(at: b)
+        }
+        #expect(CrowDaemon.acquireStoreWriterLock(storeDirectory: a) == true)
+        #expect(CrowDaemon.acquireStoreWriterLock(storeDirectory: b) == true)   // genuinely separate stores still coexist
+    }
+}
+
 /// add-worktree input hardening (CROW-581 review): option-injection and orphan
 /// rows. Both checks run before any git/fs work, so no tmux/app is needed.
 @Suite struct AddWorktreeValidationTests {
