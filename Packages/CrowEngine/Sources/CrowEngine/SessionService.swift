@@ -2976,8 +2976,9 @@ public final class SessionService {
 
     // MARK: - VS Code Integration
 
-    /// Find the VS Code `code` CLI binary.
-    static func findVSCodeBinary() -> String? {
+    /// Find the VS Code `code` CLI binary. Pure (no actor state), so `nonisolated`
+    /// — the headless daemon calls it off the main actor to gate/launch VS Code.
+    public nonisolated static func findVSCodeBinary() -> String? {
         let candidates = [
             "/usr/local/bin/code",
             "/opt/homebrew/bin/code",

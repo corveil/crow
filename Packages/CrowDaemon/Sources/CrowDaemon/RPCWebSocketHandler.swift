@@ -112,6 +112,8 @@ enum RPCWebSocketHandler {
     /// - `set-config` when `defaults.binaries` change: absolute local binary paths
     ///   that execute at the next agent launch (persistent RCE on an
     ///   unauthenticated non-loopback bind). Other `set-config` fields flow through.
+    /// - `open-in-vscode` / `open-terminal`: launch a GUI app on the daemon host
+    ///   at the worktree path — a remote peer must not spawn host processes (CROW-749).
     ///
     /// Scheduled `jobs` are intentionally NOT gated here (CROW-665): the Jobs
     /// editor is a core web-Settings surface, so an authenticated remote session
@@ -122,6 +124,11 @@ enum RPCWebSocketHandler {
         switch request.method {
         case "run-setup":
             return "run-setup is local-only"
+        case "open-in-vscode", "open-terminal":
+            // These launch a GUI app on the daemon host (VS Code / Terminal at
+            // the worktree path). Restrict to loopback callers — a remote web
+            // session must not spawn host processes (CROW-749).
+            return "opening host apps is local-only"
         case "set-config":
             guard setConfigTouchesPrivilegedFields(request, devRoot: devRoot) else { return nil }
             return "set-config binaries is local-only"
