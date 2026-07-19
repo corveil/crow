@@ -443,19 +443,126 @@ public enum CrowDaemon {
         // startup are picked up; deduped by a (request, headSHA) fingerprint plus
         // the persisted reviewSessionID, and serialized so a burst can't race
         // duplicate clones. `onNewReviewRequests` is notification-only → dropped.
+        //
+        // Also drives the reviewer-side re-review (CROW-756): when the PR author
+        // pushes a new head past what the linked review session last reviewed,
+        // the stale round-1 session is completed and a fresh one spun up against
+        // the advanced head. The legacy `AppDelegate` did this via a `shaAdvanced`
+        // branch; the headless-engine port (ADR 0008) dropped it, so a
+        // `CHANGES_REQUESTED` review never got a round 2. The pure decision lives
+        // in `decideReviewKickoffs`; this closure just supplies the AppState view
+        // and applies the side effects.
         var autoReviewed: Set<String> = []
         tracker.onReviewRequestsRefreshed = { requests in
             let patterns = (config()?.workspaces ?? []).flatMap { $0.autoReviewRepos }
             guard !patterns.isEmpty else { return }
-            for request in requests {
-                guard request.reviewSessionID == nil else { continue }
-                guard repoMatchesPatterns(request.repo, patterns: patterns) else { continue }
-                let fingerprint = "\(request.id)\n\(request.headRefOid ?? "")"
-                guard autoReviewed.insert(fingerprint).inserted else { continue }
-                let url = request.url
+
+            // Snapshot the open review sessions + their links so the decision
+            // runs against a single, self-consistent view (matching
+            // `AppState.existingReviewSession`). This closure fires on the main
+            // actor inside `IssueTracker.refresh`, so the reads are synchronous.
+            let reviewSessions = appState.reviewSessions
+            var linksBySessionID: [UUID: [SessionLink]] = [:]
+            for session in reviewSessions {
+                linksBySessionID[session.id] = appState.links(for: session.id)
+            }
+
+            let plan = decideReviewKickoffs(
+                requests: requests,
+                patterns: patterns,
+                reviewSessions: reviewSessions,
+                linksBySessionID: linksBySessionID,
+                alreadyKicked: autoReviewed
+            )
+            autoReviewed.formUnion(plan.newFingerprints)
+
+            // On head-advance, tear down the stale round-1 review session before
+            // enqueuing the new head's clone so `reviewSessions` doesn't double up
+            // for the same PR (B-fallback). Completing it here (synchronously, main
+            // actor) removes it from `reviewSessions` first; the
+            // `existingReviewSession` guard inside `createReviewSession` still
+            // covers the ~10s clone window (CROW-406).
+            for staleID in plan.completeStaleSessionIDs {
+                appState.onCompleteSession?(staleID)
+            }
+            for url in plan.kickoffPRURLs {
                 Task { _ = await reviewSerializer.enqueue { await sessionService.createReviewSession(prURL: url, selectAfterCreate: false) } }
             }
         }
+    }
+
+    /// A reviewer-side re-review plan computed from one refresh's review
+    /// requests: which stale round-1 review sessions to complete and which PR
+    /// URLs to enqueue a fresh clone for. Pure + `Equatable` so the kickoff
+    /// decision (including the CROW-756 `shaAdvanced` branch and the
+    /// stale-session teardown) is unit-testable without AppState/tmux.
+    struct ReviewKickoffPlan: Equatable {
+        var completeStaleSessionIDs: [UUID] = []
+        var kickoffPRURLs: [String] = []
+        /// SHA-keyed fingerprints consumed this pass; the caller folds these into
+        /// its persistent dedup set so an unchanged head never re-kicks.
+        var newFingerprints: [String] = []
+    }
+
+    /// Decide review-session kickoffs for a refresh, mirroring legacy
+    /// `AppDelegate.onReviewRequestsRefreshed` (dropped in the headless-engine
+    /// port, ADR 0008). Two kickoff signals:
+    ///
+    /// 1. **Create-once:** no review session exists yet for the PR
+    ///    (`reviewSessionID == nil` *and* no `existingReviewSession(forPRURL:)`).
+    /// 2. **`shaAdvanced` (CROW-756):** a linked review session exists but the PR
+    ///    head advanced past what it last reviewed
+    ///    (`lastReviewedHeadSha != headRefOid`) — a force-push or round-2 commits
+    ///    after a `CHANGES_REQUESTED`. The stale session is completed and a fresh
+    ///    one spun up against the advanced head (not re-dispatched in place).
+    ///
+    /// Deduped by a SHA-keyed `(request.id, headRefOid)` fingerprint against
+    /// `alreadyKicked`, so a burst of refreshes on the same head enqueues once and
+    /// an unchanged head never re-kicks (the regression guard).
+    ///
+    /// Agent-agnostic: keyed only on review requests + sessions, so it re-reviews
+    /// for any `AgentKind` (the reported repro was a Cursor review session).
+    nonisolated static func decideReviewKickoffs(
+        requests: [ReviewRequest],
+        patterns: [String],
+        reviewSessions: [Session],
+        linksBySessionID: [UUID: [SessionLink]],
+        alreadyKicked: Set<String>
+    ) -> ReviewKickoffPlan {
+        var plan = ReviewKickoffPlan()
+        var consumed = alreadyKicked
+        for request in requests {
+            guard repoMatchesPatterns(request.repo, patterns: patterns) else { continue }
+
+            // Authoritative "already has a review session?" lookup by PR URL,
+            // mirroring `AppState.existingReviewSession` (`reviewSessions` already
+            // excludes completed/archived). Preferred over the one-tick-lagging
+            // `reviewSessionID` cross-reference (CROW-406).
+            let existingByPR = reviewSessions.first { session in
+                (linksBySessionID[session.id] ?? []).contains {
+                    $0.linkType == .pr && $0.url == request.url
+                }
+            }
+            let linkedSession = request.reviewSessionID.flatMap { id in
+                reviewSessions.first { $0.id == id }
+            } ?? existingByPR
+
+            let shaAdvanced = linkedSession != nil
+                && request.headRefOid != nil
+                && linkedSession?.lastReviewedHeadSha != request.headRefOid
+
+            guard (request.reviewSessionID == nil && existingByPR == nil) || shaAdvanced else { continue }
+
+            let fingerprint = "\(request.id)\n\(request.headRefOid ?? "")"
+            guard consumed.insert(fingerprint).inserted else { continue }
+            plan.newFingerprints.append(fingerprint)
+
+            if shaAdvanced, let staleID = linkedSession?.id {
+                plan.completeStaleSessionIDs.append(staleID)
+            }
+            plan.kickoffPRURLs.append(request.url)
+        }
+        return plan
     }
 
     /// Drive `IssueTracker.refresh()` on an explicit async tick. The tracker's
