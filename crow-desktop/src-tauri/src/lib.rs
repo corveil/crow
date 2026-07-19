@@ -90,6 +90,54 @@ fn wait_for_port(timeout: Duration) -> bool {
     false
 }
 
+/// Force-enable this app's accessibility so the embedded WKWebView exposes its
+/// web-content accessibility tree to the macOS Accessibility (AX) API (CROW-750).
+///
+/// The web UI runs in a WKWebView, which builds its AX tree out-of-process and
+/// only *lazily* — WebKit (like Chromium/Gecko) waits until the host app's
+/// `NSApplication.accessibilityEnhancedUserInterface` is set (the flag VoiceOver
+/// flips) before it exposes the DOM to the AX API. Safari sets this proactively;
+/// a bare wry WKWebView never does. So AX-based dictation tools (Wispr Flow) and
+/// other non-VoiceOver assistive clients see *no* focused text field and fall
+/// back to "click where to paste" instead of pasting on mic release. In a plain
+/// browser the tree is exposed, which is why dictation only breaks in the app.
+///
+/// We set the flag directly on our own `NSApplication` (the internal AppKit
+/// setter — self-targeting needs no accessibility permission). Note: driving the
+/// *same* attribute through the AX API against our own pid returns
+/// `kAXErrorNotImplemented` (that path is only meant for a second process like
+/// VoiceOver), so the direct property setter is the one that actually takes.
+///
+/// Must run on the main thread (it touches `NSApplication`). Known trade-off:
+/// this attribute also nudges some window-manager/zoom behavior once (it
+/// disables a couple of window animations) — benign for a single-window app.
+#[cfg(target_os = "macos")]
+fn enable_webkit_accessibility() {
+    use objc2::msg_send;
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::NSApplication;
+
+    let Some(mtm) = MainThreadMarker::new() else {
+        eprintln!("[crow-desktop] a11y enable skipped: not on the main thread");
+        return;
+    };
+    let app = NSApplication::sharedApplication(mtm);
+    // Safety: `app` is the live shared NSApplication; the selector takes a BOOL.
+    unsafe {
+        let _: () = msg_send![&app, setAccessibilityEnhancedUserInterface: true];
+        // Opt-in readback for verifying the flag actually took at runtime
+        // (`CROW_AX_DEBUG=1`); silent otherwise.
+        if std::env::var_os("CROW_AX_DEBUG").is_some() {
+            let on: bool = msg_send![&app, isAccessibilityEnhancedUserInterface];
+            eprintln!("[crow-desktop][a11y] accessibilityEnhancedUserInterface = {on}");
+        }
+    }
+}
+
+/// No-op on non-macOS: the AX/WKWebView plumbing this addresses is macOS-only.
+#[cfg(not(target_os = "macos"))]
+fn enable_webkit_accessibility() {}
+
 /// Native menu: a Crow app menu, standard Edit (so copy/paste shortcuts work in
 /// the web UI), a View menu with Reload (handy for a web frontend), and Window.
 fn build_menu(app: &tauri::App) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
@@ -151,6 +199,12 @@ pub fn run() {
         .setup(|app| {
             let menu = build_menu(app)?;
             app.set_menu(menu)?;
+
+            // Enable accessibility before the real UI loads so the WKWebView's
+            // WebContent process inherits the enabled state and exposes its AX
+            // tree to dictation/assistive tools (CROW-750). Re-asserted after
+            // navigate() below as belt-and-suspenders.
+            enable_webkit_accessibility();
 
             // Reuse an already-running crowd; otherwise spawn our own sidecar.
             // Only reuse a listener that identifies as crowd (review #7).
@@ -219,6 +273,13 @@ pub fn run() {
                     match format!("http://127.0.0.1:{}", port()).parse() {
                         Ok(url) => {
                             let _ = win.navigate(url);
+                            // Re-assert accessibility for the freshly navigated
+                            // document's WebContent process (CROW-750). The flag
+                            // is app-global, but re-setting it is cheap and keeps
+                            // the guarantee independent of process (re)spawn order.
+                            // We're on a worker thread here; the NSApplication
+                            // setter must run on the main thread.
+                            let _ = handle.run_on_main_thread(enable_webkit_accessibility);
                         }
                         Err(e) => eprintln!("[crow-desktop] bad crowd url: {e}"),
                     }
