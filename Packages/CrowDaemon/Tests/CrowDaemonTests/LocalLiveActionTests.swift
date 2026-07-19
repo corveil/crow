@@ -21,7 +21,7 @@ import CrowPersistence
     @MainActor
     private func offlineRouter(appState: AppState) -> CommandRouter {
         makeCommandRouter(
-            appState: appState, store: JSONStore(), git: GitManager(),
+            appState: appState, store: JSONStore.temporary(), git: GitManager(),
             devRoot: NSTemporaryDirectory(), cockpit: nil)
     }
 
@@ -110,7 +110,7 @@ import CrowPersistence
         jobScheduler: JobScheduler? = nil
     ) -> CommandRouter {
         makeCommandRouter(
-            appState: appState, store: JSONStore(), git: GitManager(),
+            appState: appState, store: JSONStore.temporary(), git: GitManager(),
             devRoot: NSTemporaryDirectory(), cockpit: nil,
             tracker: tracker, sessionService: sessionService, autoRespond: autoRespond,
             jobScheduler: jobScheduler)
@@ -130,7 +130,7 @@ import CrowPersistence
         // Tracker present → the local path is entered; a missing session_id is
         // then a param error (proves we didn't stop at the tracker guard).
         let appState = AppState()
-        let tracker = IssueTracker(appState: appState, providerManager: ProviderManager())
+        let tracker = IssueTracker(appState: appState, providerManager: ProviderManager(), store: .temporary())
         for method in ["mark-issue-done", "add-merge-label"] {
             let resp = await router(appState: appState, tracker: tracker)
                 .handle(request: JSONRPCRequest(id: 1, method: method))
@@ -149,7 +149,7 @@ import CrowPersistence
     @Test @MainActor func deleteSessionRejectsManagerSession() async {
         let appState = AppState()
         let service = SessionService(
-            store: JSONStore(), appState: appState,
+            store: JSONStore.temporary(), appState: appState,
             providerManager: ProviderManager(), hostBridge: NoopHostBridge())
         let resp = await router(appState: appState, sessionService: service).handle(request: JSONRPCRequest(
             id: 1, method: "delete-session",
@@ -172,7 +172,7 @@ import CrowPersistence
         // param error (proves we didn't stop at the scheduler guard).
         let appState = AppState()
         let service = SessionService(
-            store: JSONStore(), appState: appState,
+            store: JSONStore.temporary(), appState: appState,
             providerManager: ProviderManager(), hostBridge: NoopHostBridge())
         let scheduler = JobScheduler(appState: appState, sessionService: service)
         let resp = await router(appState: appState, jobScheduler: scheduler)
@@ -299,8 +299,11 @@ import CrowPersistence
         AgentRegistry.shared.register(ClaudeCodeAgent())
         // A session that completed before this daemon started: its snapshot lives
         // in store.json, but a fresh appState is empty until reseed mirrors it.
-        let session = Session(name: "s", kind: .work, agentKind: .claudeCode)
-        let store = JSONStore()
+        // Sentinel fixture name (#764): if this ever reached a real store despite
+        // the guardrail, the stray record names itself as test data instead of
+        // masquerading as corruption (the lone survivor here was named "s").
+        let session = Session(name: "__TEST__SessionAnalyticsStrip", kind: .work, agentKind: .claudeCode)
+        let store = JSONStore.temporary()
         store.mutate { data in
             data.sessions = [session]
             data.analyticsSnapshots = [session.id.uuidString: snapshot(for: session.id)]
@@ -324,7 +327,7 @@ import CrowPersistence
         let session = Session(name: "s", kind: .work, agentKind: .claudeCode)
         let appState = AppState()
         appState.sessions = [session]
-        let resp = await router(appState: appState, store: JSONStore())
+        let resp = await router(appState: appState, store: JSONStore.temporary())
             .handle(request: JSONRPCRequest(id: 1, method: "list-sessions-live"))
         let entry = resp.result?["sessions"]?.objectValue?[session.id.uuidString]?.objectValue
         #expect(entry != nil)
@@ -337,7 +340,7 @@ import CrowPersistence
         let appState = AppState()
         appState.sessions = [manager]
         appState.analyticsSnapshots[manager.id.uuidString] = snapshot(for: manager.id)
-        let resp = await router(appState: appState, store: JSONStore())
+        let resp = await router(appState: appState, store: JSONStore.temporary())
             .handle(request: JSONRPCRequest(id: 1, method: "list-sessions-live"))
         let entry = resp.result?["sessions"]?.objectValue?[manager.id.uuidString]?.objectValue
         #expect(entry != nil)

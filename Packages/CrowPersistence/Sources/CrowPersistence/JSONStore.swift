@@ -115,7 +115,21 @@ public final class JSONStore: Sendable {
     }
 
     public init(directory: URL? = nil) {
-        let dir = directory ?? AppSupportDirectory.url
+        let dir: URL
+        if let directory {
+            dir = directory
+        } else {
+            // Test-isolation guardrail (#764, ADR 0012): a bare `JSONStore()`
+            // under a test process would open the LIVE store
+            // (~/Library/Application Support/crow/store.json) and a subsequent
+            // full-snapshot `mutate` would wipe the developer's real sessions —
+            // exactly the incident this ticket fixed. Trap loudly instead of
+            // silently mutating live data. Only the default (nil-directory) path
+            // is gated, so explicit-temp-dir test stores and production `crowd`
+            // (never run under a test runner) are both unaffected.
+            Self.trapIfConstructingLivePathUnderTests()
+            dir = AppSupportDirectory.url
+        }
 
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         self.fileURL = dir.appendingPathComponent("store.json")
@@ -137,6 +151,41 @@ public final class JSONStore: Sendable {
         } else {
             self._data = StoreData()
         }
+    }
+
+    /// Fail-fast when a `JSONStore()` with no explicit `directory:` is built
+    /// inside a test process. Covers the runners Crow's suites actually use:
+    ///
+    /// - **swift-testing via SwiftPM** (`swift test` / `make test`, the path in
+    ///   #764): the host executable is `swiftpm-testing-helper`; XCTest is *not*
+    ///   linked and no XCTest env vars are set, so we key off the runner name.
+    /// - **XCTest / Xcode**: `XCTestCase` is linked into the test bundle, and the
+    ///   host runs from an `.xctest` bundle with `XCTestConfigurationFilePath` set.
+    ///
+    /// None of these signals are present in the shipping `crowd`/app binaries, so
+    /// production is never gated. See `docs/adr/0012-tests-never-touch-live-data.md`.
+    private static func isRunningUnderTests() -> Bool {
+        if NSClassFromString("XCTestCase") != nil { return true }
+        let env = ProcessInfo.processInfo.environment
+        if env["XCTestConfigurationFilePath"] != nil || env["XCTestBundlePath"] != nil { return true }
+        let arg0 = CommandLine.arguments.first
+        let runnerNames: Set<String> = ["swiftpm-testing-helper", "xctest"]
+        if let base = (arg0 as NSString?)?.lastPathComponent, runnerNames.contains(base) { return true }
+        if runnerNames.contains(ProcessInfo.processInfo.processName) { return true }
+        if arg0?.contains(".xctest") == true { return true }
+        return false
+    }
+
+    private static func trapIfConstructingLivePathUnderTests() {
+        guard isRunningUnderTests() else { return }
+        fatalError("""
+            JSONStore() was constructed with the default LIVE store path \
+            (\(AppSupportDirectory.url.appendingPathComponent("store.json").path)) \
+            under a test process. A full-store `mutate` would clobber the \
+            developer's real sessions (#764). Inject an explicit temp directory \
+            instead — e.g. `JSONStore.temporary()` or \
+            `JSONStore(directory: NSTemporaryDirectory()…)`. See ADR 0012.
+            """)
     }
 
     public func mutate(_ transform: (inout StoreData) -> Void) {

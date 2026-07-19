@@ -233,7 +233,7 @@ public final class IssueTracker {
     /// fails; a restart retries, which is the desired recovery path.
     private var changedFilesFetchAttempted: Set<String> = []
 
-    public init(appState: AppState, providerManager: ProviderManager, store: JSONStore = JSONStore()) {
+    public init(appState: AppState, providerManager: ProviderManager, store: JSONStore) {
         self.appState = appState
         self.providerManager = providerManager
         self.store = store

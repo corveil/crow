@@ -19,7 +19,7 @@ import CrowPersistence
     private func offlineRouter() -> CommandRouter {
         makeCommandRouter(
             appState: AppState(),
-            store: JSONStore(),
+            store: JSONStore.temporary(),
             git: GitManager(),
             devRoot: NSTemporaryDirectory(),
             cockpit: nil)
@@ -115,7 +115,7 @@ import CrowPersistence
         AgentRegistry.shared.register(ClaudeCodeAgent())
 
         let router = makeCommandRouter(
-            appState: AppState(), store: JSONStore(), git: GitManager(),
+            appState: AppState(), store: JSONStore.temporary(), git: GitManager(),
             devRoot: NSTemporaryDirectory(), cockpit: nil)
 
         let resp = await router.handle(request: JSONRPCRequest(id: 1, method: "list-agents"))
@@ -142,9 +142,9 @@ import CrowPersistence
                 url: "https://github.com/acme/api/issues/7", repo: "acme/api",
                 provider: .github, projectStatus: .backlog),
         ]
-        let tracker = IssueTracker(appState: appState, providerManager: ProviderManager())
+        let tracker = IssueTracker(appState: appState, providerManager: ProviderManager(), store: .temporary())
         let router = makeCommandRouter(
-            appState: appState, store: JSONStore(), git: GitManager(),
+            appState: appState, store: JSONStore.temporary(), git: GitManager(),
             devRoot: NSTemporaryDirectory(), cockpit: nil, tracker: tracker)
 
         let resp = await router.handle(request: JSONRPCRequest(id: 1, method: "list-tickets"))
@@ -159,7 +159,7 @@ import CrowPersistence
         appState.allowEntries = [AllowEntry(pattern: "Bash(npm test:*)", sources: [.global])]
         let allowList = AllowListService(appState: appState, devRoot: NSTemporaryDirectory())
         let router = makeCommandRouter(
-            appState: appState, store: JSONStore(), git: GitManager(),
+            appState: appState, store: JSONStore.temporary(), git: GitManager(),
             devRoot: NSTemporaryDirectory(), cockpit: nil, allowList: allowList)
 
         let resp = await router.handle(request: JSONRPCRequest(id: 1, method: "list-allowlist"))
@@ -188,7 +188,7 @@ import CrowPersistence
     @MainActor
     private func offlineRouter(devRoot: String) -> CommandRouter {
         makeCommandRouter(
-            appState: AppState(), store: JSONStore(), git: GitManager(),
+            appState: AppState(), store: JSONStore.temporary(), git: GitManager(),
             devRoot: devRoot, cockpit: nil)
     }
 
