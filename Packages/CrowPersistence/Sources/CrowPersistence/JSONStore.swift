@@ -74,6 +74,21 @@ public final class JSONStore: Sendable {
     private let writeLock = NSLock()
     /// Highest sequence already persisted, guarded by `writeLock`.
     private nonisolated(unsafe) var lastWrittenSeq: UInt64 = 0
+    /// File signature (mtime + size) captured after our most recent authored
+    /// write, or after `init`/`reload` adopted the on-disk file. Guarded by
+    /// `writeLock`. The external-writer tripwire compares the live file against
+    /// this before each `mutate` (and in `reload`): a mismatch means a *second*
+    /// process wrote `store.json` under us — the single-writer violation that
+    /// silently wipes sessions, since `mutate` rewrites the whole file (CROW-759).
+    /// Diagnostic only; the daemon's store-writer flock is the enforcement.
+    private nonisolated(unsafe) var lastKnownStat: StatSignature?
+
+    /// mtime + size of `store.json` — a cheap change-detection signature for the
+    /// external-writer tripwire (CROW-759).
+    private struct StatSignature: Equatable {
+        let mtime: TimeInterval
+        let size: Int
+    }
 
     public var data: StoreData {
         lock.lock()
@@ -101,9 +116,17 @@ public final class JSONStore: Sendable {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         guard let decoded = try? decoder.decode(StoreData.self, from: data) else { return }
+        // Tripwire (CROW-759): a reload that finds the file changed since our last
+        // authored write is picking up a *second writer* — flag it before adopting.
+        checkForExternalWrite(context: "reload")
         lock.lock()
         _data = decoded
         lock.unlock()
+        // The file we just read is now our baseline; the next `mutate` compares
+        // against it rather than re-flagging the same external write forever.
+        writeLock.lock()
+        lastKnownStat = Self.statSignature(fileURL)
+        writeLock.unlock()
     }
 
     public init(directory: URL? = nil) {
@@ -129,9 +152,18 @@ public final class JSONStore: Sendable {
         } else {
             self._data = StoreData()
         }
+        // Seed the external-writer tripwire baseline (CROW-759): the file we just
+        // loaded (if any) is our starting point, so a change before the first
+        // `mutate` is attributable to another writer. `nil` when no file exists yet.
+        self.lastKnownStat = Self.statSignature(fileURL)
     }
 
     public func mutate(_ transform: (inout StoreData) -> Void) {
+        // External-writer tripwire (CROW-759): if store.json changed under us since
+        // our last authored write, a second process is writing it — log LOUD before
+        // we overwrite the whole file with our snapshot and wipe its changes.
+        checkForExternalWrite(context: "mutate")
+
         // Apply the mutation and snapshot under `lock`, then release it before
         // touching disk. Holding `lock` across the encode + atomic write blocks
         // every reader (`data`) and other mutators for the full duration of the
@@ -154,6 +186,35 @@ public final class JSONStore: Sendable {
         guard mySeq > lastWrittenSeq else { return }
         lastWrittenSeq = mySeq
         Self.save(snapshot, to: fileURL)
+        // Record the signature of the file we just authored so the next tripwire
+        // check compares against our own write, not a stale baseline (CROW-759).
+        lastKnownStat = Self.statSignature(fileURL)
+    }
+
+    /// Fire the external-writer tripwire if `store.json` changed under us since our
+    /// last authored write. Diagnostic safety net for CROW-759: the daemon's
+    /// store-writer flock should make a second writer impossible, so if this ever
+    /// logs, a bypass slipped through and is now attributable (stamped with pid).
+    private func checkForExternalWrite(context: String) {
+        writeLock.lock()
+        let known = lastKnownStat
+        writeLock.unlock()
+        guard let known else { return }                                  // no authored write yet
+        guard let current = Self.statSignature(fileURL) else { return }  // gone/unreadable — skip
+        guard current != known else { return }
+        NSLog("[JSONStore] EXTERNAL WRITE DETECTED (\(context)) — a second writer is touching "
+            + "store.json (pid \(ProcessInfo.processInfo.processIdentifier)); the single-writer invariant "
+            + "is violated and the next whole-file write will clobber it (CROW-759). "
+            + "expected mtime=\(known.mtime) size=\(known.size), found mtime=\(current.mtime) size=\(current.size)")
+    }
+
+    /// mtime + size of the file at `url`, or nil if it doesn't exist / can't be
+    /// stat'd. Cheap change-detection for the external-writer tripwire.
+    private static func statSignature(_ url: URL) -> StatSignature? {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path) else { return nil }
+        let mtime = (attrs[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
+        let size = (attrs[.size] as? Int) ?? 0
+        return StatSignature(mtime: mtime, size: size)
     }
 
     private static func save(_ data: StoreData, to url: URL) {

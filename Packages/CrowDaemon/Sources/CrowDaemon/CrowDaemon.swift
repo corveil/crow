@@ -49,6 +49,28 @@ public enum CrowDaemon {
         }
 
         let store = JSONStore()
+
+        // Single-WRITER guard for store.json (CROW-759): the socket lock above is
+        // keyed to --socket, but the store directory is fixed regardless of
+        // --socket, so two daemons on *different* sockets both write the same
+        // store.json. Because JSONStore.mutate rewrites the WHOLE file, the loser's
+        // stale full-file save silently wipes every session the winner added
+        // ("all my sessions disappeared"). This store-scoped flock (beside the
+        // store, `store.json.writer.lock`) refuses a second writer for the same
+        // store dir regardless of socket. Fails CLOSED — unlike the socket lock, a
+        // lock-file open() error refuses to start rather than running unguarded,
+        // because an unenforced single-writer invariant is the exact footgun.
+        guard acquireStoreWriterLock(storeURL: store.storeURL) else {
+            log("Another crowd already owns the store at \(store.storeURL.path) — exiting. "
+                + "Only ONE writer of store.json is allowed, regardless of --socket (CROW-759).")
+            exit(1)
+        }
+
+        // Startup provenance (CROW-759): socket + store + pid, so a second instance
+        // (or a store-path surprise) is obvious in the log the user already tails.
+        log("started — pid \(ProcessInfo.processInfo.processIdentifier), "
+            + "socket \(options.socketPath), store \(store.storeURL.path)")
+
         let git = GitManager()
         let appState = await seedAppState(from: store)
         // Apply config-derived AppState fields (rc, auto-permission modes, board
@@ -316,6 +338,13 @@ public enum CrowDaemon {
         if singleInstanceLockFD >= 0 {
             close(singleInstanceLockFD)
             singleInstanceLockFD = -1
+        }
+        // Same reasoning for the store-writer lock: an inherited fd would keep the
+        // flock and the re-exec'd image's `acquireStoreWriterLock` would fail
+        // closed, killing the restart (CROW-759).
+        if storeWriterLockFD >= 0 {
+            close(storeWriterLockFD)
+            storeWriterLockFD = -1
         }
         guard let argv0 = argv.first, !argv0.isEmpty else {
             log("re-exec failed: empty argv")
@@ -717,6 +746,44 @@ public enum CrowDaemon {
             return false
         }
         singleInstanceLockFD = fd
+        return true
+    }
+
+    /// Held for the process lifetime once acquired — closing the fd drops the
+    /// `flock`, so the OS reclaims the store-writer lock on exit or crash. See
+    /// `singleInstanceLockFD` for the `nonisolated(unsafe)` rationale.
+    nonisolated(unsafe) private static var storeWriterLockFD: Int32 = -1
+
+    /// Enforce ONE writer of `store.json` regardless of `--socket` via an advisory
+    /// `flock` on `<storeDir>/store.json.writer.lock`.
+    ///
+    /// `acquireSingleInstanceLock` is keyed to the *socket* path, but the store
+    /// directory (`AppSupportDirectory`) is fixed, so two daemons launched with
+    /// distinct `--socket` values both pass that guard and write the same
+    /// `store.json`. Because `JSONStore.mutate` rewrites the entire file, the
+    /// loser's stale full-file save silently wipes every session the winner knew
+    /// about — the "all my sessions disappeared" report (CROW-759). This lock,
+    /// keyed to the store file, makes the second writer fail here.
+    ///
+    /// Fails **CLOSED**: unlike the socket lock (which fails open on a lock-file
+    /// error to never block a daemon over a weird lock dir), a store-writer
+    /// lock-file `open()` error returns false so the caller refuses to start.
+    /// Running unguarded is exactly the corruption this exists to prevent.
+    /// Returns false when another live crowd already holds the store lock.
+    static func acquireStoreWriterLock(storeURL: URL) -> Bool {
+        let lockPath = storeURL.path + ".writer.lock"
+        let fd = lockPath.withCString { open($0, O_CREAT | O_RDWR, 0o600) }
+        guard fd >= 0 else {
+            log("FATAL: could not open store-writer lock \(lockPath) "
+                + "(\(String(cString: strerror(errno)))); refusing to start rather than run without the "
+                + "single-writer guard for store.json (CROW-759)")
+            return false
+        }
+        if flock(fd, LOCK_EX | LOCK_NB) != 0 {
+            close(fd)
+            return false
+        }
+        storeWriterLockFD = fd
         return true
     }
 }

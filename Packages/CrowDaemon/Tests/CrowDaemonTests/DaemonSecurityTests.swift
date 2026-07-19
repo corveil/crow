@@ -192,6 +192,41 @@ import CrowPersistence
     }
 }
 
+/// One WRITER of `store.json` regardless of `--socket` (CROW-759). The socket
+/// lock above is keyed to the socket, but the store directory is fixed, so two
+/// daemons on distinct sockets both write the same file — and because
+/// `JSONStore.mutate` rewrites the whole file, the loser's stale save wipes every
+/// session the winner added. The store-scoped `flock` (on `store.json.writer.lock`
+/// beside the store) refuses the second writer for the same store dir; two
+/// genuinely separate store dirs still coexist.
+@Suite struct StoreWriterLockTests {
+    /// A unique temp `store.json` path (its parent dir created), so each test's
+    /// flock is on a distinct file — matching how a real store dir is laid out.
+    private func tmpStore() -> URL {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("crowd-store-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("store.json")
+    }
+
+    @Test func secondAcquireOnSameStoreDirIsRefused() {
+        let store = tmpStore()
+        defer { try? FileManager.default.removeItem(at: store.deletingLastPathComponent()) }
+        #expect(CrowDaemon.acquireStoreWriterLock(storeURL: store) == true)   // first writer wins
+        #expect(CrowDaemon.acquireStoreWriterLock(storeURL: store) == false)  // second writer refused
+    }
+
+    @Test func distinctStoreDirsCoexist() {
+        let a = tmpStore(), b = tmpStore()
+        defer {
+            try? FileManager.default.removeItem(at: a.deletingLastPathComponent())
+            try? FileManager.default.removeItem(at: b.deletingLastPathComponent())
+        }
+        #expect(CrowDaemon.acquireStoreWriterLock(storeURL: a) == true)
+        #expect(CrowDaemon.acquireStoreWriterLock(storeURL: b) == true)   // separate store → coexists
+    }
+}
+
 /// add-worktree input hardening (CROW-581 review): option-injection and orphan
 /// rows. Both checks run before any git/fs work, so no tmux/app is needed.
 @Suite struct AddWorktreeValidationTests {
