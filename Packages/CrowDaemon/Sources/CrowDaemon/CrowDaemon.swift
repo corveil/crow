@@ -48,6 +48,23 @@ public enum CrowDaemon {
             exit(1)
         }
 
+        // Store-writer guard: the socket lock above is keyed to the socket, but
+        // `store.json` lives at a fixed app-support path regardless of --socket,
+        // so two daemons on DIFFERENT sockets would still both write it — and
+        // because every mutate rewrites the whole file, the loser's sessions
+        // vanish silently. Lock the store itself (fail closed) so exactly one
+        // crowd may write it, whatever --socket each was launched with (#759).
+        let storeDirectory = JSONStore.defaultDirectory
+        guard acquireStoreWriterLock(storeDirectory: storeDirectory) else {
+            log("FATAL: another process already holds the store writer lock for "
+                + "\(storeDirectory.path) — refusing to start. Only ONE crowd may write store.json, "
+                + "regardless of --socket. Stop the other daemon first (a second writer silently "
+                + "clobbers every session the first one knew about).")
+            exit(1)
+        }
+
+        log("started: pid \(getpid()); socket \(options.socketPath); store \(storeDirectory.appendingPathComponent("store.json").path)")
+
         let store = JSONStore()
         let git = GitManager()
         let appState = await seedAppState(from: store)
@@ -316,6 +333,13 @@ public enum CrowDaemon {
         if singleInstanceLockFD >= 0 {
             close(singleInstanceLockFD)
             singleInstanceLockFD = -1
+        }
+        // Same rationale for the store lock (#759): an inherited fd keeps the
+        // flock held, so the re-exec'd image's fail-closed store guard would
+        // refuse to start.
+        if storeWriterLockFD >= 0 {
+            close(storeWriterLockFD)
+            storeWriterLockFD = -1
         }
         guard let argv0 = argv.first, !argv0.isEmpty else {
             log("re-exec failed: empty argv")
@@ -717,6 +741,50 @@ public enum CrowDaemon {
             return false
         }
         singleInstanceLockFD = fd
+        return true
+    }
+
+    /// Held for the process lifetime once acquired — closing the fd drops the
+    /// `flock`. Separate from `singleInstanceLockFD` because it guards a
+    /// different resource: the STORE, not the socket. `nonisolated(unsafe)`:
+    /// written once during single-threaded startup, then only kept alive.
+    nonisolated(unsafe) private static var storeWriterLockFD: Int32 = -1
+
+    /// Enforce ONE writer of `store.json` regardless of `--socket`, via an
+    /// advisory `flock` on `<storeDirectory>/store.json.writer.lock`.
+    ///
+    /// The socket lock (`acquireSingleInstanceLock`) is keyed to the socket
+    /// path, but `store.json` lives at a fixed app-support location no matter
+    /// which `--socket` a daemon uses — so two daemons on different sockets both
+    /// pass the socket guard and then race the same file. Because
+    /// `JSONStore.mutate` rewrites the entire `StoreData`, a stale full-file
+    /// write silently clobbers every session the other writer knew about
+    /// ("all my sessions disappeared" — #759). This store-scoped lock closes
+    /// that gap.
+    ///
+    /// Unlike the socket lock, this one **fails CLOSED**: if the lock file can't
+    /// even be opened we refuse to run rather than write unguarded, because the
+    /// blast radius of a lost race is the user's entire session history.
+    /// Returns false when another live crowd already holds the store lock.
+    static func acquireStoreWriterLock(storeDirectory: URL) -> Bool {
+        // `open(O_CREAT)` needs the parent dir; on a fresh install it doesn't
+        // exist yet (JSONStore.init creates it, but we lock BEFORE constructing
+        // the store). Create it here so a first-run daemon locks cleanly instead
+        // of failing closed on ENOENT.
+        try? FileManager.default.createDirectory(at: storeDirectory, withIntermediateDirectories: true)
+        let lockPath = storeDirectory.appendingPathComponent("store.json.writer.lock").path
+        let fd = lockPath.withCString { open($0, O_CREAT | O_RDWR, 0o600) }
+        guard fd >= 0 else {
+            log("FATAL: could not open store writer lock \(lockPath) "
+                + "(\(String(cString: strerror(errno)))); refusing to start (fail closed) rather "
+                + "than write store.json unguarded and risk clobbering another writer's sessions.")
+            return false
+        }
+        if flock(fd, LOCK_EX | LOCK_NB) != 0 {
+            close(fd)
+            return false
+        }
+        storeWriterLockFD = fd
         return true
     }
 }

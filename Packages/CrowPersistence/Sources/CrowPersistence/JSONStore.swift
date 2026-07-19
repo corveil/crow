@@ -82,6 +82,21 @@ public final class JSONStore: Sendable {
     private let writeLock = NSLock()
     /// Highest sequence already persisted, guarded by `writeLock`.
     private nonisolated(unsafe) var lastWrittenSeq: UInt64 = 0
+    /// (mtime, size) of `store.json` as of our own last write/reload, or nil
+    /// until we've touched it. Guarded by `writeLock`. Lets us notice a SECOND
+    /// process writing the file out from under us: `JSONStore.mutate` rewrites
+    /// the whole `StoreData`, so a stray external write silently clobbers our
+    /// view. The daemon enforces a single writer via an flock (#759); this is
+    /// the diagnostic tripwire that makes any future bypass attributable in the
+    /// console the user already tails.
+    private nonisolated(unsafe) var lastWrittenSignature: FileSignature?
+
+    /// A cheap fingerprint of `store.json` — enough to spot that *someone else*
+    /// rewrote it since we last did (#759).
+    private struct FileSignature: Equatable {
+        let modified: Date
+        let size: Int
+    }
 
     public var data: StoreData {
         lock.lock()
@@ -93,6 +108,11 @@ public final class JSONStore: Sendable {
     /// `crowd` daemon) can watch it for external writes and `reload()`
     /// (CROW-581).
     public var storeURL: URL { fileURL }
+
+    /// The default on-disk directory for `store.json` — the shared app-support
+    /// dir, fixed regardless of any `--socket`. The daemon locks a file beside
+    /// the store here to enforce a single store writer (#759).
+    public static var defaultDirectory: URL { AppSupportDirectory.url }
 
     /// Last-modification date of `store.json`, or nil if it doesn't exist yet.
     /// Cheap change-detection for a polling reloader.
@@ -109,6 +129,13 @@ public final class JSONStore: Sendable {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         guard let decoded = try? decoder.decode(StoreData.self, from: data) else { return }
+        // Adopting a disk copy we didn't write is exactly the single-writer
+        // violation the tripwire watches for; check + re-baseline before we
+        // overwrite our in-memory view (#759).
+        writeLock.lock()
+        detectExternalWrite(context: "reload")
+        lastWrittenSignature = currentSignature()
+        writeLock.unlock()
         lock.lock()
         _data = decoded
         lock.unlock()
@@ -209,8 +236,38 @@ public final class JSONStore: Sendable {
         writeLock.lock()
         defer { writeLock.unlock() }
         guard mySeq > lastWrittenSeq else { return }
+        // Before overwriting the whole file, notice if a second writer touched
+        // it since our last write — otherwise its records vanish silently (#759).
+        detectExternalWrite(context: "before write")
         lastWrittenSeq = mySeq
         Self.save(snapshot, to: fileURL)
+        lastWrittenSignature = currentSignature()
+    }
+
+    /// Current `(mtime, size)` fingerprint of `store.json`, or nil if it can't
+    /// be stat'd (missing file / error). Diagnostic-only (#759).
+    private func currentSignature() -> FileSignature? {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
+              let modified = attrs[.modificationDate] as? Date,
+              let size = attrs[.size] as? Int else { return nil }
+        return FileSignature(modified: modified, size: size)
+    }
+
+    /// If `store.json` changed since our last write/reload, a SECOND process is
+    /// writing it — log LOUD and pid-stamped so the bypass is immediately
+    /// attributable. Diagnostic only: it never alters behavior (the flock in
+    /// `crowd` is the actual enforcement — #759). No-op until we've written once
+    /// (`lastWrittenSignature == nil`). Must be called under `writeLock`.
+    private func detectExternalWrite(context: String) {
+        guard let expected = lastWrittenSignature, let actual = currentSignature(),
+              actual != expected else { return }
+        NSLog(
+            "[JSONStore] EXTERNAL WRITE DETECTED (%@): store.json at %@ changed under pid %d "
+                + "— a second writer is touching store.json (expected mtime=%@ size=%d, "
+                + "found mtime=%@ size=%d). Whole-file writes mean the losing writer's sessions "
+                + "vanish; only ONE crowd may write this store.",
+            context, fileURL.path, getpid(),
+            "\(expected.modified)", expected.size, "\(actual.modified)", actual.size)
     }
 
     private static func save(_ data: StoreData, to url: URL) {
