@@ -198,7 +198,7 @@ import CrowPersistence
     @MainActor
     private func router() -> CommandRouter {
         makeCommandRouter(
-            appState: AppState(), store: JSONStore(), git: GitManager(),
+            appState: AppState(), store: JSONStore.temporary(), git: GitManager(),
             devRoot: NSTemporaryDirectory(), cockpit: nil)
     }
 
