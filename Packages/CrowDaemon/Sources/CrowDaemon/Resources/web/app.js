@@ -516,6 +516,19 @@ const selectedSessionIDs = new Set();
 // ticked for the batch "Start Working (N)" action.
 let ticketSelectionMode = false;
 const selectedIssueIDs = new Set();
+// CROW-751 board controls (session-only, like ticketFilter/ticketSearch above).
+let ticketRepoFilter = 'All';     // repo selector; 'All' or a repo slug ("org/repo")
+let ticketSort = 'updated_desc';  // one of TICKET_SORT_OPTIONS keys
+const expandedIssueURLs = new Set(); // urls whose description excerpt is expanded
+// Sort control options (value → label). Replaces the old hardcoded updated-desc.
+const TICKET_SORT_OPTIONS = [
+  ['updated_desc', 'Updated (newest)'],
+  ['updated_asc', 'Updated (oldest)'],
+  ['created_desc', 'Created (newest)'],
+  ['created_asc', 'Created (oldest)'],
+  ['title_asc', 'Title (A–Z)'],
+  ['status', 'Status'],
+];
 const PIPELINE = ['All', 'Backlog', 'Ready', 'In Progress', 'In Review', 'Done'];
 // Ticket pipeline status → accent color, keyed by CrowCore TicketStatus.rawValue.
 // Paired with TICKET_STATUS_ICON below as the single source of truth for the pipeline
@@ -988,6 +1001,7 @@ const ICONS = {
   help: '<circle cx="8" cy="8" r="5.8"/><path d="M6.3 6.5a1.7 1.7 0 1 1 2.4 1.6c-.5.3-.7.6-.7 1.1v.3"/><path d="M8 11.3v.15"/>',
   code: '<path d="M6 5 2.5 8 6 11"/><path d="M10 5l3.5 3-3.5 3"/>',
   terminal: '<rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M4.5 6.5 6.5 8l-2 1.5"/><path d="M8 9.5h3"/>',
+  comment: '<path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z"/>',
 };
 function icon(name, size) {
   const span = el('span', 'ico');
@@ -2366,17 +2380,60 @@ function boardFilterInput(cls, value, placeholder, onValue) {
   return input;
 }
 
+// #751: shared board <select> control (repo filter / sort). Mutates state via
+// onValue then fully re-renders, mirroring boardFilterInput's flow. `options`
+// is an array of [value, label] pairs.
+function boardSelect(cls, options, value, onValue) {
+  const sel = document.createElement('select');
+  sel.className = 'board-select ' + cls;
+  for (const [val, label] of options) {
+    const o = document.createElement('option');
+    o.value = val;
+    o.textContent = label;
+    if (val === value) o.selected = true;
+    sel.appendChild(o);
+  }
+  sel.onchange = () => { onValue(sel.value); renderBoard(); };
+  return sel;
+}
+
+// #751: apply the active sort. Dates are ISO-8601, so a string compare orders
+// them; title is case-insensitive; status uses the PIPELINE index (Backlog→Done)
+// with updated-desc as a tiebreak.
+function sortIssues(issues) {
+  const arr = issues.slice();
+  const s = (a, b) => a.localeCompare(b);
+  switch (ticketSort) {
+    case 'updated_asc': arr.sort((a, b) => s(a.updated_at || '', b.updated_at || '')); break;
+    case 'created_desc': arr.sort((a, b) => s(b.created_at || '', a.created_at || '')); break;
+    case 'created_asc': arr.sort((a, b) => s(a.created_at || '', b.created_at || '')); break;
+    case 'title_asc': arr.sort((a, b) => s((a.title || '').toLowerCase(), (b.title || '').toLowerCase())); break;
+    case 'status': arr.sort((a, b) =>
+      (PIPELINE.indexOf(a.project_status) - PIPELINE.indexOf(b.project_status))
+      || s(b.updated_at || '', a.updated_at || '')); break;
+    case 'updated_desc':
+    default: arr.sort((a, b) => s(b.updated_at || '', a.updated_at || '')); break;
+  }
+  return arr;
+}
+
 function renderTicketBoard(root) {
   const d = boardData.tickets;
   const allIssues = (d && d.issues) || [];
   // Compose the status pipeline filter (#660) with the #714 search up front so the
   // Select button, selection pruning, and the list all operate on the same visible
   // set — no hidden ticket can be started.
+  // Distinct repos for the repo filter (#751). Reset a stale selection so a
+  // repo that dropped out of the payload doesn't hide the whole board.
+  const repos = [...new Set(allIssues.map((i) => i.repo))].sort();
+  if (ticketRepoFilter !== 'All' && !repos.includes(ticketRepoFilter)) ticketRepoFilter = 'All';
+
   let issues = allIssues.slice();
   if (ticketFilter !== 'All') issues = issues.filter((i) => i.project_status === ticketFilter);
+  if (ticketRepoFilter !== 'All') issues = issues.filter((i) => i.repo === ticketRepoFilter);
   const q = ticketSearch.trim().toLowerCase();
   if (q) issues = issues.filter((i) => ticketHaystack(i).includes(q));
-  issues.sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''));
+  issues = sortIssues(issues);
   // Only tickets without a linked session are startable, so only those are
   // selectable. Prune any stale selections against the *visible* set (refresh,
   // status filter, or search may have removed/hidden/linked issues).
@@ -2437,6 +2494,23 @@ function renderTicketBoard(root) {
   }
   root.appendChild(bar);
 
+  // #751: repo filter + sort controls, composed with the status pipeline above
+  // and the search below. Repo selector only appears when multiple repos exist.
+  const controls = el('div', 'board-controls');
+  if (repos.length > 1) {
+    const repoWrap = el('label', 'board-control');
+    repoWrap.appendChild(el('span', 'board-control-label', 'Repo'));
+    repoWrap.appendChild(boardSelect('ticket-repo',
+      [['All', 'All repos'], ...repos.map((r) => [r, r])],
+      ticketRepoFilter, (v) => { ticketRepoFilter = v; }));
+    controls.appendChild(repoWrap);
+  }
+  const sortWrap = el('label', 'board-control');
+  sortWrap.appendChild(el('span', 'board-control-label', 'Sort'));
+  sortWrap.appendChild(boardSelect('ticket-sort', TICKET_SORT_OPTIONS, ticketSort, (v) => { ticketSort = v; }));
+  controls.appendChild(sortWrap);
+  root.appendChild(controls);
+
   // #714: search bar below the pipeline (both act as filters). Composed with the
   // status segment above; clearing restores the full status-filtered list.
   root.appendChild(boardFilterInput('ticket-filter', ticketSearch, 'Filter tickets…', (v) => { ticketSearch = v; }));
@@ -2447,9 +2521,12 @@ function renderTicketBoard(root) {
   root.appendChild(list);
 }
 
-// #714: lowercased searchable text for a ticket — title, repo, #number, labels.
+// #714: lowercased searchable text for a ticket — title, repo, #number, labels,
+// author. Labels are {name,color} objects, so map to names (#751 fixes the old
+// bug that spread the raw objects and searched "[object Object]").
 function ticketHaystack(i) {
-  return [i.title, i.repo, '#' + i.number, ...(i.labels || [])].join(' ').toLowerCase();
+  return [i.title, i.repo, '#' + i.number, i.author || '', ...(i.labels || []).map((l) => l.name)]
+    .join(' ').toLowerCase();
 }
 
 function ticketCard(i) {
@@ -2482,23 +2559,116 @@ function ticketCard(i) {
   if (t) meta.appendChild(el('span', 'card-time', t));
   card.appendChild(meta);
   card.appendChild(el('div', 'card-title', i.title));
+
+  // #751: author + created date + comment count sub-line. All fields optional
+  // (older payloads / providers omit them), so render only what's present.
+  const ct = relTime(i.created_at);
+  if (i.author || ct || (i.comments_count != null && i.comments_count > 0)) {
+    const byline = el('div', 'card-byline');
+    if (i.author) byline.appendChild(el('span', 'byline-author', i.author));
+    if (ct) byline.appendChild(el('span', 'byline-created',
+      ct === 'just now' ? 'opened just now' : 'opened ' + ct + ' ago'));
+    if (i.comments_count != null && i.comments_count > 0) {
+      const c = el('span', 'byline-comments');
+      c.appendChild(icon('comment', 12));
+      c.appendChild(el('span', null, String(i.comments_count)));
+      c.title = i.comments_count + ' comment' + (i.comments_count === 1 ? '' : 's');
+      byline.appendChild(c);
+    }
+    card.appendChild(byline);
+  }
+
+  // #751: description excerpt (line-clamped) with an expand toggle. The full
+  // (server-capped) body is present; CSS clamps it until expanded.
+  if (i.body) {
+    const expanded = expandedIssueURLs.has(i.url);
+    card.appendChild(el('div', 'card-desc' + (expanded ? ' expanded' : ''), i.body));
+    if (i.body.length > 140) {
+      const toggle = el('button', 'card-desc-toggle', expanded ? 'Show less' : 'Show more');
+      toggle.onclick = (e) => {
+        e.stopPropagation();
+        if (expanded) expandedIssueURLs.delete(i.url); else expandedIssueURLs.add(i.url);
+        renderBoard();
+      };
+      card.appendChild(toggle);
+    }
+  }
+
   if (i.labels && i.labels.length) card.appendChild(labelPills(i.labels));
   const foot = el('div', 'card-foot');
   const statusPill = el('span', 'status-pill', i.project_status);
   statusPill.style.color = sc;
   statusPill.style.borderColor = sc;
   foot.appendChild(statusPill);
+  // #751: inline PR state + CI checks (present only when a PR is linked).
+  if (i.pr_state) foot.appendChild(prStateBadge(i.pr_state));
+  if (i.checks && i.checks.state) foot.appendChild(checksBadge(i.checks));
+
+  // #751: right-aligned action cluster — Open Issue / Open PR always, plus the
+  // existing Go to Session / Start Working affordance.
+  const actions = el('div', 'card-actions');
+  actions.appendChild(openLinkButton('Open Issue', i.url));
+  if (i.pr_url) actions.appendChild(openLinkButton('Open PR', i.pr_url));
   if (i.linked_session_id) {
     const go = el('button', 'action-btn', 'Go to Session');
     go.onclick = () => selectSession(i.linked_session_id);
-    foot.appendChild(go);
+    actions.appendChild(go);
   } else if (!selecting) {
     const work = el('button', 'action-btn action-primary', 'Start Working');
     work.onclick = () => spawnAction(work, 'work-on-issue', { url: i.url }, 'Start Working');
-    foot.appendChild(work);
+    actions.appendChild(work);
   }
+  foot.appendChild(actions);
   card.appendChild(foot);
   return card;
+}
+
+// #751: an anchor styled as an action button that opens a URL in a new tab
+// (same safe-href handling as linkChip). Falls back to a disabled-looking span
+// for non-http(s) urls.
+function openLinkButton(text, url) {
+  const safe = /^https?:\/\//i.test(url || '');
+  const a = document.createElement(safe ? 'a' : 'span');
+  a.className = 'action-btn open-link-btn';
+  if (safe) { a.href = url; a.target = '_blank'; a.rel = 'noopener'; }
+  a.textContent = text;
+  a.onclick = (e) => e.stopPropagation(); // don't toggle selection in select mode
+  return a;
+}
+
+// #751: PR state badge — draft / open / merged / closed, colored to match.
+function prStateBadge(state) {
+  const map = {
+    draft: ['Draft PR', 'var(--text-muted)'],
+    open: ['PR Open', 'var(--blue)'],
+    merged: ['PR Merged', 'var(--purple)'],
+    closed: ['PR Closed', 'var(--red)'],
+  };
+  const [label, color] = map[state] || ['PR ' + state, 'var(--text-muted)'];
+  const b = el('span', 'pr-state-badge', label);
+  b.style.color = color;
+  b.style.borderColor = color;
+  return b;
+}
+
+// #751: CI checks rollup badge (pass/fail/pending), with failing check names in
+// the tooltip. `checks` is { state, failed:[...] }.
+function checksBadge(checks) {
+  let label, color;
+  switch (checks.state) {
+    case 'SUCCESS': label = 'CI passing'; color = 'var(--green)'; break;
+    case 'FAILURE':
+    case 'ERROR': label = 'CI failing'; color = 'var(--red)'; break;
+    case 'PENDING':
+    case 'EXPECTED': label = 'CI pending'; color = 'var(--orange)'; break;
+    default: label = 'CI ' + String(checks.state).toLowerCase(); color = 'var(--text-muted)';
+  }
+  const b = el('span', 'checks-badge', label);
+  b.style.color = color;
+  b.style.borderColor = color;
+  const failed = checks.failed || [];
+  if (failed.length) b.title = 'Failing: ' + failed.join(', ');
+  return b;
 }
 
 function toggleIssueSelect(url) {

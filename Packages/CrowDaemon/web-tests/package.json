@@ -1,0 +1,12 @@
+{
+  "name": "crow-web-board-tests",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Headless jsdom regression tests for the web Ticket Board (renderTicketBoard / ticketCard). Drives the real app.js from Resources/web against mock board payloads.",
+  "scripts": {
+    "test": "node board.test.js"
+  },
+  "devDependencies": {
+    "jsdom": "^24.0.0"
+  }
+}

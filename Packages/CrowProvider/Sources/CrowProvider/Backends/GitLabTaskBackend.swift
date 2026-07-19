@@ -219,16 +219,36 @@ public struct GitLabTaskBackend: TaskBackend {
             let labels = (item["labels"] as? [String] ?? []).map { LabelInfo(name: $0) }
             let refs = item["references"] as? [String: Any]
             let fullRef = refs?["full"] as? String ?? ""
+            // `references.full` is "group/project#iid" — the iid belongs in the
+            // issue identity (`id`), but `repo` must be the bare project path so
+            // the repo filter groups correctly (#751) and the MR-status API call
+            // targets a valid `projects/{slug}` path (paths never contain '#').
+            let repoSlug = fullRef.split(separator: "#", maxSplits: 1).first.map(String.init) ?? fullRef
+            // Richer detail for the board (#751) — the REST issues payload
+            // already carries these, so no extra call. Dates via the tolerant
+            // parser (GitLab may or may not include fractional seconds).
+            let author = (item["author"] as? [String: Any])?["username"] as? String
+            let createdAt = IssueDate.parse(item["created_at"] as? String)
+            let updatedAt = IssueDate.parse(item["updated_at"] as? String)
+            let commentsCount = item["user_notes_count"] as? Int
+            let mrCount = item["merge_requests_count"] as? Int
+            let body = (item["description"] as? String).flatMap(IssueBody.cap)
             return AssignedIssue(
                 id: "gitlab:\(host):\(fullRef)",
                 number: number,
                 title: title,
                 state: state == "opened" ? "open" : state,
                 url: url,
-                repo: fullRef,
+                repo: repoSlug,
                 labels: labels,
                 provider: .gitlab,
-                projectStatus: projectStatusOverride ?? .unknown
+                updatedAt: updatedAt,
+                projectStatus: projectStatusOverride ?? .unknown,
+                body: body,
+                author: author,
+                createdAt: createdAt,
+                commentsCount: commentsCount,
+                mergeRequestsCount: mrCount
             )
         }
     }

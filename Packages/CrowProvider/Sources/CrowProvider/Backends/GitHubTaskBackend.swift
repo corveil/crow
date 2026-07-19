@@ -399,7 +399,9 @@ public struct GitHubTaskBackend: TaskBackend {
       openIssues: search(type: ISSUE, query: $openQuery, first: 100) {
         nodes {
           ... on Issue {
-            number title url state updatedAt
+            number title url state updatedAt createdAt bodyText
+            author { login }
+            comments { totalCount }
             repository { nameWithOwner }
             labels(first: 20) { nodes { name color } }
             projectItems(first: 10) {
@@ -416,7 +418,9 @@ public struct GitHubTaskBackend: TaskBackend {
         issueCount
         nodes {
           ... on Issue {
-            number title url state updatedAt
+            number title url state updatedAt createdAt bodyText
+            author { login }
+            comments { totalCount }
             repository { nameWithOwner }
             labels(first: 20) { nodes { name color } }
           }
@@ -431,7 +435,9 @@ public struct GitHubTaskBackend: TaskBackend {
       openIssues: search(type: ISSUE, query: $openQuery, first: 100) {
         nodes {
           ... on Issue {
-            number title url state updatedAt
+            number title url state updatedAt createdAt bodyText
+            author { login }
+            comments { totalCount }
             repository { nameWithOwner }
             labels(first: 20) { nodes { name color } }
           }
@@ -441,7 +447,9 @@ public struct GitHubTaskBackend: TaskBackend {
         issueCount
         nodes {
           ... on Issue {
-            number title url state updatedAt
+            number title url state updatedAt createdAt bodyText
+            author { login }
+            comments { totalCount }
             repository { nameWithOwner }
             labels(first: 20) { nodes { name color } }
           }
@@ -457,17 +465,13 @@ public struct GitHubTaskBackend: TaskBackend {
               let dataObj = json["data"] as? [String: Any] else {
             throw ProviderError.commandFailed("listAssigned: failed to parse GraphQL response")
         }
-        let dateFmt = ISO8601DateFormatter()
-        dateFmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         let open = parseIssueNodes(
             dataObj["openIssues"] as? [String: Any],
-            defaultState: "open",
-            dateFormatter: dateFmt
+            defaultState: "open"
         )
         let closed = parseIssueNodes(
             dataObj["closedIssues"] as? [String: Any],
             defaultState: "closed",
-            dateFormatter: dateFmt,
             projectStatusOverride: .done
         )
         // Total matches in the 24h window — `nodes` is capped at `first: 50`,
@@ -489,17 +493,13 @@ public struct GitHubTaskBackend: TaskBackend {
         guard let dataObj = decodeGraphQLData(blob) else {
             return AssignedListing(open: [], closed: [], rateLimit: nil, samlRestricted: true)
         }
-        let dateFmt = ISO8601DateFormatter()
-        dateFmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         let open = parseIssueNodes(
             dataObj["openIssues"] as? [String: Any],
-            defaultState: "open",
-            dateFormatter: dateFmt
+            defaultState: "open"
         )
         let closed = parseIssueNodes(
             dataObj["closedIssues"] as? [String: Any],
             defaultState: "closed",
-            dateFormatter: dateFmt,
             projectStatusOverride: .done
         )
         let rate = parseRateLimit(dataObj["rateLimit"] as? [String: Any])
@@ -568,7 +568,6 @@ public struct GitHubTaskBackend: TaskBackend {
     static func parseIssueNodes(
         _ searchObj: [String: Any]?,
         defaultState: String,
-        dateFormatter: ISO8601DateFormatter,
         projectStatusOverride: TicketStatus? = nil
     ) -> [AssignedIssue] {
         guard let nodes = searchObj?["nodes"] as? [[String: Any]] else { return [] }
@@ -583,10 +582,14 @@ public struct GitHubTaskBackend: TaskBackend {
                     guard let name = labelNode["name"] as? String else { return nil }
                     return LabelInfo(name: name, color: labelNode["color"] as? String)
                 } ?? []
-            var updatedAt: Date?
-            if let dateStr = node["updatedAt"] as? String {
-                updatedAt = dateFormatter.date(from: dateStr)
-            }
+            // Tolerant parse (#751): GitHub GraphQL emits non-fractional
+            // DateTime, which a `.withFractionalSeconds` formatter rejects —
+            // that silently disabled updated/created sort + "opened … ago".
+            let updatedAt = GitHubCodeBackend.parseGitHubDateTime((node["updatedAt"] as? String) ?? "")
+            let createdAt = GitHubCodeBackend.parseGitHubDateTime((node["createdAt"] as? String) ?? "")
+            let author = (node["author"] as? [String: Any])?["login"] as? String
+            let commentsCount = (node["comments"] as? [String: Any])?["totalCount"] as? Int
+            let body = (node["bodyText"] as? String).flatMap(IssueBody.cap)
             var projectStatus: TicketStatus = projectStatusOverride ?? .unknown
             if projectStatusOverride == nil,
                let projectItems = node["projectItems"] as? [String: Any],
@@ -616,7 +619,11 @@ public struct GitHubTaskBackend: TaskBackend {
                 labels: labels,
                 provider: .github,
                 updatedAt: updatedAt,
-                projectStatus: projectStatus
+                projectStatus: projectStatus,
+                body: body,
+                author: author,
+                createdAt: createdAt,
+                commentsCount: commentsCount
             )
         }
     }
