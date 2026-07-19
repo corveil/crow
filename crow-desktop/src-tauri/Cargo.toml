@@ -29,3 +29,12 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 libc = "0.2"
 
+# macOS only: force-enable the WKWebView's out-of-process accessibility tree so
+# AX-based dictation/assistive tools (Wispr Flow) can find the focused editable
+# field (CROW-750). Both are already in the lockfile via wry's deps.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+# Only NSApplication is needed (we set one accessibility flag on it), so trim the
+# default AppKit feature surface to keep the build lean.
+objc2-app-kit = { version = "0.3", default-features = false, features = ["NSApplication", "NSResponder"] }
+
