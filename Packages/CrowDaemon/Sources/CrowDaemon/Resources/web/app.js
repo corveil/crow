@@ -1564,7 +1564,18 @@ function renderHeader(s) {
     const canDispatch = liveFor(s.id).can_dispatch !== false;
     const qaOpts = { disabled: !canDispatch, title: canDispatch ? '' : 'No managed Claude Code terminal in this session' };
     if (pr.merge === 'conflicting') actions.appendChild(qaButton('Rebase & Fix Conflicts', 'fixConflicts', s.id, 'danger', 'merge', qaOpts));
-    if (pr.review === 'changesRequested') actions.appendChild(qaButton('Address Review', 'addressChanges', s.id, 'danger', 'pencil', qaOpts));
+    if (pr.review === 'changesRequested') {
+      // Per-kind split (CROW-757): a reviewer must never modify the branch
+      // under review, so review sessions get "Re-review" (re-run the review on
+      // the author's latest head; never edits code) instead of "Address Review"
+      // (author fixes code + pushes). The daemon also refuses the code-changing
+      // actions on review sessions server-side (`dispatchManual` guard).
+      if (s.kind === 'review') {
+        actions.appendChild(qaButton('Re-review', 'reReview', s.id, 'primary', 'eye', qaOpts));
+      } else {
+        actions.appendChild(qaButton('Address Review', 'addressChanges', s.id, 'danger', 'pencil', qaOpts));
+      }
+    }
     if (pr.checks === 'failing') actions.appendChild(qaButton('Fix Checks', 'fixChecks', s.id, 'danger', 'warning', qaOpts));
     if (pr.ready_to_merge) actions.appendChild(qaButton('Merge PR', 'mergePR', s.id, 'primary', 'merge', qaOpts));
   }

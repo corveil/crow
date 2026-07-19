@@ -235,15 +235,15 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                 }
             },
             // CROW-581: trigger a PR-status quick action (fixConflicts /
-            // addressChanges / fixChecks / mergePR) — reuses the existing
-            // `onQuickAction` hook, which pastes the deterministic prompt into
-            // the session's managed agent terminal.
+            // addressChanges / fixChecks / mergePR / reReview) — reuses the
+            // existing `onQuickAction` hook, which pastes the deterministic
+            // prompt into the session's managed agent terminal.
             "quick-action": { @Sendable params in
                 guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
                     throw RPCError.invalidParams("session_id required")
                 }
                 guard let actionStr = params["action"]?.stringValue, let action = QuickAction(rawValue: actionStr) else {
-                    throw RPCError.invalidParams("action required (fixConflicts, addressChanges, fixChecks, mergePR)")
+                    throw RPCError.invalidParams("action required (fixConflicts, addressChanges, fixChecks, mergePR, reReview)")
                 }
                 await MainActor.run {
                     capturedAppState.onQuickAction?(id, action)

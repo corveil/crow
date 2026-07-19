@@ -458,7 +458,7 @@ func makeCommandRouter(
                 throw DaemonRPCError.invalidParams("session_id required")
             }
             guard let actionStr = params["action"]?.stringValue, let action = QuickAction(rawValue: actionStr) else {
-                throw DaemonRPCError.invalidParams("action required (fixConflicts, addressChanges, fixChecks, mergePR)")
+                throw DaemonRPCError.invalidParams("action required (fixConflicts, addressChanges, fixChecks, mergePR, reReview)")
             }
             // `dispatchManual` silently skips (no managed terminal / surface not
             // ready / no PR link); report that faithfully as `dispatched:false`
