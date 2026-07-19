@@ -56,6 +56,12 @@ public final class AppState {
     /// `.review`-kind sessions; manager/work/CLI sessions are unaffected.
     public var reviewAutoPermissionMode: Bool = true
 
+    /// Whether newly launched work coder views start with
+    /// `--permission-mode auto` (auto-accept) instead of plan mode. Mirrors
+    /// `AppConfig.coderViewAutoPermissionMode`. Applies only to `.work`-kind
+    /// sessions; manager/review/job sessions are unaffected (#586).
+    public var coderViewAutoPermissionMode: Bool = false
+
     /// `true` when the Manager's `claude` process has exited (crash, kill, OOM)
     /// and has not yet been restarted. Drives the "Manager process exited" banner
     /// and enables the "Restart Manager" action. Reset when the Manager relaunches.
@@ -82,6 +88,16 @@ public final class AppState {
     /// `defaultAgentKind` when no override is set (CROW-421, CROW-433).
     public func agentKind(for sessionKind: SessionKind) -> AgentKind {
         return agentsByKind[sessionKind.rawValue] ?? defaultAgentKind
+    }
+
+    /// Mirror the agent-selection config (`defaultAgentKind` + `agentsByKind`)
+    /// into runtime state so `agentKind(for:)` resolves the just-saved value
+    /// without a config reload (CROW-733). The single choke point every
+    /// config→state sync site funnels through, so no save path can leave the
+    /// mirror stale.
+    public func applyAgentConfig(_ config: AppConfig) {
+        defaultAgentKind = config.defaultAgentKind
+        agentsByKind = config.agentsByKind
     }
 
     /// Terminal IDs whose Claude Code was launched with `--rc` — drives the

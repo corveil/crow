@@ -111,6 +111,43 @@ public struct PRRecord: Sendable {
     }
 }
 
+/// Issue-body helpers shared across provider backends (#751). The board only
+/// needs an excerpt plus an "expand" affordance, so the body is capped here to
+/// bound the RPC payload rather than shipping arbitrarily long issue bodies.
+public enum IssueBody {
+    /// Max stored body length. Comfortably covers a card excerpt plus an
+    /// inline expand without unbounded payload growth.
+    public static let maxLength = 2000
+
+    /// Trim whitespace and cap to `maxLength`, appending an ellipsis when
+    /// truncated. Returns nil for an empty/whitespace-only body so the card
+    /// renders no description block.
+    public static func cap(_ raw: String) -> String? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        guard trimmed.count > maxLength else { return trimmed }
+        return String(trimmed.prefix(maxLength)) + "…"
+    }
+}
+
+/// Tolerant ISO-8601 parsing shared across backends (#751). Providers are
+/// inconsistent about fractional seconds — GitHub GraphQL emits the plain form
+/// (`2026-06-15T01:28:17Z`) while GitLab/others may include `.SSS`. A formatter
+/// pinned to one shape silently returns nil for the other (the CROW-508 trap;
+/// see `GitHubCodeBackend.parseGitHubDateTime`), which quietly disables any
+/// feature that depends on the parsed date. Try plain first, then fractional.
+public enum IssueDate {
+    public static func parse(_ raw: String?) -> Date? {
+        guard let raw else { return nil }
+        let plain = ISO8601DateFormatter()
+        plain.formatOptions = [.withInternetDateTime]
+        if let d = plain.date(from: raw) { return d }
+        let withFraction = ISO8601DateFormatter()
+        withFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return withFraction.date(from: raw)
+    }
+}
+
 /// An issue reference linked from a PR/MR via "closes #N" or equivalent.
 public struct LinkedIssueRef: Sendable {
     public let number: Int
@@ -203,13 +240,17 @@ public struct PRMetadata: Sendable {
     public let headRefName: String
     public let headRefOid: String
     public let baseRefName: String
+    /// PR author login (e.g. "octocat"). Empty when the provider didn't surface
+    /// it. Used to show "PR by @author" on a review session (CROW-593).
+    public let author: String
 
-    public init(title: String, number: Int, headRefName: String, headRefOid: String, baseRefName: String) {
+    public init(title: String, number: Int, headRefName: String, headRefOid: String, baseRefName: String, author: String = "") {
         self.title = title
         self.number = number
         self.headRefName = headRefName
         self.headRefOid = headRefOid
         self.baseRefName = baseRefName
+        self.author = author
     }
 }
 

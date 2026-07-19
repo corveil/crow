@@ -10,7 +10,7 @@ All persistent state lives under `~/Library/Application Support/crow/` (see `Pac
 | --------------------------------------------------------------------- | ------------------------------------------------------------- |
 | `~/Library/Application Support/crow/devroot`                          | Pointer file containing the development root path            |
 | `~/Library/Application Support/crow/store.json`                       | Persisted sessions, worktrees, links, terminals               |
-| `~/.local/share/crow/crow.sock`                                       | Unix socket for CLI ↔ app IPC                                 |
+| `~/.local/share/crow/crow.sock`                                       | Unix socket for CLI ↔ server IPC (owned by `crowd` by default) |
 | `{devRoot}/.claude/config.json`                                       | Workspace configuration (see below)                          |
 | `{devRoot}/.claude/CLAUDE.md`                                         | Manager-tab context with the `crow` CLI reference             |
 | `{devRoot}/.claude/settings.local.json`                               | Crow-managed pre-approved permissions, merged on every launch  |
@@ -96,7 +96,7 @@ Crow can drive four coding agents. Which one a session launches is resolved from
 ```
 
 - **`defaultAgentKind`** — the agent used for newly created sessions when no override applies. One of `claude-code`, `codex`, `cursor`, `opencode`. Defaults to `claude-code`.
-- **`agentsByKind`** — per-session-kind overrides, keyed by session kind (`work`, `review`, `job`, `manager`). When a key is present, sessions of that kind use the mapped agent; when absent they fall back to `defaultAgentKind`. Resolution: `agentsByKind[<kind>] ?? defaultAgentKind ?? claude-code`. A session persists the resolved kind and can be overridden per-session at creation time (Create-Session picker or the `crow new-session --agent-kind` / RPC `agent_kind` param).
+- **`agentsByKind`** — per-session-kind overrides, keyed by session kind (`work`, `review`, `job`, `manager`). When a key is present, sessions of that kind use the mapped agent; when absent they fall back to `defaultAgentKind`. Resolution: `agentsByKind[<kind>] ?? defaultAgentKind ?? claude-code`. A session persists the resolved kind and can be overridden per-session at creation time (Create-Session picker or the `crow new-session --agent` / RPC `agent_kind` param). Mid-session switches use `crow handoff-agent` / the web “Switch agent…” control (CROW-627 / [ADR 0009](adr/0009-agent-handoff-preserves-session-not-chat.md)) — session identity and worktree stay; chat history does not transfer.
 - **`defaults.binaries.<kind>`** — absolute-path override for an agent's CLI binary, keyed by agent kind (`claude-code`, `codex`, `cursor`, `opencode`). Consulted before Crow walks `PATH`, so it pins discovery for non-standard installs (nvm/Volta/asdf) or when a token collides with another binary (e.g. Cursor's CLI is named `agent`). The same map also accepts **`crow`** — pins the Crow CLI used by `/crow-workspace`'s `setup.sh` when it runs outside a Crow terminal (e.g. from Cursor or Codex, which inherit a minimal `PATH`). Crow also symlinks every configured entry into `{devRoot}/.claude/bin/<name>` (CROW-487); `setup.sh` consults that farm before walking `PATH`.
 
 | Kind | Display name | CLI binary | Remote control | Notes |
@@ -181,7 +181,7 @@ The `jira` server lives **globally** in `~/.claude.json`'s top-level `mcpServers
 - **Auth** is a **personal API token** (from <https://id.atlassian.com>) passed to the container via the `JIRA_*` env vars. The same global config serves worktree sessions, the Manager, and cron jobs.
 - **`gh`/`glab` GitHub/GitLab task paths are unaffected.**
 
-> **In-app status fetch.** The "Fetch from Jira" status-map button (below) is the one Jira feature that runs in the **Crow app process**, which can't use the MCP. It uses a separate small credential under **Settings → Automation → Jira (status fetch)**, stored top-level in `config.json` as `jiraCredential` (`username` + an `op://`/plaintext `tokenRef`, same secret rules as gateway keys). Crow builds `Authorization: Basic base64(username:token)` on demand to call Jira's REST API directly; it is never written to a launched session.
+> **In-app status fetch.** The "Fetch from Jira" status-map button (below) is the one Jira feature that runs in the **crowd process**, which can't use the MCP. It uses a separate small credential under **Settings → Automation → Jira (status fetch)**, stored top-level in `config.json` as `jiraCredential` (`username` + an `op://`/plaintext `tokenRef`, same secret rules as gateway keys). Crow builds `Authorization: Basic base64(username:token)` on demand to call Jira's REST API directly; it is never written to a launched session.
 
 ### Jira status mapping
 
@@ -242,7 +242,7 @@ Worktrees are created **at the same level as the main repo**, not in a `worktree
 
 | Variable              | Purpose                                                                                            | Default                        |
 | --------------------- | -------------------------------------------------------------------------------------------------- | ------------------------------ |
-| `CROW_SOCKET`         | Override the Unix socket path for CLI ↔ app IPC                                                    | `~/.local/share/crow/crow.sock` |
+| `CROW_SOCKET`         | Override the Unix socket path for CLI ↔ server IPC (also the `crowd` bind path)                    | `~/.local/share/crow/crow.sock` |
 | `TMPDIR`              | Temporary file directory (used by the terminal subsystem)                                          | System default                 |
 | `GITLAB_HOST`         | GitLab instance hostname (set automatically per workspace from `host` in `config.json`)            | —                              |
 | `CROW_HOOK_DEBUG`     | Set to `1` to enable `[hook-event]` debug logging                                                  | unset                          |
@@ -259,7 +259,7 @@ Worktrees are created **at the same level as the main repo**, not in a `worktree
 
 ## Terminal Readiness
 
-`TerminalReadiness` (`Packages/CrowCore/Sources/CrowCore/Models/Enums.swift:41`) tracks how far each managed terminal has progressed through startup. The sidebar dot in `Packages/CrowUI/Sources/CrowUI/SessionListView.swift:325-372` reflects the current state:
+`TerminalReadiness` (`Packages/CrowCore/Sources/CrowCore/Models/Enums.swift:41`) tracks how far each managed terminal has progressed through startup. The sidebar dot in `Packages/CrowDaemon/Sources/CrowDaemon/Resources/web/app.js` reflects the current state:
 
 1. **Gray dot (`uninitialized`)** — `XTermSurfaceView` exists but `createSurface()` has not been called yet.
 2. **Yellow dot (`surfaceCreated`)** — the xterm.js surface exists and the shell process (`PTYProcess`) is spawning.

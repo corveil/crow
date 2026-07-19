@@ -32,9 +32,24 @@ extension ShellRunner {
     }
 }
 
-public enum ShellRunnerError: Error, Sendable {
+public enum ShellRunnerError: Error, LocalizedError, Sendable {
     /// Process exited non-zero. `output` is the merged stdout+stderr.
     case nonZeroExit(exitCode: Int32, output: String)
+
+    /// Surfaces exit code + subprocess output so callers logging
+    /// `error.localizedDescription` get the real stderr (e.g. `gh` GraphQL
+    /// errors) instead of the useless `ShellRunnerError error 0` default
+    /// (CROW-621).
+    public var errorDescription: String? {
+        switch self {
+        case .nonZeroExit(let exitCode, let output):
+            let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty {
+                return "Command failed with exit code \(exitCode)"
+            }
+            return "Command failed with exit code \(exitCode): \(trimmed)"
+        }
+    }
 }
 
 /// Default production implementation: spawns `/usr/bin/env <args>` with

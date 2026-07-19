@@ -1,0 +1,40 @@
+[package]
+name = "crow"
+version = "0.1.0"
+description = "Crow desktop shell — a native window over the crowd daemon and its web UI."
+authors = ["dhilgaertner", "dgershman"]
+edition = "2021"
+
+[[bin]]
+name = "Crow"
+path = "src/main.rs"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "crow_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tauri-plugin-notification = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+libc = "0.2"
+
+# macOS only: force-enable the WKWebView's out-of-process accessibility tree so
+# AX-based dictation/assistive tools (Wispr Flow) can find the focused editable
+# field (CROW-750). Both are already in the lockfile via wry's deps.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+# Only NSApplication is needed (we set one accessibility flag on it), so trim the
+# default AppKit feature surface to keep the build lean.
+objc2-app-kit = { version = "0.3", default-features = false, features = ["NSApplication", "NSResponder"] }
+

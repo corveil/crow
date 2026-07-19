@@ -114,6 +114,17 @@ is_remote_control_enabled() {
     | grep -qE '"remoteControlEnabled"[[:space:]]*:[[:space:]]*true'
 }
 
+# Read the coderViewAutoPermissionMode flag from {devRoot}/.claude/config.json.
+# Returns 0 if true, 1 otherwise. Missing file / malformed JSON / missing
+# key all default to 1 (off — plan mode), matching AppConfig's decodeIfPresent
+# behavior (#586).
+is_coder_view_auto_permission_enabled() {
+  local config_path="$DEV_ROOT/.claude/config.json"
+  [[ -f "$config_path" ]] || return 1
+  tr -d '\n' < "$config_path" \
+    | grep -qE '"coderViewAutoPermissionMode"[[:space:]]*:[[:space:]]*true'
+}
+
 # Read the attributionTrailers flag from {devRoot}/.claude/config.json.
 # Defaults to 0 (on) when the file is missing, malformed, or the key is
 # absent — matches AppConfig's decodeIfPresent default. Returns 1 only
@@ -1315,7 +1326,15 @@ launch_claude_code() {
   resolve_gateway_env
   local gw_prefix
   gw_prefix=$(gateway_launch_prefix)
-  local launch_cmd="cd $WORKTREE_PATH && ${gw_prefix}$bin --permission-mode plan$rc_args \"\$(cat $prompt_path)\""
+  # New coder views default to plan mode; the Settings → Automation
+  # "Launch new coder views in auto permission mode" toggle opts the launch
+  # into auto-accept instead (#586).
+  local perm_mode="plan"
+  if is_coder_view_auto_permission_enabled; then
+    perm_mode="auto"
+    log "coderViewAutoPermissionMode enabled — launching with --permission-mode auto"
+  fi
+  local launch_cmd="cd $WORKTREE_PATH && ${gw_prefix}$bin --permission-mode $perm_mode$rc_args \"\$(cat $prompt_path)\""
   create_agent_terminal "Claude Code" "$launch_cmd"
 }
 

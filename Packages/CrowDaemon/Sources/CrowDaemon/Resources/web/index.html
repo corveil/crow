@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Crow</title>
+  <link rel="icon" type="image/svg+xml" href="/brand.svg">
+  <link rel="stylesheet" href="/xterm/xterm.css">
+  <link rel="stylesheet" href="/app.css">
+  <link rel="stylesheet" href="/settings.css">
+</head>
+<body>
+  <div id="app">
+    <button id="back-to-sidebar" aria-label="Show sessions" title="Sessions">&#9776;</button>
+    <aside id="sidebar"></aside>
+    <main id="detail">
+      <header id="detail-header"></header>
+      <div id="detail-artifacts"></div>
+      <div id="tabbar"></div>
+      <div id="terminal-wrap"><div id="terminal"></div><!--
+        Skeleton loading overlay (#677): shimmer bars over the terminal area
+        while xterm attaches/reloads, masking the blank/garbled grid + reflow
+        flash + mid-paint scrollback replay. Reuses the CROW-613 .skel shimmer.
+        pointer-events:none so it never steals input/focus from xterm.
+      --><div id="terminal-skeleton" aria-hidden="true">
+          <div class="skel term-skel-bar" style="--skel-delay: 0s; width: 58%"></div>
+          <div class="skel term-skel-bar" style="--skel-delay: .08s; width: 34%"></div>
+          <div class="skel term-skel-bar" style="--skel-delay: .16s; width: 66%"></div>
+          <div class="skel term-skel-bar" style="--skel-delay: .24s; width: 45%"></div>
+          <div class="skel term-skel-bar" style="--skel-delay: .32s; width: 71%"></div>
+          <div class="skel term-skel-bar" style="--skel-delay: .40s; width: 28%"></div>
+          <div class="skel term-skel-bar" style="--skel-delay: .48s; width: 52%"></div>
+          <div class="skel term-skel-bar" style="--skel-delay: .56s; width: 39%"></div>
+          <div class="skel term-skel-bar" style="--skel-delay: .64s; width: 61%"></div>
+          <!-- #687: steady caption shown (via #terminal-wrap.reconnecting) during
+               a sustained disconnect, so the overlay reads as one calm
+               "Reconnecting…" state instead of a strobing attach shimmer. -->
+          <div id="terminal-reconnect-note" aria-hidden="true">Reconnecting…</div>
+      </div></div>
+      <div id="board"></div>
+      <div id="detail-empty">
+        <img class="empty-brand" src="/brand.svg" alt="Crow">
+        <div class="empty-msg">Select a session</div>
+      </div>
+    </main>
+  </div>
+  <!-- Session-expired scrim (#679): on a confirmed 401 (sessionDead) this blocks
+       all interaction with #app until re-login. Sits below #statusbar so the
+       statusbar Log in stays reachable; only shown on sessionDead, never on a
+       transient reconnect. -->
+  <div id="session-scrim" hidden>
+    <div class="scrim-card" role="alertdialog" aria-label="Session expired">
+      <div class="scrim-title">Session expired</div>
+      <div class="scrim-msg">Your web session ended. Log in again to continue.</div>
+      <button id="scrim-login" class="scrim-login" type="button">Log in</button>
+    </div>
+  </div>
+  <!-- Fixed connection/status bar, bottom-left (CROW-593): a light for the /rpc
+       socket state, plus a logout button on signed-in remote sessions. -->
+  <div id="statusbar" class="disconnected">
+    <span class="conn-dot" aria-hidden="true"></span>
+    <span class="conn-label">Connecting…</span>
+    <span id="statusbar-actions"></span>
+  </div>
+  <div id="lightbox" hidden><img id="lightbox-img" alt=""></div>
+  <script src="/xterm/xterm.js"></script>
+  <script src="/xterm/xterm-addon-fit.js"></script>
+  <script src="/xterm/xterm-addon-image.js"></script>
+  <script src="/xterm/xterm-addon-search.js"></script>
+  <script src="/xterm/xterm-addon-web-links.js"></script>
+  <script src="/xterm/xterm-addon-webgl.js"></script>
+  <script src="/xterm/xterm-addon-crow-jumpbottom.js"></script>
+  <script src="/app.js"></script>
+  <script src="/settings.js"></script>
+</body>
+</html>

@@ -1,4 +1,6 @@
-import AppKit
+#if canImport(AppKit)
+import AppKit  // only for the WKWebView cockpit surface (gated below); Linux uses the daemon's WebSocket terminal instead
+#endif
 import CrowCore
 import Foundation
 
@@ -65,10 +67,17 @@ public final class TmuxBackend {
 
     /// The single embedded surface attached to the cockpit session. Created
     /// lazily on first use; WKWebView must load in a visible window.
+    #if canImport(AppKit)
     private var sharedSurface: XTermSurfaceView?
+    #endif
 
     /// UUID → tmux window index for tabs registered with us.
     private var bindings: [UUID: Int] = [:]
+
+    /// Agent-window indices seen orphaned on the previous reconcile pass — the
+    /// one-pass grace so a window created mid-`new-terminal` (before its binding
+    /// lands) is never reaped (CROW-581).
+    private var orphanGraceWindows: Set<Int> = []
 
     /// Terminal whose tmux window is currently selected, so `makeActive` can
     /// skip a redundant `select-window`. SwiftUI re-runs `updateNSView` (→
@@ -134,6 +143,30 @@ public final class TmuxBackend {
     /// quit left the server running at the stable socket — see #330.
     public var isRunning: Bool { controller?.hasSession() ?? false }
 
+    /// Probe whether the cockpit tmux session is live on the socket *right now*,
+    /// WITHOUT creating it — unlike `ensureRunningServer`, which resurrects an
+    /// empty cockpit as a side effect. Used at daemon cold start to choose
+    /// between adopting surviving windows (warm `crowd` restart) and recreating
+    /// + relaunching them (machine reboot / `tmux kill-server`) — CROW-747.
+    ///
+    /// Distinct from `isRunning`: that reads the *cached* `controller`, which is
+    /// `nil` at daemon boot even when the server is alive, so it can't answer
+    /// the cold-start question. This constructs a throwaway `TmuxController`
+    /// when none is cached and runs `has-session` against the socket directly.
+    /// The throwaway is deliberately NOT cached — populating `controller` with a
+    /// session-less handle would make the next `ensureRunningServer` spuriously
+    /// fire `onServerLost` (it treats a cached controller whose session vanished
+    /// as a mid-run crash). Returns `false` when tmux wasn't configured this run.
+    public func cockpitSessionIsLive() -> Bool {
+        guard !tmuxBinary.isEmpty, !socketPath.isEmpty else { return false }
+        let ctrl = controller ?? TmuxController(
+            tmuxBinary: tmuxBinary,
+            socketPath: socketPath,
+            sessionName: TmuxBackend.cockpitSessionName
+        )
+        return ctrl.hasSession()
+    }
+
     /// Detach this Crow process from the tmux backend, resetting in-memory
     /// state. Used by app quit and by the crash-watchdog (PROD #5).
     ///
@@ -153,9 +186,12 @@ public final class TmuxBackend {
         // onProcessExit synchronously, and killServer's waitUntilExit pumps the
         // main run loop — without this order the attach client's death would be
         // delivered mid-shutdown and a deliberate restart would masquerade as
-        // a server crash (#588).
+        // a server crash (#588). Guarded for the Linux daemon build, where the
+        // AppKit surface doesn't exist (b982621).
+        #if canImport(AppKit)
         sharedSurface?.destroy()
         sharedSurface = nil
+        #endif
         if killServer {
             controller?.killServer()
         }
@@ -199,6 +235,7 @@ public final class TmuxBackend {
         command: String?,
         trackReadiness: Bool,
         agentKind: AgentKind? = nil,
+        extraEnv: [String: String] = [:],
         newWindowTimeout: TimeInterval = TmuxController.defaultTimeout
     ) throws -> TmuxBinding {
         precondition(!tmuxBinary.isEmpty, "TmuxBackend.configure(...) must be called first")
@@ -234,6 +271,9 @@ public final class TmuxBackend {
             "CROW_SENTINEL": sentinelPath,
             "CROW_WRAPPER_LOG": wrapperLog,
         ]
+        // Caller-supplied vars (e.g. CROW_ARTIFACTS_DIR / CROW_SESSION_ID).
+        // Merged first so the built-ins below always win on any collision.
+        for (key, value) in extraEnv { env[key] = value }
         if let agentKind {
             for (key, value) in CrowAttribution.environmentEntries(for: agentKind) {
                 env[key] = value
@@ -629,6 +669,68 @@ public final class TmuxBackend {
         return orphanLoginShells.contains(command)
     }
 
+    /// Targeted-auto orphan policy (CROW-581). Reap a cockpit window that no live
+    /// terminal references (`!keep.contains`) when it is either a forgotten bare
+    /// login shell OR a positively-identified coding-agent window (its pinned
+    /// name is one of `agentWindowNames`) that has stayed orphaned across two
+    /// passes (`seenOrphanedLastPass`, the grace). NEVER reaps the session anchor
+    /// (index 0), a bound window, an unknown/infra window, or a **Manager**
+    /// (name contains "manager") — Managers are long-lived and may be unbound.
+    /// Pure so the policy is unit-testable without tmux.
+    nonisolated static func shouldReapOrphanWindow(
+        index: Int, name: String, command: String, keep: Set<Int>,
+        agentWindowNames: Set<String>, seenOrphanedLastPass: Bool
+    ) -> Bool {
+        if index == 0 { return false }
+        if keep.contains(index) { return false }
+        if name.range(of: "manager", options: [.caseInsensitive]) != nil { return false }
+        if orphanLoginShells.contains(command) { return true }
+        if agentWindowNames.contains(name) { return seenOrphanedLastPass }
+        return false
+    }
+
+    /// Live cockpit windows as (index, pinned name, foreground command). `[]` if
+    /// tmux is unavailable or the read fails.
+    public func listCockpitWindows() -> [(index: Int, name: String, command: String)] {
+        guard let ctrl = controller else { return [] }
+        do { return try ctrl.listWindows() }
+        catch { reportIfTimeout(error); return [] }
+    }
+
+    /// Reap orphaned cockpit windows per `shouldReapOrphanWindow` (targeted-auto).
+    /// `keepWindowIndices` are windows referenced by persisted terminals — unioned
+    /// with the in-memory `bindings` so a just-adopted window is never reaped.
+    /// `agentWindowNames` are the display names `new-terminal` pins on managed
+    /// agent windows. Tracks the agent-orphan set for the next pass's grace.
+    /// Best-effort; returns the count reaped (CROW-581).
+    @discardableResult
+    public func reconcileOrphanWindows(keepWindowIndices: Set<Int>, agentWindowNames: Set<String>) -> Int {
+        guard let ctrl = controller else { return 0 }
+        let keep = keepWindowIndices.union(bindings.values)
+        let windows = listCockpitWindows()
+        let previouslyOrphaned = orphanGraceWindows
+        var stillOrphanedAgents: Set<Int> = []
+        var reaped = 0
+        for w in windows {
+            // Agent-named orphans are grace candidates for the next pass.
+            if w.index != 0, !keep.contains(w.index), agentWindowNames.contains(w.name),
+               w.name.range(of: "manager", options: [.caseInsensitive]) == nil {
+                stillOrphanedAgents.insert(w.index)
+            }
+            if Self.shouldReapOrphanWindow(
+                index: w.index, name: w.name, command: w.command, keep: keep,
+                agentWindowNames: agentWindowNames,
+                seenOrphanedLastPass: previouslyOrphaned.contains(w.index)) {
+                ctrl.killWindow(index: w.index)
+                NSLog("[CrowTelemetry tmux:orphan_window_reaped index=\(w.index) name=\(w.name) command=\(w.command)]")
+                reaped += 1
+            }
+        }
+        orphanGraceWindows = stillOrphanedAgents
+        if reaped > 0 { NSLog("[Crow] Reaped \(reaped) orphaned cockpit window(s) (CROW-581)") }
+        return reaped
+    }
+
     /// Decide whether the Manager agent has exited, from one poll sample of its
     /// window's foreground command (#558). Because the agent (`claude …`) runs
     /// *inside* the window's shell wrapper rather than as the pane's direct
@@ -764,6 +866,7 @@ public final class TmuxBackend {
     /// Return the shared cockpit xterm surface, lazily creating it the
     /// first time. The surface attaches to the live tmux session via
     /// `tmux -S … attach-session -t …` as its child command.
+    #if canImport(AppKit)
     public func cockpitSurface() throws -> XTermSurfaceView {
         if let existing = sharedSurface { return existing }
         let ctrl = try ensureRunningServer()
@@ -799,6 +902,7 @@ public final class TmuxBackend {
     public var existingCockpitSurface: XTermSurfaceView? {
         sharedSurface
     }
+    #endif
 
     /// Destroy only the cockpit attach surface; the server, window bindings,
     /// sentinels and readiness watches all survive. The next `cockpitSurface()`

@@ -21,12 +21,14 @@ crow select-session --session <uuid>            → {"session_id":"..."}
 crow list-sessions                              → {"sessions":[...]}
 crow get-session --session <uuid>               → {id, name, status, ticket_url, ...}
 crow set-status --session <uuid> active|paused|inReview|completed|archived
+crow handoff-agent --session <uuid> --agent cursor [--note "..."] → {"session_id":"...","agent_kind":"...","terminal_id":"..."}
 crow delete-session --session <uuid>            → {"deleted":true}
 ```
 
 ### Metadata Commands
 ```
 crow set-ticket --session <uuid> --url "..." [--title "..."] [--number N]
+crow set-goal --session <uuid> --goal "..." | --clear                  → tag the session's org goal/KPI (feeds alignment weight; exactly one of --goal/--clear)
 crow add-link --session <uuid> --label "Issue" --url "..." --type ticket|pr|repo|custom
 crow list-links --session <uuid>
 crow transition-ticket --session <uuid> --to inProgress|inReview|done   → moves the linked ticket to a pipeline status (Jira honors jiraStatusMap)
@@ -91,7 +93,7 @@ The crow CLI is safe for concurrent use. Multiple `crow` commands can run simult
 
 - **Socket Server**: Each CLI connection is dispatched to GCD's global concurrent queue. Multiple connections are accepted and processed in parallel.
 - **State Mutations**: All RPC handlers use `await MainActor.run { ... }`, serializing all AppState mutations on the main thread. This prevents data races even when multiple CLI commands arrive simultaneously.
-- **Persistence**: JSONStore uses NSLock to serialize disk writes. Concurrent `mutate()` calls are safe.
+- **Persistence**: `JSONStore` serializes disk writes with `NSLock` and coalesces them by sequence — but **only within a single instance**. Its in-memory `_data` and `writeSeq` are instance state, and every `mutate` rewrites the whole `StoreData`. **All writers must therefore share the one injected `JSONStore`** (owned by `SessionService`, created in `AppDelegate`). Constructing a throwaway `JSONStore().mutate { … }` reads its own (possibly stale) disk snapshot, and its full-store write can silently clobber a record another writer just added (#728).
 - **Git Operations**: Each `setup.sh` creates its own worktree at a unique path, its own session (unique UUID), and its own terminal. There are no shared resources between parallel workspace setups.
 
 Use `/crow-batch-workspace` to set up multiple workspaces in parallel.
