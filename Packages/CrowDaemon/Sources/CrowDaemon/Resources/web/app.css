@@ -351,8 +351,12 @@ html, body {
 .tab.add { color: var(--gold); font-size: 16px; font-weight: 700; }
 .tab-close { color: var(--text-muted); font-size: 14px; }
 .tab-close:hover { color: var(--red); }
-#terminal-wrap { flex: 1; min-height: 0; background: #1e1e1e; position: relative; }
-#terminal { width: 100%; height: 100%; }
+#terminal-wrap { flex: 1; min-height: 0; background: #1e1e1e; position: relative; overscroll-behavior: contain; }
+/* #777: `touch-action: none` hands the one-finger gesture to enableTouchScroll
+   instead of iOS Safari's overscroll — without it Safari rubber-bands the fixed
+   xterm canvas and the swipe never reaches the buffer. Costs pinch-zoom over the
+   terminal (change the font size instead); long-press selection is unaffected. */
+#terminal { width: 100%; height: 100%; touch-action: none; }
 
 /* ---- Terminal skeleton loading overlay (#677) ----
    Masks the xterm attach/reload window (blank/garbled grid, reflow flash,
