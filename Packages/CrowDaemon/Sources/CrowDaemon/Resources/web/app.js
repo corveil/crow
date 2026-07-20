@@ -2074,7 +2074,13 @@ function renderScorecard(root) {
     rebuild.onclick = async () => {
       rebuild.disabled = true;
       rebuild.textContent = 'Rebuilding…';
-      try { await rpc('rebuild-scorecard'); } catch (_) { /* surfaced by the unchanged board */ }
+      try {
+        await rpc('rebuild-scorecard');
+      } catch (e) {
+        // Match the other board actions' failure affordance (alertModal) rather
+        // than swallow — a failed rebuild otherwise re-enables silently.
+        alertModal('Rebuild scorecard failed: ' + (e.message || e));
+      }
       rebuild.disabled = false;
       rebuild.textContent = 'Rebuild';
       refreshBoard('scorecard');
