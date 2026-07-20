@@ -227,7 +227,7 @@ Crow expects repositories organized under workspace folders:
 
 ```
 ~/Dev/                             # Development root
-├── Corveil/                  # Workspace (GitHub)
+├── Corveil/                       # Workspace (GitHub)
 │   ├── acme-api/                   # Main repo checkout
 │   ├── acme-api-134-sensor/        # Worktree for issue #134
 │   └── acme-api-209-review/        # Worktree for issue #209

@@ -1090,7 +1090,7 @@ public final class IssueTracker {
     struct ReconcileCandidate: Sendable, Equatable {
         let sessionID: UUID
         let provider: Provider
-        let repoSlug: String       // "corveil/corveil"
+        let repoSlug: String       // "corveil/crow"
         let branch: String
         let gitlabHost: String?    // nil for github.com
     }
