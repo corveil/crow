@@ -62,6 +62,7 @@ Backfill of merged PRs since the 0.1.0 release, grouped by theme.
 
 ### Tooling & Misc
 
+- #769 — `crowd` can start at login again (the gap ADR-0010 left when the macOS app was retired). `crow autostart install | uninstall | status` registers a launchd LaunchAgent — idempotent, re-points itself after an upgrade, and never bootstraps a duplicate over a running daemon. Same toggle at Settings → General → Autostart from a local browser. macOS only for now; Linux waits on #645.
 - #152 — Replace dock icon with the Corveil Brandmark.
 - #155 — Docs refresh: README, `make build` promotion, GitHub project scope wording.
 - #162 — Silence noisy console logs from Ghostty and IssueTracker.

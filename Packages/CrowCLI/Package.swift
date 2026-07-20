@@ -10,6 +10,7 @@ let package = Package(
     dependencies: [
         .package(path: "../CrowIPC"),
         .package(path: "../CrowCodex"),
+        .package(path: "../CrowAutostart"),
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.5.0"),
     ],
     targets: [
@@ -18,6 +19,7 @@ let package = Package(
             dependencies: [
                 "CrowIPC",
                 "CrowCodex",
+                "CrowAutostart",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ]
         ),
