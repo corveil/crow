@@ -396,9 +396,10 @@ public struct Scaffolder {
     }
 
     /// Wall-clock budget for the per-launch `corveil skill install` run. Tight
-    /// because `Scaffolder.scaffold(...)` runs on the main thread before the
-    /// app window is shown — a hung corveil binary delays first paint by this
-    /// many seconds. 5s is generous for a local subprocess that only writes
+    /// because `Scaffolder.scaffold(...)` runs synchronously on the daemon
+    /// launch path (`CrowDaemon.run` → `LaunchScaffold.run`) before the Manager
+    /// session is ensured — a hung corveil binary delays the Manager's spawn by
+    /// this many seconds. 5s is generous for a local subprocess that only writes
     /// one ~10KB file.
     static let corveilInstallTimeout: TimeInterval = 5.0
 

@@ -160,6 +160,25 @@ import CrowPersistence
         }
     }
 
+    /// An empty (or whitespace-only) `--dev-root ""` must NOT count as a
+    /// configured root: `NSString("").appendingPathComponent(".claude")`
+    /// resolves to a CWD-relative `.claude`, so honoring it would scaffold into
+    /// the process working directory — the exact footgun the gate prevents
+    /// (#766 review). It must fall through to the App Support / CWD resolution
+    /// exactly as if the flag were absent.
+    @Test func emptyDevRootFlagIsTreatedAsUnset() {
+        let empty = DaemonOptions.parse(["crowd", "--dev-root", ""])
+        let whitespace = DaemonOptions.parse(["crowd", "--dev-root", "   "])
+        let baseline = DaemonOptions.parse(["crowd"])
+
+        for options in [empty, whitespace] {
+            #expect(options.devRootConfigured == baseline.devRootConfigured)
+            #expect(options.devRoot == baseline.devRoot)
+            // Never a relative `.claude` root.
+            #expect(!options.devRoot.isEmpty)
+        }
+    }
+
     /// An empty `CROW_DEV_ROOT=` must read as unset rather than as an explicit
     /// override of `""` — otherwise the launch-time scaffold gate would open on
     /// a nonsense path. Exercised through the parse helper's env read.

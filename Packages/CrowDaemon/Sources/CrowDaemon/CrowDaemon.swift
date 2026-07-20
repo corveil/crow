@@ -860,10 +860,12 @@ struct DaemonOptions {
     static func parse(_ arguments: [String]) -> DaemonOptions {
         var options = DaemonOptions()
         var devRootExplicit = false
-        // An empty `CROW_DEV_ROOT=` is treated as unset, not as an explicit
-        // override of "" — otherwise it would count as a configured root and
-        // open the launch-time scaffold gate on a nonsense path (#766 review).
-        if let envRoot = ProcessInfo.processInfo.environment["CROW_DEV_ROOT"], !envRoot.isEmpty {
+        // An empty / whitespace-only `CROW_DEV_ROOT=` is treated as unset, not
+        // as an explicit override of "" — otherwise it would count as a
+        // configured root and open the launch-time scaffold gate on a nonsense
+        // path (#766 review).
+        if let envRoot = ProcessInfo.processInfo.environment["CROW_DEV_ROOT"]?
+            .trimmingCharacters(in: .whitespaces), !envRoot.isEmpty {
             options.devRoot = envRoot
             devRootExplicit = true
         }
@@ -874,6 +876,8 @@ struct DaemonOptions {
         while index < arguments.count {
             let flag = arguments[index]
             let next = index + 1 < arguments.count ? arguments[index + 1] : nil
+            // An empty / whitespace-only value read as its trimmed self, or nil.
+            let trimmedNext = next?.trimmingCharacters(in: .whitespaces)
             switch flag {
             case "--http-port":
                 if let value = next {
@@ -888,7 +892,13 @@ struct DaemonOptions {
             case "--host": if let value = next { options.host = value }; index += 1
             case "--socket", "--socket-path": if let value = next { options.socketPath = value }; index += 1
             case "--dev-root":
-                if let value = next {
+                // Same guard as empty `CROW_DEV_ROOT=`: an empty or
+                // whitespace-only `--dev-root ""` must NOT count as a configured
+                // root. `NSString("").appendingPathComponent(".claude")`
+                // resolves to a relative `.claude`, so honoring it would scaffold
+                // into the process CWD — the exact footgun `devRootConfigured`
+                // exists to prevent (#766 review).
+                if let value = trimmedNext, !value.isEmpty {
                     options.devRoot = value
                     devRootExplicit = true
                 }

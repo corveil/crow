@@ -72,12 +72,15 @@ enum LaunchScaffold {
     /// section, so co-existence is safe.
     private static func scaffoldAgents(devRoot: String) {
         let crowPath = ClaudeHookConfigWriter.findCrowBinary(devRoot: devRoot)
-        let env = ProcessInfo.processInfo.environment
 
         if AgentRegistry.shared.agent(for: .codex) != nil {
             attempt("Codex scaffold") { try CodexScaffolder.scaffold(devRoot: devRoot) }
             if let crowPath {
-                let codexHome = env["CODEX_HOME"] ?? NSString(string: "~/.codex").expandingTildeInPath
+                // An empty `CODEX_HOME=` is treated as unset — otherwise
+                // `appendingPathComponent("hooks.json")` on "" is a relative path
+                // and the config writes into the process CWD, matching the empty
+                // `XDG_CONFIG_HOME` guard below (#766 review).
+                let codexHome = nonEmptyEnv("CODEX_HOME") ?? NSString(string: "~/.codex").expandingTildeInPath
                 attempt("Codex global config install") {
                     try CodexHookConfigWriter.installGlobalConfig(codexHome: codexHome, crowPath: crowPath)
                     try CodexHookConfigWriter.installGlobalTomlConfig(codexHome: codexHome, crowPath: crowPath)
@@ -88,7 +91,9 @@ enum LaunchScaffold {
         if AgentRegistry.shared.agent(for: .cursor) != nil {
             attempt("Cursor scaffold") { try CursorScaffolder.scaffold(devRoot: devRoot) }
             if let crowPath {
-                let cursorHome = env["CURSOR_CONFIG_DIR"] ?? NSString(string: "~/.cursor").expandingTildeInPath
+                // Empty `CURSOR_CONFIG_DIR=` treated as unset, same reason as
+                // `CODEX_HOME` above.
+                let cursorHome = nonEmptyEnv("CURSOR_CONFIG_DIR") ?? NSString(string: "~/.cursor").expandingTildeInPath
                 attempt("Cursor global config install") {
                     try CursorHookConfigWriter.installGlobalConfig(cursorHome: cursorHome, crowPath: crowPath)
                 }
@@ -100,8 +105,7 @@ enum LaunchScaffold {
             if let crowPath {
                 // XDG spec: an empty `XDG_CONFIG_HOME` is treated as unset, so
                 // fall through to ~/.config/opencode rather than a relative path.
-                let xdg = env["XDG_CONFIG_HOME"]
-                let configHome = (xdg?.isEmpty == false ? xdg : nil)
+                let configHome = nonEmptyEnv("XDG_CONFIG_HOME")
                     .map { ($0 as NSString).appendingPathComponent("opencode") }
                     ?? NSString(string: "~/.config/opencode").expandingTildeInPath
                 attempt("OpenCode global config install") {
@@ -109,6 +113,14 @@ enum LaunchScaffold {
                 }
             }
         }
+    }
+
+    /// The value of environment variable `name`, or `nil` when it is unset or
+    /// empty. An empty config-home var must never survive to
+    /// `appendingPathComponent`, where "" yields a CWD-relative path.
+    private static func nonEmptyEnv(_ name: String) -> String? {
+        guard let value = ProcessInfo.processInfo.environment[name], !value.isEmpty else { return nil }
+        return value
     }
 
     /// Run one optional scaffold step, logging (never propagating) its failure —
