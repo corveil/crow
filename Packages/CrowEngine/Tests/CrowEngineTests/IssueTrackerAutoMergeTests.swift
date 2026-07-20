@@ -161,6 +161,18 @@ struct IssueTrackerAutoMergeTests {
         #expect(IssueTracker.AutoMergeSkipReason.changesRequested.rawValue == "changes-requested")
     }
 
+    // MARK: - canRunAutoCreate (review #787 — never burn crow:auto with no handler)
+
+    @Test func autoCreateRunsOnlyWhenEnabledAndDispatchable() {
+        #expect(IssueTracker.canRunAutoCreate(enabled: true, hasHandler: true))
+        // Enabled but no handler: the sweep would strip `crow:auto` after
+        // dispatching into nil, permanently burning the one-shot trigger on a
+        // daemon that never created a workspace. The label must survive.
+        #expect(!IssueTracker.canRunAutoCreate(enabled: true, hasHandler: false))
+        #expect(!IssueTracker.canRunAutoCreate(enabled: false, hasHandler: true))
+        #expect(!IssueTracker.canRunAutoCreate(enabled: false, hasHandler: false))
+    }
+
     // MARK: - shouldUpdateBranchBeforeMerge (BEHIND base)
 
     @Test func updatesBranchWhenBehindBase() {

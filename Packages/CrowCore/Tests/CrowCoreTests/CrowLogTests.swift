@@ -61,6 +61,47 @@ struct CrowLogTests {
         }
     }
 
+    @Test func logFileAndDirectoryAreOwnerOnly() throws {
+        // The log carries session UUIDs, PR URLs and raw `gh` error text — same
+        // 0o700 dir / 0o600 file treatment as JSONStore/ConfigStore (review #787).
+        try withTempLogDirectory { dir in
+            CrowLog.automation("first line creates the file")
+            let fm = FileManager.default
+            let filePerms = try #require(
+                (try fm.attributesOfItem(atPath: CrowLog.fileURL.path))[.posixPermissions] as? NSNumber)
+            let dirPerms = try #require(
+                (try fm.attributesOfItem(atPath: dir.path))[.posixPermissions] as? NSNumber)
+            #expect(filePerms.int16Value == 0o600)
+            #expect(dirPerms.int16Value == 0o700)
+
+            // Still owner-only after an append to the existing file...
+            CrowLog.automation("second line appends")
+            let afterAppend = try #require(
+                (try fm.attributesOfItem(atPath: CrowLog.fileURL.path))[.posixPermissions] as? NSNumber)
+            #expect(afterAppend.int16Value == 0o600)
+        }
+    }
+
+    @Test func permissionsSurviveRotation() throws {
+        try withTempLogDirectory { _ in
+            let url = CrowLog.fileURL
+            CrowLog.automation("seed")
+            let filler = String(repeating: "x", count: CrowLog.maxBytes + 1)
+            try filler.write(to: url, atomically: true, encoding: .utf8)
+
+            CrowLog.automation("triggers rotation")
+
+            let fm = FileManager.default
+            // Both the fresh active file and the rotated generation stay 0o600 —
+            // the atomic write above replaced the inode, dropping any prior mode.
+            for path in [url.path, url.appendingPathExtension("1").path] {
+                let perms = try #require(
+                    (try fm.attributesOfItem(atPath: path))[.posixPermissions] as? NSNumber)
+                #expect(perms.int16Value == 0o600, "\(path) should be owner-only")
+            }
+        }
+    }
+
     @Test func defaultDirectoryUnderTestsIsNotTheLiveLogDirectory() {
         // No `configure` override: the ADR 0012 test-process fallback must keep
         // the suite out of ~/Library/Logs/crow.

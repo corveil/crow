@@ -153,6 +153,21 @@ public final class IssueTracker {
     /// bury the interesting entries at one line per 60s poll (CROW-782).
     private var lastAutoMergeDisabledLogAt: Date?
 
+    /// Same hourly rate-limit for the two other steady-state "nothing happened"
+    /// lines — an idle auto-rebase watcher and `crow:auto` issues with no
+    /// handler to dispatch them. At one line per 60s poll they'd rotate the
+    /// interesting entries out of the log (review #787).
+    private var lastAutoRebaseIdleLogAt: Date?
+    private var lastAutoCreateUndispatchableLogAt: Date?
+
+    /// Why we permanently stopped trying to auto-merge a PR, keyed by PR URL.
+    /// `autoMergeInFlight` is deliberately left set for permanent outcomes (repo
+    /// disallows auto-merge, no Crow-Session trailer) so the failure isn't
+    /// re-logged every poll — but then the per-poll summary would report a bare
+    /// `in-flight` forever instead of the real reason. Recording it here keeps
+    /// the summary honest (review #787).
+    private var autoMergePermanentSkips: [String: String] = [:]
+
     /// Per-head-commit guard for `gh pr update-branch`. Keyed
     /// `"<url>\n<headRefOid>"` so a PR that is `BEHIND` its base gets exactly
     /// one update attempt per head state — a successful update adds a merge
@@ -638,8 +653,19 @@ public final class IssueTracker {
     /// No-op when the global `autoCreateWatcherEnabled` setting is off
     /// (CROW-312). The label is intentionally left in place while disabled
     /// so a later opt-in still picks up the issue on the next poll.
+    ///
+    /// Also a no-op when no `onAutoCreateRequest` handler is wired: since
+    /// CROW-782 the *provider* is armed even on a daemon with no tmux (and so no
+    /// Manager terminal to spawn into), and dispatching into a nil callback here
+    /// would strip `crow:auto` anyway — permanently burning the one-shot trigger
+    /// for a workspace that was never created (review #787). Same contract as
+    /// the disabled case: leave the label, pick it up once a host can act.
     private func detectAutoCreateCandidates(issues: [AssignedIssue]) {
-        guard autoCreateWatcherEnabledProvider() else { return }
+        guard Self.canRunAutoCreate(enabled: autoCreateWatcherEnabledProvider(),
+                                    hasHandler: onAutoCreateRequest != nil) else {
+            if autoCreateWatcherEnabledProvider() { logAutoCreateUndispatchableIfDue(issues: issues) }
+            return
+        }
         // Purge in-flight URLs that now have an active session — the dispatch
         // succeeded and the set can shrink.
         if !autoCreateInFlight.isEmpty {
@@ -662,6 +688,33 @@ public final class IssueTracker {
             onAutoCreateRequest?(issue)
             Task { [weak self] in await self?.removeAutoCreateLabel(from: issue) }
         }
+    }
+
+    /// Whether the auto-create sweep may run — i.e. whether stripping `crow:auto`
+    /// (which the sweep always does after dispatch) is justified. Requires BOTH
+    /// the config opt-in AND a wired handler: dispatching into a nil callback
+    /// still burns the one-shot label without creating anything (review #787).
+    /// Pure so the rule is unit-testable without an `IssueTracker`.
+    nonisolated static func canRunAutoCreate(enabled: Bool, hasHandler: Bool) -> Bool {
+        enabled && hasHandler
+    }
+
+    /// Say (hourly at most) that `crow:auto` issues are waiting but nothing can
+    /// act on them — the enabled-but-undispatchable state a no-tmux daemon is in.
+    /// Silent when there's nothing labeled, so a normal headless daemon with no
+    /// pending auto-create work doesn't log at all.
+    private func logAutoCreateUndispatchableIfDue(issues: [AssignedIssue]) {
+        let waiting = issues.filter { issue in
+            issue.state == "open"
+                && issue.labels.contains { $0.name.caseInsensitiveCompare(Self.autoCreateLabel) == .orderedSame }
+        }
+        guard !waiting.isEmpty else { return }
+        let now = Date()
+        if let last = lastAutoCreateUndispatchableLogAt, now.timeIntervalSince(last) < 3600 { return }
+        lastAutoCreateUndispatchableLogAt = now
+        CrowLog.automation(
+            "crow:auto: \(waiting.count) labeled issue(s) waiting but no onAutoCreateRequest handler is "
+            + "wired (no Manager terminal — is tmux available?); leaving the label in place")
     }
 
     /// Best-effort removal of the auto-create label. Failure is logged and
@@ -2393,7 +2446,9 @@ public final class IssueTracker {
         for session in appState.sessions where !session.isManager {
             guard let prLink = appState.links(for: session.id).first(where: { $0.linkType == .pr }) else { continue }
             guard !autoMergeInFlight.contains(prLink.url) else {
-                skips.append("\(prLink.url):in-flight")
+                // A permanent outcome keeps its marker set on purpose — report
+                // the reason it stopped, not the bare marker (review #787).
+                skips.append("\(prLink.url):\(autoMergePermanentSkips[prLink.url] ?? "in-flight")")
                 continue
             }
             guard let pr = byURL[prLink.url] else {
@@ -2469,6 +2524,9 @@ public final class IssueTracker {
             return
         }
         guard await prHasCrowAuthoredCommit(pr: pr, backend: backend) else {
+            // Leaves `autoMergeInFlight` set (one log line, not one per poll);
+            // record why so the summary doesn't just say "in-flight" forever.
+            autoMergePermanentSkips[pr.url] = "no-crow-session-trailer"
             CrowLog.automation("auto-merge: #\(pr.number) ignored — no Crow-Session trailer matching a known session")
             return
         }
@@ -2476,8 +2534,12 @@ public final class IssueTracker {
         await ensureMergeLabel(repo: pr.repoNameWithOwner, backend: backend)
 
         guard backend.capabilities.contains(.autoMerge) else {
-            // Capability gate: don't even try if the backend can't enable auto-merge.
-            autoMergeInFlight.remove(pr.url)
+            // Capability gate: don't even try if the backend can't enable
+            // auto-merge. A backend's capability set is static, so this is
+            // permanent — keep the in-flight marker (with its reason) rather
+            // than clearing it and re-running the authorship commit fetch, and
+            // re-logging, on every 60s poll (review #787).
+            autoMergePermanentSkips[pr.url] = "backend-lacks-auto-merge-capability"
             CrowLog.automation("auto-merge: #\(pr.number) skipped — backend lacks the autoMerge capability")
             return
         }
@@ -2503,11 +2565,13 @@ public final class IssueTracker {
             if Self.isPermanentAutoMergeFailure(error) {
                 // Leave `autoMergeInFlight` set so subsequent polls skip this
                 // PR instead of re-logging a permanent repo policy failure.
+                autoMergePermanentSkips[pr.url] = "repo-disallows-auto-merge"
                 CrowLog.automation(
                     "auto-merge: #\(pr.number) permanently skipped (auto-merge not allowed on repo): "
                     + error.localizedDescription)
             } else {
                 autoMergeInFlight.remove(pr.url)
+                autoMergePermanentSkips[pr.url] = nil
                 CrowLog.automation(
                     "auto-merge: #\(pr.number) enableAutoMerge failed (will retry next poll): "
                     + error.localizedDescription)
@@ -2527,20 +2591,22 @@ public final class IssueTracker {
     private func attemptUpdateBranch(session: Session, pr: ViewerPR) async {
         guard let backend = codeBackend(for: session) else { return }
         guard await prHasCrowAuthoredCommit(pr: pr, backend: backend) else {
-            NSLog("[Crow] crow:merge update-branch skipped on %@ — no Crow-Session trailer matching a known session",
-                  pr.url as NSString)
+            CrowLog.automation(
+                "auto-merge: #\(pr.number) update-branch skipped — no Crow-Session trailer matching a known session")
             return
         }
 
         defer { autoMergeInFlight.remove(pr.url) }
-        guard backend.capabilities.contains(.updateBranch) else { return }
+        guard backend.capabilities.contains(.updateBranch) else {
+            CrowLog.automation("auto-merge: #\(pr.number) update-branch skipped — backend lacks the updateBranch capability")
+            return
+        }
         do {
             try await backend.updateBranch(prURL: pr.url)
-            NSLog("[Crow] Updated branch for %@ (session %@, was BEHIND base)",
-                  pr.url as NSString, session.id.uuidString as NSString)
+            CrowLog.automation(
+                "auto-merge: #\(pr.number) branch updated from base (session \(session.id.uuidString), was BEHIND)")
         } catch {
-            NSLog("[Crow] updateBranch failed for %@: %@",
-                  pr.url as NSString, error.localizedDescription as NSString)
+            CrowLog.automation("auto-merge: #\(pr.number) updateBranch failed: \(error.localizedDescription)")
         }
     }
 
@@ -2638,7 +2704,17 @@ public final class IssueTracker {
             Task { await self.attemptRebase(session: capturedSession, pr: pr) }
         }
         if dispatched == 0 {
-            CrowLog.automation("auto-rebase: enabled, no candidates this poll")
+            // Hourly, not per-poll: an idle-but-enabled watcher is the steady
+            // state, and one line per 60s would rotate the interesting entries
+            // out of the log (review #787).
+            let now = Date()
+            if lastAutoRebaseIdleLogAt.map({ now.timeIntervalSince($0) >= 3600 }) ?? true {
+                lastAutoRebaseIdleLogAt = now
+                CrowLog.automation("auto-rebase: enabled, no candidates this poll")
+            }
+        } else {
+            // A live dispatch means the next idle stretch is worth reporting.
+            lastAutoRebaseIdleLogAt = nil
         }
     }
 

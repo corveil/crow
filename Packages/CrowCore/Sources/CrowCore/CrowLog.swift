@@ -83,7 +83,9 @@ public enum CrowLog {
         let dir = resolvedDirectoryLocked()
         let url = dir.appendingPathComponent("crowd-automation.log")
         let fm = FileManager.default
-        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        try? fm.createDirectory(
+            at: dir, withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700])
 
         rotateIfNeededLocked(url: url)
 
@@ -93,9 +95,16 @@ public enum CrowLog {
             _ = try? handle.seekToEnd()
             try? handle.write(contentsOf: data)
         } else {
-            // First write (or the file was removed under us) — create it.
+            // First write, or the file was rotated/removed under us — create it.
             try? data.write(to: url, options: .atomic)
         }
+        // The log carries session UUIDs, PR URLs and raw `gh` error text, so it
+        // gets the same owner-only treatment as Crow's other durable local state
+        // (JSONStore / ConfigStore, 0o700 dirs + 0o600 files). Re-applied after
+        // every write: an atomic write replaces the inode, so permissions set on
+        // a previous generation don't carry over (review #787).
+        try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        try? fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path)
     }
 
     private static func rotateIfNeededLocked(url: URL) {
@@ -105,6 +114,10 @@ public enum CrowLog {
         let rotated = url.appendingPathExtension("1")
         try? fm.removeItem(at: rotated)
         try? fm.moveItem(at: url, to: rotated)
+        // The rotated generation holds the same data as the active file, so it
+        // keeps the same owner-only permissions (a move preserves them, but the
+        // active file may predate this hardening).
+        try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: rotated.path)
     }
 
     /// Mirrors `JSONStore.isRunningUnderTests()` — see ADR 0012 for why each
