@@ -12,7 +12,15 @@ const epilogue = `
   set ticketRepoFilter(v){ticketRepoFilter=v;},
   set ticketFilter(v){ticketFilter=v;},
   set ticketSearch(v){ticketSearch=v;},
+  set ticketRefreshPending(v){ticketRefreshPending=v;},
+  set reviewRefreshPending(v){reviewRefreshPending=v;},
   renderBoard(){ return renderBoard(); },
+  ticketsCard(){ return ticketsCard(); },
+  ticketsRefreshing(){ return ticketsRefreshing(); },
+  get sidebarCacheKey(){return SIDEBAR_CACHE_KEY;},
+  clearDaemonRefreshFlag(){ return clearDaemonRefreshFlag(); },
+  persistSidebarCache(){ return persistSidebarCache(); },
+  restoreSidebarCache(){ return restoreSidebarCache(); },
 };
 `;
 const APP_JS = __dirname + '/../Sources/CrowDaemon/Resources/web/app.js';
@@ -136,6 +144,75 @@ const toggleBtn = [...q('.card-desc-toggle')].find((b) => b.textContent === 'Sho
 toggleBtn.onclick({ stopPropagation() {} });
 check('after toggle, one desc expanded', q('.card-desc.expanded').length === 1);
 check('toggle now reads Show less', [...q('.card-desc-toggle')].some((b) => b.textContent === 'Show less'));
+
+// -- Refresh in-progress indicator (CROW-771) --
+// Two independent sources feed `ticketsRefreshing()`: the daemon's `loading`
+// flag on the board payload (covers the automatic poll) and the local
+// `ticketRefreshPending` flag (covers the click→first-re-read gap).
+console.log('\nRefresh spinner — idle:');
+delete payload.loading; T.ticketRefreshPending = false; render();
+check('no spinner in board head', q('.board-title .action-spinner').length === 0);
+check('Refresh button enabled', [...q('.action-btn')].find((b) => b.textContent === 'Refresh').disabled === false);
+
+console.log('\nRefresh spinner — daemon `loading: true` (automatic refresh):');
+payload.loading = true; render();
+check('spinner beside the board title', q('.board-title .action-spinner').length === 1);
+check('Refresh button disabled', [...q('.action-btn')].find((b) => b.textContent === 'Refresh').disabled === true);
+
+console.log('\nRefresh spinner — local pending flag alone (manual click):');
+payload.loading = false; T.ticketRefreshPending = true; render();
+check('spinner shown without the daemon flag', q('.board-title .action-spinner').length === 1);
+check('Refresh button disabled', [...q('.action-btn')].find((b) => b.textContent === 'Refresh').disabled === true);
+
+console.log('\nRefresh spinner — sidebar Tickets card ↻:');
+check('↻ spins + disabled while refreshing', (() => {
+  const b = T.ticketsCard().querySelector('.tickets-refresh');
+  return b.className.includes('spinning') && b.disabled === true && /Refreshing/.test(b.title);
+})());
+T.ticketRefreshPending = false;
+check('↻ idle when not refreshing', (() => {
+  const b = T.ticketsCard().querySelector('.tickets-refresh');
+  return !b.className.includes('spinning') && b.disabled === false && b.title === 'Refresh tickets';
+})());
+
+console.log('\nRefresh spinner — Reviews board:');
+T.boardData.reviews = { reviews: [], unseen: 0 };
+T.selectedBoard = 'reviews';
+T.reviewRefreshPending = true; T.renderBoard();
+check('spinner beside the Reviews title', q('.board-title .action-spinner').length === 1);
+check('Reviews Refresh disabled', [...q('.action-btn')].find((b) => b.textContent === 'Refresh').disabled === true);
+T.reviewRefreshPending = false; T.renderBoard();
+check('Reviews idle: no spinner, button enabled',
+  q('.board-title .action-spinner').length === 0
+  && [...q('.action-btn')].find((b) => b.textContent === 'Refresh').disabled === false);
+
+// The daemon half of the flag has no `finally` to fall back on — it clears only
+// when a later `list-tickets` says so. These cover the paths where that never
+// comes, which would otherwise strand the spinner (AC3; PR #784 review).
+console.log('\nStale `loading` never strands the spinner:');
+T.selectedBoard = 'tickets';
+T.boardData.tickets = Object.assign({}, payload, { loading: true });
+check('sanity: daemon flag alone marks it refreshing', T.ticketsRefreshing() === true);
+T.clearDaemonRefreshFlag();
+check('clearing the daemon flag stops the indicator', T.ticketsRefreshing() === false);
+check('clear is idempotent when already false', (() => { T.clearDaemonRefreshFlag(); return T.ticketsRefreshing() === false; })());
+
+console.log('\nSidebar cache never resurrects a spinner across a reload:');
+T.boardData.tickets = Object.assign({}, payload, { loading: true });
+T.persistSidebarCache();                       // cache written mid-fetch
+check('persisted payload has loading stripped',
+  JSON.parse(window.localStorage.getItem(T.sidebarCacheKey) || '{}').tickets.loading === false);
+T.boardData.tickets = { counts: {}, issues: [] };
+T.restoreSidebarCache();                       // …and read back on the next boot
+check('restored payload is not refreshing', T.ticketsRefreshing() === false);
+check('restore kept the rest of the payload', T.boardData.tickets.issues.length === 3);
+
+// A legacy cache written before the strip landed must also be scrubbed.
+window.localStorage.setItem(T.sidebarCacheKey, JSON.stringify({
+  sessions: [], tickets: Object.assign({}, payload, { loading: true }), reviews: { reviews: [] },
+}));
+T.restoreSidebarCache();
+check('legacy cache with loading:true is scrubbed on restore', T.ticketsRefreshing() === false);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

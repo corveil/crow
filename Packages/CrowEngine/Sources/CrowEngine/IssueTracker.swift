@@ -49,6 +49,15 @@ public final class IssueTracker {
     /// trigger a session, not just newly-arrived ones.
     public var onReviewRequestsRefreshed: (([ReviewRequest]) -> Void)?
 
+    /// Callback fired immediately after `appState.isLoadingIssues` flips, in
+    /// both directions. Lets a client-facing UI be nudged at the moment the
+    /// flag is observable, rather than guessing around `refresh()` from the
+    /// outside: a nudge issued *before* `refresh()` races the flag being set,
+    /// and fires spuriously when the rate-limit guard skips the poll
+    /// (CROW-771). Fires only on a real transition, so a skipped poll is
+    /// silent.
+    public var onLoadingIssuesChanged: (() -> Void)?
+
     /// Callback for detected PR status transitions — fires once per
     /// transition, after dedupe. Wired in AppDelegate to drive notifications
     /// and the auto-respond coordinator.
@@ -390,8 +399,14 @@ public final class IssueTracker {
         isRefreshing = true
         defer { isRefreshing = false }
 
+        // Announce the in-flight window only once the flag is actually set, so
+        // an observer that re-reads on the nudge can never miss it (CROW-771).
         appState.isLoadingIssues = true
-        defer { appState.isLoadingIssues = false }
+        onLoadingIssuesChanged?()
+        defer {
+            appState.isLoadingIssues = false
+            onLoadingIssuesChanged?()
+        }
 
         let startedAt = Date()
 

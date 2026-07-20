@@ -23,6 +23,10 @@
   // browser (loopback, no proxy), false for a proxied/remote session — which
   // sees those settings read-only (CROW-593).
   let isLocal = false;
+  // Login-item state from GET /autostart (CROW-769). Not part of config.json —
+  // it's a host-machine registration, so the toggle acts immediately instead of
+  // riding the Save button. null when the read failed.
+  let autostart = null;
 
   const TABS = [
     ['general', 'General'],
@@ -38,14 +42,38 @@
     taskComplete: 'Task Complete', agentWaiting: 'Agent Waiting',
     reviewRequested: 'Review Requested', changesRequested: 'Changes Requested',
     checksFailing: 'CI Failing',
+    autoWorkspaceCreated: 'Auto-Workspace Created', autoMergeEnabled: 'Auto-Merge Enabled',
+    autoRebasePushed: 'Branch Rebased', autoRebaseConflicts: 'Rebase Conflicts',
+    configReloaded: 'Config Reloaded',
+  };
+  // One-line "what fires this" hint per event, so the automation entries aren't
+  // guesswork (CrowCore NotificationEvent.description).
+  const EVENT_HINTS = {
+    taskComplete: 'Claude finished responding.',
+    agentWaiting: 'Claude needs your input or permission.',
+    reviewRequested: 'Someone requested your review on a PR.',
+    changesRequested: 'A reviewer requested changes on your PR.',
+    checksFailing: 'CI checks started failing on your PR.',
+    autoWorkspaceCreated: 'Crow auto-created a workspace for a crow:auto-labeled issue.',
+    autoMergeEnabled: 'Crow enabled auto-merge on a crow:merge-labeled PR.',
+    autoRebasePushed: 'Crow rebased a PR branch onto its base and force-pushed.',
+    autoRebaseConflicts: 'An auto-rebase hit conflicts that need attention.',
+    configReloaded: 'Crow picked up a change to config.json.',
   };
   // Canonical NotificationEvent set + defaults (CrowCore NotificationEvent) —
-  // the config only stores events the user has touched, so we render all five
-  // and materialize any missing ones with their default sound (CROW-593).
-  const EVENT_ORDER = ['taskComplete', 'agentWaiting', 'reviewRequested', 'changesRequested', 'checksFailing'];
+  // the config only stores events the user has touched, so we render all of them
+  // and materialize any missing ones with their default sound (CROW-593). The
+  // trailing five are Crow's own automation events (CROW-768).
+  const EVENT_ORDER = [
+    'taskComplete', 'agentWaiting', 'reviewRequested', 'changesRequested', 'checksFailing',
+    'autoWorkspaceCreated', 'autoMergeEnabled', 'autoRebasePushed', 'autoRebaseConflicts',
+    'configReloaded',
+  ];
   const EVENT_DEFAULT_SOUND = {
     taskComplete: 'Glass', agentWaiting: 'Funk', reviewRequested: 'Glass',
     changesRequested: 'Funk', checksFailing: 'Sosumi',
+    autoWorkspaceCreated: 'Hero', autoMergeEnabled: 'Glass',
+    autoRebasePushed: 'Bottle', autoRebaseConflicts: 'Basso', configReloaded: 'Tink',
   };
   const BUILT_IN_SOUNDS = [
     'Basso', 'Blow', 'Bottle', 'Frog', 'Funk', 'Glass', 'Hero', 'Morse',
@@ -116,6 +144,10 @@
     // gateways) — editable locally, read-only when proxied/remote (CROW-593).
     try { const cr = await fetch('/auth/context'); isLocal = cr.ok ? !!(await cr.json()).local : false; }
     catch (_) { isLocal = false; }
+    // Is crowd registered to start at login? Read-only for everyone; only a
+    // local browser may change it (CROW-769).
+    try { const ar2 = await fetch('/autostart'); autostart = ar2.ok ? await ar2.json() : null; }
+    catch (_) { autostart = null; }
     dirty = false;
     subForm = null;
     activeTab = 'general';
@@ -443,6 +475,8 @@
     body.appendChild(textField('Path', { path: devRoot }, 'path',
       { readonly: true, help: 'The dev root is fixed for this daemon and managed in the desktop app.' }));
 
+    renderAutostart(body);
+
     body.appendChild(group('Agent'));
     if (agents.length >= 2) {
       // Choose the default agent, like the desktop Settings picker. The options
@@ -490,6 +524,58 @@
     body.appendChild(selectField('Retention', cfg.cleanup, 'retentionHours', [
       [1, '1 hour'], [4, '4 hours'], [8, '8 hours'], [24, '1 day'], [72, '3 days'], [168, '7 days'], [720, '30 days'],
     ], { number: true }));
+  }
+
+  // "Start Crow at login" (CROW-769). Unlike the rest of General this is not a
+  // config field: it registers a launch agent on the machine running crowd, so
+  // the toggle POSTs immediately (no Save) and — like the web password and the
+  // AI gateways — only a local browser may change it.
+  function renderAutostart(body) {
+    body.appendChild(group('Autostart'));
+    if (!autostart) {
+      body.appendChild(readonlyNote('Could not read the autostart status from crowd.'));
+      return;
+    }
+    if (!autostart.supported || !isLocal) {
+      body.appendChild(readonlyNote(autostart.supported
+        ? autostart.message + ' Autostart is changed only from a local browser (on the machine running crowd).'
+        : autostart.message));
+      return;
+    }
+
+    const row = el('label', 'st-switch-row');
+    const input = el('input', 'st-switch');
+    input.type = 'checkbox';
+    input.checked = !!autostart.enabled;
+    input.onchange = async () => {
+      input.disabled = true;
+      try {
+        autostart = await postConfig('/autostart', { enabled: input.checked });
+      } catch (err) {
+        alertModal('Could not change autostart: ' + (err.message || err));
+        input.checked = !input.checked;
+      }
+      input.disabled = false;
+      render();
+    };
+    row.appendChild(input);
+    row.appendChild(el('span', 'st-switch-label', 'Start Crow at login'));
+    const f = el('div', 'st-field');
+    f.appendChild(row);
+    f.appendChild(el('div', 'st-help', autostart.message));
+    body.appendChild(f);
+
+    // A plist left pointing at a crowd that has since moved — one click re-points it.
+    if (autostart.stale) {
+      const fix = el('button', 'action-primary', 'Re-point to this crowd');
+      fix.onclick = async () => {
+        fix.disabled = true;
+        try { autostart = await postConfig('/autostart', { enabled: true }); }
+        catch (err) { alertModal('Could not re-point autostart: ' + (err.message || err)); }
+        render();
+      };
+      body.appendChild(field(null, fix));
+    }
   }
 
   // ---- Automation ---------------------------------------------------------
@@ -592,7 +678,7 @@
 
     for (const [raw, conf] of ensureAllEvents(n)) {
       body.appendChild(group(EVENT_LABELS[raw] || raw));
-      body.appendChild(toggleField('Enabled', conf, 'enabled'));
+      body.appendChild(toggleField('Enabled', conf, 'enabled', EVENT_HINTS[raw]));
       body.appendChild(toggleField('Play sound', conf, 'soundEnabled'));
       body.appendChild(toggleField('System notification', conf, 'systemNotificationEnabled'));
       body.appendChild(soundField(conf));

@@ -12,6 +12,8 @@ let package = Package(
         .package(path: "../CrowPersistence"),
         .package(path: "../CrowGit"),
         .package(path: "../CrowIPC"),
+        // Login-item installer shared with the crow CLI (CROW-769).
+        .package(path: "../CrowAutostart"),
         .package(path: "../CrowTerminal"),
         // The headless engine (IssueTracker / AllowListService) + its provider
         // layer, so the daemon owns the board reads with the app down (CROW-581).
@@ -42,6 +44,7 @@ let package = Package(
                 .product(name: "CrowPersistence", package: "CrowPersistence"),
                 .product(name: "CrowGit", package: "CrowGit"),
                 .product(name: "CrowIPC", package: "CrowIPC"),
+                .product(name: "CrowAutostart", package: "CrowAutostart"),
                 .product(name: "CrowTerminal", package: "CrowTerminal"),
                 .product(name: "CrowEngine", package: "CrowEngine"),
                 .product(name: "CrowProvider", package: "CrowProvider"),
@@ -63,6 +66,8 @@ let package = Package(
             dependencies: [
                 "CrowDaemon",
                 .product(name: "CrowCore", package: "CrowCore"),
+                .product(name: "CrowAutostart", package: "CrowAutostart"),
+                .product(name: "HummingbirdTesting", package: "hummingbird"),
                 .product(name: "CrowClaude", package: "CrowClaude"),
                 .product(name: "CrowEngine", package: "CrowEngine"),
                 .product(name: "CrowProvider", package: "CrowProvider"),

@@ -1,6 +1,6 @@
 # `crow` CLI Reference
 
-The `crow` CLI communicates over a Unix socket at `~/.local/share/crow/crow.sock` (override with `CROW_SOCKET`). A server must be listening on it for RPC commands to succeed — the `crowd` daemon owns this socket. `crow setup` is the only subcommand that works with nothing listening.
+The `crow` CLI communicates over a Unix socket at `~/.local/share/crow/crow.sock` (override with `CROW_SOCKET`). A server must be listening on it for RPC commands to succeed — the `crowd` daemon owns this socket. `crow setup` and `crow autostart` are the only subcommands that work with nothing listening.
 
 All commands print JSON to stdout on success. Session and terminal identifiers are full UUIDs (e.g. `a1b2c3d4-e5f6-7890-abcd-ef1234567890`) — short names are not accepted.
 
@@ -23,7 +23,35 @@ crow setup --dev-root ~/Dev
 | ------------ | -------- | ------------------------------------------- |
 | `--dev-root` | no       | Skip the interactive dev-root prompt        |
 
-This is the only subcommand that does not require a running app.
+This is one of two subcommands that do not require a running daemon (see `crow autostart`).
+
+---
+
+## Autostart
+
+### `crow autostart install | uninstall | status`
+
+Registers `crowd` to start at login — a launchd LaunchAgent at `~/Library/LaunchAgents/com.corveil.crowd.plist`, logging to `~/Library/Logs/crow/crowd.log`. Runs locally instead of over the socket, so it works with the daemon down (which is the point). macOS only for now; on other platforms it reports `supported: false` rather than pretending to register anything. The same control lives at Settings → General → Autostart for a local browser.
+
+```bash
+crow autostart install
+crow autostart install --host 0.0.0.0 --port 8080 --dev-root ~/Dev
+crow autostart status --json
+crow autostart uninstall
+```
+
+Bare `crow autostart` is `status`. `install` is idempotent and re-points the login item at the current `crowd` on every run, so an upgrade never leaves a stale plist. When a `crowd` is already running, `install` writes the login item and leaves launchd alone — it takes effect at next login rather than spawning a duplicate the single-instance guard would refuse.
+
+| Flag         | Applies to        | Description                                                              |
+| ------------ | ----------------- | ------------------------------------------------------------------------ |
+| `--binary`   | install, status   | Path to `crowd` (default: next to this `crow`, then `PATH`)              |
+| `--host`     | install           | Bind host passed to `crowd`                                              |
+| `--port`     | install           | HTTP port passed to `crowd`                                              |
+| `--dev-root` | install           | Development root passed to `crowd`                                       |
+| `--socket`   | install           | Unix socket path passed to `crowd`                                       |
+| `--json`     | all               | Print the status object instead of the human summary                     |
+
+The status object reports `enabled` (registered at login), `running` (a `crowd` is answering right now), `loaded` (launchd knows it in this session), and `stale` (the registration points at a different binary than `--binary` / the resolved one).
 
 ---
 

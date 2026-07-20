@@ -37,6 +37,9 @@ function rpcConnect() {
       // daemon — re-fetch the live surfaces now instead of waiting for the
       // interval poll (CROW-581, M-D).
       if (msg.id == null && msg.method === 'changed') { onServerChanged(); return; }
+      // Automation event push (CROW-768): a moment Crow acted on the user's
+      // behalf, which no client can derive from polled state.
+      if (msg.id == null && msg.method === 'notify') { onServerNotify(msg.params); return; }
       const waiter = rpcState.pending.get(msg.id);
       if (!waiter) return;
       rpcState.pending.delete(msg.id);
@@ -51,6 +54,10 @@ function rpcConnect() {
       // Reject in-flight rpcs instead of leaving them stuck until the 10s timeout.
       rpcState.pending.forEach((w) => w.reject(new Error('rpc: connection closed')));
       rpcState.pending.clear();
+      // Daemon's gone, so its in-flight refresh flag will never be cleared for
+      // us. Drop it here rather than waiting for a board poll that may not run
+      // (the interval only polls an *open* board) (CROW-771).
+      clearDaemonRefreshFlag();
       // A crowd restart wipes its in-memory sessions, so a remote web cookie may now
       // be invalid — probe and, if so, stop reconnecting and surface "Log in" (CROW-593).
       handleAuthOnDisconnect();
@@ -150,6 +157,10 @@ window.reloadUIConfig = loadUIConfig;
 const DEFAULT_EVENT_SOUND = {
   taskComplete: 'Glass', agentWaiting: 'Funk', reviewRequested: 'Glass',
   changesRequested: 'Funk', checksFailing: 'Sosumi',
+  // Automation events (CROW-768) — Basso for conflicts so "needs attention" is
+  // audibly distinct from the success events beside it.
+  autoWorkspaceCreated: 'Hero', autoMergeEnabled: 'Glass',
+  autoRebasePushed: 'Bottle', autoRebaseConflicts: 'Basso', configReloaded: 'Tink',
 };
 
 // NotificationEvent.displayName / .description (CrowCore) — reused for the
@@ -158,6 +169,9 @@ const EVENT_LABEL = {
   taskComplete: 'Task Complete', agentWaiting: 'Agent Waiting',
   reviewRequested: 'Review Requested', changesRequested: 'Changes Requested',
   checksFailing: 'CI Failing',
+  autoWorkspaceCreated: 'Auto-Workspace Created', autoMergeEnabled: 'Auto-Merge Enabled',
+  autoRebasePushed: 'Branch Rebased', autoRebaseConflicts: 'Rebase Conflicts',
+  configReloaded: 'Config Reloaded',
 };
 const EVENT_DESC = {
   taskComplete: 'Claude finished responding',
@@ -165,7 +179,23 @@ const EVENT_DESC = {
   reviewRequested: 'Someone requested your review on a PR',
   changesRequested: 'A reviewer requested changes on your PR',
   checksFailing: 'CI checks started failing on your PR',
+  autoWorkspaceCreated: 'Crow auto-created a workspace for an assigned issue',
+  autoMergeEnabled: 'Crow enabled auto-merge on a PR',
+  autoRebasePushed: 'Crow rebased a PR branch onto its base and pushed',
+  autoRebaseConflicts: 'An auto-rebase hit conflicts that need attention',
+  configReloaded: 'Crow reloaded its configuration',
 };
+
+// NotificationEvent.isAutomationEvent (CrowCore) — the events the daemon pushes
+// rather than the client deriving them from polled state (CROW-768).
+const AUTOMATION_EVENTS = [
+  'autoWorkspaceCreated', 'autoMergeEnabled', 'autoRebasePushed',
+  'autoRebaseConflicts', 'configReloaded',
+];
+// Every event the notification layer knows about, in the Settings tab's order.
+const ALL_EVENTS = [
+  'taskComplete', 'agentWaiting', 'reviewRequested', 'changesRequested', 'checksFailing',
+].concat(AUTOMATION_EVENTS);
 
 // Crow brandmark (96px) as a data URL, so notifications are visibly ours
 // without adding a server asset route — Chrome won't render SVG notification
@@ -274,9 +304,7 @@ function playEventSound(event, key) {
 // crowTestSound('agentWaiting') plays one. Bypasses config/dedup so it's always
 // audible — useful to confirm audio works and hear each configured tone.
 window.crowTestSound = function (event) {
-  const evs = event
-    ? [event]
-    : ['taskComplete', 'agentWaiting', 'reviewRequested', 'changesRequested', 'checksFailing'];
+  const evs = event ? [event] : ALL_EVENTS;
   evs.forEach((ev, i) => setTimeout(() => {
     const cfg = (uiConfig.notifications && uiConfig.notifications.events[ev]) || {};
     const name = cfg.soundName || DEFAULT_EVENT_SOUND[ev] || 'Glass';
@@ -323,8 +351,11 @@ function sessionNameFor(id) {
   return (s && s.name) || 'Session';
 }
 
+// `detail` (optional) carries a server-supplied { title, body } for automation
+// events, whose text is specific (PR number, issue title) rather than derivable
+// from EVENT_DESC (CROW-768).
 const _lastNotifyAt = {};
-function showEventNotification(event, key) {
+function showEventNotification(event, key, detail) {
   const N = uiConfig.notifications;
   if (!N) return;                          // config not loaded — don't guess
   if (N.globalMute) return;
@@ -337,21 +368,29 @@ function showEventNotification(event, key) {
 
   const isSession = !!sessions.find((x) => x.id === key);
   // Focus-suppression, mirroring NotificationManager (!appFocused || !visible):
-  // don't ping about the session you're already looking at.
-  if (isSession && document.hasFocus() && selectedId === key) return;
+  // don't ping about the session you're already looking at. Automation events
+  // are exempt (as they were natively) — an action Crow took on your behalf is
+  // worth knowing about even while that session is on screen (CROW-768).
+  const isAutomation = AUTOMATION_EVENTS.indexOf(event) !== -1;
+  if (!isAutomation && isSession && document.hasFocus() && selectedId === key) return;
 
   const k = (key || '') + '|' + event;
   const now = Date.now();
   if (_lastNotifyAt[k] && now - _lastNotifyAt[k] < 2000) return;
   _lastNotifyAt[k] = now;
 
-  const label = EVENT_LABEL[event] || event;
-  let body = EVENT_DESC[event] || '';
-  if (isSession) {
-    body = `${sessionNameFor(key)} — ${body}`;
-  } else {
-    const r = ((boardData.reviews && boardData.reviews.reviews) || []).find((x) => x.id === key);
-    if (r && r.repo) body = `${r.repo} — ${body}`;
+  // A server-supplied title/body already names the PR / issue / session, so it's
+  // used verbatim; derived events get the label plus a subject prefix.
+  const label = (detail && detail.title) || EVENT_LABEL[event] || event;
+  let body = (detail && detail.body) || '';
+  if (!body) {
+    body = EVENT_DESC[event] || '';
+    if (isSession) {
+      body = `${sessionNameFor(key)} — ${body}`;
+    } else {
+      const r = ((boardData.reviews && boardData.reviews.reviews) || []).find((x) => x.id === key);
+      if (r && r.repo) body = `${r.repo} — ${body}`;
+    }
   }
   try {
     // In the desktop app, WKWebView lacks the Web Notification API — post via the
@@ -364,12 +403,14 @@ function showEventNotification(event, key) {
     });
     // Clicking focuses the window and returns to where it originated: the
     // session for session events, or the review's session / reviews board.
+    // Automation events keyed on something other than a session (an issue URL,
+    // `config`) have nowhere better to land than the window itself.
     n.onclick = () => {
       window.focus();
       try {
         if (isSession) {
           selectSession(key);
-        } else {
+        } else if (!isAutomation) {
           const r = ((boardData.reviews && boardData.reviews.reviews) || []).find((x) => x.id === key);
           if (r && r.review_session_id) selectSession(r.review_session_id);
           else selectBoard('reviews');
@@ -381,9 +422,26 @@ function showEventNotification(event, key) {
 }
 
 // Both channels fire from one call in the detectors below; each self-gates.
-function emitEvent(event, key) {
+function emitEvent(event, key, detail) {
   playEventSound(event, key);
-  showEventNotification(event, key);
+  showEventNotification(event, key, detail);
+}
+
+// Server-pushed automation event (CROW-768). The daemon fires these at the point
+// a watcher acts — auto-workspace, auto-merge, auto-rebase, config reload — since
+// none of them are visible in the state the client polls. Gating (global mute,
+// per-event toggles, dedup) is the detectors' gating; the arm window applies too,
+// so a frame landing mid-boot can't chime over a page load.
+function onServerNotify(params) {
+  if (!_soundArmed) return;
+  if (!params || typeof params.event !== 'string') return;
+  if (ALL_EVENTS.indexOf(params.event) === -1) return; // unknown/newer event — ignore
+  // Defensive: the daemon always sends strings, but never hand a non-string to
+  // the Notification API. A missing key just weakens dedup, so tolerate it.
+  const key = typeof params.key === 'string' ? params.key : '';
+  const title = typeof params.title === 'string' ? params.title : '';
+  const body = typeof params.body === 'string' ? params.body : '';
+  emitEvent(params.event, key, { title, body });
 }
 
 // Manual test hook, mirroring crowTestSound. crowTestNotify() shows one popup
@@ -392,9 +450,7 @@ function emitEvent(event, key) {
 window.crowTestNotify = function (event) {
   if (!notificationsSupported()) { console.warn('[crowNotify] Notification API unavailable'); return; }
   const fire = () => {
-    const evs = event
-      ? [event]
-      : ['taskComplete', 'agentWaiting', 'reviewRequested', 'changesRequested', 'checksFailing'];
+    const evs = event ? [event] : ALL_EVENTS;
     evs.forEach((ev, i) => setTimeout(() => {
       try {
         const n = new Notification(`Crow — ${EVENT_LABEL[ev] || ev} (test)`, {
@@ -488,6 +544,11 @@ function restoreSidebarCache() {
     if (Array.isArray(data.sessions)) sessions = data.sessions;
     if (data.tickets) boardData.tickets = data.tickets;
     if (data.reviews) boardData.reviews = data.reviews;
+    // `loading` is runtime-only and never survives a reload meaningfully: a
+    // cache written mid-fetch would otherwise boot showing a spinner that only
+    // a successful `list-tickets` could clear. Also scrubs legacy caches
+    // written before `persistSidebarCache` started stripping it (CROW-771).
+    if (boardData.tickets) boardData.tickets.loading = false;
     sidebarCacheHit = true;
   } catch (_) { /* corrupt cache — start empty */ }
 }
@@ -495,7 +556,9 @@ function persistSidebarCache() {
   try {
     localStorage.setItem(SIDEBAR_CACHE_KEY, JSON.stringify({
       sessions,
-      tickets: boardData.tickets,
+      // Strip the runtime-only in-flight flag — a cache written mid-fetch must
+      // not resurrect a spinner on the next boot (CROW-771).
+      tickets: boardData.tickets && Object.assign({}, boardData.tickets, { loading: false }),
       reviews: boardData.reviews,
     }));
     sidebarCacheHit = true;
@@ -619,6 +682,8 @@ function sidebarSignature() {
     boardData.tickets && boardData.tickets.counts,
     boardData.tickets && boardData.tickets.done_last_24h,
     boardData.reviews && boardData.reviews.unseen,
+    // The ↻ spins off this, and the local half isn't in `boardData` (CROW-771).
+    ticketsRefreshing(),
   ]);
 }
 
@@ -764,8 +829,10 @@ function ticketsCard() {
   card.onclick = () => selectBoard('tickets');
   const head = el('div', 'tickets-head');
   head.appendChild(el('span', 'tickets-title', 'Tickets'));
-  const refresh = el('button', 'tickets-refresh', '↻');
-  refresh.title = 'Refresh tickets';
+  const busy = ticketsRefreshing();
+  const refresh = el('button', 'tickets-refresh' + (busy ? ' spinning' : ''), '↻');
+  refresh.title = busy ? 'Refreshing tickets…' : 'Refresh tickets';
+  refresh.disabled = busy;
   refresh.onclick = (e) => { e.stopPropagation(); refreshTickets(); };
   head.appendChild(refresh);
   card.appendChild(head);
@@ -1978,7 +2045,12 @@ async function refreshBoard(key) {
     : key === 'scorecard' ? 'get-scorecard'
     : 'list-allowlist';
   let data;
-  try { data = await rpc(method); } catch (_) { return; }
+  try { data = await rpc(method); } catch (_) {
+    // A failed read leaves us with no fresh word on the daemon's in-flight
+    // flag, and a stale `true` never self-clears (CROW-771).
+    if (key === 'tickets') clearDaemonRefreshFlag();
+    return;
+  }
   const changed = JSON.stringify(boardData[key]) !== JSON.stringify(data);
   boardData[key] = data;
   if (changed && (key === 'tickets' || key === 'reviews')) persistSidebarCache();
@@ -2523,9 +2595,15 @@ function renderTicketBoard(root) {
   for (const url of [...selectedIssueIDs]) if (!selectableUrls.has(url)) selectedIssueIDs.delete(url);
 
   const head = el('div', 'board-head');
-  head.appendChild(el('div', 'board-title', 'Ticket Board'));
+  // Spinner nests *inside* the title, where native's `ProgressView()` sat:
+  // `.board-title` carries `margin-right: auto`, so a sibling would be shoved
+  // to the right edge with the buttons instead (CROW-771).
+  const title = el('div', 'board-title', 'Ticket Board');
+  if (ticketsRefreshing()) title.appendChild(el('span', 'action-spinner'));
+  head.appendChild(title);
   if (d && d.done_last_24h) head.appendChild(el('span', 'done-chip', d.done_last_24h + ' done · 24h'));
   const refresh = el('button', 'action-btn', 'Refresh');
+  refresh.disabled = ticketsRefreshing();
   refresh.onclick = () => refreshTickets();
   head.appendChild(refresh);
   // Select / Cancel toggle (mirrors the native selectToggleButton). Hidden when
@@ -2759,9 +2837,10 @@ function toggleIssueSelect(url) {
   renderBoard();
 }
 
-// Batch "Start Working (N)": dispatch work-on-issue for each selected ticket
-// (mirrors the native batch action's per-issue dispatch), then clear selection
-// and exit selection mode.
+// Batch "Start Working (N)": ONE batch-work-on-issues call with every selected
+// ticket, so the Manager runs a single `/crow-batch-workspace url1 url2 …` (the
+// batch skill sets them up in parallel) instead of N separate `/crow-workspace`
+// submissions (#752). Then clear selection and exit selection mode.
 async function startWorkingSelected(btn) {
   const urls = ((boardData.tickets && boardData.tickets.issues) || [])
     .filter((i) => !i.linked_session_id && selectedIssueIDs.has(i.url))
@@ -2769,30 +2848,101 @@ async function startWorkingSelected(btn) {
   if (!urls.length) return;
   btn.disabled = true;
   btn.textContent = 'Starting…';
-  let failed = 0;
-  for (const url of urls) {
-    try { await rpc('work-on-issue', { url }); selectedIssueIDs.delete(url); }
-    catch (_) { failed++; }
+  let problem = '';
+  try {
+    const res = await rpc('batch-work-on-issues', { urls });
+    const rejected = (res && res.rejected) || [];
+    if (rejected.length) problem = rejected.length + ' ticket(s) could not be started.';
+  } catch (e) {
+    problem = 'Start Working failed: ' + (e.message || e);
   }
   selectedIssueIDs.clear();
   ticketSelectionMode = false;
   refreshTickets();
   renderBoard();
-  if (failed) alertModal(failed + ' ticket(s) could not be started.');
+  if (problem) alertModal(problem);
+}
+
+// In-flight refresh state (CROW-771) — restores the native `isLoadingIssues`
+// spinner the web dropped in the native→web move (ADR-0010, CROW-593).
+//
+// Two sources, OR'd together:
+//   • `boardData.tickets.loading` — the daemon's own `isLoadingIssues`, already
+//     shipped by `list-tickets`. Covers the *automatic* board poll (and any
+//     manual refresh outliving the client's 10s rpc timeout), which is what the
+//     native every-minute spinner showed.
+//   • `ticketRefreshPending` — local, optimistic. Covers the gap between the
+//     click and the first board re-read so the button reacts instantly.
+//
+// The web re-renders by destroy-and-rebuild, so this must live in module state
+// the render functions read — DOM-only state would be wiped by `renderBoard()`.
+let ticketRefreshPending = false;
+let reviewRefreshPending = false;
+function ticketsRefreshing() {
+  return ticketRefreshPending || !!(boardData.tickets && boardData.tickets.loading);
+}
+function reviewsRefreshing() { return reviewRefreshPending; }
+
+// The daemon half of the indicator has no `finally` to fall back on: it clears
+// only when a *later* `list-tickets` says so. Lose contact mid-fetch — the
+// daemon dies between the in-flight nudge and the completion one, or a board
+// read starts failing — and nothing would ever clear it, stranding the spinner.
+// So every path that loses authority over the flag drops it (CROW-771, review).
+function clearDaemonRefreshFlag() {
+  if (!boardData.tickets || !boardData.tickets.loading) return;
+  boardData.tickets.loading = false;
+  paintRefreshState();
+}
+
+// Repaint the surfaces that show the indicator. The local flags aren't part of
+// `boardData`, so `refreshBoard`'s diff guard can't see them change.
+function paintRefreshState() {
+  renderSidebar();
+  if (selectedBoard === 'tickets' || selectedBoard === 'reviews') renderBoard();
 }
 
 async function refreshTickets() {
-  try { await rpc('refresh-tickets'); } catch (_) { /* app down — ignore */ }
-  setTimeout(() => refreshBoard('tickets'), 1200);
+  if (ticketRefreshPending) return; // coalesce; tracker.refresh() drops concurrent calls anyway
+  ticketRefreshPending = true;
+  paintRefreshState();
+  try {
+    try { await rpc('refresh-tickets'); } catch (_) { /* app down, or >10s — the
+      daemon's own `loading` flag covers the rest; never leave the spinner on */ }
+    // The engine path (`onManualRefresh`) returns before the fetch lands, so
+    // keep the settle delay rather than re-reading an unchanged board.
+    await new Promise((r) => setTimeout(r, 1200));
+    await refreshBoard('tickets');
+  } finally {
+    ticketRefreshPending = false;
+    paintRefreshState();
+  }
+}
+
+// Reviews have no "re-poll the provider" RPC — Refresh is a daemon re-read, and
+// fresh review data arrives via the poll nudge. Show the indicator for exactly
+// that re-read (CROW-771).
+async function refreshReviews() {
+  if (reviewRefreshPending) return;
+  reviewRefreshPending = true;
+  paintRefreshState();
+  try { await refreshBoard('reviews'); }
+  finally {
+    reviewRefreshPending = false;
+    paintRefreshState();
+  }
 }
 
 // -- Review Board --
 function renderReviewBoard(root) {
   const d = boardData.reviews;
+  const busy = reviewsRefreshing();
   const head = el('div', 'board-head');
-  head.appendChild(el('div', 'board-title', 'Reviews'));
+  const title = el('div', 'board-title', 'Reviews');
+  if (busy) title.appendChild(el('span', 'action-spinner'));
+  head.appendChild(title);
   const refresh = el('button', 'action-btn', 'Refresh');
-  refresh.onclick = () => refreshBoard('reviews');
+  refresh.disabled = busy;
+  refresh.onclick = () => refreshReviews();
   head.appendChild(refresh);
   root.appendChild(head);
 

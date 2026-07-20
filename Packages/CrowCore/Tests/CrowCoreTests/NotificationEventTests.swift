@@ -3,7 +3,8 @@ import Testing
 @testable import CrowCore
 
 @Test func notificationEventAllCasesCount() {
-    #expect(NotificationEvent.allCases.count == 5)
+    // 5 agent/PR events + 5 automation events (CROW-768).
+    #expect(NotificationEvent.allCases.count == 10)
 }
 
 @Test func notificationEventDefaultSoundsNonEmpty() {
@@ -73,4 +74,36 @@ import Testing
 @Test func prTransitionEventsHaveDistinctDefaultSounds() {
     // Different default sounds so the two events are audibly distinct.
     #expect(NotificationEvent.changesRequested.defaultSound != NotificationEvent.checksFailing.defaultSound)
+}
+
+// MARK: - Automation events (CROW-768)
+
+@Test func automationEventsArePresentAndClassified() {
+    let automation: [NotificationEvent] = [
+        .autoWorkspaceCreated, .autoMergeEnabled, .autoRebasePushed,
+        .autoRebaseConflicts, .configReloaded,
+    ]
+    for event in automation {
+        #expect(NotificationEvent.allCases.contains(event))
+        #expect(event.isAutomationEvent)
+    }
+    // Everything else is derived from hooks / PR polling, not pushed.
+    for event in NotificationEvent.allCases where !automation.contains(event) {
+        #expect(!event.isAutomationEvent)
+    }
+}
+
+@Test func automationEventsNeverArriveAsHookEvents() {
+    // `from` maps raw Claude Code hook names; automation events are pushed by the
+    // daemon's watchers and must not be reachable through that mapper.
+    for event in NotificationEvent.allCases where event.isAutomationEvent {
+        #expect(NotificationEvent.from(eventName: event.rawValue) == nil)
+    }
+}
+
+@Test func rebaseConflictsSoundsDistinctFromRebaseSuccess() {
+    // Acceptance criterion: an attention event must be audibly distinguishable
+    // from the success event beside it.
+    #expect(NotificationEvent.autoRebaseConflicts.defaultSound
+            != NotificationEvent.autoRebasePushed.defaultSound)
 }

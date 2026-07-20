@@ -11,6 +11,7 @@ public struct CrowCommand: ParsableCommand {
         version: CLIVersion.version,
         subcommands: [
             Setup.self,
+            AutostartCommand.self,
             NewSession.self,
             RenameSession.self,
             SelectSession.self,

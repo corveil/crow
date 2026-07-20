@@ -132,7 +132,8 @@ public enum CrowDaemon {
 
         // Live-reload the store so the web UI reflects the desktop app's writes
         // (new sessions/status/terminals/links) without a daemon restart.
-        startStoreReloadPoll(store: store, appState: appState, eventHub: eventHub)
+        startStoreReloadPoll(
+            store: store, appState: appState, eventHub: eventHub, devRoot: options.devRoot)
 
         // Terminal cockpit (tmux). Optional — RPC still works without tmux, but
         // the terminal handlers (new-terminal/close-terminal) and `/terminal`
@@ -288,6 +289,15 @@ public enum CrowDaemon {
         // Write-actions that mutate session state run locally on the daemon's
         // own SessionService / store — the sole authority (ADR 0007).
 
+        // Push a `changed` nudge whenever the tracker's in-flight state moves,
+        // so clients can render a refresh indicator for the *automatic* poll.
+        // `isLoadingIssues` is runtime-only (not store-backed), so nothing else
+        // announces it. Wired unconditionally — it needs no cockpit, unlike the
+        // automations below (CROW-771).
+        await MainActor.run {
+            tracker.onLoadingIssuesChanged = { Task { await eventHub.broadcast() } }
+        }
+
         // Drive the board poll. It also performs the terminal "takeover" (adopt
         // persisted tmux windows + ensure the Manager) on startup (CROW-581).
         startBoardPoll(
@@ -306,7 +316,7 @@ public enum CrowDaemon {
                 wireTrackerAutomations(
                     tracker: tracker, appState: appState, sessionService: sessionService,
                     autoRespond: autoRespond, devRoot: options.devRoot,
-                    reviewSerializer: reviewSerializer)
+                    reviewSerializer: reviewSerializer, eventHub: eventHub)
             }
         }
 
@@ -409,6 +419,9 @@ public enum CrowDaemon {
         // Local-only secret management (web password + AI gateways) as
         // Origin-checked HTTP POSTs, gated to a local-direct peer (CROW-593).
         SecretRoutes.mount(on: httpRouter, boundHost: options.host, devRoot: options.devRoot)
+        // "Start Crow at login" for Settings → General — same local-only gating,
+        // since it registers a launch agent on the host machine (CROW-769).
+        AutostartRoutes.mount(on: httpRouter, boundHost: options.host, options: options)
         StaticAssets.mount(on: httpRouter, webDir: options.webDir)
         // Per-session generated images (diagrams/screenshots an agent dropped
         // in the scratch dir), served read-only + sandboxed (CROW-593).
@@ -533,8 +546,10 @@ public enum CrowDaemon {
     }
 
     /// Wire the IssueTracker's background automation hooks: spawns go to the
-    /// daemon's Manager terminal / SessionService, notifications are dropped (no
-    /// UI). Config-gated behaviors read `{devRoot}/.claude/config.json` fresh each
+    /// daemon's Manager terminal / SessionService, and the user-facing
+    /// notifications are pushed to connected web clients over `eventHub`
+    /// (CROW-768 — restoring what the retired native NotificationManager did).
+    /// Config-gated behaviors read `{devRoot}/.claude/config.json` fresh each
     /// poll so Settings edits take effect (CROW-581).
     @MainActor
     private static func wireTrackerAutomations(
@@ -543,9 +558,20 @@ public enum CrowDaemon {
         sessionService: SessionService,
         autoRespond: AutoRespondCoordinator?,
         devRoot: String,
-        reviewSerializer: ReviewKickoffSerializer
+        reviewSerializer: ReviewKickoffSerializer,
+        eventHub: EventHub
     ) {
         func config() -> AppConfig? { ConfigStore.loadConfig(devRoot: devRoot) }
+        // The tracker's hooks are synchronous; the hub is an actor. Hop off in a
+        // detached-from-the-caller Task so a broadcast never blocks a watcher.
+        func notify(_ event: NotificationEvent, key: String, title: String, body: String) {
+            Task { await eventHub.broadcastNotification(event: event, key: key, title: title, body: body) }
+        }
+        // Name a session for a notification title, as the native manager did.
+        func sessionName(_ id: UUID) -> String {
+            appState.sessions.first(where: { $0.id == id })?.name ?? "session"
+        }
+
         // crow:auto — run /crow-workspace on the Manager for a newly-labeled
         // assigned issue (the tracker strips the label after, so once-only).
         tracker.autoCreateWatcherEnabledProvider = { (config()?.autoCreateWatcherEnabled ?? false) }
@@ -555,6 +581,10 @@ public enum CrowDaemon {
                 return
             }
             TerminalRouter.send(managerTerminal, text: "/crow-workspace \(issue.url)\n")
+            // No session exists yet — key the notification on the issue URL.
+            notify(.autoWorkspaceCreated, key: issue.url,
+                   title: "Auto-creating workspace — \(issue.repo)",
+                   body: "#\(issue.number): \(issue.title)")
         }
 
         // Auto-respond to PR transitions (changes-requested / checks-failing) and
@@ -564,17 +594,41 @@ public enum CrowDaemon {
             tracker.onPRStatusTransitions = { transitions in
                 autoRespond.handle(transitions)
             }
-            tracker.onAutoRebaseConflicts = { sessionID, _, _ in
-                autoRespond.dispatchManual(action: .fixConflicts, sessionID: sessionID)
-            }
             tracker.respondToChangesRequestedProvider = { (config()?.autoRespond.respondToChangesRequested ?? false) }
             tracker.autoRebaseAndResolveConflictsProvider = { (config()?.autoRespond.autoRebaseAndResolveConflicts ?? false) }
         }
 
+        // Auto-rebase outcomes. The conflict hand-off dispatches to the session's
+        // agent when a coordinator exists, but the notification fires either way —
+        // conflicts need a human's attention even with no terminal to paste into.
+        tracker.onAutoRebasePushed = { sessionID, _, number in
+            notify(.autoRebasePushed, key: sessionID.uuidString,
+                   title: "Branch rebased — \(sessionName(sessionID))",
+                   body: "PR #\(number) was rebased onto its base and force-pushed.")
+        }
+        tracker.onAutoRebaseConflicts = { sessionID, _, number in
+            // Only claim the agent was asked to resolve when the prompt actually
+            // reached a managed terminal — with no coordinator, no terminal, or a
+            // refused review session the body would otherwise mislead (review).
+            let handedOff = autoRespond?.dispatchManual(
+                action: .fixConflicts, sessionID: sessionID).isSent ?? false
+            let body = handedOff
+                ? "PR #\(number) has conflicts. Crow asked the agent to resolve them."
+                : "PR #\(number) has conflicts that need attention."
+            notify(.autoRebaseConflicts, key: sessionID.uuidString,
+                   title: "Rebase conflicts — \(sessionName(sessionID))",
+                   body: body)
+        }
+
         // Auto-merge (enable GitHub native auto-merge on eligible Crow PRs). The
-        // user-facing notification is dropped headless; the audit line is NSLog'd
-        // at the tracker's call site regardless.
+        // audit line is NSLog'd at the tracker's call site regardless of whether
+        // any client is connected to receive the notification.
         tracker.autoMergeWatcherEnabledProvider = { (config()?.autoMergeWatcherEnabled ?? false) }
+        tracker.onAutoMergeEnabled = { sessionID, _, number in
+            notify(.autoMergeEnabled, key: sessionID.uuidString,
+                   title: "Auto-merge enabled — \(sessionName(sessionID))",
+                   body: "PR #\(number) will merge once required reviews and checks pass.")
+        }
 
         // Auto-complete on merge/close, and auto-move-to-inReview when a
         // session's PR opens, run INSIDE the tracker's own refresh via these
@@ -702,6 +756,11 @@ public enum CrowDaemon {
                         await MainActor.run { sessionService.reconcileTerminalSurfaces() }
                     }
                 }
+                // The in-flight half of the refresh is announced by
+                // `tracker.onLoadingIssuesChanged` (wired at startup), which
+                // fires *after* `isLoadingIssues` is set — nudging from here
+                // beforehand would race the flag and fire on skipped polls
+                // (CROW-771).
                 await tracker.refresh()
                 await eventHub.broadcast()
                 try? await Task.sleep(nanoseconds: 60 * 1_000_000_000)
@@ -854,9 +913,25 @@ public enum CrowDaemon {
     /// that break fd-based watching. Broadcasts a `changed` nudge on the hub so
     /// connected clients re-fetch immediately instead of waiting for their own
     /// interval poll (CROW-581, M-D).
-    private static func startStoreReloadPoll(store: JSONStore, appState: AppState, eventHub: EventHub) {
+    ///
+    /// The same tick stats `{devRoot}/.claude/config.json` and pushes a
+    /// `configReloaded` notification when it moves — the daemon re-reads config
+    /// lazily rather than holding a snapshot, so an mtime change *is* the reload.
+    /// One event per real change, covering Settings saves, CLI writes and hand
+    /// edits alike (CROW-768).
+    private static func startStoreReloadPoll(
+        store: JSONStore, appState: AppState, eventHub: EventHub, devRoot: String
+    ) {
+        let configPath = URL(fileURLWithPath: devRoot)
+            .appendingPathComponent(".claude", isDirectory: true)
+            .appendingPathComponent("config.json").path
+        func configModified() -> Date? {
+            (try? FileManager.default.attributesOfItem(atPath: configPath)[.modificationDate]) as? Date
+        }
         Task {
             var lastModified = store.storeModificationDate
+            // Seeded before the loop so startup never fires a spurious reload.
+            var lastConfigModified = configModified()
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(2))
                 let now = store.storeModificationDate
@@ -865,6 +940,14 @@ public enum CrowDaemon {
                     store.reload()
                     await reseed(appState, from: store)
                     await eventHub.broadcast()
+                }
+                let configNow = configModified()
+                if configNow != lastConfigModified {
+                    lastConfigModified = configNow
+                    await eventHub.broadcastNotification(
+                        event: .configReloaded, key: "config",
+                        title: "Config reloaded",
+                        body: "Settings were reloaded from config.json.")
                 }
             }
         }
