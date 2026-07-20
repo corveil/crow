@@ -144,10 +144,17 @@ public enum CrowDaemon {
         // to, so it resolves through a holder the init fills in afterwards (the app
         // used `self.telemetryService` for the same reason).
         let telemetryHolder = TelemetryHolder()
-        let telemetry: TelemetryService?
+        // Create AND start before deriving `telemetryPort`: `start()` is where the
+        // database opens and the listener comes up, so a service that merely
+        // constructed is not yet usable. Starting later would leave a window where
+        // the port is already baked into every agent launch (exporting at a dead
+        // endpoint) and the holder already answers queries (against an unopened DB)
+        // (review). `start()` needs nothing from SessionService — only the backfill
+        // below does — so it belongs here.
+        var startedTelemetry: TelemetryService?
         if telemetryConfig.enabled {
             do {
-                telemetry = try TelemetryService(
+                let service = try TelemetryService(
                     port: telemetryConfig.port,
                     onDataReceived: { sessionID in
                         // Already @MainActor — the analytics write is serialized
@@ -163,16 +170,19 @@ public enum CrowDaemon {
                                 lastReceivedAt: Date())
                         }
                     })
+                // Publish before `start()` so the first datapoint can't arrive to an
+                // empty holder; cleared again below if the start throws.
+                await MainActor.run { telemetryHolder.service = service }
+                try await service.start()
+                startedTelemetry = service
             } catch {
-                log("WARNING: failed to create the telemetry receiver on port \(telemetryConfig.port) "
-                    + "(\(error)) — per-session analytics will be unavailable")
-                telemetry = nil
+                log("WARNING: telemetry receiver unavailable on port \(telemetryConfig.port) "
+                    + "(\(error)) — per-session analytics will not be collected")
+                await MainActor.run { telemetryHolder.service = nil }
             }
-        } else {
-            telemetry = nil
         }
-        await MainActor.run { telemetryHolder.service = telemetry }
-        // nil when telemetry is off OR the receiver failed to bind: without a live
+        let telemetry = startedTelemetry
+        // nil when telemetry is off OR the receiver never came up: without a live
         // receiver the `OTEL_*` exporter vars would point at a closed port.
         let telemetryPort: UInt16? = telemetry.map(\.port)
 
@@ -228,19 +238,12 @@ public enum CrowDaemon {
             return (service, coordinator)
         }
 
-        // Start the OTLP receiver now that SessionService exists to drive the
-        // scorecard rebuild. Order mirrors the app's: start → backfill → prune, so
-        // sessions whose rows are about to age out still produce a snapshot (#745).
+        // The rest of the telemetry startup, deferred until SessionService exists to
+        // drive it. Order mirrors the app's: backfill BEFORE pruning, so sessions
+        // whose rows are about to age out still produce a snapshot (#745).
         if let telemetry {
             let retentionDays = telemetryConfig.retentionDays
             Task {
-                do {
-                    try await telemetry.start()
-                } catch {
-                    log("WARNING: telemetry receiver failed to start on port \(telemetry.port) "
-                        + "(\(error)) — per-session analytics will be unavailable")
-                    return
-                }
                 await sessionService?.backfillAnalyticsSnapshots()
                 await sessionService?.refreshManagerUsage()
                 let status = await telemetry.captureStatus()
