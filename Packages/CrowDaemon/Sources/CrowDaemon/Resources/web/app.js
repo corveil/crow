@@ -2688,9 +2688,10 @@ function toggleIssueSelect(url) {
   renderBoard();
 }
 
-// Batch "Start Working (N)": dispatch work-on-issue for each selected ticket
-// (mirrors the native batch action's per-issue dispatch), then clear selection
-// and exit selection mode.
+// Batch "Start Working (N)": ONE batch-work-on-issues call with every selected
+// ticket, so the Manager runs a single `/crow-batch-workspace url1 url2 …` (the
+// batch skill sets them up in parallel) instead of N separate `/crow-workspace`
+// submissions (#752). Then clear selection and exit selection mode.
 async function startWorkingSelected(btn) {
   const urls = ((boardData.tickets && boardData.tickets.issues) || [])
     .filter((i) => !i.linked_session_id && selectedIssueIDs.has(i.url))
@@ -2698,16 +2699,19 @@ async function startWorkingSelected(btn) {
   if (!urls.length) return;
   btn.disabled = true;
   btn.textContent = 'Starting…';
-  let failed = 0;
-  for (const url of urls) {
-    try { await rpc('work-on-issue', { url }); selectedIssueIDs.delete(url); }
-    catch (_) { failed++; }
+  let problem = '';
+  try {
+    const res = await rpc('batch-work-on-issues', { urls });
+    const rejected = (res && res.rejected) || [];
+    if (rejected.length) problem = rejected.length + ' ticket(s) could not be started.';
+  } catch (e) {
+    problem = 'Start Working failed: ' + (e.message || e);
   }
   selectedIssueIDs.clear();
   ticketSelectionMode = false;
   refreshTickets();
   renderBoard();
-  if (failed) alertModal(failed + ' ticket(s) could not be started.');
+  if (problem) alertModal(problem);
 }
 
 async function refreshTickets() {
