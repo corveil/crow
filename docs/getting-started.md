@@ -180,7 +180,19 @@ make uninstall
 
 ### Running crowd as a background service
 
-Crow does not yet ship a launchd/login-item installer, so start `crowd` yourself (a terminal, `tmux`, or your own `launchd` plist). It binds `127.0.0.1:8787` by default; see [Remote access](../README.md#remote-access) to reach it from another device.
+Register `crowd` to start at login, so Crow is up after a reboot with no manual command:
+
+```bash
+crow autostart install     # writes ~/Library/LaunchAgents/com.corveil.crowd.plist
+crow autostart status      # enabled? running? add --json for scripts
+crow autostart uninstall   # remove the login item
+```
+
+Install is idempotent, and re-running it after a rebuild re-points the login item at the current `crowd` — so an upgrade never leaves a stale plist behind. If a `crowd` is already running, install writes the login item and leaves the running daemon alone (it takes effect at next login) rather than starting a second one. The login-item daemon logs to `~/Library/Logs/crow/crowd.log`. The same toggle lives at Settings → General → Autostart, from a browser on the machine running `crowd`.
+
+Pass the daemon's flags through if you don't run it on the defaults — `crow autostart install --host 0.0.0.0 --port 8080 --dev-root ~/Dev`.
+
+macOS only for now (launchd); on Linux, start `crowd` yourself or write a `systemd --user` unit until [#645](https://github.com/corveil/crow/issues/645) lands. `crowd` binds `127.0.0.1:8787` by default; see [Remote access](../README.md#remote-access) to reach it from another device.
 
 ## Next Steps
 

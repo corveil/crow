@@ -23,6 +23,10 @@
   // browser (loopback, no proxy), false for a proxied/remote session — which
   // sees those settings read-only (CROW-593).
   let isLocal = false;
+  // Login-item state from GET /autostart (CROW-769). Not part of config.json —
+  // it's a host-machine registration, so the toggle acts immediately instead of
+  // riding the Save button. null when the read failed.
+  let autostart = null;
 
   const TABS = [
     ['general', 'General'],
@@ -116,6 +120,10 @@
     // gateways) — editable locally, read-only when proxied/remote (CROW-593).
     try { const cr = await fetch('/auth/context'); isLocal = cr.ok ? !!(await cr.json()).local : false; }
     catch (_) { isLocal = false; }
+    // Is crowd registered to start at login? Read-only for everyone; only a
+    // local browser may change it (CROW-769).
+    try { const ar2 = await fetch('/autostart'); autostart = ar2.ok ? await ar2.json() : null; }
+    catch (_) { autostart = null; }
     dirty = false;
     subForm = null;
     activeTab = 'general';
@@ -443,6 +451,8 @@
     body.appendChild(textField('Path', { path: devRoot }, 'path',
       { readonly: true, help: 'The dev root is fixed for this daemon and managed in the desktop app.' }));
 
+    renderAutostart(body);
+
     body.appendChild(group('Agent'));
     if (agents.length >= 2) {
       // Choose the default agent, like the desktop Settings picker. The options
@@ -490,6 +500,58 @@
     body.appendChild(selectField('Retention', cfg.cleanup, 'retentionHours', [
       [1, '1 hour'], [4, '4 hours'], [8, '8 hours'], [24, '1 day'], [72, '3 days'], [168, '7 days'], [720, '30 days'],
     ], { number: true }));
+  }
+
+  // "Start Crow at login" (CROW-769). Unlike the rest of General this is not a
+  // config field: it registers a launch agent on the machine running crowd, so
+  // the toggle POSTs immediately (no Save) and — like the web password and the
+  // AI gateways — only a local browser may change it.
+  function renderAutostart(body) {
+    body.appendChild(group('Autostart'));
+    if (!autostart) {
+      body.appendChild(readonlyNote('Could not read the autostart status from crowd.'));
+      return;
+    }
+    if (!autostart.supported || !isLocal) {
+      body.appendChild(readonlyNote(autostart.supported
+        ? autostart.message + ' Autostart is changed only from a local browser (on the machine running crowd).'
+        : autostart.message));
+      return;
+    }
+
+    const row = el('label', 'st-switch-row');
+    const input = el('input', 'st-switch');
+    input.type = 'checkbox';
+    input.checked = !!autostart.enabled;
+    input.onchange = async () => {
+      input.disabled = true;
+      try {
+        autostart = await postConfig('/autostart', { enabled: input.checked });
+      } catch (err) {
+        alertModal('Could not change autostart: ' + (err.message || err));
+        input.checked = !input.checked;
+      }
+      input.disabled = false;
+      render();
+    };
+    row.appendChild(input);
+    row.appendChild(el('span', 'st-switch-label', 'Start Crow at login'));
+    const f = el('div', 'st-field');
+    f.appendChild(row);
+    f.appendChild(el('div', 'st-help', autostart.message));
+    body.appendChild(f);
+
+    // A plist left pointing at a crowd that has since moved — one click re-points it.
+    if (autostart.stale) {
+      const fix = el('button', 'action-primary', 'Re-point to this crowd');
+      fix.onclick = async () => {
+        fix.disabled = true;
+        try { autostart = await postConfig('/autostart', { enabled: true }); }
+        catch (err) { alertModal('Could not re-point autostart: ' + (err.message || err)); }
+        render();
+      };
+      body.appendChild(field(null, fix));
+    }
   }
 
   // ---- Automation ---------------------------------------------------------

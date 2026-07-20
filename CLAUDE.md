@@ -25,6 +25,17 @@ crow handoff-agent --session <uuid> --agent cursor [--note "..."] → {"session_
 crow delete-session --session <uuid>            → {"deleted":true}
 ```
 
+### Daemon Autostart
+
+Runs locally, not over the socket — these work with `crowd` down (CROW-769). macOS only for now.
+
+```
+crow autostart install [--binary PATH] [--host H] [--port N] [--dev-root PATH] [--socket PATH]
+                                                → registers a launchd LaunchAgent so crowd starts at login (idempotent; re-points after an upgrade)
+crow autostart uninstall                        → removes the login item
+crow autostart status [--json]                  → {enabled, running, loaded, stale, plistPath, logPath, ...}
+```
+
 ### Metadata Commands
 ```
 crow set-ticket --session <uuid> --url "..." [--title "..."] [--number N]

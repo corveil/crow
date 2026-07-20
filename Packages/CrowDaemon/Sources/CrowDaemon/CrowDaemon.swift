@@ -276,6 +276,9 @@ public enum CrowDaemon {
         // Local-only secret management (web password + AI gateways) as
         // Origin-checked HTTP POSTs, gated to a local-direct peer (CROW-593).
         SecretRoutes.mount(on: httpRouter, boundHost: options.host, devRoot: options.devRoot)
+        // "Start Crow at login" for Settings → General — same local-only gating,
+        // since it registers a launch agent on the host machine (CROW-769).
+        AutostartRoutes.mount(on: httpRouter, boundHost: options.host, options: options)
         StaticAssets.mount(on: httpRouter, webDir: options.webDir)
         // Per-session generated images (diagrams/screenshots an agent dropped
         // in the scratch dir), served read-only + sandboxed (CROW-593).
