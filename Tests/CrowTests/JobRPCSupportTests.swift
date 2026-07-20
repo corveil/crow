@@ -68,7 +68,7 @@ struct JobRPCSupportTests {
     // MARK: - validateRepoSlug
 
     @Test func validateRepoSlugAcceptsSlugsAndNestedGroups() throws {
-        #expect(try JobRPC.validateRepoSlug("radiusmethod/crow") == "radiusmethod/crow")
+        #expect(try JobRPC.validateRepoSlug("corveil/crow") == "corveil/crow")
         #expect(try JobRPC.validateRepoSlug("group/sub/project") == "group/sub/project")
         #expect(try JobRPC.validateRepoSlug("  owner/repo  ") == "owner/repo")
     }
@@ -104,8 +104,8 @@ struct JobRPCSupportTests {
         let created = Date(timeIntervalSince1970: 1_750_000_000)
         let job = JobConfig(
             name: "triage",
-            workspace: "RadiusMethod",
-            repo: "radiusmethod/api",
+            workspace: "Corveil",
+            repo: "corveil/api",
             prompts: ["go"],
             schedule: .interval(seconds: 3600),
             enabled: true,
@@ -115,8 +115,8 @@ struct JobRPCSupportTests {
         let object = try #require(JobRPC.jobJSON(job).objectValue)
         #expect(object["id"] == .string(job.id.uuidString))
         #expect(object["name"] == .string("triage"))
-        #expect(object["workspace"] == .string("RadiusMethod"))
-        #expect(object["repo"] == .string("radiusmethod/api"))
+        #expect(object["workspace"] == .string("Corveil"))
+        #expect(object["repo"] == .string("corveil/api"))
         #expect(object["prompts"] == .array([.string("go")]))
         #expect(object["enabled"] == .bool(true))
         #expect(object["schedule"] == .object(["type": .string("interval"), "seconds": .int(3600)]))

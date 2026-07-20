@@ -46,7 +46,7 @@ cat > "$DEV_ROOT/.claude/config.json" <<'JSON'
   "workspaces": [
     {
       "id": "00000000-0000-0000-0000-000000000001",
-      "name": "RadiusMethod",
+      "name": "Corveil",
       "provider": "github",
       "cli": "gh",
       "gateway": {
@@ -75,8 +75,8 @@ source "$SETUP_SH"
 DEV_ROOT="$TMP/devroot"
 
 echo "== gateway-present workspace =="
-WORKSPACE="RadiusMethod"
-WORKTREE_PATH="$DEV_ROOT/RadiusMethod/repo-1-slug"
+WORKSPACE="Corveil"
+WORKTREE_PATH="$DEV_ROOT/Corveil/repo-1-slug"
 SESSION_ID="ABCD-1234"
 WS_GATEWAY_RESOLVED=false; WS_HAS_GATEWAY=false; WS_BASE_URL=""; WS_CUSTOM_HEADERS=""
 

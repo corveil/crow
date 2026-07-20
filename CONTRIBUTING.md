@@ -6,7 +6,7 @@ Please note that this project is released with a [Code of Conduct](CODE_OF_CONDU
 
 ## Reporting Bugs
 
-Open a [GitHub Issue](https://github.com/radiusmethod/crow/issues/new?template=bug_report.md) with:
+Open a [GitHub Issue](https://github.com/corveil/crow/issues/new?template=bug_report.md) with:
 
 - macOS version and hardware (Intel/Apple Silicon)
 - Xcode and Zig versions
@@ -16,14 +16,14 @@ Open a [GitHub Issue](https://github.com/radiusmethod/crow/issues/new?template=b
 
 ## Suggesting Features
 
-Open a [GitHub Issue](https://github.com/radiusmethod/crow/issues/new?template=feature_request.md) describing the use case and proposed solution.
+Open a [GitHub Issue](https://github.com/corveil/crow/issues/new?template=feature_request.md) describing the use case and proposed solution.
 
 ## Development Setup
 
 See [README.md](README.md#detailed-setup) for full build instructions. The short version:
 
 ```bash
-git clone https://github.com/radiusmethod/crow.git
+git clone https://github.com/corveil/crow.git
 cd crow
 make build
 ```

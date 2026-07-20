@@ -28,7 +28,7 @@ struct AutoRespondCoordinatorReviewSessionTests {
         let t = PRStatusTransition(
             kind: .changesRequested,
             sessionID: review.id,
-            prURL: "https://github.com/radiusmethod/crow/pull/123",
+            prURL: "https://github.com/corveil/crow/pull/123",
             prNumber: 123
         )
         #expect(coord.shouldSkipReviewSession(t))
@@ -40,7 +40,7 @@ struct AutoRespondCoordinatorReviewSessionTests {
         let t = PRStatusTransition(
             kind: .checksFailing,
             sessionID: review.id,
-            prURL: "https://github.com/radiusmethod/crow/pull/456",
+            prURL: "https://github.com/corveil/crow/pull/456",
             prNumber: 456
         )
         #expect(coord.shouldSkipReviewSession(t))
@@ -52,7 +52,7 @@ struct AutoRespondCoordinatorReviewSessionTests {
         let t = PRStatusTransition(
             kind: .changesRequested,
             sessionID: work.id,
-            prURL: "https://github.com/radiusmethod/crow/pull/789",
+            prURL: "https://github.com/corveil/crow/pull/789",
             prNumber: 789
         )
         #expect(!coord.shouldSkipReviewSession(t))
@@ -66,7 +66,7 @@ struct AutoRespondCoordinatorReviewSessionTests {
         let t = PRStatusTransition(
             kind: .changesRequested,
             sessionID: UUID(),
-            prURL: "https://github.com/radiusmethod/crow/pull/1",
+            prURL: "https://github.com/corveil/crow/pull/1",
             prNumber: 1
         )
         #expect(!coord.shouldSkipReviewSession(t))

@@ -62,7 +62,7 @@ enum JobRPC {
         guard components.count >= 2,
               components.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else {
             throw RPCError.invalidParams(
-                "repo must be an owner/repo slug (e.g. \"radiusmethod/crow\"); components must not be empty, '.', or '..'"
+                "repo must be an owner/repo slug (e.g. \"corveil/crow\"); components must not be empty, '.', or '..'"
             )
         }
         return repo

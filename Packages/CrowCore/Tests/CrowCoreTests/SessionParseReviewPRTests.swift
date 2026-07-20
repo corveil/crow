@@ -3,8 +3,8 @@ import Testing
 @testable import CrowCore
 
 @Test func parseReviewPRExtractsOwnerRepoAndNumber() {
-    let parsed = Session.parseReviewPR(url: "https://github.com/radiusmethod/crow/pull/406")
-    #expect(parsed?.owner == "radiusmethod")
+    let parsed = Session.parseReviewPR(url: "https://github.com/corveil/crow/pull/406")
+    #expect(parsed?.owner == "corveil")
     #expect(parsed?.repo == "crow")
     #expect(parsed?.number == 406)
 }

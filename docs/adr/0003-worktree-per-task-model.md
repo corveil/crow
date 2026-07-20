@@ -8,7 +8,7 @@
 
 Crow's central pattern is running multiple Claude Code sessions in parallel, each working on a different ticket. A single clone of a repo can only have one branch checked out at a time — the working tree, the index, and `HEAD` are shared global state. That makes branch-switching hostile to parallel agents: any two sessions touching the same clone will fight over the working tree, and an agent that runs `git checkout` mid-task can clobber another agent's edits.
 
-We also want the on-disk layout to be self-describing — a path like `/Users/jane/Dev/RadiusMethod/acme-api-197-fix-tab-url-hash` should reveal the repo, the ticket, and the slug at a glance, both for humans and for grep-based agent navigation.
+We also want the on-disk layout to be self-describing — a path like `/Users/jane/Dev/Corveil/acme-api-197-fix-tab-url-hash` should reveal the repo, the ticket, and the slug at a glance, both for humans and for grep-based agent navigation.
 
 ## Decision
 

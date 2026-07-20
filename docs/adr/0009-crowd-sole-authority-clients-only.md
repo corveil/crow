@@ -86,7 +86,7 @@ directly. All mutation flows through `crowd` RPCs; all state arrives via
 
 ## References
 
-- PR: https://github.com/radiusmethod/crow/pull/594 (CROW-581, Milestones A–E1)
+- PR: https://github.com/corveil/crow/pull/594 (CROW-581, Milestones A–E1)
 - Related ADRs: [0001](./0001-tmux-only-terminal-backend.md) (tmux as the sole
   terminal backend — the shared server is what lets many clients attach),
   [0002](./0002-unix-socket-cli-architecture.md) (the JSON-RPC surface clients

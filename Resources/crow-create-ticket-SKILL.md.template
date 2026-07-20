@@ -41,7 +41,7 @@ same file used by `/crow-workspace`. It maps each workspace to a provider/cli/ho
 {
   "devRoot": "/Users/name/Dev",
   "workspaces": {
-    "RadiusMethod": { "provider": "github", "cli": "gh" },
+    "Corveil": { "provider": "github", "cli": "gh" },
     "MyGitLab": { "provider": "gitlab", "cli": "glab", "host": "gitlab.example.com" }
   },
   "defaults": { "provider": "github", "cli": "gh" }
@@ -124,7 +124,7 @@ gh issue create --repo OWNER/REPO \
   --title "TITLE" \
   --body "BODY
 
-[🐦‍⬛ Created with Crow via {{CROW_AGENT_DISPLAY_NAME}}](https://github.com/radiusmethod/crow)" \
+[🐦‍⬛ Created with Crow via {{CROW_AGENT_DISPLAY_NAME}}](https://github.com/corveil/crow)" \
   --assignee "{login}" \
   --label "crow:auto"
 ```
@@ -137,7 +137,7 @@ GITLAB_HOST={host} glab issue create --repo {org/repo} \
   --title "TITLE" \
   --description "BODY
 
-[🐦‍⬛ Created with Crow via {{CROW_AGENT_DISPLAY_NAME}}](https://github.com/radiusmethod/crow)" \
+[🐦‍⬛ Created with Crow via {{CROW_AGENT_DISPLAY_NAME}}](https://github.com/corveil/crow)" \
   --assignee "{username}" \
   --label "crow:auto" \
   --yes
@@ -157,11 +157,11 @@ See `.claude/skills/crow-attribution/FOOTER.md` for the full rules. The body pas
 followed by:
 
 ```
-[🐦‍⬛ Created with Crow via {{CROW_AGENT_DISPLAY_NAME}}](https://github.com/radiusmethod/crow)
+[🐦‍⬛ Created with Crow via {{CROW_AGENT_DISPLAY_NAME}}](https://github.com/corveil/crow)
 ```
 
 - Crow filled in the agent name for this session before this skill reached you — paste the line literally; do not re-introduce `${…}` shell parameter expansion of your own (it silently fails inside single-quoted heredocs and the literal text leaks into the issue body).
-- Do not modify the URL — the link target is always `https://github.com/radiusmethod/crow`, never a fork or a derived value from the local git remote.
+- Do not modify the URL — the link target is always `https://github.com/corveil/crow`, never a fork or a derived value from the local git remote.
 - Do not wrap the line in additional formatting (no blockquote, no extra brackets, no surrounding text).
 - This line MUST appear in every issue body — GitHub, GitLab, or Jira — and whether or not the user supplied any body text.
 

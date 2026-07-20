@@ -21,7 +21,7 @@ struct IssueTrackerAutoRebaseTests {
     ) -> IssueTracker.ViewerPR {
         IssueTracker.ViewerPR(
             number: 42,
-            url: "https://github.com/radiusmethod/crow/pull/42",
+            url: "https://github.com/corveil/crow/pull/42",
             state: state,
             mergeable: mergeable,
             mergeStateStatus: mergeStateStatus,
@@ -30,7 +30,7 @@ struct IssueTrackerAutoRebaseTests {
             headRefName: "feature/x",
             headRefOid: "abc1234",
             baseRefName: "main",
-            repoNameWithOwner: "radiusmethod/crow",
+            repoNameWithOwner: "corveil/crow",
             labels: labels,
             linkedIssueReferences: [],
             checksState: "SUCCESS",

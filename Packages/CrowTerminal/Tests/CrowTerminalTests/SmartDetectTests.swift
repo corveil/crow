@@ -10,10 +10,10 @@ struct SmartDetectTests {
 
     @Test func detectsHttpsURLInPlainSelection() {
         let url = SmartDetect.detectURL(
-            in: "https://github.com/radiusmethod/crow",
+            in: "https://github.com/corveil/crow",
             allowedSchemes: schemes
         )
-        #expect(url?.absoluteString == "https://github.com/radiusmethod/crow")
+        #expect(url?.absoluteString == "https://github.com/corveil/crow")
     }
 
     @Test func detectURLTolersWhitespace() {

@@ -360,7 +360,7 @@ Usage: setup.sh [OPTIONS]
 
 Required:
   --dev-root <path>          Development root directory
-  --workspace <name>         Workspace name (e.g. RadiusMethod)
+  --workspace <name>         Workspace name (e.g. Corveil)
   --repo <name>              Repository name
   --repo-path <path>         Main repo clone path
   --slug <slug>              LLM-generated slug (e.g. 104-global-terminals)
