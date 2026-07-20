@@ -16,7 +16,7 @@ public final class PTYProcess: @unchecked Sendable {
     private var masterFD: Int32 = -1
     private var childPID: pid_t = -1
     private var readSource: DispatchSourceRead?
-    private let readQueue = DispatchQueue(label: "com.radiusmethod.crow.pty-read", qos: .userInteractive)
+    private let readQueue = DispatchQueue(label: "com.corveil.crow.pty-read", qos: .userInteractive)
     /// When true (default), `onOutput`/`onExit` fire on `DispatchQueue.main` —
     /// what the AppKit surface needs. The headless `crowd` daemon has no main
     /// run loop pumping that queue, so it constructs with `false` to receive

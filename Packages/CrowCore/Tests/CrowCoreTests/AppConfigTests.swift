@@ -617,7 +617,7 @@ import Testing
 @Test func workspaceGatewayRoundTrip() throws {
     let config = AppConfig(workspaces: [
         WorkspaceInfo(
-            name: "RadiusMethod",
+            name: "Corveil",
             gateway: WorkspaceGateway(
                 baseURL: "https://corveil.io",
                 customHeaders: ["x-citadel-api-key": "op://Spotlight Prod/Citadel/api_key"]

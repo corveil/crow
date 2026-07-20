@@ -27,6 +27,6 @@ The macOS app is removed. `crowd` plus the **web UI are the only client**. The `
 
 ## References
 
-- PR: https://github.com/radiusmethod/crow/pull/594 (CROW-593)
+- PR: https://github.com/corveil/crow/pull/594 (CROW-593)
 - Related ADRs: [0009](./0009-crowd-sole-authority-clients-only.md) (crowd is the sole authority — this ADR removes its last non-web client), [0006](./0006-universal-macos-binary.md) (xterm.js renderer — still used, now in the browser)
 - Code: `Packages/CrowDaemon/` (`crowd`), `Packages/CrowEngine/` (host-agnostic engine + `HostBridge`)

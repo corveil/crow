@@ -10,7 +10,7 @@ import Testing
 struct JobRepoResolutionTests {
 
     @Test func repoFolderTakesSlugLastComponent() {
-        #expect(SessionService.jobRepoFolder(for: "radiusmethod/api") == "api")
+        #expect(SessionService.jobRepoFolder(for: "corveil/api") == "api")
     }
 
     @Test func repoFolderHandlesNestedGitLabGroups() {
@@ -24,10 +24,10 @@ struct JobRepoResolutionTests {
 
     @Test func worktreeLayoutComposesWorkspaceScopedPath() {
         let layout = SessionService.jobWorktreeLayout(
-            devRoot: "/dev", workspace: "RadiusMethod", repo: "radiusmethod/api"
+            devRoot: "/dev", workspace: "Corveil", repo: "corveil/api"
         )
-        #expect(layout.workspacePath == "/dev/RadiusMethod")
-        #expect(layout.repoPath == "/dev/RadiusMethod/api")
+        #expect(layout.workspacePath == "/dev/Corveil")
+        #expect(layout.repoPath == "/dev/Corveil/api")
         #expect(layout.repoFolder == "api")
     }
 

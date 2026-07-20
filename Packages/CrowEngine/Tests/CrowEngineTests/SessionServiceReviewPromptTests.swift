@@ -16,9 +16,9 @@ import CrowCore
 @Suite("Review prompt branch")
 struct SessionServiceReviewPromptTests {
 
-    private static let prURL = "https://github.com/radiusmethod/crow/pull/123"
+    private static let prURL = "https://github.com/corveil/crow/pull/123"
     private static let prTitle = "Some PR"
-    private static let repoSlug = "radiusmethod/crow"
+    private static let repoSlug = "corveil/crow"
     private static let prNumber = 123
 
     /// Minimal SKILL-shaped fixture. Avoids depending on
@@ -28,7 +28,7 @@ struct SessionServiceReviewPromptTests {
     # Crow Review PR
     Review PR $ARGUMENTS — checkout via `gh pr checkout $ARGUMENTS`.
 
-    [🐦‍⬛ Reviewed by Crow via ${CROW_AGENT_DISPLAY_NAME:-Claude Code}](https://github.com/radiusmethod/crow)
+    [🐦‍⬛ Reviewed by Crow via ${CROW_AGENT_DISPLAY_NAME:-Claude Code}](https://github.com/corveil/crow)
     """
 
     @Test func cursorPromptSubstitutesPRURLForArguments() {
@@ -61,7 +61,7 @@ struct SessionServiceReviewPromptTests {
         #expect(!prompt.contains("$CROW_AGENT_DISPLAY_NAME"))
         // The canonical URL must remain — only the agent-name segment is
         // swapped.
-        #expect(prompt.contains("https://github.com/radiusmethod/crow"))
+        #expect(prompt.contains("https://github.com/corveil/crow"))
     }
 
     @Test func buildReviewPromptCursorBranchUsesCursorHelper() {

@@ -2526,7 +2526,7 @@ public final class SessionService {
     }
 
     /// The local folder name for a job's repo: the slug's last component
-    /// (`radiusmethod/api` → `api`, GitLab `group/sub/proj` → `proj`), or the
+    /// (`corveil/api` → `api`, GitLab `group/sub/proj` → `proj`), or the
     /// value verbatim when it isn't a slug (legacy bare-name jobs).
     nonisolated static func jobRepoFolder(for repo: String) -> String {
         repo.contains("/") ? (repo as NSString).lastPathComponent : repo

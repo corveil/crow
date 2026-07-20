@@ -28,10 +28,10 @@ import CrowCore
 // MARK: - RepoInfo
 
 @Test func repoInfoStoresAllProperties() {
-    let info = RepoInfo(name: "crow", path: "/dev/crow", workspace: "RadiusMethod", provider: "github", cli: "gh", host: "github.com")
+    let info = RepoInfo(name: "crow", path: "/dev/crow", workspace: "Corveil", provider: "github", cli: "gh", host: "github.com")
     #expect(info.name == "crow")
     #expect(info.path == "/dev/crow")
-    #expect(info.workspace == "RadiusMethod")
+    #expect(info.workspace == "Corveil")
     #expect(info.provider == "github")
     #expect(info.cli == "gh")
     #expect(info.host == "github.com")

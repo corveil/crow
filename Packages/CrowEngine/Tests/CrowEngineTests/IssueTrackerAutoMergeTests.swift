@@ -13,7 +13,7 @@ struct IssueTrackerAutoMergeTests {
     private static let otherLabel = LabelInfo(name: "documentation", color: "ffffff")
 
     private func makePR(
-        url: String = "https://github.com/radiusmethod/crow/pull/42",
+        url: String = "https://github.com/corveil/crow/pull/42",
         number: Int = 42,
         state: String = "OPEN",
         mergeable: String = "MERGEABLE",
@@ -21,7 +21,7 @@ struct IssueTrackerAutoMergeTests {
         reviewDecision: String = "APPROVED",
         isDraft: Bool = false,
         labels: [LabelInfo] = [crowMergeLabel],
-        repo: String = "radiusmethod/crow"
+        repo: String = "corveil/crow"
     ) -> IssueTracker.ViewerPR {
         IssueTracker.ViewerPR(
             number: number,

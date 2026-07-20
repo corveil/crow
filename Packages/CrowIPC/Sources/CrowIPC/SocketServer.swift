@@ -20,7 +20,7 @@ public final class SocketServer: @unchecked Sendable {
     private let router: CommandRouter
     private var serverFD: Int32 = -1
     private var running = false
-    private let queue = DispatchQueue(label: "com.radiusmethod.crow.socket", qos: .userInitiated)
+    private let queue = DispatchQueue(label: "com.corveil.crow.socket", qos: .userInitiated)
 
     /// Maximum size of a single JSON-RPC message (1 MB).
     static let maxMessageSize = 1_048_576

@@ -22,7 +22,7 @@ Configuration is at `{devRoot}/.claude/config.json` (managed by the Crow app). T
 {
   "devRoot": "/Users/name/Dev",
   "workspaces": {
-    "RadiusMethod": {
+    "Corveil": {
       "provider": "github",
       "cli": "gh",
       "customInstructions": "Always run `npm test` before committing."
@@ -195,18 +195,18 @@ Branch: `feature/{repo}-{ticket_number}-{brief_slug}`
 The brief slug is 2-4 key words from the ticket title.
 
 **Concrete example with full paths:**
-Given: devRoot=`/Users/jane/Dev`, workspace=`RadiusMethod`, repo=`acme-api` (cloned at `/Users/jane/Dev/RadiusMethod/acme-api`), ticket #197 "Fix tab URL hash routing"
+Given: devRoot=`/Users/jane/Dev`, workspace=`Corveil`, repo=`acme-api` (cloned at `/Users/jane/Dev/Corveil/acme-api`), ticket #197 "Fix tab URL hash routing"
 
 ```
-Worktree path: /Users/jane/Dev/RadiusMethod/acme-api-197-fix-tab-url-hash
+Worktree path: /Users/jane/Dev/Corveil/acme-api-197-fix-tab-url-hash
 Branch:        feature/acme-api-197-fix-tab-url-hash
-Git command:   git -C /Users/jane/Dev/RadiusMethod/acme-api worktree add /Users/jane/Dev/RadiusMethod/acme-api-197-fix-tab-url-hash -b feature/acme-api-197-fix-tab-url-hash --no-track origin/main
+Git command:   git -C /Users/jane/Dev/Corveil/acme-api worktree add /Users/jane/Dev/Corveil/acme-api-197-fix-tab-url-hash -b feature/acme-api-197-fix-tab-url-hash --no-track origin/main
 ```
 
 More examples:
 ```
 web-app #252 "Update deployment-guide.md"    → {devRoot}/MyGitLab/web-app-252-update-deploy-docs
-acme-api #45 "Add JWT validation endpoint"   → {devRoot}/RadiusMethod/acme-api-45-jwt-validation
+acme-api #45 "Add JWT validation endpoint"   → {devRoot}/Corveil/acme-api-45-jwt-validation
 ```
 
 **For ticket URLs with an existing PR:**
@@ -217,7 +217,7 @@ Use the PR's `headRefName` as the branch — do NOT generate a new name. Derive 
 {devRoot}/{workspace}/{repo}-{pr_branch_slug}
 ```
 
-Where `{pr_branch_slug}` is the `headRefName` with any `feature/` prefix stripped. For example, if the PR branch is `feature/acme-api-45-jwt-validation`, the worktree path is `{devRoot}/RadiusMethod/acme-api-45-jwt-validation`.
+Where `{pr_branch_slug}` is the `headRefName` with any `feature/` prefix stripped. For example, if the PR branch is `feature/acme-api-45-jwt-validation`, the worktree path is `{devRoot}/Corveil/acme-api-45-jwt-validation`.
 
 **WRONG — do NOT create subdirectories:**
 ```
@@ -600,10 +600,10 @@ All commands return JSON and require `dangerouslyDisableSandbox: true`.
 
 ### GitHub Issue URL
 ```
-/crow-workspace https://github.com/RadiusMethod/acme-api/issues/45
+/crow-workspace https://github.com/corveil/acme-api/issues/45
 ```
-→ Fetches issue #45, matches acme-api in RadiusMethod
-→ Creates worktree at ~/Dev/RadiusMethod/acme-api-45-jwt-validation
+→ Fetches issue #45, matches acme-api in Corveil
+→ Creates worktree at ~/Dev/Corveil/acme-api-45-jwt-validation
 → Creates crow session with ticket metadata + worktree + Claude Code terminal
 
 ### Natural Language
@@ -618,6 +618,6 @@ All commands return JSON and require `dangerouslyDisableSandbox: true`.
 ```
 /crow-workspace "integrate my-project with acme-api gateway"
 ```
-→ Matches my-project (MyGitLab) + acme-api (RadiusMethod)
+→ Matches my-project (MyGitLab) + acme-api (Corveil)
 → Creates worktrees for both, one crow session
 → Claude launches in highest-scoring repo

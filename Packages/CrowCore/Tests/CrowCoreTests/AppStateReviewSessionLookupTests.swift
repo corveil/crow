@@ -29,7 +29,7 @@ private func makeReviewSession(name: String = "review-crow-406", status: Session
 @Test func existingReviewSessionReturnsSessionWithMatchingPRLink() {
     let appState = AppState()
     let session = makeReviewSession()
-    let prURL = "https://github.com/radiusmethod/crow/pull/406"
+    let prURL = "https://github.com/corveil/crow/pull/406"
     appState.sessions = [session]
     appState.links[session.id] = [
         SessionLink(sessionID: session.id, label: "PR #406", url: prURL, linkType: .pr)
@@ -42,7 +42,7 @@ private func makeReviewSession(name: String = "review-crow-406", status: Session
 @Test func existingReviewSessionIgnoresCompletedSessions() {
     let appState = AppState()
     let session = makeReviewSession(status: .completed)
-    let prURL = "https://github.com/radiusmethod/crow/pull/406"
+    let prURL = "https://github.com/corveil/crow/pull/406"
     appState.sessions = [session]
     appState.links[session.id] = [
         SessionLink(sessionID: session.id, label: "PR #406", url: prURL, linkType: .pr)
@@ -55,7 +55,7 @@ private func makeReviewSession(name: String = "review-crow-406", status: Session
 @Test func existingReviewSessionIgnoresArchivedSessions() {
     let appState = AppState()
     let session = makeReviewSession(status: .archived)
-    let prURL = "https://github.com/radiusmethod/crow/pull/406"
+    let prURL = "https://github.com/corveil/crow/pull/406"
     appState.sessions = [session]
     appState.links[session.id] = [
         SessionLink(sessionID: session.id, label: "PR #406", url: prURL, linkType: .pr)
@@ -68,7 +68,7 @@ private func makeReviewSession(name: String = "review-crow-406", status: Session
 @Test func existingReviewSessionIgnoresNonPRLinkTypes() {
     let appState = AppState()
     let session = makeReviewSession()
-    let prURL = "https://github.com/radiusmethod/crow/pull/406"
+    let prURL = "https://github.com/corveil/crow/pull/406"
     appState.sessions = [session]
     // Same URL string but linked as `.repo`, not `.pr` — should not match.
     appState.links[session.id] = [
@@ -83,7 +83,7 @@ private func makeReviewSession(name: String = "review-crow-406", status: Session
     let appState = AppState()
     let first = makeReviewSession(name: "review-crow-406-a")
     let second = makeReviewSession(name: "review-crow-406-b")
-    let prURL = "https://github.com/radiusmethod/crow/pull/406"
+    let prURL = "https://github.com/corveil/crow/pull/406"
     appState.sessions = [first, second]
     appState.links[first.id] = [
         SessionLink(sessionID: first.id, label: "PR #406", url: prURL, linkType: .pr)

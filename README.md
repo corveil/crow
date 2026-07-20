@@ -80,7 +80,7 @@ flowchart TB
 
 ```bash
 # 1. Clone
-git clone https://github.com/radiusmethod/crow.git
+git clone https://github.com/corveil/crow.git
 cd crow
 
 # 2. Build the `crow` CLI and the `crowd` daemon (Swift toolchain only).

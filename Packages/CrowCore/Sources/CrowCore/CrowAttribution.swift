@@ -2,7 +2,7 @@ import Foundation
 
 /// Canonical Crow attribution footers for GitHub/GitLab artifacts and skill instructions.
 public enum CrowAttribution {
-    public static let repoURL = "https://github.com/radiusmethod/crow"
+    public static let repoURL = "https://github.com/corveil/crow"
 
     /// Human-readable agent label when kind/env is unknown (legacy installs).
     public static let defaultAgentDisplayName = "Claude Code"
@@ -103,12 +103,12 @@ public enum CrowAttribution {
     expression in attribution footers. The shell silently fails to expand it inside
     single-quoted heredocs and the literal text leaks into the artifact (#447).
 
-    The link target is always `https://github.com/radiusmethod/crow` — never a fork or a value from the local git remote.
+    The link target is always `https://github.com/corveil/crow` — never a fork or a value from the local git remote.
 
     | Artifact | Footer |
     |----------|--------|
-    | Created (issues, PR descriptions, etc.) | `[🐦‍⬛ Created with Crow via <agent>](https://github.com/radiusmethod/crow)` |
-    | Reviewed | `[🐦‍⬛ Reviewed by Crow via <agent>](https://github.com/radiusmethod/crow)` |
+    | Created (issues, PR descriptions, etc.) | `[🐦‍⬛ Created with Crow via <agent>](https://github.com/corveil/crow)` |
+    | Reviewed | `[🐦‍⬛ Reviewed by Crow via <agent>](https://github.com/corveil/crow)` |
     | Committed (hand-authored commit message) | Trailer block at the end of the message: `Crow-Session: <session-uuid>` and `Co-Authored-By: Claude <noreply@anthropic.com>` on their own lines, separated from the body by a blank line. `setup.sh` installs a `prepare-commit-msg` hook (CROW-518) that idempotently fills them in if missing, but include them explicitly when writing the message — the hook is the safety net. |
 
     `<agent>` above is just a placeholder for *this document* — in the real footer lines

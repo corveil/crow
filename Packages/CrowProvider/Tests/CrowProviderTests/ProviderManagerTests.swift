@@ -41,8 +41,8 @@ struct ProviderManagerTests {
     // MARK: - parseTicketURLComponents (static)
 
     @Test func parseGitHubIssueURL() {
-        let result = ProviderManager.parseTicketURLComponents("https://github.com/radiusmethod/crow/issues/74")
-        #expect(result?.org == "radiusmethod")
+        let result = ProviderManager.parseTicketURLComponents("https://github.com/corveil/crow/issues/74")
+        #expect(result?.org == "corveil")
         #expect(result?.repo == "crow")
         #expect(result?.number == 74)
         #expect(result?.isMR == false)
@@ -262,7 +262,7 @@ struct ProviderManagerTests {
     // MARK: - classifySpec (Jobs repo specs)
 
     @Test func classifySpecGlobExtractsOwner() {
-        #expect(ProviderManager.classifySpec("radiusmethod/*") == .glob(owner: "radiusmethod"))
+        #expect(ProviderManager.classifySpec("corveil/*") == .glob(owner: "corveil"))
     }
 
     @Test func classifySpecNestedGroupGlob() {
@@ -270,11 +270,11 @@ struct ProviderManagerTests {
     }
 
     @Test func classifySpecExplicitSlugPassesThrough() {
-        #expect(ProviderManager.classifySpec("radiusmethod/api") == .explicit(slug: "radiusmethod/api"))
+        #expect(ProviderManager.classifySpec("corveil/api") == .explicit(slug: "corveil/api"))
     }
 
     @Test func classifySpecTrimsWhitespace() {
-        #expect(ProviderManager.classifySpec("  radiusmethod/api  ") == .explicit(slug: "radiusmethod/api"))
+        #expect(ProviderManager.classifySpec("  corveil/api  ") == .explicit(slug: "corveil/api"))
     }
 
     @Test func classifySpecBareNameIsInvalid() {
@@ -298,7 +298,7 @@ struct ProviderManagerTests {
     }
 
     @Test func encodeGitLabGroupPathLeavesSimpleOwnerUnchanged() {
-        #expect(ProviderManager.encodeGitLabGroupPath("radiusmethod") == "radiusmethod")
+        #expect(ProviderManager.encodeGitLabGroupPath("corveil") == "corveil")
     }
 
     @Test func reposForSpecsKeepsExplicitSlugsSortedAndDeduped() async {
@@ -369,12 +369,12 @@ struct ProviderManagerTests {
     // MARK: - TicketInfo
 
     @Test func ticketInfoStoresAllProperties() {
-        let info = TicketInfo(number: 42, title: "Fix bug", repo: "crow", org: "radiusmethod", url: "https://github.com/radiusmethod/crow/issues/42", provider: .github, isMR: false)
+        let info = TicketInfo(number: 42, title: "Fix bug", repo: "crow", org: "corveil", url: "https://github.com/corveil/crow/issues/42", provider: .github, isMR: false)
         #expect(info.number == 42)
         #expect(info.title == "Fix bug")
         #expect(info.repo == "crow")
-        #expect(info.org == "radiusmethod")
-        #expect(info.url == "https://github.com/radiusmethod/crow/issues/42")
+        #expect(info.org == "corveil")
+        #expect(info.url == "https://github.com/corveil/crow/issues/42")
         #expect(info.provider == .github)
         #expect(info.isMR == false)
     }

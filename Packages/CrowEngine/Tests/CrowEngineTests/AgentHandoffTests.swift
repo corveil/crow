@@ -61,7 +61,7 @@ struct AgentHandoffPromptTests {
             name: "crow-627",
             kind: .work,
             agentKind: .claudeCode,
-            ticketURL: "https://github.com/radiusmethod/crow/issues/627"
+            ticketURL: "https://github.com/corveil/crow/issues/627"
         )
         let wt = SessionWorktree(
             sessionID: session.id,

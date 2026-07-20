@@ -4,7 +4,7 @@
 
 **Please do not report security vulnerabilities through public GitHub issues.**
 
-If you discover a security vulnerability in Crow, please report it by emailing **security@radiusmethod.com**. Include as much detail as possible:
+If you discover a security vulnerability in Crow, please report it privately through [GitHub's private vulnerability reporting](https://github.com/corveil/crow/security/advisories/new) for this repository. Include as much detail as possible:
 
 - A description of the vulnerability
 - Steps to reproduce the issue
