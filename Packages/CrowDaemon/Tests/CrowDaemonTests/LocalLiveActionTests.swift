@@ -322,6 +322,44 @@ import CrowPersistence
         #expect(num(a?["wallClockDurationSeconds"]) == 7200)
     }
 
+    /// The branch #772 made reachable: until the daemon ran the OTLP receiver,
+    /// nothing ever wrote `hookState.analytics`, so an OPEN session could never
+    /// render the strip no matter how much telemetry it produced.
+    @Test @MainActor func liveHookAggregateRendersForAnOpenSession() async {
+        AgentRegistry.shared.register(ClaudeCodeAgent())
+        let session = Session(name: "__TEST__SessionAnalyticsStripLive", kind: .work, agentKind: .claudeCode)
+        let appState = AppState()
+        appState.sessions = [session]
+        appState.hookState(for: session.id).analytics = SessionAnalytics(
+            totalCost: 1.25, inputTokens: 10, outputTokens: 20, toolCallCount: 4, apiErrorCount: 2)
+
+        let resp = await router(appState: appState, store: JSONStore.temporary())
+            .handle(request: JSONRPCRequest(id: 1, method: "list-sessions-live"))
+        let a = resp.result?["sessions"]?.objectValue?[session.id.uuidString]?.objectValue?["analytics"]?.objectValue
+        #expect(a?["source"]?.stringValue == "live")
+        #expect(num(a?["totalCost"]) == 1.25)
+        #expect(num(a?["totalTokens"]) == 30) // 10 + 20
+        #expect(num(a?["toolCallCount"]) == 4)
+        #expect(num(a?["apiErrorCount"]) == 2)
+    }
+
+    /// A live aggregate wins over a stale snapshot — a completed session that was
+    /// reopened keeps updating instead of freezing at its end-of-session numbers.
+    @Test @MainActor func liveAggregateWinsOverSnapshot() async {
+        AgentRegistry.shared.register(ClaudeCodeAgent())
+        let session = Session(name: "__TEST__SessionAnalyticsStripBoth", kind: .work, agentKind: .claudeCode)
+        let appState = AppState()
+        appState.sessions = [session]
+        appState.analyticsSnapshots[session.id.uuidString] = snapshot(for: session.id, cost: 2.5)
+        appState.hookState(for: session.id).analytics = SessionAnalytics(totalCost: 9.75)
+
+        let resp = await router(appState: appState, store: JSONStore.temporary())
+            .handle(request: JSONRPCRequest(id: 1, method: "list-sessions-live"))
+        let a = resp.result?["sessions"]?.objectValue?[session.id.uuidString]?.objectValue?["analytics"]?.objectValue
+        #expect(a?["source"]?.stringValue == "live")
+        #expect(num(a?["totalCost"]) == 9.75)
+    }
+
     @Test @MainActor func omitsAnalyticsWhenNoLiveOrSnapshot() async {
         AgentRegistry.shared.register(ClaudeCodeAgent())
         let session = Session(name: "s", kind: .work, agentKind: .claudeCode)

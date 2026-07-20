@@ -26,6 +26,12 @@ public final class SessionService {
     /// Windowed Manager-session aggregate from telemetry.db for the ungraded
     /// weekly usage bucket (#745). Optional for the same reason.
     private let managerUsageProvider: (@Sendable (Date, Date) async -> SessionAnalytics)?
+    /// Drops a session's rows from telemetry.db as part of `deleteSession`
+    /// (#772). Injected here rather than at each call site so all three delete
+    /// paths — the daemon's `delete-session` handler, the engine-router
+    /// fallback, and the auto-cleanup reaper — clean up through one choke
+    /// point. Optional: telemetry-off hosts and unit tests pass nil.
+    private let telemetryDeleteProvider: (@Sendable (UUID) async -> Void)?
     /// Host-only affordances (clipboard, editor/terminal launching, hook
     /// notifications). Defaults to a headless no-op so tests and the daemon
     /// need not supply one; the macOS app injects a real `AppHostBridge`.
@@ -39,6 +45,7 @@ public final class SessionService {
         analyticsProvider: (@Sendable (UUID) async -> SessionAnalytics?)? = nil,
         telemetrySessionIDsProvider: (@Sendable () async -> [UUID])? = nil,
         managerUsageProvider: (@Sendable (Date, Date) async -> SessionAnalytics)? = nil,
+        telemetryDeleteProvider: (@Sendable (UUID) async -> Void)? = nil,
         hostBridge: HostBridge = NoopHostBridge()
     ) {
         self.store = store
@@ -48,6 +55,7 @@ public final class SessionService {
         self.analyticsProvider = analyticsProvider
         self.telemetrySessionIDsProvider = telemetrySessionIDsProvider
         self.managerUsageProvider = managerUsageProvider
+        self.telemetryDeleteProvider = telemetryDeleteProvider
         self.hostBridge = hostBridge
     }
 
@@ -1536,6 +1544,15 @@ public final class SessionService {
             data.hookStates?[id.uuidString] = nil
         }
 
+        // Drop the session's raw telemetry rows now that the session itself is
+        // gone (#772). Only after the cleanup succeeded — a retryable failure
+        // returns above with the session intact, and its metrics with it. Any
+        // `SessionAnalyticsSnapshot` is deliberately left alone: the scorecard
+        // aggregates historical work whose sessions have since been deleted.
+        if let telemetryDeleteProvider {
+            await telemetryDeleteProvider(id)
+        }
+
         if appState.selectedSessionID == id {
             appState.selectedSessionID = appState.sessions.first?.id
         }
@@ -2798,7 +2815,7 @@ public final class SessionService {
     /// empty-analytics guard in `writeAnalyticsSnapshot` still applies.
     /// Returns the number of snapshots written.
     @discardableResult
-    func backfillAnalyticsSnapshots() async -> Int {
+    public func backfillAnalyticsSnapshots() async -> Int {
         guard let telemetrySessionIDsProvider else { return 0 }
         var written = 0
         for id in await telemetrySessionIDsProvider() {
@@ -2836,7 +2853,7 @@ public final class SessionService {
     /// pruning. Known bounded edge: the oldest still-covered week can be
     /// partially pruned mid-week, briefly dipping its recomputed total; it
     /// self-corrects once the week ages out entirely.
-    func refreshManagerUsage(now: Date = Date()) async {
+    public func refreshManagerUsage(now: Date = Date()) async {
         guard let managerUsageProvider else { return }
         // ISO-8601 weeks in the current timezone — the same bucketing
         // ScorecardModel.build uses, so the Manager card's weeks line up
