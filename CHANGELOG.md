@@ -13,6 +13,7 @@ Backfill of merged PRs since the 0.1.0 release, grouped by theme.
 
 - #752 — Multi-select "Start Working (N)" on the tickets board now fires a single `batch-work-on-issues` RPC, so the Manager runs one `/crow-batch-workspace url1 url2 …` (parallel setup) instead of N separate `/crow-workspace` submissions.
 - #613 — Left pane paints chrome + skeleton (or cached last-known) session rows on first load before `list-sessions` returns, then swaps in real rows without a blank flash.
+- #768 — Notifications for automation events are back after the native→web move: auto-workspace created, auto-merge enabled, auto-rebase pushed, auto-rebase conflicts, and config reloaded. The daemon pushes each over the existing `/rpc` socket at the moment the watcher acts; the web UI chimes and posts a browser notification, with per-event Enabled / sound / system toggles under Settings → Notifications. Conflict events use a distinct, harsher tone and are never suppressed by the "you're looking at it" focus rule.
 
 ### Automation
 

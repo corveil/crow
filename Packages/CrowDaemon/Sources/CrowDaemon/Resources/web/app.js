@@ -37,6 +37,9 @@ function rpcConnect() {
       // daemon — re-fetch the live surfaces now instead of waiting for the
       // interval poll (CROW-581, M-D).
       if (msg.id == null && msg.method === 'changed') { onServerChanged(); return; }
+      // Automation event push (CROW-768): a moment Crow acted on the user's
+      // behalf, which no client can derive from polled state.
+      if (msg.id == null && msg.method === 'notify') { onServerNotify(msg.params); return; }
       const waiter = rpcState.pending.get(msg.id);
       if (!waiter) return;
       rpcState.pending.delete(msg.id);
@@ -150,6 +153,10 @@ window.reloadUIConfig = loadUIConfig;
 const DEFAULT_EVENT_SOUND = {
   taskComplete: 'Glass', agentWaiting: 'Funk', reviewRequested: 'Glass',
   changesRequested: 'Funk', checksFailing: 'Sosumi',
+  // Automation events (CROW-768) — Basso for conflicts so "needs attention" is
+  // audibly distinct from the success events beside it.
+  autoWorkspaceCreated: 'Hero', autoMergeEnabled: 'Glass',
+  autoRebasePushed: 'Bottle', autoRebaseConflicts: 'Basso', configReloaded: 'Tink',
 };
 
 // NotificationEvent.displayName / .description (CrowCore) — reused for the
@@ -158,6 +165,9 @@ const EVENT_LABEL = {
   taskComplete: 'Task Complete', agentWaiting: 'Agent Waiting',
   reviewRequested: 'Review Requested', changesRequested: 'Changes Requested',
   checksFailing: 'CI Failing',
+  autoWorkspaceCreated: 'Auto-Workspace Created', autoMergeEnabled: 'Auto-Merge Enabled',
+  autoRebasePushed: 'Branch Rebased', autoRebaseConflicts: 'Rebase Conflicts',
+  configReloaded: 'Config Reloaded',
 };
 const EVENT_DESC = {
   taskComplete: 'Claude finished responding',
@@ -165,7 +175,23 @@ const EVENT_DESC = {
   reviewRequested: 'Someone requested your review on a PR',
   changesRequested: 'A reviewer requested changes on your PR',
   checksFailing: 'CI checks started failing on your PR',
+  autoWorkspaceCreated: 'Crow auto-created a workspace for an assigned issue',
+  autoMergeEnabled: 'Crow enabled auto-merge on a PR',
+  autoRebasePushed: 'Crow rebased a PR branch onto its base and pushed',
+  autoRebaseConflicts: 'An auto-rebase hit conflicts that need attention',
+  configReloaded: 'Crow reloaded its configuration',
 };
+
+// NotificationEvent.isAutomationEvent (CrowCore) — the events the daemon pushes
+// rather than the client deriving them from polled state (CROW-768).
+const AUTOMATION_EVENTS = [
+  'autoWorkspaceCreated', 'autoMergeEnabled', 'autoRebasePushed',
+  'autoRebaseConflicts', 'configReloaded',
+];
+// Every event the notification layer knows about, in the Settings tab's order.
+const ALL_EVENTS = [
+  'taskComplete', 'agentWaiting', 'reviewRequested', 'changesRequested', 'checksFailing',
+].concat(AUTOMATION_EVENTS);
 
 // Crow brandmark (96px) as a data URL, so notifications are visibly ours
 // without adding a server asset route — Chrome won't render SVG notification
@@ -274,9 +300,7 @@ function playEventSound(event, key) {
 // crowTestSound('agentWaiting') plays one. Bypasses config/dedup so it's always
 // audible — useful to confirm audio works and hear each configured tone.
 window.crowTestSound = function (event) {
-  const evs = event
-    ? [event]
-    : ['taskComplete', 'agentWaiting', 'reviewRequested', 'changesRequested', 'checksFailing'];
+  const evs = event ? [event] : ALL_EVENTS;
   evs.forEach((ev, i) => setTimeout(() => {
     const cfg = (uiConfig.notifications && uiConfig.notifications.events[ev]) || {};
     const name = cfg.soundName || DEFAULT_EVENT_SOUND[ev] || 'Glass';
@@ -323,8 +347,11 @@ function sessionNameFor(id) {
   return (s && s.name) || 'Session';
 }
 
+// `detail` (optional) carries a server-supplied { title, body } for automation
+// events, whose text is specific (PR number, issue title) rather than derivable
+// from EVENT_DESC (CROW-768).
 const _lastNotifyAt = {};
-function showEventNotification(event, key) {
+function showEventNotification(event, key, detail) {
   const N = uiConfig.notifications;
   if (!N) return;                          // config not loaded — don't guess
   if (N.globalMute) return;
@@ -337,21 +364,29 @@ function showEventNotification(event, key) {
 
   const isSession = !!sessions.find((x) => x.id === key);
   // Focus-suppression, mirroring NotificationManager (!appFocused || !visible):
-  // don't ping about the session you're already looking at.
-  if (isSession && document.hasFocus() && selectedId === key) return;
+  // don't ping about the session you're already looking at. Automation events
+  // are exempt (as they were natively) — an action Crow took on your behalf is
+  // worth knowing about even while that session is on screen (CROW-768).
+  const isAutomation = AUTOMATION_EVENTS.indexOf(event) !== -1;
+  if (!isAutomation && isSession && document.hasFocus() && selectedId === key) return;
 
   const k = (key || '') + '|' + event;
   const now = Date.now();
   if (_lastNotifyAt[k] && now - _lastNotifyAt[k] < 2000) return;
   _lastNotifyAt[k] = now;
 
-  const label = EVENT_LABEL[event] || event;
-  let body = EVENT_DESC[event] || '';
-  if (isSession) {
-    body = `${sessionNameFor(key)} — ${body}`;
-  } else {
-    const r = ((boardData.reviews && boardData.reviews.reviews) || []).find((x) => x.id === key);
-    if (r && r.repo) body = `${r.repo} — ${body}`;
+  // A server-supplied title/body already names the PR / issue / session, so it's
+  // used verbatim; derived events get the label plus a subject prefix.
+  const label = (detail && detail.title) || EVENT_LABEL[event] || event;
+  let body = (detail && detail.body) || '';
+  if (!body) {
+    body = EVENT_DESC[event] || '';
+    if (isSession) {
+      body = `${sessionNameFor(key)} — ${body}`;
+    } else {
+      const r = ((boardData.reviews && boardData.reviews.reviews) || []).find((x) => x.id === key);
+      if (r && r.repo) body = `${r.repo} — ${body}`;
+    }
   }
   try {
     // In the desktop app, WKWebView lacks the Web Notification API — post via the
@@ -364,12 +399,14 @@ function showEventNotification(event, key) {
     });
     // Clicking focuses the window and returns to where it originated: the
     // session for session events, or the review's session / reviews board.
+    // Automation events keyed on something other than a session (an issue URL,
+    // `config`) have nowhere better to land than the window itself.
     n.onclick = () => {
       window.focus();
       try {
         if (isSession) {
           selectSession(key);
-        } else {
+        } else if (!isAutomation) {
           const r = ((boardData.reviews && boardData.reviews.reviews) || []).find((x) => x.id === key);
           if (r && r.review_session_id) selectSession(r.review_session_id);
           else selectBoard('reviews');
@@ -381,9 +418,26 @@ function showEventNotification(event, key) {
 }
 
 // Both channels fire from one call in the detectors below; each self-gates.
-function emitEvent(event, key) {
+function emitEvent(event, key, detail) {
   playEventSound(event, key);
-  showEventNotification(event, key);
+  showEventNotification(event, key, detail);
+}
+
+// Server-pushed automation event (CROW-768). The daemon fires these at the point
+// a watcher acts — auto-workspace, auto-merge, auto-rebase, config reload — since
+// none of them are visible in the state the client polls. Gating (global mute,
+// per-event toggles, dedup) is the detectors' gating; the arm window applies too,
+// so a frame landing mid-boot can't chime over a page load.
+function onServerNotify(params) {
+  if (!_soundArmed) return;
+  if (!params || typeof params.event !== 'string') return;
+  if (ALL_EVENTS.indexOf(params.event) === -1) return; // unknown/newer event — ignore
+  // Defensive: the daemon always sends strings, but never hand a non-string to
+  // the Notification API. A missing key just weakens dedup, so tolerate it.
+  const key = typeof params.key === 'string' ? params.key : '';
+  const title = typeof params.title === 'string' ? params.title : '';
+  const body = typeof params.body === 'string' ? params.body : '';
+  emitEvent(params.event, key, { title, body });
 }
 
 // Manual test hook, mirroring crowTestSound. crowTestNotify() shows one popup
@@ -392,9 +446,7 @@ function emitEvent(event, key) {
 window.crowTestNotify = function (event) {
   if (!notificationsSupported()) { console.warn('[crowNotify] Notification API unavailable'); return; }
   const fire = () => {
-    const evs = event
-      ? [event]
-      : ['taskComplete', 'agentWaiting', 'reviewRequested', 'changesRequested', 'checksFailing'];
+    const evs = event ? [event] : ALL_EVENTS;
     evs.forEach((ev, i) => setTimeout(() => {
       try {
         const n = new Notification(`Crow — ${EVENT_LABEL[ev] || ev} (test)`, {

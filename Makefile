@@ -94,6 +94,8 @@ test:
 			swift test --package-path "$$pkg"; \
 		fi; \
 	done
+	@echo "==> Checking notification-event catalogs (CROW-768)..."
+	@./scripts/check-notification-events.sh
 
 clean:
 	rm -rf .build

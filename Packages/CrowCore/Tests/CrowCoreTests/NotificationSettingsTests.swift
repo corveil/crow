@@ -77,3 +77,24 @@ import Testing
                 "Default sound '\(event.defaultSound)' for \(event) not in builtInSounds")
     }
 }
+
+// MARK: - Forward compatibility (CROW-768)
+
+@Test func legacyConfigWithoutAutomationEventsFallsBackToDefaults() throws {
+    // A config written before the automation events existed carries only the
+    // original five entries. `config(for:)` must still hand back a sensible
+    // enabled-by-default config rather than dropping the notification.
+    var legacy = NotificationSettings(eventSettings: [:])
+    legacy.eventSettings[.taskComplete] = EventNotificationConfig(soundName: "Glass")
+    let data = try JSONEncoder().encode(legacy)
+    let decoded = try JSONDecoder().decode(NotificationSettings.self, from: data)
+
+    for event in NotificationEvent.allCases where event.isAutomationEvent {
+        #expect(decoded.eventSettings[event] == nil)
+        let config = decoded.config(for: event)
+        #expect(config.enabled == true)
+        #expect(config.soundEnabled == true)
+        #expect(config.systemNotificationEnabled == true)
+        #expect(config.soundName == event.defaultSound)
+    }
+}

@@ -38,14 +38,38 @@
     taskComplete: 'Task Complete', agentWaiting: 'Agent Waiting',
     reviewRequested: 'Review Requested', changesRequested: 'Changes Requested',
     checksFailing: 'CI Failing',
+    autoWorkspaceCreated: 'Auto-Workspace Created', autoMergeEnabled: 'Auto-Merge Enabled',
+    autoRebasePushed: 'Branch Rebased', autoRebaseConflicts: 'Rebase Conflicts',
+    configReloaded: 'Config Reloaded',
+  };
+  // One-line "what fires this" hint per event, so the automation entries aren't
+  // guesswork (CrowCore NotificationEvent.description).
+  const EVENT_HINTS = {
+    taskComplete: 'Claude finished responding.',
+    agentWaiting: 'Claude needs your input or permission.',
+    reviewRequested: 'Someone requested your review on a PR.',
+    changesRequested: 'A reviewer requested changes on your PR.',
+    checksFailing: 'CI checks started failing on your PR.',
+    autoWorkspaceCreated: 'Crow auto-created a workspace for a crow:auto-labeled issue.',
+    autoMergeEnabled: 'Crow enabled auto-merge on a crow:merge-labeled PR.',
+    autoRebasePushed: 'Crow rebased a PR branch onto its base and force-pushed.',
+    autoRebaseConflicts: 'An auto-rebase hit conflicts that need attention.',
+    configReloaded: 'Crow picked up a change to config.json.',
   };
   // Canonical NotificationEvent set + defaults (CrowCore NotificationEvent) —
-  // the config only stores events the user has touched, so we render all five
-  // and materialize any missing ones with their default sound (CROW-593).
-  const EVENT_ORDER = ['taskComplete', 'agentWaiting', 'reviewRequested', 'changesRequested', 'checksFailing'];
+  // the config only stores events the user has touched, so we render all of them
+  // and materialize any missing ones with their default sound (CROW-593). The
+  // trailing five are Crow's own automation events (CROW-768).
+  const EVENT_ORDER = [
+    'taskComplete', 'agentWaiting', 'reviewRequested', 'changesRequested', 'checksFailing',
+    'autoWorkspaceCreated', 'autoMergeEnabled', 'autoRebasePushed', 'autoRebaseConflicts',
+    'configReloaded',
+  ];
   const EVENT_DEFAULT_SOUND = {
     taskComplete: 'Glass', agentWaiting: 'Funk', reviewRequested: 'Glass',
     changesRequested: 'Funk', checksFailing: 'Sosumi',
+    autoWorkspaceCreated: 'Hero', autoMergeEnabled: 'Glass',
+    autoRebasePushed: 'Bottle', autoRebaseConflicts: 'Basso', configReloaded: 'Tink',
   };
   const BUILT_IN_SOUNDS = [
     'Basso', 'Blow', 'Bottle', 'Frog', 'Funk', 'Glass', 'Hero', 'Morse',
@@ -592,7 +616,7 @@
 
     for (const [raw, conf] of ensureAllEvents(n)) {
       body.appendChild(group(EVENT_LABELS[raw] || raw));
-      body.appendChild(toggleField('Enabled', conf, 'enabled'));
+      body.appendChild(toggleField('Enabled', conf, 'enabled', EVENT_HINTS[raw]));
       body.appendChild(toggleField('Play sound', conf, 'soundEnabled'));
       body.appendChild(toggleField('System notification', conf, 'systemNotificationEnabled'));
       body.appendChild(soundField(conf));
