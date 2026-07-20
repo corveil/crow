@@ -20,7 +20,7 @@ import Testing
     #expect(CrowAttribution.reviewMarkdownLink.contains(CrowAttribution.repoURL))
 }
 
-@Test func crowAttributionContainsNoForkReferences() {
+@Test func crowAttributionContainsNoForkOrSupersededOrgReferences() {
     #expect(!CrowAttribution.reviewMarkdownLink.contains("nicholasgasior"))
     #expect(!CrowAttribution.reviewMarkdownLink.lowercased().contains("radiusmethod"))
 }
@@ -39,7 +39,7 @@ import Testing
     #expect(CrowAttribution.ticketMarkdownLink.contains(CrowAttribution.repoURL))
 }
 
-@Test func crowAttributionTicketLinkContainsNoForkReferences() {
+@Test func crowAttributionTicketLinkContainsNoForkOrSupersededOrgReferences() {
     #expect(!CrowAttribution.ticketMarkdownLink.contains("nicholasgasior"))
     #expect(!CrowAttribution.ticketMarkdownLink.lowercased().contains("radiusmethod"))
 }

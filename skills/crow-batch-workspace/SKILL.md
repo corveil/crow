@@ -42,16 +42,16 @@ One or more ticket URLs, separated by newlines:
 
 ```
 /crow-batch-workspace
-https://github.com/Corveil/crow/issues/101
-https://github.com/Corveil/acme-api/issues/45
-https://github.com/Corveil/crow/issues/99
+https://github.com/corveil/crow/issues/101
+https://github.com/corveil/acme-api/issues/45
+https://github.com/corveil/crow/issues/99
 ```
 
 Or a mix of ticket URLs and natural language:
 
 ```
 /crow-batch-workspace
-https://github.com/Corveil/crow/issues/101
+https://github.com/corveil/crow/issues/101
 "update acme-api authentication"
 https://gitlab.example.com/org/repo/-/issues/42
 ```
@@ -190,9 +190,9 @@ Same as `/crow-workspace`. See that skill for the full CLI reference.
 ### Three GitHub Issues
 ```
 /crow-batch-workspace
-https://github.com/Corveil/crow/issues/101
-https://github.com/Corveil/acme-api/issues/45
-https://github.com/Corveil/crow/issues/99
+https://github.com/corveil/crow/issues/101
+https://github.com/corveil/acme-api/issues/45
+https://github.com/corveil/crow/issues/99
 ```
 - Resolves all 3 sequentially (fetches tickets, detects PRs, generates names)
 - Fires 3 `setup.sh` calls simultaneously
@@ -201,7 +201,7 @@ https://github.com/Corveil/crow/issues/99
 ### Mixed Providers
 ```
 /crow-batch-workspace
-https://github.com/Corveil/crow/issues/101
+https://github.com/corveil/crow/issues/101
 https://gitlab.example.com/org/my-project/-/issues/42
 ```
 - Detects GitHub and GitLab providers from URLs
@@ -211,11 +211,11 @@ https://gitlab.example.com/org/my-project/-/issues/42
 ### Five Workspaces (Stress Test)
 ```
 /crow-batch-workspace
-https://github.com/Corveil/crow/issues/101
-https://github.com/Corveil/crow/issues/102
-https://github.com/Corveil/crow/issues/103
-https://github.com/Corveil/acme-api/issues/45
-https://github.com/Corveil/acme-api/issues/46
+https://github.com/corveil/crow/issues/101
+https://github.com/corveil/crow/issues/102
+https://github.com/corveil/crow/issues/103
+https://github.com/corveil/acme-api/issues/45
+https://github.com/corveil/acme-api/issues/46
 ```
 - 5 parallel `setup.sh` calls
 - Each blocks one GCD thread in the socket server (well within the 64+ thread pool)

@@ -600,7 +600,7 @@ All commands return JSON and require `dangerouslyDisableSandbox: true`.
 
 ### GitHub Issue URL
 ```
-/crow-workspace https://github.com/Corveil/acme-api/issues/45
+/crow-workspace https://github.com/corveil/acme-api/issues/45
 ```
 → Fetches issue #45, matches acme-api in Corveil
 → Creates worktree at ~/Dev/Corveil/acme-api-45-jwt-validation
