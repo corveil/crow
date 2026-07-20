@@ -254,19 +254,23 @@ public enum CrowDaemon {
         // One rebuild entry point (#767), shared by the launch startup below, the
         // hourly poll, and the `rebuild-scorecard` RPC: backfill snapshots for
         // sessions recorded before snapshotting existed, recompute the ungraded
-        // Manager weekly rollups, and refresh the capture-status line. In-flight
-        // guard via `isRebuildingScorecard` so the three callers can't interleave
-        // and clear the flag out from under each other. Nil when telemetry is off.
+        // Manager weekly rollups, and refresh the capture-status line. Wrapped in
+        // a single-flight `ScorecardRebuilder` so overlapping callers await one
+        // rebuild instead of racing (the RPC never reports success for skipped
+        // work, and `isRebuildingScorecard` can't clear mid-run — #781). Nil when
+        // telemetry is off.
         let rebuildScorecard: (@MainActor @Sendable () async -> Void)?
         if let telemetry, let sessionService {
-            rebuildScorecard = {
-                guard !appState.isRebuildingScorecard else { return }
-                appState.isRebuildingScorecard = true
-                defer { appState.isRebuildingScorecard = false }
-                await sessionService.backfillAnalyticsSnapshots()
-                await sessionService.refreshManagerUsage()
-                appState.telemetryCaptureStatus = await telemetry.captureStatus()
+            let rebuilder = await MainActor.run {
+                ScorecardRebuilder {
+                    appState.isRebuildingScorecard = true
+                    defer { appState.isRebuildingScorecard = false }
+                    await sessionService.backfillAnalyticsSnapshots()
+                    await sessionService.refreshManagerUsage()
+                    appState.telemetryCaptureStatus = await telemetry.captureStatus()
+                }
             }
+            rebuildScorecard = { await rebuilder.rebuild() }
         } else {
             rebuildScorecard = nil
         }
