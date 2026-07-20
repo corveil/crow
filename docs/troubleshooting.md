@@ -23,6 +23,7 @@
 | Sidebar status dot stuck gray                            | Terminal never initialized — click the session tab to trigger `createSurface()` |
 | Sidebar status dot stuck yellow                          | Shell is spawning but the probe file never appeared. Check `[TerminalManager]` logs for shell-startup errors |
 | Auto-respond didn't fire on a failed CI run              | Toggle is at **Settings → Automation → Auto-respond**, off by default. The session must have an active Claude Code terminal that `TerminalRouter.canSend` accepts; a torn-down terminal won't receive the prompt. See [automation.md](automation.md) for full coverage. |
+| Auto-merge never enables on a `crow:merge` PR            | Check `~/Library/Logs/crow/crowd-automation.log` — every poll writes an `auto-merge:` line naming each candidate and its skip reason (`no-crow-merge-label`, `changes-requested`, `not-in-viewer-prs`, …). A `skipped entirely — autoMergeWatcherEnabledProvider() is false` line means the watcher is off in Settings. Before #782, a `crowd` started without tmux on its PATH disabled every automation silently; the `startup:` line in that log now records whether tmux was found. |
 | Sidebar shows "working" forever after a `※ recap:` line  | The Claude Code session recap (`awaySummaryEnabled`, on by default in v2.1.108+) fires hook events after a turn's `Stop`. Crow now ignores those — if you're on an older build, disable the recap by setting `"awaySummaryEnabled": false` in `~/.claude/settings.json`, toggling "Session recap" off via `/config` inside Claude Code, or exporting `CLAUDE_CODE_ENABLE_AWAY_SUMMARY=0`. |
 
 ## Debugging
@@ -50,6 +51,21 @@ Filter for scope / auth errors while you're iterating on `gh` permissions:
 ```bash
 .build/debug/crowd 2>&1 | grep '\[IssueTracker\]'
 ```
+
+### Automation log
+
+Background-automation decisions (auto-merge, auto-rebase, auto-respond) are also
+written to a durable, rotating file so a skip is diagnosable after the fact —
+stderr is not retained across daemon restarts (#782):
+
+```bash
+tail -f ~/Library/Logs/crow/crowd-automation.log
+grep 'auto-merge' ~/Library/Logs/crow/crowd-automation.log | tail -20
+```
+
+Each poll emits one `auto-merge:` summary (`dispatched=… updateBranch=… skipped=…`
+with a per-PR reason list), plus a `startup:` line recording whether tmux was found
+and which automation flags were armed. The file rotates to `…log.1` past 5 MB.
 
 ## Unsigned Builds
 

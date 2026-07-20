@@ -148,6 +148,26 @@ public final class IssueTracker {
     /// persisted, which the gating guard checks first.
     private var autoMergeInFlight: Set<String> = []
 
+    /// Last time we logged "auto-merge watcher disabled" to the automation log.
+    /// Rate-limits that line to hourly so a deliberately-off watcher doesn't
+    /// bury the interesting entries at one line per 60s poll (CROW-782).
+    private var lastAutoMergeDisabledLogAt: Date?
+
+    /// Same hourly rate-limit for the two other steady-state "nothing happened"
+    /// lines — an idle auto-rebase watcher and `crow:auto` issues with no
+    /// handler to dispatch them. At one line per 60s poll they'd rotate the
+    /// interesting entries out of the log (review #787).
+    private var lastAutoRebaseIdleLogAt: Date?
+    private var lastAutoCreateUndispatchableLogAt: Date?
+
+    /// Why we permanently stopped trying to auto-merge a PR, keyed by PR URL.
+    /// `autoMergeInFlight` is deliberately left set for permanent outcomes (repo
+    /// disallows auto-merge, no Crow-Session trailer) so the failure isn't
+    /// re-logged every poll — but then the per-poll summary would report a bare
+    /// `in-flight` forever instead of the real reason. Recording it here keeps
+    /// the summary honest (review #787).
+    private var autoMergePermanentSkips: [String: String] = [:]
+
     /// Per-head-commit guard for `gh pr update-branch`. Keyed
     /// `"<url>\n<headRefOid>"` so a PR that is `BEHIND` its base gets exactly
     /// one update attempt per head state — a successful update adds a merge
@@ -633,8 +653,19 @@ public final class IssueTracker {
     /// No-op when the global `autoCreateWatcherEnabled` setting is off
     /// (CROW-312). The label is intentionally left in place while disabled
     /// so a later opt-in still picks up the issue on the next poll.
+    ///
+    /// Also a no-op when no `onAutoCreateRequest` handler is wired: since
+    /// CROW-782 the *provider* is armed even on a daemon with no tmux (and so no
+    /// Manager terminal to spawn into), and dispatching into a nil callback here
+    /// would strip `crow:auto` anyway — permanently burning the one-shot trigger
+    /// for a workspace that was never created (review #787). Same contract as
+    /// the disabled case: leave the label, pick it up once a host can act.
     private func detectAutoCreateCandidates(issues: [AssignedIssue]) {
-        guard autoCreateWatcherEnabledProvider() else { return }
+        guard Self.canRunAutoCreate(enabled: autoCreateWatcherEnabledProvider(),
+                                    hasHandler: onAutoCreateRequest != nil) else {
+            if autoCreateWatcherEnabledProvider() { logAutoCreateUndispatchableIfDue(issues: issues) }
+            return
+        }
         // Purge in-flight URLs that now have an active session — the dispatch
         // succeeded and the set can shrink.
         if !autoCreateInFlight.isEmpty {
@@ -657,6 +688,33 @@ public final class IssueTracker {
             onAutoCreateRequest?(issue)
             Task { [weak self] in await self?.removeAutoCreateLabel(from: issue) }
         }
+    }
+
+    /// Whether the auto-create sweep may run — i.e. whether stripping `crow:auto`
+    /// (which the sweep always does after dispatch) is justified. Requires BOTH
+    /// the config opt-in AND a wired handler: dispatching into a nil callback
+    /// still burns the one-shot label without creating anything (review #787).
+    /// Pure so the rule is unit-testable without an `IssueTracker`.
+    nonisolated static func canRunAutoCreate(enabled: Bool, hasHandler: Bool) -> Bool {
+        enabled && hasHandler
+    }
+
+    /// Say (hourly at most) that `crow:auto` issues are waiting but nothing can
+    /// act on them — the enabled-but-undispatchable state a no-tmux daemon is in.
+    /// Silent when there's nothing labeled, so a normal headless daemon with no
+    /// pending auto-create work doesn't log at all.
+    private func logAutoCreateUndispatchableIfDue(issues: [AssignedIssue]) {
+        let waiting = issues.filter { issue in
+            issue.state == "open"
+                && issue.labels.contains { $0.name.caseInsensitiveCompare(Self.autoCreateLabel) == .orderedSame }
+        }
+        guard !waiting.isEmpty else { return }
+        let now = Date()
+        if let last = lastAutoCreateUndispatchableLogAt, now.timeIntervalSince(last) < 3600 { return }
+        lastAutoCreateUndispatchableLogAt = now
+        CrowLog.automation(
+            "crow:auto: \(waiting.count) labeled issue(s) waiting but no onAutoCreateRequest handler is "
+            + "wired (no Manager terminal — is tmux available?); leaving the label in place")
     }
 
     /// Best-effort removal of the auto-create label. Failure is logged and
@@ -1749,12 +1807,11 @@ public final class IssueTracker {
                     failedCheckNames: [],
                     isCooldownReFire: isCooldownReFire
                 ))
-                NSLog("[IssueTracker] needs-refine fired — session=%@, sha=%@, lastCR=%@, lastCommit=%@, reFire=%@",
-                      session.id.uuidString as NSString,
-                      (newStatus.headSha ?? "") as NSString,
-                      Self.iso(newStatus.lastChangesRequestedAt) as NSString,
-                      Self.iso(newStatus.lastSubstantiveCommitAt) as NSString,
-                      (isCooldownReFire ? "yes" : "no") as NSString)
+                CrowLog.automation(
+                    "auto-respond: needs-refine fired — session=\(session.id.uuidString), "
+                    + "sha=\(newStatus.headSha ?? ""), lastCR=\(Self.iso(newStatus.lastChangesRequestedAt)), "
+                    + "lastCommit=\(Self.iso(newStatus.lastSubstantiveCommitAt)), "
+                    + "reFire=\(isCooldownReFire ? "yes" : "no")")
             }
             seenPRs.insert(prLink.url)
 
@@ -1846,13 +1903,36 @@ public final class IssueTracker {
     /// - the `crow:merge` label is absent
     /// - the PR is in CONFLICTING or CHANGES_REQUESTED state
     nonisolated static func shouldAttemptAutoMerge(pr: ViewerPR, session: Session) -> Bool {
-        guard session.autoMergeEnabledAt == nil else { return false }
-        guard pr.state == "OPEN" else { return false }
-        guard !pr.isDraft else { return false }
-        guard pr.labels.contains(where: { $0.name.caseInsensitiveCompare(autoMergeLabel) == .orderedSame }) else { return false }
-        guard pr.mergeable != "CONFLICTING" else { return false }
-        guard pr.reviewDecision != "CHANGES_REQUESTED" else { return false }
-        return true
+        autoMergeSkipReason(pr: pr, session: session) == nil
+    }
+
+    /// Why `pr` is not an auto-merge candidate, or `nil` when it is one.
+    ///
+    /// The reason exists so a skip leaves a trace: `shouldAttemptAutoMerge`
+    /// used to collapse six distinct guards into a bare `false`, which is why
+    /// "why wasn't this PR merged?" was unanswerable after the fact (CROW-782).
+    /// `applyAutoMerge` logs the reason per PR each poll; the boolean helper
+    /// above is derived from this one so the two can never disagree.
+    ///
+    /// Raw values are the strings that land in the automation log — keep them
+    /// stable enough to grep for.
+    enum AutoMergeSkipReason: String {
+        case alreadyEnabled = "already-enabled"
+        case notOpen = "not-open"
+        case draft = "draft"
+        case noMergeLabel = "no-crow-merge-label"
+        case conflicting = "conflicting"
+        case changesRequested = "changes-requested"
+    }
+
+    nonisolated static func autoMergeSkipReason(pr: ViewerPR, session: Session) -> AutoMergeSkipReason? {
+        guard session.autoMergeEnabledAt == nil else { return .alreadyEnabled }
+        guard pr.state == "OPEN" else { return .notOpen }
+        guard !pr.isDraft else { return .draft }
+        guard pr.labels.contains(where: { $0.name.caseInsensitiveCompare(autoMergeLabel) == .orderedSame }) else { return .noMergeLabel }
+        guard pr.mergeable != "CONFLICTING" else { return .conflicting }
+        guard pr.reviewDecision != "CHANGES_REQUESTED" else { return .changesRequested }
+        return nil
     }
 
     /// True when `gh pr merge --auto` failed for a permanent repo/policy
@@ -2346,15 +2426,42 @@ public final class IssueTracker {
     /// kicks off the async enable flow once each. No-op when the global
     /// `autoMergeWatcherEnabled` setting is off.
     private func applyAutoMerge(viewerPRs: [ViewerPR]) {
-        guard autoMergeWatcherEnabledProvider() else { return }
-        guard !viewerPRs.isEmpty else { return }
+        guard autoMergeWatcherEnabledProvider() else {
+            // Durable, not silent: this exact early return is how the tmux-gated
+            // wiring regression went dark for weeks (CROW-782). Rate-limited to
+            // once per hour so an intentionally-disabled watcher doesn't spam.
+            logAutoMergeDisabledIfDue()
+            return
+        }
+        guard !viewerPRs.isEmpty else {
+            CrowLog.automation("auto-merge: no viewer PRs in this poll's fetch — nothing to evaluate")
+            return
+        }
         let byURL = Dictionary(viewerPRs.map { ($0.url, $0) }, uniquingKeysWith: Self.mergePRRecords)
+
+        var enabledCount = 0
+        var updateBranchCount = 0
+        var skips: [String] = []
 
         for session in appState.sessions where !session.isManager {
             guard let prLink = appState.links(for: session.id).first(where: { $0.linkType == .pr }) else { continue }
-            guard !autoMergeInFlight.contains(prLink.url) else { continue }
-            guard let pr = byURL[prLink.url] else { continue }
-            guard Self.shouldAttemptAutoMerge(pr: pr, session: session) else { continue }
+            guard !autoMergeInFlight.contains(prLink.url) else {
+                // A permanent outcome keeps its marker set on purpose — report
+                // the reason it stopped, not the bare marker (review #787).
+                skips.append("\(prLink.url):\(autoMergePermanentSkips[prLink.url] ?? "in-flight")")
+                continue
+            }
+            guard let pr = byURL[prLink.url] else {
+                // The PR is linked to a live session but absent from the
+                // viewer-PR fetch — a fetch/scope problem, not an eligibility
+                // one, and invisible before CROW-782.
+                skips.append("\(prLink.url):not-in-viewer-prs")
+                continue
+            }
+            if let reason = Self.autoMergeSkipReason(pr: pr, session: session) {
+                skips.append("#\(pr.number):\(reason.rawValue)")
+                continue
+            }
 
             let capturedSession = session
             if Self.shouldUpdateBranchBeforeMerge(pr: pr, session: session) {
@@ -2362,15 +2469,39 @@ public final class IssueTracker {
                 // of merging. One attempt per head commit (loop safety); the
                 // next poll re-evaluates once GitHub recomputes mergeability.
                 let key = "\(prLink.url)\n\(pr.headRefOid)"
-                guard !autoUpdateBranchAttempted.contains(key) else { continue }
+                guard !autoUpdateBranchAttempted.contains(key) else {
+                    skips.append("#\(pr.number):update-branch-already-attempted-for-head")
+                    continue
+                }
                 autoUpdateBranchAttempted.insert(key)
                 autoMergeInFlight.insert(prLink.url)
+                updateBranchCount += 1
                 Task { await self.attemptUpdateBranch(session: capturedSession, pr: pr) }
             } else {
                 autoMergeInFlight.insert(prLink.url)
+                enabledCount += 1
                 Task { await self.attemptEnableAutoMerge(session: capturedSession, pr: pr) }
             }
         }
+
+        // One line per poll, always — an empty candidate set is itself the
+        // answer to "why didn't my PR merge?" (CROW-782).
+        let skipDetail = skips.isEmpty ? "" : " [\(skips.joined(separator: ", "))]"
+        CrowLog.automation(
+            "auto-merge: dispatched=\(enabledCount) updateBranch=\(updateBranchCount) "
+            + "skipped=\(skips.count)\(skipDetail)")
+    }
+
+    /// Emit the "watcher disabled" line at most once an hour. `nil` until the
+    /// first emission, so a daemon that starts with the watcher off says so
+    /// immediately.
+    private func logAutoMergeDisabledIfDue() {
+        let now = Date()
+        if let last = lastAutoMergeDisabledLogAt, now.timeIntervalSince(last) < 3600 { return }
+        lastAutoMergeDisabledLogAt = now
+        CrowLog.automation(
+            "auto-merge: skipped entirely — autoMergeWatcherEnabledProvider() is false "
+            + "(config `autoMergeWatcherEnabled` off, or the provider was never wired)")
     }
 
     /// Resolve the `CodeBackend` for a session's PR/merge actions, following the
@@ -2393,16 +2524,23 @@ public final class IssueTracker {
             return
         }
         guard await prHasCrowAuthoredCommit(pr: pr, backend: backend) else {
-            NSLog("[Crow] crow:merge ignored on %@ — no Crow-Session trailer matching a known session",
-                  pr.url as NSString)
+            // Leaves `autoMergeInFlight` set (one log line, not one per poll);
+            // record why so the summary doesn't just say "in-flight" forever.
+            autoMergePermanentSkips[pr.url] = "no-crow-session-trailer"
+            CrowLog.automation("auto-merge: #\(pr.number) ignored — no Crow-Session trailer matching a known session")
             return
         }
 
         await ensureMergeLabel(repo: pr.repoNameWithOwner, backend: backend)
 
         guard backend.capabilities.contains(.autoMerge) else {
-            // Capability gate: don't even try if the backend can't enable auto-merge.
-            autoMergeInFlight.remove(pr.url)
+            // Capability gate: don't even try if the backend can't enable
+            // auto-merge. A backend's capability set is static, so this is
+            // permanent — keep the in-flight marker (with its reason) rather
+            // than clearing it and re-running the authorship commit fetch, and
+            // re-logging, on every 60s poll (review #787).
+            autoMergePermanentSkips[pr.url] = "backend-lacks-auto-merge-capability"
+            CrowLog.automation("auto-merge: #\(pr.number) skipped — backend lacks the autoMerge capability")
             return
         }
         do {
@@ -2421,19 +2559,22 @@ public final class IssueTracker {
                     data.sessions[idx].updatedAt = now
                 }
             }
-            NSLog("[Crow] Auto-merge enabled on %@ (session %@, squash)",
-                  pr.url as NSString, session.id.uuidString as NSString)
+            CrowLog.automation("auto-merge: ENABLED on \(pr.url) (session \(session.id.uuidString), squash)")
             onAutoMergeEnabled?(session.id, pr.url, pr.number)
         } catch {
             if Self.isPermanentAutoMergeFailure(error) {
                 // Leave `autoMergeInFlight` set so subsequent polls skip this
                 // PR instead of re-logging a permanent repo policy failure.
-                NSLog("[Crow] enableAutoMerge skipped for %@ (auto-merge not allowed on repo): %@",
-                      pr.url as NSString, error.localizedDescription as NSString)
+                autoMergePermanentSkips[pr.url] = "repo-disallows-auto-merge"
+                CrowLog.automation(
+                    "auto-merge: #\(pr.number) permanently skipped (auto-merge not allowed on repo): "
+                    + error.localizedDescription)
             } else {
                 autoMergeInFlight.remove(pr.url)
-                NSLog("[Crow] enableAutoMerge failed for %@: %@",
-                      pr.url as NSString, error.localizedDescription as NSString)
+                autoMergePermanentSkips[pr.url] = nil
+                CrowLog.automation(
+                    "auto-merge: #\(pr.number) enableAutoMerge failed (will retry next poll): "
+                    + error.localizedDescription)
             }
         }
     }
@@ -2450,20 +2591,22 @@ public final class IssueTracker {
     private func attemptUpdateBranch(session: Session, pr: ViewerPR) async {
         guard let backend = codeBackend(for: session) else { return }
         guard await prHasCrowAuthoredCommit(pr: pr, backend: backend) else {
-            NSLog("[Crow] crow:merge update-branch skipped on %@ — no Crow-Session trailer matching a known session",
-                  pr.url as NSString)
+            CrowLog.automation(
+                "auto-merge: #\(pr.number) update-branch skipped — no Crow-Session trailer matching a known session")
             return
         }
 
         defer { autoMergeInFlight.remove(pr.url) }
-        guard backend.capabilities.contains(.updateBranch) else { return }
+        guard backend.capabilities.contains(.updateBranch) else {
+            CrowLog.automation("auto-merge: #\(pr.number) update-branch skipped — backend lacks the updateBranch capability")
+            return
+        }
         do {
             try await backend.updateBranch(prURL: pr.url)
-            NSLog("[Crow] Updated branch for %@ (session %@, was BEHIND base)",
-                  pr.url as NSString, session.id.uuidString as NSString)
+            CrowLog.automation(
+                "auto-merge: #\(pr.number) branch updated from base (session \(session.id.uuidString), was BEHIND)")
         } catch {
-            NSLog("[Crow] updateBranch failed for %@: %@",
-                  pr.url as NSString, error.localizedDescription as NSString)
+            CrowLog.automation("auto-merge: #\(pr.number) updateBranch failed: \(error.localizedDescription)")
         }
     }
 
@@ -2534,6 +2677,7 @@ public final class IssueTracker {
         guard !viewerPRs.isEmpty else { return }
         let byURL = Dictionary(viewerPRs.map { ($0.url, $0) }, uniquingKeysWith: Self.mergePRRecords)
 
+        var dispatched = 0
         for session in appState.sessions where Self.sessionEligibleForAutoRebase(session) {
             guard let prLink = appState.links(for: session.id).first(where: { $0.linkType == .pr }) else { continue }
             guard !autoRebaseInFlight.contains(prLink.url) else { continue }
@@ -2554,8 +2698,23 @@ public final class IssueTracker {
             guard !autoRebaseAttempted.contains(key) else { continue }
             autoRebaseAttempted.insert(key)
             autoRebaseInFlight.insert(prLink.url)
+            dispatched += 1
+            CrowLog.automation("auto-rebase: dispatched #\(pr.number) (\(pr.mergeStateStatus), mergeable=\(pr.mergeable))")
             let capturedSession = session
             Task { await self.attemptRebase(session: capturedSession, pr: pr) }
+        }
+        if dispatched == 0 {
+            // Hourly, not per-poll: an idle-but-enabled watcher is the steady
+            // state, and one line per 60s would rotate the interesting entries
+            // out of the log (review #787).
+            let now = Date()
+            if lastAutoRebaseIdleLogAt.map({ now.timeIntervalSince($0) >= 3600 }) ?? true {
+                lastAutoRebaseIdleLogAt = now
+                CrowLog.automation("auto-rebase: enabled, no candidates this poll")
+            }
+        } else {
+            // A live dispatch means the next idle stretch is worth reporting.
+            lastAutoRebaseIdleLogAt = nil
         }
     }
 

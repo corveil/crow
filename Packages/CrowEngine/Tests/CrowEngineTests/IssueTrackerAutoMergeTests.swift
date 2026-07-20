@@ -129,6 +129,69 @@ struct IssueTrackerAutoMergeTests {
         #expect(IssueTracker.shouldAttemptAutoMerge(pr: pr, session: makeSession()))
     }
 
+    // MARK: - autoMergeSkipReason (CROW-782 — skips must name themselves)
+
+    @Test func skipReasonIsNilForAnEligiblePR() {
+        #expect(IssueTracker.autoMergeSkipReason(pr: makePR(), session: makeSession()) == nil)
+    }
+
+    @Test func skipReasonNamesEachGuard() {
+        let cases: [(IssueTracker.ViewerPR, Session, IssueTracker.AutoMergeSkipReason)] = [
+            (makePR(), makeSession(autoMergeEnabledAt: Date()), .alreadyEnabled),
+            (makePR(state: "CLOSED"), makeSession(), .notOpen),
+            (makePR(isDraft: true), makeSession(), .draft),
+            (makePR(labels: [Self.otherLabel]), makeSession(), .noMergeLabel),
+            (makePR(mergeable: "CONFLICTING"), makeSession(), .conflicting),
+            (makePR(reviewDecision: "CHANGES_REQUESTED"), makeSession(), .changesRequested),
+        ]
+        for (pr, session, expected) in cases {
+            #expect(IssueTracker.autoMergeSkipReason(pr: pr, session: session) == expected)
+        }
+    }
+
+    @Test func skipReasonAgreesWithShouldAttemptAutoMerge() {
+        // The boolean helper is derived from the reason, so every fixture must
+        // agree — otherwise the log would name a reason for a PR we still merge.
+        let fixtures: [(IssueTracker.ViewerPR, Session)] = [
+            (makePR(), makeSession()),
+            (makePR(), makeSession(autoMergeEnabledAt: Date())),
+            (makePR(state: "MERGED"), makeSession()),
+            (makePR(isDraft: true), makeSession()),
+            (makePR(labels: []), makeSession()),
+            (makePR(mergeable: "CONFLICTING"), makeSession()),
+            (makePR(reviewDecision: "CHANGES_REQUESTED"), makeSession()),
+            (makePR(reviewDecision: ""), makeSession()),
+            (makePR(mergeStateStatus: "BEHIND"), makeSession()),
+        ]
+        for (pr, session) in fixtures {
+            #expect(IssueTracker.shouldAttemptAutoMerge(pr: pr, session: session)
+                    == (IssueTracker.autoMergeSkipReason(pr: pr, session: session) == nil))
+        }
+    }
+
+    @Test func skipReasonRawValuesAreStableForGrepping() {
+        // These strings land in ~/Library/Logs/crow/crowd-automation.log and are
+        // what a future investigation greps for — pin them.
+        #expect(IssueTracker.AutoMergeSkipReason.alreadyEnabled.rawValue == "already-enabled")
+        #expect(IssueTracker.AutoMergeSkipReason.notOpen.rawValue == "not-open")
+        #expect(IssueTracker.AutoMergeSkipReason.draft.rawValue == "draft")
+        #expect(IssueTracker.AutoMergeSkipReason.noMergeLabel.rawValue == "no-crow-merge-label")
+        #expect(IssueTracker.AutoMergeSkipReason.conflicting.rawValue == "conflicting")
+        #expect(IssueTracker.AutoMergeSkipReason.changesRequested.rawValue == "changes-requested")
+    }
+
+    // MARK: - canRunAutoCreate (review #787 — never burn crow:auto with no handler)
+
+    @Test func autoCreateRunsOnlyWhenEnabledAndDispatchable() {
+        #expect(IssueTracker.canRunAutoCreate(enabled: true, hasHandler: true))
+        // Enabled but no handler: the sweep would strip `crow:auto` after
+        // dispatching into nil, permanently burning the one-shot trigger on a
+        // daemon that never created a workspace. The label must survive.
+        #expect(!IssueTracker.canRunAutoCreate(enabled: true, hasHandler: false))
+        #expect(!IssueTracker.canRunAutoCreate(enabled: false, hasHandler: true))
+        #expect(!IssueTracker.canRunAutoCreate(enabled: false, hasHandler: false))
+    }
+
     // MARK: - shouldUpdateBranchBeforeMerge (BEHIND base)
 
     @Test func updatesBranchWhenBehindBase() {
