@@ -860,7 +860,10 @@ struct DaemonOptions {
     static func parse(_ arguments: [String]) -> DaemonOptions {
         var options = DaemonOptions()
         var devRootExplicit = false
-        if let envRoot = ProcessInfo.processInfo.environment["CROW_DEV_ROOT"] {
+        // An empty `CROW_DEV_ROOT=` is treated as unset, not as an explicit
+        // override of "" — otherwise it would count as a configured root and
+        // open the launch-time scaffold gate on a nonsense path (#766 review).
+        if let envRoot = ProcessInfo.processInfo.environment["CROW_DEV_ROOT"], !envRoot.isEmpty {
             options.devRoot = envRoot
             devRootExplicit = true
         }

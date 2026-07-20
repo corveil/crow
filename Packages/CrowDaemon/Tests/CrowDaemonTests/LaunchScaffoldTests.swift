@@ -45,6 +45,16 @@ struct LaunchScaffoldTests {
         #expect(fm.fileExists(atPath: (claudeDir as NSString).appendingPathComponent("CLAUDE.md")))
         #expect(fm.fileExists(atPath: (claudeDir as NSString).appendingPathComponent("settings.local.json")))
         #expect(fm.fileExists(atPath: (claudeDir as NSString).appendingPathComponent("commands/crow-image.md")))
+        // The `.claude/bin` PATH-precedence anchor is materialized too. Only the
+        // directory is asserted here: which links land inside depends on
+        // `defaults.binaries` and on `ClaudeHookConfigWriter.appCrowBinary()`
+        // resolving in the host process, and the link contents are already
+        // covered with an injected binary by `ScaffolderBinarySymlinkTests`.
+        var isDirectory: ObjCBool = false
+        #expect(fm.fileExists(
+            atPath: (claudeDir as NSString).appendingPathComponent("bin"),
+            isDirectory: &isDirectory))
+        #expect(isDirectory.boolValue)
     }
 
     /// The upgrade case: an existing dev root whose skills are stale must be
