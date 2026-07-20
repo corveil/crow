@@ -23,6 +23,11 @@ let package = Package(
         .package(path: "../CrowCodex"),
         .package(path: "../CrowCursor"),
         .package(path: "../CrowOpenCode"),
+        // OTLP receiver + telemetry.db, so the daemon produces the per-session
+        // analytics the web strip and the scorecard read (#772). Darwin-only
+        // (Network.framework) — CrowDaemon already is, via CrowTerminal, and
+        // ci.yml's Linux allow-list excludes both.
+        .package(path: "../CrowTelemetry"),
         .package(url: "https://github.com/hummingbird-project/hummingbird.git", from: "2.0.0"),
         .package(url: "https://github.com/hummingbird-project/hummingbird-websocket.git", from: "2.0.0"),
         // Already resolved transitively (via NIO/Hummingbird); declared directly
@@ -44,6 +49,7 @@ let package = Package(
                 .product(name: "CrowCodex", package: "CrowCodex"),
                 .product(name: "CrowCursor", package: "CrowCursor"),
                 .product(name: "CrowOpenCode", package: "CrowOpenCode"),
+                .product(name: "CrowTelemetry", package: "CrowTelemetry"),
                 .product(name: "Hummingbird", package: "hummingbird"),
                 .product(name: "HummingbirdWebSocket", package: "hummingbird-websocket"),
                 .product(name: "Crypto", package: "swift-crypto"),
