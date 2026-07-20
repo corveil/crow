@@ -97,6 +97,30 @@ PR #299 added a single toggle that lets Crow enable GitHub's native auto-merge o
 
 Backed by `AppConfig.autoMergeWatcherEnabled`. Hand-written PRs without the Crow trailer are ignored even when labeled. Crow lazily creates the `crow:merge` label in the repo on first observation so repo owners don't need to pre-seed it.
 
+## Automation notifications
+
+Every automation above acts without you asking, so each one announces itself. Alongside the
+five agent/PR events (Task Complete, Agent Waiting, Review Requested, Changes Requested, CI
+Failing), the daemon pushes five **automation** events to connected clients at the moment a
+watcher acts:
+
+| Event                    | Fires when                                                              |
+| ------------------------ | ----------------------------------------------------------------------- |
+| Auto-Workspace Created   | A `crow:auto`-labeled assigned issue triggered `/crow-workspace`         |
+| Auto-Merge Enabled       | Crow enabled auto-merge on a `crow:merge`-labeled PR                     |
+| Branch Rebased           | An auto-rebase succeeded and force-pushed                               |
+| Rebase Conflicts         | An auto-rebase hit conflicts (needs attention — deliberately harsher tone) |
+| Config Reloaded          | `{devRoot}/.claude/config.json` changed and was picked up               |
+
+Each has its own **Enabled / Play sound / System notification / Sound** row under
+**Settings → Notifications**, on top of the global mute and sound/system category toggles.
+Unlike the session events, these are not suppressed when you are already looking at the
+session they belong to — an action Crow took on your behalf is worth surfacing either way.
+
+Transport is the existing `/rpc` WebSocket: the daemon broadcasts an idless JSON-RPC
+`notify` frame (`EventHub.notifyFrame`), which the web client turns into a chime plus a
+browser/Tauri notification with the same 2s per-`(key, event)` dedup as everything else.
+
 ## Per-PR feature notes
 
 Short descriptions of each shipped automation, in roughly the order they fire during the lifecycle.
@@ -147,6 +171,9 @@ Claude Code's OpenTelemetry exporter is wired up so each session emits standard 
 | Auto-create / auto-respond loop  | `Packages/CrowEngine/Sources/CrowEngine/IssueTracker.swift` (60s polling cycle)                                         |
 | Review session auto-start        | `Packages/CrowEngine/Sources/CrowEngine/IssueTracker.swift` + per-workspace flag in `AppConfig`                         |
 | Auto-merge watcher (`crow:merge`)| `Packages/CrowEngine/Sources/CrowEngine/IssueTracker.swift` (`applyAutoMerge`, `extractCrowSessionUUIDs`, `crowAuthored`) |
+| Automation notification push     | `Packages/CrowDaemon/Sources/CrowDaemon/CrowDaemon.swift` (`wireTrackerAutomations`) + `EventHub.notifyFrame`             |
+| Notification events + defaults   | `Packages/CrowCore/Sources/CrowCore/Models/NotificationEvent.swift`                                                       |
+| Chime / browser notification     | `Packages/CrowDaemon/Sources/CrowDaemon/Resources/web/app.js` (`onServerNotify`, `emitEvent`)                             |
 
 ## See also
 
