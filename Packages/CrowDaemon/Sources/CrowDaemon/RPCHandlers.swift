@@ -137,6 +137,10 @@ func makeCommandRouter(
     sessionService: SessionService? = nil,
     autoRespond: AutoRespondCoordinator? = nil,
     jobScheduler: JobScheduler? = nil,
+    // Backs `rebuild-scorecard` (#767). Defined by the daemon where both the
+    // SessionService and the telemetry receiver are in scope; nil when telemetry
+    // is off (there'd be no DB to rebuild from).
+    rebuildScorecard: (@MainActor @Sendable () async -> Void)? = nil,
     fallback: CommandRouter? = nil
 ) -> CommandRouter {
     // Serializes review kickoffs (see start-review) — one per router instance.
@@ -909,7 +913,11 @@ func makeCommandRouter(
                 return ScorecardDTO(
                     model,
                     telemetryEnabled: telemetryEnabled,
-                    snapshotCount: appState.analyticsSnapshots.count
+                    snapshotCount: appState.analyticsSnapshots.count,
+                    // Ungraded Manager rollups ride alongside the model rather
+                    // than through it (#767) — see `ScorecardDTO.managerWeeks`.
+                    managerUsage: Array(appState.managerUsageWeekly.values),
+                    captureStatus: appState.telemetryCaptureStatus
                 )
             }
             do {
@@ -922,6 +930,21 @@ func makeCommandRouter(
             } catch {
                 throw DaemonRPCError.applicationError("Failed to encode scorecard: \(error)")
             }
+        },
+
+        // Manual scorecard rebuild (#745, #767) — backs the web Rebuild button,
+        // the port of the desktop's `AppDelegate.rebuildScorecard()`. Backfills
+        // snapshots for sessions recorded before snapshotting existed (without
+        // re-running them), recomputes the ungraded Manager weekly rollups, and
+        // refreshes the capture-status line. Idempotent, local-only, and a
+        // no-op error when telemetry is off (there'd be no DB to read).
+        "rebuild-scorecard": { _ in
+            guard let rebuildScorecard else {
+                throw DaemonRPCError.applicationError(
+                    "Rebuilding the scorecard requires telemetry — enable it in Settings and restart crowd")
+            }
+            await rebuildScorecard()
+            return ["rebuilt": .bool(true)]
         },
 
         // App config (the web Settings modal). Forward to the app when it's

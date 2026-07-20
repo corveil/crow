@@ -1240,6 +1240,26 @@ html, body {
 .score-prior-combined { color: var(--text-muted); font-variant-numeric: tabular-nums; min-width: 30px; text-align: right; }
 .score-prior-cost { color: var(--text-muted); font-variant-numeric: tabular-nums; min-width: 56px; text-align: right; }
 
+/* Manager usage (#767) — the ungraded bucket. Same row rhythm as .score-prior
+   so it belongs to the card system, but muted throughout and badge-free: it
+   must never read as a graded surface. */
+.score-manager { display: flex; flex-direction: column; gap: 6px; }
+.score-manager-row { display: flex; align-items: center; gap: 10px; font-size: 12px; }
+.score-manager-week { color: var(--text-secondary); }
+.score-manager-prompts { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--text-secondary); }
+.score-manager-stat { color: var(--text-muted); font-variant-numeric: tabular-nums; min-width: 72px; text-align: right; }
+.score-ungraded {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+.score-capture { color: var(--text-muted); font-size: 11px; margin: -8px 0 12px; }
+
 .score-sessions { display: flex; flex-direction: column; gap: 8px; }
 .score-session { display: flex; flex-direction: column; gap: 3px; padding: 2px 0; }
 .score-session-line { display: flex; align-items: center; gap: 8px; }

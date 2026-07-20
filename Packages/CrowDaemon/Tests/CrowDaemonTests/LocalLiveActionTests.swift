@@ -360,6 +360,35 @@ import CrowPersistence
         #expect(num(a?["totalCost"]) == 9.75)
     }
 
+    @Test @MainActor func reseedSurfacesPersistedManagerWeeksOnScorecard() async {
+        // #767: the ungraded Manager rollups persist in store.json, but a fresh
+        // crowd appState is empty until reseed mirrors them — `hydrateState`
+        // (the app's fuller restore) never runs here, and the detached launch
+        // rebuild may not have run (or never runs when telemetry is off). Without
+        // the reseed mirror, `get-scorecard` reads an empty `managerUsageWeekly`
+        // and the persisted weeks stay invisible — the #745 empty-state bug.
+        AgentRegistry.shared.register(ClaudeCodeAgent())
+        let weekStart = Date(timeIntervalSince1970: 1_752_364_800) // Mon 2026-07-13 UTC
+        let rollup = ManagerWeeklyUsage(
+            weekStart: weekStart,
+            analytics: SessionAnalytics(totalCost: 4.25, inputTokens: 900, promptCount: 7))
+        let store = JSONStore.temporary()
+        store.mutate { $0.managerUsageWeekly = ["2026-07-13": rollup] }
+
+        let appState = AppState()
+        CrowDaemon.reseed(appState, from: store)
+        #expect(appState.managerUsageWeekly["2026-07-13"] == rollup)
+
+        // …and it reaches the wire the web reads.
+        let resp = await router(appState: appState, store: store)
+            .handle(request: JSONRPCRequest(id: 1, method: "get-scorecard"))
+        let weeks = resp.result?["managerWeeks"]?.arrayValue
+        #expect(weeks?.count == 1)
+        let week = weeks?.first?.objectValue
+        #expect(week?["promptCount"]?.intValue == 7)
+        #expect(num(week?["totalCost"]) == 4.25)
+    }
+
     @Test @MainActor func omitsAnalyticsWhenNoLiveOrSnapshot() async {
         AgentRegistry.shared.register(ClaudeCodeAgent())
         let session = Session(name: "s", kind: .work, agentKind: .claudeCode)
