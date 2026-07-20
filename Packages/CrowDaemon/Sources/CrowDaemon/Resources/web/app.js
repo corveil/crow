@@ -432,7 +432,12 @@ function onServerNotify(params) {
   if (!_soundArmed) return;
   if (!params || typeof params.event !== 'string') return;
   if (ALL_EVENTS.indexOf(params.event) === -1) return; // unknown/newer event — ignore
-  emitEvent(params.event, params.key || '', { title: params.title, body: params.body });
+  // Defensive: the daemon always sends strings, but never hand a non-string to
+  // the Notification API. A missing key just weakens dedup, so tolerate it.
+  const key = typeof params.key === 'string' ? params.key : '';
+  const title = typeof params.title === 'string' ? params.title : '';
+  const body = typeof params.body === 'string' ? params.body : '';
+  emitEvent(params.event, key, { title, body });
 }
 
 // Manual test hook, mirroring crowTestSound. crowTestNotify() shows one popup

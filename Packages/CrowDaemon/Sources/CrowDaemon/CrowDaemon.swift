@@ -459,10 +459,17 @@ public enum CrowDaemon {
                    body: "PR #\(number) was rebased onto its base and force-pushed.")
         }
         tracker.onAutoRebaseConflicts = { sessionID, _, number in
-            autoRespond?.dispatchManual(action: .fixConflicts, sessionID: sessionID)
+            // Only claim the agent was asked to resolve when the prompt actually
+            // reached a managed terminal — with no coordinator, no terminal, or a
+            // refused review session the body would otherwise mislead (review).
+            let handedOff = autoRespond?.dispatchManual(
+                action: .fixConflicts, sessionID: sessionID).isSent ?? false
+            let body = handedOff
+                ? "PR #\(number) has conflicts. Crow asked the agent to resolve them."
+                : "PR #\(number) has conflicts that need attention."
             notify(.autoRebaseConflicts, key: sessionID.uuidString,
                    title: "Rebase conflicts — \(sessionName(sessionID))",
-                   body: "PR #\(number) has conflicts. Crow asked the agent to resolve them.")
+                   body: body)
         }
 
         // Auto-merge (enable GitHub native auto-merge on eligible Crow PRs). The
