@@ -31,6 +31,20 @@ public struct ScorecardDTO: Codable, Sendable, Equatable {
     public let baseline: BaselineDTO
     /// Current week's per-session drill-down rows, newest first.
     public let sessions: [SessionRowDTO]
+    /// Ungraded Manager-session weekly usage, newest first (#745, #767).
+    /// Deliberately NOT derived from `ScorecardModel` — the Manager session
+    /// never reaches a terminal status, so it has no snapshot to grade. These
+    /// rows are a straight projection of the persisted `managerUsageWeekly`
+    /// mirror, which is what keeps them structurally out of the grade, the
+    /// shipped count, the combined score, and the baseline.
+    public let managerWeeks: [ManagerUsageWeekDTO]
+
+    // Live telemetry capture health (#745), for the header status line and the
+    // empty state's "why is this empty" copy. `telemetryCapturing == false`
+    // means telemetry is off or hasn't started.
+    public let telemetryCapturing: Bool
+    public let telemetrySessionCount: Int
+    public let telemetryLastReceivedAtMillis: Double?
 
     // Tuning constants the web needs for its "baseline building" / "insufficient
     // data" copy, so those thresholds live in Core, not duplicated in JS.
@@ -41,10 +55,18 @@ public struct ScorecardDTO: Codable, Sendable, Equatable {
     public init(
         _ model: ScorecardModel,
         telemetryEnabled: Bool,
-        snapshotCount: Int
+        snapshotCount: Int,
+        managerUsage: [ManagerWeeklyUsage] = [],
+        captureStatus: TelemetryCaptureStatus? = nil
     ) {
         self.telemetryEnabled = telemetryEnabled
         self.snapshotCount = snapshotCount
+        self.managerWeeks = managerUsage
+            .sorted { $0.weekStart > $1.weekStart }
+            .map(ManagerUsageWeekDTO.init)
+        self.telemetryCapturing = captureStatus != nil
+        self.telemetrySessionCount = captureStatus?.sessionCount ?? 0
+        self.telemetryLastReceivedAtMillis = captureStatus?.lastReceivedAt?.millis
         self.currentWeek = WeeklyDTO(model.currentWeek)
         self.priorWeeks = model.priorWeeks.map(WeeklyDTO.init)
         self.baseline = BaselineDTO(model.baseline)
@@ -233,6 +255,23 @@ public struct SessionRowDTO: Codable, Sendable, Equatable {
         self.totalCost = row.analytics.totalCost
         self.activeTimeSeconds = row.analytics.activeTimeSeconds
         self.wallClockDurationSeconds = row.wallClockDurationSeconds
+    }
+}
+
+/// One ungraded Manager-usage week (#745, #767) — the three figures the
+/// desktop `ScorecardView`'s Manager row rendered, plus its week key. No
+/// grade, by design: the always-on Manager session is visibility only.
+public struct ManagerUsageWeekDTO: Codable, Sendable, Equatable {
+    public let weekStartMillis: Double
+    public let promptCount: Int
+    public let totalTokens: Int
+    public let totalCost: Double
+
+    init(_ week: ManagerWeeklyUsage) {
+        self.weekStartMillis = week.weekStart.millis
+        self.promptCount = week.analytics.promptCount
+        self.totalTokens = week.analytics.totalTokens
+        self.totalCost = week.analytics.totalCost
     }
 }
 

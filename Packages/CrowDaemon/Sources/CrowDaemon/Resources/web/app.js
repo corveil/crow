@@ -2065,6 +2065,22 @@ function renderScorecard(root) {
   const refresh = el('button', 'action-btn', 'Refresh');
   refresh.onclick = () => refreshBoard('scorecard');
   head.appendChild(refresh);
+  // Rebuild backfills snapshots from telemetry.db and recomputes the ungraded
+  // Manager rollups (#745) — only offered when telemetry is actually capturing,
+  // since with it off there is no database to rebuild from.
+  if (data && data.telemetryCapturing) {
+    const rebuild = el('button', 'action-btn', 'Rebuild');
+    rebuild.title = 'Rebuild scorecard data from the local telemetry database';
+    rebuild.onclick = async () => {
+      rebuild.disabled = true;
+      rebuild.textContent = 'Rebuilding…';
+      try { await rpc('rebuild-scorecard'); } catch (_) { /* surfaced by the unchanged board */ }
+      rebuild.disabled = false;
+      rebuild.textContent = 'Rebuild';
+      refreshBoard('scorecard');
+    };
+    head.appendChild(rebuild);
+  }
   root.appendChild(head);
 
   const banner = el('div', 'score-banner',
@@ -2076,7 +2092,13 @@ function renderScorecard(root) {
     root.appendChild(el('div', 'score-empty', 'Loading…'));
     return;
   }
-  if (!data.snapshotCount) {
+  root.appendChild(el('div', 'score-capture', captureStatusText(data)));
+  const manager = managerWeeks(data);
+  // Manager-only data still shows the content pane: the grade card renders
+  // "insufficient data" gracefully with zero snapshots, and hiding captured
+  // Manager usage behind the empty state would repeat the invisibility this
+  // gate is meant to fix (#745) — same condition the desktop view used.
+  if (!data.snapshotCount && !manager.length) {
     root.appendChild(scorecardEmpty(data));
     return;
   }
@@ -2090,17 +2112,32 @@ function renderScorecard(root) {
   wrap.appendChild(combinedCardEl(data.currentWeek));
   wrap.appendChild(baselineCardEl(data));
   wrap.appendChild(displayedStatsEl(data.currentWeek));
+  if (manager.length) wrap.appendChild(managerUsageEl(manager));
   if (data.priorWeeks.length) wrap.appendChild(priorWeeksEl(data.priorWeeks));
   if (data.sessions.length) wrap.appendChild(sessionsEl(data.sessions));
   root.appendChild(wrap);
 }
 
+// A daemon that isn't capturing is the usual reason a section is empty, so say
+// so instead of leaving the user to guess (#745).
+function captureStatusText(data) {
+  if (!data.telemetryCapturing) {
+    return 'Telemetry not capturing — enable it in Settings, then restart crowd';
+  }
+  return 'Telemetry capturing — ' + data.telemetrySessionCount +
+    ' session' + (data.telemetrySessionCount === 1 ? '' : 's') + ' recorded';
+}
+
+// Tolerates a daemon predating #767, whose `get-scorecard` has no such field.
+function managerWeeks(data) { return data.managerWeeks || []; }
+
 function scorecardEmpty(data) {
   const box = el('div', 'score-empty');
   box.appendChild(el('div', 'score-empty-title', 'No Session Data Yet'));
-  const msg = el('div', 'score-empty-msg', data.telemetryEnabled
+  const msg = el('div', 'score-empty-msg', (data.telemetryEnabled
     ? 'The scorecard is computed from analytics snapshots written when sessions complete or archive. Telemetry is on — finish a session and it will appear here.'
-    : 'The scorecard is computed from analytics snapshots written when sessions complete or archive. Snapshots require Claude Code telemetry, which is off by default.');
+    : 'The scorecard is computed from analytics snapshots written when sessions complete or archive. Snapshots require Claude Code telemetry, which is off by default.') +
+    ' The Manager session is never graded — its usage appears in its own ungraded section once captured.');
   box.appendChild(msg);
   if (!data.telemetryEnabled) {
     const btn = el('button', 'action-btn action-primary', 'Open Settings');
@@ -2246,6 +2283,34 @@ function statChipEl(label, value) {
   chip.appendChild(el('span', 'score-chip-label', label));
   chip.appendChild(el('span', 'score-chip-value', value));
   return chip;
+}
+
+// Manager usage — the ungraded bucket (#745, #767). The always-on Manager
+// session never reaches a terminal status, so it produces no snapshot and no
+// grade; these rows come straight off the persisted weekly rollups and are
+// deliberately absent from the grade, the shipped count, the combined score,
+// and the baseline. Visually a sibling of "Previous Weeks", minus every graded
+// affordance — no badge, no score, muted throughout.
+function managerUsageEl(weeks) {
+  const label = el('div', 'score-card-label');
+  label.appendChild(el('span', null, 'Manager Usage'));
+  label.appendChild(el('span', 'score-ungraded', 'ungraded'));
+  const body = [label];
+  const list = el('div', 'score-manager');
+  for (const w of weeks) {
+    const row = el('div', 'score-manager-row');
+    row.appendChild(el('span', 'score-manager-week', scoreWeekLabel(w.weekStartMillis)));
+    row.appendChild(el('span', 'score-manager-prompts',
+      w.promptCount + ' prompt' + (w.promptCount === 1 ? '' : 's')));
+    row.appendChild(el('span', 'score-manager-stat', fmtCount(w.totalTokens) + ' tokens'));
+    row.appendChild(el('span', 'score-manager-stat', fmtCost(w.totalCost)));
+    list.appendChild(row);
+  }
+  body.push(list);
+  body.push(el('div', 'score-muted',
+    'The always-on Manager session never completes, so its usage is tracked here directly from ' +
+    'telemetry — visibility only, never graded.'));
+  return scoreCard(body);
 }
 
 function priorWeeksEl(weeks) {

@@ -250,18 +250,39 @@ public enum CrowDaemon {
             return (service, coordinator)
         }
 
+        // One rebuild entry point (#767), shared by the launch startup below, the
+        // hourly poll, and the `rebuild-scorecard` RPC: backfill snapshots for
+        // sessions recorded before snapshotting existed, recompute the ungraded
+        // Manager weekly rollups, and refresh the capture-status line. In-flight
+        // guard via `isRebuildingScorecard` so the three callers can't interleave
+        // and clear the flag out from under each other. Nil when telemetry is off.
+        let rebuildScorecard: (@MainActor @Sendable () async -> Void)?
+        if let telemetry, let sessionService {
+            rebuildScorecard = {
+                guard !appState.isRebuildingScorecard else { return }
+                appState.isRebuildingScorecard = true
+                defer { appState.isRebuildingScorecard = false }
+                await sessionService.backfillAnalyticsSnapshots()
+                await sessionService.refreshManagerUsage()
+                appState.telemetryCaptureStatus = await telemetry.captureStatus()
+            }
+        } else {
+            rebuildScorecard = nil
+        }
+
         // The rest of the telemetry startup, deferred until SessionService exists to
         // drive it. Order mirrors the app's: backfill BEFORE pruning, so sessions
-        // whose rows are about to age out still produce a snapshot (#745).
-        if let telemetry {
+        // whose rows are about to age out still produce a snapshot (#745). The
+        // hourly poll keeps the current week's Manager rollup and the capture line
+        // moving — the app refreshed only at launch, fine for a process restarted
+        // daily but not for a daemon that runs for weeks (#767).
+        if let telemetry, let rebuildScorecard {
             let retentionDays = telemetryConfig.retentionDays
             Task {
-                await sessionService?.backfillAnalyticsSnapshots()
-                await sessionService?.refreshManagerUsage()
-                let status = await telemetry.captureStatus()
-                await MainActor.run { appState.telemetryCaptureStatus = status }
+                await rebuildScorecard()
                 await telemetry.pruneOldData(retentionDays: retentionDays)
             }
+            startScorecardPoll(rebuild: rebuildScorecard)
         }
 
         // Write-actions that mutate session state run locally on the daemon's
@@ -344,7 +365,7 @@ public enum CrowDaemon {
             appState: appState, store: store, git: git, devRoot: options.devRoot,
             cockpit: cockpit, tracker: tracker, allowList: allowList,
             sessionService: sessionService, autoRespond: autoRespond, jobScheduler: jobScheduler,
-            fallback: engineFallback)
+            rebuildScorecard: rebuildScorecard, fallback: engineFallback)
 
         // Unix socket — lets the existing `crow` CLI talk to the daemon. By
         // default this IS the app's well-known `crow.sock` (the daemon owns it in
@@ -700,6 +721,21 @@ public enum CrowDaemon {
         }
     }
 
+    /// Keep the ungraded Manager rollups and the capture-status line moving
+    /// while the daemon runs (#767). The desktop app refreshed these only at
+    /// launch and on the manual Rebuild — fine for a process restarted daily,
+    /// but `crowd` runs for weeks, so without this the current week's Manager
+    /// usage would freeze at whatever it was when the daemon started. Hourly:
+    /// these are week-grain numbers and the backfill touches the DB.
+    private static func startScorecardPoll(rebuild: @escaping @MainActor @Sendable () async -> Void) {
+        Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 3600 * 1_000_000_000)
+                await rebuild()
+            }
+        }
+    }
+
     @MainActor
     private static func seedAppState(from store: JSONStore) -> AppState {
         let appState = AppState()
@@ -773,6 +809,13 @@ public enum CrowDaemon {
         // and never runs here, so without this the snapshot fallback is dead for
         // any session that completed before this daemon process started (#736 review).
         appState.analyticsSnapshots = data.analyticsSnapshots ?? [:]
+        // Same reasoning for the ungraded Manager rollups (#767): `get-scorecard`
+        // reads `appState.managerUsageWeekly`, `hydrateState` never runs here, and
+        // the detached launch rebuild may not have finished (or never runs when
+        // telemetry is off). Without this mirror, persisted Manager weeks in
+        // store.json stay invisible on the cold / telemetry-off path — the very
+        // #745 empty-state invisibility this restores.
+        appState.managerUsageWeekly = data.managerUsageWeekly ?? [:]
     }
 
     /// Mirror the config-derived `AppState` fields the desktop app syncs in
