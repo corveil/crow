@@ -61,6 +61,7 @@ let package = Package(
                 "CrowDaemon",
                 .product(name: "CrowCore", package: "CrowCore"),
                 .product(name: "CrowAutostart", package: "CrowAutostart"),
+                .product(name: "HummingbirdTesting", package: "hummingbird"),
                 .product(name: "CrowClaude", package: "CrowClaude"),
                 .product(name: "CrowEngine", package: "CrowEngine"),
                 .product(name: "CrowProvider", package: "CrowProvider"),

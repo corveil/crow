@@ -28,7 +28,7 @@ extension AutostartCommand {
     /// configured the same way you run it by hand. Omitted flags leave the
     /// daemon on its own defaults (`127.0.0.1:8787`, the well-known socket).
     struct DaemonFlags: ParsableArguments {
-        @Option(name: .long, help: "Path to the crowd binary (default: next to this crow, then PATH)")
+        @Option(name: .long, help: "Path to the crowd binary, launched at login as-is (default: next to this crow, then PATH)")
         var binary: String?
         @Option(name: .long, help: "Bind host to pass to crowd (default: crowd's own default)")
         var host: String?
@@ -88,14 +88,22 @@ extension AutostartCommand {
 
         @Option(name: .long, help: "Path to the crowd binary to compare against (stale-plist detection)")
         var binary: String?
+        @Option(name: .long, help: "Unix socket to probe for a running crowd (default: the login item's, else the well-known socket)")
+        var socket: String?
         @Flag(name: .long, help: "Print the status as JSON") var json: Bool = false
 
         public init() {}
 
         public func run() throws {
             // Status must answer even when no crowd can be found — an
-            // unresolvable binary just means no stale comparison.
-            let expected = (try? CrowdBinaryResolver.resolve(override: binary)).map { AutostartSpec(binaryPath: $0) }
+            // unresolvable binary just means no stale comparison. When the
+            // binary can't be resolved but a `--socket` was given, still carry
+            // the socket so the liveness probe targets it.
+            let resolved = try? CrowdBinaryResolver.resolve(override: binary)
+            let expected: AutostartSpec? = (resolved != nil || socket != nil)
+                ? AutostartSpec(binaryPath: resolved ?? "",
+                                socketPath: socket.map { ($0 as NSString).expandingTildeInPath })
+                : nil
             emit(try AutostartCommand.service().status(expected: expected), json: json)
         }
     }

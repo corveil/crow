@@ -30,7 +30,11 @@ public struct LaunchdAutostart: AutostartService {
     let logDirectory: URL
     let uid: uid_t
     let runner: CommandRunner
-    let isDaemonRunning: @Sendable () -> Bool
+    /// Liveness probe, keyed by the socket the daemon would be listening on.
+    /// The socket comes from the spec's `--socket` (the login item registers
+    /// one there), so a daemon on a custom socket is detected instead of being
+    /// missed and needlessly restarted. `nil` → the well-known default.
+    let isDaemonRunning: @Sendable (_ socketPath: String?) -> Bool
     let launchctl: String
 
     /// `FileManager` is not `Sendable`, so it is reached through the shared
@@ -43,7 +47,7 @@ public struct LaunchdAutostart: AutostartService {
         logDirectory: URL? = nil,
         uid: uid_t = getuid(),
         runner: @escaping CommandRunner = systemCommandRunner,
-        isDaemonRunning: @escaping @Sendable () -> Bool = { DaemonProbe.isRunning() },
+        isDaemonRunning: @escaping @Sendable (_ socketPath: String?) -> Bool = { DaemonProbe.isRunning(socketPath: $0) },
         launchctl: String = "/bin/launchctl"
     ) {
         let home = FileManager.default.homeDirectoryForCurrentUser
@@ -77,8 +81,10 @@ public struct LaunchdAutostart: AutostartService {
 
         // Probe BEFORE touching launchd: booting out would stop a daemon that's
         // currently serving, and bootstrapping alongside a hand-started one
-        // would spawn a duplicate that immediately refuses to run.
-        let alreadyRunning = isDaemonRunning()
+        // would spawn a duplicate that immediately refuses to run. Probe the
+        // socket THIS login item targets, so a daemon on a custom `--socket`
+        // isn't missed and needlessly restarted.
+        let alreadyRunning = isDaemonRunning(spec.socketPath)
 
         try createDirectory(launchAgentsDirectory)
         try createDirectory(logDirectory)
@@ -146,14 +152,19 @@ public struct LaunchdAutostart: AutostartService {
 
     public func status(expected: AutostartSpec? = nil) throws -> AutostartStatus {
         let installedPath = installedProgramPath()
-        let expectedPath = expected?.binaryPath
+        // An empty binaryPath (a socket-only status probe) is "no expectation",
+        // not a comparison target — otherwise it would read as stale.
+        let expectedPath = expected?.binaryPath.isEmpty == true ? nil : expected?.binaryPath
         let enabled = installedPath != nil || fileManager.fileExists(atPath: plistURL.path)
         let stale = {
             guard enabled, let installedPath, let expectedPath else { return false }
             return installedPath != expectedPath
         }()
         let loaded = isLoaded()
-        let running = isDaemonRunning()
+        // Probe the socket the login item actually targets (from the installed
+        // plist), so a launchd-started daemon on a custom `--socket` is seen;
+        // fall back to the caller's expected socket, then the well-known one.
+        let running = isDaemonRunning(installedSocketPath() ?? expected?.socketPath)
 
         var result = AutostartStatus(
             platform: "macos",
@@ -192,14 +203,30 @@ public struct LaunchdAutostart: AutostartService {
 
     // MARK: - launchd / plist plumbing
 
-    /// The plist's `ProgramArguments[0]`, or nil when there's no readable plist.
-    func installedProgramPath() -> String? {
+    /// The registered `ProgramArguments`, or nil when there's no readable plist.
+    private func installedProgramArguments() -> [String]? {
         guard let data = fileManager.contents(atPath: plistURL.path),
               let plist = try? PropertyListSerialization.propertyList(from: data, format: nil),
-              let dict = plist as? [String: Any],
-              let arguments = dict["ProgramArguments"] as? [String]
+              let dict = plist as? [String: Any]
         else { return nil }
-        return arguments.first
+        return dict["ProgramArguments"] as? [String]
+    }
+
+    /// The plist's `ProgramArguments[0]`, or nil when there's no readable plist.
+    func installedProgramPath() -> String? {
+        installedProgramArguments()?.first
+    }
+
+    /// The `--socket` (or `--socket-path`) the login item registered, so status
+    /// probes the right socket. Nil when unset — the daemon uses the default.
+    func installedSocketPath() -> String? {
+        guard let arguments = installedProgramArguments() else { return nil }
+        for flag in ["--socket", "--socket-path"] {
+            if let index = arguments.firstIndex(of: flag), index + 1 < arguments.count {
+                return arguments[index + 1]
+            }
+        }
+        return nil
     }
 
     private func isLoaded() -> Bool {

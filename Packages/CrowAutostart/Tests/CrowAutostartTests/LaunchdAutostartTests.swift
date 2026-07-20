@@ -42,8 +42,33 @@ private func makeService(
         logDirectory: root.appendingPathComponent("Logs/crow"),
         uid: 501,
         runner: launchctl.runner(),
-        isDaemonRunning: { running }
+        isDaemonRunning: { _ in running }
     )
+}
+
+/// A service whose probe reports "running" only for one specific socket path,
+/// and records the paths it was asked about.
+private final class SocketProbeSpy: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _asked: [String?] = []
+    let liveSocket: String?
+
+    init(liveSocket: String?) { self.liveSocket = liveSocket }
+
+    var asked: [String?] { lock.lock(); defer { lock.unlock() }; return _asked }
+
+    func service(root: URL, launchctl: FakeLaunchctl) -> LaunchdAutostart {
+        LaunchdAutostart(
+            launchAgentsDirectory: root.appendingPathComponent("LaunchAgents"),
+            logDirectory: root.appendingPathComponent("Logs/crow"),
+            uid: 501,
+            runner: launchctl.runner(),
+            isDaemonRunning: { [self] socket in
+                lock.lock(); _asked.append(socket); lock.unlock()
+                return socket == liveSocket
+            }
+        )
+    }
 }
 
 /// A file that passes the "executable file" check, standing in for `crowd`.
@@ -252,6 +277,57 @@ private func readPlist(_ service: LaunchdAutostart) throws -> [String: Any] {
 
     #expect(status.installedPath == newBinary)
     #expect(!status.stale)
+}
+
+/// The install-time probe must check the socket the login item targets, not
+/// the well-known default — otherwise a daemon on a custom `--socket` is missed
+/// and needlessly bootstrapped/restarted (review Yellow #1).
+@Test func installProbesTheSpecSocketNotTheDefault() throws {
+    let root = try makeTempRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let binary = try makeFakeBinary(in: root.appendingPathComponent("bin"))
+    let launchctl = FakeLaunchctl()
+    let spy = SocketProbeSpy(liveSocket: "/tmp/custom.sock")
+    let service = spy.service(root: root, launchctl: launchctl)
+
+    let status = try service.install(AutostartSpec(binaryPath: binary, socketPath: "/tmp/custom.sock"))
+
+    // Probed the custom socket, saw the daemon, and left launchd alone.
+    #expect(spy.asked.contains("/tmp/custom.sock"))
+    #expect(!launchctl.subcommands.contains("bootstrap"))
+    #expect(status.message.contains("next login"))
+}
+
+/// Status must probe the socket the installed plist registered, so a
+/// launchd-started daemon on a custom socket reads as running.
+@Test func statusProbesTheInstalledSocket() throws {
+    let root = try makeTempRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let binary = try makeFakeBinary(in: root.appendingPathComponent("bin"))
+    let spy = SocketProbeSpy(liveSocket: "/tmp/custom.sock")
+    let service = spy.service(root: root, launchctl: FakeLaunchctl())
+    _ = try service.install(AutostartSpec(binaryPath: binary, socketPath: "/tmp/custom.sock"))
+
+    let status = try service.status(expected: nil)
+
+    #expect(status.running)
+    #expect(spy.asked.contains("/tmp/custom.sock"))
+    #expect(service.installedSocketPath() == "/tmp/custom.sock")
+}
+
+/// A socket-only status probe (empty binaryPath) is "no expectation" — it must
+/// not read as a stale plist just because the path differs from "".
+@Test func socketOnlyStatusIsNotStale() throws {
+    let root = try makeTempRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let binary = try makeFakeBinary(in: root.appendingPathComponent("bin"))
+    let service = makeService(root: root, launchctl: FakeLaunchctl())
+    _ = try service.install(AutostartSpec(binaryPath: binary))
+
+    let status = try service.status(expected: AutostartSpec(binaryPath: "", socketPath: "/tmp/x.sock"))
+
+    #expect(!status.stale)
+    #expect(status.expectedPath == nil)
 }
 
 // MARK: - Status
