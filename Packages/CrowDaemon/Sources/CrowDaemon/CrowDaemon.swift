@@ -283,21 +283,49 @@ public enum CrowDaemon {
             tracker: tracker, eventHub: eventHub, sessionService: sessionService,
             appState: appState, devRoot: options.devRoot)
 
-        // Wire the IssueTracker background automations — crow:auto, auto-respond,
-        // auto-merge, auto-rebase, auto-cleanup, review auto-kickoff. Needs a live
-        // cockpit (terminals to dispatch into) (CROW-581).
+        // Wire the IssueTracker's config-flag providers and its notification-only
+        // outcome hooks. Terminal-INDEPENDENT, so this runs whenever `crowd` runs —
+        // enabling GitHub native auto-merge is a pure gh/GraphQL call and
+        // auto-rebase is pure git; neither needs tmux, and a broadcast needs only
+        // the event hub. Bundling these behind the cockpit is what silently killed
+        // every automation on a daemon started without tmux (CROW-782): the
+        // providers stayed at their `{ false }` defaults and `applyAutoMerge`
+        // bailed on its first guard, every poll, with no log line. The retired
+        // AppDelegate wired them unconditionally; this restores that.
+        await MainActor.run {
+            wireTrackerAutomations(
+                tracker: tracker, appState: appState, devRoot: options.devRoot,
+                autoRespond: autoRespond, eventHub: eventHub)
+        }
+
+        // Wire the automations that DO need a terminal / SessionService to act:
+        // crow:auto workspace spawns, auto-respond + conflict hand-off dispatch,
+        // session completion/in-review, auto-cleanup teardown, review auto-kickoff
+        // (CROW-581). Without a cockpit these stay nil and the corresponding paths
+        // are inert no-ops — but auto-merge above keeps working.
         // Serializes review kickoffs (auto-review + the start-review RPC share
         // the internal createReviewSession dedupe; a dedicated serializer keeps a
         // burst of pending review requests from racing duplicate clones).
         let reviewSerializer = ReviewKickoffSerializer()
         if let sessionService {
             await MainActor.run {
-                wireTrackerAutomations(
+                wireTerminalAutomations(
                     tracker: tracker, appState: appState, sessionService: sessionService,
                     autoRespond: autoRespond, devRoot: options.devRoot,
                     reviewSerializer: reviewSerializer, eventHub: eventHub)
             }
         }
+
+        // One durable startup line so "were automations even armed?" is
+        // answerable from the log alone, without a rebuild (CROW-782).
+        let cfg = ConfigStore.loadConfig(devRoot: options.devRoot)
+        CrowLog.automation(
+            "startup: tmux=\(cockpit == nil ? "missing" : "present") "
+            + "terminalAutomations=\(sessionService == nil ? "off" : "on") "
+            + "autoMergeWatcherEnabled=\(cfg?.autoMergeWatcherEnabled ?? false) "
+            + "autoCreateWatcherEnabled=\(cfg?.autoCreateWatcherEnabled ?? false) "
+            + "respondToChangesRequested=\(cfg?.autoRespond.respondToChangesRequested ?? false) "
+            + "autoRebaseAndResolveConflicts=\(cfg?.autoRespond.autoRebaseAndResolveConflicts ?? false)")
 
         // Scheduled jobs (CROW-317) — run them headless too. `JobScheduler.start()`
         // uses a `RunLoop.main` Timer the daemon lacks, so build it here and drive
@@ -524,26 +552,35 @@ public enum CrowDaemon {
         #endif
     }
 
-    /// Wire the IssueTracker's background automation hooks: spawns go to the
-    /// daemon's Manager terminal / SessionService, and the user-facing
-    /// notifications are pushed to connected web clients over `eventHub`
-    /// (CROW-768 — restoring what the retired native NotificationManager did).
-    /// Config-gated behaviors read `{devRoot}/.claude/config.json` fresh each
-    /// poll so Settings edits take effect (CROW-581).
+    /// Wire the terminal-independent half of the automation wiring: the
+    /// config-flag providers, plus the outcome hooks that only need `eventHub` to
+    /// push a user-facing notification to connected web clients (CROW-768 —
+    /// restoring what the retired native NotificationManager did). Each provider
+    /// reads `{devRoot}/.claude/config.json` fresh on every poll so Settings edits
+    /// take effect without a restart (CROW-581).
+    ///
+    /// MUST be called unconditionally, not from inside a `if let sessionService`
+    /// (i.e. tmux-present) branch: a provider left at its `{ false }` default
+    /// disables the whole watcher — `applyAutoMerge`'s first guard — even though
+    /// enabling auto-merge and rebasing a branch need no terminal at all
+    /// (CROW-782). `internal` (not `private`) so `CrowDaemonTests` can assert the
+    /// providers come up armed.
+    ///
+    /// `autoRespond` is optional here precisely because it's nil without tmux: the
+    /// conflict hand-off is then skipped, but the notification still fires.
     @MainActor
-    private static func wireTrackerAutomations(
+    static func wireTrackerAutomations(
         tracker: IssueTracker,
         appState: AppState,
-        sessionService: SessionService,
-        autoRespond: AutoRespondCoordinator?,
         devRoot: String,
-        reviewSerializer: ReviewKickoffSerializer,
-        eventHub: EventHub
+        autoRespond: AutoRespondCoordinator? = nil,
+        eventHub: EventHub? = nil
     ) {
         func config() -> AppConfig? { ConfigStore.loadConfig(devRoot: devRoot) }
         // The tracker's hooks are synchronous; the hub is an actor. Hop off in a
         // detached-from-the-caller Task so a broadcast never blocks a watcher.
         func notify(_ event: NotificationEvent, key: String, title: String, body: String) {
+            guard let eventHub else { return }
             Task { await eventHub.broadcastNotification(event: event, key: key, title: title, body: body) }
         }
         // Name a session for a notification title, as the native manager did.
@@ -551,31 +588,15 @@ public enum CrowDaemon {
             appState.sessions.first(where: { $0.id == id })?.name ?? "session"
         }
 
-        // crow:auto — run /crow-workspace on the Manager for a newly-labeled
-        // assigned issue (the tracker strips the label after, so once-only).
+        // crow:auto — gate only; the dispatch lives in wireTerminalAutomations.
+        // The tracker refuses to strip the label when no handler is wired, so an
+        // armed provider with no Manager terminal can't burn the trigger (#787).
         tracker.autoCreateWatcherEnabledProvider = { (config()?.autoCreateWatcherEnabled ?? false) }
-        tracker.onAutoCreateRequest = { issue in
-            guard let managerTerminal = appState.terminals[AppState.managerSessionID]?.first else {
-                log("crow:auto: Manager terminal not ready; dropped \(issue.url)")
-                return
-            }
-            TerminalRouter.send(managerTerminal, text: "/crow-workspace \(issue.url)\n")
-            // No session exists yet — key the notification on the issue URL.
-            notify(.autoWorkspaceCreated, key: issue.url,
-                   title: "Auto-creating workspace — \(issue.repo)",
-                   body: "#\(issue.number): \(issue.title)")
-        }
 
-        // Auto-respond to PR transitions (changes-requested / checks-failing) and
-        // auto-rebase conflict hand-off — both go through the coordinator, which
-        // pastes the prompt into the session's managed terminal.
-        if let autoRespond {
-            tracker.onPRStatusTransitions = { transitions in
-                autoRespond.handle(transitions)
-            }
-            tracker.respondToChangesRequestedProvider = { (config()?.autoRespond.respondToChangesRequested ?? false) }
-            tracker.autoRebaseAndResolveConflictsProvider = { (config()?.autoRespond.autoRebaseAndResolveConflicts ?? false) }
-        }
+        // Auto-respond / auto-rebase gates. The rebase + force-push itself runs in
+        // the tracker (pure git); only the conflict hand-off needs a terminal.
+        tracker.respondToChangesRequestedProvider = { (config()?.autoRespond.respondToChangesRequested ?? false) }
+        tracker.autoRebaseAndResolveConflictsProvider = { (config()?.autoRespond.autoRebaseAndResolveConflicts ?? false) }
 
         // Auto-rebase outcomes. The conflict hand-off dispatches to the session's
         // agent when a coordinator exists, but the notification fires either way —
@@ -600,14 +621,69 @@ public enum CrowDaemon {
         }
 
         // Auto-merge (enable GitHub native auto-merge on eligible Crow PRs). The
-        // audit line is NSLog'd at the tracker's call site regardless of whether
-        // any client is connected to receive the notification.
+        // audit line goes to the automation log at the tracker's call site
+        // regardless of whether any client is connected to receive the notification.
         tracker.autoMergeWatcherEnabledProvider = { (config()?.autoMergeWatcherEnabled ?? false) }
         tracker.onAutoMergeEnabled = { sessionID, _, number in
             notify(.autoMergeEnabled, key: sessionID.uuidString,
                    title: "Auto-merge enabled — \(sessionName(sessionID))",
                    body: "PR #\(number) will merge once required reviews and checks pass.")
         }
+    }
+
+    /// Wire the automation hooks that need somewhere to act: the daemon's Manager
+    /// terminal, the session's managed terminal, or `SessionService`. Only called
+    /// when the tmux cockpit came up (CROW-581). Notifications for these paths go
+    /// to connected web clients over `eventHub` (CROW-768).
+    @MainActor
+    private static func wireTerminalAutomations(
+        tracker: IssueTracker,
+        appState: AppState,
+        sessionService: SessionService,
+        autoRespond: AutoRespondCoordinator?,
+        devRoot: String,
+        reviewSerializer: ReviewKickoffSerializer,
+        eventHub: EventHub
+    ) {
+        func config() -> AppConfig? { ConfigStore.loadConfig(devRoot: devRoot) }
+        // The tracker's hooks are synchronous; the hub is an actor. Hop off in a
+        // detached-from-the-caller Task so a broadcast never blocks a watcher.
+        func notify(_ event: NotificationEvent, key: String, title: String, body: String) {
+            Task { await eventHub.broadcastNotification(event: event, key: key, title: title, body: body) }
+        }
+        // Name a session for a notification title, as the native manager did.
+        func sessionName(_ id: UUID) -> String {
+            appState.sessions.first(where: { $0.id == id })?.name ?? "session"
+        }
+
+        // crow:auto — run /crow-workspace on the Manager for a newly-labeled
+        // assigned issue (the tracker strips the label after, so once-only).
+        tracker.onAutoCreateRequest = { issue in
+            guard let managerTerminal = appState.terminals[AppState.managerSessionID]?.first else {
+                log("crow:auto: Manager terminal not ready; dropped \(issue.url)")
+                return
+            }
+            TerminalRouter.send(managerTerminal, text: "/crow-workspace \(issue.url)\n")
+            // No session exists yet — key the notification on the issue URL.
+            notify(.autoWorkspaceCreated, key: issue.url,
+                   title: "Auto-creating workspace — \(issue.repo)",
+                   body: "#\(issue.number): \(issue.title)")
+        }
+
+        // Auto-respond to PR transitions (changes-requested / checks-failing) and
+        // auto-rebase conflict hand-off — both go through the coordinator, which
+        // pastes the prompt into the session's managed terminal.
+        if let autoRespond {
+            tracker.onPRStatusTransitions = { transitions in
+                autoRespond.handle(transitions)
+            }
+        }
+        // Note: the auto-rebase/auto-merge OUTCOME hooks (onAutoRebasePushed,
+        // onAutoRebaseConflicts, onAutoMergeEnabled) and the config-flag providers
+        // are wired in `wireTrackerAutomations` instead — they need only `eventHub`
+        // (and, for the conflict hand-off, an optional coordinator), so gating them
+        // on tmux would silence notifications for automations that still run
+        // (CROW-768 + CROW-782).
 
         // Auto-complete on merge/close, and auto-move-to-inReview when a
         // session's PR opens, run INSIDE the tracker's own refresh via these
