@@ -16,6 +16,11 @@ const epilogue = `
   set reviewRefreshPending(v){reviewRefreshPending=v;},
   renderBoard(){ return renderBoard(); },
   ticketsCard(){ return ticketsCard(); },
+  ticketsRefreshing(){ return ticketsRefreshing(); },
+  get sidebarCacheKey(){return SIDEBAR_CACHE_KEY;},
+  clearDaemonRefreshFlag(){ return clearDaemonRefreshFlag(); },
+  persistSidebarCache(){ return persistSidebarCache(); },
+  restoreSidebarCache(){ return restoreSidebarCache(); },
 };
 `;
 const APP_JS = __dirname + '/../Sources/CrowDaemon/Resources/web/app.js';
@@ -180,6 +185,34 @@ T.reviewRefreshPending = false; T.renderBoard();
 check('Reviews idle: no spinner, button enabled',
   q('.board-title .action-spinner').length === 0
   && [...q('.action-btn')].find((b) => b.textContent === 'Refresh').disabled === false);
+
+// The daemon half of the flag has no `finally` to fall back on — it clears only
+// when a later `list-tickets` says so. These cover the paths where that never
+// comes, which would otherwise strand the spinner (AC3; PR #784 review).
+console.log('\nStale `loading` never strands the spinner:');
+T.selectedBoard = 'tickets';
+T.boardData.tickets = Object.assign({}, payload, { loading: true });
+check('sanity: daemon flag alone marks it refreshing', T.ticketsRefreshing() === true);
+T.clearDaemonRefreshFlag();
+check('clearing the daemon flag stops the indicator', T.ticketsRefreshing() === false);
+check('clear is idempotent when already false', (() => { T.clearDaemonRefreshFlag(); return T.ticketsRefreshing() === false; })());
+
+console.log('\nSidebar cache never resurrects a spinner across a reload:');
+T.boardData.tickets = Object.assign({}, payload, { loading: true });
+T.persistSidebarCache();                       // cache written mid-fetch
+check('persisted payload has loading stripped',
+  JSON.parse(window.localStorage.getItem(T.sidebarCacheKey) || '{}').tickets.loading === false);
+T.boardData.tickets = { counts: {}, issues: [] };
+T.restoreSidebarCache();                       // …and read back on the next boot
+check('restored payload is not refreshing', T.ticketsRefreshing() === false);
+check('restore kept the rest of the payload', T.boardData.tickets.issues.length === 3);
+
+// A legacy cache written before the strip landed must also be scrubbed.
+window.localStorage.setItem(T.sidebarCacheKey, JSON.stringify({
+  sessions: [], tickets: Object.assign({}, payload, { loading: true }), reviews: { reviews: [] },
+}));
+T.restoreSidebarCache();
+check('legacy cache with loading:true is scrubbed on restore', T.ticketsRefreshing() === false);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

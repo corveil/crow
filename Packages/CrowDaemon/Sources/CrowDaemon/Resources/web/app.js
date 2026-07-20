@@ -51,6 +51,10 @@ function rpcConnect() {
       // Reject in-flight rpcs instead of leaving them stuck until the 10s timeout.
       rpcState.pending.forEach((w) => w.reject(new Error('rpc: connection closed')));
       rpcState.pending.clear();
+      // Daemon's gone, so its in-flight refresh flag will never be cleared for
+      // us. Drop it here rather than waiting for a board poll that may not run
+      // (the interval only polls an *open* board) (CROW-771).
+      clearDaemonRefreshFlag();
       // A crowd restart wipes its in-memory sessions, so a remote web cookie may now
       // be invalid — probe and, if so, stop reconnecting and surface "Log in" (CROW-593).
       handleAuthOnDisconnect();
@@ -488,6 +492,11 @@ function restoreSidebarCache() {
     if (Array.isArray(data.sessions)) sessions = data.sessions;
     if (data.tickets) boardData.tickets = data.tickets;
     if (data.reviews) boardData.reviews = data.reviews;
+    // `loading` is runtime-only and never survives a reload meaningfully: a
+    // cache written mid-fetch would otherwise boot showing a spinner that only
+    // a successful `list-tickets` could clear. Also scrubs legacy caches
+    // written before `persistSidebarCache` started stripping it (CROW-771).
+    if (boardData.tickets) boardData.tickets.loading = false;
     sidebarCacheHit = true;
   } catch (_) { /* corrupt cache — start empty */ }
 }
@@ -495,7 +504,9 @@ function persistSidebarCache() {
   try {
     localStorage.setItem(SIDEBAR_CACHE_KEY, JSON.stringify({
       sessions,
-      tickets: boardData.tickets,
+      // Strip the runtime-only in-flight flag — a cache written mid-fetch must
+      // not resurrect a spinner on the next boot (CROW-771).
+      tickets: boardData.tickets && Object.assign({}, boardData.tickets, { loading: false }),
       reviews: boardData.reviews,
     }));
     sidebarCacheHit = true;
@@ -1982,7 +1993,12 @@ async function refreshBoard(key) {
     : key === 'scorecard' ? 'get-scorecard'
     : 'list-allowlist';
   let data;
-  try { data = await rpc(method); } catch (_) { return; }
+  try { data = await rpc(method); } catch (_) {
+    // A failed read leaves us with no fresh word on the daemon's in-flight
+    // flag, and a stale `true` never self-clears (CROW-771).
+    if (key === 'tickets') clearDaemonRefreshFlag();
+    return;
+  }
   const changed = JSON.stringify(boardData[key]) !== JSON.stringify(data);
   boardData[key] = data;
   if (changed && (key === 'tickets' || key === 'reviews')) persistSidebarCache();
@@ -2739,6 +2755,17 @@ function ticketsRefreshing() {
   return ticketRefreshPending || !!(boardData.tickets && boardData.tickets.loading);
 }
 function reviewsRefreshing() { return reviewRefreshPending; }
+
+// The daemon half of the indicator has no `finally` to fall back on: it clears
+// only when a *later* `list-tickets` says so. Lose contact mid-fetch — the
+// daemon dies between the in-flight nudge and the completion one, or a board
+// read starts failing — and nothing would ever clear it, stranding the spinner.
+// So every path that loses authority over the flag drops it (CROW-771, review).
+function clearDaemonRefreshFlag() {
+  if (!boardData.tickets || !boardData.tickets.loading) return;
+  boardData.tickets.loading = false;
+  paintRefreshState();
+}
 
 // Repaint the surfaces that show the indicator. The local flags aren't part of
 // `boardData`, so `refreshBoard`'s diff guard can't see them change.
