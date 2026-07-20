@@ -2955,9 +2955,7 @@ function ensureTerminal() {
     webglAddon.onContextLoss(() => webglAddon.dispose());
     term.loadAddon(webglAddon);
   } catch (_) { /* WebGL unavailable → canvas/DOM renderer */ }
-  term.onData((data) => {
-    if (termWs && termWs.readyState === WebSocket.OPEN) termWs.send(new TextEncoder().encode(data));
-  });
+  term.onData(sendToPTY);
   // Cmd/Ctrl+C copies the selection (falling through to SIGINT when nothing is
   // selected so Ctrl+C still interrupts); Cmd+V pastes. Lets the browser own
   // copy/paste instead of tmux's copy-mode.
@@ -3001,21 +2999,81 @@ function ensureTerminal() {
   connectTerminalWs();
 }
 
+// The one guarded writer to the PTY socket, shared by term.onData and the touch
+// scroll shim below (mirrors terminal.html's sendToPTY of the same name).
+function sendToPTY(text) {
+  if (!text) return;
+  if (termWs && termWs.readyState === WebSocket.OPEN) termWs.send(new TextEncoder().encode(text));
+}
+
+// One rendered row in CSS pixels. `.xterm-screen` is exactly rows × cellHeight
+// under both the WebGL and DOM renderers, so it's a truer metric than the
+// container's clientHeight (which carries padding and, on mobile, the keyboard
+// inset / dPR mis-fit that made the old `clientHeight / rows` yield delta 0).
+function terminalCellHeight(node) {
+  const rows = (term && term.rows) || 0;
+  if (rows > 0) {
+    const screen = term.element && term.element.querySelector('.xterm-screen');
+    const h = screen ? screen.clientHeight / rows : 0;
+    if (isFinite(h) && h >= 4) return h;
+    const fallback = (node ? node.clientHeight : 0) / rows;
+    if (isFinite(fallback) && fallback >= 4) return fallback;
+  }
+  return 18;
+}
+
+// Translate N lines of scroll into what a wheel tick would send, for the case
+// where the local buffer can't scroll: the alternate screen has no scrollback,
+// so term.scrollLines is a silent no-op there (#777 — on mobile that read as
+// "the same frame forever"). Matches enableWheelScroll's policy of letting a
+// fullscreen TUI own the wheel. Negative = up/back.
+const MAX_PTY_SCROLL_LINES = 24; // a fling must not flood the PTY
+function sendScrollToPTY(lines) {
+  const n = Math.min(Math.abs(lines), MAX_PTY_SCROLL_LINES);
+  if (n === 0) return;
+  const up = lines < 0;
+  const modes = (term && term.modes) || {};
+  // Mouse-reporting apps (and tmux, whose `mouse on` relays to them) want SGR
+  // wheel buttons 64/65; everything else takes the cursor-key fallback xterm
+  // itself uses for an alt-buffer wheel.
+  let seq;
+  if (modes.mouseTrackingMode && modes.mouseTrackingMode !== 'none') {
+    seq = up ? '\x1b[<64;1;1M' : '\x1b[<65;1;1M';
+  } else {
+    const ss3 = modes.applicationCursorKeysMode;
+    seq = up ? (ss3 ? '\x1bOA' : '\x1b[A') : (ss3 ? '\x1bOB' : '\x1b[B');
+  }
+  sendToPTY(seq.repeat(n));
+}
+
 // xterm.js doesn't scroll its scrollback on touch drags — map a one-finger
-// vertical swipe to term.scrollLines so the terminal is scrollable on mobile.
+// vertical swipe to the terminal so it's scrollable on mobile. Registered
+// non-passive and preventDefault'ed: a passive listener can't stop iOS Safari's
+// native overscroll, so the browser rubber-banded the canvas while this shim
+// tried to scroll the buffer, and the native gesture won (#777). `#terminal`
+// also carries `touch-action: none` so Safari never claims the gesture at all.
 function enableTouchScroll(node) {
   let lastY = null;
+  let accum = 0; // sub-cell remainder, so slow drags aren't truncated away
   node.addEventListener('touchstart', (e) => {
-    if (e.touches.length === 1) lastY = e.touches[0].clientY;
+    if (e.touches.length === 1) { lastY = e.touches[0].clientY; accum = 0; }
+    else lastY = null; // pinch/multi-touch is not ours
   }, { passive: true });
   node.addEventListener('touchmove', (e) => {
     if (lastY == null || e.touches.length !== 1 || !term) return;
+    e.preventDefault(); // own the gesture instead of racing Safari's overscroll
     const y = e.touches[0].clientY;
-    const cell = (node.clientHeight / (term.rows || 24)) || 18;
-    const delta = Math.trunc((lastY - y) / cell);
-    if (delta !== 0) { term.scrollLines(delta); lastY = y; }
-  }, { passive: true });
-  node.addEventListener('touchend', () => { lastY = null; }, { passive: true });
+    accum += (lastY - y) / terminalCellHeight(node);
+    lastY = y;
+    const delta = Math.trunc(accum);
+    if (delta === 0) return;
+    accum -= delta;
+    const buf = term.buffer && term.buffer.active;
+    if (buf && buf.type === 'alternate') sendScrollToPTY(delta);
+    else term.scrollLines(delta);
+  }, { passive: false });
+  node.addEventListener('touchend', () => { lastY = null; accum = 0; }, { passive: true });
+  node.addEventListener('touchcancel', () => { lastY = null; accum = 0; }, { passive: true });
 }
 
 // Let xterm.js own wheel scrolling in the browser: scroll the local 50k-line
