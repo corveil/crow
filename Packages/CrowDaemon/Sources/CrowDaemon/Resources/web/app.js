@@ -2941,6 +2941,32 @@ function ensureTerminal() {
   term.loadAddon(imageAddon);
   term.loadAddon(searchAddon);
   term.loadAddon(webLinksAddon);
+
+  // Mouse-mode swallow — same handler as web/terminal.html (CROW-581). The
+  // agent TUIs (Claude Code, Cursor) turn the xterm mouse protocol on
+  // themselves, and crow-tmux.conf's `mouse off` means tmux forwards those
+  // DECSETs straight through to this client. Left alone, xterm.js enters
+  // mouse-reporting mode and every mouse MOVE emits an SGR report to the PTY →
+  // the TUI repaints → the viewport is yanked to the bottom while the user is
+  // scrolled up; drag-select and the browser context menu are eaten too.
+  // Dropping the mode toggles at the parser keeps selection, the context menu,
+  // and wheel-scroll client-side. Inner apps that genuinely want the mouse
+  // (vim/htop) lose it here — the same acceptable trade terminal.html makes.
+  // #776: this surface was built without the swallow, so it regressed against
+  // the standalone renderer. Must be registered before open()/first write.
+  const MOUSE_MODES = new Set([1000, 1001, 1002, 1003, 1005, 1006, 1015, 1016]);
+  function swallowMouseMode(params) {
+    const arr = params && params.params ? params.params : params;
+    const len = arr ? arr.length : 0;
+    for (let i = 0; i < len; i++) {
+      const v = arr[i];
+      if (MOUSE_MODES.has(Array.isArray(v) ? v[0] : v)) return true; // handled → drop it
+    }
+    return false; // not a mouse mode → let xterm apply it normally
+  }
+  term.parser.registerCsiHandler({ prefix: '?', final: 'h' }, swallowMouseMode);
+  term.parser.registerCsiHandler({ prefix: '?', final: 'l' }, swallowMouseMode);
+
   // #677: seed the skeleton before first open() so it covers the initial xterm
   // layout / first-fit reflow flash; connectTerminalWs() re-arms it below.
   showTerminalSkeleton();
@@ -3020,14 +3046,22 @@ function enableTouchScroll(node) {
 
 // Let xterm.js own wheel scrolling in the browser: scroll the local 50k-line
 // scrollback instead of forwarding the wheel to tmux (whose server-global
-// `mouse on` would otherwise drop into copy-mode — janky in a browser). A
-// fullscreen/alternate-screen app (vim, htop) still gets the wheel.
+// `mouse on` would otherwise drop into copy-mode — janky in a browser).
+//
+// #776: this used to bail on the alternate-screen buffer to "let TUIs handle
+// the wheel", but the mouse-mode swallow in ensureTerminal means no inner app
+// can receive mouse events here — so bailing just handed the wheel to xterm's
+// alternate-scroll fallback, which emits ARROW KEYS. Claude Code reads those as
+// input-history navigation: exactly the bug crow-tmux.conf documents under
+// `alternate-screen off`. Keep owning the event in both buffers; an alternate
+// buffer has no scrollback, so there we swallow the wheel rather than scroll.
+// (crow-tmux.conf also strips the client's smcup/rmcup, so in practice the
+// terminal stays in the main buffer and the scrollback path is the live one.)
 function enableWheelScroll(node) {
   node.addEventListener('wheel', (e) => {
     if (!term) return;
     const buf = term.buffer && term.buffer.active;
-    if (buf && buf.type === 'alternate') return; // let TUIs handle the wheel
-    term.scrollLines(e.deltaY > 0 ? 3 : -3);
+    if (!buf || buf.type !== 'alternate') term.scrollLines(e.deltaY > 0 ? 3 : -3);
     e.preventDefault();
     e.stopPropagation();
   }, { capture: true, passive: false });
