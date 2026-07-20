@@ -34,6 +34,16 @@ enum DaemonRPCError: Error, LocalizedError, RPCErrorCoded {
 /// `DaemonRPCError` on an app-level error; rethrows the underlying socket error
 /// (connection refused → app not running) so callers can fall back to local
 /// handling (CROW-581).
+/// A ticket/PR URL is sent verbatim as Manager keystrokes, so accept only a
+/// plain http(s) URL with no whitespace or control characters — otherwise a
+/// crafted url could inject extra submitted lines into the agent (review #4).
+/// Shared by `work-on-issue` and `batch-work-on-issues` so the two can't drift.
+func isSafeIssueURL(_ url: String) -> Bool {
+    guard !url.isEmpty,
+          url.range(of: #"^https?://[^\s]+$"#, options: .regularExpression) != nil else { return false }
+    return !url.unicodeScalars.contains { $0.value < 0x20 || $0.value == 0x7F }
+}
+
 /// App-down local path for the `session.status` transitions (mark-in-review /
 /// complete-session / set-session-active): write the status to both the
 /// observable `appState` and the persisted `store`, exactly like `set-status`.
@@ -677,11 +687,7 @@ func makeCommandRouter(
             guard let url = params["url"]?.stringValue, !url.isEmpty else {
                 throw DaemonRPCError.invalidParams("url required")
             }
-            // Sent verbatim as Manager keystrokes below — reject anything that
-            // isn't a plain http(s) URL, so newlines/control chars can't inject
-            // extra submitted lines into the agent (review #4).
-            guard url.range(of: #"^https?://[^\s]+$"#, options: .regularExpression) != nil,
-                  !url.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7F }) else {
+            guard isSafeIssueURL(url) else {
                 throw DaemonRPCError.invalidParams("url must be a well-formed http(s) URL with no control characters")
             }
             return try await MainActor.run {
@@ -690,6 +696,49 @@ func makeCommandRouter(
                 }
                 TerminalRouter.send(managerTerminal, text: "/crow-workspace \(url)\n")
                 return ["ok": .bool(true)]
+            }
+        },
+        // Batch counterpart of work-on-issue (#752): types ONE
+        // `/crow-batch-workspace <url1> <url2> …` line, so the Manager runs the
+        // parallel batch skill once instead of N sequential `/crow-workspace`
+        // submissions. Single-line by construction — TerminalRouter turns
+        // newlines into Enter presses, so an embedded newline would split the
+        // prompt (cf. #161). Unsafe URLs are dropped and reported back in
+        // `rejected` rather than failing the whole batch, so one bad ticket
+        // can't block the rest.
+        "batch-work-on-issues": { params in
+            guard sessionService != nil else {
+                throw DaemonRPCError.applicationError(
+                    "Working on an issue requires tmux on the daemon host")
+            }
+            guard let arr = params["urls"]?.arrayValue, !arr.isEmpty else {
+                throw DaemonRPCError.invalidParams("urls array required")
+            }
+            var valid: [String] = []
+            var rejected: [String] = []
+            for value in arr {
+                let url = value.stringValue ?? ""
+                if isSafeIssueURL(url) {
+                    if !valid.contains(url) { valid.append(url) }
+                } else {
+                    rejected.append(url)
+                }
+            }
+            guard !valid.isEmpty else {
+                throw DaemonRPCError.invalidParams("urls must be well-formed http(s) URLs with no control characters")
+            }
+            return try await MainActor.run {
+                guard let managerTerminal = appState.terminals[AppState.managerSessionID]?.first else {
+                    throw DaemonRPCError.applicationError("The Manager is still starting — try again in a moment")
+                }
+                TerminalRouter.send(
+                    managerTerminal,
+                    text: "/crow-batch-workspace \(valid.joined(separator: " "))\n")
+                return [
+                    "ok": .bool(true),
+                    "sent": .int(valid.count),
+                    "rejected": .array(rejected.map { .string($0) }),
+                ]
             }
         },
         // Starting a review forwards to the app when it's running; with the app

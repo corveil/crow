@@ -53,7 +53,8 @@ import CrowPersistence
         // mark-in-review / complete-session / set-session-active — now run
         // locally, so they're covered by LocalStatusTests instead.)
         let actions = [
-            "work-on-issue", "start-review", "promote-allowlist", "refresh-tickets", "refresh-allowlist",
+            "work-on-issue", "batch-work-on-issues", "start-review", "promote-allowlist",
+            "refresh-tickets", "refresh-allowlist",
             "create-manager", "mark-issue-done", "add-merge-label",
         ]
         for method in actions {
@@ -61,6 +62,36 @@ import CrowPersistence
             #expect(resp.error != nil, "\(method) should error when the app is down")
             #expect(resp.error?.code == RPCErrorCode.applicationError, "\(method) should be an application error")
         }
+    }
+}
+
+/// #752: the web board's batch "Start Working (N)" dispatches a single
+/// `batch-work-on-issues` RPC, which types one `/crow-batch-workspace url1 url2 …`
+/// line into the Manager. These pin the URL contract — the URLs reach the agent
+/// as keystrokes, so anything that isn't a plain http(s) URL must be dropped.
+@Suite struct BatchWorkOnIssuesTests {
+    @Test func acceptsPlainHTTPURLsOnly() {
+        #expect(isSafeIssueURL("https://github.com/acme/api/issues/7"))
+        #expect(isSafeIssueURL("http://gitlab.example.com/org/repo/-/issues/42"))
+
+        #expect(!isSafeIssueURL(""))
+        #expect(!isSafeIssueURL("javascript:alert(1)"))
+        #expect(!isSafeIssueURL("ftp://example.com/x"))
+        #expect(!isSafeIssueURL("https://example.com/a b"))            // whitespace
+        #expect(!isSafeIssueURL("https://example.com/x\n/crow-workspace evil"))  // newline injection
+        #expect(!isSafeIssueURL("https://example.com/x\u{7F}"))        // DEL
+    }
+
+    /// Params validation is reached only once tmux is available; with the app
+    /// down the applicationError guard fires first (same ordering as
+    /// `work-on-issue`), which `boardActionsErrorWhenAppDown` already pins.
+    @Test @MainActor func missingURLsErrorsWhenTmuxUnavailable() async {
+        let router = makeCommandRouter(
+            appState: AppState(), store: JSONStore.temporary(), git: GitManager(),
+            devRoot: NSTemporaryDirectory(), cockpit: nil)
+        let resp = await router.handle(request: JSONRPCRequest(
+            id: 1, method: "batch-work-on-issues", params: ["urls": .array([])]))
+        #expect(resp.error?.code == RPCErrorCode.applicationError)
     }
 }
 

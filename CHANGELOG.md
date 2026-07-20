@@ -11,6 +11,7 @@ Backfill of merged PRs since the 0.1.0 release, grouped by theme.
 
 ### Web UI
 
+- #752 — Multi-select "Start Working (N)" on the tickets board now fires a single `batch-work-on-issues` RPC, so the Manager runs one `/crow-batch-workspace url1 url2 …` (parallel setup) instead of N separate `/crow-workspace` submissions.
 - #613 — Left pane paints chrome + skeleton (or cached last-known) session rows on first load before `list-sessions` returns, then swaps in real rows without a blank flash.
 
 ### Automation
