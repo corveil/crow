@@ -10,7 +10,7 @@ public final class OTLPReceiver: Sendable {
     private let port: UInt16
     private let listener: NWListener
     private let database: TelemetryDatabase
-    private let queue = DispatchQueue(label: "com.radiusmethod.crow.otlp-receiver")
+    private let queue = DispatchQueue(label: "com.corveil.crow.otlp-receiver")
 
     /// Callback invoked on the main actor when new data arrives for a Crow session.
     /// The UUID is the Crow session ID.

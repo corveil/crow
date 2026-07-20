@@ -6,7 +6,7 @@
 
 ## Context
 
-Users hit per-agent credit limits mid-task (Claude Code → Cursor, etc.) and need to continue the same Crow session without recreating worktrees or losing ticket context ([#627](https://github.com/radiusmethod/crow/issues/627)). Each coding agent keeps its own conversation store; there is no portable transcript format across Claude Code, Cursor, Codex, and OpenCode. Crow already persists per-session `agentKind` and launches via the `CodingAgent` protocol, but until now that kind was fixed at create time (Manager config reconcile aside).
+Users hit per-agent credit limits mid-task (Claude Code → Cursor, etc.) and need to continue the same Crow session without recreating worktrees or losing ticket context ([#627](https://github.com/corveil/crow/issues/627)). Each coding agent keeps its own conversation store; there is no portable transcript format across Claude Code, Cursor, Codex, and OpenCode. Crow already persists per-session `agentKind` and launches via the `CodingAgent` protocol, but until now that kind was fixed at create time (Manager config reconcile aside).
 
 ## Decision
 
@@ -34,6 +34,6 @@ Exposed as RPC/CLI `handoff-agent` and a web UI “Switch agent…” control. M
 
 ## References
 
-- Issue: https://github.com/radiusmethod/crow/issues/627
+- Issue: https://github.com/corveil/crow/issues/627
 - Code: `Packages/CrowEngine/Sources/CrowEngine/AgentHandoff.swift`, `SessionService.handoffAgent`
 - Related ADRs: [0003](./0003-worktree-per-task-model.md), [0007](./0007-crowd-sole-authority-clients-only.md)

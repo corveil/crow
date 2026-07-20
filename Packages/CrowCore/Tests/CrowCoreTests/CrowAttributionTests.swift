@@ -3,17 +3,17 @@ import Testing
 @testable import CrowCore
 
 @Test func crowAttributionRepoURLIsCanonical() {
-    #expect(CrowAttribution.repoURL == "https://github.com/radiusmethod/crow")
+    #expect(CrowAttribution.repoURL == "https://github.com/corveil/crow")
 }
 
 @Test func crowAttributionReviewLinkDefaultIsClaudeCode() {
     #expect(CrowAttribution.reviewMarkdownLink ==
-            "[🐦‍⬛ Reviewed by Crow via Claude Code](https://github.com/radiusmethod/crow)")
+            "[🐦‍⬛ Reviewed by Crow via Claude Code](https://github.com/corveil/crow)")
 }
 
 @Test func crowAttributionReviewLinkForCursor() {
     #expect(CrowAttribution.reviewMarkdownLink(agentDisplayName: "Cursor") ==
-            "[🐦‍⬛ Reviewed by Crow via Cursor](https://github.com/radiusmethod/crow)")
+            "[🐦‍⬛ Reviewed by Crow via Cursor](https://github.com/corveil/crow)")
 }
 
 @Test func crowAttributionReviewLinkEmbedsRepoURL() {
@@ -22,17 +22,17 @@ import Testing
 
 @Test func crowAttributionContainsNoForkReferences() {
     #expect(!CrowAttribution.reviewMarkdownLink.contains("nicholasgasior"))
-    #expect(!CrowAttribution.reviewMarkdownLink.lowercased().contains("corveil"))
+    #expect(!CrowAttribution.reviewMarkdownLink.lowercased().contains("radiusmethod"))
 }
 
 @Test func crowAttributionTicketLinkDefaultIsClaudeCode() {
     #expect(CrowAttribution.ticketMarkdownLink ==
-            "[🐦‍⬛ Created with Crow via Claude Code](https://github.com/radiusmethod/crow)")
+            "[🐦‍⬛ Created with Crow via Claude Code](https://github.com/corveil/crow)")
 }
 
 @Test func crowAttributionTicketLinkForCodex() {
     #expect(CrowAttribution.ticketMarkdownLink(agentDisplayName: "OpenAI Codex") ==
-            "[🐦‍⬛ Created with Crow via OpenAI Codex](https://github.com/radiusmethod/crow)")
+            "[🐦‍⬛ Created with Crow via OpenAI Codex](https://github.com/corveil/crow)")
 }
 
 @Test func crowAttributionTicketLinkEmbedsRepoURL() {
@@ -41,7 +41,7 @@ import Testing
 
 @Test func crowAttributionTicketLinkContainsNoForkReferences() {
     #expect(!CrowAttribution.ticketMarkdownLink.contains("nicholasgasior"))
-    #expect(!CrowAttribution.ticketMarkdownLink.lowercased().contains("corveil"))
+    #expect(!CrowAttribution.ticketMarkdownLink.lowercased().contains("radiusmethod"))
 }
 
 @Test func crowAttributionAgentDisplayNameKnownKinds() {
@@ -91,7 +91,7 @@ import Testing
 }
 
 @Test func crowAttributionExpandSkillBodyReplacesLegacyClaudeCodeWording() {
-    let body = "[🐦‍⬛ Reviewed by Crow via Claude Code](https://github.com/radiusmethod/crow)"
+    let body = "[🐦‍⬛ Reviewed by Crow via Claude Code](https://github.com/corveil/crow)"
     let expanded = CrowAttribution.expandSkillBody(body, agentKind: .codex)
     #expect(expanded.contains("via OpenAI Codex"))
     #expect(!expanded.contains("via Claude Code"))

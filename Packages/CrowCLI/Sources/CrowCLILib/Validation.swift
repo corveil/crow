@@ -45,7 +45,7 @@ func validateRepoSlug(_ value: String) throws {
     let components = repo.split(separator: "/", omittingEmptySubsequences: false)
     guard components.count >= 2,
           components.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else {
-        throw ValidationError("'\(value)' is not a valid repo. Expected an owner/repo slug (e.g. radiusmethod/crow); components must not be empty, '.', or '..'.")
+        throw ValidationError("'\(value)' is not a valid repo. Expected an owner/repo slug (e.g. corveil/crow); components must not be empty, '.', or '..'.")
     }
 }
 

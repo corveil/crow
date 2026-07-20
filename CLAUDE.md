@@ -72,13 +72,13 @@ git worktree add /path -b feature/name --no-track origin/main   # Retry
 ### Worktree Naming
 **Correct:** `{devRoot}/{workspace}/{repo}-{number}-{slug}` (same level as main repo)
 ```
-/Users/jane/Dev/RadiusMethod/acme-api-197-fix-tab-url-hash
+/Users/jane/Dev/Corveil/acme-api-197-fix-tab-url-hash
 ```
 
 **WRONG — never create subdirectories:**
 ```
-WRONG: /Users/jane/Dev/RadiusMethod/acme-api-worktrees/197-fix-tab
-WRONG: /Users/jane/Dev/RadiusMethod/worktrees/acme-api-197-fix-tab
+WRONG: /Users/jane/Dev/Corveil/acme-api-worktrees/197-fix-tab
+WRONG: /Users/jane/Dev/Corveil/worktrees/acme-api-197-fix-tab
 ```
 
 ### Always use `--no-track` for new branches

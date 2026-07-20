@@ -191,8 +191,8 @@ Register a git worktree for a session. The app uses `--repo-path` to run git com
 crow add-worktree \
   --session <uuid> \
   --repo "acme-api" \
-  --repo-path "/Users/you/Dev/RadiusMethod/acme-api" \
-  --path "/Users/you/Dev/RadiusMethod/acme-api-123-feature" \
+  --repo-path "/Users/you/Dev/Corveil/acme-api" \
+  --path "/Users/you/Dev/Corveil/acme-api-123-feature" \
   --branch "feature/acme-api-123" \
   --primary
 ```

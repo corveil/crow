@@ -148,11 +148,11 @@ struct IssueTrackerReconcileProviderTests {
 @Suite("IssueTracker remote host extraction")
 struct IssueTrackerRemoteHostTests {
     @Test func parsesGitHubSSH() {
-        #expect(IssueTracker.extractHost(fromRemote: "git@github.com:radiusmethod/corveil") == "github.com")
+        #expect(IssueTracker.extractHost(fromRemote: "git@github.com:corveil/corveil") == "github.com")
     }
 
     @Test func parsesGitHubHTTPS() {
-        #expect(IssueTracker.extractHost(fromRemote: "https://github.com/radiusmethod/corveil") == "github.com")
+        #expect(IssueTracker.extractHost(fromRemote: "https://github.com/corveil/corveil") == "github.com")
     }
 
     @Test func parsesGitLabHTTPSCustomHost() {
@@ -172,11 +172,11 @@ struct IssueTrackerRemoteHostTests {
 @Suite("IssueTracker remote slug extraction")
 struct IssueTrackerRemoteSlugTests {
     @Test func parsesGitHubSSH() {
-        #expect(IssueTracker.extractSlug(fromRemote: "git@github.com:radiusmethod/corveil") == "radiusmethod/corveil")
+        #expect(IssueTracker.extractSlug(fromRemote: "git@github.com:corveil/corveil") == "corveil/corveil")
     }
 
     @Test func parsesGitHubHTTPS() {
-        #expect(IssueTracker.extractSlug(fromRemote: "https://github.com/radiusmethod/corveil") == "radiusmethod/corveil")
+        #expect(IssueTracker.extractSlug(fromRemote: "https://github.com/corveil/corveil") == "corveil/corveil")
     }
 
     @Test func parsesGitLabTwoLevel() {
@@ -202,8 +202,8 @@ struct IssueTrackerRemoteSlugTests {
     }
 
     @Test func stripsTrailingDotGit() {
-        #expect(IssueTracker.extractSlug(fromRemote: "https://github.com/radiusmethod/corveil.git") == "radiusmethod/corveil")
-        #expect(IssueTracker.extractSlug(fromRemote: "git@github.com:radiusmethod/corveil.git") == "radiusmethod/corveil")
+        #expect(IssueTracker.extractSlug(fromRemote: "https://github.com/corveil/corveil.git") == "corveil/corveil")
+        #expect(IssueTracker.extractSlug(fromRemote: "git@github.com:corveil/corveil.git") == "corveil/corveil")
         #expect(
             IssueTracker.extractSlug(
                 fromRemote: "https://gitlab.example.com/big-bang/product/packages/elasticsearch-kibana.git"

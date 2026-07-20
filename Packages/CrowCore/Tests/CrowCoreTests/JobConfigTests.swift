@@ -6,8 +6,8 @@ import Testing
     let config = AppConfig(jobs: [
         JobConfig(
             name: "Nightly Audit",
-            workspace: "RadiusMethod",
-            repo: "radiusmethod/api",
+            workspace: "Corveil",
+            repo: "corveil/api",
             prompts: ["Run the audit", "Summarize findings"],
             schedule: .interval(seconds: 3600),
             enabled: true
@@ -22,8 +22,8 @@ import Testing
     #expect(decoded.jobs.count == 1)
     let job = decoded.jobs[0]
     #expect(job.name == "Nightly Audit")
-    #expect(job.workspace == "RadiusMethod")
-    #expect(job.repo == "radiusmethod/api")
+    #expect(job.workspace == "Corveil")
+    #expect(job.repo == "corveil/api")
     #expect(job.prompts == ["Run the audit", "Summarize findings"])
     #expect(job.schedule == .interval(seconds: 3600))
     #expect(job.enabled == true)

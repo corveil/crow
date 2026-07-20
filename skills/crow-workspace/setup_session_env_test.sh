@@ -36,7 +36,7 @@ not_contains() { # not_contains <description> <haystack> <needle>
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
-# Synthetic devRoot + config.json. RadiusMethod carries a sessionEnv map (one
+# Synthetic devRoot + config.json. Corveil carries a sessionEnv map (one
 # templated value); Bare carries no sessionEnv; WithGateway carries both a
 # gateway block and a sessionEnv map (coexistence case).
 DEV_ROOT="$TMP/devroot"
@@ -46,7 +46,7 @@ cat > "$DEV_ROOT/.claude/config.json" <<'JSON'
   "workspaces": [
     {
       "id": "00000000-0000-0000-0000-000000000001",
-      "name": "RadiusMethod",
+      "name": "Corveil",
       "provider": "github",
       "cli": "gh",
       "sessionEnv": {
@@ -94,11 +94,11 @@ reset_gateway() {
 
 # ── 1. Config map → settings.local.json .env (token substitution) ──────────────
 echo "== config sessionEnv map =="
-WORKSPACE="RadiusMethod"
+WORKSPACE="Corveil"
 SESSION_NAME="crow-543-session-env"
 SLUG="543-session-env"; BRANCH="feature/crow-543-session-env"; REPO="crow"
 TICKET_NUMBER="543"; TICKET_URL=""; SESSION_ID="ABCD-1234"
-WORKTREE_PATH="$DEV_ROOT/RadiusMethod/crow-543"
+WORKTREE_PATH="$DEV_ROOT/Corveil/crow-543"
 reset_session_env; reset_gateway
 mkdir -p "$WORKTREE_PATH"
 
@@ -118,7 +118,7 @@ check "settings.local.json is 0600" "600" "$(stat -f '%Lp' "$settings" 2>/dev/nu
 echo "== --session-env overrides config key =="
 reset_session_env
 CLI_SESSION_ENV="COORD_SESSION_NAME=from-flag"
-WORKTREE_PATH="$DEV_ROOT/RadiusMethod/crow-543-flag"
+WORKTREE_PATH="$DEV_ROOT/Corveil/crow-543-flag"
 mkdir -p "$WORKTREE_PATH"
 resolve_session_env
 write_settings_local

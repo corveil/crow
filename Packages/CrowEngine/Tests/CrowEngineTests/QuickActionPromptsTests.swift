@@ -33,10 +33,10 @@ struct QuickActionPromptsTests {
         let prompt = QuickActionPrompts.build(
             action: .mergePR,
             codeBackend: FakeCodeBackend(provider: .github, cliName: "gh"),
-            prURL: "https://github.com/radiusmethod/crow/pull/123",
+            prURL: "https://github.com/corveil/crow/pull/123",
             prNumber: 123
         )
-        #expect(prompt.contains("cd \"$TMPDIR\" && gh pr merge https://github.com/radiusmethod/crow/pull/123 --squash --delete-branch"))
+        #expect(prompt.contains("cd \"$TMPDIR\" && gh pr merge https://github.com/corveil/crow/pull/123 --squash --delete-branch"))
         #expect(prompt.contains("worktree"))
         #expect(prompt.hasSuffix("\n"))
     }
@@ -65,14 +65,14 @@ struct ReReviewPromptTests {
         let prompt = QuickActionPrompts.build(
             action: .reReview,
             codeBackend: FakeCodeBackend(provider: .github, cliName: "gh"),
-            prURL: "https://github.com/radiusmethod/crow/pull/753",
+            prURL: "https://github.com/corveil/crow/pull/753",
             prNumber: 753,
             lastReviewedHeadSha: "abcdef0123456789"
         )
         // Never touch the branch under review.
         #expect(prompt.contains("do NOT modify code, commit, or push"))
         // Re-runs the review + posts a verdict (not a bare comment).
-        #expect(prompt.contains("gh pr review https://github.com/radiusmethod/crow/pull/753 --request-changes"))
+        #expect(prompt.contains("gh pr review https://github.com/corveil/crow/pull/753 --request-changes"))
         #expect(prompt.contains("--approve"))
         #expect(prompt.contains("never `--comment`"))
         // Single-line contract.
@@ -84,7 +84,7 @@ struct ReReviewPromptTests {
         let prompt = QuickActionPrompts.build(
             action: .reReview,
             codeBackend: FakeCodeBackend(provider: .github, cliName: "gh"),
-            prURL: "https://github.com/radiusmethod/crow/pull/753",
+            prURL: "https://github.com/corveil/crow/pull/753",
             prNumber: 753,
             lastReviewedHeadSha: "abcdef0123456789deadbeef"
         )
@@ -96,7 +96,7 @@ struct ReReviewPromptTests {
         let prompt = QuickActionPrompts.build(
             action: .reReview,
             codeBackend: FakeCodeBackend(provider: .github, cliName: "gh"),
-            prURL: "https://github.com/radiusmethod/crow/pull/753",
+            prURL: "https://github.com/corveil/crow/pull/753",
             prNumber: 753,
             lastReviewedHeadSha: nil
         )

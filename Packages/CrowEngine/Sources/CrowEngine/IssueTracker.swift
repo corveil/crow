@@ -1090,7 +1090,7 @@ public final class IssueTracker {
     struct ReconcileCandidate: Sendable, Equatable {
         let sessionID: UUID
         let provider: Provider
-        let repoSlug: String       // "radiusmethod/corveil"
+        let repoSlug: String       // "corveil/corveil"
         let branch: String
         let gitlabHost: String?    // nil for github.com
     }
@@ -1522,7 +1522,7 @@ public final class IssueTracker {
         }
     }
 
-    /// Resolve the org/repo slug (e.g. "radiusmethod/citadel") from a worktree's git remote.
+    /// Resolve the org/repo slug (e.g. "corveil/citadel") from a worktree's git remote.
     private func resolveRepoSlug(worktree: SessionWorktree) -> String {
         return resolveRepoInfo(worktree: worktree).slug
     }

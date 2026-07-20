@@ -50,7 +50,7 @@ struct IssueTrackerDedupTests {
     }
 
     @Test func collapsesExactDuplicates() {
-        let url = "https://github.com/radiusmethod/corveil/pull/201"
+        let url = "https://github.com/corveil/corveil/pull/201"
         let prs = [
             makeViewerPR(url: url, state: "OPEN"),
             makeViewerPR(url: url, state: "OPEN"),
@@ -61,7 +61,7 @@ struct IssueTrackerDedupTests {
     }
 
     @Test func mergedBeatsOpenRegardlessOfOrder() {
-        let url = "https://github.com/radiusmethod/corveil/pull/201"
+        let url = "https://github.com/corveil/corveil/pull/201"
         let open = makeViewerPR(url: url, state: "OPEN")
         let merged = makeViewerPR(url: url, state: "MERGED")
 
@@ -75,14 +75,14 @@ struct IssueTrackerDedupTests {
     }
 
     @Test func mergedWinnerBackfillsEmptyFieldsFromOpenLoser() {
-        let url = "https://github.com/radiusmethod/corveil/pull/201"
+        let url = "https://github.com/corveil/corveil/pull/201"
         let open = makeViewerPR(
             url: url,
             state: "OPEN",
             reviewDecision: "APPROVED",
             headRefName: "feature/x",
             baseRefName: "main",
-            repoNameWithOwner: "radiusmethod/corveil",
+            repoNameWithOwner: "corveil/corveil",
             checksState: "SUCCESS",
             failedCheckNames: ["noop"],
             latestReviewStates: ["APPROVED"]
@@ -96,14 +96,14 @@ struct IssueTrackerDedupTests {
         #expect(pr.reviewDecision == "APPROVED")
         #expect(pr.headRefName == "feature/x")
         #expect(pr.baseRefName == "main")
-        #expect(pr.repoNameWithOwner == "radiusmethod/corveil")
+        #expect(pr.repoNameWithOwner == "corveil/corveil")
         #expect(pr.checksState == "SUCCESS")
         #expect(pr.failedCheckNames == ["noop"])
         #expect(pr.latestReviewStates == ["APPROVED"])
     }
 
     @Test func mergedWinsThreeWay() {
-        let url = "https://github.com/radiusmethod/corveil/pull/201"
+        let url = "https://github.com/corveil/corveil/pull/201"
         let prs = [
             makeViewerPR(url: url, state: "OPEN"),
             makeViewerPR(url: url, state: "CLOSED"),
@@ -128,7 +128,7 @@ struct IssueTrackerDedupTests {
         // applyPRStatuses / autoCompleteFinishedSessions. If a future
         // refactor regresses dedup at the assembly site, these call sites
         // must still tolerate duplicates instead of trapping.
-        let url = "https://github.com/radiusmethod/corveil/pull/201"
+        let url = "https://github.com/corveil/corveil/pull/201"
         let prs = [
             makeViewerPR(url: url, state: "OPEN"),
             makeViewerPR(url: url, state: "MERGED"),
@@ -148,7 +148,7 @@ struct IssueTrackerDedupTests {
         // Forward its lastChangesRequestedAt; fall back to loser's only when
         // winner's is nil so the stateless "needs refine" rule never loses
         // the anchor timestamp during merge.
-        let url = "https://github.com/radiusmethod/corveil/pull/201"
+        let url = "https://github.com/corveil/corveil/pull/201"
         let openTs = Date(timeIntervalSince1970: 1_700_000_000)
         let mergedTs = Date(timeIntervalSince1970: 1_700_001_000)
         let open = makeViewerPR(url: url, state: "OPEN", lastChangesRequestedAt: openTs)
@@ -158,7 +158,7 @@ struct IssueTrackerDedupTests {
     }
 
     @Test func mergePRRecordsBackfillsLastChangesRequestedAtWhenWinnerLacks() {
-        let url = "https://github.com/radiusmethod/corveil/pull/201"
+        let url = "https://github.com/corveil/corveil/pull/201"
         let openTs = Date(timeIntervalSince1970: 1_700_000_000)
         let open = makeViewerPR(url: url, state: "OPEN", lastChangesRequestedAt: openTs)
         let mergedNoTs = makeViewerPR(url: url, state: "MERGED")
@@ -166,7 +166,7 @@ struct IssueTrackerDedupTests {
     }
 
     @Test func mergePRRecordsBackfillsLastSubstantiveCommitAtWhenWinnerLacks() {
-        let url = "https://github.com/radiusmethod/corveil/pull/201"
+        let url = "https://github.com/corveil/corveil/pull/201"
         let openTs = Date(timeIntervalSince1970: 1_700_000_000)
         let open = makeViewerPR(url: url, state: "OPEN", lastSubstantiveCommitAt: openTs)
         let mergedNoTs = makeViewerPR(url: url, state: "MERGED")

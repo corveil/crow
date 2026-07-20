@@ -10,8 +10,8 @@ private let jobUUID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
 @Test func jobAddParsesFullArgs() throws {
     let cmd = try JobAdd.parse([
         "--name", "nightly triage",
-        "--workspace", "RadiusMethod",
-        "--repo", "radiusmethod/api",
+        "--workspace", "Corveil",
+        "--repo", "corveil/api",
         "--prompt", "first prompt",
         "--prompt", "second prompt",
         "--daily-at", "09:30",
@@ -19,8 +19,8 @@ private let jobUUID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
         "--disabled",
     ])
     #expect(cmd.name == "nightly triage")
-    #expect(cmd.workspace == "RadiusMethod")
-    #expect(cmd.repo == "radiusmethod/api")
+    #expect(cmd.workspace == "Corveil")
+    #expect(cmd.repo == "corveil/api")
     #expect(cmd.prompt == ["first prompt", "second prompt"])
     #expect(cmd.dailyAt == "09:30")
     #expect(cmd.weekdays == "mon,fri")

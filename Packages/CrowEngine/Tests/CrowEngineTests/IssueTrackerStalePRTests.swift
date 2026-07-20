@@ -181,7 +181,7 @@ struct IssueTrackerStalePRTests {
         // from a prior reconcile, once MERGED from this cycle's stale fetch)
         // collapses with MERGED winning.
         let mrURL = "https://repo1.dso.mil/big-bang/product/-/merge_requests/7"
-        let prURL = "https://github.com/radiusmethod/corveil/pull/201"
+        let prURL = "https://github.com/corveil/corveil/pull/201"
         let prs = [
             makeViewerPR(url: prURL, state: "OPEN"),
             makeViewerPR(url: mrURL, state: "OPEN"),
