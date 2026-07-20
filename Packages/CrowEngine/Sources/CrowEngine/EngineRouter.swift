@@ -231,6 +231,7 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                         "ready_to_merge": .bool(pr.isReadyToMerge),
                         "has_blockers": .bool(pr.hasBlockers),
                         "failed_checks": .array(pr.failedCheckNames.map { .string($0) }),
+                        "has_merge_label": .bool(pr.hasMergeLabel),
                     ]
                 }
             },
@@ -410,6 +411,7 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                                 "ready_to_merge": .bool(pr.isReadyToMerge),
                                 "has_blockers": .bool(pr.hasBlockers),
                                 "failed_checks": .array(pr.failedCheckNames.map { .string($0) }),
+                                "has_merge_label": .bool(pr.hasMergeLabel),
                             ])
                         } else {
                             entry["pr"] = .object(["has_pr": .bool(false)])

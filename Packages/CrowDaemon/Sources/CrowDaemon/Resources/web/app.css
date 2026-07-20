@@ -193,9 +193,13 @@ html, body {
 }
 .row-badges { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
 .pr-badge {
-  display: inline-block; padding: 2px 8px; border-radius: 10px;
+  display: inline-flex; align-items: center; gap: 3px; padding: 2px 8px; border-radius: 10px;
   font-size: 10px; font-weight: 600; border: 1px solid; background: var(--bg-surface);
 }
+/* Per-status glyphs inside the pill (checks / review / conflict / crow:merge).
+   Each carries its own color, so they must not inherit the pill's — hence the
+   inline style on the span; this rule only handles sizing (CROW-773). */
+.pr-badge .pr-ico { font-size: 9px; line-height: 1; }
 .activity-badge { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; }
 /* Org-goal tag (#723): the sidebar glyph reuses .badge sizing (non-clickable);
    the detail-header .meta-goal row shows the full text and turns gold on hover
@@ -526,6 +530,14 @@ html, body {
   font-size: 10px; padding: 1px 7px; border-radius: 9px;
   border: 1px solid var(--border-subtle); color: var(--text-secondary);
 }
+/* Sidebar rows reuse the board's label pills at a tighter scale, and clamp long
+   label names so a verbose label can't push the row wide (CROW-773). */
+.session-row .label-row { gap: 4px; margin-top: 4px; }
+.session-row .label-pill {
+  font-size: 9px; padding: 0 5px;
+  max-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.session-row .label-more { color: var(--text-muted); }
 .card-foot { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
 .card-foot .badge { text-transform: capitalize; }
 .card-foot .action-btn { margin-left: auto; }

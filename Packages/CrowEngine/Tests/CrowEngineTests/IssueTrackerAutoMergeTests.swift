@@ -51,6 +51,25 @@ struct IssueTrackerAutoMergeTests {
         )
     }
 
+    // MARK: - buildPRStatus surfaces the label to the UI (CROW-773)
+
+    @Test func buildPRStatusFlagsCrowMergeLabel() {
+        #expect(IssueTracker.buildPRStatus(from: makePR()).hasMergeLabel)
+    }
+
+    @Test func buildPRStatusClearsFlagWithoutTheLabel() {
+        #expect(!IssueTracker.buildPRStatus(from: makePR(labels: [Self.otherLabel])).hasMergeLabel)
+        #expect(!IssueTracker.buildPRStatus(from: makePR(labels: [])).hasMergeLabel)
+    }
+
+    @Test func buildPRStatusMatchesLabelCaseInsensitively() {
+        // Same case-insensitive rule `shouldAttemptAutoMerge` gates on — the
+        // indicator must never disagree with the watcher about the same PR.
+        let pr = makePR(labels: [LabelInfo(name: "Crow:Merge", color: nil)])
+        #expect(IssueTracker.buildPRStatus(from: pr).hasMergeLabel)
+        #expect(IssueTracker.shouldAttemptAutoMerge(pr: pr, session: makeSession()))
+    }
+
     // MARK: - shouldAttemptAutoMerge guards
 
     @Test func acceptsHealthyLabeledPR() {

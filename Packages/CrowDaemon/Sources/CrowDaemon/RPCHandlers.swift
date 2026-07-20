@@ -83,6 +83,10 @@ private func prStatusJSON(_ pr: PRStatus) -> [String: JSONValue] {
         "ready_to_merge": .bool(pr.isReadyToMerge),
         "has_blockers": .bool(pr.hasBlockers),
         "failed_checks": .array(pr.failedCheckNames.map { .string($0) }),
+        // `crow:merge` label presence — the *request* for auto-merge, distinct
+        // from `session.auto_merge` (Crow already enabled it). The web row
+        // renders them as two indicators (CROW-773).
+        "has_merge_label": .bool(pr.hasMergeLabel),
     ]
 }
 
@@ -169,8 +173,8 @@ func makeCommandRouter(
 
         // Expanded for the web UI: enough per session to render the sidebar
         // rows and the detail header (status/kind/agent/ticket + primary
-        // worktree). PR status, labels, and hook-activity state need RPC the
-        // daemon doesn't expose yet and are omitted.
+        // worktree), plus ticket labels and hook-activity state. Live PR status
+        // is not here — it comes from `list-sessions-live`.
         "list-sessions": { _ in
             let items: [JSONValue] = await MainActor.run {
                 appState.sessions.map { session in
@@ -214,6 +218,18 @@ func makeCommandRouter(
                                 "label": .string(link.label),
                                 "url": .string(link.url),
                                 "type": .string(link.linkType.rawValue),
+                            ])
+                        })
+                    }
+                    // Ticket/review labels for the sidebar row's label pills —
+                    // restores native `SessionRow`'s LabelPillsView, which read
+                    // the same `labels(forSession:)` source (CROW-773).
+                    let labels = appState.labels(forSession: session)
+                    if !labels.isEmpty {
+                        object["labels"] = .array(labels.map { label in
+                            .object([
+                                "name": .string(label.name),
+                                "color": label.color.map { .string($0) } ?? .null,
                             ])
                         })
                     }

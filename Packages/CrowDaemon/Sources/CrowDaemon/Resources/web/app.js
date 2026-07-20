@@ -1156,6 +1156,9 @@ function sessionRow(s) {
   if (!uiConfig.hideSessionDetails) {
     if (s.ticket_title) content.appendChild(el('div', 'subtle', s.ticket_title));
     if (s.repo) content.appendChild(el('div', 'meta', s.repo + (s.branch ? ' · ' + s.branch : '')));
+    // Ticket/review label pills — native `SessionRow` showed these below the
+    // repo line, capped at 2, behind the same hideSessionDetails gate (CROW-773).
+    if (s.labels && s.labels.length) content.appendChild(labelPills(s.labels, 2));
   }
 
   const badges = el('div', 'row-badges');
@@ -1168,13 +1171,27 @@ function sessionRow(s) {
     badges.appendChild(g);
   }
   // PR badge — shown whenever a PR link exists (stored, or live from the app
-  // when it's only in memory); colored by live status when available.
+  // when it's only in memory); colored AND glyphed by live status when
+  // available. The glyphs mirror the retired native `PRBadge` (CROW-773): a
+  // color-only pill can't distinguish failing checks from changes-requested.
   const prLink = (s.links || []).find((l) => l.type === 'pr') || liveFor(s.id).pr_link;
   if (prLink) {
-    const color = prBadgeColor(liveFor(s.id).pr);
+    const pr = liveFor(s.id).pr;
+    const color = prBadgeColor(pr);
     const prb = el('span', 'pr-badge', prLink.label || 'PR');
     prb.style.color = color;
     prb.style.borderColor = color;
+    const parts = prBadgeParts(pr);
+    for (const part of parts) {
+      const ico = el('span', 'pr-ico', part.glyph);
+      ico.style.color = part.color;
+      prb.appendChild(ico);
+    }
+    // Glyph + color must not be the only channel — mirrors native PRBadge's
+    // `accessibilityDescription` ("#123, Checks pass, Approved").
+    const desc = [prLink.label || 'PR', ...parts.map((p) => p.label)].join(', ');
+    prb.title = desc;
+    prb.setAttribute('aria-label', desc);
     badges.appendChild(prb);
   }
   // Activity badge (Working/Waiting/Done/…) is redundant on managers — they
@@ -1211,6 +1228,52 @@ function prBadgeColor(pr) {
   if (pr.has_blockers) return 'var(--red)';
   if (pr.ready_to_merge) return 'var(--green)';
   return 'var(--gold)';
+}
+
+// ---------------------------------------------------------------------------
+// PR status glyphs — ONE vocabulary shared by the sidebar row pill
+// (`sessionRow`) and the detail header (`prStatusInline`), so the two can never
+// disagree about the same PR (CROW-773).
+// ---------------------------------------------------------------------------
+const PR_CHECKS_GLYPH = {
+  passing: { glyph: '✔', color: 'var(--green)', label: 'Checks pass' },
+  failing: { glyph: '✕', color: 'var(--red)', label: 'Checks failing' },
+  pending: { glyph: '◷', color: 'var(--orange)', label: 'Checks running' },
+  unknown: { glyph: '?', color: 'var(--text-muted)', label: 'No checks' },
+};
+const PR_REVIEW_GLYPH = {
+  approved: { glyph: '✔', color: 'var(--green)', label: 'Approved' },
+  changesRequested: { glyph: '✕', color: 'var(--red)', label: 'Changes requested' },
+  reviewRequired: { glyph: '◷', color: 'var(--orange)', label: 'Needs review' },
+  unknown: { glyph: '○', color: 'var(--text-muted)', label: 'No reviews' },
+};
+const PR_MERGED_GLYPH = { glyph: '✔', color: 'var(--purple)', label: 'Merged' };
+const PR_CONFLICT_GLYPH = { glyph: '⚠', color: 'var(--red)', label: 'Conflicts' };
+const PR_MERGE_LABEL_GLYPH = { glyph: '🏷', color: 'var(--gold)', label: 'crow:merge label' };
+
+function prChecksGlyph(pr) {
+  const base = PR_CHECKS_GLYPH[pr.checks] || PR_CHECKS_GLYPH.unknown;
+  // Failing checks carry their count when the daemon sent the names.
+  if (pr.checks === 'failing' && pr.failed_checks && pr.failed_checks.length) {
+    return { ...base, label: pr.failed_checks.length + ' failing' };
+  }
+  return base;
+}
+
+function prReviewGlyph(pr) {
+  return PR_REVIEW_GLYPH[pr.review] || PR_REVIEW_GLYPH.unknown;
+}
+
+// The ordered glyphs for a session-row PR pill, mirroring native `PRBadge`:
+// merged collapses to a single check, otherwise checks + review, plus the
+// conflict and crow:merge-label markers the native pill folded into its tint.
+function prBadgeParts(pr) {
+  if (!pr || !pr.has_pr) return [];
+  if (pr.is_merged) return [PR_MERGED_GLYPH];
+  const parts = [prChecksGlyph(pr), prReviewGlyph(pr)];
+  if (pr.merge === 'conflicting') parts.push(PR_CONFLICT_GLYPH);
+  if (pr.has_merge_label) parts.push(PR_MERGE_LABEL_GLYPH);
+  return parts;
 }
 
 // ---------------------------------------------------------------------------
@@ -1703,25 +1766,24 @@ function renderSessionAnalyticsStrip(s, root) {
   root.appendChild(strip);
 }
 
-// Inline PR status, mirroring the desktop PRStatusDetail.
+// Inline PR status, mirroring the desktop PRStatusDetail. Same glyph/color
+// vocabulary as the sidebar row pill (`prBadgeParts`) — spelled out with labels
+// here, glyph-only there (CROW-773).
 function prStatusInline(pr) {
   const wrap = el('div', 'pr-status-inline');
-  if (pr.is_merged) { wrap.appendChild(prStatusPart('✔ Merged', 'var(--purple)')); return wrap; }
-  const checks = {
-    passing: ['✔ Checks pass', 'var(--green)'],
-    failing: [(pr.failed_checks && pr.failed_checks.length ? '✕ ' + pr.failed_checks.length + ' failing' : '✕ Checks failing'), 'var(--red)'],
-    pending: ['◷ Checks running', 'var(--orange)'],
-    unknown: ['? No checks', 'var(--text-muted)'],
-  }[pr.checks] || ['? No checks', 'var(--text-muted)'];
-  wrap.appendChild(prStatusPart(checks[0], checks[1]));
-  const review = {
-    approved: ['✔ Approved', 'var(--green)'],
-    changesRequested: ['✕ Changes requested', 'var(--red)'],
-    reviewRequired: ['◷ Needs review', 'var(--orange)'],
-    unknown: ['○ No reviews', 'var(--text-muted)'],
-  }[pr.review] || ['○ No reviews', 'var(--text-muted)'];
-  wrap.appendChild(prStatusPart(review[0], review[1]));
-  if (pr.merge === 'conflicting') wrap.appendChild(prStatusPart('⚠ Conflicts', 'var(--red)'));
+  if (pr.is_merged) {
+    wrap.appendChild(prStatusPart(PR_MERGED_GLYPH.glyph + ' ' + PR_MERGED_GLYPH.label, PR_MERGED_GLYPH.color));
+    return wrap;
+  }
+  for (const part of [prChecksGlyph(pr), prReviewGlyph(pr)]) {
+    wrap.appendChild(prStatusPart(part.glyph + ' ' + part.label, part.color));
+  }
+  if (pr.merge === 'conflicting') {
+    wrap.appendChild(prStatusPart(PR_CONFLICT_GLYPH.glyph + ' ' + PR_CONFLICT_GLYPH.label, PR_CONFLICT_GLYPH.color));
+  }
+  if (pr.has_merge_label) {
+    wrap.appendChild(prStatusPart(PR_MERGE_LABEL_GLYPH.glyph + ' ' + PR_MERGE_LABEL_GLYPH.label, PR_MERGE_LABEL_GLYPH.color));
+  }
   return wrap;
 }
 
@@ -2403,12 +2465,22 @@ function linkChip(text, url, type) {
   return a;
 }
 
-function labelPills(labels) {
+// `maxVisible` caps how many pills render, with a trailing `+N` for the rest —
+// the sidebar row is narrow and passes 2 (native LabelPillsView's cap). Board
+// cards omit it and render every label, as before (CROW-773).
+function labelPills(labels, maxVisible) {
   const wrap = el('div', 'label-row');
-  for (const l of (labels || [])) {
+  const all = labels || [];
+  const shown = maxVisible != null ? all.slice(0, maxVisible) : all;
+  for (const l of shown) {
     const pill = el('span', 'label-pill', l.name);
     if (l.color) { pill.style.borderColor = '#' + l.color; pill.style.color = '#' + l.color; }
     wrap.appendChild(pill);
+  }
+  if (all.length > shown.length) {
+    const more = el('span', 'label-pill label-more', '+' + (all.length - shown.length));
+    more.title = all.slice(shown.length).map((l) => l.name).join(', ');
+    wrap.appendChild(more);
   }
   return wrap;
 }

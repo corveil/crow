@@ -26,6 +26,12 @@ public struct PRStatus: Codable, Sendable, Equatable {
     /// the stateless rule to know whether the author has substantively
     /// responded since the latest CHANGES_REQUESTED review.
     public var lastSubstantiveCommitAt: Date?
+    /// Whether the PR currently carries the `crow:merge` auto-merge label
+    /// (`IssueTracker.autoMergeLabel`). Distinct from
+    /// `Session.autoMergeEnabledAt`, which records that Crow has already
+    /// *enabled* GitHub auto-merge: the label is the request, the timestamp is
+    /// the action. The UI shows them as separate indicators (CROW-773).
+    public var hasMergeLabel: Bool
 
     public init(
         checksPass: CheckStatus = .unknown,
@@ -35,7 +41,8 @@ public struct PRStatus: Codable, Sendable, Equatable {
         headSha: String? = nil,
         isOpen: Bool = true,
         lastChangesRequestedAt: Date? = nil,
-        lastSubstantiveCommitAt: Date? = nil
+        lastSubstantiveCommitAt: Date? = nil,
+        hasMergeLabel: Bool = false
     ) {
         self.checksPass = checksPass
         self.reviewStatus = reviewStatus
@@ -45,6 +52,7 @@ public struct PRStatus: Codable, Sendable, Equatable {
         self.isOpen = isOpen
         self.lastChangesRequestedAt = lastChangesRequestedAt
         self.lastSubstantiveCommitAt = lastSubstantiveCommitAt
+        self.hasMergeLabel = hasMergeLabel
     }
 
     public init(from decoder: Decoder) throws {
@@ -57,11 +65,12 @@ public struct PRStatus: Codable, Sendable, Equatable {
         isOpen = try c.decodeIfPresent(Bool.self, forKey: .isOpen) ?? true
         lastChangesRequestedAt = try c.decodeIfPresent(Date.self, forKey: .lastChangesRequestedAt)
         lastSubstantiveCommitAt = try c.decodeIfPresent(Date.self, forKey: .lastSubstantiveCommitAt)
+        hasMergeLabel = try c.decodeIfPresent(Bool.self, forKey: .hasMergeLabel) ?? false
     }
 
     private enum CodingKeys: String, CodingKey {
         case checksPass, reviewStatus, mergeable, failedCheckNames, headSha, isOpen
-        case lastChangesRequestedAt, lastSubstantiveCommitAt
+        case lastChangesRequestedAt, lastSubstantiveCommitAt, hasMergeLabel
     }
 
     public enum CheckStatus: String, Codable, Sendable {
