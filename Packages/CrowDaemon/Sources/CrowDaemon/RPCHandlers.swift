@@ -182,6 +182,9 @@ func makeCommandRouter(
         "list-sessions": { _ in
             let items: [JSONValue] = await MainActor.run {
                 appState.sessions.map { session in
+                    // Board issue linked to this session (exact ticket URL, plus
+                    // the Jira-key fallback). Also backs `labels` below.
+                    let issue = appState.assignedIssue(for: session)
                     var object: [String: JSONValue] = [
                         "id": .string(session.id.uuidString),
                         "name": .string(session.name),
@@ -194,6 +197,10 @@ func makeCommandRouter(
                         "ticket_title": session.ticketTitle.map { .string($0) } ?? .null,
                         "ticket_url": session.ticketURL.map { .string($0) } ?? .null,
                         "ticket_badge": session.ticketBadgeLabel.map { .string($0) } ?? .null,
+                        // Linked issue's open/closed state (#792) — drives the
+                        // sidebar ticket pill's closed color, parity with the
+                        // merged-PR pill. Null when no board issue matches.
+                        "ticket_state": issue.map { .string($0.state) } ?? .null,
                         "provider": session.provider.map { .string($0.rawValue) } ?? .null,
                         "review_author": session.reviewAuthor.map { .string($0) } ?? .null,
                         // Org-goal tag (#723; ADR 0008 follow-up 8) — drives the
