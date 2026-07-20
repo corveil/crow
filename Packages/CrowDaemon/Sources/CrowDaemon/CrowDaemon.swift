@@ -86,6 +86,18 @@ public enum CrowDaemon {
         // same store-backed binary overrides (CROW-581, M-B).
         await registerAgents(devRoot: options.devRoot)
 
+        // Refresh the dev-root scaffold — bundled skills, CLAUDE.md,
+        // settings.local.json, .claude/bin symlinks — on every launch, the way
+        // the retired app's `AppDelegate.launchMainApp` used to (#766). Runs
+        // AFTER `registerAgents` (the per-agent branches gate on the registry
+        // and on `BinaryOverrides`) and synchronously BEFORE `startBoardPoll`,
+        // whose first tick calls `ensureManagerSession` — so the Manager agent
+        // sees `.claude/skills/` on first paint. Bounded by
+        // `Scaffolder.corveilInstallTimeout` in the worst case.
+        let scaffoldWarning = LaunchScaffold.run(
+            devRoot: options.devRoot, configured: options.devRootConfigured)
+        await MainActor.run { appState.corveilSkillInstallWarning = scaffoldWarning }
+
         // Providers back both the board tracker (M-C) and the spawn engine
         // (M-E2). Zero-config at construction — it reads gh/glab/config lazily.
         let providerManager = ProviderManager()
@@ -712,7 +724,8 @@ public enum CrowDaemon {
         }
     }
 
-    private static func log(_ message: String) {
+    // Internal (not private): `LaunchScaffold` logs through the same prefix.
+    static func log(_ message: String) {
         FileHandle.standardError.write(Data("[crowd] \(message)\n".utf8))
     }
 
@@ -822,6 +835,12 @@ struct DaemonOptions {
     var host: String = "127.0.0.1"
     var socketPath: String = DaemonOptions.defaultDaemonSocketPath()
     var devRoot: String = FileManager.default.currentDirectoryPath
+    /// Whether `devRoot` came from an explicit override (`--dev-root` /
+    /// `CROW_DEV_ROOT`) or the App Support pointer — as opposed to the bare
+    /// current-working-directory fallback below. Gates the launch-time scaffold
+    /// (#766): re-materializing `.claude/skills/` is right for a configured dev
+    /// root and wrong for whatever directory `crowd` happened to start in.
+    var devRootConfigured: Bool = false
     /// When set, serve web UI files live from this source directory instead of
     /// the compiled bundle (`--web-dir` / `CROW_WEB_DIR`) — edit + refresh.
     var webDir: String?
@@ -841,7 +860,12 @@ struct DaemonOptions {
     static func parse(_ arguments: [String]) -> DaemonOptions {
         var options = DaemonOptions()
         var devRootExplicit = false
-        if let envRoot = ProcessInfo.processInfo.environment["CROW_DEV_ROOT"] {
+        // An empty / whitespace-only `CROW_DEV_ROOT=` is treated as unset, not
+        // as an explicit override of "" — otherwise it would count as a
+        // configured root and open the launch-time scaffold gate on a nonsense
+        // path (#766 review).
+        if let envRoot = ProcessInfo.processInfo.environment["CROW_DEV_ROOT"]?
+            .trimmingCharacters(in: .whitespaces), !envRoot.isEmpty {
             options.devRoot = envRoot
             devRootExplicit = true
         }
@@ -852,6 +876,8 @@ struct DaemonOptions {
         while index < arguments.count {
             let flag = arguments[index]
             let next = index + 1 < arguments.count ? arguments[index + 1] : nil
+            // An empty / whitespace-only value read as its trimmed self, or nil.
+            let trimmedNext = next?.trimmingCharacters(in: .whitespaces)
             switch flag {
             case "--http-port":
                 if let value = next {
@@ -866,7 +892,13 @@ struct DaemonOptions {
             case "--host": if let value = next { options.host = value }; index += 1
             case "--socket", "--socket-path": if let value = next { options.socketPath = value }; index += 1
             case "--dev-root":
-                if let value = next {
+                // Same guard as empty `CROW_DEV_ROOT=`: an empty or
+                // whitespace-only `--dev-root ""` must NOT count as a configured
+                // root. `NSString("").appendingPathComponent(".claude")`
+                // resolves to a relative `.claude`, so honoring it would scaffold
+                // into the process CWD — the exact footgun `devRootConfigured`
+                // exists to prevent (#766 review).
+                if let value = trimmedNext, !value.isEmpty {
                     options.devRoot = value
                     devRootExplicit = true
                 }
@@ -884,9 +916,12 @@ struct DaemonOptions {
         if !devRootExplicit {
             if let configured = ConfigStore.loadDevRoot() {
                 options.devRoot = configured
+                options.devRootConfigured = true
             } else {
                 options.devRoot = FileManager.default.currentDirectoryPath
             }
+        } else {
+            options.devRootConfigured = true
         }
         return options
     }
