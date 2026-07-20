@@ -1703,7 +1703,7 @@ public final class IssueTracker {
             guard let pr = byURL[prLink.url] else { continue }
             livePRURLs.insert(prLink.url)
 
-            let newStatus = buildPRStatus(from: pr)
+            let newStatus = Self.buildPRStatus(from: pr)
             let oldStatus = previousPRStatus[session.id]
 
             // Checks-failing edge: fire only when transitioning from
@@ -2644,7 +2644,10 @@ public final class IssueTracker {
         }
     }
 
-    private func buildPRStatus(from pr: ViewerPR) -> PRStatus {
+    /// Pure projection of a provider PR record onto the UI-facing `PRStatus`.
+    /// `nonisolated static` (like `shouldAttemptAutoMerge`) because it touches
+    /// no tracker state — which also makes it directly unit-testable.
+    nonisolated static func buildPRStatus(from pr: ViewerPR) -> PRStatus {
         // Checks
         let checksPass: PRStatus.CheckStatus
         var failedChecks: [String] = []
@@ -2698,7 +2701,13 @@ public final class IssueTracker {
             headSha: pr.headRefOid.isEmpty ? nil : pr.headRefOid,
             isOpen: pr.state == "OPEN",
             lastChangesRequestedAt: pr.lastChangesRequestedAt,
-            lastSubstantiveCommitAt: pr.lastSubstantiveCommitAt
+            lastSubstantiveCommitAt: pr.lastSubstantiveCommitAt,
+            // Same case-insensitive match `shouldAttemptAutoMerge` gates on —
+            // surfaced for the UI so the sidebar can show "labeled for merge"
+            // separately from "auto-merge already enabled" (CROW-773).
+            hasMergeLabel: pr.labels.contains {
+                $0.name.caseInsensitiveCompare(Self.autoMergeLabel) == .orderedSame
+            }
         )
     }
 

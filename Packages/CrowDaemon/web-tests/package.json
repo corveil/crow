@@ -1,10 +1,10 @@
 {
-  "name": "crow-web-board-tests",
+  "name": "crow-web-tests",
   "version": "1.0.0",
   "private": true,
-  "description": "Headless jsdom regression tests for the web UI (Ticket Board rendering; terminal touch-scroll). Drives the real app.js from Resources/web against mocks.",
+  "description": "Headless jsdom regression tests for the web UI (Ticket Board; terminal touch-scroll; sidebar session rows). Drives the real app.js from Resources/web against mocks.",
   "scripts": {
-    "test": "node board.test.js && node touch-scroll.test.js"
+    "test": "node board.test.js && node touch-scroll.test.js && node row.test.js"
   },
   "devDependencies": {
     "jsdom": "^24.0.0"

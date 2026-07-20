@@ -23,6 +23,15 @@ accumulation, the alternate-screen branch (SGR wheel reports when the TUI has
 mouse tracking on, cursor keys otherwise, capped per event), multi-touch
 pass-through, and degenerate cell metrics.
 
+## `row.test.js` — sidebar session rows (CROW-773)
+
+Drives `sessionRow`. Coverage: the PR pill's status glyphs for every
+checks/review state, merged collapsing to a single purple check, the conflict
+`⚠`, the `crow:merge` label `🏷` as a signal independent of the `⛙`
+auto-merge-enabled glyph, the composed `aria-label`, graceful degradation when
+the live `pr` entry is missing or `has_pr: false`, and the ticket-label pills
+(2-pill cap + `+N` overflow, hidden under `hideSessionDetails`).
+
 ## Run
 
 ```sh
