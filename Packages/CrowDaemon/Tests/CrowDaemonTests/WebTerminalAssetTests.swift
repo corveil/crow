@@ -33,6 +33,24 @@ import Testing
         return try String(contentsOf: url, encoding: .utf8)
     }
 
+    /// The single line declaring the swallowed-mode set. Anchoring the per-mode
+    /// assertions to it keeps them meaningful: a bare `contains("1000")` over
+    /// all of `app.js` would match any unrelated timeout literal (review).
+    private static func mouseModesLine(_ source: String) throws -> Substring {
+        try #require(
+            source.split(separator: "\n").first { $0.contains("const MOUSE_MODES") },
+            "no `const MOUSE_MODES` declaration")
+    }
+
+    /// The body of a top-level `function <name>(` … `\n}` block, for asserting on
+    /// one handler rather than the whole file.
+    private static func functionBody(_ name: String, in source: String) throws -> Substring {
+        let start = try #require(source.range(of: "function \(name)("), "no \(name)")
+        let rest = source[start.upperBound...]
+        let end = try #require(rest.range(of: "\n}\n"), "unterminated \(name)")
+        return rest[..<end.lowerBound]
+    }
+
     /// Both surfaces must drop the mouse-tracking DECSET/DECRST toggles
     /// (`?1000/1001/1002/1003/1005/1006/1015/1016`) at the parser, for `h` (set)
     /// and `l` (reset) alike — a swallow that covers only one of the two leaves
@@ -43,10 +61,11 @@ import Testing
         #expect(
             source.contains("MOUSE_MODES"),
             "\(asset) must keep the mouse-mode swallow (#776)")
+        let modes = try Self.mouseModesLine(source)
         for mode in ["1000", "1001", "1002", "1003", "1005", "1006", "1015", "1016"] {
             #expect(
-                source.contains(mode),
-                "\(asset) must swallow mouse mode ?\(mode)")
+                modes.contains(mode),
+                "\(asset)'s MOUSE_MODES must include ?\(mode)")
         }
         for final in ["'h'", "'l'"] {
             #expect(
@@ -55,12 +74,27 @@ import Testing
         }
     }
 
-    /// The wheel handler owns the event in BOTH buffers. Returning early on the
-    /// alternate buffer would hand the wheel to xterm's alternate-scroll
-    /// fallback, which emits arrow keys the agent TUI reads as input-history
-    /// navigation (crow-tmux.conf's `alternate-screen off` rationale, #776).
-    @Test func wheelHandlerNeverFallsThroughOnAlternateBuffer() throws {
-        let source = try Self.webAsset("app.js")
-        #expect(!source.contains("return; // let TUIs handle the wheel"))
+    /// The wheel handler owns the event in BOTH buffers. Any early return on the
+    /// alternate buffer hands the wheel to xterm's alternate-scroll fallback,
+    /// which emits arrow keys the agent TUI reads as input-history navigation
+    /// (crow-tmux.conf's `alternate-screen off` rationale, #776).
+    ///
+    /// Asserted as the positive ownership shape rather than the absence of one
+    /// comment string, so reintroducing the bail with different wording still
+    /// fails (review): the alternate check may only gate `scrollLines`, the
+    /// event is always consumed, and the sole `return` is the no-terminal guard.
+    @Test func wheelHandlerOwnsTheEventInBothBuffers() throws {
+        let body = try Self.functionBody("enableWheelScroll", in: Self.webAsset("app.js"))
+        #expect(
+            body.contains("buf.type !== 'alternate'"),
+            "the alternate-buffer check must gate scrolling, not handling")
+        #expect(body.contains("term.scrollLines("), "must scroll the local scrollback")
+        for consume in ["e.preventDefault();", "e.stopPropagation();"] {
+            #expect(body.contains(consume), "must always consume the wheel event: \(consume)")
+        }
+        // `if (!term) return;` — nothing else may short-circuit before the
+        // preventDefault/stopPropagation pair below it.
+        let returns = body.components(separatedBy: "return").count - 1
+        #expect(returns == 1, "only the `if (!term)` guard may return early, found \(returns)")
     }
 }
