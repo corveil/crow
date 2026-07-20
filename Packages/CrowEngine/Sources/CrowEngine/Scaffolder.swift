@@ -317,21 +317,19 @@ public struct Scaffolder {
     /// user-facing warning string on failure; `nil` on success or when the
     /// feature is unconfigured (empty/nil path).
     ///
-    /// `Scaffolder.scaffold(...)` runs on the main thread during
-    /// `applicationDidFinishLaunching`, so a hung corveil binary (wrong
-    /// executable, stdin prompt, etc.) would freeze app startup with no
-    /// window drawn yet. The hard wall-clock timeout bounds the worst case:
-    /// after `corveilInstallTimeout` seconds the process is sent SIGTERM and
-    /// the install reports a warning rather than blocking forever.
+    /// `Scaffolder.scaffold(...)` runs synchronously on the daemon's launch
+    /// path (`CrowDaemon.run` → `LaunchScaffold.run`, before the Manager
+    /// session is ensured), so a hung corveil binary (wrong executable, stdin
+    /// prompt, etc.) would stall startup before the Manager comes up. The hard
+    /// wall-clock timeout bounds the worst case: after `corveilInstallTimeout`
+    /// seconds the process is sent SIGTERM and the install reports a warning
+    /// rather than blocking forever.
     ///
-    /// Internal, not private — Settings calls this directly via callbacks
-    /// wired in `AppDelegate.launchMainApp`: when the user picks a new
-    /// corveil binary (CROW-490) and when the user clicks "Reinstall skill"
-    /// (CROW-491). Both avoid the "must restart Crow" gap of the per-launch
-    /// path. SettingsView itself lives in CrowUI and cannot import the app
-    /// target, so closure injection through `AppState` is the only path.
-    /// Settings-side callers dispatch off the main thread (`Task.detached`)
-    /// so the 5s worst-case doesn't freeze the Settings window.
+    /// Public, not private — it is also the "reinstall without restarting Crow"
+    /// entry point for a corveil binary the user just picked (CROW-490) or
+    /// clicked Reinstall on (CROW-491). Callers on that path must dispatch off
+    /// the main thread (`Task.detached`) so the worst case doesn't freeze the
+    /// settings UI.
     public func installCorveilSkill(_ corveilBinaryPath: String?) -> String? {
         guard let path = corveilBinaryPath?.trimmingCharacters(in: .whitespacesAndNewlines),
               !path.isEmpty else {
@@ -398,9 +396,10 @@ public struct Scaffolder {
     }
 
     /// Wall-clock budget for the per-launch `corveil skill install` run. Tight
-    /// because `Scaffolder.scaffold(...)` runs on the main thread before the
-    /// app window is shown — a hung corveil binary delays first paint by this
-    /// many seconds. 5s is generous for a local subprocess that only writes
+    /// because `Scaffolder.scaffold(...)` runs synchronously on the daemon
+    /// launch path (`CrowDaemon.run` → `LaunchScaffold.run`) before the Manager
+    /// session is ensured — a hung corveil binary delays the Manager's spawn by
+    /// this many seconds. 5s is generous for a local subprocess that only writes
     /// one ~10KB file.
     static let corveilInstallTimeout: TimeInterval = 5.0
 

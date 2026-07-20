@@ -117,7 +117,9 @@ import CrowPersistence
     }
 }
 
-@Suite struct DaemonOptionsTests {
+/// `.serialized`: two of these tests read `CROW_DEV_ROOT` and one mutates it,
+/// so they must not run concurrently with each other.
+@Suite(.serialized) struct DaemonOptionsTests {
     @Test func parsesAllFlags() {
         let options = DaemonOptions.parse([
             "crowd", "--http-port", "9001", "--host", "0.0.0.0",
@@ -127,6 +129,70 @@ import CrowPersistence
         #expect(options.host == "0.0.0.0")
         #expect(options.socketPath == "/tmp/crowd.sock")
         #expect(options.devRoot == "/tmp/dev")
+        // An explicit --dev-root is a configured root, so the launch-time
+        // scaffold gate opens (#766).
+        #expect(options.devRootConfigured)
+    }
+
+    /// `LaunchScaffold` refuses to scaffold unless `devRootConfigured` is set,
+    /// so the parse-side wiring of that flag is the other half of the #766
+    /// safety property: an unconfigured `crowd` must never scatter
+    /// `.claude/skills/` into whatever directory it was started from.
+    ///
+    /// With no flags the answer depends on the host — this machine may or may
+    /// not have an App Support dev-root pointer, and `CROW_DEV_ROOT` may be
+    /// exported into the test process — so assert the invariant that holds
+    /// either way: configured ⇔ an explicit env override or a pointer exists,
+    /// and the unconfigured case falls back to the current working directory.
+    @Test func devRootConfiguredTracksTheAppSupportPointer() {
+        let options = DaemonOptions.parse(["crowd"])
+        let envRoot = ProcessInfo.processInfo.environment["CROW_DEV_ROOT"]
+            .flatMap { $0.isEmpty ? nil : $0 }
+        let pointer = ConfigStore.loadDevRoot()
+
+        #expect(options.devRootConfigured == (envRoot != nil || pointer != nil))
+        if let envRoot {
+            #expect(options.devRoot == envRoot)
+        } else if let pointer {
+            #expect(options.devRoot == pointer)
+        } else {
+            #expect(options.devRoot == FileManager.default.currentDirectoryPath)
+        }
+    }
+
+    /// An empty (or whitespace-only) `--dev-root ""` must NOT count as a
+    /// configured root: `NSString("").appendingPathComponent(".claude")`
+    /// resolves to a CWD-relative `.claude`, so honoring it would scaffold into
+    /// the process working directory — the exact footgun the gate prevents
+    /// (#766 review). It must fall through to the App Support / CWD resolution
+    /// exactly as if the flag were absent.
+    @Test func emptyDevRootFlagIsTreatedAsUnset() {
+        let empty = DaemonOptions.parse(["crowd", "--dev-root", ""])
+        let whitespace = DaemonOptions.parse(["crowd", "--dev-root", "   "])
+        let baseline = DaemonOptions.parse(["crowd"])
+
+        for options in [empty, whitespace] {
+            #expect(options.devRootConfigured == baseline.devRootConfigured)
+            #expect(options.devRoot == baseline.devRoot)
+            // Never a relative `.claude` root.
+            #expect(!options.devRoot.isEmpty)
+        }
+    }
+
+    /// An empty `CROW_DEV_ROOT=` must read as unset rather than as an explicit
+    /// override of `""` — otherwise the launch-time scaffold gate would open on
+    /// a nonsense path. Exercised through the parse helper's env read.
+    @Test func emptyDevRootEnvIsTreatedAsUnset() {
+        let prior = ProcessInfo.processInfo.environment["CROW_DEV_ROOT"]
+        setenv("CROW_DEV_ROOT", "", 1)
+        defer {
+            if let prior { setenv("CROW_DEV_ROOT", prior, 1) } else { unsetenv("CROW_DEV_ROOT") }
+        }
+
+        let options = DaemonOptions.parse(["crowd"])
+
+        #expect(!options.devRoot.isEmpty)
+        #expect(options.devRootConfigured == (ConfigStore.loadDevRoot() != nil))
     }
 
     @Test func malformedPortKeepsDefault() {
