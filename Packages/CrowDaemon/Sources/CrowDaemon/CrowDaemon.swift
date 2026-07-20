@@ -268,6 +268,15 @@ public enum CrowDaemon {
         // Write-actions that mutate session state run locally on the daemon's
         // own SessionService / store — the sole authority (ADR 0007).
 
+        // Push a `changed` nudge whenever the tracker's in-flight state moves,
+        // so clients can render a refresh indicator for the *automatic* poll.
+        // `isLoadingIssues` is runtime-only (not store-backed), so nothing else
+        // announces it. Wired unconditionally — it needs no cockpit, unlike the
+        // automations below (CROW-771).
+        await MainActor.run {
+            tracker.onLoadingIssuesChanged = { Task { await eventHub.broadcast() } }
+        }
+
         // Drive the board poll. It also performs the terminal "takeover" (adopt
         // persisted tmux windows + ensure the Manager) on startup (CROW-581).
         startBoardPoll(
@@ -726,6 +735,11 @@ public enum CrowDaemon {
                         await MainActor.run { sessionService.reconcileTerminalSurfaces() }
                     }
                 }
+                // The in-flight half of the refresh is announced by
+                // `tracker.onLoadingIssuesChanged` (wired at startup), which
+                // fires *after* `isLoadingIssues` is set — nudging from here
+                // beforehand would race the flag and fire on skipped polls
+                // (CROW-771).
                 await tracker.refresh()
                 await eventHub.broadcast()
                 try? await Task.sleep(nanoseconds: 60 * 1_000_000_000)
