@@ -566,6 +566,13 @@ public enum CrowDaemon {
                         await MainActor.run { sessionService.reconcileTerminalSurfaces() }
                     }
                 }
+                // Nudge *before* the fetch as well as after: `isLoadingIssues`
+                // is runtime-only (not store-backed), so without this the
+                // in-flight window is invisible to clients and the web's
+                // every-minute refresh spinner never appears (CROW-771). The
+                // rate-limit guard inside `refresh()` returns before the flag
+                // is set, so a skipped poll correctly shows no spinner.
+                await eventHub.broadcast()
                 await tracker.refresh()
                 await eventHub.broadcast()
                 try? await Task.sleep(nanoseconds: 60 * 1_000_000_000)

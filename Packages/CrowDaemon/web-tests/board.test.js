@@ -12,7 +12,10 @@ const epilogue = `
   set ticketRepoFilter(v){ticketRepoFilter=v;},
   set ticketFilter(v){ticketFilter=v;},
   set ticketSearch(v){ticketSearch=v;},
+  set ticketRefreshPending(v){ticketRefreshPending=v;},
+  set reviewRefreshPending(v){reviewRefreshPending=v;},
   renderBoard(){ return renderBoard(); },
+  ticketsCard(){ return ticketsCard(); },
 };
 `;
 const APP_JS = __dirname + '/../Sources/CrowDaemon/Resources/web/app.js';
@@ -136,6 +139,47 @@ const toggleBtn = [...q('.card-desc-toggle')].find((b) => b.textContent === 'Sho
 toggleBtn.onclick({ stopPropagation() {} });
 check('after toggle, one desc expanded', q('.card-desc.expanded').length === 1);
 check('toggle now reads Show less', [...q('.card-desc-toggle')].some((b) => b.textContent === 'Show less'));
+
+// -- Refresh in-progress indicator (CROW-771) --
+// Two independent sources feed `ticketsRefreshing()`: the daemon's `loading`
+// flag on the board payload (covers the automatic poll) and the local
+// `ticketRefreshPending` flag (covers the click→first-re-read gap).
+console.log('\nRefresh spinner — idle:');
+delete payload.loading; T.ticketRefreshPending = false; render();
+check('no spinner in board head', q('.board-title .action-spinner').length === 0);
+check('Refresh button enabled', [...q('.action-btn')].find((b) => b.textContent === 'Refresh').disabled === false);
+
+console.log('\nRefresh spinner — daemon `loading: true` (automatic refresh):');
+payload.loading = true; render();
+check('spinner beside the board title', q('.board-title .action-spinner').length === 1);
+check('Refresh button disabled', [...q('.action-btn')].find((b) => b.textContent === 'Refresh').disabled === true);
+
+console.log('\nRefresh spinner — local pending flag alone (manual click):');
+payload.loading = false; T.ticketRefreshPending = true; render();
+check('spinner shown without the daemon flag', q('.board-title .action-spinner').length === 1);
+check('Refresh button disabled', [...q('.action-btn')].find((b) => b.textContent === 'Refresh').disabled === true);
+
+console.log('\nRefresh spinner — sidebar Tickets card ↻:');
+check('↻ spins + disabled while refreshing', (() => {
+  const b = T.ticketsCard().querySelector('.tickets-refresh');
+  return b.className.includes('spinning') && b.disabled === true && /Refreshing/.test(b.title);
+})());
+T.ticketRefreshPending = false;
+check('↻ idle when not refreshing', (() => {
+  const b = T.ticketsCard().querySelector('.tickets-refresh');
+  return !b.className.includes('spinning') && b.disabled === false && b.title === 'Refresh tickets';
+})());
+
+console.log('\nRefresh spinner — Reviews board:');
+T.boardData.reviews = { reviews: [], unseen: 0 };
+T.selectedBoard = 'reviews';
+T.reviewRefreshPending = true; T.renderBoard();
+check('spinner beside the Reviews title', q('.board-title .action-spinner').length === 1);
+check('Reviews Refresh disabled', [...q('.action-btn')].find((b) => b.textContent === 'Refresh').disabled === true);
+T.reviewRefreshPending = false; T.renderBoard();
+check('Reviews idle: no spinner, button enabled',
+  q('.board-title .action-spinner').length === 0
+  && [...q('.action-btn')].find((b) => b.textContent === 'Refresh').disabled === false);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -619,6 +619,8 @@ function sidebarSignature() {
     boardData.tickets && boardData.tickets.counts,
     boardData.tickets && boardData.tickets.done_last_24h,
     boardData.reviews && boardData.reviews.unseen,
+    // The ↻ spins off this, and the local half isn't in `boardData` (CROW-771).
+    ticketsRefreshing(),
   ]);
 }
 
@@ -764,8 +766,10 @@ function ticketsCard() {
   card.onclick = () => selectBoard('tickets');
   const head = el('div', 'tickets-head');
   head.appendChild(el('span', 'tickets-title', 'Tickets'));
-  const refresh = el('button', 'tickets-refresh', '↻');
-  refresh.title = 'Refresh tickets';
+  const busy = ticketsRefreshing();
+  const refresh = el('button', 'tickets-refresh' + (busy ? ' spinning' : ''), '↻');
+  refresh.title = busy ? 'Refreshing tickets…' : 'Refresh tickets';
+  refresh.disabled = busy;
   refresh.onclick = (e) => { e.stopPropagation(); refreshTickets(); };
   head.appendChild(refresh);
   card.appendChild(head);
@@ -2452,9 +2456,15 @@ function renderTicketBoard(root) {
   for (const url of [...selectedIssueIDs]) if (!selectableUrls.has(url)) selectedIssueIDs.delete(url);
 
   const head = el('div', 'board-head');
-  head.appendChild(el('div', 'board-title', 'Ticket Board'));
+  // Spinner nests *inside* the title, where native's `ProgressView()` sat:
+  // `.board-title` carries `margin-right: auto`, so a sibling would be shoved
+  // to the right edge with the buttons instead (CROW-771).
+  const title = el('div', 'board-title', 'Ticket Board');
+  if (ticketsRefreshing()) title.appendChild(el('span', 'action-spinner'));
+  head.appendChild(title);
   if (d && d.done_last_24h) head.appendChild(el('span', 'done-chip', d.done_last_24h + ' done · 24h'));
   const refresh = el('button', 'action-btn', 'Refresh');
+  refresh.disabled = ticketsRefreshing();
   refresh.onclick = () => refreshTickets();
   head.appendChild(refresh);
   // Select / Cancel toggle (mirrors the native selectToggleButton). Hidden when
@@ -2710,18 +2720,75 @@ async function startWorkingSelected(btn) {
   if (failed) alertModal(failed + ' ticket(s) could not be started.');
 }
 
+// In-flight refresh state (CROW-771) — restores the native `isLoadingIssues`
+// spinner the web dropped in the native→web move (ADR-0010, CROW-593).
+//
+// Two sources, OR'd together:
+//   • `boardData.tickets.loading` — the daemon's own `isLoadingIssues`, already
+//     shipped by `list-tickets`. Covers the *automatic* board poll (and any
+//     manual refresh outliving the client's 10s rpc timeout), which is what the
+//     native every-minute spinner showed.
+//   • `ticketRefreshPending` — local, optimistic. Covers the gap between the
+//     click and the first board re-read so the button reacts instantly.
+//
+// The web re-renders by destroy-and-rebuild, so this must live in module state
+// the render functions read — DOM-only state would be wiped by `renderBoard()`.
+let ticketRefreshPending = false;
+let reviewRefreshPending = false;
+function ticketsRefreshing() {
+  return ticketRefreshPending || !!(boardData.tickets && boardData.tickets.loading);
+}
+function reviewsRefreshing() { return reviewRefreshPending; }
+
+// Repaint the surfaces that show the indicator. The local flags aren't part of
+// `boardData`, so `refreshBoard`'s diff guard can't see them change.
+function paintRefreshState() {
+  renderSidebar();
+  if (selectedBoard === 'tickets' || selectedBoard === 'reviews') renderBoard();
+}
+
 async function refreshTickets() {
-  try { await rpc('refresh-tickets'); } catch (_) { /* app down — ignore */ }
-  setTimeout(() => refreshBoard('tickets'), 1200);
+  if (ticketRefreshPending) return; // coalesce; tracker.refresh() drops concurrent calls anyway
+  ticketRefreshPending = true;
+  paintRefreshState();
+  try {
+    try { await rpc('refresh-tickets'); } catch (_) { /* app down, or >10s — the
+      daemon's own `loading` flag covers the rest; never leave the spinner on */ }
+    // The engine path (`onManualRefresh`) returns before the fetch lands, so
+    // keep the settle delay rather than re-reading an unchanged board.
+    await new Promise((r) => setTimeout(r, 1200));
+    await refreshBoard('tickets');
+  } finally {
+    ticketRefreshPending = false;
+    paintRefreshState();
+  }
+}
+
+// Reviews have no "re-poll the provider" RPC — Refresh is a daemon re-read, and
+// fresh review data arrives via the poll nudge. Show the indicator for exactly
+// that re-read (CROW-771).
+async function refreshReviews() {
+  if (reviewRefreshPending) return;
+  reviewRefreshPending = true;
+  paintRefreshState();
+  try { await refreshBoard('reviews'); }
+  finally {
+    reviewRefreshPending = false;
+    paintRefreshState();
+  }
 }
 
 // -- Review Board --
 function renderReviewBoard(root) {
   const d = boardData.reviews;
+  const busy = reviewsRefreshing();
   const head = el('div', 'board-head');
-  head.appendChild(el('div', 'board-title', 'Reviews'));
+  const title = el('div', 'board-title', 'Reviews');
+  if (busy) title.appendChild(el('span', 'action-spinner'));
+  head.appendChild(title);
   const refresh = el('button', 'action-btn', 'Refresh');
-  refresh.onclick = () => refreshBoard('reviews');
+  refresh.disabled = busy;
+  refresh.onclick = () => refreshReviews();
   head.appendChild(refresh);
   root.appendChild(head);
 

@@ -472,6 +472,8 @@ html, body {
 
 .board-head { position: sticky; top: 0; z-index: 2; background: var(--bg-deep); display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; padding: 4px 0 8px; }
 .board-title { color: var(--gold); font-size: 18px; font-weight: 700; margin-right: auto; }
+/* In-flight refresh spinner beside the board title (CROW-771). */
+.board-title .action-spinner { margin-left: 10px; vertical-align: middle; }
 .done-chip {
   color: var(--gold); background: rgba(221, 196, 130, 0.14);
   padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600;
@@ -625,6 +627,17 @@ html, body {
   border: 1px solid var(--border-subtle); background: var(--bg-card); color: var(--text-secondary); font-size: 12px;
 }
 .tickets-refresh:hover { color: var(--text-primary); border-color: var(--border-strong); }
+/* In-flight ticket refresh (CROW-771). Can't reuse `wizard-spin`: the button is
+   absolutely positioned with `translateY(-50%)`, which a bare rotate keyframe
+   would clobber — so the keyframe composes both transforms. */
+.tickets-refresh.spinning {
+  opacity: 0.6; cursor: default;
+  animation: tickets-refresh-spin 0.7s linear infinite;
+}
+@keyframes tickets-refresh-spin {
+  from { transform: translateY(-50%) rotate(0deg); }
+  to   { transform: translateY(-50%) rotate(360deg); }
+}
 .tickets-row { display: flex; align-items: stretch; gap: 6px; margin: 2px 2px 8px; }
 .tickets-row .tickets-card { flex: 1 1 auto; margin: 0; }
 .sidebar-tools { display: flex; flex-direction: column; justify-content: center; gap: 4px; flex: 0 0 auto; }
