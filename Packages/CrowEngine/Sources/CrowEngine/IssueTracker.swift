@@ -3435,12 +3435,17 @@ public final class IssueTracker {
             appState.assignedIssues[idx].projectStatus = .done
         }
 
-        // Cosmetic cleanup (#706): a closed issue reads as Done regardless, so
-        // drop a lingering no-project `crow:in-review` fallback label. Gated on
-        // the in-memory labels to avoid a gratuitous API call; best-effort.
-        if let issue = appState.assignedIssues.first(where: { $0.url == ticketURL }),
-           issue.labels.contains(where: { $0.name == TicketStatus.inReviewFallbackLabel }) {
-            try? await backend.setLabels(url: ticketURL, add: [], remove: [TicketStatus.inReviewFallbackLabel])
+        // Cosmetic cleanup (#706, #790): a closed issue reads as Done
+        // regardless, so drop any lingering no-project fallback status label.
+        // Only the labels the issue actually carries are removed — gated on the
+        // in-memory labels to avoid a gratuitous API call (and a "not found"
+        // failure); best-effort.
+        if let issue = appState.assignedIssues.first(where: { $0.url == ticketURL }) {
+            let names = Set(issue.labels.map(\.name))
+            let stale = TicketStatus.fallbackStatusLabels.filter { names.contains($0) }
+            if !stale.isEmpty {
+                try? await backend.setLabels(url: ticketURL, add: [], remove: stale)
+            }
         }
 
         print("[IssueTracker] Marked issue done: \(ticketURL)")

@@ -1187,7 +1187,16 @@ GRAPHQL
   project_id=$(echo "$item_result" | grep -o '"id":"[^"]*"' | tail -1 | cut -d'"' -f4)
 
   if [[ -z "$item_id" || -z "$project_id" || "$item_id" == "$project_id" ]]; then
-    log "Issue not on any project, skipping status update"
+    # CROW-790: no board to mutate — delegate to the app, which represents
+    # In Progress with the `crow:in-progress` fallback label instead of
+    # dropping the transition on the floor. Best-effort, never fatal.
+    if [[ -n "$CROW_BIN" && -n "$SESSION_ID" ]]; then
+      log "Issue not on any project, using the crow:in-progress label fallback"
+      "$CROW_BIN" transition-ticket --session "$SESSION_ID" --to inProgress >/dev/null 2>&1 \
+        || log "Warning: in-progress label fallback failed (non-fatal)"
+    else
+      log "Issue not on any project, skipping status update"
+    fi
     return 0
   fi
 

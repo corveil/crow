@@ -158,12 +158,13 @@ public struct GitHubTaskBackend: TaskBackend {
         guard let resolved = Self.resolveProjectFieldOption(queryOut, target: status) else {
             if !Self.hasProjectItems(queryOut) {
                 // No project board attached to the issue: represent pipeline
-                // status with the `crow:in-review` fallback label instead
-                // (#706). The label only encodes In Review — any other target
-                // status just clears it (Done is signaled by closing the
-                // issue; In Progress by the active session).
-                try await setInReviewFallbackLabel(
-                    url: url, repo: "\(parsed.org)/\(parsed.repo)", applied: status == .inReview
+                // status with a `crow:in-progress` / `crow:in-review` fallback
+                // label instead (#706, #790). The two are mutually exclusive —
+                // the target status' label is applied and the other cleared.
+                // Statuses with no label (notably Done, signaled by closing the
+                // issue) just clear both.
+                try await setFallbackStatusLabel(
+                    url: url, repo: "\(parsed.org)/\(parsed.repo)", status: status
                 )
                 return
             }
@@ -287,33 +288,41 @@ public struct GitHubTaskBackend: TaskBackend {
         return .commandFailed(stderr)
     }
 
-    /// Apply or clear the `crow:in-review` fallback label on an issue that has
-    /// no project board (#706).
-    private func setInReviewFallbackLabel(url: String, repo: String, applied: Bool) async throws {
-        let label = TicketStatus.inReviewFallbackLabel
-        if applied {
-            try await ensureInReviewLabel(repo: repo)
-            try await setLabels(url: url, add: [label], remove: [])
-        } else {
+    /// Apply the fallback status label for `status` — and clear the other one —
+    /// on an issue that has no project board (#706, #790).
+    ///
+    /// The add and each removal go out as separate `gh issue edit` calls on
+    /// purpose: `--remove-label` fails the whole invocation when the label
+    /// doesn't exist in the repo, which would take the add down with it.
+    private func setFallbackStatusLabel(url: String, repo: String, status: TicketStatus) async throws {
+        let target = status.fallbackStatusLabel
+        if let target {
+            try await ensureFallbackLabel(target, repo: repo)
+            try await setLabels(url: url, add: [target], remove: [])
+        }
+        for stale in TicketStatus.fallbackStatusLabels where stale != target {
             do {
-                try await setLabels(url: url, add: [], remove: [label])
+                try await setLabels(url: url, add: [], remove: [stale])
             } catch ShellRunnerError.nonZeroExit(_, let output)
                 where output.localizedCaseInsensitiveContains("not found") {
-                // Label doesn't exist in the repo (never entered review here);
-                // removal is best-effort.
+                // Label doesn't exist in the repo (never reached that status
+                // here); removal is best-effort.
             }
         }
     }
 
-    /// Ensure the `crow:in-review` fallback label exists in `repo`, mirroring
+    /// Ensure a `crow:` fallback status label exists in `repo`, mirroring
     /// `GitHubCodeBackend.ensureMergeLabel`.
-    private func ensureInReviewLabel(repo: String) async throws {
+    private func ensureFallbackLabel(_ label: String, repo: String) async throws {
+        let isInReview = label == TicketStatus.inReviewFallbackLabel
         do {
             _ = try await shellRunner.run(
-                "gh", "label", "create", TicketStatus.inReviewFallbackLabel,
+                "gh", "label", "create", label,
                 "--repo", repo,
-                "--color", "FBCA04",
-                "--description", "Crow: in review (no-project status fallback)"
+                "--color", isInReview ? "FBCA04" : "1D76DB",
+                "--description", isInReview
+                    ? "Crow: in review (no-project status fallback)"
+                    : "Crow: in progress (no-project status fallback)"
             )
         } catch ShellRunnerError.nonZeroExit(_, let output) where output.localizedCaseInsensitiveContains("already exists") {
             return
@@ -602,12 +611,18 @@ public struct GitHubTaskBackend: TaskBackend {
                     }
                 }
             }
-            // Label fallback (#706): when the board yields no status (issue
-            // not on any project), the `crow:in-review` label carries the
-            // In Review state. A board status, when present, wins above.
-            if projectStatusOverride == nil, projectStatus == .unknown,
-               labels.contains(where: { $0.name == TicketStatus.inReviewFallbackLabel }) {
-                projectStatus = .inReview
+            // Label fallback (#706, #790): when the board yields no status
+            // (issue not on any project), the `crow:in-review` /
+            // `crow:in-progress` labels carry the state. A board status, when
+            // present, wins above. In Review wins if both labels are somehow
+            // present, matching pipeline order.
+            if projectStatusOverride == nil, projectStatus == .unknown {
+                let names = Set(labels.map(\.name))
+                if names.contains(TicketStatus.inReviewFallbackLabel) {
+                    projectStatus = .inReview
+                } else if names.contains(TicketStatus.inProgressFallbackLabel) {
+                    projectStatus = .inProgress
+                }
             }
             return AssignedIssue(
                 id: "github:\(repoName)#\(number)",
