@@ -975,17 +975,20 @@ function sidebarToolsStack() {
 
 // Reviews / Allowlist / Manager pills + "+" (new manager).
 function navPillRow() {
-  const row = el('div', 'nav-pills');
+  const wrap = el('div', 'nav-pills');
 
+  // Row 1: Reviews · Allowlist · Scorecard (kept together, no mid-group wrap).
+  const row1 = el('div', 'nav-pills-row');
   const rev = navPill('Reviews', selectedBoard === 'reviews', () => selectBoard('reviews'));
   const unseen = (boardData.reviews && boardData.reviews.unseen) || 0;
   if (unseen) rev.appendChild(el('span', 'pill-badge', String(unseen)));
-  row.appendChild(rev);
+  row1.appendChild(rev);
+  row1.appendChild(navPill('Allowlist', selectedBoard === 'allowlist', () => selectBoard('allowlist')));
+  row1.appendChild(navPill('Scorecard', selectedBoard === 'scorecard', () => selectBoard('scorecard')));
+  wrap.appendChild(row1);
 
-  row.appendChild(navPill('Allowlist', selectedBoard === 'allowlist', () => selectBoard('allowlist')));
-
-  row.appendChild(navPill('Scorecard', selectedBoard === 'scorecard', () => selectBoard('scorecard')));
-
+  // Row 2: Manager pill (when a primary manager session exists) + the "+" new-manager button.
+  const row2 = el('div', 'nav-pills-row');
   const primaryManager = sessions.find((s) => s.kind === 'manager');
   if (primaryManager) {
     const mgr = navPill('Manager', selectedId === primaryManager.id, () => selectSession(primaryManager.id));
@@ -994,14 +997,15 @@ function navPillRow() {
     dot.style.background = ind.color;
     mgr.insertBefore(dot, mgr.firstChild);
     if (liveFor(primaryManager.id).remote_control_active) mgr.appendChild(rcGlyph());
-    row.appendChild(mgr);
+    row2.appendChild(mgr);
   }
-
   const plus = el('button', 'nav-plus', '+');
   plus.title = 'New Manager session';
   plus.onclick = () => openNewManagerMenu(plus);
-  row.appendChild(plus);
-  return row;
+  row2.appendChild(plus);
+  wrap.appendChild(row2);
+
+  return wrap;
 }
 
 function navPill(label, active, onClick) {

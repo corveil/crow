@@ -719,7 +719,10 @@ html, body {
 .tk-dot { width: 7px; height: 7px; border-radius: 50%; }
 .tk-n { font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; }
 
-.nav-pills { display: flex; gap: 6px; margin: 0 2px 8px; }
+/* Two deterministic rows: Reviews/Allowlist/Scorecard, then Manager + "+".
+   Each .nav-pills-row is its own non-wrapping flex line so groups never reflow. */
+.nav-pills { display: flex; flex-direction: column; gap: 6px; margin: 0 2px 8px; }
+.nav-pills-row { display: flex; gap: 6px; }
 .nav-pill {
   flex: 1 1 auto; min-width: 0; display: flex; align-items: center; justify-content: center; gap: 5px;
   padding: 6px 8px; border-radius: 6px; cursor: pointer;
