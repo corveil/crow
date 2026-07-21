@@ -100,6 +100,25 @@ public enum TicketStatus: String, Codable, Sendable, CaseIterable {
     /// a board, and the label is ignored there.
     public static let inReviewFallbackLabel = "crow:in-review"
 
+    /// Sibling of `inReviewFallbackLabel` for In Progress (#790). Applied on
+    /// session start when the issue has no board; mutually exclusive with the
+    /// in-review label (In Review wins if both are somehow present).
+    public static let inProgressFallbackLabel = "crow:in-progress"
+
+    /// The no-project fallback status labels, in pipeline order.
+    public static let fallbackStatusLabels = [inProgressFallbackLabel, inReviewFallbackLabel]
+
+    /// The fallback label that encodes `self`, or nil for statuses that carry
+    /// no label (Done is signaled by closing the issue; Backlog/Ready have no
+    /// off-board representation).
+    public var fallbackStatusLabel: String? {
+        switch self {
+        case .inProgress: return TicketStatus.inProgressFallbackLabel
+        case .inReview:   return TicketStatus.inReviewFallbackLabel
+        default:          return nil
+        }
+    }
+
     /// Initialize from a GitHub/GitLab project board status name (case-insensitive).
     public init(projectBoardName name: String) {
         switch name.lowercased().trimmingCharacters(in: .whitespaces) {
