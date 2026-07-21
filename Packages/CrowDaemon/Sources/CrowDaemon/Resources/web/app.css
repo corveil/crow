@@ -642,7 +642,7 @@ html, body {
 .tickets-refresh {
   position: absolute; right: 0; top: 50%; transform: translateY(-50%);
   display: inline-flex; align-items: center; justify-content: center;
-  width: 22px; height: 22px; border-radius: 6px; cursor: pointer; line-height: 1;
+  width: 22px; height: 22px; padding: 0; border-radius: 6px; cursor: pointer; line-height: 1;
   border: 1px solid var(--border-subtle); background: var(--bg-card); color: var(--text-secondary); font-size: 12px;
 }
 .tickets-refresh:hover { color: var(--text-primary); border-color: var(--border-strong); }
