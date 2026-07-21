@@ -830,7 +830,10 @@ function ticketsCard() {
   const head = el('div', 'tickets-head');
   head.appendChild(el('span', 'tickets-title', 'Tickets'));
   const busy = ticketsRefreshing();
-  const refresh = el('button', 'tickets-refresh' + (busy ? ' spinning' : ''), '↻');
+  // While refreshing, swap the ↻ glyph for the shared `.action-spinner` ring so
+  // the spinner turns inside a stationary button, not the button itself (CROW-797).
+  const refresh = el('button', 'tickets-refresh' + (busy ? ' spinning' : ''), busy ? '' : '↻');
+  if (busy) refresh.appendChild(el('span', 'action-spinner'));
   refresh.title = busy ? 'Refreshing tickets…' : 'Refresh tickets';
   refresh.disabled = busy;
   refresh.onclick = (e) => { e.stopPropagation(); refreshTickets(); };

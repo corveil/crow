@@ -641,21 +641,15 @@ html, body {
 .tickets-title { color: var(--gold); font-weight: 700; font-size: 13px; }
 .tickets-refresh {
   position: absolute; right: 0; top: 50%; transform: translateY(-50%);
+  display: inline-flex; align-items: center; justify-content: center;
   width: 22px; height: 22px; border-radius: 6px; cursor: pointer; line-height: 1;
   border: 1px solid var(--border-subtle); background: var(--bg-card); color: var(--text-secondary); font-size: 12px;
 }
 .tickets-refresh:hover { color: var(--text-primary); border-color: var(--border-strong); }
-/* In-flight ticket refresh (CROW-771). Can't reuse `wizard-spin`: the button is
-   absolutely positioned with `translateY(-50%)`, which a bare rotate keyframe
-   would clobber — so the keyframe composes both transforms. */
-.tickets-refresh.spinning {
-  opacity: 0.6; cursor: default;
-  animation: tickets-refresh-spin 0.7s linear infinite;
-}
-@keyframes tickets-refresh-spin {
-  from { transform: translateY(-50%) rotate(0deg); }
-  to   { transform: translateY(-50%) rotate(360deg); }
-}
+/* In-flight ticket refresh (CROW-771): the button chrome stays put while the
+   `.action-spinner` glyph swapped in for the `↻` turns inside it (CROW-797) —
+   matching the detail-header action-button spinner (CROW-749). */
+.tickets-refresh.spinning { opacity: 0.6; cursor: default; }
 .tickets-row { display: flex; align-items: stretch; gap: 6px; margin: 2px 2px 8px; }
 .tickets-row .tickets-card { flex: 1 1 auto; margin: 0; }
 .sidebar-tools { display: flex; flex-direction: column; justify-content: center; gap: 4px; flex: 0 0 auto; }
