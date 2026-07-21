@@ -1162,7 +1162,17 @@ function sessionRow(s) {
   }
 
   const badges = el('div', 'row-badges');
-  if (s.ticket_badge) badges.appendChild(el('span', 'badge', s.ticket_badge));
+  // Ticket pill — purple once the linked issue is closed, mirroring the
+  // merged-PR pill so the row shows issue state at a glance (#792).
+  if (s.ticket_badge) {
+    const tb = el('span', 'badge', s.ticket_badge);
+    if (s.ticket_state === 'closed') {
+      tb.classList.add('badge-closed');
+      tb.title = 'Issue closed';
+      tb.setAttribute('aria-label', s.ticket_badge + ', issue closed');
+    }
+    badges.appendChild(tb);
+  }
   // Light org-goal indicator (#723) — glyph only to keep the card compact; the
   // full goal text lives in the tooltip and the detail header.
   if (s.org_goal) {

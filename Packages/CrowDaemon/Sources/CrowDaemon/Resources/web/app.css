@@ -191,6 +191,8 @@ html, body {
   font-size: 10px;
   font-weight: 600;
 }
+/* #792: closed-issue ticket pill — purple, matching the merged-PR pill. */
+.badge-closed { color: var(--purple); background: rgba(191, 90, 242, 0.14); }
 .row-badges { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
 .pr-badge {
   display: inline-flex; align-items: center; gap: 3px; padding: 2px 8px; border-radius: 10px;
