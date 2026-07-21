@@ -165,14 +165,18 @@ check('spinner shown without the daemon flag', q('.board-title .action-spinner')
 check('Refresh button disabled', [...q('.action-btn')].find((b) => b.textContent === 'Refresh').disabled === true);
 
 console.log('\nRefresh spinner — sidebar Tickets card ↻:');
-check('↻ spins + disabled while refreshing', (() => {
+check('↻ swaps for inner .action-spinner + disabled while refreshing', (() => {
   const b = T.ticketsCard().querySelector('.tickets-refresh');
-  return b.className.includes('spinning') && b.disabled === true && /Refreshing/.test(b.title);
+  return b.className.includes('spinning') && b.disabled === true && /Refreshing/.test(b.title)
+    // The spinner turns on an inner node, not the button itself (CROW-797): the ↻
+    // glyph is gone and the shared `.action-spinner` ring is present.
+    && b.querySelector('.action-spinner') !== null && b.textContent === '';
 })());
 T.ticketRefreshPending = false;
-check('↻ idle when not refreshing', (() => {
+check('↻ glyph restored, no spinner node when idle', (() => {
   const b = T.ticketsCard().querySelector('.tickets-refresh');
-  return !b.className.includes('spinning') && b.disabled === false && b.title === 'Refresh tickets';
+  return !b.className.includes('spinning') && b.disabled === false && b.title === 'Refresh tickets'
+    && b.querySelector('.action-spinner') === null && b.textContent === '↻';
 })());
 
 console.log('\nRefresh spinner — Reviews board:');
