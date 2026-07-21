@@ -564,7 +564,7 @@ function persistSidebarCache() {
     sidebarCacheHit = true;
   } catch (_) { /* quota / private mode */ }
 }
-let ticketFilter = 'All'; // pipeline segment ('All' or a status rawValue); default to All so the board isn't misread as empty when work moves to Done
+let ticketFilter = 'Backlog'; // pipeline segment ('All' or a status rawValue); default to Backlog so the Tickets view opens on the intake queue (CROW-795). 'All' stays a selectable tab.
 let allowlistHideGlobal = false;
 let allowlistFilter = ''; // #701: case-insensitive substring filter on entry pattern
 let ticketSearch = ''; // #714: case-insensitive substring on ticket text, composed with ticketFilter
