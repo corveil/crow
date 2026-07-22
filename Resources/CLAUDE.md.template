@@ -24,6 +24,8 @@ crow set-ticket --session <uuid> --url "..." [--title "..."] [--number N]
 crow set-goal --session <uuid> --goal "..." | --clear
 crow add-link --session <uuid> --label "Issue" --url "..." --type ticket|pr|repo|custom
 crow list-links --session <uuid>
+crow remove-link --session <uuid> --id <link-uuid> | --url "..."
+crow edit-link --session <uuid> --id <link-uuid> | --url "..." [--label "..."] [--new-url "..."] [--type ticket|pr|repo|custom]
 ```
 
 ### Worktree Commands

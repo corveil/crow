@@ -62,6 +62,7 @@ Backfill of merged PRs since the 0.1.0 release, grouped by theme.
 
 ### Tooling & Misc
 
+- #805 — `crow edit-link` updates a session link's label, URL, or type in place (`--id`/`--url` selects, `--new-url` sets the new URL, only provided fields change) so a mislabeled link can be corrected without a remove-then-add round trip. Also documents the pre-existing `crow remove-link`, which detaches a link by `--id` or `--url` — it was implemented but missing from the CLI reference, skill, and CLAUDE.md.
 - #769 — `crowd` can start at login again (the gap ADR-0010 left when the macOS app was retired). `crow autostart install | uninstall | status` registers a launchd LaunchAgent — idempotent, re-points itself after an upgrade, and never bootstraps a duplicate over a running daemon. Same toggle at Settings → General → Autostart from a local browser. macOS only for now; Linux waits on #645.
 - #152 — Replace dock icon with the Corveil Brandmark.
 - #155 — Docs refresh: README, `make build` promotion, GitHub project scope wording.

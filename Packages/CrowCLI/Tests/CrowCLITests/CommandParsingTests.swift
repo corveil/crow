@@ -99,6 +99,75 @@ private let validUUID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
     #expect(cmd.type == "custom")
 }
 
+@Test func editLinkParsesAllArgs() throws {
+    let cmd = try EditLink.parse([
+        "--session", validUUID,
+        "--id", validUUID,
+        "--label", "PR #42",
+        "--new-url", "https://example.com/pr/42",
+        "--type", "pr",
+    ])
+    #expect(cmd.session == validUUID)
+    #expect(cmd.id == validUUID)
+    #expect(cmd.label == "PR #42")
+    #expect(cmd.newUrl == "https://example.com/pr/42")
+    #expect(cmd.type == "pr")
+    try cmd.validate()
+}
+
+@Test func editLinkSelectsByUrl() throws {
+    let cmd = try EditLink.parse(["--session", validUUID, "--url", "https://old.com", "--label", "Renamed"])
+    #expect(cmd.url == "https://old.com")
+    #expect(cmd.label == "Renamed")
+    try cmd.validate()
+}
+
+@Test func editLinkRequiresSelector() {
+    // Neither --id nor --url provided: cannot identify the link.
+    #expect(throws: (any Error).self) {
+        let cmd = try EditLink.parse(["--session", validUUID, "--label", "x"])
+        try cmd.validate()
+    }
+}
+
+@Test func editLinkRequiresMutation() {
+    // A selector but no field to change is a no-op the CLI rejects.
+    #expect(throws: (any Error).self) {
+        let cmd = try EditLink.parse(["--session", validUUID, "--id", validUUID])
+        try cmd.validate()
+    }
+}
+
+@Test func editLinkRejectsBlankLabel() {
+    // An empty/whitespace label would wipe the display text.
+    #expect(throws: (any Error).self) {
+        let cmd = try EditLink.parse(["--session", validUUID, "--id", validUUID, "--label", "  "])
+        try cmd.validate()
+    }
+}
+
+@Test func editLinkRejectsBlankNewUrl() {
+    // An empty --new-url would break URL-keyed consumers, so reject it.
+    #expect(throws: (any Error).self) {
+        let cmd = try EditLink.parse(["--session", validUUID, "--id", validUUID, "--new-url", ""])
+        try cmd.validate()
+    }
+}
+
+@Test func editLinkRejectsInvalidType() {
+    #expect(throws: (any Error).self) {
+        let cmd = try EditLink.parse(["--session", validUUID, "--id", validUUID, "--type", "bogus"])
+        try cmd.validate()
+    }
+}
+
+@Test func editLinkRejectsInvalidUUID() {
+    #expect(throws: (any Error).self) {
+        let cmd = try EditLink.parse(["--session", validUUID, "--id", "not-a-uuid", "--label", "x"])
+        try cmd.validate()
+    }
+}
+
 // MARK: - set-ticket --priority + set-goal (#696)
 
 @Test func setTicketParsesPriority() throws {
