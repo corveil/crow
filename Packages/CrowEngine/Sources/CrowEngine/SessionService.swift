@@ -463,6 +463,64 @@ public final class SessionService {
         }
     }
 
+    /// Heal one terminal whose tmux window is stuck with degraded scrollback —
+    /// created before the current `crow-tmux.conf` so it's frozen in the
+    /// alternate-screen buffer and/or capped at the old 5000-line history-limit,
+    /// neither of which tmux can fix in place (CROW-804). Kills the degraded
+    /// window and rebuilds a fresh, correctly-configured one (50000-line main
+    /// buffer), relaunching the agent — the exact per-terminal work
+    /// `rebuildAllSurfaces(forceRegister:true)` does on a cold-start takeover,
+    /// applied to a single terminal on user request. Returns whether a recreate
+    /// was performed (false if the terminal wasn't found).
+    ///
+    /// The Manager terminal has its own purpose-built recreate that preserves
+    /// `managerSessionID` and re-arms the exit monitor, so it delegates to
+    /// `restartManager`. Recreating interrupts whatever agent is running in the
+    /// window — the caller is expected to have confirmed with the user first.
+    @MainActor
+    @discardableResult
+    public func recreateTerminalSurface(sessionID: UUID, terminalID: UUID, devRoot: String) -> Bool {
+        guard let session = appState.sessions.first(where: { $0.id == sessionID }),
+              let terminal = appState.terminals(for: sessionID).first(where: { $0.id == terminalID }) else {
+            NSLog("[SessionService] recreateTerminalSurface: terminal \(terminalID) not found in session \(sessionID)")
+            return false
+        }
+
+        // The Manager isn't a per-session tab; route to its dedicated recreate.
+        if session.isManager {
+            restartManager(devRoot: devRoot)
+            return true
+        }
+
+        wireTerminalReadiness()
+
+        let trackReadiness = terminal.isManaged
+        // Drop the old (degraded) window so its agent doesn't linger in a
+        // duplicate pane; `rehydrateTerminalSurface` below then registers a
+        // fresh window under the current config.
+        if let oldIndex = terminal.tmuxBinding?.windowIndex {
+            TmuxBackend.shared.killWindow(index: oldIndex)
+        }
+
+        var seed = terminal
+        seed.tmuxBinding = nil
+        // Re-arm managed work terminals so the fresh shell's `.shellReady` drives
+        // the agent relaunch via `claude --continue` (never the stored initial
+        // command) — same seeding as `rebuildAllSurfaces(forceRegister:true)`.
+        if trackReadiness {
+            appState.terminalReadiness[terminalID] = .uninitialized
+            appState.autoLaunchTerminals.insert(terminalID)
+            if let cmd = seed.command, cmd.contains("claude") {
+                seed.command = nil
+            }
+        }
+
+        NSLog("[CrowTelemetry tmux:scrollback_recreate terminal=\(terminalID) session=\(sessionID)]")
+        let updated = rehydrateTerminalSurface(seed, trackReadiness: trackReadiness)
+        applyRehydrationResult(sessionID: sessionID, original: seed, updated: updated)
+        return true
+    }
+
     /// Re-hydrate one persisted terminal's tmux window on app launch. Returns
     /// the (possibly-modified) row with `tmuxBinding.windowIndex` updated to
     /// the freshly-registered window. If tmux is unavailable or registration

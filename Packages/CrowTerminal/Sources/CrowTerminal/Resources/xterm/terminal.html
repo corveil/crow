@@ -71,7 +71,11 @@
           // Nerd Font first for Claude/Cursor TUI icons; Menlo fallback if not installed.
           fontFamily: '"MesloLGS NF", "MesloLGS Nerd Font", "JetBrainsMono Nerd Font", "Hack Nerd Font", "FiraCode Nerd Font", Menlo, Monaco, monospace',
           theme: { background: '#1e1e1e', foreground: '#d4d4d4' },
-          scrollback: 10000,
+          // Match the web UI (app.js), the tmux history-limit, and the daemon
+          // replay window so the full retained transcript survives a reconnect
+          // (CROW-804). Was 10000, which truncated scroll-up below the 50000
+          // tmux keeps.
+          scrollback: 50000,
           allowTransparency: true,
         });
         term.loadAddon(fitAddon);

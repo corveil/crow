@@ -2059,6 +2059,15 @@ function renderTabs() {
     const label = el('span', null, t.name);
     label.onclick = () => switchTerminal(t);
     tab.appendChild(label);
+    // CROW-804: this terminal's tmux window is stuck with degraded scrollback
+    // (alternate-screen buffer and/or the old 5000-line history-limit) that
+    // tmux can't fix in place. Badge it and offer a one-click recreate.
+    if (t.scrollback_degraded) {
+      const warn = el('span', 'tab-degraded', '⚠');
+      warn.title = 'Scrollback degraded — this window can\'t show full history (created before the current config). Click to recreate it and restore scroll-up.';
+      warn.onclick = (e) => { e.stopPropagation(); recreateTerminal(t); };
+      tab.appendChild(warn);
+    }
     const close = el('span', 'tab-close', '×');
     close.onclick = (e) => { e.stopPropagation(); closeTerminal(t); };
     tab.appendChild(close);
@@ -2100,6 +2109,27 @@ async function closeTerminal(t) {
   try { await rpc('close-terminal', { session_id: selectedId, terminal_id: t.id }); } catch (_) {}
   if (activeTerminal && activeTerminal.id === t.id) activeTerminal = null;
   await refreshTerminals();
+}
+
+// CROW-804: heal a terminal whose tmux window has degraded scrollback. Recreate
+// kills the window and rebuilds it under the current config, relaunching the
+// agent (`claude --continue`) — so confirm first, since it interrupts whatever
+// is running in the pane.
+async function recreateTerminal(t) {
+  const ok = await confirmModal(
+    'This rebuilds “' + (t.name || 'terminal') + '” to restore full scroll-up history. '
+    + 'The agent running in it will be restarted (resumed via claude --continue).',
+    { title: 'Recreate terminal', okLabel: 'Recreate', danger: true });
+  if (!ok) return;
+  try {
+    await rpc('recreate-terminal', { session_id: selectedId, terminal_id: t.id });
+  } catch (e) {
+    if (term) term.write('\r\n\x1b[31m[crow] recreate-terminal failed: ' + (e.message || e) + '\x1b[0m\r\n');
+    return;
+  }
+  await refreshTerminals();
+  // Re-attach so the fresh window streams into the surface immediately.
+  if (activeTerminal && activeTerminal.id === t.id) attachWindow(activeTerminal.window);
 }
 
 // ---------------------------------------------------------------------------

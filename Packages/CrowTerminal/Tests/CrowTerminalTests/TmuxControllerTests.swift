@@ -158,4 +158,27 @@ struct TmuxControllerTests {
         #expect(out.contains("LINE-0000-"))
         #expect(out.contains("LINE-1199-"))
     }
+
+    /// CROW-804 enforcement: a window created under the **bundled** `crow-tmux.conf`
+    /// is born with the 50000-line main-buffer scrollback, so it is NOT flagged
+    /// degraded. This is the regression guard that new managed windows always get
+    /// correct scrollback (the whole point of the config fix); a window stuck at
+    /// the old 5000 limit or in the alt buffer is what `isScrollbackDegraded`
+    /// catches for the recreate flow.
+    @Test func newWindowUnderBundledConfIsNotDegraded() throws {
+        let confURL = try #require(BundledResources.tmuxConfURL)
+        let ctrl = makeController()
+        defer {
+            ctrl.killServer()
+            try? FileManager.default.removeItem(atPath: ctrl.socketPath)
+        }
+        try ctrl.newSessionDetached(configPath: confURL.path, command: "/bin/sh -c 'sleep 60'")
+        let idx = try ctrl.newWindow(command: "/bin/sh -c 'sleep 60'")
+        let health = try ctrl.listWindowScrollback()
+        let window = try #require(health.first(where: { $0.index == idx }))
+        #expect(window.historyLimit == TmuxBackend.scrollbackHistoryLimit)
+        #expect(window.alternateOn == false)
+        #expect(!TmuxBackend.isScrollbackDegraded(
+            historyLimit: window.historyLimit, alternateOn: window.alternateOn))
+    }
 }

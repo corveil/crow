@@ -357,6 +357,9 @@ html, body {
 .tab.add { color: var(--gold); font-size: 16px; font-weight: 700; }
 .tab-close { color: var(--text-muted); font-size: 14px; }
 .tab-close:hover { color: var(--red); }
+/* CROW-804: degraded-scrollback warning badge on a terminal tab. */
+.tab-degraded { color: var(--gold); font-size: 12px; }
+.tab-degraded:hover { color: var(--text-primary); }
 #terminal-wrap { flex: 1; min-height: 0; background: #1e1e1e; position: relative; overscroll-behavior: contain; }
 /* #777: `touch-action: none` hands the one-finger gesture to enableTouchScroll
    instead of iOS Safari's overscroll — without it Safari rubber-bands the fixed
