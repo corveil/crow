@@ -1046,6 +1046,46 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                     return ["removed": .int(removed)]
                 }
             },
+            "edit-link": { @Sendable params in
+                guard let idStr = params["session_id"]?.stringValue, let sessionID = UUID(uuidString: idStr) else {
+                    throw RPCError.invalidParams("session_id required")
+                }
+                let linkID = params["link_id"]?.stringValue.flatMap { UUID(uuidString: $0) }
+                let selectorURL = params["url"]?.stringValue
+                guard linkID != nil || selectorURL != nil else {
+                    throw RPCError.invalidParams("link_id or url required to identify the link")
+                }
+                let newLabel = params["label"]?.stringValue
+                let newURL = params["new_url"]?.stringValue
+                let newType = params["type"]?.stringValue.flatMap { LinkType(rawValue: $0) }
+                guard newLabel != nil || newURL != nil || newType != nil else {
+                    throw RPCError.invalidParams("at least one of label, new_url, type required")
+                }
+                func matches(_ l: SessionLink) -> Bool {
+                    (linkID != nil && l.id == linkID) || (selectorURL != nil && l.url == selectorURL)
+                }
+                func apply(_ l: inout SessionLink) {
+                    if let newLabel { l.label = newLabel }
+                    if let newURL { l.url = newURL }
+                    if let newType { l.linkType = newType }
+                }
+                return await MainActor.run {
+                    var updated = 0
+                    if var existing = capturedAppState.links[sessionID] {
+                        for i in existing.indices where matches(existing[i]) {
+                            apply(&existing[i])
+                            updated += 1
+                        }
+                        capturedAppState.links[sessionID] = existing
+                    }
+                    capturedStore.mutate { data in
+                        for i in data.links.indices where data.links[i].sessionID == sessionID && matches(data.links[i]) {
+                            apply(&data.links[i])
+                        }
+                    }
+                    return ["updated": .int(updated)]
+                }
+            },
             "hook-event": { @Sendable params in
                 guard let eventName = params["event_name"]?.stringValue else {
                     throw RPCError.invalidParams("event_name required")

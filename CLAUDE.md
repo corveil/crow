@@ -42,6 +42,8 @@ crow set-ticket --session <uuid> --url "..." [--title "..."] [--number N]
 crow set-goal --session <uuid> --goal "..." | --clear                  → tag the session's org goal/KPI (feeds alignment weight; exactly one of --goal/--clear)
 crow add-link --session <uuid> --label "Issue" --url "..." --type ticket|pr|repo|custom
 crow list-links --session <uuid>
+crow remove-link --session <uuid> --id <link-uuid> | --url "..."       → detach a link by id (from list-links) or url; returns {"removed":N}
+crow edit-link --session <uuid> --id <link-uuid> | --url "..." [--label "..."] [--new-url "..."] [--type ...]   → update a link in place (only provided fields change; --url selects, --new-url sets); returns {"updated":N}
 crow transition-ticket --session <uuid> --to inProgress|inReview|done   → moves the linked ticket to a pipeline status (Jira honors jiraStatusMap)
 crow resync-jira                                                        → re-sync every Jira ticket's status from its Crow session state
 ```

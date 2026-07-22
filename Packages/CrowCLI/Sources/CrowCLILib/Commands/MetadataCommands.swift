@@ -178,3 +178,43 @@ public struct RemoveLink: ParsableCommand {
         printJSON(result)
     }
 }
+
+/// Edit a session link's label, URL, or type in place, identified by its link ID
+/// (from `list-links`) or its current URL. Only the fields provided change; the
+/// URL selector and the new URL value are distinct flags (`--url` selects,
+/// `--new-url` sets) so a link can be relabeled or re-pointed without a
+/// remove-then-add round trip (#805).
+public struct EditLink: ParsableCommand {
+    public static let configuration = CommandConfiguration(commandName: "edit-link", abstract: "Edit a link's label, URL, or type in place")
+    @Option(name: .long, help: "Session UUID") var session: String
+    @Option(name: .long, help: "Link ID (from list-links)") var id: String?
+    @Option(name: .long, help: "Current link URL to match (alternative to --id)") var url: String?
+    @Option(name: .long, help: "New label") var label: String?
+    @Option(name: .long, help: "New URL") var newUrl: String?
+    @Option(name: .long, help: "New link type: ticket, pr, repo, custom") var type: String?
+
+    public init() {}
+
+    public func validate() throws {
+        try validateUUID(session, label: "session UUID")
+        if let id { try validateUUID(id, label: "link ID") }
+        guard id != nil || url != nil else {
+            throw ValidationError("Provide --id or --url to identify the link to edit")
+        }
+        guard label != nil || newUrl != nil || type != nil else {
+            throw ValidationError("At least one of --label, --new-url, or --type is required")
+        }
+        if let type { try validateLinkType(type) }
+    }
+
+    public func run() throws {
+        var params: [String: JSONValue] = ["session_id": .string(session)]
+        if let id { params["link_id"] = .string(id) }
+        if let url { params["url"] = .string(url) }
+        if let label { params["label"] = .string(label) }
+        if let newUrl { params["new_url"] = .string(newUrl) }
+        if let type { params["type"] = .string(type) }
+        let result = try rpc("edit-link", params: params)
+        printJSON(result)
+    }
+}
