@@ -2053,7 +2053,25 @@ function renderTabs() {
   // moots the stale-tab naming bug: a renamed manager session has no tab to go
   // stale, since tabs are labeled from the terminal name, not the session name.)
   const sel = sessions.find((x) => x.id === selectedId);
-  if (sel && sel.kind === 'manager') return;
+  if (sel && sel.kind === 'manager') {
+    // #680: managers have no tabs. But the Manager window is a common CROW-804
+    // "stuck alt-screen / 5000-line" case, and with no tab there'd be no ⚠ or
+    // Recreate. Surface a slim warning strip with a Recreate action when the
+    // Manager terminal is degraded; otherwise leave #tabbar empty so it stays
+    // collapsed. Recreate routes through restartManager (SessionService).
+    const degraded = terminals.find((t) => t.scrollback_degraded);
+    if (degraded) {
+      const strip = el('div', 'degraded-strip');
+      strip.appendChild(el('span', 'tab-degraded', '⚠'));
+      strip.appendChild(el('span', 'degraded-msg', 'Scrollback degraded — this Manager window can\'t show full history.'));
+      const btn = el('span', 'degraded-recreate', 'Recreate');
+      btn.title = 'Rebuild this Manager terminal to restore full scroll-up history (restarts the agent).';
+      btn.onclick = () => recreateTerminal(degraded);
+      strip.appendChild(btn);
+      bar.appendChild(strip);
+    }
+    return;
+  }
   for (const t of terminals) {
     const tab = el('div', 'tab' + (activeTerminal && t.id === activeTerminal.id ? ' active' : ''));
     const label = el('span', null, t.name);
@@ -2128,8 +2146,13 @@ async function recreateTerminal(t) {
     return;
   }
   await refreshTerminals();
-  // Re-attach so the fresh window streams into the surface immediately.
-  if (activeTerminal && activeTerminal.id === t.id) attachWindow(activeTerminal.window);
+  // Recreate keeps the terminal id but binds a NEW tmux window index, and
+  // refreshTerminals() only swaps activeTerminal when the id disappears — so the
+  // active tab would keep the old (killed) window object and attachWindow's
+  // `win === attachedWindow` guard would skip the reload. Re-point at the
+  // refreshed row and switch onto its new window so the fresh pane streams in.
+  const refreshed = terminals.find((x) => x.id === t.id);
+  if (refreshed) switchTerminal(refreshed);
 }
 
 // ---------------------------------------------------------------------------

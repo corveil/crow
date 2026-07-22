@@ -737,14 +737,6 @@ public final class TmuxBackend {
         }
     }
 
-    /// Per-window scrollback facts (index, history_limit, alternate_on) for
-    /// diagnostics/logging. Best-effort; `[]` on any failure.
-    public func windowScrollbackHealth() -> [(index: Int, historyLimit: Int, alternateOn: Bool)] {
-        guard let ctrl = controller else { return [] }
-        do { return try ctrl.listWindowScrollback() }
-        catch { reportIfTimeout(error); return [] }
-    }
-
     /// Kill the cockpit window at `index`. Passthrough to the controller so
     /// callers outside `TmuxBackend` (e.g. the CROW-804 terminal recreate in
     /// `SessionService`) can drop a degraded window before re-registering a

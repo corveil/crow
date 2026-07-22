@@ -360,6 +360,12 @@ html, body {
 /* CROW-804: degraded-scrollback warning badge on a terminal tab. */
 .tab-degraded { color: var(--gold); font-size: 12px; }
 .tab-degraded:hover { color: var(--text-primary); }
+/* CROW-804: Manager surface has no tabs — a slim warning strip carries the
+   degraded-scrollback notice + Recreate action instead. */
+.degraded-strip { display: flex; align-items: center; gap: 8px; padding: 6px 12px; font-size: 12px; }
+.degraded-msg { color: var(--text-secondary); }
+.degraded-recreate { color: var(--gold); cursor: pointer; font-weight: 600; }
+.degraded-recreate:hover { color: var(--text-primary); text-decoration: underline; }
 #terminal-wrap { flex: 1; min-height: 0; background: #1e1e1e; position: relative; overscroll-behavior: contain; }
 /* #777: `touch-action: none` hands the one-finger gesture to enableTouchScroll
    instead of iOS Safari's overscroll — without it Safari rubber-bands the fixed
