@@ -764,7 +764,8 @@ html, body {
 /* ---- Detail header: gold PR chip + inline PR status ---- */
 .link-chip.link-pr { color: var(--gold); border-color: var(--border-strong); }
 .pr-status-inline { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-left: 4px; }
-.pr-stat { font-size: 11px; font-weight: 600; }
+.pr-stat { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 600; }
+.pr-stat-glyph { line-height: 1; }
 
 /* Artifacts — per-session generated images (CROW-593). Hidden until the
    session has any; a compact horizontal strip under the detail header. */
