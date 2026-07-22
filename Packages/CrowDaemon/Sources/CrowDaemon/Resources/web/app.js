@@ -1200,7 +1200,7 @@ function sessionRow(s) {
     prb.style.borderColor = color;
     const parts = prBadgeParts(pr);
     for (const part of parts) {
-      const ico = el('span', 'pr-ico', part.glyph);
+      const ico = part.icon ? icon(part.icon, 10) : el('span', 'pr-ico', part.glyph);
       ico.style.color = part.color;
       prb.appendChild(ico);
     }
@@ -1252,20 +1252,24 @@ function prBadgeColor(pr) {
 // (`sessionRow`) and the detail header (`prStatusInline`), so the two can never
 // disagree about the same PR (CROW-773).
 // ---------------------------------------------------------------------------
+// `icon` names an entry in ICONS: those glyphs render as monochrome SVGs that
+// inherit `currentColor`, so the checkmarks tint with their label instead of
+// staying black (Apple emoji ✔/✕/⚠ ignore CSS `color` — CROW-802). Geometric
+// glyphs (◷/○/?) and the 🏷 tag are already color-faithful, so they stay text.
 const PR_CHECKS_GLYPH = {
-  passing: { glyph: '✔', color: 'var(--green)', label: 'Checks pass' },
-  failing: { glyph: '✕', color: 'var(--red)', label: 'Checks failing' },
+  passing: { glyph: '✔', icon: 'check', color: 'var(--green)', label: 'Checks pass' },
+  failing: { glyph: '✕', icon: 'close', color: 'var(--red)', label: 'Checks failing' },
   pending: { glyph: '◷', color: 'var(--orange)', label: 'Checks running' },
   unknown: { glyph: '?', color: 'var(--text-muted)', label: 'No checks' },
 };
 const PR_REVIEW_GLYPH = {
-  approved: { glyph: '✔', color: 'var(--green)', label: 'Approved' },
-  changesRequested: { glyph: '✕', color: 'var(--red)', label: 'Changes requested' },
+  approved: { glyph: '✔', icon: 'check', color: 'var(--green)', label: 'Approved' },
+  changesRequested: { glyph: '✕', icon: 'close', color: 'var(--red)', label: 'Changes requested' },
   reviewRequired: { glyph: '◷', color: 'var(--orange)', label: 'Needs review' },
   unknown: { glyph: '○', color: 'var(--text-muted)', label: 'No reviews' },
 };
-const PR_MERGED_GLYPH = { glyph: '✔', color: 'var(--purple)', label: 'Merged' };
-const PR_CONFLICT_GLYPH = { glyph: '⚠', color: 'var(--red)', label: 'Conflicts' };
+const PR_MERGED_GLYPH = { glyph: '✔', icon: 'check', color: 'var(--purple)', label: 'Merged' };
+const PR_CONFLICT_GLYPH = { glyph: '⚠', icon: 'warning', color: 'var(--red)', label: 'Conflicts' };
 const PR_MERGE_LABEL_GLYPH = { glyph: '🏷', color: 'var(--gold)', label: 'crow:merge label' };
 
 function prChecksGlyph(pr) {
@@ -1789,25 +1793,30 @@ function renderSessionAnalyticsStrip(s, root) {
 function prStatusInline(pr) {
   const wrap = el('div', 'pr-status-inline');
   if (pr.is_merged) {
-    wrap.appendChild(prStatusPart(PR_MERGED_GLYPH.glyph + ' ' + PR_MERGED_GLYPH.label, PR_MERGED_GLYPH.color));
+    wrap.appendChild(prStatusPart(PR_MERGED_GLYPH));
     return wrap;
   }
   for (const part of [prChecksGlyph(pr), prReviewGlyph(pr)]) {
-    wrap.appendChild(prStatusPart(part.glyph + ' ' + part.label, part.color));
+    wrap.appendChild(prStatusPart(part));
   }
   if (pr.merge === 'conflicting') {
-    wrap.appendChild(prStatusPart(PR_CONFLICT_GLYPH.glyph + ' ' + PR_CONFLICT_GLYPH.label, PR_CONFLICT_GLYPH.color));
+    wrap.appendChild(prStatusPart(PR_CONFLICT_GLYPH));
   }
   if (pr.has_merge_label) {
-    wrap.appendChild(prStatusPart(PR_MERGE_LABEL_GLYPH.glyph + ' ' + PR_MERGE_LABEL_GLYPH.label, PR_MERGE_LABEL_GLYPH.color));
+    wrap.appendChild(prStatusPart(PR_MERGE_LABEL_GLYPH));
   }
   return wrap;
 }
 
-function prStatusPart(text, color) {
-  const part = el('span', 'pr-stat', text);
-  part.style.color = color;
-  return part;
+// One status chip: a monochrome SVG glyph (or geometric char) + its label, both
+// tinted `part.color` — the SVG inherits it via currentColor so the checkmark
+// matches the text instead of rendering as a black emoji (CROW-802).
+function prStatusPart(part) {
+  const chip = el('span', 'pr-stat');
+  chip.style.color = part.color;
+  chip.appendChild(part.icon ? icon(part.icon, 12) : el('span', 'pr-stat-glyph', part.glyph));
+  chip.appendChild(el('span', 'pr-stat-label', part.label));
+  return chip;
 }
 
 function qaButton(label, action, id, variant, iconName, opts) {
