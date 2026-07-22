@@ -204,6 +204,15 @@ public struct EditLink: ParsableCommand {
         guard label != nil || newUrl != nil || type != nil else {
             throw ValidationError("At least one of --label, --new-url, or --type is required")
         }
+        // Reject blank writes: an empty label/URL would break URL-keyed
+        // consumers (PR badge, review-session lookup). Mirrors add-link's
+        // non-empty guard.
+        if let label, label.trimmingCharacters(in: .whitespaces).isEmpty {
+            throw ValidationError("--label must not be blank")
+        }
+        if let newUrl, newUrl.trimmingCharacters(in: .whitespaces).isEmpty {
+            throw ValidationError("--new-url must not be blank")
+        }
         if let type { try validateLinkType(type) }
     }
 

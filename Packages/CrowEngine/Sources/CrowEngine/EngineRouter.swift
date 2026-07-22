@@ -1057,7 +1057,21 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                 }
                 let newLabel = params["label"]?.stringValue
                 let newURL = params["new_url"]?.stringValue
-                let newType = params["type"]?.stringValue.flatMap { LinkType(rawValue: $0) }
+                // Blank label/URL would break URL-keyed consumers; reject them
+                // like add-link does rather than silently wiping a field.
+                if let newLabel, newLabel.trimmingCharacters(in: .whitespaces).isEmpty {
+                    throw RPCError.invalidParams("label must not be empty")
+                }
+                if let newURL, newURL.trimmingCharacters(in: .whitespaces).isEmpty {
+                    throw RPCError.invalidParams("new_url must not be empty")
+                }
+                var newType: LinkType?
+                if let typeStr = params["type"]?.stringValue {
+                    guard let parsed = LinkType(rawValue: typeStr) else {
+                        throw RPCError.invalidParams("invalid type '\(typeStr)' (expected ticket, pr, repo, or custom)")
+                    }
+                    newType = parsed
+                }
                 guard newLabel != nil || newURL != nil || newType != nil else {
                     throw RPCError.invalidParams("at least one of label, new_url, type required")
                 }

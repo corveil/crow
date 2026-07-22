@@ -138,6 +138,22 @@ private let validUUID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
     }
 }
 
+@Test func editLinkRejectsBlankLabel() {
+    // An empty/whitespace label would wipe the display text.
+    #expect(throws: (any Error).self) {
+        let cmd = try EditLink.parse(["--session", validUUID, "--id", validUUID, "--label", "  "])
+        try cmd.validate()
+    }
+}
+
+@Test func editLinkRejectsBlankNewUrl() {
+    // An empty --new-url would break URL-keyed consumers, so reject it.
+    #expect(throws: (any Error).self) {
+        let cmd = try EditLink.parse(["--session", validUUID, "--id", validUUID, "--new-url", ""])
+        try cmd.validate()
+    }
+}
+
 @Test func editLinkRejectsInvalidType() {
     #expect(throws: (any Error).self) {
         let cmd = try EditLink.parse(["--session", validUUID, "--id", validUUID, "--type", "bogus"])
