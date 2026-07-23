@@ -24,7 +24,7 @@ capabilities, update this table in the same PR.
 | Dimension | Claude Code | Cursor | Codex | OpenCode |
 |---|---|---|---|---|
 | Binary token (`launchCommandToken`) | `claude` | `agent` ⚠️ collision risk | `codex` | `opencode` |
-| Registered at boot | **always** (also the default) | only if binary found | only if binary found | only if binary found |
+| Registered at boot | **always** (default out of the box) | only if binary found | only if binary found | only if binary found |
 | Resume / continue | ✅ `--continue` | ❌ no MVP resume | ❌ no MVP resume | ⚠️ `--continue` re-enters TUI, no history |
 | Remote control | ✅ native `--rc --name` | ⚠️ faked via `crow send` stdin | ❌ `supportsRemoteControl=false` | ⚠️ faked via `crow send` stdin |
 | Auto-permission | ✅ `--permission-mode auto` | ❌ ignored | ❌ ignored | ⚠️ runtime-probed `--auto`, `.job` only |
@@ -34,7 +34,7 @@ capabilities, update this table in the same PR.
 | MCP (e.g. Jira) | ✅ `jira` MCP server via `~/.claude.json` | ❌ falls back to `acli` | ❌ falls back to `acli` | ❌ falls back to `acli` |
 | Review (`/crow-review-pr`) | ✅ slash-command | ✅ inlined skill body | ❌ returns `nil` (Phase C) | ✅ inlined skill body |
 | Initial-prompt injection | ✅ `$(cat …-prompt.md)` + deferred paste | ✅ `agent "$(cat …)"` (launcher not auto-wired) | job only (review → `nil`) | ✅ run-then-`--continue` |
-| Gateway env / trust seed | ✅ Claude special-case | ❌ | ❌ | ❌ |
+| Gateway env / trust seed / telemetry | ✅ Claude special-case | ❌ | ❌ | ❌ |
 | Rename passthrough (`/rename`) | ✅ | ✅ | ✅ | ✅ |
 
 Legend: ✅ full · ⚠️ partial / faked / unverified · ❌ not supported.
@@ -68,6 +68,13 @@ managed-terminal command needs hook/env prep.
 - `findBinary()` resolves in three tiers: explicit `defaults.binaries.<kind>`
   override → `PATH` walk → hardcoded `fallbackCandidates`
   (`CodingAgent` default impl; `BinaryOverrides`, CROW-484).
+- **Registration order ≠ new-session default.** First-registered only sets the
+  *registry's* fallback (`AgentRegistry.defaultAgent`). The harness a new session
+  launches with is config-driven: `AppState.agentKind(for:) =
+  agentsByKind[sessionKind] ?? defaultAgentKind`, both user-settable in Settings →
+  "Default agent" + per-session-kind overrides (CROW-421 / CROW-433).
+  `defaultAgentKind` ships as `.claudeCode`, so Claude is the *out-of-the-box*
+  default; set it to Cursor and every new session uses Cursor.
 
 ### Resume / continue
 
@@ -195,19 +202,24 @@ Review/job sessions get a pre-written prompt file (`.crow-review-prompt.md` /
   consumes the prompt reliably, then `; opencode --continue` opens the TUI with a
   fresh stdin so `crow send` keeps working (#547).
 
-### Gateway env / trust seed
+### Gateway env / trust seed / telemetry
 
-`SessionService.launchAgent` and `handoffAgent` run a **Claude-only** prep branch
-(`if agent.kind == .claudeCode`):
+Three capabilities the protocol doesn't abstract are gated on Claude identity
+(`if …kind == .claudeCode`), because no other harness has an analogue:
 
-- `ClaudeTrustSeeder.seedTrust` pre-trusts the worktree in `~/.claude.json` so
-  the "Do you trust the files in this folder?" dialog never blocks an
-  auto-launched session (CROW-600).
-- `ClaudeHookConfigWriter.writeGatewayEnv` + `ClaudeLaunchArgs.gatewayEnvPrefix`
-  apply (or clear) the workspace's `ANTHROPIC_BASE_URL` /
-  `ANTHROPIC_CUSTOM_HEADERS` AI-gateway env (CROW-402).
+- **Trust seeding** — `ClaudeTrustSeeder.seedTrust` pre-trusts the worktree in
+  `~/.claude.json` so the "Do you trust the files in this folder?" dialog never
+  blocks an auto-launched session (CROW-600). Runs at **four** call sites:
+  `SessionService.launchAgent`, `handoffAgent`, and the two Manager paths.
+- **AI-gateway env** — `ClaudeHookConfigWriter.writeGatewayEnv` +
+  `ClaudeLaunchArgs.gatewayEnvPrefix` apply (or clear) the workspace's
+  `ANTHROPIC_BASE_URL` / `ANTHROPIC_CUSTOM_HEADERS` env (CROW-402).
+- **OTEL telemetry env** — `AgentLaunch.prepareAgentLaunchText` prepends the
+  `OTEL_*` exporter vars, gated on `agent.kind == .claudeCode` (Codex has no OTLP
+  equivalent).
 
-These vars are Claude-specific; no other harness has an analogue.
+These are the residual Claude-identity switches called out in
+[ADR 0014](adr/0014-pluggable-coding-agent-adapter.md).
 
 ### Rename passthrough
 
@@ -222,9 +234,12 @@ spurious `/rename` paste.
 [--note "…"]` switches a running session to a different harness. It preserves the
 Crow session identity, worktree, branch, ticket, and links; it does **not**
 transfer chat history ([ADR 0011](adr/0011-agent-handoff-preserves-session-not-chat.md)).
-A handoff to an unregistered harness (binary missing) fails with
-`AgentHandoffError.agentBinaryMissing` — the binary-gating from
-[ADR 0015](adr/0015-harness-capability-tiers.md) surfaces here too.
+A handoff to a harness whose binary isn't on `PATH` throws
+`AgentHandoffError.agentNotRegistered` — such a harness was never registered at
+boot (`registerAgents` gates on `findBinary()`), and `handoffAgent`'s registry
+lookup precedes its binary check. `agentBinaryMissing` is the narrower case where
+the harness *was* registered but its binary later vanished. Either way, the
+binary-gating from [ADR 0015](adr/0015-harness-capability-tiers.md) surfaces here.
 
 ## Version-pinned reasons — re-check targets
 

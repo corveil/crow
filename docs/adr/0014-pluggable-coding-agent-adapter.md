@@ -63,10 +63,21 @@ modifying `CrowCore`.
 
 [`AgentRegistry`](../../Packages/CrowCore/Sources/CrowCore/Agent/AgentRegistry.swift)
 is the process-wide map from kind → agent. **The first kind registered becomes
-the default.** At daemon boot, `CrowDaemon.registerAgents` registers
-`ClaudeCodeAgent` unconditionally first, then Codex / Cursor / OpenCode **only if
-`findBinary()` resolves**. So Claude Code is always present and always the
-default; any other harness whose binary is off `PATH` is simply not in the map.
+the registry's *fallback* default.** At daemon boot, `CrowDaemon.registerAgents`
+registers `ClaudeCodeAgent` unconditionally first, then Codex / Cursor / OpenCode
+**only if `findBinary()` resolves**. So Claude Code is always present, and is the
+registry fallback; any other harness whose binary is off `PATH` is simply not in
+the map.
+
+The harness a **new session** actually launches with is a separate, config-driven
+choice: `AppState.agentKind(for:) = agentsByKind[sessionKind] ?? defaultAgentKind`
+(`AppConfig`, CROW-421 / CROW-433), both user-settable in Settings → "Default
+agent" and per-session-kind overrides. Every creation site reads that; the
+registry's `defaultAgent` is only a last-resort fallback (e.g. `managerCommand`
+when the session's kind isn't registered) and the `"default": true` flag on the
+web agent menu. A user who sets Default agent = Cursor gets Cursor on every new
+session — `defaultAgentKind` defaults to `.claudeCode`, which is why Claude is the
+*out-of-the-box* default, not a hardwired one.
 
 The engine has **no central per-harness switch**: `SessionService.launchAgent`
 and `handoffAgent` resolve the agent by kind and drive it through protocol
@@ -109,9 +120,13 @@ These are the accepted exceptions — the candidates for a future
 **Harder / accepted:**
 
 - **A harness whose binary isn't on `PATH` is silently unavailable** in the
-  picker and in `handoff-agent` (which fails `agentBinaryMissing`). This is
-  intentional (no half-registered harness), but "why isn't Cursor in the list?"
-  is answered by `findBinary()`, not an error message.
+  picker and in `handoff-agent`. Because `registerAgents` gates registration on
+  `findBinary()` at boot, such a harness is *unregistered*, so a handoff to it
+  throws `agentNotRegistered` (the registry lookup precedes the binary check in
+  `handoffAgent`). `agentBinaryMissing` is the narrower post-boot case — the
+  harness *was* registered at boot but its binary later disappeared or its
+  `defaults.binaries.<kind>` override was repointed. Either way, "why isn't Cursor
+  in the list?" is answered by `findBinary()`, not an error message.
 - The residual identity checks above are real switches-on-identity the
   abstraction hasn't dissolved — the review-prompt `switch` plus Claude-only prep
   (trust seeding across four sites, gateway env, OTEL telemetry). They are the

@@ -70,7 +70,13 @@ records the rationale for each gap here (verbatim reasons preserved from source)
 8. **Capability availability is gated on binary registration.** A harness whose
    `findBinary()` misses is never registered ([ADR 0014](./0014-pluggable-coding-agent-adapter.md)),
    so *all* of its capabilities are unavailable — the picker and `handoff-agent`
-   act as if it doesn't exist. Claude is always registered.
+   act as if it doesn't exist (a handoff to it throws `agentNotRegistered`).
+   Claude is always registered. Gating is uneven across surfaces, though: session
+   *creation* (`EngineRouter` new-session) takes `requestedAgentKind ??
+   agentKind(for: .work)` with **no** registry check, so a session can be created
+   with an unregistered kind and `launchAgent` then silently no-ops on the
+   registry lookup. The Manager path does validate against the registry. Closing
+   that asymmetry is a code follow-up, not a doc change.
 
 These gaps are **phased parity, not permanent tiers.** Comments mark the phase
 that will close them (Cursor/Codex/OpenCode launchers are written but
