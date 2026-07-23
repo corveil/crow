@@ -3334,8 +3334,16 @@ function ensureTerminal() {
   // (vim/htop) lose it here — the same acceptable trade terminal.html makes.
   // #776: this surface was built without the swallow, so it regressed against
   // the standalone renderer. Must be registered before open()/first write.
+  // SPIKE #822 Option B: make the swallow CONDITIONAL on pane state. On plain
+  // shell / review surfaces (main buffer, unified scrollback) we keep swallowing
+  // — nothing there legitimately wants mouse reporting, and letting it through
+  // would yank the viewport to the bottom while the user is scrolled up. On an
+  // AGENT-TUI surface (alt buffer) we let the mode toggles THROUGH so the agent
+  // claims the wheel and owns its own scroll, exactly like a naked terminal.
   const MOUSE_MODES = new Set([1000, 1001, 1002, 1003, 1005, 1006, 1015, 1016]);
   function swallowMouseMode(params) {
+    const buf = term && term.buffer && term.buffer.active;
+    if (buf && buf.type === 'alternate') return false; // agent surface → let it own the mouse
     const arr = params && params.params ? params.params : params;
     const len = arr ? arr.length : 0;
     for (let i = 0; i < len; i++) {
@@ -3495,11 +3503,21 @@ function enableTouchScroll(node) {
 // buffer has no scrollback, so there we swallow the wheel rather than scroll.
 // (crow-tmux.conf also strips the client's smcup/rmcup, so in practice the
 // terminal stays in the main buffer and the scrollback path is the live one.)
+// SPIKE #822 Option B: route the wheel by pane state (mirrors what
+// enableTouchScroll already does). Agent-TUI surface (alt buffer) OR an app
+// actively mouse-tracking → forward the tick to the app so it scrolls its own
+// transcript. Plain shell / review surface (main buffer) → scroll the unified
+// xterm.js 50k scrollback. This is the conditional twin of the mouse-mode
+// swallow above; the two decide together which surface owns the wheel.
 function enableWheelScroll(node) {
   node.addEventListener('wheel', (e) => {
     if (!term) return;
     const buf = term.buffer && term.buffer.active;
-    if (!buf || buf.type !== 'alternate') term.scrollLines(e.deltaY > 0 ? 3 : -3);
+    const modes = term.modes || {};
+    const appOwnsWheel = (buf && buf.type === 'alternate') ||
+      (modes.mouseTrackingMode && modes.mouseTrackingMode !== 'none');
+    if (appOwnsWheel) sendScrollToPTY(e.deltaY > 0 ? 3 : -3);
+    else term.scrollLines(e.deltaY > 0 ? 3 : -3);
     e.preventDefault();
     e.stopPropagation();
   }, { capture: true, passive: false });
