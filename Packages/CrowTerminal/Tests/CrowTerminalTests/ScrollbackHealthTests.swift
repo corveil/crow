@@ -37,6 +37,26 @@ struct ScrollbackHealthTests {
             historyLimit: 50000, alternateOn: false, alternateScreenEnabled: true))
     }
 
+    /// A failed tmux read must be distinguishable from a successful read that
+    /// found nothing. `list-terminals` re-derives `agent_surface` from
+    /// `SessionTerminal.isAgentSurface` when tmux can't answer; if failure were
+    /// reported as an empty set, every bound agent tab would instead be told
+    /// `agent_surface: false` — so the client would swallow mouse modes and
+    /// scroll xterm locally while tmux has that window in the alternate buffer,
+    /// which has no scrollback to scroll.
+    @Test @MainActor func classificationReportsFailureDistinctlyFromAnEmptyResult() {
+        // A fresh, unconfigured backend has no controller, so the read cannot
+        // run — the same shape as tmux being unavailable at runtime. Uses its
+        // own instance rather than `.shared` so the result doesn't depend on
+        // whether this host happens to have a live tmux server.
+        let backend = TmuxBackend()
+        #expect(backend.windowScrollbackClassification() == nil,
+                "a read that could not run must be nil, not ([], [])")
+        // The fail-open convenience accessors still collapse it to empty.
+        #expect(backend.degradedWindowIndices().isEmpty)
+        #expect(backend.agentSurfaceWindowIndices().isEmpty)
+    }
+
     @Test func agentSurfaceStillFailsTheHistoryFloor() {
         // Kind-awareness only relaxes the alt-buffer term. A pre-config window
         // is caught by the floor whether or not it's an agent surface — which

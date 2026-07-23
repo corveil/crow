@@ -140,16 +140,38 @@ console.log('\nAgent surface forwards the wheel to the app:');
   check('still nothing scrolled locally', t.scrolled.length === 0);
 }
 
-console.log('\nThe legacy signals still route to the app (back-compat):');
+// There is ONE shared xterm across every tab, and agent surfaces now let the
+// mouse-mode DECSETs through, so `modes.mouseTrackingMode` can outlive the tab
+// that set it (attachWindow only resets when the socket is already OPEN). A
+// KNOWN shell must never inherit that and start forwarding the wheel.
+console.log('\nA known plain shell ignores stale state from a previous agent tab:');
 {
-  const t = setup({ agentSurface: false, altScreen: true, mouseTrackingMode: 'vt200' });
+  const t = setup({ agentSurface: false, mouseTrackingMode: 'any' });
   t.up();
-  check('a real alternate buffer forwards to the PTY', t.sent.length > 0 && t.scrolled.length === 0);
+  check('sticky mouseTrackingMode does not hijack the shell', t.scrolled.join() === '-3');
+  check('nothing forwarded to the PTY', t.sent.length === 0);
 }
 {
-  const t = setup({ agentSurface: false, altScreen: false, mouseTrackingMode: 'any' });
+  const t = setup({ agentSurface: false, altScreen: true });
   t.up();
-  check('active mouse tracking forwards to the PTY', t.sent.length > 0 && t.scrolled.length === 0);
+  check('a stale alternate buffer does not hijack the shell either', t.scrolled.join() === '-3');
+  check('still nothing forwarded to the PTY', t.sent.length === 0);
+}
+
+// Those same signals remain the fallback when the daemon hasn't told us the
+// surface kind yet — pre-#824 behavior for an unclassified surface.
+console.log('\nWith no surface metadata, the legacy signals still apply:');
+{
+  const t = setup({ agentSurface: false, altScreen: true, mouseTrackingMode: 'vt200' });
+  T.activeTerminal = null;
+  t.up();
+  check('unclassified + alternate buffer forwards to the PTY', t.sent.length > 0 && t.scrolled.length === 0);
+}
+{
+  const t = setup({ agentSurface: false, mouseTrackingMode: 'any' });
+  T.activeTerminal = { id: 't1', window: 1 }; // no agent_surface field
+  t.up();
+  check('unclassified + mouse tracking forwards to the PTY', t.sent.length > 0 && t.scrolled.length === 0);
 }
 
 // ---- Conditional mouse-mode swallow ----------------------------------------

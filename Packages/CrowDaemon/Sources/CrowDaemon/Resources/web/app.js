@@ -3371,11 +3371,29 @@ function forceSelectModifierLabel() {
 }
 
 // True when the app on the other end should receive the scroll instead of us
-// scrolling xterm's local buffer: an agent surface, an actual alternate buffer,
-// or an app that has mouse tracking on. Shared by the wheel and touch shims so
-// both agree on who owns the surface.
+// scrolling xterm's local buffer. Shared by the wheel and touch shims so both
+// agree on who owns the surface.
+//
+// The daemon-supplied `agent_surface` is AUTHORITATIVE whenever we have it: an
+// agent surface forwards, and a known plain shell scrolls its unified 50k
+// scrollback — full stop. The alt-buffer / mouse-tracking checks are consulted
+// ONLY when we have no surface metadata at all (before the first
+// `list-terminals` lands).
+//
+// That gating is load-bearing, not defensive coding. There is ONE shared xterm
+// instance across every tab, and agent surfaces now let DECSET 1000–1016
+// through, so `term.modes.mouseTrackingMode` can outlive the tab that set it:
+// `attachWindow` only clears it via `reloadTerminal()`/`term.reset()` when the
+// socket is already OPEN, and skips that during a reconnect. Ungated, a shell
+// tab visited right after an agent tab would inherit its modes and forward the
+// wheel to the PTY as arrow keys — regressing the exact shell path this model
+// exists to preserve. Nothing is lost by gating: under the smcup strip plus the
+// conditional swallow, a real shell surface can never legitimately be in the
+// alternate buffer or be mouse-tracking.
 function appOwnsScroll() {
-  if (activeSurfaceIsAgent()) return true;
+  if (activeTerminal && typeof activeTerminal.agent_surface === 'boolean') {
+    return activeTerminal.agent_surface;
+  }
   const buf = term && term.buffer && term.buffer.active;
   if (buf && buf.type === 'alternate') return true;
   const modes = (term && term.modes) || {};

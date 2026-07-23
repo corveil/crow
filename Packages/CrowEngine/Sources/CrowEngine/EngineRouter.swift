@@ -899,11 +899,14 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                 // rather than inferred client-side, so `app.js` routes the wheel
                 // on the SAME ground truth the daemon actually applied. One
                 // combined read so this RPC forks a single `tmux` subprocess.
-                let (degraded, agentSurfaces) = await MainActor.run {
+                // `nil` means the read FAILED (tmux down / timed out), which is
+                // not the same as "no such windows" — see the agent_surface
+                // fallback below.
+                let classification = await MainActor.run {
                     TmuxBackend.shared.windowScrollbackClassification()
                 }
-                // Only for the pre-binding fallback below — the tmux read above
-                // is authoritative once a window exists.
+                let degraded = classification?.degraded ?? []
+                // For the fallback below, when tmux couldn't answer.
                 let session = await MainActor.run {
                     capturedAppState.sessions.first(where: { $0.id == id })
                 }
@@ -929,14 +932,21 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                         // True when this terminal is an agent-TUI surface that
                         // owns its own viewport + scrollback (ADR-0013). The web
                         // client routes the wheel and the mouse-mode swallow on
-                        // this. Before the window exists (or when tmux is
-                        // unreachable) it falls back to the SAME predicate the
-                        // daemon registers the window with, so the two agree —
-                        // including for the Manager, whose terminal carries no
-                        // `isManaged` flag.
+                        // this.
+                        //
+                        // tmux is authoritative when it ANSWERED and this
+                        // terminal has a window. Otherwise — no binding yet, or
+                        // the read failed — fall back to the SAME predicate the
+                        // daemon registers the window with, so the two agree
+                        // (including for the Manager, whose terminal carries no
+                        // `isManaged` flag). Failing to `false` instead would
+                        // tell the client to swallow mouse modes and scroll
+                        // locally while tmux has that window in the alt buffer,
+                        // where there is no scrollback to scroll.
                         "agent_surface": .bool(
-                            t.tmuxBinding.map { agentSurfaces.contains($0.windowIndex) }
-                                ?? t.isAgentSurface(session: session)),
+                            classification.flatMap { c in
+                                t.tmuxBinding.map { c.agentSurfaces.contains($0.windowIndex) }
+                            } ?? t.isAgentSurface(session: session)),
                     ])
                 }
                 return ["terminals": .array(items)]

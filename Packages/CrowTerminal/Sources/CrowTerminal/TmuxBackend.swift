@@ -761,12 +761,20 @@ public final class TmuxBackend {
     ///
     /// They ship together on every `list-terminals` RPC, and each is derived
     /// from the same three fields, so reading twice would fork a second `tmux`
-    /// subprocess per call for nothing. Best-effort — empty sets when tmux is
-    /// unavailable or the read fails, mirroring `listCockpitWindows`.
+    /// subprocess per call for nothing.
+    ///
+    /// Returns `nil` when tmux is unavailable or the read fails — deliberately
+    /// NOT a pair of empty sets. Empty is a perfectly valid SUCCESS (a server
+    /// of nothing but plain shells), so emptiness cannot double as a failure
+    /// signal. Callers that need to fall back to a different source of truth on
+    /// failure — `list-terminals` re-deriving `agent_surface` from
+    /// `SessionTerminal.isAgentSurface` — can only do that if failure is
+    /// distinguishable. Callers that are happy to fail open collapse it with
+    /// `?? []`.
     public func windowScrollbackClassification(
         floor: Int = TmuxBackend.scrollbackHistoryLimit
-    ) -> (degraded: Set<Int>, agentSurfaces: Set<Int>) {
-        guard let ctrl = controller else { return ([], []) }
+    ) -> (degraded: Set<Int>, agentSurfaces: Set<Int>)? {
+        guard let ctrl = controller else { return nil }
         do {
             let windows = try ctrl.listWindowScrollback()
             let degraded = windows.filter {
@@ -780,15 +788,17 @@ public final class TmuxBackend {
             return (Set(degraded.map(\.index)), Set(agents.map(\.index)))
         } catch {
             reportIfTimeout(error)
-            return ([], [])
+            return nil
         }
     }
 
     /// Window indices whose scrollback is degraded per `isScrollbackDegraded`.
-    /// Callers needing BOTH this and the agent-surface set should use
-    /// `windowScrollbackClassification` so tmux is only read once.
+    /// Fails open (`[]`) — not badging a window on a failed read is the safe
+    /// direction, and matches `listCockpitWindows`. Callers needing BOTH this
+    /// and the agent-surface set should use `windowScrollbackClassification`
+    /// so tmux is only read once.
     public func degradedWindowIndices(floor: Int = TmuxBackend.scrollbackHistoryLimit) -> Set<Int> {
-        windowScrollbackClassification(floor: floor).degraded
+        windowScrollbackClassification(floor: floor)?.degraded ?? []
     }
 
     /// Window indices configured as agent-TUI surfaces (`alternate-screen on`),
@@ -797,7 +807,7 @@ public final class TmuxBackend {
     /// window names so the daemon and the web client route on the SAME ground
     /// truth the daemon actually applied.
     public func agentSurfaceWindowIndices() -> Set<Int> {
-        windowScrollbackClassification().agentSurfaces
+        windowScrollbackClassification()?.agentSurfaces ?? []
     }
 
     /// Give one window the agent-TUI scroll model: `alternate-screen on`, so a

@@ -112,10 +112,20 @@ import Testing
     @Test func scrollOwnershipConsultsTheDaemonSuppliedSurfaceKind() throws {
         let source = try Self.webAsset("app.js")
         let body = try Self.functionBody("appOwnsScroll", in: source)
-        #expect(body.contains("activeSurfaceIsAgent()"), "must consult the surface kind")
+        // The daemon flag must be consulted FIRST and must be able to answer
+        // `false`. There is one shared xterm across tabs, and agent surfaces now
+        // let the mouse-mode DECSETs through, so `mouseTrackingMode` can outlive
+        // the tab that set it — an ungated legacy branch would let a known plain
+        // shell inherit it and forward the wheel to the PTY.
+        #expect(
+            body.contains("typeof activeTerminal.agent_surface === 'boolean'"),
+            "must treat a known surface kind as authoritative in BOTH directions")
+        #expect(
+            body.contains("return activeTerminal.agent_surface;"),
+            "a known plain shell must scroll locally, not fall through to the legacy signals")
         #expect(
             body.contains("'alternate'") && body.contains("mouseTrackingMode"),
-            "must keep the alt-buffer / mouse-tracking signals as well")
+            "must keep the alt-buffer / mouse-tracking signals as the unclassified fallback")
         #expect(
             try Self.functionBody("activeSurfaceIsAgent", in: source).contains("agent_surface"),
             "the surface kind comes from the list-terminals payload")
