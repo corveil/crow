@@ -20,15 +20,26 @@ No runtime code changed in this audit. Closures are tracked as spin-off tickets
 
 ## 1. Versions audited
 
-All four binaries resolve on the audit machine's PATH; capability probes below are
-against these exact builds (`<binary> --version` / `--help`).
+These are the builds **installed on the audit machine** (each `--version` verbatim
+below), probed via `<binary> --help`. They are **not** necessarily latest-upstream —
+several trail stable by a minor or two as of the audit date, and a verdict in §2/§3
+can already have moved when the installed build is behind. The `Upstream latest`
+column records where stable was on 2026-07-23 so a re-runner knows which rows to
+re-probe; the OpenCode row is exactly where a stale build bit this audit (see §3c).
 
-| Harness | Binary | Version at audit | Adapter written against |
-|---|---|---|---|
-| Claude Code | `claude` | `2.1.206` | baseline (mostly ✅) |
-| Cursor | `agent` / `cursor-agent` | `2026.07.23-e383d2b` | pre-resume/print MVP |
-| OpenAI Codex | `codex` | `codex-cli 0.141.0` | comments pin `v0.139.0` |
-| OpenCode | `opencode` | `1.17.10` | CROW-545/547 MVP |
+| Harness | Binary | Installed (`--version`) | Upstream latest @ 2026-07-23 | Adapter written against |
+|---|---|---|---|---|
+| Claude Code | `claude` | `2.1.206 (Claude Code)` | `2.1.218` | baseline (mostly ✅) |
+| Cursor | `agent` / `cursor-agent` | `2026.07.23-e383d2b` | (rolling; audit build is same-day) | pre-resume/print MVP |
+| OpenAI Codex | `codex` | `codex-cli 0.141.0` | `rust-v0.145.0` (2026-07-21) | comments pin `v0.139.0` |
+| OpenCode | `opencode` | `1.17.10` | `v1.18.4` (2026-07-20) | CROW-545/547 MVP |
+
+> **Reproducing:** flag/version claims below are cited to each installed CLI's own
+> `--help`. Where a claim depends on a version the audit build predates, it is cited
+> to the upstream tag instead (e.g. `sst/opencode` `tui.ts@v1.18.4`). Re-run the
+> probes after any `codex`/`opencode`/`agent` upgrade; the OpenCode auto-permission
+> surface in particular flipped twice across `v1.17`→`v1.18`.
+
 
 ---
 
@@ -44,13 +55,15 @@ the stale version reference).
 | 1 | Codex review unsupported → `nil` ("Phase C; `/crow-review-pr` is Claude-only") | ✅ **NOW AVAILABLE** | `codex review [--base BRANCH] [--commit SHA] [--uncommitted] [--title]` runs a review **non-interactively**; also `codex exec review`. |
 | 2 | Codex / Cursor no resume ("no `--continue` equivalent in MVP") | ✅ **NOW AVAILABLE (both)** | Codex: `codex resume [SESSION_ID] [--last] [--all]` + `codex fork`. Cursor: `agent --resume [chatId]`, `agent --continue`, `agent resume`, `agent ls`. |
 | 3 | Codex `supportsRemoteControl=false` (no RC flag); Cursor/OpenCode fake RC via `crow send` stdin | ⚠️ **PARTIAL** | Codex now has experimental `codex remote-control {start,stop}` (app-server daemon) + `codex --remote <ws://…>` to connect a TUI to a remote app server. OpenCode has `opencode serve` (headless server) + `opencode attach <url>` + `opencode acp` (Agent Client Protocol) + `opencode web`. Both are *native* remote surfaces that could retire the stdin fake, but both are heavier than the current `crow send` paste — see closing approach. |
-| 4 | Codex hooks sync-only ("as of v0.139.0; async breaks state detection") | ❌ **STILL ABSENT** | `async: true` is still **parsed but skipped** upstream — Codex ignores async command hooks; only the version reference is stale (now v0.141.0). Concurrency exists (multiple matching hooks launch concurrently) but no fire-and-forget async. Keep `asyncEvents` empty. [Codex hooks docs](https://developers.openai.com/codex/config-advanced) |
-| 5 | Auto-permission only Claude (`--permission-mode auto`) + OpenCode (runtime-probed `--auto`) | ✅ **NOW AVAILABLE (Cursor + Codex)** | Cursor: `-f/--force`, `--yolo` (alias), `--auto-review`, `--approve-mcps`, `--trust`. Codex: `-a/--ask-for-approval never`, `-s/--sandbox danger-full-access`, `--dangerously-bypass-approvals-and-sandbox`. OpenCode's `--auto` probe is now stale: 1.17.10 exposes `--dangerously-skip-permissions` on `opencode run` (not a top-level `--auto`). |
+| 4 | Codex hooks sync-only ("as of v0.139.0; async breaks state detection") | ❌ **STILL ABSENT** | `async: true` is still **parsed but skipped** upstream at HEAD (~`0.146-alpha`), not just 0.141.0 — refresh the pin. `codex-rs/hooks/src/engine/discovery.rs:480` logs `"async hooks are not supported yet"` for every event **except `SessionEnd`**, which is kept but downgraded to synchronous (`discovery.rs:503`, `"running async SessionEnd hook synchronously"`). So no fire-and-forget async for the events Crow's state machine needs; `asyncEvents` stays `[]`. [Codex hooks docs](https://developers.openai.com/codex/config-advanced) |
+| 5 | Auto-permission only Claude (`--permission-mode auto`) + OpenCode (runtime-probed `--auto`) | ✅ **NOW AVAILABLE (Cursor + Codex)** | Cursor (`cursor-agent --help`): `-f/--force`, `--yolo` (alias), `--approve-mcps`, `--trust`, `--sandbox` (`--auto-review` also present in `--help` — see §3a caveat). Codex: `-a/--ask-for-approval never` + `-s/--sandbox workspace-write` (bounded; the recommended default), or the full-bypass `--dangerously-bypass-approvals-and-sandbox` / `-s danger-full-access` (**not** recommended — §3a/§3b). OpenCode is **not** broken today: `OpenCodeLaunchArgs.runAutoApproveSuffix` already applies `--dangerously-skip-permissions` on the `run` path; only the separate `tuiSupportsAuto` top-level `--auto` probe was dead weight on `v1.17.x`, and `v1.18.0` re-added TUI `--auto` anyway (§3c). |
 | 6 | MCP Claude-only (Jira via `~/.claude.json`) | ✅ **NOW AVAILABLE (all three)** | `codex mcp {list,get,add,remove,login,logout}` + `codex mcp-server`; `cursor-agent mcp`; `opencode mcp`. |
-| 7 | Non-Claude hooks global-scope, session resolved by `cwd` match (no per-session UUID) | ✅ **NOW AVAILABLE (all three)** | Codex: project `.codex/hooks.json` or inline `[hooks]` in `.codex/config.toml` (trusted-project scoped). Cursor: project `.cursor/hooks.json`. OpenCode: project `.opencode/plugin/`. All three can now carry a per-worktree config with Crow's session UUID baked into the command — the same shape as Claude's `.claude/settings.local.json` — closing the shared-`cwd` collision. |
+| 7 | Non-Claude hooks global-scope, session resolved by `cwd` match (no per-session UUID) | ✅ **NOW AVAILABLE (all three)** | Codex: project `.codex/hooks.json` or inline `[hooks]` in `.codex/config.toml` (trusted-project scoped — see the trust-gate warning in §3b). Cursor: project `.cursor/hooks.json`. OpenCode: project `.opencode/plugin/`. All three can now carry a per-worktree config with Crow's session UUID baked into the command — the same shape as Claude's `.claude/settings.local.json` — closing the shared-`cwd` collision. |
 | 8 | Capability availability gated on binary registration | ✅ **UNCHANGED (by design)** | Not a gap. `AgentRegistry` still registers a kind only if `findBinary()` resolves; that's the intended contract (ADR seed, #827 Deliverable 2). No re-check needed. |
 
-**Net:** of the seven genuine gaps, **five flip to now-available** (2, 5, 6, 7, and Codex's half of 1/3), **one is partial** (3 — native RC exists but is heavier than the stdin fake), and **one still holds** (4 — Codex async hooks).
+**Net:** of the seven genuine gaps, **rows 1, 2, 5, 6, 7 are now available** upstream,
+**row 3 is partial** (native RC exists but is heavier than the working stdin fake),
+and **row 4 still holds** (Codex async hooks parsed-but-skipped). Row 8 is not a gap.
 
 ---
 
@@ -65,7 +78,7 @@ Claude Code is the baseline and omitted except where it frames the target shape.
 |---|---|---|---|---|
 | Resume / continue | ❌ "no `--continue` in MVP" | ✅ | `agent --continue`, `agent --resume [chatId]`, `agent resume`, `agent ls` (landed [CLI Jan 16 2026](https://cursor.com/changelog/cli-jan-16-2026): `/list`→`/resume`) | On `.job`/`.review` restart, replace the bare `agent` fallback in `CursorAgent.autoLaunchCommand` with `agent --continue`, so re-open restores history instead of a cold TUI. |
 | Non-interactive / headless | ❌ (TUI only) | ✅ | `-p/--print` with `--output-format text\|json\|stream-json` ([CLI docs](https://cursor.com/docs/cli/using)) | Use `agent -p --output-format stream-json` for unattended `.job`s and for review, so Crow can parse structured completion instead of scraping the TUI. |
-| Auto-permission | ❌ ignored | ✅ | `-f/--force`, `--yolo`, `--auto-review`, `--sandbox`, `--approve-mcps`, `--trust` | Honor `autoPermissionMode` for `.job`: append `--force` (or `--auto-review` for a safer classifier). Seeds the trust model too (`--trust` ≈ Claude gateway trust seed). |
+| Auto-permission | ❌ ignored | ✅ | `-f/--force`, `--yolo` (alias for `--force`), `--sandbox`, `--approve-mcps`, `--trust` — all in `cursor-agent --help` (2026.07.23) and the [CLI parameter reference](https://cursor.com/docs/cli/reference/parameters). `--auto-review` ("Smart Auto: a server classifier auto-runs safe tool calls, prompts for the rest") is present in `--help` on this build but **not yet in the web reference** — treat as unverified/unstable until documented. | Honor `autoPermissionMode` for `.job` with `--force` (documented). Do **not** default to the undocumented `--auto-review` until it appears in the reference. `--trust` seeds workspace trust (≈ Claude gateway trust seed) but is headless-mode only per the reference. |
 | MCP (e.g. Jira) | ❌ | ✅ | `cursor-agent mcp` subcommand | Reuse the Jira MCP config Crow already writes for Claude; register it via `cursor-agent mcp add`. |
 | Hook scope (per-session) | ❌ global `~/.cursor/hooks.json`, cwd-match | ✅ *(caveat)* | project `.cursor/hooks.json` (hooks landed [CLI Jan 16 2026](https://cursor.com/changelog/cli-jan-16-2026)) | Write per-worktree `.cursor/hooks.json` with the Crow session UUID in the command (mirror `ClaudeCodeAgent`). **Caveat:** community reports the CLI only fires a subset of events (`beforeShellExecution`/`afterShellExecution`, session start/end/prompt/stop) — verify event coverage against `CursorSignalSource`'s state machine before ripping out the cwd-match. |
 | Prompt injection / launcher auto-wire | ⚠️ launcher not auto-wired; `.work` drops into bare TUI | ✅ | positional prompt already works (`agent "<prompt>"`); print mode gives a clean injection surface | With `-p`/`--print` for jobs and positional prompt for `.work`, `CursorLauncher.generatePrompt` output can finally be fed at launch instead of leaving a bare TUI. |
@@ -77,23 +90,28 @@ Claude Code is the baseline and omitted except where it frames the target shape.
 |---|---|---|---|---|
 | Resume / continue | ❌ "no `--continue` in MVP" | ✅ | `codex resume [SESSION_ID\|--last\|--all]`, `codex fork`, `codex exec resume --last` | On `.job`/`.work` restart, replace bare `codex` with `codex resume --last` (or resume by recorded session id) so re-open restores the thread. |
 | Review (`/crow-review-pr`) | ❌ `nil` — "Phase C, Claude-only" | ✅ | `codex review [--base BRANCH\|--commit SHA\|--uncommitted] [--title]`; `codex exec review` | Return a real command from the `.review` branch of `autoLaunchCommand`: `codex review --base main` (or the PR base), replacing the `nil` + `⚠️` echo. Inlined-skill brief no longer needed for the review *itself*. |
-| Non-interactive / headless + auto-permission | ❌ ignored | ✅ | `codex exec [PROMPT]` (non-interactive); approval: `-a/--ask-for-approval never`, `-s/--sandbox danger-full-access`, `--dangerously-bypass-approvals-and-sandbox` | For `.job` + `autoPermissionMode`, dispatch `codex exec "$(cat …prompt)" -a never -s workspace-write` instead of feeding the prompt to the interactive TUI; honors unattended semantics like Claude's `--permission-mode auto`. |
+| Non-interactive / headless + auto-permission | ❌ ignored | ✅ | `codex exec [PROMPT]` (non-interactive); approval knobs `-a/--ask-for-approval never`, `-s/--sandbox {read-only,workspace-write,danger-full-access}`, `--dangerously-bypass-approvals-and-sandbox` | For `.job` + `autoPermissionMode`, dispatch `codex exec "$(cat …prompt)" -a never -s workspace-write` — **approval off, sandbox still bounded** — as the recommended default (matches Claude's `--permission-mode auto`, not a full escape). Do **not** reach for `--dangerously-bypass-approvals-and-sandbox` or `-s danger-full-access`: they disable the workspace sandbox entirely and are only appropriate inside an already-externally-sandboxed runner. Treat the full-bypass variants as not-recommended, not interchangeable with the bounded default. |
 | MCP (e.g. Jira) | ❌ | ✅ | `codex mcp {list,add,get,remove,login,logout}`; `codex mcp-server` (Codex as MCP server) | Register the Jira MCP via `codex mcp add`; parity with Claude's `~/.claude.json` MCP. |
-| Hook scope (per-session) | ❌ global `~/.codex/hooks.json`, no-op per-session writer, cwd-match | ✅ | project `.codex/hooks.json` **or** inline `[hooks]` in `.codex/config.toml`; loads only in **trusted** projects (hooks stable [v0.124.0, Apr 2026](https://developers.openai.com/codex/config-advanced)) | Make `CodexHookConfigWriter.writeHookConfig` non-nop: write a per-worktree `.codex/hooks.json` carrying `--session <uuid>`, and trust-seed the worktree (`--dangerously-bypass-hook-trust` on first launch, or persist trust) so the project layer loads. Retains the global writer as fallback. |
-| Hook async | ❌ sync-only (pinned v0.139.0) | ❌ **still** | `async:true` parsed-but-skipped as of v0.141.0 | **Deferred** — keep `asyncEvents` empty; re-check on the next Codex minor. |
+| Hook scope (per-session) | ❌ global `~/.codex/hooks.json`, no-op per-session writer, cwd-match | ✅ *(trust caveat)* | project `.codex/hooks.json` **or** inline `[hooks]` in `.codex/config.toml`; loads only in **trusted** projects (hooks stable [v0.124.0, Apr 2026](https://developers.openai.com/codex/config-advanced)) | Make `CodexHookConfigWriter.writeHookConfig` non-nop: write a per-worktree `.codex/hooks.json` carrying `--session <uuid>`, then get the project layer trusted. **⚠️ Do not auto-seed trust with `--dangerously-bypass-hook-trust`:** Codex's trusted-project gate exists precisely so a *cloned* repo's committed `.codex/hooks.json` doesn't execute on checkout. A blanket bypass would run any hostile/compromised repo's committed hooks on Crow session start, for every repo Crow opens. Instead **persist trust for the specific worktree** so only Crow's own written config runs. Also unlike Claude's gitignored `.claude/settings.local.json`, `.codex/hooks.json` is not conventionally gitignored, so a repo may already ship one — **#830 must resolve the merge/overwrite question** (preserve user entries, like the existing global writer does) rather than clobber it. |
+| Hook async | ❌ sync-only (pinned v0.139.0) | ❌ **still** (pin refreshed) | `async:true` parsed-but-skipped at HEAD (~`0.146-alpha`), not just v0.141.0 — `discovery.rs:480`. Carve-out: async `SessionEnd` is kept but run synchronously (`discovery.rs:503`); every other event's async hook is skipped. | **Deferred** — the events Crow's state machine relies on have no working async path; keep `asyncEvents` empty. Re-check on a future Codex minor (refresh the pin, note the SessionEnd exception). |
 | Remote control | ❌ `supportsRemoteControl=false` | ⚠️ experimental | `codex remote-control {start,stop}` (app-server daemon) + `codex --remote <ws://…>` | Flip `supportsRemoteControl=true` **only** once the experimental app-server path is validated end-to-end; until then the badge stays off. Lower priority than resume/review — the stdin paste isn't available for Codex's TUI the way it is for Cursor/OpenCode, so this is the one harness where native RC actually adds a capability. |
-| Notify bridge | via `~/.codex/hooks.json` + `notify` | ⚠️ possibly redundant | first-class hooks now stable | Once per-worktree hooks land, evaluate retiring the `notify`→`CodexNotifyCommand` bridge in favor of a `Stop`/`SessionEnd` hook. |
+| Notify bridge | via `~/.codex/hooks.json` + `notify` | ⚠️ possibly redundant | first-class hooks now stable | Once per-worktree hooks land, evaluate retiring the `notify`→`CodexNotifyCommand` bridge in favor of a `Stop`/`SessionEnd` hook. **Folded into #830** as a stretch item (see §4). |
 
-### 3c. OpenCode (`opencode` 1.17.10)
+### 3c. OpenCode (`opencode` 1.17.10 installed; ≥1.18 for auto-permission — see note)
 
 | Dimension | Before (adapter) | Now | Upstream flag / min version | Closing approach |
 |---|---|---|---|---|
 | Resume / continue | ⚠️ TUI re-entry, no history | ✅ | TUI `-c/--continue`, `-s/--session <id>`, `--fork`; same on `opencode run` | Replace the bare-`opencode` resume fallback in `resumeTUICommand` with `opencode --continue` (or `--session <id>`), so re-open restores history rather than a fresh TUI. Removes the "no history" caveat. |
-| Auto-permission (drop probe hack) | ⚠️ runtime `--help` probe for `--auto`, job-only | ✅ (flag stable) | `opencode run --dangerously-skip-permissions` (stable in 1.17.x); top-level TUI `--auto` is **gone**, so the current `tuiSupportsAuto` probe never matches on ≥1.17 | Retire the `--help` subprocess probe in `OpenCodeLaunchArgs`: hard-code `--dangerously-skip-permissions` on the headless `run` step (which is where auto-approve already applies), drop `tuiSupportsAuto`. Keeps the main thread free of subprocess probes. |
+| Auto-permission (probe) | ⚠️ runtime `--help` probe for `--auto`, job-only | ✅ *(surface unstable)* | The `run` path already works today: `OpenCodeLaunchArgs.runAutoApproveSuffix` applies `--dangerously-skip-permissions` (present on `opencode run` at `v1.17.10`). The **TUI** `--auto` surface flipped twice across two minors: absent in the `v1.17.x` window (verified `tui.ts@v1.17.10`), then **re-added in `v1.18.0`** (2026-07-14, before this audit) — `tui.ts@v1.18.4` exposes `--auto`, `--yolo`, **and** `--dangerously-skip-permissions` (`auto: args.auto \|\| args.yolo \|\| args["dangerously-skip-permissions"]`). | **Do not hard-code a single flag name.** The earlier "retire the probe, hard-code `--dangerously-skip-permissions`" advice was scoped to `v1.17.x`, where TUI `--auto` was gone; upstream re-added it a minor later, so a hard-coded name is *more* brittle than the probe. `runAutoApproveSuffix`'s "try `--auto`, else `--dangerously-skip-permissions`" fallback is the resilient shape — keep it. The one true dead-weight is `tuiSupportsAuto`'s top-level `--auto` probe **on `v1.17.x` only**; on ≥`1.18` it matches again. #831 should *narrow* the probe (or make it version-aware), not delete it. |
 | MCP (e.g. Jira) | ❌ | ✅ | `opencode mcp` subcommand | Register Jira MCP via `opencode mcp`; parity with Claude. |
 | Hook scope (per-session) | ❌ global `~/.config/opencode/plugin/`, cwd-match | ✅ | project `.opencode/plugin/` (project-scoped plugins; project config overrides global) | Install the `crow-hooks.js` plugin into the **worktree's** `.opencode/plugin/` with the session UUID baked in, instead of the global dir. Closes the shared-cwd collision. |
 | Remote control | ⚠️ faked via `crow send` stdin | ⚠️ native option exists | `opencode serve` (headless server) + `opencode attach <url>` + `opencode acp` (Agent Client Protocol) + `opencode web` | No change recommended near-term; `crow send` paste is simpler than standing up a server per session. `supportsRemoteControl=true` stays correct. Note ACP as the strategic option if Crow ever wants structured (non-paste) driving. |
 | Review | ✅ inlined skill (already works) | ✅ | `opencode run` + inlined skill; also `opencode github` / `opencode pr <n>` | No change needed. `opencode pr <number>` could simplify PR-checkout for review jobs later. |
+
+> **Version note (auto-permission):** the installed build was `1.17.10`; the analysis
+> above is cited to upstream `sst/opencode` tags because the auto-permission surface
+> is only correct if you know which side of the `v1.17`→`v1.18` boundary you're on.
+> Re-probe against the actually-installed build before implementing #831.
 
 ---
 
@@ -104,12 +122,12 @@ a single adapter + its launcher + hook writer + tests change together).
 
 | Ticket | Scope | Closes |
 |---|---|---|
-| [#829](https://github.com/corveil/crow/issues/829) — Cursor closures | resume (`--continue`/`--resume`), print-mode jobs/review (`-p`), auto-permission (`--force`/`--auto-review`/`--trust`), MCP (`cursor-agent mcp`), per-project `.cursor/hooks.json`, auto-wire `CursorLauncher` | §3a rows 1–6 |
-| [#830](https://github.com/corveil/crow/issues/830) — Codex closures | resume (`codex resume --last`), review (`codex review`), non-interactive `codex exec` + auto-approve (`-a never`/`--dangerously-bypass…`), MCP (`codex mcp`), per-project `.codex/hooks.json` (trust-seeded); evaluate experimental `remote-control` | §3b rows 1–5, 7 |
-| [#831](https://github.com/corveil/crow/issues/831) — OpenCode closures | TUI resume with history (`--continue`/`--session`), retire `--help` auto-probe (stable `--dangerously-skip-permissions`), MCP (`opencode mcp`), per-project `.opencode/plugin/` | §3c rows 1–4 |
+| [#829](https://github.com/corveil/crow/issues/829) — Cursor closures | resume (`--continue`/`--resume`), print-mode jobs/review (`-p`), auto-permission (`--force`; `--trust` headless-only; **not** the undocumented `--auto-review`), MCP (`cursor-agent mcp`), per-project `.cursor/hooks.json`, auto-wire `CursorLauncher` | §3a rows 1–6 |
+| [#830](https://github.com/corveil/crow/issues/830) — Codex closures | resume (`codex resume --last`), review (`codex review`), non-interactive `codex exec` + auto-approve (`-a never -s workspace-write`, bounded — **not** full-bypass), MCP (`codex mcp`), per-project `.codex/hooks.json` (persist per-worktree trust — **not** `--dangerously-bypass-hook-trust`; resolve merge-vs-clobber), retire `notify` bridge, evaluate experimental `remote-control` | §3b rows 1–5, 7, 8 |
+| [#831](https://github.com/corveil/crow/issues/831) — OpenCode closures | TUI resume with history (`--continue`/`--session`), MCP (`opencode mcp`), per-project `.opencode/plugin/`; **narrow (do not delete) the auto-permission probe** — TUI `--auto` was gone only in `v1.17.x` and returned in `v1.18.0`, so keep `runAutoApproveSuffix`'s fallback and make the probe version-aware | §3c rows 1–4 |
 
 **Deferred (no ticket):**
-- **Codex async hooks** (§2 #4 / §3b) — upstream still parses-but-skips `async:true`; nothing to wire. Re-check on next Codex minor.
+- **Codex async hooks** (§2 #4 / §3b) — upstream still parses-but-skips `async:true` at HEAD (~`0.146-alpha`), except `SessionEnd` which runs synchronously; nothing to wire for Crow's state events. Re-check on a future Codex minor.
 - **Cursor / OpenCode native RC** (§3a, §3c RC rows) — native surfaces exist (`--remote`, `serve`/`attach`/`acp`) but are heavier than the working `crow send` paste; no user-facing capability gained today.
 
 Spin-off tickets are opened against `corveil/crow` and reference this audit + [#828](https://github.com/corveil/crow/issues/828).
@@ -123,11 +141,11 @@ the capability-tiers ADR are **not yet merged**, so there is nothing in-repo to 
 When #827 lands, apply these corrections from §2 so no stale "why" survives:
 
 - **Resume** row: Cursor ❌→✅ (`--continue`/`--resume`), Codex ❌→✅ (`codex resume`), OpenCode ⚠️→✅-with-history.
-- **Auto-permission** row: Cursor ❌→✅, Codex ❌→✅; rewrite OpenCode's "runtime-probed `--auto`" to "`run --dangerously-skip-permissions` (probe retired)".
+- **Auto-permission** row: Cursor ❌→✅, Codex ❌→✅; rewrite OpenCode's "runtime-probed `--auto`" to note the `run` path already auto-approves via `runAutoApproveSuffix` and the TUI `--auto` surface is version-dependent (gone in `v1.17.x`, back in `v1.18.0`) — *not* "probe retired".
 - **MCP** row: Cursor/Codex/OpenCode ❌→✅.
-- **Hook scope** row: all three ❌→✅ (per-project config files now exist); keep the cwd-match note only as the *current adapter behavior*, not an upstream limitation.
+- **Hook scope** row: all three ❌→✅ (per-project config files now exist); keep the cwd-match note only as the *current adapter behavior*, not an upstream limitation. Add the Codex trust-gate caveat (§3b).
 - **Review** row: Codex ❌→✅ (`codex review`).
 - **Remote control** row: Codex `false`→"experimental `remote-control`"; leave Cursor/OpenCode ⚠️ (fake) with a note that native surfaces exist.
-- **Hook async** row: leave Codex ❌; update the pinned version `v0.139.0`→`v0.141.0` and the reason from "no async support" to "async parsed-but-skipped upstream".
+- **Hook async** row: leave Codex ❌; refresh the pinned version `v0.139.0`→ HEAD (~`0.146-alpha`) and the reason from "no async support" to "async parsed-but-skipped upstream (except `SessionEnd`, run synchronously)".
 
 Until #827 merges, this audit is the authoritative record of what's closeable.
