@@ -68,12 +68,26 @@ the default.** At daemon boot, `CrowDaemon.registerAgents` registers
 `findBinary()` resolves**. So Claude Code is always present and always the
 default; any other harness whose binary is off `PATH` is simply not in the map.
 
-The engine never switches on harness identity. `SessionService.launchAgent`,
-`handoffAgent`, and `buildReviewPrompt` look the agent up by kind and call
-protocol members. The one accepted exception is a small **Claude-only prep
-branch** (`if agent.kind == .claudeCode`) for trust seeding and AI-gateway env —
-capabilities the protocol does not (yet) abstract because no other harness has an
-analogue (see [ADR 0015](./0015-harness-capability-tiers.md)).
+The engine has **no central per-harness switch**: `SessionService.launchAgent`
+and `handoffAgent` resolve the agent by kind and drive it through protocol
+members (`autoLaunchCommand`, `hookConfigWriter`, `stateSignalSource`, …). A
+handful of **residual identity checks** remain where the protocol does not (yet)
+abstract a Claude-specific concept:
+
+1. **Review-prompt form.** `SessionService.buildReviewPrompt` is a literal
+   `switch agentKind` selecting the terse `/crow-review-pr <URL>` slash-command
+   (Claude) versus the inlined skill body (Cursor / OpenCode), with Codex
+   returning `nil` upstream.
+2. **Claude-only prep**, gated by `if …kind == .claudeCode`, for three
+   capabilities no other harness has: **trust seeding**
+   (`ClaudeTrustSeeder.seedTrust`, at `launchAgent`, `handoffAgent`, and the two
+   Manager paths — four sites), **AI-gateway env**
+   (`ClaudeHookConfigWriter.writeGatewayEnv` + `gatewayEnvPrefix`), and **OTEL
+   telemetry env** (`AgentLaunch.prepareAgentLaunchText`).
+
+These are the accepted exceptions — the candidates for a future
+`capabilities`-style member if a second harness ever grows an analogue (see
+[ADR 0015](./0015-harness-capability-tiers.md)).
 
 ## Consequences
 
@@ -93,13 +107,18 @@ analogue (see [ADR 0015](./0015-harness-capability-tiers.md)).
   picker and in `handoff-agent` (which fails `agentBinaryMissing`). This is
   intentional (no half-registered harness), but "why isn't Cursor in the list?"
   is answered by `findBinary()`, not an error message.
-- The `Claude-only` prep branch is a real switch-on-identity the abstraction
-  hasn't dissolved. It is documented and localized to two call sites, and is the
-  candidate for a future `capabilities`-style member if a second harness grows a
-  gateway/trust concept.
+- The residual identity checks above are real switches-on-identity the
+  abstraction hasn't dissolved — the review-prompt `switch` plus Claude-only prep
+  (trust seeding across four sites, gateway env, OTEL telemetry). They are the
+  candidates for a future `capabilities`-style member if a second harness grows a
+  gateway/trust/telemetry concept.
 - `AgentKind` being an open struct means a typo'd raw value (`"claude_code"` vs
-  `"claude-code"`) resolves to an unregistered kind rather than a compile error —
-  the CLI validates the four known tokens to blunt this.
+  `"claude-code"`) resolves to an unregistered kind rather than a compile error.
+  The CLI's `validate()` only rejects an empty `--agent` (the four tokens appear
+  in its help/error text, not a membership check), so the typo is caught
+  **server-side** by the registry lookup — `handoffAgent` throws
+  `AgentHandoffError.agentNotRegistered`. Behavior is safe; the guard just lives
+  in the daemon, not the client.
 
 ## Alternatives considered
 
@@ -131,5 +150,8 @@ analogue (see [ADR 0015](./0015-harness-capability-tiers.md)).
   - `Packages/CrowCore/Sources/CrowCore/Agent/AgentRegistry.swift`
   - `Packages/CrowCore/Sources/CrowCore/Agent/{HookConfigWriter,StateSignalSource,BinaryOverrides}.swift`
   - `Packages/CrowDaemon/Sources/CrowDaemon/CrowDaemon.swift` (`registerAgents`)
+  - `Packages/CrowEngine/Sources/CrowEngine/SessionService.swift` (`launchAgent`, `handoffAgent`, `buildReviewPrompt`, Manager trust-seed sites)
+  - `Packages/CrowEngine/Sources/CrowEngine/AgentLaunch.swift` (`prepareAgentLaunchText`, OTEL gate)
+  - `Packages/CrowCLI/Sources/CrowCLILib/Commands/SessionCommands.swift` (`HandoffAgent.validate`)
   - `Packages/Crow{Claude,Cursor,Codex,OpenCode}/`
 - Reference: [Coding-agent harness capability matrix](../agent-harness-matrix.md)
