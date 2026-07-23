@@ -86,4 +86,4 @@ Option A is simpler and fully fixes the sediment, but it regresses unified scrol
 
 ## 7. Follow-up
 
-Implementation is tracked in a separate ticket (filed from this spike): per-agent-window `alternate-screen on` + agent-window classification in the daemon, conditional `swallowMouseMode`/`enableWheelScroll` in `app.js`, the client alt-buffer-detection wiring (scope the smcup strip or signal window-kind), and an alt-buffer pass over CROW-606 replay / jump-to-bottom / copy-paste. Prototype branches `spike/822-option-a` and `spike/822-option-b` are reference only — not for merge.
+Implementation is tracked in [#824](https://github.com/corveil/crow/issues/824) (filed from this spike): per-agent-window `alternate-screen on` + agent-window classification in the daemon, conditional `swallowMouseMode`/`enableWheelScroll` in `app.js`, the client alt-buffer-detection wiring (scope the smcup strip or signal window-kind), and an alt-buffer pass over CROW-606 replay / jump-to-bottom / copy-paste. Prototype branches `spike/822-option-a` and `spike/822-option-b` are reference only — not for merge.
