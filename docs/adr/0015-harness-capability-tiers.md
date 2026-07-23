@@ -48,10 +48,11 @@ records the rationale for each gap here (verbatim reasons preserved from source)
    session-state detection."*
 
 5. **Auto-permission is Claude + OpenCode only.** Claude emits
-   `--permission-mode auto`; OpenCode runtime-probes `opencode --help` for
-   `--auto` (falling back to `--dangerously-skip-permissions`) and applies it to
-   `.job` sessions with auto-permission only. Cursor and Codex accept and ignore
-   the `autoPermissionMode` argument.
+   `--permission-mode auto`; OpenCode runtime-probes `opencode --help` for the
+   TUI `--auto` flag (no fallback) and `opencode run --help` for the headless
+   auto-approve flag (`--auto`, else `--dangerously-skip-permissions`), applying
+   them to `.job` sessions with auto-permission only. Cursor and Codex accept and
+   ignore the `autoPermissionMode` argument.
 
 6. **MCP is Claude-only.** Claude's prompt fetches Jira via the `jira` MCP
    server (`jira_get_issue`); its MCP config lives in `~/.claude.json`. The other
