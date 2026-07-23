@@ -100,19 +100,36 @@ extension SessionTerminal {
     ///
     /// TWO shapes qualify, and both are load-bearing:
     ///   * a managed work terminal (`isManaged`), and
-    ///   * a Manager session's terminal, which always launches an agent but is
-    ///     built WITHOUT `isManaged` — `createManagerTerminal` relies on the
-    ///     memberwise default of `false`. Keying on `isManaged` alone silently
-    ///     excludes the Manager, which is itself one of the repainting agent
-    ///     windows #822 was reported against.
+    ///   * a Manager session's **agent** terminal, which launches an agent via
+    ///     `command` but is built WITHOUT `isManaged` — `createManagerTerminal`
+    ///     relies on the memberwise default of `false`. Keying on `isManaged`
+    ///     alone silently excludes the Manager, itself one of the repainting
+    ///     agent windows #822 was reported against.
+    ///
+    /// The `command != nil` half of the Manager test is what keeps this from
+    /// over-classifying. A Manager session can hold ADDITIONAL plain shells —
+    /// `new-terminal` with just a `session_id` (the `+` button, or
+    /// `crow new-terminal --session <manager-uuid>`) yields `isManaged: false`
+    /// with no command. Those are line-streaming surfaces and must keep the
+    /// unified 50k scrollback; only the terminal that actually launches the
+    /// agent gets the alt-buffer model. `createManagerTerminal` always passes a
+    /// non-nil `managerCommand(for:)`, so the two are cleanly separable.
     ///
     /// Deliberately NOT `agentKind` (it always resolves to a configured
     /// default, so it never discriminates) and NOT `trackReadiness` (false for
     /// Manager sessions precisely because they launch the agent via `command`).
     ///
+    /// Known boundary: an extra Manager-session terminal created with an
+    /// explicit `--command` is treated as an agent surface. That is a deliberate
+    /// trade — the alternative is persisting a new per-terminal field — and the
+    /// cost is only that a hand-launched full-screen program there gets the
+    /// naked-terminal scroll model instead of the unified one.
+    ///
     /// `session` is this terminal's session; `nil` (not yet hydrated) falls
     /// back to `isManaged` alone.
     public func isAgentSurface(session: Session?) -> Bool {
-        isManaged || (session?.isManager ?? false)
+        if isManaged { return true }
+        guard session?.isManager == true else { return false }
+        return command != nil
     }
 }

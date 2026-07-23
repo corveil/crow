@@ -47,11 +47,14 @@ So `term.buffer.active.type` is **permanently `'normal'`** on the web client, an
 
 **Chosen: (b), carried on the existing `list-terminals` RPC payload.** `crowd` emits a per-terminal `agent_surface` flag beside the existing `scrollback_degraded`, and `app.js` routes on it. The flag's source of truth is the `alternate-screen` **window option the daemon actually set**, read back via `#{alternate-screen}` in the same `list-windows` call that feeds degraded-detection — so daemon and client agree by construction, with no window-name matching. The `/terminal` socket was deliberately not used: its server→client direction is binary-only through a single writer task, so adding text frames would mean widening the stream type and racing that writer.
 
-Classification is `SessionTerminal.isAgentSurface(session:)` — a managed work terminal **or** a Manager session's terminal. Both halves are load-bearing, and the alternatives all fail:
+Classification is `SessionTerminal.isAgentSurface(session:)` — a managed work terminal, **or** a Manager session's terminal that carries a launch `command`. Every part is load-bearing, and the simpler alternatives all fail:
 
 - `agentKind` never discriminates: it always resolves to a configured default, so every terminal has one.
 - `trackReadiness` is `false` for Manager sessions, precisely because they launch the agent via `command`.
-- `isManaged` **alone** silently excludes the Manager: `createManagerTerminal` builds its row without that flag, so it takes the memberwise default of `false` — yet the Manager runs a full-frame repainting agent and is one of the windows #822 was reported against.
+- `isManaged` **alone** under-classifies: `createManagerTerminal` builds its row without that flag, so it takes the memberwise default of `false` — yet the Manager runs a full-frame repainting agent and is one of the windows #822 was reported against.
+- Session kind **alone** over-classifies in the other direction: a Manager session can hold additional plain shells (`new-terminal` with just a `session_id`), and those are line-streaming surfaces that must keep the unified scrollback. The `command != nil` test separates the Manager's agent terminal from them.
+
+Boundary accepted: an extra Manager-session terminal created with an explicit `--command` is treated as an agent surface. The alternative is persisting a new per-terminal field; the cost here is only that a hand-launched full-screen program in that one spot gets the naked-terminal scroll model.
 
 The predicate lives in `CrowCore` because the daemon needs it twice — to set the window option at creation/adopt, and as the `list-terminals` fallback before a window exists — and those two must not drift apart.
 

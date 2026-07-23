@@ -42,9 +42,31 @@ struct AgentSurfaceClassificationTests {
         #expect(managerTerminal.isAgentSurface(session: session))
     }
 
+    /// The counterweight to the test above. A Manager session can hold extra
+    /// plain shells — `new-terminal` with only a `session_id` (the `+` button,
+    /// or `crow new-terminal --session <manager-uuid>`) produces
+    /// `isManaged: false` with no command. Classifying by session kind ALONE
+    /// swept those into the alt-buffer model, taking away the unified 50k
+    /// scrollback from an ordinary line-streaming shell. Only the terminal that
+    /// actually launches the agent qualifies.
+    @Test func plainShellInAManagerSessionIsNotAnAgentSurface() {
+        let session = Session(name: "Manager", status: .active, kind: .manager)
+        let shell = SessionTerminal(sessionID: session.id, name: "Shell", cwd: "/dev/root")
+        #expect(shell.command == nil, "precondition: an added shell carries no launch command")
+        #expect(!shell.isAgentSurface(session: session))
+    }
+
     @Test func unhydratedSessionFallsBackToIsManaged() {
         // Before the session is known we can only trust the flag we have.
         #expect(terminal(isManaged: true).isAgentSurface(session: nil))
         #expect(!terminal(isManaged: false).isAgentSurface(session: nil))
+    }
+
+    @Test func managerSessionKindDoesNotLeakAcrossSessions() {
+        // A work session's plain shell stays unified even if a Manager exists.
+        let work = Session(name: "work", status: .active, kind: .work)
+        let shell = SessionTerminal(sessionID: work.id, name: "Shell", cwd: "/repo", command: "vim")
+        #expect(!shell.isAgentSurface(session: work),
+                "a command alone must not promote a work-session shell")
     }
 }
