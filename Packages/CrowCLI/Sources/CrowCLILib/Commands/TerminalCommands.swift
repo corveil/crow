@@ -71,6 +71,31 @@ public struct CloseTerminal: ParsableCommand {
     }
 }
 
+/// Recreate a terminal whose tmux window has degraded scrollback (CROW-804).
+/// Kills the stale window and rebuilds a fresh, correctly-configured one,
+/// relaunching the agent (`claude --continue`). Destructive to the running
+/// agent — the web UI confirms first; from the CLI the caller owns that choice.
+public struct RecreateTerminal: ParsableCommand {
+    public static let configuration = CommandConfiguration(commandName: "recreate-terminal", abstract: "Recreate a terminal to restore full scrollback (CROW-804)")
+    @Option(name: .long, help: "Session UUID") var session: String
+    @Option(name: .long, help: "Terminal UUID") var terminal: String
+
+    public init() {}
+
+    public func validate() throws {
+        try validateUUID(session, label: "session UUID")
+        try validateUUID(terminal, label: "terminal UUID")
+    }
+
+    public func run() throws {
+        let result = try rpc("recreate-terminal", params: [
+            "session_id": .string(session),
+            "terminal_id": .string(terminal),
+        ])
+        printJSON(result)
+    }
+}
+
 /// Rename a terminal tab.
 public struct RenameTerminal: ParsableCommand {
     public static let configuration = CommandConfiguration(commandName: "rename-terminal", abstract: "Rename a terminal tab")

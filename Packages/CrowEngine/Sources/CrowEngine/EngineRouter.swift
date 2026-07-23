@@ -885,6 +885,11 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                 }
                 let terms = await MainActor.run { capturedAppState.terminals(for: id) }
                 let readiness = await MainActor.run { capturedAppState.terminalReadiness }
+                // Windows stuck in the alternate-screen buffer or capped at the
+                // old 5000-line history-limit can't show full scroll-up history
+                // and can only be healed by recreation (CROW-804). Read the live
+                // set once so the web UI can badge the affected tabs.
+                let degraded = await MainActor.run { TmuxBackend.shared.degradedWindowIndices() }
                 let items: [JSONValue] = terms.map { t in
                     // `readiness` lets CLI callers (setup.sh) verify the agent
                     // actually started rather than assuming a launch succeeded
@@ -900,6 +905,10 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                         // to provide it — CROW-593 review regression).
                         "window": t.tmuxBinding.map { .int($0.windowIndex) } ?? .null,
                         "readiness": .string((readiness[t.id] ?? .uninitialized).rawValue),
+                        // True when this terminal's window has degraded scrollback
+                        // and needs a recreate (CROW-804). Never degraded when
+                        // there's no window binding yet.
+                        "scrollback_degraded": .bool(t.tmuxBinding.map { degraded.contains($0.windowIndex) } ?? false),
                     ])
                 }
                 return ["terminals": .array(items)]
@@ -929,6 +938,30 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                     }
                     capturedStore.mutate { data in data.terminals.removeAll { $0.id == terminalID } }
                     return ["deleted": .bool(true)]
+                }
+            },
+            // Heal a terminal whose tmux window has degraded scrollback — stuck
+            // in the alternate-screen buffer and/or capped at the old 5000-line
+            // history-limit, which tmux can't fix in place (CROW-804). Kills the
+            // window and rebuilds a fresh, correctly-configured one, relaunching
+            // the agent (`claude --continue`). Destructive to the running agent,
+            // so the web UI confirms before calling this.
+            "recreate-terminal": { @Sendable params in
+                guard let sessionIDStr = params["session_id"]?.stringValue,
+                      let sessionID = UUID(uuidString: sessionIDStr),
+                      let terminalIDStr = params["terminal_id"]?.stringValue,
+                      let terminalID = UUID(uuidString: terminalIDStr) else {
+                    throw RPCError.invalidParams("session_id and terminal_id required")
+                }
+                return try await MainActor.run {
+                    guard capturedService.recreateTerminalSurface(
+                        sessionID: sessionID, terminalID: terminalID, devRoot: devRoot) else {
+                        // False = terminal not found OR the fresh tmux window
+                        // failed to register (the old window was killed, so the
+                        // terminal is now unbound). Surface it either way (CROW-804).
+                        throw RPCError.applicationError("Could not recreate terminal (not found or tmux window failed to register)")
+                    }
+                    return ["recreated": .bool(true)]
                 }
             },
             "rename-terminal": { @Sendable params in

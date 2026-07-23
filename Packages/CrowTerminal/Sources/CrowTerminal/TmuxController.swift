@@ -163,6 +163,32 @@ public struct TmuxController: Sendable {
         }
     }
 
+    /// Per-window scrollback health: each window's index plus the two pane
+    /// facts that determine whether scroll-up can show the full transcript —
+    /// `#{history_limit}` (the frozen-at-birth scrollback cap) and
+    /// `#{alternate_on}` (whether the active pane is in the alternate buffer,
+    /// which has NO scrollback). Windows created before the current
+    /// `crow-tmux.conf` are stuck at `history_limit=5000 alternate_on=1` and
+    /// tmux cannot resize/undo either in place, so this is how Crow detects the
+    /// degraded windows that need a recreate (CROW-804). `history_limit`/
+    /// `alternate_on` resolve against each window's active pane under
+    /// `list-windows -F`.
+    public func listWindowScrollback() throws -> [(index: Int, historyLimit: Int, alternateOn: Bool)] {
+        let out = try run(["list-windows", "-t", sessionName,
+                           "-F", "#{window_index}\t#{history_limit}\t#{alternate_on}"])
+        return out.split(separator: "\n").compactMap { line in
+            let parts = line.split(separator: "\t", maxSplits: 2, omittingEmptySubsequences: false)
+            guard parts.count == 3,
+                  let idx = Int(parts[0].trimmingCharacters(in: .whitespaces)),
+                  let limit = Int(parts[1].trimmingCharacters(in: .whitespaces)) else {
+                return nil
+            }
+            // tmux renders boolean flags as "1"/"0".
+            let alt = parts[2].trimmingCharacters(in: .whitespaces) == "1"
+            return (idx, limit, alt)
+        }
+    }
+
     // MARK: - Windows
 
     /// `timeout` defaults to the per-call default. Callers spawning a window

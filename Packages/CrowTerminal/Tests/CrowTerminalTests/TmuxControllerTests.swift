@@ -158,4 +158,62 @@ struct TmuxControllerTests {
         #expect(out.contains("LINE-0000-"))
         #expect(out.contains("LINE-1199-"))
     }
+
+    /// CROW-804 enforcement: a window created under the **bundled** `crow-tmux.conf`
+    /// is born with the 50000-line main-buffer scrollback, so it is NOT flagged
+    /// degraded. This is the regression guard that new managed windows always get
+    /// correct scrollback (the whole point of the config fix); a window stuck at
+    /// the old 5000 limit or in the alt buffer is what `isScrollbackDegraded`
+    /// catches for the recreate flow.
+    @Test func newWindowUnderBundledConfIsNotDegraded() throws {
+        let confURL = try #require(BundledResources.tmuxConfURL)
+        let ctrl = makeController()
+        defer {
+            ctrl.killServer()
+            try? FileManager.default.removeItem(atPath: ctrl.socketPath)
+        }
+        try ctrl.newSessionDetached(configPath: confURL.path, command: "/bin/sh -c 'sleep 60'")
+        let idx = try ctrl.newWindow(command: "/bin/sh -c 'sleep 60'")
+        let health = try ctrl.listWindowScrollback()
+        let window = try #require(health.first(where: { $0.index == idx }))
+        #expect(window.historyLimit == TmuxBackend.scrollbackHistoryLimit)
+        #expect(window.alternateOn == false)
+        #expect(!TmuxBackend.isScrollbackDegraded(
+            historyLimit: window.historyLimit, alternateOn: window.alternateOn))
+    }
+
+    /// CROW-804: assert `alternate-screen off` in the bundled conf actually
+    /// suppresses the alternate buffer — a `sleep`-only pane never requests it,
+    /// so it wouldn't catch a regression that broke the setting or its option
+    /// scope. Drive a process that issues smcup (DECSET 1049) and assert the pane
+    /// stays in the MAIN buffer (`alternate_on == 0`). Without the setting this
+    /// pane reads `alternate_on == 1` (verified: bare conf → 1), so this genuinely
+    /// locks the config behavior, not a tautology.
+    @Test func bundledConfKeepsInnerAppsOutOfAlternateBuffer() throws {
+        let confURL = try #require(BundledResources.tmuxConfURL)
+        let ctrl = makeController()
+        defer {
+            ctrl.killServer()
+            try? FileManager.default.removeItem(atPath: ctrl.socketPath)
+        }
+        // The anchor pane (window 0) *continuously* re-requests the alternate
+        // screen. A broken `alternate-screen off` (or wrong option scope) would
+        // flip `alternate_on` to 1 within a tick; poll across a window and assert
+        // it stays 0 the whole time. Polling (vs a single fixed sleep) avoids a
+        // flake if the first read lands before the shell's first emit, and the
+        // persistent emitter makes an all-0 result meaningful rather than a race.
+        try ctrl.newSessionDetached(
+            configPath: confURL.path,
+            command: #"/bin/sh -c 'while true; do printf "\033[?1049h"; sleep 0.05; done'"#)
+        var reads: [Bool] = []
+        let deadline = Date().addingTimeInterval(1.0)
+        repeat {
+            Thread.sleep(forTimeInterval: 0.1)
+            if let anchor = (try? ctrl.listWindowScrollback())?.first(where: { $0.index == 0 }) {
+                reads.append(anchor.alternateOn)
+            }
+        } while Date() < deadline
+        #expect(!reads.isEmpty)
+        #expect(reads.allSatisfy { $0 == false })
+    }
 }

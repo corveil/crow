@@ -2053,12 +2053,39 @@ function renderTabs() {
   // moots the stale-tab naming bug: a renamed manager session has no tab to go
   // stale, since tabs are labeled from the terminal name, not the session name.)
   const sel = sessions.find((x) => x.id === selectedId);
-  if (sel && sel.kind === 'manager') return;
+  if (sel && sel.kind === 'manager') {
+    // #680: managers have no tabs. But the Manager window is a common CROW-804
+    // "stuck alt-screen / 5000-line" case, and with no tab there'd be no ⚠ or
+    // Recreate. Surface a slim warning strip with a Recreate action when the
+    // Manager terminal is degraded; otherwise leave #tabbar empty so it stays
+    // collapsed. Recreate routes through restartManager (SessionService).
+    const degraded = terminals.find((t) => t.scrollback_degraded);
+    if (degraded) {
+      const strip = el('div', 'degraded-strip');
+      strip.appendChild(el('span', 'tab-degraded', '⚠'));
+      strip.appendChild(el('span', 'degraded-msg', 'Scrollback degraded — this Manager window can\'t show full history.'));
+      const btn = el('span', 'degraded-recreate', 'Recreate');
+      btn.title = 'Rebuild this Manager terminal to restore full scroll-up history (restarts the agent).';
+      btn.onclick = () => recreateTerminal(degraded);
+      strip.appendChild(btn);
+      bar.appendChild(strip);
+    }
+    return;
+  }
   for (const t of terminals) {
     const tab = el('div', 'tab' + (activeTerminal && t.id === activeTerminal.id ? ' active' : ''));
     const label = el('span', null, t.name);
     label.onclick = () => switchTerminal(t);
     tab.appendChild(label);
+    // CROW-804: this terminal's tmux window is stuck with degraded scrollback
+    // (alternate-screen buffer and/or the old 5000-line history-limit) that
+    // tmux can't fix in place. Badge it and offer a one-click recreate.
+    if (t.scrollback_degraded) {
+      const warn = el('span', 'tab-degraded', '⚠');
+      warn.title = 'Scrollback degraded — this window can\'t show full history (created before the current config). Click to recreate it and restore scroll-up.';
+      warn.onclick = (e) => { e.stopPropagation(); recreateTerminal(t); };
+      tab.appendChild(warn);
+    }
     const close = el('span', 'tab-close', '×');
     close.onclick = (e) => { e.stopPropagation(); closeTerminal(t); };
     tab.appendChild(close);
@@ -2100,6 +2127,40 @@ async function closeTerminal(t) {
   try { await rpc('close-terminal', { session_id: selectedId, terminal_id: t.id }); } catch (_) {}
   if (activeTerminal && activeTerminal.id === t.id) activeTerminal = null;
   await refreshTerminals();
+}
+
+// CROW-804: heal a terminal whose tmux window has degraded scrollback. Recreate
+// kills the window and rebuilds it under the current config, relaunching the
+// agent (`claude --continue`) — so confirm first, since it interrupts whatever
+// is running in the pane.
+async function recreateTerminal(t) {
+  const ok = await confirmModal(
+    'This rebuilds “' + (t.name || 'terminal') + '” to restore full scroll-up history. '
+    + 'The agent running in it will be restarted (and resumed where the agent supports it).',
+    { title: 'Recreate terminal', okLabel: 'Recreate', danger: true });
+  if (!ok) return;
+  try {
+    await rpc('recreate-terminal', { session_id: selectedId, terminal_id: t.id });
+  } catch (e) {
+    if (term) term.write('\r\n\x1b[31m[crow] recreate-terminal failed: ' + (e.message || e) + '\x1b[0m\r\n');
+    // Register-then-kill means a failed heal leaves the old window live and
+    // still degraded — refresh so the ⚠ / Recreate affordance re-renders for a
+    // retry instead of vanishing on a half-applied state.
+    await refreshTerminals();
+    return;
+  }
+  await refreshTerminals();
+  // Recreate binds a FRESH tmux window, but `new-window` (no -a) reuses the
+  // index just freed by killWindow — so the new index usually EQUALS the old
+  // one. Even after re-pointing at the refreshed row, attachWindow's
+  // `win === attachedWindow` guard would then skip the reload and leave the
+  // surface on the dead pane (the stale-*index* case; the stale-*object* case
+  // was fixed earlier). Clear attachedWindow so the reattach can't short-circuit,
+  // then switch onto the refreshed row — for the primary Manager its id changes,
+  // so fall back to the activeTerminal refreshTerminals already swapped in.
+  const refreshed = terminals.find((x) => x.id === t.id) || activeTerminal;
+  attachedWindow = null;
+  if (refreshed) switchTerminal(refreshed);
 }
 
 // ---------------------------------------------------------------------------

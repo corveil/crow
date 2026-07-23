@@ -33,6 +33,15 @@ protocol CockpitSessionStarter {
 public final class TmuxBackend {
     public static let shared = TmuxBackend()
 
+    /// Scrollback ceiling every managed window should be born with. Mirrors the
+    /// bundled `crow-tmux.conf` `set -gs history-limit 50000`, the daemon's
+    /// `TerminalCockpit.replayLines`, and the web UI's xterm.js `scrollback:
+    /// 50000` — the single number those four surfaces must agree on so a full
+    /// transcript survives a reconnect. A window whose `history_limit` is below
+    /// this (created under an older 2000/5000 default) is degraded and can only
+    /// be fixed by recreating it (CROW-804).
+    nonisolated public static let scrollbackHistoryLimit = 50000
+
     /// Fired when a tmux-backed terminal's readiness state changes.
     /// Callers wire this through to the `TerminalReadiness` state machine so
     /// downstream consumers (e.g. `ClaudeLauncher`) stay backend-agnostic.
@@ -695,6 +704,45 @@ public final class TmuxBackend {
         guard let ctrl = controller else { return [] }
         do { return try ctrl.listWindows() }
         catch { reportIfTimeout(error); return [] }
+    }
+
+    // MARK: - Scrollback health (CROW-804)
+
+    /// Pure policy: a window's scroll-up can't show the full transcript when its
+    /// pane is in the alternate buffer (no scrollback) OR its `history_limit` is
+    /// below the ceiling we bake into new windows. tmux freezes both at window
+    /// birth and can't resize/undo either in place (see `crow-tmux.conf`
+    /// history-limit caveat), so a degraded window's only remedy is recreation.
+    /// `nonisolated static` so the policy is unit-testable without tmux.
+    nonisolated public static func isScrollbackDegraded(
+        historyLimit: Int, alternateOn: Bool, floor: Int = TmuxBackend.scrollbackHistoryLimit
+    ) -> Bool {
+        alternateOn || historyLimit < floor
+    }
+
+    /// Window indices whose scrollback is degraded per `isScrollbackDegraded`.
+    /// Best-effort — `[]` when tmux is unavailable or the read fails, mirroring
+    /// `listCockpitWindows`. Callers use it to badge terminals in the web UI and
+    /// to log the degraded set on daemon start (CROW-804).
+    public func degradedWindowIndices(floor: Int = TmuxBackend.scrollbackHistoryLimit) -> Set<Int> {
+        guard let ctrl = controller else { return [] }
+        do {
+            let windows = try ctrl.listWindowScrollback()
+            return Set(windows
+                .filter { Self.isScrollbackDegraded(historyLimit: $0.historyLimit, alternateOn: $0.alternateOn, floor: floor) }
+                .map(\.index))
+        } catch {
+            reportIfTimeout(error)
+            return []
+        }
+    }
+
+    /// Kill the cockpit window at `index`. Passthrough to the controller so
+    /// callers outside `TmuxBackend` (e.g. the CROW-804 terminal recreate in
+    /// `SessionService`) can drop a degraded window before re-registering a
+    /// fresh one. No-op when tmux is unavailable.
+    public func killWindow(index: Int) {
+        controller?.killWindow(index: index)
     }
 
     /// Reap orphaned cockpit windows per `shouldReapOrphanWindow` (targeted-auto).

@@ -35,6 +35,20 @@ struct TerminalCockpit: Sendable {
         // Reap grouped sessions this or a prior crowd leaked (#667). Runs on
         // every startup, whether we adopted or created the cockpit.
         reapOrphanedViewSessions()
+        logDegradedScrollbackWindows()
+    }
+
+    /// Diagnostic: log every window whose scroll-up can't show the full
+    /// transcript — stuck in the alternate-screen buffer (`alternate_on=1`)
+    /// and/or capped below the current `history-limit` because it was created
+    /// before the config bump. tmux can't heal these in place; the web UI badges
+    /// them and offers a recreate (CROW-804). Best-effort; never throws.
+    private func logDegradedScrollbackWindows() {
+        guard let windows = try? controller.listWindowScrollback() else { return }
+        for w in windows where TmuxBackend.isScrollbackDegraded(
+            historyLimit: w.historyLimit, alternateOn: w.alternateOn) {
+            NSLog("[CrowTelemetry tmux:scrollback_degraded index=\(w.index) history_limit=\(w.historyLimit) alternate_on=\(w.alternateOn ? 1 : 0)]")
+        }
     }
 
     /// Kill `crowd-web-*` grouped sessions left detached by a prior crowd's
@@ -89,11 +103,13 @@ struct TerminalCockpit: Sendable {
         _ = try? controller.run(["select-window", "-t", "\(group):\(index)"])
     }
 
-    /// How many lines of pane history to replay on (re)connect. Matched to the
-    /// xterm.js client scrollback (`scrollback: 50000` in app.js) and the tmux
-    /// `history-limit` (crow-tmux.conf) so the full retained history survives a
-    /// crowd restart or browser reload (CROW-606).
-    static let replayLines = 50000
+    /// How many lines of pane history to replay on (re)connect. Wired to
+    /// `TmuxBackend.scrollbackHistoryLimit` — the same value baked into the tmux
+    /// `history-limit` (crow-tmux.conf) and the xterm.js client scrollback
+    /// (`scrollback: 50000` in app.js) — so the full retained history survives a
+    /// crowd restart or browser reload (CROW-606) and the daemon replay can't
+    /// drift from the policy floor (CROW-804 review).
+    static let replayLines = TmuxBackend.scrollbackHistoryLimit
 
     /// Capture window `index`'s pane scrollback (history + current screen) and
     /// package it as bytes ready to write into a reconnecting xterm.js buffer.
