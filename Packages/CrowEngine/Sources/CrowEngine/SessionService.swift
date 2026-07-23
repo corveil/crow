@@ -503,12 +503,17 @@ public final class SessionService {
         wireTerminalReadiness()
 
         let trackReadiness = terminal.isManaged
-        // Drop the old (degraded) window so its agent doesn't linger in a
-        // duplicate pane; `rehydrateTerminalSurface` below then registers a
-        // fresh window under the current config.
-        if let oldIndex = terminal.tmuxBinding?.windowIndex {
-            TmuxBackend.shared.killWindow(index: oldIndex)
-        }
+        // Register-then-kill (review): register the fresh window FIRST and only
+        // drop the old (degraded) window once the replacement is bound. On a
+        // register failure the old window stays live, so the terminal remains
+        // degraded-but-live (still badged + recreatable) instead of unbound with
+        // a dead pane. A brief duplicate-agent overlap is the accepted cost.
+        let oldIndex = terminal.tmuxBinding?.windowIndex
+        // Snapshot the readiness state we're about to re-arm so a failed register
+        // can restore it — otherwise a managed terminal is left half-armed
+        // pointing at a window that never got created.
+        let priorReadiness = appState.terminalReadiness[terminalID]
+        let priorAutoLaunch = appState.autoLaunchTerminals.contains(terminalID)
 
         var seed = terminal
         seed.tmuxBinding = nil
@@ -525,15 +530,24 @@ public final class SessionService {
 
         NSLog("[CrowTelemetry tmux:scrollback_recreate terminal=\(terminalID) session=\(sessionID)]")
         let updated = rehydrateTerminalSurface(seed, trackReadiness: trackReadiness)
-        applyRehydrationResult(sessionID: sessionID, original: seed, updated: updated)
-        // We already killed the old window. If registration failed the terminal
-        // is now unbound (worse than the degraded-but-live prior state), so report
-        // failure rather than a false success — the RPC surfaces it to the web
-        // error path instead of the UI refreshing as if healed (review).
-        if updated.tmuxBinding == nil {
-            NSLog("[SessionService] recreateTerminalSurface: re-register failed for \(terminalID); terminal is now unbound")
+
+        guard updated.tmuxBinding != nil else {
+            // Register failed. Leave the terminal exactly as it was — the old
+            // window is untouched (still live/degraded), so restore the readiness
+            // we re-armed and report failure. The RPC surfaces it and the ⚠ /
+            // Recreate affordance persists for a retry (review).
+            NSLog("[SessionService] recreateTerminalSurface: re-register failed for \(terminalID); keeping the existing degraded window")
+            if trackReadiness {
+                appState.terminalReadiness[terminalID] = priorReadiness
+                if !priorAutoLaunch { appState.autoLaunchTerminals.remove(terminalID) }
+            }
             return false
         }
+
+        // Replacement bound — persist the new window index, then drop the old
+        // degraded window so its (now-duplicate) agent doesn't linger.
+        applyRehydrationResult(sessionID: sessionID, original: seed, updated: updated)
+        if let oldIndex { TmuxBackend.shared.killWindow(index: oldIndex) }
         return true
     }
 

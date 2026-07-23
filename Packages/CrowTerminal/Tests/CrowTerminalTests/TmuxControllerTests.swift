@@ -196,14 +196,24 @@ struct TmuxControllerTests {
             ctrl.killServer()
             try? FileManager.default.removeItem(atPath: ctrl.socketPath)
         }
-        // The anchor pane (window 0) requests the alternate screen, then stays
-        // alive so we can read its buffer state back.
+        // The anchor pane (window 0) *continuously* re-requests the alternate
+        // screen. A broken `alternate-screen off` (or wrong option scope) would
+        // flip `alternate_on` to 1 within a tick; poll across a window and assert
+        // it stays 0 the whole time. Polling (vs a single fixed sleep) avoids a
+        // flake if the first read lands before the shell's first emit, and the
+        // persistent emitter makes an all-0 result meaningful rather than a race.
         try ctrl.newSessionDetached(
             configPath: confURL.path,
-            command: #"/bin/sh -c 'printf "\033[?1049h"; sleep 60'"#)
-        Thread.sleep(forTimeInterval: 0.3)
-        let health = try ctrl.listWindowScrollback()
-        let anchor = try #require(health.first(where: { $0.index == 0 }))
-        #expect(anchor.alternateOn == false)
+            command: #"/bin/sh -c 'while true; do printf "\033[?1049h"; sleep 0.05; done'"#)
+        var reads: [Bool] = []
+        let deadline = Date().addingTimeInterval(1.0)
+        repeat {
+            Thread.sleep(forTimeInterval: 0.1)
+            if let anchor = (try? ctrl.listWindowScrollback())?.first(where: { $0.index == 0 }) {
+                reads.append(anchor.alternateOn)
+            }
+        } while Date() < deadline
+        #expect(!reads.isEmpty)
+        #expect(reads.allSatisfy { $0 == false })
     }
 }

@@ -2143,6 +2143,10 @@ async function recreateTerminal(t) {
     await rpc('recreate-terminal', { session_id: selectedId, terminal_id: t.id });
   } catch (e) {
     if (term) term.write('\r\n\x1b[31m[crow] recreate-terminal failed: ' + (e.message || e) + '\x1b[0m\r\n');
+    // Register-then-kill means a failed heal leaves the old window live and
+    // still degraded — refresh so the ⚠ / Recreate affordance re-renders for a
+    // retry instead of vanishing on a half-applied state.
+    await refreshTerminals();
     return;
   }
   await refreshTerminals();
