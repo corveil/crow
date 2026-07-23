@@ -956,7 +956,10 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                 return try await MainActor.run {
                     guard capturedService.recreateTerminalSurface(
                         sessionID: sessionID, terminalID: terminalID, devRoot: devRoot) else {
-                        throw RPCError.applicationError("Terminal not found")
+                        // False = terminal not found OR the fresh tmux window
+                        // failed to register (the old window was killed, so the
+                        // terminal is now unbound). Surface it either way (CROW-804).
+                        throw RPCError.applicationError("Could not recreate terminal (not found or tmux window failed to register)")
                     }
                     return ["recreated": .bool(true)]
                 }

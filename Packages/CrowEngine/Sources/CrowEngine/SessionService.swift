@@ -526,6 +526,14 @@ public final class SessionService {
         NSLog("[CrowTelemetry tmux:scrollback_recreate terminal=\(terminalID) session=\(sessionID)]")
         let updated = rehydrateTerminalSurface(seed, trackReadiness: trackReadiness)
         applyRehydrationResult(sessionID: sessionID, original: seed, updated: updated)
+        // We already killed the old window. If registration failed the terminal
+        // is now unbound (worse than the degraded-but-live prior state), so report
+        // failure rather than a false success — the RPC surfaces it to the web
+        // error path instead of the UI refreshing as if healed (review).
+        if updated.tmuxBinding == nil {
+            NSLog("[SessionService] recreateTerminalSurface: re-register failed for \(terminalID); terminal is now unbound")
+            return false
+        }
         return true
     }
 

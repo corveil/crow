@@ -2146,12 +2146,16 @@ async function recreateTerminal(t) {
     return;
   }
   await refreshTerminals();
-  // Recreate keeps the terminal id but binds a NEW tmux window index, and
-  // refreshTerminals() only swaps activeTerminal when the id disappears — so the
-  // active tab would keep the old (killed) window object and attachWindow's
-  // `win === attachedWindow` guard would skip the reload. Re-point at the
-  // refreshed row and switch onto its new window so the fresh pane streams in.
-  const refreshed = terminals.find((x) => x.id === t.id);
+  // Recreate binds a FRESH tmux window, but `new-window` (no -a) reuses the
+  // index just freed by killWindow — so the new index usually EQUALS the old
+  // one. Even after re-pointing at the refreshed row, attachWindow's
+  // `win === attachedWindow` guard would then skip the reload and leave the
+  // surface on the dead pane (the stale-*index* case; the stale-*object* case
+  // was fixed earlier). Clear attachedWindow so the reattach can't short-circuit,
+  // then switch onto the refreshed row — for the primary Manager its id changes,
+  // so fall back to the activeTerminal refreshTerminals already swapped in.
+  const refreshed = terminals.find((x) => x.id === t.id) || activeTerminal;
+  attachedWindow = null;
   if (refreshed) switchTerminal(refreshed);
 }
 

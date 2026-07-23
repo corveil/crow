@@ -181,4 +181,29 @@ struct TmuxControllerTests {
         #expect(!TmuxBackend.isScrollbackDegraded(
             historyLimit: window.historyLimit, alternateOn: window.alternateOn))
     }
+
+    /// CROW-804: assert `alternate-screen off` in the bundled conf actually
+    /// suppresses the alternate buffer — a `sleep`-only pane never requests it,
+    /// so it wouldn't catch a regression that broke the setting or its option
+    /// scope. Drive a process that issues smcup (DECSET 1049) and assert the pane
+    /// stays in the MAIN buffer (`alternate_on == 0`). Without the setting this
+    /// pane reads `alternate_on == 1` (verified: bare conf → 1), so this genuinely
+    /// locks the config behavior, not a tautology.
+    @Test func bundledConfKeepsInnerAppsOutOfAlternateBuffer() throws {
+        let confURL = try #require(BundledResources.tmuxConfURL)
+        let ctrl = makeController()
+        defer {
+            ctrl.killServer()
+            try? FileManager.default.removeItem(atPath: ctrl.socketPath)
+        }
+        // The anchor pane (window 0) requests the alternate screen, then stays
+        // alive so we can read its buffer state back.
+        try ctrl.newSessionDetached(
+            configPath: confURL.path,
+            command: #"/bin/sh -c 'printf "\033[?1049h"; sleep 60'"#)
+        Thread.sleep(forTimeInterval: 0.3)
+        let health = try ctrl.listWindowScrollback()
+        let anchor = try #require(health.first(where: { $0.index == 0 }))
+        #expect(anchor.alternateOn == false)
+    }
 }
