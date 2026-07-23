@@ -96,11 +96,13 @@ abstract a Claude-specific concept:
 2. **Claude-only prep**, gated by `if …kind == .claudeCode`, for capabilities no
    other harness has: **trust seeding** (`ClaudeTrustSeeder.seedTrust`, gated at
    all four call sites — `launchAgent`, `handoffAgent`, and the two Manager
-   paths), **AI-gateway env** (`ClaudeHookConfigWriter.writeGatewayEnv` +
-   `gatewayEnvPrefix`, gated at `launchAgent` / `handoffAgent`; the
-   Manager-terminal write in `createManagerTerminal` is **unconditional** —
-   harmless, since a non-Claude agent ignores `settings.local.json`), and **OTEL
-   telemetry env** (`AgentLaunch.prepareAgentLaunchText`, gated).
+   paths), **AI-gateway env** (`ClaudeHookConfigWriter.writeGatewayEnv` gated at
+   `launchAgent` / `handoffAgent`, plus the launch-line `gatewayEnvPrefix` at
+   `launchAgent` only; the **two** Manager gateway writes —
+   `createManagerTerminal` and the hydrate path's `writeManagerGatewayEnv` — are
+   unconditional, harmless since a non-Claude agent ignores
+   `settings.local.json`), and **OTEL telemetry env**
+   (`AgentLaunch.prepareAgentLaunchText`, gated).
 
 These are the accepted exceptions — the candidates for a future
 `capabilities`-style member if a second harness ever grows an analogue (see

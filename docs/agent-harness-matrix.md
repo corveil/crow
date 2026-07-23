@@ -206,17 +206,19 @@ Review/job sessions get a pre-written prompt file (`.crow-review-prompt.md` /
 
 Three Claude-specific capabilities the protocol doesn't abstract key on Claude
 identity (`if …kind == .claudeCode`), because no other harness has an analogue
-(gating is exhaustive except the one Manager gateway write noted below):
+(gating is exhaustive except the two Manager gateway writes noted below):
 
 - **Trust seeding** — `ClaudeTrustSeeder.seedTrust` pre-trusts the worktree in
   `~/.claude.json` so the "Do you trust the files in this folder?" dialog never
   blocks an auto-launched session (CROW-600). Runs at **four** call sites:
   `SessionService.launchAgent`, `handoffAgent`, and the two Manager paths.
-- **AI-gateway env** — `ClaudeHookConfigWriter.writeGatewayEnv` +
-  `ClaudeLaunchArgs.gatewayEnvPrefix` apply (or clear) the workspace's
-  `ANTHROPIC_BASE_URL` / `ANTHROPIC_CUSTOM_HEADERS` env (CROW-402). Gated on
-  Claude at `launchAgent` / `handoffAgent`; the Manager-terminal write in
-  `createManagerTerminal` is **unconditional** (harmless — a non-Claude agent
+- **AI-gateway env** — two mechanisms for the workspace's `ANTHROPIC_BASE_URL` /
+  `ANTHROPIC_CUSTOM_HEADERS` (CROW-402): `ClaudeHookConfigWriter.writeGatewayEnv`
+  writes the env block into `settings.local.json` (Claude-gated at `launchAgent`
+  and `handoffAgent`), and `ClaudeLaunchArgs.gatewayEnvPrefix` adds the
+  launch-line `export …` prefix (at `launchAgent` only). The **two** Manager
+  gateway writes — `createManagerTerminal` and the hydrate path's
+  `writeManagerGatewayEnv` — are **unconditional** (harmless: a non-Claude agent
   ignores `settings.local.json`).
 - **OTEL telemetry env** — `AgentLaunch.prepareAgentLaunchText` prepends the
   `OTEL_*` exporter vars, gated on `agent.kind == .claudeCode` (Codex has no OTLP
