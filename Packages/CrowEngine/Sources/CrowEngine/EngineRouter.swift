@@ -894,12 +894,14 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                 // old 5000-line history-limit can't show full scroll-up history
                 // and can only be healed by recreation (CROW-804). Read the live
                 // set once so the web UI can badge the affected tabs.
-                let degraded = await MainActor.run { TmuxBackend.shared.degradedWindowIndices() }
-                // Which windows run the agent-TUI scroll model (ADR-0013). Read
-                // from tmux (`alternate-screen` per window) rather than inferred
-                // client-side, so `app.js` routes the wheel on the SAME ground
-                // truth the daemon actually applied.
-                let agentSurfaces = await MainActor.run { TmuxBackend.shared.agentSurfaceWindowIndices() }
+                // Paired with which windows run the agent-TUI scroll model
+                // (ADR-0013) — read from tmux (`alternate-screen` per window)
+                // rather than inferred client-side, so `app.js` routes the wheel
+                // on the SAME ground truth the daemon actually applied. One
+                // combined read so this RPC forks a single `tmux` subprocess.
+                let (degraded, agentSurfaces) = await MainActor.run {
+                    TmuxBackend.shared.windowScrollbackClassification()
+                }
                 // Only for the pre-binding fallback below — the tmux read above
                 // is authoritative once a window exists.
                 let session = await MainActor.run {

@@ -126,6 +126,28 @@ import Testing
             "touch must share the wheel's ownership test")
     }
 
+    /// `refreshTerminals` must REBIND `activeTerminal` to the freshly-fetched
+    /// row, not merely check the old one is still present.
+    ///
+    /// `activeTerminal` stopped being a selection marker once `agent_surface`
+    /// began driving the wheel/mouse routing (ADR-0013) — and that field can
+    /// change under a stable terminal id, because `list-terminals` answers with
+    /// the pre-binding fallback until the tmux window exists and with the
+    /// authoritative option read afterwards. Holding the stale object left the
+    /// client routing on an outdated flag until the user switched tabs.
+    ///
+    /// Asserted on source shape because driving `refreshTerminals` needs a live
+    /// RPC socket; the jsdom suite covers the routing this feeds.
+    @Test func refreshTerminalsRebindsTheActiveTerminalToTheFreshRow() throws {
+        let body = try Self.functionBody("refreshTerminals", in: Self.webAsset("app.js"))
+        #expect(
+            body.contains("activeTerminal = terminals.find("),
+            "must re-resolve activeTerminal from the fresh list, not keep the old object")
+        #expect(
+            body.contains("|| terminals[0] || null"),
+            "must still fall back to the first terminal, then null")
+    }
+
     /// The swallow is conditional on surface kind (ADR-0013): plain shells keep
     /// it (so drag-select and the context menu survive), agent surfaces let the
     /// mode toggles through so the app claims the wheel. Because that hands

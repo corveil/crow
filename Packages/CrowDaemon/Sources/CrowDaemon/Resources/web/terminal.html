@@ -77,6 +77,15 @@
       // never reports the mouse: native selection, our context menu, and
       // wheel-scroll all work client-side instead (CROW-581). Inner apps that
       // want the mouse (vim/htop) lose it in the browser — an acceptable trade.
+      //
+      // DELIBERATELY UNCONDITIONAL here, unlike app.js (#824). app.js makes the
+      // swallow depend on surface kind so agent TUIs own their own wheel
+      // (ADR-0013), which needs the `agent_surface` flag from `list-terminals`
+      // and an `activeTerminal` to hang it on — neither exists on this
+      // single-terminal debug page. The #822 frame sediment is fixed SERVER-side
+      // (per-window `alternate-screen on`), so this page benefits from that fix
+      // regardless; what it gives up is only the wheel forwarding. So the two
+      // files are expected to differ now — do NOT "resync" this with app.js.
       const MOUSE_MODES = new Set([1000, 1001, 1002, 1003, 1005, 1006, 1015, 1016]);
       function swallowMouseMode(params) {
         const arr = params && params.params ? params.params : params;

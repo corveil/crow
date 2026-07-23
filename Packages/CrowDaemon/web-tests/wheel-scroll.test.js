@@ -13,6 +13,7 @@ const epilogue = `
   enableWheelScroll(node){ return enableWheelScroll(node); },
   swallowMouseMode(params){ return swallowMouseMode(params); },
   appOwnsScroll(){ return appOwnsScroll(); },
+  showTerminalMenu(e){ return showTerminalMenu(e); },
   set term(v){ term = v; },
   set termWs(v){ termWs = v; },
   set activeTerminal(v){ activeTerminal = v; },
@@ -191,6 +192,43 @@ console.log('\nMissing surface metadata degrades to the shell path:');
   T.activeTerminal = { id: 't1', window: 1 }; // older daemon: field absent
   t.up();
   check('absent agent_surface field → shell path', t.scrolled.join() === '-3');
+}
+
+// ---- Selection escape-hatch discoverability --------------------------------
+
+// Letting mouse modes through costs native drag-select on agent surfaces, so
+// the ⌥/Shift-drag hint is the only in-product teaching of the way back. It
+// lives in the right-click menu, which stays reachable under live mouse
+// tracking: xterm.js's only `contextmenu` listener is `rightClickHandler`,
+// which calls neither preventDefault() nor stopPropagation(), and our listener
+// sits on the #terminal-wrap ANCESTOR of xterm's element, so the event bubbles
+// up regardless of what the app is reporting.
+console.log('\nThe selection hint is discoverable on agent surfaces:');
+function openMenu({ agentSurface, selection = '' }) {
+  document.querySelectorAll('.ctx-menu').forEach((n) => n.remove());
+  T.term = { getSelection: () => selection, selectAll() {}, clear() {} };
+  T.activeTerminal = { id: 't1', window: 1, agent_surface: agentSurface };
+  const e = new window.Event('contextmenu', { bubbles: true, cancelable: true });
+  T.showTerminalMenu(e);
+  return document.querySelector('.ctx-menu');
+}
+const { document } = window;
+{
+  const menu = openMenu({ agentSurface: true });
+  const hint = menu && menu.querySelector('.ctx-hint');
+  check('agent surface shows the selection hint', !!hint);
+  check('hint names a modifier key', !!hint && /⌥|Shift/.test(hint.textContent));
+  check('hint is not a clickable menu item', !!hint && !hint.classList.contains('ctx-item'));
+}
+{
+  const menu = openMenu({ agentSurface: false });
+  check('plain shell shows no hint (drag-select just works)', menu && !menu.querySelector('.ctx-hint'));
+}
+{
+  const menu = openMenu({ agentSurface: true, selection: 'already selected' });
+  check('no hint once the user has a selection', menu && !menu.querySelector('.ctx-hint'));
+  check('...and Copy is offered instead',
+    menu && [...menu.querySelectorAll('.ctx-item')].some((n) => n.textContent === 'Copy'));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

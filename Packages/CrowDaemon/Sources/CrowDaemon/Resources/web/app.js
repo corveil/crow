@@ -2032,9 +2032,15 @@ async function refreshTerminals() {
   } catch (_) {
     terminals = [];
   }
-  if (!activeTerminal || !terminals.find((t) => t.id === activeTerminal.id)) {
-    activeTerminal = terminals[0] || null;
-  }
+  // Rebind to the FRESH row, don't just check the old one is still present.
+  // `activeTerminal` is not merely a selection marker: `agent_surface` drives
+  // the wheel/mouse routing (ADR-0013) and `window` drives attachWindow, and
+  // both can change under a stable id — `agent_surface` starts as the
+  // pre-binding fallback and becomes authoritative once the tmux window exists
+  // or an adopt re-applies the option. Keeping the stale object left routing on
+  // the old value until the user happened to switch tabs.
+  activeTerminal = terminals.find((t) => t.id === (activeTerminal && activeTerminal.id))
+    || terminals[0] || null;
   renderTabs();
   // #673: session switches funnel through here too (selectSession → refreshTerminals),
   // changing which window this shared socket shows — same corruption as a terminal-tab

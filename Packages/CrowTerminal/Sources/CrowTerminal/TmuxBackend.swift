@@ -755,43 +755,49 @@ public final class TmuxBackend {
         return alternateScreenEnabled ? false : alternateOn
     }
 
-    /// Window indices whose scrollback is degraded per `isScrollbackDegraded`.
-    /// Best-effort — `[]` when tmux is unavailable or the read fails, mirroring
-    /// `listCockpitWindows`. Callers use it to badge terminals in the web UI and
-    /// to log the degraded set on daemon start (CROW-804).
-    public func degradedWindowIndices(floor: Int = TmuxBackend.scrollbackHistoryLimit) -> Set<Int> {
-        guard let ctrl = controller else { return [] }
+    /// Both per-window classifications the web UI needs, from ONE `list-windows`
+    /// read: which windows are scrollback-degraded (CROW-804 ⚠ Recreate) and
+    /// which run the agent-TUI scroll model (ADR-0013 wheel/mouse routing).
+    ///
+    /// They ship together on every `list-terminals` RPC, and each is derived
+    /// from the same three fields, so reading twice would fork a second `tmux`
+    /// subprocess per call for nothing. Best-effort — empty sets when tmux is
+    /// unavailable or the read fails, mirroring `listCockpitWindows`.
+    public func windowScrollbackClassification(
+        floor: Int = TmuxBackend.scrollbackHistoryLimit
+    ) -> (degraded: Set<Int>, agentSurfaces: Set<Int>) {
+        guard let ctrl = controller else { return ([], []) }
         do {
             let windows = try ctrl.listWindowScrollback()
-            return Set(windows
-                .filter { Self.isScrollbackDegraded(
+            let degraded = windows.filter {
+                Self.isScrollbackDegraded(
                     historyLimit: $0.historyLimit,
                     alternateOn: $0.alternateOn,
                     alternateScreenEnabled: $0.alternateScreenEnabled,
-                    floor: floor) }
-                .map(\.index))
+                    floor: floor)
+            }
+            let agents = windows.filter(\.alternateScreenEnabled)
+            return (Set(degraded.map(\.index)), Set(agents.map(\.index)))
         } catch {
             reportIfTimeout(error)
-            return []
+            return ([], [])
         }
+    }
+
+    /// Window indices whose scrollback is degraded per `isScrollbackDegraded`.
+    /// Callers needing BOTH this and the agent-surface set should use
+    /// `windowScrollbackClassification` so tmux is only read once.
+    public func degradedWindowIndices(floor: Int = TmuxBackend.scrollbackHistoryLimit) -> Set<Int> {
+        windowScrollbackClassification(floor: floor).degraded
     }
 
     /// Window indices configured as agent-TUI surfaces (`alternate-screen on`),
     /// i.e. the windows that own their own viewport + scrollback under the
     /// hybrid scroll model (ADR-0013). Read from tmux rather than inferred from
     /// window names so the daemon and the web client route on the SAME ground
-    /// truth the daemon actually applied. Best-effort — `[]` when tmux is
-    /// unavailable, mirroring `degradedWindowIndices`.
+    /// truth the daemon actually applied.
     public func agentSurfaceWindowIndices() -> Set<Int> {
-        guard let ctrl = controller else { return [] }
-        do {
-            return Set(try ctrl.listWindowScrollback()
-                .filter(\.alternateScreenEnabled)
-                .map(\.index))
-        } catch {
-            reportIfTimeout(error)
-            return []
-        }
+        windowScrollbackClassification().agentSurfaces
     }
 
     /// Give one window the agent-TUI scroll model: `alternate-screen on`, so a
