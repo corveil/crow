@@ -3334,18 +3334,13 @@ function ensureTerminal() {
   // (vim/htop) lose it here — the same acceptable trade terminal.html makes.
   // #776: this surface was built without the swallow, so it regressed against
   // the standalone renderer. Must be registered before open()/first write.
+  // SPIKE #822 Option A: STOP swallowing mouse modes. Let DECSET 1000–1016
+  // through so the inner TUI (Claude Code, vim, htop) claims the wheel and owns
+  // its own scroll — exactly like a naked terminal. COST: client-side drag-select
+  // and the browser context menu are eaten while the app is in mouse mode.
   const MOUSE_MODES = new Set([1000, 1001, 1002, 1003, 1005, 1006, 1015, 1016]);
-  function swallowMouseMode(params) {
-    const arr = params && params.params ? params.params : params;
-    const len = arr ? arr.length : 0;
-    for (let i = 0; i < len; i++) {
-      const v = arr[i];
-      if (MOUSE_MODES.has(Array.isArray(v) ? v[0] : v)) return true; // handled → drop it
-    }
-    return false; // not a mouse mode → let xterm apply it normally
-  }
-  term.parser.registerCsiHandler({ prefix: '?', final: 'h' }, swallowMouseMode);
-  term.parser.registerCsiHandler({ prefix: '?', final: 'l' }, swallowMouseMode);
+  void MOUSE_MODES; // (kept for reference; swallow disabled in this prototype)
+  // (swallowMouseMode + its two registerCsiHandler calls removed for Option A)
 
   // #677: seed the skeleton before first open() so it covers the initial xterm
   // layout / first-fit reflow flash; connectTerminalWs() re-arms it below.
@@ -3495,11 +3490,15 @@ function enableTouchScroll(node) {
 // buffer has no scrollback, so there we swallow the wheel rather than scroll.
 // (crow-tmux.conf also strips the client's smcup/rmcup, so in practice the
 // terminal stays in the main buffer and the scrollback path is the live one.)
+// SPIKE #822 Option A: forward the wheel to the app UNCONDITIONALLY. The inner
+// TUI now owns the alternate buffer + its own scrollback, so a wheel tick should
+// reach it (mouse SGR when it's tracking, cursor keys otherwise) rather than
+// scroll a (now empty) xterm scrollback. COST: plain shells lose native wheel
+// scrollback too — everything routes to the PTY.
 function enableWheelScroll(node) {
   node.addEventListener('wheel', (e) => {
     if (!term) return;
-    const buf = term.buffer && term.buffer.active;
-    if (!buf || buf.type !== 'alternate') term.scrollLines(e.deltaY > 0 ? 3 : -3);
+    sendScrollToPTY(e.deltaY > 0 ? 3 : -3);
     e.preventDefault();
     e.stopPropagation();
   }, { capture: true, passive: false });
