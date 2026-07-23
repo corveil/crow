@@ -102,11 +102,12 @@ managed-terminal command needs hook/env prep.
   Manager uses ([ADR 0004](adr/0004-manager-auto-permission-mode.md)).
 - **Cursor & Codex:** the `autoPermissionMode` argument is accepted and ignored —
   no flag is emitted.
-- **OpenCode:** `autoPermissionMode` is honored for `.job` sessions only, via a
-  **runtime-probed** `--auto` (falling back to
-  `--dangerously-skip-permissions`). `OpenCodeLaunchArgs` shells `opencode
-  --help` once, caches whether `--auto` is advertised, and omits the flag if
-  not (#547). Reviews never auto-approve.
+- **OpenCode:** `autoPermissionMode` is honored for `.job` sessions only, via
+  **runtime-probed** flags. `OpenCodeLaunchArgs` runs two independently-cached
+  probes: the interactive TUI's `--auto` (probed with `opencode --help`, **no**
+  fallback) and the headless-`run` auto-approve (probed with `opencode run
+  --help`: `--auto`, else `--dangerously-skip-permissions`). Each flag is omitted
+  when its probe doesn't advertise it (#547). Reviews never auto-approve.
 
 ### Hooks transport & session scope
 

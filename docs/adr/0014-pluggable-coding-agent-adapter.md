@@ -100,8 +100,9 @@ These are the accepted exceptions — the candidates for a future
 - Adding a harness is a new package that conforms to `CodingAgent` plus one
   registration line in `CrowDaemon.registerAgents` — no engine surgery.
 - Capabilities are declarative and testable per harness; the
-  [matrix](../agent-harness-matrix.md) is generated from real property values,
-  not aspirational.
+  [matrix](../agent-harness-matrix.md) is hand-maintained but **verified against**
+  real property values, not aspirational — the doc's own contract is to update it
+  in the same PR that changes a capability.
 - Handoff ([ADR 0011](./0011-agent-handoff-preserves-session-not-chat.md)) is a
   registry lookup + protocol calls; it inherited multi-harness support for free.
 

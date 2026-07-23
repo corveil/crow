@@ -104,10 +104,10 @@ never on a central `switch`. Harnesses register at daemon boot into
 their binary resolves on `PATH`.
 
 The harnesses are **not at parity**: Claude Code is the reference implementation
-and the others ship with deliberate, documented gaps. Two references cover this:
+and the others ship with deliberate, documented gaps. Three references cover this:
 
 - **[Coding-agent harness capability matrix](agent-harness-matrix.md)** — the
-  living harness × capability grid, with a why/notes column citing code and ADRs.
+  living harness × capability grid, with a per-dimension why/notes section citing code and ADRs.
 - **[ADR 0014](adr/0014-pluggable-coding-agent-adapter.md)** — the pluggable
   `CodingAgent` adapter architecture (and how it relates to the orthogonal
   task/code-provider axis in [ADR 0005](adr/0005-task-and-code-backend-protocols.md)).
