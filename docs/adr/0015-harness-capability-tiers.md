@@ -54,8 +54,10 @@ records the rationale for each gap here (verbatim reasons preserved from source)
    the `autoPermissionMode` argument.
 
 6. **MCP is Claude-only.** Claude's prompt fetches Jira via the `jira` MCP
-   server (`jira_get_issue`); its MCP config lives in `~/.claude.json`. Cursor
-   falls back to `acli jira workitem view`; Codex and OpenCode have no MCP wiring.
+   server (`jira_get_issue`); its MCP config lives in `~/.claude.json`. The other
+   three have no MCP wiring — Cursor, Codex, and OpenCode all emit the same
+   `acli jira workitem view <key>` fallback line. The gap is MCP, not Jira
+   ticket-fetch: every harness can still fetch the ticket via `acli`.
 
 7. **Non-Claude hooks are global-scope, session resolved by `cwd`.** Only Claude
    writes a per-worktree config keyed by `--session <UUID>`. Cursor

@@ -31,7 +31,7 @@ capabilities, update this table in the same PR.
 | Hooks transport | per-worktree `.claude/settings.local.json` | global `~/.cursor/hooks.json` | global `~/.codex/hooks.json` + `config.toml` `notify` bridge | global JS plugin `~/.config/opencode/plugins/crow-hooks.js` |
 | Hook → session scope | ✅ per-session UUID | ❌ `cwd` match | ❌ `cwd` match | ❌ `cwd` match |
 | Hook async delivery | ✅ `PostToolUse*` async | ⚠️ declared, timing unverified | ❌ sync-only (v0.139.0) | ⚠️ names verified, timing unverified |
-| MCP (e.g. Jira) | ✅ `jira` MCP server via `~/.claude.json` | ❌ falls back to `acli` | ❌ | ❌ |
+| MCP (e.g. Jira) | ✅ `jira` MCP server via `~/.claude.json` | ❌ falls back to `acli` | ❌ falls back to `acli` | ❌ falls back to `acli` |
 | Review (`/crow-review-pr`) | ✅ slash-command | ✅ inlined skill body | ❌ returns `nil` (Phase C) | ✅ inlined skill body |
 | Initial-prompt injection | ✅ `$(cat …-prompt.md)` + deferred paste | ✅ `agent "$(cat …)"` (launcher not auto-wired) | job only (review → `nil`) | ✅ run-then-`--continue` |
 | Gateway env / trust seed | ✅ Claude special-case | ❌ | ❌ | ❌ |
@@ -159,9 +159,11 @@ global config and are disambiguated by `cwd`. See
   cross-backend prompt-routing case from
   [ADR 0005](adr/0005-task-and-code-backend-protocols.md) (Jira task + GitHub
   code): the ticket is fetched via MCP while the PR is still opened with `gh`.
-- **Cursor:** its Jira prompt uses `acli jira workitem view` — no MCP
-  (`CursorLauncher`).
-- **Codex / OpenCode:** no MCP wiring.
+- **Cursor, Codex, OpenCode:** none have MCP wiring — all three fall back to the
+  same `acli jira workitem view <key> --fields …` prompt line
+  (`CursorLauncher`, `CodexLauncher`, `OpenCodeLauncher`). The gap is **MCP**,
+  not Jira ticket-fetch: every harness can fetch the ticket, just via `acli`
+  rather than the `jira` MCP server.
 
 ### Review (`/crow-review-pr`)
 

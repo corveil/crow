@@ -75,9 +75,13 @@ handful of **residual identity checks** remain where the protocol does not (yet)
 abstract a Claude-specific concept:
 
 1. **Review-prompt form.** `SessionService.buildReviewPrompt` is a literal
-   `switch agentKind` selecting the terse `/crow-review-pr <URL>` slash-command
-   (Claude) versus the inlined skill body (Cursor / OpenCode), with Codex
-   returning `nil` upstream.
+   `switch agentKind`: `.cursor` / `.openCode` get the inlined skill body, Codex
+   returns `nil` upstream, and **Claude is the `default:` arm** (the terse
+   `/crow-review-pr <URL>` slash-command). Because Claude is the default, a
+   *future* harness registered without touching `buildReviewPrompt` silently
+   inherits the slash-command form — the sharpest edge of these residual identity
+   checks, and the reason this switch (not just the prep branch) is a candidate
+   for a capability member.
 2. **Claude-only prep**, gated by `if …kind == .claudeCode`, for three
    capabilities no other harness has: **trust seeding**
    (`ClaudeTrustSeeder.seedTrust`, at `launchAgent`, `handoffAgent`, and the two
