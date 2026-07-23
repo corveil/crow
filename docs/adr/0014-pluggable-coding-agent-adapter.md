@@ -93,12 +93,14 @@ abstract a Claude-specific concept:
    inherits the slash-command form — the sharpest edge of these residual identity
    checks, and the reason this switch (not just the prep branch) is a candidate
    for a capability member.
-2. **Claude-only prep**, gated by `if …kind == .claudeCode`, for three
-   capabilities no other harness has: **trust seeding**
-   (`ClaudeTrustSeeder.seedTrust`, at `launchAgent`, `handoffAgent`, and the two
-   Manager paths — four sites), **AI-gateway env**
-   (`ClaudeHookConfigWriter.writeGatewayEnv` + `gatewayEnvPrefix`), and **OTEL
-   telemetry env** (`AgentLaunch.prepareAgentLaunchText`).
+2. **Claude-only prep**, gated by `if …kind == .claudeCode`, for capabilities no
+   other harness has: **trust seeding** (`ClaudeTrustSeeder.seedTrust`, gated at
+   all four call sites — `launchAgent`, `handoffAgent`, and the two Manager
+   paths), **AI-gateway env** (`ClaudeHookConfigWriter.writeGatewayEnv` +
+   `gatewayEnvPrefix`, gated at `launchAgent` / `handoffAgent`; the
+   Manager-terminal write in `createManagerTerminal` is **unconditional** —
+   harmless, since a non-Claude agent ignores `settings.local.json`), and **OTEL
+   telemetry env** (`AgentLaunch.prepareAgentLaunchText`, gated).
 
 These are the accepted exceptions — the candidates for a future
 `capabilities`-style member if a second harness ever grows an analogue (see

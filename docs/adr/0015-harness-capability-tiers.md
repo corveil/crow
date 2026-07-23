@@ -75,8 +75,13 @@ records the rationale for each gap here (verbatim reasons preserved from source)
    *creation* (`EngineRouter` new-session) takes `requestedAgentKind ??
    agentKind(for: .work)` with **no** registry check, so a session can be created
    with an unregistered kind and `launchAgent` then silently no-ops on the
-   registry lookup. The Manager path does validate against the registry. Closing
-   that asymmetry is a code follow-up, not a doc change.
+   registry lookup. The two Manager-creation surfaces also differ: the **web**
+   `create-manager` (`EngineRouter`) validates against the registry (CROW-593
+   security gate, falling back to the configured default), but the **daemon's**
+   `create-manager` (`RPCHandlers`) passes the requested kind straight through —
+   and there the launch degrades differently again, `managerCommand` falling back
+   to `AgentRegistry.defaultAgent` rather than no-op'ing. Closing these
+   asymmetries is a code follow-up, not a doc change.
 
 These gaps are **phased parity, not permanent tiers.** Comments mark the phase
 that will close them (Cursor/Codex/OpenCode launchers are written but
@@ -90,18 +95,16 @@ that will close them (Cursor/Codex/OpenCode launchers are written but
   hook scope) remain Claude-first. The [matrix](../agent-harness-matrix.md) is
   the single place that says which is which.
 - **Version-pinned reasons are re-check targets, not settled facts.** Each pin
-  below must be re-verified when the harness ships a new release; a stale pin is
-  a bug in this ADR. This table is the explicit **seed for a follow-up capability
-  audit** — the audit walks each row and confirms (or retires) the reason.
-
-  | Gap | Pin | Source of truth |
-  |---|---|---|
-  | Codex hooks sync-only | Codex **v0.139.0** | `CodexHookConfigWriter.asyncEvents` |
-  | Codex `config.toml` key `codex_hooks` → `hooks` | Codex **v0.139.0+** | `CodexHookConfigWriter.installGlobalTomlConfig` |
-  | Codex reuses `ClaudeHooksEngine` (schemas byte-compatible) | **codex 0.123.0** | `CodexSignalSource` |
-  | Claude recap subagent must not elevate state | Claude Code **≥ 2.1.108** (`awaySummaryEnabled`) | `ClaudeHookSignalSource` |
-  | Cursor `PostToolUse`/`Notification` async timing | empirical (unpinned) | `CursorSignalSource` |
-  | OpenCode `session.idle` "done" semantics | CROW-545 (empirical) | `OpenCodeHookConfigWriter` |
+  must be re-verified when the harness ships a new release; a stale pin is a bug.
+  These pins are the explicit **seed for a follow-up capability audit** — the
+  audit walks each row and confirms (or retires) the reason. The canonical
+  row-set lives in the matrix's
+  [Version-pinned reasons — re-check targets](../agent-harness-matrix.md#version-pinned-reasons--re-check-targets)
+  table (kept in one place so the two docs can't go stale asymmetrically);
+  today it covers Codex sync-only (**v0.139.0**), the `codex_hooks`→`hooks`
+  rename (**v0.139.0+**), the `ClaudeHooksEngine` reuse (**codex 0.123.0**),
+  Claude's recap subagent (**≥ 2.1.108**), and the two unpinned empirical
+  timings (Cursor async, OpenCode `session.idle` / CROW-545).
 
 - The gating rule (8) means a partially-installed environment produces a smaller,
   correct picker rather than broken entries — but "why can't I hand off to X?"

@@ -204,8 +204,9 @@ Review/job sessions get a pre-written prompt file (`.crow-review-prompt.md` /
 
 ### Gateway env / trust seed / telemetry
 
-Three capabilities the protocol doesn't abstract are gated on Claude identity
-(`if …kind == .claudeCode`), because no other harness has an analogue:
+Three Claude-specific capabilities the protocol doesn't abstract key on Claude
+identity (`if …kind == .claudeCode`), because no other harness has an analogue
+(gating is exhaustive except the one Manager gateway write noted below):
 
 - **Trust seeding** — `ClaudeTrustSeeder.seedTrust` pre-trusts the worktree in
   `~/.claude.json` so the "Do you trust the files in this folder?" dialog never
@@ -213,7 +214,10 @@ Three capabilities the protocol doesn't abstract are gated on Claude identity
   `SessionService.launchAgent`, `handoffAgent`, and the two Manager paths.
 - **AI-gateway env** — `ClaudeHookConfigWriter.writeGatewayEnv` +
   `ClaudeLaunchArgs.gatewayEnvPrefix` apply (or clear) the workspace's
-  `ANTHROPIC_BASE_URL` / `ANTHROPIC_CUSTOM_HEADERS` env (CROW-402).
+  `ANTHROPIC_BASE_URL` / `ANTHROPIC_CUSTOM_HEADERS` env (CROW-402). Gated on
+  Claude at `launchAgent` / `handoffAgent`; the Manager-terminal write in
+  `createManagerTerminal` is **unconditional** (harmless — a non-Claude agent
+  ignores `settings.local.json`).
 - **OTEL telemetry env** — `AgentLaunch.prepareAgentLaunchText` prepends the
   `OTEL_*` exporter vars, gated on `agent.kind == .claudeCode` (Codex has no OTLP
   equivalent).
