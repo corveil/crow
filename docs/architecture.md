@@ -1,6 +1,6 @@
 # Architecture
 
-Crow coordinates AI-assisted development sessions. Each session is a git worktree + a Claude Code terminal + ticket metadata, tracked in a persistent store. The `crowd` daemon is the **sole authority**: it owns the store, spawns workspaces (worktree + tmux window + agent), runs the background automations, and serves the web UI + a JSON-RPC surface. Every interface — the browser UI and the `crow` CLI — is a **pure client** that sends RPCs and renders pushed state. See [ADR 0009](adr/0009-crowd-sole-authority-clients-only.md) (crowd is the sole authority) and [ADR 0010](adr/0010-retire-the-macos-app.md) (the macOS app was retired).
+Crow coordinates AI-assisted development sessions. Each session is a git worktree + a coding-agent terminal (Claude Code by default; Cursor, OpenAI Codex, or OpenCode when installed) + ticket metadata, tracked in a persistent store. The `crowd` daemon is the **sole authority**: it owns the store, spawns workspaces (worktree + tmux window + agent), runs the background automations, and serves the web UI + a JSON-RPC surface. Every interface — the browser UI and the `crow` CLI — is a **pure client** that sends RPCs and renders pushed state. See [ADR 0009](adr/0009-crowd-sole-authority-clients-only.md) (crowd is the sole authority) and [ADR 0010](adr/0010-retire-the-macos-app.md) (the macOS app was retired).
 
 ## System diagram
 
@@ -92,6 +92,30 @@ There are two `CrowCLI` directories:
 | **AutostartService**       | `Packages/CrowAutostart/`                              | Registers `crowd` to start at login (launchd LaunchAgent on macOS). Shared by `crow autostart` and the daemon's local-only `/autostart` routes; the protocol leaves room for a systemd `--user` backend |
 | **HostBridge**             | `Packages/CrowEngine/.../HostBridge.swift`             | Seam for host affordances (clipboard, open-in-editor, notifications). `crowd` uses a no-op default; the browser provides these itself where it can |
 | **JSONStore**              | `Packages/CrowPersistence/`                            | NSLock-serialized JSON persistence for sessions, worktrees, links, terminals                                      |
+
+## Coding-agent harnesses
+
+Crow drives four coding agents ("harnesses") through one adapter protocol,
+`CodingAgent`: **Claude Code**, **Cursor**, **OpenAI Codex**, and **OpenCode**.
+Each harness declares its own capabilities (remote control, hook transport,
+resume, review support, …) as protocol members; the engine branches on those,
+never on a central `switch`. Harnesses register at daemon boot into
+`AgentRegistry` — Claude Code always (and as the default), the others only when
+their binary resolves on `PATH`.
+
+The harnesses are **not at parity**: Claude Code is the reference implementation
+and the others ship with deliberate, documented gaps. Two references cover this:
+
+- **[Coding-agent harness capability matrix](agent-harness-matrix.md)** — the
+  living harness × capability grid, with a why/notes column citing code and ADRs.
+- **[ADR 0014](adr/0014-pluggable-coding-agent-adapter.md)** — the pluggable
+  `CodingAgent` adapter architecture (and how it relates to the orthogonal
+  task/code-provider axis in [ADR 0005](adr/0005-task-and-code-backend-protocols.md)).
+- **[ADR 0015](adr/0015-harness-capability-tiers.md)** — why the non-Claude
+  harnesses ship with capability gaps, and the version-pinned reasons to re-check.
+
+Mid-session, a session can switch harnesses via `crow handoff-agent`
+([ADR 0011](adr/0011-agent-handoff-preserves-session-not-chat.md)).
 
 ## Data Flow
 

@@ -41,7 +41,7 @@ Don't delete the old file. Update its `Status` to `Superseded by NNNN` and point
 | 0002 | [Unix-socket CLI ↔ app architecture](./0002-unix-socket-cli-architecture.md) | Accepted | 2026-05-25 |
 | 0003 | [Worktree-per-task model](./0003-worktree-per-task-model.md) | Accepted | 2026-05-25 |
 | 0004 | [Manager session launches in auto-permission mode by default](./0004-manager-auto-permission-mode.md) | Accepted | 2026-05-25 |
-| 0005 | [TaskBackend and CodeBackend protocols](./0005-task-and-code-backend-protocols.md) | Proposed | 2026-06-03 |
+| 0005 | [TaskBackend and CodeBackend protocols](./0005-task-and-code-backend-protocols.md) | Accepted | 2026-06-07 |
 | 0006 | [xterm.js terminal renderer (Intel support)](./0006-universal-macos-binary.md) | Accepted | 2026-07-01 |
 | 0007 | [Swift CI runs on Linux, not macOS](./0007-linux-ci-swift.md) | Accepted | 2026-07-10 |
 | 0008 | [AI-usage efficiency scorecard](./0008-ai-usage-efficiency-scorecard.md) | Accepted | 2026-07-10 |
@@ -50,3 +50,5 @@ Don't delete the old file. Update its `Status` to `Superseded by NNNN` and point
 | 0011 | [Mid-session agent handoff preserves Crow identity, not chat history](./0011-agent-handoff-preserves-session-not-chat.md) | Accepted | 2026-07-09 |
 | 0012 | [Tests must never touch live application data](./0012-tests-never-touch-live-data.md) | Accepted | 2026-07-19 |
 | 0013 | [Terminal scroll model: per-surface hybrid](./0013-terminal-scroll-model.md) | Accepted | 2026-07-23 |
+| 0014 | [Pluggable `CodingAgent` adapter](./0014-pluggable-coding-agent-adapter.md) | Accepted | 2026-07-23 |
+| 0015 | [Harness capability tiers & phased parity](./0015-harness-capability-tiers.md) | Accepted | 2026-07-23 |
