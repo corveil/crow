@@ -769,6 +769,12 @@ html, body {
 .ctx-item.ctx-danger { color: var(--red); }
 .ctx-item.ctx-danger:hover { background: rgba(255, 69, 58, 0.14); }
 .ctx-sep { height: 1px; background: var(--border-subtle); margin: 4px 6px; }
+/* Non-interactive footnote in the terminal context menu — tells the user how to
+   select text on an agent surface, where the app owns the mouse (ADR-0013). */
+.ctx-hint {
+  padding: 6px 10px 2px; font-size: 11px; color: var(--text-secondary);
+  border-top: 1px solid var(--border-subtle); margin-top: 4px; cursor: default;
+}
 
 /* ---- Detail header: gold PR chip + inline PR status ---- */
 .link-chip.link-pr { color: var(--gold); border-color: var(--border-strong); }

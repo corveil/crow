@@ -3302,6 +3302,71 @@ function setTerminalReconnecting(on) {
 // Terminal font stack: Nerd Fonts → system monospace.
 const DEFAULT_TERM_FONT = '"MesloLGS NF", "MesloLGS Nerd Font", "JetBrainsMono Nerd Font", "Hack Nerd Font", "FiraCode Nerd Font", Menlo, Monaco, monospace';
 
+// --- Per-surface hybrid scroll model (ADR-0013) -----------------------------
+//
+// Crow runs two scroll models side by side, chosen per tmux window:
+//
+//   * PLAIN SHELL / REVIEW surfaces keep the unified model — output flows into
+//     xterm's 50k scrollback, the daemon replays tmux history on reconnect
+//     (CROW-606), and the wheel scrolls that local buffer.
+//   * AGENT-TUI surfaces (Claude Code, Cursor, Manager) own their own viewport
+//     like a naked terminal. crowd sets `alternate-screen on` for those windows
+//     so the agent's constant full-frame repaints stay in the alt buffer, which
+//     has no scrollback. Without that, every repaint deposited its predecessor
+//     into the shared history and scrolling up walked hundreds of stacked
+//     copies of the TUI (#822).
+//
+// `agent_surface` comes from `list-terminals`, sourced from the tmux window
+// option crowd actually set — NOT from `term.buffer.active.type`. The client
+// can't use the buffer type here: crow-tmux.conf strips the client's
+// smcup/rmcup, and `terminal-overrides` is keyed on the client's TERM while a
+// single tmux client serves every tab, so there is no per-window client buffer
+// state to read. The buffer/mouse-mode checks below are kept as an additional
+// signal for surfaces that do legitimately enter the alt buffer.
+function activeSurfaceIsAgent() {
+  return !!(activeTerminal && activeTerminal.agent_surface);
+}
+
+// Mouse-mode swallow — same handler as web/terminal.html (CROW-581). The agent
+// TUIs turn the xterm mouse protocol on themselves, and crow-tmux.conf's
+// `mouse off` means tmux forwards those DECSETs straight through to this
+// client.
+//
+// On a PLAIN SHELL we drop them: left alone, xterm.js enters mouse-reporting
+// mode and every mouse MOVE emits an SGR report to the PTY → the TUI repaints →
+// the viewport is yanked to the bottom while the user is scrolled up;
+// drag-select and the browser context menu are eaten too (#776).
+//
+// On an AGENT SURFACE we let them THROUGH, so the agent claims the wheel and
+// owns its own scroll exactly like a naked terminal (ADR-0013). The cost is the
+// one the swallow was avoiding: native drag-select and the right-click menu are
+// eaten inside agent windows. Hold ⌥ (Alt) to force selection anyway — that's
+// why `macOptionClickForcesSelection` is enabled in the Terminal config, since
+// xterm.js gates the Mac force-selection path on it and it defaults to false.
+const MOUSE_MODES = new Set([1000, 1001, 1002, 1003, 1005, 1006, 1015, 1016]);
+function swallowMouseMode(params) {
+  if (activeSurfaceIsAgent()) return false; // agent surface → let it own the mouse
+  const arr = params && params.params ? params.params : params;
+  const len = arr ? arr.length : 0;
+  for (let i = 0; i < len; i++) {
+    const v = arr[i];
+    if (MOUSE_MODES.has(Array.isArray(v) ? v[0] : v)) return true; // handled → drop it
+  }
+  return false; // not a mouse mode → let xterm apply it normally
+}
+
+// True when the app on the other end should receive the scroll instead of us
+// scrolling xterm's local buffer: an agent surface, an actual alternate buffer,
+// or an app that has mouse tracking on. Shared by the wheel and touch shims so
+// both agree on who owns the surface.
+function appOwnsScroll() {
+  if (activeSurfaceIsAgent()) return true;
+  const buf = term && term.buffer && term.buffer.active;
+  if (buf && buf.type === 'alternate') return true;
+  const modes = (term && term.modes) || {};
+  return !!(modes.mouseTrackingMode && modes.mouseTrackingMode !== 'none');
+}
+
 function ensureTerminal() {
   if (term) return;
   fitAddon = new FitAddon.FitAddon();
@@ -3316,34 +3381,20 @@ function ensureTerminal() {
     theme: { background: '#1e1e1e', foreground: '#d4d4d4' },
     scrollback: 50000,
     allowTransparency: true,
+    // Escape hatch for agent surfaces, where we stop swallowing mouse modes so
+    // the agent owns the wheel (ADR-0013) — which also means xterm reports
+    // drags to the app instead of selecting text. xterm.js's Mac force-select
+    // path is `altKey && macOptionClickForcesSelection`, and this option
+    // DEFAULTS TO FALSE, so without it ⌥-drag would silently do nothing and
+    // there'd be no way to select text inside an agent window at all.
+    macOptionClickForcesSelection: true,
   });
   term.loadAddon(fitAddon);
   term.loadAddon(imageAddon);
   term.loadAddon(searchAddon);
   term.loadAddon(webLinksAddon);
 
-  // Mouse-mode swallow — same handler as web/terminal.html (CROW-581). The
-  // agent TUIs (Claude Code, Cursor) turn the xterm mouse protocol on
-  // themselves, and crow-tmux.conf's `mouse off` means tmux forwards those
-  // DECSETs straight through to this client. Left alone, xterm.js enters
-  // mouse-reporting mode and every mouse MOVE emits an SGR report to the PTY →
-  // the TUI repaints → the viewport is yanked to the bottom while the user is
-  // scrolled up; drag-select and the browser context menu are eaten too.
-  // Dropping the mode toggles at the parser keeps selection, the context menu,
-  // and wheel-scroll client-side. Inner apps that genuinely want the mouse
-  // (vim/htop) lose it here — the same acceptable trade terminal.html makes.
-  // #776: this surface was built without the swallow, so it regressed against
-  // the standalone renderer. Must be registered before open()/first write.
-  const MOUSE_MODES = new Set([1000, 1001, 1002, 1003, 1005, 1006, 1015, 1016]);
-  function swallowMouseMode(params) {
-    const arr = params && params.params ? params.params : params;
-    const len = arr ? arr.length : 0;
-    for (let i = 0; i < len; i++) {
-      const v = arr[i];
-      if (MOUSE_MODES.has(Array.isArray(v) ? v[0] : v)) return true; // handled → drop it
-    }
-    return false; // not a mouse mode → let xterm apply it normally
-  }
+  // Registered before open()/first write so no mode toggle slips past.
   term.parser.registerCsiHandler({ prefix: '?', final: 'h' }, swallowMouseMode);
   term.parser.registerCsiHandler({ prefix: '?', final: 'l' }, swallowMouseMode);
 
@@ -3474,32 +3525,35 @@ function enableTouchScroll(node) {
     const delta = Math.trunc(accum);
     if (delta === 0) return;
     accum -= delta;
-    const buf = term.buffer && term.buffer.active;
-    if (buf && buf.type === 'alternate') sendScrollToPTY(delta);
+    // Same ownership test as the wheel (ADR-0013) so touch and wheel never
+    // disagree about who owns the surface.
+    if (appOwnsScroll()) sendScrollToPTY(delta);
     else term.scrollLines(delta);
   }, { passive: false });
   node.addEventListener('touchend', () => { lastY = null; accum = 0; }, { passive: true });
   node.addEventListener('touchcancel', () => { lastY = null; accum = 0; }, { passive: true });
 }
 
-// Let xterm.js own wheel scrolling in the browser: scroll the local 50k-line
-// scrollback instead of forwarding the wheel to tmux (whose server-global
-// `mouse on` would otherwise drop into copy-mode — janky in a browser).
+// Route the wheel by surface (ADR-0013) — the mirror of what enableTouchScroll
+// does for touch:
 //
-// #776: this used to bail on the alternate-screen buffer to "let TUIs handle
-// the wheel", but the mouse-mode swallow in ensureTerminal means no inner app
-// can receive mouse events here — so bailing just handed the wheel to xterm's
-// alternate-scroll fallback, which emits ARROW KEYS. Claude Code reads those as
-// input-history navigation: exactly the bug crow-tmux.conf documents under
-// `alternate-screen off`. Keep owning the event in both buffers; an alternate
-// buffer has no scrollback, so there we swallow the wheel rather than scroll.
-// (crow-tmux.conf also strips the client's smcup/rmcup, so in practice the
-// terminal stays in the main buffer and the scrollback path is the live one.)
+//   * PLAIN SHELL → scroll xterm's local 50k scrollback. Forwarding to tmux
+//     instead would drop into copy-mode, which is janky in a browser.
+//   * AGENT SURFACE → forward the tick to the app so it scrolls its own
+//     transcript, like a naked terminal.
+//
+// This handler always CONSUMES the event (capture + preventDefault +
+// stopPropagation) so xterm's own alternate-scroll fallback never runs. That
+// fallback emits ARROW KEYS, which Claude Code reads as input-history
+// navigation — the #776 bug. Forwarding goes through sendScrollToPTY, which
+// picks SGR wheel buttons when the app is mouse-tracking and cursor keys
+// otherwise, and caps a fling so it can't flood the PTY.
 function enableWheelScroll(node) {
   node.addEventListener('wheel', (e) => {
     if (!term) return;
-    const buf = term.buffer && term.buffer.active;
-    if (!buf || buf.type !== 'alternate') term.scrollLines(e.deltaY > 0 ? 3 : -3);
+    const delta = e.deltaY > 0 ? 3 : -3;
+    if (appOwnsScroll()) sendScrollToPTY(delta);
+    else term.scrollLines(delta);
     e.preventDefault();
     e.stopPropagation();
   }, { capture: true, passive: false });
@@ -3599,6 +3653,13 @@ function showTerminalMenu(e) {
     const item = el('div', 'ctx-item', it.label);
     item.onclick = (ev) => { ev.stopPropagation(); closeContextMenu(); it.action(); };
     menu.appendChild(item);
+  }
+  // On an agent surface the app receives the mouse (ADR-0013), so a plain drag
+  // scrolls the agent instead of selecting. Surface the escape hatch rather
+  // than leaving the user to discover it.
+  if (activeSurfaceIsAgent() && !sel) {
+    const hint = el('div', 'ctx-hint', 'Hold ⌥ to select text');
+    menu.appendChild(hint);
   }
   document.body.appendChild(menu);
   const x = Math.min(e.clientX, window.innerWidth - menu.offsetWidth - 8);

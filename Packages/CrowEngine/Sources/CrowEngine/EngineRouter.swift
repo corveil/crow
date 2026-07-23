@@ -846,6 +846,11 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                                 command: registerCommand,
                                 trackReadiness: trackReadiness,
                                 agentKind: agentKind,
+                                // Agent TUIs get the alt-buffer scroll model;
+                                // plain shells keep the unified scrollback
+                                // (ADR-0013). `agentKind` can't discriminate —
+                                // it always resolves to a default.
+                                agentSurface: isManaged,
                                 newWindowTimeout: 3.0
                             )
                         }
@@ -890,6 +895,11 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                 // and can only be healed by recreation (CROW-804). Read the live
                 // set once so the web UI can badge the affected tabs.
                 let degraded = await MainActor.run { TmuxBackend.shared.degradedWindowIndices() }
+                // Which windows run the agent-TUI scroll model (ADR-0013). Read
+                // from tmux (`alternate-screen` per window) rather than inferred
+                // client-side, so `app.js` routes the wheel on the SAME ground
+                // truth the daemon actually applied.
+                let agentSurfaces = await MainActor.run { TmuxBackend.shared.agentSurfaceWindowIndices() }
                 let items: [JSONValue] = terms.map { t in
                     // `readiness` lets CLI callers (setup.sh) verify the agent
                     // actually started rather than assuming a launch succeeded
@@ -909,6 +919,14 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                         // and needs a recreate (CROW-804). Never degraded when
                         // there's no window binding yet.
                         "scrollback_degraded": .bool(t.tmuxBinding.map { degraded.contains($0.windowIndex) } ?? false),
+                        // True when this terminal is an agent-TUI surface that
+                        // owns its own viewport + scrollback (ADR-0013). The web
+                        // client routes the wheel and the mouse-mode swallow on
+                        // this. Falls back to `isManaged` before the window
+                        // exists (or when tmux is unreachable), which is the
+                        // same predicate the daemon registers the window with.
+                        "agent_surface": .bool(
+                            t.tmuxBinding.map { agentSurfaces.contains($0.windowIndex) } ?? t.isManaged),
                     ])
                 }
                 return ["terminals": .array(items)]

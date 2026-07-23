@@ -49,4 +49,4 @@ Don't delete the old file. Update its `Status` to `Superseded by NNNN` and point
 | 0010 | [Retire the macOS app; the web UI is the only client](./0010-retire-the-macos-app.md) | Accepted | 2026-07-07 |
 | 0011 | [Mid-session agent handoff preserves Crow identity, not chat history](./0011-agent-handoff-preserves-session-not-chat.md) | Accepted | 2026-07-09 |
 | 0012 | [Tests must never touch live application data](./0012-tests-never-touch-live-data.md) | Accepted | 2026-07-19 |
-| 0013 | [Terminal scroll model: per-surface hybrid](./0013-terminal-scroll-model.md) | Proposed | 2026-07-23 |
+| 0013 | [Terminal scroll model: per-surface hybrid](./0013-terminal-scroll-model.md) | Accepted | 2026-07-23 |

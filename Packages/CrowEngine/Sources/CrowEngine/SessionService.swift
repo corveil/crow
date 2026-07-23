@@ -582,6 +582,18 @@ public final class SessionService {
                 // would drive launchClaude and paste a *second* `claude
                 // --continue` into a pane where Claude is already running.
                 try TmuxBackend.shared.adoptTerminal(id: terminal.id, binding: binding, trackReadiness: false)
+                // Adopted windows were born under whatever conf was live at the
+                // time, and `alternate-screen` is a per-WINDOW option that a
+                // `source-file` reload does NOT retrofit. Re-apply the agent
+                // scroll model here so a window predating ADR-0013 stops
+                // accumulating duplicate-frame sediment once its agent next
+                // enters the alt screen. Idempotent and best-effort — no live
+                // agent is interrupted, so an already-running agent keeps its
+                // current buffer until it restarts (the ⚠ Recreate affordance
+                // remains the immediate manual path).
+                if terminal.isManaged {
+                    TmuxBackend.shared.enableAlternateScreen(index: binding.windowIndex)
+                }
                 // The window survived the prior quit → Claude is already up.
                 // Belt-and-suspenders against any other readiness path: drop
                 // the terminal from autoLaunchTerminals (also stops the
@@ -648,6 +660,9 @@ public final class SessionService {
                 command: terminal.command,
                 trackReadiness: trackReadiness,
                 agentKind: agentKind,
+                // isManaged, not trackReadiness: the latter is false for
+                // Manager sessions, which are agent TUIs too (ADR-0013).
+                agentSurface: terminal.isManaged,
                 extraEnv: Self.artifactsEnv(sessionID: terminal.sessionID)
             )
             var updated = terminal
@@ -3148,6 +3163,7 @@ public final class SessionService {
                 command: t.command,
                 trackReadiness: trackReadiness,
                 agentKind: agentKind,
+                agentSurface: t.isManaged,
                 extraEnv: Self.artifactsEnv(sessionID: t.sessionID)
             )
             t.tmuxBinding = binding

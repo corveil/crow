@@ -236,6 +236,13 @@ public final class TmuxBackend {
     /// Create a new tmux window for `id`. If the cockpit session doesn't
     /// exist yet, starts it. Returns the binding so callers can persist
     /// it on the `SessionTerminal` row.
+    ///
+    /// `agentSurface` selects this window's scroll model (ADR-0013). Pass the
+    /// terminal's `isManaged`: managed terminals run a repainting agent TUI and
+    /// get `alternate-screen on`; plain shells keep the global `off` and the
+    /// unified 50k scrollback. Note this is deliberately NOT keyed on
+    /// `agentKind` (always non-nil — it falls back to the AppState default) nor
+    /// on `trackReadiness` (false for Manager sessions, which ARE agent TUIs).
     @discardableResult
     public func registerTerminal(
         id: UUID,
@@ -244,6 +251,7 @@ public final class TmuxBackend {
         command: String?,
         trackReadiness: Bool,
         agentKind: AgentKind? = nil,
+        agentSurface: Bool = false,
         extraEnv: [String: String] = [:],
         newWindowTimeout: TimeInterval = TmuxController.defaultTimeout
     ) throws -> TmuxBinding {
@@ -309,6 +317,13 @@ public final class TmuxBackend {
             timeout: newWindowTimeout
         )
         bindings[id] = windowIndex
+
+        // Hand agent-TUI windows their own viewport BEFORE the launch command
+        // below is pasted, so the agent enters the alt buffer on its very first
+        // repaint and never deposits a frame into the shared history (#822).
+        if agentSurface {
+            enableAlternateScreen(index: windowIndex)
+        }
 
         if trackReadiness {
             startReadinessWatch(id: id, sentinelPath: sentinelPath)
@@ -714,10 +729,30 @@ public final class TmuxBackend {
     /// birth and can't resize/undo either in place (see `crow-tmux.conf`
     /// history-limit caveat), so a degraded window's only remedy is recreation.
     /// `nonisolated static` so the policy is unit-testable without tmux.
+    ///
+    /// `alternateScreenEnabled` makes the alt-buffer half of that test
+    /// KIND-AWARE (ADR-0013). Under the per-surface hybrid scroll model an
+    /// agent-TUI window deliberately runs with `alternate-screen on`, so
+    /// `alternateOn == true` there is the design working, not a stuck window —
+    /// flagging it would badge every agent tab with the ⚠ "Recreate" affordance.
+    /// The `history_limit` floor still applies to those windows, and it is what
+    /// keeps the CROW-804/#821 detection meaningful: the real pre-config
+    /// casualties measured `history_limit=5000` alongside `alternate_on=1`, so
+    /// they stay caught by the floor.
+    ///
+    /// Known blind spot: an agent window genuinely wedged in the alt buffer at
+    /// the full 50000 limit is now indistinguishable from the normal state.
+    /// That is the accepted cost of the hybrid model — the alternative is a
+    /// false ⚠ on every healthy agent surface.
     nonisolated public static func isScrollbackDegraded(
-        historyLimit: Int, alternateOn: Bool, floor: Int = TmuxBackend.scrollbackHistoryLimit
+        historyLimit: Int,
+        alternateOn: Bool,
+        alternateScreenEnabled: Bool = false,
+        floor: Int = TmuxBackend.scrollbackHistoryLimit
     ) -> Bool {
-        alternateOn || historyLimit < floor
+        if historyLimit < floor { return true }
+        // An agent surface is SUPPOSED to be in the alt buffer.
+        return alternateScreenEnabled ? false : alternateOn
     }
 
     /// Window indices whose scrollback is degraded per `isScrollbackDegraded`.
@@ -729,11 +764,53 @@ public final class TmuxBackend {
         do {
             let windows = try ctrl.listWindowScrollback()
             return Set(windows
-                .filter { Self.isScrollbackDegraded(historyLimit: $0.historyLimit, alternateOn: $0.alternateOn, floor: floor) }
+                .filter { Self.isScrollbackDegraded(
+                    historyLimit: $0.historyLimit,
+                    alternateOn: $0.alternateOn,
+                    alternateScreenEnabled: $0.alternateScreenEnabled,
+                    floor: floor) }
                 .map(\.index))
         } catch {
             reportIfTimeout(error)
             return []
+        }
+    }
+
+    /// Window indices configured as agent-TUI surfaces (`alternate-screen on`),
+    /// i.e. the windows that own their own viewport + scrollback under the
+    /// hybrid scroll model (ADR-0013). Read from tmux rather than inferred from
+    /// window names so the daemon and the web client route on the SAME ground
+    /// truth the daemon actually applied. Best-effort — `[]` when tmux is
+    /// unavailable, mirroring `degradedWindowIndices`.
+    public func agentSurfaceWindowIndices() -> Set<Int> {
+        guard let ctrl = controller else { return [] }
+        do {
+            return Set(try ctrl.listWindowScrollback()
+                .filter(\.alternateScreenEnabled)
+                .map(\.index))
+        } catch {
+            reportIfTimeout(error)
+            return []
+        }
+    }
+
+    /// Give one window the agent-TUI scroll model: `alternate-screen on`, so a
+    /// repainting agent keeps its frames in the alt buffer (which has no
+    /// scrollback) instead of depositing every repaint into the shared 50k
+    /// history as duplicate-frame sediment (#822, ADR-0013).
+    ///
+    /// Best-effort by design: the window is already usable without it, so a
+    /// failure here must never fail terminal creation. Returns whether it stuck.
+    @discardableResult
+    public func enableAlternateScreen(index: Int) -> Bool {
+        guard let ctrl = controller else { return false }
+        do {
+            try ctrl.setWindowOption(index: index, name: "alternate-screen", value: "on")
+            return true
+        } catch {
+            reportIfTimeout(error)
+            NSLog("[Crow] could not set alternate-screen on window \(index): \(error)")
+            return false
         }
     }
 

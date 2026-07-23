@@ -54,7 +54,14 @@ struct BundledResourcesTests {
         let body = try String(contentsOf: url, encoding: .utf8)
         #expect(body.contains("set -gs mouse off"))
         #expect(!body.contains("set -gs mouse on"))
-        #expect(body.contains("set -gs alternate-screen off"))
+        // `alternate-screen` is a WINDOW option, so the scope-correct idiom is
+        // `-gw` (global window default), not `-gs`. This assertion pinned `-gs`
+        // and so silently failed from #821 (which corrected the conf) until
+        // #824. Pin the real scope, and pin that the DEFAULT is `off` — agent
+        // windows override it per window at runtime (ADR-0013), they must not
+        // flip this global.
+        #expect(body.contains("set -gw alternate-screen off"))
+        #expect(!body.contains("set -gw alternate-screen on"))
         // Cancel the client's smcup/rmcup so tmux renders into the outer
         // terminal's main buffer (scrollback), not its alternate buffer — the
         // load-bearing half of the native-wheel-scroll fix.
