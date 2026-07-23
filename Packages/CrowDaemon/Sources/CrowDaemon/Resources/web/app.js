@@ -3355,6 +3355,15 @@ function swallowMouseMode(params) {
   return false; // not a mouse mode → let xterm apply it normally
 }
 
+// The modifier that forces a text selection when the app owns the mouse.
+// Mirrors xterm.js's own `shouldForceSelection`: Alt on macOS (which is why
+// `macOptionClickForcesSelection` must be enabled), Shift on every other
+// platform. Best-effort UA sniff — only ever used for a label.
+function forceSelectModifierLabel() {
+  const ua = (navigator.userAgent || '') + ' ' + (navigator.platform || '');
+  return /Mac|iPhone|iPad|iPod/.test(ua) ? '⌥' : 'Shift';
+}
+
 // True when the app on the other end should receive the scroll instead of us
 // scrolling xterm's local buffer: an agent surface, an actual alternate buffer,
 // or an app that has mouse tracking on. Shared by the wheel and touch shims so
@@ -3656,9 +3665,12 @@ function showTerminalMenu(e) {
   }
   // On an agent surface the app receives the mouse (ADR-0013), so a plain drag
   // scrolls the agent instead of selecting. Surface the escape hatch rather
-  // than leaving the user to discover it.
+  // than leaving the user to discover it. xterm.js's force-select modifier is
+  // platform-dependent — ⌥ on macOS (gated on macOptionClickForcesSelection,
+  // set in ensureTerminal), Shift everywhere else — and this UI is reachable
+  // from any browser, so name the right key for the client we're running on.
   if (activeSurfaceIsAgent() && !sel) {
-    const hint = el('div', 'ctx-hint', 'Hold ⌥ to select text');
+    const hint = el('div', 'ctx-hint', `Hold ${forceSelectModifierLabel()} to select text`);
     menu.appendChild(hint);
   }
   document.body.appendChild(menu);

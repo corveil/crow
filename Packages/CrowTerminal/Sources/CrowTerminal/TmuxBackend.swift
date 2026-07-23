@@ -237,12 +237,12 @@ public final class TmuxBackend {
     /// exist yet, starts it. Returns the binding so callers can persist
     /// it on the `SessionTerminal` row.
     ///
-    /// `agentSurface` selects this window's scroll model (ADR-0013). Pass the
-    /// terminal's `isManaged`: managed terminals run a repainting agent TUI and
-    /// get `alternate-screen on`; plain shells keep the global `off` and the
-    /// unified 50k scrollback. Note this is deliberately NOT keyed on
-    /// `agentKind` (always non-nil — it falls back to the AppState default) nor
-    /// on `trackReadiness` (false for Manager sessions, which ARE agent TUIs).
+    /// `agentSurface` selects this window's scroll model (ADR-0013): a
+    /// repainting agent TUI gets `alternate-screen on`, while a plain shell
+    /// keeps the global `off` and the unified 50k scrollback. Callers should
+    /// pass `SessionTerminal.isAgentSurface(session:)` rather than a hand-rolled
+    /// test — in particular `isManaged` ALONE is wrong, because the Manager's
+    /// terminal is built without that flag yet still runs an agent.
     @discardableResult
     public func registerTerminal(
         id: UUID,

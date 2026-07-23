@@ -90,3 +90,29 @@ public struct SessionTerminal: Identifiable, Codable, Sendable {
         tmuxBinding = try container.decodeIfPresent(TmuxBinding.self, forKey: .tmuxBinding)
     }
 }
+
+extension SessionTerminal {
+    /// Whether this terminal hosts a repainting agent TUI, and so takes the
+    /// alt-buffer scroll model instead of the unified scrollback (ADR-0013).
+    /// Single source of truth for that classification — the daemon uses it to
+    /// set `alternate-screen on` at window creation/adopt, and `list-terminals`
+    /// uses it for the `agent_surface` fallback, so the two can't disagree.
+    ///
+    /// TWO shapes qualify, and both are load-bearing:
+    ///   * a managed work terminal (`isManaged`), and
+    ///   * a Manager session's terminal, which always launches an agent but is
+    ///     built WITHOUT `isManaged` — `createManagerTerminal` relies on the
+    ///     memberwise default of `false`. Keying on `isManaged` alone silently
+    ///     excludes the Manager, which is itself one of the repainting agent
+    ///     windows #822 was reported against.
+    ///
+    /// Deliberately NOT `agentKind` (it always resolves to a configured
+    /// default, so it never discriminates) and NOT `trackReadiness` (false for
+    /// Manager sessions precisely because they launch the agent via `command`).
+    ///
+    /// `session` is this terminal's session; `nil` (not yet hydrated) falls
+    /// back to `isManaged` alone.
+    public func isAgentSurface(session: Session?) -> Bool {
+        isManaged || (session?.isManager ?? false)
+    }
+}

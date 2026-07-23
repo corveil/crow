@@ -850,7 +850,7 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                                 // plain shells keep the unified scrollback
                                 // (ADR-0013). `agentKind` can't discriminate —
                                 // it always resolves to a default.
-                                agentSurface: isManaged,
+                                agentSurface: terminal.isAgentSurface(session: session),
                                 newWindowTimeout: 3.0
                             )
                         }
@@ -900,6 +900,11 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                 // client-side, so `app.js` routes the wheel on the SAME ground
                 // truth the daemon actually applied.
                 let agentSurfaces = await MainActor.run { TmuxBackend.shared.agentSurfaceWindowIndices() }
+                // Only for the pre-binding fallback below — the tmux read above
+                // is authoritative once a window exists.
+                let session = await MainActor.run {
+                    capturedAppState.sessions.first(where: { $0.id == id })
+                }
                 let items: [JSONValue] = terms.map { t in
                     // `readiness` lets CLI callers (setup.sh) verify the agent
                     // actually started rather than assuming a launch succeeded
@@ -922,11 +927,14 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                         // True when this terminal is an agent-TUI surface that
                         // owns its own viewport + scrollback (ADR-0013). The web
                         // client routes the wheel and the mouse-mode swallow on
-                        // this. Falls back to `isManaged` before the window
-                        // exists (or when tmux is unreachable), which is the
-                        // same predicate the daemon registers the window with.
+                        // this. Before the window exists (or when tmux is
+                        // unreachable) it falls back to the SAME predicate the
+                        // daemon registers the window with, so the two agree —
+                        // including for the Manager, whose terminal carries no
+                        // `isManaged` flag.
                         "agent_surface": .bool(
-                            t.tmuxBinding.map { agentSurfaces.contains($0.windowIndex) } ?? t.isManaged),
+                            t.tmuxBinding.map { agentSurfaces.contains($0.windowIndex) }
+                                ?? t.isAgentSurface(session: session)),
                     ])
                 }
                 return ["terminals": .array(items)]
