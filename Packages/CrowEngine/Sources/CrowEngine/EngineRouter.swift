@@ -846,6 +846,11 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                                 command: registerCommand,
                                 trackReadiness: trackReadiness,
                                 agentKind: agentKind,
+                                // Agent TUIs get the alt-buffer scroll model;
+                                // plain shells keep the unified scrollback
+                                // (ADR-0013). `agentKind` can't discriminate —
+                                // it always resolves to a default.
+                                agentSurface: terminal.isAgentSurface(session: session),
                                 newWindowTimeout: 3.0
                             )
                         }
@@ -889,7 +894,22 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                 // old 5000-line history-limit can't show full scroll-up history
                 // and can only be healed by recreation (CROW-804). Read the live
                 // set once so the web UI can badge the affected tabs.
-                let degraded = await MainActor.run { TmuxBackend.shared.degradedWindowIndices() }
+                // Paired with which windows run the agent-TUI scroll model
+                // (ADR-0013) — read from tmux (`alternate-screen` per window)
+                // rather than inferred client-side, so `app.js` routes the wheel
+                // on the SAME ground truth the daemon actually applied. One
+                // combined read so this RPC forks a single `tmux` subprocess.
+                // `nil` means the read FAILED (tmux down / timed out), which is
+                // not the same as "no such windows" — see the agent_surface
+                // fallback below.
+                let classification = await MainActor.run {
+                    TmuxBackend.shared.windowScrollbackClassification()
+                }
+                let degraded = classification?.degraded ?? []
+                // For the fallback below, when tmux couldn't answer.
+                let session = await MainActor.run {
+                    capturedAppState.sessions.first(where: { $0.id == id })
+                }
                 let items: [JSONValue] = terms.map { t in
                     // `readiness` lets CLI callers (setup.sh) verify the agent
                     // actually started rather than assuming a launch succeeded
@@ -909,6 +929,24 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                         // and needs a recreate (CROW-804). Never degraded when
                         // there's no window binding yet.
                         "scrollback_degraded": .bool(t.tmuxBinding.map { degraded.contains($0.windowIndex) } ?? false),
+                        // True when this terminal is an agent-TUI surface that
+                        // owns its own viewport + scrollback (ADR-0013). The web
+                        // client routes the wheel and the mouse-mode swallow on
+                        // this.
+                        //
+                        // tmux is authoritative when it ANSWERED and this
+                        // terminal has a window. Otherwise — no binding yet, or
+                        // the read failed — fall back to the SAME predicate the
+                        // daemon registers the window with, so the two agree
+                        // (including for the Manager, whose terminal carries no
+                        // `isManaged` flag). Failing to `false` instead would
+                        // tell the client to swallow mouse modes and scroll
+                        // locally while tmux has that window in the alt buffer,
+                        // where there is no scrollback to scroll.
+                        "agent_surface": .bool(
+                            classification.flatMap { c in
+                                t.tmuxBinding.map { c.agentSurfaces.contains($0.windowIndex) }
+                            } ?? t.isAgentSurface(session: session)),
                     ])
                 }
                 return ["terminals": .array(items)]

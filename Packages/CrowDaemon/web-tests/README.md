@@ -23,6 +23,20 @@ accumulation, the alternate-screen branch (SGR wheel reports when the TUI has
 mouse tracking on, cursor keys otherwise, capped per event), multi-touch
 pass-through, and degenerate cell metrics.
 
+## `wheel-scroll.test.js` — per-surface hybrid scroll (#824, ADR-0013)
+
+Drives `enableWheelScroll` and `swallowMouseMode` against a fake xterm + PTY
+socket. Coverage: the #776 invariant that the handler always consumes the wheel
+(capture-phase, non-passive, `preventDefault`) on every surface; routing by
+surface — a plain shell scrolls the local 50k scrollback and writes nothing to
+the PTY, while an agent surface forwards SGR wheel reports (or cursor keys when
+the app isn't mouse-tracking) and never scrolls locally; the legacy alt-buffer
+and mouse-tracking signals still routing to the app; the conditional mouse-mode
+swallow (swallowed on a shell, passed through on an agent surface, never
+swallowing a non-mouse mode like `?25`), including xterm's params-object and
+sub-parameter shapes; and graceful degradation when `activeTerminal` is null or
+an older daemon omits `agent_surface`.
+
 ## `row.test.js` — sidebar session rows (CROW-773)
 
 Drives `sessionRow`. Coverage: the PR pill's status glyphs for every

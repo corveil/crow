@@ -74,21 +74,26 @@ import Testing
         }
     }
 
-    /// The wheel handler owns the event in BOTH buffers. Any early return on the
-    /// alternate buffer hands the wheel to xterm's alternate-scroll fallback,
-    /// which emits arrow keys the agent TUI reads as input-history navigation
-    /// (crow-tmux.conf's `alternate-screen off` rationale, #776).
+    /// The wheel handler always CONSUMES the event, and ROUTES it by surface
+    /// rather than dropping it (ADR-0013).
     ///
-    /// Asserted as the positive ownership shape rather than the absence of one
-    /// comment string, so reintroducing the bail with different wording still
-    /// fails (review): the alternate check may only gate `scrollLines`, the
-    /// event is always consumed, and the sole `return` is the no-terminal guard.
-    @Test func wheelHandlerOwnsTheEventInBothBuffers() throws {
+    /// Consuming is the #776 invariant: any early return hands the wheel to
+    /// xterm's alternate-scroll fallback, which emits arrow keys that the agent
+    /// TUI reads as input-history navigation. Routing is the #824 invariant: a
+    /// plain shell scrolls the local 50k scrollback, while an agent surface
+    /// forwards the tick to the app so it scrolls its own transcript.
+    ///
+    /// Asserted as the positive shape rather than the absence of a string, so
+    /// reintroducing a bail with different wording still fails (review).
+    @Test func wheelHandlerOwnsTheEventAndRoutesBySurface() throws {
         let body = try Self.functionBody("enableWheelScroll", in: Self.webAsset("app.js"))
         #expect(
-            body.contains("buf.type !== 'alternate'"),
-            "the alternate-buffer check must gate scrolling, not handling")
+            body.contains("appOwnsScroll()"),
+            "the wheel must route by surface ownership, not unconditionally")
         #expect(body.contains("term.scrollLines("), "must scroll the local scrollback")
+        #expect(
+            body.contains("sendScrollToPTY("),
+            "must forward the wheel to the app on an agent surface")
         for consume in ["e.preventDefault();", "e.stopPropagation();"] {
             #expect(body.contains(consume), "must always consume the wheel event: \(consume)")
         }
@@ -96,5 +101,76 @@ import Testing
         // preventDefault/stopPropagation pair below it.
         let returns = body.components(separatedBy: "return").count - 1
         #expect(returns == 1, "only the `if (!term)` guard may return early, found \(returns)")
+    }
+
+    /// The surface-ownership predicate the wheel and touch shims share. Agent
+    /// surfaces are identified by the daemon-supplied `agent_surface` flag, NOT
+    /// by `buffer.active.type`: crow-tmux.conf strips the client's smcup/rmcup
+    /// and one tmux client serves every tab, so the client never actually enters
+    /// the alternate buffer per-window and a buffer-type-only check would be
+    /// permanently false (the trap the #822 prototype fell into).
+    @Test func scrollOwnershipConsultsTheDaemonSuppliedSurfaceKind() throws {
+        let source = try Self.webAsset("app.js")
+        let body = try Self.functionBody("appOwnsScroll", in: source)
+        // The daemon flag must be consulted FIRST and must be able to answer
+        // `false`. There is one shared xterm across tabs, and agent surfaces now
+        // let the mouse-mode DECSETs through, so `mouseTrackingMode` can outlive
+        // the tab that set it — an ungated legacy branch would let a known plain
+        // shell inherit it and forward the wheel to the PTY.
+        #expect(
+            body.contains("typeof activeTerminal.agent_surface === 'boolean'"),
+            "must treat a known surface kind as authoritative in BOTH directions")
+        #expect(
+            body.contains("return activeTerminal.agent_surface;"),
+            "a known plain shell must scroll locally, not fall through to the legacy signals")
+        #expect(
+            body.contains("'alternate'") && body.contains("mouseTrackingMode"),
+            "must keep the alt-buffer / mouse-tracking signals as the unclassified fallback")
+        #expect(
+            try Self.functionBody("activeSurfaceIsAgent", in: source).contains("agent_surface"),
+            "the surface kind comes from the list-terminals payload")
+        // Touch must not diverge from the wheel — #777's shim and #824's wheel
+        // routing have to agree about who owns the surface.
+        #expect(
+            try Self.functionBody("enableTouchScroll", in: source).contains("appOwnsScroll()"),
+            "touch must share the wheel's ownership test")
+    }
+
+    /// `refreshTerminals` must REBIND `activeTerminal` to the freshly-fetched
+    /// row, not merely check the old one is still present.
+    ///
+    /// `activeTerminal` stopped being a selection marker once `agent_surface`
+    /// began driving the wheel/mouse routing (ADR-0013) — and that field can
+    /// change under a stable terminal id, because `list-terminals` answers with
+    /// the pre-binding fallback until the tmux window exists and with the
+    /// authoritative option read afterwards. Holding the stale object left the
+    /// client routing on an outdated flag until the user switched tabs.
+    ///
+    /// Asserted on source shape because driving `refreshTerminals` needs a live
+    /// RPC socket; the jsdom suite covers the routing this feeds.
+    @Test func refreshTerminalsRebindsTheActiveTerminalToTheFreshRow() throws {
+        let body = try Self.functionBody("refreshTerminals", in: Self.webAsset("app.js"))
+        #expect(
+            body.contains("activeTerminal = terminals.find("),
+            "must re-resolve activeTerminal from the fresh list, not keep the old object")
+        #expect(
+            body.contains("|| terminals[0] || null"),
+            "must still fall back to the first terminal, then null")
+    }
+
+    /// The swallow is conditional on surface kind (ADR-0013): plain shells keep
+    /// it (so drag-select and the context menu survive), agent surfaces let the
+    /// mode toggles through so the app claims the wheel. Because that hands
+    /// drags to the app, `macOptionClickForcesSelection` is the only way left to
+    /// select text in an agent window — and xterm.js defaults it to false, so it
+    /// must be set explicitly or the ⌥-drag escape hatch silently does nothing.
+    @Test func mouseSwallowIsConditionalWithASelectionEscapeHatch() throws {
+        let source = try Self.webAsset("app.js")
+        #expect(
+            try Self.functionBody("swallowMouseMode", in: source).contains("activeSurfaceIsAgent()"),
+            "the swallow must be conditional on the surface kind")
+        #expect(
+            source.contains("macOptionClickForcesSelection: true"),
+            "⌥-drag selection must be enabled explicitly (xterm.js defaults it to false)")
     }
 }

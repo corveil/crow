@@ -1,6 +1,6 @@
 # 0013 — Terminal scroll model: per-surface hybrid (unified scrollback for shells, native alt-screen for agent TUIs)
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-07-23
 - **Deciders:** @dhilgaertner
 
@@ -30,13 +30,33 @@ Prior work healed a *related* degradation (stale alt-screen / 5000-line windows,
 Crow adopts a **per-surface hybrid** terminal scroll model:
 
 - **Plain shell / review surfaces** keep the unified xterm.js scrollback (the current behavior): `alternate-screen off`, output flows into the 50k history, CROW-606 replay restores it, the browser wheel scrolls xterm.
-- **Agent-TUI surfaces** (Claude Code, Cursor) own their own viewport and scrollback like a naked terminal: the daemon sets `alternate-screen on` **per agent window**, the client stops swallowing that window's mouse modes, and the wheel is forwarded to the app. No frame sediment because repaints stay in the alt buffer, which has no scrollback.
+- **Agent-TUI surfaces** (Claude Code, Cursor, and the Manager, which runs one too) own their own viewport and scrollback like a naked terminal: the daemon sets `alternate-screen on` **per agent window**, the client stops swallowing that window's mouse modes, and the wheel is forwarded to the app. No frame sediment because repaints stay in the alt buffer, which has no scrollback.
 
-`swallowMouseMode` and `enableWheelScroll` become **conditional on pane state** (`buffer.active.type === 'alternate'` OR active mouse tracking → the app owns the wheel; else xterm scrolls its scrollback) rather than global. This mirrors what `enableTouchScroll`/`sendScrollToPTY` already do for touch on the alt buffer.
+`swallowMouseMode` and `enableWheelScroll` become **conditional on surface kind** rather than global, sharing one predicate (`appOwnsScroll`): an agent surface, a real alternate buffer, or an app with active mouse tracking → the app owns the wheel; else xterm scrolls its scrollback. `enableTouchScroll` routes on the same predicate so touch and wheel can't disagree. How "agent surface" is determined is the crux, resolved below — it is *not* `buffer.active.type`.
 
 This is the **Option B** of the spike. It is chosen over Option A (honor the alt screen everywhere) because A throws away the unified scrollback for *every* surface — regressing the exact behavior CROW-606, #776, and #777 were built to deliver — to fix a problem that only the repainting agent surfaces have.
 
-Status is **Proposed**: the spike delivers the decision + this record; implementation lands under a follow-up ticket, at which point this ADR moves to Accepted.
+### Resolved: how the client learns a surface is an agent TUI
+
+The spike left this open, offering (a) scope the `smcup@/rmcup@` strip to non-agent surfaces, or (b) signal window-kind to `app.js`. **Option (a) turned out to be unimplementable**, verified against a live server during #824:
+
+- `terminal-overrides` is a **server** option matched on the **client's `TERM`**, not on a window.
+- `tmux list-clients` shows **one client serving every tab** — each web surface opens a single grouped `crowd-web-*` session and switches tabs with `select-window`. smcup is emitted once for the whole attachment, so there is no per-window client buffer state to scope.
+
+So `term.buffer.active.type` is **permanently `'normal'`** on the web client, and routing on it cannot work. (The spike's Option B prototype did exactly that and was therefore inert: its `swallowMouseMode` early-return never fired, and its `mouseTrackingMode` fallback was suppressed by the very swallow it was meant to gate — a circular dependency that latched into the plain-shell path.)
+
+**Chosen: (b), carried on the existing `list-terminals` RPC payload.** `crowd` emits a per-terminal `agent_surface` flag beside the existing `scrollback_degraded`, and `app.js` routes on it. The flag's source of truth is the `alternate-screen` **window option the daemon actually set**, read back via `#{alternate-screen}` in the same `list-windows` call that feeds degraded-detection — so daemon and client agree by construction, with no window-name matching. The `/terminal` socket was deliberately not used: its server→client direction is binary-only through a single writer task, so adding text frames would mean widening the stream type and racing that writer.
+
+Classification is `SessionTerminal.isAgentSurface(session:)` — a managed work terminal, **or** a Manager session's terminal that carries a launch `command`. Every part is load-bearing, and the simpler alternatives all fail:
+
+- `agentKind` never discriminates: it always resolves to a configured default, so every terminal has one.
+- `trackReadiness` is `false` for Manager sessions, precisely because they launch the agent via `command`.
+- `isManaged` **alone** under-classifies: `createManagerTerminal` builds its row without that flag, so it takes the memberwise default of `false` — yet the Manager runs a full-frame repainting agent and is one of the windows #822 was reported against.
+- Session kind **alone** over-classifies in the other direction: a Manager session can hold additional plain shells (`new-terminal` with just a `session_id`), and those are line-streaming surfaces that must keep the unified scrollback. The `command != nil` test separates the Manager's agent terminal from them.
+
+Boundary accepted: an extra Manager-session terminal created with an explicit `--command` is treated as an agent surface. The alternative is persisting a new per-terminal field; the cost here is only that a hand-launched full-screen program in that one spot gets the naked-terminal scroll model.
+
+The predicate lives in `CrowCore` because the daemon needs it twice — to set the window option at creation/adopt, and as the `list-terminals` fallback before a window exists — and those two must not drift apart.
 
 ## Consequences
 
@@ -48,8 +68,13 @@ Status is **Proposed**: the spike delivers the decision + this record; implement
 **Harder / to live with**
 - **Two code paths.** The wheel/mouse handling is now conditional; both branches must be kept correct and tested. The `swallowMouseMode` and `enableWheelScroll` conditionals are the crux.
 - **Agent-window classification.** The daemon must know which windows are agent TUIs to set `alternate-screen on` at creation (it already names them, e.g. "Claude Code", and launches a known command — a reliable signal).
-- **Client alt-buffer detection is the load-bearing open question.** For `app.js` to route by `buffer.active.type === 'alternate'`, the **client** (xterm.js) must also enter the alt buffer for an agent window — which the global `smcup@/rmcup@` strip (layer 2) currently prevents. The follow-up must either (a) scope that strip to non-agent surfaces so agent windows re-gain client smcup, or (b) have crowd signal window-kind to `app.js` over the existing control channel and route on that instead of buffer type. The spike validated the tmux side (per-window `alternate-screen on` coexists with `off` in one server) but flagged this wiring as the real implementation work.
-- **Agent-window scrollback boundary.** Inside an agent window, "scroll behind the app" into pre-launch shell history is no longer available (the alt buffer has no scrollback) — same trade a naked terminal makes. CROW-606 replay for an agent window restores only its current frame; the jump-to-bottom pill and copy/paste semantics need a pass for the alt-buffer case.
+- **The client cannot detect the alt buffer itself** — resolved above by signalling `agent_surface` out of band. The cost is that the two layers must stay in sync: if the daemon ever stops setting the window option, the client silently falls back to the shell path.
+- **Agent-window scrollback boundary.** Inside an agent window, "scroll behind the app" into pre-launch shell history is no longer available (the alt buffer has no scrollback) — same trade a naked terminal makes. Settled during #824:
+  - **CROW-606 replay** is correct by construction. `capture-pane -pe -S -50000` on an alt-buffer pane returns just the current frame, and `replayFrame` prepends `ESC[H ESC[2J ESC[3J`, so reconnects rebuild rather than stack. No change needed.
+  - **Jump-to-bottom pill** keys off `viewportY >= baseY`. On an agent surface tmux repaints in place, the client's scrollback never grows, both stay 0, and the pill correctly stays hidden — there is nothing to jump back to. No change needed.
+  - **Copy/paste** is the one real regression: native drag-select and the right-click menu are eaten inside agent windows, because they worked *because* of the mouse-mode swallow. Mitigated by enabling `macOptionClickForcesSelection` so ⌥-drag forces selection (xterm.js defaults that option to `false`, so it must be set explicitly), surfaced as a hint in the terminal context menu. Plain shells are unaffected.
+- **A degraded-window blind spot.** `isScrollbackDegraded` now takes `alternateScreenEnabled`, so an agent surface in the alt buffer is healthy rather than badged ⚠ Recreate. The consequence is that an agent window *genuinely* wedged in the alt buffer at the full 50000 limit is no longer distinguishable from the normal state. The `history_limit` floor still catches the real #804/#821 casualties, which measured `history_limit=5000`.
+- **The window option is frozen at creation.** tmux applies `alternate-screen` per window, and a `source-file` reload does not retrofit it. Windows adopted from a previous crowd are re-applied on adopt, but a *live* agent keeps its current buffer until it restarts; the ⚠ Recreate affordance remains the immediate manual path.
 
 ## Alternatives considered
 
@@ -62,4 +87,6 @@ Status is **Proposed**: the spike delivers the decision + this record; implement
 - Prototype branches (not merged): `spike/822-option-a`, `spike/822-option-b`.
 - Related ADRs: [0001 — tmux as the sole terminal backend](./0001-tmux-only-terminal-backend.md) (this ADR carves the scroll model out of ADR-0001's terminal-backend scope; ADR-0001 is otherwise unchanged).
 - Prior art: CROW-606 (replay, #609/#612), #776/#789 (mouse-mode swallow), #777/#786 (iOS touch-scroll ownership), #804/#821 (scrollback heal), epic #783 (replay reflow fidelity).
-- Code: `Packages/CrowTerminal/Sources/CrowTerminal/Resources/crow-tmux.conf` (alt-screen, smcup/rmcup, mouse, history-limit); `Packages/CrowDaemon/Sources/CrowDaemon/Resources/web/app.js` (`swallowMouseMode`, `enableWheelScroll`, `enableTouchScroll`, `sendScrollToPTY`); `Packages/CrowDaemon/Sources/CrowDaemon/TerminalCockpit.swift` / `TerminalWebSocket.swift` (CROW-606 replay).
+- Implementation: [#824](https://github.com/corveil/crow/issues/824).
+- Code: `crow-tmux.conf` (alt-screen default, smcup/rmcup, mouse, history-limit); `TmuxController.setWindowOption` / `listWindowScrollback` (per-window option + the `#{alternate-screen}` read-back); `TmuxBackend.registerTerminal(agentSurface:)`, `enableAlternateScreen`, `isScrollbackDegraded(alternateScreenEnabled:)`, `agentSurfaceWindowIndices`; `EngineRouter` `list-terminals` (`agent_surface`); `web/app.js` (`activeSurfaceIsAgent`, `appOwnsScroll`, `swallowMouseMode`, `enableWheelScroll`, `enableTouchScroll`, `sendScrollToPTY`); `TerminalCockpit.swift` / `TerminalWebSocket.swift` (CROW-606 replay).
+- Tests: `ScrollbackHealthTests` (kind-aware policy truth table), `TmuxControllerTests.agentWindowOptsIntoAlternateScreenWithoutAffectingSiblings` (real-tmux per-window coexistence), `WebTerminalAssetTests` (client routing shape), `web-tests/wheel-scroll.test.js` (jsdom wheel + conditional swallow).

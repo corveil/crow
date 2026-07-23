@@ -163,29 +163,40 @@ public struct TmuxController: Sendable {
         }
     }
 
-    /// Per-window scrollback health: each window's index plus the two pane
-    /// facts that determine whether scroll-up can show the full transcript —
-    /// `#{history_limit}` (the frozen-at-birth scrollback cap) and
-    /// `#{alternate_on}` (whether the active pane is in the alternate buffer,
-    /// which has NO scrollback). Windows created before the current
-    /// `crow-tmux.conf` are stuck at `history_limit=5000 alternate_on=1` and
-    /// tmux cannot resize/undo either in place, so this is how Crow detects the
-    /// degraded windows that need a recreate (CROW-804). `history_limit`/
-    /// `alternate_on` resolve against each window's active pane under
-    /// `list-windows -F`.
-    public func listWindowScrollback() throws -> [(index: Int, historyLimit: Int, alternateOn: Bool)] {
+    /// Per-window scrollback health: each window's index plus the three facts
+    /// that determine whether scroll-up can show the full transcript —
+    /// `#{history_limit}` (the frozen-at-birth scrollback cap), `#{alternate_on}`
+    /// (whether the active pane is CURRENTLY in the alternate buffer, which has
+    /// NO scrollback), and `#{alternate-screen}` (whether this window is
+    /// CONFIGURED to honor the alternate screen at all).
+    ///
+    /// Windows created before the current `crow-tmux.conf` are stuck at
+    /// `history_limit=5000 alternate_on=1` and tmux cannot resize/undo either in
+    /// place, so this is how Crow detects the degraded windows that need a
+    /// recreate (CROW-804).
+    ///
+    /// The `alternate-screen` OPTION is what separates "degraded" from "working
+    /// as designed" under the hybrid scroll model (ADR-0013): agent-TUI windows
+    /// deliberately run with it `on`, so `alternate_on=1` there is expected
+    /// rather than broken. It is a window OPTION, not a pane variable, but tmux
+    /// resolves options in format strings, so one `list-windows` read serves
+    /// both the health check and the agent-surface classification. (Verified on
+    /// tmux 3.6a: a real option renders `0`/`1`, an unknown one renders empty.)
+    public func listWindowScrollback() throws
+        -> [(index: Int, historyLimit: Int, alternateOn: Bool, alternateScreenEnabled: Bool)] {
         let out = try run(["list-windows", "-t", sessionName,
-                           "-F", "#{window_index}\t#{history_limit}\t#{alternate_on}"])
+                           "-F", "#{window_index}\t#{history_limit}\t#{alternate_on}\t#{alternate-screen}"])
         return out.split(separator: "\n").compactMap { line in
-            let parts = line.split(separator: "\t", maxSplits: 2, omittingEmptySubsequences: false)
-            guard parts.count == 3,
+            let parts = line.split(separator: "\t", maxSplits: 3, omittingEmptySubsequences: false)
+            guard parts.count == 4,
                   let idx = Int(parts[0].trimmingCharacters(in: .whitespaces)),
                   let limit = Int(parts[1].trimmingCharacters(in: .whitespaces)) else {
                 return nil
             }
-            // tmux renders boolean flags as "1"/"0".
+            // tmux renders boolean flags AND boolean options as "1"/"0".
             let alt = parts[2].trimmingCharacters(in: .whitespaces) == "1"
-            return (idx, limit, alt)
+            let altOption = parts[3].trimmingCharacters(in: .whitespaces) == "1"
+            return (idx, limit, alt, altOption)
         }
     }
 
@@ -222,6 +233,19 @@ public struct TmuxController: Sendable {
             )
         }
         return idx
+    }
+
+    /// Set a tmux WINDOW option on a single window, overriding the global
+    /// default from `crow-tmux.conf` for that window only.
+    ///
+    /// Crow's terminal settings are otherwise all server-global (set once at
+    /// startup via `tmux -f crow-tmux.conf`); this is the one place a window
+    /// deviates. It exists for the per-surface hybrid scroll model (ADR-0013):
+    /// agent-TUI windows get `alternate-screen on` so their full-frame repaints
+    /// stay in the alt buffer instead of silting up the shared scrollback, while
+    /// plain shell windows keep the global `off` and the unified 50k history.
+    public func setWindowOption(index: Int, name: String, value: String) throws {
+        try run(["set-window-option", "-t", "\(sessionName):\(index)", name, value])
     }
 
     public func selectWindow(index: Int) throws {

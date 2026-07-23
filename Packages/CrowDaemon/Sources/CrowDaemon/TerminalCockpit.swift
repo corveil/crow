@@ -46,7 +46,9 @@ struct TerminalCockpit: Sendable {
     private func logDegradedScrollbackWindows() {
         guard let windows = try? controller.listWindowScrollback() else { return }
         for w in windows where TmuxBackend.isScrollbackDegraded(
-            historyLimit: w.historyLimit, alternateOn: w.alternateOn) {
+            historyLimit: w.historyLimit,
+            alternateOn: w.alternateOn,
+            alternateScreenEnabled: w.alternateScreenEnabled) {
             NSLog("[CrowTelemetry tmux:scrollback_degraded index=\(w.index) history_limit=\(w.historyLimit) alternate_on=\(w.alternateOn ? 1 : 0)]")
         }
     }

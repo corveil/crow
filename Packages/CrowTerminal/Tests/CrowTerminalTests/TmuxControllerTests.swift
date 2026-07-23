@@ -189,6 +189,12 @@ struct TmuxControllerTests {
     /// stays in the MAIN buffer (`alternate_on == 0`). Without the setting this
     /// pane reads `alternate_on == 1` (verified: bare conf → 1), so this genuinely
     /// locks the config behavior, not a tautology.
+    ///
+    /// Scope (ADR-0013): this pins the GLOBAL DEFAULT, i.e. the plain shell /
+    /// review surface. Agent-TUI windows deliberately override it per window —
+    /// see `agentWindowOptsIntoAlternateScreenWithoutAffectingSiblings`. The
+    /// assertion below therefore also checks the window did NOT opt in, so this
+    /// test keeps failing for the right reason if the default ever flips.
     @Test func bundledConfKeepsInnerAppsOutOfAlternateBuffer() throws {
         let confURL = try #require(BundledResources.tmuxConfURL)
         let ctrl = makeController()
@@ -206,14 +212,66 @@ struct TmuxControllerTests {
             configPath: confURL.path,
             command: #"/bin/sh -c 'while true; do printf "\033[?1049h"; sleep 0.05; done'"#)
         var reads: [Bool] = []
+        var optedIn: [Bool] = []
         let deadline = Date().addingTimeInterval(1.0)
         repeat {
             Thread.sleep(forTimeInterval: 0.1)
             if let anchor = (try? ctrl.listWindowScrollback())?.first(where: { $0.index == 0 }) {
                 reads.append(anchor.alternateOn)
+                optedIn.append(anchor.alternateScreenEnabled)
             }
         } while Date() < deadline
         #expect(!reads.isEmpty)
         #expect(reads.allSatisfy { $0 == false })
+        // The window never opted in, so `alternate_on == 0` above is the global
+        // default doing its job — not an agent surface that happens to be idle.
+        #expect(optedIn.allSatisfy { $0 == false })
+    }
+
+    /// ADR-0013 (per-surface hybrid): the daemon flips `alternate-screen on` for
+    /// AGENT windows only, and that must coexist with the global `off` in the
+    /// same server — the spike measured exactly this pairing (agent window
+    /// `alternate_on=1 history_size=0`, shell window `alternate_on=0` with a
+    /// growing history). Drives a real tmux server: one window opts in, a
+    /// sibling does not, and both continuously request the alternate screen.
+    @Test func agentWindowOptsIntoAlternateScreenWithoutAffectingSiblings() throws {
+        let confURL = try #require(BundledResources.tmuxConfURL)
+        let ctrl = makeController()
+        defer {
+            ctrl.killServer()
+            try? FileManager.default.removeItem(atPath: ctrl.socketPath)
+        }
+        let smcupLoop = #"/bin/sh -c 'while true; do printf "\033[?1049h"; sleep 0.05; done'"#
+        // Window 0 = the plain-shell control; it stays on the global default.
+        try ctrl.newSessionDetached(configPath: confURL.path, command: smcupLoop)
+        let agentIdx = try ctrl.newWindow(name: "Claude Code", command: smcupLoop)
+        try ctrl.setWindowOption(index: agentIdx, name: "alternate-screen", value: "on")
+
+        // Poll until the agent window enters the alt buffer, so the assertions
+        // below aren't racing the shell's first emit.
+        var agent: (index: Int, historyLimit: Int, alternateOn: Bool, alternateScreenEnabled: Bool)?
+        let deadline = Date().addingTimeInterval(2.0)
+        repeat {
+            Thread.sleep(forTimeInterval: 0.1)
+            agent = (try? ctrl.listWindowScrollback())?.first(where: { $0.index == agentIdx })
+        } while !(agent?.alternateOn ?? false) && Date() < deadline
+
+        let agentWindow = try #require(agent)
+        #expect(agentWindow.alternateScreenEnabled, "the per-window option must stick")
+        #expect(agentWindow.alternateOn, "the agent window should be IN the alt buffer")
+        // Still born with the full history-limit, so the floor check is intact.
+        #expect(agentWindow.historyLimit == TmuxBackend.scrollbackHistoryLimit)
+        // The regression guard that #824 must not break: an agent surface in the
+        // alt buffer is healthy, NOT a CROW-804 degraded window.
+        #expect(!TmuxBackend.isScrollbackDegraded(
+            historyLimit: agentWindow.historyLimit,
+            alternateOn: agentWindow.alternateOn,
+            alternateScreenEnabled: agentWindow.alternateScreenEnabled))
+
+        // The sibling is untouched: still on the global default, still in the
+        // main buffer, and therefore still keeping the unified scrollback.
+        let shell = try #require((try ctrl.listWindowScrollback()).first(where: { $0.index == 0 }))
+        #expect(!shell.alternateScreenEnabled, "per-window `on` must not leak to siblings")
+        #expect(!shell.alternateOn)
     }
 }

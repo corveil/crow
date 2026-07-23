@@ -582,6 +582,19 @@ public final class SessionService {
                 // would drive launchClaude and paste a *second* `claude
                 // --continue` into a pane where Claude is already running.
                 try TmuxBackend.shared.adoptTerminal(id: terminal.id, binding: binding, trackReadiness: false)
+                // Adopted windows were born under whatever conf was live at the
+                // time, and `alternate-screen` is a per-WINDOW option that a
+                // `source-file` reload does NOT retrofit. Re-apply the agent
+                // scroll model here so a window predating ADR-0013 stops
+                // accumulating duplicate-frame sediment once its agent next
+                // enters the alt screen. Idempotent and best-effort — no live
+                // agent is interrupted, so an already-running agent keeps its
+                // current buffer until it restarts (the ⚠ Recreate affordance
+                // remains the immediate manual path).
+                let session = appState.sessions.first(where: { $0.id == terminal.sessionID })
+                if terminal.isAgentSurface(session: session) {
+                    TmuxBackend.shared.enableAlternateScreen(index: binding.windowIndex)
+                }
                 // The window survived the prior quit → Claude is already up.
                 // Belt-and-suspenders against any other readiness path: drop
                 // the terminal from autoLaunchTerminals (also stops the
@@ -640,14 +653,15 @@ public final class SessionService {
         // window was closed, or a legacy per-PID socketPath that no longer
         // matches the stable socket). Create a fresh window as before.
         do {
-            let agentKind = appState.sessions.first(where: { $0.id == terminal.sessionID })?.agentKind
+            let session = appState.sessions.first(where: { $0.id == terminal.sessionID })
             let binding = try TmuxBackend.shared.registerTerminal(
                 id: terminal.id,
                 name: terminal.name,
                 cwd: terminal.cwd,
                 command: terminal.command,
                 trackReadiness: trackReadiness,
-                agentKind: agentKind,
+                agentKind: session?.agentKind,
+                agentSurface: terminal.isAgentSurface(session: session),
                 extraEnv: Self.artifactsEnv(sessionID: terminal.sessionID)
             )
             var updated = terminal
@@ -3139,7 +3153,7 @@ public final class SessionService {
             NSLog("[SessionService] tmux not configured; terminal \(t.id) will not render")
             return t
         }
-        let agentKind = appState.sessions.first(where: { $0.id == t.sessionID })?.agentKind
+        let session = appState.sessions.first(where: { $0.id == t.sessionID })
         do {
             let binding = try TmuxBackend.shared.registerTerminal(
                 id: t.id,
@@ -3147,7 +3161,10 @@ public final class SessionService {
                 cwd: t.cwd,
                 command: t.command,
                 trackReadiness: trackReadiness,
-                agentKind: agentKind,
+                agentKind: session?.agentKind,
+                // Covers the Manager, whose terminal is built without
+                // `isManaged` but still runs a repainting agent (ADR-0013).
+                agentSurface: t.isAgentSurface(session: session),
                 extraEnv: Self.artifactsEnv(sessionID: t.sessionID)
             )
             t.tmuxBinding = binding
