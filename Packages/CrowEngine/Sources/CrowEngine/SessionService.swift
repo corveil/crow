@@ -473,21 +473,29 @@ public final class SessionService {
     /// applied to a single terminal on user request. Returns whether a recreate
     /// was performed (false if the terminal wasn't found).
     ///
-    /// The Manager terminal has its own purpose-built recreate that preserves
-    /// `managerSessionID` and re-arms the exit monitor, so it delegates to
-    /// `restartManager`. Recreating interrupts whatever agent is running in the
+    /// The **primary** Manager terminal has its own purpose-built recreate that
+    /// preserves `managerSessionID` and re-arms the exit monitor, so it delegates
+    /// to `restartManager`. Secondary Manager sessions (also `kind == .manager`,
+    /// but NOT the well-known primary) fall through to the general rehydrate path
+    /// — `restartManager` hard-codes `AppState.managerSessionID`, so routing them
+    /// there would restart the *primary* Manager and leave the selected window
+    /// untouched (review). Their command-launches-agent terminal re-runs its
+    /// stored `managerCommand` via `registerTerminal` on rehydrate, healing the
+    /// correct window. Recreating interrupts whatever agent is running in the
     /// window — the caller is expected to have confirmed with the user first.
     @MainActor
     @discardableResult
     public func recreateTerminalSurface(sessionID: UUID, terminalID: UUID, devRoot: String) -> Bool {
-        guard let session = appState.sessions.first(where: { $0.id == sessionID }),
+        guard appState.sessions.contains(where: { $0.id == sessionID }),
               let terminal = appState.terminals(for: sessionID).first(where: { $0.id == terminalID }) else {
             NSLog("[SessionService] recreateTerminalSurface: terminal \(terminalID) not found in session \(sessionID)")
             return false
         }
 
-        // The Manager isn't a per-session tab; route to its dedicated recreate.
-        if session.isManager {
+        // Only the PRIMARY Manager routes to its dedicated recreate — that path
+        // is keyed on the well-known managerSessionID. Everything else (work,
+        // review, job, AND secondary Managers) heals via the rehydrate path.
+        if Self.shouldRestartPrimaryManagerOnRecreate(sessionID: sessionID) {
             restartManager(devRoot: devRoot)
             return true
         }
@@ -519,6 +527,16 @@ public final class SessionService {
         let updated = rehydrateTerminalSurface(seed, trackReadiness: trackReadiness)
         applyRehydrationResult(sessionID: sessionID, original: seed, updated: updated)
         return true
+    }
+
+    /// Pure policy (CROW-804): only the well-known **primary** Manager session
+    /// routes a recreate to `restartManager`, which hard-codes
+    /// `AppState.managerSessionID`. Secondary Manager sessions (created via
+    /// `createManagerSession`) are also `kind == .manager` but must NOT restart
+    /// the primary — they fall through to the rehydrate path. `nonisolated static`
+    /// so the branch is unit-testable without a live app.
+    nonisolated static func shouldRestartPrimaryManagerOnRecreate(sessionID: UUID) -> Bool {
+        sessionID == AppState.managerSessionID
     }
 
     /// Re-hydrate one persisted terminal's tmux window on app launch. Returns

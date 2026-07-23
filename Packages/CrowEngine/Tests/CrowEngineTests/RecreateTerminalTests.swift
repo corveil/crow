@@ -30,6 +30,16 @@ struct RecreateTerminalTests {
             sessionID: UUID(), terminalID: UUID(), devRoot: devRoot))
     }
 
+    /// Only the well-known primary Manager routes a recreate to `restartManager`
+    /// (which hard-codes `AppState.managerSessionID`). A secondary Manager — also
+    /// `kind == .manager` — must NOT, or it would restart the primary and leave
+    /// the selected window untouched. Locks the review fix.
+    @Test func onlyPrimaryManagerRestartsManager() {
+        #expect(SessionService.shouldRestartPrimaryManagerOnRecreate(sessionID: AppState.managerSessionID))
+        // A secondary Manager (any other id) falls through to the rehydrate path.
+        #expect(!SessionService.shouldRestartPrimaryManagerOnRecreate(sessionID: UUID()))
+    }
+
     /// The RPC rejects a call missing its ids rather than reaching the service.
     @Test func rpcRequiresSessionAndTerminalIDs() async throws {
         let (service, appState, store, devRoot) = makeService()

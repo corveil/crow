@@ -2136,7 +2136,7 @@ async function closeTerminal(t) {
 async function recreateTerminal(t) {
   const ok = await confirmModal(
     'This rebuilds “' + (t.name || 'terminal') + '” to restore full scroll-up history. '
-    + 'The agent running in it will be restarted (resumed via claude --continue).',
+    + 'The agent running in it will be restarted (and resumed where the agent supports it).',
     { title: 'Recreate terminal', okLabel: 'Recreate', danger: true });
   if (!ok) return;
   try {

@@ -103,11 +103,13 @@ struct TerminalCockpit: Sendable {
         _ = try? controller.run(["select-window", "-t", "\(group):\(index)"])
     }
 
-    /// How many lines of pane history to replay on (re)connect. Matched to the
-    /// xterm.js client scrollback (`scrollback: 50000` in app.js) and the tmux
-    /// `history-limit` (crow-tmux.conf) so the full retained history survives a
-    /// crowd restart or browser reload (CROW-606).
-    static let replayLines = 50000
+    /// How many lines of pane history to replay on (re)connect. Wired to
+    /// `TmuxBackend.scrollbackHistoryLimit` — the same value baked into the tmux
+    /// `history-limit` (crow-tmux.conf) and the xterm.js client scrollback
+    /// (`scrollback: 50000` in app.js) — so the full retained history survives a
+    /// crowd restart or browser reload (CROW-606) and the daemon replay can't
+    /// drift from the policy floor (CROW-804 review).
+    static let replayLines = TmuxBackend.scrollbackHistoryLimit
 
     /// Capture window `index`'s pane scrollback (history + current screen) and
     /// package it as bytes ready to write into a reconnecting xterm.js buffer.
