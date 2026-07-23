@@ -90,16 +90,18 @@ managed-terminal command needs hook/env prep.
 
 ### Remote control
 
-`supportsRemoteControl` drives the `RemoteControlBadge`
+`supportsRemoteControl` drives whether the remote-control badge is shown for a
+harness's sessions
 ([`CodingAgent.swift`](../Packages/CrowCore/Sources/CrowCore/Agent/CodingAgent.swift)).
 
 - **Claude:** `true`, backed by real `--rc --name` flags
   (`ClaudeLaunchArgs.argsSuffix`). `--name` labels the session in claude.ai's
   Remote Control panel.
 - **Cursor & OpenCode:** `true`, but there is **no RC flag** — remote driving is
-  `crow send` typing into the interactive TUI (the agent-agnostic stdin path in
-  `SessionService.send`). The badge reflects that Crow *can* drive them, not that
-  the agent has a native RC protocol.
+  `crow send` typing into the interactive TUI (the agent-agnostic stdin path: the
+  `send` RPC handler in `EngineRouter` → `TerminalRouter.send`). The badge
+  reflects that Crow *can* drive them, not that the agent has a native RC
+  protocol.
 - **Codex:** `false` — Codex has no remote-control surface at all
   (`OpenAICodexAgent`, "Codex doesn't do remote control").
 
@@ -189,11 +191,12 @@ global config and are disambiguated by `cwd`. See
 ### Initial-prompt injection
 
 Review/job sessions get a pre-written prompt file (`.crow-review-prompt.md` /
-`.crow-job-prompt.md`) inlined via shell substitution on first launch.
+`.crow-job-prompt.md`) inlined via shell substitution on first launch. A preflight
+in `launchAgent` refuses to dispatch if that file is missing, for **every**
+harness (CROW-439) — it's gated on the prompt-file convention, not on agent kind.
 
 - **Claude:** `$(cat …-prompt.md)`, dispatched through the deferred `#408`
-  paste path (stash in `pendingLaunchCommands`, paste on `.shellReady`). A
-  preflight refuses to dispatch if the file is missing (CROW-439).
+  paste path (stash in `pendingLaunchCommands`, paste on `.shellReady`).
 - **Cursor:** `agent "$(cat …)"`. `CursorLauncher` (the workspace-skill prompt
   generator) is written but **not yet auto-wired** — Phase-C MVP launches
   `agent` bare for `.work`.
@@ -216,7 +219,8 @@ identity (`if …kind == .claudeCode`), because no other harness has an analogue
   `ANTHROPIC_CUSTOM_HEADERS` (CROW-402): `ClaudeHookConfigWriter.writeGatewayEnv`
   writes the env block into `settings.local.json` (Claude-gated at `launchAgent`
   and `handoffAgent`), and `ClaudeLaunchArgs.gatewayEnvPrefix` adds the
-  launch-line `export …` prefix (at `launchAgent` only). The **two** Manager
+  launch-line `export …` prefix (at `launchAgent`, plus `managerCommand`'s
+  no-registered-agent fallback). The **two** Manager
   gateway writes — `createManagerTerminal` and the hydrate path's
   `writeManagerGatewayEnv` — are **unconditional** (harmless: a non-Claude agent
   ignores `settings.local.json`).

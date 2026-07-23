@@ -76,8 +76,9 @@ public struct OpenCodeAgent: CodingAgent {
             // TUI. No env prefix (OpenCode reads provider creds from its own
             // config / env), no `--continue` (MVP doesn't auto-resume), no
             // remote-control flag (remote control is `crow send` typing into
-            // the TUI — agent-agnostic, handled by `SessionService.send`).
-            // OpenCode has no `--rc`/`--name` analog anyway.
+            // the TUI — agent-agnostic, handled by the `send` RPC →
+            // `TerminalRouter.send`). OpenCode has no `--rc`/`--name` analog
+            // anyway.
             return "\(opencodePath)\n"
         case .job, .review:
             // First launch: headless `run` consumes the prompt file, then

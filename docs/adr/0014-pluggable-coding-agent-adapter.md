@@ -98,7 +98,8 @@ abstract a Claude-specific concept:
    all four call sites — `launchAgent`, `handoffAgent`, and the two Manager
    paths), **AI-gateway env** (`ClaudeHookConfigWriter.writeGatewayEnv` gated at
    `launchAgent` / `handoffAgent`, plus the launch-line `gatewayEnvPrefix` at
-   `launchAgent` only; the **two** Manager gateway writes —
+   `launchAgent` (and `managerCommand`'s no-registered-agent fallback); the
+   **two** Manager gateway writes —
    `createManagerTerminal` and the hydrate path's `writeManagerGatewayEnv` — are
    unconditional, harmless since a non-Claude agent ignores
    `settings.local.json`), and **OTEL telemetry env**

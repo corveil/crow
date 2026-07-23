@@ -71,7 +71,8 @@ public struct CursorAgent: CodingAgent {
             // GUI-stored creds are inherited otherwise), no `--continue`
             // (MVP doesn't auto-resume), no remote-control flag (remote
             // control is `crow send` typing into the TUI — agent-agnostic,
-            // handled by `SessionService.send`, not a per-launch flag).
+            // handled by the `send` RPC → `TerminalRouter.send`, not a
+            // per-launch flag).
             return "\(agentPath)\n"
         case .job, .review:
             // Jobs and reviews share the same dispatch shape: a pre-written

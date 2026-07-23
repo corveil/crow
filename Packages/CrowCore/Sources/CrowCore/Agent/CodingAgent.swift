@@ -18,8 +18,8 @@ public protocol CodingAgent: Sendable {
 
     /// Whether this agent supports Crow's "remote control" feature (the
     /// `--rc --name` flags Claude Code uses to register a session in
-    /// claude.ai's Remote Control panel). Drives whether the
-    /// `RemoteControlBadge` is shown for this agent's sessions.
+    /// claude.ai's Remote Control panel). Drives whether the remote-control
+    /// badge is shown for this agent's sessions.
     var supportsRemoteControl: Bool { get }
 
     /// The shell token that identifies a command as launching this agent.

@@ -39,8 +39,9 @@ records the rationale for each gap here (verbatim reasons preserved from source)
 3. **Remote control is Claude-native; others are faked or absent.** Codex sets
    `supportsRemoteControl = false` ("Codex doesn't do remote control", no `--rc`
    flag). Cursor and OpenCode set it `true` but have **no RC flag** — remote
-   driving is `crow send` typing into the interactive TUI
-   (`SessionService.send`), agent-agnostic, not a per-launch flag.
+   driving is `crow send` typing into the interactive TUI (the `send` RPC handler
+   in `EngineRouter` → `TerminalRouter.send`), agent-agnostic, not a per-launch
+   flag.
 
 4. **Codex hooks are sync-only.** `CodexHookConfigWriter.asyncEvents` is empty:
    *"Codex's hook runtime is sync-only as of v0.139.0 — declaring `async = true`
