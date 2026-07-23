@@ -592,6 +592,8 @@ crow list-terminals --session <uuid>
 crow send --session <uuid> --terminal <uuid> "text"
 crow add-link --session <uuid> --label "..." --url "..." --type ticket|pr|repo|custom
 crow list-links --session <uuid>
+crow remove-link --session <uuid> --id <link-uuid> | --url "..."
+crow edit-link --session <uuid> --id <link-uuid> | --url "..." [--label "..."] [--new-url "..."] [--type ticket|pr|repo|custom]
 ```
 
 All commands return JSON and require `dangerouslyDisableSandbox: true`.

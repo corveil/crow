@@ -207,6 +207,45 @@ crow add-link --session <uuid> --label "Issue #123" --url "https://..." --type t
 crow list-links --session <uuid>
 ```
 
+Returns each link's `id`, `label`, `url`, and `type` — the `id` is what `edit-link` / `remove-link` take.
+
+### `crow remove-link`
+
+Detach a link from a session, identified by its link ID (from `list-links`) or its URL.
+
+```bash
+crow remove-link --session <uuid> --id <link-uuid>
+crow remove-link --session <uuid> --url "https://..."
+```
+
+| Flag        | Required | Description                                  |
+| ----------- | -------- | -------------------------------------------- |
+| `--session` | yes      | Session UUID                                 |
+| `--id`      | one of   | Link UUID (from `list-links`)                |
+| `--url`     | one of   | Link URL (alternative to `--id`)             |
+
+Provide at least one of `--id` / `--url`. Returns `{"removed": N}`.
+
+### `crow edit-link`
+
+Update a link's label, URL, or type in place. The link is selected by `--id` or its current `--url`; only the fields you pass change. Because `--url` selects the link, the *new* URL is set via `--new-url`.
+
+```bash
+crow edit-link --session <uuid> --id <link-uuid> --label "PR #42" --type pr
+crow edit-link --session <uuid> --url "https://old..." --new-url "https://new..."
+```
+
+| Flag        | Required | Description                                        |
+| ----------- | -------- | -------------------------------------------------- |
+| `--session` | yes      | Session UUID                                        |
+| `--id`      | one of   | Link UUID to edit (from `list-links`)              |
+| `--url`     | one of   | Current link URL to match (alternative to `--id`)  |
+| `--label`   | no       | New display label                                  |
+| `--new-url` | no       | New target URL                                     |
+| `--type`    | no       | New type: `ticket`, `pr`, `repo`, or `custom`      |
+
+Provide at least one selector (`--id` / `--url`) and at least one field to change (`--label` / `--new-url` / `--type`). Returns `{"updated": N}`.
+
 ---
 
 ## Worktree Commands
