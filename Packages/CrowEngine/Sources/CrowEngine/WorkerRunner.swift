@@ -21,7 +21,10 @@ public final class WorkerRunner {
 
     // MARK: - Injection
 
-    /// Current runner config (from `AppConfig.runner`). Nil/`disabled` ⇒ inert.
+    /// Current runner config (from `AppConfig.runner`). Nil (no `runner` block or
+    /// a failed config load) or `disabled` ⇒ **no new claims**, but teardown of
+    /// existing/persisted runs still runs each `tick()` so secrets are never
+    /// orphaned (review).
     public var configProvider: () -> RunnerConfig? = { nil }
     /// The configured dev root (scratch dirs live under it).
     public var devRootProvider: () -> String? = { nil }
@@ -110,34 +113,41 @@ public final class WorkerRunner {
     ///
     /// **Teardown always runs; only claiming is gated.** Reconcile + heartbeat +
     /// finish/wipe of already-watched (or persisted, post-relaunch) runs happen
-    /// every tick regardless of `enabled` / API-key presence — otherwise
-    /// disabling the runner or unsetting the key mid-run would abandon the local
-    /// secret teardown, leaving the scoped `CORVEIL_API_KEY` on disk (review). New
-    /// claims are gated at the bottom.
+    /// every tick regardless of config presence / `enabled` / API-key / dev-root —
+    /// otherwise disabling the runner (by flipping `enabled`, **removing the whole
+    /// `runner` block**, or a transient `ConfigStore.loadConfig` failure that
+    /// makes `configProvider()` return nil) would abandon the local secret
+    /// teardown, leaving the scoped `CORVEIL_API_KEY` on disk (review). Teardown
+    /// needs none of those — each watch carries its own `workerID` and absolute
+    /// scratch path — so it runs first, then claiming is gated at the bottom.
     public func tick() async {
         guard !ticking else { return }
-        guard let config = configProvider() else { return }
-        guard let devRoot = devRootProvider() else { return }
-
         ticking = true
         defer { ticking = false }
 
+        // A nil config (no `runner` block, or a failed config load) means "don't
+        // claim new work", NOT "skip teardown" — default to a disabled config so
+        // the teardown below never depends on config presence.
+        let config = configProvider() ?? RunnerConfig()
         let apiKey = (apiKeyProvider() ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let workerID = config.resolvedWorkerID()
         let url = config.corveilURL.isEmpty ? (envURLProvider() ?? "") : config.corveilURL
         let backend = makeBackend(CorveilWorkerConfig(url: url, apiKey: apiKey))
         let now = Date()
 
-        // Teardown of existing runs — always, even when disabled / key missing.
-        // Without a key the Corveil-side `complete`/`heartbeat` best-efforts fail
-        // (logged), but the local `completeSession` + scratch-dir wipe still run,
-        // which is the security-critical part.
+        // Teardown of existing runs — always, independent of config/enabled/key/
+        // devRoot. Uses each watch's own stored `workerID` + absolute scratch
+        // path. Without a key the Corveil-side `complete`/`heartbeat` best-efforts
+        // fail (logged), but the local `completeSession` + scratch-dir wipe still
+        // run, which is the security-critical part.
         reconcileUnwatchedWorkerRuns(now: now)
         await heartbeatWatched(backend: backend, now: now)
         await checkFinishedRuns(backend: backend, now: now)
 
-        // New claims are gated on the runner being enabled with a usable key.
+        // New claims are gated on the runner being enabled, a dev root (to place
+        // scratch dirs), and a usable key.
         guard config.enabled else { return }
+        guard let devRoot = devRootProvider() else { return }
+        let workerID = config.resolvedWorkerID()
         guard !apiKey.isEmpty else {
             if !warnedMissingKey {
                 NSLog("[WorkerRunner] runner enabled but CORVEIL_API_KEY is not set in the crowd environment; idle")
