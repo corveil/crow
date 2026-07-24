@@ -27,7 +27,7 @@ capabilities, update this table in the same PR.
 | Registered at boot | **always** (default out of the box) | only if binary found | only if binary found | only if binary found |
 | Resume / continue | ✅ `--continue` | ❌ no MVP resume | ✅ `resume --last` | ⚠️ `--continue` re-enters TUI, no history |
 | Remote control | ✅ native `--rc --name` | ⚠️ faked via `crow send` stdin | ❌ `supportsRemoteControl=false` (experimental `--remote` unwired) | ⚠️ faked via `crow send` stdin |
-| Auto-permission | ✅ `--permission-mode auto` | ❌ ignored | ✅ `exec -a never -s workspace-write` (`.job`) | ⚠️ runtime-probed `--auto`, `.job` only |
+| Auto-permission | ✅ `--permission-mode auto` | ❌ ignored | ✅ `-a never -s workspace-write` (`.job`, interactive) | ⚠️ runtime-probed `--auto`, `.job` only |
 | Hooks transport | per-worktree `.claude/settings.local.json` | global `~/.cursor/hooks.json` | global `~/.codex/hooks.json` + `config.toml` `notify` bridge (per-worktree deferred — see below) | global JS plugin `~/.config/opencode/plugins/crow-hooks.js` |
 | Hook → session scope | ✅ per-session UUID | ❌ `cwd` match | ❌ `cwd` match (per-worktree UUID deferred) | ❌ `cwd` match |
 | Hook async delivery | ✅ `PostToolUse*` async | ⚠️ declared, timing unverified | ❌ sync-only (v0.141.0) | ⚠️ names verified, timing unverified |
@@ -61,7 +61,8 @@ Legend: ✅ full · ⚠️ partial / faked / unverified · ❌ not supported.
 >
 > **[#830](https://github.com/corveil/crow/issues/830) (Codex) landed** — the
 > Codex cells above now reflect shipped state: `resume --last`, bounded
-> `exec -a never -s workspace-write`, MCP mirror from `~/.claude.json`, and
+> `-a never -s workspace-write` on interactive `.job` launches, MCP mirror from
+> `~/.claude.json`, and
 > per-worktree **project-trust** seeding (`CodexTrustSeeder`). Review uses the
 > **inlined `/crow-review-pr` skill body** (like Cursor/OpenCode), *not* the
 > native `codex review --base` subcommand: `codex review` only prints local
@@ -151,11 +152,15 @@ harness's sessions
   Manager uses ([ADR 0004](adr/0004-manager-auto-permission-mode.md)).
 - **Cursor:** the `autoPermissionMode` argument is accepted and ignored — no
   flag is emitted.
-- **Codex:** honored for `.job` sessions via the non-interactive runner —
-  `codex exec -a never -s workspace-write` (approval off, sandbox still bounded;
-  the analogue of Claude's `--permission-mode auto`, **not** the full-bypass
-  `--dangerously-bypass-approvals-and-sandbox` / `-s danger-full-access`, #830).
-  `.work` doesn't take the knob. `.review` is **human-gated**: it runs the
+- **Codex:** honored for `.job` sessions on the **interactive** launch —
+  `codex -a never -s workspace-write "$(cat …-prompt.md)"` (approval off, sandbox
+  still bounded; the analogue of Claude's `--permission-mode auto`, **not** the
+  full-bypass `--dangerously-bypass-approvals-and-sandbox` / `-s danger-full-access`,
+  #830). It is deliberately **not** headless `codex exec`: `exec` is one-shot, so
+  for a multi-prompt job it would exit after the first prompt and `JobScheduler`'s
+  typed follow-up prompts would land at the shell (which executes prose). The TUI
+  stays alive and consumes typed lines as prompts, like every other agent's job
+  path. `.work` doesn't take the knob. `.review` is **human-gated**: it runs the
   inlined skill interactively, so an unattended review (`reviewAutoPermissionMode`
   on) stalls at Codex's first approval prompt until someone approves the `gh`
   call — the same property Cursor's review has. It is *not* wired to headless

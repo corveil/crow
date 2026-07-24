@@ -16,6 +16,16 @@ import Foundation
 /// existing one — the safe posture for a credentials-bearing file. To force a
 /// refresh after changing a server in `~/.claude.json`, remove it from
 /// `~/.codex/config.toml` (or `codex mcp remove <name>`) and relaunch.
+///
+/// **Scope (deliberately narrow):**
+/// - Only **root-level** `mcpServers` are mirrored. Claude's project-scoped
+///   `projects.<path>.mcpServers` are not (they'd need per-worktree Codex
+///   config, which the per-worktree-hooks deferral already parks).
+/// - Mirroring runs only at daemon boot (from `LaunchScaffold`). A server added
+///   to `~/.claude.json` mid-session doesn't reach Codex until the next daemon
+///   restart.
+/// - HTTP servers carrying `headers` (auth) are skipped, and `env` values are
+///   copied verbatim (Codex doesn't expand `${VAR}`) — see `translate`.
 public enum CodexMCPWriter {
 
     /// A translated MCP server ready to serialize as a Codex `[mcp_servers.*]`
@@ -94,7 +104,18 @@ public enum CodexMCPWriter {
     }
 
     /// Translate one Claude `mcpServers.<name>` definition into a `Server`.
-    /// Returns `nil` when the definition has no usable transport.
+    /// Returns `nil` when the definition has no usable transport, or when it's
+    /// an HTTP server carrying `headers` — Claude puts an HTTP MCP's
+    /// `Authorization` there, and Codex's `url` form can't express arbitrary
+    /// headers (only a bearer-token env var), so mirroring it would ship an
+    /// **auth-less** server that silently fails to connect. Skipping fails
+    /// louder (#843 review round 3).
+    ///
+    /// Note on `env`: values are copied **verbatim**. Claude Code expands
+    /// `${VAR}` / `${VAR:-default}` inside `env` values; Codex does not — so a
+    /// Claude config that uses that indirection mirrors the literal `${VAR}`
+    /// string (harmless: the secret was never in `~/.claude.json` to copy, and
+    /// the resulting server is simply non-functional until fixed by hand).
     static func translate(name: String, def: [String: Any]) -> Server? {
         let command = (def["command"] as? String).flatMap { $0.isEmpty ? nil : $0 }
         let url = (def["url"] as? String).flatMap { $0.isEmpty ? nil : $0 }
@@ -111,9 +132,12 @@ public enum CodexMCPWriter {
             return Server(name: name, command: command, args: args, env: env, url: nil)
         }
         if url != nil {
-            // Streamable-HTTP server: Codex uses `url`. Arbitrary Claude
-            // `headers` don't map to Codex's `url`-only HTTP form (it takes a
-            // bearer-token env var, not free-form headers), so they're dropped.
+            // HTTP/SSE server. If it carries `headers` (where the auth lives),
+            // we can't faithfully mirror it — skip rather than write a broken
+            // auth-less entry.
+            if let headers = def["headers"] as? [String: Any], !headers.isEmpty {
+                return nil
+            }
             return Server(name: name, command: nil, args: [], env: env, url: url)
         }
         return nil
@@ -154,22 +178,49 @@ public enum CodexMCPWriter {
         return lines.joined(separator: "\n") + "\n"
     }
 
-    /// Whether `content` already declares an `[mcp_servers.<name>]` table, so we
-    /// never append a duplicate (TOML rejects a redefined table — the same
-    /// unparseable-config outcome the escaping guards against). Compares
-    /// **trimmed line equality** against both the bare and quoted header
-    /// spellings (Codex accepts `[mcp_servers."jira"]` as well as
-    /// `[mcp_servers.jira]`), and skips `#`-commented lines so a commented-out
-    /// server reads as absent (and gets mirrored) rather than silently dropped.
+    /// Whether `content` already declares an MCP server named `name`, so we
+    /// never append a duplicate (TOML rejects a redefined table / duplicate key
+    /// — the same unparseable-config outcome the escaping guards against, and
+    /// append-only means it never self-heals). Recognizes all three spellings
+    /// Codex accepts:
+    /// - the bare dotted table header `[mcp_servers.jira]`
+    /// - the quoted dotted header `[mcp_servers."jira"]`
+    /// - an inline key inside a `[mcp_servers]` parent table (`jira = { … }`)
+    ///
+    /// Trimmed line-equality for headers; `#`-commented lines are skipped so a
+    /// commented-out server reads as absent (and gets mirrored) rather than
+    /// silently dropped.
     static func serverAlreadyPresent(_ content: String, name: String) -> Bool {
-        let bare = "[mcp_servers.\(keyToken(name))]"
-        let quoted = "[mcp_servers.\"\(escape(name))\"]"
+        let bareHeader = "[mcp_servers.\(keyToken(name))]"
+        let quotedHeader = "[mcp_servers.\"\(escape(name))\"]"
+        var inParentTable = false
         for raw in content.components(separatedBy: "\n") {
             let trimmed = raw.trimmingCharacters(in: .whitespaces)
             if trimmed.hasPrefix("#") { continue }
-            if trimmed == bare || trimmed == quoted { return true }
+            if trimmed == bareHeader || trimmed == quotedHeader { return true }
+            if trimmed.hasPrefix("[") && trimmed.hasSuffix("]") {
+                // Entering/leaving a table; only the bare `[mcp_servers]` parent
+                // holds inline `name = { … }` server definitions.
+                inParentTable = (trimmed == "[mcp_servers]")
+                continue
+            }
+            if inParentTable, assignmentKey(of: trimmed) == name { return true }
         }
         return false
+    }
+
+    /// The (unquoted) key of a `key = value` TOML assignment, or `nil` for a
+    /// non-assignment line. Handles a quoted key (`"jira" = …`). Splits on the
+    /// first `=` so an inline-table value (`jira = { command = … }`) yields
+    /// `jira`, not `command`.
+    private static func assignmentKey(of line: String) -> String? {
+        guard let eq = line.firstIndex(of: "=") else { return nil }
+        let raw = line[line.startIndex..<eq].trimmingCharacters(in: .whitespaces)
+        guard !raw.isEmpty else { return nil }
+        if raw.count >= 2, raw.hasPrefix("\""), raw.hasSuffix("\"") {
+            return String(raw.dropFirst().dropLast())
+        }
+        return raw
     }
 
     /// A TOML key: **ASCII** bare when it matches `[A-Za-z0-9_-]+`, otherwise

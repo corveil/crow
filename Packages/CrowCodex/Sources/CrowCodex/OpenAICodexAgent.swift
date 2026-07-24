@@ -62,9 +62,14 @@ public struct OpenAICodexAgent: CodingAgent {
             // seeded by `launch_codex` in `crow-workspace/setup.sh` via
             // `--command`). Resume the most recent recorded thread instead of
             // reopening a blank TUI (#830 — the "no `--continue` in MVP" pin is
-            // gone). `.work` threads are interactive, so plain `--last` selects
-            // them. No env prefix (Codex has no OTEL equivalent), no `--rc`
-            // (Codex doesn't do remote control). Mirrors Claude's `--continue`.
+            // gone). `--last` is cwd-scoped (`--all` is the flag that *disables*
+            // cwd filtering), so it selects this worktree's own thread; and when
+            // no thread exists yet (fresh/pruned worktree, or Codex was opened
+            // but never took a turn) `codex resume --last` gracefully opens a new
+            // interactive TUI rather than erroring — verified against 0.141.0 in
+            // a pty, so no `|| codex` fallback is needed (#843 review round 3).
+            // No env prefix (Codex has no OTEL equivalent), no `--rc` (Codex
+            // doesn't do remote control). Mirrors Claude's `--continue`.
             return "\(codexPath) resume --last\n"
         case .job:
             if !session.reviewPromptDispatched {
@@ -72,30 +77,37 @@ public struct OpenAICodexAgent: CodingAgent {
                 // message so Codex starts working unattended. `SessionService`
                 // wrote the file and flips `reviewPromptDispatched` after the
                 // command goes out.
+                //
+                // Always the **interactive** TUI, never headless `codex exec`:
+                // a job may carry multiple prompts, and `JobScheduler`
+                // (`sendSequentially`) types the follow-up prompts into the same
+                // tmux pane after the first. `codex exec` is one-shot — it exits
+                // after prompt 1, so prompt 2 would be typed at the *shell*,
+                // which then executes prose (backticks / `&&` / `$(…)` in the
+                // prompt evaluate). The TUI stays alive and consumes typed lines
+                // as prompts, matching every other agent's job path (#843 review
+                // round 3). Auto-permission just adds the bounded approval +
+                // sandbox flags to the same interactive launch.
                 let promptPath = (worktreePath as NSString)
                     .appendingPathComponent(".crow-job-prompt.md")
                 let promptArg = "\"$(cat \(promptPath))\""
                 if autoPermissionMode {
-                    // Non-interactive headless run with approval off but the
-                    // workspace-write sandbox still ON — the bounded default
-                    // that matches Claude's `--permission-mode auto` (#830,
-                    // scope-correction). Deliberately NOT
+                    // Approval off, workspace-write sandbox still ON — the
+                    // bounded analogue of Claude's `--permission-mode auto`
+                    // (#830). Deliberately NOT
                     // `--dangerously-bypass-approvals-and-sandbox` /
-                    // `-s danger-full-access`: those disable the sandbox and are
-                    // only for externally-sandboxed runners. Flags precede the
-                    // positional prompt so clap never mistakes prompt text for a
-                    // `resume`/`review` subcommand.
-                    return "\(codexPath) exec -a never -s workspace-write \(promptArg)\n"
+                    // `-s danger-full-access` (those disable the sandbox; only
+                    // for externally-sandboxed runners). Options precede the
+                    // positional prompt.
+                    return "\(codexPath) -a never -s workspace-write \(promptArg)\n"
                 }
-                // Interactive job (auto-permission off): drive the TUI with the
-                // initial prompt so the user still approves each step.
+                // Auto-permission off: interactive TUI with the initial prompt,
+                // default approval policy so the user approves each step.
                 return "\(codexPath) \(promptArg)\n"
             }
-            // Subsequent restarts resume the prior thread. `--include-non-
-            // interactive` is required so `--last` can select a session that
-            // first ran via `codex exec` (non-interactive), which the picker
-            // otherwise skips.
-            return "\(codexPath) resume --last --include-non-interactive\n"
+            // Subsequent restarts resume the prior thread — interactive, so
+            // plain `--last` selects it (jobs are no longer headless `exec`).
+            return "\(codexPath) resume --last\n"
         case .review:
             // Review sessions inline `.crow-review-prompt.md` (the expanded
             // `/crow-review-pr` skill), exactly like Cursor/OpenCode — the skill

@@ -131,12 +131,13 @@ a single adapter + its launcher + hook writer + tests change together).
 - **Cursor / OpenCode native RC** (§3a, §3c RC rows) — native surfaces exist (`--remote`, `serve`/`attach`/`acp`) but are heavier than the working `crow send` paste; no user-facing capability gained today.
 
 > **#830 resolution (landed).** §3b rows 1–4 shipped: `.work`/`.job`-restart →
-> `codex resume --last` (cwd-scoped by default; jobs add `--include-non-
-> interactive` so `--last` can pick a prior `codex exec` session); `.job` +
-> auto-permission → `codex exec -a never -s workspace-write` (bounded — **not**
-> the full-bypass variants); MCP mirrored from `~/.claude.json` into
-> `[mcp_servers.*]` (`CodexMCPWriter`, append-only, gated by
-> `defaults.mirrorClaudeMCPToCodex`). **Review** (row 2) landed *not* as the
+> `codex resume --last` (cwd-scoped by default; opens a fresh TUI when no thread
+> matches, so no fallback is needed); `.job` + auto-permission → the **interactive**
+> `codex -a never -s workspace-write "$(cat …-prompt.md)"` (bounded — **not**
+> the full-bypass variants; *not* headless `codex exec`, which is one-shot and
+> would drop a multi-prompt job's typed follow-ups into the shell); MCP mirrored
+> from `~/.claude.json` into `[mcp_servers.*]` (`CodexMCPWriter`, append-only,
+> gated by `defaults.mirrorClaudeMCPToCodex`). **Review** (row 2) landed *not* as the
 > native `codex review --base` but via the **inlined `/crow-review-pr` skill**
 > (same as Cursor/OpenCode): `codex review` prints local findings and posts no
 > GitHub verdict, so a review driven by it can never satisfy

@@ -71,6 +71,36 @@ struct CodexMCPWriterTests {
         #expect(CodexMCPWriter.translate(name: "bad", def: ["type": "sse"]) == nil)
     }
 
+    @Test func translateSkipsHTTPServerCarryingHeaders() {
+        // Claude puts an HTTP MCP's auth in `headers`, which Codex's url form
+        // can't express — mirroring would ship an auth-less server, so skip.
+        let withAuth = CodexMCPWriter.translate(
+            name: "remote",
+            def: ["type": "http", "url": "https://h", "headers": ["Authorization": "Bearer x"]])
+        #expect(withAuth == nil)
+        // …but an HTTP server with no headers is fine to mirror.
+        let noAuth = CodexMCPWriter.translate(name: "remote", def: ["url": "https://h"])
+        #expect(noAuth?.url == "https://h")
+    }
+
+    @Test func serverAlreadyPresentMatchesInlineParentTable() {
+        // `[mcp_servers]` with an inline `jira = { … }` key is a valid, distinct
+        // spelling — appending `[mcp_servers.jira]` on top would be a duplicate
+        // key and break the file.
+        let inlineBare = "[mcp_servers]\njira = { command = \"x\" }\n"
+        #expect(CodexMCPWriter.serverAlreadyPresent(inlineBare, name: "jira") == true)
+
+        let inlineQuoted = "[mcp_servers]\n\"jira\" = { command = \"x\" }\n"
+        #expect(CodexMCPWriter.serverAlreadyPresent(inlineQuoted, name: "jira") == true)
+
+        // A different inline key doesn't count as present.
+        #expect(CodexMCPWriter.serverAlreadyPresent(inlineBare, name: "github") == false)
+
+        // An assignment outside the [mcp_servers] table must not match.
+        let elsewhere = "[other]\njira = { command = \"x\" }\n"
+        #expect(CodexMCPWriter.serverAlreadyPresent(elsewhere, name: "jira") == false)
+    }
+
     // MARK: - Install
 
     private func writeClaudeJSON(_ dir: URL, _ mcpServers: [String: Any]) throws -> String {

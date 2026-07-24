@@ -120,10 +120,12 @@ struct OpenAICodexAgentTests {
     }
 
     @Test func autoLaunchCommandJobSessionFirstLaunchAutoPermission() {
-        // First job launch with auto-permission ON dispatches the non-
-        // interactive `codex exec` runner with approval OFF but the
-        // workspace-write sandbox still ON — the bounded default (#830), NOT
-        // the full-bypass variants.
+        // First job launch with auto-permission ON runs the INTERACTIVE TUI
+        // with approval OFF but the workspace-write sandbox still ON — the
+        // bounded default (#830). It is deliberately NOT headless `codex exec`:
+        // exec is one-shot and would exit after prompt 1, leaving JobScheduler's
+        // typed follow-up prompts to hit the shell (#843 review round 3). And
+        // never the unbounded escape hatches.
         let session = Session(name: "job", kind: .job, agentKind: .codex)
         let cmd = agent.autoLaunchCommand(
             session: session,
@@ -132,17 +134,17 @@ struct OpenAICodexAgentTests {
             autoPermissionMode: true,
             telemetryPort: nil
         )
-        #expect(cmd?.contains("exec -a never -s workspace-write") == true)
+        #expect(cmd?.contains("-a never -s workspace-write") == true)
         #expect(cmd?.contains("/tmp/wt/.crow-job-prompt.md") == true)
-        // Never the unbounded escape hatches.
+        // Interactive, not the one-shot headless runner.
+        #expect(cmd?.contains(" exec ") == false)
         #expect(cmd?.contains("danger-full-access") == false)
         #expect(cmd?.contains("--dangerously-bypass") == false)
     }
 
     @Test func autoLaunchCommandJobSessionSubsequentLaunch() {
         // After the initial prompt has been dispatched, restarts resume the
-        // prior thread. `--include-non-interactive` is required so `--last` can
-        // select a session that first ran via `codex exec` (#830).
+        // prior (interactive) thread — plain `--last` (cwd-scoped) selects it.
         var session = Session(name: "job", kind: .job, agentKind: .codex)
         session.reviewPromptDispatched = true
         let cmd = agent.autoLaunchCommand(
@@ -154,7 +156,7 @@ struct OpenAICodexAgentTests {
         )
         #expect(cmd != nil)
         #expect(cmd?.contains(".crow-job-prompt.md") == false)
-        #expect(cmd?.hasSuffix("resume --last --include-non-interactive\n") == true)
+        #expect(cmd?.hasSuffix("resume --last\n") == true)
     }
 
     @Test func findBinaryReturnsNilWhenAbsent() {
