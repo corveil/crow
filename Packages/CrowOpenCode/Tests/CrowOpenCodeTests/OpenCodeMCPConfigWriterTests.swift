@@ -262,6 +262,37 @@ struct OpenCodeMCPConfigWriterTests {
         #expect(jira["enabled"] as? Bool == false)
     }
 
+    @Test func deletingEntryIsDurableOptOut() throws {
+        // Once Crow has written the mirror, a user who deletes `mcp.jira`
+        // outright (not just edits it) has opted out — the next launch must not
+        // silently re-add it.
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("opencode-mcp-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let (claude, configHome, record) = try makeConfigDir(tmp, jira: [
+            "command": "uvx", "args": ["mcp-atlassian"],
+        ])
+        #expect(OpenCodeMCPConfigWriter.installGlobalMCPConfig(
+            configHome: configHome.path, claudeJSONPath: claude.path, mirrorRecordPath: record) == .registered)
+
+        // User deletes the mirrored entry (Claude source still present).
+        try JSONSerialization.data(withJSONObject: [
+            "$schema": "https://opencode.ai/config.json",
+        ]).write(to: configHome.appendingPathComponent("opencode.json"))
+
+        let outcome = OpenCodeMCPConfigWriter.installGlobalMCPConfig(
+            configHome: configHome.path, claudeJSONPath: claude.path, mirrorRecordPath: record)
+        #expect(outcome == .skippedUserOwned)
+
+        // Still absent — the opt-out stuck.
+        let target = configHome.appendingPathComponent("opencode.json")
+        let root = try #require(FileManager.default.contents(atPath: target.path)
+            .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] })
+        #expect((root["mcp"] as? [String: Any])?["jira"] == nil)
+    }
+
     @Test func preservesUserAuthoredEntryOnSourceRemoval() throws {
         // The failure case the reviewer flagged: an OpenCode-primary user with
         // their own `mcp.jira` and no Claude source must NOT have it deleted.

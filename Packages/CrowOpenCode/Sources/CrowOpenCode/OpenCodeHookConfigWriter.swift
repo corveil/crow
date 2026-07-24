@@ -82,21 +82,23 @@ public struct OpenCodeHookConfigWriter: HookConfigWriter {
     }
 
     /// Remove the per-project plugin from a worktree's `.opencode/plugins/`,
-    /// leaving any user-authored plugins in that directory untouched. Best
-    /// effort: also removes our self-scoped `.gitignore` and prunes the
-    /// `plugins`/`.opencode` dirs when they're left empty (i.e. Crow created
-    /// them), so tearing a session down leaves no trace, but never touches a
-    /// directory that still holds other files.
+    /// leaving any user-authored files (plugins *and* a hand-written
+    /// `.gitignore`) untouched. Best effort: removes our own `.gitignore` when
+    /// it still carries exactly our content, and prunes the `plugins`/`.opencode`
+    /// dirs when they're left empty (i.e. Crow created them), so tearing a
+    /// session down leaves no trace — but never touches a file or directory that
+    /// isn't ours.
     public func removeHookConfig(worktreePath: String) {
         let pluginsDir = Self.worktreePluginsDir(worktreePath)
         let pluginPath = (pluginsDir as NSString).appendingPathComponent(Self.pluginFileName)
         let fm = FileManager.default
         guard fm.fileExists(atPath: pluginPath) else { return }
         try? fm.removeItem(atPath: pluginPath)
-        // Drop our `.gitignore` only if it's the sole remaining entry (i.e. Crow
-        // owns the dir); a user plugin alongside means leave everything.
+        // Drop our `.gitignore` only if it still holds exactly our content — a
+        // user may have replaced it with their own rules (same provenance
+        // discipline as writeGitignore).
         let gitignorePath = (pluginsDir as NSString).appendingPathComponent(".gitignore")
-        if (try? fm.contentsOfDirectory(atPath: pluginsDir)) == [".gitignore"] {
+        if (try? String(contentsOfFile: gitignorePath, encoding: .utf8)) == Self.gitignoreBody {
             try? fm.removeItem(atPath: gitignorePath)
         }
         Self.removeIfEmpty(pluginsDir)
@@ -142,18 +144,29 @@ public struct OpenCodeHookConfigWriter: HookConfigWriter {
         try? fm.removeItem(atPath: dir)
     }
 
+    /// The exact body Crow writes to `.opencode/plugins/.gitignore`. A single
+    /// source of truth so `writeGitignore` and `removeHookConfig` agree on what
+    /// "ours" means when deciding whether it's safe to write/delete.
+    static let gitignoreBody = """
+    # Crow-generated — safe to delete.
+    \(pluginFileName)
+    .gitignore
+    """
+
     /// Write a self-scoped `.gitignore` into `dir` that ignores Crow's generated
     /// plugin (and the `.gitignore` itself), so an agent's `git add -A` in the
-    /// worktree never stages them. Idempotent; best effort (a failure just means
-    /// the files remain stageable, the pre-existing behavior).
+    /// worktree never stages them. `.opencode/plugins/` is the *user's*
+    /// directory (their own plugins live there), so this never clobbers a
+    /// pre-existing `.gitignore` — it writes only into an empty slot or over our
+    /// own previous body. Idempotent; best effort.
     private static func writeGitignore(inDir dir: String) {
         let path = (dir as NSString).appendingPathComponent(".gitignore")
-        let body = """
-        # Crow-generated — safe to delete.
-        \(pluginFileName)
-        .gitignore
-        """
-        try? body.write(to: URL(fileURLWithPath: path), atomically: true, encoding: .utf8)
+        if let existing = try? String(contentsOfFile: path, encoding: .utf8),
+           existing != gitignoreBody {
+            // A `.gitignore` we didn't write (user's own rules) — leave it.
+            return
+        }
+        try? gitignoreBody.write(to: URL(fileURLWithPath: path), atomically: true, encoding: .utf8)
     }
 
     /// The JS plugin body, with `crowPath` baked in as a string literal

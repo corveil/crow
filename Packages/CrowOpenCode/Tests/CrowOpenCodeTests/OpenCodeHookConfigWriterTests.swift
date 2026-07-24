@@ -141,4 +141,44 @@ struct OpenCodeHookConfigWriterTests {
             atPath: pluginsDir.appendingPathComponent("crow-hooks.js").path))
         #expect(FileManager.default.fileExists(atPath: userPlugin.path))
     }
+
+    @Test func writeHookConfigPreservesUserGitignore() throws {
+        // `.opencode/plugins/` is the user's dir — a hand-written `.gitignore`
+        // there must never be clobbered by our self-scoped one.
+        let worktree = FileManager.default.temporaryDirectory
+            .appendingPathComponent("opencode-wt-\(UUID().uuidString)")
+        let pluginsDir = worktree.appendingPathComponent(".opencode/plugins")
+        try FileManager.default.createDirectory(at: pluginsDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: worktree) }
+
+        let userGitignore = pluginsDir.appendingPathComponent(".gitignore")
+        try "my-local-only.js\n".write(to: userGitignore, atomically: true, encoding: .utf8)
+
+        let writer = OpenCodeHookConfigWriter()
+        try writer.writeHookConfig(
+            worktreePath: worktree.path, sessionID: UUID(), crowPath: "/bin/crow")
+
+        // Our plugin is written, but the user's ignore rules are untouched.
+        #expect(FileManager.default.fileExists(
+            atPath: pluginsDir.appendingPathComponent("crow-hooks.js").path))
+        #expect(try String(contentsOf: userGitignore, encoding: .utf8) == "my-local-only.js\n")
+
+        // And removeHookConfig must not delete a `.gitignore` that isn't ours.
+        writer.removeHookConfig(worktreePath: worktree.path)
+        #expect(try String(contentsOf: userGitignore, encoding: .utf8) == "my-local-only.js\n")
+    }
+
+    @Test func writeHookConfigWritesOwnGitignoreIntoEmptyDir() throws {
+        let worktree = FileManager.default.temporaryDirectory
+            .appendingPathComponent("opencode-wt-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: worktree, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: worktree) }
+
+        try OpenCodeHookConfigWriter().writeHookConfig(
+            worktreePath: worktree.path, sessionID: UUID(), crowPath: "/bin/crow")
+        let gitignore = worktree.appendingPathComponent(".opencode/plugins/.gitignore")
+        let body = try String(contentsOf: gitignore, encoding: .utf8)
+        #expect(body == OpenCodeHookConfigWriter.gitignoreBody)
+        #expect(body.contains("crow-hooks.js"))
+    }
 }
