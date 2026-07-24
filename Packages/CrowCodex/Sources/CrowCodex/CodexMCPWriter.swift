@@ -26,6 +26,14 @@ import Foundation
 ///   restart.
 /// - HTTP servers carrying `headers` (auth) are skipped, and `env` values are
 ///   copied verbatim (Codex doesn't expand `${VAR}`) — see `translate`.
+///
+/// **Concurrency.** `config.toml` is read-modify-written here, in
+/// `CodexHookConfigWriter.installGlobalTomlConfig`, and in `CodexTrustSeeder`
+/// with no shared lock. In practice the mirror and the toml-config install both
+/// run once, synchronously, from `LaunchScaffold` at boot — before any session
+/// launch's `seedTrust` — so they don't interleave today. A future caller that
+/// seeds trust concurrently with a boot mirror could lose one write (re-run on
+/// the next boot fixes it); worth knowing before adding an out-of-band writer.
 public enum CodexMCPWriter {
 
     /// A translated MCP server ready to serialize as a Codex `[mcp_servers.*]`
@@ -181,30 +189,35 @@ public enum CodexMCPWriter {
     /// Whether `content` already declares an MCP server named `name`, so we
     /// never append a duplicate (TOML rejects a redefined table / duplicate key
     /// — the same unparseable-config outcome the escaping guards against, and
-    /// append-only means it never self-heals). Recognizes all three spellings
-    /// Codex accepts:
-    /// - the bare dotted table header `[mcp_servers.jira]`
-    /// - the quoted dotted header `[mcp_servers."jira"]`
-    /// - an inline key inside a `[mcp_servers]` parent table (`jira = { … }`)
+    /// append-only means it never self-heals). Recognizes every spelling Codex
+    /// accepts, via the comment/whitespace/quote-tolerant `tomlHeaderSegments`:
+    /// - the bare or quoted dotted table header `[mcp_servers.jira]` /
+    ///   `[mcp_servers."jira"]`, with or without a trailing `# comment` or
+    ///   whitespace around the dots (`[mcp_servers . jira]`);
+    /// - a sub-table header `[mcp_servers.jira.env]`;
+    /// - an inline key inside a bare `[mcp_servers]` parent table (`jira = { … }`).
     ///
-    /// Trimmed line-equality for headers; `#`-commented lines are skipped so a
-    /// commented-out server reads as absent (and gets mirrored) rather than
-    /// silently dropped.
+    /// A fully `#`-commented header reads as absent (and gets mirrored) rather
+    /// than silently dropped. (Not covered: a top-level dotted-key assignment
+    /// `mcp_servers.jira.command = …` with no header — rare; `codex mcp add`
+    /// emits the header form.)
     static func serverAlreadyPresent(_ content: String, name: String) -> Bool {
-        let bareHeader = "[mcp_servers.\(keyToken(name))]"
-        let quotedHeader = "[mcp_servers.\"\(escape(name))\"]"
         var inParentTable = false
         for raw in content.components(separatedBy: "\n") {
-            let trimmed = raw.trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix("#") { continue }
-            if trimmed == bareHeader || trimmed == quotedHeader { return true }
-            if trimmed.hasPrefix("[") && trimmed.hasSuffix("]") {
-                // Entering/leaving a table; only the bare `[mcp_servers]` parent
-                // holds inline `name = { … }` server definitions.
-                inParentTable = (trimmed == "[mcp_servers]")
+            if let segments = CodexHookConfigWriter.tomlHeaderSegments(raw) {
+                // Header: match `[mcp_servers.<name>]` and any sub-table under it.
+                if segments.count >= 2, segments[0] == "mcp_servers", segments[1] == name {
+                    return true
+                }
+                inParentTable = (segments == ["mcp_servers"])
                 continue
             }
-            if inParentTable, assignmentKey(of: trimmed) == name { return true }
+            if inParentTable {
+                let bare = CodexHookConfigWriter.stripTomlInlineComment(raw)
+                    .trimmingCharacters(in: .whitespaces)
+                if bare.isEmpty { continue }
+                if assignmentKey(of: bare) == name { return true }
+            }
         }
         return false
     }
@@ -242,9 +255,12 @@ public enum CodexMCPWriter {
 
     private static func stringify(_ value: Any?) -> String? {
         switch value {
-        case let s as String: return s
-        case let i as Int: return String(i)
+        // Bool MUST precede Int: `JSONSerialization` bridges booleans as
+        // `NSNumber`, so a `true`/`false` would otherwise match `as Int` and
+        // stringify to "1"/"0" instead of "true"/"false" (#843 review round 4).
         case let b as Bool: return String(b)
+        case let i as Int: return String(i)
+        case let s as String: return s
         case let d as Double: return String(d)
         default: return nil
         }

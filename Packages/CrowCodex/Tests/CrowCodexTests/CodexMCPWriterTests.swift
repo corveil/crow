@@ -83,6 +83,29 @@ struct CodexMCPWriterTests {
         #expect(noAuth?.url == "https://h")
     }
 
+    @Test func serverAlreadyPresentToleratesCommentsWhitespaceAndSubtables() {
+        // #843 review round 4: a trailing comment, whitespace-around-dots, or a
+        // sub-table header must all count as "present" — otherwise the mirror
+        // appends a duplicate `[mcp_servers.jira]` and TOML rejects the file.
+        #expect(CodexMCPWriter.serverAlreadyPresent("[mcp_servers.jira] # my token", name: "jira") == true)
+        #expect(CodexMCPWriter.serverAlreadyPresent("[mcp_servers . jira]", name: "jira") == true)
+        #expect(CodexMCPWriter.serverAlreadyPresent("[mcp_servers . \"jira\"]  # x", name: "jira") == true)
+        #expect(CodexMCPWriter.serverAlreadyPresent("[mcp_servers.jira.env]\nK = \"v\"", name: "jira") == true)
+        // A fully-commented header still reads as absent (→ mirrored).
+        #expect(CodexMCPWriter.serverAlreadyPresent("# [mcp_servers.jira]", name: "jira") == false)
+        // A different server isn't a match.
+        #expect(CodexMCPWriter.serverAlreadyPresent("[mcp_servers.github] # x", name: "jira") == false)
+    }
+
+    @Test func serverBlockMirrorsBoolEnvAsTrueNotOne() {
+        // JSON booleans bridge as NSNumber; `stringify` must render them as
+        // true/false, not 1/0 (#843 review round 4).
+        let server = CodexMCPWriter.translate(name: "x", def: ["command": "sh", "env": ["FLAG": true]])
+        #expect(server?.env.first?.1 == "true")
+        let block = CodexMCPWriter.serverBlock(server!)
+        #expect(block.contains("FLAG = \"true\""))
+    }
+
     @Test func serverAlreadyPresentMatchesInlineParentTable() {
         // `[mcp_servers]` with an inline `jira = { … }` key is a valid, distinct
         // spelling — appending `[mcp_servers.jira]` on top would be a duplicate

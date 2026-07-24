@@ -175,8 +175,66 @@ public struct CodexHookConfigWriter: HookConfigWriter {
         return lines.joined(separator: "\n")
     }
 
+    /// Strip a TOML end-of-line `# comment` that sits outside any double-quoted
+    /// string, leaving quoted `#` intact. So `[a.b] # note` → `[a.b] `.
+    static func stripTomlInlineComment(_ line: String) -> String {
+        var inQuotes = false
+        var escaped = false
+        var out = ""
+        for ch in line {
+            if escaped { out.append(ch); escaped = false; continue }
+            if ch == "\\" { out.append(ch); escaped = true; continue }
+            if ch == "\"" { inQuotes.toggle(); out.append(ch); continue }
+            if ch == "#" && !inQuotes { break }
+            out.append(ch)
+        }
+        return out
+    }
+
+    /// Split a TOML dotted key path into segments, respecting double-quoted
+    /// segments, trimming whitespace around each dot, and unwrapping the quotes.
+    /// `mcp_servers . "jira"` → `["mcp_servers", "jira"]`.
+    static func splitTomlDottedPath(_ s: String) -> [String] {
+        var segments: [String] = []
+        var current = ""
+        var inQuotes = false
+        var escaped = false
+        for ch in s {
+            if escaped { current.append(ch); escaped = false; continue }
+            if ch == "\\" { current.append(ch); escaped = true; continue }
+            if ch == "\"" { inQuotes.toggle(); current.append(ch); continue }
+            if ch == "." && !inQuotes { segments.append(unwrapTomlKey(current)); current = ""; continue }
+            current.append(ch)
+        }
+        segments.append(unwrapTomlKey(current))
+        return segments
+    }
+
+    private static func unwrapTomlKey(_ s: String) -> String {
+        let t = s.trimmingCharacters(in: .whitespaces)
+        if t.count >= 2, t.hasPrefix("\""), t.hasSuffix("\"") {
+            return String(t.dropFirst().dropLast())
+        }
+        return t
+    }
+
+    /// If `line` is a TOML table header `[a.b."c"]`, return its dotted-path
+    /// segments (quotes unwrapped, whitespace-around-dots trimmed, trailing
+    /// `# comment` stripped); `nil` for a non-header line. So
+    /// `[mcp_servers . "jira"] # x` → `["mcp_servers", "jira"]`. Comment-,
+    /// whitespace-, and quote-tolerant so a present/section match can't be
+    /// defeated by a legal-but-unusual spelling that would then append a
+    /// duplicate table and corrupt `config.toml` (#843 review round 4).
+    static func tomlHeaderSegments(_ line: String) -> [String]? {
+        let bare = stripTomlInlineComment(line).trimmingCharacters(in: .whitespaces)
+        guard bare.count >= 2, bare.hasPrefix("["), bare.hasSuffix("]") else { return nil }
+        return splitTomlDottedPath(String(bare.dropFirst().dropLast()))
+    }
+
     /// Replace or insert `key = …` inside `[section]`. Adds the section if
-    /// missing.
+    /// missing. Header matching is comment/whitespace/quote-tolerant via
+    /// `tomlHeaderSegments`, so an existing `[section] # note` is updated in
+    /// place rather than duplicated.
     static func upsertTomlSectionLine(
         _ content: String,
         section: String,
@@ -187,13 +245,14 @@ public struct CodexHookConfigWriter: HookConfigWriter {
         var sectionStart: Int? = nil
         var sectionEnd: Int = lines.count
         let sectionHeader = "[\(section)]"
+        let targetSegments = splitTomlDottedPath(section)
         for (i, raw) in lines.enumerated() {
-            let trimmed = raw.trimmingCharacters(in: .whitespaces)
-            if trimmed == sectionHeader {
+            let segments = tomlHeaderSegments(raw)
+            if sectionStart == nil, segments == targetSegments {
                 sectionStart = i
                 continue
             }
-            if let _ = sectionStart, trimmed.hasPrefix("[") && trimmed.hasSuffix("]") {
+            if sectionStart != nil, segments != nil {
                 sectionEnd = i
                 break
             }
@@ -234,14 +293,14 @@ public struct CodexHookConfigWriter: HookConfigWriter {
         var lines = content.components(separatedBy: "\n")
         var sectionStart: Int? = nil
         var sectionEnd: Int = lines.count
-        let sectionHeader = "[\(section)]"
+        let targetSegments = splitTomlDottedPath(section)
         for (i, raw) in lines.enumerated() {
-            let trimmed = raw.trimmingCharacters(in: .whitespaces)
-            if trimmed == sectionHeader {
+            let segments = tomlHeaderSegments(raw)
+            if sectionStart == nil, segments == targetSegments {
                 sectionStart = i
                 continue
             }
-            if let _ = sectionStart, trimmed.hasPrefix("[") && trimmed.hasSuffix("]") {
+            if sectionStart != nil, segments != nil {
                 sectionEnd = i
                 break
             }

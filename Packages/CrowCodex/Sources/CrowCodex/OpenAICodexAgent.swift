@@ -7,12 +7,13 @@ import CrowCore
 ///
 /// `codex` 0.141.0 closed the early-MVP gaps (#830): restarts now `codex
 /// resume --last` (cwd-scoped by default — `--all` is what disables cwd
-/// filtering), unattended `.job` sessions dispatch `codex exec … -a never -s
-/// workspace-write` (approval off, sandbox still bounded) instead of the
-/// interactive TUI, and `.review` sessions inline the `/crow-review-pr` skill
-/// so they post a real GitHub verdict (the native `codex review` subcommand
-/// only prints local findings, so it can't satisfy Crow's review-completion
-/// contract).
+/// filtering), unattended `.job` sessions launch the interactive TUI with
+/// approval off and the sandbox bounded (`codex -a never -s workspace-write
+/// "$(cat …)"`) — deliberately *not* headless `codex exec`, which is one-shot
+/// and would drop a multi-prompt job's typed follow-ups into the shell — and
+/// `.review` sessions inline the `/crow-review-pr` skill so they post a real
+/// GitHub verdict (the native `codex review` subcommand only prints local
+/// findings, so it can't satisfy Crow's review-completion contract).
 public struct OpenAICodexAgent: CodingAgent {
     public let kind: AgentKind = .codex
     public let displayName: String = "OpenAI Codex"
@@ -106,7 +107,15 @@ public struct OpenAICodexAgent: CodingAgent {
                 return "\(codexPath) \(promptArg)\n"
             }
             // Subsequent restarts resume the prior thread — interactive, so
-            // plain `--last` selects it (jobs are no longer headless `exec`).
+            // plain `--last` (cwd-scoped) selects it. Carry the same bounded
+            // auto-permission flags when they're on, so an unattended job
+            // resumed after a crowd/app restart doesn't stall at Codex's default
+            // approval policy (#843 review round 4 — `codex resume` accepts
+            // `-a`/`-s`). `.work`/`.review` resume flagless (`.work` isn't
+            // auto-driven; `.review` is human-gated by design).
+            if autoPermissionMode {
+                return "\(codexPath) resume --last -a never -s workspace-write\n"
+            }
             return "\(codexPath) resume --last\n"
         case .review:
             // Review sessions inline `.crow-review-prompt.md` (the expanded
@@ -118,11 +127,14 @@ public struct OpenAICodexAgent: CodingAgent {
             // and posts nothing, so a review driven by it could never complete
             // and would be re-kicked on every head-SHA advance (#830 review).
             //
-            // Kept interactive (not the headless `exec -s workspace-write`
-            // path): `codex review`'s posting step needs network for `gh`, and
-            // the workspace-write sandbox blocks network — so the same TUI path
-            // Cursor uses is the one that actually lands a verdict. First launch
-            // feeds the prompt; restarts resume the thread.
+            // Kept interactive (not the headless `exec -a never -s
+            // workspace-write` path the `.job` branch could use): the inlined
+            // skill's `gh pr review` posting step needs network, and the
+            // workspace-write sandbox blocks it — so the same TUI path Cursor
+            // uses is the one that actually lands a verdict. Consequence: an
+            // unattended review stalls at Codex's first approval prompt
+            // (human-gated, same as Cursor; documented in the matrix). First
+            // launch feeds the prompt; restarts resume the thread.
             if !session.reviewPromptDispatched {
                 let promptPath = (worktreePath as NSString)
                     .appendingPathComponent(".crow-review-prompt.md")

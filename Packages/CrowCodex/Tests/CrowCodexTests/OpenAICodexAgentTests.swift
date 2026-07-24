@@ -159,6 +159,23 @@ struct OpenAICodexAgentTests {
         #expect(cmd?.hasSuffix("resume --last\n") == true)
     }
 
+    @Test func autoLaunchCommandJobSessionSubsequentLaunchKeepsAutoPermission() {
+        // #843 review round 4: a job resumed after a restart with auto-permission
+        // ON must keep the bounded flags, or the unattended job stalls at
+        // Codex's default approval policy. `codex resume` accepts `-a`/`-s`.
+        var session = Session(name: "job", kind: .job, agentKind: .codex)
+        session.reviewPromptDispatched = true
+        let cmd = agent.autoLaunchCommand(
+            session: session,
+            worktreePath: "/tmp/wt",
+            remoteControlEnabled: false,
+            autoPermissionMode: true,
+            telemetryPort: nil
+        )
+        #expect(cmd?.hasSuffix("resume --last -a never -s workspace-write\n") == true)
+        #expect(cmd?.contains("danger-full-access") == false)
+    }
+
     @Test func findBinaryReturnsNilWhenAbsent() {
         // We can't easily mock FileManager.isExecutableFile, but we CAN
         // verify the search returns nil when the candidate paths don't

@@ -125,4 +125,29 @@ struct CodexTrustSeederTests {
         // Pre-existing user content is preserved through the tightening rewrite.
         #expect(try String(contentsOfFile: config, encoding: .utf8).contains("model = \"x\""))
     }
+
+    @Test func seedTrustUpdatesInPlaceThroughCommentedHeader() throws {
+        // #843 review round 4: an existing `[projects."…"]` header carrying a
+        // trailing comment must be matched (comment-tolerant), so trust is
+        // upgraded in place rather than a duplicate section being appended
+        // (which TOML would reject → Codex can't parse its config).
+        let (project, config) = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: (config as NSString).deletingLastPathComponent) }
+
+        let existing = """
+        [projects."\(project)"] # personal note
+        trust_level = "untrusted"
+        """
+        try existing.write(toFile: config, atomically: true, encoding: .utf8)
+
+        let outcome = CodexTrustSeeder.seedTrust(projectPath: project, codexConfigPath: config)
+        #expect(outcome == .seeded)
+
+        let toml = try String(contentsOfFile: config, encoding: .utf8)
+        #expect(toml.contains("trust_level = \"trusted\""))
+        #expect(!toml.contains("trust_level = \"untrusted\""))
+        // Exactly one header for this project — no duplicate appended.
+        let occurrences = toml.components(separatedBy: "[projects.\"\(project)\"]").count - 1
+        #expect(occurrences == 1)
+    }
 }
