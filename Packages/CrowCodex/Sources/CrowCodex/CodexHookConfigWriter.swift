@@ -1,5 +1,10 @@
 import Foundation
 import CrowCore
+#if canImport(Glibc)
+import Glibc
+#elseif canImport(Darwin)
+import Darwin
+#endif
 
 /// Writes hook configuration that OpenAI Codex picks up. Codex reads hooks
 /// from `$CODEX_HOME/hooks.json` (default `~/.codex/hooks.json`) regardless
@@ -292,8 +297,11 @@ public struct CodexHookConfigWriter: HookConfigWriter {
     /// `write(toFile:atomically:true)` stages a temp at the process umask (often
     /// 0644) for the write+rename window, briefly exposing secrets (#830
     /// review). This stages a sibling temp created at 0600, writes into it, then
-    /// atomically replaces the destination and re-asserts 0600 (`replaceItemAt`
-    /// can inherit the destination's prior perms).
+    /// `rename(2)`s it over the destination — one atomic step on the same
+    /// filesystem (the temp is a sibling), so there's no window where the file is
+    /// missing or world-readable. `rename(2)` is used directly rather than
+    /// `FileManager.replaceItemAt`, which is unreliable on
+    /// swift-corelibs-foundation (it left the destination missing on Linux CI).
     static func writeConfigPrivately(_ content: String, toFile path: String) throws {
         let fm = FileManager.default
         let dir = (path as NSString).deletingLastPathComponent
@@ -305,13 +313,13 @@ public struct CodexHookConfigWriter: HookConfigWriter {
         ) else {
             throw CocoaError(.fileWriteUnknown)
         }
-        defer { try? fm.removeItem(atPath: tmp) }
-        if fm.fileExists(atPath: path) {
-            _ = try fm.replaceItemAt(
-                URL(fileURLWithPath: path), withItemAt: URL(fileURLWithPath: tmp))
-        } else {
-            try fm.moveItem(atPath: tmp, toPath: path)
+        // Atomic replace; the 0600 temp's inode (and perms) become the target.
+        let renamed = tmp.withCString { tmpC in
+            path.withCString { pathC in rename(tmpC, pathC) == 0 }
         }
-        try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
+        guard renamed else {
+            try? fm.removeItem(atPath: tmp)
+            throw CocoaError(.fileWriteUnknown)
+        }
     }
 }
