@@ -129,6 +129,7 @@ After #454, `rg '"gh"|"glab"|gh api|glab api' Sources/Crow/App/IssueTracker.swif
 
 - Tickets: [#410](https://github.com/corveil/crow/issues/410) (foundation, closed via #411), [#454](https://github.com/corveil/crow/issues/454) (migration), [#495](https://github.com/corveil/crow/issues/495) (real Corveil backend)
 - PRs: #411 (foundation), the PR closing #454 (migration)
+- Related ADRs: [0014](./0014-pluggable-coding-agent-adapter.md) — the `CodingAgent` harness adapter is the **orthogonal** axis (which agent edits the code) to this ADR's task/code-provider axis (where the ticket and PR live). They compose at `CodingAgent.generatePrompt`, which routes a Jira-task + GitHub-code session's ticket fetch and PR step to different CLIs.
 - Code:
   - `Packages/CrowProvider/Sources/CrowProvider/TaskBackend.swift`
   - `Packages/CrowProvider/Sources/CrowProvider/CodeBackend.swift`
