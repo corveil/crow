@@ -115,6 +115,11 @@ public struct CorveilWorkerBackend: Sendable {
 
     /// Terminal transition. A non-empty `error` marks the run failed (skips
     /// delivery); otherwise it's completed with the given title/content/output.
+    ///
+    /// Note: `content`/`output` are passed as argv, so a very large payload could
+    /// hit the platform `ARG_MAX` limit. Fine for typical result summaries;
+    /// bulky-payload runs would want a stdin/file transport (deferred follow-up,
+    /// corveil/crow#801 review).
     public func complete(
         _ id: String,
         workerID: String,

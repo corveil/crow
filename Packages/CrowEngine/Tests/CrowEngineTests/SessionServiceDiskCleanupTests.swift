@@ -93,9 +93,13 @@ struct SessionServiceDiskCleanupTests {
     /// (repoPath == worktreePath, isMainCheckout true) and holds the scoped
     /// CORVEIL_API_KEY, so `isWorkerRun` must remove it wholesale rather than
     /// skip it as a "main checkout" (corveil/crow#801 review — the Red finding).
+    /// A scratch dir under `.crow-worker-runs` is removed wholesale despite the
+    /// main-checkout shape (repoPath == worktreePath, isMainCheckout true).
     @Test func deletesWorkerRunScratchDirDespiteMainCheckoutShape() {
-        let scratch = Self.makeTempDir(name: "worker-run-scratch")
-        defer { try? FileManager.default.removeItem(at: scratch) }
+        let root = Self.makeTempDir(name: "wr-dev").appendingPathComponent(".crow-worker-runs")
+        let scratch = root.appendingPathComponent("run-abc")
+        try? FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
         // Seed the secret file the finding is about.
         FileManager.default.createFile(
             atPath: scratch.appendingPathComponent("settings.local.json").path,
@@ -114,9 +118,27 @@ struct SessionServiceDiskCleanupTests {
         #expect(!FileManager.default.fileExists(atPath: scratch.path))
     }
 
+    /// The same parent-name guard as `wipeWorkerRunScratch` applies here: a
+    /// worker-run item whose path is NOT under `.crow-worker-runs` is refused, so
+    /// a corrupted `worktreePath` can't trigger an arbitrary recursive delete
+    /// (review — consistent threat model across both teardown paths).
+    @Test func refusesWorkerRunRemovalOutsideCrowWorkerRuns() {
+        let victim = Self.makeTempDir(name: "not-a-scratch")
+        defer { try? FileManager.default.removeItem(at: victim) }
+        let item = SessionService.WorktreeCleanupItem(
+            repoPath: victim.path, worktreePath: victim.path, branch: "", isMainCheckout: true
+        )
+
+        let error = SessionService.performDiskCleanup(items: [item], isReview: false, isWorkerRun: true)
+
+        #expect(error == nil)  // refusal is not a fatal cleanup error
+        #expect(FileManager.default.fileExists(atPath: victim.path))  // NOT removed
+    }
+
     @Test func workerRunCleanupIsIdempotentWhenAlreadyGone() {
-        let scratch = Self.makeTempDir(name: "worker-run-gone")
-        try? FileManager.default.removeItem(at: scratch)
+        let scratch = Self.makeTempDir(name: "wr-dev-gone")
+            .appendingPathComponent(".crow-worker-runs").appendingPathComponent("run-gone")
+        // Never created — parent-name is valid but the dir doesn't exist.
         let item = SessionService.WorktreeCleanupItem(
             repoPath: scratch.path, worktreePath: scratch.path, branch: "", isMainCheckout: true
         )

@@ -48,8 +48,9 @@ public final class WorkerRunner {
     /// Grace after the prompt is delivered before a run may auto-complete
     /// (mirrors `JobScheduler.finishSettleDelay`).
     private let finishSettleDelay: TimeInterval = 20
-    /// Safety cap so a stuck run can't linger forever.
-    private let maxWatchDuration: TimeInterval = 12 * 3600
+    /// Safety cap so a stuck run can't linger forever. `var` (not `let`) only so
+    /// tests can shrink it to force the timeout path without waiting 12h.
+    var maxWatchDuration: TimeInterval = 12 * 3600
     /// Max polls (× 5s) to observe `.agentLaunched` before giving up on stamping
     /// the settle window for a run.
     private let maxLaunchWaitPolls = 60
@@ -208,9 +209,10 @@ public final class WorkerRunner {
     /// maps the outcome onto `corveil worker-run complete`.
     private func checkFinishedRuns(backend: CorveilWorkerBackend, now: Date) async {
         for (sessionID, run) in watchedRuns {
+            let status = appState.sessions.first(where: { $0.id == sessionID })?.status
             let decision = JobScheduler.finishDecision(
                 now: now,
-                status: appState.sessions.first(where: { $0.id == sessionID })?.status,
+                status: status,
                 startedAt: run.startedAt,
                 promptsDeliveredAt: run.promptsDeliveredAt,
                 readiness: appState.terminalReadiness[run.terminalID],
@@ -231,16 +233,40 @@ public final class WorkerRunner {
                 SessionService.wipeWorkerRunScratch(run.scratchDir)
                 watchedRuns[sessionID] = nil
             case .stopWatching:
-                // Session gone / no longer active / timed out — best-effort fail
-                // the Corveil run so the queue isn't left hanging, then wipe.
-                await complete(
-                    backend: backend, run: run,
-                    args: WorkerRunCompletion.CompleteArgs(error: "run aborted on runner before completion")
-                )
-                SessionService.wipeWorkerRunScratch(run.scratchDir)
-                watchedRuns[sessionID] = nil
+                await stopWatching(run: run, sessionID: sessionID, status: status, backend: backend)
             }
         }
+    }
+
+    /// Handle a run we've stopped watching. There are three sub-cases behind
+    /// `finishDecision`'s `.stopWatching`, distinguished by the session status:
+    ///
+    /// - **Still `.active` (max-duration timeout):** the run overran the watch
+    ///   cap. Fail it on Corveil AND `completeSession` — moving it off `.active` is
+    ///   essential, because otherwise the next tick's `reconcileUnwatchedWorkerRuns`
+    ///   re-adopts it and resets `startedAt`, so the 12h cap never sticks and the
+    ///   run becomes a zombie permanently holding a `maxConcurrentRuns` slot while
+    ///   re-heartbeating an already-completed Corveil run (review).
+    /// - **Deleted (`nil`):** `deleteSession` already tore down the local session +
+    ///   scratch dir; just best-effort fail the Corveil run so the queue isn't hung.
+    /// - **User-moved off `.active` (paused/archived/…):** leave the Corveil run to
+    ///   the lease-expiry abandonment sweep; only wipe the local secret.
+    ///
+    /// Every case wipes the scratch dir and drops the watch.
+    private func stopWatching(run: WorkerRunWatch, sessionID: UUID, status: SessionStatus?, backend: CorveilWorkerBackend) async {
+        switch status {
+        case .active:
+            await complete(backend: backend, run: run,
+                           args: .init(error: "run exceeded the runner's max watch duration"))
+            sessionService.completeSession(id: sessionID)
+        case nil:
+            await complete(backend: backend, run: run,
+                           args: .init(error: "run aborted on runner before completion"))
+        default:
+            break  // user moved it off active — lease expiry fails it on Corveil.
+        }
+        SessionService.wipeWorkerRunScratch(run.scratchDir)
+        watchedRuns[sessionID] = nil
     }
 
     private func complete(backend: CorveilWorkerBackend, run: WorkerRunWatch, args: WorkerRunCompletion.CompleteArgs) async {

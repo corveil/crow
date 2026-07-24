@@ -217,6 +217,50 @@ struct WorkerRunnerTickTeardownTests {
         #expect(snap.enabled == false)  // nil config surfaces as disabled
     }
 
+    /// A max-duration timeout on a still-`.active` run must move the session OFF
+    /// `.active` (via completeSession) and wipe the scratch dir — otherwise the
+    /// next tick's reconcile re-adopts it, resets `startedAt`, and it becomes a
+    /// zombie permanently holding a concurrency slot (review — the Yellow).
+    @Test func timeoutOnActiveRunCompletesSessionAndDoesNotReAdopt() async throws {
+        let (runner, appState) = makeRunner()
+        runner.maxWatchDuration = 0            // any active watched run times out immediately
+        runner.configProvider = { RunnerConfig(enabled: true) }
+        runner.apiKeyProvider = { "sk-test" }
+        runner.devRootProvider = { "/tmp/dev" }
+
+        // Real scratch dir under `.crow-worker-runs` so the wipe is observable and
+        // passes the parent-name guard.
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wr-timeout-\(UUID().uuidString)")
+            .appendingPathComponent(".crow-worker-runs")
+        let scratch = root.appendingPathComponent("run-timeout")
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        FileManager.default.createFile(atPath: scratch.appendingPathComponent("settings.local.json").path,
+                                       contents: Data(#"{"env":{"CORVEIL_API_KEY":"k"}}"#.utf8))
+
+        let session = Session(
+            name: "wr-timeout", status: .active, kind: .workerRun,
+            workerRunID: "run-timeout", workerID: "crow-x-1",
+            workerRunScratchDir: scratch.path
+        )
+        appState.sessions.append(session)
+        appState.terminals[session.id] = [
+            SessionTerminal(sessionID: session.id, name: "t", cwd: scratch.path, isManaged: true)
+        ]
+
+        await runner.tick()
+
+        // Session moved off .active, watch dropped, secret wiped.
+        #expect(appState.sessions.first(where: { $0.id == session.id })?.status == .completed)
+        #expect(runner.statusSnapshot().watched.isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: scratch.path))
+
+        // A second tick must NOT re-adopt it (status is now .completed, not .active).
+        await runner.tick()
+        #expect(runner.statusSnapshot().watched.isEmpty)
+    }
+
     /// With config present but `enabled: false`, teardown likewise still runs.
     @Test func disabledConfigStillReconcilesInFlightRun() async {
         let (runner, appState) = makeRunner()
