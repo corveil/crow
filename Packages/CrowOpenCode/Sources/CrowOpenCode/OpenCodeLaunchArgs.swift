@@ -88,12 +88,13 @@ public enum OpenCodeLaunchArgs {
     /// Probe the installed binary once and cache the result. Only call when
     /// an auto-approve suffix is actually needed — each probe spawns a subprocess.
     ///
-    /// Version-narrowed (CROW-831): on builds older than
-    /// `tuiAutoReintroducedVersion` the TUI `--auto` flag is *known absent*, so
+    /// Version-narrowed (CROW-831): on builds inside the `[1.17.0, 1.18.0)`
+    /// window where the TUI `--auto` flag was dropped, it is *known absent*, so
     /// we answer `false` from the (cheaper) `--version` string alone and skip
-    /// the dead-weight `opencode --help` parse. On `≥1.18` and on unparseable
-    /// versions we still run the `--help` probe, so an upstream flip is caught
-    /// without a code change (the probe was never wrong on `≥1.18`).
+    /// the dead-weight `opencode --help` parse. On `<1.17` (flag still present),
+    /// `≥1.18` (flag re-added), and unparseable versions we still run the
+    /// `--help` probe, so a flip in either direction is caught without a code
+    /// change.
     public static func tuiSupportsAuto(binary: String) -> Bool {
         cacheLock.lock()
         if let cached = tuiAutoFlagCache[binary] {
@@ -104,8 +105,8 @@ public enum OpenCodeLaunchArgs {
 
         let supports: Bool
         if tuiAutoKnownAbsent(version: installedVersion(binary: binary)) {
-            // Known `<1.18`: the top-level `--auto` flag does not exist. No point
-            // spawning `opencode --help` to confirm the absence.
+            // Known `[1.17.0, 1.18.0)`: the top-level `--auto` flag does not
+            // exist. No point spawning `opencode --help` to confirm the absence.
             supports = false
         } else {
             let help = (try? runHelp(binary: binary, subcommand: nil)) ?? ""

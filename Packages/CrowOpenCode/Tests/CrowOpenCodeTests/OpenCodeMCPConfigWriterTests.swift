@@ -44,7 +44,8 @@ struct OpenCodeMCPConfigWriterTests {
     // MARK: - End-to-end registration
 
     /// Write a Claude config carrying a `jira` MCP, run the mirror, and return
-    /// the parsed `<configHome>/opencode.json`.
+    /// the parsed `<configHome>/opencode.json`. The provenance record lives
+    /// inside the (deleted) temp dir so the run is hermetic.
     private func runMirror(
         claudeMCPServers: [String: Any]?,
         existingOpenCode: [String: Any]? = nil
@@ -68,7 +69,9 @@ struct OpenCodeMCPConfigWriterTests {
         }
 
         let outcome = OpenCodeMCPConfigWriter.installGlobalMCPConfig(
-            configHome: configHome.path, claudeJSONPath: claudePath.path)
+            configHome: configHome.path,
+            claudeJSONPath: claudePath.path,
+            mirrorRecordPath: tmp.appendingPathComponent("mirror.json").path)
 
         let target = configHome.appendingPathComponent("opencode.json")
         let root = FileManager.default.contents(atPath: target.path)
@@ -117,13 +120,19 @@ struct OpenCodeMCPConfigWriterTests {
     }
 
     @Test func secondRunIsUnchanged() throws {
-        // Registering, then registering again against the same inputs, is idempotent.
-        let servers: [String: Any] = ["jira": ["command": "uvx", "args": ["mcp-atlassian"]]]
-        let (first, root) = try runMirror(claudeMCPServers: servers)
-        #expect(first == .registered)
-        let (second, _) = try runMirror(
-            claudeMCPServers: servers, existingOpenCode: root)
-        #expect(second == .unchanged)
+        // Registering, then registering again against the same inputs (same
+        // config home + provenance record), is idempotent.
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("opencode-mcp-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let (claude, configHome, record) = try makeConfigDir(tmp, jira: ["command": "uvx", "args": ["mcp-atlassian"]])
+
+        #expect(OpenCodeMCPConfigWriter.installGlobalMCPConfig(
+            configHome: configHome.path, claudeJSONPath: claude.path, mirrorRecordPath: record) == .registered)
+        #expect(OpenCodeMCPConfigWriter.installGlobalMCPConfig(
+            configHome: configHome.path, claudeJSONPath: claude.path, mirrorRecordPath: record) == .unchanged)
     }
 
     @Test func refusesToTouchUnparseableOpenCodeConfig() throws {
@@ -150,12 +159,12 @@ struct OpenCodeMCPConfigWriterTests {
 
     // MARK: - Credential handling + lifecycle (CROW-831 review)
 
-    /// Set up a persistent `.claude.json` + `opencode` config home under `tmp`,
-    /// with an optional initial Claude `jira` server. Returns the two paths so a
-    /// test can mutate the source between calls.
+    /// Set up a persistent `.claude.json` + `opencode` config home + provenance
+    /// record path under `tmp`, with an optional initial Claude `jira` server.
+    /// Returns the paths so a test can mutate the source between calls.
     private func makeConfigDir(
         _ tmp: URL, jira: [String: Any]?
-    ) throws -> (claude: URL, configHome: URL) {
+    ) throws -> (claude: URL, configHome: URL, record: String) {
         let claude = tmp.appendingPathComponent(".claude.json")
         if let jira {
             try JSONSerialization.data(withJSONObject: ["mcpServers": ["jira": jira]])
@@ -163,7 +172,7 @@ struct OpenCodeMCPConfigWriterTests {
         }
         let configHome = tmp.appendingPathComponent("opencode")
         try FileManager.default.createDirectory(at: configHome, withIntermediateDirectories: true)
-        return (claude, configHome)
+        return (claude, configHome, tmp.appendingPathComponent("mirror.json").path)
     }
 
     @Test func writesTargetOwnerOnly() throws {
@@ -173,18 +182,19 @@ struct OpenCodeMCPConfigWriterTests {
         try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tmp) }
 
-        let (claude, configHome) = try makeConfigDir(tmp, jira: [
+        let (claude, configHome, record) = try makeConfigDir(tmp, jira: [
             "command": "uvx", "args": ["mcp-atlassian"],
             "env": ["JIRA_API_TOKEN": "secret"],
         ])
         let outcome = OpenCodeMCPConfigWriter.installGlobalMCPConfig(
-            configHome: configHome.path, claudeJSONPath: claude.path)
+            configHome: configHome.path, claudeJSONPath: claude.path, mirrorRecordPath: record)
         #expect(outcome == .registered)
 
-        let target = configHome.appendingPathComponent("opencode.json")
-        let perms = try #require(
-            (try FileManager.default.attributesOfItem(atPath: target.path))[.posixPermissions] as? NSNumber)
-        #expect(perms.int16Value == 0o600)
+        for path in [configHome.appendingPathComponent("opencode.json").path, record] {
+            let perms = try #require(
+                (try FileManager.default.attributesOfItem(atPath: path))[.posixPermissions] as? NSNumber)
+            #expect(perms.int16Value == 0o600)
+        }
     }
 
     @Test func unMirrorsWhenSourceRemoved() throws {
@@ -193,20 +203,20 @@ struct OpenCodeMCPConfigWriterTests {
         try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tmp) }
 
-        let (claude, configHome) = try makeConfigDir(tmp, jira: [
+        let (claude, configHome, record) = try makeConfigDir(tmp, jira: [
             "command": "uvx", "args": ["mcp-atlassian"],
         ])
         #expect(OpenCodeMCPConfigWriter.installGlobalMCPConfig(
-            configHome: configHome.path, claudeJSONPath: claude.path) == .registered)
+            configHome: configHome.path, claudeJSONPath: claude.path, mirrorRecordPath: record) == .registered)
 
         // User drops `jira` from the Claude config entirely.
         try JSONSerialization.data(withJSONObject: ["mcpServers": [String: Any]()])
             .write(to: claude)
         let outcome = OpenCodeMCPConfigWriter.installGlobalMCPConfig(
-            configHome: configHome.path, claudeJSONPath: claude.path)
+            configHome: configHome.path, claudeJSONPath: claude.path, mirrorRecordPath: record)
         #expect(outcome == .removed)
 
-        // The stale mirror is gone.
+        // The stale mirror (the one Crow wrote) is gone.
         let target = configHome.appendingPathComponent("opencode.json")
         let root = try #require(FileManager.default.contents(atPath: target.path)
             .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] })
@@ -215,33 +225,67 @@ struct OpenCodeMCPConfigWriterTests {
 
         // Running again with the source still gone is a clean no-op.
         #expect(OpenCodeMCPConfigWriter.installGlobalMCPConfig(
-            configHome: configHome.path, claudeJSONPath: claude.path) == .noSource)
+            configHome: configHome.path, claudeJSONPath: claude.path, mirrorRecordPath: record) == .noSource)
     }
 
-    @Test func preservesUserDisabledEnabled() throws {
+    @Test func doesNotOverwriteUserAuthoredEntry() throws {
+        // A `mcp.jira` Crow never wrote (no provenance record) is left untouched
+        // even when a Claude source is present — the register path must not
+        // clobber a user's own OpenCode Jira server. Also the opt-out path: an
+        // `enabled: false` the user set survives.
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("opencode-mcp-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tmp) }
 
-        let (claude, configHome) = try makeConfigDir(tmp, jira: [
+        let (claude, configHome, record) = try makeConfigDir(tmp, jira: [
             "command": "uvx", "args": ["mcp-atlassian"],
         ])
-        // Seed a Crow-written entry the user has since disabled.
+        let userEntry: [String: Any] = [
+            "type": "local", "command": ["my-own-jira"], "enabled": false,
+        ]
         try JSONSerialization.data(withJSONObject: [
             "$schema": "https://opencode.ai/config.json",
-            "mcp": ["jira": ["type": "local", "command": ["uvx", "mcp-atlassian"], "enabled": false]],
+            "mcp": ["jira": userEntry],
         ]).write(to: configHome.appendingPathComponent("opencode.json"))
 
-        // Next launch: source still present, but the user's opt-out must stick.
         let outcome = OpenCodeMCPConfigWriter.installGlobalMCPConfig(
-            configHome: configHome.path, claudeJSONPath: claude.path)
-        #expect(outcome == .unchanged)
+            configHome: configHome.path, claudeJSONPath: claude.path, mirrorRecordPath: record)
+        #expect(outcome == .skippedUserOwned)
 
+        // The user's entry is byte-for-byte intact — not replaced by the mirror.
         let target = configHome.appendingPathComponent("opencode.json")
         let root = try #require(FileManager.default.contents(atPath: target.path)
             .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] })
         let jira = try #require((root["mcp"] as? [String: Any])?["jira"] as? [String: Any])
+        #expect(jira["command"] as? [String] == ["my-own-jira"])
         #expect(jira["enabled"] as? Bool == false)
+    }
+
+    @Test func preservesUserAuthoredEntryOnSourceRemoval() throws {
+        // The failure case the reviewer flagged: an OpenCode-primary user with
+        // their own `mcp.jira` and no Claude source must NOT have it deleted.
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("opencode-mcp-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        // No Claude jira at all.
+        let (claude, configHome, record) = try makeConfigDir(tmp, jira: nil)
+        try JSONSerialization.data(withJSONObject: [
+            "$schema": "https://opencode.ai/config.json",
+            "mcp": ["jira": ["type": "remote", "url": "https://mine.example.net", "enabled": true]],
+        ]).write(to: configHome.appendingPathComponent("opencode.json"))
+
+        let outcome = OpenCodeMCPConfigWriter.installGlobalMCPConfig(
+            configHome: configHome.path, claudeJSONPath: claude.path, mirrorRecordPath: record)
+        #expect(outcome == .skippedUserOwned)
+
+        // Their server (and its would-be credentials) survives.
+        let target = configHome.appendingPathComponent("opencode.json")
+        let root = try #require(FileManager.default.contents(atPath: target.path)
+            .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] })
+        let jira = try #require((root["mcp"] as? [String: Any])?["jira"] as? [String: Any])
+        #expect(jira["url"] as? String == "https://mine.example.net")
     }
 }
