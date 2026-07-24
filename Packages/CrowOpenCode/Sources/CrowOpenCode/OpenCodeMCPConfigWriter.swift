@@ -1,4 +1,3 @@
-import Crypto
 import Foundation
 
 /// Registers the Jira MCP server into OpenCode's config so OpenCode sessions
@@ -27,21 +26,22 @@ import Foundation
 /// **Provenance (CROW-831 review round 2).** `~/.config/opencode/opencode.json`
 /// is OpenCode's own documented global config path — exactly where an
 /// OpenCode-primary user's hand-configured `jira` server (or `opencode mcp add`)
-/// already lands. So Crow keeps a sidecar recording the SHA-256 digest of the
-/// entry it last wrote (`~/.local/share/crow/opencode-mcp-mirror.json`, `0600`)
-/// and only ever touches `mcp.jira` when the on-disk entry still hashes to that
-/// digest. A user-authored `jira` (no record) or one the user has since edited
-/// or deleted (digest mismatch / entry gone) is left completely alone — never
-/// overwritten by the mirror, never deleted on un-mirror, never re-added after a
-/// manual delete. That *is* the opt-out: editing or removing the entry makes it
-/// "not ours", so it stops being managed.
+/// already lands. So Crow keeps a sidecar recording the exact entry it last
+/// wrote (`~/.local/share/crow/opencode-mcp-mirror.json`, `0600`) and only ever
+/// touches `mcp.jira` when the on-disk entry still matches that record. A
+/// user-authored `jira` (no record) or one the user has since edited or deleted
+/// (record mismatch / entry gone) is left completely alone — never overwritten
+/// by the mirror, never deleted on un-mirror, never re-added after a manual
+/// delete. That *is* the opt-out: editing or removing the entry makes it "not
+/// ours", so it stops being managed.
 ///
 /// It **un-mirrors**: when the source `jira` disappears from the Claude config,
 /// a mirror Crow wrote is dropped so a stale (possibly credential-bearing)
-/// server never lingers. The `opencode.json` file is written `0600` — the
-/// mirrored `environment`/`headers` carry the same secrets `~/.claude.json`
-/// (itself `0600`) does. The sidecar stores only digests (no token) and is
-/// `0600` too.
+/// server never lingers. Both `opencode.json` and the sidecar are written `0600`
+/// — the mirrored `environment`/`headers` carry the same secrets `~/.claude.json`
+/// (itself `0600`) does. (A digest-only sidecar would avoid the third on-disk
+/// copy, but swift-crypto's BoringSSL interop breaks the Linux CI link; all
+/// three files are `0600`, so this is a duplicated-secret note, not a leak.)
 public enum OpenCodeMCPConfigWriter {
 
     /// The MCP server name. Matches Claude's `jira` key so the `jira_*` tool
@@ -106,14 +106,15 @@ public enum OpenCodeMCPConfigWriter {
         var mcp = root["mcp"] as? [String: Any] ?? [:]
         let existing = mcp[serverName] as? [String: Any]
 
-        // 3. Provenance: does the on-disk entry hash to the digest Crow last
-        //    wrote? The record stores only a SHA-256 of the canonical entry, not
-        //    the entry itself — so the token isn't copied to a third file.
+        // 3. Provenance: is the on-disk entry the exact one Crow last wrote?
+        //    The record stores the entry itself (in Crow's own `0600` state dir);
+        //    it can't be a hash without a crypto dependency that breaks the Linux
+        //    CI link (swift-crypto's BoringSSL interop), and all three files are
+        //    `0600`, so this is a duplicated-secret note, not a leak.
         let recordPath = mirrorRecordPath ?? Self.defaultMirrorRecordPath()
         var record = readMirrorRecord(path: recordPath)
-        let recordedDigest = record[serverName] as? String
-        let existingDigest = existing.flatMap(canonicalDigest)
-        let entryIsOurs = existing != nil && recordedDigest != nil && existingDigest == recordedDigest
+        let recorded = record[serverName] as? [String: Any]
+        let entryIsOurs = existing != nil && recorded != nil && jsonEqual(existing!, recorded!)
 
         // 4a. Source absent → un-mirror, but only an entry we actually wrote.
         if sourceServer == nil {
@@ -153,7 +154,7 @@ public enum OpenCodeMCPConfigWriter {
         // 4c. Durable opt-out: the user deleted a mirror Crow wrote (entry gone,
         //     record still present). Treat the deletion as intent and don't
         //     re-add it — deleting behaves the same as editing.
-        if existing == nil, recordedDigest != nil {
+        if existing == nil, recorded != nil {
             NSLog("[OpenCodeMCPConfigWriter] mcp.%@ removed after Crow wrote it; honoring the opt-out", serverName)
             return .skippedUserOwned
         }
@@ -166,9 +167,10 @@ public enum OpenCodeMCPConfigWriter {
 
         // 4e. Register/update. Reaching here means either no existing entry (and
         //     no record — 4c caught deleted-with-record) or an entry that is
-        //     exactly ours; either way it's safe to (re)write.
-        let desiredDigest = canonicalDigest(translated)
-        if let existingDigest, existingDigest == desiredDigest {
+        //     exactly ours (so `recorded == existing`); either way it's safe to
+        //     (re)write, and when it already equals the desired entry the record
+        //     is already in sync — so there's nothing to re-sync.
+        if let existing, jsonEqual(existing, translated) {
             return .unchanged
         }
         mcp[serverName] = translated
@@ -176,10 +178,8 @@ public enum OpenCodeMCPConfigWriter {
         if let failure = write(root, to: targetPath, configHome: configHome, fm: fm) {
             return failure
         }
-        if let desiredDigest {
-            record[serverName] = desiredDigest
-            writeMirrorRecord(record, path: recordPath, fm: fm)
-        }
+        record[serverName] = translated
+        writeMirrorRecord(record, path: recordPath, fm: fm)
         return .registered
     }
 
@@ -213,18 +213,17 @@ public enum OpenCodeMCPConfigWriter {
     // MARK: - Provenance record
 
     /// `~/.local/share/crow/opencode-mcp-mirror.json` — Crow's own state dir
-    /// (alongside `crow.sock`), never the user's config. Maps each server name
-    /// to the SHA-256 digest of the entry Crow last wrote, so the register/remove
-    /// paths can tell "ours" from "user-authored" without storing the entry (and
-    /// its token) a third time.
+    /// (alongside `crow.sock`), never the user's config. Holds the exact entry
+    /// Crow last wrote per server name, so the register/remove paths can tell
+    /// "ours" from "user-authored".
     static func defaultMirrorRecordPath() -> String {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".local/share/crow/opencode-mcp-mirror.json").path
     }
 
-    /// Read the provenance sidecar (`{ "<server>": "<sha256-hex>" }`). Missing or
-    /// unparseable → empty (fail open: with no record every entry reads as "not
-    /// ours", so we never delete or overwrite — the safe direction).
+    /// Read the provenance sidecar. Missing or unparseable → empty (fail open:
+    /// with no record every entry reads as "not ours", so we never delete or
+    /// overwrite — the safe direction).
     static func readMirrorRecord(path: String) -> [String: Any] {
         let fm = FileManager.default
         guard fm.fileExists(atPath: path),
@@ -234,11 +233,10 @@ public enum OpenCodeMCPConfigWriter {
         return root
     }
 
-    /// Persist the provenance sidecar `0600`. It holds only digests now (no
-    /// secret), but `0600` still keeps the "which servers does Crow manage" list
-    /// owner-only. Best effort — a failure only means the next run re-evaluates
-    /// provenance and, lacking a record, treats the entry as user-owned (safe:
-    /// leaves it alone).
+    /// Persist the provenance sidecar `0600` (it holds the same
+    /// `environment`/`headers` the mirror does, in Crow's own state dir). Best
+    /// effort — a failure only means the next run re-evaluates provenance and,
+    /// lacking a record, treats the entry as user-owned (safe: leaves it alone).
     static func writeMirrorRecord(_ record: [String: Any], path: String, fm: FileManager) {
         do {
             let dir = (path as NSString).deletingLastPathComponent
@@ -315,16 +313,18 @@ public enum OpenCodeMCPConfigWriter {
         return nil
     }
 
-    /// SHA-256 hex digest of an entry's canonical JSON, used as the provenance
-    /// fingerprint. `.sortedKeys` normalizes every value type identically on
-    /// macOS and Linux (a freshly-built `[String]`/`Bool` and the same value
-    /// round-tripped through JSON as `NSArray`/`NSNumber` serialize to identical
-    /// bytes) — the reason `NSDictionary.isEqual`, which does *not* deep-equate
-    /// those across swift-corelibs-foundation, can't be used. Storing the digest
-    /// rather than the entry keeps the Jira token out of the sidecar entirely.
-    static func canonicalDigest(_ dict: [String: Any]) -> String? {
-        guard let data = try? JSONSerialization.data(withJSONObject: dict, options: [.sortedKeys])
-        else { return nil }
-        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    /// Structural equality via canonical JSON bytes. `NSDictionary.isEqual`
+    /// can't be used here: on swift-corelibs-foundation (Linux CI) it does not
+    /// deep-equate a Swift `[String]` against a JSON-decoded `NSArray`, nor a
+    /// `Bool` against an `NSNumber`, so a freshly-built server never compared
+    /// equal to the same server round-tripped through `opencode.json` — the
+    /// idempotency check always fired and rewrote the file. Serializing both
+    /// with `.sortedKeys` normalizes every value type identically on macOS and
+    /// Linux, so the comparison is stable cross-platform.
+    private static func jsonEqual(_ a: [String: Any], _ b: [String: Any]) -> Bool {
+        guard let da = try? JSONSerialization.data(withJSONObject: a, options: [.sortedKeys]),
+              let db = try? JSONSerialization.data(withJSONObject: b, options: [.sortedKeys])
+        else { return false }
+        return da == db
     }
 }
