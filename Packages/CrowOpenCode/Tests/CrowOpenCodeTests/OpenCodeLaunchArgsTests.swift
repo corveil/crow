@@ -131,10 +131,13 @@ struct OpenCodeLaunchArgsTests {
         #expect(!(OpenCodeLaunchArgs.SemVer(2, 0, 0) < OpenCodeLaunchArgs.SemVer(1, 99, 99)))
     }
 
-    @Test func tuiAutoKnownAbsentOnlyForPre118() {
-        // < 1.18: the top-level `--auto` flag is known absent, skip the probe.
+    @Test func tuiAutoKnownAbsentOnlyForRemovedWindow() {
+        // [1.17.0, 1.18.0): the top-level `--auto` flag was dropped, skip the probe.
+        #expect(OpenCodeLaunchArgs.tuiAutoKnownAbsent(version: OpenCodeLaunchArgs.SemVer(1, 17, 0)))
         #expect(OpenCodeLaunchArgs.tuiAutoKnownAbsent(version: OpenCodeLaunchArgs.SemVer(1, 17, 10)))
-        #expect(OpenCodeLaunchArgs.tuiAutoKnownAbsent(version: OpenCodeLaunchArgs.SemVer(1, 0, 0)))
+        // < 1.17: the flag was still present — must probe, not "known absent".
+        #expect(!OpenCodeLaunchArgs.tuiAutoKnownAbsent(version: OpenCodeLaunchArgs.SemVer(1, 16, 9)))
+        #expect(!OpenCodeLaunchArgs.tuiAutoKnownAbsent(version: OpenCodeLaunchArgs.SemVer(1, 0, 0)))
         // >= 1.18: `--auto` was re-added — must still probe (not "known absent").
         #expect(!OpenCodeLaunchArgs.tuiAutoKnownAbsent(version: OpenCodeLaunchArgs.SemVer(1, 18, 0)))
         #expect(!OpenCodeLaunchArgs.tuiAutoKnownAbsent(version: OpenCodeLaunchArgs.SemVer(1, 18, 4)))

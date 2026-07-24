@@ -113,10 +113,15 @@ enum LaunchScaffold {
                 }
                 // Mirror the user's Claude `jira` MCP into OpenCode's global
                 // config so OpenCode sessions get the same `jira_*` tools
-                // (parity with Claude; CROW-831). No-op when the user has no
-                // Claude Jira MCP to mirror.
-                attempt("OpenCode Jira MCP registration") {
-                    OpenCodeMCPConfigWriter.installGlobalMCPConfig(configHome: configHome)
+                // (parity with Claude; CROW-831). Never throws — it returns an
+                // Outcome — so inspect and log non-success directly rather than
+                // through `attempt`, whose catch branch would never fire.
+                let mcpOutcome = OpenCodeMCPConfigWriter.installGlobalMCPConfig(configHome: configHome)
+                switch mcpOutcome {
+                case .registered, .removed, .unchanged, .noSource:
+                    CrowDaemon.log("OpenCode Jira MCP registration: \(mcpOutcome)")
+                case .skippedUnparseable, .failed:
+                    CrowDaemon.log("WARNING: OpenCode Jira MCP registration: \(mcpOutcome)")
                 }
             }
         }

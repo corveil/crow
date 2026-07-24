@@ -17,10 +17,17 @@ public enum OpenCodeLaunchArgs {
     /// The first `opencode` release that re-added the top-level TUI `--auto`
     /// flag. It was present pre-`1.17`, **removed across the `1.17.x` window**,
     /// then re-added in `1.18.0` (2026-07-14; verified `sst/opencode`
-    /// `tui.ts@v1.18.4`). Below this, the TUI `--help` probe for `--auto` can
-    /// only ever answer "no" — so we short-circuit it (CROW-831). At/above it we
-    /// still probe, so a *future* upstream flip is caught without a code change.
+    /// `tui.ts@v1.18.4`). Only within `[tuiAutoRemovedVersion,
+    /// tuiAutoReintroducedVersion)` can the TUI `--help` probe for `--auto`
+    /// answer only "no" — so we short-circuit it there (CROW-831). Outside that
+    /// window we still probe, so a *future* upstream flip is caught without a
+    /// code change.
     static let tuiAutoReintroducedVersion = SemVer(1, 18, 0)
+
+    /// The first `1.17.x` release where the top-level TUI `--auto` flag was
+    /// dropped. Below this (`< 1.17`) the flag was still present, so the probe
+    /// must run — do **not** treat those builds as "known absent".
+    static let tuiAutoRemovedVersion = SemVer(1, 17, 0)
 
     /// A parsed `MAJOR.MINOR.PATCH`, compared field-by-field.
     struct SemVer: Comparable, Equatable {
@@ -45,12 +52,14 @@ public enum OpenCodeLaunchArgs {
         return SemVer(parts[0], parts[1], parts[2])
     }
 
-    /// Whether a known installed `version` predates the TUI `--auto`
-    /// reintroduction — i.e. the top-level `--auto` probe is guaranteed to miss
-    /// and can be skipped. `nil` version means "unknown", so we do *not* skip.
+    /// Whether a known installed `version` falls in the window where the TUI
+    /// `--auto` flag was dropped — `[1.17.0, 1.18.0)` — so the top-level
+    /// `--auto` probe is guaranteed to miss and can be skipped. Builds `<1.17`
+    /// still had the flag and `≥1.18` re-added it, so both fall through to the
+    /// probe; a `nil` version is "unknown" and never skipped.
     static func tuiAutoKnownAbsent(version: SemVer?) -> Bool {
         guard let version else { return false }
-        return version < tuiAutoReintroducedVersion
+        return version >= tuiAutoRemovedVersion && version < tuiAutoReintroducedVersion
     }
 
     /// POSIX single-quote escape for paths interpolated into shell commands.

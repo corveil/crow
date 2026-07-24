@@ -22,6 +22,12 @@ import Foundation
 /// The write merges: it preserves `$schema`, any other `mcp` entries, and every
 /// other key already in `opencode.json`, and refuses to touch a file that isn't
 /// a JSON object. Idempotent — re-running rewrites only the `mcp.jira` entry.
+/// It **un-mirrors**: when the source `jira` server disappears from the Claude
+/// config, the previously-written `mcp.jira` is dropped so a stale server never
+/// lingers. A user's explicit `enabled: false` on the mirrored entry is
+/// preserved across launches. The file is written `0600` — the mirrored
+/// `environment`/`headers` carry the same secrets `~/.claude.json` (itself
+/// `0600`) does.
 public enum OpenCodeMCPConfigWriter {
 
     /// The MCP server name. Matches Claude's `jira` key so the `jira_*` tool
@@ -31,9 +37,13 @@ public enum OpenCodeMCPConfigWriter {
     public enum Outcome: Equatable {
         /// The `mcp.jira` entry was written/updated in `opencode.json`.
         case registered
+        /// The source `jira` server is gone and the previously-mirrored
+        /// `mcp.jira` entry was dropped from `opencode.json` (un-mirror).
+        case removed
         /// `opencode.json` already carried an identical `mcp.jira`; nothing written.
         case unchanged
-        /// No `jira` MCP server in the Claude config to mirror; nothing written.
+        /// No `jira` MCP server in the Claude config to mirror, and nothing
+        /// stale to remove; nothing written.
         case noSource
         /// A target/source file exists but isn't a JSON object; refused to touch it.
         case skippedUnparseable
@@ -44,6 +54,13 @@ public enum OpenCodeMCPConfigWriter {
     /// Mirror the user's Claude `jira` MCP into `<configHome>/opencode.json`.
     /// Pass `claudeJSONPath` to read a different Claude config (tests); `nil`
     /// uses the real `~/.claude.json`.
+    ///
+    /// Lifecycle parity with Claude (CROW-831 review): when the source `jira`
+    /// server *disappears* from the Claude config, the previously-mirrored
+    /// `mcp.jira` is removed from `opencode.json` too — so a stale (and possibly
+    /// credential-bearing) server never lingers after the user drops it from
+    /// Claude. Crow owns the `mcp.jira` key in this file; user-authored MCP
+    /// servers belong in `opencode.jsonc` (or under a different name).
     @discardableResult
     public static func installGlobalMCPConfig(
         configHome: String,
@@ -51,7 +68,9 @@ public enum OpenCodeMCPConfigWriter {
     ) -> Outcome {
         let fm = FileManager.default
 
-        // 1. Read the source `jira` server from the Claude config.
+        // 1. Read the source `jira` server from the Claude config. Distinguish
+        //    "absent" (→ un-mirror) from "present but untranslatable" (→ leave
+        //    the mirror alone) from "unparseable" (→ refuse).
         let claudePath = claudeJSONPath
             ?? fm.homeDirectoryForCurrentUser.appendingPathComponent(".claude.json").path
         let sourceServer: [String: Any]?
@@ -59,14 +78,12 @@ public enum OpenCodeMCPConfigWriter {
         case .success(let server): sourceServer = server
         case .unparseable: return .skippedUnparseable
         }
-        guard let sourceServer, let openCodeServer = translateClaudeServer(sourceServer) else {
-            return .noSource
-        }
 
-        // 2. Merge into the Crow-owned `opencode.json`.
+        // 2. Load the Crow-owned `opencode.json` (if any).
         let targetPath = (configHome as NSString).appendingPathComponent("opencode.json")
+        let targetExists = fm.fileExists(atPath: targetPath)
         var root: [String: Any] = ["$schema": "https://opencode.ai/config.json"]
-        if fm.fileExists(atPath: targetPath) {
+        if targetExists {
             guard let data = fm.contents(atPath: targetPath),
                   let parsed = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
             else {
@@ -75,25 +92,62 @@ public enum OpenCodeMCPConfigWriter {
             }
             root = parsed
         }
-
         var mcp = root["mcp"] as? [String: Any] ?? [:]
+
+        // 3a. Source gone → drop any stale mirror we wrote.
+        guard let sourceServer, let translated = translateClaudeServer(sourceServer) else {
+            guard mcp[serverName] != nil else { return .noSource }
+            mcp.removeValue(forKey: serverName)
+            if mcp.isEmpty {
+                root.removeValue(forKey: "mcp")
+            } else {
+                root["mcp"] = mcp
+            }
+            return write(root, to: targetPath, configHome: configHome, fm: fm) ?? .removed
+        }
+
+        // 3b. Source present → register/update. Preserve a user's explicit
+        //     `enabled` value so disabling the mirror in `opencode.json` sticks
+        //     across launches (we only ever *default* it to true on first write).
+        var openCodeServer = translated
+        if let existing = mcp[serverName] as? [String: Any],
+           let userEnabled = existing["enabled"] {
+            openCodeServer["enabled"] = userEnabled
+        }
         if let existing = mcp[serverName] as? [String: Any],
            NSDictionary(dictionary: existing).isEqual(to: openCodeServer) {
             return .unchanged
         }
         mcp[serverName] = openCodeServer
         root["mcp"] = mcp
+        return write(root, to: targetPath, configHome: configHome, fm: fm) ?? .registered
+    }
 
+    /// Write `root` as pretty JSON to `path`, owner-only. `mcp.<name>` mirrors
+    /// Claude's `environment`/`headers`, which carry secrets (e.g. a Jira API
+    /// token), and `~/.claude.json` is `0600` — so match it. `.atomic` renames a
+    /// fresh temp file over the target, resetting its mode to the umask default
+    /// (~`0644`), so the `setAttributes` is required, not belt-and-braces
+    /// (`Scaffolder.swift:177`, `ClaudeHookConfigWriter.writeGatewayEnv:147`).
+    /// Returns `.failed` on error, or `nil` on success (the caller supplies the
+    /// success outcome).
+    private static func write(
+        _ root: [String: Any],
+        to path: String,
+        configHome: String,
+        fm: FileManager
+    ) -> Outcome? {
         do {
             try fm.createDirectory(atPath: configHome, withIntermediateDirectories: true)
             let data = try JSONSerialization.data(
                 withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
-            try data.write(to: URL(fileURLWithPath: targetPath), options: .atomic)
+            try data.write(to: URL(fileURLWithPath: path), options: .atomic)
+            try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
+            return nil
         } catch {
-            NSLog("[OpenCodeMCPConfigWriter] Failed to write %@: %@", targetPath, error.localizedDescription)
+            NSLog("[OpenCodeMCPConfigWriter] Failed to write %@: %@", path, error.localizedDescription)
             return .failed(error.localizedDescription)
         }
-        return .registered
     }
 
     // MARK: - Source
