@@ -57,16 +57,16 @@ public enum CodexMCPWriter {
         }
 
         var added: [String] = []
-        for server in servers where !content.contains(sectionHeaderVariants(server.name)) {
+        for server in servers where !serverAlreadyPresent(content, name: server.name) {
             content = appendServerBlock(content, server: server)
             added.append(server.name)
         }
         guard !added.isEmpty else { return [] }
 
-        try content.write(toFile: tomlPath, atomically: true, encoding: .utf8)
-        // config.toml can carry provider credentials — keep it owner-only.
-        try? FileManager.default.setAttributes(
-            [.posixPermissions: 0o600], ofItemAtPath: tomlPath)
+        // config.toml can carry provider credentials (and the mirrored `env`
+        // values are themselves secrets) — write via the owner-only-temp path so
+        // nothing lands in a 0644 temp mid-rename.
+        try CodexHookConfigWriter.writeConfigPrivately(content, toFile: tomlPath)
         return added
     }
 
@@ -154,20 +154,35 @@ public enum CodexMCPWriter {
         return lines.joined(separator: "\n") + "\n"
     }
 
-    /// The header spellings we treat as "already present" so we never duplicate
-    /// a server the user (or a prior run) already wrote. Covers bare and quoted
-    /// keys; the `.contains` in `installMCPConfig` uses the canonical form we'd
-    /// emit, and TOML normalizes `foo` and `"foo"` identically.
-    private static func sectionHeaderVariants(_ name: String) -> String {
-        "[mcp_servers.\(keyToken(name))]"
+    /// Whether `content` already declares an `[mcp_servers.<name>]` table, so we
+    /// never append a duplicate (TOML rejects a redefined table — the same
+    /// unparseable-config outcome the escaping guards against). Compares
+    /// **trimmed line equality** against both the bare and quoted header
+    /// spellings (Codex accepts `[mcp_servers."jira"]` as well as
+    /// `[mcp_servers.jira]`), and skips `#`-commented lines so a commented-out
+    /// server reads as absent (and gets mirrored) rather than silently dropped.
+    static func serverAlreadyPresent(_ content: String, name: String) -> Bool {
+        let bare = "[mcp_servers.\(keyToken(name))]"
+        let quoted = "[mcp_servers.\"\(escape(name))\"]"
+        for raw in content.components(separatedBy: "\n") {
+            let trimmed = raw.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("#") { continue }
+            if trimmed == bare || trimmed == quoted { return true }
+        }
+        return false
     }
 
-    /// A TOML key: bare when it matches `[A-Za-z0-9_-]+`, otherwise
-    /// double-quoted-and-escaped. MCP/env names are normally bare (`jira`,
-    /// `JIRA_API_TOKEN`).
+    /// A TOML key: **ASCII** bare when it matches `[A-Za-z0-9_-]+`, otherwise
+    /// double-quoted-and-escaped. TOML bare keys are ASCII-only, so a Unicode
+    /// letter/digit (`café`, `٣`) must be quoted — `Character.isLetter` /
+    /// `isNumber` are Unicode-aware and would wrongly bare them. MCP/env names
+    /// are normally already bare (`jira`, `JIRA_API_TOKEN`).
     static func keyToken(_ key: String) -> String {
-        let bare = key.allSatisfy { $0.isLetter || $0.isNumber || $0 == "_" || $0 == "-" }
-        return (bare && !key.isEmpty) ? key : "\"\(escape(key))\""
+        let bare = !key.isEmpty && key.allSatisfy { c in
+            (c >= "A" && c <= "Z") || (c >= "a" && c <= "z")
+                || (c >= "0" && c <= "9") || c == "_" || c == "-"
+        }
+        return bare ? key : "\"\(escape(key))\""
     }
 
     private static func escape(_ s: String) -> String {

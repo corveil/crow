@@ -60,7 +60,7 @@ enum LaunchScaffold {
             CrowDaemon.log("WARNING: dev-root scaffold failed: \(error.localizedDescription)")
         }
 
-        scaffoldAgents(devRoot: devRoot)
+        scaffoldAgents(devRoot: devRoot, mirrorClaudeMCPToCodex: config.defaults.mirrorClaudeMCPToCodex)
         return warning
     }
 
@@ -70,7 +70,7 @@ enum LaunchScaffold {
     /// gets a `~/.codex`. `AGENTS.md` is shared by all three scaffolders; all are
     /// idempotent and preserve the user-edited `## Known Issues / Corrections`
     /// section, so co-existence is safe.
-    private static func scaffoldAgents(devRoot: String) {
+    private static func scaffoldAgents(devRoot: String, mirrorClaudeMCPToCodex: Bool) {
         let crowPath = ClaudeHookConfigWriter.findCrowBinary(devRoot: devRoot)
 
         if AgentRegistry.shared.agent(for: .codex) != nil {
@@ -90,10 +90,14 @@ enum LaunchScaffold {
             // Codex so Codex sessions get the same tools a Claude session
             // inherits from ~/.claude.json. Append-only; a no-op when the user
             // has no `mcpServers` configured. Independent of `crowPath`.
-            attempt("Codex MCP mirror") {
-                let added = try CodexMCPWriter.installMCPConfig(codexHome: codexHome)
-                if !added.isEmpty {
-                    CrowDaemon.log("Codex MCP mirror added: \(added.joined(separator: ", "))")
+            // Gated by `defaults.mirrorClaudeMCPToCodex` (default on) because it
+            // copies MCP `env` values (often API tokens) into a second file.
+            if mirrorClaudeMCPToCodex {
+                attempt("Codex MCP mirror") {
+                    let added = try CodexMCPWriter.installMCPConfig(codexHome: codexHome)
+                    if !added.isEmpty {
+                        CrowDaemon.log("Codex MCP mirror: added \(added.count) server(s) [\(added.joined(separator: ", "))] from ~/.claude.json into \(codexHome)/config.toml — any configured env values (e.g. API tokens) were copied. Set defaults.mirrorClaudeMCPToCodex = false to opt out.")
+                    }
                 }
             }
         }

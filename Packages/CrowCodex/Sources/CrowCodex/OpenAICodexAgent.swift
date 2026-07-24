@@ -6,10 +6,13 @@ import CrowCore
 /// configuration and no `--rc` remote-control support.
 ///
 /// `codex` 0.141.0 closed the early-MVP gaps (#830): restarts now `codex
-/// resume --last`, reviews run the native `codex review --base` subcommand,
-/// and unattended `.job` sessions dispatch `codex exec … -a never -s
+/// resume --last` (cwd-scoped by default — `--all` is what disables cwd
+/// filtering), unattended `.job` sessions dispatch `codex exec … -a never -s
 /// workspace-write` (approval off, sandbox still bounded) instead of the
-/// interactive TUI.
+/// interactive TUI, and `.review` sessions inline the `/crow-review-pr` skill
+/// so they post a real GitHub verdict (the native `codex review` subcommand
+/// only prints local findings, so it can't satisfy Crow's review-completion
+/// contract).
 public struct OpenAICodexAgent: CodingAgent {
     public let kind: AgentKind = .codex
     public let displayName: String = "OpenAI Codex"
@@ -94,14 +97,26 @@ public struct OpenAICodexAgent: CodingAgent {
             // otherwise skips.
             return "\(codexPath) resume --last --include-non-interactive\n"
         case .review:
-            // Native review subcommand (#830 — "Phase C, Claude-only" no longer
-            // holds). `codex review --base <branch>` reviews the checked-out PR
-            // head against its base non-interactively; the inlined review-skill
-            // brief the Claude/Cursor path feeds isn't needed for the review
-            // itself. Base is captured at review-creation from the PR metadata;
-            // fall back to `main` for legacy sessions that predate the field.
-            let base = session.reviewBaseBranch ?? "main"
-            return "\(codexPath) review --base \"\(base)\"\n"
+            // Review sessions inline `.crow-review-prompt.md` (the expanded
+            // `/crow-review-pr` skill), exactly like Cursor/OpenCode — the skill
+            // body runs `gh pr review …`, which is what satisfies Crow's review
+            // completion contract (`IssueTracker.decideReviewCompletions` closes
+            // a review only once the viewer has a *posted* GitHub verdict). The
+            // native `codex review --base` subcommand only prints local findings
+            // and posts nothing, so a review driven by it could never complete
+            // and would be re-kicked on every head-SHA advance (#830 review).
+            //
+            // Kept interactive (not the headless `exec -s workspace-write`
+            // path): `codex review`'s posting step needs network for `gh`, and
+            // the workspace-write sandbox blocks network — so the same TUI path
+            // Cursor uses is the one that actually lands a verdict. First launch
+            // feeds the prompt; restarts resume the thread.
+            if !session.reviewPromptDispatched {
+                let promptPath = (worktreePath as NSString)
+                    .appendingPathComponent(".crow-review-prompt.md")
+                return "\(codexPath) \"$(cat \(promptPath))\"\n"
+            }
+            return "\(codexPath) resume --last\n"
         case .manager:
             // Manager sessions never auto-launch an agent — Crow drives them
             // externally. Matches `CursorAgent`'s `.manager` contract.

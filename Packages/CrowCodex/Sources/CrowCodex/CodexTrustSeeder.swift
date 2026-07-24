@@ -90,10 +90,9 @@ public enum CodexTrustSeeder {
         }
 
         do {
-            try content.write(toFile: tomlPath, atomically: true, encoding: .utf8)
-            // config.toml can carry provider credentials — keep it owner-only,
-            // matching Codex's own posture and `ClaudeTrustSeeder`'s 0600.
-            try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: tomlPath)
+            // config.toml can carry provider credentials — write via the
+            // owner-only-temp path so secrets never touch a 0644 temp.
+            try CodexHookConfigWriter.writeConfigPrivately(content, toFile: tomlPath)
             return .seeded
         } catch {
             return .failed(error.localizedDescription)

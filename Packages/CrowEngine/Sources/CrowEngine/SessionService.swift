@@ -2356,8 +2356,7 @@ public final class SessionService {
             ticketTitle: prep.prTitle,
             provider: .github,
             lastReviewedHeadSha: prep.headRefOid,
-            reviewAuthor: prMetadata.author.isEmpty ? nil : prMetadata.author,
-            reviewBaseBranch: prMetadata.baseRefName.isEmpty ? nil : prMetadata.baseRefName
+            reviewAuthor: prMetadata.author.isEmpty ? nil : prMetadata.author
         )
 
         let worktree = SessionWorktree(

@@ -32,8 +32,8 @@ capabilities, update this table in the same PR.
 | Hook → session scope | ✅ per-session UUID | ❌ `cwd` match | ❌ `cwd` match (per-worktree UUID deferred) | ❌ `cwd` match |
 | Hook async delivery | ✅ `PostToolUse*` async | ⚠️ declared, timing unverified | ❌ sync-only (v0.141.0) | ⚠️ names verified, timing unverified |
 | MCP (e.g. Jira) | ✅ `jira` MCP server via `~/.claude.json` | ❌ falls back to `acli` | ✅ mirrored from `~/.claude.json` into `config.toml` | ❌ falls back to `acli` |
-| Review (`/crow-review-pr`) | ✅ slash-command | ✅ inlined skill body | ✅ native `codex review --base` | ✅ inlined skill body |
-| Initial-prompt injection | ✅ `$(cat …-prompt.md)` + deferred paste | ⚠️ job/review only, `.work` launcher not auto-wired | ✅ `.job` (`exec`/TUI) + `.review` (`codex review`) | ✅ run-then-`--continue` |
+| Review (`/crow-review-pr`) | ✅ slash-command | ✅ inlined skill body | ✅ inlined skill body | ✅ inlined skill body |
+| Initial-prompt injection | ✅ `$(cat …-prompt.md)` + deferred paste | ⚠️ job/review only, `.work` launcher not auto-wired | ✅ `.job` + `.review` (`$(cat …-prompt.md)`) | ✅ run-then-`--continue` |
 | Gateway env / trust seed / telemetry | ✅ Claude special-case | ❌ | ⚠️ trust seed only (`[projects."…"]` in `config.toml`) | ❌ |
 | Rename passthrough (`/rename`) | ✅ | ✅ | ✅ | ✅ |
 
@@ -60,15 +60,20 @@ Legend: ✅ full · ⚠️ partial / faked / unverified · ❌ not supported.
 > `SessionEnd`). See the gap audit for flags, min versions, and closing approaches.
 >
 > **[#830](https://github.com/corveil/crow/issues/830) (Codex) landed** — the
-> Codex cells above now reflect shipped state: `resume --last`, native
-> `codex review --base`, bounded `exec -a never -s workspace-write`, MCP mirror
-> from `~/.claude.json`, and per-worktree **project-trust** seeding
-> (`CodexTrustSeeder`). **Deferred within #830:** per-worktree `.codex/hooks.json`
-> (would double-fire alongside the still-needed global writer — both dispatch to
-> the same session, doubling notifications; needs server-side event dedup first),
-> retiring the `notify` bridge (tied to that hooks cutover), and flipping
-> `supportsRemoteControl` (experimental `codex remote-control` needs end-to-end
-> validation). See the gap audit §3b update.
+> Codex cells above now reflect shipped state: `resume --last`, bounded
+> `exec -a never -s workspace-write`, MCP mirror from `~/.claude.json`, and
+> per-worktree **project-trust** seeding (`CodexTrustSeeder`). Review uses the
+> **inlined `/crow-review-pr` skill body** (like Cursor/OpenCode), *not* the
+> native `codex review --base` subcommand: `codex review` only prints local
+> findings and posts no GitHub verdict, so a review driven by it could never
+> satisfy Crow's completion contract (`decideReviewCompletions` needs a posted
+> verdict) and would be re-kicked on every head-SHA advance. **Deferred within
+> #830:** per-worktree `.codex/hooks.json` (would double-fire alongside the
+> still-needed global writer — both dispatch to the same session, doubling
+> notifications; needs server-side event dedup first), retiring the `notify`
+> bridge (tied to that hooks cutover), and flipping `supportsRemoteControl`
+> (experimental `codex remote-control` needs end-to-end validation). See the gap
+> audit §3b update.
 
 ## Notes per dimension
 

@@ -167,12 +167,77 @@ struct CodexMCPWriterTests {
         #expect(afterFirst == afterSecond)
     }
 
-    @Test func installNoOpWhenClaudeJSONMissing() throws {
+    @Test func serverBlockEscapesControlCharsInEnvValue() {
+        // A newline in an env value (PEM key, pretty-printed JSON) must be
+        // escaped — a raw newline terminates the TOML basic string and corrupts
+        // config.toml (#830 review). The whole server block is a table, so the
+        // env value lives on one physical line.
+        let server = CodexMCPWriter.Server(
+            name: "creds", command: "sh", args: [],
+            env: [("PEM", "-----BEGIN-----\nline2\ttab")], url: nil)
+        let block = CodexMCPWriter.serverBlock(server)
+        #expect(block.contains("-----BEGIN-----\\nline2\\ttab"))  // escaped
+        // The `env = { … }` line carries no raw newline/tab.
+        let envLine = block.split(separator: "\n").first { $0.contains("env = {") }
+        #expect(envLine != nil)
+        #expect(envLine?.contains("\t") == false)
+    }
+
+    @Test func keyTokenQuotesNonASCII() {
+        #expect(CodexMCPWriter.keyToken("jira") == "jira")
+        #expect(CodexMCPWriter.keyToken("JIRA_API_TOKEN") == "JIRA_API_TOKEN")
+        #expect(CodexMCPWriter.keyToken("gh-mcp") == "gh-mcp")
+        // Unicode letters/digits are NOT valid TOML bare keys → must be quoted.
+        #expect(CodexMCPWriter.keyToken("café") == "\"café\"")
+        #expect(CodexMCPWriter.keyToken("has space") == "\"has space\"")
+    }
+
+    @Test func serverAlreadyPresentMatchesQuotedHeaderAndSkipsComments() {
+        let quoted = "[mcp_servers.\"jira\"]\ncommand = \"x\""
+        #expect(CodexMCPWriter.serverAlreadyPresent(quoted, name: "jira") == true)
+
+        let bare = "[mcp_servers.jira]\ncommand = \"x\""
+        #expect(CodexMCPWriter.serverAlreadyPresent(bare, name: "jira") == true)
+
+        // A commented-out header reads as absent (so it gets mirrored, not
+        // silently dropped by a substring match).
+        let commented = "# [mcp_servers.jira]\n"
+        #expect(CodexMCPWriter.serverAlreadyPresent(commented, name: "jira") == false)
+
+        #expect(CodexMCPWriter.serverAlreadyPresent("model = \"x\"", name: "jira") == false)
+    }
+
+    @Test func installDoesNotDuplicateQuotedExistingServer() throws {
         let dir = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
-        let added = try CodexMCPWriter.installMCPConfig(
-            codexHome: dir.path,
-            claudeJSONPath: dir.appendingPathComponent("does-not-exist.json").path)
-        #expect(added.isEmpty)
+
+        // User wrote the quoted spelling — a substring check would miss it and
+        // append a duplicate `[mcp_servers.jira]`, which TOML rejects.
+        try "[mcp_servers.\"jira\"]\ncommand = \"/user/jira\"\n".write(
+            toFile: dir.appendingPathComponent("config.toml").path,
+            atomically: true, encoding: .utf8)
+
+        let claudePath = try writeClaudeJSON(dir, ["jira": ["command": "npx", "args": ["-y", "x"]]])
+        let added = try CodexMCPWriter.installMCPConfig(codexHome: dir.path, claudeJSONPath: claudePath)
+        #expect(added.isEmpty, "quoted-header server must be recognized as present")
+
+        let toml = try String(contentsOf: dir.appendingPathComponent("config.toml"))
+        #expect(toml.contains("command = \"/user/jira\""))
+        #expect(!toml.contains("npx"), "must not append a duplicate jira table")
+    }
+
+    @Test func installWritesOwnerOnlyConfig() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let claudePath = try writeClaudeJSON(dir, ["jira": ["command": "npx", "env": ["T": "secret"]]])
+        _ = try CodexMCPWriter.installMCPConfig(codexHome: dir.path, claudeJSONPath: claudePath)
+
+        let perms = try FileManager.default.attributesOfItem(
+            atPath: dir.appendingPathComponent("config.toml").path)[.posixPermissions] as? NSNumber
+        #expect(perms?.intValue == 0o600, "secrets file must be owner-only")
+        // And no stray temp left behind.
+        let leftovers = try FileManager.default.contentsOfDirectory(atPath: dir.path)
+            .filter { $0.hasPrefix(".crow-codex-") }
+        #expect(leftovers.isEmpty)
     }
 }

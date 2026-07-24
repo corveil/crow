@@ -607,6 +607,13 @@ public struct ConfigDefaults: Codable, Sendable, Equatable {
     /// …) don't overlap, so the two callers coexist in one map.
     public var binaries: [String: String]
 
+    /// Whether Crow mirrors the user's `~/.claude.json` `mcpServers` into Codex's
+    /// `~/.codex/config.toml` on daemon boot (#830). Default `true` for MCP
+    /// parity with Claude sessions. Set `false` to opt out: mirroring copies MCP
+    /// `env` values (often API tokens) into a second on-disk file, so a user who
+    /// deliberately keeps credentials in one place can suppress the duplication.
+    public var mirrorClaudeMCPToCodex: Bool
+
     /// Characters that are invalid in git ref names (see `git check-ref-format`).
     private static let invalidBranchChars = CharacterSet(charactersIn: " ~^:?*[\\")
 
@@ -633,7 +640,8 @@ public struct ConfigDefaults: Codable, Sendable, Equatable {
         excludeReviewRepos: [String] = [],
         excludeTicketRepos: [String] = [],
         ignoreReviewLabels: [String] = [],
-        binaries: [String: String] = [:]
+        binaries: [String: String] = [:],
+        mirrorClaudeMCPToCodex: Bool = true
     ) {
         self.provider = provider
         self.cli = cli
@@ -643,6 +651,7 @@ public struct ConfigDefaults: Codable, Sendable, Equatable {
         self.excludeTicketRepos = excludeTicketRepos
         self.ignoreReviewLabels = ignoreReviewLabels
         self.binaries = binaries
+        self.mirrorClaudeMCPToCodex = mirrorClaudeMCPToCodex
     }
 
     public init(from decoder: Decoder) throws {
@@ -655,10 +664,11 @@ public struct ConfigDefaults: Codable, Sendable, Equatable {
         excludeTicketRepos = try container.decodeIfPresent([String].self, forKey: .excludeTicketRepos) ?? []
         ignoreReviewLabels = try container.decodeIfPresent([String].self, forKey: .ignoreReviewLabels) ?? []
         binaries = try container.decodeIfPresent([String: String].self, forKey: .binaries) ?? [:]
+        mirrorClaudeMCPToCodex = try container.decodeIfPresent(Bool.self, forKey: .mirrorClaudeMCPToCodex) ?? true
     }
 
     private enum CodingKeys: String, CodingKey {
-        case provider, cli, branchPrefix, excludeDirs, excludeReviewRepos, excludeTicketRepos, ignoreReviewLabels, binaries
+        case provider, cli, branchPrefix, excludeDirs, excludeReviewRepos, excludeTicketRepos, ignoreReviewLabels, binaries, mirrorClaudeMCPToCodex
     }
 }
 

@@ -50,26 +50,11 @@ struct OpenAICodexAgentTests {
         #expect(cmd?.contains(".crow-job-prompt.md") == false)
     }
 
-    @Test func autoLaunchCommandReviewSessionRunsNativeReview() {
-        // #830: review-on-Codex is now the native `codex review --base <branch>`
-        // subcommand (was nil + a `⚠️` echo in Phase C). The base is captured
-        // at review-creation from the PR metadata.
-        let session = Session(
-            name: "review", kind: .review, agentKind: .codex, reviewBaseBranch: "develop")
-        let cmd = agent.autoLaunchCommand(
-            session: session,
-            worktreePath: "/tmp/wt",
-            remoteControlEnabled: false,
-            autoPermissionMode: false,
-            telemetryPort: nil
-        )
-        #expect(cmd?.hasSuffix("review --base \"develop\"\n") == true)
-        // The native review command doesn't read the inlined prompt file.
-        #expect(cmd?.contains(".crow-review-prompt.md") == false)
-    }
-
-    @Test func autoLaunchCommandReviewSessionDefaultsBaseToMain() {
-        // Legacy review sessions predating `reviewBaseBranch` fall back to main.
+    @Test func autoLaunchCommandReviewSessionFirstLaunchFeedsPrompt() {
+        // #830 review: Codex inlines `.crow-review-prompt.md` (the `/crow-review-pr`
+        // skill) exactly like Cursor/OpenCode so the review posts a real GitHub
+        // verdict — the native `codex review` subcommand posts nothing and would
+        // leave the session unable to satisfy its completion condition.
         let session = Session(name: "review", kind: .review, agentKind: .codex)
         let cmd = agent.autoLaunchCommand(
             session: session,
@@ -78,7 +63,26 @@ struct OpenAICodexAgentTests {
             autoPermissionMode: false,
             telemetryPort: nil
         )
-        #expect(cmd?.hasSuffix("review --base \"main\"\n") == true)
+        #expect(cmd?.contains("/tmp/wt/.crow-review-prompt.md") == true)
+        // Not the native local-review subcommand.
+        #expect(cmd?.contains(" review --base") == false)
+        #expect(cmd?.hasSuffix("\n") == true)
+    }
+
+    @Test func autoLaunchCommandReviewSessionSubsequentLaunchResumes() {
+        // After the review prompt has been dispatched, restarts resume the
+        // thread rather than re-running the whole review.
+        var session = Session(name: "review", kind: .review, agentKind: .codex)
+        session.reviewPromptDispatched = true
+        let cmd = agent.autoLaunchCommand(
+            session: session,
+            worktreePath: "/tmp/wt",
+            remoteControlEnabled: false,
+            autoPermissionMode: false,
+            telemetryPort: nil
+        )
+        #expect(cmd?.contains(".crow-review-prompt.md") == false)
+        #expect(cmd?.hasSuffix("resume --last\n") == true)
     }
 
     @Test func autoLaunchCommandManagerSessionUnsupported() {

@@ -90,4 +90,19 @@ struct CodexTrustSeederTests {
         #expect(toml.contains("trust_level = \"trusted\""))
         #expect(!toml.contains("trust_level = \"untrusted\""))
     }
+
+    @Test func seedTrustWritesOwnerOnlyConfig() throws {
+        let (project, config) = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: (config as NSString).deletingLastPathComponent) }
+
+        _ = CodexTrustSeeder.seedTrust(projectPath: project, codexConfigPath: config)
+        // config.toml can carry provider credentials — must be owner-only, and
+        // no world-readable temp may leak (#830 review).
+        let perms = try FileManager.default.attributesOfItem(atPath: config)[.posixPermissions] as? NSNumber
+        #expect(perms?.intValue == 0o600)
+        let dir = (config as NSString).deletingLastPathComponent
+        let leftovers = try FileManager.default.contentsOfDirectory(atPath: dir)
+            .filter { $0.hasPrefix(".crow-codex-") }
+        #expect(leftovers.isEmpty)
+    }
 }

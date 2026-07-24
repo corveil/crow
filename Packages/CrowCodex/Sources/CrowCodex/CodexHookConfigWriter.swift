@@ -257,10 +257,61 @@ public struct CodexHookConfigWriter: HookConfigWriter {
         return key.isEmpty ? nil : String(key)
     }
 
-    /// Escape backslash and double-quote for safe inclusion in a TOML
-    /// double-quoted string.
+    /// Escape a string for safe inclusion in a TOML **basic** (double-quoted)
+    /// string. TOML forbids raw control characters (including newlines) inside a
+    /// basic string, so a value carrying a `\n` — e.g. a PEM key or a
+    /// pretty-printed JSON blob mirrored from an MCP `env` — would otherwise
+    /// terminate the string early and leave `config.toml` unparseable (#830
+    /// review). Escapes `\`, `"`, the named short escapes, and every other
+    /// control character as `\uXXXX`.
     static func escapeTomlString(_ s: String) -> String {
-        s.replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
+        var out = ""
+        out.reserveCapacity(s.unicodeScalars.count)
+        for scalar in s.unicodeScalars {
+            switch scalar {
+            case "\\": out += "\\\\"
+            case "\"": out += "\\\""
+            case "\u{08}": out += "\\b"
+            case "\u{09}": out += "\\t"
+            case "\u{0A}": out += "\\n"
+            case "\u{0C}": out += "\\f"
+            case "\u{0D}": out += "\\r"
+            default:
+                if scalar.value < 0x20 || scalar.value == 0x7F {
+                    out += String(format: "\\u%04X", scalar.value)
+                } else {
+                    out.unicodeScalars.append(scalar)
+                }
+            }
+        }
+        return out
+    }
+
+    /// Write `content` to `path` so the file — and its transient temp — is never
+    /// world-readable. `config.toml` can carry provider credentials, and a plain
+    /// `write(toFile:atomically:true)` stages a temp at the process umask (often
+    /// 0644) for the write+rename window, briefly exposing secrets (#830
+    /// review). This stages a sibling temp created at 0600, writes into it, then
+    /// atomically replaces the destination and re-asserts 0600 (`replaceItemAt`
+    /// can inherit the destination's prior perms).
+    static func writeConfigPrivately(_ content: String, toFile path: String) throws {
+        let fm = FileManager.default
+        let dir = (path as NSString).deletingLastPathComponent
+        let tmp = (dir as NSString).appendingPathComponent(".crow-codex-\(UUID().uuidString).tmp")
+        guard fm.createFile(
+            atPath: tmp,
+            contents: Data(content.utf8),
+            attributes: [.posixPermissions: 0o600]
+        ) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        defer { try? fm.removeItem(atPath: tmp) }
+        if fm.fileExists(atPath: path) {
+            _ = try fm.replaceItemAt(
+                URL(fileURLWithPath: path), withItemAt: URL(fileURLWithPath: tmp))
+        } else {
+            try fm.moveItem(atPath: tmp, toPath: path)
+        }
+        try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
     }
 }

@@ -131,12 +131,17 @@ a single adapter + its launcher + hook writer + tests change together).
 - **Cursor / OpenCode native RC** (§3a, §3c RC rows) — native surfaces exist (`--remote`, `serve`/`attach`/`acp`) but are heavier than the working `crow send` paste; no user-facing capability gained today.
 
 > **#830 resolution (landed).** §3b rows 1–4 shipped: `.work`/`.job`-restart →
-> `codex resume --last` (jobs add `--include-non-interactive` so `--last` can pick
-> a prior `codex exec` session); `.review` → native `codex review --base <PR
-> base>` (new `Session.reviewBaseBranch`, captured from `PRMetadata.baseRefName`);
-> `.job` + auto-permission → `codex exec -a never -s workspace-write` (bounded —
-> **not** the full-bypass variants); MCP mirrored from `~/.claude.json` into
-> `[mcp_servers.*]` (`CodexMCPWriter`, append-only). The §3b **hook-scope** row's
+> `codex resume --last` (cwd-scoped by default; jobs add `--include-non-
+> interactive` so `--last` can pick a prior `codex exec` session); `.job` +
+> auto-permission → `codex exec -a never -s workspace-write` (bounded — **not**
+> the full-bypass variants); MCP mirrored from `~/.claude.json` into
+> `[mcp_servers.*]` (`CodexMCPWriter`, append-only, gated by
+> `defaults.mirrorClaudeMCPToCodex`). **Review** (row 2) landed *not* as the
+> native `codex review --base` but via the **inlined `/crow-review-pr` skill**
+> (same as Cursor/OpenCode): `codex review` prints local findings and posts no
+> GitHub verdict, so a review driven by it can never satisfy
+> `decideReviewCompletions` (which closes a review only on a *posted* verdict)
+> and would be re-kicked on every head-SHA advance. The §3b **hook-scope** row's
 > *trust* half shipped as `CodexTrustSeeder` — it persists `[projects."<worktree>"]
 > trust_level = "trusted"` per worktree (the bounded alternative the row demands,
 > **not** `--dangerously-bypass-hook-trust`), which also unblocks unattended
