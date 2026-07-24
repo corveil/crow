@@ -32,6 +32,14 @@ Gotchas:
   (the receiver closes it after responding). `Content-Length` and
   `Transfer-Encoding: chunked` both work; a compressed body or a non-JSON
   `Content-Type` is rejected by name.
+- `Content-Type: application/json` is **required** on POST — the receiver fails
+  closed. Pass it explicitly with curl, which otherwise sends
+  `application/x-www-form-urlencoded` for `-d` and gets a 400:
+
+  ```
+  curl -X POST http://localhost:<port>/v1/logs \
+       -H 'Content-Type: application/json' --data-binary @payload.json
+  ```
 - The resource must carry `crow.session.id` (a UUID string) in
   `resource.attributes`, or the payload is silently skipped.
 - Datapoint values: `asDouble` (number) or `asInt` (string **or** number).

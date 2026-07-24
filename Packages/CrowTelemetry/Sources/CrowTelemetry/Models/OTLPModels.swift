@@ -515,6 +515,12 @@ public struct OTLPLogRecord: Codable, Sendable {
     /// (`user_prompt`) while the fully-qualified `claude_code.user_prompt` sits
     /// in the body. Readers in `TelemetryDatabase` match the qualified form, so
     /// unqualified names are prefixed here at ingest.
+    ///
+    /// The `claude_code.` prefix assumes a single producer, which holds because
+    /// `AgentLaunch` exports the `OTEL_*` env only for `agent.kind ==
+    /// .claudeCode` — no other harness reaches this receiver. If a second agent
+    /// ever exports here, this needs a source-aware prefix (derived from the
+    /// resource's `service.name`) rather than a constant.
     public var resolvedEventName: String? {
         let candidate = eventName
             ?? attributes.flatMap { extractAttribute("event.name", from: $0) }

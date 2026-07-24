@@ -77,6 +77,19 @@ enum HTTPParser {
     /// Reject absurd bodies rather than buffering them (64 MiB).
     static let maxBodyBytes = 64 * 1024 * 1024
 
+    /// Give up on a request whose headers never terminate (8 KiB).
+    static let maxHeaderBytes = 8192
+
+    /// Hard ceiling on what one connection may buffer before completing.
+    ///
+    /// The parser can only reject what it can already frame, so the receiver
+    /// needs its own stop: a chunked request whose body never yields a chunk
+    /// boundary would otherwise accumulate without limit.
+    static var maxRequestBytes: Int { maxBodyBytes + maxHeaderBytes }
+
+    /// A chunk-size line is a handful of bytes; anything longer is malformed.
+    static let maxChunkLineBytes = 1024
+
     /// Parse result from feeding data into the parser.
     enum ParseResult: Sendable {
         /// A complete request was parsed.
@@ -98,8 +111,7 @@ enum HTTPParser {
         // Find the end of headers (double CRLF)
         let separator = Data("\r\n\r\n".utf8)
         guard let separatorRange = data.range(of: separator) else {
-            // Check for unreasonably large headers (> 8KB without end)
-            if data.count > 8192 {
+            if data.count > maxHeaderBytes {
                 return .error("Headers too large")
             }
             return .needsMore
@@ -192,13 +204,16 @@ enum HTTPParser {
            !encoding.isEmpty, encoding != "identity" {
             return "Unsupported Content-Encoding: \(quoted(encoding)) (OTLP export must be uncompressed)"
         }
-        if let contentType = headers["content-type"]?.lowercased() {
-            // Tolerate parameters, e.g. "application/json; charset=utf-8".
-            let mediaType = contentType.split(separator: ";").first.map(String.init)?
-                .trimmingCharacters(in: .whitespaces) ?? contentType
-            guard mediaType == "application/json" || mediaType.hasSuffix("+json") else {
-                return "Unsupported Content-Type: \(quoted(mediaType)) (OTLP/JSON only)"
-            }
+        // Fail closed: OTLP/JSON requires the header, so an absent one is a
+        // client that is not speaking the protocol we ingest.
+        guard let contentType = headers["content-type"]?.lowercased() else {
+            return "Missing Content-Type (OTLP/JSON requires application/json)"
+        }
+        // Tolerate parameters, e.g. "application/json; charset=utf-8".
+        let mediaType = contentType.split(separator: ";").first.map(String.init)?
+            .trimmingCharacters(in: .whitespaces) ?? contentType
+        guard mediaType == "application/json" || mediaType.hasSuffix("+json") else {
+            return "Unsupported Content-Type: \(quoted(mediaType)) (OTLP/JSON only)"
         }
         return nil
     }
@@ -220,6 +235,12 @@ enum HTTPParser {
 
         while true {
             guard let lineEnd = data.range(of: crlf, in: cursor..<data.endIndex)?.lowerBound else {
+                // Nothing here is worth waiting for beyond a short size line.
+                // Without this, a CRLF-free stream is buffered forever: the
+                // caller keeps appending because the parser keeps asking.
+                if data.distance(from: cursor, to: data.endIndex) > maxChunkLineBytes {
+                    return .error("Malformed chunk size line")
+                }
                 return .needsMore
             }
             let sizeField = data[cursor..<lineEnd]
@@ -241,6 +262,11 @@ enum HTTPParser {
                     return .complete(body)
                 }
                 guard data.range(of: Data("\r\n\r\n".utf8), in: chunkStart..<data.endIndex) != nil else {
+                    // Same trap as the size line: trailers that never terminate
+                    // must not keep the connection buffering.
+                    if data.distance(from: chunkStart, to: data.endIndex) > maxHeaderBytes {
+                        return .error("Chunk trailers too large")
+                    }
                     return .needsMore
                 }
                 return .complete(body)

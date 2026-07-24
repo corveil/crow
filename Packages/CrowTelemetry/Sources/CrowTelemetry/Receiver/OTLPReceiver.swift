@@ -96,6 +96,13 @@ public final class OTLPReceiver: Sendable {
                 if isComplete {
                     // Connection closed before complete request
                     connection.cancel()
+                } else if accumulated.count > HTTPParser.maxRequestBytes {
+                    // Backstop: the parser can only reject what it can frame,
+                    // so never let one connection buffer without bound while it
+                    // keeps asking for more.
+                    NSLog("[OTLPReceiver] Buffered %d bytes without a complete request; closing",
+                          accumulated.count)
+                    self.sendResponse(HTTPResponse.badRequest(message: "Request too large"), on: connection)
                 } else {
                     self.receiveData(on: connection, buffer: accumulated)
                 }

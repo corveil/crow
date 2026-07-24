@@ -224,6 +224,23 @@ func protobufContentTypeIsRejected() throws {
     #expect(message.contains("application/x-protobuf"))
 }
 
+@Test("A POST with no Content-Type is rejected rather than assumed to be JSON")
+func missingContentTypeIsRejected() throws {
+    let data = request("POST /v1/logs", body: json, headers: ["Content-Length": "\(json.utf8.count)"])
+    #expect(try errorMessage(data).contains("Missing Content-Type"))
+}
+
+@Test("A +json suffix type is accepted")
+func suffixJSONContentTypeIsAccepted() throws {
+    let result = try parsed(request(
+        "POST /v1/logs",
+        body: json,
+        headers: ["Content-Type": "application/vnd.otlp+json",
+                  "Content-Length": "\(json.utf8.count)"]
+    ))
+    #expect(String(decoding: result.body, as: UTF8.self) == json)
+}
+
 @Test("A charset parameter on the content type is tolerated")
 func contentTypeParametersAreTolerated() throws {
     let result = try parsed(request(
@@ -283,6 +300,56 @@ func oversizedHeadersAreRejected() throws {
     var data = Data("POST /v1/logs HTTP/1.1\r\n".utf8)
     data.append(Data(String(repeating: "X", count: 9000).utf8))
     #expect(try errorMessage(data).contains("Headers too large"))
+}
+
+// MARK: - Buffering limits
+
+@Test("A CRLF-free chunked stream is rejected instead of buffered forever")
+func crlfFreeChunkedStreamIsRejected() throws {
+    // The chunk-size line never terminates. Before this guard the parser kept
+    // answering `.needsMore`, so the receiver appended without limit — 250 MiB
+    // of this drove the process to ~16 GB RSS.
+    var data = request(
+        "POST /v1/logs",
+        headers: ["Content-Type": "application/json", "Transfer-Encoding": "chunked"]
+    )
+    data.append(Data(String(repeating: "A", count: HTTPParser.maxChunkLineBytes + 1).utf8))
+
+    #expect(try errorMessage(data).contains("Malformed chunk size line"))
+}
+
+@Test("A short CRLF-free prefix still waits for more data")
+func shortChunkSizePrefixStillWaits() {
+    var data = request(
+        "POST /v1/logs",
+        headers: ["Content-Type": "application/json", "Transfer-Encoding": "chunked"]
+    )
+    data.append(Data("4".utf8))
+
+    guard case .needsMore = HTTPParser.parse(data) else {
+        Issue.record("a partial chunk-size line should ask for more data")
+        return
+    }
+}
+
+@Test("Unterminated chunk trailers are rejected")
+func unterminatedTrailersAreRejected() throws {
+    var data = request(
+        "POST /v1/logs",
+        body: "4\r\ntest\r\n0\r\n",
+        headers: ["Content-Type": "application/json", "Transfer-Encoding": "chunked"]
+    )
+    data.append(Data(("X-Trailer: " + String(repeating: "v", count: HTTPParser.maxHeaderBytes)).utf8))
+
+    #expect(try errorMessage(data).contains("Chunk trailers too large"))
+}
+
+@Test("The receiver's ceiling covers the whole framed request")
+func requestCeilingExceedsBodyCap() {
+    // The backstop must leave room for headers on top of a maximal body,
+    // otherwise a legitimate 64 MiB export would be cut off.
+    #expect(HTTPParser.maxRequestBytes > HTTPParser.maxBodyBytes)
+    #expect(HTTPParser.maxRequestBytes == HTTPParser.maxBodyBytes + HTTPParser.maxHeaderBytes)
 }
 
 // MARK: - Error response encoding
