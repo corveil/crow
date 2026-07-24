@@ -112,8 +112,15 @@ public struct CodexHookConfigWriter: HookConfigWriter {
         let tomlPath = (codexHome as NSString).appendingPathComponent("config.toml")
 
         var content: String = ""
-        if let data = FileManager.default.contents(atPath: tomlPath),
-           let text = String(data: data, encoding: .utf8) {
+        if let data = FileManager.default.contents(atPath: tomlPath) {
+            // "Exists but not UTF-8" must not read as "" — that would truncate a
+            // config.toml holding credentials/providers on the read-modify-write
+            // (#843 review round 6). Refuse instead.
+            guard let text = String(data: data, encoding: .utf8) else {
+                throw NSError(
+                    domain: "CodexHookConfigWriter", code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "\(tomlPath) is not valid UTF-8; refusing to rewrite"])
+            }
             content = text
         }
 

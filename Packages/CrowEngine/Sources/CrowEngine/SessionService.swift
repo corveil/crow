@@ -2513,6 +2513,15 @@ public final class SessionService {
         // working tree may already be on the right branch, and a network blip
         // on `pull` shouldn't abort the launch — the agent can resume from the
         // local state.
+        //
+        // Restore `.codex` first (no-op on a fresh clone / untracked-`.codex`
+        // repo): a *re-prep* of this same clone dir starts with the prior prep's
+        // `.codex` strip still applied as an unstaged deletion of tracked files,
+        // which would make `git pull` refuse ("local changes would be
+        // overwritten") if the new head touches `.codex/` — silently reviewing a
+        // stale head. Restoring before the pull keeps the tree clean; the strip
+        // below re-applies afterward (#843 review round 6).
+        _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "checkout", "--", ".codex"])
         _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "fetch", "origin", headBranch])
         _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "checkout", headBranch])
         _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "pull", "origin", headBranch])

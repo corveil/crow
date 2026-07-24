@@ -69,8 +69,16 @@ public enum CodexMCPWriter {
         let tomlPath = (codexHome as NSString).appendingPathComponent("config.toml")
 
         var content = ""
-        if let data = FileManager.default.contents(atPath: tomlPath),
-           let text = String(data: data, encoding: .utf8) {
+        if let data = FileManager.default.contents(atPath: tomlPath) {
+            // "Exists but not UTF-8" must not read as "" — that would truncate
+            // the whole (credentials-bearing) config on the read-modify-write,
+            // contradicting this writer's append-only contract. Refuse instead
+            // (#843 review round 6).
+            guard let text = String(data: data, encoding: .utf8) else {
+                throw NSError(
+                    domain: "CodexMCPWriter", code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "\(tomlPath) is not valid UTF-8; refusing to rewrite"])
+            }
             content = text
         }
 
@@ -112,10 +120,12 @@ public enum CodexMCPWriter {
     }
 
     /// Translate one Claude `mcpServers.<name>` definition into a `Server`.
-    /// Returns `nil` when the definition has no usable transport, or when it's
-    /// an HTTP server carrying `headers` — Claude puts an HTTP MCP's
-    /// `Authorization` there, and Codex's `url` form can't express arbitrary
-    /// headers (only a bearer-token env var), so mirroring it would ship an
+    /// Returns `nil` when the definition has no usable transport, when it's an
+    /// SSE server (`type: "sse"` — Codex's `url` form is streamable-HTTP, a
+    /// different transport), or when it's an HTTP server carrying `headers` —
+    /// Claude puts an HTTP MCP's `Authorization` there, and Codex's `url` form
+    /// can't express arbitrary headers (only a bearer-token env var), so
+    /// mirroring it would ship an
     /// **auth-less** server that silently fails to connect. Skipping fails
     /// louder (#843 review round 3).
     ///
@@ -140,9 +150,15 @@ public enum CodexMCPWriter {
             return Server(name: name, command: command, args: args, env: env, url: nil)
         }
         if url != nil {
-            // HTTP/SSE server. If it carries `headers` (where the auth lives),
-            // we can't faithfully mirror it — skip rather than write a broken
-            // auth-less entry.
+            // HTTP/SSE server. Codex's `url` form is *streamable HTTP* only, so:
+            // - an SSE server (`type: "sse"`) would be mirrored as the wrong
+            //   transport → skip (fail loud, don't ship a broken entry);
+            // - `headers` (where an HTTP MCP's auth lives) can't be expressed in
+            //   the url form either → skip.
+            // (#843 review rounds 3 & 6.)
+            if (def["type"] as? String)?.lowercased() == "sse" {
+                return nil
+            }
             if let headers = def["headers"] as? [String: Any], !headers.isEmpty {
                 return nil
             }

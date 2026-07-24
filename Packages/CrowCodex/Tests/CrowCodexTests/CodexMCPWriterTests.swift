@@ -83,6 +83,34 @@ struct CodexMCPWriterTests {
         #expect(noAuth?.url == "https://h")
     }
 
+    @Test func translateSkipsSSEServer() {
+        // Codex's `url` form is streamable-HTTP; an SSE server would be the wrong
+        // transport, so skip rather than mirror a broken entry (#843 round 6).
+        let sse = CodexMCPWriter.translate(name: "r", def: ["type": "sse", "url": "https://h"])
+        #expect(sse == nil)
+        // A plain `http` server (or one with no type) still mirrors.
+        #expect(CodexMCPWriter.translate(name: "r", def: ["type": "http", "url": "https://h"])?.url == "https://h")
+    }
+
+    @Test func installRefusesNonUTF8Config() throws {
+        // A non-UTF-8 config.toml must not read as "" and get clobbered — the
+        // credentials-bearing file would be truncated (#843 round 6). Refuse.
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        var bytes = Data("[model_providers.x]\napi_key = \"sk-secret\"\n".utf8)
+        bytes.append(0xE9)  // lone continuation byte → invalid UTF-8
+        try bytes.write(to: dir.appendingPathComponent("config.toml"))
+        let claudePath = try writeClaudeJSON(dir, ["jira": ["command": "npx"]])
+
+        var threw = false
+        do { _ = try CodexMCPWriter.installMCPConfig(codexHome: dir.path, claudeJSONPath: claudePath) }
+        catch { threw = true }
+        #expect(threw, "must refuse to rewrite a non-UTF-8 config")
+        // File is byte-for-byte unchanged — secrets preserved.
+        let after = try Data(contentsOf: dir.appendingPathComponent("config.toml"))
+        #expect(after == bytes)
+    }
+
     @Test func serverAlreadyPresentToleratesCommentsWhitespaceAndSubtables() {
         // #843 review round 4: a trailing comment, whitespace-around-dots, or a
         // sub-table header must all count as "present" — otherwise the mirror

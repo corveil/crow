@@ -76,8 +76,13 @@ public enum CodexTrustSeeder {
         }
 
         var content = ""
-        if let data = fm.contents(atPath: tomlPath),
-           let text = String(data: data, encoding: .utf8) {
+        if let data = fm.contents(atPath: tomlPath) {
+            // "Exists but not UTF-8" must not read as "" — that would truncate a
+            // config.toml holding credentials/providers/trusted-projects on the
+            // read-modify-write. Refuse instead (#843 review round 6).
+            guard let text = String(data: data, encoding: .utf8) else {
+                return .failed("\(tomlPath) is not valid UTF-8; refusing to rewrite")
+            }
             content = text
         }
 

@@ -19,6 +19,25 @@ struct CodexTrustSeederTests {
         return (project, config)
     }
 
+    @Test func seedTrustRefusesNonUTF8Config() throws {
+        // A non-UTF-8 config.toml must not read as "" and get clobbered on the
+        // read-modify-write — that would drop credentials/trusted projects
+        // (#843 round 6). Refuse and leave the file untouched.
+        let (project, config) = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: (config as NSString).deletingLastPathComponent) }
+
+        var bytes = Data("[projects.\"/keep\"]\ntrust_level = \"trusted\"\n".utf8)
+        bytes.append(0xE9)  // lone continuation byte → invalid UTF-8
+        try bytes.write(to: URL(fileURLWithPath: config))
+
+        let outcome = CodexTrustSeeder.seedTrust(projectPath: project, codexConfigPath: config)
+        let refused: Bool = { if case .failed = outcome { return true }; return false }()
+        #expect(refused, "must refuse a non-UTF-8 config; got \(outcome)")
+        // File is byte-for-byte unchanged.
+        let after = try Data(contentsOf: URL(fileURLWithPath: config))
+        #expect(after == bytes)
+    }
+
     @Test func seedTrustCreatesFreshFile() throws {
         let (project, config) = try makeTempDir()
         defer { try? FileManager.default.removeItem(atPath: (config as NSString).deletingLastPathComponent) }
