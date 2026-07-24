@@ -71,18 +71,20 @@ public actor CursorLauncher {
         return lines.joined(separator: "\n")
     }
 
-    /// Write `prompt` to a temp file and return the launch command.
+    /// Write `prompt` to a temp file and return the launch command used by the
+    /// agent-handoff path (`crow handoff-agent --agent cursor`) to start
+    /// `agent` on that prompt instead of a bare TUI (#829).
+    ///
+    /// This one-shot handoff command intentionally does **not** carry the
+    /// auto-permission flags — like `ClaudeLauncher.launchCommand`, it feeds the
+    /// prompt only; `CursorAgent.autoLaunchCommand` applies the bounded flags on
+    /// the (re)launch path that follows a handoff.
     public func launchCommand(sessionID: UUID, worktreePath: String, prompt: String) throws -> String {
         let tmpDir = FileManager.default.temporaryDirectory
         let promptPath = tmpDir.appendingPathComponent("crow-cursor-\(sessionID.uuidString)-prompt.md")
         try prompt.write(to: promptPath, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes(
             [.posixPermissions: 0o600], ofItemAtPath: promptPath.path)
-        return "cd \(Self.shellEscape(worktreePath)) && agent \"$(cat \(Self.shellEscape(promptPath.path)))\"\n"
-    }
-
-    private static func shellEscape(_ str: String) -> String {
-        let escaped = str.replacingOccurrences(of: "'", with: "'\\''")
-        return "'\(escaped)'"
+        return "cd \(CursorLaunchArgs.shellQuote(worktreePath)) && agent \"$(cat \(CursorLaunchArgs.shellQuote(promptPath.path)))\"\n"
     }
 }

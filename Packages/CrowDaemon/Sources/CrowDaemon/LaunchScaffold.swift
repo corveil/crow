@@ -103,10 +103,12 @@ enum LaunchScaffold {
                 CursorHookConfigWriter.removeManagedGlobalConfig(cursorHome: cursorHome)
             }
             // Mirror the user's Jira MCP from `~/.claude.json` into
-            // `~/.cursor/mcp.json` so Cursor sessions get the same `jira` MCP
-            // Claude uses (#829). No-op when unconfigured.
+            // `<cursorHome>/mcp.json` so Cursor sessions get the same `jira` MCP
+            // Claude uses (#829). Honors `CURSOR_CONFIG_DIR` so it lands where
+            // Cursor actually reads. No-op when unconfigured.
             attempt("Cursor Jira MCP bridge") {
-                CursorMCPConfigWriter.bridgeJiraMCP()
+                CursorMCPConfigWriter.bridgeJiraMCP(
+                    cursorMCPPath: (cursorHome as NSString).appendingPathComponent("mcp.json"))
             }
         }
 

@@ -33,9 +33,9 @@ struct CursorAgentTests {
     }
 
     @Test func autoLaunchCommandIgnoresTelemetryAndRemoteControl() {
-        // Cursor has no OTEL exporter and provides remote control via the
-        // global hooks.json (`stop.followup_message`), not a per-launch
-        // flag — toggling these shouldn't change the launch text.
+        // Cursor has no OTEL exporter and provides remote control via `crow
+        // send` typing into the interactive TUI (not a per-launch flag), so
+        // toggling these shouldn't change the launch text.
         let session = Session(name: "test", agentKind: .cursor)
         let cmd = agent.autoLaunchCommand(
             session: session,

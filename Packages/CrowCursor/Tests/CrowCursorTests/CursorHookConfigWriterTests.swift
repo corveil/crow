@@ -203,12 +203,65 @@ struct CursorHookConfigWriterTests {
         #expect(FileManager.default.fileExists(atPath: hooksPath.path) == false)
     }
 
-    @Test func removeManagedGlobalConfigNoOpWhenAbsent() throws {
-        let cursorHome = try makeTempDir()
-        defer { try? FileManager.default.removeItem(at: cursorHome) }
-        // Must not throw or create anything when there's no file.
-        CursorHookConfigWriter.removeManagedGlobalConfig(cursorHome: cursorHome.path)
-        #expect(FileManager.default.fileExists(
-            atPath: cursorHome.appendingPathComponent("hooks.json").path) == false)
+    @Test func writeHookConfigCoexistsWithUserOwnedManagedEvent() throws {
+        let worktree = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: worktree) }
+        // User already ships a `stop` hook (a managed event key) in the shared
+        // project file.
+        let cursorDir = worktree.appendingPathComponent(".cursor")
+        try FileManager.default.createDirectory(at: cursorDir, withIntermediateDirectories: true)
+        let hooksPath = cursorDir.appendingPathComponent("hooks.json")
+        let userStop: [String: Any] = [
+            "hooks": ["stop": [["hooks": [["type": "command", "command": "/usr/local/bin/my-stop"]]]]]
+        ]
+        try JSONSerialization.data(withJSONObject: userStop).write(to: hooksPath)
+
+        let w = CursorHookConfigWriter()
+        try w.writeHookConfig(worktreePath: worktree.path, sessionID: UUID(), crowPath: "/bin/crow")
+
+        // Both groups present: user's own `stop` is NOT clobbered, Crow's added.
+        var hooks = try readHooks(hooksPath)
+        var stopGroups = hooks["stop"] as! [[String: Any]]
+        #expect(stopGroups.count == 2, "user stop + crow stop coexist")
+        let commands = stopGroups.flatMap { ($0["hooks"] as! [[String: Any]]).map { $0["command"] as! String } }
+        #expect(commands.contains { $0.contains("/usr/local/bin/my-stop") })
+        #expect(commands.contains { $0.contains("hook-event --session") })
+
+        // Idempotent: a second write doesn't duplicate Crow's group.
+        try w.writeHookConfig(worktreePath: worktree.path, sessionID: UUID(), crowPath: "/bin/crow")
+        hooks = try readHooks(hooksPath)
+        stopGroups = hooks["stop"] as! [[String: Any]]
+        #expect(stopGroups.count == 2, "re-write drops the prior crow group before appending")
+
+        // Remove strips only Crow's group, leaving the user's stop.
+        w.removeHookConfig(worktreePath: worktree.path)
+        hooks = try readHooks(hooksPath)
+        let remaining = hooks["stop"] as! [[String: Any]]
+        #expect(remaining.count == 1)
+        let cmd = (remaining.first!["hooks"] as! [[String: Any]]).first!["command"] as! String
+        #expect(cmd == "/usr/local/bin/my-stop", "user's own stop hook survives removal")
+    }
+
+    @Test func writeHookConfigAddsGitExclude() throws {
+        let worktree = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: worktree) }
+        // Simulate a normal git checkout (`.git` is a directory).
+        try FileManager.default.createDirectory(
+            at: worktree.appendingPathComponent(".git/info"), withIntermediateDirectories: true)
+
+        try CursorHookConfigWriter().writeHookConfig(
+            worktreePath: worktree.path, sessionID: UUID(), crowPath: "/bin/crow")
+
+        let exclude = try String(
+            contentsOf: worktree.appendingPathComponent(".git/info/exclude"), encoding: .utf8)
+        #expect(exclude.contains(".cursor/hooks.json"))
+
+        // Idempotent — a second write doesn't duplicate the line.
+        try CursorHookConfigWriter().writeHookConfig(
+            worktreePath: worktree.path, sessionID: UUID(), crowPath: "/bin/crow")
+        let after = try String(
+            contentsOf: worktree.appendingPathComponent(".git/info/exclude"), encoding: .utf8)
+        let count = after.components(separatedBy: ".cursor/hooks.json").count - 1
+        #expect(count == 1, "pattern listed exactly once")
     }
 }

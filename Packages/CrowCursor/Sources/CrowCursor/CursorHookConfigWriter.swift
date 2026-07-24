@@ -18,6 +18,16 @@ import CrowCore
 /// unroutable. `LaunchScaffold` calls `removeManagedGlobalConfig` to migrate
 /// users off any global config a prior Crow installed.
 ///
+/// **User-owned entries are respected everywhere.** Unlike Claude's
+/// gitignored, local-only `.claude/settings.local.json`, `.cursor/hooks.json`
+/// is Cursor's documented **shared project** hooks file — a user may already
+/// have committed one. So both write and remove operate at *group* level and
+/// key on a Crow marker: a write appends Crow's group (dropping only a prior
+/// Crow group, for idempotency) and never clobbers a user's own hook for the
+/// same event; a remove strips only Crow's groups. The file is also added to
+/// the worktree's `.git/info/exclude` so an unattended `git add -A` can't
+/// commit the session-specific config.
+///
 /// Cursor's native event names are camelCase (`preToolUse`, `stop`) but it
 /// documents exit-code 0/2 semantics and the `CLAUDE_PROJECT_DIR` alias as
 /// "matching Claude Code behavior for compatibility." We collapse the
@@ -47,46 +57,32 @@ public struct CursorHookConfigWriter: HookConfigWriter {
     /// observational so async is fine.
     private static let asyncCrowEvents: Set<String> = ["PostToolUse", "Notification"]
 
-    /// Substring that identifies a Crow-installed hook command, used by
-    /// `removeManagedGlobalConfig` to strip only our entries (leaving a user's
-    /// own hook for the same event name untouched).
-    private static let crowCommandMarker = "hook-event --session"
-    /// Legacy marker for the global (cwd-resolved, no `--session`) commands a
-    /// prior Crow installed — also stripped during migration.
-    private static let legacyGlobalMarker = "hook-event --agent cursor"
-
     public init() {}
 
     // MARK: - Hook generation
 
-    /// Build the hooks dict in the schema Cursor expects, with `sessionID`
-    /// baked into each command so the crow server never has to resolve the
+    /// One Crow hook group (`{"hooks": [{command…}]}`) for `crowEvent`, with the
+    /// session UUID baked into the command so the server never resolves the
     /// session from `cwd`.
-    static func generateHooks(sessionID: UUID, crowPath: String) -> [String: Any] {
-        let sid = sessionID.uuidString
-        var hooks: [String: Any] = [:]
-        for (cursorKey, crowEvent) in eventMapping {
-            let command = "\(crowPath) hook-event --session \(sid) --agent cursor --event \(crowEvent)"
-            var entry: [String: Any] = [
-                "type": "command",
-                "command": command,
-                "timeout": 5,
-            ]
-            if asyncCrowEvents.contains(crowEvent) {
-                entry["async"] = true
-            }
-            hooks[cursorKey] = [
-                ["hooks": [entry]] as [String: Any]
-            ]
+    static func crowGroup(sessionID: UUID, crowEvent: String, crowPath: String) -> [String: Any] {
+        let command = "\(crowPath) hook-event --session \(sessionID.uuidString) --agent cursor --event \(crowEvent)"
+        var entry: [String: Any] = [
+            "type": "command",
+            "command": command,
+            "timeout": 5,
+        ]
+        if asyncCrowEvents.contains(crowEvent) {
+            entry["async"] = true
         }
-        return hooks
+        return ["hooks": [entry]]
     }
 
     // MARK: - HookConfigWriter Conformance
 
-    /// Write `<worktreePath>/.cursor/hooks.json`, merging so any user-authored
-    /// entries for events outside our `eventMapping` survive. Sets the schema
-    /// `version` field (Cursor's hooks schema is versioned).
+    /// Write `<worktreePath>/.cursor/hooks.json`. For each managed event we drop
+    /// any prior Crow group (keeps re-runs idempotent) and append a fresh one,
+    /// leaving the user's own groups — and every unmanaged event — untouched.
+    /// Sets the schema `version` field and git-excludes the file.
     public func writeHookConfig(
         worktreePath: String,
         sessionID: UUID,
@@ -103,45 +99,52 @@ public struct CursorHookConfigWriter: HookConfigWriter {
         }
         root["version"] = 1
 
-        var existingHooks = root["hooks"] as? [String: Any] ?? [:]
-        let ours = Self.generateHooks(sessionID: sessionID, crowPath: crowPath)
-        for (eventName, config) in ours {
-            existingHooks[eventName] = config
+        var hooks = root["hooks"] as? [String: Any] ?? [:]
+        for (cursorKey, crowEvent) in Self.eventMapping {
+            var groups = hooks[cursorKey] as? [[String: Any]] ?? []
+            groups.removeAll { Self.groupIsCrowManaged($0) }
+            groups.append(Self.crowGroup(sessionID: sessionID, crowEvent: crowEvent, crowPath: crowPath))
+            hooks[cursorKey] = groups
         }
-        root["hooks"] = existingHooks
+        root["hooks"] = hooks
 
         let data = try JSONSerialization.data(
             withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
         try data.write(to: URL(fileURLWithPath: hooksPath))
+
+        // Keep the session-specific config out of commits (works for any repo,
+        // not just ones that gitignore `.cursor/hooks.json`).
+        Self.ensureGitExcluded(worktreePath: worktreePath, pattern: ".cursor/hooks.json")
     }
 
-    /// Remove our managed event entries from a worktree's
-    /// `.cursor/hooks.json`, preserving user entries. Deletes the file when
-    /// nothing but the `version` scaffold would remain.
+    /// Remove Crow's hook groups from a worktree's `.cursor/hooks.json`,
+    /// preserving a user's own groups (and unmanaged events). Deletes the file
+    /// when nothing but the `version` scaffold would remain.
     public func removeHookConfig(worktreePath: String) {
         let hooksPath = (worktreePath as NSString)
             .appendingPathComponent(".cursor/hooks.json")
-        Self.stripManagedEntries(at: hooksPath, requireCrowMarker: false)
+        Self.stripCrowGroups(at: hooksPath)
     }
 
     // MARK: - Global-config migration
 
-    /// Strip any Crow-managed entries a prior Crow left in the **global**
-    /// `<cursorHome>/hooks.json`. Per-project configs are now the authority
-    /// (#829); because Cursor merges global + project and runs both, a
-    /// surviving global config would double-fire every event. Only entries
-    /// whose command is recognizably Crow's are removed, so a user's own hook
-    /// for the same event name is left in place.
+    /// Strip Crow's hook groups from the **global** `<cursorHome>/hooks.json` a
+    /// prior Crow installed. Per-project configs are now the authority (#829);
+    /// because Cursor merges global + project and runs both, a surviving global
+    /// config would double-fire every event. Only Crow's groups are removed, so
+    /// a user's own hooks — even for the same event name — are left in place.
     public static func removeManagedGlobalConfig(cursorHome: String) {
         let hooksPath = (cursorHome as NSString).appendingPathComponent("hooks.json")
-        stripManagedEntries(at: hooksPath, requireCrowMarker: true)
+        stripCrowGroups(at: hooksPath)
     }
 
-    /// Shared removal core. When `requireCrowMarker` is true, an event entry is
-    /// only removed if its command looks Crow-installed (protects user hooks in
-    /// the shared global file); when false (per-worktree file, which we own),
-    /// every managed event key is removed.
-    private static func stripManagedEntries(at hooksPath: String, requireCrowMarker: Bool) {
+    // MARK: - Group-level helpers
+
+    /// Remove every Crow group from each managed event in `hooksPath`,
+    /// preserving user groups; drop an event key that ends up empty and the
+    /// whole file when only the `version` scaffold remains. No-op when the file
+    /// is absent, unparseable, or already Crow-free.
+    private static func stripCrowGroups(at hooksPath: String) {
         guard let data = FileManager.default.contents(atPath: hooksPath),
               var root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               var hooks = root["hooks"] as? [String: Any] else {
@@ -149,10 +152,17 @@ public struct CursorHookConfigWriter: HookConfigWriter {
         }
 
         var changed = false
-        for (cursorKey, _) in eventMapping where hooks[cursorKey] != nil {
-            if requireCrowMarker && !entryIsCrowManaged(hooks[cursorKey]) { continue }
-            hooks.removeValue(forKey: cursorKey)
+        for (cursorKey, _) in eventMapping {
+            guard var groups = hooks[cursorKey] as? [[String: Any]] else { continue }
+            let before = groups.count
+            groups.removeAll { groupIsCrowManaged($0) }
+            if groups.count == before { continue }
             changed = true
+            if groups.isEmpty {
+                hooks.removeValue(forKey: cursorKey)
+            } else {
+                hooks[cursorKey] = groups
+            }
         }
         guard changed else { return }
 
@@ -179,19 +189,75 @@ public struct CursorHookConfigWriter: HookConfigWriter {
         }
     }
 
-    /// Whether an event's hook array contains a command Crow installed (either
-    /// the per-session form or the legacy global form).
-    private static func entryIsCrowManaged(_ value: Any?) -> Bool {
-        guard let groups = value as? [[String: Any]] else { return false }
-        for group in groups {
-            guard let inner = group["hooks"] as? [[String: Any]] else { continue }
-            for entry in inner {
-                guard let command = entry["command"] as? String else { continue }
-                if command.contains(crowCommandMarker) || command.contains(legacyGlobalMarker) {
-                    return true
-                }
+    /// Whether a hook group (`{"hooks": [{command…}]}`) is one Crow installed —
+    /// its command shells `crow hook-event … --agent cursor` (matches both the
+    /// current `--session` form and the legacy cwd-resolved global form). A
+    /// user's own command for the same event won't carry both tokens.
+    private static func groupIsCrowManaged(_ group: [String: Any]) -> Bool {
+        guard let inner = group["hooks"] as? [[String: Any]] else { return false }
+        for entry in inner {
+            guard let command = entry["command"] as? String else { continue }
+            if command.contains("hook-event") && command.contains("--agent cursor") {
+                return true
             }
         }
         return false
+    }
+
+    // MARK: - Git exclude
+
+    /// Best-effort: ensure `pattern` is listed in the worktree's git
+    /// `info/exclude` so Crow's runtime config isn't committed. Handles both a
+    /// normal `.git` directory and a linked-worktree `.git` file (which points
+    /// at a gitdir whose `commondir` holds the shared exclude). Silent on any
+    /// failure — the config still works, it just isn't excluded.
+    static func ensureGitExcluded(worktreePath: String, pattern: String) {
+        guard let excludePath = gitInfoExcludePath(worktreePath: worktreePath) else { return }
+        let existing = (try? String(contentsOfFile: excludePath, encoding: .utf8)) ?? ""
+        let alreadyListed = existing
+            .split(separator: "\n")
+            .contains { $0.trimmingCharacters(in: .whitespaces) == pattern }
+        if alreadyListed { return }
+
+        var updated = existing
+        if !updated.isEmpty && !updated.hasSuffix("\n") { updated += "\n" }
+        updated += pattern + "\n"
+        try? FileManager.default.createDirectory(
+            atPath: (excludePath as NSString).deletingLastPathComponent,
+            withIntermediateDirectories: true)
+        try? updated.write(toFile: excludePath, atomically: true, encoding: .utf8)
+    }
+
+    /// Resolve the git `info/exclude` path for a worktree, or `nil` when the
+    /// directory isn't a git checkout / can't be resolved.
+    private static func gitInfoExcludePath(worktreePath: String) -> String? {
+        let fm = FileManager.default
+        let dotGit = (worktreePath as NSString).appendingPathComponent(".git")
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: dotGit, isDirectory: &isDir) else { return nil }
+        if isDir.boolValue {
+            return (dotGit as NSString).appendingPathComponent("info/exclude")
+        }
+        // Linked worktree: `.git` is a file `gitdir: <path>`.
+        guard let raw = try? String(contentsOfFile: dotGit, encoding: .utf8) else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("gitdir:") else { return nil }
+        var gitDir = String(trimmed.dropFirst("gitdir:".count)).trimmingCharacters(in: .whitespaces)
+        if !(gitDir as NSString).isAbsolutePath {
+            gitDir = (worktreePath as NSString).appendingPathComponent(gitDir)
+        }
+        gitDir = (gitDir as NSString).standardizingPath
+        // The `info/exclude` in the *common* dir applies to all worktrees; use
+        // it when a `commondir` pointer exists.
+        let commonDirFile = (gitDir as NSString).appendingPathComponent("commondir")
+        if let common = try? String(contentsOfFile: commonDirFile, encoding: .utf8) {
+            var commonPath = common.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !(commonPath as NSString).isAbsolutePath {
+                commonPath = (gitDir as NSString).appendingPathComponent(commonPath)
+            }
+            return ((commonPath as NSString).standardizingPath as NSString)
+                .appendingPathComponent("info/exclude")
+        }
+        return (gitDir as NSString).appendingPathComponent("info/exclude")
     }
 }

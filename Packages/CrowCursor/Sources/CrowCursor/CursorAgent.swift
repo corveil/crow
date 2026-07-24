@@ -108,7 +108,10 @@ public struct CursorAgent: CodingAgent {
                     : ".crow-job-prompt.md"
                 let promptPath = (worktreePath as NSString)
                     .appendingPathComponent(promptFile)
-                return "\(agentPath)\(autoArgs) \"$(cat \(promptPath))\"\n"
+                // Quote the path so a devRoot containing spaces
+                // (`/Users/x/My Projects/…`) doesn't split `cat`'s argv and
+                // resolve the positional prompt to empty.
+                return "\(agentPath)\(autoArgs) \"$(cat \(CursorLaunchArgs.shellQuote(promptPath)))\"\n"
             }
             return "\(agentPath)\(autoArgs) --continue\n"
         case .manager:

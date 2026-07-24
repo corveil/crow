@@ -81,17 +81,34 @@ struct CursorMCPConfigWriterTests {
         #expect(servers["jira"] != nil, "jira bridged in")
     }
 
-    @Test func idempotentWhenAlreadyBridged() throws {
+    @Test func bridgesJiraFromProjectLocalScope() throws {
+        // `claude mcp add` defaults to LOCAL scope: projects[<path>].mcpServers,
+        // not the root block. The bridge must find it there too.
         let claude = tempFile(".claude.json")
         let cursor = tempFile("mcp.json")
         defer { try? FileManager.default.removeItem(atPath: (claude as NSString).deletingLastPathComponent) }
         defer { try? FileManager.default.removeItem(atPath: (cursor as NSString).deletingLastPathComponent) }
 
-        try write(["mcpServers": ["jira": jiraEntry]], to: claude)
+        try write(["projects": ["/Users/x/repo": ["mcpServers": ["jira": jiraEntry]]]], to: claude)
         CursorMCPConfigWriter.bridgeJiraMCP(claudeJSONPath: claude, cursorMCPPath: cursor)
-        let first = try Data(contentsOf: URL(fileURLWithPath: cursor))
+
+        let servers = try read(cursor)["mcpServers"] as! [String: Any]
+        #expect((servers["jira"] as? [String: Any])?["command"] as? String == "jira-mcp")
+    }
+
+    @Test func rootScopePreferredOverProjectScope() throws {
+        let claude = tempFile(".claude.json")
+        let cursor = tempFile("mcp.json")
+        defer { try? FileManager.default.removeItem(atPath: (claude as NSString).deletingLastPathComponent) }
+        defer { try? FileManager.default.removeItem(atPath: (cursor as NSString).deletingLastPathComponent) }
+
+        try write([
+            "mcpServers": ["jira": ["command": "user-scope-jira"]],
+            "projects": ["/Users/x/repo": ["mcpServers": ["jira": ["command": "project-scope-jira"]]]],
+        ], to: claude)
         CursorMCPConfigWriter.bridgeJiraMCP(claudeJSONPath: claude, cursorMCPPath: cursor)
-        let second = try Data(contentsOf: URL(fileURLWithPath: cursor))
-        #expect(first == second)
+
+        let servers = try read(cursor)["mcpServers"] as! [String: Any]
+        #expect((servers["jira"] as? [String: Any])?["command"] as? String == "user-scope-jira")
     }
 }
