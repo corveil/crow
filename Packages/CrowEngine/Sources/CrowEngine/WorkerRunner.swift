@@ -105,6 +105,17 @@ public final class WorkerRunner {
         timer = nil
     }
 
+    /// Build a Corveil backend from the current config + env. Shared by `tick()`
+    /// and the out-of-tick launch-timeout teardown so both authenticate the same
+    /// way (a nil config resolves to a disabled default — teardown never depends
+    /// on config presence).
+    private func currentBackend() -> CorveilWorkerBackend {
+        let config = configProvider() ?? RunnerConfig()
+        let apiKey = (apiKeyProvider() ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let url = config.corveilURL.isEmpty ? (envURLProvider() ?? "") : config.corveilURL
+        return makeBackend(CorveilWorkerConfig(url: url, apiKey: apiKey))
+    }
+
     // MARK: - Tick
 
     /// One evaluation: adopt/heartbeat/finish watched runs, then claim new ones
@@ -132,7 +143,7 @@ public final class WorkerRunner {
         let config = configProvider() ?? RunnerConfig()
         let apiKey = (apiKeyProvider() ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let url = config.corveilURL.isEmpty ? (envURLProvider() ?? "") : config.corveilURL
-        let backend = makeBackend(CorveilWorkerConfig(url: url, apiKey: apiKey))
+        let backend = currentBackend()
         let now = Date()
 
         // Teardown of existing runs — always, independent of config/enabled/key/
@@ -230,11 +241,22 @@ public final class WorkerRunner {
                 let args = WorkerRunCompletion.map(result: result)
                 await complete(backend: backend, run: run, args: args)
                 sessionService.completeSession(id: sessionID)
-                SessionService.wipeWorkerRunScratch(run.scratchDir)
-                watchedRuns[sessionID] = nil
+                wipeAndDrop(sessionID: sessionID, scratchDir: run.scratchDir)
             case .stopWatching:
                 await stopWatching(run: run, sessionID: sessionID, status: status, backend: backend)
             }
+        }
+    }
+
+    /// Wipe the scratch dir and drop the watch — but **only if the wipe
+    /// succeeded**. A failed wipe keeps the watch so a later tick re-evaluates and
+    /// retries; the session has already been moved off `.active`, so it resolves
+    /// to `.stopWatching` (no repeated Corveil calls) and just re-attempts the
+    /// wipe. This prevents a transient remove failure from orphaning the scoped
+    /// API key with no retry (review).
+    private func wipeAndDrop(sessionID: UUID, scratchDir: String) {
+        if SessionService.wipeWorkerRunScratch(scratchDir) {
+            watchedRuns[sessionID] = nil
         }
     }
 
@@ -265,8 +287,7 @@ public final class WorkerRunner {
         default:
             break  // user moved it off active — lease expiry fails it on Corveil.
         }
-        SessionService.wipeWorkerRunScratch(run.scratchDir)
-        watchedRuns[sessionID] = nil
+        wipeAndDrop(sessionID: sessionID, scratchDir: run.scratchDir)
     }
 
     private func complete(backend: CorveilWorkerBackend, run: WorkerRunWatch, args: WorkerRunCompletion.CompleteArgs) async {
@@ -384,6 +405,13 @@ public final class WorkerRunner {
     /// it's "delivered" as soon as the terminal reports `.agentLaunched`. Poll
     /// until then (bounded), then stamp the settle window. Mirrors
     /// `JobScheduler.waitForAgentLaunched` + `markPromptsDelivered`.
+    ///
+    /// On expiry (the agent never reached `.agentLaunched` within the launch
+    /// window) the run is **torn down**, not just logged: with `promptsDeliveredAt`
+    /// left nil, `finishDecision` would return `.keepWaiting` until the 12h
+    /// `maxWatchDuration`, so a stuck launch would otherwise hold a
+    /// `maxConcurrentRuns` slot and keep heartbeating for hours (review). Failing
+    /// it here frees the slot immediately.
     private func markPromptsDeliveredWhenLaunched(sessionID: UUID, terminalID: UUID, polls: Int) {
         guard watchedRuns[sessionID] != nil else { return }
         if appState.terminalReadiness[terminalID] == .agentLaunched {
@@ -391,12 +419,24 @@ public final class WorkerRunner {
             return
         }
         guard polls < maxLaunchWaitPolls else {
-            NSLog("[WorkerRunner] gave up waiting for agent launch on %@", terminalID.uuidString)
+            NSLog("[WorkerRunner] agent never launched for session %@; failing the run", sessionID.uuidString)
+            Task { @MainActor [weak self] in await self?.handleLaunchTimeout(sessionID: sessionID) }
             return
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
             self?.markPromptsDeliveredWhenLaunched(sessionID: sessionID, terminalID: terminalID, polls: polls + 1)
         }
+    }
+
+    /// Tear down a run whose agent never launched: fail it on Corveil, complete
+    /// the local session, and wipe the scratch dir (dropping the watch only once
+    /// the wipe succeeds). Same shape as the max-duration timeout path.
+    private func handleLaunchTimeout(sessionID: UUID) async {
+        guard let run = watchedRuns[sessionID] else { return }
+        await complete(backend: currentBackend(), run: run,
+                       args: .init(error: "agent failed to launch on the runner"))
+        sessionService.completeSession(id: sessionID)
+        wipeAndDrop(sessionID: sessionID, scratchDir: run.scratchDir)
     }
 
     // MARK: - Claim planning (pure)

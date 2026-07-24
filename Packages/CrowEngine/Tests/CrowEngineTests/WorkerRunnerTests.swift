@@ -114,13 +114,27 @@ struct WorkerRunResultDecodeTests {
 @Suite("Worker-run scratch dir + cleanup")
 struct WorkerRunScratchTests {
     @Test func scratchDirLivesUnderDevRootWorkerRunsFolder() {
+        // A UUID-shaped id sanitizes to itself (dashes preserved) + a hash suffix.
         let dir = SessionService.workerRunScratchDir(devRoot: "/dev/root", runID: "abc-123")
-        #expect(dir == "/dev/root/.crow-worker-runs/abc-123")
+        #expect(dir == "/dev/root/.crow-worker-runs/\(SessionService.scratchSlug("abc-123"))")
+        #expect(dir.hasPrefix("/dev/root/.crow-worker-runs/abc-123-"))
     }
 
     @Test func scratchSlugSanitizesUnsafeIds() {
-        #expect(SessionService.scratchSlug("Run/../42?x") == "run-42-x")
-        #expect(SessionService.scratchSlug("") == "run")
+        // Readable, path-safe base + deterministic hash suffix.
+        #expect(SessionService.scratchSlug("Run/../42?x").hasPrefix("run-42-x-"))
+        #expect(SessionService.scratchSlug("").hasPrefix("run-"))
+        // Deterministic across calls.
+        #expect(SessionService.scratchSlug("abc-123") == SessionService.scratchSlug("abc-123"))
+    }
+
+    @Test func scratchSlugAvoidsCollisionsForDistinctRawIds() {
+        // Distinct ids that sanitize to the same readable slug must NOT collide.
+        let a = SessionService.scratchSlug("aaa!")
+        let b = SessionService.scratchSlug("aaa?")
+        #expect(a != b)
+        #expect(a.hasPrefix("aaa-"))
+        #expect(b.hasPrefix("aaa-"))
     }
 
     @Test func wipeRemovesScratchDirUnderCrowWorkerRuns() throws {
@@ -258,6 +272,57 @@ struct WorkerRunnerTickTeardownTests {
 
         // A second tick must NOT re-adopt it (status is now .completed, not .active).
         await runner.tick()
+        #expect(runner.statusSnapshot().watched.isEmpty)
+    }
+
+    /// A failed scratch-dir wipe must NOT drop the watch — the key would then sit
+    /// on disk with no retry (completed sessions are skipped by reconcile). The
+    /// watch is kept so a later tick retries the wipe (review, Yellow 1).
+    @Test func failedWipeKeepsWatchThenRetriesOnceUnblocked() async throws {
+        // Perms are ignored under root, which would defeat the forced-failure.
+        try #require(getuid() != 0)
+
+        let (runner, appState) = makeRunner()
+        runner.maxWatchDuration = 0
+        runner.configProvider = { RunnerConfig(enabled: true) }
+        runner.apiKeyProvider = { "sk-test" }
+        runner.devRootProvider = { "/tmp/dev" }
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wr-lock-\(UUID().uuidString)")
+            .appendingPathComponent(".crow-worker-runs")
+        let scratch = root.appendingPathComponent("run-locked")
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: scratch.appendingPathComponent("settings.local.json").path,
+                                       contents: Data("k".utf8))
+        // Read-only parent so the child dir cannot be unlinked → removeItem fails.
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: root.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: root.path)
+            try? FileManager.default.removeItem(at: root)
+        }
+
+        let session = Session(
+            name: "wr-locked", status: .active, kind: .workerRun,
+            workerRunID: "run-locked", workerID: "crow-x-1",
+            workerRunScratchDir: scratch.path
+        )
+        appState.sessions.append(session)
+        appState.terminals[session.id] = [
+            SessionTerminal(sessionID: session.id, name: "t", cwd: scratch.path, isManaged: true)
+        ]
+
+        await runner.tick()
+
+        // Session completed, but the wipe failed → watch KEPT (key still on disk).
+        #expect(appState.sessions.first(where: { $0.id == session.id })?.status == .completed)
+        #expect(FileManager.default.fileExists(atPath: scratch.path))
+        #expect(runner.statusSnapshot().watched.contains { $0.runID == "run-locked" })
+
+        // Unblock removal; the next tick retries the wipe and finally drops it.
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: root.path)
+        await runner.tick()
+        #expect(!FileManager.default.fileExists(atPath: scratch.path))
         #expect(runner.statusSnapshot().watched.isEmpty)
     }
 

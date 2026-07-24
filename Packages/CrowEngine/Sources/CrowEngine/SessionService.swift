@@ -3149,7 +3149,12 @@ public final class SessionService {
             .appendingPathComponent(scratchSlug(runID))
     }
 
-    /// A filesystem-safe token derived from a run id (ids may be UUIDs or slugs).
+    /// A filesystem-safe, collision-free token derived from a run id (ids may be
+    /// UUIDs or slugs). The readable part sanitizes the id to alphanumerics/dashes;
+    /// a deterministic hash suffix of the RAW id guarantees uniqueness so two
+    /// distinct ids that sanitize to the same slug (e.g. `aaa!` / `aaa?` → `aaa`)
+    /// never collide onto one scratch dir and clobber each other's prompt/creds
+    /// (review).
     nonisolated static func scratchSlug(_ runID: String) -> String {
         var slug = ""
         var lastDash = false
@@ -3163,7 +3168,21 @@ public final class SessionService {
             }
         }
         let cleaned = slug.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
-        return cleaned.isEmpty ? "run" : String(cleaned.prefix(64))
+        let base = cleaned.isEmpty ? "run" : String(cleaned.prefix(48))
+        return "\(base)-\(fnv1aHex(runID))"
+    }
+
+    /// Deterministic FNV-1a 32-bit hash of a string as 8 lowercase hex chars.
+    /// Stable across processes (unlike Swift's randomized `Hasher`), so a given
+    /// run id always maps to the same scratch dir — required for the reconcile /
+    /// relaunch path to find and wipe it.
+    nonisolated static func fnv1aHex(_ s: String) -> String {
+        var hash: UInt32 = 2_166_136_261
+        for byte in s.utf8 {
+            hash ^= UInt32(byte)
+            hash = hash &* 16_777_619
+        }
+        return String(format: "%08x", hash)
     }
 
     /// Spin up a repo-less scratch workdir for a claimed Corveil worker run and
@@ -3285,22 +3304,37 @@ public final class SessionService {
         return (session.id, preparedTerminal.id, scratchDir)
     }
 
-    /// Recursively remove a worker-run scratch dir. Best-effort — the dir holds
-    /// the scoped `CORVEIL_API_KEY`, so this is the security teardown for a run
-    /// (called on completion, on abnormal exit, and on session delete). No-op if
-    /// already gone or the path is empty.
+    /// Recursively remove a worker-run scratch dir. The dir holds the scoped
+    /// `CORVEIL_API_KEY`, so this is the security teardown for a run (called on
+    /// completion, abnormal exit, and session delete).
+    ///
+    /// Returns `true` when it is safe to stop tracking the dir: it was removed, it
+    /// was already gone, or the path isn't ours to touch (guard refusal). Returns
+    /// `false` only when the dir IS a scratch path but removal genuinely failed
+    /// and it is still on disk — the caller keeps the watch and retries on a later
+    /// tick rather than orphaning the key with no retry (review).
     ///
     /// Defense in depth: refuses any path whose immediate parent is not
     /// `.crow-worker-runs`, so a corrupted/attacker-influenced `workerRunScratchDir`
     /// can never turn this into an arbitrary recursive delete (review).
-    nonisolated static func wipeWorkerRunScratch(_ path: String) {
+    @discardableResult
+    nonisolated static func wipeWorkerRunScratch(_ path: String) -> Bool {
         guard isWorkerRunScratchPath(path) else {
             if !path.isEmpty {
                 NSLog("[SessionService] Refusing to wipe non-scratch path: %@", path)
             }
-            return
+            return true  // not ours to remove — don't loop retrying it
         }
-        try? FileManager.default.removeItem(atPath: path)
+        do {
+            try FileManager.default.removeItem(atPath: path)
+            return true
+        } catch {
+            // Already gone is success; a real failure leaves the key on disk.
+            if !FileManager.default.fileExists(atPath: path) { return true }
+            NSLog("[SessionService] Failed to wipe worker-run scratch %@: %@ (will retry)",
+                  path, error.localizedDescription)
+            return false
+        }
     }
 
     /// Whether `path` is a well-formed worker-run scratch dir: a non-empty path
