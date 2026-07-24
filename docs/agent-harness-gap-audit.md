@@ -134,18 +134,34 @@ Spin-off tickets are opened against `corveil/crow` and reference this audit + [#
 
 ---
 
-## 5. Matrix + tiers-ADR reconciliation (pending #827)
+## 5. Matrix + tiers-ADR reconciliation (#827 merged as [#833](https://github.com/corveil/crow/pull/833))
 
-[#827](https://github.com/corveil/crow/issues/827)'s `docs/agent-harness-matrix.md` and
-the capability-tiers ADR are **not yet merged**, so there is nothing in-repo to edit.
-When #827 lands, apply these corrections from §2 so no stale "why" survives:
+#827's deliverables landed on `main` in [#833](https://github.com/corveil/crow/pull/833):
+[`docs/agent-harness-matrix.md`](agent-harness-matrix.md), [ADR 0014](adr/0014-pluggable-coding-agent-adapter.md)
+(adapter), and [ADR 0015](adr/0015-harness-capability-tiers.md) (capability tiers).
+This audit's corrections have now been applied to those docs — see the commit that
+rebased this branch onto #833.
 
-- **Resume** row: Cursor ❌→✅ (`--continue`/`--resume`), Codex ❌→✅ (`codex resume`), OpenCode ⚠️→✅-with-history.
-- **Auto-permission** row: Cursor ❌→✅, Codex ❌→✅; rewrite OpenCode's "runtime-probed `--auto`" to note the `run` path already auto-approves via `runAutoApproveSuffix` and the TUI `--auto` surface is version-dependent (gone in `v1.17.x`, back in `v1.18.0`) — *not* "probe retired".
-- **MCP** row: Cursor/Codex/OpenCode ❌→✅.
-- **Hook scope** row: all three ❌→✅ (per-project config files now exist); keep the cwd-match note only as the *current adapter behavior*, not an upstream limitation. Add the Codex trust-gate caveat (§3b).
-- **Review** row: Codex ❌→✅ (`codex review`).
-- **Remote control** row: Codex `false`→"experimental `remote-control`"; leave Cursor/OpenCode ⚠️ (fake) with a note that native surfaces exist.
-- **Hook async** row: leave Codex ❌; refresh the pinned version `v0.139.0`→ HEAD (~`0.146-alpha`) and the reason from "no async support" to "async parsed-but-skipped upstream (except `SessionEnd`, run synchronously)".
+**Framing that matters:** the matrix grid and ADR 0015's Decision list describe
+**Crow's own adapter behavior** ("what Crow wires up"), *not* raw upstream
+capability. `cursor-agent --resume` existing upstream does **not** make Crow's
+Resume cell ✅ — Crow still launches a bare TUI on restart until #829 lands. So the
+reconciliation **annotates the documented *why*** (the reason a gap exists) where
+upstream has closed it, and leaves each grid cell at Crow's real status until the
+spin-off ticket ships the wiring. Concretely, applied to #833's docs:
 
-Until #827 merges, this audit is the authoritative record of what's closeable.
+- **Matrix — [re-check-targets table](agent-harness-matrix.md#version-pinned-reasons--re-check-targets):**
+  linked this audit as the follow-up it seeds, and refreshed the Codex sync-only
+  pin (still holds at `~0.146-alpha`, with the `SessionEnd`-runs-synchronously
+  carve-out from §2 #4).
+- **Matrix — new "Upstream closures" note:** per-dimension, records which grid
+  gaps now have an upstream flag + the tracking ticket (Resume → #829/#830/#831,
+  Auto-permission → #829/#830, MCP → all three, Review → #830, Hook scope → all
+  three, Codex RC → experimental), while stating the grid stays at Crow's status
+  until those land.
+- **ADR 0015 — Consequences:** pointed the "seed for a follow-up capability audit"
+  bullet at this completed audit.
+
+The per-dimension closure detail (flag, min version, closing approach, security
+caveats) lives in §3 above; the matrix note just cross-links it so the two docs
+can't drift.

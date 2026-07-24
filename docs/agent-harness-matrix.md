@@ -39,6 +39,26 @@ capabilities, update this table in the same PR.
 
 Legend: ✅ full · ⚠️ partial / faked / unverified · ❌ not supported.
 
+> **The grid is Crow's status, not upstream capability.** A ❌/⚠️ means *Crow
+> doesn't wire it up* — the upstream CLI may already support it. The
+> [harness capability gap audit](agent-harness-gap-audit.md) ([#828](https://github.com/corveil/crow/issues/828))
+> re-checked every gap against current upstream (Cursor `2026.07.23`, Codex
+> `0.141.0`, OpenCode `1.17.10`+); several now have an upstream flag and a
+> spin-off closure ticket. **The cells below stay at Crow's real status until
+> those tickets land:**
+>
+> | Gap (grid row) | Now available upstream | Closure ticket |
+> |---|---|---|
+> | Resume / continue | Cursor `--resume`/`--continue`, Codex `resume --last`, OpenCode `--continue` (history caveat already closed by #547) | [#829](https://github.com/corveil/crow/issues/829) / [#830](https://github.com/corveil/crow/issues/830) / [#831](https://github.com/corveil/crow/issues/831) |
+> | Auto-permission (Cursor, Codex) | Cursor `--force --sandbox enabled`; Codex `-a never -s workspace-write` | #829 / #830 |
+> | MCP | `cursor-agent mcp`, `codex mcp`, `opencode mcp` | #829 / #830 / #831 |
+> | Review (Codex) | `codex review --base <branch>` / `codex exec review` | #830 |
+> | Hook → session scope | project `.cursor/hooks.json`, `.codex/hooks.json`, `.opencode/plugins/` (per-worktree UUID) | #829 / #830 / #831 |
+> | Remote control (Codex) | experimental `codex remote-control` / `--remote` | #830 (evaluate) |
+>
+> Still absent upstream: Codex **async hooks** (parsed-but-skipped, except
+> `SessionEnd`). See the gap audit for flags, min versions, and closing approaches.
+
 ## Notes per dimension
 
 Each note cites the source of truth. Line numbers drift; the symbol names are
@@ -256,11 +276,14 @@ binary-gating from [ADR 0015](adr/0015-harness-capability-tiers.md) surfaces her
 Several gaps are pinned to a specific upstream version. Each is a standing
 **re-check target**: when the harness ships a new release, confirm the reason
 still holds and update this page + [ADR 0015](adr/0015-harness-capability-tiers.md).
-This list is the seed for a follow-up capability audit.
+This list is the seed for a follow-up capability audit — now performed in
+[`agent-harness-gap-audit.md`](agent-harness-gap-audit.md) ([#828](https://github.com/corveil/crow/issues/828)),
+which re-checks these pins **and** the capability gaps in ADR 0015's Decision list
+against current upstream CLIs.
 
 | Reason | Pin | Source | Last verified |
 |---|---|---|---|
-| Codex hooks are sync-only (async → silent skip → broken state detection) | Codex **v0.139.0** | `CodexHookConfigWriter.asyncEvents` | 2026-07-24 |
+| Codex hooks are sync-only (async → silent skip → broken state detection) | Codex **v0.139.0** | `CodexHookConfigWriter.asyncEvents` | 2026-07-24 — **still holds** at codex `~0.146-alpha` (`discovery.rs:480` skips async for every event **except `SessionEnd`**, run synchronously); see [gap audit §2 #4](agent-harness-gap-audit.md) |
 | Codex `config.toml` hook key renamed `codex_hooks` → `hooks` | Codex **v0.139.0+** | `CodexHookConfigWriter.installGlobalTomlConfig` | 2026-07-24 |
 | Codex reuses Claude's hook engine (`ClaudeHooksEngine`, byte-compatible schemas) | verified against **codex 0.123.0** | `CodexSignalSource` | 2026-07-24 |
 | Claude background-recap subagent must not elevate state | Claude Code **≥ 2.1.108** (`awaySummaryEnabled`) | `ClaudeHookSignalSource` | 2026-07-24 |
