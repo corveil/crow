@@ -23,6 +23,9 @@ Sources/CrowCLI/Generated/
 # Claude Code (session-specific, generated at runtime)
 .claude/settings.local.json
 
+# Cursor (session-specific hook config, generated at runtime)
+.cursor/hooks.json
+
 # Environment
 .env
 .env.*

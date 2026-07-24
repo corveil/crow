@@ -33,9 +33,9 @@ struct CursorAgentTests {
     }
 
     @Test func autoLaunchCommandIgnoresTelemetryAndRemoteControl() {
-        // Cursor has no OTEL exporter and provides remote control via the
-        // global hooks.json (`stop.followup_message`), not a per-launch
-        // flag — toggling these shouldn't change the launch text.
+        // Cursor has no OTEL exporter and provides remote control via `crow
+        // send` typing into the interactive TUI (not a per-launch flag), so
+        // toggling these shouldn't change the launch text.
         let session = Session(name: "test", agentKind: .cursor)
         let cmd = agent.autoLaunchCommand(
             session: session,
@@ -73,8 +73,8 @@ struct CursorAgentTests {
 
     @Test func autoLaunchCommandReviewSessionSubsequentLaunch() {
         // After the initial review prompt has been dispatched, restarting
-        // Crow should resume the TUI with a bare `agent` (no re-issued
-        // review brief). Mirrors the Jobs subsequent-launch contract.
+        // Crow resumes the conversation with `--continue` instead of
+        // re-issuing the review brief or dropping into a cold TUI (#829).
         var session = Session(name: "review", kind: .review, agentKind: .cursor)
         session.reviewPromptDispatched = true
         let cmd = agent.autoLaunchCommand(
@@ -86,7 +86,7 @@ struct CursorAgentTests {
         )
         #expect(cmd != nil)
         #expect(cmd?.contains(".crow-review-prompt.md") == false)
-        #expect(cmd?.hasSuffix("agent\n") == true)
+        #expect(cmd?.hasSuffix("--continue\n") == true)
     }
 
     @Test func autoLaunchCommandManagerSessionUnsupported() {
@@ -124,8 +124,8 @@ struct CursorAgentTests {
 
     @Test func autoLaunchCommandJobSessionSubsequentLaunch() {
         // After the initial prompt has been dispatched, the deferred-launch
-        // path falls back to a bare `agent` (Cursor has no `--continue`), so
-        // restarting Crow resumes the TUI instead of re-running the prompt.
+        // path resumes the conversation with `--continue` (#829) rather than
+        // re-running the prompt or opening a cold TUI.
         var session = Session(name: "job", kind: .job, agentKind: .cursor)
         session.reviewPromptDispatched = true
         let cmd = agent.autoLaunchCommand(
@@ -137,7 +137,59 @@ struct CursorAgentTests {
         )
         #expect(cmd != nil)
         #expect(cmd?.contains(".crow-job-prompt.md") == false)
-        #expect(cmd?.hasSuffix("agent\n") == true)
+        #expect(cmd?.hasSuffix("--continue\n") == true)
+    }
+
+    @Test func autoLaunchCommandJobAutoPermissionBounded() {
+        // With auto-permission on, a first job launch carries the bounded
+        // flags (approval off, sandbox ON) — not bare --force/--yolo, not
+        // --auto-review (#829 scope corrections). Positional prompt is still
+        // fed, and the flags precede it.
+        let session = Session(name: "job", kind: .job, agentKind: .cursor)
+        let cmd = agent.autoLaunchCommand(
+            session: session,
+            worktreePath: "/tmp/wt",
+            remoteControlEnabled: false,
+            autoPermissionMode: true,
+            telemetryPort: nil
+        )
+        #expect(cmd?.contains(" --force --sandbox enabled --approve-mcps --trust ") == true)
+        #expect(cmd?.contains(".crow-job-prompt.md") == true)
+        #expect(cmd?.contains("--yolo") == false)
+        #expect(cmd?.contains("--auto-review") == false)
+    }
+
+    @Test func autoLaunchCommandJobResumeCarriesAutoPermission() {
+        // Resume (subsequent launch) with auto-permission keeps the flags so
+        // the resumed unattended job still runs hands-off.
+        var session = Session(name: "job", kind: .job, agentKind: .cursor)
+        session.reviewPromptDispatched = true
+        let cmd = agent.autoLaunchCommand(
+            session: session,
+            worktreePath: "/tmp/wt",
+            remoteControlEnabled: false,
+            autoPermissionMode: true,
+            telemetryPort: nil
+        )
+        #expect(cmd?.contains("--force --sandbox enabled") == true)
+        #expect(cmd?.hasSuffix("--continue\n") == true)
+    }
+
+    @Test func managerLaunchCommandAppliesAutoPermission() {
+        // Manager honors its auto-permission toggle (parity with Claude's
+        // --permission-mode auto) and returns no trailing newline (backend
+        // appends Enter).
+        let plain = agent.managerLaunchCommand(
+            sessionName: "Manager", remoteControlEnabled: false,
+            autoPermissionMode: false, telemetryPort: nil)
+        #expect(plain.hasSuffix("agent"))
+        #expect(plain.contains("--force") == false)
+
+        let auto = agent.managerLaunchCommand(
+            sessionName: "Manager", remoteControlEnabled: false,
+            autoPermissionMode: true, telemetryPort: nil)
+        #expect(auto.contains("--force --sandbox enabled --approve-mcps --trust"))
+        #expect(auto.hasSuffix("\n") == false)
     }
 
     @Test func findBinaryReturnsNilWhenAbsent() {

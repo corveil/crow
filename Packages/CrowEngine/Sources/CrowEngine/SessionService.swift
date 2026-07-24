@@ -1440,6 +1440,14 @@ public final class SessionService {
             NSLog("[SessionService] Failed to write Manager hook config for session %@: %@",
                   session.id.uuidString, error.localizedDescription)
         }
+        // Clean up any hook config a *previous* Manager agent left in dirPath, so
+        // switching the Manager's agent (e.g. Cursor → Claude) doesn't leave a
+        // stale `.cursor/hooks.json` pointing at a dead manager UUID. The
+        // devRoot isn't a deleted worktree, so nothing else reaps it. Idempotent
+        // — no-ops when a sibling agent never wrote here.
+        for other in AgentRegistry.shared.allAgents() where other.kind != session.agentKind {
+            other.hookConfigWriter.removeHookConfig(worktreePath: dirPath)
+        }
     }
 
     /// Resolve the Manager's own AI gateway (`AppConfig.managerGateway`) from
@@ -1571,6 +1579,10 @@ public final class SessionService {
         let worktreePath: String
         let branch: String
         let isMainCheckout: Bool
+        /// Agent whose per-worktree hook config to remove before deletion, so
+        /// the removal dispatches through the right writer (e.g. Cursor's
+        /// `.cursor/hooks.json`, not just Claude's `.claude/settings.local.json`).
+        var agentKind: AgentKind = .claudeCode
     }
 
     /// Delete a session and clean up all associated resources.
@@ -1598,7 +1610,8 @@ public final class SessionService {
                 repoPath: $0.repoPath,
                 worktreePath: $0.worktreePath,
                 branch: $0.branch,
-                isMainCheckout: $0.isMainRepoCheckout
+                isMainCheckout: $0.isMainRepoCheckout,
+                agentKind: session?.agentKind ?? .claudeCode
             )
         }
 
@@ -1703,8 +1716,13 @@ public final class SessionService {
                 continue
             }
 
-            // Remove our hook config from settings.local.json before deleting the worktree
-            ClaudeHookConfigWriter().removeHookConfig(worktreePath: item.worktreePath)
+            // Remove our hook config before deleting the worktree, dispatching
+            // through the session's own agent so non-Claude configs (e.g.
+            // Cursor's `.cursor/hooks.json`) are cleaned by the right writer,
+            // not just `.claude/settings.local.json`.
+            let cleanupWriter = AgentRegistry.shared.agent(for: item.agentKind)?.hookConfigWriter
+                ?? ClaudeHookConfigWriter()
+            cleanupWriter.removeHookConfig(worktreePath: item.worktreePath)
 
             var gitRemoveFailed = false
             do {

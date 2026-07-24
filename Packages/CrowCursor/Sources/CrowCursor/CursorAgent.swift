@@ -2,14 +2,16 @@ import Foundation
 import CrowCore
 
 /// `CodingAgent` conformer for the Cursor CLI (`agent` binary). Mirrors the
-/// shape of `OpenAICodexAgent` but enables remote control — Cursor runs an
+/// shape of `ClaudeCodeAgent` — resume on restart (`--continue`), bounded
+/// auto-permission flags for unattended `.job`/`.review`, and per-worktree
+/// hook config with the Crow session UUID baked in (see
+/// `CursorHookConfigWriter`, #829). Remote control is enabled: Cursor runs an
 /// interactive TUI, so `crow send` (the agent-agnostic stdin-paste path in
-/// `SessionService`) is sufficient for remote-driving it; no per-agent
-/// hookery needed. Cursor's hook engine itself is a superset of Claude
-/// Code's — same exit-code 0/2 protocol, accepts `CLAUDE_PROJECT_DIR` as
-/// an alias — which is why the `HookConfigWriter` / `StateSignalSource`
-/// pair below works rather than being a no-op like Codex's per-session
-/// writer.
+/// `SessionService`) drives it; no per-launch RC flag needed. Cursor's hook
+/// engine is a superset of Claude Code's — same exit-code 0/2 protocol,
+/// accepts `CLAUDE_PROJECT_DIR` as an alias — which is why the
+/// `HookConfigWriter` / `StateSignalSource` pair works rather than being a
+/// no-op like Codex's per-session writer.
 public struct CursorAgent: CodingAgent {
     public let kind: AgentKind = .cursor
     public let displayName: String = "Cursor"
@@ -63,24 +65,38 @@ public struct CursorAgent: CodingAgent {
         telemetryPort: UInt16?
     ) -> String? {
         let agentPath = findBinary() ?? "agent"
+        // Bounded auto-permission flags (`--force --sandbox enabled
+        // --approve-mcps --trust`) when the caller opted in — empty otherwise.
+        // See `CursorLaunchArgs.autoPermissionSuffix` for why this is the
+        // bounded, not the unbounded, posture (#829).
+        let autoArgs = CursorLaunchArgs.autoPermissionSuffix(autoPermissionMode)
 
         switch session.kind {
         case .work:
-            // Bare `agent` launch — the user types their prompt into the TUI.
-            // No env prefix (Cursor reads `CURSOR_API_KEY` from the shell;
-            // GUI-stored creds are inherited otherwise), no `--continue`
-            // (MVP doesn't auto-resume), no remote-control flag (remote
+            // Interactive TUI — the user types their prompt. No env prefix
+            // (Cursor reads `CURSOR_API_KEY` from the shell; GUI-stored creds
+            // are inherited otherwise), no `--continue` (resume is scoped to
+            // `.job`/`.review` restart, #829; a fresh work TUI launching bare
+            // is a deliberate product choice), no remote-control flag (remote
             // control is `crow send` typing into the TUI — agent-agnostic,
-            // handled by the `send` RPC → `TerminalRouter.send`, not a
-            // per-launch flag).
-            return "\(agentPath)\n"
+            // handled by the `send` RPC → `TerminalRouter.send`). Auto-
+            // permission flags apply when the opt-in coder-view toggle is on
+            // (#586).
+            return "\(agentPath)\(autoArgs)\n"
         case .job, .review:
             // Jobs and reviews share the same dispatch shape: a pre-written
             // initial prompt file (`.crow-job-prompt.md` / `.crow-review-prompt.md`)
-            // is passed as argv on first launch so Cursor starts working
-            // unattended. On subsequent app restarts we fall back to a bare
-            // `agent` (Cursor has no `--continue` equivalent in MVP), so the
-            // user resumes the TUI rather than re-running the full prompt.
+            // is fed as the positional prompt on first launch so Cursor starts
+            // working unattended. Cursor's interactive TUI accepts a positional
+            // prompt directly, so this one session gives unattended dispatch,
+            // full hook coverage (`CursorSignalSource`), and `crow send` remote
+            // control at once — no headless `-p` chain needed (unlike
+            // OpenCode's batch `run`, which *must* chain `--continue` for a
+            // TUI). The auto-permission flags above make it truly hands-off.
+            //
+            // On subsequent app restarts we resume the conversation with
+            // `--continue` (landed CLI 2026-01-16) instead of re-running the
+            // whole prompt or dropping into a cold TUI (#829).
             //
             // Review prompts are agent-aware: SessionService.buildReviewPrompt
             // inlines the crow-review-pr SKILL body for Cursor so the `agent`
@@ -92,9 +108,12 @@ public struct CursorAgent: CodingAgent {
                     : ".crow-job-prompt.md"
                 let promptPath = (worktreePath as NSString)
                     .appendingPathComponent(promptFile)
-                return "\(agentPath) \"$(cat \(promptPath))\"\n"
+                // Quote the path so a devRoot containing spaces
+                // (`/Users/x/My Projects/…`) doesn't split `cat`'s argv and
+                // resolve the positional prompt to empty.
+                return "\(agentPath)\(autoArgs) \"$(cat \(CursorLaunchArgs.shellQuote(promptPath)))\"\n"
             }
-            return "\(agentPath)\n"
+            return "\(agentPath)\(autoArgs) --continue\n"
         case .manager:
             // Manager sessions never auto-launch an agent — Crow drives them
             // externally. Returning nil here is the contract, not a gap.
@@ -136,13 +155,16 @@ public struct CursorAgent: CodingAgent {
         autoPermissionMode: Bool,
         telemetryPort: UInt16?
     ) -> String {
-        // Cursor's Manager is a plain orchestration TUI in the devRoot — no
+        // Cursor's Manager is an orchestration TUI in the devRoot — no
         // auto-prompt, no `--continue`. Cursor has no `--rc`/`--name`
-        // equivalent, so the remote-control / auto-permission knobs don't
-        // apply (CROW-433). Terminal backend appends the submitting Enter,
-        // so we return the bare command without a trailing newline to match
-        // the cross-agent convention.
-        return findBinary() ?? "agent"
+        // equivalent, so remote control doesn't apply (CROW-433), but the
+        // bounded auto-permission flags do so `crow`/`gh`/`git` orchestration
+        // runs without per-call approval when the Manager toggle is on
+        // (parity with Claude's `--permission-mode auto`). Terminal backend
+        // appends the submitting Enter, so we return the command without a
+        // trailing newline to match the cross-agent convention.
+        let agentPath = findBinary() ?? "agent"
+        return agentPath + CursorLaunchArgs.autoPermissionSuffix(autoPermissionMode)
     }
 
     /// Cursor CLI exposes `/rename` for naming sessions (CROW-629).
