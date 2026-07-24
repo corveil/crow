@@ -241,6 +241,20 @@ public final class IssueTracker {
     /// real-world telemetry calls for it.
     nonisolated static let needsRefineCooldown: TimeInterval = 7 * 60
 
+    /// Sessions whose PR just had `crow:merge` added via `addMergeLabel` but
+    /// whose next fetched snapshot may not yet reflect it (#838). Two windows
+    /// leave a fresh label temporarily invisible: an in-flight poll that
+    /// *started before* the add will overwrite `prStatus` in `applyPRStatuses`
+    /// with pre-label data (clearing the optimistic flag), and GitHub's
+    /// read-your-write consistency lag. While a session sits here,
+    /// `applyPRStatuses` keeps its merge icon lit (ORs `hasMergeLabel`) and
+    /// drops the marker the moment a fetched record actually confirms the label
+    /// — so the icon never flickers off between the add and the durable
+    /// stale-query/union fixes catching up. Ephemeral; pruned to live sessions.
+    /// Internal (not private) so `@testable` tests can seed it without driving
+    /// a full `addMergeLabel` (which needs a live backend + `gh` call).
+    var pendingMergeLabelSessions: Set<UUID> = []
+
     /// Guards the GitHub-scope console warning so it fires once per session.
     private var didLogGitHubScopeWarning = false
 
@@ -1787,8 +1801,25 @@ public final class IssueTracker {
             guard let pr = byURL[prLink.url] else { continue }
             livePRURLs.insert(prLink.url)
 
-            let newStatus = Self.buildPRStatus(from: pr)
+            var newStatus = Self.buildPRStatus(from: pr)
             let oldStatus = previousPRStatus[session.id]
+
+            // #838: after a successful `addMergeLabel`, keep the merge icon lit
+            // until a fetch actually confirms `crow:merge`. An in-flight poll
+            // that started before the add carries pre-label data and would
+            // otherwise clear the optimistic flag here; GitHub's read-your-write
+            // lag can do the same. Once a snapshot reports the label, the
+            // durable path (stale-query labels + `unionLabels`) has caught up —
+            // drop the marker so a genuine later removal isn't masked. Applied
+            // before the assignments below; `hasMergeLabel` isn't a transition
+            // input, so this doesn't affect checks-failing/needs-refine edges.
+            if pendingMergeLabelSessions.contains(session.id) {
+                if newStatus.hasMergeLabel {
+                    pendingMergeLabelSessions.remove(session.id)
+                } else {
+                    newStatus.hasMergeLabel = true
+                }
+            }
 
             // Checks-failing edge: fire only when transitioning from
             // non-failing to failing. `transitions(from:to:…)` returns at
@@ -1852,6 +1883,12 @@ public final class IssueTracker {
         if !seenPRs.isEmpty { seenPRs.formIntersection(livePRURLs) }
         lastRefineDispatchAt = lastRefineDispatchAt.filter { livePRURLs.contains($0.key) }
         lastNotifiedChangesRequestedAt = lastNotifiedChangesRequestedAt.filter { livePRURLs.contains($0.key) }
+        // Drop pending merge-label markers for sessions that no longer exist
+        // (deleted mid-window). Keyed by session, so intersect with live
+        // sessions rather than PR URLs (#838).
+        if !pendingMergeLabelSessions.isEmpty {
+            pendingMergeLabelSessions.formIntersection(Set(sessionsWithPRs.map { $0.id }))
+        }
 
         if !transitions.isEmpty {
             onPRStatusTransitions?(transitions)
@@ -3567,8 +3604,11 @@ public final class IssueTracker {
             NSLog("[Crow] Added crow:merge to %@", prLink.url as NSString)
             // Optimistically flip the merge icon so the user sees the label
             // land immediately, rather than waiting for — and getting stuck
-            // behind — the next full poll's snapshot (#838). The subsequent
-            // refresh re-fetches the PR and confirms/keeps this flag.
+            // behind — the next full poll's snapshot (#838). The sticky marker
+            // keeps it lit across a poll that started *before* this add (which
+            // would otherwise overwrite `prStatus` with pre-label data) until a
+            // fetch confirms the label; `applyPRStatuses` clears it then.
+            pendingMergeLabelSessions.insert(sessionID)
             appState.prStatus[sessionID]?.hasMergeLabel = true
             // Targeted re-fetch so the auto-merge watcher re-evaluates promptly
             // with the label present instead of on the next scheduled poll.

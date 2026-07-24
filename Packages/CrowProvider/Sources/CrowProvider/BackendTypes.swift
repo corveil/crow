@@ -28,10 +28,11 @@ public struct PRRef: Sendable, Hashable {
 ///
 /// Not every field is populated by every call — for example, `prStates` skips
 /// checks/reviews because they're moot for the closed PRs that query targets.
-/// (It does fetch `labels`, since a session-linked PR reached only via the
-/// stale path must still carry its `crow:merge` label — #838.) Callers merge
-/// records by URL using the `merge` helper to fill in gaps as more data
-/// arrives.
+/// (GitHub's `prStates` does fetch `labels`, since a session-linked PR reached
+/// only via the stale path must still carry its `crow:merge` label — #838;
+/// GitLab's stale-MR path still omits them, which is fine while auto-merge is
+/// GitHub-only.) Callers merge records by URL using the `merge` helper to fill
+/// in gaps as more data arrives.
 public struct PRRecord: Sendable {
     public let number: Int
     public let url: String
