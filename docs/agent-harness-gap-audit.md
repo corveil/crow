@@ -130,6 +130,27 @@ a single adapter + its launcher + hook writer + tests change together).
 - **Codex async hooks** (§2 #4 / §3b) — upstream still parses-but-skips `async:true` at HEAD (~`0.146-alpha`), except `SessionEnd` which runs synchronously; nothing to wire for Crow's state events. Re-check on a future Codex minor.
 - **Cursor / OpenCode native RC** (§3a, §3c RC rows) — native surfaces exist (`--remote`, `serve`/`attach`/`acp`) but are heavier than the working `crow send` paste; no user-facing capability gained today.
 
+> **#830 resolution (landed).** §3b rows 1–4 shipped: `.work`/`.job`-restart →
+> `codex resume --last` (jobs add `--include-non-interactive` so `--last` can pick
+> a prior `codex exec` session); `.review` → native `codex review --base <PR
+> base>` (new `Session.reviewBaseBranch`, captured from `PRMetadata.baseRefName`);
+> `.job` + auto-permission → `codex exec -a never -s workspace-write` (bounded —
+> **not** the full-bypass variants); MCP mirrored from `~/.claude.json` into
+> `[mcp_servers.*]` (`CodexMCPWriter`, append-only). The §3b **hook-scope** row's
+> *trust* half shipped as `CodexTrustSeeder` — it persists `[projects."<worktree>"]
+> trust_level = "trusted"` per worktree (the bounded alternative the row demands,
+> **not** `--dangerously-bypass-hook-trust`), which also unblocks unattended
+> auto-launch (Codex's folder-trust gate would otherwise hang a `.job`/`.review`).
+> **Deferred within #830** (rows 7 partial, 8, RC): writing per-worktree
+> `.codex/hooks.json` was held back because Codex layers project hooks *on top of*
+> the still-needed global `~/.codex/hooks.json`, so both would fire for the same
+> action and the `hook-event` handler would double-count (duplicate notifications,
+> ring-buffer entries). Closing it cleanly needs either dropping the global writer
+> (contradicts "keep global writer as fallback") or a server-side (session,event)
+> dedup — out of scope here. The `notify`→`CodexNotifyCommand` bridge stays (its
+> retirement was contingent on that hooks cutover), and `supportsRemoteControl`
+> stays `false` pending end-to-end `codex remote-control` validation.
+
 Spin-off tickets are opened against `corveil/crow` and reference this audit + [#828](https://github.com/corveil/crow/issues/828).
 
 ---
