@@ -115,7 +115,7 @@ public enum OpenCodeMCPConfigWriter {
             openCodeServer["enabled"] = userEnabled
         }
         if let existing = mcp[serverName] as? [String: Any],
-           NSDictionary(dictionary: existing).isEqual(to: openCodeServer) {
+           jsonEqual(existing, openCodeServer) {
             return .unchanged
         }
         mcp[serverName] = openCodeServer
@@ -211,5 +211,20 @@ public enum OpenCodeMCPConfigWriter {
         }
 
         return nil
+    }
+
+    /// Structural equality via canonical JSON bytes. `NSDictionary.isEqual`
+    /// can't be used here: on swift-corelibs-foundation (Linux CI) it does not
+    /// deep-equate a Swift `[String]` against a JSON-decoded `NSArray`, nor a
+    /// `Bool` against an `NSNumber`, so a freshly-built server never compared
+    /// equal to the same server round-tripped through `opencode.json` — the
+    /// idempotency check always fired and rewrote the file. Serializing both
+    /// with `.sortedKeys` normalizes every value type identically on macOS and
+    /// Linux, so the comparison is stable cross-platform.
+    private static func jsonEqual(_ a: [String: Any], _ b: [String: Any]) -> Bool {
+        guard let da = try? JSONSerialization.data(withJSONObject: a, options: [.sortedKeys]),
+              let db = try? JSONSerialization.data(withJSONObject: b, options: [.sortedKeys])
+        else { return false }
+        return da == db
     }
 }
