@@ -1,6 +1,6 @@
 import Foundation
 
-/// A parsed HTTP/1.1 request.
+/// A parsed HTTP/1.1 request. Header keys are normalized to lowercase.
 struct HTTPRequest: Sendable {
     let method: String
     let path: String
@@ -9,11 +9,7 @@ struct HTTPRequest: Sendable {
 
     /// Get a header value (case-insensitive lookup).
     func header(_ name: String) -> String? {
-        let lower = name.lowercased()
-        for (key, value) in headers {
-            if key.lowercased() == lower { return value }
-        }
-        return nil
+        headers[name.lowercased()]
     }
 
     /// Content-Length from headers, or 0 if absent.
@@ -34,13 +30,26 @@ struct HTTPResponse: Sendable {
     }
 
     static func badRequest(message: String = "Bad Request") -> HTTPResponse {
-        HTTPResponse(statusCode: 400, statusText: "Bad Request",
-                     body: Data("{\"error\":\"\(message)\"}".utf8))
+        HTTPResponse(statusCode: 400, statusText: "Bad Request", body: errorBody(message))
     }
 
     static func notFound() -> HTTPResponse {
-        HTTPResponse(statusCode: 404, statusText: "Not Found",
-                     body: Data("{\"error\":\"Not Found\"}".utf8))
+        HTTPResponse(statusCode: 404, statusText: "Not Found", body: errorBody("Not Found"))
+    }
+
+    /// Build the `{"error": …}` body with proper JSON escaping.
+    ///
+    /// Parser messages quote request-controlled values (`Content-Type`, a chunk
+    /// size, the request path), so a quote or backslash in one of them would
+    /// otherwise break out of the string and emit malformed JSON.
+    private static func errorBody(_ message: String) -> Data {
+        guard let data = try? JSONSerialization.data(
+            withJSONObject: ["error": message],
+            options: [.sortedKeys, .withoutEscapingSlashes]
+        ) else {
+            return Data(#"{"error":"Bad Request"}"#.utf8)
+        }
+        return data
     }
 
     /// Serialize to HTTP/1.1 response bytes.
@@ -58,9 +67,28 @@ struct HTTPResponse: Sendable {
 
 /// Minimal HTTP/1.1 request parser for OTLP payloads.
 ///
-/// Only handles simple POST requests with Content-Length (no chunked encoding,
-/// no keep-alive). This is sufficient for OTLP HTTP/JSON clients.
+/// Handles `Content-Length` and `Transfer-Encoding: chunked` framing; no
+/// keep-alive (the receiver closes each connection after responding) and no
+/// compressed bodies. Requests it cannot frame or read are reported as errors
+/// rather than passed on with an empty body — silently handing `JSONDecoder` a
+/// zero-byte body produced an unattributable decode error (#823).
 enum HTTPParser {
+
+    /// Reject absurd bodies rather than buffering them (64 MiB).
+    static let maxBodyBytes = 64 * 1024 * 1024
+
+    /// Give up on a request whose headers never terminate (8 KiB).
+    static let maxHeaderBytes = 8192
+
+    /// Hard ceiling on what one connection may buffer before completing.
+    ///
+    /// The parser can only reject what it can already frame, so the receiver
+    /// needs its own stop: a chunked request whose body never yields a chunk
+    /// boundary would otherwise accumulate without limit.
+    static var maxRequestBytes: Int { maxBodyBytes + maxHeaderBytes }
+
+    /// A chunk-size line is a handful of bytes; anything longer is malformed.
+    static let maxChunkLineBytes = 1024
 
     /// Parse result from feeding data into the parser.
     enum ParseResult: Sendable {
@@ -72,6 +100,9 @@ enum HTTPParser {
         case error(String)
     }
 
+    /// Methods that carry a request body and therefore require framing.
+    private static let bodyMethods: Set<String> = ["POST", "PUT", "PATCH"]
+
     /// Attempt to parse a complete HTTP request from the accumulated data.
     ///
     /// - Parameter data: All data received so far on the connection.
@@ -80,8 +111,7 @@ enum HTTPParser {
         // Find the end of headers (double CRLF)
         let separator = Data("\r\n\r\n".utf8)
         guard let separatorRange = data.range(of: separator) else {
-            // Check for unreasonably large headers (> 8KB without end)
-            if data.count > 8192 {
+            if data.count > maxHeaderBytes {
                 return .error("Headers too large")
             }
             return .needsMore
@@ -109,35 +139,158 @@ enum HTTPParser {
         var headers: [String: String] = [:]
         for line in lines.dropFirst() {
             if let colonIndex = line.firstIndex(of: ":") {
-                let key = String(line[line.startIndex..<colonIndex]).trimmingCharacters(in: .whitespaces)
+                let key = String(line[line.startIndex..<colonIndex])
+                    .trimmingCharacters(in: .whitespaces).lowercased()
                 let value = String(line[line.index(after: colonIndex)...]).trimmingCharacters(in: .whitespaces)
                 headers[key] = value
             }
         }
 
-        // Determine body length
+        let expectsBody = bodyMethods.contains(method.uppercased())
+        if expectsBody, let rejection = rejectUnsupportedEncoding(headers) {
+            return .error(rejection)
+        }
+
         let bodyStart = separatorRange.upperBound
-        let contentLength: Int
-        if let cl = headers.first(where: { $0.key.lowercased() == "content-length" })?.value,
-           let len = Int(cl) {
-            contentLength = len
-        } else {
-            contentLength = 0
+        let available = data.count - data.distance(from: data.startIndex, to: bodyStart)
+
+        // Framing: chunked takes precedence over Content-Length (RFC 9112 §6.1).
+        let transferEncoding = headers["transfer-encoding"]?.lowercased()
+        if transferEncoding?.contains("chunked") == true {
+            switch dechunk(data, from: bodyStart) {
+            case .needsMore:
+                return .needsMore
+            case let .error(message):
+                return .error(message)
+            case let .complete(body):
+                return .complete(HTTPRequest(method: method, path: path, headers: headers, body: body))
+            }
         }
 
-        // Check if we have the full body
-        let bodyAvailable = data.count - data.distance(from: data.startIndex, to: bodyStart)
-        if bodyAvailable < contentLength {
-            return .needsMore
+        if let value = headers["content-length"] {
+            guard let contentLength = Int(value), contentLength >= 0 else {
+                return .error("Malformed Content-Length: \(quoted(value))")
+            }
+            guard contentLength <= maxBodyBytes else {
+                return .error("Body too large: \(contentLength) bytes")
+            }
+            if available < contentLength {
+                return .needsMore
+            }
+            let body = data[bodyStart..<data.index(bodyStart, offsetBy: contentLength)]
+            return .complete(HTTPRequest(method: method, path: path, headers: headers, body: Data(body)))
         }
 
-        let body = data[bodyStart..<data.index(bodyStart, offsetBy: contentLength)]
+        // No framing at all. A body-bearing request without Content-Length or
+        // chunked encoding cannot be read; saying so beats forwarding an empty
+        // body that fails later as an opaque decode error.
+        if expectsBody {
+            return .error("Missing Content-Length or Transfer-Encoding on \(quoted(method)) \(quoted(path))")
+        }
+        return .complete(HTTPRequest(method: method, path: path, headers: headers, body: Data()))
+    }
 
-        return .complete(HTTPRequest(
-            method: method,
-            path: path,
-            headers: headers,
-            body: Data(body)
-        ))
+    /// Quote a request-controlled value into an error message.
+    ///
+    /// Bounded so an 8 KiB header cannot bloat the 400 response or the log line
+    /// it is echoed into. Escaping is handled where the JSON body is built.
+    private static func quoted(_ value: String, limit: Int = 120) -> String {
+        value.count <= limit ? value : String(value.prefix(limit)) + "…"
+    }
+
+    /// Reject bodies this parser cannot read, naming the reason.
+    private static func rejectUnsupportedEncoding(_ headers: [String: String]) -> String? {
+        if let encoding = headers["content-encoding"]?.lowercased(),
+           !encoding.isEmpty, encoding != "identity" {
+            return "Unsupported Content-Encoding: \(quoted(encoding)) (OTLP export must be uncompressed)"
+        }
+        // Fail closed: OTLP/JSON requires the header, so an absent one is a
+        // client that is not speaking the protocol we ingest.
+        guard let contentType = headers["content-type"]?.lowercased() else {
+            return "Missing Content-Type (OTLP/JSON requires application/json)"
+        }
+        // Tolerate parameters, e.g. "application/json; charset=utf-8".
+        let mediaType = contentType.split(separator: ";").first.map(String.init)?
+            .trimmingCharacters(in: .whitespaces) ?? contentType
+        guard mediaType == "application/json" || mediaType.hasSuffix("+json") else {
+            return "Unsupported Content-Type: \(quoted(mediaType)) (OTLP/JSON only)"
+        }
+        return nil
+    }
+
+    private enum ChunkedResult {
+        case complete(Data)
+        case needsMore
+        case error(String)
+    }
+
+    /// Reassemble a `Transfer-Encoding: chunked` body.
+    ///
+    /// Trailers after the terminating zero-length chunk are consumed and
+    /// discarded; the receiver has no use for them.
+    private static func dechunk(_ data: Data, from start: Data.Index) -> ChunkedResult {
+        let crlf = Data("\r\n".utf8)
+        var cursor = start
+        var body = Data()
+
+        while true {
+            guard let lineEnd = data.range(of: crlf, in: cursor..<data.endIndex)?.lowerBound else {
+                // Nothing here is worth waiting for beyond a short size line.
+                // Without this, a CRLF-free stream is buffered forever: the
+                // caller keeps appending because the parser keeps asking.
+                if data.distance(from: cursor, to: data.endIndex) > maxChunkLineBytes {
+                    return .error("Malformed chunk size line")
+                }
+                return .needsMore
+            }
+            let sizeField = data[cursor..<lineEnd]
+            guard let sizeText = String(data: sizeField, encoding: .utf8) else {
+                return .error("Invalid chunk size encoding")
+            }
+            // A chunk size may carry extensions: "1a;name=value".
+            let hex = sizeText.split(separator: ";").first.map(String.init) ?? sizeText
+            guard let size = Int(hex.trimmingCharacters(in: .whitespaces), radix: 16), size >= 0 else {
+                return .error("Malformed chunk size: \(quoted(sizeText))")
+            }
+
+            let chunkStart = data.index(lineEnd, offsetBy: crlf.count)
+
+            if size == 0 {
+                // Terminating chunk: an immediate CRLF, or trailers then CRLFCRLF.
+                if data.distance(from: chunkStart, to: data.endIndex) >= crlf.count,
+                   data[chunkStart..<data.index(chunkStart, offsetBy: crlf.count)] == crlf {
+                    return .complete(body)
+                }
+                guard data.range(of: Data("\r\n\r\n".utf8), in: chunkStart..<data.endIndex) != nil else {
+                    // Same trap as the size line: trailers that never terminate
+                    // must not keep the connection buffering.
+                    if data.distance(from: chunkStart, to: data.endIndex) > maxHeaderBytes {
+                        return .error("Chunk trailers too large")
+                    }
+                    return .needsMore
+                }
+                return .complete(body)
+            }
+
+            // Compare against the remaining budget rather than summing: a chunk
+            // size near `Int.max` is well-formed hex, and `body.count + size`
+            // would trap on overflow before the cap could reject it.
+            guard size <= maxBodyBytes, body.count <= maxBodyBytes - size else {
+                return .error("Chunked body too large")
+            }
+            // Chunk data plus its trailing CRLF must both have arrived.
+            guard data.distance(from: chunkStart, to: data.endIndex) >= size + crlf.count else {
+                return .needsMore
+            }
+            let chunkEnd = data.index(chunkStart, offsetBy: size)
+            let terminatorEnd = data.index(chunkEnd, offsetBy: crlf.count)
+            // A chunk must end with CRLF; without this check a wrong size
+            // silently desyncs the stream and corrupts the rest of the body.
+            guard data[chunkEnd..<terminatorEnd] == crlf else {
+                return .error("Malformed chunk terminator")
+            }
+            body.append(data[chunkStart..<chunkEnd])
+            cursor = terminatorEnd
+        }
     }
 }
