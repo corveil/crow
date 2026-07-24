@@ -82,7 +82,8 @@ records the rationale for each gap here (verbatim reasons preserved from source)
    `create-manager` (`RPCHandlers.swift`) passes the requested kind straight through —
    and there the launch degrades differently again, `managerCommand` falling back
    to `AgentRegistry.defaultAgent` rather than no-op'ing. Closing these
-   asymmetries is a code follow-up, not a doc change.
+   asymmetries is a code follow-up ([#834](https://github.com/corveil/crow/issues/834)),
+   not a doc change.
 
 These gaps are **phased parity, not permanent tiers.** Comments mark the phase
 that will close them (Cursor/Codex/OpenCode launchers are written but

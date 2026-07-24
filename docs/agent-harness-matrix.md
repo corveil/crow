@@ -33,7 +33,7 @@ capabilities, update this table in the same PR.
 | Hook async delivery | ✅ `PostToolUse*` async | ⚠️ declared, timing unverified | ❌ sync-only (v0.139.0) | ⚠️ names verified, timing unverified |
 | MCP (e.g. Jira) | ✅ `jira` MCP server via `~/.claude.json` | ❌ falls back to `acli` | ❌ falls back to `acli` | ❌ falls back to `acli` |
 | Review (`/crow-review-pr`) | ✅ slash-command | ✅ inlined skill body | ❌ returns `nil` (Phase C) | ✅ inlined skill body |
-| Initial-prompt injection | ✅ `$(cat …-prompt.md)` + deferred paste | ✅ `agent "$(cat …)"` (launcher not auto-wired) | job only (review → `nil`) | ✅ run-then-`--continue` |
+| Initial-prompt injection | ✅ `$(cat …-prompt.md)` + deferred paste | ⚠️ job/review only, `.work` launcher not auto-wired | job only (review → `nil`) | ✅ run-then-`--continue` |
 | Gateway env / trust seed / telemetry | ✅ Claude special-case | ❌ | ❌ | ❌ |
 | Rename passthrough (`/rename`) | ✅ | ✅ | ✅ | ✅ |
 
@@ -71,8 +71,8 @@ managed-terminal command needs hook/env prep.
 - **Registration order ≠ new-session default.** First-registered only sets the
   *registry's* fallback (`AgentRegistry.defaultAgent`). The harness a new session
   launches with is config-driven: `AppState.agentKind(for:) =
-  agentsByKind[sessionKind] ?? defaultAgentKind`, both user-settable in Settings →
-  "Default agent" + per-session-kind overrides (CROW-421 / CROW-433).
+  agentsByKind[sessionKind.rawValue] ?? defaultAgentKind`, both user-settable in
+  Settings → "Default agent" + per-session-kind overrides (CROW-421 / CROW-433).
   `defaultAgentKind` ships as `.claudeCode`, so Claude is the *out-of-the-box*
   default; set it to Cursor and every new session uses Cursor.
 
@@ -258,11 +258,11 @@ Several gaps are pinned to a specific upstream version. Each is a standing
 still holds and update this page + [ADR 0015](adr/0015-harness-capability-tiers.md).
 This list is the seed for a follow-up capability audit.
 
-| Reason | Pin | Source |
-|---|---|---|
-| Codex hooks are sync-only (async → silent skip → broken state detection) | Codex **v0.139.0** | `CodexHookConfigWriter.asyncEvents` |
-| Codex `config.toml` hook key renamed `codex_hooks` → `hooks` | Codex **v0.139.0+** | `CodexHookConfigWriter.installGlobalTomlConfig` |
-| Codex reuses Claude's hook engine (`ClaudeHooksEngine`, byte-compatible schemas) | verified against **codex 0.123.0** | `CodexSignalSource` |
-| Claude background-recap subagent must not elevate state | Claude Code **≥ 2.1.108** (`awaySummaryEnabled`) | `ClaudeHookSignalSource` |
-| Cursor `PostToolUse` / `Notification` async timing unconfirmed | — (empirical) | `CursorSignalSource` |
-| OpenCode `session.idle` "done" semantics unconfirmed for TUI | — (CROW-545) | `OpenCodeHookConfigWriter` |
+| Reason | Pin | Source | Last verified |
+|---|---|---|---|
+| Codex hooks are sync-only (async → silent skip → broken state detection) | Codex **v0.139.0** | `CodexHookConfigWriter.asyncEvents` | 2026-07-24 |
+| Codex `config.toml` hook key renamed `codex_hooks` → `hooks` | Codex **v0.139.0+** | `CodexHookConfigWriter.installGlobalTomlConfig` | 2026-07-24 |
+| Codex reuses Claude's hook engine (`ClaudeHooksEngine`, byte-compatible schemas) | verified against **codex 0.123.0** | `CodexSignalSource` | 2026-07-24 |
+| Claude background-recap subagent must not elevate state | Claude Code **≥ 2.1.108** (`awaySummaryEnabled`) | `ClaudeHookSignalSource` | 2026-07-24 |
+| Cursor `PostToolUse` / `Notification` async timing unconfirmed | — (empirical) | `CursorSignalSource` | 2026-07-24 |
+| OpenCode `session.idle` "done" semantics unconfirmed for TUI | — (CROW-545) | `OpenCodeHookConfigWriter` | 2026-07-24 |
