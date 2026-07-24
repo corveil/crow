@@ -5,134 +5,210 @@ import Testing
 
 @Suite("CursorHookConfigWriter")
 struct CursorHookConfigWriterTests {
-    private func makeTempCursorHome() throws -> URL {
+    private func makeTempDir() throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("cursor-test-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
     }
 
-    @Test func writeHookConfigIsNoOp() throws {
-        // Per-session writes are no-ops — Cursor hooks are global.
-        let writer = CursorHookConfigWriter()
-        let tmp = try makeTempCursorHome()
-        defer { try? FileManager.default.removeItem(at: tmp) }
-        try writer.writeHookConfig(
-            worktreePath: tmp.path,
-            sessionID: UUID(),
-            crowPath: "/usr/local/bin/crow"
-        )
-        // No file should have been created in the worktree.
-        let files = try FileManager.default.contentsOfDirectory(atPath: tmp.path)
-        #expect(files.isEmpty)
+    private func readHooks(_ path: URL) throws -> [String: Any] {
+        let data = try Data(contentsOf: path)
+        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        return json["hooks"] as! [String: Any]
     }
 
-    @Test func installGlobalConfigWritesAllEvents() throws {
-        let cursorHome = try makeTempCursorHome()
-        defer { try? FileManager.default.removeItem(at: cursorHome) }
-        try CursorHookConfigWriter.installGlobalConfig(
-            cursorHome: cursorHome.path,
+    private func command(_ hooks: [String: Any], _ key: String) -> String {
+        let entries = hooks[key] as! [[String: Any]]
+        let inner = entries.first!["hooks"] as! [[String: Any]]
+        return inner.first!["command"] as! String
+    }
+
+    // MARK: - Per-project write
+
+    @Test func writeHookConfigWritesPerWorktreeWithSession() throws {
+        let worktree = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: worktree) }
+        let sid = UUID()
+        try CursorHookConfigWriter().writeHookConfig(
+            worktreePath: worktree.path,
+            sessionID: sid,
             crowPath: "/opt/homebrew/bin/crow"
         )
 
-        let hooksPath = cursorHome.appendingPathComponent("hooks.json")
-        let data = try Data(contentsOf: hooksPath)
-        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
-        let hooks = json["hooks"] as! [String: Any]
+        let hooksPath = worktree.appendingPathComponent(".cursor/hooks.json")
+        let root = try JSONSerialization.jsonObject(
+            with: Data(contentsOf: hooksPath)) as! [String: Any]
+        // Versioned schema.
+        #expect(root["version"] as? Int == 1)
 
-        // Cursor keys are camelCase.
+        let hooks = root["hooks"] as! [String: Any]
+        // Same curated camelCase event set.
         #expect(hooks.count == 6)
         for event in ["sessionStart", "preToolUse", "postToolUse", "beforeSubmitPrompt", "stop", "afterAgentResponse"] {
             #expect(hooks[event] != nil, "missing hook entry for \(event)")
         }
 
-        // Spot-check the command shape — the `--event` arg is the
-        // Crow-canonical PascalCase name, not the Cursor camelCase key.
-        let entries = hooks["preToolUse"] as! [[String: Any]]
-        let inner = entries.first!["hooks"] as! [[String: Any]]
-        let command = inner.first!["command"] as! String
-        #expect(command == "/opt/homebrew/bin/crow hook-event --agent cursor --event PreToolUse")
+        // The command bakes in the session UUID and rewrites the event to its
+        // Crow-canonical PascalCase name.
+        let cmd = command(hooks, "preToolUse")
+        #expect(cmd == "/opt/homebrew/bin/crow hook-event --session \(sid.uuidString) --agent cursor --event PreToolUse")
     }
 
-    @Test func installGlobalConfigMapsAfterAgentResponseToNotification() throws {
-        let cursorHome = try makeTempCursorHome()
-        defer { try? FileManager.default.removeItem(at: cursorHome) }
-        try CursorHookConfigWriter.installGlobalConfig(
-            cursorHome: cursorHome.path,
-            crowPath: "/usr/local/bin/crow"
-        )
+    @Test func writeHookConfigMapsAfterAgentResponseToNotification() throws {
+        let worktree = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: worktree) }
+        try CursorHookConfigWriter().writeHookConfig(
+            worktreePath: worktree.path, sessionID: UUID(), crowPath: "/usr/local/bin/crow")
 
-        let hooksPath = cursorHome.appendingPathComponent("hooks.json")
-        let data = try Data(contentsOf: hooksPath)
-        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
-        let hooks = json["hooks"] as! [String: Any]
-
-        let entries = hooks["afterAgentResponse"] as! [[String: Any]]
-        let inner = entries.first!["hooks"] as! [[String: Any]]
-        let command = inner.first!["command"] as! String
-        #expect(command.contains("--event Notification"))
+        let hooks = try readHooks(worktree.appendingPathComponent(".cursor/hooks.json"))
+        #expect(command(hooks, "afterAgentResponse").contains("--event Notification"))
     }
 
-    @Test func installGlobalConfigPreservesUserEntries() throws {
-        let cursorHome = try makeTempCursorHome()
-        defer { try? FileManager.default.removeItem(at: cursorHome) }
+    @Test func writeHookConfigPostToolUseAndNotificationAsync() throws {
+        let worktree = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: worktree) }
+        try CursorHookConfigWriter().writeHookConfig(
+            worktreePath: worktree.path, sessionID: UUID(), crowPath: "/bin/crow")
 
-        // Pre-seed a user-managed hook for a non-Crow event.
-        let hooksPath = cursorHome.appendingPathComponent("hooks.json")
-        let preExisting: [String: Any] = [
-            "hooks": [
-                "beforeShellExecution": [
-                    ["hooks": [["type": "command", "command": "/usr/local/bin/my-shell-guard"]]]
-                ]
-            ]
-        ]
-        let data = try JSONSerialization.data(withJSONObject: preExisting)
-        try data.write(to: hooksPath)
-
-        try CursorHookConfigWriter.installGlobalConfig(
-            cursorHome: cursorHome.path,
-            crowPath: "/usr/local/bin/crow"
-        )
-
-        let after = try Data(contentsOf: hooksPath)
-        let json = try JSONSerialization.jsonObject(with: after) as! [String: Any]
-        let hooks = json["hooks"] as! [String: Any]
-        #expect(hooks["beforeShellExecution"] != nil, "user-managed hook entry should be preserved")
-        #expect(hooks["stop"] != nil, "Crow's stop hook should still be installed")
-    }
-
-    @Test func installGlobalConfigIsIdempotent() throws {
-        let cursorHome = try makeTempCursorHome()
-        defer { try? FileManager.default.removeItem(at: cursorHome) }
-        try CursorHookConfigWriter.installGlobalConfig(cursorHome: cursorHome.path, crowPath: "/bin/crow")
-        let first = try Data(contentsOf: cursorHome.appendingPathComponent("hooks.json"))
-        try CursorHookConfigWriter.installGlobalConfig(cursorHome: cursorHome.path, crowPath: "/bin/crow")
-        let second = try Data(contentsOf: cursorHome.appendingPathComponent("hooks.json"))
-        #expect(first == second)
-    }
-
-    @Test func postToolUseAndNotificationAreAsync() throws {
-        let cursorHome = try makeTempCursorHome()
-        defer { try? FileManager.default.removeItem(at: cursorHome) }
-        try CursorHookConfigWriter.installGlobalConfig(
-            cursorHome: cursorHome.path,
-            crowPath: "/bin/crow"
-        )
-
-        let data = try Data(contentsOf: cursorHome.appendingPathComponent("hooks.json"))
-        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
-        let hooks = json["hooks"] as! [String: Any]
-
+        let hooks = try readHooks(worktree.appendingPathComponent(".cursor/hooks.json"))
         for asyncKey in ["postToolUse", "afterAgentResponse"] {
             let entries = hooks[asyncKey] as! [[String: Any]]
             let inner = entries.first!["hooks"] as! [[String: Any]]
-            let asyncFlag = inner.first!["async"] as? Bool
-            #expect(asyncFlag == true, "\(asyncKey) should be async")
+            #expect(inner.first!["async"] as? Bool == true, "\(asyncKey) should be async")
         }
-
-        // Spot-check that `stop` stays synchronous — its timing matters.
-        let stopEntries = hooks["stop"] as! [[String: Any]]
-        let stopInner = stopEntries.first!["hooks"] as! [[String: Any]]
+        // Stop stays synchronous — its timing matters.
+        let stop = hooks["stop"] as! [[String: Any]]
+        let stopInner = stop.first!["hooks"] as! [[String: Any]]
         #expect(stopInner.first!["async"] == nil, "stop should be synchronous")
+    }
+
+    @Test func writeHookConfigPreservesUserEntries() throws {
+        let worktree = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: worktree) }
+        // Pre-seed a user-managed hook for a non-Crow event.
+        let cursorDir = worktree.appendingPathComponent(".cursor")
+        try FileManager.default.createDirectory(at: cursorDir, withIntermediateDirectories: true)
+        let hooksPath = cursorDir.appendingPathComponent("hooks.json")
+        let preExisting: [String: Any] = [
+            "hooks": ["beforeShellExecution": [["hooks": [["type": "command", "command": "/usr/local/bin/guard"]]]]]
+        ]
+        try JSONSerialization.data(withJSONObject: preExisting).write(to: hooksPath)
+
+        try CursorHookConfigWriter().writeHookConfig(
+            worktreePath: worktree.path, sessionID: UUID(), crowPath: "/bin/crow")
+
+        let hooks = try readHooks(hooksPath)
+        #expect(hooks["beforeShellExecution"] != nil, "user-managed hook should survive")
+        #expect(hooks["stop"] != nil, "Crow's stop hook should be installed")
+    }
+
+    @Test func writeHookConfigIsIdempotent() throws {
+        let worktree = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: worktree) }
+        let sid = UUID()
+        let w = CursorHookConfigWriter()
+        try w.writeHookConfig(worktreePath: worktree.path, sessionID: sid, crowPath: "/bin/crow")
+        let first = try Data(contentsOf: worktree.appendingPathComponent(".cursor/hooks.json"))
+        try w.writeHookConfig(worktreePath: worktree.path, sessionID: sid, crowPath: "/bin/crow")
+        let second = try Data(contentsOf: worktree.appendingPathComponent(".cursor/hooks.json"))
+        #expect(first == second)
+    }
+
+    // MARK: - Removal
+
+    @Test func removeHookConfigDeletesWhenOnlyOursRemain() throws {
+        let worktree = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: worktree) }
+        let hooksPath = worktree.appendingPathComponent(".cursor/hooks.json")
+        let w = CursorHookConfigWriter()
+        try w.writeHookConfig(worktreePath: worktree.path, sessionID: UUID(), crowPath: "/bin/crow")
+        #expect(FileManager.default.fileExists(atPath: hooksPath.path))
+        w.removeHookConfig(worktreePath: worktree.path)
+        // Nothing but our entries + version scaffold → file removed.
+        #expect(FileManager.default.fileExists(atPath: hooksPath.path) == false)
+    }
+
+    @Test func removeHookConfigPreservesUserEntries() throws {
+        let worktree = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: worktree) }
+        let w = CursorHookConfigWriter()
+        try w.writeHookConfig(worktreePath: worktree.path, sessionID: UUID(), crowPath: "/bin/crow")
+        // Add a user entry alongside ours.
+        let hooksPath = worktree.appendingPathComponent(".cursor/hooks.json")
+        var root = try JSONSerialization.jsonObject(with: Data(contentsOf: hooksPath)) as! [String: Any]
+        var hooks = root["hooks"] as! [String: Any]
+        hooks["beforeShellExecution"] = [["hooks": [["type": "command", "command": "/usr/local/bin/guard"]]]]
+        root["hooks"] = hooks
+        try JSONSerialization.data(withJSONObject: root).write(to: hooksPath)
+
+        w.removeHookConfig(worktreePath: worktree.path)
+
+        #expect(FileManager.default.fileExists(atPath: hooksPath.path), "file kept because a user entry remains")
+        let after = try readHooks(hooksPath)
+        #expect(after["beforeShellExecution"] != nil)
+        #expect(after["stop"] == nil, "Crow entries removed")
+    }
+
+    // MARK: - Global-config migration
+
+    @Test func removeManagedGlobalConfigStripsOnlyCrowEntries() throws {
+        let cursorHome = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: cursorHome) }
+        // Simulate a legacy global config: a Crow-managed `stop` (old cwd form)
+        // + a user's own `beforeShellExecution`.
+        let hooksPath = cursorHome.appendingPathComponent("hooks.json")
+        let legacy: [String: Any] = [
+            "hooks": [
+                "stop": [["hooks": [["type": "command", "command": "/bin/crow hook-event --agent cursor --event Stop"]]]],
+                "beforeShellExecution": [["hooks": [["type": "command", "command": "/usr/local/bin/guard"]]]],
+            ]
+        ]
+        try JSONSerialization.data(withJSONObject: legacy).write(to: hooksPath)
+
+        CursorHookConfigWriter.removeManagedGlobalConfig(cursorHome: cursorHome.path)
+
+        let hooks = try readHooks(hooksPath)
+        #expect(hooks["stop"] == nil, "legacy Crow entry stripped")
+        #expect(hooks["beforeShellExecution"] != nil, "user entry preserved")
+    }
+
+    @Test func removeManagedGlobalConfigProtectsUserOwnedEventName() throws {
+        let cursorHome = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: cursorHome) }
+        // A user's own `stop` hook (not Crow's) must NOT be stripped.
+        let hooksPath = cursorHome.appendingPathComponent("hooks.json")
+        let userConfig: [String: Any] = [
+            "hooks": ["stop": [["hooks": [["type": "command", "command": "/usr/local/bin/my-stop"]]]]]
+        ]
+        try JSONSerialization.data(withJSONObject: userConfig).write(to: hooksPath)
+
+        CursorHookConfigWriter.removeManagedGlobalConfig(cursorHome: cursorHome.path)
+
+        let hooks = try readHooks(hooksPath)
+        #expect(hooks["stop"] != nil, "user's own stop hook preserved")
+    }
+
+    @Test func removeManagedGlobalConfigDeletesFileWhenEmptied() throws {
+        let cursorHome = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: cursorHome) }
+        let hooksPath = cursorHome.appendingPathComponent("hooks.json")
+        let legacy: [String: Any] = [
+            "hooks": ["stop": [["hooks": [["type": "command", "command": "/bin/crow hook-event --agent cursor --event Stop"]]]]]
+        ]
+        try JSONSerialization.data(withJSONObject: legacy).write(to: hooksPath)
+
+        CursorHookConfigWriter.removeManagedGlobalConfig(cursorHome: cursorHome.path)
+
+        #expect(FileManager.default.fileExists(atPath: hooksPath.path) == false)
+    }
+
+    @Test func removeManagedGlobalConfigNoOpWhenAbsent() throws {
+        let cursorHome = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: cursorHome) }
+        // Must not throw or create anything when there's no file.
+        CursorHookConfigWriter.removeManagedGlobalConfig(cursorHome: cursorHome.path)
+        #expect(FileManager.default.fileExists(
+            atPath: cursorHome.appendingPathComponent("hooks.json").path) == false)
     }
 }

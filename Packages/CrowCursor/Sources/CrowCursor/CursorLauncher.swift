@@ -6,9 +6,10 @@ import CrowCore
 /// without Claude-specific slash commands or `dangerouslyDisableSandbox`
 /// directives.
 ///
-/// Phase-C MVP launches `agent` bare (the user types into the TUI), so
-/// this type isn't wired into the auto-launch path yet. A follow-up will
-/// use it for a Cursor-flavored `crow-workspace` skill.
+/// `generatePrompt` feeds `CursorAgent.generatePrompt`, and `launchCommand`
+/// is used by the agent-handoff path (`crow handoff-agent --agent cursor`) to
+/// materialize that prompt and start `agent` with it — so a handoff into
+/// Cursor lands on a working session instead of a bare TUI (#829).
 public actor CursorLauncher {
     public init() {}
 

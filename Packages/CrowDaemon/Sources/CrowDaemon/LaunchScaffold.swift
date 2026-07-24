@@ -90,13 +90,23 @@ enum LaunchScaffold {
 
         if AgentRegistry.shared.agent(for: .cursor) != nil {
             attempt("Cursor scaffold") { try CursorScaffolder.scaffold(devRoot: devRoot) }
-            if let crowPath {
-                // Empty `CURSOR_CONFIG_DIR=` treated as unset, same reason as
-                // `CODEX_HOME` above.
-                let cursorHome = nonEmptyEnv("CURSOR_CONFIG_DIR") ?? NSString(string: "~/.cursor").expandingTildeInPath
-                attempt("Cursor global config install") {
-                    try CursorHookConfigWriter.installGlobalConfig(cursorHome: cursorHome, crowPath: crowPath)
-                }
+            // Empty `CURSOR_CONFIG_DIR=` treated as unset, same reason as
+            // `CODEX_HOME` above.
+            let cursorHome = nonEmptyEnv("CURSOR_CONFIG_DIR") ?? NSString(string: "~/.cursor").expandingTildeInPath
+            // Per-worktree `.cursor/hooks.json` (with `--session` baked in) is
+            // now the authority (#829), written by the engine per session.
+            // Cursor merges global + project hooks and runs both, so any global
+            // config a prior Crow installed would double-fire every event —
+            // strip our managed entries from `~/.cursor/hooks.json` (user
+            // entries survive). Doesn't need `crowPath`.
+            attempt("Cursor global hook cleanup") {
+                CursorHookConfigWriter.removeManagedGlobalConfig(cursorHome: cursorHome)
+            }
+            // Mirror the user's Jira MCP from `~/.claude.json` into
+            // `~/.cursor/mcp.json` so Cursor sessions get the same `jira` MCP
+            // Claude uses (#829). No-op when unconfigured.
+            attempt("Cursor Jira MCP bridge") {
+                CursorMCPConfigWriter.bridgeJiraMCP()
             }
         }
 
