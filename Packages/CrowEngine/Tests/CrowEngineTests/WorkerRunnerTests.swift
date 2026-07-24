@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import CrowCore
+import CrowPersistence
 import CrowProvider
 @testable import CrowEngine
 
@@ -162,5 +163,78 @@ struct WorkerRunScratchTests {
         SessionService.wipeWorkerRunScratch(victim.path)
         // Refused — still present.
         #expect(FileManager.default.fileExists(atPath: victim.path))
+    }
+}
+
+/// A no-op `ShellRunner` so `tick()` can never spawn a real `corveil` process.
+private struct NoopShellRunner: ShellRunner {
+    func run(args: [String], env: [String: String], cwd: String?) async throws -> String { "" }
+}
+
+/// `tick()`-level teardown gating (corveil/crow#801 review). Teardown of
+/// existing/persisted runs must run even when the runner config is absent — a
+/// removed `runner` block (or a failed config load) makes `configProvider()`
+/// return nil, and gating teardown on that would orphan the scoped API key.
+@Suite("WorkerRunner tick teardown gating")
+@MainActor
+struct WorkerRunnerTickTeardownTests {
+    private func makeRunner() -> (WorkerRunner, AppState) {
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("wr-tick-\(UUID().uuidString)")
+        let appState = AppState()
+        let service = SessionService(store: JSONStore(directory: tmp), appState: appState, hostBridge: NoopHostBridge())
+        let runner = WorkerRunner(appState: appState, sessionService: service)
+        runner.makeBackend = { config in CorveilWorkerBackend(shellRunner: NoopShellRunner(), config: config) }
+        return (runner, appState)
+    }
+
+    /// Seed a persisted active `.workerRun` session with a managed terminal, then
+    /// tick with a **nil config** (and no key / no dev root). Reconcile must still
+    /// adopt it into the watch set — proving teardown isn't gated on config.
+    @Test func nilConfigStillReconcilesInFlightRun() async {
+        let (runner, appState) = makeRunner()
+        runner.configProvider = { nil }          // no `runner` block at all
+        runner.apiKeyProvider = { nil }          // no key
+        runner.envURLProvider = { nil }
+        runner.devRootProvider = { nil }         // no dev root
+
+        let session = Session(
+            name: "wr-1", status: .active, kind: .workerRun,
+            workerRunID: "run-1", workerID: "crow-x-1",
+            workerRunScratchDir: "/tmp/dev/.crow-worker-runs/run-1"
+        )
+        appState.sessions.append(session)
+        appState.terminals[session.id] = [
+            SessionTerminal(sessionID: session.id, name: "t", cwd: "/tmp", isManaged: true)
+        ]
+
+        await runner.tick()
+
+        // Adopted despite nil config / no key / no dev root — so its finish/wipe
+        // will be driven on subsequent ticks rather than abandoned.
+        let snap = runner.statusSnapshot()
+        #expect(snap.watched.contains { $0.runID == "run-1" })
+        #expect(snap.enabled == false)  // nil config surfaces as disabled
+    }
+
+    /// With config present but `enabled: false`, teardown likewise still runs.
+    @Test func disabledConfigStillReconcilesInFlightRun() async {
+        let (runner, appState) = makeRunner()
+        runner.configProvider = { RunnerConfig(enabled: false) }
+        runner.apiKeyProvider = { nil }
+        runner.devRootProvider = { "/tmp/dev" }
+
+        let session = Session(
+            name: "wr-2", status: .active, kind: .workerRun,
+            workerRunID: "run-2", workerID: "crow-x-1",
+            workerRunScratchDir: "/tmp/dev/.crow-worker-runs/run-2"
+        )
+        appState.sessions.append(session)
+        appState.terminals[session.id] = [
+            SessionTerminal(sessionID: session.id, name: "t", cwd: "/tmp", isManaged: true)
+        ]
+
+        await runner.tick()
+        #expect(runner.statusSnapshot().watched.contains { $0.runID == "run-2" })
     }
 }
