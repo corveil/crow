@@ -254,15 +254,21 @@ public enum CodexMCPWriter {
     }
 
     private static func stringify(_ value: Any?) -> String? {
-        switch value {
-        // Bool MUST precede Int: `JSONSerialization` bridges booleans as
-        // `NSNumber`, so a `true`/`false` would otherwise match `as Int` and
-        // stringify to "1"/"0" instead of "true"/"false" (#843 review round 4).
-        case let b as Bool: return String(b)
-        case let i as Int: return String(i)
-        case let s as String: return s
-        case let d as Double: return String(d)
-        default: return nil
+        if let s = value as? String { return s }
+        if let num = value as? NSNumber {
+            // A JSON bool and a JSON number both bridge to `NSNumber` and both
+            // cast across `Bool`/`Int`, so cast order can't separate them
+            // (`0`/`1` cast to `Bool`; `true`/`false` cast to `Int`) — the
+            // Obj-C type encoding does: `"c"` is the bool tag JSONSerialization
+            // stamps on true/false, `"d"`/`"f"` are floating, everything else is
+            // an integer. This keeps `true`→"true", `1`→"1", `0`→"0",
+            // `1.0`→"1.0" all correct (#843 review round 5).
+            switch String(cString: num.objCType) {
+            case "c": return num.boolValue ? "true" : "false"
+            case "d", "f": return String(num.doubleValue)
+            default: return num.stringValue
+            }
         }
+        return nil
     }
 }

@@ -192,10 +192,16 @@ All harnesses report lifecycle events by shelling out to `crow hook-event`, but
   plus a `config.toml` `notify = ["<crow>", "codex-notify"]` line and
   `features.hooks = true`. `cwd`-resolved like Cursor. The `notify` bridge is a
   Tier-2 fallback: `crow codex-notify` translates Codex's post-turn JSON payload
-  into a hook event (`CodexNotifyPayload`, `CodexNotify`). Auto-launched sessions
-  additionally get per-worktree **project-trust** seeded into `config.toml`
+  into a hook event (`CodexNotifyPayload`, `CodexNotify`). Auto-launched
+  **`.work`/`.job` worktrees and the Manager devRoot** additionally get
+  per-worktree **project-trust** seeded into `config.toml`
   (`[projects."<worktree>"] trust_level = "trusted"`, `CodexTrustSeeder`) so
-  Codex's folder-trust gate never blocks an unattended launch. Per-worktree
+  Codex's folder-trust gate never blocks an unattended launch. **`.review`
+  clones are deliberately not trust-seeded** — their working tree is `gh repo
+  clone` output at the PR author's head (attacker-controlled), and trusting it
+  would arm a committed `.codex/hooks.json`; they fall back to Codex's folder-
+  trust prompt (the human-gated path), and `prepareReviewClone` strips any
+  committed `.codex/` as defense-in-depth (#843). Per-worktree
   `.codex/hooks.json` (UUID-scoped) is **deferred** — Codex layers project hooks
   atop the global file, so both would fire and the `hook-event` handler would
   double-count; a clean cutover needs server-side (session,event) dedup or

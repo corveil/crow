@@ -926,7 +926,17 @@ public final class SessionService {
         case .claudeCode:
             ClaudeTrustSeeder.seedTrust(projectPath: worktree.worktreePath)
         case .codex:
-            CodexTrustSeeder.seedTrust(projectPath: worktree.worktreePath)
+            // Never trust a `.review` clone: its working tree is `gh repo clone`
+            // output checked out at the PR author's head — attacker-controlled.
+            // Trusting it would arm a committed `.codex/hooks.json` on launch
+            // (#843 review round 5). `prepareReviewClone` also strips any
+            // committed `.codex/` as defense-in-depth. Crow-created `.work`/
+            // `.job` worktrees branch off a trusted base, so they're safe to
+            // trust; the review clone falls back to Codex's folder-trust prompt
+            // (acceptable — review is the human-gated path anyway).
+            if session.kind != .review {
+                CodexTrustSeeder.seedTrust(projectPath: worktree.worktreePath)
+            }
         default:
             break
         }
@@ -1203,13 +1213,21 @@ public final class SessionService {
             throw AgentHandoffError.launchFailed(error.localizedDescription)
         }
 
-        // Claude-specific prep (trust + gateway) before the new process starts.
+        // Agent-specific prep (trust + gateway) before the new process starts.
         // Idempotent file writes — safe to run before teardown.
         if target.kind == .claudeCode {
             ClaudeTrustSeeder.seedTrust(projectPath: worktree.worktreePath)
             let gatewayResolved = workspaceGatewayResolved(for: sessionID)
             ClaudeHookConfigWriter.writeGatewayEnv(
                 dirPath: worktree.worktreePath, resolved: gatewayResolved)
+        } else if target.kind == .codex, session.kind != .review {
+            // Seed Codex trust on handoff too, or `crow handoff-agent --agent
+            // codex` opens in an untrusted folder and the (possibly unattended)
+            // session stalls on the folder-trust gate (#843 review round 5).
+            // Handoff dispatches via `pendingLaunchCommands`, so `launchAgent`'s
+            // seeding never fires for it. Skip `.review` for the same
+            // attacker-controlled-clone reason as `launchAgent`.
+            CodexTrustSeeder.seedTrust(projectPath: worktree.worktreePath)
         }
 
         // Persist the new agent only after launch prep succeeds so register /
@@ -2498,6 +2516,19 @@ public final class SessionService {
         _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "fetch", "origin", headBranch])
         _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "checkout", headBranch])
         _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "pull", "origin", headBranch])
+
+        // Defense-in-depth for Codex reviews (#843 review round 5): strip any
+        // committed `.codex/` from the checked-out PR head before the agent
+        // launches. The head is attacker-controlled and `.codex/hooks.json` /
+        // inline `[hooks]` in `.codex/config.toml` are not conventionally
+        // gitignored, so a drive-by PR could ship hooks that Codex would run
+        // once the folder is trusted. `launchAgent` already declines to trust a
+        // review clone; removing the config layer here means the hooks can't
+        // fire even if the folder is trusted by some other path (a globally
+        // pre-trusted parent, a manual handoff). Re-run on every prep so a
+        // `git pull` on the reused clone dir can't reintroduce it. Mirrors the
+        // Claude path's `.claude/settings.json` overwrite below.
+        try? fm.removeItem(atPath: (clonePath as NSString).appendingPathComponent(".codex"))
 
         // Write review prompt file into the clone directory. Write failures
         // MUST surface (CROW-439): the launcher's `$(cat ...)` shell

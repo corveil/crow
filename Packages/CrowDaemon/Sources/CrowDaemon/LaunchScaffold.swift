@@ -80,6 +80,16 @@ enum LaunchScaffold {
             // and the config writes into the process CWD, matching the empty
             // `XDG_CONFIG_HOME` guard below (#766 review).
             let codexHome = nonEmptyEnv("CODEX_HOME") ?? NSString(string: "~/.codex").expandingTildeInPath
+            // Sweep any `.crow-codex-*.tmp` left by a crash between
+            // `writeConfigPrivately`'s createFile and rename(2) — a 0600 temp
+            // that may hold mirrored MCP tokens (#843 review round 5). Nothing
+            // else cleans it; best-effort at boot.
+            if let entries = try? FileManager.default.contentsOfDirectory(atPath: codexHome) {
+                for name in entries where name.hasPrefix(".crow-codex-") && name.hasSuffix(".tmp") {
+                    try? FileManager.default.removeItem(
+                        atPath: (codexHome as NSString).appendingPathComponent(name))
+                }
+            }
             if let crowPath {
                 attempt("Codex global config install") {
                     try CodexHookConfigWriter.installGlobalConfig(codexHome: codexHome, crowPath: crowPath)

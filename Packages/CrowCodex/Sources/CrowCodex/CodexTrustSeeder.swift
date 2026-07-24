@@ -17,8 +17,18 @@ import Foundation
 /// This is the deliberate, bounded alternative to Codex's
 /// `--dangerously-bypass-hook-trust` (which the #830 scope-correction forbids):
 /// we persist trust for *this specific worktree* rather than blanket-trusting
-/// every folder Crow ever opens, so a cloned repo's committed hooks never
-/// execute on checkout.
+/// every folder Crow ever opens.
+///
+/// **Only trust worktrees Crow creates off a trusted base.** `SessionService`
+/// seeds trust for `.work`/`.job` git worktrees (branched from a trusted base)
+/// and the Manager's devRoot — never for a `.review` clone, whose working tree
+/// is `gh repo clone` output checked out at the PR author's head and is
+/// therefore attacker-controlled. Trusting such a clone would arm a committed
+/// `.codex/hooks.json` on launch (#843 review round 5); review clones fall back
+/// to Codex's own folder-trust prompt (they're the human-gated path), and
+/// `prepareReviewClone` additionally strips any committed `.codex/` as
+/// defense-in-depth. So this seeder is safe *given that contract* — it does not
+/// itself distinguish clone from worktree; the caller does.
 ///
 /// `config.toml` is Codex's own mutable state (model, providers, credentials,
 /// `[hooks]`, other projects), so this **merges** — it only inserts/updates the

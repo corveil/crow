@@ -144,9 +144,13 @@ a single adapter + its launcher + hook writer + tests change together).
 > `decideReviewCompletions` (which closes a review only on a *posted* verdict)
 > and would be re-kicked on every head-SHA advance. The §3b **hook-scope** row's
 > *trust* half shipped as `CodexTrustSeeder` — it persists `[projects."<worktree>"]
-> trust_level = "trusted"` per worktree (the bounded alternative the row demands,
-> **not** `--dangerously-bypass-hook-trust`), which also unblocks unattended
-> auto-launch (Codex's folder-trust gate would otherwise hang a `.job`/`.review`).
+> trust_level = "trusted"` for the `.work`/`.job` worktrees Crow branches off a
+> trusted base and the Manager devRoot (the bounded alternative the row demands,
+> **not** `--dangerously-bypass-hook-trust`), which unblocks unattended
+> auto-launch. `.review` clones are **not** trusted — their tree is external
+> PR-head content, so trusting it would arm committed `.codex/hooks.json`; they
+> use Codex's folder-trust prompt and `prepareReviewClone` strips any committed
+> `.codex/` (#843 review round 5).
 > **Deferred within #830** (rows 7 partial, 8, RC): writing per-worktree
 > `.codex/hooks.json` was held back because Codex layers project hooks *on top of*
 > the still-needed global `~/.codex/hooks.json`, so both would fire for the same

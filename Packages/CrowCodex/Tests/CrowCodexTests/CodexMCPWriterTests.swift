@@ -106,6 +106,31 @@ struct CodexMCPWriterTests {
         #expect(block.contains("FLAG = \"true\""))
     }
 
+    @Test func mirrorsBoolAndNumericEnvFaithfully() throws {
+        // #843 review round 5: booleans and numbers both bridge to NSNumber and
+        // both cast across Bool/Int, so a cast-order fix breaks one direction.
+        // Parse real JSON (so the NSNumber type tags are authentic) and assert
+        // every case. RATIO uses 1.5 (unambiguously floating) so the double path
+        // is exercised without the 1.0→"1" serialization ambiguity.
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let path = dir.appendingPathComponent("claude.json").path
+        let json = """
+        {"mcpServers":{"s":{"command":"x","env":{
+          "FLAG":true,"OFF":false,"ONE":1,"ZERO":0,"RATIO":1.5,"PORT":8080}}}}
+        """
+        try json.write(toFile: path, atomically: true, encoding: .utf8)
+
+        let servers = CodexMCPWriter.readClaudeServers(claudeJSONPath: path)
+        let env = Dictionary(uniqueKeysWithValues: servers.first!.env.map { ($0.0, $0.1) })
+        #expect(env["FLAG"] == "true")
+        #expect(env["OFF"] == "false")
+        #expect(env["ONE"] == "1")
+        #expect(env["ZERO"] == "0")
+        #expect(env["RATIO"] == "1.5")
+        #expect(env["PORT"] == "8080")
+    }
+
     @Test func serverAlreadyPresentMatchesInlineParentTable() {
         // `[mcp_servers]` with an inline `jira = { … }` key is a valid, distinct
         // spelling — appending `[mcp_servers.jira]` on top would be a duplicate
