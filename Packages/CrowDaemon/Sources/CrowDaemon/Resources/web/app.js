@@ -2939,11 +2939,11 @@ function ticketCard(i) {
   if (i.pr_state) foot.appendChild(prStateBadge(i.pr_state));
   if (i.checks && i.checks.state) foot.appendChild(checksBadge(i.checks));
 
-  // #751: right-aligned action cluster — Open Issue / Open PR always, plus the
+  // #751: right-aligned action cluster — View Issue / View PR always, plus the
   // existing Go to Session / Start Working affordance.
   const actions = el('div', 'card-actions');
-  actions.appendChild(openLinkButton('Open Issue', i.url));
-  if (i.pr_url) actions.appendChild(openLinkButton('Open PR', i.pr_url));
+  actions.appendChild(openLinkButton('View Issue', i.url));
+  if (i.pr_url) actions.appendChild(openLinkButton('View PR', i.pr_url));
   if (i.linked_session_id) {
     const go = el('button', 'action-btn', 'Go to Session');
     go.onclick = () => selectSession(i.linked_session_id);

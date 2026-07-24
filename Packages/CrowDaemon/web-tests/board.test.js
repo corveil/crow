@@ -95,10 +95,10 @@ check('comment count 4 shown', q('.byline-comments').length >= 1 && /4/.test(q('
 check('description excerpt rendered', q('.card-desc').length >= 1);
 check('long body has Show more toggle', [...q('.card-desc-toggle')].some((b) => b.textContent === 'Show more'));
 check('short body (#42) still renders a desc', q('.card-desc').length >= 2);
-check('Open Issue buttons on all 3', [...q('.open-link-btn')].filter((b) => b.textContent === 'Open Issue').length === 3);
-check('Open PR buttons on the 2 with a PR', [...q('.open-link-btn')].filter((b) => b.textContent === 'Open PR').length === 2);
-check('Open Issue href correct', [...q('.open-link-btn')].find((b) => b.textContent === 'Open Issue').getAttribute('href') === 'https://github.com/corveil/crow/issues/751');
-check('Open Issue opens new tab', [...q('.open-link-btn')].find((b) => b.textContent === 'Open Issue').getAttribute('target') === '_blank');
+check('View Issue buttons on all 3', [...q('.open-link-btn')].filter((b) => b.textContent === 'View Issue').length === 3);
+check('View PR buttons on the 2 with a PR', [...q('.open-link-btn')].filter((b) => b.textContent === 'View PR').length === 2);
+check('View Issue href correct', [...q('.open-link-btn')].find((b) => b.textContent === 'View Issue').getAttribute('href') === 'https://github.com/corveil/crow/issues/751');
+check('View Issue opens new tab', [...q('.open-link-btn')].find((b) => b.textContent === 'View Issue').getAttribute('target') === '_blank');
 check('pr-state badges = 2', q('.pr-state-badge').length === 2);
 check('draft badge text present', /Draft PR/.test(board.textContent));
 check('checks badges = 2', q('.checks-badge').length === 2);

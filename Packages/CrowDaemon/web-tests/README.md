@@ -10,7 +10,7 @@ Drives `renderTicketBoard` / `ticketCard` against mock board payloads and
 asserts the resulting DOM. Coverage: repo filter, every sort mode,
 status-pipeline + text-search composition, the label-name search fix, richer
 card detail (author / created / comments / description excerpt + expand
-toggle), Open Issue / Open PR buttons (hrefs + `target=_blank`), inline PR
+toggle), View Issue / View PR buttons (hrefs + `target=_blank`), inline PR
 state + CI badges (incl. failing-check tooltip), and graceful degradation of an
 older payload with the new fields absent.
 
