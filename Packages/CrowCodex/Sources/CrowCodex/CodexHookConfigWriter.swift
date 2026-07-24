@@ -129,7 +129,12 @@ public struct CodexHookConfigWriter: HookConfigWriter {
             line: "hooks = true"
         )
 
-        try content.write(toFile: tomlPath, atomically: true, encoding: .utf8)
+        // Route through the owner-only writer: this is the same `config.toml`
+        // that `CodexMCPWriter` later fills with mirrored MCP `env` tokens, and
+        // `installGlobalTomlConfig` runs first on every boot — writing it 0600
+        // here keeps the file owner-only even on the very first boot, before the
+        // mirror runs (#843 review round 2).
+        try writeConfigPrivately(content, toFile: tomlPath)
     }
 
     // MARK: - TOML Line Editing (Minimal)

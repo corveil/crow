@@ -2786,11 +2786,15 @@ public final class SessionService {
     /// `ProcessInfo.processInfo.arguments[0]`).
     nonisolated static func buildReviewPrompt(prURL: String, prTitle: String, repoSlug: String, prNumber: Int, agentKind: AgentKind) -> String {
         switch agentKind {
-        case .cursor, .openCode:
-            // Cursor and OpenCode both lack a Crow slash-command engine, so
-            // they get the whole crow-review-pr SKILL body inlined into the
-            // prompt file (a self-contained brief). `agentKind` is threaded
-            // through so the posted review footer names the right agent.
+        case .cursor, .openCode, .codex:
+            // Cursor, OpenCode, and Codex all lack a Crow slash-command engine,
+            // so they get the whole crow-review-pr SKILL body inlined into the
+            // prompt file (a self-contained brief). Without this, a Codex review
+            // would receive a bare `/crow-review-pr <URL>` line it can't resolve,
+            // never run `gh pr review`, and so never satisfy the review-
+            // completion contract — the loop #830 set out to remove (#843
+            // review round 2). `agentKind` is threaded through so the posted
+            // review footer names the right agent.
             return cursorReviewPrompt(
                 skillBody: Scaffolder.bundledReviewSkill(),
                 prURL: prURL,

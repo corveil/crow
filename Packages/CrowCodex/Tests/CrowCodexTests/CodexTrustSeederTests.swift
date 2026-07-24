@@ -105,4 +105,24 @@ struct CodexTrustSeederTests {
             .filter { $0.hasPrefix(".crow-codex-") }
         #expect(leftovers.isEmpty)
     }
+
+    @Test func seedTrustTightensPreexistingWorldReadableConfig() throws {
+        // Exercises the replace-an-existing-file path (#843 review round 2): a
+        // config.toml that was already world-readable must come out 0600 after
+        // seeding, since the rename swaps in the 0600 temp's inode.
+        let (project, config) = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: (config as NSString).deletingLastPathComponent) }
+
+        FileManager.default.createFile(
+            atPath: config,
+            contents: Data("model = \"x\"\n".utf8),
+            attributes: [.posixPermissions: 0o644])
+
+        let outcome = CodexTrustSeeder.seedTrust(projectPath: project, codexConfigPath: config)
+        #expect(outcome == .seeded)
+        let perms = try FileManager.default.attributesOfItem(atPath: config)[.posixPermissions] as? NSNumber
+        #expect(perms?.intValue == 0o600)
+        // Pre-existing user content is preserved through the tightening rewrite.
+        #expect(try String(contentsOfFile: config, encoding: .utf8).contains("model = \"x\""))
+    }
 }

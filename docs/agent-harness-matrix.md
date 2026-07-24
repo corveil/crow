@@ -155,7 +155,15 @@ harness's sessions
   `codex exec -a never -s workspace-write` (approval off, sandbox still bounded;
   the analogue of Claude's `--permission-mode auto`, **not** the full-bypass
   `--dangerously-bypass-approvals-and-sandbox` / `-s danger-full-access`, #830).
-  Interactive jobs and `.work`/`.review` don't take the knob.
+  `.work` doesn't take the knob. `.review` is **human-gated**: it runs the
+  inlined skill interactively, so an unattended review (`reviewAutoPermissionMode`
+  on) stalls at Codex's first approval prompt until someone approves the `gh`
+  call — the same property Cursor's review has. It is *not* wired to headless
+  `exec` because `workspace-write` blocks network, so `gh pr review` can't post
+  from inside the sandbox; enabling `[sandbox_workspace_write] network_access`
+  would lift that but is a **global** Codex setting (it would change the sandbox
+  for all of the user's Codex usage, not just Crow's), so it's left out pending
+  a per-project scoping story.
 - **OpenCode:** `autoPermissionMode` is honored for `.job` sessions only, via
   **runtime-probed** flags. `OpenCodeLaunchArgs` runs two independently-cached
   probes: the interactive TUI's `--auto` (probed with `opencode --help`, **no**
