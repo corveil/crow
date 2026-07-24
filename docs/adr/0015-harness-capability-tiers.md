@@ -99,7 +99,13 @@ that will close them (Cursor/Codex/OpenCode launchers are written but
 - **Version-pinned reasons are re-check targets, not settled facts.** Each pin
   must be re-verified when the harness ships a new release; a stale pin is a bug.
   These pins are the explicit **seed for a follow-up capability audit** — the
-  audit walks each row and confirms (or retires) the reason. The canonical
+  audit walks each row and confirms (or retires) the reason. **That audit is now
+  recorded in [`agent-harness-gap-audit.md`](../agent-harness-gap-audit.md)
+  ([#828](https://github.com/corveil/crow/issues/828)):** of the eight gaps above,
+  five have gained an upstream flag (resume, auto-permission, MCP, Codex review,
+  per-project hook scope) with closure tickets
+  [#829](https://github.com/corveil/crow/issues/829)–[#831](https://github.com/corveil/crow/issues/831);
+  Codex async hooks (gap 4) still holds. The canonical
   row-set lives in the matrix's
   [Version-pinned reasons — re-check targets](../agent-harness-matrix.md#version-pinned-reasons--re-check-targets)
   table (kept in one place so the two docs can't go stale asymmetrically);

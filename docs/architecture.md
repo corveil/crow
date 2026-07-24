@@ -104,7 +104,7 @@ never on a central `switch`. Harnesses register at daemon boot into
 their binary resolves on `PATH`.
 
 The harnesses are **not at parity**: Claude Code is the reference implementation
-and the others ship with deliberate, documented gaps. Three references cover this:
+and the others ship with deliberate, documented gaps. These references cover this:
 
 - **[Coding-agent harness capability matrix](agent-harness-matrix.md)** — the
   living harness × capability grid, with a per-dimension why/notes section citing code and ADRs.
@@ -113,6 +113,9 @@ and the others ship with deliberate, documented gaps. Three references cover thi
   task/code-provider axis in [ADR 0005](adr/0005-task-and-code-backend-protocols.md)).
 - **[ADR 0015](adr/0015-harness-capability-tiers.md)** — why the non-Claude
   harnesses ship with capability gaps, and the version-pinned reasons to re-check.
+- **[Harness capability gap audit](agent-harness-gap-audit.md)** — re-checks each
+  ADR-0015 version-pinned reason against current upstream CLIs, recording which
+  gaps have become closeable (with flag + min version + closing approach).
 
 Mid-session, a session can switch harnesses via `crow handoff-agent`
 ([ADR 0011](adr/0011-agent-handoff-preserves-session-not-chat.md)).
