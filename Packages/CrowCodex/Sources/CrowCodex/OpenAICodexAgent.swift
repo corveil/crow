@@ -72,7 +72,18 @@ public struct OpenAICodexAgent: CodingAgent {
             // No env prefix (Codex has no OTEL equivalent), no `--rc` (Codex
             // doesn't do remote control). Mirrors Claude's `--continue`.
             return "\(codexPath) resume --last\n"
-        case .job:
+        case .job, .workerRun:
+            // First launch: feed `.crow-job-prompt.md` as the positional
+            // initial message so Codex starts working unattended. A Corveil
+            // worker run (corveil/crow#801) reuses the same prompt-file
+            // convention in its scratch workdir, so it shares this branch.
+            // `SessionService.launchAgent` wrote the file before invoking us
+            // and flips `reviewPromptDispatched` (the generic "initial
+            // prompt dispatched" gate) after the command goes out.
+            // Subsequent restarts fall back to bare `codex` — Codex has no
+            // `--continue` equivalent in MVP, so the user just resumes the
+            // TUI rather than re-running the whole prompt (CROW-493).
+            // Mirrors `CursorAgent.autoLaunchCommand`'s `.job` branch.
             if !session.reviewPromptDispatched {
                 // First launch: feed `.crow-job-prompt.md` as the initial
                 // message so Codex starts working unattended. `SessionService`

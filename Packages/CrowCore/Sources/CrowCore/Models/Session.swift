@@ -73,6 +73,18 @@ public struct Session: Identifiable, Codable, Sendable {
     // field (CROW-593).
     public var reviewAuthor: String?
 
+    // Corveil worker-run linkage for a `.workerRun` session (corveil/crow#801).
+    // Persisted so a relaunched `crowd` can still map the agent's finish onto
+    // `corveil worker-run complete` for the right run, with the right worker id,
+    // and wipe the scratch dir (which holds the scoped `CORVEIL_API_KEY`). Nil
+    // for every other session kind.
+    /// The claimed Corveil worker-run id this session is executing.
+    public var workerRunID: String?
+    /// The stable `worker_id` used to claim/heartbeat/complete the run.
+    public var workerID: String?
+    /// The repo-less scratch workdir the run executes in (wiped on finish).
+    public var workerRunScratchDir: String?
+
     /// Whether this session is a Manager (orchestration) session. Managers run
     /// Claude Code in the devRoot and are excluded from PR/issue tracking.
     public var isManager: Bool { kind == .manager }
@@ -149,7 +161,10 @@ public struct Session: Identifiable, Codable, Sendable {
         agentSessionEndedAt: Date? = nil,
         orgGoal: String? = nil,
         ticketPriority: TicketPriority? = nil,
-        reviewAuthor: String? = nil
+        reviewAuthor: String? = nil,
+        workerRunID: String? = nil,
+        workerID: String? = nil,
+        workerRunScratchDir: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -172,6 +187,9 @@ public struct Session: Identifiable, Codable, Sendable {
         self.orgGoal = orgGoal
         self.ticketPriority = ticketPriority
         self.reviewAuthor = reviewAuthor
+        self.workerRunID = workerRunID
+        self.workerID = workerID
+        self.workerRunScratchDir = workerRunScratchDir
     }
 
     /// Parse a GitHub PR URL (`https://github.com/<owner>/<repo>/pull/<number>`)
@@ -213,6 +231,9 @@ public struct Session: Identifiable, Codable, Sendable {
         orgGoal = try container.decodeIfPresent(String.self, forKey: .orgGoal)
         ticketPriority = try container.decodeIfPresent(TicketPriority.self, forKey: .ticketPriority)
         reviewAuthor = try container.decodeIfPresent(String.self, forKey: .reviewAuthor)
+        workerRunID = try container.decodeIfPresent(String.self, forKey: .workerRunID)
+        workerID = try container.decodeIfPresent(String.self, forKey: .workerID)
+        workerRunScratchDir = try container.decodeIfPresent(String.self, forKey: .workerRunScratchDir)
         // CROW-573 renamed `pinned` → `locked`. Prefer the new key, but fall
         // back to the legacy `pinned` key so sessions locked under CROW-569
         // remain locked after upgrade.

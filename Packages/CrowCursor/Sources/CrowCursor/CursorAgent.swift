@@ -103,8 +103,9 @@ public struct CursorAgent: CodingAgent {
             // seed always applies, and the auto-permission flags when the opt-in
             // coder-view toggle is on (#586) — both come from `launchArgs`.
             return "\(agentPath)\(launchArgs)\n"
-        case .job, .review:
-            // Jobs and reviews share the same dispatch shape: a pre-written
+        case .job, .review, .workerRun:
+            // Jobs, reviews, and Corveil worker runs share the same dispatch
+            // shape: a pre-written
             // initial prompt file (`.crow-job-prompt.md` / `.crow-review-prompt.md`)
             // is fed as the positional prompt on first launch so Cursor starts
             // working unattended. Cursor's interactive TUI accepts a positional
