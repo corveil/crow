@@ -1,6 +1,6 @@
 import Foundation
 
-/// A parsed HTTP/1.1 request.
+/// A parsed HTTP/1.1 request. Header keys are normalized to lowercase.
 struct HTTPRequest: Sendable {
     let method: String
     let path: String
@@ -9,11 +9,7 @@ struct HTTPRequest: Sendable {
 
     /// Get a header value (case-insensitive lookup).
     func header(_ name: String) -> String? {
-        let lower = name.lowercased()
-        for (key, value) in headers {
-            if key.lowercased() == lower { return value }
-        }
-        return nil
+        headers[name.lowercased()]
     }
 
     /// Content-Length from headers, or 0 if absent.
@@ -58,9 +54,15 @@ struct HTTPResponse: Sendable {
 
 /// Minimal HTTP/1.1 request parser for OTLP payloads.
 ///
-/// Only handles simple POST requests with Content-Length (no chunked encoding,
-/// no keep-alive). This is sufficient for OTLP HTTP/JSON clients.
+/// Handles `Content-Length` and `Transfer-Encoding: chunked` framing; no
+/// keep-alive (the receiver closes each connection after responding) and no
+/// compressed bodies. Requests it cannot frame or read are reported as errors
+/// rather than passed on with an empty body — silently handing `JSONDecoder` a
+/// zero-byte body produced an unattributable decode error (#823).
 enum HTTPParser {
+
+    /// Reject absurd bodies rather than buffering them (64 MiB).
+    static let maxBodyBytes = 64 * 1024 * 1024
 
     /// Parse result from feeding data into the parser.
     enum ParseResult: Sendable {
@@ -71,6 +73,9 @@ enum HTTPParser {
         /// The data is malformed.
         case error(String)
     }
+
+    /// Methods that carry a request body and therefore require framing.
+    private static let bodyMethods: Set<String> = ["POST", "PUT", "PATCH"]
 
     /// Attempt to parse a complete HTTP request from the accumulated data.
     ///
@@ -109,35 +114,127 @@ enum HTTPParser {
         var headers: [String: String] = [:]
         for line in lines.dropFirst() {
             if let colonIndex = line.firstIndex(of: ":") {
-                let key = String(line[line.startIndex..<colonIndex]).trimmingCharacters(in: .whitespaces)
+                let key = String(line[line.startIndex..<colonIndex])
+                    .trimmingCharacters(in: .whitespaces).lowercased()
                 let value = String(line[line.index(after: colonIndex)...]).trimmingCharacters(in: .whitespaces)
                 headers[key] = value
             }
         }
 
-        // Determine body length
+        let expectsBody = bodyMethods.contains(method.uppercased())
+        if expectsBody, let rejection = rejectUnsupportedEncoding(headers) {
+            return .error(rejection)
+        }
+
         let bodyStart = separatorRange.upperBound
-        let contentLength: Int
-        if let cl = headers.first(where: { $0.key.lowercased() == "content-length" })?.value,
-           let len = Int(cl) {
-            contentLength = len
-        } else {
-            contentLength = 0
+        let available = data.count - data.distance(from: data.startIndex, to: bodyStart)
+
+        // Framing: chunked takes precedence over Content-Length (RFC 9112 §6.1).
+        let transferEncoding = headers["transfer-encoding"]?.lowercased()
+        if transferEncoding?.contains("chunked") == true {
+            switch dechunk(data, from: bodyStart) {
+            case .needsMore:
+                return .needsMore
+            case let .error(message):
+                return .error(message)
+            case let .complete(body):
+                return .complete(HTTPRequest(method: method, path: path, headers: headers, body: body))
+            }
         }
 
-        // Check if we have the full body
-        let bodyAvailable = data.count - data.distance(from: data.startIndex, to: bodyStart)
-        if bodyAvailable < contentLength {
-            return .needsMore
+        if let value = headers["content-length"] {
+            guard let contentLength = Int(value), contentLength >= 0 else {
+                return .error("Malformed Content-Length: \(value)")
+            }
+            guard contentLength <= maxBodyBytes else {
+                return .error("Body too large: \(contentLength) bytes")
+            }
+            if available < contentLength {
+                return .needsMore
+            }
+            let body = data[bodyStart..<data.index(bodyStart, offsetBy: contentLength)]
+            return .complete(HTTPRequest(method: method, path: path, headers: headers, body: Data(body)))
         }
 
-        let body = data[bodyStart..<data.index(bodyStart, offsetBy: contentLength)]
+        // No framing at all. A body-bearing request without Content-Length or
+        // chunked encoding cannot be read; saying so beats forwarding an empty
+        // body that fails later as an opaque decode error.
+        if expectsBody {
+            return .error("Missing Content-Length or Transfer-Encoding on \(method) \(path)")
+        }
+        return .complete(HTTPRequest(method: method, path: path, headers: headers, body: Data()))
+    }
 
-        return .complete(HTTPRequest(
-            method: method,
-            path: path,
-            headers: headers,
-            body: Data(body)
-        ))
+    /// Reject bodies this parser cannot read, naming the reason.
+    private static func rejectUnsupportedEncoding(_ headers: [String: String]) -> String? {
+        if let encoding = headers["content-encoding"]?.lowercased(),
+           !encoding.isEmpty, encoding != "identity" {
+            return "Unsupported Content-Encoding: \(encoding) (OTLP export must be uncompressed)"
+        }
+        if let contentType = headers["content-type"]?.lowercased() {
+            // Tolerate parameters, e.g. "application/json; charset=utf-8".
+            let mediaType = contentType.split(separator: ";").first.map(String.init)?
+                .trimmingCharacters(in: .whitespaces) ?? contentType
+            guard mediaType == "application/json" || mediaType.hasSuffix("+json") else {
+                return "Unsupported Content-Type: \(mediaType) (OTLP/JSON only)"
+            }
+        }
+        return nil
+    }
+
+    private enum ChunkedResult {
+        case complete(Data)
+        case needsMore
+        case error(String)
+    }
+
+    /// Reassemble a `Transfer-Encoding: chunked` body.
+    ///
+    /// Trailers after the terminating zero-length chunk are consumed and
+    /// discarded; the receiver has no use for them.
+    private static func dechunk(_ data: Data, from start: Data.Index) -> ChunkedResult {
+        let crlf = Data("\r\n".utf8)
+        var cursor = start
+        var body = Data()
+
+        while true {
+            guard let lineEnd = data.range(of: crlf, in: cursor..<data.endIndex)?.lowerBound else {
+                return .needsMore
+            }
+            let sizeField = data[cursor..<lineEnd]
+            guard let sizeText = String(data: sizeField, encoding: .utf8) else {
+                return .error("Invalid chunk size encoding")
+            }
+            // A chunk size may carry extensions: "1a;name=value".
+            let hex = sizeText.split(separator: ";").first.map(String.init) ?? sizeText
+            guard let size = Int(hex.trimmingCharacters(in: .whitespaces), radix: 16), size >= 0 else {
+                return .error("Malformed chunk size: \(sizeText)")
+            }
+
+            let chunkStart = data.index(lineEnd, offsetBy: crlf.count)
+
+            if size == 0 {
+                // Terminating chunk: an immediate CRLF, or trailers then CRLFCRLF.
+                if data.distance(from: chunkStart, to: data.endIndex) >= crlf.count,
+                   data[chunkStart..<data.index(chunkStart, offsetBy: crlf.count)] == crlf {
+                    return .complete(body)
+                }
+                guard data.range(of: Data("\r\n\r\n".utf8), in: chunkStart..<data.endIndex) != nil else {
+                    return .needsMore
+                }
+                return .complete(body)
+            }
+
+            guard body.count + size <= maxBodyBytes else {
+                return .error("Chunked body too large")
+            }
+            // Chunk data plus its trailing CRLF must both have arrived.
+            guard data.distance(from: chunkStart, to: data.endIndex) >= size + crlf.count else {
+                return .needsMore
+            }
+            let chunkEnd = data.index(chunkStart, offsetBy: size)
+            body.append(data[chunkStart..<chunkEnd])
+            cursor = data.index(chunkEnd, offsetBy: crlf.count)
+        }
     }
 }

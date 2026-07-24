@@ -17,7 +17,8 @@ let package = Package(
         ),
         .testTarget(
             name: "CrowTelemetryTests",
-            dependencies: ["CrowTelemetry"]
+            dependencies: ["CrowTelemetry"],
+            resources: [.copy("Fixtures")]
         ),
     ]
 )
