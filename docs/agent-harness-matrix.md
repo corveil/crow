@@ -99,7 +99,7 @@ harness's sessions
   Remote Control panel.
 - **Cursor & OpenCode:** `true`, but there is **no RC flag** — remote driving is
   `crow send` typing into the interactive TUI (the agent-agnostic stdin path: the
-  `send` RPC handler in `EngineRouter` → `TerminalRouter.send`). The badge
+  `send` RPC handler in `EngineRouter.swift` → `TerminalRouter.send`). The badge
   reflects that Crow *can* drive them, not that the agent has a native RC
   protocol.
 - **Codex:** `false` — Codex has no remote-control surface at all
@@ -134,7 +134,7 @@ All harnesses report lifecycle events by shelling out to `crow hook-event`, but
   plus a `config.toml` `notify = ["<crow>", "codex-notify"]` line and
   `features.hooks = true`. `cwd`-resolved like Cursor. The `notify` bridge is a
   Tier-2 fallback: `crow codex-notify` translates Codex's post-turn JSON payload
-  into a hook event (`CodexNotifyPayload`, `CodexNotifyCommand`).
+  into a hook event (`CodexNotifyPayload`, `CodexNotify`).
 - **OpenCode** — no command-hook file at all; Crow installs a global **JS
   plugin** `crow-hooks.js` under `~/.config/opencode/plugins/` that subscribes to
   OpenCode's event bus + `tool.execute.*` / `permission.ask` hooks and pipes a

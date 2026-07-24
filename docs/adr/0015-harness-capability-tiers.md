@@ -40,7 +40,7 @@ records the rationale for each gap here (verbatim reasons preserved from source)
    `supportsRemoteControl = false` ("Codex doesn't do remote control", no `--rc`
    flag). Cursor and OpenCode set it `true` but have **no RC flag** — remote
    driving is `crow send` typing into the interactive TUI (the `send` RPC handler
-   in `EngineRouter` → `TerminalRouter.send`), agent-agnostic, not a per-launch
+   in `EngineRouter.swift` → `TerminalRouter.send`), agent-agnostic, not a per-launch
    flag.
 
 4. **Codex hooks are sync-only.** `CodexHookConfigWriter.asyncEvents` is empty:
@@ -73,13 +73,13 @@ records the rationale for each gap here (verbatim reasons preserved from source)
    so *all* of its capabilities are unavailable — the picker and `handoff-agent`
    act as if it doesn't exist (a handoff to it throws `agentNotRegistered`).
    Claude is always registered. Gating is uneven across surfaces, though: session
-   *creation* (`EngineRouter` new-session) takes `requestedAgentKind ??
+   *creation* (`EngineRouter.swift` new-session) takes `requestedAgentKind ??
    agentKind(for: .work)` with **no** registry check, so a session can be created
    with an unregistered kind and `launchAgent` then silently no-ops on the
    registry lookup. The two Manager-creation surfaces also differ: the **web**
-   `create-manager` (`EngineRouter`) validates against the registry (CROW-593
+   `create-manager` (`EngineRouter.swift`) validates against the registry (CROW-593
    security gate, falling back to the configured default), but the **daemon's**
-   `create-manager` (`RPCHandlers`) passes the requested kind straight through —
+   `create-manager` (`RPCHandlers.swift`) passes the requested kind straight through —
    and there the launch degrades differently again, `managerCommand` falling back
    to `AgentRegistry.defaultAgent` rather than no-op'ing. Closing these
    asymmetries is a code follow-up, not a doc change.
