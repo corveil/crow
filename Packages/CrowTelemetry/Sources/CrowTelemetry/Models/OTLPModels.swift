@@ -327,6 +327,17 @@ public struct OTLPMetricsPayload: Codable, Sendable {
 public struct ResourceMetrics: Codable, Sendable {
     public let resource: OTLPResource?
     public let scopeMetrics: [ScopeMetrics]?
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        resource = try? container.decodeIfPresent(OTLPResource.self, forKey: .resource)
+        scopeMetrics = container.otlpLenientArray(
+            ScopeMetrics.self,
+            forKey: .scopeMetrics,
+            label: "scopeMetrics",
+            diagnostics: decoder.otlpDiagnostics
+        )
+    }
 }
 
 /// Metrics from a single instrumentation scope.
@@ -456,6 +467,17 @@ public struct OTLPLogsPayload: Codable, Sendable {
 public struct ResourceLogs: Codable, Sendable {
     public let resource: OTLPResource?
     public let scopeLogs: [ScopeLogs]?
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        resource = try? container.decodeIfPresent(OTLPResource.self, forKey: .resource)
+        scopeLogs = container.otlpLenientArray(
+            ScopeLogs.self,
+            forKey: .scopeLogs,
+            label: "scopeLogs",
+            diagnostics: decoder.otlpDiagnostics
+        )
+    }
 }
 
 /// Log records from a single instrumentation scope.

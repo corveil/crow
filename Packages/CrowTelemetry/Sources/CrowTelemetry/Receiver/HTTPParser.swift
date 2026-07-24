@@ -30,13 +30,26 @@ struct HTTPResponse: Sendable {
     }
 
     static func badRequest(message: String = "Bad Request") -> HTTPResponse {
-        HTTPResponse(statusCode: 400, statusText: "Bad Request",
-                     body: Data("{\"error\":\"\(message)\"}".utf8))
+        HTTPResponse(statusCode: 400, statusText: "Bad Request", body: errorBody(message))
     }
 
     static func notFound() -> HTTPResponse {
-        HTTPResponse(statusCode: 404, statusText: "Not Found",
-                     body: Data("{\"error\":\"Not Found\"}".utf8))
+        HTTPResponse(statusCode: 404, statusText: "Not Found", body: errorBody("Not Found"))
+    }
+
+    /// Build the `{"error": …}` body with proper JSON escaping.
+    ///
+    /// Parser messages quote request-controlled values (`Content-Type`, a chunk
+    /// size, the request path), so a quote or backslash in one of them would
+    /// otherwise break out of the string and emit malformed JSON.
+    private static func errorBody(_ message: String) -> Data {
+        guard let data = try? JSONSerialization.data(
+            withJSONObject: ["error": message],
+            options: [.sortedKeys, .withoutEscapingSlashes]
+        ) else {
+            return Data(#"{"error":"Bad Request"}"#.utf8)
+        }
+        return data
     }
 
     /// Serialize to HTTP/1.1 response bytes.
@@ -144,7 +157,7 @@ enum HTTPParser {
 
         if let value = headers["content-length"] {
             guard let contentLength = Int(value), contentLength >= 0 else {
-                return .error("Malformed Content-Length: \(value)")
+                return .error("Malformed Content-Length: \(quoted(value))")
             }
             guard contentLength <= maxBodyBytes else {
                 return .error("Body too large: \(contentLength) bytes")
@@ -160,23 +173,31 @@ enum HTTPParser {
         // chunked encoding cannot be read; saying so beats forwarding an empty
         // body that fails later as an opaque decode error.
         if expectsBody {
-            return .error("Missing Content-Length or Transfer-Encoding on \(method) \(path)")
+            return .error("Missing Content-Length or Transfer-Encoding on \(quoted(method)) \(quoted(path))")
         }
         return .complete(HTTPRequest(method: method, path: path, headers: headers, body: Data()))
+    }
+
+    /// Quote a request-controlled value into an error message.
+    ///
+    /// Bounded so an 8 KiB header cannot bloat the 400 response or the log line
+    /// it is echoed into. Escaping is handled where the JSON body is built.
+    private static func quoted(_ value: String, limit: Int = 120) -> String {
+        value.count <= limit ? value : String(value.prefix(limit)) + "…"
     }
 
     /// Reject bodies this parser cannot read, naming the reason.
     private static func rejectUnsupportedEncoding(_ headers: [String: String]) -> String? {
         if let encoding = headers["content-encoding"]?.lowercased(),
            !encoding.isEmpty, encoding != "identity" {
-            return "Unsupported Content-Encoding: \(encoding) (OTLP export must be uncompressed)"
+            return "Unsupported Content-Encoding: \(quoted(encoding)) (OTLP export must be uncompressed)"
         }
         if let contentType = headers["content-type"]?.lowercased() {
             // Tolerate parameters, e.g. "application/json; charset=utf-8".
             let mediaType = contentType.split(separator: ";").first.map(String.init)?
                 .trimmingCharacters(in: .whitespaces) ?? contentType
             guard mediaType == "application/json" || mediaType.hasSuffix("+json") else {
-                return "Unsupported Content-Type: \(mediaType) (OTLP/JSON only)"
+                return "Unsupported Content-Type: \(quoted(mediaType)) (OTLP/JSON only)"
             }
         }
         return nil
@@ -208,7 +229,7 @@ enum HTTPParser {
             // A chunk size may carry extensions: "1a;name=value".
             let hex = sizeText.split(separator: ";").first.map(String.init) ?? sizeText
             guard let size = Int(hex.trimmingCharacters(in: .whitespaces), radix: 16), size >= 0 else {
-                return .error("Malformed chunk size: \(sizeText)")
+                return .error("Malformed chunk size: \(quoted(sizeText))")
             }
 
             let chunkStart = data.index(lineEnd, offsetBy: crlf.count)
@@ -225,7 +246,10 @@ enum HTTPParser {
                 return .complete(body)
             }
 
-            guard body.count + size <= maxBodyBytes else {
+            // Compare against the remaining budget rather than summing: a chunk
+            // size near `Int.max` is well-formed hex, and `body.count + size`
+            // would trap on overflow before the cap could reject it.
+            guard size <= maxBodyBytes, body.count <= maxBodyBytes - size else {
                 return .error("Chunked body too large")
             }
             // Chunk data plus its trailing CRLF must both have arrived.
@@ -233,8 +257,14 @@ enum HTTPParser {
                 return .needsMore
             }
             let chunkEnd = data.index(chunkStart, offsetBy: size)
+            let terminatorEnd = data.index(chunkEnd, offsetBy: crlf.count)
+            // A chunk must end with CRLF; without this check a wrong size
+            // silently desyncs the stream and corrupts the rest of the body.
+            guard data[chunkEnd..<terminatorEnd] == crlf else {
+                return .error("Malformed chunk terminator")
+            }
             body.append(data[chunkStart..<chunkEnd])
-            cursor = data.index(chunkEnd, offsetBy: crlf.count)
+            cursor = terminatorEnd
         }
     }
 }

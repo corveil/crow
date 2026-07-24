@@ -146,6 +146,51 @@ func malformedChunkSizeIsAnError() throws {
     #expect(try errorMessage(data).contains("Malformed chunk size"))
 }
 
+@Test("A chunk whose declared size disagrees with its framing is rejected")
+func desyncedChunkTerminatorIsRejected() throws {
+    // Declares 4 bytes but supplies 6 before the CRLF: without validating the
+    // terminator the parser would resume mid-data and corrupt the rest.
+    let data = request(
+        "POST /v1/logs",
+        body: "4\r\ntestXX\r\n0\r\n\r\n",
+        headers: ["Content-Type": "application/json", "Transfer-Encoding": "chunked"]
+    )
+    #expect(try errorMessage(data).contains("Malformed chunk terminator"))
+}
+
+@Test("A chunk size near Int.max is rejected rather than overflowing the cap")
+func hugeChunkSizeIsRejectedWithoutOverflow() throws {
+    // 0x7FFFFFFFFFFFFFFF is Int.max — valid hex, so it parses. The first chunk
+    // puts 4 bytes in the buffer, so `body.count + size` overflows and traps:
+    // the cap has to be checked against the remaining budget instead.
+    let data = request(
+        "POST /v1/logs",
+        body: "4\r\ntest\r\n7FFFFFFFFFFFFFFF\r\n",
+        headers: ["Content-Type": "application/json", "Transfer-Encoding": "chunked"]
+    )
+    #expect(try errorMessage(data).contains("Chunked body too large"))
+}
+
+@Test("A body over the size cap is rejected before it is buffered")
+func chunkedBodyOverCapIsRejected() throws {
+    let data = request(
+        "POST /v1/logs",
+        body: "\(String(HTTPParser.maxBodyBytes + 1, radix: 16))\r\n",
+        headers: ["Content-Type": "application/json", "Transfer-Encoding": "chunked"]
+    )
+    #expect(try errorMessage(data).contains("Chunked body too large"))
+}
+
+@Test("A chunk size that overflows Int is rejected as malformed")
+func overflowingChunkSizeIsRejected() throws {
+    let data = request(
+        "POST /v1/logs",
+        body: "FFFFFFFFFFFFFFFFFF\r\n",
+        headers: ["Content-Type": "application/json", "Transfer-Encoding": "chunked"]
+    )
+    #expect(try errorMessage(data).contains("Malformed chunk size"))
+}
+
 // MARK: - Framing and encoding rejections
 
 @Test("A POST with no framing is rejected instead of yielding an empty body")
@@ -238,4 +283,46 @@ func oversizedHeadersAreRejected() throws {
     var data = Data("POST /v1/logs HTTP/1.1\r\n".utf8)
     data.append(Data(String(repeating: "X", count: 9000).utf8))
     #expect(try errorMessage(data).contains("Headers too large"))
+}
+
+// MARK: - Error response encoding
+
+@Test("An error body stays valid JSON when the request quotes a value at it")
+func errorBodyEscapesRequestControlledValues() throws {
+    // A quote and a backslash in a header would previously break out of the
+    // hand-rolled `{"error":"…"}` string and emit malformed JSON.
+    let data = request(
+        "POST /v1/logs",
+        body: json,
+        headers: [#"Content-Type"#: #"application/"evil\ "#,
+                  "Content-Length": "\(json.utf8.count)"]
+    )
+    let response = HTTPResponse.badRequest(message: try errorMessage(data)).serialize()
+
+    let text = String(decoding: response, as: UTF8.self)
+    let bodyStart = try #require(text.range(of: "\r\n\r\n")).upperBound
+    let body = Data(text[bodyStart...].utf8)
+
+    let decoded = try #require(JSONSerialization.jsonObject(with: body) as? [String: String])
+    #expect(decoded["error"]?.contains("Unsupported Content-Type") == true)
+    #expect(decoded["error"]?.contains(#"application/"evil\"#) == true)
+}
+
+@Test("Paths are not slash-escaped in the error body")
+func errorBodyKeepsPathsReadable() throws {
+    let response = HTTPResponse.badRequest(message: "no framing on POST /v1/logs").serialize()
+    #expect(String(decoding: response, as: UTF8.self).contains(#"{"error":"no framing on POST /v1/logs"}"#))
+}
+
+@Test("A long header value is truncated out of the error message")
+func longHeaderValuesAreTruncated() throws {
+    let data = request(
+        "POST /v1/logs",
+        body: json,
+        headers: ["Content-Type": "application/" + String(repeating: "z", count: 4000),
+                  "Content-Length": "\(json.utf8.count)"]
+    )
+    let message = try errorMessage(data)
+    #expect(message.contains("…"))
+    #expect(message.count < 200)
 }

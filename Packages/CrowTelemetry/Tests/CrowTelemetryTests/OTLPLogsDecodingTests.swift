@@ -245,6 +245,46 @@ func consecutiveMalformedRecordsAreSkipped() throws {
     #expect(diagnostics.skipped("logRecords") == 3)
 }
 
+@Test("A malformed scope costs that scope, not the whole resource")
+func malformedScopeIsSkipped() throws {
+    let json = """
+    {"resourceLogs":[{
+      "resource":{"attributes":[
+        {"key":"crow.session.id","value":{"stringValue":"11111111-2222-3333-4444-555555555555"}}]},
+      "scopeLogs":["not a scope",
+        {"logRecords":[{"body":{"stringValue":"claude_code.user_prompt"}}]}]}]}
+    """
+    let (payload, diagnostics) = try decodeLogsReportingSkips(json)
+
+    let resource = try #require(payload.resourceLogs.first)
+    #expect(resource.resource?.crowSessionID == "11111111-2222-3333-4444-555555555555")
+    #expect(resource.scopeLogs?.count == 1)
+    #expect(resource.scopeLogs?[0].logRecords?[0].resolvedEventName == "claude_code.user_prompt")
+    #expect(diagnostics.skipped("scopeLogs") == 1)
+}
+
+@Test("A malformed metrics scope costs that scope, not the whole resource")
+func malformedMetricsScopeIsSkipped() throws {
+    let json = """
+    {"resourceMetrics":[{
+      "resource":{"attributes":[
+        {"key":"crow.session.id","value":{"stringValue":"11111111-2222-3333-4444-555555555555"}}]},
+      "scopeMetrics":[17,
+        {"metrics":[{"name":"claude_code.cost.usage",
+          "sum":{"aggregationTemporality":1,"isMonotonic":true,"dataPoints":[{"asDouble":1.5}]}}]}]}]}
+    """
+    let diagnostics = OTLPDecodeDiagnostics()
+    let decoder = JSONDecoder()
+    decoder.userInfo[.otlpDiagnostics] = diagnostics
+    let payload = try decoder.decode(OTLPMetricsPayload.self, from: Data(json.utf8))
+
+    let resource = try #require(payload.resourceMetrics.first)
+    #expect(resource.resource?.crowSessionID == "11111111-2222-3333-4444-555555555555")
+    #expect(resource.scopeMetrics?.count == 1)
+    #expect(resource.scopeMetrics?[0].metrics?[0].name == "claude_code.cost.usage")
+    #expect(diagnostics.skipped("scopeMetrics") == 1)
+}
+
 @Test("A field that should be an array but isn't is reported, not silently dropped")
 func nonArrayFieldIsReported() throws {
     let (payload, diagnostics) = try decodeLogsReportingSkips(logsPayload(records: """
