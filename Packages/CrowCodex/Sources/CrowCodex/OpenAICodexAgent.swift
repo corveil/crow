@@ -3,8 +3,13 @@ import CrowCore
 
 /// `CodingAgent` conformer for the OpenAI Codex CLI. Mirrors the shape of
 /// `ClaudeCodeAgent` while honoring Codex's quirks — global `~/.codex/`
-/// configuration, no `--rc` remote-control support, no `--continue`-style
-/// resume in MVP.
+/// configuration and no `--rc` remote-control support.
+///
+/// `codex` 0.141.0 closed the early-MVP gaps (#830): restarts now `codex
+/// resume --last`, reviews run the native `codex review --base` subcommand,
+/// and unattended `.job` sessions dispatch `codex exec … -a never -s
+/// workspace-write` (approval off, sandbox still bounded) instead of the
+/// interactive TUI.
 public struct OpenAICodexAgent: CodingAgent {
     public let kind: AgentKind = .codex
     public let displayName: String = "OpenAI Codex"
@@ -49,38 +54,54 @@ public struct OpenAICodexAgent: CodingAgent {
 
         switch session.kind {
         case .work:
-            // Bare `codex` launch — `.work` has no in-app prompt-file
-            // convention (`SessionService.initialPromptFileName` only fires
-            // for `.job`/`.review`). Skill-created `.work` sessions are
-            // seeded by `launch_codex` in `crow-workspace/setup.sh`, which
-            // feeds the prompt at first-launch time via `--command` (#492);
-            // the in-app resume path here just reopens the TUI. No env
-            // prefix (Codex has no OTEL equivalent), no `--continue` (MVP
-            // doesn't auto-resume), no `--rc` (Codex doesn't do remote
-            // control).
-            return "\(codexPath)\n"
+            // App-restart / terminal-recovery path (`autoLaunchCommand` only
+            // fires for restored terminals — brand-new `.work` sessions are
+            // seeded by `launch_codex` in `crow-workspace/setup.sh` via
+            // `--command`). Resume the most recent recorded thread instead of
+            // reopening a blank TUI (#830 — the "no `--continue` in MVP" pin is
+            // gone). `.work` threads are interactive, so plain `--last` selects
+            // them. No env prefix (Codex has no OTEL equivalent), no `--rc`
+            // (Codex doesn't do remote control). Mirrors Claude's `--continue`.
+            return "\(codexPath) resume --last\n"
         case .job:
-            // First launch: feed `.crow-job-prompt.md` as the positional
-            // initial message so Codex starts working unattended.
-            // `SessionService.launchAgent` wrote the file before invoking us
-            // and flips `reviewPromptDispatched` (the generic "initial
-            // prompt dispatched" gate) after the command goes out.
-            // Subsequent restarts fall back to bare `codex` — Codex has no
-            // `--continue` equivalent in MVP, so the user just resumes the
-            // TUI rather than re-running the whole prompt (CROW-493).
-            // Mirrors `CursorAgent.autoLaunchCommand`'s `.job` branch.
             if !session.reviewPromptDispatched {
+                // First launch: feed `.crow-job-prompt.md` as the initial
+                // message so Codex starts working unattended. `SessionService`
+                // wrote the file and flips `reviewPromptDispatched` after the
+                // command goes out.
                 let promptPath = (worktreePath as NSString)
                     .appendingPathComponent(".crow-job-prompt.md")
-                return "\(codexPath) \"$(cat \(promptPath))\"\n"
+                let promptArg = "\"$(cat \(promptPath))\""
+                if autoPermissionMode {
+                    // Non-interactive headless run with approval off but the
+                    // workspace-write sandbox still ON — the bounded default
+                    // that matches Claude's `--permission-mode auto` (#830,
+                    // scope-correction). Deliberately NOT
+                    // `--dangerously-bypass-approvals-and-sandbox` /
+                    // `-s danger-full-access`: those disable the sandbox and are
+                    // only for externally-sandboxed runners. Flags precede the
+                    // positional prompt so clap never mistakes prompt text for a
+                    // `resume`/`review` subcommand.
+                    return "\(codexPath) exec -a never -s workspace-write \(promptArg)\n"
+                }
+                // Interactive job (auto-permission off): drive the TUI with the
+                // initial prompt so the user still approves each step.
+                return "\(codexPath) \(promptArg)\n"
             }
-            return "\(codexPath)\n"
+            // Subsequent restarts resume the prior thread. `--include-non-
+            // interactive` is required so `--last` can select a session that
+            // first ran via `codex exec` (non-interactive), which the picker
+            // otherwise skips.
+            return "\(codexPath) resume --last --include-non-interactive\n"
         case .review:
-            // Review-on-Codex isn't supported in Phase C — the
-            // `/crow-review-pr` skill is Claude-only. Returning nil tells
-            // `SessionService.launchAgent` to log the skip and paste a
-            // user-facing `⚠️` echo.
-            return nil
+            // Native review subcommand (#830 — "Phase C, Claude-only" no longer
+            // holds). `codex review --base <branch>` reviews the checked-out PR
+            // head against its base non-interactively; the inlined review-skill
+            // brief the Claude/Cursor path feeds isn't needed for the review
+            // itself. Base is captured at review-creation from the PR metadata;
+            // fall back to `main` for legacy sessions that predate the field.
+            let base = session.reviewBaseBranch ?? "main"
+            return "\(codexPath) review --base \"\(base)\"\n"
         case .manager:
             // Manager sessions never auto-launch an agent — Crow drives them
             // externally. Matches `CursorAgent`'s `.manager` contract.

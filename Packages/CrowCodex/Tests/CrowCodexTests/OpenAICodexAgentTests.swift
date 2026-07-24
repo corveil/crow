@@ -25,10 +25,10 @@ struct OpenAICodexAgentTests {
             autoPermissionMode: false,
             telemetryPort: nil
         )
-        // Work sessions launch a bare `codex` — prefer the absolute binary
-        // path when `findBinary()` resolves, otherwise fall back to the bare
-        // token. Either way the tail is `codex\n` (no prompt, no flags).
-        #expect(cmd?.hasSuffix("codex\n") == true)
+        // Work sessions resume the most recent recorded thread on an app
+        // restart instead of reopening a blank TUI (#830) — prefer the absolute
+        // binary path when `findBinary()` resolves, otherwise the bare token.
+        #expect(cmd?.hasSuffix("codex resume --last\n") == true)
         #expect(cmd?.contains(".crow-job-prompt.md") == false)
     }
 
@@ -43,18 +43,33 @@ struct OpenAICodexAgentTests {
             autoPermissionMode: false,
             telemetryPort: 4318
         )
-        #expect(cmd?.hasSuffix("codex\n") == true)
+        #expect(cmd?.hasSuffix("codex resume --last\n") == true)
         // No OTEL env-var prefix and no review/job prompt file should be
         // referenced for a plain work session.
         #expect(cmd?.contains("OTEL_") == false)
         #expect(cmd?.contains(".crow-job-prompt.md") == false)
     }
 
-    @Test func autoLaunchCommandReviewSessionUnsupported() {
-        // Review-on-Codex isn't supported in Phase C — the review skill is
-        // Claude-only. Returning nil tells SessionService to log a skip and
-        // surface a `⚠️` echo in the terminal rather than producing a
-        // malformed command.
+    @Test func autoLaunchCommandReviewSessionRunsNativeReview() {
+        // #830: review-on-Codex is now the native `codex review --base <branch>`
+        // subcommand (was nil + a `⚠️` echo in Phase C). The base is captured
+        // at review-creation from the PR metadata.
+        let session = Session(
+            name: "review", kind: .review, agentKind: .codex, reviewBaseBranch: "develop")
+        let cmd = agent.autoLaunchCommand(
+            session: session,
+            worktreePath: "/tmp/wt",
+            remoteControlEnabled: false,
+            autoPermissionMode: false,
+            telemetryPort: nil
+        )
+        #expect(cmd?.hasSuffix("review --base \"develop\"\n") == true)
+        // The native review command doesn't read the inlined prompt file.
+        #expect(cmd?.contains(".crow-review-prompt.md") == false)
+    }
+
+    @Test func autoLaunchCommandReviewSessionDefaultsBaseToMain() {
+        // Legacy review sessions predating `reviewBaseBranch` fall back to main.
         let session = Session(name: "review", kind: .review, agentKind: .codex)
         let cmd = agent.autoLaunchCommand(
             session: session,
@@ -63,7 +78,7 @@ struct OpenAICodexAgentTests {
             autoPermissionMode: false,
             telemetryPort: nil
         )
-        #expect(cmd == nil)
+        #expect(cmd?.hasSuffix("review --base \"main\"\n") == true)
     }
 
     @Test func autoLaunchCommandManagerSessionUnsupported() {
@@ -80,10 +95,10 @@ struct OpenAICodexAgentTests {
         #expect(cmd == nil)
     }
 
-    @Test func autoLaunchCommandJobSessionFirstLaunch() {
-        // First job launch (reviewPromptDispatched == false) should pass the
-        // pre-written `.crow-job-prompt.md` as argv so Codex starts working
-        // unattended — mirrors the Claude/Cursor Jobs path (CROW-493).
+    @Test func autoLaunchCommandJobSessionFirstLaunchInteractive() {
+        // First job launch with auto-permission OFF drives the TUI with the
+        // pre-written `.crow-job-prompt.md` so the user still approves each
+        // step — mirrors the Claude/Cursor Jobs path (CROW-493).
         let session = Session(name: "job", kind: .job, agentKind: .codex)
         let cmd = agent.autoLaunchCommand(
             session: session,
@@ -95,13 +110,35 @@ struct OpenAICodexAgentTests {
         #expect(cmd != nil)
         #expect(cmd?.contains(".crow-job-prompt.md") == true)
         #expect(cmd?.contains("/tmp/wt/.crow-job-prompt.md") == true)
+        // Interactive path — not the headless `exec` runner.
+        #expect(cmd?.contains(" exec ") == false)
         #expect(cmd?.hasSuffix("\n") == true)
     }
 
+    @Test func autoLaunchCommandJobSessionFirstLaunchAutoPermission() {
+        // First job launch with auto-permission ON dispatches the non-
+        // interactive `codex exec` runner with approval OFF but the
+        // workspace-write sandbox still ON — the bounded default (#830), NOT
+        // the full-bypass variants.
+        let session = Session(name: "job", kind: .job, agentKind: .codex)
+        let cmd = agent.autoLaunchCommand(
+            session: session,
+            worktreePath: "/tmp/wt",
+            remoteControlEnabled: false,
+            autoPermissionMode: true,
+            telemetryPort: nil
+        )
+        #expect(cmd?.contains("exec -a never -s workspace-write") == true)
+        #expect(cmd?.contains("/tmp/wt/.crow-job-prompt.md") == true)
+        // Never the unbounded escape hatches.
+        #expect(cmd?.contains("danger-full-access") == false)
+        #expect(cmd?.contains("--dangerously-bypass") == false)
+    }
+
     @Test func autoLaunchCommandJobSessionSubsequentLaunch() {
-        // After the initial prompt has been dispatched, the deferred-launch
-        // path falls back to a bare `codex` (Codex has no `--continue`), so
-        // restarting Crow resumes the TUI instead of re-running the prompt.
+        // After the initial prompt has been dispatched, restarts resume the
+        // prior thread. `--include-non-interactive` is required so `--last` can
+        // select a session that first ran via `codex exec` (#830).
         var session = Session(name: "job", kind: .job, agentKind: .codex)
         session.reviewPromptDispatched = true
         let cmd = agent.autoLaunchCommand(
@@ -113,7 +150,7 @@ struct OpenAICodexAgentTests {
         )
         #expect(cmd != nil)
         #expect(cmd?.contains(".crow-job-prompt.md") == false)
-        #expect(cmd?.hasSuffix("codex\n") == true)
+        #expect(cmd?.hasSuffix("resume --last --include-non-interactive\n") == true)
     }
 
     @Test func findBinaryReturnsNilWhenAbsent() {
@@ -155,7 +192,7 @@ struct OpenAICodexAgentTests {
             autoPermissionMode: false,
             telemetryPort: nil
         )
-        #expect(cmd == "/bin/sh\n")
+        #expect(cmd == "/bin/sh resume --last\n")
     }
 
     @Test func findBinaryIgnoresOverrideWhenPathMissing() {

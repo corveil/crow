@@ -75,15 +75,25 @@ enum LaunchScaffold {
 
         if AgentRegistry.shared.agent(for: .codex) != nil {
             attempt("Codex scaffold") { try CodexScaffolder.scaffold(devRoot: devRoot) }
+            // An empty `CODEX_HOME=` is treated as unset — otherwise
+            // `appendingPathComponent("hooks.json")` on "" is a relative path
+            // and the config writes into the process CWD, matching the empty
+            // `XDG_CONFIG_HOME` guard below (#766 review).
+            let codexHome = nonEmptyEnv("CODEX_HOME") ?? NSString(string: "~/.codex").expandingTildeInPath
             if let crowPath {
-                // An empty `CODEX_HOME=` is treated as unset — otherwise
-                // `appendingPathComponent("hooks.json")` on "" is a relative path
-                // and the config writes into the process CWD, matching the empty
-                // `XDG_CONFIG_HOME` guard below (#766 review).
-                let codexHome = nonEmptyEnv("CODEX_HOME") ?? NSString(string: "~/.codex").expandingTildeInPath
                 attempt("Codex global config install") {
                     try CodexHookConfigWriter.installGlobalConfig(codexHome: codexHome, crowPath: crowPath)
                     try CodexHookConfigWriter.installGlobalTomlConfig(codexHome: codexHome, crowPath: crowPath)
+                }
+            }
+            // #830: mirror the user's Claude MCP servers (e.g. `jira`) into
+            // Codex so Codex sessions get the same tools a Claude session
+            // inherits from ~/.claude.json. Append-only; a no-op when the user
+            // has no `mcpServers` configured. Independent of `crowPath`.
+            attempt("Codex MCP mirror") {
+                let added = try CodexMCPWriter.installMCPConfig(codexHome: codexHome)
+                if !added.isEmpty {
+                    CrowDaemon.log("Codex MCP mirror added: \(added.joined(separator: ", "))")
                 }
             }
         }

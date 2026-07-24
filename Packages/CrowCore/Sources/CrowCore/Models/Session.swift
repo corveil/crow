@@ -73,6 +73,15 @@ public struct Session: Identifiable, Codable, Sendable {
     // field (CROW-593).
     public var reviewAuthor: String?
 
+    // PR base branch for a `.review` session (e.g. "main"), captured at
+    // review-creation from `PRMetadata.baseRefName`. Consumed by
+    // `OpenAICodexAgent.autoLaunchCommand`, which launches the review as a
+    // native `codex review --base <branch>` instead of feeding a prompt file
+    // (#830). Claude/Cursor reviews ignore it — they inline the review skill
+    // brief. Nil for non-review sessions and for legacy review sessions
+    // predating this field; Codex falls back to `main` when nil.
+    public var reviewBaseBranch: String?
+
     /// Whether this session is a Manager (orchestration) session. Managers run
     /// Claude Code in the devRoot and are excluded from PR/issue tracking.
     public var isManager: Bool { kind == .manager }
@@ -149,7 +158,8 @@ public struct Session: Identifiable, Codable, Sendable {
         agentSessionEndedAt: Date? = nil,
         orgGoal: String? = nil,
         ticketPriority: TicketPriority? = nil,
-        reviewAuthor: String? = nil
+        reviewAuthor: String? = nil,
+        reviewBaseBranch: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -172,6 +182,7 @@ public struct Session: Identifiable, Codable, Sendable {
         self.orgGoal = orgGoal
         self.ticketPriority = ticketPriority
         self.reviewAuthor = reviewAuthor
+        self.reviewBaseBranch = reviewBaseBranch
     }
 
     /// Parse a GitHub PR URL (`https://github.com/<owner>/<repo>/pull/<number>`)
@@ -213,6 +224,7 @@ public struct Session: Identifiable, Codable, Sendable {
         orgGoal = try container.decodeIfPresent(String.self, forKey: .orgGoal)
         ticketPriority = try container.decodeIfPresent(TicketPriority.self, forKey: .ticketPriority)
         reviewAuthor = try container.decodeIfPresent(String.self, forKey: .reviewAuthor)
+        reviewBaseBranch = try container.decodeIfPresent(String.self, forKey: .reviewBaseBranch)
         // CROW-573 renamed `pinned` → `locked`. Prefer the new key, but fall
         // back to the legacy `pinned` key so sessions locked under CROW-569
         // remain locked after upgrade.

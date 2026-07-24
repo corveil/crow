@@ -1,5 +1,6 @@
 import Foundation
 import CrowClaude
+import CrowCodex
 import CrowCore
 import CrowGit
 import CrowPersistence
@@ -916,6 +917,20 @@ public final class SessionService {
             }
         }
 
+        // Pre-trust the worktree so the agent's "do you trust this folder?"
+        // gate never blocks an unattended auto-launch. Trust does not inherit
+        // from parent directories, so every fresh worktree/clone would
+        // otherwise prompt (CROW-600 for Claude; #830 for Codex — persist trust
+        // for this worktree, never `--dangerously-bypass`).
+        switch agent.kind {
+        case .claudeCode:
+            ClaudeTrustSeeder.seedTrust(projectPath: worktree.worktreePath)
+        case .codex:
+            CodexTrustSeeder.seedTrust(projectPath: worktree.worktreePath)
+        default:
+            break
+        }
+
         // Resolve and apply the workspace's AI gateway for Claude sessions
         // (CROW-402). Write the resolved env block into the worktree's
         // settings.local.json so manual `claude` re-runs inherit it, and build a
@@ -925,12 +940,6 @@ public final class SessionService {
         // Claude-specific; the Manager uses `managerGateway` instead.
         var gatewayPrefix = ""
         if agent.kind == .claudeCode {
-            // CROW-600: pre-trust the worktree in ~/.claude.json so the
-            // "Do you trust the files in this folder?" dialog never blocks
-            // an auto-launched session. Trust does not inherit from parent
-            // directories, so every fresh worktree/clone would prompt.
-            ClaudeTrustSeeder.seedTrust(projectPath: worktree.worktreePath)
-
             let gatewayResolved = workspaceGatewayResolved(for: sessionID)
             ClaudeHookConfigWriter.writeGatewayEnv(
                 dirPath: worktree.worktreePath, resolved: gatewayResolved)
@@ -1505,9 +1514,15 @@ public final class SessionService {
         // {devRoot}/.claude/settings.local.json without clobbering each other.
         writeManagerHookConfig(for: session, dirPath: cwd)
         // CROW-600: a brand-new devRoot would otherwise block the Manager on
-        // Claude Code's trust dialog. No-ops when already trusted.
-        if session.agentKind == .claudeCode {
+        // the agent's trust gate. No-ops when already trusted (#830 extends
+        // this to Codex Managers).
+        switch session.agentKind {
+        case .claudeCode:
             ClaudeTrustSeeder.seedTrust(projectPath: cwd)
+        case .codex:
+            CodexTrustSeeder.seedTrust(projectPath: cwd)
+        default:
+            break
         }
         // CROW-402: write the Manager gateway env block to {devRoot}/.claude so
         // manual `claude` re-runs in this terminal inherit the same routing. The
@@ -2341,7 +2356,8 @@ public final class SessionService {
             ticketTitle: prep.prTitle,
             provider: .github,
             lastReviewedHeadSha: prep.headRefOid,
-            reviewAuthor: prMetadata.author.isEmpty ? nil : prMetadata.author
+            reviewAuthor: prMetadata.author.isEmpty ? nil : prMetadata.author,
+            reviewBaseBranch: prMetadata.baseRefName.isEmpty ? nil : prMetadata.baseRefName
         )
 
         let worktree = SessionWorktree(
