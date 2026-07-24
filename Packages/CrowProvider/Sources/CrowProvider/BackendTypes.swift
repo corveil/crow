@@ -27,7 +27,9 @@ public struct PRRef: Sendable, Hashable {
 /// - reconcile branch matches (`CodeBackend.findRecentPRsForBranches`)
 ///
 /// Not every field is populated by every call — for example, `prStates` skips
-/// labels/checks because the stale-PR query doesn't fetch them. Callers merge
+/// checks/reviews because they're moot for the closed PRs that query targets.
+/// (It does fetch `labels`, since a session-linked PR reached only via the
+/// stale path must still carry its `crow:merge` label — #838.) Callers merge
 /// records by URL using the `merge` helper to fill in gaps as more data
 /// arrives.
 public struct PRRecord: Sendable {

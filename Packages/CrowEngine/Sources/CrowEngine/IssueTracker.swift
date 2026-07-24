@@ -784,6 +784,14 @@ public final class IssueTracker {
     /// OPEN→MERGED demotion mid-refresh still carries the checks/reviews
     /// from the OPEN record (the stale-PR follow-up query leaves those
     /// fields empty).
+    ///
+    /// Labels are **unioned** rather than picked from one side (#838): a
+    /// freshly added `crow:merge` can arrive on whichever record wins the
+    /// state rank, so choosing one side's array wholesale silently dropped it
+    /// (e.g. a stale winner with a pre-label label set shadowing the fresh
+    /// loser). Both the merge icon (`hasMergeLabel`) and the auto-merge watcher
+    /// (`autoMergeSkipReason`) read this field, so a label GitHub reports on
+    /// either record must survive the merge.
     nonisolated static func mergePRRecords(_ lhs: ViewerPR, _ rhs: ViewerPR) -> ViewerPR {
         let (winner, loser) = stateRank(lhs.state) >= stateRank(rhs.state)
             ? (lhs, rhs) : (rhs, lhs)
@@ -799,7 +807,7 @@ public final class IssueTracker {
             headRefOid: winner.headRefOid.isEmpty ? loser.headRefOid : winner.headRefOid,
             baseRefName: winner.baseRefName.isEmpty ? loser.baseRefName : winner.baseRefName,
             repoNameWithOwner: winner.repoNameWithOwner.isEmpty ? loser.repoNameWithOwner : winner.repoNameWithOwner,
-            labels: winner.labels.isEmpty ? loser.labels : winner.labels,
+            labels: Self.unionLabels(winner.labels, loser.labels),
             linkedIssueReferences: winner.linkedIssueReferences.isEmpty ? loser.linkedIssueReferences : winner.linkedIssueReferences,
             checksState: winner.checksState.isEmpty ? loser.checksState : winner.checksState,
             failedCheckNames: winner.failedCheckNames.isEmpty ? loser.failedCheckNames : winner.failedCheckNames,
@@ -808,6 +816,21 @@ public final class IssueTracker {
             lastSubstantiveCommitAt: winner.lastSubstantiveCommitAt ?? loser.lastSubstantiveCommitAt,
             mergeCommitOid: winner.mergeCommitOid ?? loser.mergeCommitOid
         )
+    }
+
+    /// Union two label arrays, preserving `primary` order and appending any
+    /// `secondary` label whose name isn't already present. Dedup is
+    /// case-insensitive by `name` — matching how `autoMergeLabel` is compared
+    /// everywhere else — so a `crow:merge`/`Crow:Merge` clash collapses to one
+    /// entry rather than duplicating.
+    nonisolated static func unionLabels(_ primary: [LabelInfo], _ secondary: [LabelInfo]) -> [LabelInfo] {
+        guard !secondary.isEmpty else { return primary }
+        var seen = Set(primary.map { $0.name.lowercased() })
+        var out = primary
+        for label in secondary where seen.insert(label.name.lowercased()).inserted {
+            out.append(label)
+        }
+        return out
     }
 
     /// Collapse duplicate URLs using `mergePRRecords`, preserving first-seen
@@ -943,9 +966,12 @@ public final class IssueTracker {
     /// `gh`/`glab` call, GitLab MRs go through one REST call per
     /// MR (with `GITLAB_HOST` set per host). A failure on either side marks
     /// the result incomplete but doesn't suppress the other side's PRs.
-    /// Returns minimal `ViewerPR` records — only `state`, `url`, repo, and
-    /// branch refs are populated; checks/reviews are left empty since
-    /// they're moot for closed PRs.
+    /// Returns minimal `ViewerPR` records — `state`, `url`, repo, branch refs,
+    /// and `labels` are populated; checks/reviews are left empty since they're
+    /// moot for closed PRs. Labels are fetched (#838) so a session-linked PR
+    /// that flows through the stale path — rather than the open-viewer query —
+    /// still carries its `crow:merge` label into `dedupedByURL`/`mergePRRecords`
+    /// instead of shadowing the fresh label with an empty set.
     private func fetchStalePRStates(urls: [String]) async -> StalePRFetchResult {
         // Bucket URLs by (provider, host). GitLab self-hosted needs the host so the
         // backend pins the right GITLAB_HOST env var.
@@ -3539,6 +3565,14 @@ public final class IssueTracker {
             try await backend.ensureMergeLabel(repo: repo)
             try await backend.addMergeLabel(prURL: prLink.url)
             NSLog("[Crow] Added crow:merge to %@", prLink.url as NSString)
+            // Optimistically flip the merge icon so the user sees the label
+            // land immediately, rather than waiting for — and getting stuck
+            // behind — the next full poll's snapshot (#838). The subsequent
+            // refresh re-fetches the PR and confirms/keeps this flag.
+            appState.prStatus[sessionID]?.hasMergeLabel = true
+            // Targeted re-fetch so the auto-merge watcher re-evaluates promptly
+            // with the label present instead of on the next scheduled poll.
+            await refresh()
         } catch {
             print("[IssueTracker] addMergeLabel failed for \(prLink.url): \(error.localizedDescription.prefix(200))")
         }
