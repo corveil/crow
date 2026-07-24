@@ -74,9 +74,12 @@ public struct ClaudeCodeAgent: CodingAgent {
         // "initial prompt dispatched" gate.
         let initialPromptFile: String?
         switch session.kind {
-        case .review:         initialPromptFile = ".crow-review-prompt.md"
-        case .job:            initialPromptFile = ".crow-job-prompt.md"
-        case .work, .manager: initialPromptFile = nil
+        case .review:            initialPromptFile = ".crow-review-prompt.md"
+        // A Corveil worker run reuses the job prompt-file convention: its wrapped
+        // prompt is written to `.crow-job-prompt.md` in the scratch workdir
+        // (corveil/crow#801).
+        case .job, .workerRun:   initialPromptFile = ".crow-job-prompt.md"
+        case .work, .manager:    initialPromptFile = nil
         }
         if let initialPromptFile, !session.reviewPromptDispatched {
             let promptPath = (worktreePath as NSString)

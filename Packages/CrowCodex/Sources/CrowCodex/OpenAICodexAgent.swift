@@ -59,9 +59,11 @@ public struct OpenAICodexAgent: CodingAgent {
             // doesn't auto-resume), no `--rc` (Codex doesn't do remote
             // control).
             return "\(codexPath)\n"
-        case .job:
+        case .job, .workerRun:
             // First launch: feed `.crow-job-prompt.md` as the positional
-            // initial message so Codex starts working unattended.
+            // initial message so Codex starts working unattended. A Corveil
+            // worker run (corveil/crow#801) reuses the same prompt-file
+            // convention in its scratch workdir, so it shares this branch.
             // `SessionService.launchAgent` wrote the file before invoking us
             // and flips `reviewPromptDispatched` (the generic "initial
             // prompt dispatched" gate) after the command goes out.

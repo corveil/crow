@@ -947,6 +947,9 @@ public final class SessionService {
         // has its own managerAutoPermissionMode path and is unaffected here.
         let autoPermissionMode =
             (session.kind == .job && appState.jobsAutoPermissionMode) ||
+            // Corveil worker runs are unattended like jobs, so they reuse the
+            // jobs auto-permission toggle (corveil/crow#801).
+            (session.kind == .workerRun && appState.jobsAutoPermissionMode) ||
             (session.kind == .review && appState.reviewAutoPermissionMode) ||
             (session.kind == .work && appState.coderViewAutoPermissionMode)
         // The agent's autoLaunchCommand mirrors this condition — the initial
@@ -954,7 +957,7 @@ public final class SessionService {
         // Compute it here so we know whether to flip `reviewPromptDispatched`
         // (reused as the generic "initial prompt dispatched" gate) after the
         // command goes out.
-        let reviewPromptJustDispatched = (session.kind == .review || session.kind == .job)
+        let reviewPromptJustDispatched = (session.kind == .review || session.kind == .job || session.kind == .workerRun)
             && !session.reviewPromptDispatched
         guard let command = agent.autoLaunchCommand(
             session: session,
@@ -2734,6 +2737,148 @@ public final class SessionService {
         return formatter.string(from: Date())
     }
 
+    // MARK: - Corveil worker runs (corveil/crow#801)
+
+    /// Parent directory for repo-less worker-run scratch workdirs under a dev
+    /// root. Each run gets `{devRoot}/.crow-worker-runs/<runID>`; the whole
+    /// subtree is wiped on finish (it holds the scoped `CORVEIL_API_KEY`).
+    nonisolated static func workerRunsRoot(devRoot: String) -> String {
+        (devRoot as NSString).appendingPathComponent(".crow-worker-runs")
+    }
+
+    /// The scratch workdir for a specific run. Pure path math (unit-testable).
+    nonisolated static func workerRunScratchDir(devRoot: String, runID: String) -> String {
+        (workerRunsRoot(devRoot: devRoot) as NSString)
+            .appendingPathComponent(scratchSlug(runID))
+    }
+
+    /// A filesystem-safe token derived from a run id (ids may be UUIDs or slugs).
+    nonisolated static func scratchSlug(_ runID: String) -> String {
+        var slug = ""
+        var lastDash = false
+        for scalar in runID.lowercased().unicodeScalars {
+            if CharacterSet.alphanumerics.contains(scalar) {
+                slug.unicodeScalars.append(scalar)
+                lastDash = false
+            } else if !lastDash {
+                slug.append("-")
+                lastDash = true
+            }
+        }
+        let cleaned = slug.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        return cleaned.isEmpty ? "run" : String(cleaned.prefix(64))
+    }
+
+    /// Spin up a repo-less scratch workdir for a claimed Corveil worker run and
+    /// launch the agent in it (corveil/crow#801). Mirrors `runJob`, but with **no
+    /// git worktree**: a throwaway dir under `.crow-worker-runs/` holds the
+    /// wrapped prompt + injected `corveil` credentials, and a *synthetic*
+    /// `SessionWorktree` points the existing launch machinery (`launchAgent`
+    /// hooks/trust/gateway) at that dir. Returns the created session/terminal and
+    /// the scratch dir (for finish-time result read + wipe), or `nil` on setup
+    /// failure.
+    func runWorkerRun(
+        run: WorkerRun,
+        devRoot: String,
+        corveilURL: String,
+        apiKey: String,
+        workerID: String
+    ) async -> (sessionID: UUID, terminalID: UUID, scratchDir: String)? {
+        let scratchDir = Self.workerRunScratchDir(devRoot: devRoot, runID: run.id)
+
+        // Create the scratch dir 0700 (it will hold the scoped API key).
+        do {
+            try FileManager.default.createDirectory(
+                atPath: scratchDir,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
+        } catch {
+            NSLog("[SessionService] Worker run '%@': failed to create scratch dir %@: %@",
+                  run.id, scratchDir, error.localizedDescription)
+            return nil
+        }
+
+        // Write the wrapped prompt to the file the launcher reads on first launch.
+        // As with runJob, a write failure is fatal — an empty `$(cat …)` would
+        // silently launch a blank prompt (CROW-439).
+        let prompt = WorkerRunPrompt.build(run: run, workerID: workerID)
+        let promptPath = (scratchDir as NSString).appendingPathComponent(".crow-job-prompt.md")
+        do {
+            try prompt.write(toFile: promptPath, atomically: true, encoding: .utf8)
+        } catch {
+            NSLog("[SessionService] Worker run '%@': failed to write %@: %@",
+                  run.id, promptPath, error.localizedDescription)
+            Self.wipeWorkerRunScratch(scratchDir)
+            return nil
+        }
+
+        // Inject Corveil credentials + run identity into the scratch dir so the
+        // agent can call `corveil worker-run mcp-call` / `corveil ask` without a
+        // login session. 0600, wiped on finish.
+        ClaudeHookConfigWriter.writeCorveilRunEnv(
+            dirPath: scratchDir,
+            corveilURL: corveilURL,
+            apiKey: apiKey,
+            runID: run.id,
+            workerID: workerID
+        )
+
+        let session = Session(
+            name: "worker-\(run.kind ?? "run")-\(Self.scratchSlug(run.id).prefix(12))",
+            kind: .workerRun,
+            agentKind: appState.agentKind(for: .workerRun),
+            ticketTitle: run.promptTitle,
+            workerRunID: run.id,
+            workerID: workerID,
+            workerRunScratchDir: scratchDir
+        )
+        // Synthetic worktree: no git, but a primary worktree is required for
+        // `launchAgent` to resolve the launch dir. `worktreePath == scratchDir`
+        // is where the prompt file + injected env live.
+        let worktree = SessionWorktree(
+            sessionID: session.id,
+            repoName: "corveil-worker-run",
+            repoPath: scratchDir,
+            worktreePath: scratchDir,
+            branch: "",
+            isPrimary: true
+        )
+        let terminal = SessionTerminal(
+            sessionID: session.id,
+            name: session.agentKind.displayName,
+            cwd: scratchDir,
+            isManaged: true
+        )
+
+        let preparedTerminal = prepareTerminal(terminal, trackReadiness: true)
+
+        appState.sessions.append(session)
+        appState.worktrees[session.id] = [worktree]
+        appState.terminals[session.id] = [preparedTerminal]
+        appState.terminalReadiness[preparedTerminal.id] = .uninitialized
+        appState.autoLaunchTerminals.insert(preparedTerminal.id)
+
+        store.mutate { data in
+            data.sessions.append(session)
+            data.worktrees.append(worktree)
+            data.terminals.append(preparedTerminal)
+        }
+
+        NSLog("[SessionService] Worker run '%@': created session '%@' at %@",
+              run.id, session.name, scratchDir)
+        return (session.id, preparedTerminal.id, scratchDir)
+    }
+
+    /// Recursively remove a worker-run scratch dir. Best-effort — the dir holds
+    /// the scoped `CORVEIL_API_KEY`, so this is the security teardown for a run
+    /// (called on completion and on abnormal exit). No-op if already gone or the
+    /// path is empty.
+    nonisolated static func wipeWorkerRunScratch(_ path: String) {
+        guard !path.isEmpty else { return }
+        try? FileManager.default.removeItem(atPath: path)
+    }
+
     // MARK: - Review Prompt
 
     /// Filename of the initial prompt file the launcher expects for a given
@@ -2747,7 +2892,9 @@ public final class SessionService {
     nonisolated static func initialPromptFileName(for kind: SessionKind) -> String? {
         switch kind {
         case .review: return ".crow-review-prompt.md"
-        case .job:    return ".crow-job-prompt.md"
+        // A Corveil worker run reuses the job prompt-file convention in its
+        // scratch workdir (corveil/crow#801).
+        case .job, .workerRun: return ".crow-job-prompt.md"
         case .work, .manager: return nil
         }
     }

@@ -74,8 +74,9 @@ public struct CursorAgent: CodingAgent {
             // handled by the `send` RPC → `TerminalRouter.send`, not a
             // per-launch flag).
             return "\(agentPath)\n"
-        case .job, .review:
-            // Jobs and reviews share the same dispatch shape: a pre-written
+        case .job, .review, .workerRun:
+            // Jobs, reviews, and Corveil worker runs share the same dispatch
+            // shape: a pre-written
             // initial prompt file (`.crow-job-prompt.md` / `.crow-review-prompt.md`)
             // is passed as argv on first launch so Cursor starts working
             // unattended. On subsequent app restarts we fall back to a bare

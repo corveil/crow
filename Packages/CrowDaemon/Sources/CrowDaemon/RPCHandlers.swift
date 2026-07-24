@@ -137,6 +137,9 @@ func makeCommandRouter(
     sessionService: SessionService? = nil,
     autoRespond: AutoRespondCoordinator? = nil,
     jobScheduler: JobScheduler? = nil,
+    // Backs the read-only `runner-status` RPC (corveil/crow#801). Nil when no
+    // SessionService-backed runner exists (no tmux).
+    workerRunner: WorkerRunner? = nil,
     // Backs `rebuild-scorecard` (#767). Defined by the daemon where both the
     // SessionService and the telemetry receiver are in scope; nil when telemetry
     // is off (there'd be no DB to rebuild from).
@@ -1172,6 +1175,37 @@ func makeCommandRouter(
             }
             await MainActor.run { jobScheduler.runNow(id) }
             return ["ok": .bool(true)]
+        },
+
+        // Read-only snapshot of the Corveil worker runner (corveil/crow#801):
+        // whether it's enabled, its worker id, the active/max run counts, whether
+        // the org API key is present in the crowd env, and the runs currently in
+        // flight. Reports `enabled=false` when no runner exists (no tmux).
+        "runner-status": { _ in
+            guard let workerRunner else {
+                return [
+                    "enabled": .bool(false),
+                    "active_runs": .int(0),
+                    "max_concurrent": .int(0),
+                    "api_key_present": .bool(false),
+                    "watched": .array([]),
+                ]
+            }
+            let status = await MainActor.run { workerRunner.statusSnapshot() }
+            return [
+                "enabled": .bool(status.enabled),
+                "worker_id": .string(status.workerID),
+                "active_runs": .int(status.activeRuns),
+                "max_concurrent": .int(status.maxConcurrent),
+                "api_key_present": .bool(status.apiKeyPresent),
+                "watched": .array(status.watched.map { run in
+                    .object([
+                        "run_id": .string(run.runID),
+                        "session_id": .string(run.sessionID),
+                        "status": .string(run.status),
+                    ])
+                }),
+            ]
         },
 
         // Job management for `crow job` (CROW-604). Mutating verbs change

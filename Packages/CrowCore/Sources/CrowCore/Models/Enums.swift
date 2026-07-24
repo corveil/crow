@@ -7,6 +7,7 @@ public enum SessionKind: String, Codable, Sendable {
     case review  // PR review session
     case job     // Session spun up by a scheduled job (CROW-317)
     case manager // Orchestration session running Claude Code in the devRoot
+    case workerRun // Session executing a claimed Corveil worker run in a repo-less scratch workdir (corveil/crow#801)
 }
 
 /// Status of a development session.

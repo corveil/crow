@@ -377,6 +377,20 @@ public enum CrowDaemon {
         }
         if let jobScheduler { startJobPoll(scheduler: jobScheduler) }
 
+        // Corveil worker runner (corveil/crow#801) — the Corveil-sourced twin of
+        // the JobScheduler. Like it, `WorkerRunner.start()` wants a `RunLoop.main`
+        // Timer the daemon lacks, so build it here and drive `tick()` from an
+        // explicit async poll. Gated on the same authority (a SessionService-backed
+        // scheduler); the org API key is read from the crowd env, never persisted.
+        let workerRunner: WorkerRunner? = await MainActor.run { () -> WorkerRunner? in
+            guard let sessionService else { return nil }
+            let runner = WorkerRunner(appState: appState, sessionService: sessionService)
+            runner.configProvider = { ConfigStore.loadConfig(devRoot: options.devRoot)?.runner }
+            runner.devRootProvider = { options.devRoot }
+            return runner
+        }
+        if let workerRunner { startRunnerPoll(runner: workerRunner) }
+
         // Delegate any method the daemon's curated router doesn't explicitly own
         // to the app's FULL engine router (hook-event, send, link/ticket ops,
         // resync-jira, get-session, list-worktrees, …). This makes a "missing
@@ -407,6 +421,7 @@ public enum CrowDaemon {
             appState: appState, store: store, git: git, devRoot: options.devRoot,
             cockpit: cockpit, tracker: tracker, allowList: allowList,
             sessionService: sessionService, autoRespond: autoRespond, jobScheduler: jobScheduler,
+            workerRunner: workerRunner,
             rebuildScorecard: rebuildScorecard, fallback: engineFallback)
 
         // Unix socket — lets the existing `crow` CLI talk to the daemon. By
@@ -856,6 +871,22 @@ public enum CrowDaemon {
             while !Task.isCancelled {
                 await MainActor.run { scheduler.tick() }
                 try? await Task.sleep(nanoseconds: 30 * 1_000_000_000)
+            }
+        }
+    }
+
+    /// Drive the Corveil worker runner's claim/heartbeat/finish loop headlessly
+    /// (corveil/crow#801). Mirrors `startJobPoll`, but `tick()` is async (each
+    /// step is a `corveil` CLI round-trip) and the cadence follows the runner
+    /// config's poll interval (re-read each loop so a config change takes effect).
+    private static func startRunnerPoll(runner: WorkerRunner) {
+        Task {
+            while !Task.isCancelled {
+                await runner.tick()
+                let seconds = await MainActor.run {
+                    runner.configProvider()?.effectivePollIntervalSeconds ?? 30
+                }
+                try? await Task.sleep(nanoseconds: UInt64(seconds) * 1_000_000_000)
             }
         }
     }
