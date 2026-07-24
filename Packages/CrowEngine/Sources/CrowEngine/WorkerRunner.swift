@@ -70,6 +70,9 @@ public final class WorkerRunner {
     private var timer: Timer?
     /// One-shot log guard so a missing API key warns once, not every tick.
     private var warnedMissingKey = false
+    /// One-shot log guard so a persistent list/auth failure warns once, not every
+    /// tick — reset on the first successful list so a transient blip re-warns.
+    private var warnedListError = false
 
     public init(appState: AppState, sessionService: SessionService) {
         self.appState = appState
@@ -78,8 +81,13 @@ public final class WorkerRunner {
 
     // MARK: - Lifecycle
 
-    /// Start the desktop-app timer loop. The headless daemon instead drives
-    /// `tick()` from its own async poll (no `RunLoop.main`).
+    /// Start a `RunLoop.main` timer loop, for a future desktop-app host.
+    ///
+    /// Currently **unused**: this slice is daemon-first, and `crowd` drives
+    /// `tick()` from its own async poll (`CrowDaemon.startRunnerPoll`) because it
+    /// has no `RunLoop.main`. Kept for parity with `JobScheduler.start()` so the
+    /// desktop app can adopt the runner later; nothing wires it today, so the
+    /// desktop app does not claim worker runs (corveil/crow#801 review).
     public func start() {
         let interval = TimeInterval(configProvider()?.effectivePollIntervalSeconds ?? 30)
         timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
@@ -99,11 +107,37 @@ public final class WorkerRunner {
     /// up to the per-host cap. Async (unlike `JobScheduler.tick`) because every
     /// step is a `corveil` CLI round-trip. Re-entrancy-guarded so a slow network
     /// tick isn't overlapped by the next poll.
+    ///
+    /// **Teardown always runs; only claiming is gated.** Reconcile + heartbeat +
+    /// finish/wipe of already-watched (or persisted, post-relaunch) runs happen
+    /// every tick regardless of `enabled` / API-key presence — otherwise
+    /// disabling the runner or unsetting the key mid-run would abandon the local
+    /// secret teardown, leaving the scoped `CORVEIL_API_KEY` on disk (review). New
+    /// claims are gated at the bottom.
     public func tick() async {
         guard !ticking else { return }
-        guard let config = configProvider(), config.enabled else { return }
+        guard let config = configProvider() else { return }
         guard let devRoot = devRootProvider() else { return }
+
+        ticking = true
+        defer { ticking = false }
+
         let apiKey = (apiKeyProvider() ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let workerID = config.resolvedWorkerID()
+        let url = config.corveilURL.isEmpty ? (envURLProvider() ?? "") : config.corveilURL
+        let backend = makeBackend(CorveilWorkerConfig(url: url, apiKey: apiKey))
+        let now = Date()
+
+        // Teardown of existing runs — always, even when disabled / key missing.
+        // Without a key the Corveil-side `complete`/`heartbeat` best-efforts fail
+        // (logged), but the local `completeSession` + scratch-dir wipe still run,
+        // which is the security-critical part.
+        reconcileUnwatchedWorkerRuns(now: now)
+        await heartbeatWatched(backend: backend, now: now)
+        await checkFinishedRuns(backend: backend, now: now)
+
+        // New claims are gated on the runner being enabled with a usable key.
+        guard config.enabled else { return }
         guard !apiKey.isEmpty else {
             if !warnedMissingKey {
                 NSLog("[WorkerRunner] runner enabled but CORVEIL_API_KEY is not set in the crowd environment; idle")
@@ -112,18 +146,6 @@ public final class WorkerRunner {
             return
         }
         warnedMissingKey = false
-
-        ticking = true
-        defer { ticking = false }
-
-        let workerID = config.resolvedWorkerID()
-        let url = config.corveilURL.isEmpty ? (envURLProvider() ?? "") : config.corveilURL
-        let backend = makeBackend(CorveilWorkerConfig(url: url, apiKey: apiKey))
-        let now = Date()
-
-        reconcileUnwatchedWorkerRuns(now: now)
-        await heartbeatWatched(backend: backend, now: now)
-        await checkFinishedRuns(backend: backend, now: now)
         await claimIfCapacity(config: config, backend: backend, devRoot: devRoot, url: url, apiKey: apiKey, workerID: workerID)
     }
 
@@ -224,6 +246,25 @@ public final class WorkerRunner {
 
     // MARK: - Claim
 
+    /// List claimable runs, surfacing errors instead of swallowing them. A
+    /// misconfiguration (`unauthenticated` / `featureDisabled`) otherwise looks
+    /// identical to "queue empty" and the runner idles silently forever; warn
+    /// once (reset on the next success) so the failure is visible in the log.
+    private func listClaimableSurfacing(backend: CorveilWorkerBackend, kind: String?, caps: [String]) async -> [WorkerRun] {
+        do {
+            let runs = try await backend.listClaimable(kind: kind, caps: caps)
+            warnedListError = false
+            return runs
+        } catch {
+            if !warnedListError {
+                NSLog("[WorkerRunner] listClaimable failed (kind=%@): %@ — runner will keep retrying",
+                      kind ?? "*", String(describing: error))
+                warnedListError = true
+            }
+            return []
+        }
+    }
+
     private func claimIfCapacity(
         config: RunnerConfig, backend: CorveilWorkerBackend,
         devRoot: String, url: String, apiKey: String, workerID: String
@@ -235,10 +276,10 @@ public final class WorkerRunner {
         // fan out across configured kinds; an empty `kinds` lists any kind.
         var candidates: [WorkerRun] = []
         if config.kinds.isEmpty {
-            candidates = (try? await backend.listClaimable(kind: nil, caps: config.caps)) ?? []
+            candidates = await listClaimableSurfacing(backend: backend, kind: nil, caps: config.caps)
         } else {
             for kind in config.kinds {
-                candidates += (try? await backend.listClaimable(kind: kind, caps: config.caps)) ?? []
+                candidates += await listClaimableSurfacing(backend: backend, kind: kind, caps: config.caps)
             }
         }
 
@@ -248,7 +289,6 @@ public final class WorkerRunner {
             candidateIDs: candidates.map(\.id), inFlight: inFlight
         )
         guard !plan.isEmpty else { return }
-        let byID = Dictionary(candidates.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
 
         for runID in plan {
             guard watchedRuns.count < cap else { break }

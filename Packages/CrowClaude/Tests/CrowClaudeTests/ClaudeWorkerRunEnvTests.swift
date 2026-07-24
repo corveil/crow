@@ -33,7 +33,7 @@ struct ClaudeWorkerRunEnvTests {
         let dir = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
 
-        ClaudeHookConfigWriter.writeCorveilRunEnv(
+        let ok = ClaudeHookConfigWriter.writeCorveilRunEnv(
             dirPath: dir.path,
             corveilURL: "https://corveil.acme.io",
             apiKey: "sk-secret",
@@ -41,6 +41,7 @@ struct ClaudeWorkerRunEnvTests {
             workerID: "crow-host-1"
         )
 
+        #expect(ok)  // success is reported so the caller can proceed
         #expect(try posixPerms(at: dir) == 0o600)  // carries the scoped API key
         let env = try env(at: dir)
         #expect(env["CORVEIL_URL"] as? String == "https://corveil.acme.io")
@@ -86,5 +87,20 @@ struct ClaudeWorkerRunEnvTests {
         #expect(env["CORVEIL_API_KEY"] == nil)
         #expect(env["CROW_WORKER_RUN_ID"] as? String == "r1")
         #expect(env["CROW_WORKER_ID"] as? String == "w1")
+    }
+
+    @Test func returnsFalseWhenTheFileCannotBeWritten() throws {
+        // Point `dirPath` at an existing *file*, so creating the `.claude`
+        // subdirectory under it fails — the writer must report failure so the
+        // caller fails the run rather than launching without credentials (review).
+        let file = FileManager.default.temporaryDirectory
+            .appendingPathComponent("blocker-\(UUID().uuidString)")
+        FileManager.default.createFile(atPath: file.path, contents: Data("x".utf8))
+        defer { try? FileManager.default.removeItem(at: file) }
+
+        let ok = ClaudeHookConfigWriter.writeCorveilRunEnv(
+            dirPath: file.path, corveilURL: "u", apiKey: "k", runID: "r", workerID: "w"
+        )
+        #expect(!ok)
     }
 }

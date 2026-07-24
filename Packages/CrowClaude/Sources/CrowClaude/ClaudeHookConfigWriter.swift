@@ -166,13 +166,20 @@ public struct ClaudeHookConfigWriter: HookConfigWriter {
     /// secret) and the scratch dir is wiped on finish — so the key never
     /// persists. Empty values are skipped so a blank var never shadows ambient
     /// state.
+    ///
+    /// Returns `true` only when the secret file was written and locked down to
+    /// 0600. The caller (`SessionService.runWorkerRun`) treats `false` as fatal —
+    /// launching an agent without the injected credentials would leave it unable
+    /// to write back (or reaching for ambient creds), so the run is failed
+    /// instead (corveil/crow#801 review).
+    @discardableResult
     public static func writeCorveilRunEnv(
         dirPath: String,
         corveilURL: String,
         apiKey: String,
         runID: String,
         workerID: String
-    ) {
+    ) -> Bool {
         let claudeDir = (dirPath as NSString).appendingPathComponent(".claude")
         let settingsPath = (claudeDir as NSString).appendingPathComponent("settings.local.json")
 
@@ -195,11 +202,13 @@ public struct ClaudeHookConfigWriter: HookConfigWriter {
             try data.write(to: URL(fileURLWithPath: settingsPath))
             // The env block carries the scoped CORVEIL_API_KEY — restrict to
             // owner-only, matching writeGatewayEnv / ConfigStore's 0600.
-            try? FileManager.default.setAttributes(
+            try FileManager.default.setAttributes(
                 [.posixPermissions: 0o600], ofItemAtPath: settingsPath)
+            return true
         } catch {
             NSLog("[ClaudeHookConfigWriter] Failed to write Corveil run env to %@: %@",
                   settingsPath, error.localizedDescription)
+            return false
         }
     }
 

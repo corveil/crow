@@ -1596,6 +1596,12 @@ public final class SessionService {
         let wts = appState.worktrees(for: id)
         let terminals = appState.terminals(for: id)
         let isReview = session?.kind == .review
+        // A worker-run scratch dir is a standalone directory (repoPath ==
+        // worktreePath, no git), so like a review clone it must be removed
+        // wholesale rather than skipped by the main-checkout guard — and it holds
+        // the scoped CORVEIL_API_KEY, so it must never be orphaned (review).
+        let isWorkerRun = session?.kind == .workerRun
+        let workerScratchDir = session?.workerRunScratchDir
         let items = wts.map {
             WorktreeCleanupItem(
                 repoPath: $0.repoPath,
@@ -1611,7 +1617,12 @@ public final class SessionService {
         // Slow git + filesystem work runs on a background thread so the main actor
         // stays free to render the spinner and respond to other input.
         let cleanupError: String? = await Task.detached(priority: .utility) {
-            Self.performDiskCleanup(items: items, isReview: isReview)
+            let error = Self.performDiskCleanup(items: items, isReview: isReview, isWorkerRun: isWorkerRun)
+            // Belt-and-suspenders: always wipe the scratch dir by its recorded
+            // path too, even if the worktree list was empty or diverged — the
+            // scoped API key must not survive session deletion (review).
+            if let workerScratchDir { Self.wipeWorkerRunScratch(workerScratchDir) }
+            return error
         }.value
 
         if let cleanupError {
@@ -1680,7 +1691,8 @@ public final class SessionService {
     /// Soft failures (branch delete, prune) only get NSLog'd.
     nonisolated static func performDiskCleanup(
         items: [WorktreeCleanupItem],
-        isReview: Bool
+        isReview: Bool,
+        isWorkerRun: Bool = false
     ) -> String? {
         var firstFatalError: String? = nil
 
@@ -1688,13 +1700,17 @@ public final class SessionService {
             // Review clones are standalone `git clone` checkouts (not `git worktree add`
             // artifacts) and always have repoPath == worktreePath, which would otherwise
             // trip the main-checkout guard below and leave the clone orphaned on disk.
-            if isReview {
+            // Worker-run scratch dirs share that shape (no git at all), and additionally
+            // hold the scoped CORVEIL_API_KEY, so they must be removed wholesale too
+            // rather than skipped as a "main checkout" (corveil/crow#801 review).
+            if isReview || isWorkerRun {
+                let label = isWorkerRun ? "worker-run scratch dir" : "review clone"
                 guard FileManager.default.fileExists(atPath: item.worktreePath) else { continue }
                 do {
                     try FileManager.default.removeItem(atPath: item.worktreePath)
-                    NSLog("[SessionService] Cleaned up review clone: \(item.worktreePath)")
+                    NSLog("[SessionService] Cleaned up \(label): \(item.worktreePath)")
                 } catch {
-                    let msg = "Failed to remove review clone: \(error.localizedDescription)"
+                    let msg = "Failed to remove \(label): \(error.localizedDescription)"
                     NSLog("[SessionService] \(msg) (\(item.worktreePath))")
                     if firstFatalError == nil { firstFatalError = msg }
                 }
@@ -2786,16 +2802,24 @@ public final class SessionService {
     ) async -> (sessionID: UUID, terminalID: UUID, scratchDir: String)? {
         let scratchDir = Self.workerRunScratchDir(devRoot: devRoot, runID: run.id)
 
-        // Create the scratch dir 0700 (it will hold the scoped API key).
+        // Create the scratch dir 0700 (it will hold the scoped API key). Both the
+        // `.crow-worker-runs` parent (created here via `withIntermediateDirectories`,
+        // which would otherwise inherit the process umask) and the run dir itself
+        // are chmod'd explicitly after create — `createDirectory(attributes:)`
+        // does NOT re-apply the mode if a directory already exists (review).
         do {
+            let parent = Self.workerRunsRoot(devRoot: devRoot)
             try FileManager.default.createDirectory(
                 atPath: scratchDir,
                 withIntermediateDirectories: true,
                 attributes: [.posixPermissions: 0o700]
             )
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: parent)
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: scratchDir)
         } catch {
             NSLog("[SessionService] Worker run '%@': failed to create scratch dir %@: %@",
                   run.id, scratchDir, error.localizedDescription)
+            Self.wipeWorkerRunScratch(scratchDir)
             return nil
         }
 
@@ -2815,19 +2839,29 @@ public final class SessionService {
 
         // Inject Corveil credentials + run identity into the scratch dir so the
         // agent can call `corveil worker-run mcp-call` / `corveil ask` without a
-        // login session. 0600, wiped on finish.
-        ClaudeHookConfigWriter.writeCorveilRunEnv(
+        // login session. 0600, wiped on finish. A write failure is FATAL: an
+        // agent launched without the scoped env can't write back (or would reach
+        // for ambient creds), so fail the run rather than launch it blind (review).
+        guard ClaudeHookConfigWriter.writeCorveilRunEnv(
             dirPath: scratchDir,
             corveilURL: corveilURL,
             apiKey: apiKey,
             runID: run.id,
             workerID: workerID
-        )
+        ) else {
+            NSLog("[SessionService] Worker run '%@': failed to inject Corveil credentials; aborting", run.id)
+            Self.wipeWorkerRunScratch(scratchDir)
+            return nil
+        }
 
         let session = Session(
             name: "worker-\(run.kind ?? "run")-\(Self.scratchSlug(run.id).prefix(12))",
             kind: .workerRun,
-            agentKind: appState.agentKind(for: .workerRun),
+            // Slice 1 pins Claude Code: credential injection writes Claude's
+            // `.claude/settings.local.json`, which the other harnesses don't read,
+            // so a non-Claude worker run would launch without its scoped env
+            // (corveil/crow#801 review). Per-harness env injection is a follow-up.
+            agentKind: .claudeCode,
             ticketTitle: run.promptTitle,
             workerRunID: run.id,
             workerID: workerID,
@@ -2872,11 +2906,30 @@ public final class SessionService {
 
     /// Recursively remove a worker-run scratch dir. Best-effort — the dir holds
     /// the scoped `CORVEIL_API_KEY`, so this is the security teardown for a run
-    /// (called on completion and on abnormal exit). No-op if already gone or the
-    /// path is empty.
+    /// (called on completion, on abnormal exit, and on session delete). No-op if
+    /// already gone or the path is empty.
+    ///
+    /// Defense in depth: refuses any path whose immediate parent is not
+    /// `.crow-worker-runs`, so a corrupted/attacker-influenced `workerRunScratchDir`
+    /// can never turn this into an arbitrary recursive delete (review).
     nonisolated static func wipeWorkerRunScratch(_ path: String) {
-        guard !path.isEmpty else { return }
+        guard isWorkerRunScratchPath(path) else {
+            if !path.isEmpty {
+                NSLog("[SessionService] Refusing to wipe non-scratch path: %@", path)
+            }
+            return
+        }
         try? FileManager.default.removeItem(atPath: path)
+    }
+
+    /// Whether `path` is a well-formed worker-run scratch dir: a non-empty path
+    /// whose immediate parent directory is named `.crow-worker-runs`. Pure so the
+    /// safety guard is unit-testable.
+    nonisolated static func isWorkerRunScratchPath(_ path: String) -> Bool {
+        guard !path.isEmpty else { return false }
+        let normalized = (path as NSString).standardizingPath
+        let parent = (normalized as NSString).deletingLastPathComponent
+        return (parent as NSString).lastPathComponent == ".crow-worker-runs"
     }
 
     // MARK: - Review Prompt
