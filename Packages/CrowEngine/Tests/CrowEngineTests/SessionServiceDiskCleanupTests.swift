@@ -88,4 +88,39 @@ struct SessionServiceDiskCleanupTests {
         #expect(!FileManager.default.fileExists(atPath: clone.path))
         #expect(FileManager.default.fileExists(atPath: parent.path))
     }
+
+    /// A worker-run scratch dir has the same standalone shape as a review clone
+    /// (repoPath == worktreePath, isMainCheckout true) and holds the scoped
+    /// CORVEIL_API_KEY, so `isWorkerRun` must remove it wholesale rather than
+    /// skip it as a "main checkout" (corveil/crow#801 review — the Red finding).
+    @Test func deletesWorkerRunScratchDirDespiteMainCheckoutShape() {
+        let scratch = Self.makeTempDir(name: "worker-run-scratch")
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        // Seed the secret file the finding is about.
+        FileManager.default.createFile(
+            atPath: scratch.appendingPathComponent("settings.local.json").path,
+            contents: Data(#"{"env":{"CORVEIL_API_KEY":"sk-secret"}}"#.utf8))
+
+        let item = SessionService.WorktreeCleanupItem(
+            repoPath: scratch.path,
+            worktreePath: scratch.path,
+            branch: "",
+            isMainCheckout: true  // synthetic worktree trips this; must be overridden
+        )
+
+        let error = SessionService.performDiskCleanup(items: [item], isReview: false, isWorkerRun: true)
+
+        #expect(error == nil)
+        #expect(!FileManager.default.fileExists(atPath: scratch.path))
+    }
+
+    @Test func workerRunCleanupIsIdempotentWhenAlreadyGone() {
+        let scratch = Self.makeTempDir(name: "worker-run-gone")
+        try? FileManager.default.removeItem(at: scratch)
+        let item = SessionService.WorktreeCleanupItem(
+            repoPath: scratch.path, worktreePath: scratch.path, branch: "", isMainCheckout: true
+        )
+        let error = SessionService.performDiskCleanup(items: [item], isReview: false, isWorkerRun: true)
+        #expect(error == nil)
+    }
 }

@@ -122,18 +122,45 @@ struct WorkerRunScratchTests {
         #expect(SessionService.scratchSlug("") == "run")
     }
 
-    @Test func wipeRemovesTheScratchDir() throws {
-        let base = FileManager.default.temporaryDirectory
-            .appendingPathComponent("wr-scratch-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
-        FileManager.default.createFile(atPath: base.appendingPathComponent("secret.env").path, contents: Data("k".utf8))
-        #expect(FileManager.default.fileExists(atPath: base.path))
+    @Test func wipeRemovesScratchDirUnderCrowWorkerRuns() throws {
+        // Only paths whose parent is `.crow-worker-runs` are wiped (the guard).
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("dev-\(UUID().uuidString)")
+            .appendingPathComponent(".crow-worker-runs")
+        let scratch = root.appendingPathComponent("run-abc")
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        FileManager.default.createFile(atPath: scratch.appendingPathComponent("secret.env").path, contents: Data("k".utf8))
+        #expect(FileManager.default.fileExists(atPath: scratch.path))
 
-        SessionService.wipeWorkerRunScratch(base.path)
-        #expect(!FileManager.default.fileExists(atPath: base.path))
+        SessionService.wipeWorkerRunScratch(scratch.path)
+        #expect(!FileManager.default.fileExists(atPath: scratch.path))
 
         // Idempotent + safe on empty input.
-        SessionService.wipeWorkerRunScratch(base.path)
+        SessionService.wipeWorkerRunScratch(scratch.path)
         SessionService.wipeWorkerRunScratch("")
+    }
+
+    @Test func isWorkerRunScratchPathAcceptsOnlyScratchDirs() {
+        #expect(SessionService.isWorkerRunScratchPath("/dev/root/.crow-worker-runs/run-42"))
+        #expect(SessionService.isWorkerRunScratchPath("/dev/root/.crow-worker-runs/run-42/"))  // trailing slash normalized
+        // Reject anything whose immediate parent isn't `.crow-worker-runs`.
+        #expect(!SessionService.isWorkerRunScratchPath("/dev/root/.crow-worker-runs"))  // the parent itself
+        #expect(!SessionService.isWorkerRunScratchPath("/etc/passwd"))
+        #expect(!SessionService.isWorkerRunScratchPath("/dev/root/worktrees/repo-42"))
+        #expect(!SessionService.isWorkerRunScratchPath(""))
+    }
+
+    @Test func wipeRefusesPathsOutsideCrowWorkerRuns() throws {
+        // A corrupted scratch-dir path must never turn the wipe into an arbitrary
+        // recursive delete (defense-in-depth, review).
+        let victim = FileManager.default.temporaryDirectory
+            .appendingPathComponent("not-a-scratch-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: victim, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: victim) }
+
+        SessionService.wipeWorkerRunScratch(victim.path)
+        // Refused — still present.
+        #expect(FileManager.default.fileExists(atPath: victim.path))
     }
 }
