@@ -470,6 +470,7 @@
     cfg.sidebar = cfg.sidebar || {};
     cfg.telemetry = cfg.telemetry || {};
     cfg.cleanup = cfg.cleanup || {};
+    cfg.terminal = cfg.terminal || {};
 
     body.appendChild(group('Development Root'));
     body.appendChild(textField('Path', { path: devRoot }, 'path',
@@ -509,6 +510,14 @@
     body.appendChild(group('Sidebar'));
     body.appendChild(toggleField('Hide session details', cfg.sidebar, 'hideSessionDetails',
       'Hides ticket title and repo/branch lines in sidebar rows.'));
+
+    body.appendChild(group('Terminal Scroll'));
+    body.appendChild(selectField('Wheel speed — plain shell', cfg.terminal, 'wheelScrollLines', [
+      [1, '1 line / notch'], [2, '2 lines / notch'], [3, '3 lines / notch (default)'], [5, '5 lines / notch'], [8, '8 lines / notch'],
+    ], { number: true, help: 'Local scrollback lines scrolled per wheel notch on shell/review surfaces.' }));
+    body.appendChild(selectField('Wheel speed — agent surfaces', cfg.terminal, 'agentWheelNotches', [
+      [1, '1 notch / notch (default)'], [2, '2 notches / notch'], [3, '3 notches / notch'],
+    ], { number: true, help: 'Wheel reports forwarded to Claude Code / Cursor per physical notch. Raise if agent scrolling feels too slow.' }));
 
     body.appendChild(group('Telemetry'));
     body.appendChild(toggleField('Enable session analytics', cfg.telemetry, 'enabled',

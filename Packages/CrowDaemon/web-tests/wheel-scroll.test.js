@@ -14,9 +14,11 @@ const epilogue = `
   swallowMouseMode(params){ return swallowMouseMode(params); },
   appOwnsScroll(){ return appOwnsScroll(); },
   showTerminalMenu(e){ return showTerminalMenu(e); },
+  wheelNotches(e){ return wheelNotches(e); },
   set term(v){ term = v; },
   set termWs(v){ termWs = v; },
   set activeTerminal(v){ activeTerminal = v; },
+  get uiConfig(){ return uiConfig; },
 };
 `;
 const APP_JS = __dirname + '/../Sources/CrowDaemon/Resources/web/app.js';
@@ -78,14 +80,16 @@ function setup({ agentSurface = false, altScreen = false,
   T.enableWheelScroll(node);
 
   let defaultPrevented = 0;
-  const wheel = (deltaY) => {
+  const wheel = (deltaY, deltaMode) => {
     const e = new window.Event('wheel', { bubbles: true, cancelable: true });
     e.deltaY = deltaY;
+    if (deltaMode !== undefined) e.deltaMode = deltaMode;
     node.dispatchEvent(e);
     if (e.defaultPrevented) defaultPrevented++;
   };
   return {
     node, opts, scrolled, sent,
+    wheel, // (deltaY, deltaMode?) — deltaMode defaults to 0 (pixel)
     up: () => wheel(-120),
     down: () => wheel(120),
     prevented: () => defaultPrevented,
@@ -124,11 +128,13 @@ console.log('\nAgent surface forwards the wheel to the app:');
 {
   // The agent turned mouse tracking on and — because the swallow is now
   // conditional — xterm actually recorded it, so we speak SGR wheel buttons.
+  // CROW-835: one physical notch (deltaY ±120, pixel mode) forwards exactly ONE
+  // SGR wheel report — not the old ±3 that flew pages in Claude Code.
   const t = setup({ agentSurface: true, mouseTrackingMode: 'any' });
   t.up();
-  check('SGR wheel-up report sent', t.sent.join() === '\x1b[<64;1;1M'.repeat(3));
+  check('one SGR wheel-up report per notch', t.sent.join() === '\x1b[<64;1;1M');
   t.down();
-  check('SGR wheel-down report on the way back', t.sent[1] === '\x1b[<65;1;1M'.repeat(3));
+  check('one SGR wheel-down report on the way back', t.sent[1] === '\x1b[<65;1;1M');
   check('no local scrollLines on an agent surface', t.scrolled.length === 0);
 }
 {
@@ -136,7 +142,7 @@ console.log('\nAgent surface forwards the wheel to the app:');
   // scroll the (empty) local buffer — that was the "same frame forever" bug.
   const t = setup({ agentSurface: true, mouseTrackingMode: 'none' });
   t.up();
-  check('no mouse tracking → cursor keys, still not scrollLines', t.sent.join() === '\x1b[A'.repeat(3));
+  check('no mouse tracking → cursor keys, still not scrollLines', t.sent.join() === '\x1b[A');
   check('still nothing scrolled locally', t.scrolled.length === 0);
 }
 
@@ -172,6 +178,69 @@ console.log('\nWith no surface metadata, the legacy signals still apply:');
   T.activeTerminal = { id: 't1', window: 1 }; // no agent_surface field
   t.up();
   check('unclassified + mouse tracking forwards to the PTY', t.sent.length > 0 && t.scrolled.length === 0);
+}
+
+// ---- Device normalization (CROW-835) ---------------------------------------
+
+// wheelNotches maps ONE event to fractional physical notches by deltaMode, so a
+// mouse, a trackpad, and a free-spin wheel all land near 1 notch per detent.
+console.log('\nwheelNotches normalizes by deltaMode:');
+{
+  const n = (deltaY, deltaMode) => T.wheelNotches({ deltaY, deltaMode });
+  // Pixel mode (0): a discrete detent (|delta| >= 40) snaps to exactly ±1,
+  // regardless of whether the device reports 100, 120, or 240 px.
+  check('pixel 120 → +1 notch', n(120, 0) === 1);
+  check('pixel -100 → -1 notch', n(-100, 0) === -1);
+  check('pixel 240 → still +1 notch (no burst)', n(240, 0) === 1);
+  check('pixel 1000 → still +1 notch (no page-fly)', n(1000, 0) === 1);
+  // Sub-detent pixel deltas (trackpad dust) stay fractional so they accumulate.
+  check('pixel 10 → 0.25 notch (accumulates)', Math.abs(n(10, 0) - 0.25) < 1e-9);
+  check('absent deltaMode is treated as pixel', n(120) === 1 && n(120, undefined) === 1);
+  // Line mode (1, Firefox mouse): 3 lines is one OS notch.
+  check('line 3 → +1 notch', n(3, 1) === 1);
+  check('line 1 → 1/3 notch (accumulates)', Math.abs(n(1, 1) - 1 / 3) < 1e-9);
+  // Page mode (2, rare): one page per notch.
+  check('page 1 → +1 notch', n(1, 2) === 1);
+}
+
+console.log('\nSub-detent trackpad deltas accumulate into whole notches:');
+{
+  // Plain shell, pixel mode: four 10px deltas (40px total) = one notch = 3 lines.
+  const t = setup({ agentSurface: false });
+  t.wheel(10, 0); t.wheel(10, 0); t.wheel(10, 0);
+  check('three 10px deltas (<40) emit nothing yet', t.scrolled.length === 0);
+  t.wheel(10, 0);
+  check('the fourth crosses 40px → one notch = 3 lines', t.scrolled.join() === '3');
+  check('every dust event is still consumed (#776)', t.prevented() === 4);
+}
+{
+  // Agent surface, pixel mode: two 30px deltas (60px total, each < 40) accumulate
+  // into one forwarded notch — a free-spin wheel doesn't burst. (30/40 = 0.75 is
+  // exact in IEEE754, so the accumulator crosses 1.0 cleanly on the second event.)
+  const t = setup({ agentSurface: true, mouseTrackingMode: 'any' });
+  t.wheel(30, 0);
+  check('one 30px delta (<40) forwards nothing yet', t.sent.length === 0);
+  t.wheel(30, 0);
+  check('the second completes a notch → one SGR report', t.sent.join() === '\x1b[<65;1;1M');
+}
+
+// ---- Configurable sensitivity (CROW-835) -----------------------------------
+
+console.log('\nWheel sensitivity scales by uiConfig (config round-trip):');
+{
+  const saved = { l: T.uiConfig.wheelScrollLines, a: T.uiConfig.agentWheelNotches };
+  // Agent surface: agentWheelNotches multiplies the forwarded report count.
+  T.uiConfig.agentWheelNotches = 2;
+  const a = setup({ agentSurface: true, mouseTrackingMode: 'any' });
+  a.down();
+  check('agentWheelNotches=2 → two SGR reports per notch', a.sent.join() === '\x1b[<65;1;1M'.repeat(2));
+  // Plain shell: wheelScrollLines multiplies the local scroll.
+  T.uiConfig.wheelScrollLines = 8;
+  const s = setup({ agentSurface: false });
+  s.down();
+  check('wheelScrollLines=8 → scrollLines(8) per notch', s.scrolled.join() === '8');
+  T.uiConfig.wheelScrollLines = saved.l;
+  T.uiConfig.agentWheelNotches = saved.a;
 }
 
 // ---- Conditional mouse-mode swallow ----------------------------------------

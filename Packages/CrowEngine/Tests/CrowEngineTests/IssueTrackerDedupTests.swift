@@ -172,4 +172,65 @@ struct IssueTrackerDedupTests {
         let mergedNoTs = makeViewerPR(url: url, state: "MERGED")
         #expect(IssueTracker.mergePRRecords(open, mergedNoTs).lastSubstantiveCommitAt == openTs)
     }
+
+    // MARK: - #838 label union: a merge must never drop a label GitHub reports
+
+    private static let crowMerge = LabelInfo(name: "crow:merge", color: "0E8A16")
+    private static let docs = LabelInfo(name: "documentation", color: "ffffff")
+
+    private func hasCrowMerge(_ pr: IssueTracker.ViewerPR) -> Bool {
+        pr.labels.contains { $0.name.caseInsensitiveCompare("crow:merge") == .orderedSame }
+    }
+
+    @Test func mergePRRecordsUnionsLabelsSoWinnerCannotShadowFreshLabel() {
+        // The regression the old `winner.labels.isEmpty ? loser : winner`
+        // caused: the higher-rank winner carries a stale, NON-empty label set
+        // (just `documentation`) while the loser carries the freshly added
+        // `crow:merge`. One-side-wins dropped it; the union must keep it.
+        let url = "https://github.com/corveil/crow/pull/836"
+        let staleWinner = makeViewerPR(url: url, state: "MERGED", labels: [Self.docs])
+        let freshLoser = makeViewerPR(url: url, state: "OPEN", labels: [Self.crowMerge])
+        #expect(hasCrowMerge(IssueTracker.mergePRRecords(staleWinner, freshLoser)))
+        // Order-independent: same result whichever side is passed first.
+        #expect(hasCrowMerge(IssueTracker.mergePRRecords(freshLoser, staleWinner)))
+    }
+
+    @Test func mergePRRecordsBackfillsLabelsFromEitherSide() {
+        // Symmetric empty cases the union must still satisfy: a stale record
+        // with no labels (the pre-#838 stale-PR query) must not erase the
+        // fresh label on the other record, regardless of merge order.
+        let url = "https://github.com/corveil/crow/pull/836"
+        let labeled = makeViewerPR(url: url, state: "OPEN", labels: [Self.crowMerge])
+        let empty = makeViewerPR(url: url, state: "MERGED", labels: [])
+        #expect(hasCrowMerge(IssueTracker.mergePRRecords(labeled, empty)))
+        #expect(hasCrowMerge(IssueTracker.mergePRRecords(empty, labeled)))
+    }
+
+    @Test func mergePRRecordsDeduplicatesLabelsAcrossRecords() {
+        // Both records carry the label (case-differing): the union collapses
+        // to a single entry, matching the case-insensitive `crow:merge` rule.
+        let url = "https://github.com/corveil/crow/pull/836"
+        let a = makeViewerPR(url: url, state: "OPEN", labels: [Self.crowMerge, Self.docs])
+        let b = makeViewerPR(url: url, state: "MERGED", labels: [LabelInfo(name: "Crow:Merge", color: nil)])
+        let merged = IssueTracker.mergePRRecords(a, b)
+        let crowMergeCount = merged.labels.filter {
+            $0.name.caseInsensitiveCompare("crow:merge") == .orderedSame
+        }.count
+        #expect(crowMergeCount == 1)
+        #expect(merged.labels.count == 2) // crow:merge + documentation, no dup
+    }
+
+    @Test func dedupedByURLUnionsLabelsAcrossViewerAndStaleRecords() {
+        // End-to-end assembly guard: the same PR arriving once from the
+        // open-viewer query (labels present) and once from the stale path
+        // (labels empty pre-#838) must dedupe to a single record that still
+        // reports `crow:merge` — neither the merge icon nor the auto-merge
+        // watcher can see the label if this drops it.
+        let url = "https://github.com/corveil/crow/pull/836"
+        let viewer = makeViewerPR(url: url, state: "OPEN", labels: [Self.crowMerge])
+        let stale = makeViewerPR(url: url, state: "MERGED", labels: [])
+        let deduped = IssueTracker.dedupedByURL([viewer, stale])
+        #expect(deduped.count == 1)
+        #expect(hasCrowMerge(deduped[0]))
+    }
 }
