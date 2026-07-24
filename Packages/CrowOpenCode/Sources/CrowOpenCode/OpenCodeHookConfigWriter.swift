@@ -92,7 +92,10 @@ public struct OpenCodeHookConfigWriter: HookConfigWriter {
         let pluginsDir = Self.worktreePluginsDir(worktreePath)
         let pluginPath = (pluginsDir as NSString).appendingPathComponent(Self.pluginFileName)
         let fm = FileManager.default
-        guard fm.fileExists(atPath: pluginPath) else { return }
+        // Remove the plugin if it's still there — but don't early-return when it
+        // isn't: a user who took the "safe to delete" header at its word and
+        // removed `crow-hooks.js` by hand must not be left with an orphaned,
+        // self-ignoring `.gitignore` that `git status` can't even surface.
         try? fm.removeItem(atPath: pluginPath)
         // Drop our `.gitignore` only if it still holds exactly our content — a
         // user may have replaced it with their own rules (same provenance

@@ -119,11 +119,11 @@ public enum OpenCodeMCPConfigWriter {
         // 4a. Source absent → un-mirror, but only an entry we actually wrote.
         if sourceServer == nil {
             guard existing != nil else {
-                // Nothing in config; drop any now-stale record.
-                if record[serverName] != nil {
-                    record.removeValue(forKey: serverName)
-                    writeMirrorRecord(record, path: recordPath, fm: fm)
-                }
+                // Entry already gone. Keep any record: it's the durable opt-out
+                // marker the register path (4c) honors, and it must survive the
+                // Claude source disappearing and later returning — otherwise a
+                // source round-trip would silently un-do the user's delete.
+                // Nothing on disk to remove.
                 return .noSource
             }
             guard entryIsOurs else {
@@ -161,7 +161,14 @@ public enum OpenCodeMCPConfigWriter {
 
         // 4d. Never clobber a user-authored entry (or the user's edits to ours).
         if existing != nil, !entryIsOurs {
-            NSLog("[OpenCodeMCPConfigWriter] mcp.%@ not written by Crow; not overwriting", serverName)
+            // Distinguish "we have no record for it" (user-authored, or our
+            // sidecar was lost) from "the record disagrees" (user edited ours) —
+            // otherwise a debugging user chasing a stale token is pointed at the
+            // wrong file.
+            let why = recorded == nil
+                ? "no Crow record for it (user-authored, or the mirror sidecar was lost)"
+                : "it differs from Crow's record (user-edited)"
+            NSLog("[OpenCodeMCPConfigWriter] mcp.%@ left as-is — %@; not overwriting", serverName, why)
             return .skippedUserOwned
         }
 

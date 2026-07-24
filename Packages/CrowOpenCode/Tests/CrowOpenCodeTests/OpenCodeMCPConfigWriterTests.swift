@@ -153,7 +153,9 @@ struct OpenCodeMCPConfigWriterTests {
             atomically: true, encoding: .utf8)
 
         let outcome = OpenCodeMCPConfigWriter.installGlobalMCPConfig(
-            configHome: configHome.path, claudeJSONPath: claudePath.path)
+            configHome: configHome.path,
+            claudeJSONPath: claudePath.path,
+            mirrorRecordPath: tmp.appendingPathComponent("mirror.json").path)
         #expect(outcome == .skippedUnparseable)
     }
 
@@ -288,9 +290,26 @@ struct OpenCodeMCPConfigWriterTests {
 
         // Still absent — the opt-out stuck.
         let target = configHome.appendingPathComponent("opencode.json")
-        let root = try #require(FileManager.default.contents(atPath: target.path)
-            .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] })
-        #expect((root["mcp"] as? [String: Any])?["jira"] == nil)
+        func jiraEntry() throws -> [String: Any]? {
+            let root = try #require(FileManager.default.contents(atPath: target.path)
+                .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] })
+            return (root["mcp"] as? [String: Any])?["jira"] as? [String: Any]
+        }
+        #expect(try jiraEntry() == nil)
+
+        // And the opt-out survives a Claude-source round-trip: the source
+        // vanishing (which must not clear the opt-out record) and returning must
+        // not silently re-add the mirror.
+        try JSONSerialization.data(withJSONObject: ["mcpServers": [String: Any]()]).write(to: claude)
+        #expect(OpenCodeMCPConfigWriter.installGlobalMCPConfig(
+            configHome: configHome.path, claudeJSONPath: claude.path, mirrorRecordPath: record) == .noSource)
+
+        try JSONSerialization.data(withJSONObject: [
+            "mcpServers": ["jira": ["command": "uvx", "args": ["mcp-atlassian"]]],
+        ]).write(to: claude)
+        #expect(OpenCodeMCPConfigWriter.installGlobalMCPConfig(
+            configHome: configHome.path, claudeJSONPath: claude.path, mirrorRecordPath: record) == .skippedUserOwned)
+        #expect(try jiraEntry() == nil)
     }
 
     @Test func preservesUserAuthoredEntryOnSourceRemoval() throws {

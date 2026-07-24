@@ -181,4 +181,26 @@ struct OpenCodeHookConfigWriterTests {
         #expect(body == OpenCodeHookConfigWriter.gitignoreBody)
         #expect(body.contains("crow-hooks.js"))
     }
+
+    @Test func removeHookConfigCleansOrphanedGitignoreAfterManualPluginDelete() throws {
+        // A user who takes the "safe to delete" header at its word and removes
+        // `crow-hooks.js` by hand must not be left with an orphaned, self-ignoring
+        // `.gitignore` that `git status` can't surface — removeHookConfig no
+        // longer early-returns just because the plugin is already gone.
+        let worktree = FileManager.default.temporaryDirectory
+            .appendingPathComponent("opencode-wt-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: worktree, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: worktree) }
+
+        let writer = OpenCodeHookConfigWriter()
+        try writer.writeHookConfig(worktreePath: worktree.path, sessionID: UUID(), crowPath: "/bin/crow")
+        let pluginsDir = worktree.appendingPathComponent(".opencode/plugins")
+        try FileManager.default.removeItem(at: pluginsDir.appendingPathComponent("crow-hooks.js"))
+        #expect(FileManager.default.fileExists(atPath: pluginsDir.appendingPathComponent(".gitignore").path))
+
+        writer.removeHookConfig(worktreePath: worktree.path)
+        #expect(!FileManager.default.fileExists(atPath: pluginsDir.appendingPathComponent(".gitignore").path))
+        #expect(!FileManager.default.fileExists(
+            atPath: worktree.appendingPathComponent(".opencode").path))
+    }
 }
