@@ -152,6 +152,66 @@ public struct ClaudeHookConfigWriter: HookConfigWriter {
         }
     }
 
+    // MARK: - Corveil worker-run env
+
+    /// Inject the Corveil runner credentials + run identity into a scratch
+    /// workdir's `.claude/settings.local.json` `env` block (corveil/crow#801).
+    ///
+    /// A repo-less worker run executes in a throwaway scratch dir with no
+    /// `corveil login` state, so the agent needs `CORVEIL_URL` + the scoped
+    /// `CORVEIL_API_KEY` to call `corveil worker-run mcp-call` / `corveil ask`.
+    /// It also needs the run id + worker id so its write-back calls target the
+    /// right run under the same bearer identity Crow claimed with. These land in
+    /// the same 0600 `env` block `writeGatewayEnv` uses (the file carries an org
+    /// secret) and the scratch dir is wiped on finish — so the key never
+    /// persists. Empty values are skipped so a blank var never shadows ambient
+    /// state.
+    ///
+    /// Returns `true` only when the secret file was written and locked down to
+    /// 0600. The caller (`SessionService.runWorkerRun`) treats `false` as fatal —
+    /// launching an agent without the injected credentials would leave it unable
+    /// to write back (or reaching for ambient creds), so the run is failed
+    /// instead (corveil/crow#801 review).
+    @discardableResult
+    public static func writeCorveilRunEnv(
+        dirPath: String,
+        corveilURL: String,
+        apiKey: String,
+        runID: String,
+        workerID: String
+    ) -> Bool {
+        let claudeDir = (dirPath as NSString).appendingPathComponent(".claude")
+        let settingsPath = (claudeDir as NSString).appendingPathComponent("settings.local.json")
+
+        var settings: [String: Any] = [:]
+        if let data = FileManager.default.contents(atPath: settingsPath),
+           let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            settings = parsed
+        }
+
+        var env = settings["env"] as? [String: Any] ?? [:]
+        if !corveilURL.isEmpty { env["CORVEIL_URL"] = corveilURL }
+        if !apiKey.isEmpty { env["CORVEIL_API_KEY"] = apiKey }
+        env["CROW_WORKER_RUN_ID"] = runID
+        env["CROW_WORKER_ID"] = workerID
+        settings["env"] = env
+
+        do {
+            try FileManager.default.createDirectory(atPath: claudeDir, withIntermediateDirectories: true)
+            let data = try JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .sortedKeys])
+            try data.write(to: URL(fileURLWithPath: settingsPath))
+            // The env block carries the scoped CORVEIL_API_KEY — restrict to
+            // owner-only, matching writeGatewayEnv / ConfigStore's 0600.
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o600], ofItemAtPath: settingsPath)
+            return true
+        } catch {
+            NSLog("[ClaudeHookConfigWriter] Failed to write Corveil run env to %@: %@",
+                  settingsPath, error.localizedDescription)
+            return false
+        }
+    }
+
     /// Remove our hook entries from a worktree's settings.local.json, preserving user settings.
     public func removeHookConfig(worktreePath: String) {
         let settingsPath = (worktreePath as NSString)

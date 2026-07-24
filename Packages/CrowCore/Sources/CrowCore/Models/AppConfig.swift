@@ -89,6 +89,15 @@ public struct AppConfig: Codable, Sendable, Equatable {
     /// the `set-web-password` RPC, never through `set-config`.
     public var webAuth: WebAuthConfig?
 
+    /// Optional Corveil worker-runner configuration (corveil/crow#801). When
+    /// `enabled`, `crowd` polls a Corveil queue for claimable worker runs,
+    /// executes each in a repo-less scratch workdir, and maps the agent's finish
+    /// to `corveil worker-run complete`. The org-scoped API key is **not** stored
+    /// here — it's sourced from the `CORVEIL_API_KEY` env of the crowd process so
+    /// no org secret lands at rest in `config.json`. When nil/`disabled`, nothing
+    /// changes (local `jobs` keep working; the Corveil source is additive).
+    public var runner: RunnerConfig?
+
     /// Effective review-exclude patterns: the global `defaults.excludeReviewRepos`
     /// unioned with every workspace's per-workspace `excludeReviewRepos`. A repo
     /// excluded by any workspace (or the global default) is hidden from the review
@@ -119,7 +128,8 @@ public struct AppConfig: Codable, Sendable, Equatable {
         agentsByKind: [String: AgentKind] = [:],
         managerGateway: WorkspaceGateway? = nil,
         jiraCredential: JiraCredential? = nil,
-        webAuth: WebAuthConfig? = nil
+        webAuth: WebAuthConfig? = nil,
+        runner: RunnerConfig? = nil
     ) {
         self.workspaces = workspaces
         self.defaults = defaults
@@ -143,6 +153,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         self.managerGateway = managerGateway
         self.jiraCredential = jiraCredential
         self.webAuth = webAuth
+        self.runner = runner
     }
 
     public init(from decoder: Decoder) throws {
@@ -192,6 +203,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
             }
         }
         webAuth = try container.decodeIfPresent(WebAuthConfig.self, forKey: .webAuth)
+        runner = try container.decodeIfPresent(RunnerConfig.self, forKey: .runner)
     }
 
     /// Pre-CROW-528 shape of the now-removed `atlassianMCP` config, decoded only
@@ -215,7 +227,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case workspaces, defaults, notifications, sidebar, remoteControlEnabled, managerAutoPermissionMode, jobsAutoPermissionMode, reviewAutoPermissionMode, coderViewAutoPermissionMode, telemetry, terminal, autoRespond, attributionTrailers, autoMergeWatcherEnabled, autoCreateWatcherEnabled, cleanup, jobs, defaultAgentKind, agentsByKind, managerGateway, jiraCredential, webAuth
+        case workspaces, defaults, notifications, sidebar, remoteControlEnabled, managerAutoPermissionMode, jobsAutoPermissionMode, reviewAutoPermissionMode, coderViewAutoPermissionMode, telemetry, terminal, autoRespond, attributionTrailers, autoMergeWatcherEnabled, autoCreateWatcherEnabled, cleanup, jobs, defaultAgentKind, agentsByKind, managerGateway, jiraCredential, webAuth, runner
     }
 
     /// Resolve the agent that should drive a newly-created session of the
@@ -223,6 +235,112 @@ public struct AppConfig: Codable, Sendable, Equatable {
     /// back to `defaultAgentKind` (CROW-421, CROW-433).
     public func agentKind(for sessionKind: SessionKind) -> AgentKind {
         return agentsByKind[sessionKind.rawValue] ?? defaultAgentKind
+    }
+}
+
+/// Corveil worker-runner settings (corveil/crow#801). Makes `crowd` a
+/// first-class runner for Corveil worker runs alongside its local `jobs`:
+/// register with a stable `worker_id`, poll/claim queued runs matching this
+/// runner's routing (`kinds` + `caps`), execute each in a repo-less scratch
+/// workdir, heartbeat to hold the lease, and complete via
+/// `corveil worker-run complete`.
+///
+/// The org-scoped API key is deliberately **absent** from this struct — it's
+/// read from the `CORVEIL_API_KEY` env of the crowd process so it never lands at
+/// rest in `config.json`. Decoding is forward-compatible (missing keys fall back
+/// to defaults) like `JobConfig`.
+///
+/// Trust boundary (operational): an enabled runner hands the scoped
+/// `CORVEIL_API_KEY` to the coding agent under `jobsAutoPermissionMode`, so a
+/// worker whose `prompt_body` was maliciously enqueued could, in principle,
+/// exfiltrate the key via auto-approved tools. This is acceptable only for a
+/// **trusted intra-org fleet** (ADR-0014) where Corveil enforces the per-run
+/// `mcp-call` allow-list server-side; do not enable it against an untrusted
+/// worker queue. Distributed/public-pool hardening is a later phase.
+public struct RunnerConfig: Codable, Sendable, Equatable {
+    /// Master switch. When false, the runner poll loop never starts.
+    public var enabled: Bool
+    /// Corveil base URL. Falls back to the crowd `CORVEIL_URL` env when blank.
+    public var corveilURL: String
+    /// Stable worker identity used across a run's claim → heartbeat → complete.
+    /// Blank ⇒ resolve `crow-<host>-1` at runtime via ``resolvedWorkerID()``.
+    public var workerID: String
+    /// Capabilities this runner advertises. A run's `required_caps` must be a
+    /// subset for it to be claimable here (hard routing filter).
+    public var caps: [String]
+    /// Worker slugs (`kind`) this runner will claim. Empty ⇒ any kind.
+    public var kinds: [String]
+    /// Backpressure: the most runs this host executes at once (corveil/crow#801
+    /// §5, paired with Corveil's staleness SLO corveil#1834). Clamped to ≥ 1.
+    public var maxConcurrentRuns: Int
+    /// How often the claim/heartbeat/finish loop ticks, in seconds. Clamped ≥ 5.
+    public var pollIntervalSeconds: Int
+
+    public init(
+        enabled: Bool = false,
+        corveilURL: String = "",
+        workerID: String = "",
+        caps: [String] = [],
+        kinds: [String] = [],
+        maxConcurrentRuns: Int = 1,
+        pollIntervalSeconds: Int = 30
+    ) {
+        self.enabled = enabled
+        self.corveilURL = corveilURL
+        self.workerID = workerID
+        self.caps = caps
+        self.kinds = kinds
+        self.maxConcurrentRuns = maxConcurrentRuns
+        self.pollIntervalSeconds = pollIntervalSeconds
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
+        corveilURL = try c.decodeIfPresent(String.self, forKey: .corveilURL) ?? ""
+        workerID = try c.decodeIfPresent(String.self, forKey: .workerID) ?? ""
+        caps = try c.decodeIfPresent([String].self, forKey: .caps) ?? []
+        kinds = try c.decodeIfPresent([String].self, forKey: .kinds) ?? []
+        maxConcurrentRuns = try c.decodeIfPresent(Int.self, forKey: .maxConcurrentRuns) ?? 1
+        pollIntervalSeconds = try c.decodeIfPresent(Int.self, forKey: .pollIntervalSeconds) ?? 30
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case enabled, corveilURL, workerID, caps, kinds, maxConcurrentRuns, pollIntervalSeconds
+    }
+
+    /// Effective per-host concurrency cap (never below 1).
+    public var effectiveMaxConcurrentRuns: Int { max(1, maxConcurrentRuns) }
+
+    /// Effective poll interval in seconds (never below 5, to bound Corveil load).
+    public var effectivePollIntervalSeconds: Int { max(5, pollIntervalSeconds) }
+
+    /// The worker id to use: the configured value, or a `crow-<host>-1` default
+    /// derived from the machine hostname when blank.
+    public func resolvedWorkerID(hostName: String = ProcessInfo.processInfo.hostName) -> String {
+        let trimmed = workerID.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty { return trimmed }
+        return "crow-\(Self.slugHost(hostName))-1"
+    }
+
+    /// Normalize a hostname into a worker-id-safe token: drop a trailing
+    /// `.local`, lowercase, and reduce runs of non-alphanumerics to single `-`.
+    static func slugHost(_ hostName: String) -> String {
+        var name = hostName
+        if name.hasSuffix(".local") { name = String(name.dropLast(6)) }
+        var slug = ""
+        var lastDash = false
+        for scalar in name.lowercased().unicodeScalars {
+            if CharacterSet.alphanumerics.contains(scalar) {
+                slug.unicodeScalars.append(scalar)
+                lastDash = false
+            } else if !lastDash {
+                slug.append("-")
+                lastDash = true
+            }
+        }
+        let cleaned = slug.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        return cleaned.isEmpty ? "host" : cleaned
     }
 }
 

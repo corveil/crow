@@ -80,7 +80,7 @@ public struct OpenCodeAgent: CodingAgent {
             // `TerminalRouter.send`). OpenCode has no `--rc`/`--name` analog
             // anyway.
             return "\(opencodePath)\n"
-        case .job, .review:
+        case .job, .review, .workerRun:
             // First launch: headless `run` consumes the prompt file, then
             // `; --continue` opens the interactive TUI (#547). Subsequent
             // restarts skip the headless re-run and resume the TUI only.
@@ -92,7 +92,8 @@ public struct OpenCodeAgent: CodingAgent {
             // inlines the crow-review-pr SKILL body for OpenCode (same as
             // Cursor) so the CLI gets a self-contained brief — OpenCode has
             // no Crow slash-command engine.
-            let autoForJob = (session.kind == .job) && autoPermissionMode
+            // Worker runs auto-approve like jobs (corveil/crow#801).
+            let autoForJob = (session.kind == .job || session.kind == .workerRun) && autoPermissionMode
             let tuiSupportsAuto = autoForJob
                 ? OpenCodeLaunchArgs.tuiSupportsAuto(binary: opencodePath)
                 : false
