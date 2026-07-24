@@ -249,6 +249,14 @@ public struct AppConfig: Codable, Sendable, Equatable {
 /// read from the `CORVEIL_API_KEY` env of the crowd process so it never lands at
 /// rest in `config.json`. Decoding is forward-compatible (missing keys fall back
 /// to defaults) like `JobConfig`.
+///
+/// Trust boundary (operational): an enabled runner hands the scoped
+/// `CORVEIL_API_KEY` to the coding agent under `jobsAutoPermissionMode`, so a
+/// worker whose `prompt_body` was maliciously enqueued could, in principle,
+/// exfiltrate the key via auto-approved tools. This is acceptable only for a
+/// **trusted intra-org fleet** (ADR-0014) where Corveil enforces the per-run
+/// `mcp-call` allow-list server-side; do not enable it against an untrusted
+/// worker queue. Distributed/public-pool hardening is a later phase.
 public struct RunnerConfig: Codable, Sendable, Equatable {
     /// Master switch. When false, the runner poll loop never starts.
     public var enabled: Bool

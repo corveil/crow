@@ -1705,6 +1705,14 @@ public final class SessionService {
             // rather than skipped as a "main checkout" (corveil/crow#801 review).
             if isReview || isWorkerRun {
                 let label = isWorkerRun ? "worker-run scratch dir" : "review clone"
+                // Worker-run dirs get the same parent-name guard as
+                // `wipeWorkerRunScratch`, so a corrupted `worktreePath` can't turn
+                // this into an arbitrary recursive delete (review — consistent
+                // threat model across both teardown paths).
+                if isWorkerRun && !isWorkerRunScratchPath(item.worktreePath) {
+                    NSLog("[SessionService] Refusing to remove non-scratch worker-run path: \(item.worktreePath)")
+                    continue
+                }
                 guard FileManager.default.fileExists(atPath: item.worktreePath) else { continue }
                 do {
                     try FileManager.default.removeItem(atPath: item.worktreePath)
