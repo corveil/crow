@@ -10,8 +10,48 @@ public enum OpenCodeLaunchArgs {
     /// omits an optional flag, never breaks launch.
     private nonisolated(unsafe) static var tuiAutoFlagCache: [String: Bool] = [:]
     private nonisolated(unsafe) static var runHelpCache: [String: String] = [:]
+    private nonisolated(unsafe) static var versionCache: [String: SemVer?] = [:]
 
     private static let helpProbeTimeoutSeconds: TimeInterval = 5
+
+    /// The first `opencode` release that re-added the top-level TUI `--auto`
+    /// flag. It was present pre-`1.17`, **removed across the `1.17.x` window**,
+    /// then re-added in `1.18.0` (2026-07-14; verified `sst/opencode`
+    /// `tui.ts@v1.18.4`). Below this, the TUI `--help` probe for `--auto` can
+    /// only ever answer "no" — so we short-circuit it (CROW-831). At/above it we
+    /// still probe, so a *future* upstream flip is caught without a code change.
+    static let tuiAutoReintroducedVersion = SemVer(1, 18, 0)
+
+    /// A parsed `MAJOR.MINOR.PATCH`, compared field-by-field.
+    struct SemVer: Comparable, Equatable {
+        let major, minor, patch: Int
+        init(_ major: Int, _ minor: Int, _ patch: Int) {
+            self.major = major; self.minor = minor; self.patch = patch
+        }
+        static func < (lhs: SemVer, rhs: SemVer) -> Bool {
+            (lhs.major, lhs.minor, lhs.patch) < (rhs.major, rhs.minor, rhs.patch)
+        }
+    }
+
+    /// Parse the leading `MAJOR.MINOR.PATCH` out of `opencode --version` output
+    /// (e.g. `"1.17.10"`, or `"opencode 1.18.4"`). Returns `nil` when no such
+    /// triple is present, in which case callers must fall back to probing.
+    static func parseVersion(_ text: String) -> SemVer? {
+        // First run of `digits.digits.digits` anywhere in the string.
+        guard let range = text.range(
+            of: #"\d+\.\d+\.\d+"#, options: .regularExpression) else { return nil }
+        let parts = text[range].split(separator: ".").compactMap { Int($0) }
+        guard parts.count == 3 else { return nil }
+        return SemVer(parts[0], parts[1], parts[2])
+    }
+
+    /// Whether a known installed `version` predates the TUI `--auto`
+    /// reintroduction — i.e. the top-level `--auto` probe is guaranteed to miss
+    /// and can be skipped. `nil` version means "unknown", so we do *not* skip.
+    static func tuiAutoKnownAbsent(version: SemVer?) -> Bool {
+        guard let version else { return false }
+        return version < tuiAutoReintroducedVersion
+    }
 
     /// POSIX single-quote escape for paths interpolated into shell commands.
     public static func shellQuote(_ s: String) -> String {
@@ -38,6 +78,13 @@ public enum OpenCodeLaunchArgs {
 
     /// Probe the installed binary once and cache the result. Only call when
     /// an auto-approve suffix is actually needed — each probe spawns a subprocess.
+    ///
+    /// Version-narrowed (CROW-831): on builds older than
+    /// `tuiAutoReintroducedVersion` the TUI `--auto` flag is *known absent*, so
+    /// we answer `false` from the (cheaper) `--version` string alone and skip
+    /// the dead-weight `opencode --help` parse. On `≥1.18` and on unparseable
+    /// versions we still run the `--help` probe, so an upstream flip is caught
+    /// without a code change (the probe was never wrong on `≥1.18`).
     public static func tuiSupportsAuto(binary: String) -> Bool {
         cacheLock.lock()
         if let cached = tuiAutoFlagCache[binary] {
@@ -46,13 +93,40 @@ public enum OpenCodeLaunchArgs {
         }
         cacheLock.unlock()
 
-        let help = (try? runHelp(binary: binary, subcommand: nil)) ?? ""
-        let supports = parseTUISupportsAuto(from: help)
+        let supports: Bool
+        if tuiAutoKnownAbsent(version: installedVersion(binary: binary)) {
+            // Known `<1.18`: the top-level `--auto` flag does not exist. No point
+            // spawning `opencode --help` to confirm the absence.
+            supports = false
+        } else {
+            let help = (try? runHelp(binary: binary, subcommand: nil)) ?? ""
+            supports = parseTUISupportsAuto(from: help)
+        }
 
         cacheLock.lock()
         tuiAutoFlagCache[binary] = supports
         cacheLock.unlock()
         return supports
+    }
+
+    /// Cached parsed `opencode --version` for the installed binary. Returns
+    /// `nil` (and caches it) when the binary can't be run or its output has no
+    /// `MAJOR.MINOR.PATCH` — callers then fall back to the `--help` probe.
+    static func installedVersion(binary: String) -> SemVer? {
+        cacheLock.lock()
+        if let cached = versionCache[binary] {
+            cacheLock.unlock()
+            return cached
+        }
+        cacheLock.unlock()
+
+        let version = (try? runHelp(binary: binary, subcommand: nil, versionOnly: true))
+            .flatMap { parseVersion($0) }
+
+        cacheLock.lock()
+        versionCache[binary] = version
+        cacheLock.unlock()
+        return version
     }
 
     /// Cached `opencode run --help` text for the installed binary. Only call
@@ -79,6 +153,7 @@ public enum OpenCodeLaunchArgs {
         defer { cacheLock.unlock() }
         tuiAutoFlagCache.removeAll()
         runHelpCache.removeAll()
+        versionCache.removeAll()
     }
 
     /// TUI auto-approve suffix when the installed build supports `--auto`.
@@ -128,11 +203,17 @@ public enum OpenCodeLaunchArgs {
         return "\(binary) --continue\(flags)\n"
     }
 
-    private static func runHelp(binary: String, subcommand: String?) throws -> String {
+    private static func runHelp(
+        binary: String,
+        subcommand: String?,
+        versionOnly: Bool = false
+    ) throws -> String {
         let process = Process()
         let pipe = Pipe()
         process.executableURL = URL(fileURLWithPath: binary)
-        if let subcommand {
+        if versionOnly {
+            process.arguments = ["--version"]
+        } else if let subcommand {
             process.arguments = [subcommand, "--help"]
         } else {
             process.arguments = ["--help"]

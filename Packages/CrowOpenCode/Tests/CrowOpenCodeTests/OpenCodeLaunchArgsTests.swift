@@ -114,4 +114,32 @@ struct OpenCodeLaunchArgsTests {
         )
         #expect(cmd == "opencode --continue\n")
     }
+
+    // MARK: - Version-aware TUI `--auto` probe narrowing (CROW-831)
+
+    @Test func parseVersionExtractsSemVer() {
+        #expect(OpenCodeLaunchArgs.parseVersion("1.17.10") == OpenCodeLaunchArgs.SemVer(1, 17, 10))
+        // Tolerates a name prefix and trailing noise.
+        #expect(OpenCodeLaunchArgs.parseVersion("opencode 1.18.4\n") == OpenCodeLaunchArgs.SemVer(1, 18, 4))
+        #expect(OpenCodeLaunchArgs.parseVersion("v2.0.0-beta") == OpenCodeLaunchArgs.SemVer(2, 0, 0))
+        #expect(OpenCodeLaunchArgs.parseVersion("no version here") == nil)
+    }
+
+    @Test func semVerOrdersByField() {
+        #expect(OpenCodeLaunchArgs.SemVer(1, 17, 10) < OpenCodeLaunchArgs.SemVer(1, 18, 0))
+        #expect(OpenCodeLaunchArgs.SemVer(1, 18, 0) < OpenCodeLaunchArgs.SemVer(1, 18, 1))
+        #expect(!(OpenCodeLaunchArgs.SemVer(2, 0, 0) < OpenCodeLaunchArgs.SemVer(1, 99, 99)))
+    }
+
+    @Test func tuiAutoKnownAbsentOnlyForPre118() {
+        // < 1.18: the top-level `--auto` flag is known absent, skip the probe.
+        #expect(OpenCodeLaunchArgs.tuiAutoKnownAbsent(version: OpenCodeLaunchArgs.SemVer(1, 17, 10)))
+        #expect(OpenCodeLaunchArgs.tuiAutoKnownAbsent(version: OpenCodeLaunchArgs.SemVer(1, 0, 0)))
+        // >= 1.18: `--auto` was re-added — must still probe (not "known absent").
+        #expect(!OpenCodeLaunchArgs.tuiAutoKnownAbsent(version: OpenCodeLaunchArgs.SemVer(1, 18, 0)))
+        #expect(!OpenCodeLaunchArgs.tuiAutoKnownAbsent(version: OpenCodeLaunchArgs.SemVer(1, 18, 4)))
+        #expect(!OpenCodeLaunchArgs.tuiAutoKnownAbsent(version: OpenCodeLaunchArgs.SemVer(2, 0, 0)))
+        // Unknown version → never assume absent; fall through to the probe.
+        #expect(!OpenCodeLaunchArgs.tuiAutoKnownAbsent(version: nil))
+    }
 }

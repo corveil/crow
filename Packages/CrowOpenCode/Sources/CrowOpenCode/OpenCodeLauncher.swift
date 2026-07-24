@@ -52,11 +52,17 @@ public actor OpenCodeLauncher {
                 lines.append("```")
             case .jira:
                 if let key = Validation.jiraKey(from: url) {
+                    // Prefer the `jira` MCP (parity with Claude — Crow mirrors
+                    // it into OpenCode's config, CROW-831); fall back to `acli`
+                    // when the MCP isn't registered.
+                    lines.append("Fetch this work item via the **`jira` MCP server** if available — call `jira_get_issue` for key `\(key)` (and the other `jira_*` tools for any create/assign/transition/comment).")
+                    lines.append("")
+                    lines.append("If the `jira` MCP isn't available, fall back to `acli`:")
                     lines.append("```bash")
                     lines.append("acli jira workitem view \(key) --fields summary,status,description,comment")
                     lines.append("```")
                 } else {
-                    lines.append("URL: \(url)")
+                    lines.append("URL: \(url) — fetch it via the `jira` MCP server (`jira_get_issue`).")
                 }
             case .corveil, nil:
                 lines.append("URL: \(url)")

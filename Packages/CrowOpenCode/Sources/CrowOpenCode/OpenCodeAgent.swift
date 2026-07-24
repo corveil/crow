@@ -20,8 +20,10 @@ import CrowCore
 ///     pipes bind fd 0 and break keyboard input; `--prompt` may only pre-fill.
 ///  2. **State hooks are a JS plugin, not a `hooks.json`.** OpenCode has no
 ///     command-based hook file; `OpenCodeHookConfigWriter` installs a plugin
-///     into `~/.config/opencode/plugins/` that shells out to `crow
-///     hook-event`. See that type for details.
+///     into the worktree's `.opencode/plugins/` with the session UUID baked in
+///     (a global fallback in `~/.config/opencode/plugins/` covers hand-started
+///     sessions and self-suppresses when the per-project plugin is present).
+///     See that type for details.
 ///
 /// OpenCode has no `--rc`/`--name`/`--permission-mode` analog. The closest
 /// permission knob is `--auto` / `--dangerously-skip-permissions`, probed via

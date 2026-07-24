@@ -111,6 +111,13 @@ enum LaunchScaffold {
                 attempt("OpenCode global config install") {
                     try OpenCodeHookConfigWriter.installGlobalConfig(configHome: configHome, crowPath: crowPath)
                 }
+                // Mirror the user's Claude `jira` MCP into OpenCode's global
+                // config so OpenCode sessions get the same `jira_*` tools
+                // (parity with Claude; CROW-831). No-op when the user has no
+                // Claude Jira MCP to mirror.
+                attempt("OpenCode Jira MCP registration") {
+                    OpenCodeMCPConfigWriter.installGlobalMCPConfig(configHome: configHome)
+                }
             }
         }
     }
