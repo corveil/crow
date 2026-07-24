@@ -28,6 +28,10 @@ public struct AppConfig: Codable, Sendable, Equatable {
     /// unless the user opts in (#586).
     public var coderViewAutoPermissionMode: Bool
     public var telemetry: TelemetryConfig
+    /// Terminal wheel-scroll tuning (CROW-835). Separate knobs for the two
+    /// per-surface scroll paths (ADR-0013): local scrollback lines-per-notch on
+    /// plain shells, and forwarded notches-per-notch on agent surfaces.
+    public var terminal: TerminalSettings
     public var autoRespond: AutoRespondSettings
     /// When true, `setup.sh` writes a per-worktree `.claude/settings.local.json`
     /// that overrides Claude Code's `attribution.commit` to include the crow
@@ -104,6 +108,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         reviewAutoPermissionMode: Bool = true,
         coderViewAutoPermissionMode: Bool = false,
         telemetry: TelemetryConfig = TelemetryConfig(),
+        terminal: TerminalSettings = TerminalSettings(),
         autoRespond: AutoRespondSettings = AutoRespondSettings(),
         attributionTrailers: Bool = true,
         autoMergeWatcherEnabled: Bool = false,
@@ -126,6 +131,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         self.reviewAutoPermissionMode = reviewAutoPermissionMode
         self.coderViewAutoPermissionMode = coderViewAutoPermissionMode
         self.telemetry = telemetry
+        self.terminal = terminal
         self.autoRespond = autoRespond
         self.attributionTrailers = attributionTrailers
         self.autoMergeWatcherEnabled = autoMergeWatcherEnabled
@@ -151,6 +157,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         reviewAutoPermissionMode = try container.decodeIfPresent(Bool.self, forKey: .reviewAutoPermissionMode) ?? true
         coderViewAutoPermissionMode = try container.decodeIfPresent(Bool.self, forKey: .coderViewAutoPermissionMode) ?? false
         telemetry = try container.decodeIfPresent(TelemetryConfig.self, forKey: .telemetry) ?? TelemetryConfig()
+        terminal = try container.decodeIfPresent(TerminalSettings.self, forKey: .terminal) ?? TerminalSettings()
         autoRespond = try container.decodeIfPresent(AutoRespondSettings.self, forKey: .autoRespond) ?? AutoRespondSettings()
         attributionTrailers = try container.decodeIfPresent(Bool.self, forKey: .attributionTrailers) ?? true
         autoMergeWatcherEnabled = try container.decodeIfPresent(Bool.self, forKey: .autoMergeWatcherEnabled) ?? false
@@ -208,7 +215,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case workspaces, defaults, notifications, sidebar, remoteControlEnabled, managerAutoPermissionMode, jobsAutoPermissionMode, reviewAutoPermissionMode, coderViewAutoPermissionMode, telemetry, autoRespond, attributionTrailers, autoMergeWatcherEnabled, autoCreateWatcherEnabled, cleanup, jobs, defaultAgentKind, agentsByKind, managerGateway, jiraCredential, webAuth
+        case workspaces, defaults, notifications, sidebar, remoteControlEnabled, managerAutoPermissionMode, jobsAutoPermissionMode, reviewAutoPermissionMode, coderViewAutoPermissionMode, telemetry, terminal, autoRespond, attributionTrailers, autoMergeWatcherEnabled, autoCreateWatcherEnabled, cleanup, jobs, defaultAgentKind, agentsByKind, managerGateway, jiraCredential, webAuth
     }
 
     /// Resolve the agent that should drive a newly-created session of the
@@ -678,6 +685,35 @@ public struct TelemetryConfig: Codable, Sendable, Equatable {
         self.port = port
         self.retentionDays = retentionDays
     }
+}
+
+/// Terminal wheel-scroll tuning (CROW-835). The web terminal routes the wheel by
+/// surface under ADR-0013's per-surface hybrid model, and the two paths have
+/// different natural units, so each gets its own knob. Device normalization
+/// (`deltaMode` + sub-notch accumulation) is a fixed client-side concern and is
+/// deliberately not configurable — these only scale the resulting notch count.
+public struct TerminalSettings: Codable, Sendable, Equatable {
+    /// Plain-shell surfaces: local xterm scrollback **lines per physical wheel
+    /// notch** (default 3 — the historical hardcoded value).
+    public var wheelScrollLines: Int
+    /// Agent-TUI surfaces (Claude Code / Cursor / Manager): number of wheel
+    /// reports **forwarded to the app per physical notch** (default 1 — one notch
+    /// in, one notch out; the app owns its own lines-per-notch). Raise it if agent
+    /// scrolling feels too slow.
+    public var agentWheelNotches: Int
+
+    public init(wheelScrollLines: Int = 3, agentWheelNotches: Int = 1) {
+        self.wheelScrollLines = wheelScrollLines
+        self.agentWheelNotches = agentWheelNotches
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        wheelScrollLines = try c.decodeIfPresent(Int.self, forKey: .wheelScrollLines) ?? 3
+        agentWheelNotches = try c.decodeIfPresent(Int.self, forKey: .agentWheelNotches) ?? 1
+    }
+
+    enum CodingKeys: String, CodingKey { case wheelScrollLines, agentWheelNotches }
 }
 
 /// Auto-cleanup settings for completed and archived sessions.

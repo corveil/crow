@@ -178,6 +178,35 @@ import Testing
     #expect(config.cleanup.retentionHours == 24)
 }
 
+@Test func appConfigTerminalRoundTrip() throws {
+    // CROW-835: the two per-surface wheel-scroll knobs survive encode→decode.
+    var config = AppConfig()
+    config.terminal.wheelScrollLines = 5
+    config.terminal.agentWheelNotches = 2
+
+    let data = try JSONEncoder().encode(config)
+    let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+    #expect(decoded.terminal.wheelScrollLines == 5)
+    #expect(decoded.terminal.agentWheelNotches == 2)
+}
+
+@Test func appConfigTerminalDefaultsWhenKeyMissing() throws {
+    // Forward-compat: a pre-CROW-835 config (no `terminal` block) decodes to the
+    // historical 3 lines/notch on shells and 1 forwarded notch/notch on agents.
+    let json = #"{"workspaces":[]}"#.data(using: .utf8)!
+    let config = try JSONDecoder().decode(AppConfig.self, from: json)
+    #expect(config.terminal.wheelScrollLines == 3)
+    #expect(config.terminal.agentWheelNotches == 1)
+}
+
+@Test func appConfigTerminalPartialKeyKeepsOtherDefault() throws {
+    // Only one knob present → the other stays at its default.
+    let json = #"{"terminal": {"agentWheelNotches": 4}}"#.data(using: .utf8)!
+    let config = try JSONDecoder().decode(AppConfig.self, from: json)
+    #expect(config.terminal.wheelScrollLines == 3)
+    #expect(config.terminal.agentWheelNotches == 4)
+}
+
 @Test func appConfigRemoteControlRoundTrip() throws {
     var config = AppConfig()
     config.remoteControlEnabled = true

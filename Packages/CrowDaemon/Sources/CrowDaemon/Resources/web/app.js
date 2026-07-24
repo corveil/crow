@@ -112,12 +112,22 @@ function onServerChanged() {
 // `changed`, so we load this on boot and re-load it when the Settings modal
 // saves (via `window.reloadUIConfig`). Mirrors the desktop's
 // `appState.hideSessionDetails`.
-const uiConfig = { hideSessionDetails: false, notifications: null, webPasswordSet: false, vsCodeAvailable: false, isLocal: false };
+const uiConfig = { hideSessionDetails: false, notifications: null, webPasswordSet: false, vsCodeAvailable: false, isLocal: false,
+  // Terminal wheel-scroll sensitivity (CROW-835), consumed by enableWheelScroll.
+  // Defaults mirror AppConfig.TerminalSettings: 3 local lines/notch on plain
+  // shells, 1 forwarded notch/notch on agent surfaces.
+  wheelScrollLines: 3, agentWheelNotches: 1 };
 async function loadUIConfig() {
   try {
     const res = await rpc('get-config');
     const cfg = JSON.parse((res && res.config) || '{}');
     uiConfig.hideSessionDetails = !!(cfg.sidebar && cfg.sidebar.hideSessionDetails);
+    // Wheel-scroll sensitivity (CROW-835). Fall back to the defaults for a config
+    // that predates the `terminal` block or omits a knob; clamp to a sane floor of
+    // 1 so a stray 0 can't wedge the wheel (Math.trunc would never emit a notch).
+    const t = cfg.terminal || {};
+    uiConfig.wheelScrollLines = Math.max(1, Number(t.wheelScrollLines) || 3);
+    uiConfig.agentWheelNotches = Math.max(1, Number(t.agentWheelNotches) || 1);
     uiConfig.notifications = parseNotificationSettings(cfg.notifications);
     // Presence of the (secret-stripped) webAuth block means a web password is set.
     uiConfig.webPasswordSet = !!cfg.webAuth;
@@ -3567,6 +3577,23 @@ function enableTouchScroll(node) {
   node.addEventListener('touchcancel', () => { lastY = null; accum = 0; }, { passive: true });
 }
 
+// Device normalization for the wheel (CROW-835). Translate ONE `wheel` event
+// into fractional PHYSICAL notches so a notched mouse, a trackpad, and a
+// free-spinning wheel all land at ~1 notch per detent — instead of the old fixed
+// ±3, which (forwarded to an agent that already scrolls several lines per notch)
+// flew multiple pages. `e.deltaMode` disambiguates the unit; the pixel branch
+// magnitude-snaps a discrete detent to exactly one notch regardless of whether
+// the device reports 100/120/240 px, while sub-detent trackpad deltas fall
+// through to the accumulator in enableWheelScroll.
+const WHEEL_NOTCH_MIN_PX = 40; // a single pixel-mode delta at least this big is one detent
+function wheelNotches(e) {
+  const mode = e.deltaMode || 0;
+  if (mode === 1) return e.deltaY / 3; // line mode (Firefox mouse): OS 3 lines/notch
+  if (mode === 2) return e.deltaY;      // page mode (rare): one page ≈ one notch
+  const px = e.deltaY;                  // pixel mode (Chrome/Safari mouse + all trackpads)
+  return Math.abs(px) >= WHEEL_NOTCH_MIN_PX ? Math.sign(px) : px / WHEEL_NOTCH_MIN_PX;
+}
+
 // Route the wheel by surface (ADR-0013) — the mirror of what enableTouchScroll
 // does for touch:
 //
@@ -3581,14 +3608,27 @@ function enableTouchScroll(node) {
 // navigation — the #776 bug. Forwarding goes through sendScrollToPTY, which
 // picks SGR wheel buttons when the app is mouse-tracking and cursor keys
 // otherwise, and caps a fling so it can't flood the PTY.
+//
+// Magnitude is device-normalized to whole notches (wheelNotches) with a
+// sub-notch accumulator (mirroring enableTouchScroll's `accum`), then scaled by
+// the user's per-path sensitivity (CROW-835): agent surfaces forward
+// `agentWheelNotches` reports per notch (default 1 — one detent in, one out),
+// plain shells scroll `wheelScrollLines` local lines per notch (default 3 — the
+// historical feel). The `if (!term)` guard is the only early exit; a partial
+// notch simply consumes the event and waits for more.
 function enableWheelScroll(node) {
+  let accum = 0; // sub-notch remainder, so slow trackpad dust isn't truncated away
   node.addEventListener('wheel', (e) => {
     if (!term) return;
-    const delta = e.deltaY > 0 ? 3 : -3;
-    if (appOwnsScroll()) sendScrollToPTY(delta);
-    else term.scrollLines(delta);
     e.preventDefault();
     e.stopPropagation();
+    accum += wheelNotches(e);
+    const notches = Math.trunc(accum);
+    if (notches !== 0) {
+      accum -= notches;
+      if (appOwnsScroll()) sendScrollToPTY(notches * (uiConfig.agentWheelNotches || 1));
+      else term.scrollLines(notches * (uiConfig.wheelScrollLines || 3));
+    }
   }, { capture: true, passive: false });
 }
 
