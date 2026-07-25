@@ -277,6 +277,17 @@ public struct CodexHookConfigWriter: HookConfigWriter {
             return lines.joined(separator: "\n")
         }
 
+        // No `[section]` header — but the section may already exist as an inline
+        // table key (legacy `[projects]` with `"/p" = { … }`, or a top-level
+        // `features = { … }`). Appending a `[section]` header on top of either is
+        // a duplicate-key TOML error that leaves config.toml unparseable and
+        // Codex unable to start (#843 review round 7). Don't merge into the
+        // inline form (rare; a current Codex migrates it to header form on its
+        // next trust write) — just refuse to append a conflicting header.
+        if inlineTableKeyPresent(lines, section: section) {
+            return content
+        }
+
         // Section absent — append at the end.
         if !content.isEmpty && !content.hasSuffix("\n") {
             lines.append("")
@@ -287,6 +298,38 @@ public struct CodexHookConfigWriter: HookConfigWriter {
         lines.append(sectionHeader)
         lines.append(line)
         return lines.joined(separator: "\n")
+    }
+
+    /// Whether `lines` already define `section` as an **inline** table key rather
+    /// than a `[section]` header — the legacy spellings a bare `[projects]`
+    /// parent with `"/path" = { … }` entries, or a top-level `features = { … }`.
+    /// Used by `upsertTomlSectionLine` to avoid appending a duplicate-key header
+    /// over one (#843 review round 7). `removeTomlSectionLine` doesn't need this
+    /// — it never appends, so it can't corrupt.
+    static func inlineTableKeyPresent(_ lines: [String], section: String) -> Bool {
+        let segments = splitTomlDottedPath(section)
+        guard let leaf = segments.last else { return false }
+        let parent = Array(segments.dropLast())
+        // For a top-level target (`features`) the inline entry lives before the
+        // first header; for `projects."/p"` it lives inside `[projects]`.
+        var inParent = parent.isEmpty
+        for raw in lines {
+            if let header = tomlHeaderSegments(raw) {
+                inParent = !parent.isEmpty && header == parent
+                continue
+            }
+            if inParent, assignmentKeyUnquoted(of: raw) == leaf { return true }
+        }
+        return false
+    }
+
+    /// The unquoted key of a `key = value` line (comment-stripped), or `nil`.
+    /// Splits on the first `=` so `"/p" = { trust_level = … }` yields `/p`.
+    private static func assignmentKeyUnquoted(of line: String) -> String? {
+        let bare = stripTomlInlineComment(line)
+        guard let eq = bare.firstIndex(of: "=") else { return nil }
+        let raw = String(bare[bare.startIndex..<eq]).trimmingCharacters(in: .whitespaces)
+        return raw.isEmpty ? nil : unwrapTomlKey(raw)
     }
 
     /// Remove `key = …` from inside `[section]` if present. Returns the

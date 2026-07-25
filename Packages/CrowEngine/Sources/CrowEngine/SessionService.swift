@@ -935,7 +935,9 @@ public final class SessionService {
             // trust; the review clone falls back to Codex's folder-trust prompt
             // (acceptable — review is the human-gated path anyway).
             if session.kind != .review {
-                CodexTrustSeeder.seedTrust(projectPath: worktree.worktreePath)
+                if case let .failed(msg) = CodexTrustSeeder.seedTrust(projectPath: worktree.worktreePath) {
+                    NSLog("[SessionService] Codex trust seed failed for %@: %@", worktree.worktreePath, msg)
+                }
             }
         default:
             break
@@ -1227,7 +1229,9 @@ public final class SessionService {
             // Handoff dispatches via `pendingLaunchCommands`, so `launchAgent`'s
             // seeding never fires for it. Skip `.review` for the same
             // attacker-controlled-clone reason as `launchAgent`.
-            CodexTrustSeeder.seedTrust(projectPath: worktree.worktreePath)
+            if case let .failed(msg) = CodexTrustSeeder.seedTrust(projectPath: worktree.worktreePath) {
+                NSLog("[SessionService] Codex trust seed failed for %@: %@", worktree.worktreePath, msg)
+            }
         }
 
         // Persist the new agent only after launch prep succeeds so register /
@@ -1538,7 +1542,9 @@ public final class SessionService {
         case .claudeCode:
             ClaudeTrustSeeder.seedTrust(projectPath: cwd)
         case .codex:
-            CodexTrustSeeder.seedTrust(projectPath: cwd)
+            if case let .failed(msg) = CodexTrustSeeder.seedTrust(projectPath: cwd) {
+                NSLog("[SessionService] Codex trust seed failed for %@: %@", cwd, msg)
+            }
         default:
             break
         }
@@ -2514,14 +2520,16 @@ public final class SessionService {
         // on `pull` shouldn't abort the launch — the agent can resume from the
         // local state.
         //
-        // Restore `.codex` first (no-op on a fresh clone / untracked-`.codex`
-        // repo): a *re-prep* of this same clone dir starts with the prior prep's
-        // `.codex` strip still applied as an unstaged deletion of tracked files,
-        // which would make `git pull` refuse ("local changes would be
+        // Restore `.codex` first, but only for Codex reviews (see the strip
+        // below): a *re-prep* of this same clone dir starts with the prior
+        // prep's `.codex` strip still applied as an unstaged deletion of tracked
+        // files, which would make `git pull` refuse ("local changes would be
         // overwritten") if the new head touches `.codex/` — silently reviewing a
         // stale head. Restoring before the pull keeps the tree clean; the strip
         // below re-applies afterward (#843 review round 6).
-        _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "checkout", "--", ".codex"])
+        if reviewAgentKind == .codex {
+            _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "checkout", "--", ".codex"])
+        }
         _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "fetch", "origin", headBranch])
         _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "checkout", headBranch])
         _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "pull", "origin", headBranch])
@@ -2537,7 +2545,15 @@ public final class SessionService {
         // pre-trusted parent, a manual handoff). Re-run on every prep so a
         // `git pull` on the reused clone dir can't reintroduce it. Mirrors the
         // Claude path's `.claude/settings.json` overwrite below.
-        try? fm.removeItem(atPath: (clonePath as NSString).appendingPathComponent(".codex"))
+        //
+        // Gated to Codex reviews (#843 review round 7): only Codex loads
+        // `.codex/`, so stripping it for a Claude/Cursor/OpenCode review would
+        // just hide from the reviewing agent the exact files a hostile PR ships
+        // — the review surface should stay intact for the agents that don't act
+        // on `.codex/`.
+        if reviewAgentKind == .codex {
+            try? fm.removeItem(atPath: (clonePath as NSString).appendingPathComponent(".codex"))
+        }
 
         // Write review prompt file into the clone directory. Write failures
         // MUST surface (CROW-439): the launcher's `$(cat ...)` shell
