@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(Glibc)
+import Glibc  // POSIX `rename`/`errno` on Linux (Darwin re-exports them via Foundation on macOS)
+#endif
 
 /// Bridges the user's `jira` MCP server — the one configured for Claude Code
 /// in `~/.claude.json` — into Cursor's `~/.cursor/mcp.json` so Cursor sessions
@@ -58,11 +61,16 @@ public enum CursorMCPConfigWriter {
 
     /// Atomically write `root` as pretty JSON to `path`, owner-only. The
     /// content is written to a sibling temp created **`0600` up front**, then
-    /// atomically swapped in — so the token-bearing `env` is never
-    /// group/other-readable at any instant (a plain `Data.write(.atomic)` would
-    /// create the new file `0644` per umask, exposing the token until a
-    /// follow-up chmod). Perms are re-asserted after the swap in case
-    /// `replaceItemAt` inherited a pre-existing destination's mode.
+    /// atomically renamed over the destination — so the token-bearing `env` is
+    /// never group/other-readable at any instant (a plain `Data.write(.atomic)`
+    /// would create the new file `0644` per umask, exposing the token until a
+    /// follow-up chmod).
+    ///
+    /// Uses POSIX `rename(2)` rather than `FileManager.replaceItemAt` /
+    /// `moveItem`: `replaceItemAt` is unreliable on swift-corelibs-foundation
+    /// (Linux — throws "file doesn't exist" when replacing) and `moveItem`
+    /// refuses to overwrite; `rename` is atomic, portable, replaces an existing
+    /// destination, and keeps the temp inode's `0600`.
     private static func atomicWriteJSON(_ root: [String: Any], to path: String) {
         do {
             let dir = (path as NSString).deletingLastPathComponent
@@ -76,16 +84,10 @@ public enum CursorMCPConfigWriter {
                 NSLog("[CursorMCPConfigWriter] Failed to create temp for %@", path)
                 return
             }
-            defer { try? FileManager.default.removeItem(atPath: tmp) }
-
-            if FileManager.default.fileExists(atPath: path) {
-                _ = try FileManager.default.replaceItemAt(
-                    URL(fileURLWithPath: path), withItemAt: URL(fileURLWithPath: tmp))
-            } else {
-                try FileManager.default.moveItem(atPath: tmp, toPath: path)
+            if rename(tmp, path) != 0 {
+                NSLog("[CursorMCPConfigWriter] atomic rename to %@ failed (errno %d)", path, errno)
+                try? FileManager.default.removeItem(atPath: tmp)
             }
-            try? FileManager.default.setAttributes(
-                [.posixPermissions: 0o600], ofItemAtPath: path)
         } catch {
             NSLog("[CursorMCPConfigWriter] Failed to write %@: %@", path, error.localizedDescription)
         }
