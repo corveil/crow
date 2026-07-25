@@ -14,7 +14,7 @@ use tauri::menu::{AboutMetadataBuilder, MenuBuilder, MenuItemBuilder, SubmenuBui
 use tauri::Manager;
 
 /// Port the sidecar crowd binds. Honors CROW_HTTP_PORT (matching
-/// scripts/crowd-dev.sh) so launching the app beside a custom-port crowd reuses
+/// scripts/daemon-run.sh) so launching the app beside a custom-port crowd reuses
 /// it instead of spawning a second daemon on 8787 against the same devRoot
 /// (review #11).
 fn port() -> u16 {
@@ -234,8 +234,8 @@ pub fn run() {
                 }
                 // No --web-dir: the sidecar serves the frozen web assets baked
                 // into crowd's resource bundle at `make daemon` time, so UI edits
-                // don't show until an explicit rebuild. For live-from-source web
-                // editing, use `make crowd-dev` (which passes --web-dir).
+                // don't show until an explicit rebuild. The `make daemon-run`
+                // dev loop serves the same frozen assets (no live-from-source).
                 match cmd.spawn() {
                     Ok(child) => {
                         eprintln!(

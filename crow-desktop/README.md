@@ -28,7 +28,7 @@ First launch compiles the Rust (~30s), then a **"Crow"** window opens. You do
 **not** need to start `crowd` yourself:
 
 - If a `crowd` is already listening on `127.0.0.1:8787`, the app reuses it and
-  leaves it running when you quit (great for iterating on a `make crowd-dev`
+  leaves it running when you quit (great for iterating on a `make daemon-run`
   daemon in another terminal).
 - Otherwise it spawns `.build/debug/crowd` (splash → UI once it's up) and stops
   that `crowd` when you quit.
@@ -49,7 +49,7 @@ The PATH pin is required: the dev shell can run under Rosetta (x86_64) and would
 otherwise grab an old x86_64 Rust; this uses the arm64 Homebrew/rustup toolchain.
 Because each relaunch re-runs the launch logic (and kills a `crowd` it spawned),
 this churns the daemon — for iterating on `crowd` or the web UI, prefer
-`make crowd-dev` + `make run` instead.
+`make daemon-run` + `make run` instead.
 
 ## How it works
 

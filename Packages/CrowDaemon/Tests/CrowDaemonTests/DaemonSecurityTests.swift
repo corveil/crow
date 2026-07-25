@@ -234,7 +234,7 @@ import CrowPersistence
 
 /// One `crowd` per socket: the flock guard makes a duplicate daemon on the same
 /// socket exit instead of half-starting (skipping the unix bind) and orphaning
-/// `crow.sock` when the first dies — the multi-`crowd-dev` footgun (CROW-581).
+/// `crow.sock` when the first dies — the multi-`daemon-run` footgun (CROW-581).
 @Suite struct SingleInstanceLockTests {
     private func tmpSocket() -> String {
         NSTemporaryDirectory() + "crowd-lock-\(UUID().uuidString).sock"

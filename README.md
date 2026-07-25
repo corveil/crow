@@ -100,11 +100,11 @@ gh auth refresh -s project,read:org,repo
 
 `crowd` prints `HTTP/WS listening on http://127.0.0.1:8787` on startup — open that URL in your browser. The first screen guides you through any remaining setup.
 
-For local daemon development, `make crowd-dev` runs `crowd` with the web UI served live from source — edit `index.html`/`app.css`/`app.js` and just refresh:
+For local daemon development, `make daemon-run` runs `crowd` serving the frozen web UI baked into the compiled bundle — the same asset source as `make run`. Web UI edits (`index.html`/`app.css`/`app.js`) need a rebuild to be picked up:
 
 ```bash
-make crowd-dev                      # stable daemon at http://127.0.0.1:8787
-bash scripts/crowd-dev.sh --watch   # ...and rebuild + restart crowd on Swift changes
+make daemon-run                      # stable daemon at http://127.0.0.1:8787
+bash scripts/daemon-run.sh --watch   # ...and rebuild + restart crowd on Swift changes
 ```
 
 `--watch` restarts the daemon on every change (Swift can't hot-swap), so leave it off when you want a daemon that stays up across edits.
@@ -157,19 +157,19 @@ crow-desktop/src-tauri/target/debug/Crow
 
 ### Iterating with the window open
 
-The `make run` window already spawns `crowd` as a sidecar that serves the web UI **live from source**, so for most web/UI work you don't need anything else — edit `index.html`/`app.css`/`app.js` and hit **⌘R** (View → Reload).
+The `make run` window spawns `crowd` as a sidecar that serves the web UI from the compiled bundle (frozen assets), so web/UI edits (`index.html`/`app.css`/`app.js`) need a `make daemon` rebuild + restart to show up — the same asset source across every dev path.
 
 Run a standalone `crowd` separately only when you want a daemon that **outlives the window** or is shared by several clients (a browser tab + the window at once). Because the window reuses a crowd already on `:8787` and leaves it running on quit, they compose cleanly:
 
 ```bash
-# Terminal 1 — a stable daemon, web served live from source
-make crowd-dev
+# Terminal 1 — a stable daemon, web served from the compiled bundle
+make daemon-run
 
 # Terminal 2 — the window attaches to it (reuses :8787, doesn't own its lifecycle)
 make run          # or, once built: crow-desktop/src-tauri/target/debug/Crow
 ```
 
-Quitting the window leaves your `crowd` running. Rebuilding the daemon (`crowd-dev --watch`, or a manual `make daemon` + restart) restarts it — the window keeps its `:8787` target, so just ⌘R once it's back up. Swift can't hot-swap, so any daemon rebuild is a restart; there's no way around that (it's the same reason the Tauri dev loop churns).
+Quitting the window leaves your `crowd` running. Rebuilding the daemon (`daemon-run --watch`, or a manual `make daemon` + restart) restarts it — the window keeps its `:8787` target, so just ⌘R once it's back up. Swift can't hot-swap, so any daemon rebuild is a restart; there's no way around that (it's the same reason the Tauri dev loop churns).
 
 - `CROW_HTTP_PORT=NNNN` — match a crowd started on a non-default port so the window reuses it instead of spawning a second daemon on 8787 (which would contend on the same store + tmux cockpit).
 - `CROWD_BIN=/path/to/crowd` — override which `crowd` binary the window spawns when none is already running.
@@ -183,7 +183,7 @@ cd crow-desktop
 PATH="/opt/homebrew/bin:$HOME/.cargo/bin:$PATH" npm run tauri dev
 ```
 
-Handy for Rust/window work, but each relaunch re-runs the launch logic and tears down a `crowd` it spawned — so it churns the daemon. When you're iterating on `crowd` or the web UI (not the Rust shell), prefer plain `make run` (or the `make crowd-dev` + `make run` split above).
+Handy for Rust/window work, but each relaunch re-runs the launch logic and tears down a `crowd` it spawned — so it churns the daemon. When you're iterating on `crowd` or the web UI (not the Rust shell), prefer plain `make run` (or the `make daemon-run` + `make run` split above).
 
 ## Documentation
 

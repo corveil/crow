@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 #
-# Run the `crowd` daemon for local development, serving the web UI live from the
-# source folder — edit index.html/app.css/app.js, then just refresh the browser.
+# Run the `crowd` daemon for local development, serving the *frozen* web UI baked
+# into crowd's resource bundle at build time — the same asset source as `make
+# run`'s sidecar. Web UI edits (index.html/app.css/app.js) require a rebuild to
+# be picked up; there is no live-from-source refresh loop.
 #
 # By default this builds `crowd` once and runs a stable daemon that a browser,
 # the `crow` CLI, or the desktop app can attach to. Pass `--watch` to also
@@ -10,9 +12,7 @@
 # Note: Swift can't be hot-swapped into a running process, so `--watch` tears
 # down and respawns the daemon on every change — the same "the server restarts"
 # tradeoff as the Tauri dev loop. Prefer the default (no --watch) when you want a
-# daemon that stays up across edits. Note that `make run` spawns its `crowd`
-# sidecar serving the *frozen* bundle-baked web assets (no live reload), so this
-# script is what you want when you need live-from-source web editing.
+# daemon that stays up across edits.
 #
 # Always binds 127.0.0.1 (loopback only) — front it with an HTTPS reverse proxy
 # for remote access. Env overrides: CROW_HTTP_PORT (8787),
@@ -28,9 +28,9 @@ for arg in "$@"; do
     -h|--help)
       echo "Usage: $(basename "$0") [--watch]"
       echo "  -w, --watch   Rebuild + restart crowd on Swift source changes"
-      echo "                (default: build once, run a stable daemon; web stays live)"
+      echo "                (default: build once, run a stable daemon)"
       exit 0 ;;
-    *) echo "[crowd-dev] unknown argument: $arg (try --help)" >&2; exit 2 ;;
+    *) echo "[daemon-run] unknown argument: $arg (try --help)" >&2; exit 2 ;;
   esac
 done
 
@@ -45,16 +45,16 @@ elif [[ -f "$HOME/Library/Application Support/crow/devroot" ]]; then
 else
   DEVROOT="$(pwd)"
 fi
-WEBDIR="$(pwd)/Packages/CrowDaemon/Sources/CrowDaemon/Resources/web"
 WATCH_PATHS=(Packages/CrowDaemon Packages/CrowEngine Packages/CrowProvider Packages/CrowClaude Packages/CrowTerminal Packages/CrowCore Packages/CrowIPC Packages/CrowGit Packages/CrowPersistence Sources/crowd)
 
-START_CMD=(.build/debug/crowd --host "$HOST" --http-port "$PORT" --socket "$SOCK" --web-dir "$WEBDIR")
+# No --web-dir: serve the frozen web assets baked into crowd's resource bundle.
+START_CMD=(.build/debug/crowd --host "$HOST" --http-port "$PORT" --socket "$SOCK")
 
-echo "[crowd-dev] ${START_CMD[*]}"
-echo "[crowd-dev] http://$HOST:$PORT  · socket $SOCK · devRoot $DEVROOT · web live from $WEBDIR"
+echo "[daemon-run] ${START_CMD[*]}"
+echo "[daemon-run] http://$HOST:$PORT  · socket $SOCK · devRoot $DEVROOT · web from compiled bundle"
 
-# Default: build once, then run a stable daemon. Web assets are still served
-# live from source, so UI edits need only a browser refresh — no restart.
+# Default: build once, then run a stable daemon serving the frozen bundle-baked
+# web assets. UI edits need a rebuild to show up (same as `make run`).
 if [[ "$WATCH" -eq 0 ]]; then
   swift build --product crowd
   exec "${START_CMD[@]}"
@@ -62,7 +62,7 @@ fi
 
 # --watch: rebuild + restart crowd on Swift changes. Uses `watchexec` if
 # installed (fastest); otherwise falls back to a portable mtime poll loop.
-echo "[crowd-dev] --watch: rebuild + restart on *.swift change"
+echo "[daemon-run] --watch: rebuild + restart on *.swift change"
 if command -v watchexec >/dev/null 2>&1; then
   WATCH_ARGS=()
   for w in "${WATCH_PATHS[@]}"; do WATCH_ARGS+=(-w "$w"); done
@@ -73,7 +73,7 @@ if command -v watchexec >/dev/null 2>&1; then
     sh -c 'swift build --product crowd && exec "$@"' sh "${START_CMD[@]}"
 fi
 
-echo "[crowd-dev] poll mode (install 'watchexec' for instant restarts: brew install watchexec)"
+echo "[daemon-run] poll mode (install 'watchexec' for instant restarts: brew install watchexec)"
 PID=""
 cleanup() { if [ -n "$PID" ]; then kill "$PID" 2>/dev/null || true; fi; exit 0; }
 trap cleanup INT TERM
@@ -94,9 +94,9 @@ while true; do
     if swift build --product crowd; then
       "${START_CMD[@]}" &
       PID=$!
-      echo "[crowd-dev] (re)started crowd pid=$PID"
+      echo "[daemon-run] (re)started crowd pid=$PID"
     else
-      echo "[crowd-dev] build failed — fix and save to retry"
+      echo "[daemon-run] build failed — fix and save to retry"
     fi
   fi
   sleep 1

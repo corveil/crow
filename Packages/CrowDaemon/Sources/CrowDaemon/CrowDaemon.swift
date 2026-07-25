@@ -51,7 +51,7 @@ public enum CrowDaemon {
 
         // Single-instance guard: refuse to start a SECOND crowd on this socket. A
         // duplicate would skip the unix bind and orphan `crow.sock` when the first
-        // exits (the multi-`crowd-dev` footgun). Distinct --socket → own lock, so
+        // exits (the multi-`daemon-run` footgun). Distinct --socket → own lock, so
         // isolated daemons still run (CROW-581).
         guard acquireSingleInstanceLock(socketPath: options.socketPath) else {
             log("Another crowd is already running on \(options.socketPath) — exiting. "
@@ -1070,7 +1070,7 @@ public enum CrowDaemon {
     /// Enforce ONE `crowd` per socket path via an advisory `flock` on
     /// `<socketPath>.lock`. Without it a second daemon on the same socket sees the
     /// socket "in use", skips the unix bind, and runs degraded (HTTP-only) — then
-    /// orphans `crow.sock` when the first exits (the multi-`crowd-dev` footgun).
+    /// orphans `crow.sock` when the first exits (the multi-`daemon-run` footgun).
     /// Distinct `--socket` paths get distinct locks, so isolated daemons still
     /// coexist. Fails open on lock-file errors (never blocks a daemon over a weird
     /// lock dir). Returns false when another live crowd already holds this lock

@@ -62,7 +62,7 @@ crow/
 │   ├── CrowPersistence/             # JSON store, config persistence
 │   ├── CrowClaude / CrowCodex / CrowCursor / CrowOpenCode  # coding-agent adapters
 │   └── CrowTelemetry/               # telemetry
-├── scripts/                   # Build helpers (generate-build-info.sh, crowd-dev.sh)
+├── scripts/                   # Build helpers (generate-build-info.sh, daemon-run.sh)
 └── skills/                    # Bundled Claude Code skills (crow-workspace, etc.)
 ```
 
