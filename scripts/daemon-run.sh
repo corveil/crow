@@ -17,7 +17,9 @@
 # Always binds 127.0.0.1 (loopback only) — front it with an HTTPS reverse proxy
 # for remote access. Env overrides: CROW_HTTP_PORT (8787),
 # CROW_SOCKET (~/.local/share/crow/crow.sock),
-# CROW_DEV_ROOT (defaults to the app's devroot pointer, else the current dir).
+# CROW_DEV_ROOT (defaults to the app's devroot pointer, else the current dir),
+# CROW_WEB_DIR (unset — set it to serve the web UI live from that on-disk
+# directory instead of the frozen bundle; the crowd child inherits it).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -27,7 +29,7 @@ for arg in "$@"; do
     -w|--watch) WATCH=1 ;;
     -h|--help)
       echo "Usage: $(basename "$0") [--watch]"
-      echo "  -w, --watch   Rebuild + restart crowd on Swift source changes"
+      echo "  -w, --watch   Rebuild + restart crowd on Swift or web-asset changes"
       echo "                (default: build once, run a stable daemon)"
       exit 0 ;;
     *) echo "[daemon-run] unknown argument: $arg (try --help)" >&2; exit 2 ;;
@@ -60,16 +62,19 @@ if [[ "$WATCH" -eq 0 ]]; then
   exec "${START_CMD[@]}"
 fi
 
-# --watch: rebuild + restart crowd on Swift changes. Uses `watchexec` if
+# --watch: rebuild + restart crowd on Swift *or* web-asset changes. A rebuild
+# re-copies Resources/web into the bundle (Package.swift `.copy("Resources/web")`)
+# and StaticAssets reads it per request, so a browser refresh shows web edits —
+# the frozen-asset equivalent of the old live reload. Uses `watchexec` if
 # installed (fastest); otherwise falls back to a portable mtime poll loop.
-echo "[daemon-run] --watch: rebuild + restart on *.swift change"
+echo "[daemon-run] --watch: rebuild + restart on *.swift or Resources/web change"
 if command -v watchexec >/dev/null 2>&1; then
   WATCH_ARGS=()
   for w in "${WATCH_PATHS[@]}"; do WATCH_ARGS+=(-w "$w"); done
   # Pass START_CMD as positional args so array quoting survives — a devRoot or
   # socket path with spaces/metacharacters must not word-split or get evaluated
   # (review). watchexec needs a shell for the `&&`, so route through `sh -c`.
-  exec watchexec -r -e swift "${WATCH_ARGS[@]}" -- \
+  exec watchexec -r -e swift,js,css,html,svg,json "${WATCH_ARGS[@]}" -- \
     sh -c 'swift build --product crowd && exec "$@"' sh "${START_CMD[@]}"
 fi
 
@@ -79,10 +84,11 @@ cleanup() { if [ -n "$PID" ]; then kill "$PID" 2>/dev/null || true; fi; exit 0; 
 trap cleanup INT TERM
 
 # stat(1) differs across platforms: BSD/macOS uses `-f`, GNU/Linux uses `-c`.
+# Watch Swift sources plus everything under Resources/web (any extension).
 if stat -f '%m' . >/dev/null 2>&1; then
-  snapshot() { find "${WATCH_PATHS[@]}" -name '*.swift' -type f -exec stat -f '%m %N' {} + 2>/dev/null | sort; }
+  snapshot() { find "${WATCH_PATHS[@]}" \( -name '*.swift' -o -path '*/Resources/web/*' \) -type f -exec stat -f '%m %N' {} + 2>/dev/null | sort; }
 else
-  snapshot() { find "${WATCH_PATHS[@]}" -name '*.swift' -type f -exec stat -c '%Y %n' {} + 2>/dev/null | sort; }
+  snapshot() { find "${WATCH_PATHS[@]}" \( -name '*.swift' -o -path '*/Resources/web/*' \) -type f -exec stat -c '%Y %n' {} + 2>/dev/null | sort; }
 fi
 
 last=""

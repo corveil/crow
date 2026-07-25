@@ -49,7 +49,7 @@ help:
 	@echo "  daemon     Build just the Swift binaries (crow CLI + crowd daemon)"
 	@echo "  app        Build just the Crow desktop app (Tauri) → $(DESKTOP_BIN)"
 	@echo "  run        Build, then open the Crow desktop window over a running (or fresh) crowd"
-	@echo "  daemon-run Run crowd serving the frozen bundle-baked web UI (add --watch to rebuild on Swift change)"
+	@echo "  daemon-run Run crowd serving the frozen bundle-baked web UI (add --watch to rebuild on Swift/web change)"
 	@echo "  setup      Check build prerequisites"
 	@echo "  check      Verify all build and runtime prerequisites"
 	@echo "  test       Run all package tests"
@@ -69,7 +69,7 @@ setup:
 
 # Run crowd for local dev: build once and serve the frozen web UI baked into
 # crowd's resource bundle (edit + rebuild to pick up UI changes — same as `make
-# run`). Add --watch to also rebuild + restart on Swift changes:
+# run`). Add --watch to also rebuild + restart on Swift or web-asset changes:
 # `bash scripts/daemon-run.sh --watch`. See scripts/daemon-run.sh.
 daemon-run:
 	bash scripts/daemon-run.sh

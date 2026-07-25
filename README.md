@@ -157,7 +157,7 @@ crow-desktop/src-tauri/target/debug/Crow
 
 ### Iterating with the window open
 
-The `make run` window spawns `crowd` as a sidecar that serves the web UI from the compiled bundle (frozen assets), so web/UI edits (`index.html`/`app.css`/`app.js`) need a `make daemon` rebuild + restart to show up — the same asset source across every dev path.
+The `make run` window spawns `crowd` as a sidecar that serves the web UI from the compiled bundle (frozen assets), so web/UI edits (`index.html`/`app.css`/`app.js`) need a `make daemon` rebuild to show up — the same asset source across every dev path. The rebuild re-copies the assets into the bundle and `crowd` reads them per request, so a plain ⌘R picks them up (no daemon restart needed for web-only edits; a Swift change does need a restart, since Swift can't hot-swap).
 
 Run a standalone `crowd` separately only when you want a daemon that **outlives the window** or is shared by several clients (a browser tab + the window at once). Because the window reuses a crowd already on `:8787` and leaves it running on quit, they compose cleanly:
 
@@ -169,7 +169,7 @@ make daemon-run
 make run          # or, once built: crow-desktop/src-tauri/target/debug/Crow
 ```
 
-Quitting the window leaves your `crowd` running. Rebuilding the daemon (`daemon-run --watch`, or a manual `make daemon` + restart) restarts it — the window keeps its `:8787` target, so just ⌘R once it's back up. Swift can't hot-swap, so any daemon rebuild is a restart; there's no way around that (it's the same reason the Tauri dev loop churns).
+Quitting the window leaves your `crowd` running. `daemon-run --watch` rebuilds it on Swift *or* web-asset edits (a manual `make daemon` works too) — the window keeps its `:8787` target, so just ⌘R once it's back up. A Swift rebuild is always a restart (Swift can't hot-swap — the same reason the Tauri dev loop churns); a web-only rebuild just re-copies the assets, which the running daemon serves on the next refresh without a restart.
 
 - `CROW_HTTP_PORT=NNNN` — match a crowd started on a non-default port so the window reuses it instead of spawning a second daemon on 8787 (which would contend on the same store + tmux cockpit).
 - `CROWD_BIN=/path/to/crowd` — override which `crowd` binary the window spawns when none is already running.
