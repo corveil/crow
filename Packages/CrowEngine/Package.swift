@@ -34,6 +34,7 @@ let package = Package(
                 "CrowProvider",
                 "CrowTerminal",
                 "CrowClaude",
+                "CrowCodex",
                 "CrowIPC",
             ]
         ),

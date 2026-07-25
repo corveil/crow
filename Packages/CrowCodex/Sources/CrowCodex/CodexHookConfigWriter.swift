@@ -1,5 +1,10 @@
 import Foundation
 import CrowCore
+#if canImport(Glibc)
+import Glibc
+#elseif canImport(Darwin)
+import Darwin
+#endif
 
 /// Writes hook configuration that OpenAI Codex picks up. Codex reads hooks
 /// from `$CODEX_HOME/hooks.json` (default `~/.codex/hooks.json`) regardless
@@ -107,8 +112,15 @@ public struct CodexHookConfigWriter: HookConfigWriter {
         let tomlPath = (codexHome as NSString).appendingPathComponent("config.toml")
 
         var content: String = ""
-        if let data = FileManager.default.contents(atPath: tomlPath),
-           let text = String(data: data, encoding: .utf8) {
+        if let data = FileManager.default.contents(atPath: tomlPath) {
+            // "Exists but not UTF-8" must not read as "" — that would truncate a
+            // config.toml holding credentials/providers on the read-modify-write
+            // (#843 review round 6). Refuse instead.
+            guard let text = String(data: data, encoding: .utf8) else {
+                throw NSError(
+                    domain: "CodexHookConfigWriter", code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "\(tomlPath) is not valid UTF-8; refusing to rewrite"])
+            }
             content = text
         }
 
@@ -124,7 +136,12 @@ public struct CodexHookConfigWriter: HookConfigWriter {
             line: "hooks = true"
         )
 
-        try content.write(toFile: tomlPath, atomically: true, encoding: .utf8)
+        // Route through the owner-only writer: this is the same `config.toml`
+        // that `CodexMCPWriter` later fills with mirrored MCP `env` tokens, and
+        // `installGlobalTomlConfig` runs first on every boot — writing it 0600
+        // here keeps the file owner-only even on the very first boot, before the
+        // mirror runs (#843 review round 2).
+        try writeConfigPrivately(content, toFile: tomlPath)
     }
 
     // MARK: - TOML Line Editing (Minimal)
@@ -165,8 +182,66 @@ public struct CodexHookConfigWriter: HookConfigWriter {
         return lines.joined(separator: "\n")
     }
 
+    /// Strip a TOML end-of-line `# comment` that sits outside any double-quoted
+    /// string, leaving quoted `#` intact. So `[a.b] # note` → `[a.b] `.
+    static func stripTomlInlineComment(_ line: String) -> String {
+        var inQuotes = false
+        var escaped = false
+        var out = ""
+        for ch in line {
+            if escaped { out.append(ch); escaped = false; continue }
+            if ch == "\\" { out.append(ch); escaped = true; continue }
+            if ch == "\"" { inQuotes.toggle(); out.append(ch); continue }
+            if ch == "#" && !inQuotes { break }
+            out.append(ch)
+        }
+        return out
+    }
+
+    /// Split a TOML dotted key path into segments, respecting double-quoted
+    /// segments, trimming whitespace around each dot, and unwrapping the quotes.
+    /// `mcp_servers . "jira"` → `["mcp_servers", "jira"]`.
+    static func splitTomlDottedPath(_ s: String) -> [String] {
+        var segments: [String] = []
+        var current = ""
+        var inQuotes = false
+        var escaped = false
+        for ch in s {
+            if escaped { current.append(ch); escaped = false; continue }
+            if ch == "\\" { current.append(ch); escaped = true; continue }
+            if ch == "\"" { inQuotes.toggle(); current.append(ch); continue }
+            if ch == "." && !inQuotes { segments.append(unwrapTomlKey(current)); current = ""; continue }
+            current.append(ch)
+        }
+        segments.append(unwrapTomlKey(current))
+        return segments
+    }
+
+    private static func unwrapTomlKey(_ s: String) -> String {
+        let t = s.trimmingCharacters(in: .whitespaces)
+        if t.count >= 2, t.hasPrefix("\""), t.hasSuffix("\"") {
+            return String(t.dropFirst().dropLast())
+        }
+        return t
+    }
+
+    /// If `line` is a TOML table header `[a.b."c"]`, return its dotted-path
+    /// segments (quotes unwrapped, whitespace-around-dots trimmed, trailing
+    /// `# comment` stripped); `nil` for a non-header line. So
+    /// `[mcp_servers . "jira"] # x` → `["mcp_servers", "jira"]`. Comment-,
+    /// whitespace-, and quote-tolerant so a present/section match can't be
+    /// defeated by a legal-but-unusual spelling that would then append a
+    /// duplicate table and corrupt `config.toml` (#843 review round 4).
+    static func tomlHeaderSegments(_ line: String) -> [String]? {
+        let bare = stripTomlInlineComment(line).trimmingCharacters(in: .whitespaces)
+        guard bare.count >= 2, bare.hasPrefix("["), bare.hasSuffix("]") else { return nil }
+        return splitTomlDottedPath(String(bare.dropFirst().dropLast()))
+    }
+
     /// Replace or insert `key = …` inside `[section]`. Adds the section if
-    /// missing.
+    /// missing. Header matching is comment/whitespace/quote-tolerant via
+    /// `tomlHeaderSegments`, so an existing `[section] # note` is updated in
+    /// place rather than duplicated.
     static func upsertTomlSectionLine(
         _ content: String,
         section: String,
@@ -177,13 +252,14 @@ public struct CodexHookConfigWriter: HookConfigWriter {
         var sectionStart: Int? = nil
         var sectionEnd: Int = lines.count
         let sectionHeader = "[\(section)]"
+        let targetSegments = splitTomlDottedPath(section)
         for (i, raw) in lines.enumerated() {
-            let trimmed = raw.trimmingCharacters(in: .whitespaces)
-            if trimmed == sectionHeader {
+            let segments = tomlHeaderSegments(raw)
+            if sectionStart == nil, segments == targetSegments {
                 sectionStart = i
                 continue
             }
-            if let _ = sectionStart, trimmed.hasPrefix("[") && trimmed.hasSuffix("]") {
+            if sectionStart != nil, segments != nil {
                 sectionEnd = i
                 break
             }
@@ -201,6 +277,17 @@ public struct CodexHookConfigWriter: HookConfigWriter {
             return lines.joined(separator: "\n")
         }
 
+        // No `[section]` header — but the section may already exist as an inline
+        // table key (legacy `[projects]` with `"/p" = { … }`, or a top-level
+        // `features = { … }`). Appending a `[section]` header on top of either is
+        // a duplicate-key TOML error that leaves config.toml unparseable and
+        // Codex unable to start (#843 review round 7). Don't merge into the
+        // inline form (rare; a current Codex migrates it to header form on its
+        // next trust write) — just refuse to append a conflicting header.
+        if inlineTableKeyPresent(lines, section: section) {
+            return content
+        }
+
         // Section absent — append at the end.
         if !content.isEmpty && !content.hasSuffix("\n") {
             lines.append("")
@@ -211,6 +298,38 @@ public struct CodexHookConfigWriter: HookConfigWriter {
         lines.append(sectionHeader)
         lines.append(line)
         return lines.joined(separator: "\n")
+    }
+
+    /// Whether `lines` already define `section` as an **inline** table key rather
+    /// than a `[section]` header — the legacy spellings a bare `[projects]`
+    /// parent with `"/path" = { … }` entries, or a top-level `features = { … }`.
+    /// Used by `upsertTomlSectionLine` to avoid appending a duplicate-key header
+    /// over one (#843 review round 7). `removeTomlSectionLine` doesn't need this
+    /// — it never appends, so it can't corrupt.
+    static func inlineTableKeyPresent(_ lines: [String], section: String) -> Bool {
+        let segments = splitTomlDottedPath(section)
+        guard let leaf = segments.last else { return false }
+        let parent = Array(segments.dropLast())
+        // For a top-level target (`features`) the inline entry lives before the
+        // first header; for `projects."/p"` it lives inside `[projects]`.
+        var inParent = parent.isEmpty
+        for raw in lines {
+            if let header = tomlHeaderSegments(raw) {
+                inParent = !parent.isEmpty && header == parent
+                continue
+            }
+            if inParent, assignmentKeyUnquoted(of: raw) == leaf { return true }
+        }
+        return false
+    }
+
+    /// The unquoted key of a `key = value` line (comment-stripped), or `nil`.
+    /// Splits on the first `=` so `"/p" = { trust_level = … }` yields `/p`.
+    private static func assignmentKeyUnquoted(of line: String) -> String? {
+        let bare = stripTomlInlineComment(line)
+        guard let eq = bare.firstIndex(of: "=") else { return nil }
+        let raw = String(bare[bare.startIndex..<eq]).trimmingCharacters(in: .whitespaces)
+        return raw.isEmpty ? nil : unwrapTomlKey(raw)
     }
 
     /// Remove `key = …` from inside `[section]` if present. Returns the
@@ -224,14 +343,14 @@ public struct CodexHookConfigWriter: HookConfigWriter {
         var lines = content.components(separatedBy: "\n")
         var sectionStart: Int? = nil
         var sectionEnd: Int = lines.count
-        let sectionHeader = "[\(section)]"
+        let targetSegments = splitTomlDottedPath(section)
         for (i, raw) in lines.enumerated() {
-            let trimmed = raw.trimmingCharacters(in: .whitespaces)
-            if trimmed == sectionHeader {
+            let segments = tomlHeaderSegments(raw)
+            if sectionStart == nil, segments == targetSegments {
                 sectionStart = i
                 continue
             }
-            if let _ = sectionStart, trimmed.hasPrefix("[") && trimmed.hasSuffix("]") {
+            if sectionStart != nil, segments != nil {
                 sectionEnd = i
                 break
             }
@@ -257,10 +376,64 @@ public struct CodexHookConfigWriter: HookConfigWriter {
         return key.isEmpty ? nil : String(key)
     }
 
-    /// Escape backslash and double-quote for safe inclusion in a TOML
-    /// double-quoted string.
+    /// Escape a string for safe inclusion in a TOML **basic** (double-quoted)
+    /// string. TOML forbids raw control characters (including newlines) inside a
+    /// basic string, so a value carrying a `\n` — e.g. a PEM key or a
+    /// pretty-printed JSON blob mirrored from an MCP `env` — would otherwise
+    /// terminate the string early and leave `config.toml` unparseable (#830
+    /// review). Escapes `\`, `"`, the named short escapes, and every other
+    /// control character as `\uXXXX`.
     static func escapeTomlString(_ s: String) -> String {
-        s.replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
+        var out = ""
+        out.reserveCapacity(s.unicodeScalars.count)
+        for scalar in s.unicodeScalars {
+            switch scalar {
+            case "\\": out += "\\\\"
+            case "\"": out += "\\\""
+            case "\u{08}": out += "\\b"
+            case "\u{09}": out += "\\t"
+            case "\u{0A}": out += "\\n"
+            case "\u{0C}": out += "\\f"
+            case "\u{0D}": out += "\\r"
+            default:
+                if scalar.value < 0x20 || scalar.value == 0x7F {
+                    out += String(format: "\\u%04X", scalar.value)
+                } else {
+                    out.unicodeScalars.append(scalar)
+                }
+            }
+        }
+        return out
+    }
+
+    /// Write `content` to `path` so the file — and its transient temp — is never
+    /// world-readable. `config.toml` can carry provider credentials, and a plain
+    /// `write(toFile:atomically:true)` stages a temp at the process umask (often
+    /// 0644) for the write+rename window, briefly exposing secrets (#830
+    /// review). This stages a sibling temp created at 0600, writes into it, then
+    /// `rename(2)`s it over the destination — one atomic step on the same
+    /// filesystem (the temp is a sibling), so there's no window where the file is
+    /// missing or world-readable. `rename(2)` is used directly rather than
+    /// `FileManager.replaceItemAt`, which is unreliable on
+    /// swift-corelibs-foundation (it left the destination missing on Linux CI).
+    static func writeConfigPrivately(_ content: String, toFile path: String) throws {
+        let fm = FileManager.default
+        let dir = (path as NSString).deletingLastPathComponent
+        let tmp = (dir as NSString).appendingPathComponent(".crow-codex-\(UUID().uuidString).tmp")
+        guard fm.createFile(
+            atPath: tmp,
+            contents: Data(content.utf8),
+            attributes: [.posixPermissions: 0o600]
+        ) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        // Atomic replace; the 0600 temp's inode (and perms) become the target.
+        let renamed = tmp.withCString { tmpC in
+            path.withCString { pathC in rename(tmpC, pathC) == 0 }
+        }
+        guard renamed else {
+            try? fm.removeItem(atPath: tmp)
+            throw CocoaError(.fileWriteUnknown)
+        }
     }
 }

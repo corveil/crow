@@ -204,4 +204,34 @@ struct CodexHookConfigWriterTests {
             }
         }
     }
+
+    // MARK: - Inline parent-table safety (#843 review round 7)
+
+    @Test func upsertTomlSectionLineDoesNotDuplicateInlineProjectsParent() {
+        // Legacy inline `[projects]` with `"/p" = { … }`: appending a
+        // `[projects."/p"]` header on top is a duplicate-key TOML error. The
+        // upsert must recognize the inline form and bail, not append.
+        let content = "[projects]\n\"/p\" = { trust_level = \"untrusted\" }\n"
+        let result = CodexHookConfigWriter.upsertTomlSectionLine(
+            content, section: "projects.\"/p\"", key: "trust_level", line: "trust_level = \"trusted\"")
+        #expect(!result.contains("[projects.\"/p\"]"), "must not append a conflicting header")
+        #expect(result == content, "inline form is left intact (not merged)")
+    }
+
+    @Test func upsertTomlSectionLineDoesNotDuplicateTopLevelInlineTable() {
+        // Top-level `features = { … }`: appending `[features]` is a duplicate key.
+        let content = "features = { hooks = false }\n"
+        let result = CodexHookConfigWriter.upsertTomlSectionLine(
+            content, section: "features", key: "hooks", line: "hooks = true")
+        #expect(!result.contains("[features]"), "must not append a conflicting header")
+    }
+
+    @Test func upsertTomlSectionLineStillHandlesHeaderForm() {
+        // Regression guard: the normal `[features]` header path still upserts.
+        let content = "[features]\nmemories = true\n"
+        let result = CodexHookConfigWriter.upsertTomlSectionLine(
+            content, section: "features", key: "hooks", line: "hooks = true")
+        #expect(result.contains("hooks = true"))
+        #expect(result.contains("memories = true"))
+    }
 }

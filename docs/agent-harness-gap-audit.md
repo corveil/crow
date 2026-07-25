@@ -130,6 +130,37 @@ a single adapter + its launcher + hook writer + tests change together).
 - **Codex async hooks** (§2 #4 / §3b) — upstream still parses-but-skips `async:true` at HEAD (~`0.146-alpha`), except `SessionEnd` which runs synchronously; nothing to wire for Crow's state events. Re-check on a future Codex minor.
 - **Cursor / OpenCode native RC** (§3a, §3c RC rows) — native surfaces exist (`--remote`, `serve`/`attach`/`acp`) but are heavier than the working `crow send` paste; no user-facing capability gained today.
 
+> **#830 resolution (landed).** §3b rows 1–4 shipped: `.work`/`.job`-restart →
+> `codex resume --last` (cwd-scoped by default; opens a fresh TUI when no thread
+> matches, so no fallback is needed); `.job` + auto-permission → the **interactive**
+> `codex -a never -s workspace-write "$(cat …-prompt.md)"` (bounded — **not**
+> the full-bypass variants; *not* headless `codex exec`, which is one-shot and
+> would drop a multi-prompt job's typed follow-ups into the shell); MCP mirrored
+> from `~/.claude.json` into `[mcp_servers.*]` (`CodexMCPWriter`, append-only,
+> gated by `defaults.mirrorClaudeMCPToCodex`). **Review** (row 2) landed *not* as the
+> native `codex review --base` but via the **inlined `/crow-review-pr` skill**
+> (same as Cursor/OpenCode): `codex review` prints local findings and posts no
+> GitHub verdict, so a review driven by it can never satisfy
+> `decideReviewCompletions` (which closes a review only on a *posted* verdict)
+> and would be re-kicked on every head-SHA advance. The §3b **hook-scope** row's
+> *trust* half shipped as `CodexTrustSeeder` — it persists `[projects."<worktree>"]
+> trust_level = "trusted"` for the `.work`/`.job` worktrees Crow branches off a
+> trusted base and the Manager devRoot (the bounded alternative the row demands,
+> **not** `--dangerously-bypass-hook-trust`), which unblocks unattended
+> auto-launch. `.review` clones are **not** trusted — their tree is external
+> PR-head content, so trusting it would arm committed `.codex/hooks.json`; they
+> use Codex's folder-trust prompt and `prepareReviewClone` strips any committed
+> `.codex/` (#843 review round 5).
+> **Deferred within #830** (rows 7 partial, 8, RC): writing per-worktree
+> `.codex/hooks.json` was held back because Codex layers project hooks *on top of*
+> the still-needed global `~/.codex/hooks.json`, so both would fire for the same
+> action and the `hook-event` handler would double-count (duplicate notifications,
+> ring-buffer entries). Closing it cleanly needs either dropping the global writer
+> (contradicts "keep global writer as fallback") or a server-side (session,event)
+> dedup — out of scope here. The `notify`→`CodexNotifyCommand` bridge stays (its
+> retirement was contingent on that hooks cutover), and `supportsRemoteControl`
+> stays `false` pending end-to-end `codex remote-control` validation.
+
 Spin-off tickets are opened against `corveil/crow` and reference this audit + [#828](https://github.com/corveil/crow/issues/828).
 
 ---

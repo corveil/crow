@@ -60,7 +60,7 @@ enum LaunchScaffold {
             CrowDaemon.log("WARNING: dev-root scaffold failed: \(error.localizedDescription)")
         }
 
-        scaffoldAgents(devRoot: devRoot)
+        scaffoldAgents(devRoot: devRoot, mirrorClaudeMCPToCodex: config.defaults.mirrorClaudeMCPToCodex)
         return warning
     }
 
@@ -70,20 +70,44 @@ enum LaunchScaffold {
     /// gets a `~/.codex`. `AGENTS.md` is shared by all three scaffolders; all are
     /// idempotent and preserve the user-edited `## Known Issues / Corrections`
     /// section, so co-existence is safe.
-    private static func scaffoldAgents(devRoot: String) {
+    private static func scaffoldAgents(devRoot: String, mirrorClaudeMCPToCodex: Bool) {
         let crowPath = ClaudeHookConfigWriter.findCrowBinary(devRoot: devRoot)
 
         if AgentRegistry.shared.agent(for: .codex) != nil {
             attempt("Codex scaffold") { try CodexScaffolder.scaffold(devRoot: devRoot) }
+            // An empty `CODEX_HOME=` is treated as unset — otherwise
+            // `appendingPathComponent("hooks.json")` on "" is a relative path
+            // and the config writes into the process CWD, matching the empty
+            // `XDG_CONFIG_HOME` guard below (#766 review).
+            let codexHome = nonEmptyEnv("CODEX_HOME") ?? NSString(string: "~/.codex").expandingTildeInPath
+            // Sweep any `.crow-codex-*.tmp` left by a crash between
+            // `writeConfigPrivately`'s createFile and rename(2) — a 0600 temp
+            // that may hold mirrored MCP tokens (#843 review round 5). Nothing
+            // else cleans it; best-effort at boot.
+            if let entries = try? FileManager.default.contentsOfDirectory(atPath: codexHome) {
+                for name in entries where name.hasPrefix(".crow-codex-") && name.hasSuffix(".tmp") {
+                    try? FileManager.default.removeItem(
+                        atPath: (codexHome as NSString).appendingPathComponent(name))
+                }
+            }
             if let crowPath {
-                // An empty `CODEX_HOME=` is treated as unset — otherwise
-                // `appendingPathComponent("hooks.json")` on "" is a relative path
-                // and the config writes into the process CWD, matching the empty
-                // `XDG_CONFIG_HOME` guard below (#766 review).
-                let codexHome = nonEmptyEnv("CODEX_HOME") ?? NSString(string: "~/.codex").expandingTildeInPath
                 attempt("Codex global config install") {
                     try CodexHookConfigWriter.installGlobalConfig(codexHome: codexHome, crowPath: crowPath)
                     try CodexHookConfigWriter.installGlobalTomlConfig(codexHome: codexHome, crowPath: crowPath)
+                }
+            }
+            // #830: mirror the user's Claude MCP servers (e.g. `jira`) into
+            // Codex so Codex sessions get the same tools a Claude session
+            // inherits from ~/.claude.json. Append-only; a no-op when the user
+            // has no `mcpServers` configured. Independent of `crowPath`.
+            // Gated by `defaults.mirrorClaudeMCPToCodex` (default on) because it
+            // copies MCP `env` values (often API tokens) into a second file.
+            if mirrorClaudeMCPToCodex {
+                attempt("Codex MCP mirror") {
+                    let added = try CodexMCPWriter.installMCPConfig(codexHome: codexHome)
+                    if !added.isEmpty {
+                        CrowDaemon.log("Codex MCP mirror: added \(added.count) server(s) [\(added.joined(separator: ", "))] from ~/.claude.json into \(codexHome)/config.toml — any configured env values (e.g. API tokens) were copied. Set defaults.mirrorClaudeMCPToCodex = false to opt out.")
+                    }
                 }
             }
         }

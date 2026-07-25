@@ -82,6 +82,24 @@ struct SessionServiceReviewPromptTests {
         #expect(!prompt.hasPrefix("/crow-review-pr"))
     }
 
+    @Test func buildReviewPromptCodexBranchInlinesSkillBody() {
+        // #843 review round 2: Codex has no slash-command engine, so it MUST
+        // get the inlined SKILL body — not the bare `/crow-review-pr <URL>`
+        // one-liner it can't resolve (which would leave the review unable to
+        // post a verdict and stuck in the re-kick loop). Guards the regression
+        // where `.codex` silently fell into the Claude `default` branch.
+        let prompt = SessionService.buildReviewPrompt(
+            prURL: Self.prURL,
+            prTitle: Self.prTitle,
+            repoSlug: Self.repoSlug,
+            prNumber: Self.prNumber,
+            agentKind: .codex
+        )
+
+        #expect(!prompt.isEmpty)
+        #expect(!prompt.hasPrefix("/crow-review-pr"))
+    }
+
     @Test func buildReviewPromptClaudeBranchIsTerseSlashCommand() {
         let prompt = SessionService.buildReviewPrompt(
             prURL: Self.prURL,

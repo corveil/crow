@@ -1,5 +1,6 @@
 import Foundation
 import CrowClaude
+import CrowCodex
 import CrowCore
 import CrowGit
 import CrowPersistence
@@ -916,6 +917,32 @@ public final class SessionService {
             }
         }
 
+        // Pre-trust the worktree so the agent's "do you trust this folder?"
+        // gate never blocks an unattended auto-launch. Trust does not inherit
+        // from parent directories, so every fresh worktree/clone would
+        // otherwise prompt (CROW-600 for Claude; #830 for Codex — persist trust
+        // for this worktree, never `--dangerously-bypass`).
+        switch agent.kind {
+        case .claudeCode:
+            ClaudeTrustSeeder.seedTrust(projectPath: worktree.worktreePath)
+        case .codex:
+            // Never trust a `.review` clone: its working tree is `gh repo clone`
+            // output checked out at the PR author's head — attacker-controlled.
+            // Trusting it would arm a committed `.codex/hooks.json` on launch
+            // (#843 review round 5). `prepareReviewClone` also strips any
+            // committed `.codex/` as defense-in-depth. Crow-created `.work`/
+            // `.job` worktrees branch off a trusted base, so they're safe to
+            // trust; the review clone falls back to Codex's folder-trust prompt
+            // (acceptable — review is the human-gated path anyway).
+            if session.kind != .review {
+                if case let .failed(msg) = CodexTrustSeeder.seedTrust(projectPath: worktree.worktreePath) {
+                    NSLog("[SessionService] Codex trust seed failed for %@: %@", worktree.worktreePath, msg)
+                }
+            }
+        default:
+            break
+        }
+
         // Resolve and apply the workspace's AI gateway for Claude sessions
         // (CROW-402). Write the resolved env block into the worktree's
         // settings.local.json so manual `claude` re-runs inherit it, and build a
@@ -925,12 +952,6 @@ public final class SessionService {
         // Claude-specific; the Manager uses `managerGateway` instead.
         var gatewayPrefix = ""
         if agent.kind == .claudeCode {
-            // CROW-600: pre-trust the worktree in ~/.claude.json so the
-            // "Do you trust the files in this folder?" dialog never blocks
-            // an auto-launched session. Trust does not inherit from parent
-            // directories, so every fresh worktree/clone would prompt.
-            ClaudeTrustSeeder.seedTrust(projectPath: worktree.worktreePath)
-
             let gatewayResolved = workspaceGatewayResolved(for: sessionID)
             ClaudeHookConfigWriter.writeGatewayEnv(
                 dirPath: worktree.worktreePath, resolved: gatewayResolved)
@@ -1194,13 +1215,23 @@ public final class SessionService {
             throw AgentHandoffError.launchFailed(error.localizedDescription)
         }
 
-        // Claude-specific prep (trust + gateway) before the new process starts.
+        // Agent-specific prep (trust + gateway) before the new process starts.
         // Idempotent file writes — safe to run before teardown.
         if target.kind == .claudeCode {
             ClaudeTrustSeeder.seedTrust(projectPath: worktree.worktreePath)
             let gatewayResolved = workspaceGatewayResolved(for: sessionID)
             ClaudeHookConfigWriter.writeGatewayEnv(
                 dirPath: worktree.worktreePath, resolved: gatewayResolved)
+        } else if target.kind == .codex, session.kind != .review {
+            // Seed Codex trust on handoff too, or `crow handoff-agent --agent
+            // codex` opens in an untrusted folder and the (possibly unattended)
+            // session stalls on the folder-trust gate (#843 review round 5).
+            // Handoff dispatches via `pendingLaunchCommands`, so `launchAgent`'s
+            // seeding never fires for it. Skip `.review` for the same
+            // attacker-controlled-clone reason as `launchAgent`.
+            if case let .failed(msg) = CodexTrustSeeder.seedTrust(projectPath: worktree.worktreePath) {
+                NSLog("[SessionService] Codex trust seed failed for %@: %@", worktree.worktreePath, msg)
+            }
         }
 
         // Persist the new agent only after launch prep succeeds so register /
@@ -1505,9 +1536,17 @@ public final class SessionService {
         // {devRoot}/.claude/settings.local.json without clobbering each other.
         writeManagerHookConfig(for: session, dirPath: cwd)
         // CROW-600: a brand-new devRoot would otherwise block the Manager on
-        // Claude Code's trust dialog. No-ops when already trusted.
-        if session.agentKind == .claudeCode {
+        // the agent's trust gate. No-ops when already trusted (#830 extends
+        // this to Codex Managers).
+        switch session.agentKind {
+        case .claudeCode:
             ClaudeTrustSeeder.seedTrust(projectPath: cwd)
+        case .codex:
+            if case let .failed(msg) = CodexTrustSeeder.seedTrust(projectPath: cwd) {
+                NSLog("[SessionService] Codex trust seed failed for %@: %@", cwd, msg)
+            }
+        default:
+            break
         }
         // CROW-402: write the Manager gateway env block to {devRoot}/.claude so
         // manual `claude` re-runs in this terminal inherit the same routing. The
@@ -2480,9 +2519,41 @@ public final class SessionService {
         // working tree may already be on the right branch, and a network blip
         // on `pull` shouldn't abort the launch — the agent can resume from the
         // local state.
+        //
+        // Restore `.codex` first, but only for Codex reviews (see the strip
+        // below): a *re-prep* of this same clone dir starts with the prior
+        // prep's `.codex` strip still applied as an unstaged deletion of tracked
+        // files, which would make `git pull` refuse ("local changes would be
+        // overwritten") if the new head touches `.codex/` — silently reviewing a
+        // stale head. Restoring before the pull keeps the tree clean; the strip
+        // below re-applies afterward (#843 review round 6).
+        if reviewAgentKind == .codex {
+            _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "checkout", "--", ".codex"])
+        }
         _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "fetch", "origin", headBranch])
         _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "checkout", headBranch])
         _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "pull", "origin", headBranch])
+
+        // Defense-in-depth for Codex reviews (#843 review round 5): strip any
+        // committed `.codex/` from the checked-out PR head before the agent
+        // launches. The head is attacker-controlled and `.codex/hooks.json` /
+        // inline `[hooks]` in `.codex/config.toml` are not conventionally
+        // gitignored, so a drive-by PR could ship hooks that Codex would run
+        // once the folder is trusted. `launchAgent` already declines to trust a
+        // review clone; removing the config layer here means the hooks can't
+        // fire even if the folder is trusted by some other path (a globally
+        // pre-trusted parent, a manual handoff). Re-run on every prep so a
+        // `git pull` on the reused clone dir can't reintroduce it. Mirrors the
+        // Claude path's `.claude/settings.json` overwrite below.
+        //
+        // Gated to Codex reviews (#843 review round 7): only Codex loads
+        // `.codex/`, so stripping it for a Claude/Cursor/OpenCode review would
+        // just hide from the reviewing agent the exact files a hostile PR ships
+        // — the review surface should stay intact for the agents that don't act
+        // on `.codex/`.
+        if reviewAgentKind == .codex {
+            try? fm.removeItem(atPath: (clonePath as NSString).appendingPathComponent(".codex"))
+        }
 
         // Write review prompt file into the clone directory. Write failures
         // MUST surface (CROW-439): the launcher's `$(cat ...)` shell
@@ -2771,11 +2842,15 @@ public final class SessionService {
     /// `ProcessInfo.processInfo.arguments[0]`).
     nonisolated static func buildReviewPrompt(prURL: String, prTitle: String, repoSlug: String, prNumber: Int, agentKind: AgentKind) -> String {
         switch agentKind {
-        case .cursor, .openCode:
-            // Cursor and OpenCode both lack a Crow slash-command engine, so
-            // they get the whole crow-review-pr SKILL body inlined into the
-            // prompt file (a self-contained brief). `agentKind` is threaded
-            // through so the posted review footer names the right agent.
+        case .cursor, .openCode, .codex:
+            // Cursor, OpenCode, and Codex all lack a Crow slash-command engine,
+            // so they get the whole crow-review-pr SKILL body inlined into the
+            // prompt file (a self-contained brief). Without this, a Codex review
+            // would receive a bare `/crow-review-pr <URL>` line it can't resolve,
+            // never run `gh pr review`, and so never satisfy the review-
+            // completion contract — the loop #830 set out to remove (#843
+            // review round 2). `agentKind` is threaded through so the posted
+            // review footer names the right agent.
             return cursorReviewPrompt(
                 skillBody: Scaffolder.bundledReviewSkill(),
                 prURL: prURL,

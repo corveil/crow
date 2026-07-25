@@ -1,0 +1,172 @@
+import Foundation
+import Testing
+@testable import CrowCodex
+@testable import CrowCore
+
+@Suite("CodexTrustSeeder")
+struct CodexTrustSeederTests {
+    /// A canonical (symlink-resolved) temp dir so `seedTrust`'s raw+resolved
+    /// dual-write collapses to a single `[projects."…"]` entry, keeping
+    /// assertions deterministic.
+    private func makeTempDir() throws -> (project: String, config: String) {
+        let base = URL(fileURLWithPath: FileManager.default.temporaryDirectory.path)
+            .resolvingSymlinksInPath()
+            .appendingPathComponent("codex-trust-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        let project = base.appendingPathComponent("worktree").path
+        try FileManager.default.createDirectory(atPath: project, withIntermediateDirectories: true)
+        let config = base.appendingPathComponent("config.toml").path
+        return (project, config)
+    }
+
+    @Test func seedTrustRefusesNonUTF8Config() throws {
+        // A non-UTF-8 config.toml must not read as "" and get clobbered on the
+        // read-modify-write — that would drop credentials/trusted projects
+        // (#843 round 6). Refuse and leave the file untouched.
+        let (project, config) = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: (config as NSString).deletingLastPathComponent) }
+
+        var bytes = Data("[projects.\"/keep\"]\ntrust_level = \"trusted\"\n".utf8)
+        bytes.append(0xE9)  // lone continuation byte → invalid UTF-8
+        try bytes.write(to: URL(fileURLWithPath: config))
+
+        let outcome = CodexTrustSeeder.seedTrust(projectPath: project, codexConfigPath: config)
+        let refused: Bool = { if case .failed = outcome { return true }; return false }()
+        #expect(refused, "must refuse a non-UTF-8 config; got \(outcome)")
+        // File is byte-for-byte unchanged.
+        let after = try Data(contentsOf: URL(fileURLWithPath: config))
+        #expect(after == bytes)
+    }
+
+    @Test func seedTrustCreatesFreshFile() throws {
+        let (project, config) = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: (config as NSString).deletingLastPathComponent) }
+
+        let outcome = CodexTrustSeeder.seedTrust(projectPath: project, codexConfigPath: config)
+        #expect(outcome == .seeded)
+
+        let toml = try String(contentsOfFile: config, encoding: .utf8)
+        #expect(toml.contains("[projects.\"\(project)\"]"))
+        #expect(toml.contains("trust_level = \"trusted\""))
+    }
+
+    @Test func seedTrustPreservesExistingConfig() throws {
+        let (project, config) = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: (config as NSString).deletingLastPathComponent) }
+
+        let existing = """
+        model = "gpt-5.5"
+
+        [model_providers.corveil]
+        base_url = "https://corveil.io/v1"
+        api_key = "sk-secret-do-not-lose"
+
+        [projects."/some/other/path"]
+        trust_level = "trusted"
+        """
+        try existing.write(toFile: config, atomically: true, encoding: .utf8)
+
+        let outcome = CodexTrustSeeder.seedTrust(projectPath: project, codexConfigPath: config)
+        #expect(outcome == .seeded)
+
+        let toml = try String(contentsOfFile: config, encoding: .utf8)
+        // User content survives.
+        #expect(toml.contains("model = \"gpt-5.5\""))
+        #expect(toml.contains("api_key = \"sk-secret-do-not-lose\""))
+        #expect(toml.contains("[projects.\"/some/other/path\"]"))
+        // New project trusted.
+        #expect(toml.contains("[projects.\"\(project)\"]"))
+    }
+
+    @Test func seedTrustIsIdempotent() throws {
+        let (project, config) = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: (config as NSString).deletingLastPathComponent) }
+
+        let first = CodexTrustSeeder.seedTrust(projectPath: project, codexConfigPath: config)
+        #expect(first == .seeded)
+        let afterFirst = try String(contentsOfFile: config, encoding: .utf8)
+
+        let second = CodexTrustSeeder.seedTrust(projectPath: project, codexConfigPath: config)
+        #expect(second == .alreadyTrusted)
+        let afterSecond = try String(contentsOfFile: config, encoding: .utf8)
+        #expect(afterFirst == afterSecond)
+    }
+
+    @Test func seedTrustUpgradesUntrustedProject() throws {
+        let (project, config) = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: (config as NSString).deletingLastPathComponent) }
+
+        let existing = """
+        [projects."\(project)"]
+        trust_level = "untrusted"
+        """
+        try existing.write(toFile: config, atomically: true, encoding: .utf8)
+
+        let outcome = CodexTrustSeeder.seedTrust(projectPath: project, codexConfigPath: config)
+        #expect(outcome == .seeded)
+
+        let toml = try String(contentsOfFile: config, encoding: .utf8)
+        #expect(toml.contains("trust_level = \"trusted\""))
+        #expect(!toml.contains("trust_level = \"untrusted\""))
+    }
+
+    @Test func seedTrustWritesOwnerOnlyConfig() throws {
+        let (project, config) = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: (config as NSString).deletingLastPathComponent) }
+
+        _ = CodexTrustSeeder.seedTrust(projectPath: project, codexConfigPath: config)
+        // config.toml can carry provider credentials — must be owner-only, and
+        // no world-readable temp may leak (#830 review).
+        let perms = try FileManager.default.attributesOfItem(atPath: config)[.posixPermissions] as? NSNumber
+        #expect(perms?.intValue == 0o600)
+        let dir = (config as NSString).deletingLastPathComponent
+        let leftovers = try FileManager.default.contentsOfDirectory(atPath: dir)
+            .filter { $0.hasPrefix(".crow-codex-") }
+        #expect(leftovers.isEmpty)
+    }
+
+    @Test func seedTrustTightensPreexistingWorldReadableConfig() throws {
+        // Exercises the replace-an-existing-file path (#843 review round 2): a
+        // config.toml that was already world-readable must come out 0600 after
+        // seeding, since the rename swaps in the 0600 temp's inode.
+        let (project, config) = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: (config as NSString).deletingLastPathComponent) }
+
+        FileManager.default.createFile(
+            atPath: config,
+            contents: Data("model = \"x\"\n".utf8),
+            attributes: [.posixPermissions: 0o644])
+
+        let outcome = CodexTrustSeeder.seedTrust(projectPath: project, codexConfigPath: config)
+        #expect(outcome == .seeded)
+        let perms = try FileManager.default.attributesOfItem(atPath: config)[.posixPermissions] as? NSNumber
+        #expect(perms?.intValue == 0o600)
+        // Pre-existing user content is preserved through the tightening rewrite.
+        #expect(try String(contentsOfFile: config, encoding: .utf8).contains("model = \"x\""))
+    }
+
+    @Test func seedTrustUpdatesInPlaceThroughCommentedHeader() throws {
+        // #843 review round 4: an existing `[projects."…"]` header carrying a
+        // trailing comment must be matched (comment-tolerant), so trust is
+        // upgraded in place rather than a duplicate section being appended
+        // (which TOML would reject → Codex can't parse its config).
+        let (project, config) = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: (config as NSString).deletingLastPathComponent) }
+
+        let existing = """
+        [projects."\(project)"] # personal note
+        trust_level = "untrusted"
+        """
+        try existing.write(toFile: config, atomically: true, encoding: .utf8)
+
+        let outcome = CodexTrustSeeder.seedTrust(projectPath: project, codexConfigPath: config)
+        #expect(outcome == .seeded)
+
+        let toml = try String(contentsOfFile: config, encoding: .utf8)
+        #expect(toml.contains("trust_level = \"trusted\""))
+        #expect(!toml.contains("trust_level = \"untrusted\""))
+        // Exactly one header for this project — no duplicate appended.
+        let occurrences = toml.components(separatedBy: "[projects.\"\(project)\"]").count - 1
+        #expect(occurrences == 1)
+    }
+}
