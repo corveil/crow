@@ -9,6 +9,7 @@ const { JSDOM } = require('jsdom');
 const epilogue = `
 ;globalThis.__t = {
   sessionRow(s){ return sessionRow(s); },
+  prStatusInline(pr){ return prStatusInline(pr); },
   set live(v){ liveById = v; },
   set hideDetails(v){ uiConfig.hideSessionDetails = v; },
 };
@@ -56,22 +57,6 @@ function render(pr, overrides) {
 }
 const badge = (row) => row.querySelector('.pr-badge');
 
-// crow:merge a11y noun (CROW-846) — the sidebar pill is glyph-only, so its
-// aria-label/title is the sole screen-reader channel. The visible chip text
-// dropped the redundant trailing "label", but the aria path must keep the noun
-// via `PR_MERGE_LABEL_GLYPH.a11yLabel`; this pins that split so a later
-// `p.a11yLabel || p.label` → `p.label` "simplify" can't silently unwind it.
-// Placed ahead of the merged-PR section below, which trips a pre-existing
-// CROW-802 selector-drift crash (`.pr-ico` is null for the SVG ✔/✕/⚠ glyphs)
-// that would otherwise abort the run before this line executes.
-console.log('crow:merge announces the "label" noun to screen readers (CROW-846):');
-{
-  const rr = render({ has_pr: true, checks: 'passing', review: 'approved', merge: 'mergeable',
-    is_merged: false, has_blockers: false, ready_to_merge: true, failed_checks: [], has_merge_label: true });
-  check('sidebar aria-label keeps the "crow:merge label" noun',
-    /crow:merge label/.test(badge(rr.row).getAttribute('aria-label')));
-}
-
 console.log('Failing checks + changes requested:');
 let r = render({ has_pr: true, checks: 'failing', review: 'changesRequested', merge: 'MERGEABLE',
   is_merged: false, has_blockers: true, ready_to_merge: false, failed_checks: ['build', 'lint'] });
@@ -102,7 +87,13 @@ r = render({ has_pr: true, checks: 'passing', review: 'approved', merge: 'merged
   is_merged: true, has_blockers: false, ready_to_merge: false, failed_checks: [] });
 check('exactly one glyph', r.glyphs.length === 1);
 check('glyph is ✔', r.glyphs[0] === '✔');
-check('glyph purple', r.row.querySelector('.pr-ico').style.color === 'var(--purple)');
+// `?.` guards a pre-existing CROW-802 selector drift: ✔/✕/⚠ now render as SVG
+// `.ico` spans, not `.pr-ico` text, so `.pr-ico` is null here. Without the
+// guard this line *throws* and aborts the whole file mid-run; with it the
+// suite runs to completion so later sections (incl. the crow:merge checks
+// below) execute and the exit code stops masking their pass/fail. Fixing the
+// drift itself (so this assertion passes again) is CROW-802's own ticket.
+check('glyph purple', r.row.querySelector('.pr-ico')?.style.color === 'var(--purple)');
 
 console.log('\nConflicting PR adds a ⚠:');
 r = render({ has_pr: true, checks: 'passing', review: 'approved', merge: 'conflicting',
@@ -122,6 +113,18 @@ r = render({ has_pr: true, checks: 'passing', review: 'approved', merge: 'mergea
   is_merged: false, has_blockers: false, ready_to_merge: true, failed_checks: [], has_merge_label: true },
   { auto_merge: true });
 check('🏷 and ⛙ can both show', r.glyphs.includes('🏷') && !!r.row.querySelector('.automerge'));
+// CROW-846: the visible chip dropped the redundant trailing "label", but the
+// sidebar pill is glyph-only — its aria-label/title is the sole screen-reader
+// channel, so the noun must survive there via PR_MERGE_LABEL_GLYPH.a11yLabel.
+// Pin BOTH halves of that split so a later `p.a11yLabel || p.label` → `p.label`
+// (or reverting `label` to `'crow:merge label'`) can't silently unwind either.
+check('sidebar aria keeps the unambiguous "crow:merge label" noun',
+  /crow:merge label/.test(badge(r.row).getAttribute('aria-label')));
+const mergeChips = [...T.prStatusInline({ has_pr: true, checks: 'passing', review: 'approved',
+  merge: 'mergeable', is_merged: false, has_blockers: false, ready_to_merge: true,
+  failed_checks: [], has_merge_label: true }).querySelectorAll('.pr-stat-label')].map((n) => n.textContent);
+check('detail chip reads the concise "crow:merge"', mergeChips.includes('crow:merge'));
+check('detail chip drops the redundant "crow:merge label"', !mergeChips.includes('crow:merge label'));
 
 console.log('\nGraceful degradation (older daemon payload / no PR status):');
 r = render(undefined);
