@@ -7,7 +7,7 @@
 #
 # By default this builds `crowd` once and runs a stable daemon that a browser,
 # the `crow` CLI, or the desktop app can attach to. Pass `--watch` to also
-# rebuild + restart `crowd` whenever a Swift source changes.
+# rebuild + restart `crowd` whenever a Swift source or web asset changes.
 #
 # Note: Swift can't be hot-swapped into a running process, so `--watch` tears
 # down and respawns the daemon on every change — the same "the server restarts"
@@ -74,7 +74,9 @@ if command -v watchexec >/dev/null 2>&1; then
   # Pass START_CMD as positional args so array quoting survives — a devRoot or
   # socket path with spaces/metacharacters must not word-split or get evaluated
   # (review). watchexec needs a shell for the `&&`, so route through `sh -c`.
-  exec watchexec -r -e swift,js,css,html,svg,json "${WATCH_ARGS[@]}" -- \
+  # Ignore web-tests/ so its *.test.js / package.json don't trigger rebuilds —
+  # only shipped assets under Resources/web should, matching the poll filter.
+  exec watchexec -r -e swift,js,css,html,svg,json -i '**/web-tests/**' "${WATCH_ARGS[@]}" -- \
     sh -c 'swift build --product crowd && exec "$@"' sh "${START_CMD[@]}"
 fi
 
@@ -96,7 +98,7 @@ while true; do
   cur="$(snapshot)"
   if [ "$cur" != "$last" ]; then
     last="$cur"
-    if [ -n "$PID" ]; then kill "$PID" 2>/dev/null || true; fi
+    if [ -n "$PID" ]; then kill "$PID" 2>/dev/null || true; wait "$PID" 2>/dev/null || true; fi
     if swift build --product crowd; then
       "${START_CMD[@]}" &
       PID=$!

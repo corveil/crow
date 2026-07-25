@@ -104,7 +104,7 @@ For local daemon development, `make daemon-run` runs `crowd` serving the frozen 
 
 ```bash
 make daemon-run                      # stable daemon at http://127.0.0.1:8787
-bash scripts/daemon-run.sh --watch   # ...and rebuild + restart crowd on Swift changes
+bash scripts/daemon-run.sh --watch   # ...and rebuild + restart crowd on Swift or web-asset changes
 ```
 
 `--watch` restarts the daemon on every change (Swift can't hot-swap), so leave it off when you want a daemon that stays up across edits.
@@ -169,7 +169,7 @@ make daemon-run
 make run          # or, once built: crow-desktop/src-tauri/target/debug/Crow
 ```
 
-Quitting the window leaves your `crowd` running. `daemon-run --watch` rebuilds it on Swift *or* web-asset edits (a manual `make daemon` works too) — the window keeps its `:8787` target, so just ⌘R once it's back up. A Swift rebuild is always a restart (Swift can't hot-swap — the same reason the Tauri dev loop churns); a web-only rebuild just re-copies the assets, which the running daemon serves on the next refresh without a restart.
+Quitting the window leaves your `crowd` running. `daemon-run --watch` rebuilds **and restarts** it on Swift *or* web-asset edits — the window keeps its `:8787` target, so just ⌘R once it's back up. (`--watch` always restarts; Swift can't hot-swap, and even a web edit tears the daemon down — the same reason the Tauri dev loop churns.) For a web-only tweak you can skip the churn: a **manual** `make daemon` against the already-running daemon just re-copies the assets, which it serves on the next ⌘R with no restart.
 
 - `CROW_HTTP_PORT=NNNN` — match a crowd started on a non-default port so the window reuses it instead of spawning a second daemon on 8787 (which would contend on the same store + tmux cockpit).
 - `CROWD_BIN=/path/to/crowd` — override which `crowd` binary the window spawns when none is already running.
