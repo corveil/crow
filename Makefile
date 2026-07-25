@@ -1,4 +1,4 @@
-.PHONY: build daemon app run setup install uninstall clean check test help crowd-dev
+.PHONY: build daemon app run setup install uninstall clean check test help daemon-run
 
 # Install destination and build config (override on the command line, e.g.
 # `make install BINDIR=/usr/local/bin` or `make build CONFIG=release`).
@@ -35,7 +35,7 @@ app:
 
 # Build everything, then open the Crow desktop window without installing a
 # bundle. The window reuses a crowd already listening on :8787 (e.g. one from
-# `make crowd-dev`) and leaves it running on quit; if none is up it spawns its
+# `make daemon-run`) and leaves it running on quit; if none is up it spawns its
 # own $(BUILD_OUT)/crowd and stops that on quit. This is the modern equivalent
 # of the old `make && ./.build/debug/CrowApp`.
 run: build
@@ -49,7 +49,7 @@ help:
 	@echo "  daemon     Build just the Swift binaries (crow CLI + crowd daemon)"
 	@echo "  app        Build just the Crow desktop app (Tauri) → $(DESKTOP_BIN)"
 	@echo "  run        Build, then open the Crow desktop window over a running (or fresh) crowd"
-	@echo "  crowd-dev  Run crowd with the web UI served live from source (add --watch to rebuild on change)"
+	@echo "  daemon-run Run crowd serving the frozen bundle-baked web UI (add --watch to rebuild on Swift/web change)"
 	@echo "  setup      Check build prerequisites"
 	@echo "  check      Verify all build and runtime prerequisites"
 	@echo "  test       Run all package tests"
@@ -67,11 +67,12 @@ setup:
 	fi
 	@echo "Prerequisites OK"
 
-# Run crowd for local dev: build once and serve the web UI live from source
-# (edit + refresh — no restart). Add --watch to also rebuild + restart on Swift
-# changes: `bash scripts/crowd-dev.sh --watch`. See scripts/crowd-dev.sh.
-crowd-dev:
-	bash scripts/crowd-dev.sh
+# Run crowd for local dev: build once and serve the frozen web UI baked into
+# crowd's resource bundle (edit + rebuild to pick up UI changes — same as `make
+# run`). Add --watch to also rebuild + restart on Swift or web-asset changes:
+# `bash scripts/daemon-run.sh --watch`. See scripts/daemon-run.sh.
+daemon-run:
+	bash scripts/daemon-run.sh
 
 install:
 	@test -x "$(CURDIR)/$(BUILD_OUT)/crow" && test -x "$(CURDIR)/$(BUILD_OUT)/crowd" || \

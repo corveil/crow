@@ -29,7 +29,7 @@ This runs `setup` (checks Xcode Command Line Tools), generates the CLI version f
 | `build`      | Full build: prerequisites + `swift build` — builds `crow` + `crowd` (default) |
 | `setup`      | Verify build prerequisites (Xcode CLT)                                         |
 | `check`      | Verify all build and runtime prerequisites (includes `gh`, `claude`, `tmux`)  |
-| `crowd-dev`  | Hot-reload dev loop for `crowd` (web served live from source)                 |
+| `daemon-run` | Dev loop for `crowd` (web served from the compiled bundle; `--watch` rebuilds + restarts on Swift or web-asset changes) |
 | `install`    | Symlink `crow` + `crowd` into `~/.local/bin` (override `BINDIR=`, `CONFIG=`)   |
 | `uninstall`  | Remove the `crow` + `crowd` symlinks created by `install`                      |
 | `test`       | Run all package tests                                                          |
@@ -109,7 +109,7 @@ Configure your development root and workspaces with the CLI setup wizard, then s
 .build/debug/crowd                 # serves the web UI
 ```
 
-`crowd` prints `HTTP/WS listening on http://127.0.0.1:8787` — open that URL in your browser. (For a hot-reload dev loop with web assets served live from source, use `make crowd-dev` instead.)
+`crowd` prints `HTTP/WS listening on http://127.0.0.1:8787` — open that URL in your browser. (For a stable local dev daemon, use `make daemon-run`; add `--watch` — `bash scripts/daemon-run.sh --watch` — to rebuild + restart on Swift or web-asset changes.)
 
 The setup wizard asks for:
 
