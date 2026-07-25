@@ -1280,7 +1280,7 @@ const PR_REVIEW_GLYPH = {
 };
 const PR_MERGED_GLYPH = { glyph: '✔', icon: 'check', color: 'var(--purple)', label: 'Merged' };
 const PR_CONFLICT_GLYPH = { glyph: '⚠', icon: 'warning', color: 'var(--red)', label: 'Conflicts' };
-const PR_MERGE_LABEL_GLYPH = { glyph: '🏷', color: 'var(--gold)', label: 'crow:merge label' };
+const PR_MERGE_LABEL_GLYPH = { glyph: '🏷', color: 'var(--gold)', label: 'crow:merge' };
 
 function prChecksGlyph(pr) {
   const base = PR_CHECKS_GLYPH[pr.checks] || PR_CHECKS_GLYPH.unknown;
