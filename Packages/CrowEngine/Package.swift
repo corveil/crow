@@ -19,7 +19,9 @@ let package = Package(
         .package(path: "../CrowTerminal"),
         .package(path: "../CrowClaude"),
         .package(path: "../CrowIPC"),
-        // Test-only: ManagerMigrationTests registers the other agents.
+        // `CrowCodex` (Codex `notify` bridge) and `CrowCursor` (Jira MCP bridge)
+        // are linked by the library target below; only `CrowOpenCode` stays
+        // test-only (ManagerMigrationTests registers all agents).
         .package(path: "../CrowCodex"),
         .package(path: "../CrowCursor"),
         .package(path: "../CrowOpenCode"),
@@ -35,6 +37,7 @@ let package = Package(
                 "CrowTerminal",
                 "CrowClaude",
                 "CrowCodex",
+                "CrowCursor",
                 "CrowIPC",
             ]
         ),

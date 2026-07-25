@@ -142,7 +142,10 @@ public struct CursorHookConfigWriter: HookConfigWriter {
 
         let data = try JSONSerialization.data(
             withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
-        try data.write(to: URL(fileURLWithPath: hooksPath))
+        // Atomic (temp + rename): a crash mid-write would otherwise leave a
+        // truncated file that the unparseable-guard above then refuses to touch,
+        // silently disabling this worktree's hook-based state detection forever.
+        try data.write(to: URL(fileURLWithPath: hooksPath), options: [.atomic])
 
         // Keep the session-specific config out of commits (works for any repo,
         // not just ones that gitignore `.cursor/hooks.json`). Intentionally
@@ -218,7 +221,7 @@ public struct CursorHookConfigWriter: HookConfigWriter {
         do {
             let out = try JSONSerialization.data(
                 withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
-            try out.write(to: URL(fileURLWithPath: hooksPath))
+            try out.write(to: URL(fileURLWithPath: hooksPath), options: [.atomic])
         } catch {
             NSLog("[CursorHookConfigWriter] Failed to rewrite %@: %@",
                   hooksPath, error.localizedDescription)

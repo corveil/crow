@@ -222,4 +222,26 @@ struct CursorMCPConfigWriterTests {
         #expect(after == torn, "unparseable cursor config left untouched")
         #expect(after.contains("playwright") && after.contains("postgres"))
     }
+
+    @Test func bridgedFileIsOwnerOnlyEvenOverAWorldReadableDest() throws {
+        // #829 Yellow 1: the token-bearing file must end owner-only even when a
+        // pre-existing destination was world-readable (0644).
+        let claude = tempFile(".claude.json")
+        let cursor = tempFile("mcp.json")
+        defer { try? FileManager.default.removeItem(atPath: (claude as NSString).deletingLastPathComponent) }
+        defer { try? FileManager.default.removeItem(atPath: (cursor as NSString).deletingLastPathComponent) }
+
+        // Bridge once (fresh dest → must be 0600 from the 0600 temp).
+        try write(["mcpServers": ["jira": ["command": "old-jira"]]], to: claude)
+        CursorMCPConfigWriter.bridgeJiraMCP(claudeJSONPath: claude, cursorMCPPath: cursor)
+        let fresh = try FileManager.default.attributesOfItem(atPath: cursor)[.posixPermissions] as? NSNumber
+        #expect(fresh?.int16Value == 0o600, "fresh bridge is owner-only")
+
+        // Externally loosen perms, then refresh → must be tightened back.
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: cursor)
+        try write(["mcpServers": ["jira": ["command": "new-jira"]]], to: claude)
+        CursorMCPConfigWriter.bridgeJiraMCP(claudeJSONPath: claude, cursorMCPPath: cursor)
+        let after = try FileManager.default.attributesOfItem(atPath: cursor)[.posixPermissions] as? NSNumber
+        #expect(after?.int16Value == 0o600, "refresh re-tightens to owner-only")
+    }
 }

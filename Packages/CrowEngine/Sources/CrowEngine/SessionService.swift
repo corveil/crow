@@ -1469,6 +1469,13 @@ public final class SessionService {
     /// reads hooks at startup. Written before any gateway-env write so the
     /// latter's 0o600 re-apply stays the final write.
     private func writeManagerHookConfig(for session: Session, dirPath: String) {
+        // A Cursor Manager launching → sync its global Jira MCP (covers the
+        // Manager "+" picker one-shot override, which sets agentKind without
+        // mutating config). Independent of the crow-binary resolution below, so
+        // it isn't skipped just because hook-config can't be written.
+        if session.agentKind == .cursor {
+            syncCursorMCPBridge()
+        }
         guard let agent = AgentRegistry.shared.agent(for: session.agentKind),
               let crowPath = ClaudeHookConfigWriter.findCrowBinary(devRoot: ConfigStore.loadDevRoot()) else { return }
         do {
@@ -1496,12 +1503,6 @@ public final class SessionService {
         for other in AgentRegistry.shared.allAgents()
             where other.kind != session.agentKind && other.kind != .claudeCode {
             other.hookConfigWriter.removeHookConfig(worktreePath: dirPath)
-        }
-        // A Cursor Manager launching → sync its global Jira MCP (covers the
-        // Manager "+" picker one-shot override, which sets agentKind without
-        // mutating config).
-        if session.agentKind == .cursor {
-            syncCursorMCPBridge()
         }
     }
 

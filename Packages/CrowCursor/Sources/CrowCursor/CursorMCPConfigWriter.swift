@@ -17,12 +17,13 @@ import Foundation
 /// just the `jira` server into Cursor's config, merge-preserving any other
 /// Cursor MCP servers.
 ///
-/// **Both Claude scopes are searched.** `claude mcp add`'s default scope is
+/// **User and local scopes are searched.** `claude mcp add`'s default scope is
 /// **local**, stored under `projects[<path>].mcpServers`; only `-s user` writes
 /// the root `mcpServers` block. We prefer the root (user) entry and fall back to
 /// the first project-scoped `jira` we find, so the common default-scope case
-/// isn't missed. When no Jira MCP is configured in either scope we log and
-/// no-op.
+/// isn't missed. (Claude's third scope — a repo's committed `.mcp.json` — is not
+/// read; nothing bridged from it means nothing to reap, so it's harmless.) When
+/// no Jira MCP is found we log and no-op.
 ///
 /// Cursor and Claude use the identical `mcpServers` entry schema
 /// (`{command, args, env}` or `{url, type}`), so the entry copies verbatim.
@@ -55,19 +56,34 @@ public enum CursorMCPConfigWriter {
     /// against concurrent bridges from parallel launches.
     private static let writeLock = NSLock()
 
-    /// Atomically write `root` as pretty JSON to `path`, owner-only. Atomic
-    /// (temp + rename) so a concurrent reader never sees a torn file — the state
-    /// the destination read used to mis-parse and clobber. The `env` can carry a
-    /// token, so perms are tightened right after (a brief post-rename window is
-    /// acceptable; avoiding the torn state is the load-bearing part).
+    /// Atomically write `root` as pretty JSON to `path`, owner-only. The
+    /// content is written to a sibling temp created **`0600` up front**, then
+    /// atomically swapped in — so the token-bearing `env` is never
+    /// group/other-readable at any instant (a plain `Data.write(.atomic)` would
+    /// create the new file `0644` per umask, exposing the token until a
+    /// follow-up chmod). Perms are re-asserted after the swap in case
+    /// `replaceItemAt` inherited a pre-existing destination's mode.
     private static func atomicWriteJSON(_ root: [String: Any], to path: String) {
         do {
-            try FileManager.default.createDirectory(
-                atPath: (path as NSString).deletingLastPathComponent,
-                withIntermediateDirectories: true)
+            let dir = (path as NSString).deletingLastPathComponent
+            try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
             let out = try JSONSerialization.data(
                 withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
-            try out.write(to: URL(fileURLWithPath: path), options: [.atomic])
+
+            let tmp = (dir as NSString).appendingPathComponent(".crow-mcp-\(UUID().uuidString).tmp")
+            guard FileManager.default.createFile(
+                atPath: tmp, contents: out, attributes: [.posixPermissions: 0o600]) else {
+                NSLog("[CursorMCPConfigWriter] Failed to create temp for %@", path)
+                return
+            }
+            defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+            if FileManager.default.fileExists(atPath: path) {
+                _ = try FileManager.default.replaceItemAt(
+                    URL(fileURLWithPath: path), withItemAt: URL(fileURLWithPath: tmp))
+            } else {
+                try FileManager.default.moveItem(atPath: tmp, toPath: path)
+            }
             try? FileManager.default.setAttributes(
                 [.posixPermissions: 0o600], ofItemAtPath: path)
         } catch {
