@@ -76,6 +76,31 @@ struct ClaudeHookConfigWriterTests {
         // Re-write still restricts the file (unrelated USER_VAR could be secret too).
         #expect(try posixPerms(at: dir) == 0o600)
     }
+
+    /// `writeHookConfig` rewrites the same `settings.local.json` that carries the
+    /// `env` block (gateway token + worker-run CORVEIL_API_KEY), so it must also
+    /// lock the file to 0600 — otherwise a hook-config write after the secret was
+    /// injected would revert it to the process umask (corveil/crow#801 review).
+    @Test func writeHookConfigLocksFileTo0600() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        // Pre-seed a secret-bearing env block, then write hooks on top.
+        let claudeDir = dir.appendingPathComponent(".claude")
+        try FileManager.default.createDirectory(at: claudeDir, withIntermediateDirectories: true)
+        let seed: [String: Any] = ["env": ["CORVEIL_API_KEY": "sk-secret"]]
+        try JSONSerialization.data(withJSONObject: seed)
+            .write(to: claudeDir.appendingPathComponent("settings.local.json"))
+
+        try ClaudeHookConfigWriter().writeHookConfig(
+            worktreePath: dir.path, sessionID: UUID(), crowPath: "/usr/bin/true")
+
+        #expect(try posixPerms(at: dir) == 0o600)
+        // The secret survived the hook merge (and is now owner-only).
+        let env = try #require(try settings(at: dir)["env"] as? [String: Any])
+        #expect(env["CORVEIL_API_KEY"] as? String == "sk-secret")
+        #expect(try settings(at: dir)["hooks"] != nil)
+    }
 }
 
 /// #897: a hook command must never name a build product. An old dev build baked

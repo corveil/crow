@@ -1185,6 +1185,14 @@ public final class SessionService {
         guard !session.isManager else {
             throw AgentHandoffError.managerNotSupported
         }
+        // Worker-run sessions are pinned to Claude Code because only Claude's
+        // `.claude/settings.local.json` receives the scoped Corveil credentials
+        // (`writeCorveilRunEnv`). A handoff to Cursor/Codex/OpenCode would launch
+        // the remote `prompt_body` under auto-permission WITHOUT that env — refuse
+        // it until per-harness injection ships (corveil/crow#801 review).
+        guard session.kind != .workerRun else {
+            throw AgentHandoffError.workerRunNotSupported
+        }
         let priorKind = session.agentKind
         guard priorKind != targetKind else {
             throw AgentHandoffError.sameAgent
@@ -3201,6 +3209,19 @@ public final class SessionService {
         workerID: String
     ) async -> (sessionID: UUID, terminalID: UUID, scratchDir: String)? {
         let scratchDir = Self.workerRunScratchDir(devRoot: devRoot, runID: run.id)
+
+        // Start from a CLEAN scratch dir. A previous attempt for the same run id
+        // could have left a stale `.crow-run-result.json` (or leftover creds); a
+        // stale result would otherwise be mapped onto `worker-run complete` for
+        // this fresh run (review). `createDirectory` does not clear contents, so
+        // wipe first. If a stale dir genuinely can't be removed, abort rather than
+        // launch into dirty state — the tick-level orphan sweep will retry it.
+        if FileManager.default.fileExists(atPath: scratchDir),
+           !Self.wipeWorkerRunScratch(scratchDir) {
+            NSLog("[SessionService] Worker run '%@': stale scratch dir could not be cleared at %@; aborting",
+                  run.id, scratchDir)
+            return nil
+        }
 
         // Create the scratch dir 0700 (it will hold the scoped API key). Both the
         // `.crow-worker-runs` parent (created here via `withIntermediateDirectories`,

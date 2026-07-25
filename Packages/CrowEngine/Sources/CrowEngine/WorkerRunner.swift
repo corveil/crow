@@ -152,6 +152,11 @@ public final class WorkerRunner {
         // fail (logged), but the local `completeSession` + scratch-dir wipe still
         // run, which is the security-critical part.
         reconcileUnwatchedWorkerRuns(now: now)
+        // Backstop for crash / failed-wipe orphans: remove any scratch dir with no
+        // live `.workerRun` session (e.g. `crowd` died after `writeCorveilRunEnv`
+        // but before persisting the session). Needs a dev root to locate the
+        // scratch root; skipped when unavailable (rare).
+        if let devRoot = devRootProvider() { sweepOrphanScratchDirs(devRoot: devRoot) }
         await heartbeatWatched(backend: backend, now: now)
         await checkFinishedRuns(backend: backend, now: now)
 
@@ -196,6 +201,32 @@ public final class WorkerRunner {
                 promptsDeliveredAt: now,
                 lastHeartbeatAt: now
             )
+        }
+    }
+
+    // MARK: - Orphan sweep
+
+    /// Remove scratch dirs under `.crow-worker-runs/` that no live `.workerRun`
+    /// session references. Backstop for the case a run's scratch dir (holding the
+    /// scoped `CORVEIL_API_KEY`) was created but its session never persisted — a
+    /// crash between `writeCorveilRunEnv` and `store.mutate`, or a setup-failure
+    /// wipe that itself failed — leaving an orphan no reconcile/watch can reach.
+    ///
+    /// "Live" = referenced by any `.workerRun` session currently in `appState`
+    /// (regardless of status: a completed session whose wipe is still retrying
+    /// keeps its dir, and its watch handles the retry). A dir is swept only when
+    /// no such session claims it.
+    private func sweepOrphanScratchDirs(devRoot: String) {
+        let root = SessionService.workerRunsRoot(devRoot: devRoot)
+        guard let entries = try? FileManager.default.contentsOfDirectory(atPath: root) else { return }
+        let live = Set(appState.sessions
+            .filter { $0.kind == .workerRun }
+            .compactMap { $0.workerRunScratchDir })
+        for entry in entries {
+            let path = (root as NSString).appendingPathComponent(entry)
+            guard !live.contains(path) else { continue }
+            NSLog("[WorkerRunner] sweeping orphan worker-run scratch dir %@", path)
+            SessionService.wipeWorkerRunScratch(path)
         }
     }
 

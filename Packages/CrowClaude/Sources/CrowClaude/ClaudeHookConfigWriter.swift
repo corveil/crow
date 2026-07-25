@@ -101,6 +101,13 @@ public struct ClaudeHookConfigWriter: HookConfigWriter {
         // Write back
         let data = try JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .sortedKeys])
         try data.write(to: URL(fileURLWithPath: settingsPath))
+        // This same file also carries the `env` block, which can hold the
+        // AI-gateway bearer token and (for worker runs) the scoped
+        // CORVEIL_API_KEY. Rewriting it here would otherwise revert it to the
+        // process umask (e.g. 0644); re-apply 0600 so a hook-config rewrite never
+        // widens the secret file's permissions (corveil/crow#801 review).
+        try? FileManager.default.setAttributes(
+            [.posixPermissions: 0o600], ofItemAtPath: settingsPath)
     }
 
     // MARK: - Gateway env

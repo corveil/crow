@@ -185,6 +185,29 @@ private struct NoopShellRunner: ShellRunner {
     func run(args: [String], env: [String: String], cwd: String?) async throws -> String { "" }
 }
 
+/// A `.workerRun` session is pinned to Claude Code (only Claude receives the
+/// scoped Corveil env), so it must refuse an agent handoff — otherwise a handoff
+/// would launch the remote prompt under auto-permission without credentials
+/// (review, Yellow 3).
+@Suite("WorkerRun handoff refusal")
+@MainActor
+struct WorkerRunHandoffTests {
+    @Test func handoffAgentRefusesWorkerRunSessions() async {
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("wr-handoff-\(UUID().uuidString)")
+        let appState = AppState()
+        let service = SessionService(store: JSONStore(directory: tmp), appState: appState, hostBridge: NoopHostBridge())
+
+        let session = Session(name: "wr", status: .active, kind: .workerRun, agentKind: .claudeCode,
+                              workerRunID: "run-1", workerID: "w")
+        appState.sessions.append(session)
+
+        await #expect(throws: AgentHandoffError.workerRunNotSupported) {
+            _ = try await service.handoffAgent(sessionID: session.id, to: .codex)
+        }
+    }
+}
+
 /// `tick()`-level teardown gating (corveil/crow#801 review). Teardown of
 /// existing/persisted runs must run even when the runner config is absent — a
 /// removed `runner` block (or a failed config load) makes `configProvider()`
@@ -324,6 +347,36 @@ struct WorkerRunnerTickTeardownTests {
         await runner.tick()
         #expect(!FileManager.default.fileExists(atPath: scratch.path))
         #expect(runner.statusSnapshot().watched.isEmpty)
+    }
+
+    /// The orphan sweep removes a scratch dir with no matching `.workerRun`
+    /// session (crash / failed-wipe orphan holding the scoped key) while keeping
+    /// one that a live session still references (review, Yellow 1 backstop).
+    @Test func tickSweepsOrphanScratchDirsButKeepsLiveOnes() async throws {
+        let (runner, appState) = makeRunner()
+        let devRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wr-sweep-\(UUID().uuidString)")
+        let wrRoot = devRoot.appendingPathComponent(".crow-worker-runs")
+        let keep = wrRoot.appendingPathComponent("run-live")
+        let orphan = wrRoot.appendingPathComponent("run-orphan")
+        try FileManager.default.createDirectory(at: keep, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: orphan, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: devRoot) }
+
+        runner.configProvider = { nil }   // sweep runs during teardown regardless
+        runner.apiKeyProvider = { nil }
+        runner.devRootProvider = { devRoot.path }
+
+        // A live .workerRun session references only `keep`.
+        appState.sessions.append(Session(
+            name: "live", status: .active, kind: .workerRun,
+            workerRunID: "run-live", workerID: "w", workerRunScratchDir: keep.path
+        ))
+
+        await runner.tick()
+
+        #expect(FileManager.default.fileExists(atPath: keep.path))       // referenced → kept
+        #expect(!FileManager.default.fileExists(atPath: orphan.path))    // orphan → swept
     }
 
     /// With config present but `enabled: false`, teardown likewise still runs.

@@ -5,6 +5,7 @@ import CrowCore
 public enum AgentHandoffError: Error, LocalizedError, Equatable {
     case sessionNotFound
     case managerNotSupported
+    case workerRunNotSupported
     case sameAgent
     case agentNotRegistered(String)
     case agentBinaryMissing(String)
@@ -18,6 +19,8 @@ public enum AgentHandoffError: Error, LocalizedError, Equatable {
             return "Session not found"
         case .managerNotSupported:
             return "Manager sessions cannot be handed off; change the Manager agent in Settings and restart"
+        case .workerRunNotSupported:
+            return "Corveil worker-run sessions cannot be handed off — only Claude Code receives the scoped Corveil credentials"
         case .sameAgent:
             return "Session is already using that agent"
         case .agentNotRegistered(let kind):
