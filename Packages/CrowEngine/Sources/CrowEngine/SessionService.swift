@@ -1476,6 +1476,29 @@ public final class SessionService {
         if session.agentKind == .cursor {
             syncCursorMCPBridge()
         }
+        // Clean up any hook config a *previous* Manager agent left in dirPath, so
+        // switching the Manager's agent (e.g. Cursor → Claude) doesn't leave a
+        // stale `.cursor/hooks.json` pointing at a dead manager UUID. The
+        // devRoot isn't a deleted worktree, so nothing else reaps it. Idempotent
+        // — no-ops when a sibling agent never wrote here.
+        //
+        // Runs BEFORE the `crowPath` guard (#829 review round 9, Green 3): the
+        // cleanup depends only on `dirPath`/`session.agentKind`, so if
+        // `findCrowBinary` misses, switching Cursor → Claude must still reap the
+        // stale `.cursor/hooks.json` — otherwise the leak this loop exists to
+        // prevent survives exactly when the guard bails. It removes only *other*
+        // agents' configs, so ordering it ahead of our own write is safe.
+        //
+        // Claude is skipped: its `removeHookConfig` strips managed event keys
+        // wholesale (not marker-scoped like Cursor's), and the devRoot's
+        // `.claude/settings.local.json` commonly holds the user's own Manager
+        // config — so cleaning it on every boot could drop a user's hand-authored
+        // devRoot hooks. A stale Claude config left when switching to a non-Claude
+        // Manager is inert anyway (Claude isn't launched there).
+        for other in AgentRegistry.shared.allAgents()
+            where other.kind != session.agentKind && other.kind != .claudeCode {
+            other.hookConfigWriter.removeHookConfig(worktreePath: dirPath)
+        }
         guard let agent = AgentRegistry.shared.agent(for: session.agentKind),
               let crowPath = ClaudeHookConfigWriter.findCrowBinary(devRoot: ConfigStore.loadDevRoot()) else { return }
         do {
@@ -1487,22 +1510,6 @@ public final class SessionService {
         } catch {
             NSLog("[SessionService] Failed to write Manager hook config for session %@: %@",
                   session.id.uuidString, error.localizedDescription)
-        }
-        // Clean up any hook config a *previous* Manager agent left in dirPath, so
-        // switching the Manager's agent (e.g. Cursor → Claude) doesn't leave a
-        // stale `.cursor/hooks.json` pointing at a dead manager UUID. The
-        // devRoot isn't a deleted worktree, so nothing else reaps it. Idempotent
-        // — no-ops when a sibling agent never wrote here.
-        //
-        // Claude is skipped: its `removeHookConfig` strips managed event keys
-        // wholesale (not marker-scoped like Cursor's), and the devRoot's
-        // `.claude/settings.local.json` commonly holds the user's own Manager
-        // config — so cleaning it on every boot could drop a user's hand-authored
-        // devRoot hooks. A stale Claude config left when switching to a non-Claude
-        // Manager is inert anyway (Claude isn't launched there).
-        for other in AgentRegistry.shared.allAgents()
-            where other.kind != session.agentKind && other.kind != .claudeCode {
-            other.hookConfigWriter.removeHookConfig(worktreePath: dirPath)
         }
     }
 
@@ -2592,6 +2599,12 @@ public final class SessionService {
         if reviewAgentKind == .codex {
             _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "checkout", "--", ".codex"])
         }
+        // Same restore-before-pull for Cursor reviews (#829 review round 9):
+        // the `.cursor/` strip below applies as an unstaged deletion of tracked
+        // files, so `git pull` would refuse if the new head touches `.cursor/`.
+        if reviewAgentKind == .cursor {
+            _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "checkout", "--", ".cursor"])
+        }
         _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "fetch", "origin", headBranch])
         _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "checkout", headBranch])
         _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "pull", "origin", headBranch])
@@ -2615,6 +2628,23 @@ public final class SessionService {
         // on `.codex/`.
         if reviewAgentKind == .codex {
             try? fm.removeItem(atPath: (clonePath as NSString).appendingPathComponent(".codex"))
+        }
+        // Same defense-in-depth for Cursor reviews (#829 review round 9). This
+        // PR makes project `.cursor/hooks.json` Crow's load-bearing hook
+        // transport and adds `--force --approve-mcps` on the `.review` path, so
+        // a hostile PR head's committed `.cursor/hooks.json` (arbitrary
+        // `beforeShellExecution`/`beforeSubmitPrompt` commands) OR `.cursor/mcp.json`
+        // (a project-scope MCP server that `--approve-mcps` would auto-trust)
+        // would run on the reviewer's machine, unsandboxed, once Cursor trusts
+        // the clone. `writeHookConfig` already declines to overwrite the tracked
+        // hostile hooks file, but declining isn't neutralizing — stripping the
+        // whole `.cursor/` removes both surfaces AND frees `writeHookConfig` to
+        // write Crow's own untracked hooks.json (restoring Stop/state signals
+        // the tracked file would otherwise block). Gated to Cursor reviews for
+        // the same reason as `.codex/`: stripping it for an agent that doesn't
+        // load it would just hide the files a hostile PR ships.
+        if reviewAgentKind == .cursor {
+            try? fm.removeItem(atPath: (clonePath as NSString).appendingPathComponent(".cursor"))
         }
 
         // Write review prompt file into the clone directory. Write failures

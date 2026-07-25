@@ -243,9 +243,10 @@ public struct CursorHookConfigWriter: HookConfigWriter {
         return false
     }
 
-    /// Cache of `worktreePath → tracked?`, so a worktree's git index is probed
-    /// at most once per process (a worktree doesn't flip tracked↔untracked
-    /// mid-session in practice). Guarded by `trackedCacheLock`.
+    /// Cache of `(worktreePath, relativePath) → tracked?`, so a given path in a
+    /// worktree's git index is probed at most once per process (a file doesn't
+    /// flip tracked↔untracked mid-session in practice). Keyed on both dimensions
+    /// (NUL-joined) so distinct paths can't collide. Guarded by `trackedCacheLock`.
     private nonisolated(unsafe) static var trackedCache: [String: Bool] = [:]
     private static let trackedCacheLock = NSLock()
 
@@ -263,8 +264,14 @@ public struct CursorHookConfigWriter: HookConfigWriter {
     /// change across all four adapters and the sync send/paste path — tracked as
     /// a follow-up; caching bounds the common (relaunch) repetition meanwhile.
     private static func isGitTracked(worktreePath: String, relativePath: String) -> Bool {
+        // Key on (worktree, relativePath): the memoized answer is about a
+        // specific path, so a bare `worktreePath` key would return the wrong
+        // cached result the moment a second `relativePath` is ever probed
+        // (#829 review round 9, Green 2). One caller today, but the cache
+        // shouldn't be a latent trap for the next one.
+        let cacheKey = worktreePath + "\u{0}" + relativePath
         trackedCacheLock.lock()
-        if let cached = trackedCache[worktreePath] {
+        if let cached = trackedCache[cacheKey] {
             trackedCacheLock.unlock()
             return cached
         }
@@ -273,7 +280,7 @@ public struct CursorHookConfigWriter: HookConfigWriter {
         let result = probeGitTracked(worktreePath: worktreePath, relativePath: relativePath)
 
         trackedCacheLock.lock()
-        trackedCache[worktreePath] = result
+        trackedCache[cacheKey] = result
         trackedCacheLock.unlock()
         return result
     }
