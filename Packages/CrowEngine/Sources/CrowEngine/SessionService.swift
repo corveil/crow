@@ -1241,6 +1241,19 @@ public final class SessionService {
         // Handing off to Cursor → sync its global Jira MCP (this path selects
         // Cursor without touching config, so the boot-time gate would miss it).
         if target.kind == .cursor {
+            // Neutralize the review clone's committed `.cursor/` FIRST (#829
+            // review round 10, Red 1). `prepareReviewClone` strips it only when
+            // Cursor is the *creation-time* review agent; a handoff flips a
+            // review session created under Claude/Codex/OpenCode to Cursor in a
+            // clone that was never stripped, so without this the attacker's
+            // `.cursor/hooks.json` fires on the very first handoff launch (hooks
+            // have no approval gate) and its `.cursor/mcp.json` is auto-trusted
+            // on the next relaunch. Mirrors the Codex handoff arm's
+            // `session.kind != .review` reasoning above, applied to Cursor's
+            // config layer rather than its trust seed.
+            if session.kind == .review {
+                Self.stripCursorConfigFromReviewClone(clonePath: worktree.worktreePath)
+            }
             syncCursorMCPBridge()
         }
 
@@ -2514,6 +2527,32 @@ public final class SessionService {
         let clonePath: String
     }
 
+    /// Neutralize a review clone's committed Cursor config layer by removing the
+    /// working-tree `.cursor/` directory. A hostile PR head can commit
+    /// `.cursor/hooks.json` (arbitrary `beforeShellExecution` commands, with no
+    /// approval gate at all) or `.cursor/mcp.json` (a project-scope
+    /// `{command,args,env}` MCP server that this PR's `--approve-mcps` would
+    /// auto-trust), either of which would run unsandboxed on the reviewer's
+    /// machine once Cursor loads the clone as its project root. Stripping the
+    /// whole directory removes both surfaces.
+    ///
+    /// Shared by two call sites so the gate can't drift (#829 review round 10):
+    /// `prepareReviewClone` (the creation-time default review agent) and the
+    /// Cursor branch of `handoffAgent` (`crow handoff-agent --agent cursor` can
+    /// flip a review session created under another agent to Cursor *after* the
+    /// clone was prepped, landing it in a never-stripped hostile checkout).
+    /// Working-tree removal only: the git index entry survives (`removeItem`
+    /// doesn't stage a deletion), so `CursorHookConfigWriter.writeHookConfig`
+    /// still correctly declines to overwrite a *committed* hooks file and the
+    /// review runs without Crow's hook-based state signals — a bounded,
+    /// pre-existing limitation for repos that commit their own `.cursor/`,
+    /// independent of this security strip. Idempotent; no-ops when the clone
+    /// ships no `.cursor/`.
+    nonisolated static func stripCursorConfigFromReviewClone(clonePath: String) {
+        try? FileManager.default.removeItem(
+            atPath: (clonePath as NSString).appendingPathComponent(".cursor"))
+    }
+
     /// Off-main-actor preparation for a review session: fetch PR metadata,
     /// clone the repo (if needed), check out the PR branch, and stage the
     /// review prompt / skill / settings files. Returns the metadata the
@@ -2635,16 +2674,15 @@ public final class SessionService {
         // a hostile PR head's committed `.cursor/hooks.json` (arbitrary
         // `beforeShellExecution`/`beforeSubmitPrompt` commands) OR `.cursor/mcp.json`
         // (a project-scope MCP server that `--approve-mcps` would auto-trust)
-        // would run on the reviewer's machine, unsandboxed, once Cursor trusts
-        // the clone. `writeHookConfig` already declines to overwrite the tracked
-        // hostile hooks file, but declining isn't neutralizing — stripping the
-        // whole `.cursor/` removes both surfaces AND frees `writeHookConfig` to
-        // write Crow's own untracked hooks.json (restoring Stop/state signals
-        // the tracked file would otherwise block). Gated to Cursor reviews for
-        // the same reason as `.codex/`: stripping it for an agent that doesn't
-        // load it would just hide the files a hostile PR ships.
+        // would run on the reviewer's machine, unsandboxed, once Cursor loads
+        // the clone as its project root. Gated to Cursor reviews for the same
+        // reason as `.codex/`: stripping it for an agent that doesn't load it
+        // would just hide the files a hostile PR ships. The strip is a
+        // working-tree removal — see `stripCursorConfigFromReviewClone` for why
+        // this doesn't (and needn't) free `writeHookConfig` to write into a
+        // committed hooks file.
         if reviewAgentKind == .cursor {
-            try? fm.removeItem(atPath: (clonePath as NSString).appendingPathComponent(".cursor"))
+            Self.stripCursorConfigFromReviewClone(clonePath: clonePath)
         }
 
         // Write review prompt file into the clone directory. Write failures

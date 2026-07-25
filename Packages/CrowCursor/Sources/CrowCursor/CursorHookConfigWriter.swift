@@ -244,9 +244,19 @@ public struct CursorHookConfigWriter: HookConfigWriter {
     }
 
     /// Cache of `(worktreePath, relativePath) → tracked?`, so a given path in a
-    /// worktree's git index is probed at most once per process (a file doesn't
-    /// flip tracked↔untracked mid-session in practice). Keyed on both dimensions
-    /// (NUL-joined) so distinct paths can't collide. Guarded by `trackedCacheLock`.
+    /// worktree's git index is probed at most once per process. Keyed on both
+    /// dimensions (NUL-joined) so distinct paths can't collide. Guarded by
+    /// `trackedCacheLock`.
+    ///
+    /// The "probe once" assumption holds for normal worktrees (a file doesn't
+    /// flip tracked↔untracked mid-session in practice), but NOT for review
+    /// clones: those live at a stable path (`{devRoot}/crow-reviews/{repo}-pr-{n}`)
+    /// and are re-prepped as the PR head advances, so a head that newly adds or
+    /// drops a tracked `.cursor/hooks.json` flips the answer under a cached
+    /// result (#829 review round 10, Green 1). Bounded in practice — the clone
+    /// is throwaway and never pushed, and each re-prep's `git checkout -- .cursor`
+    /// restores whatever the writer then produces — so this is accepted rather
+    /// than invalidated per-prep.
     private nonisolated(unsafe) static var trackedCache: [String: Bool] = [:]
     private static let trackedCacheLock = NSLock()
 
