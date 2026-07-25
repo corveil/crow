@@ -1216,7 +1216,7 @@ function sessionRow(s) {
     }
     // Glyph + color must not be the only channel — mirrors native PRBadge's
     // `accessibilityDescription` ("#123, Checks pass, Approved").
-    const desc = [prLink.label || 'PR', ...parts.map((p) => p.label)].join(', ');
+    const desc = [prLink.label || 'PR', ...parts.map((p) => p.a11yLabel || p.label)].join(', ');
     prb.title = desc;
     prb.setAttribute('aria-label', desc);
     badges.appendChild(prb);
@@ -1266,6 +1266,10 @@ function prBadgeColor(pr) {
 // inherit `currentColor`, so the checkmarks tint with their label instead of
 // staying black (Apple emoji ✔/✕/⚠ ignore CSS `color` — CROW-802). Geometric
 // glyphs (◷/○/?) and the 🏷 tag are already color-faithful, so they stay text.
+// `label` is the chip text in the detail header AND the sidebar pill's
+// aria-label/title; an optional `a11yLabel` overrides the latter when the
+// concise chip text would be ambiguous without its (unannounced) glyph
+// (CROW-846). Add it only where the two channels must diverge.
 const PR_CHECKS_GLYPH = {
   passing: { glyph: '✔', icon: 'check', color: 'var(--green)', label: 'Checks pass' },
   failing: { glyph: '✕', icon: 'close', color: 'var(--red)', label: 'Checks failing' },
@@ -1280,7 +1284,10 @@ const PR_REVIEW_GLYPH = {
 };
 const PR_MERGED_GLYPH = { glyph: '✔', icon: 'check', color: 'var(--purple)', label: 'Merged' };
 const PR_CONFLICT_GLYPH = { glyph: '⚠', icon: 'warning', color: 'var(--red)', label: 'Conflicts' };
-const PR_MERGE_LABEL_GLYPH = { glyph: '🏷', color: 'var(--gold)', label: 'crow:merge label' };
+// Chip text drops the redundant "label" (the 🏷 glyph shows it beside the
+// text); the aria path keeps it via `a11yLabel` — there the glyph is never
+// announced, so the noun is the only signal it's a label (CROW-846).
+const PR_MERGE_LABEL_GLYPH = { glyph: '🏷', color: 'var(--gold)', label: 'crow:merge', a11yLabel: 'crow:merge label' };
 
 function prChecksGlyph(pr) {
   const base = PR_CHECKS_GLYPH[pr.checks] || PR_CHECKS_GLYPH.unknown;
