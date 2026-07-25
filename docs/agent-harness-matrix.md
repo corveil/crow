@@ -25,15 +25,15 @@ capabilities, update this table in the same PR.
 |---|---|---|---|---|
 | Binary token (`launchCommandToken`) | `claude` | `agent` ⚠️ collision risk | `codex` | `opencode` |
 | Registered at boot | **always** (default out of the box) | only if binary found | only if binary found | only if binary found |
-| Resume / continue | ✅ `--continue` | ❌ no MVP resume | ✅ `resume --last` | ⚠️ `--continue` re-enters TUI, no history |
+| Resume / continue | ✅ `--continue` | ✅ `--continue` (job/review restart, #829) | ✅ `resume --last` | ⚠️ `--continue` re-enters TUI, no history |
 | Remote control | ✅ native `--rc --name` | ⚠️ faked via `crow send` stdin | ❌ `supportsRemoteControl=false` (experimental `--remote` unwired) | ⚠️ faked via `crow send` stdin |
-| Auto-permission | ✅ `--permission-mode auto` | ❌ ignored | ✅ `-a never -s workspace-write` (`.job`, interactive) | ⚠️ runtime-probed `--auto`, `.job` only |
-| Hooks transport | per-worktree `.claude/settings.local.json` | global `~/.cursor/hooks.json` | global `~/.codex/hooks.json` + `config.toml` `notify` bridge (per-worktree deferred — see below) | global JS plugin `~/.config/opencode/plugins/crow-hooks.js` |
-| Hook → session scope | ✅ per-session UUID | ❌ `cwd` match | ❌ `cwd` match (per-worktree UUID deferred) | ❌ `cwd` match |
+| Auto-permission | ✅ `--permission-mode auto` | ✅ `--force --approve-mcps` (parity with Claude auto, #829) | ✅ `-a never -s workspace-write` (`.job`, interactive) | ⚠️ runtime-probed `--auto`, `.job` only |
+| Hooks transport | per-worktree `.claude/settings.local.json` | per-worktree `.cursor/hooks.json` (#829) | global `~/.codex/hooks.json` + `config.toml` `notify` bridge (per-worktree deferred — see below) | global JS plugin `~/.config/opencode/plugins/crow-hooks.js` |
+| Hook → session scope | ✅ per-session UUID | ✅ per-session UUID (#829) | ❌ `cwd` match (per-worktree UUID deferred) | ❌ `cwd` match |
 | Hook async delivery | ✅ `PostToolUse*` async | ⚠️ declared, timing unverified | ❌ sync-only (v0.141.0) | ⚠️ names verified, timing unverified |
-| MCP (e.g. Jira) | ✅ `jira` MCP server via `~/.claude.json` | ❌ falls back to `acli` | ✅ mirrored from `~/.claude.json` into `config.toml` | ❌ falls back to `acli` |
+| MCP (e.g. Jira) | ✅ `jira` MCP server via `~/.claude.json` | ✅ `jira` bridged into `~/.cursor/mcp.json` (#829) | ✅ mirrored from `~/.claude.json` into `config.toml` | ❌ falls back to `acli` |
 | Review (`/crow-review-pr`) | ✅ slash-command | ✅ inlined skill body | ✅ inlined skill body | ✅ inlined skill body |
-| Initial-prompt injection | ✅ `$(cat …-prompt.md)` + deferred paste | ⚠️ job/review only, `.work` launcher not auto-wired | ✅ `.job` + `.review` (`$(cat …-prompt.md)`) | ✅ run-then-`--continue` |
+| Initial-prompt injection | ✅ `$(cat …-prompt.md)` + deferred paste | ✅ `$(cat …)` job/review; handoff launcher auto-wired (#829); `.work` bare | ✅ `.job` + `.review` (`$(cat …-prompt.md)`) | ✅ run-then-`--continue` |
 | Gateway env / trust seed / telemetry | ✅ Claude special-case | ❌ | ⚠️ trust seed only (`[projects."…"]` in `config.toml`) | ❌ |
 | Rename passthrough (`/rename`) | ✅ | ✅ | ✅ | ✅ |
 
@@ -44,16 +44,18 @@ Legend: ✅ full · ⚠️ partial / faked / unverified · ❌ not supported.
 > [harness capability gap audit](agent-harness-gap-audit.md) ([#828](https://github.com/corveil/crow/issues/828))
 > re-checked every gap against current upstream (Cursor `2026.07.23`, Codex
 > `0.141.0`, OpenCode `1.17.10`+); several now have an upstream flag and a
-> spin-off closure ticket. **The cells below stay at Crow's real status until
-> those tickets land:**
+> spin-off closure ticket. **Cursor's row landed in [#829](https://github.com/corveil/crow/issues/829)**
+> (resume, auto-permission `--force --approve-mcps`, per-worktree hooks, `jira`
+> MCP bridge); the
+> remaining cells below stay at Crow's real status until their tickets land:
 >
 > | Gap (grid row) | Now available upstream | Closure ticket |
 > |---|---|---|
-> | Resume / continue | Cursor `--resume`/`--continue`, Codex `resume --last`, OpenCode `--continue` (history caveat already closed by #547) | [#829](https://github.com/corveil/crow/issues/829) / [#830](https://github.com/corveil/crow/issues/830) / [#831](https://github.com/corveil/crow/issues/831) |
-> | Auto-permission (Cursor, Codex) | Cursor `--force --sandbox enabled`; Codex `-a never -s workspace-write` | #829 / #830 |
-> | MCP | `cursor-agent mcp`, `codex mcp`, `opencode mcp` | #829 / #830 / #831 |
+> | Resume / continue | Codex `resume --last`, OpenCode `--continue` (history caveat already closed by #547) | [#830](https://github.com/corveil/crow/issues/830) / [#831](https://github.com/corveil/crow/issues/831) — Cursor ✅ landed #829 |
+> | Auto-permission (Codex) | Codex `-a never -s workspace-write` | #830 — Cursor ✅ landed #829 |
+> | MCP | `codex mcp`, `opencode mcp` (Cursor has no `mcp add`; file-based `~/.cursor/mcp.json`) | #830 / #831 — Cursor ✅ landed #829 (file bridge) |
 > | Review (Codex) | `codex review --base <branch>` / `codex exec review` | #830 |
-> | Hook → session scope | project `.cursor/hooks.json`, `.codex/hooks.json`, `.opencode/plugins/` (per-worktree UUID) | #829 / #830 / #831 |
+> | Hook → session scope | `.codex/hooks.json`, `.opencode/plugins/` (per-worktree UUID) | #830 / #831 — Cursor ✅ landed #829 |
 > | Remote control (Codex) | experimental `codex remote-control` / `--remote` | #830 (evaluate) |
 >
 > Still absent upstream: Codex **async hooks** (parsed-but-skipped, except
@@ -118,9 +120,12 @@ managed-terminal command needs hook/env prep.
 - **Claude:** work sessions relaunch with `--continue`; review/job sessions read
   their prompt file on first launch, then fall through to `--continue` on
   restart (`ClaudeCodeAgent.autoLaunchCommand`, CROW-224 / CROW-317).
-- **Cursor & Codex:** no `--continue` equivalent in the MVP — a restart drops
-  the user back into a bare TUI rather than re-running the prompt
-  (`CursorAgent` / `OpenAICodexAgent` `.job` branches).
+- **Cursor:** review/job sessions read their prompt file on first launch, then
+  resume with `--continue` on restart (`CursorAgent.autoLaunchCommand`, #829);
+  `.work` launches bare (deliberate — the user types into the TUI).
+- **Codex:** no `--continue` equivalent in the MVP — a restart drops the user
+  back into a bare TUI rather than re-running the prompt
+  (`OpenAICodexAgent` `.job` branch).
 - **OpenCode:** `--continue` re-enters the TUI (`resumeTUICommand`,
   `OpenCodeLaunchArgs`) but does not replay conversation history; `.work`
   launches bare ("MVP doesn't auto-resume").
@@ -150,8 +155,15 @@ harness's sessions
 
 - **Claude:** `--permission-mode auto` (`ClaudeLaunchArgs`), the same knob the
   Manager uses ([ADR 0004](adr/0004-manager-auto-permission-mode.md)).
-- **Cursor:** the `autoPermissionMode` argument is accepted and ignored — no
-  flag is emitted.
+- **Cursor:** `--force --approve-mcps` (`CursorLaunchArgs.autoPermissionSuffix`,
+  #829) — approval off + auto-approve MCP, **genuine parity** with Claude's auto
+  mode (which imposes no sandbox). Applied to `.job`/`.review`, the opt-in work
+  coder view, and the Manager. Deliberately **not**: `--sandbox enabled` (it
+  blocks network at the syscall level — `.review`'s `gh pr review`, `.job`'s
+  `git push`, and the Manager's `crow`-socket / `gh` / sibling `git worktree add`
+  all need network the sandbox would kill; `--sandbox` is left unset so Cursor
+  honors the user's own config), `--yolo`, the undocumented `--auto-review`, or
+  the headless-only `--trust`.
 - **Codex:** honored for `.job` sessions on the **interactive** launch —
   `codex -a never -s workspace-write "$(cat …-prompt.md)"` (approval off, sandbox
   still bounded; the analogue of Claude's `--permission-mode auto`, **not** the
@@ -184,10 +196,19 @@ All harnesses report lifecycle events by shelling out to `crow hook-event`, but
 - **Claude** — per-worktree `.claude/settings.local.json`, written per session
   with `hook-event --session <UUID>`, so the session is resolved by **UUID**
   ([`ClaudeHookConfigWriter`](../Packages/CrowClaude/Sources/CrowClaude/ClaudeHookConfigWriter.swift)).
-- **Cursor** — global `~/.cursor/hooks.json` (override `CURSOR_CONFIG_DIR`).
-  Commands carry `--agent cursor` with **no `--session`**; the server resolves
-  the session by matching `cwd` in the payload against registered worktrees
-  (`CursorHookConfigWriter`). Per-project `.cursor/hooks.json` is deferred.
+- **Cursor** — per-worktree `.cursor/hooks.json`, written per session with
+  `hook-event --session <UUID>`, resolved by **UUID** (#829,
+  `CursorHookConfigWriter`). No global config: Cursor merges global + project and
+  runs both, so a global config would double-fire; `removeManagedGlobalConfig`
+  migrates users off any a prior Crow installed. Write/remove operate at group
+  level and key on a Crow marker, so a user's own hook in the (shared, committed)
+  `.cursor/hooks.json` is preserved. An *untracked* file is git-excluded so it
+  isn't committed; a repo that already *commits* `.cursor/hooks.json` (where
+  exclude has no effect) makes the write skip entirely rather than push a
+  machine-local path + dead UUID into the shared repo — that worktree loses
+  hook-based state detection (logged; a session-visible warning is a fast-follow).
+  This is also what makes the **Manager** hookable — the devRoot isn't
+  a registered worktree, so the old `cwd` match could never route it.
 - **Codex** — global `$CODEX_HOME/hooks.json` (default `~/.codex/hooks.json`),
   plus a `config.toml` `notify = ["<crow>", "codex-notify"]` line and
   `features.hooks = true`. `cwd`-resolved like Cursor. The `notify` bridge is a
@@ -212,8 +233,8 @@ All harnesses report lifecycle events by shelling out to `crow hook-event`, but
   `{cwd, …}` JSON payload to `crow hook-event --agent opencode`. `cwd`-resolved
   (`OpenCodeHookConfigWriter`).
 
-Only Claude gets **per-session UUID scope**; the other three share the host's
-global config and are disambiguated by `cwd`. See
+Only Claude and Cursor get **per-session UUID scope**; Codex and OpenCode share
+the host's global config and are disambiguated by `cwd`. See
 [ADR 0015](adr/0015-harness-capability-tiers.md).
 
 ### Hook async delivery
@@ -240,11 +261,28 @@ global config and are disambiguated by `cwd`. See
   cross-backend prompt-routing case from
   [ADR 0005](adr/0005-task-and-code-backend-protocols.md) (Jira task + GitHub
   code): the ticket is fetched via MCP while the PR is still opened with `gh`.
-- **Cursor, Codex, OpenCode:** none have MCP wiring — all three fall back to the
-  same `acli jira workitem view <key> --fields …` prompt line
-  (`CursorLauncher`, `CodexLauncher`, `OpenCodeLauncher`). The gap is **MCP**,
-  not Jira ticket-fetch: every harness can fetch the ticket, just via `acli`
-  rather than the `jira` MCP server.
+- **Cursor:** the `jira` MCP is **bridged** — `CursorMCPConfigWriter` copies the
+  user's `jira` server from `~/.claude.json` (root `mcpServers` or the default
+  project-local `projects[<path>].mcpServers`) into `~/.cursor/mcp.json` (#829).
+  Cursor's CLI has **no `cursor-agent mcp add`** on the audited build, so the
+  config is file-based, not a CLI call; unattended runs add `--approve-mcps` so
+  the bridged server auto-approves, and the `CursorLauncher` prompt instructs the
+  `jira_*` MCP tools (with `acli` as a fallback), matching Claude. It runs
+  **when a Cursor agent actually launches** (worker auto-launch, Manager,
+  handoff, and the brand-new-terminal deferred paste / `crow send` via
+  `AgentLaunch`), not at boot — so it fires for Cursor selected via config *or*
+  per-session (`handoff-agent`, the Manager picker), and never copies the token
+  onto a box that merely has a binary named `agent`.
+  The bridged entry is Crow-marked (a top-level `x-crow-managed` list, so the
+  server def stays byte-identical to Claude's): a user's own `jira` is never
+  clobbered, and the copy is withdrawn only when `~/.claude.json` parses cleanly
+  with no `jira` (an unreadable read is left alone). No-op when no Jira MCP is
+  configured.
+- **Codex, OpenCode:** no MCP wiring — both fall back to the same
+  `acli jira workitem view <key> --fields …` prompt line
+  (`CodexLauncher`, `OpenCodeLauncher`). The gap is **MCP**, not Jira
+  ticket-fetch: every harness can fetch the ticket, just via `acli` rather than
+  the `jira` MCP server.
 
 ### Review (`/crow-review-pr`)
 
@@ -268,9 +306,10 @@ harness (CROW-439) — it's gated on the prompt-file convention, not on agent ki
 
 - **Claude:** `$(cat …-prompt.md)`, dispatched through the deferred `#408`
   paste path (stash in `pendingLaunchCommands`, paste on `.shellReady`).
-- **Cursor:** `agent "$(cat …)"`. `CursorLauncher` (the workspace-skill prompt
-  generator) is written but **not yet auto-wired** — Phase-C MVP launches
-  `agent` bare for `.work`.
+- **Cursor:** `agent "$(cat …)"` for job/review (path shell-quoted). The
+  interactive TUI takes the positional prompt directly, so no headless `-p` leg
+  is needed; `CursorLauncher.launchCommand` feeds the prompt on agent handoff
+  (#829). `.work` launches `agent` bare (the user types into the TUI).
 - **Codex:** job only; review returns `nil`.
 - **OpenCode:** **run-then-`--continue`** — headless `opencode run "$(cat …)"`
   consumes the prompt reliably, then `; opencode --continue` opens the TUI with a

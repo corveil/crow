@@ -2,6 +2,7 @@ import Foundation
 import CrowClaude
 import CrowCodex
 import CrowCore
+import CrowCursor
 import CrowGit
 import CrowPersistence
 import CrowProvider
@@ -957,6 +958,10 @@ public final class SessionService {
                 dirPath: worktree.worktreePath, resolved: gatewayResolved)
             gatewayPrefix = ClaudeLaunchArgs.gatewayEnvPrefix(gatewayResolved)
         }
+        // Cursor worker launching → ensure its global Jira MCP is synced.
+        if agent.kind == .cursor {
+            syncCursorMCPBridge()
+        }
 
         let rcEnabled = appState.remoteControlEnabled
         // Jobs are unattended, so opt-in (default-on) auto-permission mode lets
@@ -1233,6 +1238,11 @@ public final class SessionService {
                 NSLog("[SessionService] Codex trust seed failed for %@: %@", worktree.worktreePath, msg)
             }
         }
+        // Handing off to Cursor → sync its global Jira MCP (this path selects
+        // Cursor without touching config, so the boot-time gate would miss it).
+        if target.kind == .cursor {
+            syncCursorMCPBridge()
+        }
 
         // Persist the new agent only after launch prep succeeds so register /
         // attribution / hooks all see the target kind, and a failed build
@@ -1471,6 +1481,47 @@ public final class SessionService {
             NSLog("[SessionService] Failed to write Manager hook config for session %@: %@",
                   session.id.uuidString, error.localizedDescription)
         }
+        // Clean up any hook config a *previous* Manager agent left in dirPath, so
+        // switching the Manager's agent (e.g. Cursor → Claude) doesn't leave a
+        // stale `.cursor/hooks.json` pointing at a dead manager UUID. The
+        // devRoot isn't a deleted worktree, so nothing else reaps it. Idempotent
+        // — no-ops when a sibling agent never wrote here.
+        //
+        // Claude is skipped: its `removeHookConfig` strips managed event keys
+        // wholesale (not marker-scoped like Cursor's), and the devRoot's
+        // `.claude/settings.local.json` commonly holds the user's own Manager
+        // config — so cleaning it on every boot could drop a user's hand-authored
+        // devRoot hooks. A stale Claude config left when switching to a non-Claude
+        // Manager is inert anyway (Claude isn't launched there).
+        for other in AgentRegistry.shared.allAgents()
+            where other.kind != session.agentKind && other.kind != .claudeCode {
+            other.hookConfigWriter.removeHookConfig(worktreePath: dirPath)
+        }
+        // A Cursor Manager launching → sync its global Jira MCP (covers the
+        // Manager "+" picker one-shot override, which sets agentKind without
+        // mutating config).
+        if session.agentKind == .cursor {
+            syncCursorMCPBridge()
+        }
+    }
+
+    /// Sync the user's Jira MCP into Cursor's global `mcp.json` when a Cursor
+    /// agent is actually launching — the strongest "Cursor is in use" signal
+    /// (#829 review). Called from every Cursor launch path (worker auto-launch,
+    /// Manager, handoff, and the brand-new-terminal paste in `AgentLaunch`) so
+    /// it fires for Cursor selected via config, `handoff-agent`, or the Manager
+    /// picker alike; a CI box that merely ships a binary named `agent` never
+    /// launches a Crow Cursor session, so the user's token is never copied
+    /// there. Idempotent + marker-guarded — safe to call every launch.
+    ///
+    /// Dispatched off the main actor: reading a possibly-multi-MB
+    /// `~/.claude.json` and writing `~/.cursor/mcp.json` must not block the UI.
+    /// The write is global and self-heals on the next launch, so fire-and-forget
+    /// is acceptable.
+    private func syncCursorMCPBridge() {
+        Task.detached(priority: .utility) {
+            CursorMCPConfigWriter.bridgeJiraMCPDefault()
+        }
     }
 
     /// Resolve the Manager's own AI gateway (`AppConfig.managerGateway`) from
@@ -1610,6 +1661,10 @@ public final class SessionService {
         let worktreePath: String
         let branch: String
         let isMainCheckout: Bool
+        /// Agent whose per-worktree hook config to remove before deletion, so
+        /// the removal dispatches through the right writer (e.g. Cursor's
+        /// `.cursor/hooks.json`, not just Claude's `.claude/settings.local.json`).
+        var agentKind: AgentKind = .claudeCode
     }
 
     /// Delete a session and clean up all associated resources.
@@ -1637,7 +1692,8 @@ public final class SessionService {
                 repoPath: $0.repoPath,
                 worktreePath: $0.worktreePath,
                 branch: $0.branch,
-                isMainCheckout: $0.isMainRepoCheckout
+                isMainCheckout: $0.isMainRepoCheckout,
+                agentKind: session?.agentKind ?? .claudeCode
             )
         }
 
@@ -1742,8 +1798,13 @@ public final class SessionService {
                 continue
             }
 
-            // Remove our hook config from settings.local.json before deleting the worktree
-            ClaudeHookConfigWriter().removeHookConfig(worktreePath: item.worktreePath)
+            // Remove our hook config before deleting the worktree, dispatching
+            // through the session's own agent so non-Claude configs (e.g.
+            // Cursor's `.cursor/hooks.json`) are cleaned by the right writer,
+            // not just `.claude/settings.local.json`.
+            let cleanupWriter = AgentRegistry.shared.agent(for: item.agentKind)?.hookConfigWriter
+                ?? ClaudeHookConfigWriter()
+            cleanupWriter.removeHookConfig(worktreePath: item.worktreePath)
 
             var gitRemoveFailed = false
             do {
