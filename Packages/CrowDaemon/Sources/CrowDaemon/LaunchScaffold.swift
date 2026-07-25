@@ -114,14 +114,24 @@ enum LaunchScaffold {
 
         if AgentRegistry.shared.agent(for: .cursor) != nil {
             attempt("Cursor scaffold") { try CursorScaffolder.scaffold(devRoot: devRoot) }
-            if let crowPath {
-                // Empty `CURSOR_CONFIG_DIR=` treated as unset, same reason as
-                // `CODEX_HOME` above.
-                let cursorHome = nonEmptyEnv("CURSOR_CONFIG_DIR") ?? NSString(string: "~/.cursor").expandingTildeInPath
-                attempt("Cursor global config install") {
-                    try CursorHookConfigWriter.installGlobalConfig(cursorHome: cursorHome, crowPath: crowPath)
-                }
+            // Empty `CURSOR_CONFIG_DIR=` treated as unset, same reason as
+            // `CODEX_HOME` above.
+            let cursorHome = nonEmptyEnv("CURSOR_CONFIG_DIR") ?? NSString(string: "~/.cursor").expandingTildeInPath
+            // Per-worktree `.cursor/hooks.json` (with `--session` baked in) is
+            // now the authority (#829), written by the engine per session.
+            // Cursor merges global + project hooks and runs both, so any global
+            // config a prior Crow installed would double-fire every event —
+            // strip our managed entries from `~/.cursor/hooks.json` (user
+            // entries survive). Doesn't need `crowPath`.
+            attempt("Cursor global hook cleanup") {
+                CursorHookConfigWriter.removeManagedGlobalConfig(cursorHome: cursorHome)
             }
+            // The Jira MCP bridge is NOT run here. Gating it on "a binary named
+            // `agent` is on PATH" would copy the user's token onto a CI box that
+            // ships its own `agent`, and gating on config would miss Cursor
+            // selected per-session (handoff / Manager picker). Instead it runs
+            // when a Cursor agent actually launches — the strongest "Cursor is in
+            // use" signal — from `SessionService` (#829 review).
         }
 
         if AgentRegistry.shared.agent(for: .openCode) != nil {
