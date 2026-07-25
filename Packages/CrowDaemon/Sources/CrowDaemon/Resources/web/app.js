@@ -1266,6 +1266,10 @@ function prBadgeColor(pr) {
 // inherit `currentColor`, so the checkmarks tint with their label instead of
 // staying black (Apple emoji ✔/✕/⚠ ignore CSS `color` — CROW-802). Geometric
 // glyphs (◷/○/?) and the 🏷 tag are already color-faithful, so they stay text.
+// `label` is the chip text in the detail header AND the sidebar pill's
+// aria-label/title; an optional `a11yLabel` overrides the latter when the
+// concise chip text would be ambiguous without its (unannounced) glyph
+// (CROW-846). Add it only where the two channels must diverge.
 const PR_CHECKS_GLYPH = {
   passing: { glyph: '✔', icon: 'check', color: 'var(--green)', label: 'Checks pass' },
   failing: { glyph: '✕', icon: 'close', color: 'var(--red)', label: 'Checks failing' },

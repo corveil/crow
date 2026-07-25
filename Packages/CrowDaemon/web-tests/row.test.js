@@ -56,6 +56,22 @@ function render(pr, overrides) {
 }
 const badge = (row) => row.querySelector('.pr-badge');
 
+// crow:merge a11y noun (CROW-846) — the sidebar pill is glyph-only, so its
+// aria-label/title is the sole screen-reader channel. The visible chip text
+// dropped the redundant trailing "label", but the aria path must keep the noun
+// via `PR_MERGE_LABEL_GLYPH.a11yLabel`; this pins that split so a later
+// `p.a11yLabel || p.label` → `p.label` "simplify" can't silently unwind it.
+// Placed ahead of the merged-PR section below, which trips a pre-existing
+// CROW-802 selector-drift crash (`.pr-ico` is null for the SVG ✔/✕/⚠ glyphs)
+// that would otherwise abort the run before this line executes.
+console.log('crow:merge announces the "label" noun to screen readers (CROW-846):');
+{
+  const rr = render({ has_pr: true, checks: 'passing', review: 'approved', merge: 'mergeable',
+    is_merged: false, has_blockers: false, ready_to_merge: true, failed_checks: [], has_merge_label: true });
+  check('sidebar aria-label keeps the "crow:merge label" noun',
+    /crow:merge label/.test(badge(rr.row).getAttribute('aria-label')));
+}
+
 console.log('Failing checks + changes requested:');
 let r = render({ has_pr: true, checks: 'failing', review: 'changesRequested', merge: 'MERGEABLE',
   is_merged: false, has_blockers: true, ready_to_merge: false, failed_checks: ['build', 'lint'] });
