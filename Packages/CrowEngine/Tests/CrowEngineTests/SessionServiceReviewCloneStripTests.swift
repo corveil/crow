@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import CrowCore
 @testable import CrowEngine
 
 /// Coverage for `SessionService.stripCursorConfigFromReviewClone` — the shared
@@ -76,5 +77,34 @@ struct SessionServiceReviewCloneStripTests {
 
         #expect(!FileManager.default.fileExists(atPath: cursorDir))
         #expect(FileManager.default.fileExists(atPath: codexDir))
+    }
+
+    // MARK: - Handoff gate (the dimension both round-10 and round-11 blockers lived in)
+
+    /// Only a `.review` handoff *to Cursor* strips: the exact gate that, when
+    /// missing (round 10) or divergent (round 11), left Cursor running in an
+    /// unstripped hostile clone.
+    @Test func handoffGateFiresOnlyForCursorReview() {
+        #expect(SessionService.shouldStripCursorReviewCloneOnHandoff(
+            targetKind: .cursor, sessionKind: .review))
+    }
+
+    /// A `.work`/`.job` handoff to Cursor is a normal working clone, not an
+    /// attacker-controlled review head — no strip.
+    @Test func handoffGateSkipsNonReviewCursor() {
+        #expect(!SessionService.shouldStripCursorReviewCloneOnHandoff(
+            targetKind: .cursor, sessionKind: .work))
+        #expect(!SessionService.shouldStripCursorReviewCloneOnHandoff(
+            targetKind: .cursor, sessionKind: .job))
+    }
+
+    /// A `.review` handoff to any *other* agent must not strip `.cursor/` —
+    /// stripping a surface the reviewing agent doesn't load would just hide the
+    /// files a hostile PR ships (same reasoning as the `.codex/` gate).
+    @Test func handoffGateSkipsReviewForNonCursorAgents() {
+        for k: AgentKind in [.claudeCode, .codex, .openCode] {
+            #expect(!SessionService.shouldStripCursorReviewCloneOnHandoff(
+                targetKind: k, sessionKind: .review))
+        }
     }
 }
