@@ -108,6 +108,7 @@ public struct GitHubCodeBackend: CodeBackend {
                   headRefName headRefOid baseRefName
                   mergeCommit { oid }
                   repository { nameWithOwner }
+                  labels(first: 20) { nodes { name color } }
                 }
               }
             """)

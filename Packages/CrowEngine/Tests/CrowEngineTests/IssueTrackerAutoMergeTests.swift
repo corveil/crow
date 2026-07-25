@@ -135,6 +135,25 @@ struct IssueTrackerAutoMergeTests {
         #expect(IssueTracker.autoMergeSkipReason(pr: makePR(), session: makeSession()) == nil)
     }
 
+    @Test func gainingCrowMergeLabelFlipsIconAndClearsNoMergeLabelSkip() {
+        // #838 acceptance criterion (a): the exact before/after a right-click
+        // "Add label crow:merge to PR" produces. Before the label lands both
+        // consumers reject the PR; once the fresh label is present on the
+        // record, the icon flag flips true and the watcher stops skipping —
+        // a green, open, non-draft, viewer PR now dispatches.
+        let session = makeSession()
+
+        let before = makePR(labels: [Self.otherLabel])
+        #expect(!IssueTracker.buildPRStatus(from: before).hasMergeLabel)
+        #expect(IssueTracker.autoMergeSkipReason(pr: before, session: session) == .noMergeLabel)
+        #expect(!IssueTracker.shouldAttemptAutoMerge(pr: before, session: session))
+
+        let after = makePR(labels: [Self.otherLabel, Self.crowMergeLabel])
+        #expect(IssueTracker.buildPRStatus(from: after).hasMergeLabel)
+        #expect(IssueTracker.autoMergeSkipReason(pr: after, session: session) == nil)
+        #expect(IssueTracker.shouldAttemptAutoMerge(pr: after, session: session))
+    }
+
     @Test func skipReasonNamesEachGuard() {
         let cases: [(IssueTracker.ViewerPR, Session, IssueTracker.AutoMergeSkipReason)] = [
             (makePR(), makeSession(autoMergeEnabledAt: Date()), .alreadyEnabled),

@@ -11,6 +11,7 @@ public final class OTLPReceiver: Sendable {
     private let listener: NWListener
     private let database: TelemetryDatabase
     private let queue = DispatchQueue(label: "com.corveil.crow.otlp-receiver")
+    private let decodeFailures = FailureThrottle(interval: 60)
 
     /// Callback invoked on the main actor when new data arrives for a Crow session.
     /// The UUID is the Crow session ID.
@@ -95,6 +96,13 @@ public final class OTLPReceiver: Sendable {
                 if isComplete {
                     // Connection closed before complete request
                     connection.cancel()
+                } else if accumulated.count > HTTPParser.maxRequestBytes {
+                    // Backstop: the parser can only reject what it can frame,
+                    // so never let one connection buffer without bound while it
+                    // keeps asking for more.
+                    NSLog("[OTLPReceiver] Buffered %d bytes without a complete request; closing",
+                          accumulated.count)
+                    self.sendResponse(HTTPResponse.badRequest(message: "Request too large"), on: connection)
                 } else {
                     self.receiveData(on: connection, buffer: accumulated)
                 }
@@ -118,14 +126,14 @@ public final class OTLPReceiver: Sendable {
         case "/v1/metrics":
             Task {
                 do {
-                    let payload = try JSONDecoder().decode(OTLPMetricsPayload.self, from: request.body)
+                    let payload = try self.decode(OTLPMetricsPayload.self, from: request)
                     let affectedSessions = await self.processMetrics(payload, database: db)
                     self.sendResponse(HTTPResponse.ok(), on: connection)
                     for sessionID in affectedSessions {
                         await onData(sessionID)
                     }
                 } catch {
-                    NSLog("[OTLPReceiver] Metrics decode error: %@", error.localizedDescription)
+                    self.reportDecodeFailure(error, request: request)
                     self.sendResponse(HTTPResponse.badRequest(message: "Invalid metrics payload"), on: connection)
                 }
             }
@@ -133,20 +141,94 @@ public final class OTLPReceiver: Sendable {
         case "/v1/logs":
             Task {
                 do {
-                    let payload = try JSONDecoder().decode(OTLPLogsPayload.self, from: request.body)
+                    let payload = try self.decode(OTLPLogsPayload.self, from: request)
                     let affectedSessions = await self.processLogs(payload, database: db)
                     self.sendResponse(HTTPResponse.ok(), on: connection)
                     for sessionID in affectedSessions {
                         await onData(sessionID)
                     }
                 } catch {
-                    NSLog("[OTLPReceiver] Logs decode error: %@", error.localizedDescription)
+                    self.reportDecodeFailure(error, request: request)
                     self.sendResponse(HTTPResponse.badRequest(message: "Invalid logs payload"), on: connection)
                 }
             }
 
         default:
             sendResponse(HTTPResponse.notFound(), on: connection)
+        }
+    }
+
+    // MARK: - Decoding & Diagnostics
+
+    /// Decode an OTLP payload, reporting any records tolerant decoding dropped.
+    private func decode<T: Decodable>(_ type: T.Type, from request: HTTPRequest) throws -> T {
+        let diagnostics = OTLPDecodeDiagnostics()
+        let decoder = JSONDecoder()
+        decoder.userInfo[.otlpDiagnostics] = diagnostics
+        let payload = try decoder.decode(T.self, from: request.body)
+        if let summary = diagnostics.summary {
+            NSLog("[OTLPReceiver] %@: skipped malformed %@", request.path, summary)
+        }
+        return payload
+    }
+
+    /// Log a decode failure with enough context to identify the offending field.
+    ///
+    /// The bare `localizedDescription` of a `DecodingError` is the same
+    /// "isn't in the correct format" string for every cause, which left the
+    /// receiver undiagnosable (#823). The coding path pinpoints the field.
+    /// Failures are throttled so a systematic mismatch cannot drown the log.
+    private func reportDecodeFailure(_ error: Error, request: HTTPRequest) {
+        guard let suppressed = decodeFailures.claim(request.path) else { return }
+
+        var message = "[OTLPReceiver] \(request.path) decode failed: \(Self.describe(error))"
+        message += "\n  content-type=\(request.header("Content-Type") ?? "-")"
+        message += " content-length=\(request.header("Content-Length") ?? "-")"
+        message += " transfer-encoding=\(request.header("Transfer-Encoding") ?? "-")"
+        message += " content-encoding=\(request.header("Content-Encoding") ?? "-")"
+        message += " bodybytes=\(request.body.count)"
+        if suppressed > 0 {
+            message += "\n  (\(suppressed) further failures suppressed since the last report)"
+        }
+        // Bodies carry account IDs, emails and event attributes, so the raw
+        // prefix is opt-in; the coding path above is enough to diagnose shape.
+        if Self.logRawBodies {
+            let prefix = request.body.prefix(512)
+            let text = String(decoding: prefix, as: UTF8.self)
+                .replacingOccurrences(of: "\n", with: " ")
+            message += "\n  body[0..<\(prefix.count)]: \(text)"
+        }
+        NSLog("%@", message)
+    }
+
+    private static var logRawBodies: Bool {
+        ProcessInfo.processInfo.environment["CROW_TELEMETRY_LOG_RAW_BODIES"] == "1"
+    }
+
+    /// Render a `DecodingError` as case, coding path, and underlying reason.
+    static func describe(_ error: Error) -> String {
+        func path(_ context: DecodingError.Context) -> String {
+            let rendered = context.codingPath.map { key in
+                key.intValue.map { "[\($0)]" } ?? ".\(key.stringValue)"
+            }.joined()
+            let trimmed = rendered.hasPrefix(".") ? String(rendered.dropFirst()) : rendered
+            return trimmed.isEmpty ? "<root>" : trimmed
+        }
+
+        guard let error = error as? DecodingError else {
+            return "\(type(of: error)): \(error.localizedDescription)"
+        }
+        switch error {
+        case let .typeMismatch(type, context):
+            return "typeMismatch(\(type)) at \(path(context)) — \(context.debugDescription)"
+        case let .valueNotFound(type, context):
+            return "valueNotFound(\(type)) at \(path(context)) — \(context.debugDescription)"
+        case let .keyNotFound(key, context):
+            return "keyNotFound(\(key.stringValue)) at \(path(context)) — \(context.debugDescription)"
+        case let .dataCorrupted(context):
+            return "dataCorrupted at \(path(context)) — \(context.debugDescription)"
+        @unknown default:
+            return "DecodingError: \(error.localizedDescription)"
         }
     }
 
@@ -233,7 +315,7 @@ public final class OTLPReceiver: Sendable {
             for scope in scopeLogs {
                 guard let logRecords = scope.logRecords else { continue }
                 for record in logRecords {
-                    let eventName = record.eventName ?? "unknown"
+                    let eventName = record.resolvedEventName ?? "unknown"
                     let body = record.body?.asString
                     let attributesJSON = encodeAttributes(record.attributes)
 
@@ -263,5 +345,39 @@ public final class OTLPReceiver: Sendable {
             return nil
         }
         return String(data: data, encoding: .utf8)
+    }
+}
+
+// MARK: - Failure Throttling
+
+/// Rate-limits a repeating failure to one report per `interval`, per key.
+///
+/// A systematic payload mismatch fires on every export (~every 5s per session),
+/// which is how #823 drowned the daemon log. The first failure always reports
+/// in full; later ones are counted and folded into the next report.
+final class FailureThrottle: @unchecked Sendable {
+    private let lock = NSLock()
+    private let interval: TimeInterval
+    private var lastReported: [String: Date] = [:]
+    private var suppressed: [String: Int] = [:]
+
+    init(interval: TimeInterval) {
+        self.interval = interval
+    }
+
+    /// Claim the right to report a failure for `key`.
+    ///
+    /// - Returns: the number of failures suppressed since the last report, or
+    ///   `nil` if this one should stay silent.
+    func claim(_ key: String, now: Date = Date()) -> Int? {
+        lock.lock()
+        defer { lock.unlock() }
+
+        if let last = lastReported[key], now.timeIntervalSince(last) < interval {
+            suppressed[key, default: 0] += 1
+            return nil
+        }
+        lastReported[key] = now
+        return suppressed.removeValue(forKey: key) ?? 0
     }
 }
