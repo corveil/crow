@@ -11,6 +11,7 @@ const epilogue = `
   enableTouchScroll(node){ return enableTouchScroll(node); },
   set term(v){ term = v; },
   set termWs(v){ termWs = v; },
+  set activeTerminal(v){ activeTerminal = v; },
 };
 `;
 const APP_JS = __dirname + '/../Sources/CrowDaemon/Resources/web/app.js';
@@ -49,7 +50,8 @@ const CELL = 20; // px per row in the fakes below
 // A fresh #terminal node with the listeners attached, plus recorders for what
 // the shim did. Returns a small driver for synthesising a one-finger drag.
 function setup({ rows = 24, screenHeight = rows * CELL, altScreen = false,
-                 mouseTrackingMode = 'none', applicationCursorKeysMode = false } = {}) {
+                 mouseTrackingMode = 'none', applicationCursorKeysMode = false,
+                 agentSurface = undefined } = {}) {
   const node = window.document.createElement('div');
   window.document.body.appendChild(node);
   Object.defineProperty(node, 'clientHeight', { value: rows * CELL, configurable: true });
@@ -72,6 +74,12 @@ function setup({ rows = 24, screenHeight = rows * CELL, altScreen = false,
     readyState: 1,
     send: (bytes) => sent.push(new TextDecoder().decode(bytes)),
   };
+  // Models the daemon-supplied `agent_surface` flag. Set deterministically every
+  // call (it's shared global state): a boolean → classified surface; undefined →
+  // unclassified, so appOwnsScroll falls to its legacy alt-buffer/mouse signals.
+  T.activeTerminal = typeof agentSurface === 'boolean'
+    ? { id: 't1', window: 1, agent_surface: agentSurface }
+    : null;
 
   // Record listener registration so we can assert passive-ness directly.
   const opts = {};
@@ -135,7 +143,9 @@ console.log('\nSub-cell drags accumulate instead of being truncated away:');
   check('...but is still preventDefault\'ed', t2.prevented() === 1);
 }
 
-console.log('\nAlternate screen (TUI) forwards to the PTY — scrollLines is a no-op there:');
+// Unclassified surface (no agent_surface metadata yet): a real alt buffer or a
+// mouse-tracking app forwards to the PTY — scrollLines is a no-op there.
+console.log('\nUnclassified alt screen / TUI forwards to the PTY:');
 {
   const t = setup({ altScreen: true, mouseTrackingMode: 'vt200' });
   t.start(500);
@@ -162,6 +172,36 @@ console.log('\nAlternate screen (TUI) forwards to the PTY — scrollLines is a n
   t.start(500);
   t.move(500 + 100 * CELL); // a fling
   check('a fling is capped at 24 lines', t.sent.join() === '\x1b[A'.repeat(24));
+}
+
+// #850: a classified AGENT surface at its plain prompt (no mouse tracking) must
+// scroll the LOCAL viewport, not forward the arrow keys Claude Code / Cursor
+// read as input-history navigation. Parity with the wheel and the desktop.
+console.log('\nAgent surface: a plain prompt scrolls locally, not into history (#850):');
+{
+  const t = setup({ agentSurface: true, mouseTrackingMode: 'none' });
+  t.start(500);
+  t.move(500 + 2 * CELL); // drag down 2 rows
+  check('no mouse tracking → local viewport scroll, not arrow keys', t.scrolled.join() === '-2');
+  check('nothing forwarded to the PTY (no history nav)', t.sent.length === 0);
+}
+{
+  // A mouse-tracking agent (a scrollable view) still forwards SGR wheel buttons
+  // so it scrolls its own transcript.
+  const t = setup({ agentSurface: true, mouseTrackingMode: 'any' });
+  t.start(500);
+  t.move(500 + 2 * CELL);
+  check('mouse tracking → SGR wheel reports', t.sent.join() === '\x1b[<64;1;1M'.repeat(2));
+  check('no local scrollLines while mouse-tracking', t.scrolled.length === 0);
+}
+{
+  // A KNOWN plain shell scrolls its local scrollback even if a prior agent tab
+  // left the shared xterm mouse-tracking (anti-stale ordering, ADR-0013).
+  const t = setup({ agentSurface: false, mouseTrackingMode: 'any' });
+  t.start(500);
+  t.move(500 + 2 * CELL);
+  check('sticky mouse mode does not hijack the shell', t.scrolled.join() === '-2');
+  check('nothing forwarded to the PTY', t.sent.length === 0);
 }
 
 console.log('\nMulti-touch is left to the browser:');
