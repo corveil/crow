@@ -4,6 +4,7 @@ import CrowCore
 import CrowCursor
 import CrowEngine
 import CrowOpenCode
+import CrowAntigravity
 import CrowPersistence
 import Foundation
 
@@ -159,6 +160,26 @@ enum LaunchScaffold {
                 CrowDaemon.log("OpenCode Jira MCP registration: \(mcpOutcome)")
             case .skippedUnparseable, .failed:
                 CrowDaemon.log("WARNING: OpenCode Jira MCP registration: \(mcpOutcome)")
+            }
+        }
+
+        if AgentRegistry.shared.agent(for: .antigravity) != nil {
+            // Per-worktree `.agents/hooks.json` (with `--session` baked in) is the
+            // authority (#860), written by the engine per session via the generic
+            // `agent.hookConfigWriter` path. Antigravity may merge global +
+            // workspace hooks and run both, so any global config a prior Crow
+            // installed under `~/.gemini/config/` would double-fire every event —
+            // strip our managed entries there (user entries survive). Doesn't need
+            // `crowPath`. No dev-root scaffold and no MCP bridge in Phase A: the
+            // launcher prompt uses `acli` for Jira (no MCP writer yet — deferred),
+            // and Antigravity reads no shared `AGENTS.md` we own.
+            //
+            // Empty `GEMINI_CONFIG_HOME=` treated as unset, same reason as
+            // `CODEX_HOME`/`CURSOR_CONFIG_DIR` above.
+            let geminiConfigHome = nonEmptyEnv("GEMINI_CONFIG_HOME")
+                ?? NSString(string: "~/.gemini/config").expandingTildeInPath
+            attempt("Antigravity global hook cleanup") {
+                AntigravityHookConfigWriter.removeManagedGlobalConfig(geminiConfigHome: geminiConfigHome)
             }
         }
     }

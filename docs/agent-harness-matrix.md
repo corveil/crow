@@ -1,10 +1,12 @@
 # Coding-agent harness capability matrix
 
-Crow can drive four coding agents ("harnesses") through one adapter protocol,
+Crow can drive several coding agents ("harnesses") through one adapter protocol,
 [`CodingAgent`](../Packages/CrowCore/Sources/CrowCore/Agent/CodingAgent.swift):
-**Claude Code**, **Cursor**, **OpenAI Codex**, and **OpenCode** (sst/opencode).
-Claude Code is the reference implementation and the default; the other three
-ship with deliberate gaps.
+**Claude Code**, **Cursor**, **OpenAI Codex**, **OpenCode** (sst/opencode), and
+the Tier-2 **Antigravity** (Google's `agy` CLI). Claude Code is the reference
+implementation and the default; the others ship with deliberate gaps, and
+Antigravity ships as **Tier-2 / experimental** (closed-source, Google-auth-
+locked — see its section below).
 
 This page is the living reference for **what each harness can do and why the
 gaps exist**. The *architecture* of the adapter is
@@ -21,21 +23,22 @@ capabilities, update this table in the same PR.
 
 ## The matrix
 
-| Dimension | Claude Code | Cursor | Codex | OpenCode |
-|---|---|---|---|---|
-| Binary token (`launchCommandToken`) | `claude` | `agent` ⚠️ collision risk | `codex` | `opencode` |
-| Registered at boot | **always** (default out of the box) | only if binary found | only if binary found | only if binary found |
-| Resume / continue | ✅ `--continue` | ✅ `--continue` (job/review restart, #829) | ✅ `resume --last` | ⚠️ `--continue` re-enters TUI, no history |
-| Remote control | ✅ native `--rc --name` | ⚠️ faked via `crow send` stdin | ❌ `supportsRemoteControl=false` (experimental `--remote` unwired) | ⚠️ faked via `crow send` stdin |
-| Auto-permission | ✅ `--permission-mode auto` | ✅ `--force --approve-mcps` (parity with Claude auto, #829) | ✅ `-a never -s workspace-write` (`.job`, interactive) | ⚠️ runtime-probed `--auto`, `.job` only |
-| Hooks transport | per-worktree `.claude/settings.local.json` | per-worktree `.cursor/hooks.json` (#829) | global `~/.codex/hooks.json` + `config.toml` `notify` bridge (per-worktree deferred — see below) | global JS plugin `~/.config/opencode/plugins/crow-hooks.js` |
-| Hook → session scope | ✅ per-session UUID | ✅ per-session UUID (#829) | ❌ `cwd` match (per-worktree UUID deferred) | ❌ `cwd` match |
-| Hook async delivery | ✅ `PostToolUse*` async | ⚠️ declared, timing unverified | ❌ sync-only (v0.141.0) | ⚠️ names verified, timing unverified |
-| MCP (e.g. Jira) | ✅ `jira` MCP server via `~/.claude.json` | ✅ `jira` bridged into `~/.cursor/mcp.json` (#829) | ✅ mirrored from `~/.claude.json` into `config.toml` | ❌ falls back to `acli` |
-| Review (`/crow-review-pr`) | ✅ slash-command | ✅ inlined skill body | ✅ inlined skill body | ✅ inlined skill body |
-| Initial-prompt injection | ✅ `$(cat …-prompt.md)` + deferred paste | ✅ `$(cat …)` job/review; handoff launcher auto-wired (#829); `.work` bare | ✅ `.job` + `.review` (`$(cat …-prompt.md)`) | ✅ run-then-`--continue` |
-| Gateway env / trust seed / telemetry | ✅ Claude special-case | ❌ | ⚠️ trust seed only (`[projects."…"]` in `config.toml`) | ❌ |
-| Rename passthrough (`/rename`) | ✅ | ✅ | ✅ | ✅ |
+| Dimension | Claude Code | Cursor | Codex | OpenCode | Antigravity (Tier-2) |
+|---|---|---|---|---|---|
+| Binary token (`launchCommandToken`) | `claude` | `agent` ⚠️ collision risk | `codex` | `opencode` | `agy` ✅ low collision |
+| Registered at boot | **always** (default out of the box) | only if binary found | only if binary found | only if binary found | only if binary found |
+| Resume / continue | ✅ `--continue` | ✅ `--continue` (job/review restart, #829) | ✅ `resume --last` | ⚠️ `--continue` re-enters TUI, no history | ⚠️ `-c` (machine-global most-recent; no per-run id, FR #7) |
+| Remote control | ✅ native `--rc --name` | ⚠️ faked via `crow send` stdin | ❌ `supportsRemoteControl=false` (experimental `--remote` unwired) | ⚠️ faked via `crow send` stdin | ⚠️ faked via `crow send` stdin (no native RC) |
+| Auto-permission | ✅ `--permission-mode auto` | ✅ `--force --approve-mcps` (parity with Claude auto, #829) | ✅ `-a never -s workspace-write` (`.job`, interactive) | ⚠️ runtime-probed `--auto`, `.job` only | ⚠️ `settings.json` modes only (no verified launch flag; never `--dangerously-skip-permissions`) |
+| Hooks transport | per-worktree `.claude/settings.local.json` | per-worktree `.cursor/hooks.json` (#829) | global `~/.codex/hooks.json` + `config.toml` `notify` bridge (per-worktree deferred — see below) | global JS plugin `~/.config/opencode/plugins/crow-hooks.js` | per-worktree `.agents/hooks.json` (#860) |
+| Hook → session scope | ✅ per-session UUID | ✅ per-session UUID (#829) | ❌ `cwd` match (per-worktree UUID deferred) | ❌ `cwd` match | ✅ per-session UUID |
+| Hook async delivery | ✅ `PostToolUse*` async | ⚠️ declared, timing unverified | ❌ sync-only (v0.141.0) | ⚠️ names verified, timing unverified | ⚠️ `PostToolUse`/`PostInvocation` declared, timing unverified |
+| MCP (e.g. Jira) | ✅ `jira` MCP server via `~/.claude.json` | ✅ `jira` bridged into `~/.cursor/mcp.json` (#829) | ✅ mirrored from `~/.claude.json` into `config.toml` | ❌ falls back to `acli` | ❌ falls back to `acli` (file bridge deferred) |
+| Review (`/crow-review-pr`) | ✅ slash-command | ✅ inlined skill body | ✅ inlined skill body | ✅ inlined skill body | ❌ unsupported in Phase A (`autoLaunchCommand(.review)` → nil, like Codex) |
+| Initial-prompt injection | ✅ `$(cat …-prompt.md)` + deferred paste | ✅ `$(cat …)` job/review; handoff launcher auto-wired (#829); `.work` bare | ✅ `.job` + `.review` (`$(cat …-prompt.md)`) | ✅ run-then-`--continue` | ✅ `-p "$(cat …-job-prompt.md)"` (`.job`); `.work` bare |
+| Gateway env / trust seed / telemetry | ✅ Claude special-case | ❌ | ⚠️ trust seed only (`[projects."…"]` in `config.toml`) | ❌ | ❌ |
+| Rename passthrough (`/rename`) | ✅ | ✅ | ✅ | ✅ | ❌ unverified on v1.1.7 (opt-out `nil`) |
+| Self-host / local models | provider-dependent | provider-dependent | provider-dependent | provider-dependent | ❌ **permanent** — closed-source, Google-Sign-In/GCP-locked (Gemini 3 Pro / Claude Sonnet 4.5 only) |
 
 Legend: ✅ full · ⚠️ partial / faked / unverified · ❌ not supported.
 
@@ -348,9 +351,51 @@ sent after a Crow rename so the agent's own session title stays in sync
 (CROW-629). The protocol default is `nil` so a *future* harness can't inherit a
 spurious `/rename` paste.
 
+## Antigravity (Tier-2 / experimental)
+
+Google Antigravity's CLI (binary **`agy`**) is the terminal surface of Google's
+agent-first dev platform (IDE + CLI + SDK, launched with Gemini 3). Crow drives
+it through the same `CodingAgent` protocol as the others — its adapter
+(`CrowAntigravity`) is structurally a **near-clone of `CrowCursor`**: Claude-
+Code-style hooks (JSON on stdin, reply on stdout), so the
+`HookConfigWriter`/`StateSignalSource` pair does real work; per-worktree
+`.agents/hooks.json` with the session UUID baked in (per-session scope, not
+`cwd`); remote control faked via `crow send`; `.review` unsupported in Phase A
+(like Codex). It ships **Tier-2** ([ADR 0015](adr/0015-harness-capability-tiers.md))
+with honest, documented gaps (#860).
+
+**Hooks are its single strongest point.** Antigravity's `Stop` hook carries
+`fullyIdle` + `terminationReason` (`model_stop` / `max_steps_exceeded` /
+`error`) — a real "done" signal that `AntigravitySignalSource` maps to `.done`.
+`PreInvocation`/`PostInvocation` are the turn-boundary hooks (Claude's
+`UserPromptSubmit`/`SessionStart` analogue); `PreToolUse`/`PostToolUse` share the
+tool vocabulary. Gaps: no `--output-format json`/`stream-json` (upstream FRs
+#119/#597), no ACP/JSON-RPC (FR #31), no dedicated "awaiting-input" event, and
+headless `-p` historically drops stdout on a **non-TTY** — which doesn't bite
+Crow because it launches `agy` inside a tmux PTY, so no shim is needed on the
+`.job` `-p` path.
+
+**Permanent gap — self-host.** The `agy` binary is **closed-source** and auth is
+**Google Sign-In / GCP**, so it runs only against Google's cloud models (Gemini
+3 Pro default, Claude Sonnet 4.5) — never an arbitrary self-hosted/local model.
+That fails Corveil's self-host axis and is a **fixed** gap, not a phase.
+
+**⚠️ Supply-chain note (the gate this adapter was built behind).** The
+`google-antigravity` GitHub org is `is_verified: false` (confirmed via
+`gh api orgs/google-antigravity`), was created 2025-11-04, and is **not** one of
+Google's canonical orgs (`google`, `google-gemini`); its `antigravity-cli` repo
+is README-only (no source, no license) — a community mirror/tracker. Crow's
+`findBinary()`/`fallbackCandidates` are therefore **never** wired to that org's
+release binaries: resolution is PATH-first (picking up whatever the **official**
+`antigravity.google` installer placed), with only conservative standard-bin
+fallbacks (`/opt/homebrew/bin/agy`, `/usr/local/bin/agy`, `~/.local/bin/agy`,
+`~/.antigravity/bin/agy`). Off-`PATH` `agy` ⇒ silently unregistered (ADR 0014),
+the safe default. **The exact official install path must be confirmed before
+Antigravity is promoted out of Tier-2.**
+
 ## Handoff between harnesses
 
-`crow handoff-agent --session <UUID> --agent <claude-code|cursor|codex|opencode>
+`crow handoff-agent --session <UUID> --agent <claude-code|cursor|codex|opencode|antigravity>
 [--note "…"]` switches a running session to a different harness. It preserves the
 Crow session identity, worktree, branch, ticket, and links; it does **not**
 transfer chat history ([ADR 0011](adr/0011-agent-handoff-preserves-session-not-chat.md)).
@@ -379,3 +424,7 @@ against current upstream CLIs.
 | Claude background-recap subagent must not elevate state | Claude Code **≥ 2.1.108** (`awaySummaryEnabled`) | `ClaudeHookSignalSource` | 2026-07-24 |
 | Cursor `PostToolUse` / `Notification` async timing unconfirmed | — (empirical) | `CursorSignalSource` | 2026-07-24 |
 | OpenCode `session.idle` "done" semantics unconfirmed for TUI | — (CROW-545) | `OpenCodeHookConfigWriter` | 2026-07-24 |
+| Antigravity flags (`agy` hooks events, `-p` non-TTY stdout, `-c`/`--conversation` resume) | `agy` **v1.1.7 (2026-07-26)** | `AntigravityAgent` / `AntigravityHookConfigWriter` | 2026-07-26 — re-probe on upgrade |
+| Antigravity structured-stdout (would promote toward first-class parity) | upstream FRs **#119/#597** (`--output-format stream-json`), **#31** (ACP) | `AntigravitySignalSource` | 2026-07-26 — hooks are the only transport until either lands |
+| Antigravity bounded auto-permission has no verified interactive launch flag | `agy` **v1.1.7**; headless `-p` ignores `permissions.allow` (issue #548) | `AntigravityLaunchArgs.autoPermissionSuffix` | 2026-07-26 |
+| Antigravity official-installer provenance (supply-chain gate) unconfirmed | `google-antigravity` org `is_verified: false`; pin `antigravity.google` | `AntigravityAgent.fallbackCandidates` | 2026-07-26 — confirm before promoting out of Tier-2 |

@@ -869,7 +869,7 @@ public final class SessionService {
         // `new-terminal` pins on managed agent windows, so orphaned agents are
         // identified positively and the anchor/infra is never touched.
         let keep = Set(appState.terminals.values.flatMap { $0 }.compactMap { $0.tmuxBinding?.windowIndex })
-        let agentNames = Set([AgentKind.claudeCode, .cursor, .codex, .openCode]
+        let agentNames = Set([AgentKind.claudeCode, .cursor, .codex, .openCode, .antigravity]
             .map { CrowAttribution.agentDisplayName(for: $0) })
         TmuxBackend.shared.reconcileOrphanWindows(keepWindowIndices: keep, agentWindowNames: agentNames)
     }
