@@ -3036,13 +3036,25 @@ public final class SessionService {
             atomically: true, encoding: .utf8
         )
 
-        // Copy settings.json into the clone's .claude/ for permissions
+        // Overwrite `.claude/settings.json` with Crow's bundled-safe permissions.
+        // For a **Grok** review this overwrite is the RCE control for that file:
+        // the strip deliberately keeps `settings.json` (Grok, like Claude, loads
+        // it via compat — hooks + `env` there run subprocesses), so a committed
+        // hostile one must be replaced, not left. **Fail closed** (#861 review
+        // round 4, Yellow): remove any committed file FIRST, then write, so a
+        // write failure can't silently leave the attacker's file in place — and
+        // make a real write failure audible, matching every other strip layer.
         let cloneSettingsDir = (clonePath as NSString).appendingPathComponent(".claude")
+        let settingsPath = (cloneSettingsDir as NSString).appendingPathComponent("settings.json")
+        removeReviewCloneConfig(settingsPath, label: ".claude/settings.json", clonePath: clonePath)
         let settingsContent = Scaffolder.bundledSettings()
-        try? settingsContent.write(
-            toFile: (cloneSettingsDir as NSString).appendingPathComponent("settings.json"),
-            atomically: true, encoding: .utf8
-        )
+        do {
+            try fm.createDirectory(atPath: cloneSettingsDir, withIntermediateDirectories: true)
+            try settingsContent.write(toFile: settingsPath, atomically: true, encoding: .utf8)
+        } catch {
+            NSLog("[SessionService] Failed to write bundled .claude/settings.json to review clone %@: %@ (any committed file was already removed — fail-closed)",
+                  clonePath, error.localizedDescription)
+        }
 
         return ReviewClonePrep(
             prTitle: prTitle,

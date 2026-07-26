@@ -26,13 +26,27 @@ struct GrokHookConfigWriterTests {
             let entry = try #require(inner.first)
             #expect(entry["type"] as? String == "command")
             let command = try #require(entry["command"] as? String)
-            #expect(command == "/usr/local/bin/crow hook-event --session \(sid.uuidString) --event \(event)")
+            // crowPath is shell-quoted (Grok runs the hook via `sh -c`), so a
+            // path with a space can't word-split.
+            #expect(command == "'/usr/local/bin/crow' hook-event --session \(sid.uuidString) --event \(event)")
             #expect(entry["timeout"] as? Int == 5)
             // No matcher key (match-all).
             #expect(groups.first?["matcher"] == nil)
             // Sync-only for now (Grok async delivery unverified).
             #expect(entry["async"] == nil)
         }
+    }
+
+    @Test func shellQuotesSpacedCrowPath() throws {
+        // A `crow` binary at a path with a space must stay a single argument
+        // under Grok's `sh -c` execution.
+        let doc = GrokHookConfigWriter.generateDocument(
+            sessionID: UUID(), crowPath: "/Users/me/My Apps/crow")
+        let hooks = try #require(doc["hooks"] as? [String: Any])
+        let stop = try #require(hooks["Stop"] as? [[String: Any]])
+        let entry = try #require(((stop.first?["hooks"]) as? [[String: Any]])?.first)
+        let command = try #require(entry["command"] as? String)
+        #expect(command.hasPrefix("'/Users/me/My Apps/crow' hook-event"))
     }
 
     @Test func registersTheVerifiedGrokEventSet() {

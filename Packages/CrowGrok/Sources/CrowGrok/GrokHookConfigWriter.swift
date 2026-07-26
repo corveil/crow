@@ -69,7 +69,7 @@ public struct GrokHookConfigWriter: HookConfigWriter {
         var hooks: [String: Any] = [:]
 
         for event in allEvents {
-            let command = "\(crowPath) hook-event --session \(sid) --event \(event)"
+            let command = "\(shellQuote(crowPath)) hook-event --session \(sid) --event \(event)"
             var hookEntry: [String: Any] = [
                 "type": "command",
                 "command": command,
@@ -136,5 +136,16 @@ public struct GrokHookConfigWriter: HookConfigWriter {
         let fm = FileManager.default
         guard let contents = try? fm.contentsOfDirectory(atPath: dir), contents.isEmpty else { return }
         try? fm.removeItem(atPath: dir)
+    }
+
+    /// POSIX single-quote the `crow` binary path in the hook command. Grok runs
+    /// a command hook through `sh -c` whenever it contains a space (verified:
+    /// `xai-grok-hooks/src/runner/command.rs` — `is_shell_command` is true for
+    /// any command with a space, and ours always has one), so a `crow` path with
+    /// a space would word-split unquoted. Quoting hardens against that; the
+    /// session UUID and event names are space-free and need none. (#861 review
+    /// round 4, Green — Cursor quotes here too.)
+    private static func shellQuote(_ s: String) -> String {
+        "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 }
