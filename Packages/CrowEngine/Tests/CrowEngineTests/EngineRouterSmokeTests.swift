@@ -1,6 +1,8 @@
 import Foundation
 import Testing
 import CrowCore
+import CrowClaude
+import CrowCursor
 import CrowPersistence
 import CrowIPC
 @testable import CrowEngine
@@ -190,5 +192,54 @@ struct EngineRouterSmokeTests {
         let mgr = await handle(["session_id": .string(manager.id.uuidString), "goal": .string("x")])
         #expect(mgr.error != nil)
         #expect(appState.sessions.first(where: { $0.id == manager.id })?.orgGoal == nil)
+    }
+
+    /// #834: the app's `new-session` surface must run a requested `agent_kind`
+    /// through the shared registry gate — an unregistered kind falls back to the
+    /// configured default (not persisted verbatim, which would leave the session
+    /// unlaunchable), while a registered non-default kind passes through.
+    @Test("new-session gates agent_kind against the registry")
+    func newSessionGatesAgentKindAgainstRegistry() async throws {
+        // Two agents registered; the app default is Claude Code (AppState default).
+        AgentRegistry.shared.register(ClaudeCodeAgent())
+        AgentRegistry.shared.register(CursorAgent())
+        #expect(AgentRegistry.shared.registeredKind(.cursor) == .cursor)
+
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("crow-engine-smoke-\(UUID().uuidString)")
+        let appState = AppState()
+        appState.defaultAgentKind = .claudeCode
+        let store = JSONStore(directory: tmp)
+        let service = SessionService(store: store, appState: appState, hostBridge: NoopHostBridge())
+
+        let ctx = EngineContext(
+            appState: appState,
+            store: store,
+            sessionService: service,
+            issueTracker: nil,
+            telemetryPort: nil,
+            devRoot: tmp.path,
+            hostBridge: NoopHostBridge(),
+            loadConfig: { nil },
+            applyConfig: { _ in nil }
+        )
+        let router = makeEngineRouter(ctx)
+
+        func createSession(agentKind: String) async -> JSONRPCResponse {
+            await router.handle(request: JSONRPCRequest(id: 1, method: "new-session", params: [
+                "name": .string("s"), "agent_kind": .string(agentKind),
+            ]))
+        }
+
+        // Unregistered kind → falls back to the configured default, not persisted.
+        let unknown = await createSession(agentKind: "crow-834-unregistered-work")
+        #expect(unknown.error == nil)
+        #expect(unknown.result?["agent_kind"]?.stringValue == AgentKind.claudeCode.rawValue)
+
+        // Registered non-default kind → honored (proves the gate isn't just
+        // always returning the default).
+        let cursor = await createSession(agentKind: AgentKind.cursor.rawValue)
+        #expect(cursor.error == nil)
+        #expect(cursor.result?["agent_kind"]?.stringValue == AgentKind.cursor.rawValue)
     }
 }
