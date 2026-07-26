@@ -107,4 +107,32 @@ struct SessionServiceReviewCloneStripTests {
                 targetKind: k, sessionKind: .review))
         }
     }
+
+    // MARK: - Antigravity review-handoff refusal (#862 review — RCE vector)
+
+    /// A `.review` handoff to Antigravity is refused: review is unsupported on
+    /// this Tier-2 harness and it has no `.agents/` strip / trust gate, so a
+    /// handoff would launch `agy` in an attacker-controlled clone and run
+    /// committed `.agents/hooks.json` unsandboxed.
+    @Test func refuseGateFiresForAntigravityReview() {
+        #expect(SessionService.shouldRefuseReviewHandoff(
+            targetKind: .antigravity, sessionKind: .review))
+    }
+
+    /// A `.work`/`.job` handoff to Antigravity is a normal working clone — allowed.
+    @Test func refuseGateAllowsNonReviewAntigravity() {
+        #expect(!SessionService.shouldRefuseReviewHandoff(
+            targetKind: .antigravity, sessionKind: .work))
+        #expect(!SessionService.shouldRefuseReviewHandoff(
+            targetKind: .antigravity, sessionKind: .job))
+    }
+
+    /// A `.review` handoff to a review-capable agent is NOT refused — they have
+    /// their own strip + trust protections.
+    @Test func refuseGateAllowsReviewForOtherAgents() {
+        for k: AgentKind in [.claudeCode, .cursor, .codex, .openCode] {
+            #expect(!SessionService.shouldRefuseReviewHandoff(
+                targetKind: k, sessionKind: .review))
+        }
+    }
 }
