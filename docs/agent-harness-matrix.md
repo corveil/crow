@@ -260,13 +260,15 @@ All harnesses report lifecycle events by shelling out to `crow hook-event`, but
   build — `GrokTrustSeeder` seeds it for `.work`/`.job` worktrees, never
   `.review` clones. The review-clone strip must cover not just `.grok/` but the
   compat sources Grok also loads by default —
-  `.claude/settings.json`/`settings.local.json` and
-  `.cursor/hooks.json`/`.cursor/mcp.json`. For a `.review` clone those are
+  `.claude/settings.json`/`settings.local.json`, `.cursor/hooks.json`, and the
+  project MCP sources `.cursor/mcp.json` + `.grok/config.toml` + **repo-root
+  `.mcp.json`** (Grok scans `.mcp.json` from repo root down to cwd). For a
+  `.review` clone those are
   **attacker-controlled RCE**, not just double-fire noise, so
   `stripGrokConfigFromReviewClone` neutralizes the *full* discovered surface on
-  both the creation-time and handoff-to-Grok paths: it removes `.grok/` and
-  `.cursor/`, removes `.claude/settings.local.json`, and keeps the
-  Crow-overwritten `.claude/settings.json` + review skill (#861). On a local/dev
+  both the creation-time and handoff-to-Grok paths: it removes `.grok/`,
+  `.cursor/`, `.claude/settings.local.json`, and repo-root `.mcp.json`, and keeps
+  the Crow-overwritten `.claude/settings.json` + review skill (#861). On a local/dev
   Grok build folder-trust is inert (everything trusted), and on release trust
   cascades from a trusted parent, so the strip — not trust-skipping — is the
   durable guard. **Deferred / re-check:** the *global* `~/.claude`/`~/.cursor`

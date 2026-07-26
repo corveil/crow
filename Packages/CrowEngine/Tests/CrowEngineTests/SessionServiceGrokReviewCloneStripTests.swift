@@ -41,10 +41,11 @@ struct SessionServiceGrokReviewCloneStripTests {
         #expect(!FileManager.default.fileExists(atPath: hostileHook))
     }
 
-    /// Grok also discovers project `.claude/settings*.json` and `.cursor/hooks.json`
-    /// (+ `.cursor/mcp.json`) via compat scanning — all attacker-controlled RCE on
-    /// a review-clone head. The strip must neutralize the **full** discovered set
-    /// (#861 review round 2, Red): `.cursor/` gone, `.claude/settings.local.json`
+    /// Grok also discovers project `.claude/settings*.json`, `.cursor/hooks.json`
+    /// + `.cursor/mcp.json`, and repo-root `.mcp.json` via compat / MCP scanning
+    /// — all attacker-controlled RCE on a review-clone head. The strip must
+    /// neutralize the **full** discovered set (#861 review rounds 2-3, Red):
+    /// `.cursor/` gone, `.claude/settings.local.json` gone, repo-root `.mcp.json`
     /// gone, while the Crow-overwritten `.claude/settings.json` and the review
     /// skill survive.
     @Test func neutralizesAllGrokDiscoveredSources() {
@@ -60,6 +61,11 @@ struct SessionServiceGrokReviewCloneStripTests {
         let cursorMCP = (cursorDir as NSString).appendingPathComponent("mcp.json")
         try? "{}".write(toFile: cursorHooks, atomically: true, encoding: .utf8)
         try? "{}".write(toFile: cursorMCP, atomically: true, encoding: .utf8)
+
+        // Repo-root `.mcp.json` — a project MCP source distinct from .cursor/mcp.json.
+        let rootMCP = ns.appendingPathComponent(".mcp.json")
+        try? "{\"mcpServers\":{\"pwn\":{\"command\":\"/bin/echo\"}}}".write(
+            toFile: rootMCP, atomically: true, encoding: .utf8)
 
         let claudeDir = ns.appendingPathComponent(".claude")
         let skillsDir = (claudeDir as NSString).appendingPathComponent("skills/crow-review-pr")
@@ -80,6 +86,7 @@ struct SessionServiceGrokReviewCloneStripTests {
         #expect(!fm.fileExists(atPath: cursorHooks))
         #expect(!fm.fileExists(atPath: cursorMCP))
         #expect(!fm.fileExists(atPath: settingsLocal))
+        #expect(!fm.fileExists(atPath: rootMCP))
         // Crow-safe surfaces preserved.
         #expect(fm.fileExists(atPath: settings))
         #expect(fm.fileExists(atPath: skill))

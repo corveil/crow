@@ -1301,13 +1301,14 @@ public final class SessionService {
         // layer Grok discovers FIRST (#861 review). `prepareReviewClone` strips
         // them only when Grok is the *creation-time* review agent; a handoff
         // flips a review created under Claude/Codex/Cursor/OpenCode onto a clone
-        // that was never stripped for Grok. Grok merges project hooks from
-        // `.grok/`, `.claude/settings*.json`, and `.cursor/` (compat on by
-        // default), so `stripGrokConfigFromReviewClone` removes the full set
-        // before launch — without it the hostile PR head's committed hooks stay
-        // on disk (and fire on a local/dev Grok build where folder-trust is
-        // inert, or a release build whose reviews workspace sits under a trusted
-        // parent, since trust cascades). Mirrors the Cursor handoff arm above.
+        // that was never stripped for Grok. Grok merges project config from
+        // `.grok/`, `.claude/settings*.json`, `.cursor/`, and repo-root
+        // `.mcp.json` (compat on by default), so `stripGrokConfigFromReviewClone`
+        // removes the full set before launch — without it the hostile PR head's
+        // committed hooks/MCP stay on disk (and fire on a local/dev Grok build
+        // where folder-trust is inert, or a release build whose reviews workspace
+        // sits under a trusted parent, since trust cascades). Mirrors the Cursor
+        // handoff arm above.
         if Self.shouldStripGrokReviewCloneOnHandoff(
             targetKind: target.kind, sessionKind: session.kind) {
             Self.stripGrokConfigFromReviewClone(clonePath: worktree.worktreePath)
@@ -2769,16 +2770,20 @@ public final class SessionService {
     /// discovers and merges** — not just `.grok/`. With `compat.*.hooks = true`
     /// (on by default), Grok loads project hooks from `.grok/hooks/*.json`,
     /// `.claude/settings.json` **and** `.claude/settings.local.json`, and
-    /// `.cursor/hooks.json`, plus `.cursor/mcp.json` in the same folder-trust
-    /// domain (verified against `xai-org/grok-build` `10-hooks.md` /
-    /// `07-mcp-servers.md`). On an attacker-controlled review-clone head every
-    /// one of those is arbitrary-command RCE once the folder is trusted — and on
-    /// a local/dev Grok build folder-trust is inert (everything trusted), or on a
-    /// release build trust cascades from a trusted parent — so the strip is the
-    /// durable defense (#861 review round 2, Red).
+    /// `.cursor/hooks.json`; and it loads project MCP servers from
+    /// `.cursor/mcp.json`, `.grok/config.toml [mcp_servers]`, **and repo-root
+    /// `.mcp.json`** (verified against `xai-org/grok-build`: `10-hooks.md`,
+    /// `07-mcp-servers.md`, and `xai-grok-workspace/src/{folder_trust,servers}.rs`,
+    /// where `.mcp.json` is scanned from repo root down to cwd). On an
+    /// attacker-controlled review-clone head every one is arbitrary-command RCE
+    /// once the folder is trusted — and on a local/dev Grok build folder-trust is
+    /// inert (everything trusted), or on a release build trust cascades from a
+    /// trusted parent — so the strip is the durable defense (#861 review rounds
+    /// 2-3, Red).
     ///
     /// So this neutralizes the whole discovered surface:
-    /// - `.grok/` — Grok's native project hooks (removed).
+    /// - `.grok/` — Grok's native project hooks, plus `.grok/config.toml`
+    ///   `[mcp_servers]` and `.grok/lsp.json` (all removed by the dir wipe).
     /// - `.cursor/` — `hooks.json` + `mcp.json` Grok loads via Cursor compat.
     ///   Reuses `stripCursorConfigFromReviewClone` so both agents share one
     ///   primitive.
@@ -2787,6 +2792,8 @@ public final class SessionService {
     ///   bundled-safe permissions), never neutralized elsewhere. Only this file
     ///   is removed, so the Crow-written `settings.json` + `.claude/skills/`
     ///   review skill survive.
+    /// - `.mcp.json` (repo root) — a project MCP source independent of
+    ///   `.cursor/mcp.json`; a `{mcpServers:{…command}}` there auto-spawns.
     ///
     /// Idempotent; no-ops for any layer the clone doesn't ship. Shared by
     /// `prepareReviewClone` (creation-time review agent) and the Grok handoff arm
@@ -2802,6 +2809,12 @@ public final class SessionService {
         removeReviewCloneConfig(
             base.appendingPathComponent(".claude/settings.local.json"),
             label: ".claude/settings.local.json", clonePath: clonePath)
+        // Repo-root `.mcp.json` — a project MCP source Grok loads independently
+        // of `.cursor/mcp.json`. For a review clone cwd == clone root, so the
+        // repo-root file is the only one in Grok's root→cwd scan chain.
+        removeReviewCloneConfig(
+            base.appendingPathComponent(".mcp.json"),
+            label: ".mcp.json", clonePath: clonePath)
     }
 
     /// Remove one review-clone config path, quiet when it isn't present (the
@@ -2913,13 +2926,14 @@ public final class SessionService {
         if reviewAgentKind == .cursor {
             _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "checkout", "--", ".cursor"])
         }
-        // Same restore-before-pull for Grok reviews (#859, extended #861 round 2):
-        // Grok's strip below neutralizes *every* project source Grok discovers
-        // (`.grok/`, `.cursor/`, `.claude/settings.local.json`), each applied as
-        // an unstaged deletion of tracked files — so restore all of them before
-        // the pull, or `git pull` refuses when the new head touches any.
+        // Same restore-before-pull for Grok reviews (#859, extended #861 rounds
+        // 2-3): Grok's strip below neutralizes *every* project source Grok
+        // discovers (`.grok/`, `.cursor/`, `.claude/settings.local.json`,
+        // repo-root `.mcp.json`), each applied as an unstaged deletion of tracked
+        // files — so restore all of them before the pull, or `git pull` refuses
+        // when the new head touches any.
         if reviewAgentKind == .grok {
-            for path in [".grok", ".cursor", ".claude/settings.local.json"] {
+            for path in [".grok", ".cursor", ".claude/settings.local.json", ".mcp.json"] {
                 _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "checkout", "--", path])
             }
         }
@@ -2961,17 +2975,19 @@ public final class SessionService {
         if reviewAgentKind == .antigravity {
             try? fm.removeItem(atPath: (clonePath as NSString).appendingPathComponent(".agents"))
         }
-        // Defense-in-depth for Grok reviews (#859, extended #861 round 2): Grok
-        // discovers & merges project hooks from `.grok/hooks/*.json`,
-        // `.claude/settings.json` + `settings.local.json`, and `.cursor/hooks.json`
-        // (+ `.cursor/mcp.json` in the same trust domain) — `compat.*.hooks =
-        // true` by default. On an attacker-controlled review head each is
+        // Defense-in-depth for Grok reviews (#859, extended #861 rounds 2-3):
+        // Grok discovers & merges project config from `.grok/hooks/*.json`,
+        // `.claude/settings.json` + `settings.local.json`, `.cursor/hooks.json`,
+        // and project MCP servers from `.cursor/mcp.json` +
+        // `.grok/config.toml` + repo-root `.mcp.json` — `compat.*.hooks = true`
+        // by default. On an attacker-controlled review head each is
         // arbitrary-command RCE once the folder is trusted, and the strip is the
         // durable guard (dev builds trust everything; a trusted parent cascades
         // on release). `stripGrokConfigFromReviewClone` neutralizes the full set
-        // (`.grok/` + `.cursor/` + `.claude/settings.local.json`, keeping the
-        // Crow-overwritten `settings.json` + skill). Gated to Grok reviews;
-        // shared with the Grok handoff arm so the two call sites can't drift.
+        // (`.grok/` + `.cursor/` + `.claude/settings.local.json` + `.mcp.json`,
+        // keeping the Crow-overwritten `settings.json` + skill). Gated to Grok
+        // reviews; shared with the Grok handoff arm so the two call sites can't
+        // drift.
         if reviewAgentKind == .grok {
             Self.stripGrokConfigFromReviewClone(clonePath: clonePath)
         }
