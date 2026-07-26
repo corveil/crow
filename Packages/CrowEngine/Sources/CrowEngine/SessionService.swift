@@ -1681,10 +1681,18 @@ public final class SessionService {
     }
 
     /// Resolve the agent for a new Manager session: an explicit per-session
-    /// choice wins, otherwise the configured default
-    /// (`agentsByKind["manager"] ?? defaultAgentKind`). Never mutates config.
+    /// choice wins **when an agent is registered for it**, otherwise the
+    /// configured default (`agentsByKind["manager"] ?? defaultAgentKind`).
+    /// Never mutates config.
+    ///
+    /// The single choke point both `create-manager` surfaces funnel through —
+    /// the web RPC (forwarded to `onCreateManager` → `createManagerSession`) and
+    /// the daemon RPC (`createManagerSession` directly). Routing the registry
+    /// gate here (CROW-593; #834, via `AgentRegistry.registeredKind`) keeps the
+    /// two symmetric — neither can persist a Manager with an unregistered kind
+    /// that `managerCommand` would then silently launch as the default.
     func resolvedManagerAgentKind(_ explicit: AgentKind?) -> AgentKind {
-        explicit ?? appState.agentKind(for: .manager)
+        AgentRegistry.shared.registeredKind(explicit) ?? appState.agentKind(for: .manager)
     }
 
     // MARK: - Delete Session

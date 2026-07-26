@@ -27,6 +27,22 @@ public final class AgentRegistry: @unchecked Sendable {
         return agents[kind]
     }
 
+    /// The single registry gate for a caller-supplied `AgentKind` (CROW-593; #834).
+    ///
+    /// Returns `requested` only when an agent is actually registered for it;
+    /// otherwise `nil`, so the caller falls back to its own configured default.
+    /// Every session-creation surface (new-session and web/daemon
+    /// `create-manager`) funnels a requested kind through here so none can
+    /// persist a session with an unregistered/unknown kind — a persisted-but-
+    /// unlaunchable session (`launchAgent` no-ops on the registry miss) or one
+    /// that silently launches the default instead of the requested harness.
+    /// Composed with each surface's `?? <configured default>` fallback rather
+    /// than falling back itself, so the default choice stays with the caller.
+    public func registeredKind(_ requested: AgentKind?) -> AgentKind? {
+        guard let requested, agent(for: requested) != nil else { return nil }
+        return requested
+    }
+
     /// The agent to use when the caller doesn't specify one. Falls back to
     /// the first-registered agent.
     public var defaultAgent: (any CodingAgent)? {

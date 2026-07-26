@@ -163,7 +163,11 @@ func makeCommandRouter(
             let requestedAgentKind = params["agent_kind"]?.stringValue
                 .flatMap { $0.isEmpty ? nil : AgentKind(rawValue: $0) }
             return await MainActor.run {
-                let agentKind = requestedAgentKind ?? appState.agentKind(for: .work)
+                // Registry gate (CROW-593; #834), matching the app's new-session
+                // surface: honor the requested kind only if registered, else the
+                // configured default — no unregistered kind persists here either.
+                let agentKind = AgentRegistry.shared.registeredKind(requestedAgentKind)
+                    ?? appState.agentKind(for: .work)
                 let session = Session(name: name, kind: .work, agentKind: agentKind)
                 appState.sessions.append(session)
                 store.mutate { $0.sessions.append(session) }

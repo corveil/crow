@@ -100,9 +100,12 @@ struct ManagerMigrationTests {
         #expect(!cursorCmd.contains("claude"))
     }
 
-    /// #582: the "+" agent picker passes a one-shot `AgentKind` into
+    /// #582 / #834: the "+" agent picker passes a one-shot `AgentKind` into
     /// `createManagerSession`. `resolvedManagerAgentKind` must prefer that
-    /// explicit choice over the configured Manager default.
+    /// explicit choice over the configured Manager default — but only when an
+    /// agent is registered for it (the CROW-593 gate, now shared across every
+    /// creation surface). This is the single choke point both `create-manager`
+    /// RPC surfaces (web + daemon) funnel through.
     @MainActor
     @Test
     func resolvedManagerAgentKindPrefersExplicitOverride() {
@@ -113,11 +116,24 @@ struct ManagerMigrationTests {
         appState.agentsByKind = ["manager": .claudeCode]
         let service = SessionService(store: JSONStore(directory: tmp), appState: appState)
 
-        // Explicit pick wins over both agentsByKind["manager"] and the default.
+        // Register Cursor so the explicit pick is honored (idempotent under the
+        // process-wide singleton). registeredKind passthrough proven directly.
+        AgentRegistry.shared.register(CursorAgent())
+        #expect(AgentRegistry.shared.registeredKind(.cursor) == .cursor)
+
+        // Explicit *registered* pick wins over both agentsByKind["manager"] and
+        // the default.
         #expect(service.resolvedManagerAgentKind(.cursor) == .cursor)
         // The configured default is left untouched (no config mutation).
         #expect(appState.agentsByKind["manager"] == .claudeCode)
         #expect(appState.defaultAgentKind == .claudeCode)
+
+        // #834: an explicit but *unregistered* kind is rejected by the gate and
+        // falls back to the configured Manager default — a Manager can't be
+        // persisted with a kind that would silently launch as the default.
+        let unregistered = AgentKind(rawValue: "crow-834-unregistered-manager")
+        #expect(AgentRegistry.shared.agent(for: unregistered) == nil)
+        #expect(service.resolvedManagerAgentKind(unregistered) == .claudeCode)
     }
 
     /// #582: with no explicit pick (the RPC / single-agent path passes `nil`),
