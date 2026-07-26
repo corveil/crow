@@ -3387,34 +3387,46 @@ function forceSelectModifierLabel() {
   return /Mac|iPhone|iPad|iPod/.test(ua) ? '⌥' : 'Shift';
 }
 
-// True when the app on the other end should receive the scroll instead of us
-// scrolling xterm's local buffer. Shared by the wheel and touch shims so both
-// agree on who owns the surface.
+// True when the wheel/touch scroll should be FORWARDED to the app on the other
+// end instead of scrolling xterm's local buffer. Shared by the wheel and touch
+// shims so both agree on who owns the surface.
 //
-// The daemon-supplied `agent_surface` is AUTHORITATIVE whenever we have it: an
-// agent surface forwards, and a known plain shell scrolls its unified 50k
-// scrollback — full stop. The alt-buffer / mouse-tracking checks are consulted
-// ONLY when we have no surface metadata at all (before the first
-// `list-terminals` lands).
+// Forwarding is right in exactly one case: the app is actively MOUSE-TRACKING,
+// so the tick becomes an SGR wheel button (`\x1b[<64/65`) it scrolls its own
+// transcript with (an agent TUI showing a scrollable view, vim, htop, …).
+// Everything else — a plain shell AND an agent TUI idling at its prompt —
+// scrolls the local xterm viewport. Forwarding a NON-mouse wheel would fall to
+// sendScrollToPTY's arrow-key branch, which Claude Code / Cursor read as
+// input-HISTORY navigation rather than scrollback — the #850 bug. Scrolling the
+// local viewport instead matches the desktop terminal and web/terminal.html,
+// neither of which forwards a non-mouse wheel.
 //
-// That gating is load-bearing, not defensive coding. There is ONE shared xterm
-// instance across every tab, and agent surfaces now let DECSET 1000–1016
-// through, so `term.modes.mouseTrackingMode` can outlive the tab that set it:
-// `attachWindow` only clears it via `reloadTerminal()`/`term.reset()` when the
-// socket is already OPEN, and skips that during a reconnect. Ungated, a shell
-// tab visited right after an agent tab would inherit its modes and forward the
-// wheel to the PTY as arrow keys — regressing the exact shell path this model
-// exists to preserve. Nothing is lost by gating: under the smcup strip plus the
-// conditional swallow, a real shell surface can never legitimately be in the
-// alternate buffer or be mouse-tracking.
+// `agent_surface` (daemon-supplied) is AUTHORITATIVE whenever we have it and is
+// consulted BEFORE the mouse-mode check — that ordering is load-bearing, not
+// defensive coding. There is ONE shared xterm instance across every tab, and
+// agent surfaces now let DECSET 1000–1016 through, so
+// `term.modes.mouseTrackingMode` can outlive the tab that set it: `attachWindow`
+// only clears it via `reloadTerminal()`/`term.reset()` when the socket is
+// already OPEN, and skips that during a reconnect. If we tested the mode first,
+// a shell tab visited right after an agent tab would inherit that stale mode and
+// forward the wheel to the PTY — regressing the exact shell path this model
+// exists to preserve. So a KNOWN surface reads its own kind and only an agent
+// that is genuinely mouse-tracking forwards. The alt-buffer / mouse-tracking
+// fallbacks apply ONLY before the first `list-terminals` lands (no metadata).
 function appOwnsScroll() {
-  if (activeTerminal && typeof activeTerminal.agent_surface === 'boolean') {
-    return activeTerminal.agent_surface;
-  }
-  const buf = term && term.buffer && term.buffer.active;
-  if (buf && buf.type === 'alternate') return true;
   const modes = (term && term.modes) || {};
-  return !!(modes.mouseTrackingMode && modes.mouseTrackingMode !== 'none');
+  const mouseTracking = !!(modes.mouseTrackingMode && modes.mouseTrackingMode !== 'none');
+  if (activeTerminal && typeof activeTerminal.agent_surface === 'boolean') {
+    // Agent TUI → forward only while it's mouse-tracking (SGR wheel scrolls the
+    // agent's transcript); at a plain prompt fall through to a LOCAL viewport
+    // scroll instead of the arrow keys it reads as history nav (#850). A plain
+    // shell always scrolls locally, even if a prior agent tab left the shared
+    // xterm mouse-tracking.
+    return activeTerminal.agent_surface && mouseTracking;
+  }
+  if (mouseTracking) return true;
+  const buf = term && term.buffer && term.buffer.active;
+  return !!(buf && buf.type === 'alternate');
 }
 
 function ensureTerminal() {
@@ -3541,8 +3553,11 @@ function sendScrollToPTY(lines) {
   const up = lines < 0;
   const modes = (term && term.modes) || {};
   // Mouse-reporting apps (and tmux, whose `mouse on` relays to them) want SGR
-  // wheel buttons 64/65; everything else takes the cursor-key fallback xterm
-  // itself uses for an alt-buffer wheel.
+  // wheel buttons 64/65. The cursor-key branch is now only the UNCLASSIFIED
+  // alt-buffer fallback (a genuine fullscreen app like less/vim before
+  // list-terminals lands): appOwnsScroll no longer forwards a non-mouse agent
+  // wheel here, so this branch never turns an agent's wheel into history nav
+  // (#850).
   let seq;
   if (modes.mouseTrackingMode && modes.mouseTrackingMode !== 'none') {
     seq = up ? '\x1b[<64;1;1M' : '\x1b[<65;1;1M';
@@ -3601,26 +3616,30 @@ function wheelNotches(e) {
   return Math.abs(px) >= WHEEL_NOTCH_MIN_PX ? Math.sign(px) : px / WHEEL_NOTCH_MIN_PX;
 }
 
-// Route the wheel by surface (ADR-0013) — the mirror of what enableTouchScroll
-// does for touch:
+// Route the wheel by surface (ADR-0013, refined by #850) — the mirror of what
+// enableTouchScroll does for touch:
 //
-//   * PLAIN SHELL → scroll xterm's local 50k scrollback. Forwarding to tmux
-//     instead would drop into copy-mode, which is janky in a browser.
-//   * AGENT SURFACE → forward the tick to the app so it scrolls its own
-//     transcript, like a naked terminal.
+//   * PLAIN SHELL, or an AGENT SURFACE idling at its prompt → scroll xterm's
+//     local viewport. On a shell that's the 50k scrollback; on an agent (whose
+//     transcript lives in tmux's scrollback-less alt buffer) it's a harmless
+//     no-op — but critically NOT the arrow-key history nav forwarding used to
+//     produce (#850). Matches the desktop terminal and web/terminal.html.
+//   * MOUSE-TRACKING app (an agent showing a scrollable view, vim, htop) →
+//     forward the tick so it becomes an SGR wheel button the app scrolls its
+//     own transcript with, like a naked terminal.
 //
 // This handler always CONSUMES the event (capture + preventDefault +
 // stopPropagation) so xterm's own alternate-scroll fallback never runs. That
 // fallback emits ARROW KEYS, which Claude Code reads as input-history
-// navigation — the #776 bug. Forwarding goes through sendScrollToPTY, which
-// picks SGR wheel buttons when the app is mouse-tracking and cursor keys
-// otherwise, and caps a fling so it can't flood the PTY.
+// navigation — the #776/#850 bug. `appOwnsScroll` (mouse-tracking, per above)
+// decides forward-vs-local; forwarding goes through sendScrollToPTY, which caps
+// a fling so it can't flood the PTY.
 //
 // Magnitude is device-normalized to whole notches (wheelNotches) with a
 // sub-notch accumulator (mirroring enableTouchScroll's `accum`), then scaled by
-// the user's per-path sensitivity (CROW-835): agent surfaces forward
+// the user's per-path sensitivity (CROW-835): a forwarded wheel sends
 // `agentWheelNotches` reports per notch (default 1 — one detent in, one out),
-// plain shells scroll `wheelScrollLines` local lines per notch (default 3 — the
+// a local scroll moves `wheelScrollLines` lines per notch (default 3 — the
 // historical feel). The `if (!term)` guard is the only early exit; a partial
 // notch simply consumes the event and waits for more.
 function enableWheelScroll(node) {
