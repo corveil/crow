@@ -16,14 +16,18 @@ import CrowCore
 /// (e.g. mapping `error` to a distinct state) is a version-pinned follow-up.
 ///
 /// **Events actually driven by the writer:** `PreInvocation` (turn start →
-/// working), `PostInvocation` (observational), `PostToolUse` (tool activity),
+/// working), `PostInvocation` (observational), `PostToolUse` (working-heartbeat),
 /// `Stop` (done). `PreToolUse` is **not registered** by
 /// `AntigravityHookConfigWriter` (its strict stdout decision gate is unsafe for
-/// an observational hook — see that type), so tool activity is detected on
-/// completion via `PostToolUse` rather than on start. The `PreToolUse` case
-/// below is kept for cross-agent parity / future-proofing, not because the
-/// current writer emits it — same posture as the defensive `PermissionRequest`
-/// case (Antigravity has no awaiting-input hook on v1.1.7).
+/// an observational hook — see that type). One consequence: **named tool
+/// activity is a Tier-2 gap.** Antigravity's `PostToolUse` stdin carries no tool
+/// name (only `stepIdx`/`error`); `toolCall.name` lives on `PreToolUse` alone,
+/// which we don't register — so `PostToolUse` can only signal "a tool ran, still
+/// working", not *which* tool. The `PreToolUse` case below is kept for
+/// cross-agent parity / future-proofing (if a later version is registered with a
+/// hard-coded `{"decision":"allow"}` verdict, tool naming lights up with no code
+/// change) — same posture as the defensive `PermissionRequest` case (Antigravity
+/// has no awaiting-input hook on v1.1.7).
 public struct AntigravitySignalSource: StateSignalSource {
     public init() {}
 
@@ -69,14 +73,16 @@ public struct AntigravitySignalSource: StateSignalSource {
             transition.newActivityState = .working
 
         case "PostToolUse":
-            // Where tool activity is actually detected (since PreToolUse is off).
-            // Records the tool that just ran; state stays whatever PreInvocation
-            // set (working) until Stop — mirrors Cursor's observational
-            // PostToolUse (no activity-state change here).
-            let toolName = event.toolName ?? "unknown"
-            transition.toolActivity = .set(ToolActivity(
-                toolName: toolName, isActive: false
-            ))
+            // A tool finished. Antigravity's PostToolUse stdin carries NO tool
+            // name (only `stepIdx`/`error`) — and PreToolUse (which does carry
+            // `toolCall.name`) is deliberately unregistered — so we can't name
+            // the tool here. Rather than surface a bogus "unknown", treat this as
+            // a working-heartbeat: a tool completed mid-turn, the agent is still
+            // working until `Stop`. Guarded so a stray PostToolUse after Stop
+            // doesn't re-elevate. Named tool activity is a documented Tier-2 gap.
+            if currentLastTopLevelStopAt == nil {
+                transition.newActivityState = .working
+            }
 
         case "Stop":
             transition.newActivityState = .done

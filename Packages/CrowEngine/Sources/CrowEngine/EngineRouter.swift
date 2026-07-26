@@ -48,10 +48,15 @@ public struct EngineContext {
 }
 
 /// Extract the tool name from a hook payload, tolerating each harness's shape.
-/// Claude/Cursor/Codex send a flat `tool_name`; Antigravity's stdin nests it as
-/// `toolCall.name` (camelCase). Falling back keeps Antigravity's `PostToolUse`
-/// tool activity from always reading `"unknown"` (#862 review). Harmless for the
-/// other harnesses — they have no `toolCall` object.
+/// Claude/Cursor/Codex send a flat `tool_name`; Antigravity nests it as
+/// `toolCall.name` (camelCase) — but **only on `PreToolUse`**. Antigravity's
+/// `PostToolUse` stdin carries no tool name at all (only `stepIdx`/`error`/common
+/// fields), and Crow deliberately doesn't register `PreToolUse` (its strict
+/// decision gate), so for Antigravity this fallback is future-proofing for a
+/// possible `PreToolUse` re-enable, not a live path — Antigravity's registered
+/// `PostToolUse` tool activity is unnamed by design (a documented Tier-2 gap;
+/// see `AntigravitySignalSource`). Harmless for the other harnesses (they have
+/// no `toolCall` object).
 func hookToolName(from payload: [String: JSONValue]) -> String? {
     if let flat = payload["tool_name"]?.stringValue { return flat }
     return payload["toolCall"]?.objectValue?["name"]?.stringValue

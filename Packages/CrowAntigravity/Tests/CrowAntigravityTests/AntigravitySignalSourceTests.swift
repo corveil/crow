@@ -66,19 +66,30 @@ struct AntigravitySignalSourceTests {
         }
     }
 
-    @Test func postToolUseMarksInactive() {
+    @Test func postToolUseIsWorkingHeartbeatWithoutBogusToolName() {
+        // Antigravity's PostToolUse stdin has no tool name, so we must NOT surface
+        // a bogus "unknown" tool — just keep the working heartbeat.
         let t = source.transition(
-            for: event("PostToolUse", toolName: "Bash"),
+            for: event("PostToolUse"),
             currentActivityState: .working,
             currentNotificationType: nil,
             currentLastTopLevelStopAt: nil
         )
-        #expect(t.newActivityState == nil)
-        if case .set(let activity) = t.toolActivity {
-            #expect(activity.isActive == false)
-        } else {
-            Issue.record("expected inactive tool activity")
+        #expect(t.newActivityState == .working)
+        if case .leave = t.toolActivity {} else {
+            Issue.record("PostToolUse should not set a (bogus) tool activity")
         }
+    }
+
+    @Test func postToolUseAfterStopDoesNotReElevate() {
+        // A stray PostToolUse after Stop must not flip back to working.
+        let t = source.transition(
+            for: event("PostToolUse"),
+            currentActivityState: .done,
+            currentNotificationType: nil,
+            currentLastTopLevelStopAt: Date()
+        )
+        #expect(t.newActivityState == nil)
     }
 
     // MARK: - Stop (fullyIdle → done)

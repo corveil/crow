@@ -92,8 +92,9 @@ Each harness declares a `launchCommandToken` — the binary name Crow resolves o
 `PATH` and the token the `send` RPC watches for to decide whether a
 managed-terminal command needs hook/env prep.
 
-- Tokens: `claude`, `agent`, `codex`, `opencode`
-  (`ClaudeCodeAgent`, `CursorAgent`, `OpenAICodexAgent`, `OpenCodeAgent`).
+- Tokens: `claude`, `agent`, `codex`, `opencode`, `agy`
+  (`ClaudeCodeAgent`, `CursorAgent`, `OpenAICodexAgent`, `OpenCodeAgent`,
+  `AntigravityAgent`).
 - **Cursor's token is `agent`, a generic name.** CI runners (Azure DevOps,
   TeamCity) also ship a binary called `agent`; Crow accepts the false-positive
   risk and lets users pin the real path via `defaults.binaries.cursor`
@@ -102,11 +103,13 @@ managed-terminal command needs hook/env prep.
   the *first* kind registered
   ([`AgentRegistry.swift`](../Packages/CrowCore/Sources/CrowCore/Agent/AgentRegistry.swift)).
   `CrowDaemon.registerAgents` registers **Claude unconditionally first**, then
-  Codex / Cursor / OpenCode **only if `findBinary()` resolves**
+  Codex / Cursor / OpenCode / Antigravity **only if `findBinary()` resolves**
   ([`CrowDaemon.swift`](../Packages/CrowDaemon/Sources/CrowDaemon/CrowDaemon.swift),
   `registerAgents`). So a harness whose binary is off `PATH` is silently absent
   from the picker and from `handoff-agent` — see
-  [ADR 0015](adr/0015-harness-capability-tiers.md).
+  [ADR 0015](adr/0015-harness-capability-tiers.md). Antigravity's `agy` gate is
+  also the safe default while its supply-chain provenance is confirmed (Crow
+  never installs `agy`; it only resolves what the official installer placed).
 - `findBinary()` resolves in three tiers: explicit `defaults.binaries.<kind>`
   override → `PATH` walk → hardcoded `fallbackCandidates`
   (`CodingAgent` default impl; `BinaryOverrides`, CROW-484).
@@ -375,13 +378,19 @@ event, forwards it to `crow hook-event`, then `printf '{}'`s the stdout verdict
 itself (`crow hook-event` is observational) and exits 0 — so a Crow hook can
 never block a tool or loop the agent. `Stop` carries `fullyIdle` +
 `terminationReason` (`model_stop`/`max_steps_exceeded`/`error`) →
-`AntigravitySignalSource` maps it to `.done`; `PreInvocation` → working;
-`PostToolUse` → tool activity. **`PreToolUse` is deliberately not registered** —
-it demands a strict `{"decision":…}` stdout verdict and a mis-shaped reply denies
-every tool call (cmux #5358), so — like Antigravity's own bundled vibe-island
-plugin — Crow stays off it and reads tool activity from `PostToolUse`. The stdin
-tool name is `toolCall.name` (camelCase), normalized in `EngineRouter`
-(`hookToolName`). Gaps: no `--output-format json`/`stream-json` (upstream FRs
+`AntigravitySignalSource` maps **any `Stop`** to `.done` (it does *not* gate on
+`fullyIdle`/`terminationReason` — the pinned `AgentHookEvent` doesn't surface
+those; refining on them is a version-pinned follow-up); `PreInvocation` →
+working; `PostToolUse` → working-heartbeat. **`PreToolUse` is deliberately not
+registered** — it demands a strict `{"decision":…}` stdout verdict and a
+mis-shaped reply denies every tool call (cmux #5358), so — like Antigravity's own
+bundled vibe-island plugin — Crow stays off it. **Consequence — named tool
+activity is a Tier-2 gap:** `PostToolUse` stdin carries no tool name (only
+`stepIdx`/`error`), and `toolCall.name` lives on `PreToolUse` alone, so Crow can
+signal "a tool ran, still working" but not *which* tool. `EngineRouter`'s
+`hookToolName` reads `tool_name` or the nested `toolCall.name` (future-proofing a
+`PreToolUse` re-enable; a no-op for the currently-registered events). Gaps: no
+`--output-format json`/`stream-json` (upstream FRs
 #119/#597), no ACP/JSON-RPC (FR #31), no dedicated "awaiting-input" event, and
 headless `-p` historically drops stdout on a **non-TTY** — which doesn't bite
 Crow because it launches `agy` inside a tmux PTY, so no shim is needed on the
