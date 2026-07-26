@@ -4,6 +4,7 @@ import CrowCodex
 import CrowCore
 import CrowCursor
 import CrowGit
+import CrowGrok
 import CrowPersistence
 import CrowProvider
 import CrowTerminal
@@ -939,6 +940,20 @@ public final class SessionService {
                     CrowLog.info("[SessionService] Codex trust seed failed for \(worktree.worktreePath): \(msg)")
                 }
             }
+        case .grok:
+            // Same posture as Codex: seed Grok folder-trust
+            // (`~/.grok/trusted_folders.toml`) so project `.grok/hooks/*.json`
+            // aren't silently skipped on an unattended launch — but never for a
+            // `.review` clone (attacker-controlled `gh repo clone` head; trusting
+            // it would arm a committed `.grok/hooks/*.json`). `.work`/`.job`
+            // worktrees branch off a trusted base; the review clone falls back to
+            // Grok's own folder-trust prompt, and `prepareReviewClone` strips any
+            // committed `.grok/` as defense-in-depth (#859).
+            if session.kind != .review {
+                if case let .failed(msg) = GrokTrustSeeder.seedTrust(projectPath: worktree.worktreePath) {
+                    NSLog("[SessionService] Grok trust seed failed for %@: %@", worktree.worktreePath, msg)
+                }
+            }
         default:
             break
         }
@@ -1252,6 +1267,15 @@ public final class SessionService {
             // attacker-controlled-clone reason as `launchAgent`.
             if case let .failed(msg) = CodexTrustSeeder.seedTrust(projectPath: worktree.worktreePath) {
                 CrowLog.info("[SessionService] Codex trust seed failed for \(worktree.worktreePath): \(msg)")
+            }
+        } else if target.kind == .grok, session.kind != .review {
+            // Seed Grok trust on handoff too, for the same reason as Codex:
+            // `crow handoff-agent --agent grok` dispatches via
+            // `pendingLaunchCommands`, so `launchAgent`'s seeding never fires for
+            // it, and an untrusted folder silently skips the project hooks Crow's
+            // state detection relies on. Skip `.review` (attacker-controlled clone).
+            if case let .failed(msg) = GrokTrustSeeder.seedTrust(projectPath: worktree.worktreePath) {
+                NSLog("[SessionService] Grok trust seed failed for %@: %@", worktree.worktreePath, msg)
             }
         }
         // Handing off to Cursor → sync its global Jira MCP (this path selects
@@ -1717,6 +1741,10 @@ public final class SessionService {
         case .codex:
             if case let .failed(msg) = CodexTrustSeeder.seedTrust(projectPath: cwd) {
                 CrowLog.info("[SessionService] Codex trust seed failed for \(cwd): \(msg)")
+            }
+        case .grok:
+            if case let .failed(msg) = GrokTrustSeeder.seedTrust(projectPath: cwd) {
+                NSLog("[SessionService] Grok trust seed failed for %@: %@", cwd, msg)
             }
         default:
             break
@@ -2802,6 +2830,12 @@ public final class SessionService {
         if reviewAgentKind == .cursor {
             _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "checkout", "--", ".cursor"])
         }
+        // Same restore-before-pull for Grok reviews (#859): the `.grok/` strip
+        // below applies as an unstaged deletion of tracked files, so `git pull`
+        // would refuse if the new head touches `.grok/`.
+        if reviewAgentKind == .grok {
+            _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "checkout", "--", ".grok"])
+        }
         _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "fetch", "origin", headBranch])
         _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "checkout", headBranch])
         _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "pull", "origin", headBranch])
@@ -2839,6 +2873,18 @@ public final class SessionService {
         // prep so a `git pull` can't reintroduce it.
         if reviewAgentKind == .antigravity {
             try? fm.removeItem(atPath: (clonePath as NSString).appendingPathComponent(".agents"))
+        // Same defense-in-depth for Grok reviews (#859): strip any committed
+        // `.grok/` from the attacker-controlled PR head before the agent
+        // launches. `.grok/hooks/*.json` are conventionally committed (Grok's
+        // docs recommend version-controlling them), so a drive-by PR could ship
+        // hooks Grok would run once the folder is trusted. `launchAgent` already
+        // declines to trust a review clone, but on a *local/dev* Grok build
+        // folder-trust is inert (everything trusted), so this strip is the only
+        // guard there. Re-run on every prep so a `git pull` can't reintroduce it.
+        // Gated to Grok reviews: only Grok loads `.grok/`, so stripping it for
+        // another agent's review would just hide the files a hostile PR ships.
+        if reviewAgentKind == .grok {
+            try? fm.removeItem(atPath: (clonePath as NSString).appendingPathComponent(".grok"))
         }
         // Same defense-in-depth for Cursor reviews (#829 review round 9). This
         // PR makes project `.cursor/hooks.json` Crow's load-bearing hook

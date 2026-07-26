@@ -1,0 +1,140 @@
+import Foundation
+import CrowCore
+
+/// Writes Grok Build's hook configuration into a worktree's
+/// `.grok/hooks/crow.json`. Conforms to `HookConfigWriter` so the engine can
+/// treat the configuration step generically; the concrete event list and file
+/// format stay local to CrowGrok.
+///
+/// **Why a per-worktree, per-session file (the good tier).** Grok discovers
+/// project hooks from `<project>/.grok/hooks/*.json` (a *directory* of JSON
+/// files, all merged), verified against `xai-org/grok-build@main`
+/// (`crates/codegen/xai-grok-hooks/src/discovery.rs`, 2026-07-25). Each file's
+/// `hooks` map is Claude/Cursor-compatible:
+///
+/// ```json
+/// { "hooks": { "Stop": [ { "hooks": [ { "type": "command",
+///   "command": "<crow> hook-event --session <UUID> --event Stop",
+///   "timeout": 5 } ] } ] } }
+/// ```
+///
+/// So Crow bakes the session UUID into the command and the server resolves the
+/// session **by UUID** — exact, no `cwd` matching (the same good tier as
+/// Claude/Cursor; better than Codex/OpenCode's `cwd`-match fallback). Because
+/// `crow.json` is a dedicated Crow-owned file (a user's own hooks live in other
+/// `*.json` files in the same dir, which Grok merges alongside), it is
+/// overwritten wholesale — there is nothing to merge-preserve.
+///
+/// ⚠️ **Trust caveat.** Project-scoped Grok hooks *require folder trust*
+/// (`~/.grok/trusted_folders.toml`) on a release build; a fresh worktree/clone
+/// would otherwise have its hooks silently skipped. `GrokTrustSeeder` seeds
+/// trust for Crow-created `.work`/`.job` worktrees (never `.review` clones —
+/// see that type). On a local/dev build folder-trust is inert (everything
+/// trusted), which is why `prepareReviewClone` *also* strips a committed
+/// `.grok/` from an attacker-controlled review head as defense-in-depth.
+///
+/// **Version-pinned re-check target (#859):** whether project hooks
+/// double-fire alongside the `~/.claude/settings.json` / `~/.cursor/hooks.json`
+/// Grok *also* discovers (its Claude/Cursor compat scanning) in a handed-off
+/// worktree that still carries a prior agent's hook config — dedup deferred,
+/// cf. Codex §3b. Re-probe on each upstream mirror sync.
+public struct GrokHookConfigWriter: HookConfigWriter {
+
+    /// All hook event names we register. Every name is verified present in
+    /// `xai-grok-hooks/src/event.rs` (2026-07-25). `GrokSignalSource` handles
+    /// exactly this set.
+    static let allEvents = [
+        "SessionStart", "SessionEnd", "UserPromptSubmit",
+        "PreToolUse", "PostToolUse", "PostToolUseFailure",
+        "Notification", "Stop", "StopFailure",
+    ]
+
+    /// Grok's hook runtime async-delivery support is unverified, so — like
+    /// Codex — we register everything synchronously. Sync `PreToolUse` also
+    /// keeps ordering reliable (it arrives before a permission `Notification`).
+    /// Kept as a seam so a future upstream confirmation can opt specific
+    /// post-tool events into async without reshaping the writer.
+    private static let asyncEvents: Set<String> = []
+
+    public init() {}
+
+    // MARK: - Generate Hook Configuration
+
+    /// Build the Grok hooks document (`{ "hooks": { … } }`) for a session.
+    /// Each event invokes `<crow> hook-event --session <UUID> --event <Name>`;
+    /// the crow server resolves the session by UUID and dispatches through
+    /// `GrokSignalSource`.
+    static func generateDocument(sessionID: UUID, crowPath: String) -> [String: Any] {
+        let sid = sessionID.uuidString
+        var hooks: [String: Any] = [:]
+
+        for event in allEvents {
+            let command = "\(crowPath) hook-event --session \(sid) --event \(event)"
+            var hookEntry: [String: Any] = [
+                "type": "command",
+                "command": command,
+                "timeout": 5,
+            ]
+            if asyncEvents.contains(event) {
+                hookEntry["async"] = true
+            }
+            // Omit `matcher` to match all tools (Grok, like Claude, treats an
+            // absent matcher as "match everything"; avoids an invalid regex).
+            hooks[event] = [
+                ["hooks": [hookEntry]] as [String: Any]
+            ]
+        }
+
+        return ["hooks": hooks]
+    }
+
+    // MARK: - HookConfigWriter Conformance
+
+    /// Write `<worktreePath>/.grok/hooks/crow.json` with the session UUID baked
+    /// in. Idempotent — we own this single-purpose file and overwrite it
+    /// wholesale, so there's nothing to merge. Called on every Grok launch.
+    public func writeHookConfig(
+        worktreePath: String,
+        sessionID: UUID,
+        crowPath: String
+    ) throws {
+        let hooksDir = Self.hooksDir(worktreePath)
+        try FileManager.default.createDirectory(atPath: hooksDir, withIntermediateDirectories: true)
+
+        let filePath = (hooksDir as NSString).appendingPathComponent(Self.fileName)
+        let document = Self.generateDocument(sessionID: sessionID, crowPath: crowPath)
+        let data = try JSONSerialization.data(
+            withJSONObject: document, options: [.prettyPrinted, .sortedKeys])
+        try data.write(to: URL(fileURLWithPath: filePath))
+    }
+
+    /// Remove our `crow.json` from a worktree's `.grok/hooks/`, leaving any
+    /// user-authored `*.json` hook files untouched. Best effort: prunes the
+    /// `hooks`/`.grok` dirs when they're left empty (i.e. Crow created them), so
+    /// tearing a session down leaves no trace — but never touches a file or
+    /// directory that isn't ours.
+    public func removeHookConfig(worktreePath: String) {
+        let hooksDir = Self.hooksDir(worktreePath)
+        let filePath = (hooksDir as NSString).appendingPathComponent(Self.fileName)
+        try? FileManager.default.removeItem(atPath: filePath)
+        Self.removeIfEmpty(hooksDir)
+        Self.removeIfEmpty((worktreePath as NSString).appendingPathComponent(".grok"))
+    }
+
+    // MARK: - Paths
+
+    static let fileName = "crow.json"
+
+    /// `<worktree>/.grok/hooks` — the directory Grok discovers project hook
+    /// files (`*.json`) under.
+    private static func hooksDir(_ worktree: String) -> String {
+        let grokDir = (worktree as NSString).appendingPathComponent(".grok")
+        return (grokDir as NSString).appendingPathComponent("hooks")
+    }
+
+    private static func removeIfEmpty(_ dir: String) {
+        let fm = FileManager.default
+        guard let contents = try? fm.contentsOfDirectory(atPath: dir), contents.isEmpty else { return }
+        try? fm.removeItem(atPath: dir)
+    }
+}

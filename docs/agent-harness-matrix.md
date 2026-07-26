@@ -2,11 +2,11 @@
 
 Crow can drive several coding agents ("harnesses") through one adapter protocol,
 [`CodingAgent`](../Packages/CrowCore/Sources/CrowCore/Agent/CodingAgent.swift):
-**Claude Code**, **Cursor**, **OpenAI Codex**, **OpenCode** (sst/opencode), and
-the Tier-2 **Antigravity** (Google's `agy` CLI). Claude Code is the reference
-implementation and the default; the others ship with deliberate gaps, and
-Antigravity ships as **Tier-2 / experimental** (closed-source, Google-auth-
-locked — see its section below).
+**Claude Code**, **Cursor**, **OpenAI Codex**, **OpenCode** (sst/opencode),
+**Grok Build** (xai-org/grok-build), and the Tier-2 **Antigravity** (Google's
+`agy` CLI). Claude Code is the reference implementation and the default; the
+others ship with deliberate gaps, and Antigravity ships as **Tier-2 /
+experimental** (closed-source, Google-auth-locked — see its section below).
 
 This page is the living reference for **what each harness can do and why the
 gaps exist**. The *architecture* of the adapter is
@@ -23,22 +23,22 @@ capabilities, update this table in the same PR.
 
 ## The matrix
 
-| Dimension | Claude Code | Cursor | Codex | OpenCode | Antigravity (Tier-2) |
-|---|---|---|---|---|---|
-| Binary token (`launchCommandToken`) | `claude` | `agent` ⚠️ collision risk | `codex` | `opencode` | `agy` ✅ low collision |
-| Registered at boot | **always** (default out of the box) | only if binary found | only if binary found | only if binary found | only if binary found |
-| Resume / continue | ✅ `--continue` | ✅ `--continue` (job/review restart, #829) | ✅ `resume --last` | ⚠️ `--continue` re-enters TUI, no history | ⚠️ `-c` (machine-global most-recent; no per-run id, FR #7) |
-| Remote control | ✅ native `--rc --name` | ⚠️ faked via `crow send` stdin | ❌ `supportsRemoteControl=false` (experimental `--remote` unwired) | ⚠️ faked via `crow send` stdin | ⚠️ faked via `crow send` stdin (no native RC) |
-| Auto-permission | ✅ `--permission-mode auto` | ✅ `--force --approve-mcps` (parity with Claude auto, #829) | ✅ `-a never -s workspace-write` (`.job`, interactive) | ⚠️ runtime-probed `--auto`, `.job` only | ⚠️ `settings.json` modes only (no verified launch flag; never `--dangerously-skip-permissions`) |
-| Hooks transport | per-worktree `.claude/settings.local.json` | per-worktree `.cursor/hooks.json` (#829) | global `~/.codex/hooks.json` + `config.toml` `notify` bridge (per-worktree deferred — see below) | global JS plugin `~/.config/opencode/plugins/crow-hooks.js` | per-worktree `.agents/hooks.json` (#860) |
-| Hook → session scope | ✅ per-session UUID | ✅ per-session UUID (#829) | ❌ `cwd` match (per-worktree UUID deferred) | ❌ `cwd` match | ✅ per-session UUID |
-| Hook async delivery | ✅ `PostToolUse*` async | ⚠️ declared, timing unverified | ❌ sync-only (v0.141.0) | ⚠️ names verified, timing unverified | ❌ no `async` in Antigravity's schema — all sync |
-| MCP (e.g. Jira) | ✅ `jira` MCP server via `~/.claude.json` | ✅ `jira` bridged into `~/.cursor/mcp.json` (#829) | ✅ mirrored from `~/.claude.json` into `config.toml` | ❌ falls back to `acli` | ❌ falls back to `acli` (file bridge deferred) |
-| Review (`/crow-review-pr`) | ✅ slash-command | ✅ inlined skill body | ✅ inlined skill body | ✅ inlined skill body | ❌ unsupported in Phase A (`autoLaunchCommand(.review)` → nil) |
-| Initial-prompt injection | ✅ `$(cat …-prompt.md)` + deferred paste | ✅ `$(cat …)` job/review; handoff launcher auto-wired (#829); `.work` bare | ✅ `.job` + `.review` (`$(cat …-prompt.md)`) | ✅ run-then-`--continue` | ✅ `-p "$(cat …-job-prompt.md)"` (`.job`); `.work` bare |
-| Gateway env / trust seed / telemetry | ✅ Claude special-case | ⚠️ trust seed only (`--trust`, per-launch, except `.review`) | ⚠️ trust seed only (`[projects."…"]` in `config.toml`) | ❌ | ❌ |
-| Rename passthrough (`/rename`) | ✅ | ✅ | ✅ | ✅ | ❌ unverified on v1.1.7 (opt-out `nil`) |
-| Self-host / local models | provider-dependent | provider-dependent | provider-dependent | provider-dependent | ❌ **permanent** — closed-source, Google-Sign-In/GCP-locked (Gemini 3 Pro / Claude Sonnet 4.5 only) |
+| Dimension | Claude Code | Cursor | Codex | OpenCode | Grok Build | Antigravity (Tier-2) |
+|---|---|---|---|---|---|---|
+| Binary token (`launchCommandToken`) | `claude` | `agent` ⚠️ collision risk | `codex` | `opencode` | `grok` ⚠️ collision (`grok-cli`) | `agy` ✅ low collision |
+| Registered at boot | **always** (default out of the box) | only if binary found | only if binary found | only if binary found | only if binary found | only if binary found |
+| Resume / continue | ✅ `--continue` | ✅ `--continue` (job/review restart, #829) | ✅ `resume --last` | ⚠️ `--continue` re-enters TUI, no history | ✅ `-c`/`-r` (run-then-`-c`; job/review restart) | ⚠️ `-c` (machine-global most-recent; no per-run id, FR #7) |
+| Remote control | ✅ native `--rc --name` | ⚠️ faked via `crow send` stdin | ❌ `supportsRemoteControl=false` (experimental `--remote` unwired) | ⚠️ faked via `crow send` stdin | ⚠️ faked via `crow send` stdin (native ACP `grok agent serve` deferred) | ⚠️ faked via `crow send` stdin (no native RC) |
+| Auto-permission | ✅ `--permission-mode auto` | ✅ `--force --approve-mcps` (parity with Claude auto, #829) | ✅ `-a never -s workspace-write` (`.job`, interactive) | ⚠️ runtime-probed `--auto`, `.job` only | ⚠️ `.job`-only `--permission-mode auto` + hard `--deny` guards (**not** `--yolo`); dangerous ops still gate | ⚠️ `settings.json` modes only (no verified launch flag; never `--dangerously-skip-permissions`) |
+| Hooks transport | per-worktree `.claude/settings.local.json` | per-worktree `.cursor/hooks.json` (#829) | global `~/.codex/hooks.json` + `config.toml` `notify` bridge (per-worktree deferred — see below) | global JS plugin `~/.config/opencode/plugins/crow-hooks.js` | per-worktree `.grok/hooks/crow.json` | per-worktree `.agents/hooks.json` (#860) |
+| Hook → session scope | ✅ per-session UUID | ✅ per-session UUID (#829) | ❌ `cwd` match (per-worktree UUID deferred) | ❌ `cwd` match | ✅ per-session UUID | ✅ per-session UUID |
+| Hook async delivery | ✅ `PostToolUse*` async | ⚠️ declared, timing unverified | ❌ sync-only (v0.141.0) | ⚠️ names verified, timing unverified | ❌ sync-only (async support unverified) | ❌ no `async` in Antigravity's schema — all sync |
+| MCP (e.g. Jira) | ✅ `jira` MCP server via `~/.claude.json` | ✅ `jira` bridged into `~/.cursor/mcp.json` (#829) | ✅ mirrored from `~/.claude.json` into `config.toml` | ❌ falls back to `acli` | ❌ falls back to `acli` (Jira MCP bridge deferred; Grok *does* read Claude/Cursor MCP configs) | ❌ falls back to `acli` (file bridge deferred) |
+| Review (`/crow-review-pr`) | ✅ slash-command | ✅ inlined skill body | ✅ inlined skill body | ✅ inlined skill body | ✅ inlined skill body (human-gated) | ❌ unsupported in Phase A (`autoLaunchCommand(.review)` → nil) |
+| Initial-prompt injection | ✅ `$(cat …-prompt.md)` + deferred paste | ✅ `$(cat …)` job/review; handoff launcher auto-wired (#829); `.work` bare | ✅ `.job` + `.review` (`$(cat …-prompt.md)`) | ✅ run-then-`--continue` | ✅ run-then-`-c` (`.job`/`.review`); `.work` bare | ✅ `-p "$(cat …-job-prompt.md)"` (`.job`); `.work` bare |
+| Gateway env / trust seed / telemetry | ✅ Claude special-case | ⚠️ trust seed only (`--trust`, per-launch, except `.review`) | ⚠️ trust seed only (`[projects."…"]` in `config.toml`) | ❌ | ⚠️ trust seed only (`[folders."…"]` in `~/.grok/trusted_folders.toml`) | ❌ |
+| Rename passthrough (`/rename`) | ✅ | ✅ | ✅ | ✅ | ✅ (alias `/title`) | ❌ unverified on v1.1.7 (opt-out `nil`) |
+| Self-host / local models | provider-dependent | provider-dependent | provider-dependent | provider-dependent | ✅ `config.toml` `[model.*]` → any OpenAI/Anthropic-compatible or local (Ollama) endpoint | ❌ **permanent** — closed-source, Google-Sign-In/GCP-locked (Gemini 3 Pro / Claude Sonnet 4.5 only) |
 
 Legend: ✅ full · ⚠️ partial / faked / unverified · ❌ not supported.
 
@@ -92,13 +92,18 @@ Each harness declares a `launchCommandToken` — the binary name Crow resolves o
 `PATH` and the token the `send` RPC watches for to decide whether a
 managed-terminal command needs hook/env prep.
 
-- Tokens: `claude`, `agent`, `codex`, `opencode`, `agy`
+- Tokens: `claude`, `agent`, `codex`, `opencode`, `grok`, `agy`
   (`ClaudeCodeAgent`, `CursorAgent`, `OpenAICodexAgent`, `OpenCodeAgent`,
-  `AntigravityAgent`).
+  `GrokAgent`, `AntigravityAgent`).
 - **Cursor's token is `agent`, a generic name.** CI runners (Azure DevOps,
   TeamCity) also ship a binary called `agent`; Crow accepts the false-positive
   risk and lets users pin the real path via `defaults.binaries.cursor`
   (`CursorAgent.swift` launch-token comment, CROW-484).
+- **Grok's token is `grok`, which collides** with the community
+  `superagent-ai/grok-cli` (also installs `grok`). Same posture as Cursor: Crow
+  accepts the false-positive risk and users pin xAI's Grok Build via
+  `defaults.binaries.grok` (`GrokAgent.swift` `fallbackCandidates` comment,
+  #859). `BinaryOverrides` keys on `AgentKind.rawValue` = `"grok"`.
 - **Registration order = default.** `AgentRegistry.register` sets the default to
   the *first* kind registered
   ([`AgentRegistry.swift`](../Packages/CrowCore/Sources/CrowCore/Agent/AgentRegistry.swift)).
@@ -244,9 +249,23 @@ All harnesses report lifecycle events by shelling out to `crow hook-event`, but
   OpenCode's event bus + `tool.execute.*` / `permission.ask` hooks and pipes a
   `{cwd, …}` JSON payload to `crow hook-event --agent opencode`. `cwd`-resolved
   (`OpenCodeHookConfigWriter`).
+- **Grok** — per-worktree `.grok/hooks/crow.json`, written per session with
+  `hook-event --session <UUID>`, resolved by **UUID** (#859,
+  `GrokHookConfigWriter`). Grok's hook schema is byte-compatible with Claude's
+  (`{ "hooks": { "<Event>": [ { "hooks": [ { "type": "command", … } ] } ] } }`,
+  verified against `xai-grok-hooks`), and it discovers a *directory* of
+  `*.json`, so `crow.json` is a dedicated Crow-owned file overwritten wholesale
+  (a user's own `*.json` in the dir is preserved). **Trust caveat:** project
+  hooks *require folder trust* (`~/.grok/trusted_folders.toml`) on a release
+  build — `GrokTrustSeeder` seeds it for `.work`/`.job` worktrees, never
+  `.review` clones (and `prepareReviewClone` strips a committed `.grok/`, which
+  also covers a local/dev build where folder-trust is inert). Sync-only
+  (`asyncEvents` empty) until Grok's async delivery is verified. **Deferred /
+  re-check:** whether these fire alongside the `~/.claude`/`~/.cursor` configs
+  Grok *also* discovers in a handed-off worktree (dedup, cf. Codex §3b).
 
-Only Claude and Cursor get **per-session UUID scope**; Codex and OpenCode share
-the host's global config and are disambiguated by `cwd`. See
+Claude, Cursor, and Grok get **per-session UUID scope**; Codex and OpenCode
+share the host's global config and are disambiguated by `cwd`. See
 [ADR 0015](adr/0015-harness-capability-tiers.md).
 
 ### Hook async delivery
@@ -444,7 +463,7 @@ Antigravity is promoted out of Tier-2.**
 
 ## Handoff between harnesses
 
-`crow handoff-agent --session <UUID> --agent <claude-code|cursor|codex|opencode|antigravity>
+`crow handoff-agent --session <UUID> --agent <claude-code|cursor|codex|opencode|grok|antigravity>
 [--note "…"]` switches a running session to a different harness. It preserves the
 Crow session identity, worktree, branch, ticket, and links; it does **not**
 transfer chat history ([ADR 0011](adr/0011-agent-handoff-preserves-session-not-chat.md)).
@@ -480,3 +499,8 @@ against current upstream CLIs.
 | Antigravity structured-stdout (would promote toward first-class parity) | upstream FRs **#119/#597** (`--output-format stream-json`), **#31** (ACP) | `AntigravitySignalSource` | 2026-07-26 — hooks are the only transport until either lands |
 | Antigravity bounded auto-permission has no verified interactive launch flag | `agy` **v1.1.7**; headless `-p` ignores `permissions.allow` (issue #548) | `AntigravityLaunchArgs.autoPermissionSuffix` | 2026-07-26 |
 | Antigravity official-installer provenance (supply-chain gate) unconfirmed | `google-antigravity` org `is_verified: false`; pin `antigravity.google` | `AntigravityAgent.fallbackCandidates` | 2026-07-26 — confirm before promoting out of Tier-2 |
+| **Entire Grok flag set** — hooks event names, `-p`/`--single`, `-c`/`-r`, `--allow`/`--deny`, `--permission-mode`, `--trust`, `/rename` | `xai-org/grok-build` **@ 2026-07-25** (periodic mirror of xAI's monorepo, **PRs closed** → churn likely) | `GrokAgent` / `GrokLaunchArgs` / `GrokHookConfigWriter` / `GrokSignalSource` | 2026-07-26 — verified against repo source (`crates/codegen/xai-grok-*`), not blog posts |
+| Grok `grok` binary collides with community `superagent-ai/grok-cli` | — (collision; pin path via `defaults.binaries.grok`) | `GrokAgent.fallbackCandidates` | 2026-07-26 |
+| Grok **`--permission-mode auto` now exists** — the ticket's pinned probe (#859) reported it absent; current docs show `grok --permission-mode auto`. Bounded `.job` posture stays `--permission-mode auto` + hard `--deny` (never `--yolo`) regardless | Grok mirror **@ 2026-07-25** | `GrokLaunchArgs.autoPermissionSuffix` | 2026-07-26 |
+| Grok `Stop` / `Notification` fire on the transitions Crow's state machine needs — **confirm empirically** | — (empirical, #859) | `GrokSignalSource` | 2026-07-26 |
+| Grok double-fire: whether project hooks fire alongside the `~/.claude/settings.json` / `~/.cursor/hooks.json` Grok also discovers (its compat scanning) in a handed-off worktree still carrying a prior agent's hook config — dedup deferred (cf. Codex §3b) | — (empirical, #859) | `GrokHookConfigWriter` | 2026-07-26 |
