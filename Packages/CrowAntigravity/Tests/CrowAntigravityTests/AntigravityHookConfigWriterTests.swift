@@ -12,129 +12,183 @@ struct AntigravityHookConfigWriterTests {
         return url
     }
 
-    private func readHooks(_ path: URL) throws -> [String: Any] {
-        let data = try Data(contentsOf: path)
-        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
-        return json["hooks"] as! [String: Any]
+    /// The whole hooks.json as a named-group map (root is the groups, NOT a
+    /// top-level `hooks` wrapper).
+    private func readRoot(_ path: URL) throws -> [String: Any] {
+        try JSONSerialization.jsonObject(with: Data(contentsOf: path)) as! [String: Any]
     }
 
-    private func entry(_ hooks: [String: Any], _ event: String) -> [String: Any] {
-        let groups = hooks[event] as! [[String: Any]]
-        let inner = groups.first!["hooks"] as! [[String: Any]]
-        return inner.first!
+    /// Crow's `"crow"` group (event → config array).
+    private func crowGroup(_ path: URL) throws -> [String: Any] {
+        try readRoot(path)["crow"] as! [String: Any]
     }
 
-    private func command(_ hooks: [String: Any], _ event: String) -> String {
-        entry(hooks, event)["command"] as! String
+    /// The handler object for a *direct* event (invocation/Stop) — no matcher.
+    private func directHandler(_ group: [String: Any], _ event: String) -> [String: Any] {
+        (group[event] as! [[String: Any]]).first!
     }
 
-    // MARK: - Per-worktree write, Claude-style schema, UUID baked in
+    /// The handler object for a *tool* event (matcher + hooks[]).
+    private func toolHandler(_ group: [String: Any], _ event: String) -> [String: Any] {
+        let wrap = (group[event] as! [[String: Any]]).first!
+        return (wrap["hooks"] as! [[String: Any]]).first!
+    }
 
-    @Test func writesPerWorktreeWithSessionAndPascalCaseEvents() throws {
+    // MARK: - Named-group schema (Antigravity's, not Claude's)
+
+    @Test func writesNamedCrowGroupNotClaudeHooksWrapper() throws {
         let worktree = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: worktree) }
         AntigravityHookConfigWriter.resetTrackedCacheForTesting()
         let sid = UUID()
         try AntigravityHookConfigWriter().writeHookConfig(
-            worktreePath: worktree.path,
-            sessionID: sid,
-            crowPath: "/opt/homebrew/bin/crow"
-        )
+            worktreePath: worktree.path, sessionID: sid, crowPath: "/opt/homebrew/bin/crow")
 
-        let hooksPath = worktree.appendingPathComponent(".agents/hooks.json")
-        let hooks = try readHooks(hooksPath)
-        // Exactly the documented v1.1.7 lifecycle events.
-        #expect(hooks.count == 5)
-        for event in ["PreInvocation", "PostInvocation", "PreToolUse", "PostToolUse", "Stop"] {
-            #expect(hooks[event] != nil, "missing hook entry for \(event)")
-        }
-
-        // Claude-style schema has NO top-level version field.
-        let root = try JSONSerialization.jsonObject(
-            with: Data(contentsOf: hooksPath)) as! [String: Any]
+        let root = try readRoot(worktree.appendingPathComponent(".agents/hooks.json"))
+        // Top-level is the named group `crow` — NOT a Claude-style `hooks` key,
+        // and no `version` scaffold.
+        #expect(root["crow"] != nil)
+        #expect(root["hooks"] == nil)
         #expect(root["version"] == nil)
 
-        // Command bakes the session UUID + --agent antigravity + PascalCase event.
-        #expect(command(hooks, "PreToolUse")
-            == "'/opt/homebrew/bin/crow' hook-event --session \(sid.uuidString) --agent antigravity --event PreToolUse")
+        let group = root["crow"] as! [String: Any]
+        // Mirrors Antigravity's vibe-island plugin: no PreToolUse.
+        #expect(Set(group.keys) == ["PreInvocation", "PostInvocation", "PostToolUse", "Stop"])
+        #expect(group["PreToolUse"] == nil)
     }
 
-    @Test func stopSyncPostToolUseAndPostInvocationAsync() throws {
+    @Test func toolEventUsesMatcherAndHooksWrapper() throws {
         let worktree = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: worktree) }
         AntigravityHookConfigWriter.resetTrackedCacheForTesting()
         try AntigravityHookConfigWriter().writeHookConfig(
-            worktreePath: worktree.path, sessionID: UUID(), crowPath: "/usr/local/bin/crow")
+            worktreePath: worktree.path, sessionID: UUID(), crowPath: "/bin/crow")
+        let group = try crowGroup(worktree.appendingPathComponent(".agents/hooks.json"))
 
-        let hooks = try readHooks(worktree.appendingPathComponent(".agents/hooks.json"))
-        #expect(entry(hooks, "PostToolUse")["async"] as? Bool == true)
-        #expect(entry(hooks, "PostInvocation")["async"] as? Bool == true)
-        // Stop / PreToolUse / PreInvocation stay synchronous (ordering + timing).
-        #expect(entry(hooks, "Stop")["async"] == nil)
-        #expect(entry(hooks, "PreToolUse")["async"] == nil)
-        #expect(entry(hooks, "PreInvocation")["async"] == nil)
+        // PostToolUse: `[{matcher:"*", hooks:[handler]}]`.
+        let wrap = (group["PostToolUse"] as! [[String: Any]]).first!
+        #expect(wrap["matcher"] as? String == "*")
+        #expect(wrap["hooks"] != nil)
     }
 
-    // MARK: - Idempotency + user-group preservation
-
-    @Test func rewriteIsIdempotentAndPreservesUserGroups() throws {
+    @Test func directEventsListHandlersUnderEventKey() throws {
         let worktree = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: worktree) }
         AntigravityHookConfigWriter.resetTrackedCacheForTesting()
+        try AntigravityHookConfigWriter().writeHookConfig(
+            worktreePath: worktree.path, sessionID: UUID(), crowPath: "/bin/crow")
+        let group = try crowGroup(worktree.appendingPathComponent(".agents/hooks.json"))
 
-        // Seed a user-authored group for a managed event.
+        // Invocation/Stop handlers sit directly under the event key — no matcher,
+        // no `hooks` wrapper.
+        for event in ["PreInvocation", "PostInvocation", "Stop"] {
+            let h = directHandler(group, event)
+            #expect(h["type"] as? String == "command")
+            #expect(h["command"] != nil)
+            #expect(h["matcher"] == nil)
+            #expect(h["hooks"] == nil)
+        }
+    }
+
+    @Test func noAsyncFieldAnywhere() throws {
+        let worktree = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: worktree) }
+        AntigravityHookConfigWriter.resetTrackedCacheForTesting()
+        try AntigravityHookConfigWriter().writeHookConfig(
+            worktreePath: worktree.path, sessionID: UUID(), crowPath: "/bin/crow")
+        // `async` is not part of Antigravity's handler schema — a stray field
+        // risks a parse failure.
+        let raw = try String(
+            contentsOf: worktree.appendingPathComponent(".agents/hooks.json"), encoding: .utf8)
+        #expect(raw.contains("async") == false)
+    }
+
+    // MARK: - Command wrapper (session UUID + stdout verdict + always-exit-0)
+
+    @Test func commandForwardsThenEmitsStdoutVerdict() throws {
+        let worktree = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: worktree) }
+        AntigravityHookConfigWriter.resetTrackedCacheForTesting()
+        let sid = UUID()
+        try AntigravityHookConfigWriter().writeHookConfig(
+            worktreePath: worktree.path, sessionID: sid, crowPath: "/opt/homebrew/bin/crow")
+        let group = try crowGroup(worktree.appendingPathComponent(".agents/hooks.json"))
+
+        // Stop command: session UUID + --agent antigravity, hook-event output
+        // suppressed, then an empty-object verdict emitted so the hook never
+        // blocks / loops the agent.
+        let stopCmd = directHandler(group, "Stop")["command"] as! String
+        #expect(stopCmd.contains("hook-event --session \(sid.uuidString) --agent antigravity --event Stop"))
+        #expect(stopCmd.contains(">/dev/null 2>&1; printf '{}'"))
+
+        // PostToolUse command carries the same wrapper shape.
+        let toolCmd = toolHandler(group, "PostToolUse")["command"] as! String
+        #expect(toolCmd.contains("--event PostToolUse >/dev/null 2>&1; printf '{}'"))
+    }
+
+    @Test func crowPathWithSpacesIsShellQuoted() throws {
+        let worktree = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: worktree) }
+        AntigravityHookConfigWriter.resetTrackedCacheForTesting()
+        let spaced = "/Users/x/My Projects/.claude/bin/crow"
+        try AntigravityHookConfigWriter().writeHookConfig(
+            worktreePath: worktree.path, sessionID: UUID(), crowPath: spaced)
+        let group = try crowGroup(worktree.appendingPathComponent(".agents/hooks.json"))
+        #expect((directHandler(group, "Stop")["command"] as! String).hasPrefix("'\(spaced)' hook-event "))
+    }
+
+    // MARK: - User-group preservation + idempotency
+
+    @Test func preservesOtherNamedGroupsAndIsIdempotent() throws {
+        let worktree = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: worktree) }
+        AntigravityHookConfigWriter.resetTrackedCacheForTesting()
+        // Seed a user's own named group alongside where Crow's will go.
         let agentsDir = worktree.appendingPathComponent(".agents")
         try FileManager.default.createDirectory(at: agentsDir, withIntermediateDirectories: true)
-        let userSeed: [String: Any] = [
-            "hooks": [
-                "Stop": [["hooks": [["type": "command", "command": "my-own-hook"]]]],
-            ],
+        let seed: [String: Any] = [
+            "my-linter": ["PostToolUse": [["matcher": "run_command", "hooks": [["command": "lint.sh"]]]]],
         ]
-        try JSONSerialization.data(withJSONObject: userSeed)
+        try JSONSerialization.data(withJSONObject: seed)
             .write(to: agentsDir.appendingPathComponent("hooks.json"))
 
         let writer = AntigravityHookConfigWriter()
-        let sid = UUID()
-        try writer.writeHookConfig(worktreePath: worktree.path, sessionID: sid, crowPath: "/bin/crow")
-        try writer.writeHookConfig(worktreePath: worktree.path, sessionID: sid, crowPath: "/bin/crow")
+        try writer.writeHookConfig(worktreePath: worktree.path, sessionID: UUID(), crowPath: "/bin/crow")
+        try writer.writeHookConfig(worktreePath: worktree.path, sessionID: UUID(), crowPath: "/bin/crow")
 
-        let stopGroups = try readHooks(worktree.appendingPathComponent(".agents/hooks.json"))["Stop"] as! [[String: Any]]
-        // Exactly two groups survive: the user's + one (not two) Crow group.
-        #expect(stopGroups.count == 2)
-        let commands = stopGroups.compactMap { ($0["hooks"] as? [[String: Any]])?.first?["command"] as? String }
-        #expect(commands.contains("my-own-hook"))
-        #expect(commands.contains { $0.contains("--agent antigravity") })
+        let root = try readRoot(worktree.appendingPathComponent(".agents/hooks.json"))
+        // The user's group survives untouched; Crow's group is present exactly once.
+        #expect(root["my-linter"] != nil)
+        #expect(root["crow"] != nil)
+        let linter = root["my-linter"] as! [String: Any]
+        let wrap = (linter["PostToolUse"] as! [[String: Any]]).first!
+        #expect(wrap["matcher"] as? String == "run_command")
     }
 
     // MARK: - remove
 
-    @Test func removeStripsCrowGroupsButKeepsUserGroups() throws {
+    @Test func removeStripsCrowGroupButKeepsUserGroups() throws {
         let worktree = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: worktree) }
         AntigravityHookConfigWriter.resetTrackedCacheForTesting()
         let agentsDir = worktree.appendingPathComponent(".agents")
         try FileManager.default.createDirectory(at: agentsDir, withIntermediateDirectories: true)
-        let userSeed: [String: Any] = [
-            "hooks": [
-                "PreToolUse": [["hooks": [["type": "command", "command": "user-pretool"]]]],
-            ],
+        let seed: [String: Any] = [
+            "my-linter": ["PreInvocation": [["command": "lint.sh"]]],
         ]
-        try JSONSerialization.data(withJSONObject: userSeed)
+        try JSONSerialization.data(withJSONObject: seed)
             .write(to: agentsDir.appendingPathComponent("hooks.json"))
 
         let writer = AntigravityHookConfigWriter()
         try writer.writeHookConfig(worktreePath: worktree.path, sessionID: UUID(), crowPath: "/bin/crow")
         writer.removeHookConfig(worktreePath: worktree.path)
 
-        let hooks = try readHooks(worktree.appendingPathComponent(".agents/hooks.json"))
-        // The user's PreToolUse group survives; every Crow group is gone.
-        let pre = hooks["PreToolUse"] as! [[String: Any]]
-        #expect(pre.count == 1)
-        #expect((pre.first!["hooks"] as! [[String: Any]]).first!["command"] as? String == "user-pretool")
-        #expect(hooks["Stop"] == nil)
+        let root = try readRoot(worktree.appendingPathComponent(".agents/hooks.json"))
+        #expect(root["crow"] == nil)
+        #expect(root["my-linter"] != nil)
     }
 
-    @Test func removeDeletesFileWhenOnlyCrowGroupsExisted() throws {
+    @Test func removeDeletesFileWhenOnlyCrowGroupExisted() throws {
         let worktree = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: worktree) }
         AntigravityHookConfigWriter.resetTrackedCacheForTesting()
@@ -145,7 +199,26 @@ struct AntigravityHookConfigWriterTests {
             atPath: worktree.appendingPathComponent(".agents/hooks.json").path))
     }
 
-    // MARK: - Unparseable / torn-file guard (regression, mirrors Cursor #829)
+    // MARK: - Global-config migration (double-fire guard)
+
+    @Test func removeManagedGlobalConfigStripsOnlyCrowGroup() throws {
+        let home = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let seed: [String: Any] = [
+            "crow": ["Stop": [["type": "command", "command": "old-crow"]]],
+            "user-group": ["Stop": [["type": "command", "command": "user-hook"]]],
+        ]
+        let path = home.appendingPathComponent("hooks.json")
+        try JSONSerialization.data(withJSONObject: seed).write(to: path)
+
+        AntigravityHookConfigWriter.removeManagedGlobalConfig(geminiConfigHome: home.path)
+
+        let root = try readRoot(path)
+        #expect(root["crow"] == nil)
+        #expect(root["user-group"] != nil)
+    }
+
+    // MARK: - Unparseable / torn-file guard (regression)
 
     @Test func writeHookConfigLeavesUnparseableFileUntouched() throws {
         let worktree = try makeTempDir()
@@ -153,58 +226,14 @@ struct AntigravityHookConfigWriterTests {
         AntigravityHookConfigWriter.resetTrackedCacheForTesting()
         let agentsDir = worktree.appendingPathComponent(".agents")
         try FileManager.default.createDirectory(at: agentsDir, withIntermediateDirectories: true)
-        // A torn/hand-edited config that doesn't parse. The writer must bail
-        // rather than start from `[:]` and clobber whatever the user had — a
-        // future refactor that drops the parse guard would silently destroy it.
-        let garbage = "{ \"hooks\": { \"Stop\": [  <-- oops not json"
+        let garbage = "{ \"crow\": {  <-- oops not json"
         let hooksPath = agentsDir.appendingPathComponent("hooks.json")
         try garbage.write(to: hooksPath, atomically: true, encoding: .utf8)
 
         try AntigravityHookConfigWriter().writeHookConfig(
             worktreePath: worktree.path, sessionID: UUID(), crowPath: "/bin/crow")
 
-        // Byte-for-byte unchanged: no Crow group injected, nothing overwritten.
         #expect(try String(contentsOf: hooksPath, encoding: .utf8) == garbage)
-    }
-
-    // MARK: - Path-with-spaces (shell-quoting regression)
-
-    @Test func crowPathWithSpacesIsShellQuoted() throws {
-        let worktree = try makeTempDir()
-        defer { try? FileManager.default.removeItem(at: worktree) }
-        AntigravityHookConfigWriter.resetTrackedCacheForTesting()
-        // A devRoot with a space (`/Users/x/My Projects/.claude/bin/crow`) must
-        // not split the hook command — the crow path is single-quoted, so the
-        // shell sees one argument.
-        let spaced = "/Users/x/My Projects/.claude/bin/crow"
-        try AntigravityHookConfigWriter().writeHookConfig(
-            worktreePath: worktree.path, sessionID: UUID(), crowPath: spaced)
-
-        let hooks = try readHooks(worktree.appendingPathComponent(".agents/hooks.json"))
-        #expect(command(hooks, "Stop").hasPrefix("'\(spaced)' hook-event "))
-    }
-
-    // MARK: - Global-config migration (double-fire guard)
-
-    @Test func removeManagedGlobalConfigStripsOnlyCrowGroups() throws {
-        let home = try makeTempDir()
-        defer { try? FileManager.default.removeItem(at: home) }
-        let seed: [String: Any] = [
-            "hooks": [
-                "Stop": [
-                    ["hooks": [["type": "command", "command": "user-global-hook"]]],
-                    ["hooks": [["type": "command", "command": "/x/crow hook-event --session X --agent antigravity --event Stop"]]],
-                ],
-            ],
-        ]
-        let path = home.appendingPathComponent("hooks.json")
-        try JSONSerialization.data(withJSONObject: seed).write(to: path)
-
-        AntigravityHookConfigWriter.removeManagedGlobalConfig(geminiConfigHome: home.path)
-
-        let stop = try readHooks(path)["Stop"] as! [[String: Any]]
-        #expect(stop.count == 1)
-        #expect((stop.first!["hooks"] as! [[String: Any]]).first!["command"] as? String == "user-global-hook")
     }
 
     // MARK: - Git-tracked guard + exclude
@@ -228,7 +257,7 @@ struct AntigravityHookConfigWriterTests {
         git(["init"])
         let agentsDir = repo.appendingPathComponent(".agents")
         try FileManager.default.createDirectory(at: agentsDir, withIntermediateDirectories: true)
-        let committed: [String: Any] = ["hooks": ["Stop": [["hooks": [["type": "command", "command": "committed"]]]]]]
+        let committed: [String: Any] = ["user-group": ["Stop": [["command": "committed"]]]]
         try JSONSerialization.data(withJSONObject: committed)
             .write(to: agentsDir.appendingPathComponent("hooks.json"))
         git(["add", ".agents/hooks.json"])
@@ -237,11 +266,10 @@ struct AntigravityHookConfigWriterTests {
         try AntigravityHookConfigWriter().writeHookConfig(
             worktreePath: repo.path, sessionID: UUID(), crowPath: "/bin/crow")
 
-        // The committed file is left untouched — no Crow group injected.
-        let hooks = try readHooks(repo.appendingPathComponent(".agents/hooks.json"))
-        let stop = hooks["Stop"] as! [[String: Any]]
-        #expect(stop.count == 1)
-        #expect((stop.first!["hooks"] as! [[String: Any]]).first!["command"] as? String == "committed")
+        // The committed file is untouched — no `crow` group injected.
+        let root = try readRoot(repo.appendingPathComponent(".agents/hooks.json"))
+        #expect(root["crow"] == nil)
+        #expect(root["user-group"] != nil)
     }
 
     @Test func gitExcludesUntrackedConfig() throws {
@@ -258,7 +286,8 @@ struct AntigravityHookConfigWriterTests {
         try AntigravityHookConfigWriter().writeHookConfig(
             worktreePath: repo.path, sessionID: UUID(), crowPath: "/bin/crow")
 
-        let exclude = try String(contentsOfFile: repo.appendingPathComponent(".git/info/exclude").path, encoding: .utf8)
+        let exclude = try String(
+            contentsOfFile: repo.appendingPathComponent(".git/info/exclude").path, encoding: .utf8)
         #expect(exclude.contains(".agents/hooks.json"))
     }
 }

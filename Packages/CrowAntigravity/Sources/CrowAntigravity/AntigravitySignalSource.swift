@@ -2,30 +2,28 @@ import Foundation
 import CrowCore
 
 /// Translates Google Antigravity (`agy`) hook events into
-/// `AgentStateTransition` values. Antigravity ships Claude-Code-style hooks —
-/// JSON on stdin, reply on stdout, the same `PreToolUse`/`PostToolUse` tool
-/// vocabulary — so this state machine is a near-clone of
-/// `ClaudeHookSignalSource` / `CursorSignalSource`, differing only in the
-/// invocation-level events Antigravity adds (`PreInvocation` / `PostInvocation`)
-/// in place of Claude's `UserPromptSubmit` / `SessionStart` pair (#860).
+/// `AgentStateTransition` values. Antigravity's hook *transport* is Claude-like
+/// (JSON on stdin, JSON verdict on stdout) but its config schema is its own
+/// (named groups — see `AntigravityHookConfigWriter`); this state machine only
+/// cares about the flattened event name + tool name, so it stays close to
+/// `ClaudeHookSignalSource` / `CursorSignalSource` (#860).
 ///
 /// **`Stop` is the canonical "done" signal.** Antigravity's `Stop` hook carries
 /// `fullyIdle` + `terminationReason` (`model_stop` / `max_steps_exceeded` /
-/// `error`) in its stdin payload — a real, reliable idle marker, which is what
-/// makes hooks Antigravity's single strongest integration point. The pinned
-/// `AgentHookEvent` schema doesn't surface those extra fields (they're not in
-/// the flattened struct), so here `Stop` firing at all ⇒ `.done`; the
-/// `fullyIdle`/`terminationReason` refinement (e.g. mapping `error` to a
-/// distinct state) is a version-pinned follow-up. Matching Claude/Cursor, the
-/// bare `Stop` → `.done` transition already satisfies Crow's active→done
-/// contract.
+/// `error`) in its stdin payload — a real idle marker, the strongest reason to
+/// integrate via hooks. The pinned `AgentHookEvent` schema doesn't surface those
+/// extra fields, so `Stop` firing ⇒ `.done`; refining on `terminationReason`
+/// (e.g. mapping `error` to a distinct state) is a version-pinned follow-up.
 ///
-/// **No awaiting-input event.** Antigravity has no dedicated "needs input" hook
-/// on this version, so — unlike Claude's `PermissionRequest`/`Notification`
-/// flow — this source never sets a `.waiting` notification. A `PermissionRequest`
-/// case is kept for cross-agent parity (and the follow-up that would map
-/// Antigravity's `request-review` mode / `statusLine` payload into it), but the
-/// writer doesn't currently emit it.
+/// **Events actually driven by the writer:** `PreInvocation` (turn start →
+/// working), `PostInvocation` (observational), `PostToolUse` (tool activity),
+/// `Stop` (done). `PreToolUse` is **not registered** by
+/// `AntigravityHookConfigWriter` (its strict stdout decision gate is unsafe for
+/// an observational hook — see that type), so tool activity is detected on
+/// completion via `PostToolUse` rather than on start. The `PreToolUse` case
+/// below is kept for cross-agent parity / future-proofing, not because the
+/// current writer emits it — same posture as the defensive `PermissionRequest`
+/// case (Antigravity has no awaiting-input hook on v1.1.7).
 public struct AntigravitySignalSource: StateSignalSource {
     public init() {}
 
@@ -60,6 +58,10 @@ public struct AntigravitySignalSource: StateSignalSource {
             break
 
         case "PreToolUse":
+            // NOT registered by the current writer (its stdout decision gate is
+            // unsafe for observational hooks — see AntigravityHookConfigWriter).
+            // Kept for cross-agent parity / future-proofing: if a later version
+            // registers it, tool-start detection works with no further change.
             let toolName = event.toolName ?? "unknown"
             transition.toolActivity = .set(ToolActivity(
                 toolName: toolName, isActive: true
@@ -67,6 +69,10 @@ public struct AntigravitySignalSource: StateSignalSource {
             transition.newActivityState = .working
 
         case "PostToolUse":
+            // Where tool activity is actually detected (since PreToolUse is off).
+            // Records the tool that just ran; state stays whatever PreInvocation
+            // set (working) until Stop — mirrors Cursor's observational
+            // PostToolUse (no activity-state change here).
             let toolName = event.toolName ?? "unknown"
             transition.toolActivity = .set(ToolActivity(
                 toolName: toolName, isActive: false

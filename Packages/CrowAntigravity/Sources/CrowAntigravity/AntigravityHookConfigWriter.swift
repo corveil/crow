@@ -3,85 +3,115 @@ import CrowCore
 
 /// Writes Google Antigravity's per-worktree hook configuration into
 /// `<worktree>/.agents/hooks.json`, with the Crow session UUID baked into every
-/// command (`hook-event --session <uuid> --agent antigravity`). Structurally a
-/// near-clone of `CursorHookConfigWriter` — one config per session directory,
-/// no global config, per-session **UUID** resolution — because Antigravity's
-/// hooks are Claude-Code-style (JSON on stdin, reply on stdout, exit-code
-/// semantics, the `PreToolUse`/`PostToolUse` tool vocabulary), which is what
-/// lets the `HookConfigWriter` / `StateSignalSource` pair work rather than being
-/// a `cwd`-scoped fallback (#860).
+/// command (`hook-event --session <uuid> --agent antigravity`).
 ///
-/// **Why per-worktree with UUID, not global `~/.gemini/config/`.** Antigravity
-/// reads hooks from both the global `~/.gemini/config/hooks.json` and the
-/// workspace `.agents/hooks.json`; if it merges and runs both (as Cursor does),
-/// a surviving global config would double-fire every event. Per-worktree-only
-/// sidesteps that, bakes the session UUID into the command (so the server never
-/// guesses the session from `cwd` — which the Manager, running in the un-worktree
-/// devRoot, defeats), and `LaunchScaffold` calls `removeManagedGlobalConfig` to
-/// migrate users off any global config a prior Crow installed.
+/// **Schema — Antigravity's own, not Claude's.** Verified against
+/// [`antigravity.google/docs/hooks`](https://antigravity.google/docs/hooks): the
+/// file is a map of **named groups** → event configs, *not* Claude's
+/// `{"hooks": {Event: […]}}`. Crow owns exactly one named group (`"crow"`) and
+/// leaves every other group untouched:
 ///
-/// **`.agents/hooks.json` is a shared workspace file.** Like Cursor's
-/// `.cursor/hooks.json` (and unlike Claude's gitignored, local-only
-/// `.claude/settings.local.json`), a user may already track a committed
-/// `.agents/hooks.json`. So this writer inherits Cursor's guarantees verbatim:
-/// group-level Crow-marker preservation (a user's own hook for the same event is
-/// never clobbered), an untracked file is git-excluded so it isn't committed,
-/// and if the repo already **commits** `.agents/hooks.json` the write is skipped
-/// entirely (logged) rather than poison the shared repo with a machine-local
-/// crow path + dead session UUID.
+/// ```json
+/// {
+///   "crow": {
+///     "PreInvocation":  [ {"type":"command","command":"…","timeout":5} ],
+///     "PostInvocation": [ {"type":"command","command":"…","timeout":5} ],
+///     "PostToolUse":    [ {"matcher":"*","hooks":[{"type":"command","command":"…","timeout":5}]} ],
+///     "Stop":           [ {"type":"command","command":"…","timeout":5} ]
+///   }
+/// }
+/// ```
 ///
-/// The JSON shape is Claude-Code-style (PascalCase event keys, no top-level
-/// `version`): `{"hooks": {"PreToolUse": [{"hooks": [{type,command,…}]}], …}}`.
+/// Tool events (`PostToolUse`) wrap handlers in `{matcher, hooks:[…]}` with the
+/// catch-all `"*"` matcher; invocation/`Stop` events list handlers **directly**
+/// under the event key (matcher ignored). There is **no `async` field** in
+/// Antigravity's handler schema — declaring one risks a parse failure.
+///
+/// **`PreToolUse` is deliberately not registered.** Antigravity's own bundled
+/// plugin (vibe-island) registers `PreInvocation`/`PostInvocation`/`PostToolUse`/
+/// `Stop` and skips `PreToolUse`, because `PreToolUse` demands a strict stdout
+/// verdict (`{"decision":"allow"|"deny"|"ask"|"force_ask"}`) and a mis-shaped
+/// reply denies **every** tool call (see cmux #5358). Crow's hooks are
+/// observational, so we stay off that gate and detect tool activity from
+/// `PostToolUse` (whose reply is a harmless `{}`).
+///
+/// **Every command emits its own stdout verdict.** Antigravity reads the hook's
+/// stdout as JSON. `crow hook-event` is observational and may print a JSON-RPC
+/// error on failure, so each command **suppresses** hook-event's output and then
+/// `printf '{}'`s the empty-object verdict itself — the documented no-op reply
+/// for `PostToolUse`/`PreInvocation`/`PostInvocation`, and a non-`continue` reply
+/// for `Stop` (i.e. "allow the agent to stop"). Using `;` (not `&&`) plus the
+/// trailing `printf` guarantees the verdict is emitted and the hook exits 0 even
+/// when hook-event fails — so a Crow hook can never block a tool or loop the
+/// agent.
+///
+/// **`.agents/hooks.json` is a shared workspace file** (like Cursor's
+/// `.cursor/hooks.json`), so this writer keeps Cursor's protections: a
+/// git-tracked config is left untouched (never poison a committed file), an
+/// untracked one is git-excluded, and a torn/unparseable file is bailed on
+/// rather than clobbered. Crow only ever writes/removes its own `"crow"` group,
+/// so a user's other named groups survive verbatim.
 public struct AntigravityHookConfigWriter: HookConfigWriter {
 
-    /// The lifecycle events documented for `agy` v1.1.7 that Crow observes,
-    /// mapped 1:1 to their Crow-canonical (= native, PascalCase) event name.
-    /// `PreInvocation`/`PostInvocation` are Antigravity's turn-boundary hooks
-    /// (Claude's `UserPromptSubmit`/`SessionStart` analogue); `Stop` carries
-    /// `fullyIdle` and is the authoritative done signal (see
-    /// `AntigravitySignalSource`).
-    static let events: [String] = [
-        "PreInvocation",
-        "PostInvocation",
-        "PreToolUse",
-        "PostToolUse",
-        "Stop",
-    ]
+    /// Crow's named group key. Antigravity's config maps named groups → events;
+    /// Crow owns exactly this one group (a user naming their own group `"crow"`
+    /// is a documented collision — Crow's write wins for that key only).
+    static let groupKey = "crow"
 
-    /// Post-execution events safe to run async (fire-and-forget). `Stop` stays
-    /// synchronous because its state-transition timing drives the UI;
-    /// `PreToolUse`/`PreInvocation` stay sync so they arrive in order.
-    private static let asyncEvents: Set<String> = ["PostToolUse", "PostInvocation"]
+    /// Tool-scoped events — wrapped in `{matcher, hooks:[…]}`. Mirrors
+    /// vibe-island; `PreToolUse` is intentionally excluded (see type doc).
+    static let toolEvents = ["PostToolUse"]
+
+    /// Invocation / stop events — handlers listed directly under the event key
+    /// (no matcher, no `hooks` wrapper).
+    static let directEvents = ["PreInvocation", "PostInvocation", "Stop"]
+
+    /// All events Crow registers (for strip/round-trip helpers).
+    static var allEvents: [String] { toolEvents + directEvents }
 
     public init() {}
 
-    // MARK: - Hook generation
+    // MARK: - Command + group generation
 
-    /// One Crow hook group (`{"hooks": [{command…}]}`) for `event`, with the
-    /// session UUID baked into the command.
-    static func crowGroup(sessionID: UUID, event: String, crowPath: String) -> [String: Any] {
-        // Antigravity runs this string through a shell, so quote the crow path —
-        // `findCrowBinary` prefers `{devRoot}/.claude/bin/crow` and devRoot is
-        // user-chosen (`/Users/x/My Projects/…` would otherwise split the command
-        // and silently stop every hook from firing).
-        let command = "\(AntigravityLaunchArgs.shellQuote(crowPath)) hook-event --session \(sessionID.uuidString) --agent antigravity --event \(event)"
-        var entry: [String: Any] = [
+    /// The shell command for `event`: forward to `crow hook-event`, suppress its
+    /// output, then emit the `{}` stdout verdict and exit 0.
+    static func crowCommand(sessionID: UUID, event: String, crowPath: String) -> String {
+        // Quote the crow path — devRoot is user-chosen (`/Users/x/My Projects/…`
+        // would otherwise split the command).
+        "\(AntigravityLaunchArgs.shellQuote(crowPath)) hook-event --session \(sessionID.uuidString) --agent antigravity --event \(event) >/dev/null 2>&1; printf '{}'"
+    }
+
+    /// One `{type, command, timeout}` handler object.
+    private static func handler(sessionID: UUID, event: String, crowPath: String) -> [String: Any] {
+        [
             "type": "command",
-            "command": command,
+            "command": crowCommand(sessionID: sessionID, event: event, crowPath: crowPath),
             "timeout": 5,
         ]
-        if asyncEvents.contains(event) {
-            entry["async"] = true
+    }
+
+    /// Build Crow's `"crow"` group: direct handlers for invocation/Stop events,
+    /// `{matcher:"*", hooks:[…]}` for tool events.
+    static func crowGroup(sessionID: UUID, crowPath: String) -> [String: Any] {
+        var group: [String: Any] = [:]
+        for event in directEvents {
+            group[event] = [handler(sessionID: sessionID, event: event, crowPath: crowPath)]
         }
-        return ["hooks": [entry]]
+        for event in toolEvents {
+            group[event] = [
+                [
+                    "matcher": "*",
+                    "hooks": [handler(sessionID: sessionID, event: event, crowPath: crowPath)],
+                ] as [String: Any]
+            ]
+        }
+        return group
     }
 
     // MARK: - HookConfigWriter conformance
 
-    /// Write `<worktreePath>/.agents/hooks.json`. For each managed event we drop
-    /// any prior Crow group (keeps re-runs idempotent) and append a fresh one,
-    /// leaving the user's own groups — and every unmanaged event — untouched.
-    /// Git-excludes the file.
+    /// Write `<worktreePath>/.agents/hooks.json`, replacing only Crow's `"crow"`
+    /// group and preserving every other named group. Git-excludes the file.
     public func writeHookConfig(
         worktreePath: String,
         sessionID: UUID,
@@ -90,13 +120,12 @@ public struct AntigravityHookConfigWriter: HookConfigWriter {
         let agentsDir = (worktreePath as NSString).appendingPathComponent(".agents")
         let hooksPath = (agentsDir as NSString).appendingPathComponent("hooks.json")
 
-        // If the repo *tracks* `.agents/hooks.json`, refuse to write into it.
-        // `.git/info/exclude` has no effect on already-tracked files, so an
-        // unattended `.job` doing `git add -A` would commit Crow's absolute
-        // crow-path + dead session UUID into the shared repo, breaking every
-        // teammate's tool calls. Better to lose state detection for this one
-        // worktree than to poison the repo. Checked unconditionally (not gated on
-        // the file existing) so a tracked-but-`rm`'d file is still caught.
+        // If the repo *tracks* `.agents/hooks.json`, refuse to write into it —
+        // `.git/info/exclude` has no effect on tracked files, so an unattended
+        // `git add -A` would commit Crow's absolute crow-path + dead session UUID
+        // into the shared repo. Better to lose state detection for this one
+        // worktree than poison the repo. Checked unconditionally so a
+        // tracked-but-`rm`'d file is still caught.
         if Self.isGitTracked(worktreePath: worktreePath, relativePath: ".agents/hooks.json") {
             NSLog("[AntigravityHookConfigWriter] %@/.agents/hooks.json is git-tracked; not writing Crow's session hooks into a committed file. Gitignore/untrack it to enable hook-based state detection for this worktree.", worktreePath)
             return
@@ -104,9 +133,8 @@ public struct AntigravityHookConfigWriter: HookConfigWriter {
 
         try FileManager.default.createDirectory(atPath: agentsDir, withIntermediateDirectories: true)
 
-        // If the file EXISTS but doesn't parse (a torn concurrent write, a
-        // hand-edit with a syntax error), bail rather than start from `[:]` and
-        // overwrite the user's own hook groups.
+        // If the file EXISTS but doesn't parse (torn write, hand-edit), bail
+        // rather than start from `[:]` and drop the user's other groups.
         var root: [String: Any] = [:]
         if let data = FileManager.default.contents(atPath: hooksPath) {
             guard let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -116,87 +144,55 @@ public struct AntigravityHookConfigWriter: HookConfigWriter {
             root = parsed
         }
 
-        var hooks = root["hooks"] as? [String: Any] ?? [:]
-        for event in Self.events {
-            var groups = hooks[event] as? [[String: Any]] ?? []
-            groups.removeAll { Self.groupIsCrowManaged($0) }
-            groups.append(Self.crowGroup(sessionID: sessionID, event: event, crowPath: crowPath))
-            hooks[event] = groups
-        }
-        root["hooks"] = hooks
+        // Own only the `"crow"` group; every other named group is preserved.
+        root[Self.groupKey] = Self.crowGroup(sessionID: sessionID, crowPath: crowPath)
 
         let data = try JSONSerialization.data(
             withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
         // Atomic (temp + rename): a crash mid-write would otherwise leave a
-        // truncated file that the unparseable-guard then refuses to touch,
-        // silently disabling this worktree's hook-based state detection forever.
+        // truncated file the unparseable-guard then refuses to touch, silently
+        // disabling this worktree's hook-based state detection forever.
         try data.write(to: URL(fileURLWithPath: hooksPath), options: [.atomic])
 
-        // Keep the session-specific config out of commits (works for any repo,
-        // not just ones that gitignore `.agents/hooks.json`). One-way by design:
-        // the pattern is a repo-level ignore rule shared by every worktree, so
-        // `removeHookConfig` must NOT pull it back out — a sibling worktree's
-        // still-live session would otherwise lose the protection.
+        // Keep the session-specific config out of commits. One-way by design: the
+        // pattern is a repo-level ignore shared by every worktree, so
+        // `removeHookConfig` must NOT pull it back out.
         Self.ensureGitExcluded(worktreePath: worktreePath, pattern: ".agents/hooks.json")
     }
 
-    /// Remove Crow's hook groups from a worktree's `.agents/hooks.json`,
-    /// preserving a user's own groups (and unmanaged events). Deletes the file
-    /// when nothing meaningful would remain.
+    /// Remove Crow's `"crow"` group from a worktree's `.agents/hooks.json`,
+    /// preserving other groups. Deletes the file when nothing else remains.
     public func removeHookConfig(worktreePath: String) {
         let hooksPath = (worktreePath as NSString)
             .appendingPathComponent(".agents/hooks.json")
-        Self.stripCrowGroups(at: hooksPath)
+        Self.stripCrowGroup(at: hooksPath)
     }
 
     // MARK: - Global-config migration
 
-    /// Strip Crow's hook groups from the **global** `<geminiConfigHome>/hooks.json`
-    /// a prior Crow (or a future scope change) may have installed. Per-worktree
-    /// configs are the authority; because Antigravity may merge global + workspace
-    /// and run both, a surviving global config would double-fire every event.
-    /// Only Crow's groups are removed — a user's own hooks survive. `geminiConfigHome`
-    /// is typically `~/.gemini/config`.
+    /// Strip Crow's `"crow"` group from the **global** `<geminiConfigHome>/hooks.json`
+    /// (typically `~/.gemini/config`). Per-worktree configs are the authority;
+    /// because Antigravity may merge global + workspace and run both, a surviving
+    /// global Crow group would double-fire every event. Only Crow's group is
+    /// removed — a user's other groups survive.
     public static func removeManagedGlobalConfig(geminiConfigHome: String) {
         let hooksPath = (geminiConfigHome as NSString).appendingPathComponent("hooks.json")
-        stripCrowGroups(at: hooksPath)
+        stripCrowGroup(at: hooksPath)
     }
 
-    // MARK: - Group-level helpers
+    // MARK: - Group-level helper
 
-    /// Remove every Crow group from each managed event in `hooksPath`, preserving
-    /// user groups; drop an event key that ends up empty and the whole file when
-    /// only unmanaged scaffold remains. No-op when the file is absent,
+    /// Remove the `"crow"` group from `hooksPath`, preserving user groups; delete
+    /// the file when nothing else remains. No-op when the file is absent,
     /// unparseable, or already Crow-free.
-    private static func stripCrowGroups(at hooksPath: String) {
+    private static func stripCrowGroup(at hooksPath: String) {
         guard let data = FileManager.default.contents(atPath: hooksPath),
               var root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              var hooks = root["hooks"] as? [String: Any] else {
+              root[groupKey] != nil else {
             return
         }
+        root.removeValue(forKey: groupKey)
 
-        var changed = false
-        for event in events {
-            guard var groups = hooks[event] as? [[String: Any]] else { continue }
-            let before = groups.count
-            groups.removeAll { groupIsCrowManaged($0) }
-            if groups.count == before { continue }
-            changed = true
-            if groups.isEmpty {
-                hooks.removeValue(forKey: event)
-            } else {
-                hooks[event] = groups
-            }
-        }
-        guard changed else { return }
-
-        if hooks.isEmpty {
-            root.removeValue(forKey: "hooks")
-        } else {
-            root["hooks"] = hooks
-        }
-
-        // Nothing meaningful left — remove the file rather than leave a husk.
         if root.isEmpty {
             try? FileManager.default.removeItem(atPath: hooksPath)
             return
@@ -211,32 +207,11 @@ public struct AntigravityHookConfigWriter: HookConfigWriter {
         }
     }
 
-    /// Whether a hook group (`{"hooks": [{command…}]}`) is one Crow installed —
-    /// its command shells `crow hook-event … --agent antigravity`. A user's own
-    /// command for the same event won't carry both tokens.
-    private static func groupIsCrowManaged(_ group: [String: Any]) -> Bool {
-        guard let inner = group["hooks"] as? [[String: Any]] else { return false }
-        for entry in inner {
-            guard let command = entry["command"] as? String else { continue }
-            if command.contains("hook-event") && command.contains("--agent antigravity") {
-                return true
-            }
-        }
-        return false
-    }
-
     // MARK: - Git-tracked probe (mirrors CursorHookConfigWriter)
 
-    /// Cache of `(worktreePath, relativePath) → tracked?`, probed at most once per
-    /// process. Guarded by `trackedCacheLock`.
     private nonisolated(unsafe) static var trackedCache: [String: Bool] = [:]
     private static let trackedCacheLock = NSLock()
 
-    /// Best-effort: whether `relativePath` is tracked in the worktree's git index
-    /// (`git ls-files --error-unmatch`). Returns false on any error (no git, not a
-    /// repo, untracked) — the safe default is "untracked", so a normal worktree
-    /// still gets its hooks written. Bounded by a short timeout; cached per
-    /// (worktree, path).
     private static func isGitTracked(worktreePath: String, relativePath: String) -> Bool {
         let cacheKey = worktreePath + "\u{0}" + relativePath
         trackedCacheLock.lock()
@@ -283,10 +258,6 @@ public struct AntigravityHookConfigWriter: HookConfigWriter {
 
     // MARK: - Git exclude (mirrors CursorHookConfigWriter)
 
-    /// Best-effort: ensure `pattern` is listed in the worktree's git
-    /// `info/exclude` so Crow's runtime config isn't committed. Handles both a
-    /// normal `.git` directory and a linked-worktree `.git` file. Silent on any
-    /// failure — the config still works, it just isn't excluded.
     static func ensureGitExcluded(worktreePath: String, pattern: String) {
         guard let excludePath = gitInfoExcludePath(worktreePath: worktreePath) else { return }
         let existing = (try? String(contentsOfFile: excludePath, encoding: .utf8)) ?? ""
@@ -304,8 +275,6 @@ public struct AntigravityHookConfigWriter: HookConfigWriter {
         try? updated.write(toFile: excludePath, atomically: true, encoding: .utf8)
     }
 
-    /// Resolve the git `info/exclude` path for a worktree, or `nil` when the
-    /// directory isn't a git checkout / can't be resolved.
     private static func gitInfoExcludePath(worktreePath: String) -> String? {
         let fm = FileManager.default
         let dotGit = (worktreePath as NSString).appendingPathComponent(".git")
@@ -323,7 +292,6 @@ public struct AntigravityHookConfigWriter: HookConfigWriter {
             gitDir = (worktreePath as NSString).appendingPathComponent(gitDir)
         }
         gitDir = (gitDir as NSString).standardizingPath
-        // The `info/exclude` in the *common* dir applies to all worktrees.
         let commonDirFile = (gitDir as NSString).appendingPathComponent("commondir")
         if let common = try? String(contentsOfFile: commonDirFile, encoding: .utf8) {
             var commonPath = common.trimmingCharacters(in: .whitespacesAndNewlines)

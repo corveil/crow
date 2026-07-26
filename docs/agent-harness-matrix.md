@@ -32,7 +32,7 @@ capabilities, update this table in the same PR.
 | Auto-permission | ✅ `--permission-mode auto` | ✅ `--force --approve-mcps` (parity with Claude auto, #829) | ✅ `-a never -s workspace-write` (`.job`, interactive) | ⚠️ runtime-probed `--auto`, `.job` only | ⚠️ `settings.json` modes only (no verified launch flag; never `--dangerously-skip-permissions`) |
 | Hooks transport | per-worktree `.claude/settings.local.json` | per-worktree `.cursor/hooks.json` (#829) | global `~/.codex/hooks.json` + `config.toml` `notify` bridge (per-worktree deferred — see below) | global JS plugin `~/.config/opencode/plugins/crow-hooks.js` | per-worktree `.agents/hooks.json` (#860) |
 | Hook → session scope | ✅ per-session UUID | ✅ per-session UUID (#829) | ❌ `cwd` match (per-worktree UUID deferred) | ❌ `cwd` match | ✅ per-session UUID |
-| Hook async delivery | ✅ `PostToolUse*` async | ⚠️ declared, timing unverified | ❌ sync-only (v0.141.0) | ⚠️ names verified, timing unverified | ⚠️ `PostToolUse`/`PostInvocation` declared, timing unverified |
+| Hook async delivery | ✅ `PostToolUse*` async | ⚠️ declared, timing unverified | ❌ sync-only (v0.141.0) | ⚠️ names verified, timing unverified | ❌ no `async` in Antigravity's schema — all sync |
 | MCP (e.g. Jira) | ✅ `jira` MCP server via `~/.claude.json` | ✅ `jira` bridged into `~/.cursor/mcp.json` (#829) | ✅ mirrored from `~/.claude.json` into `config.toml` | ❌ falls back to `acli` | ❌ falls back to `acli` (file bridge deferred) |
 | Review (`/crow-review-pr`) | ✅ slash-command | ✅ inlined skill body | ✅ inlined skill body | ✅ inlined skill body | ❌ unsupported in Phase A (`autoLaunchCommand(.review)` → nil) |
 | Initial-prompt injection | ✅ `$(cat …-prompt.md)` + deferred paste | ✅ `$(cat …)` job/review; handoff launcher auto-wired (#829); `.work` bare | ✅ `.job` + `.review` (`$(cat …-prompt.md)`) | ✅ run-then-`--continue` | ✅ `-p "$(cat …-job-prompt.md)"` (`.job`); `.work` bare |
@@ -356,8 +356,8 @@ spurious `/rename` paste.
 Google Antigravity's CLI (binary **`agy`**) is the terminal surface of Google's
 agent-first dev platform (IDE + CLI + SDK, launched with Gemini 3). Crow drives
 it through the same `CodingAgent` protocol as the others — its adapter
-(`CrowAntigravity`) is structurally a **near-clone of `CrowCursor`**: Claude-
-Code-style hooks (JSON on stdin, reply on stdout), so the
+(`CrowAntigravity`) is structurally a **near-clone of `CrowCursor`**: hooks feed
+lifecycle events (JSON on stdin, JSON verdict on stdout) so the
 `HookConfigWriter`/`StateSignalSource` pair does real work; per-worktree
 `.agents/hooks.json` with the session UUID baked in (per-session scope, not
 `cwd`); remote control faked via `crow send`; `.review` unsupported in Phase A
@@ -365,12 +365,23 @@ Code-style hooks (JSON on stdin, reply on stdout), so the
 It ships **Tier-2** ([ADR 0015](adr/0015-harness-capability-tiers.md))
 with honest, documented gaps (#860).
 
-**Hooks are its single strongest point.** Antigravity's `Stop` hook carries
-`fullyIdle` + `terminationReason` (`model_stop` / `max_steps_exceeded` /
-`error`) — a real "done" signal that `AntigravitySignalSource` maps to `.done`.
-`PreInvocation`/`PostInvocation` are the turn-boundary hooks (Claude's
-`UserPromptSubmit`/`SessionStart` analogue); `PreToolUse`/`PostToolUse` share the
-tool vocabulary. Gaps: no `--output-format json`/`stream-json` (upstream FRs
+**Hooks are its single strongest point — but the schema is Antigravity's own,
+not Claude's.** Verified against [`antigravity.google/docs/hooks`](https://antigravity.google/docs/hooks):
+`hooks.json` is a map of **named groups** → event configs (`{"crow": {…}}`), not
+Claude's `{"hooks": {Event: […]}}`. Tool events (`PostToolUse`) wrap handlers in
+`{matcher:"*", hooks:[…]}`; invocation/`Stop` events list handlers directly under
+the event key; there is **no `async` field**. Each hook command reads its stdin
+event, forwards it to `crow hook-event`, then `printf '{}'`s the stdout verdict
+itself (`crow hook-event` is observational) and exits 0 — so a Crow hook can
+never block a tool or loop the agent. `Stop` carries `fullyIdle` +
+`terminationReason` (`model_stop`/`max_steps_exceeded`/`error`) →
+`AntigravitySignalSource` maps it to `.done`; `PreInvocation` → working;
+`PostToolUse` → tool activity. **`PreToolUse` is deliberately not registered** —
+it demands a strict `{"decision":…}` stdout verdict and a mis-shaped reply denies
+every tool call (cmux #5358), so — like Antigravity's own bundled vibe-island
+plugin — Crow stays off it and reads tool activity from `PostToolUse`. The stdin
+tool name is `toolCall.name` (camelCase), normalized in `EngineRouter`
+(`hookToolName`). Gaps: no `--output-format json`/`stream-json` (upstream FRs
 #119/#597), no ACP/JSON-RPC (FR #31), no dedicated "awaiting-input" event, and
 headless `-p` historically drops stdout on a **non-TTY** — which doesn't bite
 Crow because it launches `agy` inside a tmux PTY, so no shim is needed on the

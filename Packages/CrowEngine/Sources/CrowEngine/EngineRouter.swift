@@ -47,6 +47,16 @@ public struct EngineContext {
     }
 }
 
+/// Extract the tool name from a hook payload, tolerating each harness's shape.
+/// Claude/Cursor/Codex send a flat `tool_name`; Antigravity's stdin nests it as
+/// `toolCall.name` (camelCase). Falling back keeps Antigravity's `PostToolUse`
+/// tool activity from always reading `"unknown"` (#862 review). Harmless for the
+/// other harnesses — they have no `toolCall` object.
+func hookToolName(from payload: [String: JSONValue]) -> String? {
+    if let flat = payload["tool_name"]?.stringValue { return flat }
+    return payload["toolCall"]?.objectValue?["name"]?.stringValue
+}
+
 @MainActor
 public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
     let capturedAppState = ctx.appState
@@ -1191,7 +1201,7 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                 let summary: String = {
                     switch eventName {
                     case "PreToolUse", "PostToolUse", "PostToolUseFailure":
-                        let tool = payload["tool_name"]?.stringValue ?? "unknown"
+                        let tool = hookToolName(from: payload) ?? "unknown"
                         return "\(eventName): \(tool)"
                     case "Notification":
                         let msg = payload["message"]?.stringValue ?? ""
@@ -1260,7 +1270,7 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                     let agentEvent = AgentHookEvent(
                         sessionID: sessionID,
                         eventName: eventName,
-                        toolName: payload["tool_name"]?.stringValue,
+                        toolName: hookToolName(from: payload),
                         source: payload["source"]?.stringValue,
                         message: payload["message"]?.stringValue,
                         notificationType: payload["notification_type"]?.stringValue,
