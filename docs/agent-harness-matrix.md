@@ -258,11 +258,21 @@ All harnesses report lifecycle events by shelling out to `crow hook-event`, but
   (a user's own `*.json` in the dir is preserved). **Trust caveat:** project
   hooks *require folder trust* (`~/.grok/trusted_folders.toml`) on a release
   build — `GrokTrustSeeder` seeds it for `.work`/`.job` worktrees, never
-  `.review` clones (and `prepareReviewClone` strips a committed `.grok/`, which
-  also covers a local/dev build where folder-trust is inert). Sync-only
-  (`asyncEvents` empty) until Grok's async delivery is verified. **Deferred /
-  re-check:** whether these fire alongside the `~/.claude`/`~/.cursor` configs
-  Grok *also* discovers in a handed-off worktree (dedup, cf. Codex §3b).
+  `.review` clones. The review-clone strip must cover not just `.grok/` but the
+  compat sources Grok also loads by default —
+  `.claude/settings.json`/`settings.local.json` and
+  `.cursor/hooks.json`/`.cursor/mcp.json`. For a `.review` clone those are
+  **attacker-controlled RCE**, not just double-fire noise, so
+  `stripGrokConfigFromReviewClone` neutralizes the *full* discovered surface on
+  both the creation-time and handoff-to-Grok paths: it removes `.grok/` and
+  `.cursor/`, removes `.claude/settings.local.json`, and keeps the
+  Crow-overwritten `.claude/settings.json` + review skill (#861). On a local/dev
+  Grok build folder-trust is inert (everything trusted), and on release trust
+  cascades from a trusted parent, so the strip — not trust-skipping — is the
+  durable guard. **Deferred / re-check:** the *global* `~/.claude`/`~/.cursor`
+  double-fire on handoff (user-controlled config, state-machine noise not RCE),
+  and whether Grok's project-hook merge double-counts in a handed-off worktree
+  (dedup, cf. Codex §3b).
 
 Claude, Cursor, and Grok get **per-session UUID scope**; Codex and OpenCode
 share the host's global config and are disambiguated by `cwd`. See
@@ -503,4 +513,4 @@ against current upstream CLIs.
 | Grok `grok` binary collides with community `superagent-ai/grok-cli` | — (collision; pin path via `defaults.binaries.grok`) | `GrokAgent.fallbackCandidates` | 2026-07-26 |
 | Grok **`--permission-mode auto` now exists** — the ticket's pinned probe (#859) reported it absent; current docs show `grok --permission-mode auto`. Bounded `.job` posture stays `--permission-mode auto` + hard `--deny` (never `--yolo`) regardless | Grok mirror **@ 2026-07-25** | `GrokLaunchArgs.autoPermissionSuffix` | 2026-07-26 |
 | Grok `Stop` / `Notification` fire on the transitions Crow's state machine needs — **confirm empirically** | — (empirical, #859) | `GrokSignalSource` | 2026-07-26 |
-| Grok double-fire: whether project hooks fire alongside the `~/.claude/settings.json` / `~/.cursor/hooks.json` Grok also discovers (its compat scanning) in a handed-off worktree still carrying a prior agent's hook config — dedup deferred (cf. Codex §3b) | — (empirical, #859) | `GrokHookConfigWriter` | 2026-07-26 |
+| Grok double-fire: **global** `~/.claude`/`~/.cursor` hook configs Grok also discovers (its compat scanning) firing alongside `.grok/hooks/crow.json` in a handed-off worktree — dedup deferred (user-controlled config, state-machine noise, not RCE; cf. Codex §3b). *Project* compat sources (`.claude/settings*.json`, `.cursor/*`) on a `.review` clone are RCE and are stripped, not deferred (`stripGrokConfigFromReviewClone`, #861). | — (empirical, #859) | `GrokHookConfigWriter` / `SessionService.stripGrokConfigFromReviewClone` | 2026-07-26 |

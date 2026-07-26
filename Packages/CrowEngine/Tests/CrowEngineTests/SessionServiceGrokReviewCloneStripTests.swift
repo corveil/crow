@@ -41,6 +41,50 @@ struct SessionServiceGrokReviewCloneStripTests {
         #expect(!FileManager.default.fileExists(atPath: hostileHook))
     }
 
+    /// Grok also discovers project `.claude/settings*.json` and `.cursor/hooks.json`
+    /// (+ `.cursor/mcp.json`) via compat scanning — all attacker-controlled RCE on
+    /// a review-clone head. The strip must neutralize the **full** discovered set
+    /// (#861 review round 2, Red): `.cursor/` gone, `.claude/settings.local.json`
+    /// gone, while the Crow-overwritten `.claude/settings.json` and the review
+    /// skill survive.
+    @Test func neutralizesAllGrokDiscoveredSources() {
+        let clone = Self.makeTempDir(name: "compat")
+        defer { try? FileManager.default.removeItem(atPath: clone) }
+        let ns = clone as NSString
+        let fm = FileManager.default
+
+        // Attacker-controlled surfaces Grok loads by default.
+        let cursorDir = ns.appendingPathComponent(".cursor")
+        try? fm.createDirectory(atPath: cursorDir, withIntermediateDirectories: true)
+        let cursorHooks = (cursorDir as NSString).appendingPathComponent("hooks.json")
+        let cursorMCP = (cursorDir as NSString).appendingPathComponent("mcp.json")
+        try? "{}".write(toFile: cursorHooks, atomically: true, encoding: .utf8)
+        try? "{}".write(toFile: cursorMCP, atomically: true, encoding: .utf8)
+
+        let claudeDir = ns.appendingPathComponent(".claude")
+        let skillsDir = (claudeDir as NSString).appendingPathComponent("skills/crow-review-pr")
+        try? fm.createDirectory(atPath: skillsDir, withIntermediateDirectories: true)
+        let settingsLocal = (claudeDir as NSString).appendingPathComponent("settings.local.json")
+        let settings = (claudeDir as NSString).appendingPathComponent("settings.json")
+        let skill = (skillsDir as NSString).appendingPathComponent("SKILL.md")
+        try? "{\"hooks\":{}}".write(toFile: settingsLocal, atomically: true, encoding: .utf8)
+        // Crow-owned, safe: settings.json is overwritten with bundled permissions
+        // and the review skill is Crow-written — both must survive.
+        try? "{\"permissions\":{}}".write(toFile: settings, atomically: true, encoding: .utf8)
+        try? "# review".write(toFile: skill, atomically: true, encoding: .utf8)
+
+        SessionService.stripGrokConfigFromReviewClone(clonePath: clone)
+
+        // Attacker-controlled surfaces gone.
+        #expect(!fm.fileExists(atPath: cursorDir))
+        #expect(!fm.fileExists(atPath: cursorHooks))
+        #expect(!fm.fileExists(atPath: cursorMCP))
+        #expect(!fm.fileExists(atPath: settingsLocal))
+        // Crow-safe surfaces preserved.
+        #expect(fm.fileExists(atPath: settings))
+        #expect(fm.fileExists(atPath: skill))
+    }
+
     /// Idempotent: a clone that ships no `.grok/` is left untouched and the call
     /// doesn't throw. Guards the handoff path, which fires unconditionally for
     /// `.review` regardless of whether the head committed a `.grok/`.
@@ -56,10 +100,10 @@ struct SessionServiceGrokReviewCloneStripTests {
         #expect(FileManager.default.fileExists(atPath: prompt))
     }
 
-    /// The strip is scoped to `.grok/` — a sibling agent's config (`.codex/`,
-    /// the review prompt) survives, so stripping for a Grok review never
-    /// collaterally hides another surface.
-    @Test func leavesSiblingConfigUntouched() {
+    /// The strip is scoped to what Grok loads — a sibling agent's config
+    /// (`.codex/`, the review prompt) that Grok never reads survives, so the
+    /// strip never collaterally hides another agent's surface.
+    @Test func leavesUnreadSiblingConfigUntouched() {
         let clone = Self.makeTempDir(name: "siblings")
         defer { try? FileManager.default.removeItem(atPath: clone) }
         let grokDir = (clone as NSString).appendingPathComponent(".grok")
@@ -75,6 +119,7 @@ struct SessionServiceGrokReviewCloneStripTests {
         SessionService.stripGrokConfigFromReviewClone(clonePath: clone)
 
         #expect(!FileManager.default.fileExists(atPath: grokDir))
+        // `.codex/` is not a Grok-discovered source — it survives.
         #expect(FileManager.default.fileExists(atPath: codexDir))
     }
 
