@@ -55,6 +55,16 @@ struct AntigravityAgentTests {
         #expect(cmd?.hasSuffix("\n") == true)
     }
 
+    @Test func jobFirstLaunchQuotesPromptPathWithSpaces() {
+        // A worktree under `/Users/x/My Projects/…` must not split `cat`'s argv:
+        // the prompt path is single-quoted inside the `$(cat …)` substitution.
+        let session = Session(name: "job", kind: .job, agentKind: .antigravity)
+        let cmd = agent.autoLaunchCommand(
+            session: session, worktreePath: "/Users/x/My Projects/wt",
+            remoteControlEnabled: false, autoPermissionMode: false, telemetryPort: nil)
+        #expect(cmd?.contains("-p \"$(cat '/Users/x/My Projects/wt/.crow-job-prompt.md')\"") == true)
+    }
+
     @Test func jobSubsequentLaunchResumesWithDashC() {
         var session = Session(name: "job", kind: .job, agentKind: .antigravity)
         session.reviewPromptDispatched = true

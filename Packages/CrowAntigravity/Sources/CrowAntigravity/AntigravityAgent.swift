@@ -106,10 +106,12 @@ public struct AntigravityAgent: CodingAgent {
             }
             return "\(agentPath)\(autoArgs) -c\n"
         case .review:
-            // Review-on-Antigravity is unsupported in Phase A — like Codex, the
-            // `/crow-review-pr` flow isn't wired for this harness. Returning nil
-            // makes Crow log the skip rather than dispatch a review it can't
-            // satisfy (no posted-verdict path). A documented Tier-2 gap.
+            // Review-on-Antigravity is unsupported in Phase A: the
+            // `/crow-review-pr` flow isn't wired for this harness yet. Returning
+            // nil makes Crow log the skip rather than dispatch a review it can't
+            // satisfy (no posted-verdict path). A documented Tier-2 gap — unlike
+            // Codex/Cursor/OpenCode, which inline the skill body, Antigravity has
+            // no review dispatch until a follow-up wires one.
             return nil
         case .manager:
             // Manager sessions never auto-launch an agent — Crow drives them

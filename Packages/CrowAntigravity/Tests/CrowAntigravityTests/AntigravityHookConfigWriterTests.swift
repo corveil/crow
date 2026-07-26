@@ -145,6 +145,45 @@ struct AntigravityHookConfigWriterTests {
             atPath: worktree.appendingPathComponent(".agents/hooks.json").path))
     }
 
+    // MARK: - Unparseable / torn-file guard (regression, mirrors Cursor #829)
+
+    @Test func writeHookConfigLeavesUnparseableFileUntouched() throws {
+        let worktree = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: worktree) }
+        AntigravityHookConfigWriter.resetTrackedCacheForTesting()
+        let agentsDir = worktree.appendingPathComponent(".agents")
+        try FileManager.default.createDirectory(at: agentsDir, withIntermediateDirectories: true)
+        // A torn/hand-edited config that doesn't parse. The writer must bail
+        // rather than start from `[:]` and clobber whatever the user had — a
+        // future refactor that drops the parse guard would silently destroy it.
+        let garbage = "{ \"hooks\": { \"Stop\": [  <-- oops not json"
+        let hooksPath = agentsDir.appendingPathComponent("hooks.json")
+        try garbage.write(to: hooksPath, atomically: true, encoding: .utf8)
+
+        try AntigravityHookConfigWriter().writeHookConfig(
+            worktreePath: worktree.path, sessionID: UUID(), crowPath: "/bin/crow")
+
+        // Byte-for-byte unchanged: no Crow group injected, nothing overwritten.
+        #expect(try String(contentsOf: hooksPath, encoding: .utf8) == garbage)
+    }
+
+    // MARK: - Path-with-spaces (shell-quoting regression)
+
+    @Test func crowPathWithSpacesIsShellQuoted() throws {
+        let worktree = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: worktree) }
+        AntigravityHookConfigWriter.resetTrackedCacheForTesting()
+        // A devRoot with a space (`/Users/x/My Projects/.claude/bin/crow`) must
+        // not split the hook command — the crow path is single-quoted, so the
+        // shell sees one argument.
+        let spaced = "/Users/x/My Projects/.claude/bin/crow"
+        try AntigravityHookConfigWriter().writeHookConfig(
+            worktreePath: worktree.path, sessionID: UUID(), crowPath: spaced)
+
+        let hooks = try readHooks(worktree.appendingPathComponent(".agents/hooks.json"))
+        #expect(command(hooks, "Stop").hasPrefix("'\(spaced)' hook-event "))
+    }
+
     // MARK: - Global-config migration (double-fire guard)
 
     @Test func removeManagedGlobalConfigStripsOnlyCrowGroups() throws {

@@ -34,7 +34,7 @@ capabilities, update this table in the same PR.
 | Hook → session scope | ✅ per-session UUID | ✅ per-session UUID (#829) | ❌ `cwd` match (per-worktree UUID deferred) | ❌ `cwd` match | ✅ per-session UUID |
 | Hook async delivery | ✅ `PostToolUse*` async | ⚠️ declared, timing unverified | ❌ sync-only (v0.141.0) | ⚠️ names verified, timing unverified | ⚠️ `PostToolUse`/`PostInvocation` declared, timing unverified |
 | MCP (e.g. Jira) | ✅ `jira` MCP server via `~/.claude.json` | ✅ `jira` bridged into `~/.cursor/mcp.json` (#829) | ✅ mirrored from `~/.claude.json` into `config.toml` | ❌ falls back to `acli` | ❌ falls back to `acli` (file bridge deferred) |
-| Review (`/crow-review-pr`) | ✅ slash-command | ✅ inlined skill body | ✅ inlined skill body | ✅ inlined skill body | ❌ unsupported in Phase A (`autoLaunchCommand(.review)` → nil, like Codex) |
+| Review (`/crow-review-pr`) | ✅ slash-command | ✅ inlined skill body | ✅ inlined skill body | ✅ inlined skill body | ❌ unsupported in Phase A (`autoLaunchCommand(.review)` → nil) |
 | Initial-prompt injection | ✅ `$(cat …-prompt.md)` + deferred paste | ✅ `$(cat …)` job/review; handoff launcher auto-wired (#829); `.work` bare | ✅ `.job` + `.review` (`$(cat …-prompt.md)`) | ✅ run-then-`--continue` | ✅ `-p "$(cat …-job-prompt.md)"` (`.job`); `.work` bare |
 | Gateway env / trust seed / telemetry | ✅ Claude special-case | ❌ | ⚠️ trust seed only (`[projects."…"]` in `config.toml`) | ❌ | ❌ |
 | Rename passthrough (`/rename`) | ✅ | ✅ | ✅ | ✅ | ❌ unverified on v1.1.7 (opt-out `nil`) |
@@ -361,7 +361,8 @@ Code-style hooks (JSON on stdin, reply on stdout), so the
 `HookConfigWriter`/`StateSignalSource` pair does real work; per-worktree
 `.agents/hooks.json` with the session UUID baked in (per-session scope, not
 `cwd`); remote control faked via `crow send`; `.review` unsupported in Phase A
-(like Codex). It ships **Tier-2** ([ADR 0015](adr/0015-harness-capability-tiers.md))
+(no review dispatch — unlike Codex/Cursor/OpenCode, which inline the skill body).
+It ships **Tier-2** ([ADR 0015](adr/0015-harness-capability-tiers.md))
 with honest, documented gaps (#860).
 
 **Hooks are its single strongest point.** Antigravity's `Stop` hook carries
