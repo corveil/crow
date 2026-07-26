@@ -1297,6 +1297,19 @@ public final class SessionService {
             }
             syncCursorMCPBridge()
         }
+        // Handing off to Grok on a `.review` → neutralize the clone's committed
+        // `.grok/` FIRST (#861 review, Red). `prepareReviewClone` strips it only
+        // when Grok is the *creation-time* review agent; a handoff flips a review
+        // created under Claude/Codex/Cursor/OpenCode onto a clone that was never
+        // stripped, and Grok merges *all* `.grok/hooks/*.json` — so without this
+        // the hostile PR head's committed hooks stay on disk (and would fire on a
+        // local/dev Grok build where folder-trust is inert, or on a release build
+        // whose reviews workspace sits under a trusted parent, since trust
+        // cascades to subdirectories). Mirrors the Cursor handoff arm above.
+        if Self.shouldStripGrokReviewCloneOnHandoff(
+            targetKind: target.kind, sessionKind: session.kind) {
+            Self.stripGrokConfigFromReviewClone(clonePath: worktree.worktreePath)
+        }
 
         // Persist the new agent only after launch prep succeeds so register /
         // attribution / hooks all see the target kind, and a failed build
@@ -2739,6 +2752,43 @@ public final class SessionService {
         }
     }
 
+    /// Whether a handoff should strip the review clone's committed `.grok/` — the
+    /// exact gate the Grok handoff arm and `prepareReviewClone` share so it can't
+    /// drift (#861 review, Red; mirrors `shouldStripCursorReviewCloneOnHandoff`).
+    /// Only a `.review` handoff *to Grok* strips: `.work`/`.job` handoffs to Grok
+    /// branch off a trusted base, and a `.review` handoff to any other agent must
+    /// not strip a surface that agent doesn't load.
+    nonisolated static func shouldStripGrokReviewCloneOnHandoff(
+        targetKind: AgentKind, sessionKind: SessionKind) -> Bool {
+        targetKind == .grok && sessionKind == .review
+    }
+
+    /// Neutralize a review clone's committed Grok config layer by removing the
+    /// working-tree `.grok/` directory. A hostile PR head can commit
+    /// `.grok/hooks/*.json` (arbitrary `command`-type hooks with no approval
+    /// gate), which Grok merges and runs once the folder is trusted — and on a
+    /// local/dev Grok build folder-trust is inert (everything trusted), so this
+    /// strip is the only guard there. `launchAgent`/handoff already decline to
+    /// *seed* trust for a review clone, but trust also cascades from a trusted
+    /// parent, so the strip is the durable defense. Idempotent; no-ops when the
+    /// clone ships no `.grok/`. Shared by `prepareReviewClone` (creation-time
+    /// review agent) and the Grok handoff arm so the gate can't drift.
+    nonisolated static func stripGrokConfigFromReviewClone(clonePath: String) {
+        let grokDir = (clonePath as NSString).appendingPathComponent(".grok")
+        do {
+            try FileManager.default.removeItem(atPath: grokDir)
+        } catch let error as NSError
+            where error.domain == NSCocoaErrorDomain
+            && error.code == NSFileNoSuchFileError {
+            // No `.grok/` shipped — the common, expected case. Stay quiet.
+        } catch {
+            // A real removal failure leaves the attacker's config layer in place,
+            // so this security control must be audible rather than swallowed.
+            NSLog("[SessionService] Failed to strip .grok/ from review clone %@: %@",
+                  clonePath, error.localizedDescription)
+        }
+    }
+
     /// Off-main-actor preparation for a review session: fetch PR metadata,
     /// clone the repo (if needed), check out the PR branch, and stage the
     /// review prompt / skill / settings files. Returns the metadata the
@@ -2883,8 +2933,10 @@ public final class SessionService {
         // guard there. Re-run on every prep so a `git pull` can't reintroduce it.
         // Gated to Grok reviews: only Grok loads `.grok/`, so stripping it for
         // another agent's review would just hide the files a hostile PR ships.
+        // Shared with the Grok handoff arm via `stripGrokConfigFromReviewClone`
+        // so the two call sites can't drift (#861 review, Red).
         if reviewAgentKind == .grok {
-            try? fm.removeItem(atPath: (clonePath as NSString).appendingPathComponent(".grok"))
+            Self.stripGrokConfigFromReviewClone(clonePath: clonePath)
         }
         // Same defense-in-depth for Cursor reviews (#829 review round 9). This
         // PR makes project `.cursor/hooks.json` Crow's load-bearing hook

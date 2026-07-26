@@ -26,7 +26,7 @@ struct GrokAgentTests {
             telemetryPort: nil
         )
         // Work sessions launch a bare `grok` TUI — no `-p`, no prompt file.
-        #expect(cmd?.hasSuffix("grok\n") == true)
+        #expect(cmd?.hasSuffix("grok'\n") == true)
         #expect(cmd?.contains(" -p ") == false)
         #expect(cmd?.contains(".crow-job-prompt.md") == false)
     }
@@ -43,7 +43,7 @@ struct GrokAgentTests {
             autoPermissionMode: false,
             telemetryPort: 4318
         )
-        #expect(cmd?.hasSuffix("grok\n") == true)
+        #expect(cmd?.hasSuffix("grok'\n") == true)
         #expect(cmd?.contains("OTEL_") == false)
         #expect(cmd?.contains("--rc") == false)
     }

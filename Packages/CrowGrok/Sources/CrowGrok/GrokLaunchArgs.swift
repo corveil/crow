@@ -64,33 +64,36 @@ public enum GrokLaunchArgs {
     /// the prompt, then `; grok -c` resumes it in the interactive TUI with a
     /// fresh stdin so `crow send` / follow-up prompts keep working. `autoFlags`
     /// (from `autoPermissionSuffix`) apply to both legs so a resumed unattended
-    /// job stays auto-approving.
+    /// job stays auto-approving. `binary` is shell-quoted so a
+    /// `defaults.binaries.grok` path with a space/special char stays intact.
     public static func firstLaunchChainedCommand(
         binary: String,
         promptPath: String,
         autoPermissionMode: Bool
     ) -> String {
+        let bin = shellQuote(binary)
         let quotedPath = shellQuote(promptPath)
         let flags = autoPermissionSuffix(autoPermissionMode: autoPermissionMode)
-        return "\(binary)\(flags) -p \"$(cat \(quotedPath))\""
-            + "; \(binary)\(flags) -c\n"
+        return "\(bin)\(flags) -p \"$(cat \(quotedPath))\""
+            + "; \(bin)\(flags) -c\n"
     }
 
     /// Resume the last Grok session in the interactive TUI (`-c`/`--continue`).
     /// Carries the bounded auto flags when they're on, so an unattended job
     /// resumed after a crowd/app restart doesn't stall at Grok's default `ask`
-    /// policy.
+    /// policy. `binary` is shell-quoted (see `firstLaunchChainedCommand`).
     public static func resumeTUICommand(
         binary: String,
         autoPermissionMode: Bool
     ) -> String {
         let flags = autoPermissionSuffix(autoPermissionMode: autoPermissionMode)
-        return "\(binary)\(flags) -c\n"
+        return "\(shellQuote(binary))\(flags) -c\n"
     }
 
     /// Bare interactive TUI launch — the `.work` path, where the user types
-    /// their prompt directly into Grok.
+    /// their prompt directly into Grok. `binary` is shell-quoted (see
+    /// `firstLaunchChainedCommand`).
     public static func bareCommand(binary: String) -> String {
-        "\(binary)\n"
+        "\(shellQuote(binary))\n"
     }
 }
