@@ -30,6 +30,7 @@ Backfill of merged PRs since the 0.1.0 release, grouped by theme.
 - #327 — Scheduled Jobs scope to a workspace + repo, where the repo picker is populated from the workspace's provider by expanding its "Always Include Repos" specs (`owner/*` globs or `owner/repo` slugs). Repos not yet checked out are cloned on demand when the job fires.
 - #461 — Remove the PR auto-label workflow (reverts #222); `crow:auto` on a PR was a no-op since only assigned issues consume the label. The label itself stays for issue auto-launch.
 - #604 — Full job management from the CLI: `crow job list/get/add/edit/enable/disable/run/delete/duplicate`. Mutations route through the running app's live config (picked up by the scheduler and Settings UI without a restart), and `crow job run --id` fires a job immediately regardless of its schedule or enabled flag, returning the launched session/terminal ids.
+- #817 — Board and workflow actions are no longer web-only: `crow list-tickets`, `list-reviews`, `refresh-tickets`, `work-on-issue`, `batch-work-on-issues`, `start-review`, `create-manager`, and `quick-action` drive the same RPCs as the board buttons. The read verbs print the board payload verbatim for `jq`; `batch-work-on-issues` takes repeatable `--url` plus `--urls-file -`, so a ticket list pipes straight out of `gh issue list`.
 
 ### Review Board & Sessions
 

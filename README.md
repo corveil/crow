@@ -236,6 +236,7 @@ This will:
 - Click a status to filter the list
 - "Start Working" button creates a workspace directly from an issue
 - Issues linked to active sessions show a navigation button
+- Scriptable from the CLI: `crow list-tickets`, `crow work-on-issue`, `crow batch-work-on-issues`, `crow start-review`, and `crow quick-action` drive the same actions as the board buttons (see the [CLI Reference](docs/cli-reference.md))
 
 ### Jira tasks + GitHub code (cross-backend workspaces)
 

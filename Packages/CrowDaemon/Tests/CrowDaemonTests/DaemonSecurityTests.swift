@@ -861,6 +861,32 @@ import CrowPersistence
         #expect(RPCWebSocketHandler.setConfigTouchesPrivilegedFields(req, devRoot: devRoot))
     }
 
+    @Test func boardAndWorkflowRPCsAreAllowedRemotely() {
+        // The board/workflow verbs exposed on the CLI (CROW-817) are the web
+        // board's OWN RPCs — the buttons behind "Start Working", "Start Review",
+        // the `+` Manager, the tickets refresh and the PR quick actions. Gating
+        // any of them to loopback would break the board for a remote session.
+        //
+        // Several of these DO drive host processes (create-manager and
+        // start-review spawn tmux windows and agents; start-review also clones;
+        // work-on-issue injects into the Manager). That is not the local-only
+        // bar. The bar is (a) launching a GUI app on the daemon's desktop
+        // (open-in-vscode / open-terminal) and (b) writing executable paths that
+        // run at the next launch (set-config binaries) — neither of which these
+        // do. Spawning agents inside Crow's own tmux server is the product's
+        // normal remote-operation model, not an escalation.
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+
+        for method in ["work-on-issue", "batch-work-on-issues", "start-review",
+                       "create-manager", "refresh-tickets", "quick-action",
+                       "list-tickets", "list-reviews"] {
+            let req = JSONRPCRequest(id: 1, method: method, params: [:])
+            #expect(RPCWebSocketHandler.localOnlyDenial(for: req, devRoot: devRoot) == nil,
+                    "\(method) must stay reachable from a remote /rpc peer")
+        }
+    }
+
     @Test func setConfigJobsChangeIsAllowedRemotely() throws {
         // Jobs are no longer a local-only surface (CROW-665): an authenticated
         // remote session may edit them, so a jobs-only change must NOT trip the

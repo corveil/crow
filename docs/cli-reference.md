@@ -622,6 +622,136 @@ Returns, newest first:
 
 ---
 
+## Board & Workflow Commands
+
+The CLI half of the actions the web Ticket Board and Reviews board expose as buttons — so a Manager agent or a shell script can drive the board without a browser.
+
+Prerequisites differ by verb:
+
+- `list-tickets` / `list-reviews` need a provider-configured tracker. Without one they return an empty board rather than failing. **No tmux required.**
+- `refresh-tickets` needs a provider-configured tracker and errors without one. **No tmux required.**
+- `work-on-issue`, `batch-work-on-issues`, `start-review`, and `create-manager` spawn or drive sessions, so they need tmux on the daemon host.
+- `quick-action` needs either the Crow desktop app or tmux on the daemon host.
+
+### `crow list-tickets`
+
+Print the Ticket Board payload verbatim: every assigned issue, per-status counts, the 24-hour done count, and whether a poll is in flight. Filter with `jq`.
+
+```bash
+crow list-tickets
+crow list-tickets | jq '.issues[] | select(.project_status == "In Progress")'
+crow list-tickets | jq -r '.issues[] | select(.linked_session_id == null) | .url'
+```
+
+Returns `{"issues": [...], "counts": {"Backlog": N, "Ready": N, "In Progress": N, "In Review": N, "Done": N, "All": N}, "done_last_24h": N, "loading": bool}`. Each issue carries `id`, `number`, `title`, `state`, `url`, `repo`, `provider`, `pr_number`, `pr_url`, `updated_at`, `project_status`, `labels`, `body`, `author`, `created_at`, `comments_count`, `pr_state`, `checks`, and `linked_session_id` (`null` when no session is working it — the same field the web uses to decide whether to offer "Start Working").
+
+### `crow list-reviews`
+
+Print the Reviews board payload verbatim: PRs awaiting your review.
+
+```bash
+crow list-reviews
+crow list-reviews | jq -r '.reviews[] | select(.review_session_id == null) | .url'
+```
+
+Returns `{"reviews": [...], "loading": bool, "unseen": N}`. Each review carries `id`, `pr_number`, `title`, `url`, `repo`, `author`, `head_branch`, `base_branch`, `is_draft`, `requested_at`, `labels`, `provider`, and `review_session_id` (`null` when no review session exists yet).
+
+### `crow refresh-tickets`
+
+Re-poll the ticket provider now instead of waiting for the next automatic poll. Shells out to `gh` / `glab` / Jira across every configured repo, so it uses a 120s timeout.
+
+```bash
+crow refresh-tickets
+```
+
+Returns `{"ok": true}` after the poll completes, so a following `crow list-tickets` already sees the new snapshot. Two cases return `{"ok": true}` without polling at all: a refresh is already in flight, or the provider is rate-limited.
+
+### `crow work-on-issue`
+
+Start working on a ticket. Types `/crow-workspace <url>` into the primary Manager terminal and lets that agent do the worktree/session setup — identical to the board's "Start Working" button.
+
+```bash
+crow work-on-issue --url "https://github.com/corveil/crow/issues/817"
+```
+
+| Flag    | Required | Description         |
+| ------- | -------- | ------------------- |
+| `--url` | yes      | Ticket / issue URL  |
+
+The URL must be an `http(s)` URL with no whitespace or control characters — it becomes terminal keystrokes, and `crow send` semantics turn a newline into an Enter press. Returns `{"ok": true}`; the session appears once the Manager agent has set it up.
+
+### `crow batch-work-on-issues`
+
+Batch counterpart of `work-on-issue`: types one `/crow-batch-workspace <url1> <url2> …` line so the Manager runs the parallel batch skill once instead of N sequential submissions.
+
+```bash
+crow batch-work-on-issues --url "https://github.com/o/r/issues/1" --url "https://github.com/o/r/issues/2"
+
+gh issue list -R corveil/crow --json url --jq '.[].url' \
+  | crow batch-work-on-issues --urls-file -
+```
+
+| Flag           | Required | Description                                                        |
+| -------------- | -------- | ------------------------------------------------------------------ |
+| `--url`        | one of   | Ticket / issue URL (repeatable)                                    |
+| `--urls-file`  | one of   | Read newline-delimited URLs from a file; `-` reads stdin           |
+
+URLs are sent in order: every `--url` first, then the file's lines (blank lines dropped). Malformed URLs are **not** rejected locally — the daemon drops them into `rejected` and starts the rest, so one bad ticket can't block the batch. Duplicates are deduped server-side.
+
+Returns `{"ok": true, "sent": N, "rejected": ["..."]}`. Check `rejected` — a non-empty array is a partial success, not a failure.
+
+### `crow start-review`
+
+Clone a pull request, scaffold the review skill, and spawn a review session — identical to the Reviews board's "Start Review" button. Uses a 120s timeout because it clones a repo.
+
+```bash
+crow start-review --url "https://github.com/corveil/crow/pull/842"
+```
+
+| Flag    | Required | Description        |
+| ------- | -------- | ------------------ |
+| `--url` | yes      | Pull request URL   |
+
+Unlike `work-on-issue`, the URL is only checked for non-emptiness: it goes to `git clone` rather than terminal keystrokes. Returns `{"session_id": "..."}`.
+
+### `crow create-manager`
+
+Create an additional Manager session, named with the lowest unused `Manager N` — identical to the sidebar's `+` button.
+
+```bash
+crow create-manager
+crow create-manager --agent cursor
+```
+
+| Flag      | Required | Description                                                                  |
+| --------- | -------- | ---------------------------------------------------------------------------- |
+| `--agent` | no       | Coding agent kind (`claude-code`, `cursor`, `codex`, `opencode`); default agent when omitted |
+
+Returns `{"session_id": "...", "name": "Manager N"}`.
+
+`--agent` is used **as given**. `AgentKind` is an open `RawRepresentable` struct, so any non-empty string parses and an unrecognized kind is not rejected — a typo like `claude_code` stamps the Manager with a kind no agent is registered for (the terminal then launches with the registry's default agent, but the session record keeps the bogus kind). Only **omitting** `--agent` falls back to the configured Manager default. Same open-kind model as [`crow handoff-agent`](#crow-handoff-agent).
+
+### `crow quick-action`
+
+Dispatch a PR next-step into a session's managed agent terminal — identical to the PR badge buttons on a session card. The prompt is deterministic and shared with the auto-respond pipeline.
+
+```bash
+crow quick-action --session <uuid> --action fixChecks
+```
+
+| Flag        | Required | Description                                                                     |
+| ----------- | -------- | ------------------------------------------------------------------------------- |
+| `--session` | yes      | Session UUID                                                                    |
+| `--action`  | yes      | `fixConflicts`, `addressChanges`, `fixChecks`, `mergePR`, or `reReview`         |
+
+Returns `{"dispatched": true, "action": "..."}` on success. A **skipped** dispatch is reported as `{"dispatched": false, "action": "...", "reason": "..."}` with a **zero** exit code — the RPC succeeded, the session just had no managed terminal, no ready surface, or no linked PR. Scripts must branch on `dispatched`, not the exit code.
+
+`addressChanges`, `fixChecks`, and `fixConflicts` are refused on a **review** session (`reason: "a reviewer can't modify the branch under review — use Re-review instead"`); use `reReview` there.
+
+---
+
+---
+
 ## Hooks (Internal)
 
 ### `crow hook-event`

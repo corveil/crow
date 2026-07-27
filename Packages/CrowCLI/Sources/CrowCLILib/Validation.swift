@@ -99,6 +99,38 @@ func normalizedAllowlistPatterns(_ raw: [String]) throws -> [String] {
     return cleaned
 }
 
+/// Valid `quick-action --action` values (CROW-817). Mirrors CrowCore's
+/// `QuickAction` cases; CrowCLI doesn't depend on CrowCore, so this is a
+/// hand-kept copy — the daemon re-validates and returns the same list in its
+/// error message.
+let validQuickActions = ["fixConflicts", "addressChanges", "fixChecks", "mergePR", "reReview"]
+
+/// Validate that a string is a recognized PR quick action.
+///
+/// - Throws: `ValidationError` if not one of: fixConflicts, addressChanges,
+///   fixChecks, mergePR, reReview.
+func validateQuickAction(_ value: String) throws {
+    guard validQuickActions.contains(value) else {
+        throw ValidationError("'\(value)' is not a valid action. Expected one of: \(validQuickActions.joined(separator: ", "))")
+    }
+}
+
+/// Validate a ticket URL that will be typed into the Manager terminal.
+///
+/// Mirrors the daemon's `isSafeIssueURL` for fast local feedback: an http(s)
+/// URL with no whitespace and no control characters. Whitespace matters beyond
+/// tidiness — `TerminalRouter` turns newlines into Enter presses, so an
+/// embedded newline would split the injected prompt.
+///
+/// - Throws: `ValidationError` for a blank, non-http(s), or whitespace/control-bearing URL.
+func validateIssueURL(_ value: String) throws {
+    guard !value.isEmpty,
+          value.range(of: #"^https?://[^\s]+$"#, options: .regularExpression) != nil,
+          !value.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7F }) else {
+        throw ValidationError("'\(value)' is not a valid URL. Expected an http(s) URL with no whitespace or control characters.")
+    }
+}
+
 /// Validate the set-goal argument shape: exactly one of `--goal`/`--clear`,
 /// and a provided goal must not be blank (a whitespace goal would silently
 /// fail to earn the on-goal alignment multiplier).

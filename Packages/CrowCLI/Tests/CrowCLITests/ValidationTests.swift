@@ -185,3 +185,37 @@ import Foundation
         }
     }
 }
+
+// MARK: - Board & Workflow Validation (CROW-817)
+
+@Test func validQuickActionsAccepted() throws {
+    for action in validQuickActions {
+        try validateQuickAction(action)
+    }
+}
+
+@Test func invalidQuickActionRejected() {
+    for bad in ["", "merge", "mergepr", "MergePR", "fix_checks"] {
+        #expect(throws: (any Error).self) {
+            try validateQuickAction(bad)
+        }
+    }
+}
+
+@Test func validIssueURLAccepted() throws {
+    try validateIssueURL("https://github.com/corveil/crow/issues/817")
+    try validateIssueURL("http://localhost:8080/browse/CROW-817")
+}
+
+@Test func invalidIssueURLRejected() {
+    // Mirrors the daemon's `isSafeIssueURL`. Whitespace and control characters
+    // matter beyond tidiness: TerminalRouter turns newlines into Enter presses,
+    // so an embedded newline would split the injected prompt.
+    for bad in ["", "github.com/o/r/issues/1", "ftp://example.com/x",
+                "https://example.com/a b", "https://example.com/a\nrm -rf /",
+                "https://example.com/a\u{7F}"] {
+        #expect(throws: (any Error).self) {
+            try validateIssueURL(bad)
+        }
+    }
+}
