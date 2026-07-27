@@ -406,16 +406,61 @@ struct WorkerRunnerTickTeardownTests {
             name: "wr-lease", status: .active, kind: .workerRun,
             workerRunID: "run-lease", workerID: "crow-x-1", workerRunScratchDir: scratch.path
         )
+        let term = SessionTerminal(sessionID: session.id, name: "t", cwd: scratch.path, isManaged: true)
         appState.sessions.append(session)
-        appState.terminals[session.id] = [
-            SessionTerminal(sessionID: session.id, name: "t", cwd: scratch.path, isManaged: true)
-        ]
+        appState.terminals[session.id] = [term]
+        appState.autoLaunchTerminals.insert(term.id)   // observe the agent being stopped
 
         await runner.tick()
 
         #expect(appState.sessions.first(where: { $0.id == session.id })?.status == .completed)
         #expect(runner.statusSnapshot().watched.isEmpty)
         #expect(!FileManager.default.fileExists(atPath: scratch.path))
+        // Fail-closed stops the agent so it can't keep using its in-process key.
+        #expect(!appState.autoLaunchTerminals.contains(term.id))
+    }
+
+    /// A user moving a watched run off `.active` (paused/archived) must fail the
+    /// Corveil claim AND stop the agent — not just wipe — so it can't keep using
+    /// its in-process key while the lapsing lease lets another runner claim the
+    /// run (review). The user's chosen status is preserved (not completed).
+    @Test func userPausedRunFailsClaimAndStopsAgent() async throws {
+        let (runner, appState) = makeRunner()
+        runner.configProvider = { RunnerConfig(enabled: true) }
+        runner.apiKeyProvider = { "sk-test" }
+        runner.devRootProvider = { "/tmp/dev" }
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wr-paused-\(UUID().uuidString)")
+            .appendingPathComponent(".crow-worker-runs")
+        let scratch = root.appendingPathComponent("run-paused")
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let session = Session(
+            name: "wr-paused", status: .active, kind: .workerRun,
+            workerRunID: "run-paused", workerID: "crow-x-1", workerRunScratchDir: scratch.path
+        )
+        let term = SessionTerminal(sessionID: session.id, name: "t", cwd: scratch.path, isManaged: true)
+        appState.sessions.append(session)
+        appState.terminals[session.id] = [term]
+        appState.autoLaunchTerminals.insert(term.id)
+
+        // Tick 1 adopts the active run into the watch set.
+        await runner.tick()
+        #expect(runner.statusSnapshot().watched.contains { $0.runID == "run-paused" })
+
+        // User pauses it; tick 2 must fail-close it (stopWatching default case).
+        if let idx = appState.sessions.firstIndex(where: { $0.id == session.id }) {
+            appState.sessions[idx].status = .paused
+        }
+        await runner.tick()
+
+        #expect(runner.statusSnapshot().watched.isEmpty)                       // watch dropped
+        #expect(!FileManager.default.fileExists(atPath: scratch.path))         // secret wiped
+        #expect(!appState.autoLaunchTerminals.contains(term.id))              // agent stopped
+        // User's chosen status is preserved (NOT forced to .completed).
+        #expect(appState.sessions.first(where: { $0.id == session.id })?.status == .paused)
     }
 
     /// An active `.workerRun` session with incomplete linkage (here: no managed

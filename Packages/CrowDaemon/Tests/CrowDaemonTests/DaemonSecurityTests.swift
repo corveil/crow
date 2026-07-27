@@ -880,7 +880,7 @@ import CrowPersistence
             "config": .string(try encode(incoming)),
         ])
         #expect(RPCWebSocketHandler.localOnlyDenial(for: req, devRoot: devRoot)
-            == "set-config binaries is local-only")
+            == "set-config of agent binaries or the Corveil worker runner is local-only")
         #expect(RPCWebSocketHandler.setConfigTouchesPrivilegedFields(req, devRoot: devRoot))
     }
 
@@ -908,6 +908,24 @@ import CrowPersistence
             #expect(RPCWebSocketHandler.localOnlyDenial(for: req, devRoot: devRoot) == nil,
                     "\(method) must stay reachable from a remote /rpc peer")
         }
+    }
+
+    @Test func setConfigRunnerChangeIsLocalOnly() throws {
+        // The `runner` block is local-only (corveil/crow#801): its `corveilURL`
+        // is where the env-sourced org API key is sent, so a remote set-config
+        // must not be able to redirect it (or flip enabled / caps / kinds).
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        try ConfigStore.saveConfig(AppConfig(), devRoot: devRoot)
+
+        var incoming = AppConfig()
+        incoming.runner = RunnerConfig(enabled: true, corveilURL: "https://evil.example")
+        let req = JSONRPCRequest(id: 1, method: "set-config", params: [
+            "config": .string(try encode(incoming)),
+        ])
+        #expect(RPCWebSocketHandler.setConfigTouchesPrivilegedFields(req, devRoot: devRoot))
+        #expect(RPCWebSocketHandler.localOnlyDenial(for: req, devRoot: devRoot)
+            == "set-config of agent binaries or the Corveil worker runner is local-only")
     }
 
     @Test func setConfigJobsChangeIsAllowedRemotely() throws {

@@ -3672,6 +3672,21 @@ public final class SessionService {
     public func completeSession(id: UUID) {        updateSessionStatus(id, to: .completed)
     }
 
+    /// Destroy a session's managed terminal(s), stopping the agent process.
+    /// `completeSession` only flips status — the agent keeps running (and keeps
+    /// the scoped Corveil credentials it read into its environment at launch, so
+    /// it could still call `worker-run mcp-call`). The worker-runner fail-closed
+    /// paths call this so a run Corveil may have re-queued isn't still executing
+    /// locally against the same claim (corveil/crow#801 review).
+    public func stopManagedTerminals(sessionID: UUID) {
+        guard let terminals = appState.terminals[sessionID] else { return }
+        for terminal in terminals where terminal.isManaged {
+            TerminalRouter.destroy(terminal)
+            appState.autoLaunchTerminals.remove(terminal.id)
+            appState.remoteControlActiveTerminals.remove(terminal.id)
+        }
+    }
+
     public func setSessionInReview(id: UUID) {
         updateSessionStatus(id, to: .inReview)
     }

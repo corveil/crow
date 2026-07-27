@@ -165,8 +165,10 @@ enum RPCWebSocketHandler {
     ///
     /// `defaults-set` IS gated, but only when the request carries a `binaries`
     /// param — see the case below for why presence and not a diff.
-    /// `defaults.binaries` therefore remains the sole local-only config field,
-    /// now enforced across two methods instead of one.
+    /// `defaults.binaries` is enforced across both `set-config` and `defaults-set`;
+    /// the Corveil worker `runner` block is additionally local-only on `set-config`
+    /// (its `corveilURL` is where the env-sourced org API key is sent, so a remote
+    /// write must not be able to redirect it — corveil/crow#801).
     ///
     /// `agents-get` / `agents-set` (CROW-811) follow that same rule: they read and
     /// write `AppConfig.defaultAgentKind` + `agentsByKind`, which name a harness
@@ -204,7 +206,7 @@ enum RPCWebSocketHandler {
             return "gateway and web-password management is local-only"
         case "set-config":
             guard setConfigTouchesPrivilegedFields(request, devRoot: devRoot) else { return nil }
-            return "set-config binaries is local-only"
+            return "set-config of agent binaries or the Corveil worker runner is local-only"
         case "defaults-set":
             // The only granular settings RPC that can reach `defaults.binaries`
             // — absolute local paths that execute at the next agent launch.
@@ -235,9 +237,18 @@ enum RPCWebSocketHandler {
         }
     }
 
-    /// True when the incoming `set-config` payload would change agent binary
-    /// overrides relative to what's on disk. Scheduled `jobs` are no longer
+    /// True when the incoming `set-config` payload would change a privileged
+    /// field relative to what's on disk. Scheduled `jobs` are no longer
     /// privileged — an authenticated remote session may edit them (CROW-665).
+    ///
+    /// Privileged fields:
+    /// - `defaults.binaries` — agent binary overrides (host process paths).
+    /// - `runner` — the Corveil worker-runner block (corveil/crow#801). Its
+    ///   `corveilURL` is where the env-sourced org `CORVEIL_API_KEY` is sent on
+    ///   every `corveil` call, so a remote write could redirect the key to an
+    ///   attacker's host; and remotely flipping `enabled` / `caps` / `kinds` would
+    ///   let an authenticated remote session enlist or re-scope this runner. The
+    ///   whole block is therefore local-only (same trust domain as the env key).
     static func setConfigTouchesPrivilegedFields(_ request: JSONRPCRequest, devRoot: String) -> Bool {
         guard let json = request.params?["config"]?.stringValue,
               let data = json.data(using: .utf8),
@@ -247,5 +258,6 @@ enum RPCWebSocketHandler {
         }
         let current = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
         return incoming.defaults.binaries != current.defaults.binaries
+            || incoming.runner != current.runner
     }
 }

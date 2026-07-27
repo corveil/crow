@@ -323,11 +323,13 @@ public final class WorkerRunner {
 
     /// Terminal fail-closed teardown for a still-`.active` run we can no longer
     /// safely execute (lost lease, launch timeout, max-duration timeout): fail the
-    /// Corveil claim, move the session off `.active` (so reconcile won't re-adopt
-    /// it), and wipe+drop. Shared so every fail path frees the concurrency slot
-    /// identically.
+    /// Corveil claim, **stop the agent** (so it can't keep using its in-process
+    /// credentials against a claim Corveil may have re-queued), move the session
+    /// off `.active` (so reconcile won't re-adopt it), and wipe+drop. Shared so
+    /// every fail path frees the concurrency slot identically.
     private func failClosed(run: WorkerRunWatch, sessionID: UUID, backend: CorveilWorkerBackend, reason: String) async {
         await complete(backend: backend, run: run, args: .init(error: reason))
+        sessionService.stopManagedTerminals(sessionID: sessionID)
         sessionService.completeSession(id: sessionID)
         wipeAndDrop(sessionID: sessionID, scratchDir: run.scratchDir)
     }
@@ -353,12 +355,20 @@ public final class WorkerRunner {
             await failClosed(run: run, sessionID: sessionID, backend: backend,
                              reason: "run exceeded the runner's max watch duration")
         case nil:
+            // Deleted — `deleteSession` already destroyed the terminals and tore
+            // down locally; just best-effort fail the Corveil run.
             await complete(backend: backend, run: run,
                            args: .init(error: "run aborted on runner before completion"))
             wipeAndDrop(sessionID: sessionID, scratchDir: run.scratchDir)
         default:
-            // User moved it off active — lease expiry fails it on Corveil; only
-            // wipe the local secret.
+            // User moved it off `.active` (paused/archived/…). Don't leave the
+            // agent running with the scoped key while we stop heartbeating (the
+            // lease can then lapse and another runner claim the same run): fail the
+            // Corveil claim AND stop the agent. Preserve the user's chosen status
+            // (no `completeSession`) (review).
+            await complete(backend: backend, run: run,
+                           args: .init(error: "run abandoned — session moved out of active on the runner"))
+            sessionService.stopManagedTerminals(sessionID: sessionID)
             wipeAndDrop(sessionID: sessionID, scratchDir: run.scratchDir)
         }
     }
