@@ -53,6 +53,17 @@ import Testing
     #expect(CrowAttribution.agentDisplayName(for: nil) == "Claude Code")
 }
 
+/// The registration-independent display-name set the orphan-window reaper unions
+/// with the registry (#861 review r10) covers every built-in kind — so a pane for
+/// a kind whose binary later stopped resolving is still reapable, and a new kind
+/// added to the table is picked up with zero reaper edits.
+@Test func crowAttributionAllKnownDisplayNames() {
+    let all = CrowAttribution.allKnownDisplayNames
+    for name in ["Claude Code", "Cursor", "OpenAI Codex", "OpenCode", "Antigravity", "Grok Build"] {
+        #expect(all.contains(name))
+    }
+}
+
 @Test func crowAttributionReadsDisplayNameFromEnvironment() {
     let env = [
         CrowAttribution.agentDisplayNameEnvironmentKey: "Cursor",

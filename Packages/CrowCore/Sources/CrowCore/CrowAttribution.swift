@@ -31,6 +31,18 @@ public enum CrowAttribution {
         AgentKind.grok.rawValue: "Grok Build",
     ]
 
+    /// Every display name Crow knows for its built-in kinds — the
+    /// registration-**independent** counterpart to `AgentRegistry.allAgents()`
+    /// (which only holds kinds whose binary resolved at daemon boot). Callers
+    /// that must recognize an agent even when its binary later stops resolving —
+    /// e.g. the orphan-window reaper matching a pane whose process is still up
+    /// after its binary was uninstalled (#861 review r10) — union this with the
+    /// registry so they keep both zero-maintenance (new kinds land in the table)
+    /// and registration-independence.
+    public static var allKnownDisplayNames: Set<String> {
+        Set(knownDisplayNames.values)
+    }
+
     /// Resolve the display name for `agentKind`, falling back to `defaultAgentDisplayName`.
     public static func agentDisplayName(for agentKind: AgentKind?) -> String {
         guard let agentKind else { return defaultAgentDisplayName }

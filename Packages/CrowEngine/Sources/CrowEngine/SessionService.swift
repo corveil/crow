@@ -616,12 +616,25 @@ public final class SessionService {
                 // managed work terminals, exactly the set launchClaude handles —
                 // so the Manager (whose RC is seeded in hydrateState) is untouched.
                 if trackReadiness {
-                    // Re-write hook config so the adopted Claude's hooks still
-                    // route back to the correct session if the config was lost.
+                    // Re-write the adopted session's OWN hook config so its hooks
+                    // still route back to the correct session if the config was
+                    // lost. Resolve the session's agent writer rather than
+                    // hardcoding `ClaudeHookConfigWriter`: for a Grok session that
+                    // would plant `.claude/settings.local.json`, which Grok
+                    // compat-loads alongside its own `.grok/hooks/crow.json` — every
+                    // event then double-fires, reverting
+                    // `stripPriorCompatHooksForGrokHandoff` on the next warm crowd
+                    // restart (#861 review r10). Using the session's writer also
+                    // repairs an adopted Cursor/Codex/OpenCode session whose own
+                    // config was lost, which the Claude-hardcoded version silently
+                    // skipped; Codex/OpenCode writers are no-op / global, so the
+                    // call is harmless for them.
                     if let crowPath = ClaudeHookConfigWriter.resolveCrowBinary(devRoot: ConfigStore.loadDevRoot()),
-                       let worktree = appState.primaryWorktree(for: terminal.sessionID) {
+                       let worktree = appState.primaryWorktree(for: terminal.sessionID),
+                       let session = appState.sessions.first(where: { $0.id == terminal.sessionID }),
+                       let agent = AgentRegistry.shared.agent(for: session.agentKind) {
                         do {
-                            try ClaudeHookConfigWriter().writeHookConfig(
+                            try agent.hookConfigWriter.writeHookConfig(
                                 worktreePath: worktree.worktreePath,
                                 sessionID: terminal.sessionID,
                                 crowPath: crowPath
@@ -870,16 +883,18 @@ public final class SessionService {
         // `new-terminal` pins on managed agent windows, so orphaned agents are
         // identified positively and the anchor/infra is never touched.
         let keep = Set(appState.terminals.values.flatMap { $0 }.compactMap { $0.tmuxBinding?.windowIndex })
-        // Derive the agent-window-name set from the registry rather than a
-        // hardcoded kind list. Managed agent windows are pinned with the agent's
-        // `displayName` (`registerTerminal` → `newWindow(name:)`, and on handoff
-        // `target.displayName`), so every registered adapter's name is matched
-        // without a per-kind edit here — a newly-registered seventh adapter is
-        // reaped for free (this PR's `.grok` was the sixth; #860's Antigravity
-        // the fifth). Registry-driven mirrors the cross-agent cleanup loop in
-        // `writeManagerHookConfig`, closing the enumeration-omission class (#861
-        // review r8) at the source instead of adding one more site to remember.
-        let agentNames = Set(AgentRegistry.shared.allAgents().map(\.displayName))
+        // Derive the agent-window-name set from the registry (windows are pinned
+        // with the agent's `displayName` — `registerTerminal` → `newWindow(name:)`,
+        // and on handoff `target.displayName`), unioned with the registration-
+        // independent `CrowAttribution.allKnownDisplayNames`. The union keeps both
+        // properties (#861 review r9-r10): registry covers any downstream-only kind
+        // not in the static table, and the static table still matches a built-in
+        // kind whose binary later stopped resolving (uninstalled / mid-upgrade /
+        // shim dir dropped from the login-shell PATH) — whose orphaned pane the
+        // registry alone would miss. No per-kind edit here either way; mirrors the
+        // cross-agent cleanup loop in `writeManagerHookConfig`.
+        let agentNames = CrowAttribution.allKnownDisplayNames
+            .union(AgentRegistry.shared.allAgents().map(\.displayName))
         TmuxBackend.shared.reconcileOrphanWindows(keepWindowIndices: keep, agentWindowNames: agentNames)
     }
 
@@ -1569,12 +1584,26 @@ public final class SessionService {
         // prevent survives exactly when the guard bails. It removes only *other*
         // agents' configs, so ordering it ahead of our own write is safe.
         //
-        // Claude is skipped: its `removeHookConfig` strips managed event keys
-        // wholesale (not marker-scoped like Cursor's), and the devRoot's
-        // `.claude/settings.local.json` commonly holds the user's own Manager
-        // config — so cleaning it on every boot could drop a user's hand-authored
-        // devRoot hooks. A stale Claude config left when switching to a non-Claude
-        // Manager is inert anyway (Claude isn't launched there).
+        // Claude is skipped from this loop — but NOT because a stale Claude config
+        // is inert. For a **Grok** Manager it is not: Grok compat-loads the
+        // devRoot's `.claude/settings.local.json` (the same fact that makes
+        // `stripGrokConfigFromReviewClone` / `stripPriorCompatHooksForGrokHandoff`
+        // strip it on the review + handoff paths). It's skipped because Claude's
+        // `removeHookConfig` is wholesale — it drops the entire managed event key,
+        // taking any user's hand-authored devRoot Manager hook under that name with
+        // it (unlike Cursor's marker-scoped removal) — and the devRoot commonly
+        // holds exactly such user config, so auto-stripping on every Manager boot
+        // would risk dropping it.
+        //
+        // KNOWN LIMITATION (#861 review r10, deferred): running Grok as the Manager
+        // therefore double-fires — the prior Claude Manager's devRoot
+        // `.claude/settings.local.json` (same fixed managerSessionID, same event
+        // names) fires alongside Grok's own `.grok/hooks/crow.json`. Left as-is for
+        // the wholesale-removal reason above, and because a *concurrent* live Claude
+        // Manager in the same devRoot (`crow create-manager --agent grok` beside a
+        // Claude primary) has load-bearing hooks we must not strip — so a blanket
+        // extension would break that. Mitigation if it bites: clear the devRoot
+        // `.claude/settings.local.json` by hand when switching the Manager to Grok.
         for other in AgentRegistry.shared.allAgents()
             where other.kind != session.agentKind && other.kind != .claudeCode {
             other.hookConfigWriter.removeHookConfig(worktreePath: dirPath)

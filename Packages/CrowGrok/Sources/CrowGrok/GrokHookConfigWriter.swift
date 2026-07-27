@@ -33,11 +33,16 @@ import CrowCore
 /// trusted), which is why `prepareReviewClone` *also* strips a committed
 /// `.grok/` from an attacker-controlled review head as defense-in-depth.
 ///
-/// **Version-pinned re-check target (#859):** whether project hooks
-/// double-fire alongside the `~/.claude/settings.json` / `~/.cursor/hooks.json`
-/// Grok *also* discovers (its Claude/Cursor compat scanning) in a handed-off
-/// worktree that still carries a prior agent's hook config — dedup deferred,
-/// cf. Codex §3b. Re-probe on each upstream mirror sync.
+/// **Version-pinned re-check target (#859):** the project handed-off-worktree
+/// double-fire — a prior agent's `.claude/settings.local.json` / `.cursor/hooks.json`
+/// that Grok compat-loads alongside `.grok/hooks/crow.json` — is now **closed**:
+/// `SessionService.stripPriorCompatHooksForGrokHandoff` strips it on handoff, and
+/// the warm-adopt path writes the session's *own* agent config instead of
+/// hardcoding Claude's (#861 review r9-r10). What remains deferred is only the
+/// **global** `~/.claude/settings.json` / `~/.cursor/hooks.json` Grok also
+/// discovers — genuinely user-controlled, no Crow session UUID, cf. Codex §3b —
+/// plus the Grok-**Manager** devRoot case (documented at
+/// `SessionService.writeManagerHookConfig`). Re-probe on each upstream mirror sync.
 public struct GrokHookConfigWriter: HookConfigWriter {
 
     /// All hook event names we register. Every name is verified present in

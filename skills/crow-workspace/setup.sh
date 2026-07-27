@@ -1438,12 +1438,13 @@ launch_grok() {
   # large prompt never becomes a giant argv or rides a subshell (#861). Brace
   # group keeps both commands gated on a successful `cd`. Mirrors
   # GrokLaunchArgs.firstLaunchChainedCommand — including its shell-quoting: unlike
-  # the peers, `$bin`/`$prompt_path`/`$WORKTREE_PATH` are double-quoted because
-  # `grok` collides with superagent-ai/grok-cli, so pinning a (possibly spaced)
-  # `defaults.binaries.grok` is the *expected* config here, not exotic; the Swift
-  # launch paths all quote it, so this one must too or it word-splits on the same
-  # input (#861 review r8).
-  local launch_cmd="cd \"$WORKTREE_PATH\" && { \"$bin\" --prompt-file \"$prompt_path\"; \"$bin\" -c; }"
+  # the peers, `$bin`/`$prompt_path`/`$WORKTREE_PATH` are POSIX single-quoted via
+  # `posix_quote` because `grok` collides with superagent-ai/grok-cli, so pinning a
+  # (possibly spaced) `defaults.binaries.grok` is the *expected* config here. Single
+  # quotes (not double) so a `$`/backtick/`\` in the pinned path is preserved
+  # literally rather than re-expanded when `crow new-terminal --command` pastes it —
+  # exact parity with Swift's `GrokLaunchArgs.shellQuote` (#861 review r10).
+  local launch_cmd="cd $(posix_quote "$WORKTREE_PATH") && { $(posix_quote "$bin") --prompt-file $(posix_quote "$prompt_path"); $(posix_quote "$bin") -c; }"
   create_agent_terminal "Grok Build" "$launch_cmd"
 }
 
