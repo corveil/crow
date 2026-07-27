@@ -787,13 +787,23 @@ public enum CrowDaemon {
                 // the session's link/reviewSessionID land).
                 let fingerprint = "\(request.id)\n\(request.headRefOid ?? "")"
                 guard autoReviewed.insert(fingerprint).inserted else { continue }
-                // B-fallback: tear down the stale round-1 session before enqueuing
-                // so `reviewSessions` doesn't double up for this PR.
-                if case let .reReview(staleID) = action {
-                    appState.onCompleteSession?(staleID)
-                }
+                // B-fallback: tear down the stale round's review session before
+                // enqueuing so `reviewSessions` doesn't double up for this PR.
+                // DELETE it — not `onCompleteSession`, which only flips it to
+                // `.completed`. A completed `review-<repo>-<pr>` row is invisible
+                // to `existingReviewSession(forPRURL:)` (that dedup guard excludes
+                // completed/archived) yet still renders, so each re-review round
+                // left another identical row piling up in Completed (CROW-877).
+                // Deleting also drops its `.pr` link, so the create below can't
+                // reuse the stale session via that same guard. Await the delete
+                // first so it's gone before `createReviewSession` runs its check.
                 let url = request.url
-                Task { _ = await reviewSerializer.enqueue { await sessionService.createReviewSession(prURL: url, selectAfterCreate: false) } }
+                let staleReviewID: UUID?
+                if case let .reReview(id) = action { staleReviewID = id } else { staleReviewID = nil }
+                Task {
+                    if let staleReviewID { await sessionService.deleteSession(id: staleReviewID) }
+                    _ = await reviewSerializer.enqueue { await sessionService.createReviewSession(prURL: url, selectAfterCreate: false) }
+                }
             }
         }
     }

@@ -661,6 +661,58 @@ const GROUPS = [
   { title: 'Completed', match: (s) => (s.status === 'completed' || s.status === 'archived') && s.kind !== 'manager' },
 ];
 
+// Assign sessions to sidebar sections, collapsing the duplicates that used to
+// render as separate rows for the same PR (CROW-877):
+//   1. dedup by session id — a payload that repeats an id renders once;
+//   2. collapse by PR URL — a PR's work row + auto-review clone become ONE
+//      entry (the open review row wins while the review is in progress; once
+//      the review session closes, the work row represents the PR). This kills
+//      both the same-PR-in-Reviews-and-Completed cross-section duplicate and
+//      any pile-up of identical completed `review-<repo>-<pr>` clones;
+//   3. first-match grouping — each surviving session lands in the FIRST group
+//      it matches, not every one, so a `kind:'review'` + `status:'inReview'`
+//      session can't appear in both "Reviews" and "In Review".
+// Managers carry no PR link and match no GROUP, so they drop out here and are
+// rendered by renderSidebar's dedicated managers pass.
+function prURLOf(s) {
+  const link = (s.links || []).find((l) => l.type === 'pr');
+  return link ? link.url : null;
+}
+function isOpenReview(s) {
+  return s.kind === 'review' && s.status !== 'completed' && s.status !== 'archived';
+}
+// Between two sessions describing the same PR, pick the one to keep.
+function pickPRRow(a, b) {
+  const ao = isOpenReview(a), bo = isOpenReview(b);
+  if (ao !== bo) return ao ? a : b;           // an open review wins outright
+  // Neither is an open review (both closed, or both non-review work rows):
+  // prefer the non-review (work) row so a merged PR shows its work session
+  // rather than a leftover completed review clone.
+  const aWork = a.kind !== 'review', bWork = b.kind !== 'review';
+  if (aWork !== bWork) return aWork ? a : b;
+  return a;                                    // stable: keep the first seen
+}
+function groupSessions(list) {
+  const seenIds = new Set();
+  const byPR = new Map();     // PR URL -> index into `collapsed`
+  const collapsed = [];
+  for (const s of list) {
+    if (seenIds.has(s.id)) continue;
+    seenIds.add(s.id);
+    const url = prURLOf(s);
+    if (!url) { collapsed.push(s); continue; }
+    const idx = byPR.get(url);
+    if (idx === undefined) { byPR.set(url, collapsed.length); collapsed.push(s); }
+    else collapsed[idx] = pickPRRow(collapsed[idx], s);
+  }
+  const out = GROUPS.map((g) => ({ title: g.title, rows: [] }));
+  for (const s of collapsed) {
+    const gi = GROUPS.findIndex((g) => g.match(s));
+    if (gi >= 0) out[gi].rows.push(s);
+  }
+  return out.filter((g) => g.rows.length);
+}
+
 // ---------------------------------------------------------------------------
 // Sidebar
 // ---------------------------------------------------------------------------
@@ -752,10 +804,8 @@ function renderSidebar() {
   for (const m of managers.slice(1)) root.appendChild(sessionRow(m));
 
   let shown = 0;
-  for (const group of GROUPS) {
-    const rows = sessions.filter(group.match);
-    if (!rows.length) continue;
-    root.appendChild(selectionMode ? sectionHeader(group.title, rows) : el('div', 'divider', group.title));
+  for (const { title, rows } of groupSessions(sessions)) {
+    root.appendChild(selectionMode ? sectionHeader(title, rows) : el('div', 'divider', title));
     for (const s of rows) { root.appendChild(sessionRow(s)); shown++; }
   }
   if ((sessionsLoaded || sidebarCacheHit) && !shown && !managers.length) {
