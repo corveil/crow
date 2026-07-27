@@ -47,6 +47,21 @@ public struct EngineContext {
     }
 }
 
+/// Extract the tool name from a hook payload, tolerating each harness's shape.
+/// Claude/Cursor/Codex send a flat `tool_name`; Antigravity nests it as
+/// `toolCall.name` (camelCase) — but **only on `PreToolUse`**. Antigravity's
+/// `PostToolUse` stdin carries no tool name at all (only `stepIdx`/`error`/common
+/// fields), and Crow deliberately doesn't register `PreToolUse` (its strict
+/// decision gate), so for Antigravity this fallback is future-proofing for a
+/// possible `PreToolUse` re-enable, not a live path — Antigravity's registered
+/// `PostToolUse` tool activity is unnamed by design (a documented Tier-2 gap;
+/// see `AntigravitySignalSource`). Harmless for the other harnesses (they have
+/// no `toolCall` object).
+func hookToolName(from payload: [String: JSONValue]) -> String? {
+    if let flat = payload["tool_name"]?.stringValue { return flat }
+    return payload["toolCall"]?.objectValue?["name"]?.stringValue
+}
+
 @MainActor
 public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
     let capturedAppState = ctx.appState
@@ -1198,7 +1213,7 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                 let summary: String = {
                     switch eventName {
                     case "PreToolUse", "PostToolUse", "PostToolUseFailure":
-                        let tool = payload["tool_name"]?.stringValue ?? "unknown"
+                        let tool = hookToolName(from: payload) ?? "unknown"
                         return "\(eventName): \(tool)"
                     case "Notification":
                         let msg = payload["message"]?.stringValue ?? ""
@@ -1267,7 +1282,7 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                     let agentEvent = AgentHookEvent(
                         sessionID: sessionID,
                         eventName: eventName,
-                        toolName: payload["tool_name"]?.stringValue,
+                        toolName: hookToolName(from: payload),
                         source: payload["source"]?.stringValue,
                         message: payload["message"]?.stringValue,
                         notificationType: payload["notification_type"]?.stringValue,

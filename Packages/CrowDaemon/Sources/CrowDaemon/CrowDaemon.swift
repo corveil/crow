@@ -9,6 +9,7 @@ import CrowClaude
 import CrowCodex
 import CrowCursor
 import CrowOpenCode
+import CrowAntigravity
 import CrowEngine
 import CrowProvider
 import CrowGit
@@ -912,6 +913,18 @@ public enum CrowDaemon {
         if let path = openCode.findBinary() {
             AgentRegistry.shared.register(openCode)
             log("OpenCode agent registered at \(path)")
+        }
+
+        // Google Antigravity (`agy`) — Tier-2 / experimental (#860). Registered
+        // only when its binary resolves on PATH (or a `defaults.binaries.antigravity`
+        // override); off-PATH ⇒ silently absent from the picker and handoff
+        // (ADR 0014). This is also the safe default while the supply-chain
+        // provenance is confirmed — Crow never installs `agy` itself, it only
+        // resolves whatever the official `antigravity.google` installer placed.
+        let antigravity = AntigravityAgent()
+        if let path = antigravity.findBinary() {
+            AgentRegistry.shared.register(antigravity)
+            log("Antigravity agent registered at \(path)")
         }
     }
 

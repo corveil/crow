@@ -13,6 +13,16 @@ implementation with every capability wired; the other three ship with
 deliberate, documented gaps (full grid in the
 [capability matrix](../agent-harness-matrix.md)).
 
+> **Amendment (2026-07-26, #860):** a fifth harness — **Antigravity** (Google's
+> `agy` CLI) — joined as an explicit **Tier-2 / experimental** target: a real,
+> driveable CLI that lands below the self-hostable harnesses and ships with
+> honest, documented gaps (closed-source + Google-auth-locked ⇒ a *permanent*
+> self-host ❌, hooks-only state detection, no review, no MCP bridge, a
+> supply-chain gate on its binary provenance). It is the first harness added
+> under the tiering this ADR defines; its gaps live in the same
+> [capability matrix](../agent-harness-matrix.md) column and are governed by the
+> Tier-2 rationale below.
+
 Until now, the *why* behind each gap lived only in scattered code comments —
 several of them **pinned to a specific upstream version** ("sync-only as of
 v0.139.0"). That makes the reasons easy to lose and, worse, easy to leave stale:

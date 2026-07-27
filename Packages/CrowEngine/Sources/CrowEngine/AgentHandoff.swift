@@ -10,6 +10,7 @@ public enum AgentHandoffError: Error, LocalizedError, Equatable {
     case agentBinaryMissing(String)
     case noWorktree
     case launchFailed(String)
+    case reviewNotSupported(String)
 
     public var errorDescription: String? {
         switch self {
@@ -27,6 +28,8 @@ public enum AgentHandoffError: Error, LocalizedError, Equatable {
             return "Session has no worktree to hand off"
         case .launchFailed(let message):
             return "Failed to build handoff launch command: \(message)"
+        case .reviewNotSupported(let kind):
+            return "Agent \"\(kind)\" does not support review sessions; hand the review to a review-capable agent instead"
         }
     }
 }

@@ -869,7 +869,7 @@ public final class SessionService {
         // `new-terminal` pins on managed agent windows, so orphaned agents are
         // identified positively and the anchor/infra is never touched.
         let keep = Set(appState.terminals.values.flatMap { $0 }.compactMap { $0.tmuxBinding?.windowIndex })
-        let agentNames = Set([AgentKind.claudeCode, .cursor, .codex, .openCode]
+        let agentNames = Set([AgentKind.claudeCode, .cursor, .codex, .openCode, .antigravity]
             .map { CrowAttribution.agentDisplayName(for: $0) })
         TmuxBackend.shared.reconcileOrphanWindows(keepWindowIndices: keep, agentWindowNames: agentNames)
     }
@@ -1192,6 +1192,22 @@ public final class SessionService {
         }
         guard target.findBinary() != nil else {
             throw AgentHandoffError.agentBinaryMissing(targetKind.rawValue)
+        }
+        // Refuse handing a *review* session off to Antigravity. Review is
+        // unsupported on this Tier-2 harness (`autoLaunchCommand(.review)` → nil),
+        // and the handoff path launches via `AntigravityLauncher.launchCommand`
+        // (`agy -p …`) regardless — which would start `agy` inside the review
+        // clone. A hostile PR head can commit `.agents/hooks.json` with arbitrary
+        // command hooks that Antigravity runs with **no approval gate**, and
+        // Crow's git-tracked guard then declines to overwrite that committed file
+        // (leaving the attacker's hooks live) — i.e. RCE on the reviewer's
+        // machine. Unlike Cursor/Codex (which support review and strip
+        // `.cursor/`/`.codex/` + trust-gate), Antigravity has no legitimate
+        // review launch, so refusing the handoff outright closes the vector at
+        // its source rather than relying on a strip. `prepareReviewClone` also
+        // strips `.agents/` for Antigravity review clones as defense-in-depth.
+        guard !Self.shouldRefuseReviewHandoff(targetKind: targetKind, sessionKind: session.kind) else {
+            throw AgentHandoffError.reviewNotSupported(targetKind.rawValue)
         }
         guard let worktree = appState.primaryWorktree(for: sessionID) else {
             throw AgentHandoffError.noWorktree
@@ -2571,6 +2587,20 @@ public final class SessionService {
         targetKind == .cursor && sessionKind == .review
     }
 
+    /// Gate for refusing a review-session handoff to an agent that can't perform
+    /// reviews. Today only Antigravity: its `.review` is unsupported in Phase A
+    /// (`autoLaunchCommand(.review)` → nil) AND it has no `.agents/` strip / trust
+    /// gate, so a review handoff would launch `agy` in an attacker-controlled
+    /// clone and run committed `.agents/hooks.json` unsandboxed. Extracted as a
+    /// pure predicate so the security gate is unit-testable without the full
+    /// `handoffAgent` machinery (mirrors `shouldStripCursorReviewCloneOnHandoff`).
+    /// Codex/Cursor/OpenCode are deliberately excluded — they support review
+    /// handoff with their own strip + trust protections.
+    nonisolated static func shouldRefuseReviewHandoff(
+        targetKind: AgentKind, sessionKind: SessionKind) -> Bool {
+        targetKind == .antigravity && sessionKind == .review
+    }
+
     /// Neutralize a review clone's committed Cursor config layer by removing the
     /// working-tree `.cursor/` directory. A hostile PR head can commit
     /// `.cursor/hooks.json` (arbitrary `beforeShellExecution` commands, with no
@@ -2724,6 +2754,20 @@ public final class SessionService {
         // on `.codex/`.
         if reviewAgentKind == .codex {
             try? fm.removeItem(atPath: (clonePath as NSString).appendingPathComponent(".codex"))
+        }
+        // Defense-in-depth for Antigravity review clones (#862 review): a hostile
+        // PR head can commit `.agents/hooks.json` with arbitrary command hooks
+        // that `agy` runs with no approval gate. Antigravity review handoff is
+        // refused outright (`shouldRefuseReviewHandoff`), so this normally guards
+        // a path that can't be reached today — but if any future code launches
+        // `agy` in a review clone (e.g. Antigravity becoming a valid review
+        // agent), the committed `.agents/` is already neutralized. Gated to
+        // Antigravity reviews for the same reason as `.codex`/`.cursor`: only
+        // Antigravity loads `.agents/`, so stripping it for another agent's
+        // review would just hide the files a hostile PR ships. Re-run on every
+        // prep so a `git pull` can't reintroduce it.
+        if reviewAgentKind == .antigravity {
+            try? fm.removeItem(atPath: (clonePath as NSString).appendingPathComponent(".agents"))
         }
         // Same defense-in-depth for Cursor reviews (#829 review round 9). This
         // PR makes project `.cursor/hooks.json` Crow's load-bearing hook

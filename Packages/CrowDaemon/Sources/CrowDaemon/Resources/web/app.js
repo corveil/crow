@@ -630,7 +630,7 @@ const STATUS_COLOR = {
   active: 'var(--green)', paused: 'var(--yellow)',
   inReview: 'var(--gold)', completed: 'var(--gold)', archived: 'var(--text-muted)',
 };
-const AGENT_GLYPH = { 'claude-code': '✦', cursor: '▲', codex: '◆', 'open-code': '◇', opencode: '◇' };
+const AGENT_GLYPH = { 'claude-code': '✦', cursor: '▲', codex: '◆', 'open-code': '◇', opencode: '◇', antigravity: '↑' };
 
 // Sidebar session groups (Managers now live in the nav pill row, not a group).
 const GROUPS = [

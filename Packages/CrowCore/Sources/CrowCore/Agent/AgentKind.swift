@@ -22,6 +22,10 @@ public struct AgentKind: Hashable, Sendable, Codable, RawRepresentable {
 
     /// The OpenCode agent (sst/opencode).
     public static let openCode = AgentKind(rawValue: "opencode")
+
+    /// The Google Antigravity agent (CLI binary `agy`). Tier-2 / experimental —
+    /// closed-source, Google-auth-locked, hooks-only state detection (#860).
+    public static let antigravity = AgentKind(rawValue: "antigravity")
 }
 
 public extension AgentKind {
