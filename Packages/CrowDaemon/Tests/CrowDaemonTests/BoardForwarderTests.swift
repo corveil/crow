@@ -95,17 +95,28 @@ import CrowPersistence
     }
 }
 
-/// M-E slice: the store-backed session status transitions gained an app-down
-/// local path (mirroring `set-status`), so they work headless. Pure
-/// `session.status` writes — the local path runs only with the app off, so
-/// there's no two-writer divergence (CROW-581).
+/// M-E slice: the store-backed session status transitions run locally off the
+/// daemon's own state, so they work headless. With no `SessionService` (the
+/// no-tmux host) `applySessionStatus` falls back to writing `appState` + `store`
+/// directly (CROW-581).
+///
+/// #816 added the CLI verbs on top of these, plus the preconditions the web UI
+/// enforces by hiding menu items — a `crow` caller has no such affordance, so
+/// the guards have to live server-side.
 @Suite struct LocalStatusTests {
+    /// `ticketURL` is nil unless asked for: `mark-in-review` requires one, the
+    /// other two transitions don't.
     @MainActor
-    private func seededRouter() -> (CommandRouter, AppState, Session) {
+    private func seededRouter(ticketURL: String? = nil, isManager: Bool = false)
+        -> (CommandRouter, AppState, Session) {
         let appState = AppState()
         let store = JSONStore(directory: URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("crowd-status-\(UUID().uuidString)"))
-        let session = Session(name: "s", kind: .work, agentKind: .claudeCode)
+        var session = Session(
+            name: isManager ? "Manager" : "s",
+            kind: isManager ? .manager : .work,
+            agentKind: .claudeCode)
+        session.ticketURL = ticketURL
         appState.sessions = [session]
         store.mutate { $0.sessions = [session] }
         let router = makeCommandRouter(
@@ -120,11 +131,15 @@ import CrowPersistence
             ("complete-session", .completed),
             ("set-session-active", .active),
         ] {
-            let (router, appState, session) = seededRouter()
+            // Seed a ticket unconditionally — harmless for the two verbs that
+            // don't require one, and satisfies mark-in-review's guard.
+            let (router, appState, session) = seededRouter(
+                ticketURL: "https://github.com/corveil/crow/issues/816")
             let resp = await router.handle(request: JSONRPCRequest(
                 id: 1, method: method, params: ["session_id": .string(session.id.uuidString)]))
             #expect(resp.error == nil, "\(method) should run locally with the app down")
             #expect(resp.result?["status"]?.stringValue == expected.rawValue)
+            #expect(resp.result?["session_id"]?.stringValue == session.id.uuidString)
             #expect(appState.sessions.first?.status == expected)
         }
     }
@@ -133,6 +148,51 @@ import CrowPersistence
         let (router, _, _) = seededRouter()
         let resp = await router.handle(request: JSONRPCRequest(id: 1, method: "mark-in-review"))
         #expect(resp.error?.code == RPCErrorCode.invalidParams)
+    }
+
+    @Test @MainActor func statusTransitionRejectsUnknownSession() async {
+        let (router, _, _) = seededRouter()
+        for method in ["mark-in-review", "complete-session", "set-session-active"] {
+            let resp = await router.handle(request: JSONRPCRequest(
+                id: 1, method: method, params: ["session_id": .string(UUID().uuidString)]))
+            #expect(resp.error?.code == RPCErrorCode.applicationError, "\(method) on an unknown session")
+        }
+    }
+
+    /// `SessionService.updateSessionStatus` silently skips managers. Surfacing
+    /// that as an error is the whole point — a CLI caller must not get a success
+    /// receipt for a write that never happened.
+    @Test @MainActor func statusTransitionsRejectManagerSessions() async {
+        for method in ["mark-in-review", "complete-session", "set-session-active"] {
+            let (router, appState, session) = seededRouter(
+                ticketURL: "https://github.com/corveil/crow/issues/816", isManager: true)
+            let resp = await router.handle(request: JSONRPCRequest(
+                id: 1, method: method, params: ["session_id": .string(session.id.uuidString)]))
+            #expect(resp.error?.code == RPCErrorCode.applicationError, "\(method) on a manager")
+            #expect(appState.sessions.first?.status != .completed)
+        }
+    }
+
+    /// Mirrors the web UI gating `s.ticket_url` before offering "Mark In Review".
+    @Test @MainActor func markInReviewRequiresLinkedTicket() async {
+        let (router, appState, session) = seededRouter(ticketURL: nil)
+        let resp = await router.handle(request: JSONRPCRequest(
+            id: 1, method: "mark-in-review", params: ["session_id": .string(session.id.uuidString)]))
+        #expect(resp.error?.code == RPCErrorCode.applicationError)
+        #expect(appState.sessions.first?.status != .inReview, "status must not move on a rejected call")
+    }
+
+    /// Completing an already-completed session must stay legal: the UI's
+    /// active/inReview gating is a menu affordance, not a rule, and scripts
+    /// need `crow complete-session` to be idempotent.
+    @Test @MainActor func completeSessionIsIdempotent() async {
+        let (router, appState, session) = seededRouter()
+        for _ in 0..<2 {
+            let resp = await router.handle(request: JSONRPCRequest(
+                id: 1, method: "complete-session", params: ["session_id": .string(session.id.uuidString)]))
+            #expect(resp.error == nil, "repeat complete-session must not fail")
+        }
+        #expect(appState.sessions.first?.status == .completed)
     }
 }
 

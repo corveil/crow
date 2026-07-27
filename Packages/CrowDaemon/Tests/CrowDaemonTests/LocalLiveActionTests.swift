@@ -138,6 +138,47 @@ import CrowPersistence
         }
     }
 
+    /// #816: `IssueTracker.markIssueDone` / `addMergeLabel` are `async -> Void`
+    /// that return early on a missing ticket / PR and swallow every provider
+    /// error. The web UI hides the menu items instead; `crow` can't, so these
+    /// preconditions are enforced in the handler — otherwise the CLI prints
+    /// `{"ok":true}` for a call that did nothing.
+    @Test @MainActor func ticketActionsRejectUnknownSession() async {
+        let appState = AppState()
+        let tracker = IssueTracker(appState: appState, providerManager: ProviderManager(), store: .temporary())
+        for method in ["mark-issue-done", "add-merge-label"] {
+            let resp = await router(appState: appState, tracker: tracker).handle(request: JSONRPCRequest(
+                id: 1, method: method, params: ["session_id": .string(UUID().uuidString)]))
+            #expect(resp.error?.code == RPCErrorCode.applicationError, "\(method) on an unknown session")
+        }
+    }
+
+    @Test @MainActor func markIssueDoneRequiresLinkedTicket() async {
+        let appState = AppState()
+        let session = Session(name: "s", kind: .work, agentKind: .claudeCode)
+        appState.sessions = [session]
+        let tracker = IssueTracker(appState: appState, providerManager: ProviderManager(), store: .temporary())
+
+        let resp = await router(appState: appState, tracker: tracker).handle(request: JSONRPCRequest(
+            id: 1, method: "mark-issue-done", params: ["session_id": .string(session.id.uuidString)]))
+        #expect(resp.error?.code == RPCErrorCode.applicationError)
+    }
+
+    @Test @MainActor func addMergeLabelRequiresLinkedPR() async {
+        let appState = AppState()
+        let session = Session(name: "s", kind: .work, agentKind: .claudeCode)
+        appState.sessions = [session]
+        // A ticket link is not a PR link — the guard must still reject.
+        appState.links[session.id] = [SessionLink(
+            sessionID: session.id, label: "Issue",
+            url: "https://github.com/corveil/crow/issues/816", linkType: .ticket)]
+        let tracker = IssueTracker(appState: appState, providerManager: ProviderManager(), store: .temporary())
+
+        let resp = await router(appState: appState, tracker: tracker).handle(request: JSONRPCRequest(
+            id: 1, method: "add-merge-label", params: ["session_id": .string(session.id.uuidString)]))
+        #expect(resp.error?.code == RPCErrorCode.applicationError)
+    }
+
     // MARK: delete-session
 
     @Test @MainActor func deleteSessionErrorsWithoutSessionService() async {
