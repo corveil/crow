@@ -1060,9 +1060,23 @@ async function createManager(agentKind) {
   catch (e) { alertModal('New manager failed: ' + (e.message || e)); }
 }
 
-// New-manager "+" button: fetch the available agents and, when there's more
-// than one, pop a context menu to pick which agent to launch (mirrors the
-// desktop AgentRegistry menu). With 0/1 agents, just create with the default.
+// Help copy for an agent whose binary wasn't found on the daemon's PATH at
+// boot. Shared by the new-manager menu and the Settings agent selectors so the
+// "why is this disabled" hint reads identically (#879). Availability is a
+// boot-time snapshot, hence "restart Crow".
+function agentUnavailableHint(a) {
+  const bin = a.binary ? ' (' + a.binary + ')' : '';
+  return (a.name || a.kind) + bin + ' not found on PATH — install it and restart Crow to enable.';
+}
+
+// New-manager "+" button: fetch the known agents and, when more than one is
+// known, pop a context menu to pick which to launch (mirrors the desktop
+// AgentRegistry menu). Off-PATH agents are listed but disabled (greyed, with a
+// help tooltip) so a shipped-but-uninstalled harness is discoverable rather than
+// invisible (#879) — that discoverability is the point, so the menu shows the
+// full roster even when only one agent is actually installed. The instant-create
+// path only kicks in when the daemon is down (0 agents) or somehow reports a
+// single known agent.
 async function openNewManagerMenu(anchorEl) {
   let agents = [];
   try { const r = await rpc('list-agents'); agents = (r && r.agents) || []; } catch (_) { /* app down */ }
@@ -1070,8 +1084,17 @@ async function openNewManagerMenu(anchorEl) {
   closeContextMenu();
   const menu = el('div', 'ctx-menu');
   for (const a of agents) {
-    const item = el('div', 'ctx-item', (a.name || a.kind) + (a.default ? '   (default)' : ''));
-    item.onclick = (ev) => { ev.stopPropagation(); closeContextMenu(); createManager(a.kind); };
+    const enabled = a.available !== false;
+    const label = (a.name || a.kind) + (a.default ? '   (default)' : '') + (enabled ? '' : '   (not installed)');
+    const item = el('div', 'ctx-item' + (enabled ? '' : ' disabled'), label);
+    if (enabled) {
+      item.onclick = (ev) => { ev.stopPropagation(); closeContextMenu(); createManager(a.kind); };
+    } else {
+      item.title = agentUnavailableHint(a);
+      // Swallow the click so a disabled row never launches (and never closes
+      // the menu), keeping it as info-only.
+      item.onclick = (ev) => { ev.stopPropagation(); };
+    }
     menu.appendChild(item);
   }
   document.body.appendChild(menu);

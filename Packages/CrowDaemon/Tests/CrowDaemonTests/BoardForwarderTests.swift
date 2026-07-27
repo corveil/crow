@@ -341,10 +341,53 @@ private struct StubShellRunner: ShellRunner {
 
         let resp = await router.handle(request: JSONRPCRequest(id: 1, method: "list-agents"))
         #expect(resp.error == nil)
-        let kinds = (resp.result?["agents"]?.arrayValue ?? [])
-            .compactMap { $0.objectValue?["kind"]?.stringValue }
+        let agents = resp.result?["agents"]?.arrayValue ?? []
+        let kinds = agents.compactMap { $0.objectValue?["kind"]?.stringValue }
         #expect(kinds.contains(AgentKind.claudeCode.rawValue),
                 "list-agents must serve the locally-registered Claude agent even with the app down")
+
+        // #879: every agent object now carries an `available` flag + `binary`
+        // token so the pickers can grey out off-PATH agents with a tooltip. The
+        // registered Claude agent is available.
+        let claude = agents.first { $0.objectValue?["kind"]?.stringValue == AgentKind.claudeCode.rawValue }
+        #expect(claude?.objectValue?["available"]?.boolValue == true,
+                "list-agents must report the availability flag (#879)")
+        #expect(claude?.objectValue?["binary"]?.stringValue == "claude",
+                "list-agents must report the PATH binary token for the disabled-picker tooltip (#879)")
+    }
+
+    // #879: `registerKnown(_:available:)` surfaces an off-PATH agent for the
+    // pickers **without** making it launchable — the launch gate
+    // (`agent(for:)` / `registeredKind` / `defaultAgent`) stays keyed on the
+    // available map, so a greyed-out picker row can never actually launch. Uses
+    // a fresh registry so the process-wide singleton other tests populate can't
+    // leak in.
+    @Test @MainActor func unavailableAgentSurfacesButStaysUnlaunchable() {
+        let reg = AgentRegistry()
+        reg.registerKnown(ClaudeCodeAgent(), available: false)
+
+        // Unavailable ⇒ not launchable, not gate-passable, not a default.
+        #expect(reg.agent(for: .claudeCode) == nil)
+        #expect(reg.registeredKind(.claudeCode) == nil)
+        #expect(reg.defaultAgent == nil)
+
+        // …but still listed for the pickers, flagged unavailable.
+        let known = reg.allKnownAgents()
+        #expect(known.count == 1)
+        #expect(known.first?.agent.kind == .claudeCode)
+        #expect(known.first?.available == false)
+    }
+
+    // The available path: registering a resolved agent makes it launchable and
+    // (being first) the default, and lists it as available.
+    @Test @MainActor func availableAgentIsLaunchableAndDefault() {
+        let reg = AgentRegistry()
+        reg.registerKnown(ClaudeCodeAgent(), available: true)
+
+        #expect(reg.agent(for: .claudeCode) != nil)
+        #expect(reg.registeredKind(.claudeCode) == .claudeCode)
+        #expect(reg.defaultAgent?.kind == .claudeCode)
+        #expect(reg.allKnownAgents().first?.available == true)
     }
 }
 

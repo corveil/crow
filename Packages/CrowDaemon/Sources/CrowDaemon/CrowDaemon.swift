@@ -884,48 +884,51 @@ public enum CrowDaemon {
     }
 
     /// Register the coding agents in this process's `AgentRegistry`, mirroring
-    /// the desktop app's registration (AppDelegate): Claude is always present;
-    /// Codex/Cursor/OpenCode register only when their binary resolves on PATH
-    /// (or a `defaults.binaries.*` override). Reads binary overrides from the
-    /// same on-disk config the app uses so both hosts gate identically
-    /// (CROW-581, M-B).
+    /// the desktop app's registration (AppDelegate): Claude is always present
+    /// and launchable; Codex/Cursor/OpenCode/Antigravity are all registered as
+    /// *known* so they surface in the pickers, but marked **available** only
+    /// when their binary resolves on PATH (or a `defaults.binaries.*` override).
+    /// Unavailable ones show greyed-out with a help tooltip and stay unlaunchable
+    /// (#879). Reads binary overrides from the same on-disk config the app uses
+    /// so both hosts gate identically (CROW-581, M-B).
     @MainActor
     private static func registerAgents(devRoot: String) {
         if let config = ConfigStore.loadConfig(devRoot: devRoot) {
             BinaryOverrides.shared.set(config.defaults.binaries)
         }
 
-        AgentRegistry.shared.register(ClaudeCodeAgent())
+        // Every known agent is registered so the pickers can surface it; the
+        // ones whose binary doesn't resolve are recorded as **unavailable**
+        // (greyed-out with a help tooltip) rather than omitted, and stay out of
+        // the launchable map so `registeredKind` still refuses to launch/hand
+        // off to them (#879). Availability is a boot-time snapshot — the tooltip
+        // copy tells users to install the binary and restart Crow.
+        AgentRegistry.shared.registerKnown(ClaudeCodeAgent(), available: true)
 
         let codex = OpenAICodexAgent()
-        if let path = codex.findBinary() {
-            AgentRegistry.shared.register(codex)
-            log("OpenAI Codex agent registered at \(path)")
-        }
+        let codexPath = codex.findBinary()
+        AgentRegistry.shared.registerKnown(codex, available: codexPath != nil)
+        if let codexPath { log("OpenAI Codex agent registered at \(codexPath)") }
 
         let cursor = CursorAgent()
-        if let path = cursor.findBinary() {
-            AgentRegistry.shared.register(cursor)
-            log("Cursor agent registered at \(path)")
-        }
+        let cursorPath = cursor.findBinary()
+        AgentRegistry.shared.registerKnown(cursor, available: cursorPath != nil)
+        if let cursorPath { log("Cursor agent registered at \(cursorPath)") }
 
         let openCode = OpenCodeAgent()
-        if let path = openCode.findBinary() {
-            AgentRegistry.shared.register(openCode)
-            log("OpenCode agent registered at \(path)")
-        }
+        let openCodePath = openCode.findBinary()
+        AgentRegistry.shared.registerKnown(openCode, available: openCodePath != nil)
+        if let openCodePath { log("OpenCode agent registered at \(openCodePath)") }
 
-        // Google Antigravity (`agy`) — Tier-2 / experimental (#860). Registered
-        // only when its binary resolves on PATH (or a `defaults.binaries.antigravity`
-        // override); off-PATH ⇒ silently absent from the picker and handoff
-        // (ADR 0014). This is also the safe default while the supply-chain
-        // provenance is confirmed — Crow never installs `agy` itself, it only
-        // resolves whatever the official `antigravity.google` installer placed.
+        // Google Antigravity (`agy`) — Tier-2 / experimental (#860). Surfaced in
+        // the picker regardless of install state; off-PATH ⇒ shown disabled with
+        // a "not found on PATH" tooltip rather than silently absent (#879,
+        // updating ADR 0014). Crow never installs `agy` itself — it only resolves
+        // whatever the official `antigravity.google` installer placed.
         let antigravity = AntigravityAgent()
-        if let path = antigravity.findBinary() {
-            AgentRegistry.shared.register(antigravity)
-            log("Antigravity agent registered at \(path)")
-        }
+        let antigravityPath = antigravity.findBinary()
+        AgentRegistry.shared.registerKnown(antigravity, available: antigravityPath != nil)
+        if let antigravityPath { log("Antigravity agent registered at \(antigravityPath)") }
     }
 
     /// (Re)populate `appState` from the store snapshot — sessions + their

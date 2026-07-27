@@ -14,7 +14,7 @@
   let devRoot = '';
   let dirty = false;
   let activeTab = 'general';
-  let agents = [];         // [{kind, name, default}] from list-agents (local, not remote)
+  let agents = [];         // [{kind, name, default, available, binary}] from list-agents (local, not remote)
   let subForm = null;      // { kind: 'workspace'|'job', draft, isNew }
   let backdrop = null;
   let escHandler = null;
@@ -325,8 +325,15 @@
     if (cfg.agentsByKind[actionKey] == null) def.selected = true;
     sel.appendChild(def);
     for (const a of agents) {
-      const o = el('option', null, a.name);
+      const enabled = a.available !== false;
+      // Off-PATH agents stay in the list (so users see the harness exists) but
+      // are disabled with an inline "(not installed)" suffix + tooltip so it's
+      // obvious why they can't be picked (#879). `agentUnavailableHint` lives in
+      // app.js, loaded first on the same page.
+      const o = el('option', null, a.name + (enabled ? '' : ' (not installed)'));
       o.value = a.kind;
+      o.disabled = !enabled;
+      if (!enabled && typeof agentUnavailableHint === 'function') o.title = agentUnavailableHint(a);
       if (cfg.agentsByKind[actionKey] === a.kind) o.selected = true;
       sel.appendChild(o);
     }

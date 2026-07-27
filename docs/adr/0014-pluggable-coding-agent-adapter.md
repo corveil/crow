@@ -64,10 +64,21 @@ modifying `CrowCore`.
 [`AgentRegistry`](../../Packages/CrowCore/Sources/CrowCore/Agent/AgentRegistry.swift)
 is the process-wide map from kind → agent. **The first kind registered becomes
 the registry's *fallback* default.** At daemon boot, `CrowDaemon.registerAgents`
-registers `ClaudeCodeAgent` unconditionally first, then Codex / Cursor / OpenCode
-**only if `findBinary()` resolves**. So Claude Code is always present, and is the
-registry fallback; any other harness whose binary is off `PATH` is simply not in
-the map.
+registers **every** known agent so all of them surface in the pickers, but flags
+each as *available* only when `findBinary()` resolves (Claude Code is always
+available). Available agents enter the launchable `agents` map (Claude Code first,
+so it's the registry fallback); an off-PATH agent is recorded as *known but
+unavailable* — kept out of the launchable map so `registeredKind`/`agent(for:)`
+still refuse to launch or hand off to it, but returned by `allKnownAgents()` so
+the `list-agents` RPC / web pickers show it **greyed-out with a "not found on
+PATH — install it and restart Crow" tooltip** instead of hiding it (#879).
+Availability is a boot-time snapshot; re-probing on install is out of scope.
+
+> **Superseded behavior (2026-07, #879):** originally an off-PATH harness was
+> *silently absent* from the registry, picker, and handoff. That read as
+> broken/missing for a shipped-but-uninstalled agent (e.g. Antigravity), so the
+> pickers now **surface-but-disable** unavailable agents. The launch gate is
+> unchanged — only the UI/`list-agents` surface widened.
 
 The harness a **new session** actually launches with is a separate, config-driven
 choice: `AppState.agentKind(for:) = agentsByKind[sessionKind] ?? defaultAgentKind`
