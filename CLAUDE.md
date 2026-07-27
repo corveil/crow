@@ -169,6 +169,21 @@ Events: `taskComplete`, `agentWaiting`, `reviewRequested`, `changesRequested`, `
 
 Notifications cascade — one fires only if `globalMute` is off, the global category toggle is on, **and** the per-event toggle is on. Omitted flags leave their stored value alone; every `--event-*` flag requires `--event`.
 
+### Gateways & Secrets
+
+Local-only (CROW-815) — these carry credentials, so the remote `/rpc` web path refuses them and only the local Unix socket works. Take exactly one target: `--manager` or `--workspace <name|uuid>`.
+
+```
+crow gateway get [--manager | --workspace <name|uuid>] [--reveal]        → {"gateway_set":true,"base_url":"...","headers":{...}}
+crow gateway set --manager --base-url URL --header "Name: Value" ...     → {"saved":true,"gateway_set":true}
+crow gateway clear --manager                                            → {"saved":true,"gateway_set":false}
+crow web-password status                                                → {"password_set":true,"iterations":210000}
+crow web-password set [--stdin]                                         → {"saved":true,"password_set":true}
+crow web-password clear                                                 → {"saved":true,"password_set":false}
+```
+
+`gateway get` blanks header values unless `--reveal`. A `--header` with a blank value (`--header "X-Api-Key:"`) keeps the stored secret — that's how to change a base URL without restating credentials. `web-password set` prompts twice with echo off; pipe with `--stdin` for scripts. There is no `--password` flag on purpose (shell history / `ps`).
+
 ## Important Notes
 
 - `--session` always expects a full UUID (e.g., `a1b2c3d4-e5f6-7890-abcd-ef1234567890`), not a session name

@@ -179,6 +179,23 @@ func validateRetentionHours(_ value: Int) throws {
     }
 }
 
+/// Validate a `crow gateway set --header` value: `Name: Value`.
+///
+/// A blank *value* is legal and meaningful — `--header "X-Api-Key:"` means
+/// "keep the secret already stored for this header", which is how the base URL
+/// can be changed without restating the key. A missing colon or blank name is
+/// rejected so a typo'd flag fails loudly instead of being dropped server-side.
+///
+/// - Throws: `ValidationError` when the line has no colon or an empty name.
+func validateHeaderLine(_ value: String) throws {
+    let trimmed = value.trimmingCharacters(in: .whitespaces)
+    guard let colon = trimmed.firstIndex(of: ":"),
+          !String(trimmed[..<colon]).trimmingCharacters(in: .whitespaces).isEmpty else {
+        throw ValidationError(
+            "'\(value)' is not a valid header. Expected 'Name: Value' (e.g. \"X-Api-Key: sk-…\").")
+    }
+}
+
 /// Validate the set-goal argument shape: exactly one of `--goal`/`--clear`,
 /// and a provided goal must not be blank (a whitespace goal would silently
 /// fail to earn the on-goal alignment multiplier).

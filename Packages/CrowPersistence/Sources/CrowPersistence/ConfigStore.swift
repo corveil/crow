@@ -107,9 +107,13 @@ public final class ConfigStore: Sendable {
     }
 
     /// Serializes `config.json` read-modify-write across concurrent writers
-    /// (set-config / set-web-password / onJobRan) so one save can't clobber
-    /// another writer's just-loaded copy (review #10). Callers wrap their whole
-    /// load → mutate → save in this.
+    /// (`set-config`, the `SecretRoutes` POSTs, `gateway-set` / `web-password-set`,
+    /// `onJobRan`) so one save can't clobber another writer's just-loaded copy
+    /// (review #10). Callers wrap their whole load → mutate → save in this.
+    ///
+    /// Process-local: this serializes writers *inside* one process, not against a
+    /// separate one. That is why the CLI goes through the daemon over RPC rather
+    /// than writing `config.json` itself.
     private static let configLock = NSLock()
 
     /// Run `body` while holding the shared config.json write lock.

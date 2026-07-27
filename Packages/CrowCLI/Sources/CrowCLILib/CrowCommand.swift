@@ -42,6 +42,8 @@ public struct CrowCommand: ParsableCommand {
             Cleanup.self,
             UI.self,
             Notifications.self,
+            Gateway.self,
+            WebPassword.self,
             AddWorktree.self,
             ListWorktrees.self,
             NewTerminal.self,

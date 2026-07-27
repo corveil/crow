@@ -114,6 +114,13 @@ enum RPCWebSocketHandler {
     ///   unauthenticated non-loopback bind). Other `set-config` fields flow through.
     /// - `open-in-vscode` / `open-terminal`: launch a GUI app on the daemon host
     ///   at the worktree path — a remote peer must not spawn host processes (CROW-749).
+    /// - `gateway-*` / `web-password-*`: the CLI's route to the same secret
+    ///   surfaces `SecretRoutes` serves the browser (CROW-815). Writes must stay
+    ///   local so a remote client can't change the password gating remote access;
+    ///   **reads are gated too**, because `gateway-get` with `reveal` returns the
+    ///   gateway auth headers verbatim. The web Settings UI is unaffected — it
+    ///   reads gateway state through `get-config` (stripped) and writes through
+    ///   `SecretRoutes`.
     ///
     /// Scheduled `jobs` are intentionally NOT gated here (CROW-665): the Jobs
     /// editor is a core web-Settings surface, so an authenticated remote session
@@ -156,6 +163,9 @@ enum RPCWebSocketHandler {
             // the worktree path). Restrict to loopback callers — a remote web
             // session must not spawn host processes (CROW-749).
             return "opening host apps is local-only"
+        case "gateway-get", "gateway-set", "web-password-get", "web-password-set":
+            // Secret reads *and* writes (CROW-815) — see the doc comment above.
+            return "gateway and web-password management is local-only"
         case "set-config":
             guard setConfigTouchesPrivilegedFields(request, devRoot: devRoot) else { return nil }
             return "set-config binaries is local-only"
