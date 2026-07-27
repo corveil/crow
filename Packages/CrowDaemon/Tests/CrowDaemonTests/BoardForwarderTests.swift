@@ -358,35 +358,32 @@ private struct StubShellRunner: ShellRunner {
     }
 
     // #879: the actual point of the PR — an **unavailable** agent must still
-    // appear in the `list-agents` payload, flagged `available: false` (so the
-    // pickers can grey it out) and **not** the default, while an available one
-    // flags `available: true`. Registers a real off-PATH agent (Codex,
-    // unavailable) alongside available Claude and inspects the router payload —
-    // the widened contract every picker consumes, made concrete.
-    @Test @MainActor func listAgentsReportsUnavailableAgents() async {
-        AgentRegistry.shared.register(ClaudeCodeAgent())              // available
-        AgentRegistry.shared.registerKnown(OpenAICodexAgent(), available: false)  // off-PATH
+    // appear in the listing, flagged `available: false` (so the pickers can grey
+    // it out) and **not** the default, while an available one flags
+    // `available: true`. Exercises `agentListings()` — the exact projection both
+    // `list-agents` handlers serialize — against a **fresh** registry, so there's
+    // no shared-singleton mutation to leak into sibling tests.
+    @Test func listingReportsUnavailableAgents() {
+        let reg = AgentRegistry()
+        reg.register(ClaudeCodeAgent())                            // available
+        reg.registerKnown(OpenAICodexAgent(), available: false)    // off-PATH
 
-        let router = makeCommandRouter(
-            appState: AppState(), store: JSONStore.temporary(), git: GitManager(),
-            devRoot: NSTemporaryDirectory(), cockpit: nil)
+        let listings = reg.agentListings()
 
-        let resp = await router.handle(request: JSONRPCRequest(id: 1, method: "list-agents"))
-        #expect(resp.error == nil)
-        let agents = resp.result?["agents"]?.arrayValue ?? []
+        let claude = listings.first { $0.kind == .claudeCode }
+        #expect(claude?.available == true)
+        #expect(claude?.isDefault == true, "the available first-registered agent is the default")
+        #expect(claude?.binary == "claude")
 
-        let codex = agents.first { $0.objectValue?["kind"]?.stringValue == AgentKind.codex.rawValue }
+        let codex = listings.first { $0.kind == .codex }
         #expect(codex != nil, "an off-PATH agent must be listed, not hidden (#879)")
-        #expect(codex?.objectValue?["available"]?.boolValue == false,
-                "an off-PATH agent must be flagged available:false")
-        #expect(codex?.objectValue?["binary"]?.stringValue == "codex",
-                "the tooltip needs the PATH binary token")
-        #expect(codex?.objectValue?["default"]?.boolValue == false,
-                "an unavailable agent must never be reported as the default")
+        #expect(codex?.available == false, "an off-PATH agent must be flagged available:false")
+        #expect(codex?.binary == "codex", "the tooltip needs the PATH binary token")
+        #expect(codex?.isDefault == false, "an unavailable agent must never be the default")
 
         // …and it stays unlaunchable: unavailable ⇒ out of the launchable map.
-        #expect(AgentRegistry.shared.agent(for: .codex) == nil)
-        #expect(AgentRegistry.shared.registeredKind(.codex) == nil)
+        #expect(reg.agent(for: .codex) == nil)
+        #expect(reg.registeredKind(.codex) == nil)
     }
 
     // #879: `registerKnown(_:available:)` surfaces an off-PATH agent for the

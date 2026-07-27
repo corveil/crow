@@ -897,38 +897,37 @@ public enum CrowDaemon {
             BinaryOverrides.shared.set(config.defaults.binaries)
         }
 
-        // Every known agent is registered so the pickers can surface it; the
-        // ones whose binary doesn't resolve are recorded as **unavailable**
-        // (greyed-out with a help tooltip) rather than omitted, and stay out of
-        // the launchable map so `registeredKind` still refuses to launch/hand
-        // off to them (#879). Availability is a boot-time snapshot — the tooltip
-        // copy tells users to install the binary and restart Crow.
+        // Register a discovered agent as *known*, marking it available iff its
+        // binary resolves. Logs either the resolved path or a "not found on PATH"
+        // line so the boot log matches what the picker shows — a greyed-out row
+        // now has a corresponding log entry (#879).
+        func registerDiscovered(_ agent: any CodingAgent) {
+            if let path = agent.findBinary() {
+                AgentRegistry.shared.registerKnown(agent, available: true)
+                log("\(agent.displayName) agent registered at \(path)")
+            } else {
+                AgentRegistry.shared.registerKnown(agent, available: false)
+                log("\(agent.displayName) agent not found on PATH — shown disabled in the picker")
+            }
+        }
+
+        // Claude Code is the baseline harness and the registry fallback default,
+        // so it's registered available **unconditionally** — deliberately without
+        // probing `findBinary()`. Greying out the default would break the common
+        // case, and if `claude` were somehow off-PATH the Manager's own legacy-
+        // `claude` fallback (`managerCommand`) still applies. This one exemption
+        // to the honest-availability rule is intentional; don't "fix" it.
         AgentRegistry.shared.registerKnown(ClaudeCodeAgent(), available: true)
 
-        let codex = OpenAICodexAgent()
-        let codexPath = codex.findBinary()
-        AgentRegistry.shared.registerKnown(codex, available: codexPath != nil)
-        if let codexPath { log("OpenAI Codex agent registered at \(codexPath)") }
-
-        let cursor = CursorAgent()
-        let cursorPath = cursor.findBinary()
-        AgentRegistry.shared.registerKnown(cursor, available: cursorPath != nil)
-        if let cursorPath { log("Cursor agent registered at \(cursorPath)") }
-
-        let openCode = OpenCodeAgent()
-        let openCodePath = openCode.findBinary()
-        AgentRegistry.shared.registerKnown(openCode, available: openCodePath != nil)
-        if let openCodePath { log("OpenCode agent registered at \(openCodePath)") }
-
+        registerDiscovered(OpenAICodexAgent())
+        registerDiscovered(CursorAgent())
+        registerDiscovered(OpenCodeAgent())
         // Google Antigravity (`agy`) — Tier-2 / experimental (#860). Surfaced in
         // the picker regardless of install state; off-PATH ⇒ shown disabled with
         // a "not found on PATH" tooltip rather than silently absent (#879,
         // updating ADR 0014). Crow never installs `agy` itself — it only resolves
         // whatever the official `antigravity.google` installer placed.
-        let antigravity = AntigravityAgent()
-        let antigravityPath = antigravity.findBinary()
-        AgentRegistry.shared.registerKnown(antigravity, available: antigravityPath != nil)
-        if let antigravityPath { log("Antigravity agent registered at \(antigravityPath)") }
+        registerDiscovered(AntigravityAgent())
     }
 
     /// (Re)populate `appState` from the store snapshot — sessions + their

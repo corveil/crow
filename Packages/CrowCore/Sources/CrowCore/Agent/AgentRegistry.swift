@@ -38,8 +38,11 @@ public final class AgentRegistry: @unchecked Sendable {
     ///
     /// Availability is authoritative and kept in sync with `agents`: re-
     /// registering a kind as unavailable also removes it from the launchable map
-    /// (and drops it as the default), so the two never disagree. Registration is
-    /// boot-once in practice, but the invariant holds regardless of order.
+    /// and, if it was the default, clears `defaultKind`. This launchable-map
+    /// consistency holds regardless of registration order. It does **not** re-
+    /// elect a new default — after clearing, `defaultAgent` can be nil while other
+    /// available agents remain; unreachable in the real boot path (Claude
+    /// registers first and available), which is why re-election is omitted.
     public func registerKnown(_ agent: any CodingAgent, available: Bool) {
         lock.lock(); defer { lock.unlock() }
         if known[agent.kind] == nil { knownOrder.append(agent.kind) }
@@ -106,4 +109,41 @@ public final class AgentRegistry: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         return knownOrder.compactMap { known[$0] }
     }
+
+    /// The picker / `list-agents` projection: every known agent, sorted by
+    /// display name, with its availability, the PATH binary token for the
+    /// disabled-row tooltip, and whether it's the (available) default. Defined
+    /// once here so the daemon and engine `list-agents` handlers serialize an
+    /// identical contract instead of duplicating the selection logic — and so it
+    /// can be unit-tested against a fresh registry with no shared-singleton
+    /// mutation (#879).
+    public func agentListings() -> [KnownAgentListing] {
+        let defaultKind = defaultAgent?.kind
+        return allKnownAgents()
+            .sorted { $0.agent.displayName < $1.agent.displayName }
+            .map { known in
+                KnownAgentListing(
+                    kind: known.agent.kind,
+                    displayName: known.agent.displayName,
+                    binary: known.agent.launchCommandToken,
+                    // A kind that isn't available can never be reported as the
+                    // default (belt-and-braces: `defaultKind` is already nil for
+                    // unavailable kinds, since it reads the launchable map).
+                    isDefault: known.available && known.agent.kind == defaultKind,
+                    available: known.available)
+            }
+    }
+}
+
+/// One row of `AgentRegistry.agentListings()` — the JSON-free shape both
+/// `list-agents` handlers serialize (#879).
+public struct KnownAgentListing: Sendable {
+    public let kind: AgentKind
+    public let displayName: String
+    /// The CLI token Crow resolves on PATH (`claude`, `codex`, `agy`, …) — shown
+    /// in the "not found on PATH" tooltip. Never the resolved absolute path, so
+    /// the payload doesn't leak the daemon host's install locations.
+    public let binary: String
+    public let isDefault: Bool
+    public let available: Bool
 }

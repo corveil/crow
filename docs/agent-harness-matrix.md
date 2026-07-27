@@ -102,12 +102,15 @@ managed-terminal command needs hook/env prep.
 - **Registration order = default.** `AgentRegistry.register` sets the default to
   the *first* kind registered
   ([`AgentRegistry.swift`](../Packages/CrowCore/Sources/CrowCore/Agent/AgentRegistry.swift)).
-  `CrowDaemon.registerAgents` registers **Claude unconditionally first**, then
-  Codex / Cursor / OpenCode / Antigravity **only if `findBinary()` resolves**
+  `CrowDaemon.registerAgents` registers **Claude unconditionally first** (and
+  available), then Codex / Cursor / OpenCode / Antigravity as *known* regardless
+  of `PATH`, marking each **available** only if `findBinary()` resolves
   ([`CrowDaemon.swift`](../Packages/CrowDaemon/Sources/CrowDaemon/CrowDaemon.swift),
-  `registerAgents`). So a harness whose binary is off `PATH` is silently absent
-  from the picker and from `handoff-agent` — see
-  [ADR 0015](adr/0015-harness-capability-tiers.md). Antigravity's `agy` gate is
+  `registerAgents`; #879). Available agents enter the launchable map; a harness
+  whose binary is off `PATH` is **shown disabled in the picker** (greyed-out with
+  a "not found on `PATH`" tooltip) and kept out of the launchable map, so a
+  handoff to it still throws `agentNotRegistered` — surfaced-but-not-launchable,
+  see [ADR 0015](adr/0015-harness-capability-tiers.md). Antigravity's `agy` gate is
   also the safe default while its supply-chain provenance is confirmed (Crow
   never installs `agy`; it only resolves what the official installer placed).
 - `findBinary()` resolves in three tiers: explicit `defaults.binaries.<kind>`
@@ -421,11 +424,13 @@ Antigravity is promoted out of Tier-2.**
 Crow session identity, worktree, branch, ticket, and links; it does **not**
 transfer chat history ([ADR 0011](adr/0011-agent-handoff-preserves-session-not-chat.md)).
 A handoff to a harness whose binary isn't on `PATH` throws
-`AgentHandoffError.agentNotRegistered` — such a harness was never registered at
-boot (`registerAgents` gates on `findBinary()`), and `handoffAgent`'s registry
-lookup precedes its binary check. `agentBinaryMissing` is the narrower case where
-the harness *was* registered but its binary later vanished. Either way, the
-binary-gating from [ADR 0015](adr/0015-harness-capability-tiers.md) surfaces here.
+`AgentHandoffError.agentNotRegistered` — since #879 such a harness is registered
+as *known-but-unavailable* and kept out of the launchable `agents` map (the web
+handoff menu shows it as a disabled row rather than offering it), so
+`handoffAgent`'s registry lookup — which precedes its binary check — misses it.
+`agentBinaryMissing` is the narrower case where the harness *was* available but
+its binary later vanished. Either way, the binary-gating from
+[ADR 0015](adr/0015-harness-capability-tiers.md) surfaces here.
 
 ## Version-pinned reasons — re-check targets
 

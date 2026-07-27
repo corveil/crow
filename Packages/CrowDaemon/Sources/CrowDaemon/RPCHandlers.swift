@@ -591,18 +591,15 @@ func makeCommandRouter(
         // instead of hiding them (#879).
         "list-agents": { _ in
             await MainActor.run {
-                let defaultKind = AgentRegistry.shared.defaultAgent?.kind
-                let items: [JSONValue] = AgentRegistry.shared.allKnownAgents()
-                    .sorted { $0.agent.displayName < $1.agent.displayName }
-                    .map { known in
-                        .object([
-                            "kind": .string(known.agent.kind.rawValue),
-                            "name": .string(known.agent.displayName),
-                            "default": .bool(known.available && known.agent.kind == defaultKind),
-                            "available": .bool(known.available),
-                            "binary": .string(known.agent.launchCommandToken),
-                        ])
-                    }
+                let items: [JSONValue] = AgentRegistry.shared.agentListings().map { a in
+                    .object([
+                        "kind": .string(a.kind.rawValue),
+                        "name": .string(a.displayName),
+                        "default": .bool(a.isDefault),
+                        "available": .bool(a.available),
+                        "binary": .string(a.binary),
+                    ])
+                }
                 return ["agents": .array(items)]
             }
         },
