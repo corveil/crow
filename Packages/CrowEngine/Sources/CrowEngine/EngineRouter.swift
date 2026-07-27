@@ -140,7 +140,13 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                         let createdName = capturedAppState.sessions.first(where: { $0.id == id })?.name ?? name
                         return ["session_id": .string(id.uuidString), "name": .string(createdName)]
                     }
-                    let agentKind = requestedAgentKind ?? capturedAppState.agentKind(for: .work)
+                    // Registry gate (CROW-593; #834): honor the requested kind
+                    // only if an agent is registered for it, else fall back to
+                    // the configured default — so this surface can't persist a
+                    // session with an unregistered kind that `launchAgent` would
+                    // then silently no-op on.
+                    let agentKind = AgentRegistry.shared.registeredKind(requestedAgentKind)
+                        ?? capturedAppState.agentKind(for: .work)
                     let session = Session(name: name, kind: .work, agentKind: agentKind)
                     capturedAppState.sessions.append(session)
                     capturedStore.mutate { $0.sessions.append(session) }
@@ -450,9 +456,10 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                 // registered in AgentRegistry, so a web/daemon caller can't
                 // request an arbitrary agent. An unknown/unavailable kind falls
                 // back to the configured default (launch is additionally gated
-                // in managerCommand's AgentRegistry fallback).
+                // in managerCommand's AgentRegistry fallback). Shared with the
+                // other creation surfaces via `registeredKind` (#834).
                 let requested = params["agent_kind"]?.stringValue.flatMap { AgentKind(rawValue: $0) }
-                let agent = requested.flatMap { AgentRegistry.shared.agent(for: $0) != nil ? $0 : nil }
+                let agent = AgentRegistry.shared.registeredKind(requested)
                 await MainActor.run { capturedAppState.onCreateManager?(agent) }
                 return ["ok": .bool(true)]
             },

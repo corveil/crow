@@ -193,8 +193,9 @@
     if (!backdrop) {
       backdrop = el('div', 'settings-backdrop');
       backdrop.onclick = (ev) => { if (ev.target === backdrop) closeSettings(); };
-      // Escape backs out of the topmost overlay first (sub-form), then Settings —
-      // matching backdrop-click behavior (review Yellow).
+      // Escape backs out of the topmost overlay first (sub-form), then Settings.
+      // The sub-form is intentionally *not* backdrop-dismissible (#851), so Esc
+      // is its only key-driven close path.
       escHandler = (ev) => {
         if (ev.key !== 'Escape') return;
         if (subForm) { subForm = null; render(); return; }
@@ -1053,7 +1054,9 @@
   // real `.settings-body` flex child so tall forms scroll instead of clipping.
   function renderSubFormOverlay() {
     const overlay = el('div', 'settings-backdrop settings-subform-overlay');
-    overlay.onclick = (ev) => { if (ev.target === overlay) { subForm = null; render(); } };
+    // Backdrop click is intentionally a no-op for the job/workspace editor: an
+    // accidental click off the modal must not silently discard in-progress edits
+    // (#851). Close via Cancel / Add-Done / ✕ / Esc only.
 
     const modal = el('div', 'settings-modal');
     const head = el('div', 'settings-head');

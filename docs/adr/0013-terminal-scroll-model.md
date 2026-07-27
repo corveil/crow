@@ -58,6 +58,12 @@ Boundary accepted: an extra Manager-session terminal created with an explicit `-
 
 The predicate lives in `CrowCore` because the daemon needs it twice — to set the window option at creation/adopt, and as the `list-terminals` fallback before a window exists — and those two must not drift apart.
 
+### Amendment — #850: forward an agent's wheel ONLY while it is mouse-tracking
+
+The original decision forwarded an agent surface's wheel to the app unconditionally, expecting the app to scroll its own transcript "like a naked terminal." In practice Claude Code and Cursor do **not** enable mouse tracking at their idle prompt, so the forward fell to `sendScrollToPTY`'s cursor-key branch — and the agent read those arrow keys as **input-history navigation**, not scrollback (#850). Every wheel notch stepped through past prompts.
+
+`appOwnsScroll` is refined so a **known agent surface forwards only while it is actively mouse-tracking** (the wheel becomes an SGR wheel button it scrolls its transcript with). At a plain prompt (no tracking) the wheel scrolls xterm's local viewport instead — on the scrollback-less alt buffer a harmless no-op, but never history nav. This is the behavior the desktop terminal and `web/terminal.html` already had (neither forwards a non-mouse wheel), so the amendment brings `app.js` to parity across surfaces. `enableTouchScroll` shares the predicate, so touch-drag matches. The alt-screen model itself is unchanged; only the wheel/touch *routing* on an agent surface is tightened. The cursor-key branch of `sendScrollToPTY` survives solely as the pre-classification alt-buffer fallback for genuine full-screen apps (less/vim).
+
 ## Consequences
 
 **Easier / better**

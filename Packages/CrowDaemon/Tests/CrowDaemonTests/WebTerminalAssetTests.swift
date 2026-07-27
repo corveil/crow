@@ -79,9 +79,10 @@ import Testing
     ///
     /// Consuming is the #776 invariant: any early return hands the wheel to
     /// xterm's alternate-scroll fallback, which emits arrow keys that the agent
-    /// TUI reads as input-history navigation. Routing is the #824 invariant: a
-    /// plain shell scrolls the local 50k scrollback, while an agent surface
-    /// forwards the tick to the app so it scrolls its own transcript.
+    /// TUI reads as input-history navigation. Routing is the #824/#850 invariant:
+    /// a plain shell — and an agent idling at its prompt — scrolls the local
+    /// viewport, while a mouse-tracking app forwards the tick so it scrolls its
+    /// own transcript (never arrow keys, which would be history nav).
     ///
     /// Asserted as the positive shape rather than the absence of a string, so
     /// reintroducing a bail with different wording still fails (review).
@@ -93,7 +94,7 @@ import Testing
         #expect(body.contains("term.scrollLines("), "must scroll the local scrollback")
         #expect(
             body.contains("sendScrollToPTY("),
-            "must forward the wheel to the app on an agent surface")
+            "must forward the wheel to the app when it is mouse-tracking")
         for consume in ["e.preventDefault();", "e.stopPropagation();"] {
             #expect(body.contains(consume), "must always consume the wheel event: \(consume)")
         }
@@ -121,8 +122,8 @@ import Testing
             body.contains("typeof activeTerminal.agent_surface === 'boolean'"),
             "must treat a known surface kind as authoritative in BOTH directions")
         #expect(
-            body.contains("return activeTerminal.agent_surface;"),
-            "a known plain shell must scroll locally, not fall through to the legacy signals")
+            body.contains("return activeTerminal.agent_surface && mouseTracking;"),
+            "a known surface is authoritative: a plain shell always scrolls locally, and an agent forwards only while mouse-tracking — at a plain prompt it scrolls the local viewport rather than the history-nav arrow keys (#850)")
         #expect(
             body.contains("'alternate'") && body.contains("mouseTrackingMode"),
             "must keep the alt-buffer / mouse-tracking signals as the unclassified fallback")

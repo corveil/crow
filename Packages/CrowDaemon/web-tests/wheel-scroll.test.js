@@ -124,7 +124,7 @@ console.log('\nPlain shell scrolls the unified local scrollback:');
   check('nothing written to the PTY', t.sent.length === 0);
 }
 
-console.log('\nAgent surface forwards the wheel to the app:');
+console.log('\nAgent surface: mouse-tracking forwards, a plain prompt scrolls locally:');
 {
   // The agent turned mouse tracking on and — because the swallow is now
   // conditional — xterm actually recorded it, so we speak SGR wheel buttons.
@@ -135,15 +135,18 @@ console.log('\nAgent surface forwards the wheel to the app:');
   check('one SGR wheel-up report per notch', t.sent.join() === '\x1b[<64;1;1M');
   t.down();
   check('one SGR wheel-down report on the way back', t.sent[1] === '\x1b[<65;1;1M');
-  check('no local scrollLines on an agent surface', t.scrolled.length === 0);
+  check('no local scrollLines while mouse-tracking', t.scrolled.length === 0);
 }
 {
-  // An agent surface whose app has NOT enabled mouse tracking still must not
-  // scroll the (empty) local buffer — that was the "same frame forever" bug.
+  // An agent TUI idling at its prompt (no mouse tracking) must scroll the LOCAL
+  // viewport, NOT forward arrow keys — Claude Code / Cursor read those as
+  // input-history navigation (#850). On the scrollback-less alt buffer that is a
+  // no-op, but it is never history nav, and it matches the desktop terminal and
+  // web/terminal.html, which never forward a non-mouse wheel.
   const t = setup({ agentSurface: true, mouseTrackingMode: 'none' });
   t.up();
-  check('no mouse tracking → cursor keys, still not scrollLines', t.sent.join() === '\x1b[A');
-  check('still nothing scrolled locally', t.scrolled.length === 0);
+  check('no mouse tracking → local viewport scroll, not arrow keys', t.scrolled.join() === '-3');
+  check('nothing forwarded to the PTY (no history nav)', t.sent.length === 0);
 }
 
 // There is ONE shared xterm across every tab, and agent surfaces now let the
