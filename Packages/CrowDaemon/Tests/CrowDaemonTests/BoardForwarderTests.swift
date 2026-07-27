@@ -53,8 +53,8 @@ import CrowPersistence
         // mark-in-review / complete-session / set-session-active — now run
         // locally, so they're covered by LocalStatusTests instead.)
         let actions = [
-            "work-on-issue", "batch-work-on-issues", "start-review", "promote-allowlist",
-            "refresh-tickets", "refresh-allowlist",
+            "work-on-issue", "batch-work-on-issues", "start-review", "batch-start-review",
+            "promote-allowlist", "refresh-tickets", "refresh-allowlist",
             "create-manager", "mark-issue-done", "add-merge-label",
         ]
         for method in actions {
@@ -92,6 +92,21 @@ import CrowPersistence
         let resp = await router.handle(request: JSONRPCRequest(
             id: 1, method: "batch-work-on-issues", params: ["urls": .array([])]))
         #expect(resp.error?.code == RPCErrorCode.applicationError)
+    }
+
+    /// CROW-865: `batch-start-review` takes the same `urls` array. It shares
+    /// `isSafeIssueURL` and the same guard ordering, so with the app down the
+    /// applicationError fires before params validation here too.
+    @Test @MainActor func batchStartReviewSharesTheURLsContract() async {
+        let router = makeCommandRouter(
+            appState: AppState(), store: JSONStore.temporary(), git: GitManager(),
+            devRoot: NSTemporaryDirectory(), cockpit: nil)
+        let resp = await router.handle(request: JSONRPCRequest(
+            id: 1, method: "batch-start-review", params: ["urls": .array([])]))
+        #expect(resp.error?.code == RPCErrorCode.applicationError)
+
+        #expect(isSafeIssueURL("https://github.com/corveil/crow/pull/865"))
+        #expect(!isSafeIssueURL("javascript:alert(1)"))
     }
 }
 

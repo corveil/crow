@@ -589,6 +589,11 @@ const selectedSessionIDs = new Set();
 // ticked for the batch "Start Working (N)" action.
 let ticketSelectionMode = false;
 const selectedIssueIDs = new Set();
+// Review-board multi-select (CROW-865): the same pattern, restoring the retired
+// ReviewBoardView's batch kickoff. Holds the urls of pending reviews ticked for
+// the batch "Start Review (N)" action.
+let reviewSelectionMode = false;
+const selectedReviewURLs = new Set();
 // CROW-751 board controls (session-only, like ticketFilter/ticketSearch above).
 let ticketRepoFilter = 'All';     // repo selector; 'All' or a repo slug ("org/repo")
 let ticketSort = 'updated_desc';  // one of TICKET_SORT_OPTIONS keys
@@ -2203,9 +2208,11 @@ async function recreateTerminal(t) {
 function selectBoard(key) {
   selectedBoard = key;
   selectedId = null;
-  // Leaving the ticket board (or re-entering) drops any stale ticket selection.
+  // Leaving a board (or re-entering) drops any stale selection on it.
   ticketSelectionMode = false;
   selectedIssueIDs.clear();
+  reviewSelectionMode = false;
+  selectedReviewURLs.clear();
   const app = document.getElementById('app');
   app.classList.add('has-selection', 'board-active');
   app.classList.remove('mobile-show-sidebar');
@@ -3129,6 +3136,20 @@ async function refreshReviews() {
 function renderReviewBoard(root) {
   const d = boardData.reviews;
   const busy = reviewsRefreshing();
+
+  // Filter/sort up front — before the head — so the Select button, the
+  // selection pruning, and the list all see the same visible set and no hidden
+  // review can be started (same ordering as renderTicketBoard).
+  let reviews = ((d && d.reviews) || []).slice()
+    .sort((a, b) => (b.requested_at || '').localeCompare(a.requested_at || ''));
+  const q = reviewSearch.trim().toLowerCase();
+  if (q) reviews = reviews.filter((r) => reviewHaystack(r).includes(q));
+  // Only reviews without a linked session can be started, so only those are
+  // selectable. Prune stale selections against the *visible* set (a refresh or
+  // the search may have removed/hidden/linked a review).
+  const selectableUrls = new Set(reviews.filter((r) => !r.review_session_id).map((r) => r.url));
+  for (const url of [...selectedReviewURLs]) if (!selectableUrls.has(url)) selectedReviewURLs.delete(url);
+
   const head = el('div', 'board-head');
   const title = el('div', 'board-title', 'Reviews');
   if (busy) title.appendChild(el('span', 'action-spinner'));
@@ -3137,19 +3158,74 @@ function renderReviewBoard(root) {
   refresh.disabled = busy;
   refresh.onclick = () => refreshReviews();
   head.appendChild(refresh);
+  // Select / Cancel toggle (CROW-865, mirroring the ticket board and the
+  // retired ReviewBoardView). Hidden when nothing is startable.
+  if (selectableUrls.size) {
+    const sel = el('button', 'action-btn' + (reviewSelectionMode ? ' nav-selecting' : ''),
+      reviewSelectionMode ? 'Cancel' : 'Select');
+    sel.onclick = () => {
+      reviewSelectionMode = !reviewSelectionMode;
+      if (!reviewSelectionMode) selectedReviewURLs.clear();
+      renderBoard();
+    };
+    head.appendChild(sel);
+  } else if (reviewSelectionMode) {
+    reviewSelectionMode = false;
+  }
   root.appendChild(head);
+
+  // Batch action bar: shown while selecting with at least one review ticked.
+  if (reviewSelectionMode && selectedReviewURLs.size) {
+    const bar = el('div', 'bulk-bar');
+    const n = selectedReviewURLs.size;
+    bar.appendChild(el('span', 'bulk-count', n + ' review' + (n === 1 ? '' : 's') + ' selected'));
+    bar.appendChild(el('div', 'bulk-spacer'));
+    const start = el('button', 'action-btn action-primary', 'Start Review (' + n + ')');
+    start.onclick = () => startReviewSelected(start);
+    bar.appendChild(start);
+    root.appendChild(bar);
+  }
 
   // #714: search bar; clearing restores the full list.
   root.appendChild(boardFilterInput('review-filter', reviewSearch, 'Filter reviews…', (v) => { reviewSearch = v; }));
 
-  let reviews = ((d && d.reviews) || []).slice()
-    .sort((a, b) => (b.requested_at || '').localeCompare(a.requested_at || ''));
-  const q = reviewSearch.trim().toLowerCase();
-  if (q) reviews = reviews.filter((r) => reviewHaystack(r).includes(q));
   if (!reviews.length) { root.appendChild(boardEmpty(q ? 'No matching reviews' : 'No review requests')); return; }
   const list = el('div', 'card-list');
   for (const r of reviews) list.appendChild(reviewCard(r));
   root.appendChild(list);
+}
+
+function toggleReviewSelect(url) {
+  if (selectedReviewURLs.has(url)) selectedReviewURLs.delete(url);
+  else selectedReviewURLs.add(url);
+  renderBoard();
+}
+
+// Batch "Start Review (N)": ONE batch-start-review call with every selected PR.
+// The daemon queues the kickoffs on its review serializer and acks immediately
+// — each one clones a PR and spawns tmux, well past our 10s rpc timeout — so
+// the new sessions surface via the sidebar poll rather than this response
+// (CROW-865). Then clear selection and exit selection mode.
+async function startReviewSelected(btn) {
+  const urls = ((boardData.reviews && boardData.reviews.reviews) || [])
+    .filter((r) => !r.review_session_id && selectedReviewURLs.has(r.url))
+    .map((r) => r.url);
+  if (!urls.length) return;
+  btn.disabled = true;
+  btn.textContent = 'Starting…';
+  let problem = '';
+  try {
+    const res = await rpc('batch-start-review', { urls });
+    const rejected = (res && res.rejected) || [];
+    if (rejected.length) problem = rejected.length + ' review(s) could not be started.';
+  } catch (e) {
+    problem = 'Start Review failed: ' + (e.message || e);
+  }
+  selectedReviewURLs.clear();
+  reviewSelectionMode = false;
+  refreshReviews();
+  renderBoard();
+  if (problem) alertModal(problem);
 }
 
 // #714: lowercased searchable text for a review — title, repo, @author, #pr_number.
@@ -3158,11 +3234,34 @@ function reviewHaystack(r) {
 }
 
 function reviewCard(r) {
-  const card = el('div', 'board-card');
+  // A review that already has a session can't be started again, so it isn't
+  // selectable — it renders dimmed and checkbox-less while selecting, as the
+  // retired ReviewBoardView did, but keeps its Go to Session button.
+  const selectable = !r.review_session_id;
+  const selecting = reviewSelectionMode && selectable;
+  const isSel = selectedReviewURLs.has(r.url);
+  const card = el('div', 'board-card'
+    + (selecting ? ' selecting' : '') + (isSel ? ' selected' : '')
+    + (reviewSelectionMode && !selectable ? ' not-selectable' : ''));
   card.oncontextmenu = (e) => showCardMenu(e, [{ label: 'Copy PR link', url: r.url }]);
+  // In selection mode a checkbox leads a selectable card and the whole card
+  // toggles selection (mirrors the ticket board).
+  if (selecting) {
+    const cb = el('input', 'row-check');
+    cb.type = 'checkbox';
+    cb.checked = isSel;
+    cb.onclick = (e) => { e.stopPropagation(); toggleReviewSelect(r.url); };
+    card.appendChild(cb);
+    card.onclick = () => toggleReviewSelect(r.url);
+  }
   const meta = el('div', 'card-meta');
   meta.appendChild(el('span', 'repo-tag', r.repo));
-  meta.appendChild(linkChip('#' + r.pr_number, r.url, 'pr'));
+  const chip = linkChip('#' + r.pr_number, r.url, 'pr');
+  // The chip is the only way to open the PR, and in select mode the card
+  // beneath it toggles selection — don't do both on one click. Kept local to
+  // reviewCard: linkChip is shared with ticketCard, whose behavior is unchanged.
+  if (selecting) chip.onclick = (e) => e.stopPropagation();
+  meta.appendChild(chip);
   if (r.is_draft) meta.appendChild(el('span', 'draft-badge', 'Draft'));
   const t = relTime(r.requested_at);
   if (t) meta.appendChild(el('span', 'card-time', t));
@@ -3178,12 +3277,15 @@ function reviewCard(r) {
     const go = el('button', 'action-btn', 'Go to Session');
     go.onclick = () => selectSession(r.review_session_id);
     foot.appendChild(go);
-  } else {
+  } else if (!selecting) {
+    // Suppressed while selecting — the batch bar owns the kickoff there.
     const rev = el('button', 'action-btn action-primary', 'Start Review');
     rev.onclick = () => spawnAction(rev, 'start-review', { url: r.url }, 'Start Review');
     foot.appendChild(rev);
   }
-  card.appendChild(foot);
+  // `.card-foot` carries a top margin, so a selectable card in select mode —
+  // which has no button at all — would otherwise end in 8px of dead space.
+  if (foot.childNodes.length) card.appendChild(foot);
   return card;
 }
 

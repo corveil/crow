@@ -793,6 +793,52 @@ func makeCommandRouter(
             }
             return ["session_id": .string(id.uuidString)]
         },
+        // Batch counterpart of start-review (CROW-865), backing the Reviews
+        // board's "Start Review (N)". Unlike batch-work-on-issues this types
+        // nothing at the Manager — it enqueues N kickoffs on the same
+        // serializer, so the dedupe stays race-free (the old desktop
+        // `onBatchStartReview` fanned out in parallel and did race, #212/#266).
+        //
+        // The enqueued tasks are deliberately NOT awaited: each one clones a PR
+        // and spawns a tmux window, far past the web client's 10s rpc timeout,
+        // and they run one at a time. So this acks as soon as the work is
+        // queued and the new sessions surface via the sidebar poll — the same
+        // "let it show up" contract `spawnAction` already relies on.
+        //
+        // Unsafe urls are dropped and reported in `rejected` rather than
+        // failing the whole batch, so one bad PR can't block the rest.
+        "batch-start-review": { params in
+            guard let sessionService else {
+                throw DaemonRPCError.applicationError(
+                    "Starting a review requires tmux on the daemon host")
+            }
+            guard let arr = params["urls"]?.arrayValue, !arr.isEmpty else {
+                throw DaemonRPCError.invalidParams("urls array required")
+            }
+            var valid: [String] = []
+            var rejected: [String] = []
+            for value in arr {
+                let url = value.stringValue ?? ""
+                if isSafeIssueURL(url) {
+                    if !valid.contains(url) { valid.append(url) }
+                } else {
+                    rejected.append(url)
+                }
+            }
+            guard !valid.isEmpty else {
+                throw DaemonRPCError.invalidParams("urls must be well-formed http(s) URLs with no control characters")
+            }
+            for url in valid {
+                _ = await reviewSerializer.enqueue {
+                    await sessionService.createReviewSession(prURL: url, selectAfterCreate: false)
+                }
+            }
+            return [
+                "ok": .bool(true),
+                "started": .int(valid.count),
+                "rejected": .array(rejected.map { .string($0) }),
+            ]
+        },
         // Allowlist writes/refreshes run locally when the daemon owns the
         // AllowListService (pure disk — no app needed); otherwise forward.
         "promote-allowlist": { params in
