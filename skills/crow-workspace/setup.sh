@@ -1437,8 +1437,13 @@ launch_grok() {
   # TUI with a fresh terminal stdin. `--prompt-file` (not `-p "$(cat …)"`) so a
   # large prompt never becomes a giant argv or rides a subshell (#861). Brace
   # group keeps both commands gated on a successful `cd`. Mirrors
-  # GrokLaunchArgs.firstLaunchChainedCommand.
-  local launch_cmd="cd $WORKTREE_PATH && { $bin --prompt-file $prompt_path; $bin -c; }"
+  # GrokLaunchArgs.firstLaunchChainedCommand — including its shell-quoting: unlike
+  # the peers, `$bin`/`$prompt_path`/`$WORKTREE_PATH` are double-quoted because
+  # `grok` collides with superagent-ai/grok-cli, so pinning a (possibly spaced)
+  # `defaults.binaries.grok` is the *expected* config here, not exotic; the Swift
+  # launch paths all quote it, so this one must too or it word-splits on the same
+  # input (#861 review r8).
+  local launch_cmd="cd \"$WORKTREE_PATH\" && { \"$bin\" --prompt-file \"$prompt_path\"; \"$bin\" -c; }"
   create_agent_terminal "Grok Build" "$launch_cmd"
 }
 

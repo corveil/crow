@@ -870,8 +870,16 @@ public final class SessionService {
         // `new-terminal` pins on managed agent windows, so orphaned agents are
         // identified positively and the anchor/infra is never touched.
         let keep = Set(appState.terminals.values.flatMap { $0 }.compactMap { $0.tmuxBinding?.windowIndex })
-        let agentNames = Set([AgentKind.claudeCode, .cursor, .codex, .openCode, .antigravity]
-            .map { CrowAttribution.agentDisplayName(for: $0) })
+        // Derive the agent-window-name set from the registry rather than a
+        // hardcoded kind list. Managed agent windows are pinned with the agent's
+        // `displayName` (`registerTerminal` → `newWindow(name:)`, and on handoff
+        // `target.displayName`), so every registered adapter's name is matched
+        // without a per-kind edit here — a newly-registered seventh adapter is
+        // reaped for free (this PR's `.grok` was the sixth; #860's Antigravity
+        // the fifth). Registry-driven mirrors the cross-agent cleanup loop in
+        // `writeManagerHookConfig`, closing the enumeration-omission class (#861
+        // review r8) at the source instead of adding one more site to remember.
+        let agentNames = Set(AgentRegistry.shared.allAgents().map(\.displayName))
         TmuxBackend.shared.reconcileOrphanWindows(keepWindowIndices: keep, agentWindowNames: agentNames)
     }
 
@@ -1277,6 +1285,14 @@ public final class SessionService {
             if case let .failed(msg) = GrokTrustSeeder.seedTrust(projectPath: worktree.worktreePath) {
                 NSLog("[SessionService] Grok trust seed failed for %@: %@", worktree.worktreePath, msg)
             }
+            // A `.work`/`.job` handoff from Claude/Cursor leaves that prior
+            // agent's Crow-managed hook config on disk (same session UUID, same
+            // event names Grok registers), which Grok compat-loads alongside its
+            // own `.grok/hooks/crow.json` → every hook event fires twice. Strip
+            // the prior compat hooks (marker-scoped, preserves user settings; the
+            // incoming Grok config is a separate `.grok/` file). See helper doc
+            // for the full double-fire rationale (#861 review r8).
+            Self.stripPriorCompatHooksForGrokHandoff(worktreePath: worktree.worktreePath)
         }
         // Handing off to Cursor → sync its global Jira MCP (this path selects
         // Cursor without touching config, so the boot-time gate would miss it).
@@ -2822,6 +2838,38 @@ public final class SessionService {
         removeReviewCloneConfig(
             base.appendingPathComponent(".mcp.json"),
             label: ".mcp.json", clonePath: clonePath)
+    }
+
+    /// Strip the PRIOR agent's Crow-managed hook config from the two project
+    /// compat sources Grok also loads — `.claude/settings.local.json` (Claude)
+    /// and `.cursor/hooks.json` (Cursor) — on a `.work`/`.job` handoff to Grok.
+    ///
+    /// Distinct from `stripGrokConfigFromReviewClone` in both scope and method:
+    /// that wholesale-wipes attacker configs off a hostile *review* clone; this
+    /// runs on a *trusted* work worktree, so it uses each writer's marker-scoped
+    /// `removeHookConfig` — strips only Crow's managed event entries, preserving
+    /// user settings and the Claude gateway `env` block — rather than deleting
+    /// whole files.
+    ///
+    /// Why it's needed: nothing else on the worker path removes a prior agent's
+    /// hooks — `launchAgent` / the deferred-paste only *write* the incoming
+    /// agent's, and the cross-agent loop in `writeManagerHookConfig` is
+    /// Manager-only. So a Claude→Grok (or Cursor→Grok) handoff leaves the prior
+    /// `.claude/settings.local.json` / `.cursor/hooks.json` — same session UUID,
+    /// same PascalCase event names Grok registers — on disk, and Grok (compat on
+    /// by default) loads BOTH it and its own `.grok/hooks/crow.json`. Every hook
+    /// event then fires twice: doubled `taskComplete`/`agentWaiting` notifications
+    /// and a doubled `crow hook-event` subprocess for the session's life, because
+    /// `EngineRouter.presentHookNotification` is per-event, not state-gated
+    /// (#861 review r8).
+    ///
+    /// Idempotent and no-op when the file/keys are absent, so it's called
+    /// unconditionally (prior Codex/OpenCode → nothing to strip) and never
+    /// touches the incoming `.grok/hooks/crow.json` (a separate file, written
+    /// later on the deferred paste).
+    nonisolated static func stripPriorCompatHooksForGrokHandoff(worktreePath: String) {
+        ClaudeHookConfigWriter().removeHookConfig(worktreePath: worktreePath)
+        CursorHookConfigWriter().removeHookConfig(worktreePath: worktreePath)
     }
 
     /// Remove one review-clone config path, quiet when it isn't present (the
