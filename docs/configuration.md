@@ -252,6 +252,44 @@ Three top-level blocks in `{devRoot}/.claude/config.json`, editable from **Setti
 | `hideSessionDetails` | `false` | boolean | Hides ticket title and repo/branch lines in sidebar rows |
 
 **Live in the browser — no restart, no reload.** The daemon watches `config.json`'s mtime and pushes a `configReloaded` event on change, so connected clients re-read the view-affecting slice within a couple of seconds regardless of who wrote it (Settings modal, `crow ui set`, or a hand edit).
+## Notifications
+
+The `notifications` block in `{devRoot}/.claude/config.json` controls when Crow chimes and posts a system notification. Edit it from **Settings → Notifications**, from the CLI with [`crow notifications get|set`](cli-reference.md#notification-commands), or by hand.
+
+Notifications cascade — one fires only if `globalMute` is off, the matching global category toggle is on, **and** the per-event toggle is on.
+
+```json
+{
+  "notifications": {
+    "globalMute": false,
+    "soundEnabled": true,
+    "systemNotificationsEnabled": true,
+    "eventSettings": [
+      "checksFailing",
+      {
+        "enabled": true,
+        "soundEnabled": true,
+        "systemNotificationEnabled": true,
+        "soundName": "Sosumi"
+      }
+    ]
+  }
+}
+```
+
+- **`globalMute`** (default: `false`) — master mute; suppresses every sound and system notification.
+- **`soundEnabled`** (default: `true`) — global sound-playback toggle.
+- **`systemNotificationsEnabled`** (default: `true`) — global system-notification toggle.
+- **`eventSettings`** — per-event overrides. Any event you omit follows the current defaults, so leaving events out is the way to stay on Crow's defaults as they evolve.
+
+The ten events are `taskComplete`, `agentWaiting`, `reviewRequested`, `changesRequested`, `checksFailing`, `autoWorkspaceCreated`, `autoMergeEnabled`, `autoRebasePushed`, `autoRebaseConflicts`, and `configReloaded`. The 14 built-in sounds are `Basso`, `Blow`, `Bottle`, `Frog`, `Funk`, `Glass`, `Hero`, `Morse`, `Ping`, `Pop`, `Purr`, `Sosumi`, `Submarine`, and `Tink`.
+
+Two shapes to be aware of when hand-editing:
+
+- **`eventSettings` serializes as a flat alternating array** of event name, settings object, event name, settings object, … — not as an object. That falls out of how Swift encodes a dictionary keyed by an enum. Crow reads either shape, but writes the array form. `crow notifications get` presents it as a proper object if you'd rather read it that way.
+- **The global key is `systemNotificationsEnabled` (plural); the per-event key is `systemNotificationEnabled` (singular).** The CLI flags mirror the same split.
+
+Any key you leave out of `notifications` — or out of an individual event entry — falls back to its default rather than failing the load, so a partial hand edit is safe.
 
 ## Directory Structure
 

@@ -712,6 +712,82 @@ Returns, newest first:
 ```
 
 `path` and `dir` are absolute on-disk locations — use these from a shell. `url` only resolves against the daemon's own web server and is there for the web UI. The directory is the one agents see as `$CROW_ARTIFACTS_DIR`; it lives under `$TMPDIR` and does not survive a reboot.
+---
+
+## Notification Commands
+
+Read and write `AppConfig.notifications` — the same settings the web Settings → Notifications tab edits. Writes land under the shared config lock, and the daemon's config poll broadcasts a `configReloaded` event, so an open web tab refreshes within a couple of seconds.
+
+Notifications cascade: one fires only if `globalMute` is off, the matching global category toggle is on, **and** the per-event toggle is on.
+
+The ten events are `taskComplete`, `agentWaiting`, `reviewRequested`, `changesRequested`, `checksFailing`, `autoWorkspaceCreated`, `autoMergeEnabled`, `autoRebasePushed`, `autoRebaseConflicts`, and `configReloaded`.
+
+### `crow notifications get`
+
+Show the global toggles, every event's effective settings, the built-in sound names, and whether the config was readable. Events absent from `config.json` are reported with the defaults they will actually fire with.
+
+```bash
+crow notifications get
+crow notifications get --event checksFailing
+```
+
+| Flag      | Required | Description                             |
+| --------- | -------- | --------------------------------------- |
+| `--event` | no       | Restrict the event list to one event    |
+
+Returns:
+
+```json
+{
+  "notifications": {
+    "global_mute": false,
+    "sound_enabled": true,
+    "system_notifications_enabled": true,
+    "events": {
+      "taskComplete": {
+        "enabled": true,
+        "sound_enabled": true,
+        "system_notification_enabled": true,
+        "sound_name": "Glass"
+      }
+    },
+    "available_sounds": ["Basso", "Blow", "..."],
+    "config_readable": true
+  }
+}
+```
+
+`--event` narrows `events` to one entry but always keeps the global toggles — `global_mute` can be the reason an event never fires. `config_readable` is `false` when `config.json` exists but could not be decoded, meaning the values shown are defaults rather than your real settings.
+
+### `crow notifications set`
+
+Change global toggles, one event's settings, or both. Only the provided flags change; everything else keeps its value.
+
+```bash
+crow notifications set --global-mute
+crow notifications set --no-global-mute --sound-enabled
+crow notifications set --event checksFailing --event-sound-name Hero --no-event-sound-enabled
+```
+
+| Flag                                       | Required | Description                                                    |
+| ------------------------------------------ | -------- | -------------------------------------------------------------- |
+| `--global-mute` / `--no-global-mute`       | no       | Master mute — suppresses every sound and system notification    |
+| `--sound-enabled` / `--no-sound-enabled`   | no       | Global sound-playback toggle                                    |
+| `--system-notifications-enabled` / `--no-…`| no       | Global system-notification toggle                               |
+| `--event`                                  | no       | Event to change — required by every `--event-*` flag            |
+| `--event-enabled` / `--no-event-enabled`   | no       | Whether this event notifies at all                              |
+| `--event-sound-enabled` / `--no-…`         | no       | Whether this event plays a sound                                |
+| `--event-system-notification-enabled` / `--no-…` | no | Whether this event posts a system notification                  |
+| `--event-sound-name`                       | no       | Sound for this event — a built-in name, matched case-insensitively |
+
+Returns the resulting settings in the same shape as `get`, plus `"saved": true`.
+
+Notes:
+
+- Every toggle is a `--flag` / `--no-flag` pair; **omitting** it leaves the stored value alone. `--flag --no-flag` together is rejected rather than silently resolved.
+- The global toggle is `--system-notifications-enabled` (plural) and the per-event one is `--event-system-notification-enabled` (singular). The flag names mirror the config field names, which differ the same way.
+- `--event-sound-name` accepts only the built-in sounds listed under `available_sounds`, matching the Settings sound picker. A config that already stores a custom sound path keeps it — reads never validate — but the CLI won't set a new one.
+- Only the event you name is written to `config.json`. Events you never touch stay absent and keep following the current defaults.
 
 ---
 

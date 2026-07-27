@@ -181,3 +181,82 @@ import Testing
 
     #expect(ConfigStore.loadConfig(from: configURL) == nil)
 }
+
+// MARK: - Notification settings (CROW-813)
+
+/// What `crow notifications set` does to the file: change some globals and one
+/// event, leave every other event alone. `eventSettings` is keyed by a
+/// non-`CodingKeyRepresentable` enum, so it serializes as a flat alternating
+/// array — this pins that it survives a real save/load rather than only an
+/// in-memory encode/decode.
+@Test func configStoreNotificationsMutationRoundTrips() throws {
+    let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let claudeDir = tmpDir.appendingPathComponent(".claude", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: tmpDir) }
+
+    var config = AppConfig()
+    config.notifications.globalMute = true
+    config.notifications.systemNotificationsEnabled = false
+    // Mirrors the handler's mutation: read through config(for:), write back.
+    var event = config.notifications.config(for: .checksFailing)
+    event.soundEnabled = false
+    event.soundName = "Hero"
+    config.notifications.eventSettings[.checksFailing] = event
+
+    try ConfigStore.saveConfig(config, to: claudeDir)
+    let loaded = ConfigStore.loadConfig(from: claudeDir.appendingPathComponent("config.json"))
+
+    #expect(loaded?.notifications.globalMute == true)
+    #expect(loaded?.notifications.soundEnabled == true)
+    #expect(loaded?.notifications.systemNotificationsEnabled == false)
+    let reloaded = try #require(loaded?.notifications.config(for: .checksFailing))
+    #expect(reloaded.soundEnabled == false)
+    #expect(reloaded.soundName == "Hero")
+    #expect(reloaded.enabled == true)
+    // Untouched events keep their defaults.
+    #expect(loaded?.notifications.config(for: .taskComplete).soundName
+        == NotificationEvent.taskComplete.defaultSound)
+}
+
+/// A per-event write against a config that omits the event — the common case,
+/// since most config.json files predate the automation events. The handler
+/// reads through `config(for:)` precisely so this isn't a silent no-op.
+@Test func configStoreNotificationsWriteToEventAbsentFromFile() throws {
+    let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let claudeDir = tmpDir.appendingPathComponent(".claude", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: tmpDir) }
+
+    var config = AppConfig()
+    config.notifications.eventSettings = [:]
+    var event = config.notifications.config(for: .autoRebaseConflicts)
+    event.enabled = false
+    config.notifications.eventSettings[.autoRebaseConflicts] = event
+
+    try ConfigStore.saveConfig(config, to: claudeDir)
+    let loaded = ConfigStore.loadConfig(from: claudeDir.appendingPathComponent("config.json"))
+
+    #expect(loaded?.notifications.eventSettings.count == 1)
+    #expect(loaded?.notifications.config(for: .autoRebaseConflicts).enabled == false)
+    #expect(loaded?.notifications.config(for: .autoRebaseConflicts).soundName
+        == NotificationEvent.autoRebaseConflicts.defaultSound)
+    // Events still absent from the file resolve to their defaults on read.
+    #expect(loaded?.notifications.config(for: .taskComplete).enabled == true)
+}
+
+/// A hand-edited `notifications` block naming only the field being changed must
+/// not take the whole config down. Before CROW-813 this returned nil, silently
+/// resetting every workspace, job, and credential to defaults on the next read.
+@Test func configStoreLoadsPartialNotificationsBlock() throws {
+    let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: tmpDir) }
+    try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+
+    let configURL = tmpDir.appendingPathComponent("config.json")
+    try #"{"remoteControlEnabled": true, "notifications": {"globalMute": true}}"#
+        .write(to: configURL, atomically: true, encoding: .utf8)
+
+    let loaded = try #require(ConfigStore.loadConfig(from: configURL))
+    #expect(loaded.notifications.globalMute == true)
+    #expect(loaded.notifications.soundEnabled == true)
+    #expect(loaded.remoteControlEnabled == true)
+}

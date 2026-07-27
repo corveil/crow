@@ -442,15 +442,22 @@ function emitEvent(event, key, detail) {
 // none of them are visible in the state the client polls. Gating (global mute,
 // per-event toggles, dedup) is the detectors' gating; the arm window applies too,
 // so a frame landing mid-boot can't chime over a page load.
-function onServerNotify(params) {
-  // config.json moved on disk (Settings save, `crow ui set`, hand edit) — re-read
-  // the view-affecting slice so an external write repaints without a reload. Must
-  // come before the arm gate: a CLI write is not a user gesture, so waiting for
-  // _soundArmed would strand the sidebar on stale config (CROW-814).
-  if (params && params.event === 'configReloaded' && window.reloadUIConfig) window.reloadUIConfig();
-  if (!_soundArmed) return;
+async function onServerNotify(params) {
   if (!params || typeof params.event !== 'string') return;
   if (ALL_EVENTS.indexOf(params.event) === -1) return; // unknown/newer event — ignore
+  // config.json moved on disk (Settings save, `crow ui set`, `crow notifications
+  // set`, hand edit) — re-read the view-affecting slice so an external write
+  // repaints without a reload. `uiConfig` is cached at boot and `set-config`
+  // pushes no `changed`, so this frame is the only signal the web gets.
+  //
+  // Ahead of the arm gate (CROW-814): a CLI write is not a user gesture, so
+  // waiting for _soundArmed would strand the sidebar on stale config. Awaited
+  // rather than fire-and-forget (CROW-813): a mute that just landed has to
+  // silence the very notification announcing it.
+  if (params.event === 'configReloaded') {
+    try { await loadUIConfig(); } catch (_) { /* keep the cached config */ }
+  }
+  if (!_soundArmed) return;
   // Defensive: the daemon always sends strings, but never hand a non-string to
   // the Notification API. A missing key just weakens dedup, so tolerate it.
   const key = typeof params.key === 'string' ? params.key : '';

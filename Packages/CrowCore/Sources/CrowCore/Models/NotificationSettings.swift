@@ -50,12 +50,51 @@ public struct NotificationSettings: Codable, Sendable, Equatable {
         }
     }
 
+    /// Tolerant decode: every key is optional and falls back to its default.
+    ///
+    /// The synthesized `Codable` required all four keys, so a hand-edited
+    /// `{"notifications": {"globalMute": true}}` threw `keyNotFound` — and since
+    /// `AppConfig.init(from:)` decodes this subtree with a throwing
+    /// `decodeIfPresent`, the failure propagated out and `ConfigStore.loadConfig`
+    /// returned nil, silently degrading the *entire* config to defaults. Mirrors
+    /// `TerminalSettings` / `AutoRespondSettings` (CROW-813).
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let events = try c.decodeIfPresent(
+            [NotificationEvent: EventNotificationConfig].self, forKey: .eventSettings)
+        // Delegating to the designated init keeps the "nil → populate all events
+        // with their defaults" rule in one place.
+        self.init(
+            globalMute: try c.decodeIfPresent(Bool.self, forKey: .globalMute) ?? false,
+            soundEnabled: try c.decodeIfPresent(Bool.self, forKey: .soundEnabled) ?? true,
+            systemNotificationsEnabled: try c.decodeIfPresent(
+                Bool.self, forKey: .systemNotificationsEnabled) ?? true,
+            eventSettings: events
+        )
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case globalMute, soundEnabled, systemNotificationsEnabled, eventSettings
+    }
+
     /// Get the config for a specific event, falling back to defaults.
     ///
     /// This ensures forward compatibility: when a new `NotificationEvent` case is added,
     /// existing config files that don't include it in `eventSettings` still get sensible defaults.
     public func config(for event: NotificationEvent) -> EventNotificationConfig {
         eventSettings[event] ?? EventNotificationConfig(soundName: event.defaultSound)
+    }
+
+    /// Resolve a user-supplied sound name to its canonical `builtInSounds`
+    /// spelling, or nil when it isn't a built-in sound.
+    ///
+    /// Single source of truth for the `--event-sound-name` rule: the CLI calls it
+    /// for fast local feedback and the `notifications-set` handler calls it again
+    /// as the authoritative check, so the two can't drift (CROW-813). Matching is
+    /// case-insensitive so `crow notifications set --event-sound-name hero` works.
+    public static func canonicalSoundName(_ raw: String) -> String? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return builtInSounds.first { $0.caseInsensitiveCompare(trimmed) == .orderedSame }
     }
 }
 
@@ -83,5 +122,21 @@ public struct EventNotificationConfig: Codable, Sendable, Equatable {
         self.soundEnabled = soundEnabled
         self.systemNotificationEnabled = systemNotificationEnabled
         self.soundName = soundName
+    }
+
+    /// Tolerant decode, for the same reason as `NotificationSettings` above: a
+    /// hand-edited event entry that names only the field being changed must not
+    /// take the whole config down with it.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+        soundEnabled = try c.decodeIfPresent(Bool.self, forKey: .soundEnabled) ?? true
+        systemNotificationEnabled = try c.decodeIfPresent(
+            Bool.self, forKey: .systemNotificationEnabled) ?? true
+        soundName = try c.decodeIfPresent(String.self, forKey: .soundName) ?? "Glass"
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case enabled, soundEnabled, systemNotificationEnabled, soundName
     }
 }

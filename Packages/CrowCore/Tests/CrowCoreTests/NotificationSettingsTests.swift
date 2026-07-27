@@ -67,6 +67,73 @@ import Testing
     #expect(config.enabled == true)
 }
 
+// MARK: - Decode tolerance (CROW-813)
+
+/// A hand-edited config that names only the field being changed must decode.
+/// Before CROW-813 the synthesized `Codable` required all four keys, so this
+/// threw `keyNotFound` — which `AppConfig.init(from:)` propagated, making
+/// `ConfigStore.loadConfig` return nil and silently reset the *entire* config.
+@Test func notificationSettingsDecodesPartialObject() throws {
+    let json = #"{"globalMute": true}"#.data(using: .utf8)!
+    let decoded = try JSONDecoder().decode(NotificationSettings.self, from: json)
+
+    #expect(decoded.globalMute == true)
+    #expect(decoded.soundEnabled == true)
+    #expect(decoded.systemNotificationsEnabled == true)
+    // eventSettings absent → all events materialized with their defaults.
+    for event in NotificationEvent.allCases {
+        #expect(decoded.eventSettings[event]?.soundName == event.defaultSound)
+    }
+}
+
+@Test func notificationSettingsDecodesEmptyObject() throws {
+    let decoded = try JSONDecoder().decode(NotificationSettings.self, from: Data("{}".utf8))
+
+    #expect(decoded.globalMute == false)
+    #expect(decoded.soundEnabled == true)
+    #expect(decoded.systemNotificationsEnabled == true)
+    #expect(decoded.eventSettings.count == NotificationEvent.allCases.count)
+}
+
+/// An explicitly empty `eventSettings` stays empty — only *absence* means
+/// "populate the defaults". `config(for:)` covers the read side.
+@Test func notificationSettingsDecodePreservesExplicitlyEmptyEventSettings() throws {
+    let data = try JSONEncoder().encode(NotificationSettings(eventSettings: [:]))
+    let decoded = try JSONDecoder().decode(NotificationSettings.self, from: data)
+
+    #expect(decoded.eventSettings.isEmpty)
+}
+
+@Test func eventNotificationConfigDecodesPartialObject() throws {
+    let json = #"{"soundName": "Ping"}"#.data(using: .utf8)!
+    let decoded = try JSONDecoder().decode(EventNotificationConfig.self, from: json)
+
+    #expect(decoded.soundName == "Ping")
+    #expect(decoded.enabled == true)
+    #expect(decoded.soundEnabled == true)
+    #expect(decoded.systemNotificationEnabled == true)
+}
+
+// MARK: - canonicalSoundName (CROW-813)
+
+@Test func canonicalSoundNameAcceptsBuiltInSounds() {
+    for sound in NotificationSettings.builtInSounds {
+        #expect(NotificationSettings.canonicalSoundName(sound) == sound)
+    }
+}
+
+@Test func canonicalSoundNameIsCaseInsensitiveAndTrims() {
+    #expect(NotificationSettings.canonicalSoundName("hero") == "Hero")
+    #expect(NotificationSettings.canonicalSoundName("SOSUMI") == "Sosumi")
+    #expect(NotificationSettings.canonicalSoundName("  Glass  ") == "Glass")
+}
+
+@Test func canonicalSoundNameRejectsUnknownNames() {
+    #expect(NotificationSettings.canonicalSoundName("Nope") == nil)
+    #expect(NotificationSettings.canonicalSoundName("") == nil)
+    #expect(NotificationSettings.canonicalSoundName("/System/Library/Sounds/Glass.aiff") == nil)
+}
+
 // MARK: - builtInSounds
 
 @Test func builtInSoundsNonEmpty() {

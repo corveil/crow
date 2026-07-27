@@ -308,6 +308,12 @@ Crow can drive a ticket from assignment to merged with minimal manual steps. Tog
 - Rename tabs from the UI or via `crow rename-terminal`
 - tmux maintenance from the CLI as well as Settings → About: `crow restart-manager`, `crow restart-tmux-server`, `crow reload-tmux-config`, `crow launch-agent`, `crow retry-readiness`, plus `crow open-in-vscode` / `crow open-terminal` for the session's worktree on the host. See [docs/cli-reference.md](docs/cli-reference.md#maintenance-commands).
 
+### Notifications
+
+- Ten event categories — task complete, agent waiting, review requested, changes requested, CI failing, plus the five automation events Crow emits when it acts on your behalf
+- Cascading control: a master mute, global sound / system-notification toggles, then per-event toggles and a sound picked from 14 built-in sounds
+- Manage from Settings → Notifications or from the CLI with `crow notifications get|set` — both write the same config, and an open browser tab picks up a CLI change within a couple of seconds
+
 ### Orphan Recovery
 
 - On startup, scans git worktrees across all repos

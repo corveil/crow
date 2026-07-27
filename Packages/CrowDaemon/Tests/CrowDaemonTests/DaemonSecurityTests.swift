@@ -964,5 +964,24 @@ import CrowPersistence
         ])
         #expect(RPCWebSocketHandler.localOnlyDenial(for: req, devRoot: devRoot) == nil)
     }
+
+    @Test func notificationRPCsAreAllowedRemotely() throws {
+        // CROW-813: `AppConfig.notifications` carries no secrets and is already
+        // remotely editable via un-gated `set-config`, so the granular verbs the
+        // CLI uses stay un-gated too. This test is what enforces that decision —
+        // `localOnlyDenial`'s `default:` would silently swallow a later change
+        // of heart. Deliberate: flip these to a denial string, not to nothing.
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        try ConfigStore.saveConfig(AppConfig(), devRoot: devRoot)
+
+        let get = JSONRPCRequest(id: 1, method: "notifications-get", params: [:])
+        #expect(RPCWebSocketHandler.localOnlyDenial(for: get, devRoot: devRoot) == nil)
+
+        let set = JSONRPCRequest(id: 2, method: "notifications-set", params: [
+            "global_mute": .bool(true),
+        ])
+        #expect(RPCWebSocketHandler.localOnlyDenial(for: set, devRoot: devRoot) == nil)
+    }
 }
 
