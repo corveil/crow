@@ -81,6 +81,24 @@ func validateTicketPriority(_ value: String) throws {
     }
 }
 
+/// Normalize repeatable `--pattern` values for `promote-allowlist` (#819): trim
+/// each, drop blanks, dedupe preserving first-seen order, and require at least
+/// one survivor. A blank pattern would be written verbatim into
+/// `~/.claude/settings.json` and silently grant nothing. Returns a value rather
+/// than `Void` like its neighbors because `validate()` and `run()` share it.
+///
+/// - Throws: `ValidationError` when no non-blank pattern remains.
+func normalizedAllowlistPatterns(_ raw: [String]) throws -> [String] {
+    var seen = Set<String>()
+    let cleaned = raw
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { !$0.isEmpty && seen.insert($0).inserted }
+    guard !cleaned.isEmpty else {
+        throw ValidationError("At least one non-blank --pattern is required.")
+    }
+    return cleaned
+}
+
 /// Validate the set-goal argument shape: exactly one of `--goal`/`--clear`,
 /// and a provided goal must not be blank (a whitespace goal would silently
 /// fail to earn the on-goal alignment multiplier).

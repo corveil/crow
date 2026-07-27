@@ -46,6 +46,13 @@ public struct CrowCommand: ParsableCommand {
             EditLink.self,
             TransitionTicket.self,
             ResyncJira.self,
+            ListAllowlist.self,
+            PromoteAllowlist.self,
+            RefreshAllowlist.self,
+            GetScorecard.self,
+            RebuildScorecard.self,
+            GetState.self,
+            ListArtifacts.self,
             HookEventCmd.self,
             CodexNotify.self,
         ]

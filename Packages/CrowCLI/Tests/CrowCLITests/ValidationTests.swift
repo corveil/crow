@@ -161,3 +161,27 @@ import Foundation
         try validateSetGoal(goal: "   ", clear: false)
     }
 }
+
+// MARK: - promote-allowlist patterns (#819)
+
+@Test func allowlistPatternsAreTrimmedDedupedAndOrdered() throws {
+    // First-seen order is preserved so the echoed request reads like the input.
+    #expect(try normalizedAllowlistPatterns(["  Read ", "Write", "Read"]) == ["Read", "Write"])
+}
+
+@Test func allowlistPatternsKeepInternalSpacingAndGlobs() throws {
+    #expect(try normalizedAllowlistPatterns(["Bash(npm run build:*)"]) == ["Bash(npm run build:*)"])
+}
+
+@Test func allowlistPatternsDropBlanksAlongsideRealOnes() throws {
+    #expect(try normalizedAllowlistPatterns(["Read", "  ", ""]) == ["Read"])
+}
+
+@Test func allowlistPatternsRejectEmptyAndAllBlank() {
+    // A blank pattern would be written verbatim and silently grant nothing.
+    for bad in [[], ["", " "], ["\n"]] {
+        #expect(throws: (any Error).self, "expected \(bad) to be rejected") {
+            try normalizedAllowlistPatterns(bad)
+        }
+    }
+}
