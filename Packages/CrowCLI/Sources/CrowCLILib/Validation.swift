@@ -179,6 +179,34 @@ func validateRetentionHours(_ value: Int) throws {
     }
 }
 
+/// Validate a `crow gateway set --header` value: `Name: Value`.
+///
+/// A blank *value* is legal and meaningful — `--header "X-Api-Key:"` means
+/// "keep the secret already stored for this header", which is how the base URL
+/// can be changed without restating the key. A missing colon or blank name is
+/// rejected so a typo'd flag fails loudly instead of being dropped server-side.
+///
+/// One `--header` must mean one header: the daemon parses these by splitting on
+/// newlines, so an embedded `\n` would smuggle in a second header. Reject it
+/// here so the typo fails loudly at the flag rather than silently expanding.
+///
+/// - Throws: `ValidationError` when the line has no colon, an empty name, or an
+///   embedded newline.
+func validateHeaderLine(_ value: String) throws {
+    // CharacterSet, not `contains("\n")`: Swift treats CRLF as a single Character,
+    // so a grapheme comparison misses "\r\n" entirely.
+    guard value.rangeOfCharacter(from: .newlines) == nil else {
+        throw ValidationError(
+            "A --header must be a single line — '\(value)' contains a newline. Pass one --header per header.")
+    }
+    let trimmed = value.trimmingCharacters(in: .whitespaces)
+    guard let colon = trimmed.firstIndex(of: ":"),
+          !String(trimmed[..<colon]).trimmingCharacters(in: .whitespaces).isEmpty else {
+        throw ValidationError(
+            "'\(value)' is not a valid header. Expected 'Name: Value' (e.g. \"X-Api-Key: sk-…\").")
+    }
+}
+
 /// Validate the set-goal argument shape: exactly one of `--goal`/`--clear`,
 /// and a provided goal must not be blank (a whitespace goal would silently
 /// fail to earn the on-goal alignment multiplier).

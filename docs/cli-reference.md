@@ -920,6 +920,100 @@ Returns `{"dispatched": true, "action": "..."}` on success. A **skipped** dispat
 
 ---
 
+## Gateway Commands
+
+An AI gateway is a base URL plus the auth headers sent with it. Agents launched into a workspace inherit them as `ANTHROPIC_BASE_URL` / `ANTHROPIC_CUSTOM_HEADERS`; the Manager session has its own gateway (`AppConfig.managerGateway`) rather than following a workspace's. Header values may be `op://…` 1Password references, resolved at launch so the secret never rests in `config.json` — see [Configuration](configuration.md#ai-gateway).
+
+**Local-only.** These run over the Unix socket, which is local by construction. The same RPC methods are refused for remote `/rpc` web clients (`RPCWebSocketHandler.localOnlyDenial`), because gateway headers are credentials — reads included. A local browser can drive the equivalent controls at Settings → the workspace / Manager gateway editor.
+
+Every subcommand takes exactly one target: `--manager`, or `--workspace` with a workspace name or UUID.
+
+### `crow gateway get`
+
+Show a gateway's base URL and header names. Header **values are blanked** unless `--reveal`, so the default output is safe to paste into a ticket.
+
+```bash
+crow gateway get --manager
+crow gateway get --workspace Corveil --reveal
+```
+
+| Flag          | Required | Description                                          |
+| ------------- | -------- | ---------------------------------------------------- |
+| `--manager`   | one of   | Target the Manager AI gateway                        |
+| `--workspace` | one of   | Target a workspace's gateway (name or UUID)          |
+| `--reveal`    | no       | Print header values instead of blanking them         |
+
+Returns `{"gateway_set": true, "base_url": "...", "headers": {...}}`, plus `workspace_id` / `workspace_name` for a workspace target.
+
+### `crow gateway set`
+
+Set a gateway. `--base-url` and at least one `--header` are both required — a gateway needs both or neither, so a half-filled one is rejected rather than persisted.
+
+A `--header` with a **blank value keeps the secret already stored** under that name. That is how to change a base URL without restating credentials:
+
+```bash
+crow gateway set --manager --base-url https://gw.example.com --header "X-Api-Key: sk-…"
+crow gateway set --manager --base-url https://gw2.example.com --header "X-Api-Key:"
+crow gateway set --workspace Corveil \
+  --base-url https://gw.example.com \
+  --header "X-Api-Key: op://Prod/Gateway/api_key" \
+  --header "X-Tenant: acme"
+```
+
+| Flag          | Required | Description                                          |
+| ------------- | -------- | ---------------------------------------------------- |
+| `--manager`   | one of   | Target the Manager AI gateway                        |
+| `--workspace` | one of   | Target a workspace's gateway (name or UUID)          |
+| `--base-url`  | yes      | Gateway base URL                                     |
+| `--header`    | yes      | Header as `Name: Value` (repeatable)                 |
+
+Returns `{"saved": true, "gateway_set": true}`.
+
+### `crow gateway clear`
+
+Remove a gateway. Agents launched afterwards fall back to vanilla Anthropic (the env vars are explicitly unset, so a global `~/.zshrc` export cannot leak in).
+
+```bash
+crow gateway clear --manager
+crow gateway clear --workspace Corveil
+```
+
+| Flag          | Required | Description                                 |
+| ------------- | -------- | ------------------------------------------- |
+| `--manager`   | one of   | Target the Manager AI gateway               |
+| `--workspace` | one of   | Target a workspace's gateway (name or UUID) |
+
+Returns `{"saved": true, "gateway_set": false}`.
+
+---
+
+## Secrets Commands
+
+### `crow web-password status | set | clear`
+
+Manage the password that gates the `crowd` web UI for non-loopback clients. It is stored as a PBKDF2-HMAC-SHA256 hash (210,000 iterations, random per-password salt); the plaintext is never persisted and never leaves the local socket. **Local-only**, like the gateway commands.
+
+```bash
+crow web-password status
+crow web-password set                              # prompts twice, echo off
+printf '%s' "$PW" | crow web-password set --stdin  # for scripts
+crow web-password clear
+```
+
+| Flag       | Applies to | Description                                  |
+| ---------- | ---------- | -------------------------------------------- |
+| `--stdin`  | set        | Read the password from stdin instead of prompting |
+
+There is deliberately **no `--password` flag** — a plaintext password in `argv` lands in shell history and is visible to any local `ps`. Changing the password does not require the old one; the local-only gate is the control, matching the web UI. Clearing it means remote web clients are no longer challenged, so check how `crowd` is bound first.
+
+`status` returns `{"password_set": true, "iterations": 210000}` — never the hash or salt. `set` / `clear` return `{"saved": true, "password_set": <bool>}`.
+
+---
+
+## Not Exposed on the CLI
+
+The **Jira credential** (`AppConfig.jiraCredential`) is intentionally UI-only. It is a `op://` 1Password reference managed outside Crow, and the app resolves it at call time rather than storing a secret — so there is nothing for a CLI verb to write that editing the reference in Settings (or 1Password) does not already cover.
+
 ---
 
 ## Hooks (Internal)

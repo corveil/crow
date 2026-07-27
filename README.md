@@ -131,7 +131,9 @@ Use a different directory with `BINDIR`, e.g. `make install BINDIR=/usr/local/bi
 
 ### Remote access
 
-`crowd` binds `127.0.0.1:8787` by default, so it's reachable only from the machine it runs on. To reach it from another device, front it with an HTTPS reverse proxy (e.g. [`tailscale serve`](https://tailscale.com/kb/1242/tailscale-serve)) and set a **web password** under **Settings → Web Access**. Non-loopback requests are blocked until a password is set and the connection is HTTPS (CROW-593).
+`crowd` binds `127.0.0.1:8787` by default, so it's reachable only from the machine it runs on. To reach it from another device, front it with an HTTPS reverse proxy (e.g. [`tailscale serve`](https://tailscale.com/kb/1242/tailscale-serve)) and set a **web password** under **Settings → Web Access** or with `crow web-password set`. Non-loopback requests are blocked until a password is set and the connection is HTTPS (CROW-593).
+
+The password and the AI gateways are **local-only** surfaces: they're settable from a local browser or the `crow` CLI (which talks over the Unix socket), and refused for remote web clients — a remote session must not be able to change the password gating remote access, or read gateway credentials. See [CLI Reference → Gateway Commands](docs/cli-reference.md#gateway-commands).
 
 ## Desktop app (native window over crowd)
 

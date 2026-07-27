@@ -846,6 +846,29 @@ import CrowPersistence
         }
     }
 
+    @Test func secretMethodsAreLocalOnly() {
+        // Gateways and the web password are the CLI's route to the same secrets
+        // `SecretRoutes` guards for the browser (CROW-815). Reads are gated too:
+        // `gateway-get` with reveal returns the gateway auth headers, and
+        // `web-password-set` from a remote peer would let it change the password
+        // gating remote access.
+        for method in ["gateway-get", "gateway-set", "web-password-get", "web-password-set"] {
+            let req = JSONRPCRequest(id: 1, method: method, params: [
+                "target": .string("manager"),
+            ])
+            #expect(RPCWebSocketHandler.localOnlyDenial(for: req, devRoot: tempDevRoot())
+                == "gateway and web-password management is local-only")
+        }
+    }
+
+    @Test func unrelatedMethodsStayUngated() {
+        // Guards against a too-broad match swallowing neighbouring methods.
+        for method in ["get-config", "job-list", "list-sessions"] {
+            let req = JSONRPCRequest(id: 1, method: method, params: [:])
+            #expect(RPCWebSocketHandler.localOnlyDenial(for: req, devRoot: tempDevRoot()) == nil)
+        }
+    }
+
     @Test func setConfigBinariesChangeIsLocalOnly() throws {
         let devRoot = tempDevRoot()
         defer { try? FileManager.default.removeItem(atPath: devRoot) }

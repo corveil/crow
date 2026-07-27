@@ -168,6 +168,29 @@ import Testing
     #expect(loaded?.managerGateway?.customHeaders["x-citadel-api-key"] == "Bearer sk-citadel-456")
 }
 
+@Test func configStoreWebAuthRoundTrip() throws {
+    // The web-password hash survives a save/load, and its presence is what marks
+    // "a password is set" — the CLI's `web-password status` reads exactly this
+    // (CROW-815). Clearing it removes the block rather than blanking the fields.
+    let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let claudeDir = tmpDir.appendingPathComponent(".claude", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: tmpDir) }
+    let configURL = claudeDir.appendingPathComponent("config.json")
+
+    var config = AppConfig()
+    config.webAuth = WebAuthConfig(hashB64: "aGFzaA==", saltB64: "c2FsdA==", iterations: 210_000)
+    try ConfigStore.saveConfig(config, to: claudeDir)
+
+    let loaded = ConfigStore.loadConfig(from: configURL)
+    #expect(loaded?.webAuth?.hashB64 == "aGFzaA==")
+    #expect(loaded?.webAuth?.saltB64 == "c2FsdA==")
+    #expect(loaded?.webAuth?.iterations == 210_000)
+
+    config.webAuth = nil
+    try ConfigStore.saveConfig(config, to: claudeDir)
+    #expect(ConfigStore.loadConfig(from: configURL)?.webAuth == nil)
+}
+
 @Test func configStoreLoadReturnsNilOnMalformedGateway() throws {
     // A half-filled gateway (baseURL but no headers) is rejected at decode time;
     // loadConfig logs and returns nil rather than dropping just the bad field.

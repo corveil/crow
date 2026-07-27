@@ -16,13 +16,23 @@ import NIOCore
 ///   - gateway auth-header secrets never travel to or from a remote browser
 ///     (they stay stripped / read-only there, per `SettingsSecrets`).
 ///
-/// These are dedicated HTTP POSTs rather than JSON-RPC methods precisely so the
-/// handler has the peer address + `X-Forwarded-For` in hand for the locality
-/// check — the shared `/rpc` WebSocket router is transport-agnostic and can't
-/// tell a local caller from a logged-in remote one. Each write is also
-/// Origin-checked, so a malicious page in the *local* browser can't drive it via
-/// CSRF. Mirrors the `WebAuthRoutes` POST pattern; both sit behind
-/// `WebAuthMiddleware`.
+/// These are dedicated HTTP POSTs because the handler then has the peer address
+/// + `X-Forwarded-For` in hand for the locality check, and can Origin-check each
+/// write so a malicious page in the *local* browser can't drive it via CSRF.
+/// Mirrors the `WebAuthRoutes` POST pattern; both sit behind `WebAuthMiddleware`.
+/// This is the path the **browser** uses.
+///
+/// The **CLI** reaches the same surfaces over the Unix socket through the
+/// `gateway-*` / `web-password-*` JSON-RPC methods (CROW-815). Those are safe
+/// despite the shared `/rpc` router being transport-agnostic *only* because
+/// every one of them is listed in
+/// ``RPCWebSocketHandler/localOnlyDenial(for:devRoot:)``, which refuses them for
+/// non-local peers — reads included, since `gateway-get` with `reveal` returns
+/// the auth headers. Validation is not duplicated: those handlers call
+/// ``buildGateway(_:)`` and ``mergingPreservedHeaders(incoming:stored:)`` below.
+///
+/// So there are two doors to one room. Removing either the RPC gate or these
+/// routes' `gateOK` check re-opens the hole this type exists to close.
 enum SecretRoutes {
     static func mount(on router: Router<CrowHTTPContext>, boundHost: String, devRoot: String) {
         // Locality probe: tells the web UI whether THIS connection may manage
