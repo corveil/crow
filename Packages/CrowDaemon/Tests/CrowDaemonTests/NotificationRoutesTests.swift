@@ -172,15 +172,81 @@ import CrowPersistence
     @Test func setGlobalsDoesNotTouchEventSettings() async throws {
         let devRoot = tempDevRoot()
         defer { try? FileManager.default.removeItem(atPath: devRoot) }
-        var config = AppConfig()
-        config.notifications.eventSettings = [:]
-        try ConfigStore.saveConfig(config, devRoot: devRoot)
+        try ConfigStore.saveConfig(AppConfig(), devRoot: devRoot)
 
         let resp = await router(devRoot: devRoot).handle(request: JSONRPCRequest(
             id: 1, method: "notifications-set", params: ["global_mute": .bool(true)]))
 
         #expect(resp.error == nil)
         #expect(ConfigStore.loadConfig(devRoot: devRoot)?.notifications.eventSettings.isEmpty == true)
+    }
+
+    /// The realistic shapes a first write lands on — a config with no
+    /// `notifications` block at all, a hand-edited partial block, and no config
+    /// file whatsoever. Each used to persist all ten events, freezing today's
+    /// `defaultSound` table into the file and contradicting the sparse-write
+    /// contract this handler documents (review of #813). The earlier version of
+    /// `setGlobalsDoesNotTouchEventSettings` missed it by pre-seeding an
+    /// explicitly-empty dictionary, which was never what a real config held.
+    @Test(arguments: [
+        #"{"remoteControlEnabled": true}"#,
+        #"{"notifications": {"globalMute": false}}"#,
+        #"{}"#,
+    ])
+    func setGlobalsAgainstARealisticConfigStaysSparse(configJSON: String) async throws {
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        let claudeDir = URL(fileURLWithPath: devRoot).appendingPathComponent(".claude")
+        try FileManager.default.createDirectory(at: claudeDir, withIntermediateDirectories: true)
+        try configJSON.write(
+            to: claudeDir.appendingPathComponent("config.json"), atomically: true, encoding: .utf8)
+
+        let resp = await router(devRoot: devRoot).handle(request: JSONRPCRequest(
+            id: 1, method: "notifications-set", params: ["global_mute": .bool(true)]))
+
+        #expect(resp.error == nil)
+        let stored = try #require(ConfigStore.loadConfig(devRoot: devRoot))
+        #expect(stored.notifications.globalMute == true)
+        #expect(stored.notifications.eventSettings.isEmpty)
+    }
+
+    /// Same contract with no config file at all — the write creates one, and it
+    /// must still carry only what was asked for.
+    @Test func setGlobalsWithNoConfigFileStaysSparse() async throws {
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+
+        let resp = await router(devRoot: devRoot).handle(request: JSONRPCRequest(
+            id: 1, method: "notifications-set", params: ["global_mute": .bool(true)]))
+
+        #expect(resp.error == nil)
+        let stored = try #require(ConfigStore.loadConfig(devRoot: devRoot))
+        #expect(stored.notifications.globalMute == true)
+        #expect(stored.notifications.eventSettings.isEmpty)
+    }
+
+    /// A per-event write against a realistic config persists exactly one entry.
+    @Test func setOneEventAgainstARealisticConfigWritesOnlyThatEvent() async throws {
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        let claudeDir = URL(fileURLWithPath: devRoot).appendingPathComponent(".claude")
+        try FileManager.default.createDirectory(at: claudeDir, withIntermediateDirectories: true)
+        try #"{"remoteControlEnabled": true}"#.write(
+            to: claudeDir.appendingPathComponent("config.json"), atomically: true, encoding: .utf8)
+
+        let resp = await router(devRoot: devRoot).handle(request: JSONRPCRequest(
+            id: 1, method: "notifications-set", params: [
+                "event": .string("checksFailing"), "event_enabled": .bool(false),
+            ]))
+
+        #expect(resp.error == nil)
+        let stored = try #require(ConfigStore.loadConfig(devRoot: devRoot))
+        #expect(stored.notifications.eventSettings.count == 1)
+        #expect(stored.notifications.eventSettings[.checksFailing]?.enabled == false)
+        // Written through `config(for:)`, so the entry carries the event's own
+        // default sound rather than the bare `EventNotificationConfig` default.
+        #expect(stored.notifications.eventSettings[.checksFailing]?.soundName
+            == NotificationEvent.checksFailing.defaultSound)
     }
 
     @Test func setRejectsBadParamCombinations() async throws {

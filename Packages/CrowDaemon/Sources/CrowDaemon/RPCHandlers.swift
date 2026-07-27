@@ -1582,7 +1582,7 @@ func makeCommandRouter(
 /// caller isn't shown invented settings as fact (CROW-813).
 private func loadConfigReportingReadability(devRoot: String) -> (AppConfig, Bool) {
     if let config = ConfigStore.loadConfig(devRoot: devRoot) { return (config, true) }
-    return (AppConfig(), !configFileExists(devRoot: devRoot))
+    return (AppConfig(), !ConfigStore.configExists(devRoot: devRoot))
 }
 
 /// Parse the `job_id` param shared by every id-taking `job-*` method.
@@ -1613,9 +1613,9 @@ private func mutateConfig<T>(devRoot: String, _ transform: (inout AppConfig) thr
         var config: AppConfig
         if let loaded = ConfigStore.loadConfig(devRoot: devRoot) {
             config = loaded
-        } else if configFileExists(devRoot: devRoot) {
+        } else if ConfigStore.configExists(devRoot: devRoot) {
             throw RPCError.applicationError(
-                "config.json exists but could not be decoded — refusing to overwrite it. Fix or move \(configFileURL(devRoot: devRoot).path).")
+                "config.json exists but could not be decoded — refusing to overwrite it. Fix or move \(ConfigStore.configURL(devRoot: devRoot).path).")
         } else {
             config = AppConfig()
         }
@@ -1627,19 +1627,6 @@ private func mutateConfig<T>(devRoot: String, _ transform: (inout AppConfig) thr
         }
         return result
     }
-}
-
-/// Location of the config `mutateConfig` guards, shared with the readability
-/// probe below. `ConfigStore` derives the same path internally but doesn't
-/// expose it.
-private func configFileURL(devRoot: String) -> URL {
-    URL(fileURLWithPath: devRoot)
-        .appendingPathComponent(".claude", isDirectory: true)
-        .appendingPathComponent("config.json")
-}
-
-private func configFileExists(devRoot: String) -> Bool {
-    FileManager.default.fileExists(atPath: configFileURL(devRoot: devRoot).path)
 }
 
 /// The engine's pure RPC support (`JobRPC`, `AllowlistRPC`, `SettingsRPC`,

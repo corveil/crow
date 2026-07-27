@@ -280,16 +280,17 @@ Notifications cascade — one fires only if `globalMute` is off, the matching gl
 - **`globalMute`** (default: `false`) — master mute; suppresses every sound and system notification.
 - **`soundEnabled`** (default: `true`) — global sound-playback toggle.
 - **`systemNotificationsEnabled`** (default: `true`) — global system-notification toggle.
-- **`eventSettings`** — per-event overrides. Any event you omit follows the current defaults, so leaving events out is the way to stay on Crow's defaults as they evolve.
+- **`eventSettings`** — per-event overrides, holding only the events you've actually changed. Any event you omit follows the current defaults, so leaving events out is the way to stay on Crow's defaults as they evolve. Neither Crow nor `crow notifications set` will backfill the rest.
 
 The ten events are `taskComplete`, `agentWaiting`, `reviewRequested`, `changesRequested`, `checksFailing`, `autoWorkspaceCreated`, `autoMergeEnabled`, `autoRebasePushed`, `autoRebaseConflicts`, and `configReloaded`. The 14 built-in sounds are `Basso`, `Blow`, `Bottle`, `Frog`, `Funk`, `Glass`, `Hero`, `Morse`, `Ping`, `Pop`, `Purr`, `Sosumi`, `Submarine`, and `Tink`.
 
-Two shapes to be aware of when hand-editing:
+Three things to know before hand-editing:
 
-- **`eventSettings` serializes as a flat alternating array** of event name, settings object, event name, settings object, … — not as an object. That falls out of how Swift encodes a dictionary keyed by an enum. Crow reads either shape, but writes the array form. `crow notifications get` presents it as a proper object if you'd rather read it that way.
+- **`eventSettings` must be the flat alternating array shown above** — event name, settings object, event name, settings object, … — and *not* a JSON object. That falls out of how Swift encodes a dictionary keyed by an enum, and the decoder accepts only that form. Writing `"eventSettings": {"checksFailing": {…}}` fails with `Expected to decode Array<Any> but found a dictionary`, which takes the **whole** `config.json` down with it: Crow falls back to defaults on every read, and writes refuse until you fix the file. If you'd rather read it as an object, use `crow notifications get`, which presents it that way.
+- **An omitted `soundName` inside an event entry becomes `Glass`, not that event's default.** Decoding an entry can't see which event keys it, so there is no per-event fallback at that level. Writing `{"enabled": false}` for `checksFailing` silently changes its sound from Sosumi to Glass; same for `autoRebaseConflicts` (Basso), `agentWaiting`/`changesRequested` (Funk), `autoWorkspaceCreated` (Hero), `autoRebasePushed` (Bottle), `configReloaded` (Tink). Either spell `soundName` out in a partial entry, or edit through `crow notifications set`, which always writes a complete entry seeded from the event's real default.
 - **The global key is `systemNotificationsEnabled` (plural); the per-event key is `systemNotificationEnabled` (singular).** The CLI flags mirror the same split.
 
-Any key you leave out of `notifications` — or out of an individual event entry — falls back to its default rather than failing the load, so a partial hand edit is safe.
+Every other key you leave out — of `notifications` or of an individual event entry — falls back to its documented default rather than failing the load, so a partial hand edit won't break config parsing.
 
 ## Directory Structure
 

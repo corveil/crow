@@ -787,7 +787,8 @@ Notes:
 - Every toggle is a `--flag` / `--no-flag` pair; **omitting** it leaves the stored value alone. `--flag --no-flag` together is rejected rather than silently resolved.
 - The global toggle is `--system-notifications-enabled` (plural) and the per-event one is `--event-system-notification-enabled` (singular). The flag names mirror the config field names, which differ the same way.
 - `--event-sound-name` accepts only the built-in sounds listed under `available_sounds`, matching the Settings sound picker. A config that already stores a custom sound path keeps it — reads never validate — but the CLI won't set a new one.
-- Only the event you name is written to `config.json`. Events you never touch stay absent and keep following the current defaults.
+- Only the event you name is written to `config.json`. Events you never touch stay absent and keep following the current defaults — a globals-only `set` leaves `eventSettings` alone entirely.
+- Each write seeds the entry from the event's real default before applying your flags, so `set` never has to be told a sound just to change a toggle. Hand-editing has no such help: an event entry written without `soundName` falls back to `Glass` rather than that event's default (see [configuration.md](configuration.md#notifications)).
 
 ---
 

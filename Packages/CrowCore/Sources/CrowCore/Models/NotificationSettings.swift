@@ -29,25 +29,26 @@ public struct NotificationSettings: Codable, Sendable, Equatable {
     /// Per-event-category configuration.
     public var eventSettings: [NotificationEvent: EventNotificationConfig]
 
+    /// `eventSettings` starts **empty**, not pre-populated with all ten events.
+    ///
+    /// Absence is the contract: `config(for:)` resolves a missing event to its
+    /// current default, so an entry only needs to exist once someone overrides
+    /// it. Eagerly materializing the full table looked harmless but wasn't —
+    /// every writer that loaded a config with no `notifications` block then
+    /// saved all ten entries back, freezing today's `defaultSound` table into
+    /// the file and silently opting the user out of future changes to it. A
+    /// globals-only `crow notifications set --global-mute` did exactly that
+    /// (review of #813).
     public init(
         globalMute: Bool = false,
         soundEnabled: Bool = true,
         systemNotificationsEnabled: Bool = true,
-        eventSettings: [NotificationEvent: EventNotificationConfig]? = nil
+        eventSettings: [NotificationEvent: EventNotificationConfig] = [:]
     ) {
         self.globalMute = globalMute
         self.soundEnabled = soundEnabled
         self.systemNotificationsEnabled = systemNotificationsEnabled
-        if let eventSettings {
-            self.eventSettings = eventSettings
-        } else {
-            // Populate defaults for all event categories
-            var defaults: [NotificationEvent: EventNotificationConfig] = [:]
-            for event in NotificationEvent.allCases {
-                defaults[event] = EventNotificationConfig(soundName: event.defaultSound)
-            }
-            self.eventSettings = defaults
-        }
+        self.eventSettings = eventSettings
     }
 
     /// Tolerant decode: every key is optional and falls back to its default.
@@ -60,16 +61,15 @@ public struct NotificationSettings: Codable, Sendable, Equatable {
     /// `TerminalSettings` / `AutoRespondSettings` (CROW-813).
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        let events = try c.decodeIfPresent(
-            [NotificationEvent: EventNotificationConfig].self, forKey: .eventSettings)
-        // Delegating to the designated init keeps the "nil → populate all events
-        // with their defaults" rule in one place.
         self.init(
             globalMute: try c.decodeIfPresent(Bool.self, forKey: .globalMute) ?? false,
             soundEnabled: try c.decodeIfPresent(Bool.self, forKey: .soundEnabled) ?? true,
             systemNotificationsEnabled: try c.decodeIfPresent(
                 Bool.self, forKey: .systemNotificationsEnabled) ?? true,
-            eventSettings: events
+            // Absent stays absent — see the designated init. A round-trip must
+            // not invent entries the file didn't have.
+            eventSettings: try c.decodeIfPresent(
+                [NotificationEvent: EventNotificationConfig].self, forKey: .eventSettings) ?? [:]
         )
     }
 
@@ -127,6 +127,15 @@ public struct EventNotificationConfig: Codable, Sendable, Equatable {
     /// Tolerant decode, for the same reason as `NotificationSettings` above: a
     /// hand-edited event entry that names only the field being changed must not
     /// take the whole config down with it.
+    ///
+    /// - Important: an omitted `soundName` falls back to `"Glass"`, **not** to
+    ///   the event's `defaultSound` — decoding one entry has no idea which event
+    ///   keys it, since `Dictionary` decodes keys and values separately. So a
+    ///   hand-written partial entry for a non-Glass event (`checksFailing`'s
+    ///   Sosumi, `autoRebaseConflicts`' Basso) silently becomes Glass. Write
+    ///   `soundName` explicitly in a partial entry, or edit through
+    ///   `crow notifications set`, which reads the existing entry through
+    ///   `config(for:)` and always writes a complete one (review of #813).
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true

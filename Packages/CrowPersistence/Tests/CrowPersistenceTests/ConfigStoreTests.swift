@@ -182,6 +182,39 @@ import Testing
     #expect(ConfigStore.loadConfig(from: configURL) == nil)
 }
 
+// MARK: - Config path (CROW-813 review)
+
+/// `configURL` / `configExists` are what the daemon's fail-closed write guard
+/// asks before refusing to overwrite a malformed config. They have to name the
+/// same file `loadConfig`/`saveConfig` use, or the guard silently stops guarding.
+@Test func configURLMatchesWhereSaveConfigWrites() throws {
+    let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: tmpDir) }
+
+    #expect(ConfigStore.configExists(devRoot: tmpDir.path) == false)
+
+    try ConfigStore.saveConfig(AppConfig(), devRoot: tmpDir.path)
+
+    let url = ConfigStore.configURL(devRoot: tmpDir.path)
+    #expect(FileManager.default.fileExists(atPath: url.path))
+    #expect(ConfigStore.configExists(devRoot: tmpDir.path))
+    #expect(ConfigStore.loadConfig(from: url) != nil)
+}
+
+/// The distinction the guard rests on: `loadConfig` returns nil for a malformed
+/// file just as it does for a missing one, but `configExists` still says yes.
+@Test func configExistsIsTrueForAnUndecodableConfig() throws {
+    let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: tmpDir) }
+    let claudeDir = tmpDir.appendingPathComponent(".claude", isDirectory: true)
+    try FileManager.default.createDirectory(at: claudeDir, withIntermediateDirectories: true)
+    try "{ not json".write(
+        to: claudeDir.appendingPathComponent("config.json"), atomically: true, encoding: .utf8)
+
+    #expect(ConfigStore.loadConfig(devRoot: tmpDir.path) == nil)
+    #expect(ConfigStore.configExists(devRoot: tmpDir.path))
+}
+
 // MARK: - Notification settings (CROW-813)
 
 /// What `crow notifications set` does to the file: change some globals and one

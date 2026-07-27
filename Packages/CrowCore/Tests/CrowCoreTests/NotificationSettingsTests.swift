@@ -9,9 +9,14 @@ import Testing
     #expect(settings.soundEnabled == true)
     #expect(settings.systemNotificationsEnabled == true)
 
-    // Every event case should have an entry
+    // No event is materialized up front — absence means "follow the current
+    // default", which `config(for:)` resolves on read. Pre-populating the table
+    // meant any subsequent save froze today's defaults into the file.
+    #expect(settings.eventSettings.isEmpty)
     for event in NotificationEvent.allCases {
-        #expect(settings.eventSettings[event] != nil)
+        let config = settings.config(for: event)
+        #expect(config.enabled == true)
+        #expect(config.soundName == event.defaultSound)
     }
 }
 
@@ -80,10 +85,10 @@ import Testing
     #expect(decoded.globalMute == true)
     #expect(decoded.soundEnabled == true)
     #expect(decoded.systemNotificationsEnabled == true)
-    // eventSettings absent → all events materialized with their defaults.
-    for event in NotificationEvent.allCases {
-        #expect(decoded.eventSettings[event]?.soundName == event.defaultSound)
-    }
+    // eventSettings absent stays absent — decoding must not invent entries the
+    // file didn't have, or the next save would persist all ten.
+    #expect(decoded.eventSettings.isEmpty)
+    #expect(decoded.config(for: .checksFailing).soundName == NotificationEvent.checksFailing.defaultSound)
 }
 
 @Test func notificationSettingsDecodesEmptyObject() throws {
@@ -92,7 +97,34 @@ import Testing
     #expect(decoded.globalMute == false)
     #expect(decoded.soundEnabled == true)
     #expect(decoded.systemNotificationsEnabled == true)
-    #expect(decoded.eventSettings.count == NotificationEvent.allCases.count)
+    #expect(decoded.eventSettings.isEmpty)
+}
+
+/// The round-trip that made the freeze visible: a config carrying only an
+/// override for one event must come back with exactly that one entry.
+@Test func notificationSettingsRoundTripDoesNotGrowEventSettings() throws {
+    var settings = NotificationSettings()
+    settings.eventSettings[.agentWaiting] = EventNotificationConfig(enabled: false, soundName: "Ping")
+
+    let decoded = try JSONDecoder().decode(
+        NotificationSettings.self, from: try JSONEncoder().encode(settings))
+
+    #expect(decoded.eventSettings.count == 1)
+    #expect(decoded.eventSettings[.agentWaiting]?.soundName == "Ping")
+    #expect(decoded.config(for: .checksFailing).soundName == NotificationEvent.checksFailing.defaultSound)
+}
+
+/// The `soundName` fallback is `"Glass"`, not the event's default — decoding an
+/// entry can't see which event keys it. Pinned so the docs note stays honest.
+@Test func eventNotificationConfigPartialDecodeFallsBackToGlassNotEventDefault() throws {
+    let json = #"{"enabled": false}"#.data(using: .utf8)!
+    let decoded = try JSONDecoder().decode(EventNotificationConfig.self, from: json)
+
+    #expect(decoded.enabled == false)
+    #expect(decoded.soundName == "Glass")
+    // Explicitly NOT checksFailing's Sosumi, even though that's where a
+    // hand-editor would most likely write a partial entry.
+    #expect(decoded.soundName != NotificationEvent.checksFailing.defaultSound)
 }
 
 /// An explicitly empty `eventSettings` stays empty — only *absence* means
