@@ -62,6 +62,16 @@ crow promote-allowlist --pattern 'Bash(npm test:*)' [--pattern ...]   → {"ok":
 
 Repeat `--pattern` for more than one, and **quote them** — `(`, `)`, `*` are shell metacharacters. A failed write is a non-zero exit, never `ok:true`; a malformed global settings file is refused rather than overwritten.
 
+### Settings Commands
+```
+crow telemetry get                                                      → {"telemetry":{"enabled":…,"port":…,"retention_days":…}}
+crow telemetry set [--enabled true|false] [--port N] [--retention-days N]  → patch; enabled/port need a crowd restart (returns "restart_required")
+crow cleanup get                                                        → {"cleanup":{"enabled":…,"retention_hours":…}}
+crow cleanup set [--enabled true|false] [--retention-hours N]           → patch; live within ~1 board poll. Deletes completed/archived sessions incl. worktree + branch
+crow ui get                                                             → {"ui":{"sidebar":{"hide_session_details":…}}}
+crow ui set --hide-session-details true|false                           → patch; connected browsers repaint within ~2s
+```
+
 ### Worktree Commands
 ```
 crow add-worktree --session <uuid> --repo "name" --repo-path "/main/repo" --path "/worktree/path" --branch "feature/..." [--primary]

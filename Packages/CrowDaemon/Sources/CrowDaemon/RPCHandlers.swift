@@ -1233,7 +1233,7 @@ func makeCommandRouter(
                 let schedule = try JobRPC.decodeSchedule(scheduleValue)
                 let prompts = try JobRPC.decodePrompts(params["prompts"])
                 let enabled = params["enabled"]?.boolValue ?? true
-                let job = try mutateJobs(devRoot: devRoot) { config -> JobConfig in
+                let job = try mutateConfig(devRoot: devRoot) { config -> JobConfig in
                     try validateJobWorkspace(workspace, config: config)
                     if let error = JobConfig.validateName(name, existingNames: config.jobs.map(\.name)) {
                         throw RPCError.invalidParams(error)
@@ -1252,7 +1252,7 @@ func makeCommandRouter(
                 let id = try jobIDParam(params)
                 let newSchedule = try params["schedule"].map { try JobRPC.decodeSchedule($0) }
                 let newPrompts = try params["prompts"].map { try JobRPC.decodePrompts($0) }
-                let job = try mutateJobs(devRoot: devRoot) { config -> JobConfig in
+                let job = try mutateConfig(devRoot: devRoot) { config -> JobConfig in
                     guard let idx = config.jobs.firstIndex(where: { $0.id == id }) else {
                         throw RPCError.applicationError("Job not found")
                     }
@@ -1285,7 +1285,7 @@ func makeCommandRouter(
         "job-enable": { params in
             try mapRPCError {
                 let id = try jobIDParam(params)
-                let job = try mutateJobs(devRoot: devRoot) { config -> JobConfig in
+                let job = try mutateConfig(devRoot: devRoot) { config -> JobConfig in
                     guard let idx = config.jobs.firstIndex(where: { $0.id == id }) else {
                         throw RPCError.applicationError("Job not found")
                     }
@@ -1298,7 +1298,7 @@ func makeCommandRouter(
         "job-disable": { params in
             try mapRPCError {
                 let id = try jobIDParam(params)
-                let job = try mutateJobs(devRoot: devRoot) { config -> JobConfig in
+                let job = try mutateConfig(devRoot: devRoot) { config -> JobConfig in
                     guard let idx = config.jobs.firstIndex(where: { $0.id == id }) else {
                         throw RPCError.applicationError("Job not found")
                     }
@@ -1311,7 +1311,7 @@ func makeCommandRouter(
         "job-delete": { params in
             try mapRPCError {
                 let id = try jobIDParam(params)
-                try mutateJobs(devRoot: devRoot) { config in
+                try mutateConfig(devRoot: devRoot) { config in
                     guard config.jobs.contains(where: { $0.id == id }) else {
                         throw RPCError.applicationError("Job not found")
                     }
@@ -1323,7 +1323,7 @@ func makeCommandRouter(
         "job-duplicate": { params in
             try mapRPCError {
                 let id = try jobIDParam(params)
-                let copy = try mutateJobs(devRoot: devRoot) { config -> JobConfig in
+                let copy = try mutateConfig(devRoot: devRoot) { config -> JobConfig in
                     guard let original = config.jobs.first(where: { $0.id == id }) else {
                         throw RPCError.applicationError("Job not found")
                     }
@@ -1354,6 +1354,94 @@ func makeCommandRouter(
                 throw DaemonRPCError.applicationError(error.localizedDescription)
             }
         },
+
+        // General-tab settings for `crow telemetry` / `crow cleanup` / `crow ui`
+        // (CROW-814). Granular PATCH methods rather than a CLI-side read-modify-
+        // write of the whole blob: `set-config` replaces the entire `AppConfig`,
+        // and CrowCLI can't decode one (it doesn't depend on CrowCore), so a blob
+        // round-trip would make the CLI a second writer racing the web Settings
+        // modal. Each write is a locked read-modify-write of one subtree via
+        // `mutateConfig`, the same lock `set-config` and the scheduler take.
+        //
+        // Deliberately NOT gated in `RPCWebSocketHandler.localOnlyDenial` — see
+        // the rationale ledger there.
+        "telemetry-get": { _ in
+            let config = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
+            return ["telemetry": SettingsRPC.telemetryJSON(config.telemetry)]
+        },
+        "telemetry-set": { params in
+            try mapRPCError {
+                let enabled = try SettingsRPC.patchBool(params, "enabled")
+                let port = try SettingsRPC.patchPort(params)
+                let retentionDays = try SettingsRPC.patchRetentionDays(params)
+                guard enabled != nil || port != nil || retentionDays != nil else {
+                    throw RPCError.invalidParams(
+                        "Nothing to set — provide at least one of enabled, port, retention_days.")
+                }
+                let (old, new) = try mutateConfig(devRoot: devRoot) {
+                    config -> (TelemetryConfig, TelemetryConfig) in
+                    let before = config.telemetry
+                    if let enabled { config.telemetry.enabled = enabled }
+                    if let port { config.telemetry.port = port }
+                    if let retentionDays { config.telemetry.retentionDays = retentionDays }
+                    return (before, config.telemetry)
+                }
+                return [
+                    "telemetry": SettingsRPC.telemetryJSON(new),
+                    "restart_required": .bool(
+                        SettingsRPC.telemetryRestartRequired(old: old, new: new)),
+                ]
+            }
+        },
+        "cleanup-get": { _ in
+            let config = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
+            return ["cleanup": SettingsRPC.cleanupJSON(config.cleanup)]
+        },
+        "cleanup-set": { params in
+            try mapRPCError {
+                let enabled = try SettingsRPC.patchBool(params, "enabled")
+                let retentionHours = try SettingsRPC.patchRetentionHours(params)
+                guard enabled != nil || retentionHours != nil else {
+                    throw RPCError.invalidParams(
+                        "Nothing to set — provide at least one of enabled, retention_hours.")
+                }
+                let cleanup = try mutateConfig(devRoot: devRoot) { config -> CleanupConfig in
+                    if let enabled { config.cleanup.enabled = enabled }
+                    if let retentionHours { config.cleanup.retentionHours = retentionHours }
+                    return config.cleanup
+                }
+                // The board poll re-reads config from disk every cycle, so this
+                // takes effect within ~60s — no restart.
+                return [
+                    "cleanup": SettingsRPC.cleanupJSON(cleanup),
+                    "restart_required": .bool(false),
+                ]
+            }
+        },
+        "ui-get": { _ in
+            let config = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
+            return ["ui": SettingsRPC.uiJSON(config.sidebar)]
+        },
+        "ui-set": { params in
+            try mapRPCError {
+                guard let hideSessionDetails =
+                        try SettingsRPC.patchBool(params, "hide_session_details") else {
+                    throw RPCError.invalidParams(
+                        "Nothing to set — provide at least one of hide_session_details.")
+                }
+                let sidebar = try mutateConfig(devRoot: devRoot) { config -> SidebarSettings in
+                    config.sidebar.hideSessionDetails = hideSessionDetails
+                    return config.sidebar
+                }
+                // Connected browsers re-read the view-affecting config slice off
+                // the `configReloaded` push that `startStoreReloadPoll` fires when
+                // config.json's mtime moves — no restart, no reload.
+                return [
+                    "ui": SettingsRPC.uiJSON(sidebar),
+                    "restart_required": .bool(false),
+                ]
+            }
+        },
     ], fallback: fallback)
 }
 
@@ -1371,24 +1459,41 @@ private func validateJobWorkspace(_ workspace: String, config: AppConfig) throws
     }
 }
 
-/// Persist a job-config mutation under the shared lock. Disk write first so a
+/// Persist an `AppConfig` mutation under the shared lock. Disk write first so a
 /// failed save leaves memory and disk consistent.
+///
+/// A `config.json` that exists but won't decode is NOT replaced with defaults:
+/// `ConfigStore.loadConfig` returns nil for both "missing" and "malformed", and
+/// blindly falling back to `AppConfig()` would silently destroy every workspace,
+/// job and credential on the next write (CROW-814).
 @discardableResult
-private func mutateJobs<T>(devRoot: String, _ transform: (inout AppConfig) throws -> T) throws -> T {
+private func mutateConfig<T>(devRoot: String, _ transform: (inout AppConfig) throws -> T) throws -> T {
     try ConfigStore.withConfigLock {
-        var config = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
+        var config: AppConfig
+        if let loaded = ConfigStore.loadConfig(devRoot: devRoot) {
+            config = loaded
+        } else {
+            let path = URL(fileURLWithPath: devRoot)
+                .appendingPathComponent(".claude", isDirectory: true)
+                .appendingPathComponent("config.json").path
+            guard !FileManager.default.fileExists(atPath: path) else {
+                throw RPCError.applicationError(
+                    "config.json exists but could not be decoded — refusing to overwrite it. Fix or move \(path).")
+            }
+            config = AppConfig()
+        }
         let result = try transform(&config)
         do {
             try ConfigStore.saveConfig(config, devRoot: devRoot)
         } catch {
-            throw RPCError.applicationError("Failed to persist job change: \(error.localizedDescription)")
+            throw RPCError.applicationError("Failed to persist config change: \(error.localizedDescription)")
         }
         return result
     }
 }
 
-/// The engine's pure RPC support (`JobRPC`, `AllowlistRPC`) throws `RPCError`;
-/// map to `DaemonRPCError` for the daemon router.
+/// The engine's pure RPC support (`JobRPC`, `AllowlistRPC`, `SettingsRPC`) throws
+/// `RPCError`; map to `DaemonRPCError` for the daemon router.
 private func mapRPCError<T>(_ body: () throws -> T) throws -> T {
     do {
         return try body()

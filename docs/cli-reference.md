@@ -322,6 +322,65 @@ crow refresh-allowlist
 ```
 
 Takes no flags. Returns `{"ok": true}`.
+## Settings Commands
+
+The General-tab settings that were previously web-only. Every `set` is a patch — only the flags you pass change, and passing none is an error rather than a silent no-op. Each `set` echoes the resulting subtree plus a `restart_required` boolean, so a write is self-verifying without a follow-up `get`.
+
+Booleans take an explicit value (`--enabled true`), not a bare flag, so that a patch can express "set to false" as distinct from "leave alone". Only the literals `true` and `false` are accepted.
+
+### `crow telemetry get | set`
+
+Session-analytics collection over Claude Code's OpenTelemetry exporter.
+
+```bash
+crow telemetry get
+crow telemetry set --enabled true --port 4318
+crow telemetry set --retention-days 0
+```
+
+| Flag               | Required | Description                                                |
+| ------------------ | -------- | ---------------------------------------------------------- |
+| `--enabled`        | no¹      | `true` or `false` — enable the OTLP receiver               |
+| `--port`           | no¹      | OTLP HTTP receiver port, 1024–65535 (default 4318)         |
+| `--retention-days` | no¹      | Days of telemetry to keep; `0` keeps forever (default 180) |
+
+¹ At least one flag is required.
+
+`--enabled` and `--port` are read once when `crowd` starts, and the port is baked into every agent launch's `OTEL_EXPORTER_OTLP_ENDPOINT`, so changing either returns `"restart_required": true` (plus a warning on stderr). Restart `crowd` to apply. `--retention-days` drives the prune that runs at startup, so it likewise takes effect at the next daemon start.
+
+### `crow cleanup get | set`
+
+Automatic deletion of completed and archived sessions.
+
+```bash
+crow cleanup get
+crow cleanup set --enabled true --retention-hours 72
+crow cleanup set --enabled false
+```
+
+| Flag                | Required | Description                                                        |
+| ------------------- | -------- | ------------------------------------------------------------------ |
+| `--enabled`         | no¹      | `true` or `false` — enable auto-cleanup                            |
+| `--retention-hours` | no¹      | Hours to keep completed/archived sessions, minimum 1 (default 24)  |
+
+¹ At least one flag is required.
+
+Cleanup deletes eligible sessions **including their worktree and branch**. Manager, virtual, and locked sessions are never deleted. Unlike telemetry this setting is live: the board poll re-reads it from disk each cycle, so enabling it starts deleting within about a minute — no restart, and no confirmation prompt.
+
+### `crow ui get | set`
+
+Display preferences for the web UI. This does not start, stop, or open the UI.
+
+```bash
+crow ui get
+crow ui set --hide-session-details true
+```
+
+| Flag                     | Required | Description                                                        |
+| ------------------------ | -------- | ------------------------------------------------------------------ |
+| `--hide-session-details` | yes      | `true` or `false` — hide ticket title and repo/branch sidebar lines |
+
+Settings are grouped by the config block they belong to, so `get` returns `{"ui": {"sidebar": {...}}}` and gains further blocks as more view options become configurable. Connected browsers pick the change up within a couple of seconds — no reload.
 
 ---
 

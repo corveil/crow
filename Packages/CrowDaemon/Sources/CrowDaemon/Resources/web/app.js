@@ -443,6 +443,11 @@ function emitEvent(event, key, detail) {
 // per-event toggles, dedup) is the detectors' gating; the arm window applies too,
 // so a frame landing mid-boot can't chime over a page load.
 function onServerNotify(params) {
+  // config.json moved on disk (Settings save, `crow ui set`, hand edit) — re-read
+  // the view-affecting slice so an external write repaints without a reload. Must
+  // come before the arm gate: a CLI write is not a user gesture, so waiting for
+  // _soundArmed would strand the sidebar on stale config (CROW-814).
+  if (params && params.event === 'configReloaded' && window.reloadUIConfig) window.reloadUIConfig();
   if (!_soundArmed) return;
   if (!params || typeof params.event !== 'string') return;
   if (ALL_EVENTS.indexOf(params.event) === -1) return; // unknown/newer event — ignore
