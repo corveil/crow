@@ -84,9 +84,11 @@ public struct AntigravityAgent: CodingAgent {
             // no resume flag (a fresh work TUI launching bare is deliberate), no
             // RC flag (remote control is `crow send` into the TUI).
             return "\(agentPath)\(autoArgs)\n"
-        case .job:
+        case .job, .workerRun:
             // Unattended dispatch: feed the pre-written `.crow-job-prompt.md` as
-            // the initial prompt via `-p` on first launch. Crow runs `agy` inside
+            // the initial prompt via `-p` on first launch. A Corveil worker run
+            // (corveil/crow#801) reuses the same prompt-file convention in its
+            // scratch workdir, so it shares this branch. Crow runs `agy` inside
             // a tmux window — a real PTY — so the non-TTY `-p` stdout-drop
             // (headless *pipe* case, upstream FRs #119/#597) doesn't apply here;
             // no PTY shim is needed on this path.
