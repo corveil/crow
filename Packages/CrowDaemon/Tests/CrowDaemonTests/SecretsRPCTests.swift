@@ -344,6 +344,16 @@ import Testing
         }
     }
 
+    @Test func decodeHeaderLinesRejectsEmbeddedNewlines() {
+        // One entry must mean one header. Parsing splits on newlines, so an
+        // embedded \n would smuggle a second header past the per-entry check.
+        for line in ["X-Api-Key: sk-1\nX-Smuggled: evil", "X-Api-Key: sk-1\r\nX-Smuggled: evil"] {
+            #expect(throws: (any Error).self, "expected an embedded newline to be rejected") {
+                _ = try SecretsRPC.decodeHeaderLines(.array([.string(line)]))
+            }
+        }
+    }
+
     @Test func decodeHeaderLinesDefaultsToEmpty() throws {
         #expect(try SecretsRPC.decodeHeaderLines(nil).isEmpty)
     }

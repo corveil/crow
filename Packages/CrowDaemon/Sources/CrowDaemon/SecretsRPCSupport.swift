@@ -72,6 +72,10 @@ enum SecretsRPC {
     /// blank *value* is preserved (it means "keep the stored secret"); a line
     /// with no colon or a blank name is rejected here rather than silently
     /// dropped, since a typo'd flag should not quietly produce an empty gateway.
+    ///
+    /// One entry must mean one header. `parseHeaderLines` splits on newlines, so
+    /// an entry containing `\n` would smuggle in extra headers past the per-entry
+    /// check below — reject embedded newlines instead of silently expanding them.
     static func decodeHeaderLines(_ value: JSONValue?) throws -> [String: String] {
         guard let lines = value?.arrayValue else { return [:] }
         let texts = try lines.map { line -> String in
@@ -81,6 +85,12 @@ enum SecretsRPC {
             return text
         }
         for text in texts {
+            // CharacterSet, not `contains("\n")`: Swift treats CRLF as a single
+            // Character, so a grapheme comparison misses "\r\n" entirely.
+            guard text.rangeOfCharacter(from: .newlines) == nil else {
+                throw DaemonRPCError.invalidParams(
+                    "A header must be a single line — '\(text)' contains a newline.")
+            }
             let trimmed = text.trimmingCharacters(in: .whitespaces)
             guard let colon = trimmed.firstIndex(of: ":"),
                   !String(trimmed[..<colon]).trimmingCharacters(in: .whitespaces).isEmpty else {

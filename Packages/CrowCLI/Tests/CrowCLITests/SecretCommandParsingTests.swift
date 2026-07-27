@@ -107,6 +107,18 @@ private let validUUID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
     try validateHeaderLine("X-Api-Key: op://Vault/Item/field")
 }
 
+@Test func gatewaySetRejectsHeadersWithEmbeddedNewlines() {
+    // One --header must mean one header: the daemon splits on newlines, so an
+    // embedded \n would smuggle in a second one.
+    for header in ["X-Api-Key: sk-1\nX-Smuggled: evil", "X-Api-Key: sk-1\r\nX-Smuggled: evil"] {
+        #expect(throws: (any Error).self, "expected an embedded newline to be rejected") {
+            _ = try GatewaySet.parse([
+                "--manager", "--base-url", "https://gw.example.com", "--header", header,
+            ])
+        }
+    }
+}
+
 // MARK: - web-password
 
 @Test func webPasswordSetParsesStdinFlag() throws {
