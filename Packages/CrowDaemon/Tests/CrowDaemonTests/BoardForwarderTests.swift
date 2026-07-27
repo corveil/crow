@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import CrowCore
 import CrowClaude
+import CrowCodex
 import CrowEngine
 import CrowProvider
 import CrowGit
@@ -354,6 +355,38 @@ private struct StubShellRunner: ShellRunner {
                 "list-agents must report the availability flag (#879)")
         #expect(claude?.objectValue?["binary"]?.stringValue == "claude",
                 "list-agents must report the PATH binary token for the disabled-picker tooltip (#879)")
+    }
+
+    // #879: the actual point of the PR — an **unavailable** agent must still
+    // appear in the `list-agents` payload, flagged `available: false` (so the
+    // pickers can grey it out) and **not** the default, while an available one
+    // flags `available: true`. Registers a real off-PATH agent (Codex,
+    // unavailable) alongside available Claude and inspects the router payload —
+    // the widened contract every picker consumes, made concrete.
+    @Test @MainActor func listAgentsReportsUnavailableAgents() async {
+        AgentRegistry.shared.register(ClaudeCodeAgent())              // available
+        AgentRegistry.shared.registerKnown(OpenAICodexAgent(), available: false)  // off-PATH
+
+        let router = makeCommandRouter(
+            appState: AppState(), store: JSONStore.temporary(), git: GitManager(),
+            devRoot: NSTemporaryDirectory(), cockpit: nil)
+
+        let resp = await router.handle(request: JSONRPCRequest(id: 1, method: "list-agents"))
+        #expect(resp.error == nil)
+        let agents = resp.result?["agents"]?.arrayValue ?? []
+
+        let codex = agents.first { $0.objectValue?["kind"]?.stringValue == AgentKind.codex.rawValue }
+        #expect(codex != nil, "an off-PATH agent must be listed, not hidden (#879)")
+        #expect(codex?.objectValue?["available"]?.boolValue == false,
+                "an off-PATH agent must be flagged available:false")
+        #expect(codex?.objectValue?["binary"]?.stringValue == "codex",
+                "the tooltip needs the PATH binary token")
+        #expect(codex?.objectValue?["default"]?.boolValue == false,
+                "an unavailable agent must never be reported as the default")
+
+        // …and it stays unlaunchable: unavailable ⇒ out of the launchable map.
+        #expect(AgentRegistry.shared.agent(for: .codex) == nil)
+        #expect(AgentRegistry.shared.registeredKind(.codex) == nil)
     }
 
     // #879: `registerKnown(_:available:)` surfaces an off-PATH agent for the

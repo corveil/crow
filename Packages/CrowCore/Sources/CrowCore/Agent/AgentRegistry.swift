@@ -8,12 +8,14 @@ public final class AgentRegistry: @unchecked Sendable {
 
     private let lock = NSLock()
     private var agents: [AgentKind: any CodingAgent] = [:]
-    /// Every agent the process knows about — available or not — in registration
-    /// order, each paired with whether its binary resolved at boot. Superset of
-    /// `agents` (which holds only the launchable ones). Drives the
-    /// "surface-but-disable" pickers so an off-PATH agent shows greyed-out with
-    /// a help tooltip instead of vanishing (#879).
-    private var knownOrder: [(agent: any CodingAgent, available: Bool)] = []
+    /// Every agent the process knows about — available or not — keyed by kind,
+    /// each paired with whether its binary resolved at boot. Superset of `agents`
+    /// (which holds only the launchable ones). `knownOrder` preserves first-
+    /// registration order for the listing. Drives the "surface-but-disable"
+    /// pickers so an off-PATH agent shows greyed-out with a help tooltip instead
+    /// of vanishing (#879).
+    private var known: [AgentKind: (agent: any CodingAgent, available: Bool)] = [:]
+    private var knownOrder: [AgentKind] = []
     private var defaultKind: AgentKind?
 
     public init() {}
@@ -28,19 +30,28 @@ public final class AgentRegistry: @unchecked Sendable {
 
     /// Record a known agent along with whether its binary resolved on PATH.
     ///
-    /// Available agents are also added to the launchable `agents` map (and seed
-    /// the default if none is set yet); **unavailable ones are recorded for the
-    /// UI only** — they never enter `agents`, so `registeredKind`/`agent(for:)`
+    /// Available agents are added to the launchable `agents` map (and seed the
+    /// default if none is set yet); **unavailable ones are recorded for the UI
+    /// only** — they never enter `agents`, so `registeredKind`/`agent(for:)`
     /// still refuse to launch or hand off to them. This is what lets the pickers
     /// show all known agents while keeping the launch gate intact (#879).
+    ///
+    /// Availability is authoritative and kept in sync with `agents`: re-
+    /// registering a kind as unavailable also removes it from the launchable map
+    /// (and drops it as the default), so the two never disagree. Registration is
+    /// boot-once in practice, but the invariant holds regardless of order.
     public func registerKnown(_ agent: any CodingAgent, available: Bool) {
         lock.lock(); defer { lock.unlock() }
-        knownOrder.append((agent, available))
+        if known[agent.kind] == nil { knownOrder.append(agent.kind) }
+        known[agent.kind] = (agent, available)
         if available {
             agents[agent.kind] = agent
             if defaultKind == nil {
                 defaultKind = agent.kind
             }
+        } else {
+            agents[agent.kind] = nil
+            if defaultKind == agent.kind { defaultKind = nil }
         }
     }
 
@@ -86,18 +97,13 @@ public final class AgentRegistry: @unchecked Sendable {
     }
 
     /// Every known agent — available and not — in first-registration order, each
-    /// paired with whether its binary resolved. De-duplicated by kind (last
-    /// registration wins, so a re-register can flip availability). This is the
-    /// source the `list-agents` RPC / pickers use so an off-PATH agent surfaces
-    /// as a disabled option rather than disappearing (#879).
+    /// paired with whether its binary resolved. Availability is write-once per
+    /// process in practice (registration is boot-once), but a re-register updates
+    /// it in place and stays consistent with the launchable `agents` map. This is
+    /// the source the `list-agents` RPC / pickers use so an off-PATH agent
+    /// surfaces as a disabled option rather than disappearing (#879).
     public func allKnownAgents() -> [(agent: any CodingAgent, available: Bool)] {
         lock.lock(); defer { lock.unlock() }
-        var byKind: [AgentKind: (agent: any CodingAgent, available: Bool)] = [:]
-        var order: [AgentKind] = []
-        for entry in knownOrder {
-            if byKind[entry.agent.kind] == nil { order.append(entry.agent.kind) }
-            byKind[entry.agent.kind] = entry
-        }
-        return order.map { byKind[$0]! }
+        return knownOrder.compactMap { known[$0] }
     }
 }

@@ -1532,20 +1532,33 @@ async function handoffAgent(sessionId, agentKind) {
 }
 
 // Pick a different coding agent for an existing work/job session (CROW-627).
-// Reuses the list-agents menu pattern from openNewManagerMenu.
+// Reuses the list-agents menu pattern from openNewManagerMenu, including the
+// #879 surface-but-disable treatment: off-PATH agents show as disabled rows
+// (handing off to one only fails server-side with a raw internal error).
 async function openHandoffAgentMenu(session, anchorEl) {
   let agents = [];
   try { const r = await rpc('list-agents'); agents = (r && r.agents) || []; } catch (_) { /* app down */ }
   const others = agents.filter((a) => a.kind && a.kind !== session.agent_kind);
-  if (!others.length) {
+  // Keep the honest empty-state: if no *other* agent is actually installed, say
+  // so instead of listing rows that can only fail (#879). Off-PATH others don't
+  // count as somewhere you can switch to.
+  if (!others.some((a) => a.available !== false)) {
     alertModal('No other coding agents are available. Install Cursor, Codex, or OpenCode to switch.');
     return;
   }
   closeContextMenu();
   const menu = el('div', 'ctx-menu');
   for (const a of others) {
-    const item = el('div', 'ctx-item', 'Hand off to ' + (a.name || a.kind));
-    item.onclick = (ev) => { ev.stopPropagation(); closeContextMenu(); handoffAgent(session.id, a.kind); };
+    const enabled = a.available !== false;
+    const label = 'Hand off to ' + (a.name || a.kind) + (enabled ? '' : '   (not installed)');
+    const item = el('div', 'ctx-item' + (enabled ? '' : ' disabled'), label);
+    if (enabled) {
+      item.onclick = (ev) => { ev.stopPropagation(); closeContextMenu(); handoffAgent(session.id, a.kind); };
+    } else {
+      item.title = agentUnavailableHint(a);
+      // Info-only: never launch a handoff that can only fail, never close the menu.
+      item.onclick = (ev) => { ev.stopPropagation(); };
+    }
     menu.appendChild(item);
   }
   document.body.appendChild(menu);
