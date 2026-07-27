@@ -339,6 +339,11 @@ share the host's global config and are disambiguated by `cwd`. See
   *"Review-on-Codex isn't supported in Phase C — the `/crow-review-pr` skill is
   Claude-only."* Crow logs the skip and pastes a `⚠️` echo
   (`OpenAICodexAgent`).
+- **Grok** has no slash-command engine either, so `buildReviewPrompt` inlines
+  the whole skill body for `.grok` (the same `cursorReviewPrompt` arm as
+  Cursor/OpenCode/Codex, #861). A bare `/crow-review-pr <URL>` would never expand
+  → never post `gh pr review` → never satisfy `decideReviewCompletions`
+  (`buildReviewPromptGrokBranchInlinesSkillBody` guards the regression).
 
 ### Initial-prompt injection
 
@@ -357,6 +362,11 @@ harness (CROW-439) — it's gated on the prompt-file convention, not on agent ki
 - **OpenCode:** **run-then-`--continue`** — headless `opencode run "$(cat …)"`
   consumes the prompt reliably, then `; opencode --continue` opens the TUI with a
   fresh stdin so `crow send` keeps working (#547).
+- **Grok:** **run-then-`-c`** — headless `grok --prompt-file <path>` consumes the
+  prompt (any prompt arg forces headless), then `; grok -c` resumes the same
+  session in the TUI with a fresh stdin. Uses `--prompt-file` (not `-p "$(cat …)"`)
+  so a large inlined review-skill body never becomes a giant argv or rides a
+  subshell (#861). `.job`/`.review` only; `.work` launches `grok` bare.
 
 ### Gateway env / trust seed / telemetry
 

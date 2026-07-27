@@ -30,14 +30,17 @@ struct GrokLaunchArgsTests {
             promptPath: "/tmp/wt/.crow-job-prompt.md",
             autoPermissionMode: false
         )
-        // Binary is shell-quoted so a `defaults.binaries.grok` path with a space
-        // stays intact.
-        #expect(cmd == "'/opt/homebrew/bin/grok' -p \"$(cat '/tmp/wt/.crow-job-prompt.md')\""
+        // `--prompt-file <path>` (not `-p "$(cat …)"`): Grok reads the file, so a
+        // large prompt never becomes a giant argv or rides a subshell. Both the
+        // binary and the path are shell-quoted so a space can't word-split.
+        #expect(cmd == "'/opt/homebrew/bin/grok' --prompt-file '/tmp/wt/.crow-job-prompt.md'"
             + "; '/opt/homebrew/bin/grok' -c\n")
         // Semicolon (not &&) so the TUI opens even if the headless leg fails;
-        // never a pipe (which would bind stdin and break the TUI).
+        // never a pipe or a `$(cat …)` subshell.
         #expect(!cmd.contains(" && "))
         #expect(!cmd.contains(" | "))
+        #expect(!cmd.contains("$(cat"))
+        #expect(!cmd.contains(" -p "))
     }
 
     @Test func firstLaunchChainedCommandAddsAutoFlagsToBothLegs() {
@@ -59,7 +62,7 @@ struct GrokLaunchArgsTests {
             promptPath: "/tmp/my worktree/.crow-job-prompt.md",
             autoPermissionMode: false
         )
-        #expect(cmd.contains("$(cat '/tmp/my worktree/.crow-job-prompt.md')"))
+        #expect(cmd.contains("--prompt-file '/tmp/my worktree/.crow-job-prompt.md'"))
     }
 
     @Test func firstLaunchChainedCommandShellQuotesBinaryPath() {
@@ -69,7 +72,7 @@ struct GrokLaunchArgsTests {
             promptPath: "/tmp/p.md",
             autoPermissionMode: false
         )
-        #expect(cmd.hasPrefix("'/opt/my tools/grok' -p "))
+        #expect(cmd.hasPrefix("'/opt/my tools/grok' --prompt-file "))
         #expect(cmd.contains("; '/opt/my tools/grok' -c\n"))
     }
 

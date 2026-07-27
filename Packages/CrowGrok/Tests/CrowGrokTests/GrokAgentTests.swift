@@ -59,7 +59,7 @@ struct GrokAgentTests {
             telemetryPort: nil
         )
         #expect(cmd != nil)
-        #expect(cmd?.contains(" -p ") == true)
+        #expect(cmd?.contains(" --prompt-file ") == true)
         #expect(cmd?.contains("; ") == true)
         #expect(cmd?.contains(" && ") == false)
         #expect(cmd?.contains(" -c") == true)
@@ -97,7 +97,7 @@ struct GrokAgentTests {
             telemetryPort: nil
         )
         #expect(cmd != nil)
-        #expect(cmd?.contains(" -p ") == true)
+        #expect(cmd?.contains(" --prompt-file ") == true)
         #expect(cmd?.contains(" -c") == true)
         #expect(cmd?.contains(".crow-review-prompt.md") == true)
         #expect(cmd?.contains(".crow-job-prompt.md") == false)

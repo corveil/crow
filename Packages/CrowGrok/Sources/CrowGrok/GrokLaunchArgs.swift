@@ -10,11 +10,13 @@ import Foundation
 /// `xai-org/grok-build@main`, 2026-07-25, `docs/user-guide/14-headless-mode.md`).
 /// Headless runs one turn and exits, which would strand a `.job`'s typed
 /// follow-up prompts at the shell. So the first dispatch runs the prompt
-/// headlessly (`grok -p "$(cat …)"`) and then chains `; grok -c` to resume that
-/// same session in the interactive TUI with a fresh stdin, so `crow send` and
-/// `JobScheduler` follow-ups keep working — the same shape `OpenCodeLaunchArgs`
-/// uses. Semicolon (not `&&`) so the TUI still opens if the headless leg exits
-/// non-zero.
+/// headlessly (`grok --prompt-file <path>`) and then chains `; grok -c` to
+/// resume that same session in the interactive TUI with a fresh stdin, so
+/// `crow send` and `JobScheduler` follow-ups keep working — the same shape
+/// `OpenCodeLaunchArgs` uses. `--prompt-file` (not `-p "$(cat …)"`) so a large
+/// inlined review-skill body never becomes a giant argv or rides a `$(cat …)`
+/// subshell. Semicolon (not `&&`) so the TUI still opens if the headless leg
+/// exits non-zero.
 ///
 /// **Bounded auto-permission (`.job` only, never `--yolo`).** Grok has no
 /// sandbox flag; its only prompt-reducing modes are `--permission-mode auto`
@@ -60,12 +62,20 @@ public enum GrokLaunchArgs {
         return out
     }
 
-    /// First unattended dispatch: headless `grok -p "$(cat prompt)"` consumes
+    /// First unattended dispatch: headless `grok --prompt-file <path>` consumes
     /// the prompt, then `; grok -c` resumes it in the interactive TUI with a
     /// fresh stdin so `crow send` / follow-up prompts keep working. `autoFlags`
     /// (from `autoPermissionSuffix`) apply to both legs so a resumed unattended
-    /// job stays auto-approving. `binary` is shell-quoted so a
-    /// `defaults.binaries.grok` path with a space/special char stays intact.
+    /// job stays auto-approving. Both `binary` and the prompt path are
+    /// shell-quoted so a `defaults.binaries.grok` path or a worktree path with a
+    /// space stays intact.
+    ///
+    /// Uses `--prompt-file <path>` rather than `-p "$(cat <path>)"` (#861 review
+    /// round 5): Grok reads the file itself, so the prompt body never becomes a
+    /// giant argv (large inlined review-skill bodies would risk `ARG_MAX`) and
+    /// never rides through a `$(cat …)` subshell. `--prompt-file` triggers the
+    /// same headless mode as `-p` (verified, `14-headless-mode.md`), so the
+    /// run-then-continue shape is unchanged.
     public static func firstLaunchChainedCommand(
         binary: String,
         promptPath: String,
@@ -74,7 +84,7 @@ public enum GrokLaunchArgs {
         let bin = shellQuote(binary)
         let quotedPath = shellQuote(promptPath)
         let flags = autoPermissionSuffix(autoPermissionMode: autoPermissionMode)
-        return "\(bin)\(flags) -p \"$(cat \(quotedPath))\""
+        return "\(bin)\(flags) --prompt-file \(quotedPath)"
             + "; \(bin)\(flags) -c\n"
     }
 

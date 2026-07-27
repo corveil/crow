@@ -100,6 +100,25 @@ struct SessionServiceReviewPromptTests {
         #expect(!prompt.hasPrefix("/crow-review-pr"))
     }
 
+    @Test func buildReviewPromptGrokBranchInlinesSkillBody() {
+        // #861 review round 5: Grok has no slash-command engine either, so it
+        // MUST get the inlined SKILL body — not the bare `/crow-review-pr <URL>`
+        // one-liner it can't resolve (which would leave the review unable to
+        // post a verdict and stuck in the re-kick loop). Guards the regression
+        // where `.grok` silently fell into the Claude `default` branch, despite
+        // the matrix / GrokAgent comments claiming the inlined-skill contract.
+        let prompt = SessionService.buildReviewPrompt(
+            prURL: Self.prURL,
+            prTitle: Self.prTitle,
+            repoSlug: Self.repoSlug,
+            prNumber: Self.prNumber,
+            agentKind: .grok
+        )
+
+        #expect(!prompt.isEmpty)
+        #expect(!prompt.hasPrefix("/crow-review-pr"))
+    }
+
     @Test func buildReviewPromptClaudeBranchIsTerseSlashCommand() {
         let prompt = SessionService.buildReviewPrompt(
             prURL: Self.prURL,
