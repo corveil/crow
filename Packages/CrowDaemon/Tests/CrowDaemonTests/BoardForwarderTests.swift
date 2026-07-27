@@ -103,6 +103,13 @@ private actor SnapshotProbe {
     func sawSnapshot(for id: UUID) -> Bool { seen.contains(id) }
 }
 
+/// Every subprocess "succeeds" with empty output, so a provider backend's
+/// `gh`/`glab` call completes without touching the network. Lets the
+/// `markIssueDone` success path run in a unit test.
+private struct StubShellRunner: ShellRunner {
+    func run(args: [String], env: [String: String], cwd: String?) async throws -> String { "" }
+}
+
 /// M-E slice: the store-backed session status transitions run locally off the
 /// daemon's own state, so they work headless. With no `SessionService` (the
 /// no-tmux host) `applySessionStatus` falls back to writing `appState` + `store`
@@ -246,6 +253,48 @@ private actor SnapshotProbe {
             id: 1, method: "complete-session", params: ["session_id": .string(session.id.uuidString)]))
         #expect(resp.error?.code == RPCErrorCode.applicationError)
         #expect(appState.sessions.first?.status != .completed)
+    }
+
+    /// `IssueTracker.markIssueDone` completes the session through
+    /// `appState.onCompleteSession`, which the daemon only wires inside
+    /// `wireTerminalAutomations` — i.e. only when a `SessionService` exists. On
+    /// a no-tmux host that callback is nil, so closing the provider issue used
+    /// to leave the Crow session active while `mark-issue-done` still returned
+    /// `{"ok":true}` — the same false-success this PR exists to kill, and it
+    /// contradicted the documented "on success the session flips to completed".
+    ///
+    /// The handler now applies `.completed` itself, so this holds with no
+    /// `SessionService` at all.
+    @Test @MainActor func markIssueDoneCompletesSessionWithoutSessionService() async {
+        let appState = AppState()
+        let store = JSONStore(directory: URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("crowd-mid-\(UUID().uuidString)"))
+        var session = Session(name: "s", kind: .work, agentKind: .claudeCode)
+        session.ticketURL = "https://github.com/corveil/crow/issues/816"
+        session.provider = .github
+        appState.sessions = [session]
+        store.mutate { $0.sessions = [session] }
+
+        // Stubbed shell → `gh issue close` "succeeds", so markIssueDone runs to
+        // completion and reaches the nil `onCompleteSession`.
+        let tracker = IssueTracker(
+            appState: appState,
+            providerManager: ProviderManager(shellRunner: StubShellRunner()),
+            store: .temporary())
+
+        let router = makeCommandRouter(
+            appState: appState, store: store, git: GitManager(),
+            devRoot: NSTemporaryDirectory(), cockpit: nil,
+            tracker: tracker, sessionService: nil)   // ← the no-tmux shape
+
+        let resp = await router.handle(request: JSONRPCRequest(
+            id: 1, method: "mark-issue-done", params: ["session_id": .string(session.id.uuidString)]))
+
+        #expect(resp.error == nil)
+        #expect(resp.result?["ok"]?.boolValue == true)
+        #expect(appState.sessions.first?.status == .completed,
+                "a closed issue must leave the session completed even with no SessionService")
+        #expect(store.data.sessions.first?.status == .completed, "and it must be persisted")
     }
 
     /// Completing an already-completed session must stay legal: the UI's

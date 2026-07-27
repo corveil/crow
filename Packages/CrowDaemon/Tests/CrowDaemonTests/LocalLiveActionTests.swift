@@ -138,11 +138,13 @@ import CrowPersistence
         }
     }
 
-    /// #816: `IssueTracker.markIssueDone` / `addMergeLabel` are `async -> Void`
-    /// that return early on a missing ticket / PR and swallow every provider
-    /// error. The web UI hides the menu items instead; `crow` can't, so these
-    /// preconditions are enforced in the handler — otherwise the CLI prints
-    /// `{"ok":true}` for a call that did nothing.
+    /// #816: `IssueTracker.markIssueDone` / `addMergeLabel` throw
+    /// `SessionActionError` on an unmet precondition or a failed provider call,
+    /// and the handler maps that to `applicationError`. The web UI enforces the
+    /// same rules by hiding the menu items; `crow` can't, so the CLI would
+    /// otherwise print `{"ok":true}` for a call that did nothing. These pin the
+    /// mapping at the router boundary; the per-case guards are covered by
+    /// CrowEngine's `SessionActionReportingTests`.
     @Test @MainActor func ticketActionsRejectUnknownSession() async {
         let appState = AppState()
         let tracker = IssueTracker(appState: appState, providerManager: ProviderManager(), store: .temporary())

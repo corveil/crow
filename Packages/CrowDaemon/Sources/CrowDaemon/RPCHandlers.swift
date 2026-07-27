@@ -1192,6 +1192,19 @@ func makeCommandRouter(
                 // `SessionActionError`s — the tracker is the single source of
                 // truth for them, so there's nothing to re-check here.
                 try await tracker.markIssueDone(sessionID: id)
+                // The tracker completes the session via `onCompleteSession`,
+                // which is only wired when the daemon has a SessionService
+                // (`wireTerminalAutomations`) — on a no-tmux host it is nil, so
+                // a closed issue would leave the session active while we
+                // returned a success receipt. Apply the transition here too:
+                // idempotent when the callback already fired, and it reuses the
+                // same SessionService-or-direct-write fallback as
+                // `complete-session`.
+                _ = try await MainActor.run {
+                    try applySessionStatus(
+                        id: id, to: .completed,
+                        appState: appState, store: store, sessionService: sessionService)
+                }
                 return SessionLifecycleRPC.okResult(id: id)
             }
         },

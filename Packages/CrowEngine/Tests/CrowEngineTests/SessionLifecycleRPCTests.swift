@@ -4,10 +4,12 @@ import CrowCore
 import CrowIPC
 @testable import CrowEngine
 
-/// The guards behind the session-lifecycle verbs (#816). These exist because the
-/// underlying `IssueTracker` entry points are `async -> Void` that return early
-/// on a missing ticket / PR — without them a CLI caller gets `{"ok":true}` for a
-/// no-op. Pinned here so a refactor can't quietly drop one.
+/// Param decoding and response shapes for the session-lifecycle verbs (#816).
+///
+/// `requireTicketURL` backs `mark-in-review`, which writes status directly and
+/// so has no tracker call to report for it. The provider-side verbs' guards
+/// live in `IssueTracker` as `SessionActionError` instead — see
+/// `SessionActionReportingTests`.
 @Suite("Session lifecycle RPC support") struct SessionLifecycleRPCTests {
     private let id = UUID()
 
