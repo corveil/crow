@@ -95,17 +95,43 @@ import CrowPersistence
     }
 }
 
-/// M-E slice: the store-backed session status transitions gained an app-down
-/// local path (mirroring `set-status`), so they work headless. Pure
-/// `session.status` writes — the local path runs only with the app off, so
-/// there's no two-writer divergence (CROW-581).
+/// Records which sessions `SessionService` asked analytics for — the observable
+/// edge of `writeAnalyticsSnapshot`.
+private actor SnapshotProbe {
+    private var seen: Set<UUID> = []
+    func record(_ id: UUID) { seen.insert(id) }
+    func sawSnapshot(for id: UUID) -> Bool { seen.contains(id) }
+}
+
+/// Every subprocess "succeeds" with empty output, so a provider backend's
+/// `gh`/`glab` call completes without touching the network. Lets the
+/// `markIssueDone` success path run in a unit test.
+private struct StubShellRunner: ShellRunner {
+    func run(args: [String], env: [String: String], cwd: String?) async throws -> String { "" }
+}
+
+/// M-E slice: the store-backed session status transitions run locally off the
+/// daemon's own state, so they work headless. With no `SessionService` (the
+/// no-tmux host) `applySessionStatus` falls back to writing `appState` + `store`
+/// directly (CROW-581).
+///
+/// #816 added the CLI verbs on top of these, plus the preconditions the web UI
+/// enforces by hiding menu items — a `crow` caller has no such affordance, so
+/// the guards have to live server-side.
 @Suite struct LocalStatusTests {
+    /// `ticketURL` is nil unless asked for: `mark-in-review` requires one, the
+    /// other two transitions don't.
     @MainActor
-    private func seededRouter() -> (CommandRouter, AppState, Session) {
+    private func seededRouter(ticketURL: String? = nil, isManager: Bool = false)
+        -> (CommandRouter, AppState, Session) {
         let appState = AppState()
         let store = JSONStore(directory: URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("crowd-status-\(UUID().uuidString)"))
-        let session = Session(name: "s", kind: .work, agentKind: .claudeCode)
+        var session = Session(
+            name: isManager ? "Manager" : "s",
+            kind: isManager ? .manager : .work,
+            agentKind: .claudeCode)
+        session.ticketURL = ticketURL
         appState.sessions = [session]
         store.mutate { $0.sessions = [session] }
         let router = makeCommandRouter(
@@ -120,11 +146,15 @@ import CrowPersistence
             ("complete-session", .completed),
             ("set-session-active", .active),
         ] {
-            let (router, appState, session) = seededRouter()
+            // Seed a ticket unconditionally — harmless for the two verbs that
+            // don't require one, and satisfies mark-in-review's guard.
+            let (router, appState, session) = seededRouter(
+                ticketURL: "https://github.com/corveil/crow/issues/816")
             let resp = await router.handle(request: JSONRPCRequest(
                 id: 1, method: method, params: ["session_id": .string(session.id.uuidString)]))
             #expect(resp.error == nil, "\(method) should run locally with the app down")
             #expect(resp.result?["status"]?.stringValue == expected.rawValue)
+            #expect(resp.result?["session_id"]?.stringValue == session.id.uuidString)
             #expect(appState.sessions.first?.status == expected)
         }
     }
@@ -133,6 +163,151 @@ import CrowPersistence
         let (router, _, _) = seededRouter()
         let resp = await router.handle(request: JSONRPCRequest(id: 1, method: "mark-in-review"))
         #expect(resp.error?.code == RPCErrorCode.invalidParams)
+    }
+
+    @Test @MainActor func statusTransitionRejectsUnknownSession() async {
+        let (router, _, _) = seededRouter()
+        for method in ["mark-in-review", "complete-session", "set-session-active"] {
+            let resp = await router.handle(request: JSONRPCRequest(
+                id: 1, method: method, params: ["session_id": .string(UUID().uuidString)]))
+            #expect(resp.error?.code == RPCErrorCode.applicationError, "\(method) on an unknown session")
+        }
+    }
+
+    /// `SessionService.updateSessionStatus` silently skips managers. Surfacing
+    /// that as an error is the whole point — a CLI caller must not get a success
+    /// receipt for a write that never happened.
+    @Test @MainActor func statusTransitionsRejectManagerSessions() async {
+        for method in ["mark-in-review", "complete-session", "set-session-active"] {
+            let (router, appState, session) = seededRouter(
+                ticketURL: "https://github.com/corveil/crow/issues/816", isManager: true)
+            let resp = await router.handle(request: JSONRPCRequest(
+                id: 1, method: method, params: ["session_id": .string(session.id.uuidString)]))
+            #expect(resp.error?.code == RPCErrorCode.applicationError, "\(method) on a manager")
+            #expect(appState.sessions.first?.status != .completed)
+        }
+    }
+
+    /// Mirrors the web UI gating `s.ticket_url` before offering "Mark In Review".
+    @Test @MainActor func markInReviewRequiresLinkedTicket() async {
+        let (router, appState, session) = seededRouter(ticketURL: nil)
+        let resp = await router.handle(request: JSONRPCRequest(
+            id: 1, method: "mark-in-review", params: ["session_id": .string(session.id.uuidString)]))
+        #expect(resp.error?.code == RPCErrorCode.applicationError)
+        #expect(appState.sessions.first?.status != .inReview, "status must not move on a rejected call")
+    }
+
+    /// The branch a production daemon actually takes. `seededRouter` passes no
+    /// `SessionService`, so the tests above only cover the no-tmux fallback
+    /// write — this one pins that with a `SessionService` present the status
+    /// still lands, and that `.completed` reaches `writeAnalyticsSnapshot`
+    /// (the snapshot that the pre-#816 direct write silently skipped).
+    @Test @MainActor func completeSessionRoutesThroughSessionServiceAndSnapshots() async {
+        let appState = AppState()
+        let store = JSONStore(directory: URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("crowd-status-svc-\(UUID().uuidString)"))
+        let session = Session(name: "s", kind: .work, agentKind: .claudeCode)
+        appState.sessions = [session]
+        store.mutate { $0.sessions = [session] }
+
+        // `writeAnalyticsSnapshot` consults `analyticsProvider` first; observing
+        // that call is how we prove the SessionService path ran.
+        let probe = SnapshotProbe()
+        let service = SessionService(
+            store: store, appState: appState,
+            analyticsProvider: { id in await probe.record(id); return nil })
+
+        let router = makeCommandRouter(
+            appState: appState, store: store, git: GitManager(),
+            devRoot: NSTemporaryDirectory(), cockpit: nil, sessionService: service)
+
+        let resp = await router.handle(request: JSONRPCRequest(
+            id: 1, method: "complete-session", params: ["session_id": .string(session.id.uuidString)]))
+        #expect(resp.error == nil)
+        #expect(resp.result?["status"]?.stringValue == "completed")
+        #expect(appState.sessions.first?.status == .completed)
+        #expect(store.data.sessions.first?.status == .completed, "the store write must go through too")
+
+        // The snapshot is scheduled on a detached Task; give it a moment to land.
+        for _ in 0..<50 where await !probe.sawSnapshot(for: session.id) {
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+        #expect(await probe.sawSnapshot(for: session.id),
+                "completing via SessionService must schedule the analytics snapshot")
+    }
+
+    /// Managers are rejected before `SessionService` is consulted, so the
+    /// analytics path is never entered for them.
+    @Test @MainActor func managerRejectionHoldsWithSessionServicePresent() async {
+        let appState = AppState()
+        let store = JSONStore.temporary()
+        let session = Session(name: "Manager", kind: .manager, agentKind: .claudeCode)
+        appState.sessions = [session]
+        let service = SessionService(store: store, appState: appState)
+
+        let router = makeCommandRouter(
+            appState: appState, store: store, git: GitManager(),
+            devRoot: NSTemporaryDirectory(), cockpit: nil, sessionService: service)
+
+        let resp = await router.handle(request: JSONRPCRequest(
+            id: 1, method: "complete-session", params: ["session_id": .string(session.id.uuidString)]))
+        #expect(resp.error?.code == RPCErrorCode.applicationError)
+        #expect(appState.sessions.first?.status != .completed)
+    }
+
+    /// `IssueTracker.markIssueDone` completes the session through
+    /// `appState.onCompleteSession`, which the daemon only wires inside
+    /// `wireTerminalAutomations` — i.e. only when a `SessionService` exists. On
+    /// a no-tmux host that callback is nil, so closing the provider issue used
+    /// to leave the Crow session active while `mark-issue-done` still returned
+    /// `{"ok":true}` — the same false-success this PR exists to kill, and it
+    /// contradicted the documented "on success the session flips to completed".
+    ///
+    /// The handler now applies `.completed` itself, so this holds with no
+    /// `SessionService` at all.
+    @Test @MainActor func markIssueDoneCompletesSessionWithoutSessionService() async {
+        let appState = AppState()
+        let store = JSONStore(directory: URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("crowd-mid-\(UUID().uuidString)"))
+        var session = Session(name: "s", kind: .work, agentKind: .claudeCode)
+        session.ticketURL = "https://github.com/corveil/crow/issues/816"
+        session.provider = .github
+        appState.sessions = [session]
+        store.mutate { $0.sessions = [session] }
+
+        // Stubbed shell → `gh issue close` "succeeds", so markIssueDone runs to
+        // completion and reaches the nil `onCompleteSession`.
+        let tracker = IssueTracker(
+            appState: appState,
+            providerManager: ProviderManager(shellRunner: StubShellRunner()),
+            store: .temporary())
+
+        let router = makeCommandRouter(
+            appState: appState, store: store, git: GitManager(),
+            devRoot: NSTemporaryDirectory(), cockpit: nil,
+            tracker: tracker, sessionService: nil)   // ← the no-tmux shape
+
+        let resp = await router.handle(request: JSONRPCRequest(
+            id: 1, method: "mark-issue-done", params: ["session_id": .string(session.id.uuidString)]))
+
+        #expect(resp.error == nil)
+        #expect(resp.result?["ok"]?.boolValue == true)
+        #expect(appState.sessions.first?.status == .completed,
+                "a closed issue must leave the session completed even with no SessionService")
+        #expect(store.data.sessions.first?.status == .completed, "and it must be persisted")
+    }
+
+    /// Completing an already-completed session must stay legal: the UI's
+    /// active/inReview gating is a menu affordance, not a rule, and scripts
+    /// need `crow complete-session` to be idempotent.
+    @Test @MainActor func completeSessionIsIdempotent() async {
+        let (router, appState, session) = seededRouter()
+        for _ in 0..<2 {
+            let resp = await router.handle(request: JSONRPCRequest(
+                id: 1, method: "complete-session", params: ["session_id": .string(session.id.uuidString)]))
+            #expect(resp.error == nil, "repeat complete-session must not fail")
+        }
+        #expect(appState.sessions.first?.status == .completed)
     }
 }
 

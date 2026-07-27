@@ -27,6 +27,20 @@ crow handoff-agent --session <uuid> --agent cursor [--note "..."] → {"session_
 crow delete-session --session <uuid>            → {"deleted":true}
 ```
 
+### Session Lifecycle
+
+The web session-menu actions, as CLI verbs. All take only `--session`. Preconditions are enforced server-side (the browser hides menu items instead); current status is **not** gated, so these are safe to re-run.
+
+```
+crow mark-in-review --session <uuid>            → {"session_id":"...","status":"inReview"}    needs a linked ticket
+crow complete-session --session <uuid>          → {"session_id":"...","status":"completed"}
+crow set-session-active --session <uuid>        → {"session_id":"...","status":"active"}      reopen a completed session
+crow mark-issue-done --session <uuid>           → {"ok":true,"session_id":"..."}              closes the linked issue, then completes the session
+crow add-merge-label --session <uuid>           → {"ok":true,"session_id":"..."}              adds crow:merge to the session's PR; needs a linked PR
+```
+
+These write Crow's session status. To move the **provider's** board (Jira workflow, GitHub Projects), use `crow transition-ticket --to ...` — `mark-in-review` does not perform the provider-side transition. Manager sessions are rejected.
+
 ### Daemon Autostart
 
 Runs locally, not over the socket — these work with `crowd` down (CROW-769). macOS only for now.

@@ -44,28 +44,49 @@ func isSafeIssueURL(_ url: String) -> Bool {
     return !url.unicodeScalars.contains { $0.value < 0x20 || $0.value == 0x7F }
 }
 
-/// App-down local path for the `session.status` transitions (mark-in-review /
-/// complete-session / set-session-active): write the status to both the
-/// observable `appState` and the persisted `store`, exactly like `set-status`.
-/// Runs only when the app isn't forwarding, so there's no two-writer divergence
-/// (CROW-581, M-E). Must be called on the main actor (`appState` isolation).
+/// The `session.status` transitions behind `mark-in-review` / `complete-session`
+/// / `set-session-active` (and their `crow` verbs, CROW-816).
+///
+/// Prefers `SessionService.updateSessionStatus`, which also schedules the
+/// analytics snapshot a `.completed` transition is supposed to record. The
+/// direct `appState` + `store` write is the fallback for a daemon with no
+/// `SessionService` at all — that's the no-tmux host (`CrowDaemon.run()`), not a
+/// defensive branch. Must be called on the main actor (`appState` isolation).
 @MainActor
-private func setSessionStatusLocally(
-    id: UUID, to status: SessionStatus, appState: AppState, store: JSONStore
+private func applySessionStatus(
+    id: UUID, to status: SessionStatus,
+    appState: AppState, store: JSONStore, sessionService: SessionService?
 ) throws -> [String: JSONValue] {
-    guard let idx = appState.sessions.firstIndex(where: { $0.id == id }) else {
+    guard appState.sessions.contains(where: { $0.id == id }) else {
         throw DaemonRPCError.applicationError("Session not found")
     }
-    let now = Date()
-    appState.sessions[idx].status = status
-    appState.sessions[idx].updatedAt = now
-    store.mutate { data in
-        if let i = data.sessions.firstIndex(where: { $0.id == id }) {
-            data.sessions[i].status = status
-            data.sessions[i].updatedAt = now
+    // `updateSessionStatus` silently skips managers. Surface that instead, so a
+    // CLI caller never gets a success receipt for a write that didn't happen.
+    guard !appState.isManagerSession(id) else {
+        throw DaemonRPCError.applicationError("Manager sessions have no review/complete lifecycle")
+    }
+
+    if let sessionService {
+        switch status {
+        case .inReview: sessionService.setSessionInReview(id: id)
+        case .completed: sessionService.completeSession(id: id)
+        case .active: sessionService.setSessionActive(id: id)
+        default: throw DaemonRPCError.invalidParams("Unsupported lifecycle status: \(status.rawValue)")
+        }
+    } else {
+        let now = Date()
+        if let idx = appState.sessions.firstIndex(where: { $0.id == id }) {
+            appState.sessions[idx].status = status
+            appState.sessions[idx].updatedAt = now
+        }
+        store.mutate { data in
+            if let i = data.sessions.firstIndex(where: { $0.id == id }) {
+                data.sessions[i].status = status
+                data.sessions[i].updatedAt = now
+            }
         }
     }
-    return ["session_id": .string(id.uuidString), "status": .string(status.rawValue)]
+    return SessionLifecycleRPC.statusResult(id: id, status: status)
 }
 
 /// The PR-status JSON the app's `makeEngineRouter` emits for a populated
@@ -819,7 +840,7 @@ func makeCommandRouter(
                 throw DaemonRPCError.applicationError(
                     "Promoting allowlist patterns requires a daemon with the allowlist service")
             }
-            let patterns = try mapRPCError { try AllowlistRPC.decodePatterns(params["patterns"]) }
+            let patterns = try await mapRPCError { try AllowlistRPC.decodePatterns(params["patterns"]) }
             do {
                 let promotion = try await MainActor.run {
                     try allowList.promoteToGlobal(patterns: patterns)
@@ -1132,60 +1153,92 @@ func makeCommandRouter(
                 return ["session_id": .string(id.uuidString), "name": .string("Manager \(n)")]
             }
         },
-        // Status transitions mirror `set-status`: forwarded to the app when
-        // running (so its SessionService side effects fire), handled locally
-        // against the store when it's down — a pure `session.status` write, so
-        // no divergence (the local path only runs with the app off). (CROW-581)
+        // Session-lifecycle verbs, shared by the web session menu and the `crow`
+        // CLI (CROW-816). The `require*` guards mirror the browser's menu gating
+        // in `web/app.js` — the CLI has no such affordance, so without them a
+        // ticket-less or PR-less session gets a success receipt for a no-op.
+        //
+        // Deliberately NOT gated on the session's *current* status: the UI's
+        // active/inReview/completed conditions decide which menu items to draw,
+        // not what's legal. Enforcing them would break idempotent scripting
+        // (running `crow complete-session` twice must not fail).
         "mark-in-review": { params in
-            guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
-                throw DaemonRPCError.invalidParams("session_id required")
-            }
-            return try await MainActor.run {
-                try setSessionStatusLocally(id: id, to: .inReview, appState: appState, store: store)
+            return try await mapRPCError {
+                let id = try SessionLifecycleRPC.sessionID(from: params)
+                return try await MainActor.run {
+                    guard let session = appState.sessions.first(where: { $0.id == id }) else {
+                        throw DaemonRPCError.applicationError("Session not found")
+                    }
+                    _ = try SessionLifecycleRPC.requireTicketURL(session.ticketURL, verb: "mark-in-review")
+                    return try applySessionStatus(
+                        id: id, to: .inReview,
+                        appState: appState, store: store, sessionService: sessionService)
+                }
             }
         },
-        // Provider ticket transition (close / project-board move). Forwarded to
-        // the app when running; with the app down the daemon runs it on its OWN
-        // IssueTracker — a pure provider CLI call (gh/glab/Jira/Corveil), no
-        // terminal needed, fully headless (CROW-581, M-E).
+        // Provider ticket transition (close / project-board move) run on the
+        // daemon's own IssueTracker — a pure provider CLI call (gh/glab/Jira/
+        // Corveil), no terminal needed, fully headless (CROW-581, M-E).
         "mark-issue-done": { params in
+            // Tracker guard stays first: `LocalLiveActionTests` pins that a
+            // provider-less daemon reports the missing capability before it
+            // bothers validating params.
             guard let tracker else {
                 throw DaemonRPCError.applicationError("Marking the issue done requires a provider-configured daemon")
             }
-            guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
-                throw DaemonRPCError.invalidParams("session_id required")
+            return try await mapRPCError {
+                let id = try SessionLifecycleRPC.sessionID(from: params)
+                // Preconditions and provider failures both surface as typed
+                // `SessionActionError`s — the tracker is the single source of
+                // truth for them, so there's nothing to re-check here.
+                try await tracker.markIssueDone(sessionID: id)
+                // The tracker completes the session via `onCompleteSession`,
+                // which is only wired when the daemon has a SessionService
+                // (`wireTerminalAutomations`) — on a no-tmux host it is nil, so
+                // a closed issue would leave the session active while we
+                // returned a success receipt. Apply the transition here too:
+                // idempotent when the callback already fired, and it reuses the
+                // same SessionService-or-direct-write fallback as
+                // `complete-session`.
+                _ = try await MainActor.run {
+                    try applySessionStatus(
+                        id: id, to: .completed,
+                        appState: appState, store: store, sessionService: sessionService)
+                }
+                return SessionLifecycleRPC.okResult(id: id)
             }
-            await tracker.markIssueDone(sessionID: id)
-            return ["ok": .bool(true)]
         },
         "complete-session": { params in
-            guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
-                throw DaemonRPCError.invalidParams("session_id required")
-            }
-            return try await MainActor.run {
-                try setSessionStatusLocally(id: id, to: .completed, appState: appState, store: store)
+            return try await mapRPCError {
+                let id = try SessionLifecycleRPC.sessionID(from: params)
+                return try await MainActor.run {
+                    try applySessionStatus(
+                        id: id, to: .completed,
+                        appState: appState, store: store, sessionService: sessionService)
+                }
             }
         },
         "set-session-active": { params in
-            guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
-                throw DaemonRPCError.invalidParams("session_id required")
-            }
-            return try await MainActor.run {
-                try setSessionStatusLocally(id: id, to: .active, appState: appState, store: store)
+            return try await mapRPCError {
+                let id = try SessionLifecycleRPC.sessionID(from: params)
+                return try await MainActor.run {
+                    try applySessionStatus(
+                        id: id, to: .active,
+                        appState: appState, store: store, sessionService: sessionService)
+                }
             }
         },
-        // Add the `crow:merge` label to the session's PR. Forwarded to the app
-        // when running; with the app down the daemon runs it on its OWN
+        // Add the `crow:merge` label to the session's PR, on the daemon's own
         // IssueTracker — a pure provider CLI call, fully headless (CROW-581, M-E).
         "add-merge-label": { params in
             guard let tracker else {
                 throw DaemonRPCError.applicationError("Adding the merge label requires a provider-configured daemon")
             }
-            guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
-                throw DaemonRPCError.invalidParams("session_id required")
+            return try await mapRPCError {
+                let id = try SessionLifecycleRPC.sessionID(from: params)
+                try await tracker.addMergeLabel(sessionID: id)
+                return SessionLifecycleRPC.okResult(id: id)
             }
-            await tracker.addMergeLabel(sessionID: id)
-            return ["ok": .bool(true)]
         },
 
         // Run a scheduled job on demand. Forwarded to the app when it's running (its
@@ -1221,7 +1274,7 @@ func makeCommandRouter(
             return ["job": JobRPC.jobJSON(job)]
         },
         "job-add": { params in
-            try mapRPCError {
+            try await mapRPCError {
                 let name = try JobRPC.decodeName(params["name"])
                 guard let workspace = params["workspace"]?.stringValue else {
                     throw RPCError.invalidParams("workspace required")
@@ -1248,7 +1301,7 @@ func makeCommandRouter(
             }
         },
         "job-edit": { params in
-            try mapRPCError {
+            try await mapRPCError {
                 let id = try jobIDParam(params)
                 let newSchedule = try params["schedule"].map { try JobRPC.decodeSchedule($0) }
                 let newPrompts = try params["prompts"].map { try JobRPC.decodePrompts($0) }
@@ -1283,7 +1336,7 @@ func makeCommandRouter(
             }
         },
         "job-enable": { params in
-            try mapRPCError {
+            try await mapRPCError {
                 let id = try jobIDParam(params)
                 let job = try mutateConfig(devRoot: devRoot) { config -> JobConfig in
                     guard let idx = config.jobs.firstIndex(where: { $0.id == id }) else {
@@ -1296,7 +1349,7 @@ func makeCommandRouter(
             }
         },
         "job-disable": { params in
-            try mapRPCError {
+            try await mapRPCError {
                 let id = try jobIDParam(params)
                 let job = try mutateConfig(devRoot: devRoot) { config -> JobConfig in
                     guard let idx = config.jobs.firstIndex(where: { $0.id == id }) else {
@@ -1309,7 +1362,7 @@ func makeCommandRouter(
             }
         },
         "job-delete": { params in
-            try mapRPCError {
+            try await mapRPCError {
                 let id = try jobIDParam(params)
                 try mutateConfig(devRoot: devRoot) { config in
                     guard config.jobs.contains(where: { $0.id == id }) else {
@@ -1321,7 +1374,7 @@ func makeCommandRouter(
             }
         },
         "job-duplicate": { params in
-            try mapRPCError {
+            try await mapRPCError {
                 let id = try jobIDParam(params)
                 let copy = try mutateConfig(devRoot: devRoot) { config -> JobConfig in
                     guard let original = config.jobs.first(where: { $0.id == id }) else {
@@ -1370,7 +1423,7 @@ func makeCommandRouter(
             return ["telemetry": SettingsRPC.telemetryJSON(config.telemetry)]
         },
         "telemetry-set": { params in
-            try mapRPCError {
+            try await mapRPCError {
                 let enabled = try SettingsRPC.patchBool(params, "enabled")
                 let port = try SettingsRPC.patchPort(params)
                 let retentionDays = try SettingsRPC.patchRetentionDays(params)
@@ -1398,7 +1451,7 @@ func makeCommandRouter(
             return ["cleanup": SettingsRPC.cleanupJSON(config.cleanup)]
         },
         "cleanup-set": { params in
-            try mapRPCError {
+            try await mapRPCError {
                 let enabled = try SettingsRPC.patchBool(params, "enabled")
                 let retentionHours = try SettingsRPC.patchRetentionHours(params)
                 guard enabled != nil || retentionHours != nil else {
@@ -1423,7 +1476,7 @@ func makeCommandRouter(
             return ["ui": SettingsRPC.uiJSON(config.sidebar)]
         },
         "ui-set": { params in
-            try mapRPCError {
+            try await mapRPCError {
                 guard let hideSessionDetails =
                         try SettingsRPC.patchBool(params, "hide_session_details") else {
                     throw RPCError.invalidParams(
@@ -1492,11 +1545,13 @@ private func mutateConfig<T>(devRoot: String, _ transform: (inout AppConfig) thr
     }
 }
 
-/// The engine's pure RPC support (`JobRPC`, `AllowlistRPC`, `SettingsRPC`) throws
-/// `RPCError`; map to `DaemonRPCError` for the daemon router.
-private func mapRPCError<T>(_ body: () throws -> T) throws -> T {
+/// The engine's pure RPC support (`JobRPC`, `AllowlistRPC`, `SettingsRPC`,
+/// `SessionLifecycleRPC`) throws `RPCError`; map to `DaemonRPCError` for the
+/// daemon router. Async so the lifecycle handlers can `await` a main-actor hop
+/// inside the mapped body; a synchronous body satisfies it unchanged.
+private func mapRPCError<T>(_ body: () async throws -> T) async throws -> T {
     do {
-        return try body()
+        return try await body()
     } catch let error as RPCError {
         switch error {
         case .invalidParams(let msg): throw DaemonRPCError.invalidParams(msg)
@@ -1504,6 +1559,10 @@ private func mapRPCError<T>(_ body: () throws -> T) throws -> T {
         }
     } catch let error as DaemonRPCError {
         throw error
+    } catch let error as SessionActionError {
+        // Unmet precondition or a failed provider call — either way the action
+        // did not happen, so the caller must see an error, not a receipt.
+        throw DaemonRPCError.applicationError(error.localizedDescription)
     } catch {
         throw DaemonRPCError.applicationError(error.localizedDescription)
     }

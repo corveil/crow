@@ -47,6 +47,7 @@ Backfill of merged PRs since the 0.1.0 release, grouped by theme.
 - #226 — Per-section select all and icon-only cancel button in selection mode.
 - #231 — Quick action buttons on the session detail header.
 - #520 — PR-link reconcile no longer attaches the wrong PR when the worktree branch carries a repo-name prefix the PR head drops (`feature/max-monorepo-maxx-7035-…` vs `feature/maxx-7035-…`). The ticket key is derived from the worktree branch, key matching ignores body-only mentions, and a PR can attach to at most one session — a session whose ticket has no PR now gets none.
+- #816 — The web session-menu actions are now CLI verbs: `crow mark-in-review`, `complete-session`, `set-session-active`, `mark-issue-done`, `add-merge-label`. `IssueTracker.markIssueDone` / `addMergeLabel` now throw `SessionActionError` instead of silently returning, so `mark-issue-done` / `add-merge-label` report the real reason (no ticket, no PR, no provider, missing capability, unparseable repo, or a failed provider call) rather than `{"ok":true}` for a call that did nothing. Preconditions the browser enforced by hiding menu items — including Manager rejection — moved server-side. The three status transitions now route through `SessionService`, restoring the analytics snapshot a completed session is meant to record.
 
 ### Terminal Runtime
 

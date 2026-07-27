@@ -121,6 +121,40 @@ crow set-status --session <uuid> archived
 | `--session`               | yes      | Session UUID                                            |
 | *(positional)* `STATUS`   | yes      | `active`, `paused`, `inReview`, `completed`, `archived` |
 
+### Session lifecycle verbs
+
+The session row/menu actions from the web UI, as CLI verbs. Each maps 1:1 onto the RPC method of the same name, so the CLI and the browser drive a session through its lifecycle by exactly the same path. All five take only `--session`.
+
+Preconditions are enforced server-side, because the browser enforces them by hiding menu items and a CLI has no equivalent affordance. They are **not** gated on the session's current status, though — the UI's active/inReview/completed conditions decide which menu items to draw, not what's legal, so `crow complete-session` is safe to run twice.
+
+| Command | Effect | Requires |
+| ------- | ------ | -------- |
+| `crow mark-in-review`     | Session status → `inReview`  | A linked ticket |
+| `crow complete-session`   | Session status → `completed` | — |
+| `crow set-session-active` | Session status → `active`    | — |
+| `crow mark-issue-done`    | Closes the linked issue on the provider, then completes the session | A linked ticket + a resolvable provider |
+| `crow add-merge-label`    | Adds the `crow:merge` label to the session's PR | A linked PR + a backend supporting auto-merge labels |
+
+The two provider-side verbs report real outcomes: an unmet precondition (no ticket, no PR, no provider, provider lacks the capability, unparseable repo slug) **and** a failed provider call both exit non-zero with the reason. They never print a success receipt for an action that didn't happen.
+
+```bash
+crow mark-in-review --session <uuid>
+crow complete-session --session <uuid>
+crow set-session-active --session <uuid>
+crow mark-issue-done --session <uuid>
+crow add-merge-label --session <uuid>
+```
+
+| Flag        | Required | Description  |
+| ----------- | -------- | ------------ |
+| `--session` | yes      | Session UUID |
+
+The three status verbs return `{"session_id": "…", "status": "…"}`; `mark-issue-done` and `add-merge-label` return `{"ok": true, "session_id": "…"}`.
+
+Manager sessions are rejected by all five — they stay always-active and never move through the review/complete lifecycle, matching the web UI, which never offers these actions for a Manager.
+
+**These write Crow's own session status.** To move the *provider's* board (a Jira workflow transition, a GitHub Projects status), use [`crow transition-ticket`](#crow-transition-ticket) — `crow mark-in-review` does not currently perform the provider-side transition.
+
 ### `crow handoff-agent`
 
 Switch a session to a different coding agent mid-flight (e.g. when credits run out). Preserves session identity, worktree, branch, and ticket context. Tears down the managed agent terminal and launches the target agent with a handoff prompt. Conversation history does **not** transfer across agents — see [ADR 0009](adr/0009-agent-handoff-preserves-session-not-chat.md).
