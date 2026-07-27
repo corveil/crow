@@ -50,6 +50,18 @@ crow transition-ticket --session <uuid> --to inProgress|inReview|done   → move
 crow resync-jira                                                        → re-sync every Jira ticket's status from its Crow session state
 ```
 
+### Allowlist
+
+Claude Code permission patterns, aggregated from global `~/.claude/settings.json` + each worktree's `.claude/settings.local.json`.
+
+```
+crow list-allowlist                                → {"entries":[{pattern,is_global,worktree_session_names}],"loading":bool}; reads the last scan
+crow refresh-allowlist                             → re-scan both sources from disk; {"ok":true}
+crow promote-allowlist --pattern 'Bash(npm test:*)' [--pattern ...]   → {"ok":true,"added":[...],"already_global":[...],"global_settings_path":"..."}
+```
+
+Repeat `--pattern` for more than one, and **quote them** — `(`, `)`, `*` are shell metacharacters. A failed write is a non-zero exit, never `ok:true`; a malformed global settings file is refused rather than overwritten.
+
 ### Worktree Commands
 ```
 crow add-worktree --session <uuid> --repo "name" --repo-path "/main/repo" --path "/worktree/path" --branch "feature/..." [--primary]
@@ -83,6 +95,14 @@ crow open-terminal --session <uuid>             → open a macOS Terminal.app wi
 - `restart-tmux-server` returns as soon as the teardown is done — the rebuild continues in the background, so don't chain a `crow send` right after it.
 - `launch-agent` / `retry-readiness` take **only** `--terminal` (no `--session`), and their `{"ok": true}` means the request was accepted, not that it applied — the daemon no-ops them unless the terminal is in the right state.
 - `open-terminal` is macOS-only and is not `new-terminal`: it opens Terminal.app on the host rather than a tab inside Crow.
+
+### Inspection & Analytics
+```
+crow list-artifacts --session <uuid>  → {"images":[{name,size,mtime,url,path}],"dir":"..."} — images agents dropped in $CROW_ARTIFACTS_DIR (use path/dir, not url)
+crow get-scorecard                    → the efficiency scorecard itself (grade, weekly rollups, baseline, per-session rows); timestamps are epoch ms
+crow rebuild-scorecard                → backfill analytics snapshots; {"rebuilt":true}; errors when telemetry is off
+crow get-state                        → the daemon's ENTIRE state snapshot; large, capped at 1 MB — prefer list-sessions / get-session / list-links
+```
 
 ## Important Notes
 

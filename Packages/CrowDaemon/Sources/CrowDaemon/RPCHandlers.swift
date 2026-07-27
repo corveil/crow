@@ -588,16 +588,33 @@ func makeCommandRouter(
                 throw DaemonRPCError.invalidParams("session_id required")
             }
             let fmt = ISO8601DateFormatter()
+            // Absolute on-disk location, for `crow list-artifacts` and for agents
+            // that wrote here via $CROW_ARTIFACTS_DIR — the `url` below is only
+            // resolvable against the daemon's own web server, so a shell caller
+            // can do nothing with it. Computed here rather than in the CLI
+            // because ArtifactPaths owns the $TMPDIR convention and a CLI
+            // process's $TMPDIR need not match a launchd-spawned crowd's (#819).
+            let dir = Artifacts.dir(sessionID: sessionID)
             let images: [JSONValue] = Artifacts.list(sessionID: sessionID).map { item in
                 let encoded = item.name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? item.name
-                return .object([
+                var object: [String: JSONValue] = [
                     "name": .string(item.name),
                     "size": .int(item.size),
                     "mtime": .string(fmt.string(from: item.mtime)),
                     "url": .string("/artifacts/\(sessionID)/\(encoded)"),
-                ])
+                ]
+                if let dir {
+                    object["path"] = .string(dir.appendingPathComponent(item.name).path)
+                }
+                return .object(object)
             }
-            return ["images": .array(images)]
+            var result: [String: JSONValue] = ["images": .array(images)]
+            // Omitted (along with every `path`) when session_id isn't a UUID —
+            // Artifacts.dir's traversal guard. Kept as an empty list rather than
+            // an error to preserve the web caller's behavior; the CLI validates
+            // the UUID client-side before it ever gets here.
+            if let dir { result["dir"] = .string(dir.path) }
+            return result
         },
         // Board reads. When the daemon owns the tracker/allowList (CROW-581 M-C)
         // they answer locally off `appState` — populated by the daemon's own
@@ -796,16 +813,24 @@ func makeCommandRouter(
         // Allowlist writes/refreshes run locally when the daemon owns the
         // AllowListService (pure disk — no app needed); otherwise forward.
         "promote-allowlist": { params in
-            if let allowList {
-                guard let arr = params["patterns"]?.arrayValue else {
-                    throw DaemonRPCError.invalidParams("patterns array required")
-                }
-                let patterns = Set(arr.compactMap { $0.stringValue })
-                guard !patterns.isEmpty else { throw DaemonRPCError.invalidParams("patterns array required") }
-                await MainActor.run { allowList.promoteToGlobal(patterns: patterns) }
-                return ["ok": .bool(true)]
+            guard let allowList else {
+                // Pure disk I/O — no provider involved. (The old copy said
+                // "provider-configured daemon", pasted from refresh-tickets.)
+                throw DaemonRPCError.applicationError(
+                    "Promoting allowlist patterns requires a daemon with the allowlist service")
             }
-            throw DaemonRPCError.applicationError("Promoting allowlist patterns requires a provider-configured daemon")
+            let patterns = try mapRPCError { try AllowlistRPC.decodePatterns(params["patterns"]) }
+            do {
+                let promotion = try await MainActor.run {
+                    try allowList.promoteToGlobal(patterns: patterns)
+                }
+                return AllowlistRPC.promotionJSON(promotion)
+            } catch {
+                // Never report success for a write that didn't land (#819) — the
+                // failure used to be an NSLog behind an unconditional ok:true.
+                throw DaemonRPCError.applicationError(
+                    "Failed to promote \(patterns.count) allowlist pattern(s): \(error.localizedDescription)")
+            }
         },
         "refresh-tickets": { params in
             if let tracker {
@@ -814,12 +839,13 @@ func makeCommandRouter(
             }
             throw DaemonRPCError.applicationError("Refreshing tickets requires a provider-configured daemon")
         },
-        "refresh-allowlist": { params in
+        "refresh-allowlist": { _ in
             if let allowList {
                 await MainActor.run { allowList.scan() }
                 return ["ok": .bool(true)]
             }
-            throw DaemonRPCError.applicationError("Refreshing the allowlist requires a provider-configured daemon")
+            throw DaemonRPCError.applicationError(
+                "Refreshing the allowlist requires a daemon with the allowlist service")
         },
 
         // Batched live per-session state (remote-control + PR + PR link).
@@ -1195,7 +1221,7 @@ func makeCommandRouter(
             return ["job": JobRPC.jobJSON(job)]
         },
         "job-add": { params in
-            try mapJobRPCError {
+            try mapRPCError {
                 let name = try JobRPC.decodeName(params["name"])
                 guard let workspace = params["workspace"]?.stringValue else {
                     throw RPCError.invalidParams("workspace required")
@@ -1222,7 +1248,7 @@ func makeCommandRouter(
             }
         },
         "job-edit": { params in
-            try mapJobRPCError {
+            try mapRPCError {
                 let id = try jobIDParam(params)
                 let newSchedule = try params["schedule"].map { try JobRPC.decodeSchedule($0) }
                 let newPrompts = try params["prompts"].map { try JobRPC.decodePrompts($0) }
@@ -1257,7 +1283,7 @@ func makeCommandRouter(
             }
         },
         "job-enable": { params in
-            try mapJobRPCError {
+            try mapRPCError {
                 let id = try jobIDParam(params)
                 let job = try mutateJobs(devRoot: devRoot) { config -> JobConfig in
                     guard let idx = config.jobs.firstIndex(where: { $0.id == id }) else {
@@ -1270,7 +1296,7 @@ func makeCommandRouter(
             }
         },
         "job-disable": { params in
-            try mapJobRPCError {
+            try mapRPCError {
                 let id = try jobIDParam(params)
                 let job = try mutateJobs(devRoot: devRoot) { config -> JobConfig in
                     guard let idx = config.jobs.firstIndex(where: { $0.id == id }) else {
@@ -1283,7 +1309,7 @@ func makeCommandRouter(
             }
         },
         "job-delete": { params in
-            try mapJobRPCError {
+            try mapRPCError {
                 let id = try jobIDParam(params)
                 try mutateJobs(devRoot: devRoot) { config in
                     guard config.jobs.contains(where: { $0.id == id }) else {
@@ -1295,7 +1321,7 @@ func makeCommandRouter(
             }
         },
         "job-duplicate": { params in
-            try mapJobRPCError {
+            try mapRPCError {
                 let id = try jobIDParam(params)
                 let copy = try mutateJobs(devRoot: devRoot) { config -> JobConfig in
                     guard let original = config.jobs.first(where: { $0.id == id }) else {
@@ -1361,8 +1387,9 @@ private func mutateJobs<T>(devRoot: String, _ transform: (inout AppConfig) throw
     }
 }
 
-/// `JobRPC` throws `RPCError`; map to `DaemonRPCError` for the daemon router.
-private func mapJobRPCError<T>(_ body: () throws -> T) throws -> T {
+/// The engine's pure RPC support (`JobRPC`, `AllowlistRPC`) throws `RPCError`;
+/// map to `DaemonRPCError` for the daemon router.
+private func mapRPCError<T>(_ body: () throws -> T) throws -> T {
     do {
         return try body()
     } catch let error as RPCError {
