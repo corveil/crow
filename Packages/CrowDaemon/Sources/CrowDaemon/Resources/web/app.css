@@ -525,6 +525,9 @@ html, body {
 .board-card.selecting { position: relative; cursor: pointer; padding-right: 34px; }
 .board-card.selecting .row-check { position: absolute; top: 10px; right: 10px; margin: 0; }
 .board-card.selected { border-color: var(--gold); }
+/* A review that already has a session can't be started again — dim it while
+   selecting so the missing checkbox reads as intentional (CROW-865). */
+.board-card.not-selectable { opacity: 0.5; }
 /* Active Select toggle on a board button reads red, matching .nav-selecting. */
 .action-btn.nav-selecting { color: var(--red); border-color: var(--red); }
 .card-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }

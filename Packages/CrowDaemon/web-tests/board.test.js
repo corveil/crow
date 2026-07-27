@@ -14,6 +14,9 @@ const epilogue = `
   set ticketSearch(v){ticketSearch=v;},
   set ticketRefreshPending(v){ticketRefreshPending=v;},
   set reviewRefreshPending(v){reviewRefreshPending=v;},
+  set reviewSearch(v){reviewSearch=v;},
+  set reviewSelectionMode(v){reviewSelectionMode=v;},
+  get selectedReviewURLs(){return selectedReviewURLs;},
   renderBoard(){ return renderBoard(); },
   ticketsCard(){ return ticketsCard(); },
   ticketsRefreshing(){ return ticketsRefreshing(); },
@@ -189,6 +192,78 @@ T.reviewRefreshPending = false; T.renderBoard();
 check('Reviews idle: no spinner, button enabled',
   q('.board-title .action-spinner').length === 0
   && [...q('.action-btn')].find((b) => b.textContent === 'Refresh').disabled === false);
+
+// -- Reviews multi-select + batch Start Review (CROW-865) --
+// Restores the retired ReviewBoardView's batch kickoff on the web board, using
+// the ticket board's selection model. r3 already has a review session, so it is
+// the non-selectable/dimmed case.
+const review = (id, n, title, repo, author, url, hours, sessionID) => ({
+  id, pr_number: n, title, url, repo, author, head_branch: 'feat/' + id, base_branch: 'main',
+  is_draft: false, requested_at: iso(hours), labels: [], provider: 'github',
+  review_session_id: sessionID || null,
+});
+const reviewsPayload = { unseen: 0, reviews: [
+  review('r1', 900, 'Add batch review', 'corveil/crow', 'dhilgaertner', 'https://github.com/corveil/crow/pull/900', 1),
+  review('r2', 17, 'Fix flaky auth', 'acme/api', 'jordan', 'https://gitlab.example.com/acme/api/-/merge_requests/17', 3),
+  review('r3', 800, 'Redesign the board', 'corveil/crow', 'sam', 'https://github.com/corveil/crow/pull/800', 5, 'sess-r3'),
+]};
+const btn = (text) => [...q('.action-btn')].find((b) => b.textContent === text);
+const countBtn = (text) => [...q('.action-btn')].filter((b) => b.textContent === text).length;
+function renderReviews() { T.boardData.reviews = reviewsPayload; T.selectedBoard = 'reviews'; T.renderBoard(); }
+
+console.log('\nReviews board — idle (no select mode):');
+T.reviewSearch = ''; T.reviewSelectionMode = false; T.selectedReviewURLs.clear();
+renderReviews();
+check('3 review cards rendered', q('.board-card').length === 3);
+check('Select offered (2 startable)', !!btn('Select'));
+check('per-card Start Review on the 2 unlinked', countBtn('Start Review') === 2);
+check('linked review offers Go to Session', !!btn('Go to Session'));
+check('no checkboxes outside select mode', q('.row-check').length === 0);
+
+console.log('\nReviews board — select mode:');
+btn('Select').onclick();
+check('toggle now reads Cancel, styled red', !!btn('Cancel') && btn('Cancel').className.includes('nav-selecting'));
+check('checkbox only on the 2 selectable rows', q('.row-check').length === 2);
+check('linked row dimmed via .not-selectable', (() => {
+  const dim = [...q('.board-card.not-selectable')];
+  return dim.length === 1 && /Redesign the board/.test(dim[0].textContent) && !dim[0].querySelector('.row-check');
+})());
+check('per-card Start Review suppressed while selecting', countBtn('Start Review') === 0);
+check('Go to Session still rendered on the linked row', !!btn('Go to Session'));
+check('no bulk bar until something is ticked', q('.bulk-bar').length === 0);
+
+console.log('\nTicking rows:');
+q('.row-check')[0].onclick({ stopPropagation() {} });
+check('bulk bar appears', q('.bulk-bar').length === 1);
+check('count reads "1 review selected"', /1 review selected/.test(q('.bulk-count')[0].textContent));
+check('action reads Start Review (1)', !!btn('Start Review (1)'));
+check('ticked card carries .selected', q('.board-card.selected').length === 1);
+// The whole card toggles too, not just the checkbox.
+[...q('.board-card')].find((c) => c.className.includes('selecting') && !c.className.includes('selected')).onclick();
+check('card click toggles → "2 reviews selected"', /2 reviews selected/.test(q('.bulk-count')[0].textContent));
+check('action reads Start Review (2)', !!btn('Start Review (2)'));
+
+console.log('\nCancel:');
+btn('Cancel').onclick();
+check('selection cleared', T.selectedReviewURLs.size === 0);
+check('per-card Start Review restored', countBtn('Start Review') === 2);
+check('no checkboxes or bulk bar left', q('.row-check').length === 0 && q('.bulk-bar').length === 0);
+check('nothing dimmed outside select mode', q('.board-card.not-selectable').length === 0);
+
+console.log('\nSelection is pruned against the visible set:');
+btn('Select').onclick();
+q('.row-check')[0].onclick({ stopPropagation() {} });
+check('sanity: 1 selected', T.selectedReviewURLs.size === 1);
+T.reviewSearch = 'jordan'; T.renderBoard();   // hides r1, the selected one
+check('search-hidden review drops out of the selection', T.selectedReviewURLs.size === 0);
+T.reviewSearch = ''; T.reviewSelectionMode = false; T.renderBoard();
+
+console.log('\nEvery review already linked:');
+T.boardData.reviews = { unseen: 0,
+  reviews: reviewsPayload.reviews.map((r) => Object.assign({}, r, { review_session_id: 'sess-x' })) };
+T.renderBoard();
+check('no Select button when nothing is startable', !btn('Select'));
+check('all 3 rows offer Go to Session', countBtn('Go to Session') === 3);
 
 // The daemon half of the flag has no `finally` to fall back on — it clears only
 // when a later `list-tickets` says so. These cover the paths where that never
