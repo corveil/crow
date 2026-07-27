@@ -335,10 +335,10 @@ share the host's global config and are disambiguated by `cwd`. See
   bundled `.claude/skills/crow-review-pr/SKILL.md` supplies the instructions.
 - **Cursor & OpenCode** have no slash-command engine, so Crow **inlines the whole
   skill body** into the prompt file (`cursorReviewPrompt`, #431).
-- **Codex** returns `nil` from `autoLaunchCommand(.review)`:
-  *"Review-on-Codex isn't supported in Phase C — the `/crow-review-pr` skill is
-  Claude-only."* Crow logs the skip and pastes a `⚠️` echo
-  (`OpenAICodexAgent`).
+- **Codex** inlines the skill body too (`buildReviewPrompt` `.codex` arm, #830):
+  the native `codex review` subcommand only prints local findings and posts no
+  GitHub verdict, so it can't satisfy `decideReviewCompletions`. Runs
+  interactively and is human-gated (see the auto-permission note).
 - **Grok** has no slash-command engine either, so `buildReviewPrompt` inlines
   the whole skill body for `.grok` (the same `cursorReviewPrompt` arm as
   Cursor/OpenCode/Codex, #861). A bare `/crow-review-pr <URL>` would never expand

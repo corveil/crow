@@ -28,6 +28,7 @@ public enum CrowAttribution {
         AgentKind.codex.rawValue: "OpenAI Codex",
         AgentKind.openCode.rawValue: "OpenCode",
         AgentKind.antigravity.rawValue: "Antigravity",
+        AgentKind.grok.rawValue: "Grok Build",
     ]
 
     /// Resolve the display name for `agentKind`, falling back to `defaultAgentDisplayName`.
