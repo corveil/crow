@@ -151,6 +151,24 @@ crow quick-action --session <uuid> --action fixConflicts|addressChanges|fixCheck
 - `refresh-tickets` awaits the poll, so a following `list-tickets` sees the new data. It returns `{"ok":true}` without polling when a refresh is already in flight or the provider is rate-limited.
 - `create-manager --agent` is used as given — an unrecognized kind is not rejected, so a typo stamps the Manager with a kind no agent is registered for. Omit `--agent` to get the configured Manager default.
 
+### Notification Commands
+
+Reads and writes `AppConfig.notifications` — the same settings as Settings → Notifications.
+
+```
+crow notifications get [--event <name>]                → {"notifications":{globals, events, available_sounds, config_readable}}
+crow notifications set [--global-mute|--no-global-mute] [--sound-enabled|--no-sound-enabled]
+                       [--system-notifications-enabled|--no-system-notifications-enabled]
+crow notifications set --event <name> [--event-enabled|--no-event-enabled]
+                       [--event-sound-enabled|--no-event-sound-enabled]
+                       [--event-system-notification-enabled|--no-event-system-notification-enabled]
+                       [--event-sound-name <Sound>]     → {"notifications":{...},"saved":true}
+```
+
+Events: `taskComplete`, `agentWaiting`, `reviewRequested`, `changesRequested`, `checksFailing`, `autoWorkspaceCreated`, `autoMergeEnabled`, `autoRebasePushed`, `autoRebaseConflicts`, `configReloaded`. Sounds: the 14 built-ins listed under `available_sounds` (case-insensitive).
+
+Notifications cascade — one fires only if `globalMute` is off, the global category toggle is on, **and** the per-event toggle is on. Omitted flags leave their stored value alone; every `--event-*` flag requires `--event`.
+
 ## Important Notes
 
 - `--session` always expects a full UUID (e.g., `a1b2c3d4-e5f6-7890-abcd-ef1234567890`), not a session name

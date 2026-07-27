@@ -43,15 +43,32 @@ public final class ConfigStore: Sendable {
 
     // MARK: - App Config
 
+    /// Location of the config this store reads and writes:
+    /// `{devRoot}/.claude/config.json`.
+    ///
+    /// Exposed so callers that need to reason about the file itself — rather
+    /// than its contents — don't rebuild the path by hand. `loadConfig` returns
+    /// nil for both "absent" and "present but undecodable", so a writer that
+    /// must not overwrite a malformed config has to ask whether the file exists;
+    /// deriving that path independently would let the check drift away from the
+    /// loader it guards (review of #813).
+    public static func configURL(devRoot: String) -> URL {
+        URL(fileURLWithPath: devRoot)
+            .appendingPathComponent(".claude", isDirectory: true)
+            .appendingPathComponent("config.json")
+    }
+
+    /// Whether a config file exists at all, independent of whether it decodes.
+    public static func configExists(devRoot: String) -> Bool {
+        FileManager.default.fileExists(atPath: configURL(devRoot: devRoot).path)
+    }
+
     /// Load config from `{devRoot}/.claude/config.json`.
     ///
     /// Returns `nil` if the file doesn't exist or can't be decoded. Decode errors
     /// are logged so malformed configs are diagnosable.
     public static func loadConfig(devRoot: String) -> AppConfig? {
-        let configURL = URL(fileURLWithPath: devRoot)
-            .appendingPathComponent(".claude", isDirectory: true)
-            .appendingPathComponent("config.json")
-        return loadConfig(from: configURL)
+        loadConfig(from: configURL(devRoot: devRoot))
     }
 
     /// Load config from an explicit URL (internal, exposed for testing via @testable).

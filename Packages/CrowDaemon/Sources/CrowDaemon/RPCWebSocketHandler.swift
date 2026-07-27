@@ -121,6 +121,12 @@ enum RPCWebSocketHandler {
     /// are likewise un-gated (same jobs-array surface; today only the CLI, which is
     /// always local, uses them).
     ///
+    /// `notifications-get` / `notifications-set` are un-gated for the same reason
+    /// (CROW-813): they read and write `AppConfig.notifications`, which carries no
+    /// secrets and is already remotely editable through un-gated `set-config` —
+    /// Settings → Notifications is a core web surface. Gating only the CLI's path
+    /// to it would be inconsistent, not safer.
+    ///
     /// The tmux-maintenance methods (`restart-manager`, `restart-tmux-server`,
     /// `reload-tmux-config`, `launch-agent`, `retry-readiness`) are also NOT gated,
     /// deliberately: Settings → About's maintenance group calls the first three from

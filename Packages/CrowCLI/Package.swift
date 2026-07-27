@@ -9,6 +9,7 @@ let package = Package(
     ],
     dependencies: [
         .package(path: "../CrowIPC"),
+        .package(path: "../CrowCore"),
         .package(path: "../CrowCodex"),
         .package(path: "../CrowAutostart"),
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.5.0"),
@@ -18,6 +19,10 @@ let package = Package(
             name: "CrowCLILib",
             dependencies: [
                 "CrowIPC",
+                // Lets `crow notifications` validate against the canonical
+                // NotificationEvent cases and builtInSounds instead of keeping
+                // its own copy of either list (CROW-813).
+                "CrowCore",
                 "CrowCodex",
                 "CrowAutostart",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),

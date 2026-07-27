@@ -1495,7 +1495,94 @@ func makeCommandRouter(
                 ]
             }
         },
+
+        // Notification settings for `crow notifications` (CROW-813). Same
+        // `AppConfig.notifications` subtree the web Settings → Notifications tab
+        // edits; the write goes through the shared config lock, and the daemon's
+        // mtime poll broadcasts `configReloaded` so an open tab refreshes.
+        // Un-gated on remote `/rpc` for the same reason as `job-*`: this is a
+        // core web-Settings surface carrying no secrets
+        // (see `RPCWebSocketHandler.localOnlyDenial`).
+        "notifications-get": { params in
+            try await mapRPCError {
+                let event = try params["event"].map { try NotificationRPC.decodeEvent($0) }
+                let (config, readable) = loadConfigReportingReadability(devRoot: devRoot)
+                return ["notifications": NotificationRPC.settingsJSON(
+                    config.notifications, only: event, configReadable: readable)]
+            }
+        },
+        "notifications-set": { params in
+            try await mapRPCError {
+                let globalMute = params["global_mute"]?.boolValue
+                let soundEnabled = params["sound_enabled"]?.boolValue
+                let systemNotificationsEnabled = params["system_notifications_enabled"]?.boolValue
+                let event = try params["event"].map { try NotificationRPC.decodeEvent($0) }
+                let eventEnabled = params["event_enabled"]?.boolValue
+                let eventSoundEnabled = params["event_sound_enabled"]?.boolValue
+                let eventSystemEnabled = params["event_system_notification_enabled"]?.boolValue
+                let eventSoundName = try params["event_sound_name"].map {
+                    try NotificationRPC.decodeSoundName($0)
+                }
+
+                let hasEventField = eventEnabled != nil || eventSoundEnabled != nil
+                    || eventSystemEnabled != nil || eventSoundName != nil
+                let hasGlobalField = globalMute != nil || soundEnabled != nil
+                    || systemNotificationsEnabled != nil
+                if event == nil, hasEventField {
+                    throw RPCError.invalidParams("event is required when setting any event_* field")
+                }
+                if event != nil, !hasEventField {
+                    throw RPCError.invalidParams(
+                        "event given with nothing to change — provide at least one event_* field")
+                }
+                guard hasGlobalField || hasEventField else {
+                    throw RPCError.invalidParams("Nothing to set — provide at least one field")
+                }
+
+                let settings = try mutateConfig(devRoot: devRoot) { config -> NotificationSettings in
+                    if let globalMute { config.notifications.globalMute = globalMute }
+                    if let soundEnabled { config.notifications.soundEnabled = soundEnabled }
+                    if let systemNotificationsEnabled {
+                        config.notifications.systemNotificationsEnabled = systemNotificationsEnabled
+                    }
+                    if let event {
+                        // Read through `config(for:)`, which supplies the event's
+                        // defaults when it's absent from disk — the common case,
+                        // since most configs predate the automation events. A
+                        // `eventSettings[event]?.enabled = x` subscript write
+                        // would be a silent no-op there. Only the event being
+                        // written is materialized: freezing all ten in on a
+                        // one-field edit would opt the user out of future
+                        // `defaultSound` changes.
+                        var eventConfig = config.notifications.config(for: event)
+                        if let eventEnabled { eventConfig.enabled = eventEnabled }
+                        if let eventSoundEnabled { eventConfig.soundEnabled = eventSoundEnabled }
+                        if let eventSystemEnabled {
+                            eventConfig.systemNotificationEnabled = eventSystemEnabled
+                        }
+                        if let eventSoundName { eventConfig.soundName = eventSoundName }
+                        config.notifications.eventSettings[event] = eventConfig
+                    }
+                    return config.notifications
+                }
+                return [
+                    "notifications": NotificationRPC.settingsJSON(settings, only: event),
+                    "saved": .bool(true),
+                ]
+            }
+        },
     ], fallback: fallback)
+}
+
+/// Load the config, reporting whether it was actually readable.
+///
+/// `ConfigStore.loadConfig` returns nil both for "no config yet" (defaults really
+/// do apply) and for "present but undecodable" (the defaults are a fiction).
+/// `notifications-get` passes the distinction through as `config_readable` so a
+/// caller isn't shown invented settings as fact (CROW-813).
+private func loadConfigReportingReadability(devRoot: String) -> (AppConfig, Bool) {
+    if let config = ConfigStore.loadConfig(devRoot: devRoot) { return (config, true) }
+    return (AppConfig(), !ConfigStore.configExists(devRoot: devRoot))
 }
 
 /// Parse the `job_id` param shared by every id-taking `job-*` method.
@@ -1518,21 +1605,18 @@ private func validateJobWorkspace(_ workspace: String, config: AppConfig) throws
 /// A `config.json` that exists but won't decode is NOT replaced with defaults:
 /// `ConfigStore.loadConfig` returns nil for both "missing" and "malformed", and
 /// blindly falling back to `AppConfig()` would silently destroy every workspace,
-/// job and credential on the next write (CROW-814).
+/// job and credential on the next write (CROW-814, found independently by
+/// CROW-813 — the notifications verbs are callers too).
 @discardableResult
 private func mutateConfig<T>(devRoot: String, _ transform: (inout AppConfig) throws -> T) throws -> T {
     try ConfigStore.withConfigLock {
         var config: AppConfig
         if let loaded = ConfigStore.loadConfig(devRoot: devRoot) {
             config = loaded
+        } else if ConfigStore.configExists(devRoot: devRoot) {
+            throw RPCError.applicationError(
+                "config.json exists but could not be decoded — refusing to overwrite it. Fix or move \(ConfigStore.configURL(devRoot: devRoot).path).")
         } else {
-            let path = URL(fileURLWithPath: devRoot)
-                .appendingPathComponent(".claude", isDirectory: true)
-                .appendingPathComponent("config.json").path
-            guard !FileManager.default.fileExists(atPath: path) else {
-                throw RPCError.applicationError(
-                    "config.json exists but could not be decoded — refusing to overwrite it. Fix or move \(path).")
-            }
             config = AppConfig()
         }
         let result = try transform(&config)
@@ -1546,9 +1630,10 @@ private func mutateConfig<T>(devRoot: String, _ transform: (inout AppConfig) thr
 }
 
 /// The engine's pure RPC support (`JobRPC`, `AllowlistRPC`, `SettingsRPC`,
-/// `SessionLifecycleRPC`) throws `RPCError`; map to `DaemonRPCError` for the
-/// daemon router. Async so the lifecycle handlers can `await` a main-actor hop
-/// inside the mapped body; a synchronous body satisfies it unchanged.
+/// `SessionLifecycleRPC`, `NotificationRPC`) throws `RPCError`; map to
+/// `DaemonRPCError` for the daemon router. Async so the lifecycle handlers can
+/// `await` a main-actor hop inside the mapped body; a synchronous body satisfies
+/// it unchanged.
 private func mapRPCError<T>(_ body: () async throws -> T) async throws -> T {
     do {
         return try await body()

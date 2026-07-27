@@ -1,4 +1,5 @@
 import ArgumentParser
+import CrowCore
 import Foundation
 
 /// Valid session status values accepted by the `set-status` command.
@@ -55,6 +56,18 @@ func validateRepoSlug(_ value: String) throws {
 func validateJobName(_ value: String) throws {
     guard !value.trimmingCharacters(in: .whitespaces).isEmpty else {
         throw ValidationError("--name must not be blank.")
+    }
+}
+
+/// Validate that a notification sound is one of the built-in sounds, matching
+/// the Settings UI's sound picker (which only offers those). Delegates to
+/// `NotificationSettings.canonicalSoundName` — the same predicate the
+/// `notifications-set` handler enforces with — so the two can't drift.
+///
+/// - Throws: `ValidationError` listing the built-in sounds when unmatched.
+func validateNotificationSound(_ value: String) throws {
+    guard NotificationSettings.canonicalSoundName(value) != nil else {
+        throw ValidationError("'\(value)' is not a built-in sound. Expected one of: \(NotificationSettings.builtInSounds.joined(separator: ", "))")
     }
 }
 
