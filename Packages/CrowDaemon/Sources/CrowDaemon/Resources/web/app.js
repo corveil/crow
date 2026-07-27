@@ -799,7 +799,9 @@ function bulkActionBar() {
   cancel.onclick = () => { selectionMode = false; selectedSessionIDs.clear(); renderSidebar(); };
   bar.appendChild(cancel);
   if (selectedSessionIDs.size) {
-    const del = el('button', 'bulk-delete', '🗑 (' + selectedSessionIDs.size + ')');
+    const del = el('button', 'bulk-delete');
+    del.appendChild(icon('trash', 12));
+    del.appendChild(el('span', null, '(' + selectedSessionIDs.size + ')'));
     del.title = 'Delete selected sessions';
     del.onclick = () => bulkDeleteSelected();
     bar.appendChild(del);
@@ -1025,10 +1027,13 @@ function navPill(label, active, onClick) {
   return p;
 }
 
-// Gold antenna glyph = remote-control active (driveable from claude.ai).
+// Gold antenna glyph = this session's agent was launched with remote control
+// enabled, so it's driveable from claude.ai. (The underlying flag tracks
+// terminals started with `--rc`, i.e. RC-enabled — not a live claude.ai drive,
+// so the badge means "enabled", not "currently being driven" — CROW-863.)
 function rcGlyph() {
   const span = el('span', 'rc-glyph');
-  span.title = 'Remote control active — driveable from claude.ai';
+  span.title = 'Remote control enabled — driveable from claude.ai';
   span.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 8a8 8 0 0 0 0 8M8 10.5a4 4 0 0 0 0 3M19 8a8 8 0 0 1 0 8M16 10.5a4 4 0 0 1 0 3"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/></svg>';
   return span;
 }
@@ -1072,6 +1077,8 @@ const ICONS = {
   uturn: '<path d="M6.5 11H9.5a3 3 0 0 0 0-6H4"/><path d="M6 3 3.5 5.5 6 8"/>',
   trash: '<path d="M3 4.5h10"/><path d="M6.5 4.5V3h3v1.5"/><path d="M4.8 4.5l.6 8.5h5.2l.6-8.5"/>',
   merge: '<circle cx="5" cy="3.5" r="1.4"/><circle cx="5" cy="12.5" r="1.4"/><circle cx="11" cy="5.5" r="1.4"/><path d="M5 5v7"/><path d="M11 7a4 4 0 0 1-4 4H5"/>',
+  tag: '<path d="M2.5 4H9L13.5 8 9 12H2.5z"/><circle cx="5" cy="8" r="1"/>',
+  clock: '<circle cx="8" cy="8" r="5.5"/><path d="M8 5v3.2l2 1.3"/>',
   pencil: '<path d="M10.5 3 13 5.5l-7 7H3.5V10z"/>',
   warning: '<path d="M8 2.5l6 11H2z"/><path d="M8 6.5v3.2"/><path d="M8 11.6v.2"/>',
   tray: '<path d="M2.5 4.5h11v7h-11z"/><path d="M2.5 9h3l1 1.5h3L13.5 9"/>',
@@ -1264,8 +1271,12 @@ function prBadgeColor(pr) {
 // ---------------------------------------------------------------------------
 // `icon` names an entry in ICONS: those glyphs render as monochrome SVGs that
 // inherit `currentColor`, so the checkmarks tint with their label instead of
-// staying black (Apple emoji ✔/✕/⚠ ignore CSS `color` — CROW-802). Geometric
-// glyphs (◷/○/?) and the 🏷 tag are already color-faithful, so they stay text.
+// staying black (Apple emoji ✔/✕/⚠ ignore CSS `color` — CROW-802). The
+// in-progress states (checks running / needs review) and the crow:merge tag
+// carry an `icon:` too, so they render as crisp SVGs at the same size as the
+// check/X instead of the thin unicode ◷ / an emoji 🏷 (CROW-863). Only the
+// "none/unknown" geometric glyphs (○/?) stay text — they're already
+// color-faithful and read fine faint.
 // `label` is the chip text in the detail header AND the sidebar pill's
 // aria-label/title; an optional `a11yLabel` overrides the latter when the
 // concise chip text would be ambiguous without its (unannounced) glyph
@@ -1273,21 +1284,21 @@ function prBadgeColor(pr) {
 const PR_CHECKS_GLYPH = {
   passing: { glyph: '✔', icon: 'check', color: 'var(--green)', label: 'Checks pass' },
   failing: { glyph: '✕', icon: 'close', color: 'var(--red)', label: 'Checks failing' },
-  pending: { glyph: '◷', color: 'var(--orange)', label: 'Checks running' },
+  pending: { glyph: '◷', icon: 'clock', color: 'var(--orange)', label: 'Checks running' },
   unknown: { glyph: '?', color: 'var(--text-muted)', label: 'No checks' },
 };
 const PR_REVIEW_GLYPH = {
   approved: { glyph: '✔', icon: 'check', color: 'var(--green)', label: 'Approved' },
   changesRequested: { glyph: '✕', icon: 'close', color: 'var(--red)', label: 'Changes requested' },
-  reviewRequired: { glyph: '◷', color: 'var(--orange)', label: 'Needs review' },
+  reviewRequired: { glyph: '◷', icon: 'eye', color: 'var(--orange)', label: 'Needs review' },
   unknown: { glyph: '○', color: 'var(--text-muted)', label: 'No reviews' },
 };
 const PR_MERGED_GLYPH = { glyph: '✔', icon: 'check', color: 'var(--purple)', label: 'Merged' };
 const PR_CONFLICT_GLYPH = { glyph: '⚠', icon: 'warning', color: 'var(--red)', label: 'Conflicts' };
-// Chip text drops the redundant "label" (the 🏷 glyph shows it beside the
+// Chip text drops the redundant "label" (the tag glyph shows it beside the
 // text); the aria path keeps it via `a11yLabel` — there the glyph is never
 // announced, so the noun is the only signal it's a label (CROW-846).
-const PR_MERGE_LABEL_GLYPH = { glyph: '🏷', color: 'var(--gold)', label: 'crow:merge', a11yLabel: 'crow:merge label' };
+const PR_MERGE_LABEL_GLYPH = { glyph: '🏷', icon: 'tag', color: 'var(--gold)', label: 'crow:merge', a11yLabel: 'crow:merge label' };
 
 function prChecksGlyph(pr) {
   const base = PR_CHECKS_GLYPH[pr.checks] || PR_CHECKS_GLYPH.unknown;
