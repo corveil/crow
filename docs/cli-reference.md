@@ -347,6 +347,133 @@ crow send --session <uuid> --terminal <uuid> "claude --continue"$'\n'
 
 ---
 
+## Maintenance Commands
+
+CLI parity for the maintenance actions that used to be web-only — Settings → About's
+maintenance group and the session-header host-app buttons. Each verb maps 1:1 to the RPC
+method of the same name.
+
+All of these need tmux on the daemon host. Without it the daemon answers
+`… requires tmux on the daemon host`.
+
+### `crow restart-manager`
+
+Relaunch the Manager's agent process in place after it has exited (crash, kill, OOM). The
+Manager session row and its UUID survive; only the dead terminal surface is replaced, so the
+new terminal gets a fresh UUID.
+
+```bash
+crow restart-manager
+```
+
+Only the **primary** Manager session (`00000000-0000-0000-0000-000000000000`) is restarted —
+secondary Manager sessions are untouched.
+
+Returns `{"ok": true}`.
+
+### `crow restart-tmux-server`
+
+Restart the shared tmux server. **Destructive:** this kills every pane — every agent in every
+session dies — then relaunches each persisted terminal (the Manager via its stored command,
+work sessions via `claude --continue`).
+
+```bash
+crow restart-tmux-server
+```
+
+The web UI confirms first; from the CLI the caller owns that choice, the same stance as
+`recreate-terminal`. There is no `--yes` flag.
+
+Returns `{"ok": true}` as soon as the teardown is done — **the per-terminal rebuild continues
+in the background**, so don't chain a `crow send` straight after this or you'll race a
+half-rebuilt surface.
+
+### `crow reload-tmux-config`
+
+Reload the bundled tmux config into the running server (`tmux source-file`) without restarting
+it. Non-destructive: windows, sessions, and running agents are unaffected.
+
+```bash
+crow reload-tmux-config
+```
+
+Returns `{"ok": true}`, or errors with `tmux server is not running` /
+`bundled crow-tmux.conf not found`.
+
+### `crow launch-agent`
+
+Launch the session's coding agent in a terminal whose shell is ready.
+
+```bash
+crow launch-agent --terminal <uuid>
+```
+
+| Flag         | Required | Description   |
+| ------------ | -------- | ------------- |
+| `--terminal` | yes      | Terminal UUID |
+
+Note this takes **only** `--terminal` — the terminal id alone identifies the surface, so unlike
+`new-terminal` / `send` / `rename-terminal` there is no `--session` flag.
+
+Returns `{"ok": true}`. The daemon applies this only to a terminal that is shell-ready and
+still pending auto-launch; in any other state it is a silent no-op, so `ok` means the request
+was **accepted**, not that an agent was started.
+
+### `crow retry-readiness`
+
+Re-arm the tmux readiness watch for a terminal whose first attempt timed out, with a longer
+budget. Clears the Retry overlay in the UI.
+
+```bash
+crow retry-readiness --terminal <uuid>
+```
+
+| Flag         | Required | Description   |
+| ------------ | -------- | ------------- |
+| `--terminal` | yes      | Terminal UUID |
+
+Takes only `--terminal`, like `launch-agent`. Returns `{"ok": true}`; the daemon applies it
+only to a terminal that timed out or never reached shell-ready, so `ok` again means
+"accepted", not "applied".
+
+### `crow open-in-vscode`
+
+Open the session's primary worktree in VS Code on the daemon host.
+
+```bash
+crow open-in-vscode --session <uuid>
+```
+
+| Flag        | Required | Description  |
+| ----------- | -------- | ------------ |
+| `--session` | yes      | Session UUID |
+
+Requires the `code` CLI on PATH (or a standard VS Code install) and a worktree attached to the
+session. Returns `{"opened": true}`, or errors with `No worktree for session` /
+`VS Code CLI not found`.
+
+### `crow open-terminal`
+
+Open a **macOS Terminal.app window** on the daemon host, cd'd to the session's primary
+worktree.
+
+```bash
+crow open-terminal --session <uuid>
+```
+
+| Flag        | Required | Description  |
+| ----------- | -------- | ------------ |
+| `--session` | yes      | Session UUID |
+
+This is **not** a Crow terminal tab — use [`crow new-terminal`](#crow-new-terminal) for that.
+macOS only. Returns `{"opened": true}`, or errors with `No worktree for session`.
+
+`open-in-vscode` and `open-terminal` launch a GUI app on the host, so the daemon restricts them
+to local callers. The CLI always qualifies: it reaches the daemon over its `0600` Unix socket,
+not the network `/rpc` endpoint.
+
+---
+
 ## Hooks (Internal)
 
 ### `crow hook-event`

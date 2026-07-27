@@ -66,6 +66,24 @@ crow send --session <uuid> --terminal <uuid> "text to send"
 
 The `crow send` command writes text to the terminal. Newlines in the text are converted to Enter keypresses. To submit a command, include a newline at the end of the text.
 
+### Maintenance Commands
+
+Need tmux on the daemon host; otherwise they error with "… requires tmux on the daemon host".
+
+```
+crow restart-manager                            → relaunch the Manager's agent in place (primary Manager only; new terminal UUID)
+crow restart-tmux-server                        → DESTRUCTIVE: kills every pane (all agents die), then rebuilds every terminal
+crow reload-tmux-config                         → `tmux source-file` the bundled config into the live server (non-destructive)
+crow launch-agent --terminal <uuid>             → launch the session's coding agent in a shell-ready terminal
+crow retry-readiness --terminal <uuid>          → re-arm the readiness watch for a terminal whose first attempt timed out
+crow open-in-vscode --session <uuid>            → open the session's worktree in VS Code on the host
+crow open-terminal --session <uuid>             → open a macOS Terminal.app window at the worktree (host GUI, NOT a Crow tab)
+```
+
+- `restart-tmux-server` returns as soon as the teardown is done — the rebuild continues in the background, so don't chain a `crow send` right after it.
+- `launch-agent` / `retry-readiness` take **only** `--terminal` (no `--session`), and their `{"ok": true}` means the request was accepted, not that it applied — the daemon no-ops them unless the terminal is in the right state.
+- `open-terminal` is macOS-only and is not `new-terminal`: it opens Terminal.app on the host rather than a tab inside Crow.
+
 ## Important Notes
 
 - `--session` always expects a full UUID (e.g., `a1b2c3d4-e5f6-7890-abcd-ef1234567890`), not a session name

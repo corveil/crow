@@ -120,6 +120,17 @@ enum RPCWebSocketHandler {
     /// may edit them, matching how the desktop app manages jobs. The `job-*` RPCs
     /// are likewise un-gated (same jobs-array surface; today only the CLI, which is
     /// always local, uses them).
+    ///
+    /// The tmux-maintenance methods (`restart-manager`, `restart-tmux-server`,
+    /// `reload-tmux-config`, `launch-agent`, `retry-readiness`) are also NOT gated,
+    /// deliberately: Settings → About's maintenance group calls the first three from
+    /// the web, so gating them here would break that surface. They shell out on the
+    /// daemon host but launch nothing on its GUI. `LocalOnlyRPCGateTests` pins this.
+    ///
+    /// Note this gate only guards the HTTP/WebSocket `/rpc` path. Every method here
+    /// also has a `crow` CLI verb (CROW-818), and the CLI reaches the daemon over its
+    /// 0600 Unix socket, which never passes through `localOnlyDenial` — a CLI caller
+    /// is local by construction, so that is the intended trust model, not a bypass.
     static func localOnlyDenial(for request: JSONRPCRequest, devRoot: String) -> String? {
         switch request.method {
         case "run-setup":

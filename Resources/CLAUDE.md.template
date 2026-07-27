@@ -41,6 +41,19 @@ crow list-terminals --session <uuid>
 crow send --session <uuid> --terminal <uuid> "text to send"
 ```
 
+### Maintenance Commands
+```
+crow restart-manager                     → relaunch the Manager's agent in place (primary Manager only)
+crow restart-tmux-server                 → DESTRUCTIVE: kills every pane (all agents die), then rebuilds
+crow reload-tmux-config                  → reload the bundled tmux config into the live server
+crow launch-agent --terminal <uuid>      → launch the coding agent in a shell-ready terminal
+crow retry-readiness --terminal <uuid>   → re-arm the readiness watch for a stuck terminal
+crow open-in-vscode --session <uuid>     → open the session's worktree in VS Code on the host
+crow open-terminal --session <uuid>      → open macOS Terminal.app at the worktree (NOT a Crow tab)
+```
+
+These need tmux on the daemon host. `restart-tmux-server` returns before the rebuild finishes, so don't chain a `crow send` right after it.
+
 ## Important Notes
 
 - `--session` always expects a full UUID (e.g., `a1b2c3d4-e5f6-7890-abcd-ef1234567890`), not a session name

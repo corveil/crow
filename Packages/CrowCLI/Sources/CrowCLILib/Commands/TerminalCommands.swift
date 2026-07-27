@@ -6,7 +6,9 @@ import Foundation
 
 /// Create a new terminal tab in a session.
 public struct NewTerminal: ParsableCommand {
-    public static let configuration = CommandConfiguration(commandName: "new-terminal", abstract: "Create a terminal in a session")
+    // Not to be confused with `open-terminal`, which opens Terminal.app on the
+    // host GUI rather than a tab inside Crow (CROW-818).
+    public static let configuration = CommandConfiguration(commandName: "new-terminal", abstract: "Create a terminal tab inside Crow (tmux)")
     @Option(name: .long, help: "Session UUID") var session: String
     @Option(name: .long, help: "Working directory") var cwd: String
     @Option(name: .long, help: "Terminal name") var name: String?

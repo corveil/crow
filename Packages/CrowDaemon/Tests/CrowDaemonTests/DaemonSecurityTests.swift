@@ -825,6 +825,27 @@ import CrowPersistence
         }
     }
 
+    @Test func tmuxMaintenanceMethodsAreNotLocalOnly() {
+        // Settings → About's maintenance group calls restart-manager /
+        // restart-tmux-server / reload-tmux-config from the web, so gating these
+        // would break that surface. They shell out on the daemon host but launch
+        // nothing on its GUI — unlike open-in-vscode / open-terminal above. These
+        // now also have `crow` CLI verbs (CROW-818), which reach the daemon over
+        // its Unix socket and never pass through this gate at all.
+        let methods: [(String, [String: JSONValue])] = [
+            ("restart-manager", [:]),
+            ("restart-tmux-server", [:]),
+            ("reload-tmux-config", [:]),
+            ("launch-agent", ["terminal_id": .string(UUID().uuidString)]),
+            ("retry-readiness", ["terminal_id": .string(UUID().uuidString)]),
+        ]
+        for (method, params) in methods {
+            let req = JSONRPCRequest(id: 1, method: method, params: params)
+            #expect(RPCWebSocketHandler.localOnlyDenial(for: req, devRoot: tempDevRoot()) == nil,
+                    "\(method) must stay reachable from a remote web session")
+        }
+    }
+
     @Test func setConfigBinariesChangeIsLocalOnly() throws {
         let devRoot = tempDevRoot()
         defer { try? FileManager.default.removeItem(atPath: devRoot) }
