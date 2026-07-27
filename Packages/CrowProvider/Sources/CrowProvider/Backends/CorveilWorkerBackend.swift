@@ -81,7 +81,7 @@ public struct CorveilWorkerBackend: Sendable {
             args += ["--limit", String(limit)]
         }
         let output = try await run(args)
-        return Self.parseRuns(output)
+        return try Self.parseRuns(output)
     }
 
     /// Full snapshot for one run (prompt body + write-back policy).
@@ -193,9 +193,21 @@ public struct CorveilWorkerBackend: Sendable {
         throw WorkerRunError.badResponse(output)
     }
 
-    /// Parse an array of `WorkerRun`s from `list` output (tolerates a bare object).
-    static func parseRuns(_ output: String) -> [WorkerRun] {
-        guard let data = output.data(using: .utf8) else { return [] }
+    /// Parse an array of `WorkerRun`s from `list` output (tolerates a bare object
+    /// or a `{ "runs": [...] }` wrapper).
+    ///
+    /// Throws ``WorkerRunError/badResponse`` when stdout is **non-empty but
+    /// unparseable**: a truly empty queue emits `""` / `[]` / `{"runs":[]}` (all
+    /// of which parse to an empty array), so anything else that fails to decode is
+    /// CLI schema drift, not an empty queue. Without this, malformed output that
+    /// still exits 0 would silently look like "nothing to claim" and idle the
+    /// runner forever (review).
+    static func parseRuns(_ output: String) throws -> [WorkerRun] {
+        let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }  // no output ⇒ empty queue
+        guard let data = trimmed.data(using: .utf8) else {
+            throw WorkerRunError.badResponse(output)
+        }
         let decoder = JSONDecoder()
         if let runs = try? decoder.decode([WorkerRun].self, from: data) {
             return runs
@@ -207,7 +219,7 @@ public struct CorveilWorkerBackend: Sendable {
         if let run = try? decoder.decode(WorkerRun.self, from: data) {
             return [run]
         }
-        return []
+        throw WorkerRunError.badResponse(output)  // non-empty + unparseable ⇒ schema drift
     }
 
     private struct WorkerRunList: Codable { let runs: [WorkerRun] }

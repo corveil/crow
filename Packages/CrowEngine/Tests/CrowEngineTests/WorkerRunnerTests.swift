@@ -367,16 +367,89 @@ struct WorkerRunnerTickTeardownTests {
         runner.apiKeyProvider = { nil }
         runner.devRootProvider = { devRoot.path }
 
-        // A live .workerRun session references only `keep`.
-        appState.sessions.append(Session(
+        // A live, FULLY-LINKED .workerRun session references only `keep` (a
+        // managed terminal is required so reconcile adopts it rather than
+        // fail-closing it for incomplete linkage).
+        let live = Session(
             name: "live", status: .active, kind: .workerRun,
             workerRunID: "run-live", workerID: "w", workerRunScratchDir: keep.path
-        ))
+        )
+        appState.sessions.append(live)
+        appState.terminals[live.id] = [
+            SessionTerminal(sessionID: live.id, name: "t", cwd: keep.path, isManaged: true)
+        ]
 
         await runner.tick()
 
         #expect(FileManager.default.fileExists(atPath: keep.path))       // referenced → kept
         #expect(!FileManager.default.fileExists(atPath: orphan.path))    // orphan → swept
+    }
+
+    /// A run whose lease has lapsed (no successful heartbeat within `leaseSeconds`)
+    /// is failed closed — completed, wiped, slot freed — so Crow doesn't keep
+    /// executing a claim Corveil may have re-queued to another runner (review).
+    @Test func lostLeaseFailsRunClosed() async throws {
+        let (runner, appState) = makeRunner()
+        runner.leaseSeconds = 0                 // any watched run is instantly "lease-lost"
+        runner.configProvider = { RunnerConfig(enabled: true) }
+        runner.apiKeyProvider = { "sk-test" }
+        runner.devRootProvider = { "/tmp/dev" }
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wr-lease-\(UUID().uuidString)")
+            .appendingPathComponent(".crow-worker-runs")
+        let scratch = root.appendingPathComponent("run-lease")
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let session = Session(
+            name: "wr-lease", status: .active, kind: .workerRun,
+            workerRunID: "run-lease", workerID: "crow-x-1", workerRunScratchDir: scratch.path
+        )
+        appState.sessions.append(session)
+        appState.terminals[session.id] = [
+            SessionTerminal(sessionID: session.id, name: "t", cwd: scratch.path, isManaged: true)
+        ]
+
+        await runner.tick()
+
+        #expect(appState.sessions.first(where: { $0.id == session.id })?.status == .completed)
+        #expect(runner.statusSnapshot().watched.isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: scratch.path))
+    }
+
+    /// An active `.workerRun` session with incomplete linkage (here: no managed
+    /// terminal) can't be driven, and the orphan sweep won't remove a dir a live
+    /// session references. Reconcile must fail it closed — wipe the scratch dir
+    /// and move the session off `.active` — rather than skipping it forever and
+    /// stranding the key (review).
+    @Test func incompleteLinkageIsFailedClosed() async throws {
+        let (runner, appState) = makeRunner()
+        runner.configProvider = { nil }
+        runner.apiKeyProvider = { nil }
+        runner.devRootProvider = { "/tmp/dev" }
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wr-incomplete-\(UUID().uuidString)")
+            .appendingPathComponent(".crow-worker-runs")
+        let scratch = root.appendingPathComponent("run-incomplete")
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: scratch.appendingPathComponent("settings.local.json").path,
+                                       contents: Data("k".utf8))
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        // Active worker-run session WITH a scratch dir but NO managed terminal.
+        let session = Session(
+            name: "wr-incomplete", status: .active, kind: .workerRun,
+            workerRunID: "run-incomplete", workerID: "crow-x-1", workerRunScratchDir: scratch.path
+        )
+        appState.sessions.append(session)
+
+        await runner.tick()
+
+        #expect(appState.sessions.first(where: { $0.id == session.id })?.status == .completed)
+        #expect(!FileManager.default.fileExists(atPath: scratch.path))  // key wiped, not stranded
+        #expect(runner.statusSnapshot().watched.isEmpty)               // never adopted
     }
 
     /// With config present but `enabled: false`, teardown likewise still runs.

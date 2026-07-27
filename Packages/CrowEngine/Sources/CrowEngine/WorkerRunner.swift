@@ -40,8 +40,10 @@ public final class WorkerRunner {
 
     // MARK: - Tunables
 
-    /// Lease requested on claim/heartbeat (matches Corveil's 30m default).
-    private let leaseSeconds = 1800
+    /// Lease requested on claim/heartbeat (matches Corveil's 30m default), and
+    /// the window after which a run with no successful heartbeat is failed closed.
+    /// `var` (not `let`) only so tests can shrink it to force the lost-lease path.
+    var leaseSeconds = 1800
     /// Re-heartbeat once a watched run is this old since its last beat — well
     /// under the 30m lease so a slow tick can't drop a live run.
     private let heartbeatInterval: TimeInterval = 600
@@ -191,7 +193,23 @@ public final class WorkerRunner {
             guard let runID = session.workerRunID, let workerID = session.workerID,
                   let scratchDir = session.workerRunScratchDir,
                   let terminalID = appState.terminals[session.id]?.first(where: { $0.isManaged })?.id
-            else { continue }
+            else {
+                // Incomplete linkage — we can't drive this run to completion, and
+                // (if it has a scratch dir) the orphan sweep won't touch a dir a
+                // live session still references. Fail-closed LOCALLY so the scoped
+                // key isn't stranded: wipe the scratch dir, then move the session
+                // off `.active`. If the wipe fails, keep it active so a later
+                // reconcile retries rather than leaving the key referenced by a
+                // completed session (review).
+                if let scratchDir = session.workerRunScratchDir, !scratchDir.isEmpty,
+                   !SessionService.wipeWorkerRunScratch(scratchDir) {
+                    continue
+                }
+                NSLog("[WorkerRunner] worker-run session %@ has incomplete linkage; failing closed",
+                      session.id.uuidString)
+                sessionService.completeSession(id: session.id)
+                continue
+            }
             watchedRuns[session.id] = WorkerRunWatch(
                 runID: runID,
                 workerID: workerID,
@@ -251,6 +269,18 @@ public final class WorkerRunner {
     /// maps the outcome onto `corveil worker-run complete`.
     private func checkFinishedRuns(backend: CorveilWorkerBackend, now: Date) async {
         for (sessionID, run) in watchedRuns {
+            // Fail-closed on a lost lease: if no heartbeat has succeeded within the
+            // lease window, Corveil may have expired our claim and re-queued the
+            // run to another runner. Continuing to execute (and calling `mcp-call`)
+            // would open a duplicate-runner / racing-write window (review). Stop:
+            // fail the dead claim, complete the local session, free the slot.
+            if now.timeIntervalSince(run.lastHeartbeatAt) >= TimeInterval(leaseSeconds) {
+                NSLog("[WorkerRunner] lease lost for run %@ (no successful heartbeat within %ds); failing",
+                      run.runID, leaseSeconds)
+                await failClosed(run: run, sessionID: sessionID, backend: backend,
+                                 reason: "lease lost — runner could not heartbeat within the lease window")
+                continue
+            }
             let status = appState.sessions.first(where: { $0.id == sessionID })?.status
             let decision = JobScheduler.finishDecision(
                 now: now,
@@ -291,6 +321,17 @@ public final class WorkerRunner {
         }
     }
 
+    /// Terminal fail-closed teardown for a still-`.active` run we can no longer
+    /// safely execute (lost lease, launch timeout, max-duration timeout): fail the
+    /// Corveil claim, move the session off `.active` (so reconcile won't re-adopt
+    /// it), and wipe+drop. Shared so every fail path frees the concurrency slot
+    /// identically.
+    private func failClosed(run: WorkerRunWatch, sessionID: UUID, backend: CorveilWorkerBackend, reason: String) async {
+        await complete(backend: backend, run: run, args: .init(error: reason))
+        sessionService.completeSession(id: sessionID)
+        wipeAndDrop(sessionID: sessionID, scratchDir: run.scratchDir)
+    }
+
     /// Handle a run we've stopped watching. There are three sub-cases behind
     /// `finishDecision`'s `.stopWatching`, distinguished by the session status:
     ///
@@ -309,16 +350,17 @@ public final class WorkerRunner {
     private func stopWatching(run: WorkerRunWatch, sessionID: UUID, status: SessionStatus?, backend: CorveilWorkerBackend) async {
         switch status {
         case .active:
-            await complete(backend: backend, run: run,
-                           args: .init(error: "run exceeded the runner's max watch duration"))
-            sessionService.completeSession(id: sessionID)
+            await failClosed(run: run, sessionID: sessionID, backend: backend,
+                             reason: "run exceeded the runner's max watch duration")
         case nil:
             await complete(backend: backend, run: run,
                            args: .init(error: "run aborted on runner before completion"))
+            wipeAndDrop(sessionID: sessionID, scratchDir: run.scratchDir)
         default:
-            break  // user moved it off active — lease expiry fails it on Corveil.
+            // User moved it off active — lease expiry fails it on Corveil; only
+            // wipe the local secret.
+            wipeAndDrop(sessionID: sessionID, scratchDir: run.scratchDir)
         }
-        wipeAndDrop(sessionID: sessionID, scratchDir: run.scratchDir)
     }
 
     private func complete(backend: CorveilWorkerBackend, run: WorkerRunWatch, args: WorkerRunCompletion.CompleteArgs) async {
@@ -464,10 +506,8 @@ public final class WorkerRunner {
     /// the wipe succeeds). Same shape as the max-duration timeout path.
     private func handleLaunchTimeout(sessionID: UUID) async {
         guard let run = watchedRuns[sessionID] else { return }
-        await complete(backend: currentBackend(), run: run,
-                       args: .init(error: "agent failed to launch on the runner"))
-        sessionService.completeSession(id: sessionID)
-        wipeAndDrop(sessionID: sessionID, scratchDir: run.scratchDir)
+        await failClosed(run: run, sessionID: sessionID, backend: currentBackend(),
+                         reason: "agent failed to launch on the runner")
     }
 
     // MARK: - Claim planning (pure)

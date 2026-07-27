@@ -62,9 +62,38 @@ final class CorveilWorkerBackendTests: XCTestCase {
         XCTAssertFalse(args.contains("--kind"))
     }
 
-    func testListToleratesRunsWrapperObject() {
-        let runs = CorveilWorkerBackend.parseRuns(#"{"runs":[{"id":"a"},{"id":"b"}]}"#)
+    func testListToleratesRunsWrapperObject() throws {
+        let runs = try CorveilWorkerBackend.parseRuns(#"{"runs":[{"id":"a"},{"id":"b"}]}"#)
         XCTAssertEqual(runs.map(\.id), ["a", "b"])
+    }
+
+    func testParseRunsTreatsEmptyOutputAsEmptyQueue() throws {
+        XCTAssertEqual(try CorveilWorkerBackend.parseRuns("").count, 0)
+        XCTAssertEqual(try CorveilWorkerBackend.parseRuns("   \n").count, 0)
+        XCTAssertEqual(try CorveilWorkerBackend.parseRuns("[]").count, 0)
+        XCTAssertEqual(try CorveilWorkerBackend.parseRuns(#"{"runs":[]}"#).count, 0)
+    }
+
+    func testParseRunsThrowsOnUnparseableNonEmptyOutput() {
+        // Schema drift / wrapper change that still exits 0 must NOT look like an
+        // empty queue — it throws so the runner surfaces the failure.
+        XCTAssertThrowsError(try CorveilWorkerBackend.parseRuns("not json at all")) { error in
+            XCTAssertEqual(error as? WorkerRunError, .badResponse("not json at all"))
+        }
+        XCTAssertThrowsError(try CorveilWorkerBackend.parseRuns(#"{"unexpected":"shape"}"#))
+    }
+
+    func testListClaimableSurfacesUnparseableOutputAsError() async {
+        let fake = FakeShellRunner()
+        fake.responses = [.success("garbage-not-json")]
+        do {
+            _ = try await backend(fake).listClaimable(kind: nil, caps: [])
+            XCTFail("expected throw on unparseable list output")
+        } catch let error as WorkerRunError {
+            XCTAssertEqual(error, .badResponse("garbage-not-json"))
+        } catch {
+            XCTFail("expected WorkerRunError.badResponse, got \(error)")
+        }
     }
 
     // MARK: - get / claim
