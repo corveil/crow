@@ -3687,6 +3687,29 @@ public final class SessionService {
         }
     }
 
+    /// Clear a `.workerRun` session's Corveil linkage (`workerRunID` / `workerID`
+    /// / `workerRunScratchDir`) once its run has reached a terminal state and the
+    /// scratch dir is wiped. This severs the session from the finished Corveil
+    /// run so that re-activating it (a remote `set-status … active` is allowed)
+    /// can NOT make the worker runner re-adopt it, re-heartbeat an already-failed
+    /// claim, and hold a concurrency slot — reconcile now sees incomplete linkage
+    /// and fails it closed instead (corveil/crow#801 review).
+    public func clearWorkerRunLinkage(sessionID: UUID) {
+        func apply(_ session: inout Session) {
+            session.workerRunID = nil
+            session.workerID = nil
+            session.workerRunScratchDir = nil
+        }
+        if let idx = appState.sessions.firstIndex(where: { $0.id == sessionID }) {
+            apply(&appState.sessions[idx])
+        }
+        store.mutate { data in
+            if let idx = data.sessions.firstIndex(where: { $0.id == sessionID }) {
+                apply(&data.sessions[idx])
+            }
+        }
+    }
+
     public func setSessionInReview(id: UUID) {
         updateSessionStatus(id, to: .inReview)
     }

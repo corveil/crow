@@ -109,6 +109,20 @@ struct WorkerRunResultDecodeTests {
     @Test func returnsNilOnGarbage() {
         #expect(WorkerRunResult.decode(fromJSON: Data("not json".utf8)) == nil)
     }
+
+    @Test func preservesStringTypedOutput() {
+        // A string `output` must NOT be dropped (JSONSerialization rejects a
+        // top-level String) — it's passed through verbatim (review).
+        let data = Data(#"{"title":"T","content":"C","output":"all done"}"#.utf8)
+        let result = WorkerRunResult.decode(fromJSON: data)
+        #expect(result?.output == "all done")
+    }
+
+    @Test func stringifiesScalarOutput() {
+        let data = Data(#"{"title":"T","content":"C","output":3}"#.utf8)
+        let result = WorkerRunResult.decode(fromJSON: data)
+        #expect(result?.output == "3")
+    }
 }
 
 @Suite("Worker-run scratch dir + cleanup")
@@ -461,6 +475,18 @@ struct WorkerRunnerTickTeardownTests {
         #expect(!appState.autoLaunchTerminals.contains(term.id))              // agent stopped
         // User's chosen status is preserved (NOT forced to .completed).
         #expect(appState.sessions.first(where: { $0.id == session.id })?.status == .paused)
+        // Linkage cleared so a re-activation can't re-adopt the finished run.
+        #expect(appState.sessions.first(where: { $0.id == session.id })?.workerRunID == nil)
+        #expect(appState.sessions.first(where: { $0.id == session.id })?.workerRunScratchDir == nil)
+
+        // Re-activate the session (a remote set-status is allowed): reconcile must
+        // NOT re-adopt/re-heartbeat it — it fails closed to .completed instead.
+        if let idx = appState.sessions.firstIndex(where: { $0.id == session.id }) {
+            appState.sessions[idx].status = .active
+        }
+        await runner.tick()
+        #expect(runner.statusSnapshot().watched.isEmpty)
+        #expect(appState.sessions.first(where: { $0.id == session.id })?.status == .completed)
     }
 
     /// An active `.workerRun` session with incomplete linkage (here: no managed

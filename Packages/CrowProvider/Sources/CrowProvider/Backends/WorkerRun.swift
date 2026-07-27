@@ -126,10 +126,12 @@ public struct WorkerRunResult: Codable, Sendable, Equatable {
         self.error = error
     }
 
-    /// Decode a `.crow-run-result.json` payload from raw bytes. `output` may be a
-    /// nested JSON object; it's re-encoded to a compact string so it can be
-    /// handed straight to `worker-run complete --output`. Pure (no filesystem)
-    /// so it's unit-testable.
+    /// Decode a `.crow-run-result.json` payload from raw bytes. `output` is
+    /// preserved for `worker-run complete --output`: a nested object/array is
+    /// re-encoded to compact JSON, a string is passed through verbatim, and any
+    /// other scalar is stringified — so a string-typed `output` is never silently
+    /// dropped (`JSONSerialization.data(withJSONObject:)` rejects a top-level
+    /// String) (review). Pure (no filesystem) so it's unit-testable.
     public static func decode(fromJSON data: Data) -> WorkerRunResult? {
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return nil
@@ -139,8 +141,14 @@ public struct WorkerRunResult: Codable, Sendable, Equatable {
         let error = obj["error"] as? String
         var output: String?
         if let outObj = obj["output"], !(outObj is NSNull) {
-            output = (try? JSONSerialization.data(withJSONObject: outObj))
-                .flatMap { String(data: $0, encoding: .utf8) }
+            if let s = outObj as? String {
+                output = s
+            } else if JSONSerialization.isValidJSONObject(outObj),
+                      let data = try? JSONSerialization.data(withJSONObject: outObj) {
+                output = String(data: data, encoding: .utf8)
+            } else {
+                output = String(describing: outObj)  // number/bool scalar
+            }
         }
         return WorkerRunResult(title: title, content: content, output: output, error: error)
     }

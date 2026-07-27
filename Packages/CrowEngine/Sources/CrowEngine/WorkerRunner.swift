@@ -318,6 +318,10 @@ public final class WorkerRunner {
     private func wipeAndDrop(sessionID: UUID, scratchDir: String) {
         if SessionService.wipeWorkerRunScratch(scratchDir) {
             watchedRuns[sessionID] = nil
+            // Sever the session from the now-finished Corveil run so re-activating
+            // it (a remote `set-status … active`) can't make reconcile re-adopt +
+            // re-heartbeat a dead claim and hold a slot (review).
+            sessionService.clearWorkerRunLinkage(sessionID: sessionID)
         }
     }
 
@@ -345,10 +349,13 @@ public final class WorkerRunner {
     ///   re-heartbeating an already-completed Corveil run (review).
     /// - **Deleted (`nil`):** `deleteSession` already tore down the local session +
     ///   scratch dir; just best-effort fail the Corveil run so the queue isn't hung.
-    /// - **User-moved off `.active` (paused/archived/…):** leave the Corveil run to
-    ///   the lease-expiry abandonment sweep; only wipe the local secret.
+    /// - **User-moved off `.active` (paused/archived/…):** fail the Corveil claim
+    ///   AND stop the agent — don't leave it running with the in-process key while
+    ///   heartbeats stop and the lease lapses (another runner could then claim the
+    ///   same run). The user's chosen status is preserved (no `completeSession`).
     ///
-    /// Every case wipes the scratch dir and drops the watch.
+    /// Every case wipes the scratch dir, drops the watch, and (via `wipeAndDrop`)
+    /// clears the session's Corveil linkage so a later re-activation can't re-adopt it.
     private func stopWatching(run: WorkerRunWatch, sessionID: UUID, status: SessionStatus?, backend: CorveilWorkerBackend) async {
         switch status {
         case .active:
