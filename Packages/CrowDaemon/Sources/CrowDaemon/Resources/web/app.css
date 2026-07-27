@@ -772,6 +772,10 @@ html, body {
 .ctx-item:hover { background: rgba(221, 196, 130, 0.14); }
 .ctx-item.ctx-danger { color: var(--red); }
 .ctx-item.ctx-danger:hover { background: rgba(255, 69, 58, 0.14); }
+/* Off-PATH agent in the new-manager menu: shown for discoverability but not
+   selectable (#879). Dimmed, default cursor, no hover highlight. */
+.ctx-item.disabled { color: var(--text-secondary); opacity: 0.5; cursor: default; }
+.ctx-item.disabled:hover { background: transparent; }
 .ctx-sep { height: 1px; background: var(--border-subtle); margin: 4px 6px; }
 /* Non-interactive footnote in the terminal context menu — tells the user how to
    select text on an agent surface, where the app owns the mouse (ADR-0013). */

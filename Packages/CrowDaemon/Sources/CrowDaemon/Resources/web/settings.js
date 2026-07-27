@@ -14,7 +14,7 @@
   let devRoot = '';
   let dirty = false;
   let activeTab = 'general';
-  let agents = [];         // [{kind, name, default}] from list-agents (local, not remote)
+  let agents = [];         // [{kind, name, default, available, binary}] from list-agents (local, not remote)
   let subForm = null;      // { kind: 'workspace'|'job', draft, isNew }
   let backdrop = null;
   let escHandler = null;
@@ -325,8 +325,15 @@
     if (cfg.agentsByKind[actionKey] == null) def.selected = true;
     sel.appendChild(def);
     for (const a of agents) {
-      const o = el('option', null, a.name);
+      const enabled = a.available !== false;
+      // Off-PATH agents stay in the list (so users see the harness exists) but
+      // are disabled with an inline "(not installed)" suffix + tooltip so it's
+      // obvious why they can't be picked (#879). `agentUnavailableHint` lives in
+      // app.js, loaded first on the same page.
+      const o = el('option', null, a.name + (enabled ? '' : ' (not installed)'));
       o.value = a.kind;
+      o.disabled = !enabled;
+      if (!enabled && typeof agentUnavailableHint === 'function') o.title = agentUnavailableHint(a);
       if (cfg.agentsByKind[actionKey] === a.kind) o.selected = true;
       sel.appendChild(o);
     }
@@ -335,6 +342,28 @@
       else cfg.agentsByKind[actionKey] = sel.value;
       markDirty();
     };
+    return field(labelText, sel, help);
+  }
+
+  // The Default agent for new sessions (the fallback the per-action overrides
+  // defer to). Bound to cfg.defaultAgentKind. Like agentOverrideField, off-PATH
+  // agents render disabled with the "(not installed)" suffix + tooltip so an
+  // unlaunchable default can't be picked here (#879) — the generic selectField
+  // has no disable support, which is how this picker escaped the first pass and
+  // let users persist an unlaunchable defaultAgentKind. No "Use default" option:
+  // this IS the default.
+  function defaultAgentField(labelText, help) {
+    const sel = el('select', 'st-select');
+    for (const a of agents) {
+      const enabled = a.available !== false;
+      const o = el('option', null, a.name + (a.default ? ' (default)' : '') + (enabled ? '' : ' (not installed)'));
+      o.value = a.kind;
+      o.disabled = !enabled;
+      if (!enabled && typeof agentUnavailableHint === 'function') o.title = agentUnavailableHint(a);
+      if (cfg.defaultAgentKind === a.kind) o.selected = true;
+      sel.appendChild(o);
+    }
+    sel.onchange = () => { cfg.defaultAgentKind = sel.value; markDirty(); };
     return field(labelText, sel, help);
   }
   // matches the desktop's token chips instead of a newline textarea. Enter or
@@ -480,13 +509,12 @@
     renderAutostart(body);
 
     body.appendChild(group('Agent'));
-    if (agents.length >= 2) {
-      // Choose the default agent, like the desktop Settings picker. The options
-      // are the locally-available (registered) agents; the launcher gates any
-      // other value back to the default (CROW-593).
-      body.appendChild(selectField('Default agent', cfg, 'defaultAgentKind',
-        agents.map((a) => [a.kind, a.name + (a.default ? ' (default)' : '')]),
-        { help: 'Used for new sessions unless overridden. Install more agent CLIs to add options.' }));
+    if (agents.length) {
+      // Choose the default agent, like the desktop Settings picker. All known
+      // agents are listed; off-PATH ones are disabled (a persisted default that
+      // isn't launchable is exactly what the launch gate exists to prevent).
+      body.appendChild(defaultAgentField('Default agent',
+        'Used for new sessions unless overridden. Uninstalled agents are shown disabled — install the CLI and restart Crow to enable.'));
       // Per-action overrides (coding / reviews / scheduled jobs / Manager),
       // matching the desktop's four pickers. "Use default" clears the override.
       body.appendChild(agentOverrideField('Agent for coding', 'work'));
@@ -494,8 +522,11 @@
       body.appendChild(agentOverrideField('Agent for scheduled jobs', 'job'));
       body.appendChild(agentOverrideField('Agent for Manager', 'manager'));
     } else {
+      // list-agents returned nothing — the daemon is unreachable, not a
+      // one-agent install. Show the stored value read-only rather than an empty
+      // dropdown.
       body.appendChild(textField('Default agent', cfg, 'defaultAgentKind',
-        { readonly: true, help: 'Only one agent is available. Install another agent CLI (Codex, Cursor, opencode) to choose.' }));
+        { readonly: true, help: 'Agent list unavailable — is crowd running?' }));
     }
 
     body.appendChild(group('Corveil CLI'));

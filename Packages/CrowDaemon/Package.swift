@@ -71,6 +71,7 @@ let package = Package(
                 .product(name: "CrowAutostart", package: "CrowAutostart"),
                 .product(name: "HummingbirdTesting", package: "hummingbird"),
                 .product(name: "CrowClaude", package: "CrowClaude"),
+                .product(name: "CrowCodex", package: "CrowCodex"),
                 .product(name: "CrowEngine", package: "CrowEngine"),
                 .product(name: "CrowProvider", package: "CrowProvider"),
             ]

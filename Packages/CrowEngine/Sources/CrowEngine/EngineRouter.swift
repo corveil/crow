@@ -475,18 +475,19 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
             },
             // Available coding agents for the web's new-manager menu (#2 /
             // CROW-593). Mirrors the desktop's AgentRegistry-backed picker.
+            // Returns **all known** agents with an `available` flag + `binary`
+            // token so off-PATH ones surface greyed-out, not hidden (#879).
             "list-agents": { @Sendable _ in
                 await MainActor.run {
-                    let defaultKind = AgentRegistry.shared.defaultAgent?.kind
-                    let items: [JSONValue] = AgentRegistry.shared.allAgents()
-                        .sorted { $0.displayName < $1.displayName }
-                        .map { agent in
-                            .object([
-                                "kind": .string(agent.kind.rawValue),
-                                "name": .string(agent.displayName),
-                                "default": .bool(agent.kind == defaultKind),
-                            ])
-                        }
+                    let items: [JSONValue] = AgentRegistry.shared.agentListings().map { a in
+                        .object([
+                            "kind": .string(a.kind.rawValue),
+                            "name": .string(a.displayName),
+                            "default": .bool(a.isDefault),
+                            "available": .bool(a.available),
+                            "binary": .string(a.binary),
+                        ])
+                    }
                     return ["agents": .array(items)]
                 }
             },

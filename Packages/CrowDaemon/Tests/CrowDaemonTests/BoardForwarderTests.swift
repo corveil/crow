@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import CrowCore
 import CrowClaude
+import CrowCodex
 import CrowEngine
 import CrowProvider
 import CrowGit
@@ -341,10 +342,82 @@ private struct StubShellRunner: ShellRunner {
 
         let resp = await router.handle(request: JSONRPCRequest(id: 1, method: "list-agents"))
         #expect(resp.error == nil)
-        let kinds = (resp.result?["agents"]?.arrayValue ?? [])
-            .compactMap { $0.objectValue?["kind"]?.stringValue }
+        let agents = resp.result?["agents"]?.arrayValue ?? []
+        let kinds = agents.compactMap { $0.objectValue?["kind"]?.stringValue }
         #expect(kinds.contains(AgentKind.claudeCode.rawValue),
                 "list-agents must serve the locally-registered Claude agent even with the app down")
+
+        // #879: every agent object now carries an `available` flag + `binary`
+        // token so the pickers can grey out off-PATH agents with a tooltip. The
+        // registered Claude agent is available.
+        let claude = agents.first { $0.objectValue?["kind"]?.stringValue == AgentKind.claudeCode.rawValue }
+        #expect(claude?.objectValue?["available"]?.boolValue == true,
+                "list-agents must report the availability flag (#879)")
+        #expect(claude?.objectValue?["binary"]?.stringValue == "claude",
+                "list-agents must report the PATH binary token for the disabled-picker tooltip (#879)")
+    }
+
+    // #879: the actual point of the PR — an **unavailable** agent must still
+    // appear in the listing, flagged `available: false` (so the pickers can grey
+    // it out) and **not** the default, while an available one flags
+    // `available: true`. Exercises `agentListings()` — the exact projection both
+    // `list-agents` handlers serialize — against a **fresh** registry, so there's
+    // no shared-singleton mutation to leak into sibling tests.
+    @Test func listingReportsUnavailableAgents() {
+        let reg = AgentRegistry()
+        reg.register(ClaudeCodeAgent())                            // available
+        reg.registerKnown(OpenAICodexAgent(), available: false)    // off-PATH
+
+        let listings = reg.agentListings()
+
+        let claude = listings.first { $0.kind == .claudeCode }
+        #expect(claude?.available == true)
+        #expect(claude?.isDefault == true, "the available first-registered agent is the default")
+        #expect(claude?.binary == "claude")
+
+        let codex = listings.first { $0.kind == .codex }
+        #expect(codex != nil, "an off-PATH agent must be listed, not hidden (#879)")
+        #expect(codex?.available == false, "an off-PATH agent must be flagged available:false")
+        #expect(codex?.binary == "codex", "the tooltip needs the PATH binary token")
+        #expect(codex?.isDefault == false, "an unavailable agent must never be the default")
+
+        // …and it stays unlaunchable: unavailable ⇒ out of the launchable map.
+        #expect(reg.agent(for: .codex) == nil)
+        #expect(reg.registeredKind(.codex) == nil)
+    }
+
+    // #879: `registerKnown(_:available:)` surfaces an off-PATH agent for the
+    // pickers **without** making it launchable — the launch gate
+    // (`agent(for:)` / `registeredKind` / `defaultAgent`) stays keyed on the
+    // available map, so a greyed-out picker row can never actually launch. Uses
+    // a fresh registry so the process-wide singleton other tests populate can't
+    // leak in.
+    @Test @MainActor func unavailableAgentSurfacesButStaysUnlaunchable() {
+        let reg = AgentRegistry()
+        reg.registerKnown(ClaudeCodeAgent(), available: false)
+
+        // Unavailable ⇒ not launchable, not gate-passable, not a default.
+        #expect(reg.agent(for: .claudeCode) == nil)
+        #expect(reg.registeredKind(.claudeCode) == nil)
+        #expect(reg.defaultAgent == nil)
+
+        // …but still listed for the pickers, flagged unavailable.
+        let known = reg.allKnownAgents()
+        #expect(known.count == 1)
+        #expect(known.first?.agent.kind == .claudeCode)
+        #expect(known.first?.available == false)
+    }
+
+    // The available path: registering a resolved agent makes it launchable and
+    // (being first) the default, and lists it as available.
+    @Test @MainActor func availableAgentIsLaunchableAndDefault() {
+        let reg = AgentRegistry()
+        reg.registerKnown(ClaudeCodeAgent(), available: true)
+
+        #expect(reg.agent(for: .claudeCode) != nil)
+        #expect(reg.registeredKind(.claudeCode) == .claudeCode)
+        #expect(reg.defaultAgent?.kind == .claudeCode)
+        #expect(reg.allKnownAgents().first?.available == true)
     }
 }
 

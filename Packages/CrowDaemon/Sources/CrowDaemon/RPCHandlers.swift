@@ -586,18 +586,20 @@ func makeCommandRouter(
         // (IssueTracker / AllowListService), so these reads are forward-only.
         // Coding agents are registered in the daemon's own AgentRegistry at
         // startup, so `list-agents` answers locally — no app required (CROW-581).
+        // Returns **all known** agents, each with an `available` flag + `binary`
+        // token, so the pickers can grey out off-PATH ones with a help tooltip
+        // instead of hiding them (#879).
         "list-agents": { _ in
             await MainActor.run {
-                let defaultKind = AgentRegistry.shared.defaultAgent?.kind
-                let items: [JSONValue] = AgentRegistry.shared.allAgents()
-                    .sorted { $0.displayName < $1.displayName }
-                    .map { agent in
-                        .object([
-                            "kind": .string(agent.kind.rawValue),
-                            "name": .string(agent.displayName),
-                            "default": .bool(agent.kind == defaultKind),
-                        ])
-                    }
+                let items: [JSONValue] = AgentRegistry.shared.agentListings().map { a in
+                    .object([
+                        "kind": .string(a.kind.rawValue),
+                        "name": .string(a.displayName),
+                        "default": .bool(a.isDefault),
+                        "available": .bool(a.available),
+                        "binary": .string(a.binary),
+                    ])
+                }
                 return ["agents": .array(items)]
             }
         },

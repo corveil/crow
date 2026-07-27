@@ -64,10 +64,21 @@ modifying `CrowCore`.
 [`AgentRegistry`](../../Packages/CrowCore/Sources/CrowCore/Agent/AgentRegistry.swift)
 is the process-wide map from kind → agent. **The first kind registered becomes
 the registry's *fallback* default.** At daemon boot, `CrowDaemon.registerAgents`
-registers `ClaudeCodeAgent` unconditionally first, then Codex / Cursor / OpenCode
-**only if `findBinary()` resolves**. So Claude Code is always present, and is the
-registry fallback; any other harness whose binary is off `PATH` is simply not in
-the map.
+registers **every** known agent so all of them surface in the pickers, but flags
+each as *available* only when `findBinary()` resolves (Claude Code is always
+available). Available agents enter the launchable `agents` map (Claude Code first,
+so it's the registry fallback); an off-PATH agent is recorded as *known but
+unavailable* — kept out of the launchable map so `registeredKind`/`agent(for:)`
+still refuse to launch or hand off to it, but returned by `allKnownAgents()` so
+the `list-agents` RPC / web pickers show it **greyed-out with a "not found on
+PATH — install it and restart Crow" tooltip** instead of hiding it (#879).
+Availability is a boot-time snapshot; re-probing on install is out of scope.
+
+> **Superseded behavior (2026-07, #879):** originally an off-PATH harness was
+> *silently absent* from the registry, picker, and handoff. That read as
+> broken/missing for a shipped-but-uninstalled agent (e.g. Antigravity), so the
+> pickers now **surface-but-disable** unavailable agents. The launch gate is
+> unchanged — only the UI/`list-agents` surface widened.
 
 The harness a **new session** actually launches with is a separate, config-driven
 choice: `AppState.agentKind(for:) = agentsByKind[sessionKind] ?? defaultAgentKind`
@@ -124,14 +135,17 @@ These are the accepted exceptions — the candidates for a future
 
 **Harder / accepted:**
 
-- **A harness whose binary isn't on `PATH` is silently unavailable** in the
-  picker and in `handoff-agent`. Because `registerAgents` gates registration on
-  `findBinary()` at boot, such a harness is *unregistered*, so a handoff to it
-  throws `agentNotRegistered` (the registry lookup precedes the binary check in
-  `handoffAgent`). `agentBinaryMissing` is the narrower post-boot case — the
-  harness *was* registered at boot but its binary later disappeared or its
-  `defaults.binaries.<kind>` override was repointed. Either way, "why isn't Cursor
-  in the list?" is answered by `findBinary()`, not an error message.
+- **A harness whose binary isn't on `PATH` is shown in the pickers but disabled**
+  — greyed-out with a "not found on `PATH` — install it and restart Crow" tooltip,
+  not hidden (#879; see the *Superseded behavior* blockquote in the Decision
+  section above). It is registered as *known-but-unavailable*: kept out of the
+  launchable `agents` map, so a handoff to it still throws `agentNotRegistered`
+  (the registry lookup precedes the binary check in `handoffAgent`). The
+  *mechanism* is unchanged — only the picker now surfaces the harness instead of
+  omitting it. `agentBinaryMissing` is the narrower post-boot case — the harness
+  *was* available at boot but its binary later disappeared or its
+  `defaults.binaries.<kind>` override was repointed. So "why isn't Cursor
+  selectable?" is now answered by the disabled row's tooltip, not by absence.
 - The residual identity checks above are real switches-on-identity the
   abstraction hasn't dissolved — the review-prompt `switch` plus Claude-only prep
   (trust seeding across four sites, gateway env, OTEL telemetry). They are the

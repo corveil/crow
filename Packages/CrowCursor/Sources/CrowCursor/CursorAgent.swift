@@ -65,12 +65,14 @@ public struct CursorAgent: CodingAgent {
         telemetryPort: UInt16?
     ) -> String? {
         let agentPath = CursorLaunchArgs.shellQuote(findBinary() ?? "agent")
-        // NB: `findBinary()` resolves to an absolute path here (Cursor is only
-        // registered when it resolves, `CrowDaemon.registerAgents`), so the
-        // quoted form is `'/…/agent'` and `AgentLaunch.commandLaunchesToken`
-        // still matches it via its `/` prefix alternative. A bare `'agent'`
-        // (findBinary→nil) would NOT match that regex — but that path is
-        // unreachable while registration gates on `findBinary()`.
+        // NB: `findBinary()` resolves to an absolute path here — Cursor is
+        // registered as *known* regardless of PATH (#879), but only enters the
+        // launchable `agents` map when it resolves, and `autoLaunchCommand` only
+        // runs for a launchable agent. So the quoted form is `'/…/agent'` and
+        // `AgentLaunch.commandLaunchesToken` still matches it via its `/` prefix
+        // alternative. A bare `'agent'` (findBinary→nil) would NOT match that
+        // regex — but that path is unreachable while the launch gate excludes
+        // unavailable kinds.
         // Auto-permission flags (`--force --approve-mcps`) when the caller opted
         // in — empty otherwise. Parity with Claude's `--permission-mode auto`;
         // see `CursorLaunchArgs.autoPermissionSuffix` for why `--sandbox` is
