@@ -104,6 +104,29 @@ crow rebuild-scorecard                → backfill analytics snapshots; {"rebuil
 crow get-state                        → the daemon's ENTIRE state snapshot; large, capped at 1 MB — prefer list-sessions / get-session / list-links
 ```
 
+### Board & Workflow Commands
+
+The CLI half of the web Ticket Board / Reviews board buttons — drive the board without a browser. The three read/refresh verbs need only a provider-configured daemon; the four session-spawning verbs additionally need tmux on the daemon host.
+
+```
+crow list-tickets                               → {issues:[...], counts:{...}, done_last_24h:N, loading:bool}
+crow list-reviews                               → {reviews:[...], loading:bool, unseen:N}
+crow refresh-tickets                            → {"ok":true}   (awaits the poll; see note below)
+crow work-on-issue --url "..."                  → {"ok":true}   (types /crow-workspace <url> into the Manager)
+crow batch-work-on-issues --url "..." [--url "..."] [--urls-file FILE|-]  → {"ok":true,"sent":N,"rejected":[...]}
+crow start-review --url "<pr-url>"              → {"session_id":"<uuid>"}
+crow create-manager [--agent claude-code|cursor|codex|opencode]           → {"session_id":"<uuid>","name":"Manager N"}
+crow quick-action --session <uuid> --action fixConflicts|addressChanges|fixChecks|mergePR|reReview
+                                                → {"dispatched":bool,"action":"...","reason":"..."}
+```
+
+- `list-tickets` / `list-reviews` print the board payload verbatim — filter with `jq`. A ticket with `linked_session_id: null` (or a review with `review_session_id: null`) is one nothing is working yet.
+- `work-on-issue` URLs become terminal keystrokes, so they must be `http(s)` with no whitespace or control characters. `start-review` URLs go to `git clone` and are not checked that way.
+- `batch-work-on-issues` sends `--url` values first, then the lines of `--urls-file`. Bad URLs come back in `rejected` instead of failing the batch.
+- `quick-action` returns `dispatched:false` + `reason` with a **zero** exit code when the session has no agent terminal or no linked PR — branch on `dispatched`, not the exit code.
+- `refresh-tickets` awaits the poll, so a following `list-tickets` sees the new data. It returns `{"ok":true}` without polling when a refresh is already in flight or the provider is rate-limited.
+- `create-manager --agent` is used as given — an unrecognized kind is not rejected, so a typo stamps the Manager with a kind no agent is registered for. Omit `--agent` to get the configured Manager default.
+
 ## Important Notes
 
 - `--session` always expects a full UUID (e.g., `a1b2c3d4-e5f6-7890-abcd-ef1234567890`), not a session name
