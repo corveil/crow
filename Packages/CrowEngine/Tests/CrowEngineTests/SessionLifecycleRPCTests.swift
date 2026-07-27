@@ -60,32 +60,6 @@ import CrowIPC
         }
     }
 
-    // MARK: - PR guard
-
-    @Test func findsPRLinkAmongOtherLinkTypes() throws {
-        let links = [
-            SessionLink(sessionID: id, label: "Issue", url: "https://example.com/i/1", linkType: .ticket),
-            SessionLink(sessionID: id, label: "PR", url: "https://example.com/pr/2", linkType: .pr),
-            SessionLink(sessionID: id, label: "Repo", url: "https://example.com/r", linkType: .repo),
-        ]
-        let url = try SessionLifecycleRPC.requirePRURL(in: links, verb: "add-merge-label")
-        #expect(url == "https://example.com/pr/2")
-    }
-
-    @Test func rejectsWhenNoPRLinkAttached() {
-        // A ticket link is not a PR link — this is exactly the case the web UI
-        // hides the menu item for, and the CLI must reject rather than no-op.
-        let links = [
-            SessionLink(sessionID: id, label: "Issue", url: "https://example.com/i/1", linkType: .ticket),
-        ]
-        #expect(throws: RPCError.self) {
-            _ = try SessionLifecycleRPC.requirePRURL(in: links, verb: "add-merge-label")
-        }
-        #expect(throws: RPCError.self) {
-            _ = try SessionLifecycleRPC.requirePRURL(in: [], verb: "add-merge-label")
-        }
-    }
-
     // MARK: - response shapes
 
     @Test func statusResultMatchesSetStatusShape() {

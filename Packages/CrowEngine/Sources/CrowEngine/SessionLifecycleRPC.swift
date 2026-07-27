@@ -10,12 +10,16 @@ import Foundation
 /// without a socket (same pattern as `JobRPC`). Callers pass already-extracted
 /// values rather than an `AppState`, so nothing here needs main-actor isolation.
 ///
-/// The `require*` guards mirror the web UI's menu gating in `web/app.js`: the
-/// browser hides "Close Issue" / "Add Merge Label" when the session has no
-/// ticket URL / PR link, so it never reaches a handler that would no-op. The
-/// CLI has no such affordance, and the underlying `IssueTracker` entry points
-/// are `async -> Void` that swallow every failure — without these guards
-/// `crow add-merge-label` would print `{"ok":true}` for a session with no PR.
+/// `requireTicketURL` mirrors the web UI's menu gating in `web/app.js`: the
+/// browser hides "Mark In Review" when the session has no ticket, so it never
+/// reaches a handler that would half-do the action. The CLI has no such
+/// affordance, so the check lives server-side.
+///
+/// The provider-side verbs (`mark-issue-done`, `add-merge-label`) do **not**
+/// guard here — their preconditions and failures are reported by
+/// `IssueTracker` as `SessionActionError`, which covers the cases a handler
+/// can't see (missing provider, absent capability, unparseable repo slug, and
+/// every failed provider call). One source of truth, not two.
 public enum SessionLifecycleRPC {
     /// Decode the `session_id` param every lifecycle verb takes.
     ///
@@ -36,17 +40,6 @@ public enum SessionLifecycleRPC {
                 "\(verb) needs a linked ticket — attach one with `crow set-ticket --url …`")
         }
         return url
-    }
-
-    /// Require a session to carry a linked PR, returning its URL.
-    ///
-    /// - Throws: `RPCError.applicationError` when no `.pr` link is attached.
-    public static func requirePRURL(in links: [SessionLink], verb: String) throws -> String {
-        guard let pr = links.first(where: { $0.linkType == .pr }) else {
-            throw RPCError.applicationError(
-                "\(verb) needs a linked PR — attach one with `crow add-link --type pr --url …`")
-        }
-        return pr.url
     }
 
     /// Response body for the three status-transition verbs, matching `set-status`.

@@ -3461,13 +3461,25 @@ public final class IssueTracker {
 
     /// Move a session's linked issue to its done/closed state on the provider
     /// (GitHub/GitLab close the issue; Jira/Corveil transition to the mapped
-    /// completed status), then flip the Crow session to `.completed`. Best-effort:
-    /// auth / transition-not-allowed / already-closed failures are logged and
-    /// swallowed (no crash). Mirrors `markInReview`'s in-flight/error handling.
-    public func markIssueDone(sessionID: UUID) async {
-        guard let session = appState.sessions.first(where: { $0.id == sessionID }),
-              let ticketURL = session.ticketURL,
-              let taskProvider = session.provider else { return }
+    /// completed status), then flip the Crow session to `.completed`.
+    ///
+    /// Throws `SessionActionError` rather than swallowing failures: the caller
+    /// (the `mark-issue-done` RPC, and through it `crow mark-issue-done`) has to
+    /// be able to distinguish "closed the issue" from "did nothing" (CROW-816).
+    public func markIssueDone(sessionID: UUID) async throws {
+        guard let session = appState.sessions.first(where: { $0.id == sessionID }) else {
+            throw SessionActionError.sessionNotFound
+        }
+        // The web menu never offers this for a Manager; match that server-side.
+        guard !session.isManager else {
+            throw SessionActionError.managerSession("mark-issue-done")
+        }
+        guard let ticketURL = session.ticketURL, !ticketURL.isEmpty else {
+            throw SessionActionError.noTicketURL("mark-issue-done")
+        }
+        guard let taskProvider = session.provider else {
+            throw SessionActionError.noProvider("mark-issue-done")
+        }
 
         // For Jira, thread the matching workspace's per-project status-name map
         // (#523) so the transition targets a renamed "Done" workflow status. For
@@ -3487,10 +3499,11 @@ public final class IssueTracker {
             try await backend.closeTask(url: ticketURL)
         } catch ProviderError.unimplemented(let msg) {
             print("[IssueTracker] markIssueDone: \(msg)")
-            return
+            throw SessionActionError.unsupportedByProvider(msg)
         } catch {
-            print("[IssueTracker] markIssueDone failed for \(ticketURL): \(error.localizedDescription.prefix(200))")
-            return
+            let detail = String(error.localizedDescription.prefix(200))
+            print("[IssueTracker] markIssueDone failed for \(ticketURL): \(detail)")
+            throw SessionActionError.providerFailed(detail)
         }
 
         // Reflect locally — match by URL so it works regardless of provider.
@@ -3580,12 +3593,28 @@ public final class IssueTracker {
 
     /// Add the `crow:merge` auto-merge label to a session's PR, ensuring the
     /// label exists in the repo first. Capability-gated on `.autoMergeLabel`
-    /// (GitHub only today). Mirrors `markInReview`'s in-flight/error handling.
-    public func addMergeLabel(sessionID: UUID) async {
-        guard let session = appState.sessions.first(where: { $0.id == sessionID }),
-              let prLink = appState.links(for: sessionID).first(where: { $0.linkType == .pr }),
-              let backend = codeBackend(for: session),
-              backend.capabilities.contains(.autoMergeLabel) else { return }
+    /// (GitHub only today).
+    ///
+    /// Throws `SessionActionError` rather than swallowing failures, so
+    /// `crow add-merge-label` can't report success for a label it never added
+    /// (CROW-816).
+    public func addMergeLabel(sessionID: UUID) async throws {
+        guard let session = appState.sessions.first(where: { $0.id == sessionID }) else {
+            throw SessionActionError.sessionNotFound
+        }
+        // The web menu never offers this for a Manager; match that server-side.
+        guard !session.isManager else {
+            throw SessionActionError.managerSession("add-merge-label")
+        }
+        guard let prLink = appState.links(for: sessionID).first(where: { $0.linkType == .pr }) else {
+            throw SessionActionError.noPRLink("add-merge-label")
+        }
+        guard let backend = codeBackend(for: session) else {
+            throw SessionActionError.noProvider("add-merge-label")
+        }
+        guard backend.capabilities.contains(.autoMergeLabel) else {
+            throw SessionActionError.unsupportedByProvider("auto-merge labels")
+        }
 
         appState.isAddingMergeLabel[sessionID] = true
         defer { appState.isAddingMergeLabel[sessionID] = false }
@@ -3596,7 +3625,7 @@ public final class IssueTracker {
             // `gh pr edit --add-label` would fail if the label doesn't already
             // exist. Bail loudly rather than silently half-doing the action.
             print("[IssueTracker] addMergeLabel: could not parse repo slug from \(prLink.url)")
-            return
+            throw SessionActionError.unparseableRepo(prLink.url)
         }
         do {
             try await backend.ensureMergeLabel(repo: repo)
@@ -3614,7 +3643,9 @@ public final class IssueTracker {
             // with the label present instead of on the next scheduled poll.
             await refresh()
         } catch {
-            print("[IssueTracker] addMergeLabel failed for \(prLink.url): \(error.localizedDescription.prefix(200))")
+            let detail = String(error.localizedDescription.prefix(200))
+            print("[IssueTracker] addMergeLabel failed for \(prLink.url): \(detail)")
+            throw SessionActionError.providerFailed(detail)
         }
     }
 }

@@ -95,6 +95,14 @@ import CrowPersistence
     }
 }
 
+/// Records which sessions `SessionService` asked analytics for — the observable
+/// edge of `writeAnalyticsSnapshot`.
+private actor SnapshotProbe {
+    private var seen: Set<UUID> = []
+    func record(_ id: UUID) { seen.insert(id) }
+    func sawSnapshot(for id: UUID) -> Bool { seen.contains(id) }
+}
+
 /// M-E slice: the store-backed session status transitions run locally off the
 /// daemon's own state, so they work headless. With no `SessionService` (the
 /// no-tmux host) `applySessionStatus` falls back to writing `appState` + `store`
@@ -180,6 +188,64 @@ import CrowPersistence
             id: 1, method: "mark-in-review", params: ["session_id": .string(session.id.uuidString)]))
         #expect(resp.error?.code == RPCErrorCode.applicationError)
         #expect(appState.sessions.first?.status != .inReview, "status must not move on a rejected call")
+    }
+
+    /// The branch a production daemon actually takes. `seededRouter` passes no
+    /// `SessionService`, so the tests above only cover the no-tmux fallback
+    /// write — this one pins that with a `SessionService` present the status
+    /// still lands, and that `.completed` reaches `writeAnalyticsSnapshot`
+    /// (the snapshot that the pre-#816 direct write silently skipped).
+    @Test @MainActor func completeSessionRoutesThroughSessionServiceAndSnapshots() async {
+        let appState = AppState()
+        let store = JSONStore(directory: URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("crowd-status-svc-\(UUID().uuidString)"))
+        let session = Session(name: "s", kind: .work, agentKind: .claudeCode)
+        appState.sessions = [session]
+        store.mutate { $0.sessions = [session] }
+
+        // `writeAnalyticsSnapshot` consults `analyticsProvider` first; observing
+        // that call is how we prove the SessionService path ran.
+        let probe = SnapshotProbe()
+        let service = SessionService(
+            store: store, appState: appState,
+            analyticsProvider: { id in await probe.record(id); return nil })
+
+        let router = makeCommandRouter(
+            appState: appState, store: store, git: GitManager(),
+            devRoot: NSTemporaryDirectory(), cockpit: nil, sessionService: service)
+
+        let resp = await router.handle(request: JSONRPCRequest(
+            id: 1, method: "complete-session", params: ["session_id": .string(session.id.uuidString)]))
+        #expect(resp.error == nil)
+        #expect(resp.result?["status"]?.stringValue == "completed")
+        #expect(appState.sessions.first?.status == .completed)
+        #expect(store.data.sessions.first?.status == .completed, "the store write must go through too")
+
+        // The snapshot is scheduled on a detached Task; give it a moment to land.
+        for _ in 0..<50 where await !probe.sawSnapshot(for: session.id) {
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+        #expect(await probe.sawSnapshot(for: session.id),
+                "completing via SessionService must schedule the analytics snapshot")
+    }
+
+    /// Managers are rejected before `SessionService` is consulted, so the
+    /// analytics path is never entered for them.
+    @Test @MainActor func managerRejectionHoldsWithSessionServicePresent() async {
+        let appState = AppState()
+        let store = JSONStore.temporary()
+        let session = Session(name: "Manager", kind: .manager, agentKind: .claudeCode)
+        appState.sessions = [session]
+        let service = SessionService(store: store, appState: appState)
+
+        let router = makeCommandRouter(
+            appState: appState, store: store, git: GitManager(),
+            devRoot: NSTemporaryDirectory(), cockpit: nil, sessionService: service)
+
+        let resp = await router.handle(request: JSONRPCRequest(
+            id: 1, method: "complete-session", params: ["session_id": .string(session.id.uuidString)]))
+        #expect(resp.error?.code == RPCErrorCode.applicationError)
+        #expect(appState.sessions.first?.status != .completed)
     }
 
     /// Completing an already-completed session must stay legal: the UI's

@@ -1188,13 +1188,10 @@ func makeCommandRouter(
             }
             return try await mapRPCError {
                 let id = try SessionLifecycleRPC.sessionID(from: params)
-                try await MainActor.run {
-                    guard let session = appState.sessions.first(where: { $0.id == id }) else {
-                        throw DaemonRPCError.applicationError("Session not found")
-                    }
-                    _ = try SessionLifecycleRPC.requireTicketURL(session.ticketURL, verb: "mark-issue-done")
-                }
-                await tracker.markIssueDone(sessionID: id)
+                // Preconditions and provider failures both surface as typed
+                // `SessionActionError`s — the tracker is the single source of
+                // truth for them, so there's nothing to re-check here.
+                try await tracker.markIssueDone(sessionID: id)
                 return SessionLifecycleRPC.okResult(id: id)
             }
         },
@@ -1226,14 +1223,7 @@ func makeCommandRouter(
             }
             return try await mapRPCError {
                 let id = try SessionLifecycleRPC.sessionID(from: params)
-                try await MainActor.run {
-                    guard appState.sessions.contains(where: { $0.id == id }) else {
-                        throw DaemonRPCError.applicationError("Session not found")
-                    }
-                    _ = try SessionLifecycleRPC.requirePRURL(
-                        in: appState.links(for: id), verb: "add-merge-label")
-                }
-                await tracker.addMergeLabel(sessionID: id)
+                try await tracker.addMergeLabel(sessionID: id)
                 return SessionLifecycleRPC.okResult(id: id)
             }
         },
@@ -1556,6 +1546,10 @@ private func mapRPCError<T>(_ body: () async throws -> T) async throws -> T {
         }
     } catch let error as DaemonRPCError {
         throw error
+    } catch let error as SessionActionError {
+        // Unmet precondition or a failed provider call — either way the action
+        // did not happen, so the caller must see an error, not a receipt.
+        throw DaemonRPCError.applicationError(error.localizedDescription)
     } catch {
         throw DaemonRPCError.applicationError(error.localizedDescription)
     }

@@ -132,8 +132,10 @@ Preconditions are enforced server-side, because the browser enforces them by hid
 | `crow mark-in-review`     | Session status → `inReview`  | A linked ticket |
 | `crow complete-session`   | Session status → `completed` | — |
 | `crow set-session-active` | Session status → `active`    | — |
-| `crow mark-issue-done`    | Closes the linked issue on the provider, then completes the session | A linked ticket + a provider-configured daemon |
+| `crow mark-issue-done`    | Closes the linked issue on the provider, then completes the session | A linked ticket + a resolvable provider |
 | `crow add-merge-label`    | Adds the `crow:merge` label to the session's PR | A linked PR + a backend supporting auto-merge labels |
+
+The two provider-side verbs report real outcomes: an unmet precondition (no ticket, no PR, no provider, provider lacks the capability, unparseable repo slug) **and** a failed provider call both exit non-zero with the reason. They never print a success receipt for an action that didn't happen.
 
 ```bash
 crow mark-in-review --session <uuid>
@@ -149,7 +151,7 @@ crow add-merge-label --session <uuid>
 
 The three status verbs return `{"session_id": "…", "status": "…"}`; `mark-issue-done` and `add-merge-label` return `{"ok": true, "session_id": "…"}`.
 
-Manager sessions are rejected — they stay always-active and never move through the review/complete lifecycle.
+Manager sessions are rejected by all five — they stay always-active and never move through the review/complete lifecycle, matching the web UI, which never offers these actions for a Manager.
 
 **These write Crow's own session status.** To move the *provider's* board (a Jira workflow transition, a GitHub Projects status), use [`crow transition-ticket`](#crow-transition-ticket) — `crow mark-in-review` does not currently perform the provider-side transition.
 
