@@ -62,6 +62,7 @@ Backfill of merged PRs since the 0.1.0 release, grouped by theme.
 
 ### Tooling & Misc
 
+- #818 — CLI parity for the tmux/daemon-maintenance actions that were web-only: `crow restart-manager`, `crow restart-tmux-server`, `crow reload-tmux-config`, `crow launch-agent --terminal`, `crow retry-readiness --terminal`, `crow open-in-vscode --session`, and `crow open-terminal --session`. Each maps 1:1 to the RPC method of the same name. The destructive restarts are unprompted from the CLI, matching `recreate-terminal`; `restart-tmux-server` returns before its background rebuild finishes.
 - #805 — `crow edit-link` updates a session link's label, URL, or type in place (`--id`/`--url` selects, `--new-url` sets the new URL, only provided fields change) so a mislabeled link can be corrected without a remove-then-add round trip. Also documents the pre-existing `crow remove-link`, which detaches a link by `--id` or `--url` — it was implemented but missing from the CLI reference, skill, and CLAUDE.md.
 - #769 — `crowd` can start at login again (the gap ADR-0010 left when the macOS app was retired). `crow autostart install | uninstall | status` registers a launchd LaunchAgent — idempotent, re-points itself after an upgrade, and never bootstraps a duplicate over a running daemon. Same toggle at Settings → General → Autostart from a local browser. macOS only for now; Linux waits on #645.
 - #152 — Replace dock icon with the Corveil Brandmark.

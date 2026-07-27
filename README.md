@@ -305,6 +305,7 @@ Crow can drive a ticket from assignment to merged with minimal manual steps. Tog
 - xterm.js terminal surface in the browser, streamed from tmux over a WebSocket (`/terminal`)
 - tmux-backed managed terminals — each session is a tmux window on a shared server (the "cockpit"), so per-session shells stay alive across UI navigation and across browser reconnects. Requires `tmux ≥ 3.3` (`brew install tmux`); without it, managed terminals don't render. See [docs/architecture.md#terminal-backends](docs/architecture.md#terminal-backends).
 - Rename tabs from the UI or via `crow rename-terminal`
+- tmux maintenance from the CLI as well as Settings → About: `crow restart-manager`, `crow restart-tmux-server`, `crow reload-tmux-config`, `crow launch-agent`, `crow retry-readiness`, plus `crow open-in-vscode` / `crow open-terminal` for the session's worktree on the host. See [docs/cli-reference.md](docs/cli-reference.md#maintenance-commands).
 
 ### Orphan Recovery
 

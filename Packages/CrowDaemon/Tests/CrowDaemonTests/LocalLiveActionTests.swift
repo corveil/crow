@@ -214,6 +214,7 @@ import CrowPersistence
             ("retry-readiness", ["terminal_id": .string(UUID().uuidString)]),
             ("restart-manager", [:]),
             ("restart-tmux-server", [:]),
+            ("reload-tmux-config", [:]),
         ]
         for (method, params) in cases {
             let resp = await router().handle(request: JSONRPCRequest(id: 1, method: method, params: params))
