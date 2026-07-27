@@ -127,6 +127,16 @@ enum RPCWebSocketHandler {
     /// the web, so gating them here would break that surface. They shell out on the
     /// daemon host but launch nothing on its GUI. `LocalOnlyRPCGateTests` pins this.
     ///
+    /// The `telemetry-*` / `cleanup-*` / `ui-*` settings RPCs (CROW-814) are also
+    /// NOT gated. An authenticated remote peer can already change every one of
+    /// those fields through the un-gated `set-config` path — that is precisely what
+    /// `setConfigHarmlessToggleIsAllowedRemotely` asserts — so gating the granular
+    /// methods would only push remote callers back onto the whole-config blob,
+    /// which puts workspaces, jobs, gateway URLs and credential shells on the wire
+    /// instead of five scalars. Un-gating is the *smaller* surface, not merely the
+    /// consistent one. None of them can reach `defaults.binaries`, which stays the
+    /// sole local-only config field.
+    ///
     /// Note this gate only guards the HTTP/WebSocket `/rpc` path. Every method here
     /// also has a `crow` CLI verb (CROW-818), and the CLI reaches the daemon over its
     /// 0600 Unix socket, which never passes through `localOnlyDenial` — a CLI caller

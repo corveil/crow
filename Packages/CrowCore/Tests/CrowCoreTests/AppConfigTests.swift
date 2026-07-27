@@ -321,6 +321,57 @@ import Testing
     #expect(config.sidebar.hideSessionDetails == false)
 }
 
+// MARK: - Partial settings blocks (CROW-814)
+//
+// `AppConfig.init(from:)`'s `decodeIfPresent` only tolerates a *wholly absent*
+// block. Before these structs got per-key defaults, a present-but-partial one
+// threw `keyNotFound`, which failed the whole AppConfig decode, which made
+// `ConfigStore.loadConfig` return nil — and every config writer's `?? AppConfig()`
+// fallback would then overwrite config.json with defaults, losing every
+// workspace, job and credential.
+
+@Test func telemetryConfigDecodesPartialObject() throws {
+    let json = #"{"telemetry": {"enabled": true}}"#.data(using: .utf8)!
+    let config = try JSONDecoder().decode(AppConfig.self, from: json)
+
+    #expect(config.telemetry.enabled == true)
+    #expect(config.telemetry.port == 4318)
+    #expect(config.telemetry.retentionDays == 180)
+}
+
+@Test func cleanupConfigDecodesPartialObject() throws {
+    let json = #"{"cleanup": {"enabled": true}}"#.data(using: .utf8)!
+    let config = try JSONDecoder().decode(AppConfig.self, from: json)
+
+    #expect(config.cleanup.enabled == true)
+    #expect(config.cleanup.retentionHours == 24)
+}
+
+@Test func sidebarSettingsDecodesEmptyObject() throws {
+    let json = #"{"sidebar": {}}"#.data(using: .utf8)!
+    let config = try JSONDecoder().decode(AppConfig.self, from: json)
+
+    #expect(config.sidebar.hideSessionDetails == false)
+}
+
+@Test func telemetryCleanupSidebarSurviveFullRoundTrip() throws {
+    let config = AppConfig(
+        sidebar: SidebarSettings(hideSessionDetails: true),
+        telemetry: TelemetryConfig(enabled: true, port: 4319, retentionDays: 30),
+        cleanup: CleanupConfig(enabled: true, retentionHours: 72)
+    )
+
+    let data = try JSONEncoder().encode(config)
+    let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+
+    #expect(decoded.telemetry.enabled == true)
+    #expect(decoded.telemetry.port == 4319)
+    #expect(decoded.telemetry.retentionDays == 30)
+    #expect(decoded.cleanup.enabled == true)
+    #expect(decoded.cleanup.retentionHours == 72)
+    #expect(decoded.sidebar.hideSessionDetails == true)
+}
+
 @Test func appConfigIgnoresUnknownKeys() throws {
     let json = """
     {"futureFeature": true, "workspaces": []}

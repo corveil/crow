@@ -222,6 +222,37 @@ The Manager tab runs Claude Code at the dev root and drives workspace orchestrat
 
 Changes take effect on next app launch — the Manager's stored command is rebuilt on hydration.
 
+## Telemetry, Cleanup & UI
+
+Three top-level blocks in `{devRoot}/.claude/config.json`, editable from **Settings → General** or from the CLI (`crow telemetry`, `crow cleanup`, `crow ui` — see the [CLI reference](cli-reference.md#settings-commands)). Their take-effect semantics differ, which is the part worth knowing before you script them.
+
+**`telemetry`** — session analytics via Claude Code's OpenTelemetry exporter.
+
+| Key             | Default | Range          | Description                                                     |
+| --------------- | ------- | -------------- | --------------------------------------------------------------- |
+| `enabled`       | `false` | boolean        | Runs the OTLP HTTP receiver                                     |
+| `port`          | `4318`  | 1024–65535     | Receiver port                                                    |
+| `retentionDays` | `180`   | ≥ 0            | Days of telemetry to keep; `0` disables pruning (keep forever)   |
+
+**Requires a `crowd` restart.** `enabled` and `port` are read once at startup, and the port is baked into every agent launch's `OTEL_EXPORTER_OTLP_ENDPOINT`, so a running daemon cannot adopt a change. `retentionDays` drives a prune that runs once at startup, so it also applies at the next start. `crow telemetry set` returns `"restart_required": true` when `enabled` or `port` actually changed.
+
+**`cleanup`** — automatic deletion of finished sessions.
+
+| Key              | Default | Range   | Description                                            |
+| ---------------- | ------- | ------- | ------------------------------------------------------ |
+| `enabled`        | `false` | boolean | Arms auto-cleanup                                      |
+| `retentionHours` | `24`    | ≥ 1     | Hours to keep completed/archived sessions before deletion |
+
+**Live — no restart.** The board poll re-reads config from disk every cycle, so a change is picked up within about a minute. Deletion includes the session's worktree and branch; Manager, virtual, and locked sessions are never eligible. The `≥ 1` floor is enforced because the cutoff is `now - retentionHours`: `0` would delete a session the moment it completes, and a negative value would push the cutoff into the future and sweep every completed and archived session at once.
+
+**`sidebar`** — view preferences (the `ui` CLI group's first block).
+
+| Key                  | Default | Range   | Description                                              |
+| -------------------- | ------- | ------- | -------------------------------------------------------- |
+| `hideSessionDetails` | `false` | boolean | Hides ticket title and repo/branch lines in sidebar rows |
+
+**Live in the browser — no restart, no reload.** The daemon watches `config.json`'s mtime and pushes a `configReloaded` event on change, so connected clients re-read the view-affecting slice within a couple of seconds regardless of who wrote it (Settings modal, `crow ui set`, or a hand edit).
+
 ## Directory Structure
 
 Crow expects repositories organized under workspace folders:

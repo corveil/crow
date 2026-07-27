@@ -219,3 +219,51 @@ import Foundation
         }
     }
 }
+
+// MARK: - Settings Ranges (CROW-814)
+//
+// These duplicate the server-side checks in `SettingsRPC` for fast local
+// feedback — and because CrowEngine is not on CI's Linux package allow-list,
+// they're the only range assertions that gate a PR.
+
+@Test func telemetryPortAcceptsRange() throws {
+    try validateTelemetryPort(1024)
+    try validateTelemetryPort(4318)
+    try validateTelemetryPort(65535)
+}
+
+@Test func telemetryPortRejectsOutOfRange() {
+    // Below 1024 needs root; above 65535 doesn't fit TelemetryConfig's UInt16 and
+    // would make config.json undecodable if it ever landed on disk.
+    for bad in [0, 80, 1023, 65536, 70000, -1] {
+        #expect(throws: (any Error).self, "expected port \(bad) to be rejected") {
+            try validateTelemetryPort(bad)
+        }
+    }
+}
+
+@Test func retentionDaysAcceptsZeroAsForever() throws {
+    try validateRetentionDays(0)
+    try validateRetentionDays(180)
+}
+
+@Test func retentionDaysRejectsNegative() {
+    #expect(throws: (any Error).self) {
+        try validateRetentionDays(-1)
+    }
+}
+
+@Test func retentionHoursAcceptsOneOrMore() throws {
+    try validateRetentionHours(1)
+    try validateRetentionHours(48) // not a UI preset — ranges, not the dropdown
+}
+
+@Test func retentionHoursRejectsZeroAndNegative() {
+    // Cleanup has no "forever": 0 deletes on completion, and a negative value
+    // pushes the cutoff into the future and sweeps every eligible session.
+    for bad in [0, -1, -24] {
+        #expect(throws: (any Error).self, "expected \(bad) hours to be rejected") {
+            try validateRetentionHours(bad)
+        }
+    }
+}

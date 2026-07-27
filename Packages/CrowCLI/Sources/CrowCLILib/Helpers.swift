@@ -27,3 +27,9 @@ public func printJSON(_ dict: [String: JSONValue]) {
         print(str)
     }
 }
+
+/// Write a non-fatal advisory to stderr. Kept off stdout so the "every command
+/// prints JSON to stdout" contract holds and pipelines stay parseable.
+public func warn(_ message: String) {
+    FileHandle.standardError.write(Data("crow: warning: \(message)\n".utf8))
+}

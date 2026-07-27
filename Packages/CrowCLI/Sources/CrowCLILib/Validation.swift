@@ -131,6 +131,41 @@ func validateIssueURL(_ value: String) throws {
     }
 }
 
+/// Validate the OTLP receiver port for `crow telemetry set --port` (#814).
+/// Below 1024 needs root, which `crowd` doesn't have; above 65535 isn't a port
+/// and wouldn't fit `TelemetryConfig.port`'s `UInt16`. Mirrors the server's
+/// check for fast local feedback.
+///
+/// - Throws: `ValidationError` outside 1024–65535.
+func validateTelemetryPort(_ value: Int) throws {
+    guard (1024...65535).contains(value) else {
+        throw ValidationError("'\(value)' is not a valid port. Expected 1024-65535.")
+    }
+}
+
+/// Validate telemetry retention for `crow telemetry set --retention-days` (#814).
+/// 0 is legal and means "keep forever" — it's the pruner's documented no-op.
+///
+/// - Throws: `ValidationError` for a negative value.
+func validateRetentionDays(_ value: Int) throws {
+    guard value >= 0 else {
+        throw ValidationError("'\(value)' is not a valid retention. Expected 0 or greater (0 = keep forever).")
+    }
+}
+
+/// Validate session-cleanup retention for `crow cleanup set --retention-hours`
+/// (#814). Unlike telemetry there is no "forever": the cutoff is
+/// `now - retentionHours`, so 0 deletes a session the moment it completes and a
+/// negative value pushes the cutoff into the future, sweeping every completed
+/// and archived session — worktree and branch included.
+///
+/// - Throws: `ValidationError` below 1.
+func validateRetentionHours(_ value: Int) throws {
+    guard value >= 1 else {
+        throw ValidationError("'\(value)' is not a valid retention. Expected 1 hour or more.")
+    }
+}
+
 /// Validate the set-goal argument shape: exactly one of `--goal`/`--clear`,
 /// and a provided goal must not be blank (a whitespace goal would silently
 /// fail to earn the on-goal alignment multiplier).

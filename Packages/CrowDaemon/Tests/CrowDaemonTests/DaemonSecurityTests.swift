@@ -907,6 +907,29 @@ import CrowPersistence
         #expect(!RPCWebSocketHandler.setConfigTouchesPrivilegedFields(req, devRoot: devRoot))
     }
 
+    @Test func settingsRPCsAreAllowedRemotely() throws {
+        // The granular telemetry/cleanup/ui RPCs (CROW-814) are deliberately
+        // un-gated. A remote peer can already change every one of these fields via
+        // the un-gated `set-config` path (see setConfigHarmlessToggleIsAllowedRemotely),
+        // so gating them would only push remote callers back onto the whole-config
+        // blob — a strictly larger surface. `defaults.binaries` stays local-only.
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        try ConfigStore.saveConfig(AppConfig(), devRoot: devRoot)
+
+        let methods = [
+            "telemetry-get", "telemetry-set",
+            "cleanup-get", "cleanup-set",
+            "ui-get", "ui-set",
+        ]
+        for method in methods {
+            let req = JSONRPCRequest(id: 1, method: method, params: ["enabled": .bool(true)])
+            #expect(
+                RPCWebSocketHandler.localOnlyDenial(for: req, devRoot: devRoot) == nil,
+                "\(method) must not be gated")
+        }
+    }
+
     @Test func setConfigHarmlessToggleIsAllowedRemotely() throws {
         let devRoot = tempDevRoot()
         defer { try? FileManager.default.removeItem(atPath: devRoot) }

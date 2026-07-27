@@ -679,6 +679,17 @@ public struct SidebarSettings: Codable, Sendable, Equatable {
     public init(hideSessionDetails: Bool = false) {
         self.hideSessionDetails = hideSessionDetails
     }
+
+    /// Per-key defaults, matching `ConfigDefaults` and `TerminalSettings`.
+    /// `AppConfig`'s `decodeIfPresent` only tolerates a wholly *absent* block —
+    /// a present-but-partial one (`{"sidebar": {}}`) would throw `keyNotFound`
+    /// and fail the entire config decode (CROW-814).
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        hideSessionDetails = try c.decodeIfPresent(Bool.self, forKey: .hideSessionDetails) ?? false
+    }
+
+    enum CodingKeys: String, CodingKey { case hideSessionDetails }
 }
 
 /// Telemetry collection settings for Claude Code OTLP metrics.
@@ -695,6 +706,16 @@ public struct TelemetryConfig: Codable, Sendable, Equatable {
         self.port = port
         self.retentionDays = retentionDays
     }
+
+    /// Per-key defaults — see `SidebarSettings.init(from:)` (CROW-814).
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
+        port = try c.decodeIfPresent(UInt16.self, forKey: .port) ?? 4318
+        retentionDays = try c.decodeIfPresent(Int.self, forKey: .retentionDays) ?? 180
+    }
+
+    enum CodingKeys: String, CodingKey { case enabled, port, retentionDays }
 }
 
 /// Terminal wheel-scroll tuning (CROW-835). The web terminal routes the wheel by
@@ -737,4 +758,13 @@ public struct CleanupConfig: Codable, Sendable, Equatable {
         self.enabled = enabled
         self.retentionHours = retentionHours
     }
+
+    /// Per-key defaults — see `SidebarSettings.init(from:)` (CROW-814).
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
+        retentionHours = try c.decodeIfPresent(Int.self, forKey: .retentionHours) ?? 24
+    }
+
+    enum CodingKeys: String, CodingKey { case enabled, retentionHours }
 }
