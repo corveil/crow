@@ -1759,6 +1759,13 @@ public final class SessionService {
                 CrowLog.info("[SessionService] Codex trust seed failed for \(cwd): \(msg)")
             }
         case .grok:
+            // ⚠️ Grok's folder trust cascades to subdirectories, so seeding the
+            // devRoot here makes every review clone under `{devRoot}` Grok-trusted.
+            // The review-clone strip (`stripGrokConfigFromReviewClone`, run on both
+            // launch paths that can open a `.review` clone in Grok) is therefore the
+            // *only* guard between that cascade and committed-hook RCE — any future
+            // third Grok launch path into a review clone MUST strip before it opens
+            // (#861 review r8).
             if case let .failed(msg) = GrokTrustSeeder.seedTrust(projectPath: cwd) {
                 NSLog("[SessionService] Grok trust seed failed for %@: %@", cwd, msg)
             }

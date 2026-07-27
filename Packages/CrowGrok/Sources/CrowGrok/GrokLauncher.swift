@@ -75,13 +75,21 @@ public actor GrokLauncher {
     /// Write `prompt` to a temp file and return the launch command. Runs the
     /// prompt headlessly, then chains into `-c` so the session stays resident
     /// with a fresh terminal stdin (see `GrokLaunchArgs`).
-    public func launchCommand(sessionID: UUID, worktreePath: String, prompt: String) throws -> String {
+    ///
+    /// `binary` is the resolved `grok` path — the caller passes
+    /// `GrokAgent.findBinary()`, which is override-aware (`defaults.binaries.grok`)
+    /// + fallback-candidate-aware. `grok` is a collision-prone token (community
+    /// `superagent-ai/grok-cli`), so we must **not** re-resolve it here with a bare
+    /// PATH walk (`ShellEnvironment.findExecutable`): that would ignore the pin and
+    /// launch the wrong `grok` on the handoff path — the same reason
+    /// `CursorLauncher.launchCommand` receives `CursorAgent.findBinary()` (#861
+    /// review round 8). Defaults to `"grok"` only as a last resort.
+    public func launchCommand(sessionID: UUID, worktreePath: String, prompt: String, binary: String = "grok") throws -> String {
         let tmpDir = FileManager.default.temporaryDirectory
         let promptPath = tmpDir.appendingPathComponent("crow-grok-\(sessionID.uuidString)-prompt.md")
         try prompt.write(to: promptPath, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes(
             [.posixPermissions: 0o600], ofItemAtPath: promptPath.path)
-        let binary = ShellEnvironment.shared.findExecutable("grok") ?? "grok"
         let inner = GrokLaunchArgs.firstLaunchChainedCommand(
             binary: binary,
             promptPath: promptPath.path,

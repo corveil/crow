@@ -11,7 +11,7 @@ import CrowCore
 ///
 /// `GrokHookConfigWriter` registers these events (all verified in
 /// `xai-grok-hooks/src/event.rs`):
-///   SessionStart       → active (fresh) / done (resume)
+///   SessionStart       → idle (fresh) / done (resume)
 ///   UserPromptSubmit   → working (a real turn began)
 ///   PreToolUse         → working + tool active
 ///   PostToolUse        → tool inactive

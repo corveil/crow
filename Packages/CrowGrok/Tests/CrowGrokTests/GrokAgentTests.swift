@@ -171,9 +171,34 @@ struct GrokAgentTests {
             autoPermissionMode: true,
             telemetryPort: 4318
         )
-        #expect(cmd.hasSuffix("grok"))
+        // Shell-quoted resolved binary (`findBinary() ?? "grok"`), no flags, no
+        // trailing newline. Quoted like Cursor's manager path so a spaced
+        // `defaults.binaries.grok` override can't word-split (#861 review r8).
+        #expect(cmd.hasPrefix("'"))
+        #expect(cmd.hasSuffix("'"))
+        #expect(cmd.contains("grok"))
         #expect(!cmd.contains("--rc"))
         #expect(!cmd.contains("--name"))
-        #expect(!cmd.hasSuffix("\n"))
+        #expect(!cmd.contains("\n"))
+    }
+
+    /// The handoff path (`GrokAgent.launchCommand` → `GrokLauncher.launchCommand`)
+    /// must launch the *passed* binary — the caller threads the override-aware
+    /// `findBinary()` result — not a bare PATH walk. Otherwise a
+    /// `defaults.binaries.grok` pin is ignored on `crow handoff-agent --agent
+    /// grok` and the colliding `superagent-ai/grok-cli` can win (#861 review r8).
+    /// Prove the launcher honors its `binary:` argument, shell-quoted so a spaced
+    /// override path stays intact.
+    @Test func launcherHandoffCommandUsesPassedBinaryQuoted() async throws {
+        let launcher = GrokLauncher()
+        let cmd = try await launcher.launchCommand(
+            sessionID: UUID(),
+            worktreePath: "/tmp/wt",
+            prompt: "do the thing",
+            binary: "/opt/my tools/grok"
+        )
+        #expect(cmd.contains("'/opt/my tools/grok'"))
+        #expect(cmd.contains("--prompt-file"))
+        #expect(cmd.contains(" -c"))
     }
 }

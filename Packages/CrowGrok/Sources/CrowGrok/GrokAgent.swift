@@ -137,7 +137,8 @@ public struct GrokAgent: CodingAgent {
         try await launcher.launchCommand(
             sessionID: sessionID,
             worktreePath: worktreePath,
-            prompt: prompt
+            prompt: prompt,
+            binary: findBinary() ?? "grok"
         )
     }
 
@@ -150,8 +151,12 @@ public struct GrokAgent: CodingAgent {
         // Grok's Manager is a plain TUI in the devRoot — no auto-prompt, no
         // remote-control / auto-permission knob (parity with Codex/OpenCode).
         // The terminal backend appends the submitting Enter, so we return the
-        // bare command without a trailing newline.
-        return findBinary() ?? "grok"
+        // bare command without a trailing newline. Shell-quoted (like
+        // `CursorAgent.managerLaunchCommand`, the other colliding-token adapter):
+        // `grok` collides with `superagent-ai/grok-cli`, so `defaults.binaries.grok`
+        // is the *expected* config here, and an override path with a space would
+        // otherwise word-split when the terminal backend runs it (#861 review r8).
+        return GrokLaunchArgs.shellQuote(findBinary() ?? "grok")
     }
 
     /// Grok's TUI exposes `/rename` (alias `/title`) for the current session
