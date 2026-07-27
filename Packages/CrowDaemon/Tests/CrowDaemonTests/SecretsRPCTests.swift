@@ -211,6 +211,39 @@ import Testing
         #expect(stored?.workspaces[0].gateway?.customHeaders["X-Api-Key"] == "sk-ws")
     }
 
+    // MARK: - Corrupt config
+
+    @Test @MainActor func secretWritesRefuseToOverwriteAnUndecodableConfig() async throws {
+        // `ConfigStore.loadConfig` returns nil for both "missing" and "malformed",
+        // so a `?? AppConfig()` fallback here would let one `crow gateway set` on a
+        // corrupt file silently replace every workspace, job and credential with
+        // defaults. Both writers share `mutateConfig`'s refusal (CROW-814); this is
+        // the secrets-side parallel to
+        // `SettingsHandlerTests.writeRefusesToOverwriteAnUndecodableConfig`.
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        let claudeDir = (devRoot as NSString).appendingPathComponent(".claude")
+        try FileManager.default.createDirectory(
+            atPath: claudeDir, withIntermediateDirectories: true)
+        let configPath = (claudeDir as NSString).appendingPathComponent("config.json")
+        let corrupt = #"{"workspaces": "not-an-array"}"#
+        try corrupt.write(toFile: configPath, atomically: true, encoding: .utf8)
+        let router = router(devRoot: devRoot)
+
+        let gateway = await call(router, "gateway-set", [
+            "target": .string("manager"),
+            "base_url": .string("https://gw.example.com"),
+            "header_lines": .array([.string("X-Api-Key: sk-test-1")]),
+        ])
+        #expect(gateway.error?.code == RPCErrorCode.applicationError)
+
+        let password = await call(router, "web-password-set", ["password": .string("hunter2")])
+        #expect(password.error?.code == RPCErrorCode.applicationError)
+
+        // The bad file is left exactly as it was, not replaced with defaults.
+        #expect(try String(contentsOfFile: configPath, encoding: .utf8) == corrupt)
+    }
+
     // MARK: - Target selector
 
     @Test @MainActor func targetSelectorRejectsBothAndNeither() async throws {

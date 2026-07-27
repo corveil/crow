@@ -1159,6 +1159,11 @@ func makeCommandRouter(
         // plus at least one `header_lines` entry is required (both-or-neither).
         // A blank header value keeps the currently-stored secret, so the CLI can
         // change a base URL without restating the key.
+        //
+        // Writes go through `mutateConfig`, which refuses to overwrite a
+        // `config.json` that exists but won't decode (CROW-814) — otherwise a
+        // corrupt file plus one `crow gateway set` would silently replace every
+        // workspace, job and credential with defaults.
         "gateway-set": { params in
             let target = try SecretsRPC.decodeTarget(params)
             let clear = params["clear"]?.boolValue ?? false
@@ -1171,7 +1176,7 @@ func makeCommandRouter(
             case .success(let gateway): incoming = gateway
             }
             return try mapGatewayError {
-                try mutateSecrets(devRoot: devRoot) { config -> [String: JSONValue] in
+                try mutateConfig(devRoot: devRoot) { config -> [String: JSONValue] in
                     switch target {
                     case .manager:
                         let merged = try SecretRoutes.mergingPreservedHeaders(
@@ -1209,7 +1214,7 @@ func makeCommandRouter(
             if !clear, password.isEmpty {
                 throw DaemonRPCError.invalidParams("password must be a non-empty string (or clear: true)")
             }
-            return try mutateSecrets(devRoot: devRoot) { config -> [String: JSONValue] in
+            return try mutateConfig(devRoot: devRoot) { config -> [String: JSONValue] in
                 config.webAuth = clear ? nil : PasswordHash.make(password: password)
                 return ["saved": .bool(true), "password_set": .bool(config.webAuth != nil)]
             }
@@ -1710,23 +1715,6 @@ private func mutateConfig<T>(devRoot: String, _ transform: (inout AppConfig) thr
             try ConfigStore.saveConfig(config, devRoot: devRoot)
         } catch {
             throw RPCError.applicationError("Failed to persist config change: \(error.localizedDescription)")
-        }
-        return result
-    }
-}
-
-/// Persist a secret-config mutation (gateways / `webAuth`) under the shared
-/// lock, mirroring ``mutateJobs(devRoot:_:)``. Kept separate so the failure
-/// message names the surface the caller was actually changing.
-private func mutateSecrets<T>(devRoot: String, _ transform: (inout AppConfig) throws -> T) throws -> T {
-    try ConfigStore.withConfigLock {
-        var config = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
-        let result = try transform(&config)
-        do {
-            try ConfigStore.saveConfig(config, devRoot: devRoot)
-        } catch {
-            throw DaemonRPCError.applicationError(
-                "Failed to persist secret change: \(error.localizedDescription)")
         }
         return result
     }
