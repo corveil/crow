@@ -795,13 +795,31 @@ public enum CrowDaemon {
                 // completed/archived) yet still renders, so each re-review round
                 // left another identical row piling up in Completed (CROW-877).
                 // Deleting also drops its `.pr` link, so the create below can't
-                // reuse the stale session via that same guard. Await the delete
-                // first so it's gone before `createReviewSession` runs its check.
+                // reuse the stale session via that same guard.
+                //
+                // This always tears down a *live* round-1 review clone (kickoff
+                // only returns `.reReview` while that session is still open):
+                // `rm -rf` on its PR clone, `TerminalRouter.destroy` on its
+                // terminal, and its raw telemetry rows are dropped. That's
+                // intended — round 1 is reviewing a now-dead SHA — but it's a
+                // harder teardown than the old status flip.
                 let url = request.url
                 let staleReviewID: UUID?
                 if case let .reReview(id) = action { staleReviewID = id } else { staleReviewID = nil }
                 Task {
-                    if let staleReviewID { await sessionService.deleteSession(id: staleReviewID) }
+                    if let staleReviewID {
+                        await sessionService.deleteSession(id: staleReviewID)
+                        // `deleteSession` no-ops on a concurrent delete (its
+                        // `isDeletingSession` guard) and bails on a disk-cleanup
+                        // failure — both leave the stale session AND its `.pr`
+                        // link intact, which would make `createReviewSession`'s
+                        // dedup guard return the stale session and swallow the new
+                        // round. Fall back to completing it (the old path's effect)
+                        // so it's at least invisible to that guard (CROW-877 review).
+                        if appState.sessions.contains(where: { $0.id == staleReviewID }) {
+                            sessionService.completeSession(id: staleReviewID)
+                        }
+                    }
                     _ = await reviewSerializer.enqueue { await sessionService.createReviewSession(prURL: url, selectAfterCreate: false) }
                 }
             }

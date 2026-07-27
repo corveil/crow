@@ -661,55 +661,51 @@ const GROUPS = [
   { title: 'Completed', match: (s) => (s.status === 'completed' || s.status === 'archived') && s.kind !== 'manager' },
 ];
 
-// Assign sessions to sidebar sections, collapsing the duplicates that used to
-// render as separate rows for the same PR (CROW-877):
+// Assign sessions to sidebar sections without the duplicate rows that used to
+// render for one PR (CROW-877):
 //   1. dedup by session id — a payload that repeats an id renders once;
-//   2. collapse by PR URL — a PR's work row + auto-review clone become ONE
-//      entry (the open review row wins while the review is in progress; once
-//      the review session closes, the work row represents the PR). This kills
-//      both the same-PR-in-Reviews-and-Completed cross-section duplicate and
-//      any pile-up of identical completed `review-<repo>-<pr>` clones;
-//   3. first-match grouping — each surviving session lands in the FIRST group
-//      it matches, not every one, so a `kind:'review'` + `status:'inReview'`
-//      session can't appear in both "Reviews" and "In Review".
+//   2. first-match grouping — each session lands in the FIRST group it matches,
+//      not every one, so a `kind:'review'` + `status:'inReview'` session can't
+//      appear in both "Reviews" and "In Review";
+//   3. collapse same-PR duplicates WITHIN a section — a merged PR (its completed
+//      work row + completed review clone both land in "Completed") and any
+//      pile-up of identical completed `review-<repo>-<pr>` clones become one row.
+// Collapsing AFTER assignment, never across sections, is deliberate: a live work
+// row in "Active"/"In Review" is never hidden by an open review clone in
+// "Reviews", and a collapse survivor can never be a row that matches no group —
+// the two failure modes of a pre-assignment collapse (CROW-877 review).
 // Managers carry no PR link and match no GROUP, so they drop out here and are
 // rendered by renderSidebar's dedicated managers pass.
 function prURLOf(s) {
   const link = (s.links || []).find((l) => l.type === 'pr');
   return link ? link.url : null;
 }
-function isOpenReview(s) {
-  return s.kind === 'review' && s.status !== 'completed' && s.status !== 'archived';
-}
-// Between two sessions describing the same PR, pick the one to keep.
-function pickPRRow(a, b) {
-  const ao = isOpenReview(a), bo = isOpenReview(b);
-  if (ao !== bo) return ao ? a : b;           // an open review wins outright
-  // Neither is an open review (both closed, or both non-review work rows):
-  // prefer the non-review (work) row so a merged PR shows its work session
-  // rather than a leftover completed review clone.
-  const aWork = a.kind !== 'review', bWork = b.kind !== 'review';
-  if (aWork !== bWork) return aWork ? a : b;
-  return a;                                    // stable: keep the first seen
+// Collapse rows that describe the same PR, keeping one. A non-review (work) row
+// represents the PR over a review clone (a merged PR shows its work row, not the
+// leftover completed clone); otherwise the first seen stays. Rows without a PR
+// link are never collapsed. Only ever called on rows already in the same section.
+function collapsePRDuplicates(rows) {
+  const byPR = new Map();     // PR URL -> index into `out`
+  const out = [];
+  for (const s of rows) {
+    const url = prURLOf(s);
+    if (!url) { out.push(s); continue; }
+    const idx = byPR.get(url);
+    if (idx === undefined) { byPR.set(url, out.length); out.push(s); continue; }
+    if (out[idx].kind === 'review' && s.kind !== 'review') out[idx] = s;   // work wins
+  }
+  return out;
 }
 function groupSessions(list) {
   const seenIds = new Set();
-  const byPR = new Map();     // PR URL -> index into `collapsed`
-  const collapsed = [];
+  const out = GROUPS.map((g) => ({ title: g.title, rows: [] }));
   for (const s of list) {
     if (seenIds.has(s.id)) continue;
     seenIds.add(s.id);
-    const url = prURLOf(s);
-    if (!url) { collapsed.push(s); continue; }
-    const idx = byPR.get(url);
-    if (idx === undefined) { byPR.set(url, collapsed.length); collapsed.push(s); }
-    else collapsed[idx] = pickPRRow(collapsed[idx], s);
-  }
-  const out = GROUPS.map((g) => ({ title: g.title, rows: [] }));
-  for (const s of collapsed) {
     const gi = GROUPS.findIndex((g) => g.match(s));
     if (gi >= 0) out[gi].rows.push(s);
   }
+  for (const g of out) g.rows = collapsePRDuplicates(g.rows);
   return out.filter((g) => g.rows.length);
 }
 

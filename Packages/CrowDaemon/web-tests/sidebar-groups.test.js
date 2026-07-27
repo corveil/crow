@@ -64,14 +64,30 @@ console.log('CROW-877 sidebar grouping:');
   check('review+inReview renders exactly one row total', rowCount([s]) === 1);
 }
 
-// 2. Cross-section collapse: a PR's work row + open review clone → one Reviews row.
+// 2. A live work session is NEVER hidden by an open review clone for the same
+//    PR. Collapse runs within a section, not across, so an active work row in
+//    "Active" and its open review clone in "Reviews" both survive (CROW-877
+//    review, Red 1 — a pre-assignment collapse dropped the developer's live row).
 {
-  const work = { id: 'w2', kind: 'work', status: 'completed', links: prLink(2) };
+  const work = { id: 'w2', kind: 'work', status: 'active', links: prLink(2) };
   const rev = { id: 'v2', kind: 'review', status: 'active', links: prLink(2) };
   const g = groupsOf([work, rev]);
-  check('open review wins while review is in progress',
-    (g['Reviews'] || []).includes('v2') && !(g['Completed'] || []).includes('w2'));
-  check('same PR collapses to a single row', rowCount([work, rev]) === 1);
+  check('active work row stays in Active', (g['Active'] || []).includes('w2'));
+  check('open review clone stays in Reviews', (g['Reviews'] || []).includes('v2'));
+  check('a live work session is never hidden by its open review', rowCount([work, rev]) === 2);
+}
+
+// 2b. A survivor is never a row that matches no group. A `paused` work row
+//     matches no GROUP; collapsing it in would drop the completed review that
+//     WOULD render, printing "No sessions" while sessions exist (CROW-877
+//     review, Red 2). Within-section collapse can't do this.
+{
+  const work = { id: 'w2b', kind: 'work', status: 'paused', links: prLink(12) };
+  const rev = { id: 'v2b', kind: 'review', status: 'completed', links: prLink(12) };
+  const g = groupsOf([work, rev]);
+  check('completed review still renders when the other row matches no group',
+    (g['Completed'] || []).includes('v2b'));
+  check('no-group work row does not suppress a renderable review', rowCount([work, rev]) === 1);
 }
 
 // 3. Once the review closes, the work row represents the PR.
