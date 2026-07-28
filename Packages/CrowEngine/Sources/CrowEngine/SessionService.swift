@@ -2910,13 +2910,14 @@ public final class SessionService {
     }
 
     /// Whether Grok is about to open a `.review` clone and must therefore strip
-    /// its committed config layers first — the exact gate shared by **all three**
-    /// Grok launch paths into a clone (`launchAgent` on restart/`crow launch-agent`,
-    /// `handoffAgent`, and — as `reviewAgentKind == .grok` — creation-time
-    /// `prepareReviewClone`) so the strip can't drift (#861 review, Red; mirrors
-    /// `shouldStripCursorReviewCloneOnHandoff`). Only a `.review` session on Grok
-    /// strips: `.work`/`.job` branch off a trusted base, and a `.review` on any
-    /// other agent must not strip a surface that agent doesn't load.
+    /// its committed config layers first. This is only the pure *predicate*; the
+    /// anti-drift guarantee comes from routing — every launch path calls
+    /// `prepareWorktreeForAgentLaunch` (grep its call sites), and creation-time
+    /// `prepareReviewClone` strips directly — not from any enumeration here (#861
+    /// review, Red; mirrors `shouldStripCursorReviewCloneOnHandoff`). Only a
+    /// `.review` session on Grok strips: `.work`/`.job` branch off a trusted base,
+    /// and a `.review` on any other agent must not strip a surface that agent
+    /// doesn't load.
     nonisolated static func shouldStripGrokReviewClone(
         agentKind: AgentKind, sessionKind: SessionKind) -> Bool {
         agentKind == .grok && sessionKind == .review

@@ -42,7 +42,16 @@ import CrowCore
 /// **global** `~/.claude/settings.json` / `~/.cursor/hooks.json` Grok also
 /// discovers — genuinely user-controlled, no Crow session UUID, cf. Codex §3b —
 /// plus the Grok-**Manager** devRoot case (documented at
-/// `SessionService.writeManagerHookConfig`). Re-probe on each upstream mirror sync.
+/// `SessionService.writeManagerHookConfig`). **Also re-probe (#861 review r19):**
+/// does Grok's Claude-compat loader resolve `.claude/settings.local.json` by
+/// walking *ancestor* directories the way Claude Code itself does? Crow's
+/// per-worktree gateway-env clear (`SessionService.readsClaudeCompatSettings`)
+/// assumes project scope; if Grok walks up the tree, a Grok worker at
+/// `{devRoot}/{workspace}/…` could still inherit a Claude Manager's bearer from
+/// `{devRoot}/.claude/settings.local.json` regardless of the worktree-level clear
+/// (would apply equally to Codex — not Crow-specific). Unverifiable without
+/// `grok-build` source; confirm on the next mirror sync. Re-probe all of the
+/// above on each upstream mirror sync.
 public struct GrokHookConfigWriter: HookConfigWriter {
 
     /// All hook event names we register. Every name is verified present in
