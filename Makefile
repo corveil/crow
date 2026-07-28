@@ -1,4 +1,4 @@
-.PHONY: build daemon app run setup install uninstall clean check test help daemon-run docs
+.PHONY: build daemon app run setup install uninstall clean check test parity help daemon-run docs
 
 # Install destination and build config (override on the command line, e.g.
 # `make install BINDIR=/usr/local/bin` or `make build CONFIG=release`).
@@ -52,7 +52,8 @@ help:
 	@echo "  daemon-run Run crowd serving the frozen bundle-baked web UI (add --watch to rebuild on Swift/web change)"
 	@echo "  setup      Check build prerequisites"
 	@echo "  check      Verify all build and runtime prerequisites"
-	@echo "  test       Run all package tests"
+	@echo "  test       Run all package tests, then the parity gates"
+	@echo "  parity     Run just the source-level drift gates (catalogs + CLI/RPC parity)"
 	@echo "  docs       Regenerate docs/cli.md from the CLI's ArgumentParser metadata"
 	@echo "  install    Symlink crow + crowd into ~/.local/bin (override BINDIR=, CONFIG=release)"
 	@echo "  uninstall  Remove installed crow + crowd symlinks"
@@ -96,8 +97,15 @@ test:
 			swift test --package-path "$$pkg"; \
 		fi; \
 	done
+	@$(MAKE) --no-print-directory parity
+
+# Source-level drift gates. Cheap, no build required, and both also run in CI —
+# see the `parity` job in .github/workflows/ci.yml.
+parity:
 	@echo "==> Checking notification-event catalogs (CROW-768)..."
 	@./scripts/check-notification-events.sh
+	@echo "==> Checking CLI/RPC control-plane parity (CROW-807)..."
+	@./scripts/check-cli-parity.sh
 
 # Regenerate the CLI reference from the commands themselves (CROW-808). Run
 # after adding or changing a subcommand — a stale docs/cli.md fails CrowCLI's

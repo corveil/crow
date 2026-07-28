@@ -23,6 +23,17 @@ public final class CommandRouter: Sendable {
         self.fallback = fallback
     }
 
+    /// Every method name this router answers, including everything reachable
+    /// through its ``fallback`` chain — i.e. exactly the set for which
+    /// ``handle(request:)`` will not return `methodNotFound`.
+    ///
+    /// Exists so the CLI-parity gate can enumerate the live RPC surface instead
+    /// of trusting a hand-maintained list (CROW-807). `handlers` stays private:
+    /// callers get the names, never the closures.
+    public var methodNames: Set<String> {
+        Set(handlers.keys).union(fallback?.methodNames ?? [])
+    }
+
     public func handle(request: JSONRPCRequest) async -> JSONRPCResponse {
         guard let handler = handlers[request.method] else {
             if let fallback {
