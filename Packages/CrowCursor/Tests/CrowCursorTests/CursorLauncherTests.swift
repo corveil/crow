@@ -36,10 +36,11 @@ struct CursorLauncherTests {
         // #890: the handoff one-shot is the only seed site that applies
         // `CursorLaunchArgs.trustSuffix` directly (not via `launchSuffix`), so
         // it needs its own assertion — the shared-helper tests can't guard it.
-        // It carries the `--trust` workspace-trust seed but deliberately omits
-        // the auto-permission flags (trust is orthogonal to approval).
+        // With `seedTrust: true` it carries the `--trust` workspace-trust seed
+        // but deliberately omits the auto-permission flags (trust is orthogonal
+        // to approval).
         let cmd = try await CursorLauncher().launchCommand(
-            sessionID: UUID(), worktreePath: "/w", prompt: "p")
+            sessionID: UUID(), worktreePath: "/w", prompt: "p", seedTrust: true)
         #expect(cmd.contains("'agent' --trust \"$(cat "))  // seed, before the prompt
         #expect(cmd.contains("--force") == false)          // no auto-permission
     }

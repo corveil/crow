@@ -43,8 +43,11 @@ deliberate, documented gaps (full grid in the
 > `session.kind != .review` guard already on `CodexTrustSeeder` and is a
 > deliberate **divergence from `ClaudeTrustSeeder`**, which is ungated on kind
 > (`SessionService.launchAgent`): Cursor follows the Codex precedent, so review
-> clones fall back to Cursor's folder-trust dialog as their human gate rather
-> than launching pre-trusted (CROW-890 review, Red 1). Requires **Cursor CLI ≥
+> clones are not auto-trusted by Crow — the intent is they fall back to Cursor's
+> folder-trust dialog rather than launching pre-trusted, though whether `--force`
+> (review's default auto-permission) still surfaces that dialog is unverified;
+> withholding `--trust` is never worse than emitting it (CROW-890 review, Red 1).
+> Requires **Cursor CLI ≥
 > 2026.07.20**; the seed is emitted on every non-`.review` path, so an older
 > binary is out of support. Probed 2026.07.23 that the arg parser silently
 > ignores a mode-gated flag used outside its mode (`agent --output-format json

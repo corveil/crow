@@ -141,6 +141,32 @@ struct CursorAgentTests {
         #expect(work.contains("--trust") == true)
     }
 
+    @Test func existentialDispatchReachesCursorOverride() async throws {
+        // CROW-890 review, Yellow 1: `SessionService.handoffAgent` holds the
+        // agent as `any CodingAgent` and calls the `sessionKind:` overload
+        // through the existential. Pin that dynamic dispatch reaches CursorAgent's
+        // override — if the protocol *requirement* were dropped (leaving only the
+        // extension default), a `.review` handoff would silently start emitting
+        // `--trust` again with an otherwise-green suite (verified counterfactual).
+        let erased: any CodingAgent = CursorAgent()
+        let review = try await erased.launchCommand(
+            sessionID: UUID(), worktreePath: "/w", prompt: "p", sessionKind: .review)
+        #expect(review.contains("--trust") == false)
+        let work = try await erased.launchCommand(
+            sessionID: UUID(), worktreePath: "/w", prompt: "p", sessionKind: .work)
+        #expect(work.contains("--trust") == true)
+    }
+
+    @Test func launchCommandThreeArgFailsClosed() async throws {
+        // CROW-890 review, Yellow 2: the kindless three-argument requirement
+        // (no production caller) must NEVER seed trust — fail closed, so a future
+        // caller of the bare form can't reopen the review-clone hole. The
+        // kind-aware overload above is the only seeding path.
+        let cmd = try await agent.launchCommand(
+            sessionID: UUID(), worktreePath: "/w", prompt: "p")
+        #expect(cmd.contains("--trust") == false)
+    }
+
     @Test func autoLaunchCommandManagerSessionUnsupported() {
         // Manager sessions never auto-launch an agent; Crow drives them
         // externally. Cursor must keep returning nil here so the manager

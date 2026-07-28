@@ -10,9 +10,10 @@ public enum CursorLaunchArgs {
         "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
-    /// Workspace-trust seed appended to **every** Crow-launched Cursor command
-    /// (auto-launch, Manager, and the handoff one-shot). A leading-space suffix
-    /// so callers concatenate it onto the shell-quoted binary path.
+    /// Workspace-trust seed appended to every Crow-launched Cursor command
+    /// **except `.review`** (auto-launch, Manager, and the handoff one-shot). A
+    /// leading-space suffix so callers concatenate it onto the shell-quoted
+    /// binary path.
     ///
     /// `--trust` trusts the current workspace up front, skips the "Do you trust
     /// the files in this folder?" dialog, and records the same saved trust
@@ -104,11 +105,14 @@ public enum CursorLaunchArgs {
     /// `seedTrust` is `session.kind != .review` at the call sites. A `.review`
     /// working tree is a `gh` clone checked out at the PR author's head
     /// (attacker-controlled), so — mirroring the `session.kind != .review` guard
-    /// on `CodexTrustSeeder` in `SessionService` — it is **never** auto-trusted:
-    /// review keeps Cursor's folder-trust dialog as its human gate (CROW-890
-    /// review, Red 1). Auto-permission is orthogonal and unchanged on `.review`.
-    /// `.work`/`.job` worktrees branch off a trusted base and the Manager runs in
-    /// the devRoot, so those seed normally.
+    /// on `CodexTrustSeeder` in `SessionService` — Crow **never** auto-trusts it
+    /// (CROW-890 review, Red 1). The intent is that review falls back to Cursor's
+    /// folder-trust dialog as its human gate; note that review's default
+    /// auto-permission adds `--force`, and whether `--force` alone still surfaces
+    /// that dialog is **unverified** — but withholding `--trust` is never worse
+    /// than emitting it, so the guard holds regardless. Auto-permission is
+    /// orthogonal and unchanged on `.review`. `.work`/`.job` worktrees branch off
+    /// a trusted base and the Manager runs in the devRoot, so those seed normally.
     public static func launchSuffix(seedTrust: Bool, autoPermissionMode: Bool) -> String {
         (seedTrust ? trustSuffix : "") + autoPermissionSuffix(autoPermissionMode)
     }

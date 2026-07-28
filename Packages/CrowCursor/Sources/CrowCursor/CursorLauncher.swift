@@ -86,14 +86,15 @@ public actor CursorLauncher {
     /// `ClaudeLauncher.launchCommand`, it feeds the prompt only, and
     /// `CursorAgent.autoLaunchCommand` applies those on the (re)launch that
     /// follows. It carries the `--trust` workspace-trust seed
-    /// (`CursorLaunchArgs.trustSuffix`) **unless `seedTrust` is false** — trust
+    /// (`CursorLaunchArgs.trustSuffix`) **only when `seedTrust` is true** — trust
     /// is orthogonal to auto-permission, and a first Cursor launch in a worktree
     /// another agent set up is fresh from Cursor's trust ledger, so it would
-    /// otherwise block on the folder-trust dialog (CROW-890). `seedTrust` is
-    /// `sessionKind != .review` at the `CursorAgent` call site: a `.review`
-    /// handoff clone is attacker-controlled, so it keeps the folder-trust dialog
-    /// as its human gate (CROW-890 review, Red 1).
-    public func launchCommand(sessionID: UUID, worktreePath: String, prompt: String, binary: String = "agent", seedTrust: Bool = true) throws -> String {
+    /// otherwise block on the folder-trust dialog (CROW-890). `seedTrust` has
+    /// **no default on purpose** (CROW-890 review, Yellow 2): a fail-open default
+    /// is the one place this guard could silently regress, so every call site
+    /// must state its intent. `CursorAgent` passes `sessionKind != .review`
+    /// (attacker-controlled review clones are never auto-trusted, Red 1).
+    public func launchCommand(sessionID: UUID, worktreePath: String, prompt: String, binary: String = "agent", seedTrust: Bool) throws -> String {
         let tmpDir = FileManager.default.temporaryDirectory
         let promptPath = tmpDir.appendingPathComponent("crow-cursor-\(sessionID.uuidString)-prompt.md")
         try prompt.write(to: promptPath, atomically: true, encoding: .utf8)
