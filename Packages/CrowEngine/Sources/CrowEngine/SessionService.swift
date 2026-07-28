@@ -1380,9 +1380,12 @@ public final class SessionService {
 
         // Agent-specific prep before the new process starts. Idempotent file
         // writes — safe to run before teardown. Handoff dispatches via
-        // `pendingLaunchCommands`, so neither `launchAgent` nor `pasteDeferredLaunch`
-        // runs for it — do the shared strip+seed here. For a Grok `.review` handoff
-        // this strips every project config layer Grok discovers (`.grok/`,
+        // `pendingLaunchCommands`, which `pasteDeferredLaunch` consumes on
+        // `.shellReady` (that later paste re-runs this same strip+seed and writes
+        // the handed-off session's `.grok/hooks/crow.json`). We do the strip+seed
+        // **eagerly here** anyway so it lands before teardown and doesn't depend on
+        // the readiness watch firing (which can time out). For a Grok `.review`
+        // handoff this strips every project config layer Grok discovers (`.grok/`,
         // `.claude/settings{,.local}.json`, `.cursor/`, repo-root `.mcp.json`) that
         // `prepareReviewClone` only stripped if Grok was the *creation-time* review
         // agent — a handoff flips a review created under another agent onto a clone

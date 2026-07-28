@@ -428,8 +428,11 @@ the two Manager gateway writes noted below):
   no-registered-agent fallback). All four `settings.local.json` writes — worker
   `launchAgent` / `handoffAgent` and the **two** Manager writes
   (`createManagerTerminal` + the hydrate path's `writeManagerGatewayEnv`) — are
-  **Claude-gated**: a Claude target gets the resolved env, and every *non-Claude*
-  target gets `resolved: nil`, which actively **clears** the block. This is not
+  **Claude-gated**: a Claude target gets the resolved env; a **compat-loading**
+  target (Grok/Codex — `readsClaudeCompatSettings`) gets `resolved: nil`, which
+  actively **clears** the block; and Cursor/OpenCode/Antigravity are left
+  **untouched** (no write, no clear) because they never read the file, so a clear
+  there would be pure rewrite churn (#861 r18). This is not
   cosmetic — the `ANTHROPIC_CUSTOM_HEADERS` can carry an `Authorization: Bearer`,
   and Grok/Codex **compat-load `.claude/settings.local.json`** (the very reason
   the review-clone strip deletes it), so an unconditional write would leak a
@@ -448,7 +451,8 @@ These are the residual Claude-identity switches called out in
 
 ### Rename passthrough
 
-All four override `sessionRenameSlashCommand` to return `"/rename <name>\n"`,
+Every harness except Antigravity overrides `sessionRenameSlashCommand` to return
+`"/rename <name>\n"`,
 sent after a Crow rename so the agent's own session title stays in sync
 (CROW-629). The protocol default is `nil` so a *future* harness can't inherit a
 spurious `/rename` paste.
