@@ -364,7 +364,7 @@ func makeCommandRouter(
             guard sessionService != nil else {
                 throw DaemonRPCError.applicationError("Reloading tmux config requires tmux on the daemon host")
             }
-            if let err = await MainActor.run(body: { TmuxBackend.shared.reloadBundledConfig() }) {
+            if let err = await TmuxBackend.shared.reloadBundledConfig() {
                 throw DaemonRPCError.applicationError(err)
             }
             return ["ok": .bool(true)]

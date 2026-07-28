@@ -192,11 +192,14 @@ public final class TmuxBackend {
             CrowLog.info("[CrowTelemetry tmux:\(killServer ? "server_killed" : "server_detach") bindings=\(bindings.count)]")
         }
         // Destroy the surface BEFORE kill-server: destroy() nils the surface's
-        // onProcessExit synchronously, and killServer's waitUntilExit pumps the
-        // main run loop — without this order the attach client's death would be
-        // delivered mid-shutdown and a deliberate restart would masquerade as
-        // a server crash (#588). Guarded for the Linux daemon build, where the
-        // AppKit surface doesn't exist (b982621).
+        // onProcessExit synchronously, so the attach client's death can no
+        // longer be delivered mid-shutdown and a deliberate restart can't
+        // masquerade as a server crash (#588). (The original reason given here
+        // was that killServer's waitUntilExit pumps the main run loop; that has
+        // not been true since #653 replaced the wait with a semaphore. The
+        // ordering still matters, for the synchronous-nil reason above.)
+        // Guarded for the Linux daemon build, where the AppKit surface doesn't
+        // exist (b982621).
         #if canImport(AppKit)
         sharedSurface?.destroy()
         sharedSurface = nil
@@ -974,7 +977,8 @@ public final class TmuxBackend {
                 guard let self else { return }
                 // Capture the tmux handle + window index on the main actor, then
                 // read `#{pane_current_command}` off it: `TmuxController.run`
-                // blocks on `waitUntilExit()`, so keep that subprocess off the UI
+                // blocks the calling thread (on a semaphore since #653, without
+                // pumping the run loop), so keep that subprocess off the UI
                 // thread. A missing binding/controller yields a `nil` sample (skip).
                 let ctrl = self.controller
                 let windowIndex = self.bindings[id]
@@ -1157,22 +1161,37 @@ public final class TmuxBackend {
     /// can surface in a banner. Idempotent: `source-file` against a live
     /// server updates server-scoped options in place; existing windows and
     /// sessions are unaffected.
-    @MainActor
-    public func reloadBundledConfig() -> String? {
-        guard let ctrl = controller, ctrl.hasSession() else {
+    ///
+    /// `async` and off the main actor: both `hasSession()` and `run()` block the
+    /// calling thread, and the RPC handler invokes this from `MainActor.run`, so
+    /// on the main actor they stall every other MainActor-bound RPC behind them
+    /// (CROW-874). `TmuxController` is a `Sendable` struct of three strings, so
+    /// it crosses cleanly — the same shape `startManagerExitMonitor` uses.
+    ///
+    /// This is one of ~24 `@MainActor` entry points on this type that call
+    /// `TmuxController` synchronously; bounding `run()` itself is what fixes the
+    /// class. Moving the rest needs `sendText`/`makeActive` and friends to stop
+    /// being sync `throws` APIs, which touches every caller.
+    public func reloadBundledConfig() async -> String? {
+        guard let ctrl = controller else {
             return "tmux server is not running"
         }
         guard let confURL = BundledResources.tmuxConfURL else {
             return "bundled crow-tmux.conf not found"
         }
-        do {
-            try ctrl.run(["source-file", confURL.path])
-            CrowLog.info("[CrowTelemetry tmux:config_reloaded_by_user path=\(confURL.path)]")
-            return nil
-        } catch {
-            CrowLog.info("[CrowTelemetry tmux:config_reload_failed error=\"\(error)\"]")
-            return "\(error)"
-        }
+        return await Task.detached {
+            guard ctrl.hasSession() else {
+                return "tmux server is not running"
+            }
+            do {
+                try ctrl.run(["source-file", confURL.path])
+                CrowLog.info("[CrowTelemetry tmux:config_reloaded_by_user path=\(confURL.path)]")
+                return nil
+            } catch {
+                CrowLog.info("[CrowTelemetry tmux:config_reload_failed error=\"\(error)\"]")
+                return "\(error)"
+            }
+        }.value
     }
 
     /// Pure policy: reconcile when either timestamp is missing (conservative
@@ -1196,20 +1215,25 @@ public final class TmuxBackend {
     /// Ensure the cockpit session is live, adopting an existing one if a
     /// concurrent caller won the `new-session` race.
     ///
-    /// The cockpit session may already be live even though `controller` is
-    /// nil. `TmuxController.run` blocks on `Process.waitUntilExit()`, which
-    /// pumps the main run loop — so the `new-session` we're about to issue can
-    /// be re-entered by another `ensureRunningServer()` caller before we cache
-    /// `controller`. On launch this is the norm: every persisted terminal
-    /// hydrates as its own `Task { @MainActor }` (#293) and, with multiple
-    /// Manager sessions (#326), six-plus of them race here at once. Whoever
-    /// wins creates `crow-cockpit`; the rest must ADOPT it, not re-create it
-    /// (`new-session` errors with "duplicate session", and because that throws
-    /// the loser never cached `controller` — so every subsequent call kept
-    /// failing and every terminal rendered blank).
+    /// **The adopt branch below is load-bearing — do not delete it.** Its
+    /// original justification was in-process: `TmuxController.run` blocked on
+    /// `Process.waitUntilExit()`, which pumps the main run loop, so a
+    /// `new-session` could be re-entered by another `ensureRunningServer()`
+    /// caller before `controller` was cached. That mechanism is gone — since
+    /// #653 the wait is a semaphore that does not pump — but the race is not.
+    ///
+    /// It is now a **cross-process** TOCTOU, which no in-process argument can
+    /// close: `TerminalCockpit.ensureSession` in `crowd` performs the identical
+    /// `hasSession()` → `newSessionDetached` against the *same* socket
+    /// (`appTmuxSocketPath()`, #330), and runs it on every daemon startup.
+    /// Whoever wins creates `crow-cockpit`; the rest must ADOPT it, not
+    /// re-create it — `new-session` errors with "duplicate session", and
+    /// because that throws, the loser never cached `controller`, so every
+    /// subsequent call kept failing and every terminal rendered blank (#326).
     ///
     /// `nonisolated static` so the adopt branch is testable without a real
-    /// tmux server or the main actor — it touches no instance/actor state.
+    /// tmux server or the main actor — it touches no instance/actor state, and
+    /// nothing pins it to the main actor.
     nonisolated static func ensureCockpitSession(
         _ ctrl: CockpitSessionStarter,
         configPath: String?,

@@ -16,7 +16,8 @@ import Foundation
 /// child and throws `.timedOut`; callers wire that into a watchdog flow
 /// that offers the user "Restart tmux server" (spec §10.1).
 ///
-/// All methods are blocking until the spawned tmux process exits.
+/// All methods block the calling thread until the spawned tmux process exits
+/// and its output is drained (both bounded — see `run`).
 public struct TmuxController: Sendable {
     public let tmuxBinary: String
     public let socketPath: String
