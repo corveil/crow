@@ -167,9 +167,10 @@ public enum ParityLedger {
         .read(
             "list-agents",
             noCLI: """
-                Populates the agent picker in the web session-create sheet. The CLI \
-                takes an agent kind directly on `crow create-manager --agent` and \
-                `crow handoff-agent --agent`, so it never needs to enumerate them.
+                Populates the agent picker in the web session-create sheet. `crow \
+                agents list` covers the CLI's need to enumerate agents via \
+                `agents-get`, whose `known` array is a superset of this payload \
+                (CROW-811) — this method is the older, picker-shaped read.
                 """),
         .write(
             "batch-start-review",
@@ -195,6 +196,8 @@ public enum ParityLedger {
         // local-only when the request carries `binaries` (CROW-810).
         .read("defaults-get", cli: "defaults get"),
         .write("defaults-set", cli: "defaults set"),
+        .read("agents-get", cli: "agents list"),
+        .write("agents-set", cli: "agents set"),
         .read("telemetry-get", cli: "telemetry get"),
         .write("telemetry-set", cli: "telemetry set"),
         .read("cleanup-get", cli: "cleanup get"),
@@ -294,9 +297,10 @@ public enum ParityLedger {
     ///
     /// The exempt rows below are the honest state of the milestone as of CROW-807:
     /// the settings blocks that already have verbs (`telemetry`, `cleanup`,
-    /// `sidebar`, `notifications`, gateways, jobs, and `defaults` since CROW-810)
-    /// are covered, and everything the web Settings tab owns exclusively —
-    /// `workspaces[].*`, the automation toggles, `terminal.*` — is not.
+    /// `sidebar`, `notifications`, gateways, jobs, `defaults` since CROW-810 and
+    /// agent selection since CROW-811) are covered, and everything the web
+    /// Settings tab owns exclusively — `workspaces[].*`, the automation toggles,
+    /// `terminal.*` — is not.
     public static let configFields: [ConfigEntry] = [
         // MARK: Covered — settings blocks with dedicated verbs
 
@@ -407,6 +411,11 @@ public enum ParityLedger {
                 sessions inherit Claude's MCP servers; web Settings tab only.
                 """),
 
+        // MARK: Covered — agent selection (CROW-811)
+
+        .field("defaultAgentKind", read: "agents list", write: "agents set"),
+        .field("agentsByKind", read: "agents list", write: "agents set"),
+
         // MARK: Exempt — workspaces (no CLI surface at all)
 
         .field(
@@ -502,7 +511,7 @@ public enum ParityLedger {
                 verb — see `workspaces[].id`.
                 """),
 
-        // MARK: Exempt — automation toggles and agent defaults (web Settings tab)
+        // MARK: Exempt — automation toggles (web Settings tab)
 
         .field(
             "remoteControlEnabled",
@@ -574,20 +583,6 @@ public enum ParityLedger {
                 toggle; the manual equivalent is `crow quick-action --action \
                 fixConflicts`.
                 """),
-        .field(
-            "defaultAgentKind",
-            noCLI: """
-                Coding agent used for new sessions when none is given. Web Settings \
-                picker; `crow create-manager --agent` and `crow handoff-agent --agent` \
-                choose per session but cannot change the default (CROW-421).
-                """),
-        .field(
-            "agentsByKind",
-            noCLI: """
-                Per-session-kind agent overrides, keyed by `SessionKind.rawValue` \
-                (CROW-433). Web Settings pickers; no verb reads or writes the map.
-                """),
-
         // MARK: Exempt — terminal tuning and Jira credential
 
         .field(
