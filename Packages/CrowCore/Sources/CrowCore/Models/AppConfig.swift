@@ -477,6 +477,20 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
     /// the CLI (`corveil login`, `CORVEIL_URL`), so Crow doesn't pipe it through.
     /// `nil` is fine: the public `corveil.io` is auto-detected.
     public var corveilHost: String?
+    /// Extra environment variables exported into every agent launched in this
+    /// workspace, as a plain `KEY: VALUE` map.
+    ///
+    /// This field was consumed before it was modeled: `skills/crow-workspace/setup.sh`
+    /// reads `.workspaces[].sessionEnv` out of `config.json` with `jq`, and the
+    /// skill documents it as a peer of `gateway` / `customInstructions`. But
+    /// `encode(to:)` is synthesized from ``CodingKeys``, so while the key was
+    /// absent from that list *every* config save silently deleted a hand-authored
+    /// block — and the `jq` read then returned empty with no error (CROW-809).
+    /// Modeling it is what makes the round-trip lossless.
+    ///
+    /// Unlike ``gateway`` this is not treated as a credential: it is not stripped
+    /// by `SettingsSecrets`, so don't put tokens here — use a gateway header.
+    public var sessionEnv: [String: String]?
 
     /// The CLI tool name derived from the current `provider` value.
     /// Unlike `cli` (which may be stale from an old config file), this is always correct.
@@ -506,6 +520,7 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
         jiraSite: String? = nil,
         jiraStatusMap: [String: String]? = nil,
         corveilHost: String? = nil,
+        sessionEnv: [String: String]? = nil,
         gateway: WorkspaceGateway? = nil
     ) {
         self.id = id
@@ -523,6 +538,7 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
         self.jiraSite = jiraSite
         self.jiraStatusMap = jiraStatusMap
         self.corveilHost = corveilHost
+        self.sessionEnv = sessionEnv
         self.gateway = gateway
     }
 
@@ -543,13 +559,31 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
         jiraSite = try container.decodeIfPresent(String.self, forKey: .jiraSite)
         jiraStatusMap = try container.decodeIfPresent([String: String].self, forKey: .jiraStatusMap)
         corveilHost = try container.decodeIfPresent(String.self, forKey: .corveilHost)
+        sessionEnv = try container.decodeIfPresent([String: String].self, forKey: .sessionEnv)
         gateway = try container.decodeIfPresent(WorkspaceGateway.self, forKey: .gateway)
     }
 
+    // `encode(to:)` is synthesized from this list, so a key missing here is a
+    // key *deleted* from config.json on the next save — not merely one the app
+    // ignores. That is how `sessionEnv` was being dropped (CROW-809).
     private enum CodingKeys: String, CodingKey {
         case id, name, provider, cli, host, alwaysInclude, autoReviewRepos, excludeReviewRepos, customInstructions
-        case taskProvider, jiraProjectKey, jiraJQL, jiraSite, jiraStatusMap, corveilHost, gateway
+        case taskProvider, jiraProjectKey, jiraJQL, jiraSite, jiraStatusMap, corveilHost, sessionEnv, gateway
     }
+
+    /// Legal `provider` values — the code/PR hosts.
+    ///
+    /// Derived from ``Provider`` rather than spelled out, so a new provider case
+    /// lands in the CLI's `--provider` rejection message and the `workspace-*`
+    /// RPC validation without a second edit. Task-only providers (Jira, Corveil)
+    /// have no git surface, so they're never a code provider.
+    public static var validProviders: [String] {
+        Provider.allCases.filter { !$0.isTaskOnly }.map(\.rawValue)
+    }
+
+    /// Legal `taskProvider` values — every ``Provider``. `nil` (the Settings
+    /// dropdown's blank option) additionally means "follow the code provider".
+    public static var validTaskProviders: [String] { Provider.allCases.map(\.rawValue) }
 
     /// Characters that are unsafe in directory names (workspace names become directory names).
     private static let unsafeCharacters = CharacterSet(charactersIn: "/:\0")

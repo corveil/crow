@@ -36,6 +36,9 @@ All persistent state lives under `~/Library/Application Support/crow/` (see `Pac
       "cli": "gh",
       "host": null,
       "customInstructions": "Always run npm test before committing",
+      "sessionEnv": {
+        "AWS_PROFILE": "dev"
+      },
       "gateway": {
         "baseURL": "https://corveil.io",
         "customHeaders": {
@@ -70,11 +73,14 @@ All persistent state lives under `~/Library/Application Support/crow/` (see `Pac
 - **`excludeReviewRepos`** — repos to hide from the review board (e.g., `["zarf-dev/zarf"]`). Supports `*` wildcards (e.g., `"zarf-dev/*"`). Matching reviews are filtered out from the board, sidebar badge count, and notifications. Editable in Settings → Automation → Reviews.
 - **`excludeTicketRepos`** — repos to hide from the ticket board (e.g., `["zarf-dev/zarf"]`). Supports `*` wildcards (e.g., `"zarf-dev/*"`). Matching issues are filtered out from the board, pipeline counts, and auto-create candidates. Editable in Settings → Automation → Tickets.
 - **`customInstructions`** — optional free-text instructions appended to the session prompt as a `## Custom Instructions` section. Use this for workspace-specific conventions, e.g., "Always run `npm test` before committing" or "Use the auth middleware in `src/middleware/auth.ts` as a pattern."
+- **`sessionEnv`** — optional `KEY: VALUE` map exported into every agent launched in this workspace. Read by the `/crow-workspace` skill's setup script as one `KEY=VALUE` per line, split at the first `=` — so neither a key nor a value may contain a newline, a key may not contain `=` (a value may), and a key may not contain whitespace or control characters. `crow workspace` rejects all of these on write; existing config is never re-validated on read. Unlike `gateway`, these values are **not** treated as credentials: they are stored in plain `config.json` and are not stripped from the web Settings payload, so put tokens in a gateway header instead.
 - **`gateway`** — optional AI gateway for this workspace's `claude` launches. See [AI Gateway](#ai-gateway) below.
 - **`ignoreReviewLabels`** — PR labels that hide a review from the board. Exact match, case-insensitive, no wildcards. Editable in Settings → Automation → Reviews.
 - **`binaries`** — absolute-path overrides keyed by tool name, e.g. `{"corveil": "/opt/corveil/bin/corveil"}`. Serves both agent binary discovery (keyed by agent kind: `claude-code`, `codex`, `cursor`, …) and external tool installers. Read at startup only, and each key becomes a symlink at `{devRoot}/.claude/bin/<name>` — so a change needs a `crowd` restart. Settings → General exposes only the `corveil` slot, and only from a local browser.
 
 The `defaults` block is also editable from the CLI with `crow defaults get|set` — see the [CLI reference](cli-reference.md#crow-defaults-get--set). The three list fields are edited incrementally there (`--add-…` / `--remove-…` / `--clear-…`) rather than by replacement, and `--binary` is local-only.
+
+Everything above except `gateway` is editable from the CLI with [`crow workspace`](cli-reference.md#workspace-commands) as well as Settings → Workspaces; the gateway is local-only and lives behind [`crow gateway`](cli-reference.md#gateway-commands).
 
 For the full set of automation toggles backed by this config, see [automation.md](automation.md).
 

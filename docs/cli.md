@@ -115,6 +115,12 @@ Every subcommand and flag the `crow` binary accepts, generated from the commands
 | [`crow web-password set`](#crow-web-password-set) | Set or change the web-access password |
 | [`crow web-password status`](#crow-web-password-status) | Report whether a web-access password is set |
 | [`crow work-on-issue`](#crow-work-on-issue) | Start working on a ticket (types /crow-workspace into the Manager) |
+| [`crow workspace`](#crow-workspace) | Manage workspaces (Settings → Workspaces) |
+| [`crow workspace add`](#crow-workspace-add) | Create a workspace |
+| [`crow workspace edit`](#crow-workspace-edit) | Change fields on an existing workspace |
+| [`crow workspace get`](#crow-workspace-get) | Show one workspace's full configuration |
+| [`crow workspace list`](#crow-workspace-list) | List every configured workspace |
+| [`crow workspace remove`](#crow-workspace-remove) | Delete a workspace from the configuration |
 
 ---
 
@@ -1673,6 +1679,151 @@ crow work-on-issue --url <url>
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |
 | `--url` | `<url>` | yes | Ticket / issue URL |
+
+---
+
+## `crow workspace`
+
+Manage workspaces (Settings → Workspaces).
+
+```
+crow workspace <list|get|add|edit|remove>
+```
+
+A workspace maps to a folder under the dev root and decides which forge its repos live on, where its tickets come from, and what extra context its sessions get. --workspace accepts a name (case-insensitive) or a workspace UUID.
+
+`add` and `edit` take the same field flags. On `edit` only the flags you pass change; an optional scalar clears with an empty string (--host ""), and a list or map clears with its --clear-* flag.
+
+Subcommands: [`list`](#crow-workspace-list), [`get`](#crow-workspace-get), [`add`](#crow-workspace-add), [`edit`](#crow-workspace-edit), [`remove`](#crow-workspace-remove).
+
+---
+
+## `crow workspace add`
+
+Create a workspace.
+
+```
+crow workspace add --name <name> [--provider <provider>] [--host <host>] [--task-provider <task-provider>] [--jira-site <jira-site>] [--jira-project-key <jira-project-key>] [--jira-jql <jira-jql>] [--jira-status-backlog <jira-status-backlog>] [--jira-status-ready <jira-status-ready>] [--jira-status-in-progress <jira-status-in-progress>] [--jira-status-in-review <jira-status-in-review>] [--jira-status-done <jira-status-done>] [--clear-jira-status-map] [--corveil-host <corveil-host>] [--custom-instructions <custom-instructions>] [--custom-instructions-file <custom-instructions-file>] [--always-include <always-include> ...] [--clear-always-include] [--auto-review-repo <auto-review-repo> ...] [--clear-auto-review-repos] [--exclude-review-repo <exclude-review-repo> ...] [--clear-exclude-review-repos] [--session-env <session-env> ...] [--clear-session-env]
+```
+
+Only --name is required; every other field takes its documented default and can be set later with `crow workspace edit`. The name becomes a directory under the dev root, so it cannot contain / or :, cannot be "." or "..", and must not collide with an existing workspace (case-insensitively).
+
+Creating a workspace does not create its directory — the daemon scaffolds it on next launch.
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--name` | `<name>` | yes | Workspace name (becomes a folder under the dev root) |
+| `--provider` | `<provider>` | no | Code/PR host: github or gitlab |
+| `--host` | `<host>` | no | GitLab host, e.g. gitlab.example.com (GitLab workspaces only; "" clears) |
+| `--task-provider` | `<task-provider>` | no | Where tickets live: github, gitlab, jira, or corveil ("" follows the code provider) |
+| `--jira-site` | `<jira-site>` | no | Atlassian site, e.g. acme.atlassian.net ("" clears) |
+| `--jira-project-key` | `<jira-project-key>` | no | Jira project key, e.g. PROPS ("" clears) |
+| `--jira-jql` | `<jira-jql>` | no | JQL for this workspace's ticket board ("" clears) |
+| `--jira-status-backlog` | `<jira-status-backlog>` | no | Jira status name for Backlog ("" clears) |
+| `--jira-status-ready` | `<jira-status-ready>` | no | Jira status name for Ready ("" clears) |
+| `--jira-status-in-progress` | `<jira-status-in-progress>` | no | Jira status name for In Progress ("" clears) |
+| `--jira-status-in-review` | `<jira-status-in-review>` | no | Jira status name for In Review ("" clears) |
+| `--jira-status-done` | `<jira-status-done>` | no | Jira status name for Done ("" clears) |
+| `--clear-jira-status-map` | — | no | Drop every Crow→Jira status mapping |
+| `--corveil-host` | `<corveil-host>` | no | Self-hosted Corveil host, e.g. corveil.acme.io ("" clears; blank means corveil.io) |
+| `--custom-instructions` | `<custom-instructions>` | no | Free text appended to this workspace's session prompts ("" clears) |
+| `--custom-instructions-file` | `<custom-instructions-file>` | no | Read --custom-instructions from a file; '-' reads stdin |
+| `--always-include` | `<always-include>` _(repeatable)_ | no | Repo always listed in the prompt table (repeatable; replaces the whole list) |
+| `--clear-always-include` | — | no | Empty the always-include list |
+| `--auto-review-repo` | `<auto-review-repo>` _(repeatable)_ | no | Repo whose review requests auto-create a session (repeatable; replaces the whole list) |
+| `--clear-auto-review-repos` | — | no | Empty the auto-review list |
+| `--exclude-review-repo` | `<exclude-review-repo>` _(repeatable)_ | no | Repo hidden from the review board (repeatable; replaces the whole list) |
+| `--clear-exclude-review-repos` | — | no | Empty the exclude-from-reviews list |
+| `--session-env` | `<session-env>` _(repeatable)_ | no | KEY=VALUE exported into agents in this workspace (repeatable; replaces the whole map) |
+| `--clear-session-env` | — | no | Drop every session env var |
+
+---
+
+## `crow workspace edit`
+
+Change fields on an existing workspace.
+
+```
+crow workspace edit --workspace <workspace> [--name <name>] [--provider <provider>] [--host <host>] [--task-provider <task-provider>] [--jira-site <jira-site>] [--jira-project-key <jira-project-key>] [--jira-jql <jira-jql>] [--jira-status-backlog <jira-status-backlog>] [--jira-status-ready <jira-status-ready>] [--jira-status-in-progress <jira-status-in-progress>] [--jira-status-in-review <jira-status-in-review>] [--jira-status-done <jira-status-done>] [--clear-jira-status-map] [--corveil-host <corveil-host>] [--custom-instructions <custom-instructions>] [--custom-instructions-file <custom-instructions-file>] [--always-include <always-include> ...] [--clear-always-include] [--auto-review-repo <auto-review-repo> ...] [--clear-auto-review-repos] [--exclude-review-repo <exclude-review-repo> ...] [--clear-exclude-review-repos] [--session-env <session-env> ...] [--clear-session-env] [--force]
+```
+
+Only the provided flags change. A repeatable list flag replaces the whole list rather than appending, matching `crow job edit`; use the matching --clear-* flag to empty one. The --jira-status-* flags patch individually — each sets one mapping and leaves the other four alone.
+
+Renaming is guarded. Sessions are tied to a workspace only by their worktree living under {devRoot}/{workspace}/, and jobs only by the workspace name string, so a rename silently orphans both — it does not move any directory. --force renames anyway and reports the counts.
+
+An edit whose values already hold is reported as "saved": false and skips the write, so re-running the same command doesn't churn config.json.
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--workspace` | `<workspace>` | yes | Workspace name or UUID |
+| `--name` | `<name>` | no | New workspace name (see the rename guard above) |
+| `--provider` | `<provider>` | no | Code/PR host: github or gitlab |
+| `--host` | `<host>` | no | GitLab host, e.g. gitlab.example.com (GitLab workspaces only; "" clears) |
+| `--task-provider` | `<task-provider>` | no | Where tickets live: github, gitlab, jira, or corveil ("" follows the code provider) |
+| `--jira-site` | `<jira-site>` | no | Atlassian site, e.g. acme.atlassian.net ("" clears) |
+| `--jira-project-key` | `<jira-project-key>` | no | Jira project key, e.g. PROPS ("" clears) |
+| `--jira-jql` | `<jira-jql>` | no | JQL for this workspace's ticket board ("" clears) |
+| `--jira-status-backlog` | `<jira-status-backlog>` | no | Jira status name for Backlog ("" clears) |
+| `--jira-status-ready` | `<jira-status-ready>` | no | Jira status name for Ready ("" clears) |
+| `--jira-status-in-progress` | `<jira-status-in-progress>` | no | Jira status name for In Progress ("" clears) |
+| `--jira-status-in-review` | `<jira-status-in-review>` | no | Jira status name for In Review ("" clears) |
+| `--jira-status-done` | `<jira-status-done>` | no | Jira status name for Done ("" clears) |
+| `--clear-jira-status-map` | — | no | Drop every Crow→Jira status mapping |
+| `--corveil-host` | `<corveil-host>` | no | Self-hosted Corveil host, e.g. corveil.acme.io ("" clears; blank means corveil.io) |
+| `--custom-instructions` | `<custom-instructions>` | no | Free text appended to this workspace's session prompts ("" clears) |
+| `--custom-instructions-file` | `<custom-instructions-file>` | no | Read --custom-instructions from a file; '-' reads stdin |
+| `--always-include` | `<always-include>` _(repeatable)_ | no | Repo always listed in the prompt table (repeatable; replaces the whole list) |
+| `--clear-always-include` | — | no | Empty the always-include list |
+| `--auto-review-repo` | `<auto-review-repo>` _(repeatable)_ | no | Repo whose review requests auto-create a session (repeatable; replaces the whole list) |
+| `--clear-auto-review-repos` | — | no | Empty the auto-review list |
+| `--exclude-review-repo` | `<exclude-review-repo>` _(repeatable)_ | no | Repo hidden from the review board (repeatable; replaces the whole list) |
+| `--clear-exclude-review-repos` | — | no | Empty the exclude-from-reviews list |
+| `--session-env` | `<session-env>` _(repeatable)_ | no | KEY=VALUE exported into agents in this workspace (repeatable; replaces the whole map) |
+| `--clear-session-env` | — | no | Drop every session env var |
+| `--force` | — | no | Rename even when sessions or jobs reference this workspace |
+
+---
+
+## `crow workspace get`
+
+Show one workspace's full configuration.
+
+```
+crow workspace get --workspace <workspace>
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--workspace` | `<workspace>` | yes | Workspace name or UUID |
+
+---
+
+## `crow workspace list`
+
+List every configured workspace.
+
+```
+crow workspace list
+```
+
+---
+
+## `crow workspace remove`
+
+Delete a workspace from the configuration.
+
+```
+crow workspace remove --workspace <workspace> [--force]
+```
+
+Removes the config entry only. The workspace directory under the dev root, its worktrees, and its branches are left on disk — same as the web UI. Any AI gateway stored for this workspace is discarded with it, and there is no undo.
+
+Refuses when sessions or jobs still reference the workspace; --force removes it anyway.
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--workspace` | `<workspace>` | yes | Workspace name or UUID |
+| `--force` | — | no | Remove even when sessions or jobs reference this workspace |
 
 ---
 

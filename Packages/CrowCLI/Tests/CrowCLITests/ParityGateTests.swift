@@ -159,6 +159,7 @@ struct ParityGateTests {
                     jiraSite: "probe.atlassian.net",
                     jiraStatusMap: ["inProgress": "In Progress"],
                     corveilHost: "corveil.example",
+                    sessionEnv: ["PROBE_ENV": "1"],
                     gateway: gateway
                 )
             ],

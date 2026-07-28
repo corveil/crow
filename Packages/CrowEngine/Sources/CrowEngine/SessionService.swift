@@ -1594,7 +1594,12 @@ public final class SessionService {
 
     /// Derive the workspace folder name from a worktree path:
     /// `{devRoot}/{workspace}/{repo-folder}` → `{workspace}`. Pure path math.
-    static func workspaceName(forWorktreePath path: String, devRoot: String) -> String? {
+    ///
+    /// Public because this string *is* the link between a session and its
+    /// workspace — there is no id on either side — so `workspace-edit` and
+    /// `workspace-remove` need it to count what a rename or removal would orphan
+    /// (CROW-809).
+    public static func workspaceName(forWorktreePath path: String, devRoot: String) -> String? {
         let root = (devRoot as NSString).standardizingPath
         let full = (path as NSString).standardizingPath
         guard full.hasPrefix(root + "/") else { return nil }

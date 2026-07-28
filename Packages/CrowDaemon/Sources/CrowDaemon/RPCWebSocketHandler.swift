@@ -176,6 +176,16 @@ enum RPCWebSocketHandler {
     /// distinction is between choosing among binaries the daemon already found and
     /// telling it to execute a new one.
     ///
+    /// The `workspace-*` RPCs (CROW-809) are NOT gated either, by the same
+    /// argument: Settings → Workspaces is a core web surface whose every field is
+    /// already remotely writable through `set-config`. The one thing that *would*
+    /// justify gating — the per-workspace AI gateway — is excluded rather than
+    /// gated: `WorkspaceRPC.workspaceJSON` reduces it to a `gateway_set` flag and
+    /// a base URL, never the `customHeaders` values, and no `workspace-*` method
+    /// writes it. Authoring that credential stays with `gateway-set`, which *is*
+    /// gated above. So the remote-reachable surface here is strictly smaller than
+    /// the `set-config` it replaces.
+    ///
     /// Note this gate only guards the HTTP/WebSocket `/rpc` path. Every method here
     /// also has a `crow` CLI verb (CROW-818), and the CLI reaches the daemon over its
     /// 0600 Unix socket, which never passes through `localOnlyDenial` — a CLI caller

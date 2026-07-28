@@ -1107,5 +1107,46 @@ import CrowPersistence
                 "defaults-set with binaries: \(payload) must be denied")
         }
     }
-}
 
+    @Test func workspaceRPCsAreAllowedRemotely() throws {
+        // CROW-809: Settings → Workspaces is a core web surface whose every field
+        // is already remotely writable through un-gated `set-config`, so the
+        // granular verbs stay un-gated too — the remote-reachable surface here is
+        // strictly smaller than the whole-config blob it replaces.
+        //
+        // What would justify gating — the per-workspace AI gateway — is *excluded*
+        // rather than gated: no `workspace-*` method writes it, and
+        // `workspaceJSON` reduces it to a flag plus a base URL. Authoring the
+        // credential stays with `gateway-set`, which is gated.
+        //
+        // This test is what enforces that decision — `localOnlyDenial`'s
+        // `default:` would silently swallow a later change of heart. Deliberate:
+        // flip these to a denial string, not to nothing.
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        try ConfigStore.saveConfig(AppConfig(), devRoot: devRoot)
+
+        for method in ["workspace-list", "workspace-get", "workspace-add",
+                       "workspace-edit", "workspace-remove"] {
+            let req = JSONRPCRequest(id: 1, method: method, params: [
+                "workspace": .string("Acme"), "name": .string("Acme"),
+            ])
+            #expect(RPCWebSocketHandler.localOnlyDenial(for: req, devRoot: devRoot) == nil,
+                    "\(method) should stay un-gated")
+        }
+    }
+
+    /// The counterpart to the above: the gateway verbs a workspace's credential
+    /// actually lives behind stay local-only, so the split survives a refactor
+    /// that moves gateway handling between the two verb groups.
+    @Test func workspaceGatewayRemainsLocalOnly() throws {
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+
+        let req = JSONRPCRequest(id: 1, method: "gateway-set", params: [
+            "workspace": .string("Acme"), "base_url": .string("https://gw.acme.io"),
+        ])
+        #expect(RPCWebSocketHandler.localOnlyDenial(for: req, devRoot: devRoot)
+            == "gateway and web-password management is local-only")
+    }
+}

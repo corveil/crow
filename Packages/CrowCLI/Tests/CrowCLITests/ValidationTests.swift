@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import CrowCore
 @testable import CrowCLILib
 
 // MARK: - UUID Validation
@@ -334,4 +335,75 @@ import Foundation
             _ = try normalizedListValues(raw, flag: "--add-x")
         }
     }
+}
+
+// MARK: - Workspace validators (CROW-809)
+
+@Test func workspaceProviderAcceptsCodeHostsOnly() throws {
+    for provider in WorkspaceInfo.validProviders { try validateWorkspaceProvider(provider) }
+    try validateWorkspaceProvider("  github  ")
+    // Jira and Corveil are task-only — they have no git surface.
+    for bad in ["jira", "corveil", "bitbucket", "", "GitHub"] {
+        #expect(throws: (any Error).self, "expected '\(bad)' to be rejected") {
+            try validateWorkspaceProvider(bad)
+        }
+    }
+}
+
+@Test func workspaceTaskProviderAcceptsEveryProviderAndBlank() throws {
+    for provider in WorkspaceInfo.validTaskProviders { try validateWorkspaceTaskProvider(provider) }
+    // Blank is the Settings dropdown's "follow the code provider" option.
+    try validateWorkspaceTaskProvider("")
+    try validateWorkspaceTaskProvider("   ")
+    #expect(throws: (any Error).self) { try validateWorkspaceTaskProvider("trello") }
+}
+
+/// The provider lists come from the model, so a new `Provider` case reaches the
+/// CLI's rejection messages without a second edit.
+@Test func workspaceProviderErrorsListTheValidValues() {
+    do {
+        try validateWorkspaceProvider("bitbucket")
+        Issue.record("expected a throw")
+    } catch {
+        let message = String(describing: error)
+        for provider in WorkspaceInfo.validProviders { #expect(message.contains(provider)) }
+    }
+}
+
+@Test func sessionEnvEntryAcceptsKeyValuePairs() throws {
+    try validateSessionEnvEntry("AWS_PROFILE=dev")
+    // An env var set to the empty string differs meaningfully from an unset one.
+    try validateSessionEnvEntry("EMPTY=")
+    // Only the first '=' separates, so a value may contain more.
+    try validateSessionEnvEntry("DSN=postgres://u:p@h/db?a=1&b=2")
+}
+
+@Test func sessionEnvEntryRejectsMalformedInput() {
+    for bad in ["NOEQUALS", "", "=novalue", "   =v"] {
+        #expect(throws: (any Error).self, "expected '\(bad)' to be rejected") {
+            try validateSessionEnvEntry(bad)
+        }
+    }
+}
+
+/// The value is exported into the agent's shell environment, where an embedded
+/// newline would read as a second statement — same hazard as a header line.
+@Test func sessionEnvEntryRejectsEmbeddedNewlines() {
+    for bad in ["K=v\nINJECTED=x", "K=v\r\nINJECTED=x", "K=v\rx"] {
+        #expect(throws: (any Error).self) { try validateSessionEnvEntry(bad) }
+    }
+}
+
+/// A key no shell can reference is an entry that can never be read back. The CLI
+/// can't produce a key containing `=` (it splits on the first one), but it can
+/// produce one containing a space — so this is the half of
+/// `WorkspaceRPC.decodeSessionEnv`'s key rules that the CLI can actually reach.
+@Test func sessionEnvEntryRejectsUnaddressableKeys() {
+    for bad in ["FOO BAR=v", "FOO\tBAR=v", "FOO\u{0}BAR=v"] {
+        #expect(throws: (any Error).self, "expected '\(bad)' to be rejected") {
+            try validateSessionEnvEntry(bad)
+        }
+    }
+    // Surrounding space is a typo, not a bad name — `parseSessionEnv` trims it.
+    #expect(throws: Never.self) { try validateSessionEnvEntry("  AWS_PROFILE  =dev") }
 }

@@ -226,6 +226,26 @@ Events: `taskComplete`, `agentWaiting`, `reviewRequested`, `changesRequested`, `
 
 Notifications cascade — one fires only if `globalMute` is off, the global category toggle is on, **and** the per-event toggle is on. Omitted flags leave their stored value alone; every `--event-*` flag requires `--event`.
 
+### Workspace Commands
+
+Manage `AppConfig.workspaces` — the Settings → Workspaces tab as CLI verbs. `--workspace` takes a name (case-insensitive) or a workspace UUID.
+
+```
+crow workspace list                                      → {"workspaces":[...],"config_readable":bool}
+crow workspace get --workspace <name|uuid>               → {"workspace":{...}}
+crow workspace add --name NAME [field flags]             → {"workspace":{...},"saved":true}
+crow workspace edit --workspace <name|uuid> [flags]      → patch; {"saved":false} when nothing changed (no write)
+crow workspace remove --workspace <name|uuid> [--force]  → {"removed":true,"gateway_discarded":bool,...}
+```
+
+Field flags (shared by `add`/`edit`): `--provider github|gitlab`, `--host`, `--task-provider github|gitlab|jira|corveil`, `--jira-site`, `--jira-project-key`, `--jira-jql`, `--jira-status-{backlog,ready,in-progress,in-review,done}`, `--corveil-host`, `--custom-instructions[-file]`, `--always-include`, `--auto-review-repo`, `--exclude-review-repo`, `--session-env KEY=VALUE`, and `--clear-{always-include,auto-review-repos,exclude-review-repos,jira-status-map,session-env}`.
+
+- **Clearing:** optional scalars clear with an empty string (`--host ""`); lists/maps need their `--clear-*` flag. `--jira-status-ready ""` clears one entry.
+- **Repeatable flags replace the whole list**, they don't append — but `--jira-status-*` patches per key.
+- **Renaming and removing are guarded.** Sessions are tied to a workspace only by their worktree path (`{devRoot}/{workspace}/...`) and jobs only by the name string, so both refuse while references exist; `--force` proceeds and reports `orphaned_sessions`/`orphaned_jobs`. Neither verb touches the filesystem — `remove` leaves the directory and returns `worktree_dir_kept`.
+- A field the workspace never reads is rejected (`--host` on GitHub, `--jira-*` on a non-Jira workspace) rather than silently stored. `cli` is always derived from `--provider`.
+- The per-workspace **AI gateway** is not settable here — it's local-only, so use `crow gateway` (below). Edits preserve it; `remove` discards it.
+
 ### Gateways & Secrets
 
 Local-only (CROW-815) — these carry credentials, so the remote `/rpc` web path refuses them and only the local Unix socket works. Take exactly one target: `--manager` or `--workspace <name|uuid>`.
