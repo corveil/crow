@@ -1,0 +1,622 @@
+import Foundation
+
+/// The checked-in CLI control-plane parity ledger (CROW-807, ADR 0016).
+///
+/// Crow's control plane exists three times over: the JSON-RPC methods `crowd`
+/// registers, the `crow` verbs that call them, and the ``AppConfig`` fields both
+/// mutate. Nothing in the compiler ties those together, so a capability can ship
+/// as an RPC method plus a web control and quietly never grow a CLI path. This
+/// ledger is the one place that states, per method and per config field, whether
+/// a CLI path exists — and when it doesn't, *why*.
+///
+/// **It is not documentation; it is a gate.** Three checks keep it honest:
+///
+/// - `CrowCLITests/ParityGateTests` — every ``Coverage/cli(_:)`` path resolves
+///   against `CrowCommand`'s subcommand tree, and ``configFields`` matches the
+///   `Mirror` walk of `AppConfig` exactly, in both directions.
+/// - `CrowDaemonTests/RPCLedgerParityTests` — ``rpcMethods`` matches
+///   `CommandRouter.methodNames` for the live daemon+engine router pair.
+/// - `scripts/check-cli-parity.sh` — the same RPC assertion by text, because
+///   CrowDaemon is Darwin-only and cannot run in the Linux PR lane.
+///
+/// Adding a ``Coverage/noCLI(reason:)`` row is the review gate: the reason is a
+/// required associated value, so an exemption cannot be added silently. Each
+/// per-area parity ticket closes its gap by *deleting* rows from the exempt set.
+///
+/// ``Coverage/noCLI(reason:)`` is CROW-807's `KNOWN_UI_ONLY` allowlist, named for
+/// what it asserts rather than what usually causes it — most exemptions are indeed
+/// web-UI-only, but a few surfaces (the web-password hash) are readable nowhere.
+public enum ParityLedger {
+
+    // MARK: - Coverage
+
+    /// Whether a surface is reachable from the `crow` CLI, or deliberately isn't.
+    public enum Coverage: Sendable, Equatable {
+        /// Reachable, via this full verb path — e.g. `"job add"`, `"web-password status"`.
+        /// Leaf command names collide across groups (six commands are named `set`),
+        /// so this is always the *full* path, never the leaf.
+        case cli(String)
+
+        /// Deliberately not reachable from the CLI. The reason is required and is
+        /// checked for substance by `ParityGateTests`; state what drives the surface
+        /// instead and, where one exists, the ticket that will close the gap.
+        case noCLI(reason: String)
+
+        public var cliPath: String? {
+            if case .cli(let path) = self { return path }
+            return nil
+        }
+
+        public var exemptionReason: String? {
+            if case .noCLI(let reason) = self { return reason }
+            return nil
+        }
+    }
+
+    // MARK: - RPC methods
+
+    /// One registered JSON-RPC method.
+    public struct RPCEntry: Sendable, Equatable {
+        public let method: String
+        /// `false` for pure queries; `true` for anything that mutates state or
+        /// performs an action. Stated per row rather than inferred from a `get-`/
+        /// `list-` prefix — a heuristic would wave through a future write named
+        /// `get-something`.
+        public let isWrite: Bool
+        public let coverage: Coverage
+
+        public static func read(_ method: String, cli path: String) -> RPCEntry {
+            RPCEntry(method: method, isWrite: false, coverage: .cli(path))
+        }
+
+        public static func read(_ method: String, noCLI reason: String) -> RPCEntry {
+            RPCEntry(method: method, isWrite: false, coverage: .noCLI(reason: reason))
+        }
+
+        public static func write(_ method: String, cli path: String) -> RPCEntry {
+            RPCEntry(method: method, isWrite: true, coverage: .cli(path))
+        }
+
+        public static func write(_ method: String, noCLI reason: String) -> RPCEntry {
+            RPCEntry(method: method, isWrite: true, coverage: .noCLI(reason: reason))
+        }
+    }
+
+    /// Every method reachable through the live router pair — the daemon's
+    /// `makeCommandRouter` unioned with the `makeEngineRouter` it falls back to.
+    public static let rpcMethods: [RPCEntry] = [
+        // Sessions
+        .write("new-session", cli: "new-session"),
+        .write("rename-session", cli: "rename-session"),
+        .write("select-session", cli: "select-session"),
+        .read("list-sessions", cli: "list-sessions"),
+        .read("get-session", cli: "get-session"),
+        .write("set-status", cli: "set-status"),
+        .write("set-locked", cli: "set-locked"),
+        .write("delete-session", cli: "delete-session"),
+        .write("handoff-agent", cli: "handoff-agent"),
+        .read(
+            "list-sessions-live",
+            noCLI: """
+                Web-board streaming read: the same rows as `list-sessions` plus live \
+                terminal/agent state, shaped for the browser's poll loop. `crow \
+                list-sessions` and `crow get-session` cover the CLI's needs.
+                """),
+        .write(
+            "set-pinned",
+            noCLI: """
+                Engine method with no caller: `crow set-pinned` in fact sends the \
+                `set-locked` RPC (SessionCommands.swift). Either the verb is \
+                misrouted or this method is dead — resolve before removing this row.
+                """),
+
+        // Session lifecycle
+        .write("mark-in-review", cli: "mark-in-review"),
+        .write("complete-session", cli: "complete-session"),
+        .write("set-session-active", cli: "set-session-active"),
+        .write("mark-issue-done", cli: "mark-issue-done"),
+        .write("add-merge-label", cli: "add-merge-label"),
+
+        // Metadata & links
+        .write("set-ticket", cli: "set-ticket"),
+        .write("set-goal", cli: "set-goal"),
+        .write("add-link", cli: "add-link"),
+        .read("list-links", cli: "list-links"),
+        .write("remove-link", cli: "remove-link"),
+        .write("edit-link", cli: "edit-link"),
+        .write("transition-ticket", cli: "transition-ticket"),
+        .write("resync-jira", cli: "resync-jira"),
+
+        // Worktrees
+        .write("add-worktree", cli: "add-worktree"),
+        .read("list-worktrees", cli: "list-worktrees"),
+
+        // Terminals
+        .write("new-terminal", cli: "new-terminal"),
+        .read("list-terminals", cli: "list-terminals"),
+        .write("close-terminal", cli: "close-terminal"),
+        .write("recreate-terminal", cli: "recreate-terminal"),
+        .write("rename-terminal", cli: "rename-terminal"),
+        .write("send", cli: "send"),
+
+        // Maintenance
+        .write("launch-agent", cli: "launch-agent"),
+        .write("retry-readiness", cli: "retry-readiness"),
+        .write("restart-manager", cli: "restart-manager"),
+        .write("restart-tmux-server", cli: "restart-tmux-server"),
+        .write("reload-tmux-config", cli: "reload-tmux-config"),
+        .write("open-in-vscode", cli: "open-in-vscode"),
+        .write("open-terminal", cli: "open-terminal"),
+
+        // Board & workflow
+        .read("list-tickets", cli: "list-tickets"),
+        .read("list-reviews", cli: "list-reviews"),
+        .write("refresh-tickets", cli: "refresh-tickets"),
+        .write("work-on-issue", cli: "work-on-issue"),
+        .write("batch-work-on-issues", cli: "batch-work-on-issues"),
+        .write("start-review", cli: "start-review"),
+        .write("create-manager", cli: "create-manager"),
+        .write("quick-action", cli: "quick-action"),
+        .read(
+            "get-pr-status",
+            noCLI: """
+                Per-row PR badge fetch for the web Reviews board, called once per \
+                visible card. `crow list-reviews` already returns the same PR state \
+                for every review in one payload, which is the shape a script wants.
+                """),
+        .read(
+            "list-agents",
+            noCLI: """
+                Populates the agent picker in the web session-create sheet. The CLI \
+                takes an agent kind directly on `crow create-manager --agent` and \
+                `crow handoff-agent --agent`, so it never needs to enumerate them.
+                """),
+        .write(
+            "batch-start-review",
+            noCLI: """
+                Backs the Reviews board's multi-select "Start Review (N)" button \
+                (#869). The CLI equivalent is looping `crow start-review --url`, \
+                which reports per-URL failures instead of one batch result.
+                """),
+
+        // Allowlist
+        .read("list-allowlist", cli: "list-allowlist"),
+        .write("promote-allowlist", cli: "promote-allowlist"),
+        .write("refresh-allowlist", cli: "refresh-allowlist"),
+
+        // Analytics
+        .read("get-scorecard", cli: "get-scorecard"),
+        .write("rebuild-scorecard", cli: "rebuild-scorecard"),
+        .read("get-state", cli: "get-state"),
+        .read("list-artifacts", cli: "list-artifacts"),
+
+        // Settings
+        // `defaults-get` is deliberately un-gated on `/rpc`; `defaults-set` is
+        // local-only when the request carries `binaries` (CROW-810).
+        .read("defaults-get", cli: "defaults get"),
+        .write("defaults-set", cli: "defaults set"),
+        .read("telemetry-get", cli: "telemetry get"),
+        .write("telemetry-set", cli: "telemetry set"),
+        .read("cleanup-get", cli: "cleanup get"),
+        .write("cleanup-set", cli: "cleanup set"),
+        .read("ui-get", cli: "ui get"),
+        .write("ui-set", cli: "ui set"),
+        .read("notifications-get", cli: "notifications get"),
+        .write("notifications-set", cli: "notifications set"),
+        .read(
+            "get-config",
+            noCLI: """
+                Ships the whole AppConfig as one opaque JSON blob to the web Settings \
+                modal. The CLI reads config per area instead (`telemetry get`, \
+                `cleanup get`, `ui get`, `notifications get`, `gateway get`), which is \
+                what `configFields` below tracks field by field.
+                """),
+        .write(
+            "set-config",
+            noCLI: """
+                Whole-config write behind the web Settings modal — it replaces every \
+                field at once, so exposing it as a verb would hand scripts a \
+                read-modify-write race against the daemon. The CLI writes per area; \
+                `configFields` below is the ledger of which fields still lack a verb.
+                """),
+        .write(
+            "run-setup",
+            noCLI: """
+                Runs the workspace `setup.sh` on the daemon host with the caller's \
+                environment; local-only on `/rpc` for that reason \
+                (RPCWebSocketHandler.localOnlyDenial). `crow setup` is the CLI path \
+                and runs the wizard in-process rather than over the socket.
+                """),
+
+        // Secrets — local-socket only (CROW-815); see RPCWebSocketHandler.localOnlyDenial.
+        .read("gateway-get", cli: "gateway get"),
+        // `gateway clear` and `web-password clear` reuse the same write RPC with a
+        // clearing payload, so only the `set` verb is named here.
+        .write("gateway-set", cli: "gateway set"),
+        .read("web-password-get", cli: "web-password status"),
+        .write("web-password-set", cli: "web-password set"),
+
+        // Jobs
+        .read("job-list", cli: "job list"),
+        .read("job-get", cli: "job get"),
+        .write("job-add", cli: "job add"),
+        .write("job-edit", cli: "job edit"),
+        .write("job-enable", cli: "job enable"),
+        .write("job-disable", cli: "job disable"),
+        .write("job-delete", cli: "job delete"),
+        .write("job-duplicate", cli: "job duplicate"),
+        .write("job-run", cli: "job run"),
+        .write(
+            "run-job",
+            noCLI: """
+                Internal scheduler entry point: fires a job on the daemon's own \
+                timer path, bypassing the enabled/schedule checks a user-initiated \
+                run must honour. `crow job run` is the user-facing verb.
+                """),
+
+        // Agent hooks
+        .write("hook-event", cli: "hook-event"),
+    ]
+
+    // MARK: - Config fields
+
+    /// One leaf field of ``AppConfig``, addressed by dotted path. Collection and
+    /// dictionary elements are addressed with a `[]` segment — e.g.
+    /// `workspaces[].jiraJQL`, `notifications.eventSettings[].soundName`.
+    public struct ConfigEntry: Sendable, Equatable {
+        public let path: String
+        /// How a user reads this field back without opening the web UI.
+        public let read: Coverage
+        /// How a user changes it.
+        public let write: Coverage
+
+        public static func field(_ path: String, read: String, write: String) -> ConfigEntry {
+            ConfigEntry(path: path, read: .cli(read), write: .cli(write))
+        }
+
+        /// Neither readable nor writable from the CLI — one reason covers both.
+        public static func field(_ path: String, noCLI reason: String) -> ConfigEntry {
+            ConfigEntry(path: path, read: .noCLI(reason: reason), write: .noCLI(reason: reason))
+        }
+
+        public static func field(_ path: String, read: String, writeNoCLI: String) -> ConfigEntry {
+            ConfigEntry(path: path, read: .cli(read), write: .noCLI(reason: writeNoCLI))
+        }
+
+        public static func field(_ path: String, readNoCLI: String, write: String) -> ConfigEntry {
+            ConfigEntry(path: path, read: .noCLI(reason: readNoCLI), write: .cli(write))
+        }
+    }
+
+    /// Every leaf field of ``AppConfig``, as produced by the `Mirror` walk in
+    /// `ParityGateTests`. The two sets must match exactly, so a new config field
+    /// fails the build until someone decides whether it gets a verb.
+    ///
+    /// The exempt rows below are the honest state of the milestone as of CROW-807:
+    /// the settings blocks that already have verbs (`telemetry`, `cleanup`,
+    /// `sidebar`, `notifications`, gateways, jobs, and `defaults` since CROW-810)
+    /// are covered, and everything the web Settings tab owns exclusively —
+    /// `workspaces[].*`, the automation toggles, `terminal.*` — is not.
+    public static let configFields: [ConfigEntry] = [
+        // MARK: Covered — settings blocks with dedicated verbs
+
+        .field("telemetry.enabled", read: "telemetry get", write: "telemetry set"),
+        .field("telemetry.port", read: "telemetry get", write: "telemetry set"),
+        .field("telemetry.retentionDays", read: "telemetry get", write: "telemetry set"),
+
+        .field("cleanup.enabled", read: "cleanup get", write: "cleanup set"),
+        .field("cleanup.retentionHours", read: "cleanup get", write: "cleanup set"),
+
+        .field("sidebar.hideSessionDetails", read: "ui get", write: "ui set"),
+
+        .field("notifications.globalMute", read: "notifications get", write: "notifications set"),
+        .field("notifications.soundEnabled", read: "notifications get", write: "notifications set"),
+        .field(
+            "notifications.systemNotificationsEnabled",
+            read: "notifications get", write: "notifications set"),
+        .field(
+            "notifications.eventSettings[].enabled",
+            read: "notifications get", write: "notifications set"),
+        .field(
+            "notifications.eventSettings[].soundEnabled",
+            read: "notifications get", write: "notifications set"),
+        .field(
+            "notifications.eventSettings[].systemNotificationEnabled",
+            read: "notifications get", write: "notifications set"),
+        .field(
+            "notifications.eventSettings[].soundName",
+            read: "notifications get", write: "notifications set"),
+
+        // Gateways and the web password are local-socket only (CROW-815).
+        .field("managerGateway.baseURL", read: "gateway get", write: "gateway set"),
+        .field("managerGateway.customHeaders", read: "gateway get", write: "gateway set"),
+        .field("workspaces[].gateway.baseURL", read: "gateway get", write: "gateway set"),
+        .field("workspaces[].gateway.customHeaders", read: "gateway get", write: "gateway set"),
+
+        .field("webAuth.iterations", read: "web-password status", write: "web-password set"),
+        .field(
+            "webAuth.hashB64",
+            readNoCLI: """
+                The PBKDF2 hash is never read back by anything — not the CLI, not the \
+                web UI. `crow web-password status` reports only that a password is \
+                set. Exposing it would defeat storing a hash rather than the password.
+                """,
+            write: "web-password set"),
+        .field(
+            "webAuth.saltB64",
+            readNoCLI: """
+                Salt for the password hash above; never read back by any surface, for \
+                the same reason. Written as a unit with the hash by `web-password set`.
+                """,
+            write: "web-password set"),
+
+        // MARK: Covered — jobs
+
+        .field("jobs[].name", read: "job get", write: "job add"),
+        .field("jobs[].workspace", read: "job get", write: "job add"),
+        .field("jobs[].repo", read: "job get", write: "job add"),
+        .field("jobs[].prompts", read: "job get", write: "job add"),
+        .field("jobs[].schedule", read: "job get", write: "job add"),
+        .field("jobs[].enabled", read: "job get", write: "job enable"),
+        .field(
+            "jobs[].id",
+            read: "job get",
+            writeNoCLI: """
+                Server-assigned UUID, minted by `job add` and thereafter the handle \
+                every other job verb takes. Not user-settable by design.
+                """),
+        .field(
+            "jobs[].createdAt",
+            read: "job get",
+            writeNoCLI: """
+                Stamped by the daemon when `job add` succeeds. Runtime provenance, \
+                not a setting — there is nothing for a user to write here.
+                """),
+        .field(
+            "jobs[].lastRunAt",
+            read: "job get",
+            writeNoCLI: """
+                Scheduler bookkeeping, written when a job fires so a daemon restart \
+                does not replay it. Not a setting; `job run` is how a user forces one.
+                """),
+
+        // MARK: Covered — global defaults (CROW-810)
+
+        .field("defaults.provider", read: "defaults get", write: "defaults set"),
+        .field("defaults.cli", read: "defaults get", write: "defaults set"),
+        .field("defaults.branchPrefix", read: "defaults get", write: "defaults set"),
+        .field("defaults.excludeReviewRepos", read: "defaults get", write: "defaults set"),
+        .field("defaults.excludeTicketRepos", read: "defaults get", write: "defaults set"),
+        .field("defaults.ignoreReviewLabels", read: "defaults get", write: "defaults set"),
+        .field("defaults.binaries", read: "defaults get", write: "defaults set"),
+        .field(
+            "defaults.excludeDirs",
+            read: "defaults get",
+            writeNoCLI: """
+                Returned by `defaults get` but `defaults set` has no flag for it \
+                (CROW-810 shipped seven of the nine fields writable). Directory-scan \
+                exclusions for repo discovery; web Settings tab is still the only \
+                way to change them.
+                """),
+        .field(
+            "defaults.mirrorClaudeMCPToCodex",
+            read: "defaults get",
+            writeNoCLI: """
+                Returned by `defaults get` but `defaults set` has no flag for it \
+                (CROW-810 shipped seven of the nine fields writable). Whether Codex \
+                sessions inherit Claude's MCP servers; web Settings tab only.
+                """),
+
+        // MARK: Exempt — workspaces (no CLI surface at all)
+
+        .field(
+            "workspaces[].id",
+            noCLI: """
+                Workspaces have no CLI surface whatsoever: they are created by the \
+                `crow setup` wizard and edited in the web Settings tab. This UUID is \
+                the identity the rest of the block hangs off.
+                """),
+        .field(
+            "workspaces[].name",
+            noCLI: """
+                Workspace folder name under the dev root. Setup wizard / web Settings \
+                only — see `workspaces[].id`. `WorkspaceInfo.validateName` guards it.
+                """),
+        .field(
+            "workspaces[].provider",
+            noCLI: """
+                Forge provider (`github`/`gitlab`) for the workspace. No verb reads or \
+                writes any workspace field — see `workspaces[].id`.
+                """),
+        .field(
+            "workspaces[].cli",
+            noCLI: """
+                Provider CLI for this workspace, kept for config-file compatibility. \
+                No workspace field has a verb — see `workspaces[].id`.
+                """),
+        .field(
+            "workspaces[].host",
+            noCLI: """
+                Self-hosted GitLab host for the workspace. No workspace field has a \
+                verb — see `workspaces[].id`.
+                """),
+        .field(
+            "workspaces[].alwaysInclude",
+            noCLI: """
+                Repos always listed in the Manager's prompt table. No workspace field \
+                has a verb — see `workspaces[].id`.
+                """),
+        .field(
+            "workspaces[].autoReviewRepos",
+            noCLI: """
+                Repos whose review requests auto-create a review session. No workspace \
+                field has a verb — see `workspaces[].id`.
+                """),
+        .field(
+            "workspaces[].excludeReviewRepos",
+            noCLI: """
+                Per-workspace review-board exclusions, unioned with the global \
+                defaults. No workspace field has a verb — see `workspaces[].id`.
+                """),
+        .field(
+            "workspaces[].customInstructions",
+            noCLI: """
+                Free-text instructions appended to session prompts for this \
+                workspace. No workspace field has a verb — see `workspaces[].id`.
+                """),
+        .field(
+            "workspaces[].taskProvider",
+            noCLI: """
+                Which ticket backend this workspace uses (github/gitlab/jira). No \
+                workspace field has a verb — see `workspaces[].id`.
+                """),
+        .field(
+            "workspaces[].jiraProjectKey",
+            noCLI: """
+                Jira project key for ticket-board queries. No workspace field has a \
+                verb — see `workspaces[].id`.
+                """),
+        .field(
+            "workspaces[].jiraJQL",
+            noCLI: """
+                Custom JQL overriding the default ticket-board query. No workspace \
+                field has a verb — see `workspaces[].id`.
+                """),
+        .field(
+            "workspaces[].jiraSite",
+            noCLI: """
+                Jira site hostname for issue links. No workspace field has a verb — \
+                see `workspaces[].id`.
+                """),
+        .field(
+            "workspaces[].jiraStatusMap",
+            noCLI: """
+                Maps Crow pipeline states to this project's Jira workflow names; \
+                honoured by `crow transition-ticket`, but only editable in the web \
+                Settings tab. No workspace field has a verb — see `workspaces[].id`.
+                """),
+        .field(
+            "workspaces[].corveilHost",
+            noCLI: """
+                Corveil task-backend host for this workspace. No workspace field has a \
+                verb — see `workspaces[].id`.
+                """),
+
+        // MARK: Exempt — automation toggles and agent defaults (web Settings tab)
+
+        .field(
+            "remoteControlEnabled",
+            noCLI: """
+                Master switch for the daemon's remote HTTP/WS surface. Web Settings \
+                toggle; a verb would let a remote caller widen its own access, so any \
+                future one must be local-socket only like the gateway verbs.
+                """),
+        .field(
+            "managerAutoPermissionMode",
+            noCLI: """
+                Whether Manager sessions launch with `--permission-mode auto`. Web \
+                Settings toggle (ADR 0004); no verb reads or writes it.
+                """),
+        .field(
+            "jobsAutoPermissionMode",
+            noCLI: """
+                Whether scheduler-launched sessions get `--permission-mode auto`. Web \
+                Settings toggle; no verb reads or writes it.
+                """),
+        .field(
+            "reviewAutoPermissionMode",
+            noCLI: """
+                Whether code-review sessions get `--permission-mode auto`. Web \
+                Settings toggle; no verb reads or writes it.
+                """),
+        .field(
+            "coderViewAutoPermissionMode",
+            noCLI: """
+                Whether new work coder views start in auto-accept rather than plan \
+                mode (#586). Web Settings toggle; no verb reads or writes it.
+                """),
+        .field(
+            "attributionTrailers",
+            noCLI: """
+                Whether `setup.sh` writes the per-worktree Claude attribution \
+                override. Web Settings toggle; no verb reads or writes it.
+                """),
+        .field(
+            "autoMergeWatcherEnabled",
+            noCLI: """
+                Opt-in watcher that enables GitHub auto-merge on Crow-authored PRs \
+                labeled `crow:merge` (CROW-299). Web Settings toggle; `crow \
+                add-merge-label` applies the label but cannot arm the watcher.
+                """),
+        .field(
+            "autoCreateWatcherEnabled",
+            noCLI: """
+                Opt-in watcher that dispatches `/crow-workspace` for issues labeled \
+                `crow:auto` (CROW-312). Web Settings toggle; `crow work-on-issue` \
+                dispatches one by hand but cannot arm the watcher.
+                """),
+        .field(
+            "autoRespond.respondToChangesRequested",
+            noCLI: """
+                Whether Crow auto-answers review feedback. Web Settings toggle; the \
+                manual equivalent is `crow quick-action --action addressChanges`.
+                """),
+        .field(
+            "autoRespond.respondToFailedChecks",
+            noCLI: """
+                Whether Crow auto-answers failing CI. Web Settings toggle; the manual \
+                equivalent is `crow quick-action --action fixChecks`.
+                """),
+        .field(
+            "autoRespond.autoRebaseAndResolveConflicts",
+            noCLI: """
+                Whether Crow auto-rebases conflicted PRs (CROW-551). Web Settings \
+                toggle; the manual equivalent is `crow quick-action --action \
+                fixConflicts`.
+                """),
+        .field(
+            "defaultAgentKind",
+            noCLI: """
+                Coding agent used for new sessions when none is given. Web Settings \
+                picker; `crow create-manager --agent` and `crow handoff-agent --agent` \
+                choose per session but cannot change the default (CROW-421).
+                """),
+        .field(
+            "agentsByKind",
+            noCLI: """
+                Per-session-kind agent overrides, keyed by `SessionKind.rawValue` \
+                (CROW-433). Web Settings pickers; no verb reads or writes the map.
+                """),
+
+        // MARK: Exempt — terminal tuning and Jira credential
+
+        .field(
+            "terminal.wheelScrollLines",
+            noCLI: """
+                Scrollback lines per wheel notch on plain-shell surfaces (CROW-835, \
+                ADR 0013). Web Settings only — the `ui` verb covers the sidebar block, \
+                not this one.
+                """),
+        .field(
+            "terminal.agentWheelNotches",
+            noCLI: """
+                Wheel notches forwarded per physical notch on agent surfaces \
+                (CROW-835, ADR 0013). Web Settings only — see \
+                `terminal.wheelScrollLines`.
+                """),
+        .field(
+            "jiraCredential.username",
+            noCLI: """
+                Jira REST account for the in-app status fetch (CROW-528). Carries a \
+                credential, so any verb must be local-socket only like `crow gateway`; \
+                today it is written in the web Settings tab only.
+                """),
+        .field(
+            "jiraCredential.tokenRef",
+            noCLI: """
+                `op://` reference to the Jira API token — resolved on demand so the \
+                secret never lands in config.json. Same local-only constraint as \
+                `jiraCredential.username`; no verb exists yet.
+                """),
+    ]
+}

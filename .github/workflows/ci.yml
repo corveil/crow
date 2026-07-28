@@ -66,6 +66,28 @@ jobs:
             swift test --no-parallel --package-path "Packages/$pkg"
           done
 
+  # Source-level drift gates: cheap text checks that need no Swift build, so they
+  # cover packages the Linux lane above cannot compile. `check-cli-parity.sh` is
+  # the PR-lane stand-in for CrowDaemonTests/RPCLedgerParityTests — CrowDaemon
+  # depends on the Darwin-only CrowTelemetry and so is absent from LINUX_PACKAGES,
+  # which would otherwise leave the RPC half of the parity gate running only on
+  # release tags (CROW-807, docs/adr/0016-cli-control-plane-parity.md).
+  #
+  # Plain ubuntu-latest rather than the swift container: check-notification-events
+  # needs node, which the container does not ship.
+  parity:
+    name: Catalog & Parity Gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: CLI/RPC control-plane parity (CROW-807)
+        run: bash scripts/check-cli-parity.sh
+
+      # Was previously reachable only via `make test`, which CI never runs.
+      - name: Notification-event catalogs (CROW-768)
+        run: bash scripts/check-notification-events.sh
+
   desktop:
     name: Desktop (Tauri) Build
     runs-on: macos-15
