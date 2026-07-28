@@ -216,6 +216,8 @@ public enum ParityLedger {
         .write("cleanup-set", cli: "cleanup set"),
         .read("ui-get", cli: "ui get"),
         .write("ui-set", cli: "ui set"),
+        .read("automation-get", cli: "automation get"),
+        .write("automation-set", cli: "automation set"),
         .read("notifications-get", cli: "notifications get"),
         .write("notifications-set", cli: "notifications set"),
         .read(
@@ -267,6 +269,14 @@ public enum ParityLedger {
                 Internal scheduler entry point: fires a job on the daemon's own \
                 timer path, bypassing the enabled/schedule checks a user-initiated \
                 run must honour. `crow job run` is the user-facing verb.
+                """),
+        .read(
+            "runner-status",
+            noCLI: """
+                Read-only snapshot of the Corveil worker runner (corveil/crow#801): \
+                enabled flag, worker id, active/max run counts, whether the API key \
+                is present, and the in-flight runs. The `crow runner` CLI verbs are \
+                a deferred follow-up ticket; the web Settings surface reads it today.
                 """),
 
         // Agent hooks
