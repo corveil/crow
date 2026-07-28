@@ -55,9 +55,8 @@ public enum CrowDaemon {
         // exits (the multi-`daemon-run` footgun). Distinct --socket → own lock, so
         // isolated daemons still run (CROW-581).
         guard acquireSingleInstanceLock(socketPath: options.socketPath) else {
-            log("Another crowd is already running on \(options.socketPath) — exiting. "
+            logAndExit("Another crowd is already running on \(options.socketPath) — exiting. "
                 + "Only one daemon per socket is allowed (use a distinct --socket for an isolated instance).")
-            exit(1)
         }
 
         // Store-writer guard: the socket lock above is keyed to the socket, but
@@ -68,11 +67,10 @@ public enum CrowDaemon {
         // crowd may write it, whatever --socket each was launched with (#759).
         let storeDirectory = JSONStore.defaultDirectory
         guard acquireStoreWriterLock(storeDirectory: storeDirectory) else {
-            log("FATAL: another process already holds the store writer lock for "
+            logAndExit("FATAL: another process already holds the store writer lock for "
                 + "\(storeDirectory.path) — refusing to start. Only ONE crowd may write store.json, "
                 + "regardless of --socket. Stop the other daemon first (a second writer silently "
                 + "clobbers every session the first one knew about).")
-            exit(1)
         }
 
         log("started: pid \(getpid()); socket \(options.socketPath); store \(storeDirectory.appendingPathComponent("store.json").path)")
@@ -524,11 +522,15 @@ public enum CrowDaemon {
             storeWriterLockFD = -1
         }
         guard let argv0 = argv.first, !argv0.isEmpty else {
-            log("re-exec failed: empty argv")
-            exit(1)
+            logAndExit("re-exec failed: empty argv")
         }
         let cArgv: [UnsafeMutablePointer<CChar>?] = argv.map { strdup($0) } + [nil]
         defer { for p in cArgv where p != nil { free(p) } }
+
+        // `execv` replaces this image, taking the log drain thread with it, so
+        // anything still queued would never be written (CROW-874). The os_log
+        // copy survives regardless; this is for stderr / crowd.log.
+        CrowLog.flush(timeout: 1.0)
 
         // Prefer the kernel's view of this process's executable (absolute path),
         // then a path-shaped argv[0], then `execvp` so a bare `crowd` on PATH still
@@ -543,6 +545,7 @@ public enum CrowDaemon {
             execvp(argv0, cArgv)
             log("re-exec failed (execvp \(argv0)): \(String(cString: strerror(errno)))")
         }
+        CrowLog.flush(timeout: 1.0)
         exit(1)
     }
 
@@ -1049,8 +1052,25 @@ public enum CrowDaemon {
     }
 
     // Internal (not private): `LaunchScaffold` logs through the same prefix.
+    //
+    // Routed through `CrowLog` so it cannot block: this used to be a synchronous
+    // `FileHandle.standardError.write`, which stalls the caller when stderr is a
+    // tty nobody is draining — and `CrowDaemon` is `@MainActor` (CROW-874). The
+    // `[crowd]` prefix stays inside the message so these lines read as they
+    // always have, now with a leading timestamp.
     static func log(_ message: String) {
-        FileHandle.standardError.write(Data("[crowd] \(message)\n".utf8))
+        CrowLog.info("[crowd] \(message)")
+    }
+
+    /// Log a final line, drain the sink, then exit. `CrowLog` delivery is
+    /// asynchronous (CROW-874), so a bare `exit()` right after `log()` would
+    /// race the drain and lose the message explaining why the daemon stopped.
+    /// The flush is bounded — a wedged stderr delays shutdown by at most a
+    /// second, and the os_log copy was already made on this thread regardless.
+    private static func logAndExit(_ message: String, code: Int32 = 1) -> Never {
+        log(message)
+        CrowLog.flush(timeout: 1.0)
+        exit(code)
     }
 
     /// Whether a live server is already accepting on the Unix socket at `path` —
@@ -1208,8 +1228,8 @@ struct DaemonOptions {
                     if let port = Int(value) {
                         options.httpPort = port
                     } else {
-                        FileHandle.standardError.write(Data(
-                            "[crowd] WARNING: ignoring malformed --http-port '\(value)'; using \(options.httpPort)\n".utf8))
+                        CrowLog.info(
+                            "[crowd] WARNING: ignoring malformed --http-port '\(value)'; using \(options.httpPort)")
                     }
                 }
                 index += 1
@@ -1230,7 +1250,7 @@ struct DaemonOptions {
             case "--web-dir": if let value = next { options.webDir = value }; index += 1
             default:
                 if flag.hasPrefix("-") {
-                    FileHandle.standardError.write(Data("[crowd] WARNING: ignoring unknown flag '\(flag)'\n".utf8))
+                    CrowLog.info("[crowd] WARNING: ignoring unknown flag '\(flag)'")
                 }
             }
             index += 1

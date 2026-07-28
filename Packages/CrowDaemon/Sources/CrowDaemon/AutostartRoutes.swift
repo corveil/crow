@@ -1,4 +1,5 @@
 import CrowAutostart
+import CrowCore
 import Foundation
 import HTTPTypes
 import Hummingbird
@@ -72,10 +73,10 @@ enum AutostartRoutes {
 
     // MARK: - HTTP helpers
 
-    /// Same `[crowd]`-prefixed stderr line the daemon's own logging uses, so an
+    /// Same `[crowd]`-prefixed line the daemon's own logging uses, so an
     /// install/uninstall (and any failure) shows up in the daemon log.
     private static func logLine(_ message: String) {
-        FileHandle.standardError.write(Data("[crowd] \(message)\n".utf8))
+        CrowLog.info("[crowd] \(message)")
     }
 
     /// `AutostartStatus` → a JSON object, so the web UI reads the same field

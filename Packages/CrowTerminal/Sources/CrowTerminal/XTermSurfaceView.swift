@@ -3,6 +3,7 @@
 // (CROW-581), so this whole file compiles away.
 #if canImport(AppKit)
 import AppKit
+import CrowCore
 import WebKit
 
 /// NSView hosting xterm.js in a WKWebView, backed by a native PTY running the
@@ -214,10 +215,10 @@ public final class XTermSurfaceView: NSView {
     }
 
     private func log(_ message: String) {
-        NSLog("[XTermSurfaceView] %@", message)
-        if let data = "[XTermSurfaceView] \(message)\n".data(using: .utf8) {
-            FileHandle.standardError.write(data)
-        }
+        // One sink, not two: this used to write the same line via NSLog *and* a
+        // synchronous stderr write, either of which can block on a tty nobody is
+        // draining (CROW-874).
+        CrowLog.info("[XTermSurfaceView] \(message)")
     }
 
     private func handlePTYOutput(_ data: Data) {
