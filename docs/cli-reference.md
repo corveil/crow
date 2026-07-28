@@ -6,6 +6,8 @@ All commands print JSON to stdout on success. Session and terminal identifiers a
 
 Every subcommand source lives in `Packages/CrowCLI/Sources/CrowCLILib/Commands/`.
 
+This page is the guide: what each verb is for, what it returns, and where it bites. For the exhaustive machine-generated surface — every subcommand and every flag, straight from the commands themselves — see [`cli.md`](cli.md). A test fails the build if a verb documented there is missing here (CROW-808).
+
 ---
 
 ## Setup
@@ -120,6 +122,23 @@ crow set-status --session <uuid> archived
 | ------------------------- | -------- | ------------------------------------------------------- |
 | `--session`               | yes      | Session UUID                                            |
 | *(positional)* `STATUS`   | yes      | `active`, `paused`, `inReview`, `completed`, `archived` |
+
+### `crow set-locked`
+
+Lock a session so the retention reaper leaves it alone. Cleanup deletes completed/archived sessions once they age past the `retention_hours` set under [Settings Commands](#settings-commands) — locking exempts a session from that, and unlocking returns it to the pool. Independent of status: a locked session still moves through `active` → `completed` normally, it just never gets swept.
+
+```bash
+crow set-locked --session <uuid> true
+crow set-locked --session <uuid> false
+crow set-pinned --session <uuid> true   # deprecated alias, still accepted
+```
+
+| Arg / Flag              | Required | Description                |
+| ----------------------- | -------- | -------------------------- |
+| `--session`             | yes      | Session UUID               |
+| *(positional)* `LOCKED` | yes      | `true` or `false`          |
+
+`crow set-pinned` is a deprecated alias kept working for existing scripts (the field was renamed in CROW-573). It is hidden from `crow --help` and takes the same arguments — prefer `set-locked`.
 
 ### Session lifecycle verbs
 
@@ -279,6 +298,33 @@ crow edit-link --session <uuid> --url "https://old..." --new-url "https://new...
 | `--type`    | no       | New type: `ticket`, `pr`, `repo`, or `custom`      |
 
 Provide at least one selector (`--id` / `--url`) and at least one field to change (`--label` / `--new-url` / `--type`). Returns `{"updated": N}`.
+
+### `crow transition-ticket`
+
+Move the session's linked ticket to a pipeline status on the *provider's* board. This is the provider-side counterpart to the [session lifecycle verbs](#session-lifecycle-verbs), which only write Crow's own status — moving a Jira issue or a GitHub Projects card needs this.
+
+```bash
+crow transition-ticket --session <uuid> --to inProgress
+crow transition-ticket --session <uuid> --to inReview
+crow transition-ticket --session <uuid> --to done
+```
+
+| Flag        | Required | Description                              |
+| ----------- | -------- | ---------------------------------------- |
+| `--session` | yes      | Session UUID                             |
+| `--to`      | yes      | `inProgress`, `inReview`, or `done` (matched case-insensitively) |
+
+Jira maps the pipeline status onto a real workflow transition through `jiraStatusMap` (see [Configuration](configuration.md)). Requires a linked ticket and a provider that supports transitions.
+
+### `crow resync-jira`
+
+Re-sync every Jira-backed session's ticket to the status implied by its Crow session state — one-shot remediation for tickets left in Backlog because earlier sessions never transitioned them (CROW-529).
+
+```bash
+crow resync-jira
+```
+
+Takes no arguments and walks every session, so it is safe but not cheap. Nothing happens for sessions whose ticket is not Jira-backed.
 
 ---
 
@@ -466,6 +512,123 @@ A path that isn't executable right now is **saved with a warning**, not rejected
 
 ---
 
+## Job Commands
+
+Scheduled jobs (CROW-604) are timed prompt-sets scoped to one repo in one workspace — the Jobs sidebar feature, as CLI verbs. When a job fires, Crow creates a session, clones the repo if needed, launches the configured agent, and sends the job's prompts in order.
+
+Every subcommand goes through the running app's RPC socket, so mutations land on the live in-memory config: the scheduler and the web Settings UI pick them up immediately, with no restart. Jobs are addressed by UUID (`--id`), which `crow job list` prints.
+
+### `crow job list`
+
+```bash
+crow job list
+```
+
+Returns `{"jobs": [...]}` — every job with its schedule, prompts, and `enabled` flag.
+
+### `crow job get`
+
+```bash
+crow job get --id <job-uuid>
+```
+
+| Flag   | Required | Description |
+| ------ | -------- | ----------- |
+| `--id` | yes      | Job UUID    |
+
+### `crow job add`
+
+Create a job. Prompts are sent in the order given: every `--prompt` first, then the contents of every `--prompt-file`.
+
+Exactly one schedule is required — either `--interval-seconds` or `--daily-at HH:MM`, the latter optionally narrowed with `--weekdays`.
+
+```bash
+crow job add --name "nightly-audit" --workspace Corveil --repo corveil/crow \
+  --prompt "Run the test suite and summarise failures" --daily-at 02:00
+
+crow job add --name "hourly-triage" --workspace Corveil --repo corveil/crow \
+  --prompt-file ./prompts/triage.md --interval-seconds 3600 --disabled
+```
+
+| Flag                 | Required | Description                                                            |
+| -------------------- | -------- | ---------------------------------------------------------------------- |
+| `--name`             | yes      | Job name; must be unique                                               |
+| `--workspace`        | yes      | Workspace name (a folder under the dev root)                           |
+| `--repo`             | yes      | Repository slug, `owner/repo`                                          |
+| `--prompt`           | one of   | Prompt text; repeatable, sent in order                                  |
+| `--prompt-file`      | one of   | Read a prompt from a file; repeatable. `-` reads stdin (at most once)  |
+| `--interval-seconds` | one of   | Run every N seconds                                                    |
+| `--daily-at`         | one of   | Run daily at `HH:MM`, 24-hour local time                               |
+| `--weekdays`         | no       | Comma-separated days for `--daily-at` (`sun,mon,…` or `1-7`); omit for every day |
+| `--disabled`         | no       | Create the job disabled                                                |
+
+Returns `{"job": {...}}`.
+
+### `crow job edit`
+
+Update fields on an existing job. Only the flags you pass change — with two sharp edges:
+
+- Any `--prompt` / `--prompt-file` replaces the **whole** prompt list, not appends to it.
+- Any schedule flag replaces the **whole** schedule, so changing `--weekdays` means restating `--daily-at` alongside it.
+
+```bash
+crow job edit --id <job-uuid> --name "nightly-audit-v2"
+crow job edit --id <job-uuid> --daily-at 03:30 --weekdays mon,tue,wed,thu,fri
+```
+
+| Flag                 | Required | Description                                       |
+| -------------------- | -------- | ------------------------------------------------- |
+| `--id`               | yes      | Job UUID                                          |
+| `--name`             | no       | New name; must still be unique                    |
+| `--workspace`        | no       | New workspace name                                |
+| `--repo`             | no       | New repository slug                               |
+| `--prompt`           | no       | Replacement prompt text (repeatable)              |
+| `--prompt-file`      | no       | Replacement prompt read from a file (repeatable)  |
+| `--interval-seconds` | no       | Replacement interval schedule                     |
+| `--daily-at`         | no       | Replacement daily schedule                        |
+| `--weekdays`         | no       | Weekday filter for `--daily-at`                   |
+
+At least one field flag is required. Use `enable` / `disable` rather than `edit` to toggle the enabled flag.
+
+### `crow job enable | disable`
+
+```bash
+crow job enable --id <job-uuid>
+crow job disable --id <job-uuid>
+```
+
+| Flag   | Required | Description |
+| ------ | -------- | ----------- |
+| `--id` | yes      | Job UUID    |
+
+### `crow job run`
+
+Run a job right now, whatever its schedule says and even if it is disabled.
+
+```bash
+crow job run --id <job-uuid>
+```
+
+Returns `{"job_id": "…", "session_id": "…", "terminal_id": "…"}`. Needs tmux on the daemon host. The CLI waits up to 120s because a first run may clone the repo — and the run continues inside the app even if the CLI gives up waiting.
+
+### `crow job delete`
+
+```bash
+crow job delete --id <job-uuid>
+```
+
+Returns `{"deleted": true, "job_id": "…"}`.
+
+### `crow job duplicate`
+
+Copy a job. The copy is created **disabled**, with a uniquified name, so it can be edited before it fires.
+
+```bash
+crow job duplicate --id <job-uuid>
+```
+
+---
+
 ## Worktree Commands
 
 ### `crow add-worktree`
@@ -532,6 +695,21 @@ Close a terminal tab in a session.
 ```bash
 crow close-terminal --session <uuid> --terminal <uuid>
 ```
+
+### `crow recreate-terminal`
+
+Rebuild a terminal whose tmux window has degraded scrollback (CROW-804). Kills the stale window, creates a fresh correctly-configured one at the same worktree, and relaunches the session's agent with `--continue` so the conversation carries over.
+
+```bash
+crow recreate-terminal --session <uuid> --terminal <uuid>
+```
+
+| Flag         | Required | Description   |
+| ------------ | -------- | ------------- |
+| `--session`  | yes      | Session UUID  |
+| `--terminal` | yes      | Terminal UUID |
+
+**Destructive to whatever is running in that pane** — anything mid-flight dies with the window. The web UI asks for confirmation first; from the CLI that judgement is yours.
 
 ### `crow rename-terminal`
 
@@ -1075,6 +1253,16 @@ echo '{"tool":"Bash"}' | crow hook-event --session <uuid> --event PreToolUse
 ```
 
 On success it is silent; on error it prints JSON to stdout.
+
+### `crow codex-notify`
+
+The same bridge for Codex, whose `notify` config is global rather than per-session and passes its JSON payload as the final positional argument instead of on stdin. Crow resolves the session from the payload's `cwd`, matching it against registered worktree paths — which is why no `--session` is needed (and why Codex could not supply one anyway).
+
+```bash
+crow codex-notify '{"type":"agent-turn-complete","cwd":"/path/to/worktree"}'
+```
+
+Wired up automatically when a session is handed off to Codex; you do not invoke it by hand.
 
 ---
 

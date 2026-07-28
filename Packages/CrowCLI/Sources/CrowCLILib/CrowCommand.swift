@@ -75,6 +75,7 @@ public struct CrowCommand: ParsableCommand {
             ListArtifacts.self,
             HookEventCmd.self,
             CodexNotify.self,
+            GenerateDocs.self,
         ]
     )
 
