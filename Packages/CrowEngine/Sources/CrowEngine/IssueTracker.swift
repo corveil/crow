@@ -185,8 +185,34 @@ public final class IssueTracker {
     /// head (new key), and a delegated conflict resolution that pushes a new
     /// head also re-arms. Transient outcomes (`.dirtyWorktree`,
     /// `.outOfSyncWithRemote`, and bounded `.failed` retries) un-set the key so
-    /// the next poll retries. In-memory only.
+    /// a later poll retries; for the two deferrals, `autoRebaseDeferrals` then
+    /// paces how much later. In-memory only.
     private var autoRebaseAttempted: Set<String> = []
+
+    /// A deferred auto-rebase attempt: why it deferred, how many consecutive
+    /// times this head state has deferred, and when it may be retried.
+    private struct AutoRebaseDeferral {
+        let reason: AutoRebaseDeferReason
+        let count: Int
+        let retryAt: Date
+    }
+
+    /// Deferred auto-rebase attempts per head-key. A deferral un-sets the
+    /// `autoRebaseAttempted` key so the head can be re-dispatched, so without
+    /// this the retry cadence is "every poll, forever" — a clean-but-stale
+    /// worktree re-fetched and re-logged a bare `dispatched` line every 60s
+    /// with no outcome ever recorded (#889). Cleared on any non-deferral
+    /// outcome. In-memory only.
+    private var autoRebaseDeferrals: [String: AutoRebaseDeferral] = [:]
+
+    /// Why an auto-rebase attempt deferred rather than rebasing. Raw values are
+    /// grep-stable — they are written verbatim to the automation log, like
+    /// `AutoMergeSkipReason`.
+    enum AutoRebaseDeferReason: String {
+        case dirtyWorktree = "dirty-worktree"
+        case outOfSyncAhead = "out-of-sync-ahead"
+        case outOfSyncDiverged = "out-of-sync-diverged"
+    }
 
     /// Consecutive `.failed` rebase attempts per head-key, so a transient git
     /// failure (fetch flake, rejected lease, unreachable base) is retried a
@@ -198,6 +224,12 @@ public final class IssueTracker {
     /// Max consecutive `.failed` auto-rebase attempts per head state before
     /// the watcher gives up until the head commit changes.
     nonisolated static let maxAutoRebaseFailureRetries = 3
+
+    /// Backoff bounds for deferred auto-rebase attempts. The base matches one
+    /// board poll so the first retry is immediate-ish; the cap keeps a
+    /// permanently stuck branch to ~4 attempts an hour.
+    nonisolated static let autoRebaseDeferralBaseDelay: TimeInterval = 60
+    nonisolated static let autoRebaseDeferralMaxDelay: TimeInterval = 900
 
     /// Last observed `PRStatus` per session. Ephemeral (not persisted across
     /// Crow restarts post-CROW-508): only used for in-process `.checksFailing`
@@ -2740,6 +2772,16 @@ public final class IssueTracker {
         guard !viewerPRs.isEmpty else { return }
         let byURL = Dictionary(viewerPRs.map { ($0.url, $0) }, uniquingKeysWith: Self.mergePRRecords)
 
+        // Drop per-head bookkeeping for heads no longer in the poll, so these
+        // maps don't grow for the lifetime of the daemon. Guarded by the
+        // non-empty check above so a failed/empty poll can't wipe live state;
+        // a PR that briefly drops out and returns just gets re-dispatched once.
+        let liveHeadKeys = Set(viewerPRs.map { "\($0.url)\n\($0.headRefOid)" })
+        autoRebaseAttempted.formIntersection(liveHeadKeys)
+        autoRebaseFailureCounts = autoRebaseFailureCounts.filter { liveHeadKeys.contains($0.key) }
+        autoRebaseDeferrals = autoRebaseDeferrals.filter { liveHeadKeys.contains($0.key) }
+
+        let now = Date()
         var dispatched = 0
         for session in appState.sessions where Self.sessionEligibleForAutoRebase(session) {
             guard let prLink = appState.links(for: session.id).first(where: { $0.linkType == .pr }) else { continue }
@@ -2758,6 +2800,9 @@ public final class IssueTracker {
             }
 
             let key = "\(prLink.url)\n\(pr.headRefOid)"
+            // A deferral re-arms `autoRebaseAttempted`, so the backoff window is
+            // what actually paces retries for a head that keeps deferring.
+            if let deferral = autoRebaseDeferrals[key], now < deferral.retryAt { continue }
             guard !autoRebaseAttempted.contains(key) else { continue }
             autoRebaseAttempted.insert(key)
             autoRebaseInFlight.insert(prLink.url)
@@ -2770,7 +2815,6 @@ public final class IssueTracker {
             // Hourly, not per-poll: an idle-but-enabled watcher is the steady
             // state, and one line per 60s would rotate the interesting entries
             // out of the log (review #787).
-            let now = Date()
             if lastAutoRebaseIdleLogAt.map({ now.timeIntervalSince($0) >= 3600 }) ?? true {
                 lastAutoRebaseIdleLogAt = now
                 CrowLog.automation("auto-rebase: enabled, no candidates this poll")
@@ -2788,11 +2832,29 @@ public final class IssueTracker {
         failureCount < maxAutoRebaseFailureRetries
     }
 
+    /// How long to wait before re-attempting a deferred auto-rebase, given how
+    /// many consecutive times this head state has already deferred. Doubles
+    /// from one poll interval up to a 15-minute cap.
+    ///
+    /// A deferral re-arms the per-head key, so without a delay a permanently
+    /// stuck branch (unpushed commits, a long-running agent edit) re-dispatched
+    /// a `git fetch` and a bare `dispatched` log line every single poll (#889).
+    /// The first retry still lands on the very next poll, so the common
+    /// transient case — an agent mid-edit — recovers as promptly as before.
+    /// Pure so the policy is unit-testable without an `IssueTracker`.
+    nonisolated static func autoRebaseDeferralBackoff(deferralCount: Int) -> TimeInterval {
+        let doublings = max(0, min(deferralCount - 1, 16))
+        return min(autoRebaseDeferralBaseDelay * pow(2, Double(doublings)), autoRebaseDeferralMaxDelay)
+    }
+
     /// Locate the session's primary worktree, verify Crow authorship, then
     /// rebase it onto base and force-push. On conflicts, fire
     /// `onAutoRebaseConflicts` so the caller hands resolution to Claude.
     /// Transient outcomes (dirty tree, out-of-sync branch, bounded failures)
-    /// un-set the per-head key so the next poll retries.
+    /// un-set the per-head key so a later poll retries; deferrals additionally
+    /// stamp a backoff deadline. Every outcome — including the early skips —
+    /// writes exactly one line to the automation log, so a `dispatched` line is
+    /// always paired with the reason it did or didn't rebase (#889).
     private func attemptRebase(session: Session, pr: ViewerPR) async {
         let headKey = "\(pr.url)\n\(pr.headRefOid)"
         defer { autoRebaseInFlight.remove(pr.url) }
@@ -2805,15 +2867,18 @@ public final class IssueTracker {
         guard let primary = worktrees.first(where: { $0.isPrimary }) ?? worktrees.first,
               !primary.isMainRepoCheckout,
               primary.branch == pr.headRefName else {
-            NSLog("[Crow] auto-rebase skipped on %@ — no usable worktree or branch mismatch (expected %@)",
-                  pr.url as NSString, pr.headRefName as NSString)
+            CrowLog.automation(
+                "auto-rebase: #\(pr.number) skipped:no-usable-worktree "
+                + "(no worktree, main-repo checkout, or branch != \(pr.headRefName))")
             return
         }
 
-        guard let backend = codeBackend(for: session) else { return }
+        guard let backend = codeBackend(for: session) else {
+            CrowLog.automation("auto-rebase: #\(pr.number) skipped:no-backend")
+            return
+        }
         guard await prHasCrowAuthoredCommit(pr: pr, backend: backend) else {
-            NSLog("[Crow] auto-rebase skipped on %@ — no Crow-Session trailer matching a known session",
-                  pr.url as NSString)
+            CrowLog.automation("auto-rebase: #\(pr.number) skipped:no-crow-session-trailer")
             return
         }
 
@@ -2825,45 +2890,64 @@ public final class IssueTracker {
         switch outcome {
         case .rebasedAndPushed:
             autoRebaseFailureCounts[headKey] = nil
+            autoRebaseDeferrals[headKey] = nil
             let priorState = pr.mergeable == "CONFLICTING" ? "CONFLICTING" : "BEHIND"
-            NSLog("[Crow] Auto-rebased & force-pushed %@ (session %@, was %@)",
-                  pr.url as NSString, session.id.uuidString as NSString, priorState as NSString)
+            CrowLog.automation(
+                "auto-rebase: #\(pr.number) rebased & force-pushed (was \(priorState), session \(session.id))")
             onAutoRebasePushed?(session.id, pr.url, pr.number)
         case .conflicts:
             autoRebaseFailureCounts[headKey] = nil
-            NSLog("[Crow] Auto-rebase hit conflicts on %@ (session %@) — delegating to Claude",
-                  pr.url as NSString, session.id.uuidString as NSString)
+            autoRebaseDeferrals[headKey] = nil
+            CrowLog.automation(
+                "auto-rebase: #\(pr.number) conflicts — delegating to agent (session \(session.id))")
             onAutoRebaseConflicts?(session.id, pr.url, pr.number)
         case .dirtyWorktree:
-            // Transient (a Claude session is mid-edit). Re-arm so the next
-            // poll retries once the tree is clean.
-            autoRebaseFailureCounts[headKey] = nil
-            autoRebaseAttempted.remove(headKey)
-            NSLog("[Crow] Auto-rebase deferred on %@ — worktree has uncommitted changes",
-                  pr.url as NSString)
-        case .outOfSyncWithRemote:
-            // Transient: local branch has unpushed commits or is stale relative
-            // to the remote. Re-arm so the next poll retries once it's in sync.
-            autoRebaseFailureCounts[headKey] = nil
-            autoRebaseAttempted.remove(headKey)
-            NSLog("[Crow] Auto-rebase deferred on %@ — local branch not in sync with origin",
-                  pr.url as NSString)
+            // Transient (a Claude session is mid-edit). Re-arm so a later poll
+            // retries once the tree is clean.
+            deferRebase(headKey: headKey, reason: .dirtyWorktree, prNumber: pr.number)
+        case .outOfSyncWithRemote(let divergence):
+            // Transient: local has unpushed commits, or local and origin have
+            // both moved. Either way a force-push would destroy work, so wait
+            // for a human to reconcile and retry on a later poll. (A branch
+            // that is merely behind is fast-forwarded by `rebaseOntoBase` and
+            // never lands here — that was the #889 hot loop.)
+            deferRebase(
+                headKey: headKey,
+                reason: divergence == .ahead ? .outOfSyncAhead : .outOfSyncDiverged,
+                prNumber: pr.number)
         case .failed(let msg):
             // Transient git failures (fetch flake, rejected lease, unreachable
             // base) shouldn't silently stall the watcher until the head commit
             // changes. Retry a bounded number of times, then give up for this
             // head state to avoid hot-looping on a broken config.
+            autoRebaseDeferrals[headKey] = nil
             let failures = (autoRebaseFailureCounts[headKey] ?? 0) + 1
             autoRebaseFailureCounts[headKey] = failures
-            if Self.shouldRetryFailedRebase(failureCount: failures) {
-                autoRebaseAttempted.remove(headKey)
-                NSLog("[Crow] Auto-rebase failed on %@ (attempt %d/%d, will retry): %@",
-                      pr.url as NSString, failures, Self.maxAutoRebaseFailureRetries, msg as NSString)
-            } else {
-                NSLog("[Crow] Auto-rebase failed on %@ (attempt %d/%d, giving up until head changes): %@",
-                      pr.url as NSString, failures, Self.maxAutoRebaseFailureRetries, msg as NSString)
-            }
+            let willRetry = Self.shouldRetryFailedRebase(failureCount: failures)
+            if willRetry { autoRebaseAttempted.remove(headKey) }
+            CrowLog.automation(
+                "auto-rebase: #\(pr.number) failed (attempt \(failures)/"
+                + "\(Self.maxAutoRebaseFailureRetries), "
+                + "\(willRetry ? "will retry" : "giving up until head changes")): \(msg)")
         }
+    }
+
+    /// Record a deferred auto-rebase attempt: re-arm the per-head key so it can
+    /// be dispatched again, but stamp a backoff deadline so a head that keeps
+    /// deferring doesn't re-fetch every poll forever (#889). A *different*
+    /// reason than last time restarts the backoff — the branch moved to a new
+    /// situation, which deserves a prompt retry rather than the previous
+    /// reason's accumulated delay.
+    private func deferRebase(headKey: String, reason: AutoRebaseDeferReason, prNumber: Int) {
+        autoRebaseFailureCounts[headKey] = nil
+        autoRebaseAttempted.remove(headKey)
+        let count = autoRebaseDeferrals[headKey].map { $0.reason == reason ? $0.count + 1 : 1 } ?? 1
+        let delay = Self.autoRebaseDeferralBackoff(deferralCount: count)
+        autoRebaseDeferrals[headKey] = AutoRebaseDeferral(
+            reason: reason, count: count, retryAt: Date().addingTimeInterval(delay))
+        CrowLog.automation(
+            "auto-rebase: #\(prNumber) deferred:\(reason.rawValue) "
+            + "(deferral \(count), retry in \(Int(delay))s)")
     }
 
     /// Pure projection of a provider PR record onto the UI-facing `PRStatus`.

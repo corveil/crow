@@ -156,9 +156,86 @@ struct RebaseTests {
         let outcome = await GitManager().rebaseOntoBase(
             worktreePath: work, branch: "feature", baseBranch: "main"
         )
-        #expect(outcome == .outOfSyncWithRemote)
+        #expect(outcome == .outOfSyncWithRemote(.ahead))
         // The unpushed commit is still HEAD — nothing was rewritten or pushed.
         #expect(git(["log", "-1", "--format=%s"], in: work).out.contains("local unpushed work"))
+    }
+
+    /// The #889 shape: a clean worktree strictly behind `origin/<branch>` (the
+    /// remote gained commits from elsewhere) used to defer forever. It should
+    /// now fast-forward onto the PR head and then rebase onto base.
+    @Test func behindRemoteIsFastForwardedThenRebased() async throws {
+        try #require(gitAvailable())
+        guard let (root, work) = makeRepo() else { Issue.record("setup failed"); return }
+        defer { cleanup(root) }
+
+        // Advance `feature` on the remote from a second clone, so `work` is
+        // behind origin/feature without knowing it.
+        let other = (root as NSString).appendingPathComponent("other-clone")
+        let remote = (root as NSString).appendingPathComponent("origin.git")
+        #expect(git(["clone", remote, other]).code == 0)
+        git(["switch", "feature"], in: other)
+        write((other as NSString).appendingPathComponent("remote-only.txt"), "remote\n")
+        git(["add", "."], in: other)
+        git(["commit", "-m", "remote-only feature work"], in: other)
+        #expect(git(["push", "origin", "feature"], in: other).code == 0)
+
+        // Advance main too, so there is something to rebase onto.
+        git(["switch", "main"], in: work)
+        write((work as NSString).appendingPathComponent("other.txt"), "other\n")
+        git(["add", "."], in: work)
+        git(["commit", "-m", "main moves on"], in: work)
+        #expect(git(["push", "origin", "main"], in: work).code == 0)
+        git(["switch", "feature"], in: work)
+
+        let outcome = await GitManager().rebaseOntoBase(
+            worktreePath: work, branch: "feature", baseBranch: "main"
+        )
+        #expect(outcome == .rebasedAndPushed)
+
+        // The ff picked up the remote-only commit, and the rebase picked up
+        // main's — the branch is now both in sync and on top of base.
+        #expect(FileManager.default.fileExists(
+            atPath: (work as NSString).appendingPathComponent("remote-only.txt")))
+        #expect(FileManager.default.fileExists(
+            atPath: (work as NSString).appendingPathComponent("other.txt")))
+        #expect(git(["status", "--porcelain"], in: work).out
+            .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        let local = git(["rev-parse", "HEAD"], in: work).out.trimmingCharacters(in: .whitespacesAndNewlines)
+        let pushed = git(["rev-parse", "origin/feature"], in: work).out.trimmingCharacters(in: .whitespacesAndNewlines)
+        #expect(local == pushed)
+    }
+
+    /// Both sides moved: force-pushing would revert the remote's commits, so
+    /// this must still refuse — the fast-forward path is behind-only.
+    @Test func divergedLocalIsSkipped() async throws {
+        try #require(gitAvailable())
+        guard let (root, work) = makeRepo() else { Issue.record("setup failed"); return }
+        defer { cleanup(root) }
+
+        let other = (root as NSString).appendingPathComponent("other-clone")
+        let remote = (root as NSString).appendingPathComponent("origin.git")
+        #expect(git(["clone", remote, other]).code == 0)
+        git(["switch", "feature"], in: other)
+        write((other as NSString).appendingPathComponent("remote-only.txt"), "remote\n")
+        git(["add", "."], in: other)
+        git(["commit", "-m", "remote-only feature work"], in: other)
+        #expect(git(["push", "origin", "feature"], in: other).code == 0)
+        let remoteHead = git(["rev-parse", "HEAD"], in: other)
+            .out.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Local commits its own work on top of the *old* head → diverged.
+        write((work as NSString).appendingPathComponent("local.txt"), "local\n")
+        git(["add", "."], in: work)
+        git(["commit", "-m", "local unpushed work"], in: work)
+
+        let outcome = await GitManager().rebaseOntoBase(
+            worktreePath: work, branch: "feature", baseBranch: "main"
+        )
+        #expect(outcome == .outOfSyncWithRemote(.diverged))
+        // The branch on the origin itself is untouched — no force-push happened.
+        #expect(git(["rev-parse", "refs/heads/feature"], in: remote)
+            .out.trimmingCharacters(in: .whitespacesAndNewlines) == remoteHead)
     }
 
     @Test func dirtyWorktreeIsSkipped() async throws {
