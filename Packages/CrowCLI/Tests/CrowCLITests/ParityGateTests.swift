@@ -187,7 +187,16 @@ struct ParityGateTests {
             agentsByKind: ["work": .claudeCode],
             managerGateway: gateway,
             jiraCredential: JiraCredential(username: "probe", tokenRef: "op://probe/token"),
-            webAuth: WebAuthConfig(hashB64: "aGFzaA==", saltB64: "c2FsdA==", iterations: 210_000)
+            webAuth: WebAuthConfig(hashB64: "aGFzaA==", saltB64: "c2FsdA==", iterations: 210_000),
+            runner: RunnerConfig(
+                enabled: true,
+                corveilURL: "https://corveil.example",
+                workerID: "crow-probe-1",
+                caps: ["ontology-write"],
+                kinds: ["tend-ontology"],
+                maxConcurrentRuns: 2,
+                pollIntervalSeconds: 30
+            )
         )
     }
 
@@ -253,7 +262,12 @@ struct ParityGateTests {
     /// `get-something` that mutates state is a write, full stop. This set only
     /// forces the disagreement to be *stated* rather than sitting unnoticed in a
     /// row nobody re-reads.
-    static let namingExceptions: Set<String> = []
+    static let namingExceptions: Set<String> = [
+        // Read-only runner snapshot whose name is neither `get-`/`list-` prefixed
+        // (it's a `-status` suffix). The `.read` classification is correct
+        // (corveil/crow#801).
+        "runner-status",
+    ]
 
     /// `isWrite` is hand-set per row, deliberately, because a `get-`/`list-`
     /// heuristic would wave through a future write named `get-something`. But

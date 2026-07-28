@@ -930,9 +930,12 @@ import Testing
     }
 }
 
-/// A 5th session kind must not be addable without the agents surface noticing —
+/// A new session kind must not be addable without the agents surface noticing —
 /// `allCases` drives the per-role map `crow agents list` reports and the roles
-/// `crow agents set --clear` accepts.
+/// `crow agents set --clear` accepts. `.workerRun` (corveil/crow#801) is listed
+/// like any role, though `SessionService.runWorkerRun` pins it to Claude Code (it
+/// is the only harness that receives the scoped Corveil credentials), so a
+/// per-role override for it is recorded but not honored in slice 1.
 @Test func sessionKindAllCasesCoversEveryRole() {
-    #expect(SessionKind.allCases == [.work, .review, .job, .manager])
+    #expect(SessionKind.allCases == [.work, .review, .job, .manager, .workerRun])
 }

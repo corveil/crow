@@ -307,6 +307,7 @@ struct AgentsRPCSupportTests {
             "review": .string("codex"),
             "job": .string("claude-code"),
             "manager": .string("claude-code"),
+            "workerRun": .string("claude-code"),
         ]))
         #expect(json?["config_readable"] == .bool(true))
     }

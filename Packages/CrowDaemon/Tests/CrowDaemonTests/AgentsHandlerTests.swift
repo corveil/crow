@@ -73,6 +73,7 @@ import CrowPersistence
             "review": .string("claude-code"),
             "job": .string("claude-code"),
             "manager": .string("claude-code"),
+            "workerRun": .string("claude-code"),
         ]))
         #expect(payload?["config_readable"] == .bool(true))
     }

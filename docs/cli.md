@@ -229,7 +229,7 @@ An agent kind that is not currently available is rejected and nothing is written
 | `--review` | `<review>` | no | Agent for PR-review sessions |
 | `--job` | `<job>` | no | Agent for scheduled-job sessions |
 | `--manager` | `<manager>` | no | Agent for the Manager session |
-| `--clear` | `<clear>` _(repeatable)_ | no | Role whose override to remove, falling back to the default (repeatable). Values: `work`, `review`, `job`, `manager`. |
+| `--clear` | `<clear>` _(repeatable)_ | no | Role whose override to remove, falling back to the default (repeatable). Values: `work`, `review`, `job`, `manager`, `workerRun`. |
 
 ---
 

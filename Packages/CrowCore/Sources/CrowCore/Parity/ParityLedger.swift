@@ -534,5 +534,25 @@ public enum ParityLedger {
                 secret never lands in config.json. Same local-only constraint as \
                 `jiraCredential.username`; no verb exists yet.
                 """),
+
+        // MARK: Exempt — Corveil worker runner (corveil/crow#801)
+
+        // The whole `runner` block is local-only on set-config (its `corveilURL`
+        // is where the env-sourced org API key is sent), and the `crow runner`
+        // CLI verbs are a deferred follow-up — so every leaf is web-Settings /
+        // local-config only today, with no dedicated verb.
+        .field(
+            "runner.enabled",
+            noCLI: """
+                Master switch for the Corveil worker runner (corveil/crow#801). \
+                Local-only on set-config; the `crow runner` verbs are a deferred \
+                follow-up ticket. Web Settings / config.json only today.
+                """),
+        .field("runner.corveilURL", noCLI: "Corveil base URL for the worker runner; local-only (see `runner.enabled`)."),
+        .field("runner.workerID", noCLI: "Stable worker id for claim/heartbeat/complete; local-only (see `runner.enabled`)."),
+        .field("runner.caps", noCLI: "Capabilities this runner advertises (hard claim filter); local-only (see `runner.enabled`)."),
+        .field("runner.kinds", noCLI: "Worker slugs this runner will claim; local-only (see `runner.enabled`)."),
+        .field("runner.maxConcurrentRuns", noCLI: "Per-host concurrency cap; local-only (see `runner.enabled`)."),
+        .field("runner.pollIntervalSeconds", noCLI: "Claim/heartbeat/finish poll cadence; local-only (see `runner.enabled`)."),
     ]
 }
