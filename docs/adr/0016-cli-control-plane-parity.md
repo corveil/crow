@@ -25,6 +25,12 @@ CLI ([ADR 0002](./0002-unix-socket-cli-architecture.md)); a capability reachable
 only from a browser is a capability no agent can use and no script can automate.
 Drift here doesn't degrade convenience, it removes the product's main interface.
 
+A CLI path is also the only **reproducible** one. A sequence of verbs can be
+checked in, replayed on another machine, and diffed when it stops working; a
+click-path through Settings can be described but never re-run. Headless
+operation — a `crowd` on a host nobody points a browser at — rests on the same
+property.
+
 The drift was also invisible. Nobody could answer "what can the web UI do that
 the CLI can't?" without reading three files and holding the result in their head,
 so the gap grew without anyone deciding it should.
@@ -62,6 +68,41 @@ Reads are ledgered too, but only **writes** are held to the parity bar. A missin
 read verb is an inconvenience; a missing write verb is a capability an agent
 cannot exercise.
 
+### Definition of done for a CLI-covered feature
+
+> **Amendment (2026-07-27, [#806](https://github.com/corveil/crow/issues/806)):**
+> this ADR was first written under CROW-807, the ticket for the *gate*. The
+> contract's own ticket also asked for the checklist below and for the
+> divergence note under *Consequences*.
+
+A green ledger row is necessary but **not sufficient**: it proves a verb exists,
+not that anyone can discover it or that it behaves. A capability is CLI-covered
+when this file set is touched. The shape is the `crow job` family (CROW-604,
+[#624](https://github.com/corveil/crow/pull/624)), re-run by every parity PR
+since — board verbs (#866), agents (#886), automation (#884):
+
+| Layer | File(s) | Enforced by |
+|---|---|---|
+| Shared handler body | `Packages/CrowEngine/Sources/CrowEngine/*RPCSupport.swift` | — |
+| RPC registration | `Packages/CrowDaemon/Sources/CrowDaemon/RPCHandlers.swift` | `RPCLedgerParityTests`, `check-cli-parity.sh` |
+| Local-only gate, when it carries secrets or host affordances | `RPCWebSocketHandler.swift` + `DaemonSecurityTests.swift` | — |
+| The verb | `Packages/CrowCLI/Sources/CrowCLILib/Commands/*Commands.swift` | — |
+| Verb registration | `CrowCommand.swift` `subcommands` | `ParityGateTests` |
+| Argument validation | `Validation.swift`, `*Args.swift` | — |
+| Ledger row | `ParityLedger.swift` | `ParityGateTests` |
+| Tests | `*CommandParsingTests`, `*HandlerTests`, `*RPCSupportTests` | — |
+| Generated reference | `docs/cli.md`, via `make docs` | `CLIDocsTests` |
+| Worked example | `docs/cli-reference.md`, inside a fenced block | `CLIDocsTests` |
+| The Manager's context | `CLAUDE.md`, and `Resources/CLAUDE.md.template` | `CLIDocsTests` (`CLAUDE.md` only) |
+| Release note | `CHANGELOG.md` | — |
+
+Half the rows are machine-checked; the other half are convention — and
+convention is exactly what the jobs CLI proved fragile. `crow job` shipped and
+then went missing from the reference, along with `set-locked`,
+`recreate-terminal`, `resync-jira` and `codex-notify`, until CROW-808 built the
+doc gate that now catches it. An unenforced row is a review item, not an
+optional one.
+
 ## Consequences
 
 **Easier.** "What can the UI do that the CLI can't?" is now a grep of the ledger's
@@ -85,13 +126,47 @@ type-enforced exemption reason and removes a hand-written decoder that could
 itself drift, which is worth more than the bytes.
 
 The gate records today's honest state, and it is not flattering: all of
-`workspaces[].*`, the automation toggles and `terminal.*` have no CLI path at
-all, and `set-config`/`run-setup`/`batch-start-review`/`run-job` are writes with
-no verb. Freezing that inventory in a file is what makes it shrinkable — and it
-already works in both directions: rebasing onto CROW-810 turned the gate red
-until the nine `defaults.*` rows were moved from exempt to covered, which is also
-how the two fields that ticket left readable-but-not-writable
-(`defaults.excludeDirs`, `defaults.mirrorClaudeMCPToCodex`) came to light.
+`workspaces[].*` and `terminal.*` have no CLI path at all, and `set-config`/
+`run-setup`/`batch-start-review`/`run-job` are writes with no verb. Freezing that
+inventory in a file is what makes it shrinkable — and it already works in both
+directions: rebasing onto CROW-810 turned the gate red until the nine
+`defaults.*` rows were moved from exempt to covered, which is also how the two
+fields that ticket left readable-but-not-writable (`defaults.excludeDirs`,
+`defaults.mirrorClaudeMCPToCodex`) came to light.
+
+The gate's own first miss is instructive (#806). CROW-812 (#884) and the gate
+(#883) were in review at the same time and merged in that order, so the ledger
+reached `main` with no rows for `automation-get`/`automation-set` and with all
+eleven automation toggles still marked *"Web Settings toggle; no verb reads or
+writes it"* — by then untrue. `main` sat red until this ADR's own branch
+reconciled it. **Two PRs that are each individually correct can still land a red
+gate**, so the `parity` job has to be watched on `main`, not only on the PR that
+last touched the ledger.
+
+**A covered row does not mean one implementation** (#806).
+[ADR 0009](./0009-crowd-sole-authority-clients-only.md) retired `forwardToApp`,
+but the shape it left behind survives: the daemon's `makeCommandRouter` and the
+`makeEngineRouter` it falls back to both register **29 of the same method
+names** — `new-session`, `set-status`, `delete-session`, `get-config` and 25
+more. The daemon's copy always answers; the engine's is shadowed, reachable only
+if the daemon's is removed. `CommandRouter.methodNames` *unions* the two, so the
+ledger sees a single row where two bodies of code exist, and no check can tell
+them apart.
+
+Those bodies have already drifted. `get-config` reports `app_running: false`
+from `RPCHandlers.swift` and `true` from `EngineRouter.swift`, and the daemon's
+copy returns three keys the engine's omits (`configured`, `default_dev_root`,
+`vs_code_available`) — one method name, two response contracts. `delete-session`
+refuses without tmux in the daemon copy and has no such guard in the engine's.
+
+Parity work must respect this: **a verb wired against the shadowed copy is a
+no-op**, so a ticket moving a row from exempt to covered has to confirm its verb
+reaches the implementation that actually answers. De-duplication is the durable
+fix, and the newer verb families already demonstrate it — `job-*`, `defaults-*`,
+`agents-*`, `notifications-*` and `telemetry-*` share one body under
+`Packages/CrowEngine/Sources/CrowEngine/*RPCSupport.swift` and never grew a
+second. All 29 duplicates are pre-CROW-581 vintage; they are a standing re-check
+target, not a settled design.
 
 ## Alternatives considered
 
@@ -116,10 +191,15 @@ maintained, but only because something else forces the update.
 
 ## References
 
-- Ticket: [corveil/crow#807](https://github.com/corveil/crow/issues/807) — anti-drift parity test + CI gate
+- Ticket: [corveil/crow#806](https://github.com/corveil/crow/issues/806) — the
+  parity contract itself (this ADR's brief; the milestone's foundation ticket),
+  [corveil/crow#807](https://github.com/corveil/crow/issues/807) — anti-drift
+  parity test + CI gate (the mechanism, written first)
 - Related ADRs: [0002](./0002-unix-socket-cli-architecture.md) (the CLI surface),
   [0007](./0007-linux-ci-swift.md) (why the RPC check is split),
-  [0009](./0009-crowd-sole-authority-clients-only.md) (mutation flows through crowd),
+  [0009](./0009-crowd-sole-authority-clients-only.md) (mutation flows through
+  crowd — and the retired `forwardToApp` whose residue is the 29 duplicated
+  handlers under *Consequences*),
   [0015](./0015-harness-capability-tiers.md) (*harness* parity — a different axis)
 - Code: `Packages/CrowCore/Sources/CrowCore/Parity/ParityLedger.swift`,
   `Packages/CrowCLI/Tests/CrowCLITests/ParityGateTests.swift`,

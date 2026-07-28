@@ -465,78 +465,26 @@ public enum ParityLedger {
         .field("workspaces[].corveilHost", read: "workspace get", write: "workspace edit"),
         .field("workspaces[].sessionEnv", read: "workspace get", write: "workspace edit"),
 
-        // MARK: Exempt — automation toggles (web Settings tab)
+        // MARK: Automation toggles (web Settings tab + `crow automation`)
 
-        .field(
-            "remoteControlEnabled",
-            noCLI: """
-                Master switch for the daemon's remote HTTP/WS surface. Web Settings \
-                toggle; a verb would let a remote caller widen its own access, so any \
-                future one must be local-socket only like the gateway verbs.
-                """),
-        .field(
-            "managerAutoPermissionMode",
-            noCLI: """
-                Whether Manager sessions launch with `--permission-mode auto`. Web \
-                Settings toggle (ADR 0004); no verb reads or writes it.
-                """),
-        .field(
-            "jobsAutoPermissionMode",
-            noCLI: """
-                Whether scheduler-launched sessions get `--permission-mode auto`. Web \
-                Settings toggle; no verb reads or writes it.
-                """),
-        .field(
-            "reviewAutoPermissionMode",
-            noCLI: """
-                Whether code-review sessions get `--permission-mode auto`. Web \
-                Settings toggle; no verb reads or writes it.
-                """),
-        .field(
-            "coderViewAutoPermissionMode",
-            noCLI: """
-                Whether new work coder views start in auto-accept rather than plan \
-                mode (#586). Web Settings toggle; no verb reads or writes it.
-                """),
-        .field(
-            "attributionTrailers",
-            noCLI: """
-                Whether `setup.sh` writes the per-worktree Claude attribution \
-                override. Web Settings toggle; no verb reads or writes it.
-                """),
-        .field(
-            "autoMergeWatcherEnabled",
-            noCLI: """
-                Opt-in watcher that enables GitHub auto-merge on Crow-authored PRs \
-                labeled `crow:merge` (CROW-299). Web Settings toggle; `crow \
-                add-merge-label` applies the label but cannot arm the watcher.
-                """),
-        .field(
-            "autoCreateWatcherEnabled",
-            noCLI: """
-                Opt-in watcher that dispatches `/crow-workspace` for issues labeled \
-                `crow:auto` (CROW-312). Web Settings toggle; `crow work-on-issue` \
-                dispatches one by hand but cannot arm the watcher.
-                """),
-        .field(
-            "autoRespond.respondToChangesRequested",
-            noCLI: """
-                Whether Crow auto-answers review feedback. Web Settings toggle; the \
-                manual equivalent is `crow quick-action --action addressChanges`.
-                """),
-        .field(
-            "autoRespond.respondToFailedChecks",
-            noCLI: """
-                Whether Crow auto-answers failing CI. Web Settings toggle; the manual \
-                equivalent is `crow quick-action --action fixChecks`.
-                """),
-        .field(
-            "autoRespond.autoRebaseAndResolveConflicts",
-            noCLI: """
-                Whether Crow auto-rebases conflicted PRs (CROW-551). Web Settings \
-                toggle; the manual equivalent is `crow quick-action --action \
-                fixConflicts`.
-                """),
+        // Covered since CROW-812 (#884): `crow automation get` reads all eleven
+        // and `crow automation set` patches them. `remoteControlEnabled` is the
+        // one to watch — it is the master switch for the daemon's remote surface,
+        // so a remote caller flipping its own access on is a widening; the verb
+        // is safe because the CLI reaches the daemon over the 0600 Unix socket,
+        // never `/rpc`.
+        .field("remoteControlEnabled", read: "automation get", write: "automation set"),
+        .field("managerAutoPermissionMode", read: "automation get", write: "automation set"),
+        .field("jobsAutoPermissionMode", read: "automation get", write: "automation set"),
+        .field("reviewAutoPermissionMode", read: "automation get", write: "automation set"),
+        .field("coderViewAutoPermissionMode", read: "automation get", write: "automation set"),
+        .field("attributionTrailers", read: "automation get", write: "automation set"),
+        .field("autoMergeWatcherEnabled", read: "automation get", write: "automation set"),
+        .field("autoCreateWatcherEnabled", read: "automation get", write: "automation set"),
+        .field("autoRespond.respondToChangesRequested", read: "automation get", write: "automation set"),
+        .field("autoRespond.respondToFailedChecks", read: "automation get", write: "automation set"),
+        .field("autoRespond.autoRebaseAndResolveConflicts", read: "automation get", write: "automation set"),
+
         // MARK: Exempt — terminal tuning and Jira credential
 
         .field(
