@@ -23,6 +23,11 @@ import Testing
 /// exist together so the gate runs on every PR *and* cannot be fooled by a
 /// router refactor the regex would under-report.
 ///
+/// Only assertions that need a live router live here. The ledger's internal
+/// invariants — CLI paths resolving, `isWrite` classification, the write
+/// exemption set — are in `CrowCLITests/ParityGateTests` so they run on PRs
+/// too; this suite does not.
+///
 /// Router construction is side-effect free: `makeCommandRouter` only allocates
 /// before its dictionary literal, and every handler's I/O lives inside a closure
 /// that is never invoked here.
@@ -30,16 +35,18 @@ import Testing
 @MainActor
 struct RPCLedgerParityTests {
 
-    private func tempDevRoot() -> String {
-        let dir = (NSTemporaryDirectory() as NSString)
+    /// Build the daemon router wired to the engine fallback, mirroring
+    /// `CrowDaemon.swift`, and hand it to `body`.
+    ///
+    /// Scoped rather than returned so the temp dev root is removed afterwards —
+    /// `makeCommandRouter` never touches it, but leaving a directory per test
+    /// run behind is the kind of litter that compounds once a pattern spreads.
+    private func withLiveRouter<T>(_ body: (CommandRouter) throws -> T) rethrows -> T {
+        let devRoot = (NSTemporaryDirectory() as NSString)
             .appendingPathComponent("crowd-parity-\(UUID().uuidString)")
-        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
-        return dir
-    }
+        try? FileManager.default.createDirectory(atPath: devRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
 
-    /// The daemon router wired to the engine fallback, mirroring `CrowDaemon.swift`.
-    private func liveRouter() -> CommandRouter {
-        let devRoot = tempDevRoot()
         let appState = AppState()
         let store = JSONStore.temporary()
         let service = SessionService(store: store, appState: appState, hostBridge: NoopHostBridge())
@@ -57,14 +64,16 @@ struct RPCLedgerParityTests {
                 applyConfig: { _ in nil }
             ))
 
-        return makeCommandRouter(
+        let router = makeCommandRouter(
             appState: appState, store: store, git: GitManager(),
             devRoot: devRoot, cockpit: nil, fallback: engine)
+
+        return try body(router)
     }
 
     @Test("Ledger names exactly the registered RPC methods")
     func ledgerMatchesRegisteredMethods() {
-        let registered = liveRouter().methodNames
+        let registered = withLiveRouter { $0.methodNames }
         let ledgered = Set(ParityLedger.rpcMethods.map(\.method))
 
         let missing = registered.subtracting(ledgered)
@@ -88,25 +97,12 @@ struct RPCLedgerParityTests {
             """)
     }
 
-    /// The whole point of classifying rows: a write without a CLI path is a
-    /// capability a script cannot reach. Reads are ledgered too, but a read-only
-    /// gap is a convenience issue, not a control-plane one.
-    @Test("Every write method is reachable or explicitly exempt")
-    func writesAreCoveredOrExempt() {
-        let uncovered = ParityLedger.rpcMethods.filter {
-            $0.isWrite && $0.coverage.cliPath == nil && $0.coverage.exemptionReason == nil
-        }
-        #expect(
-            uncovered.isEmpty,
-            "Write methods with neither a CLI verb nor an exemption: \(uncovered.map(\.method).sorted())")
-    }
-
     /// Guards the text-based stand-in: if `methodNames` ever stopped walking the
     /// fallback chain, both this suite and the script would compare a truncated
     /// surface against a truncated ledger and agree.
     @Test("Router surface is the daemon/engine union, not just the daemon")
     func fallbackChainIsIncluded() {
-        let names = liveRouter().methodNames
+        let names = withLiveRouter { $0.methodNames }
         // Registered only by the daemon router...
         #expect(names.contains("telemetry-set"))
         // ...and only by the engine router it falls back to.

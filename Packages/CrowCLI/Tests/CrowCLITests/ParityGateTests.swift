@@ -238,6 +238,90 @@ struct ParityGateTests {
         }
     }
 
+    // MARK: - Write classification
+
+    /// Names that read as queries: `get-…`, `list-…`, `…-get`, `…-list`.
+    static func namePresumesRead(_ method: String) -> Bool {
+        method.hasPrefix("get-") || method.hasPrefix("list-")
+            || method.hasSuffix("-get") || method.hasSuffix("-list")
+    }
+
+    /// Rows whose deliberate `isWrite` classification disagrees with the name.
+    ///
+    /// Empty today. The hand classification always wins — a method named
+    /// `get-something` that mutates state is a write, full stop. This set only
+    /// forces the disagreement to be *stated* rather than sitting unnoticed in a
+    /// row nobody re-reads.
+    static let namingExceptions: Set<String> = []
+
+    /// `isWrite` is hand-set per row, deliberately, because a `get-`/`list-`
+    /// heuristic would wave through a future write named `get-something`. But
+    /// nothing checked the hand classification itself — so a write mislabelled
+    /// `.read` would silently skip the write bar below. This cross-checks the two
+    /// against each other without letting the heuristic overrule the decision.
+    @Test("isWrite agrees with the method name, or the disagreement is declared")
+    func writeClassificationMatchesNaming() {
+        let disagreements = ParityLedger.rpcMethods
+            .filter { Self.namePresumesRead($0.method) == $0.isWrite }
+            .map(\.method)
+            .filter { !Self.namingExceptions.contains($0) }
+            .sorted()
+
+        #expect(
+            disagreements.isEmpty,
+            """
+            These rows classify against what their name suggests:
+            \(disagreements.map { "  \($0)" }.joined(separator: "\n"))
+            A `get-`/`list-` name marked .write, or any other name marked .read.
+            If the classification is right, add the method to `namingExceptions`
+            with a comment; if it's wrong, fix the row.
+            """)
+    }
+
+    /// The un-CLI-able writes, pinned.
+    ///
+    /// This is the milestone's burn-down list: each per-area parity ticket
+    /// deletes entries. Pinning the *set* — not just requiring a reason per row
+    /// — is what makes adding one a deliberate, visible act instead of a single
+    /// `.noCLI(…)` row lost among 85.
+    static let knownWriteExemptions: Set<String> = [
+        "batch-start-review",
+        "run-job",
+        "run-setup",
+        "set-config",
+        "set-pinned",
+    ]
+
+    @Test("The set of writes with no CLI path is exactly the pinned list")
+    func writeExemptionsArePinned() {
+        let actual = Set(
+            ParityLedger.rpcMethods
+                .filter { $0.isWrite && $0.coverage.exemptionReason != nil }
+                .map(\.method))
+
+        let added = actual.subtracting(Self.knownWriteExemptions)
+        let closed = Self.knownWriteExemptions.subtracting(actual)
+
+        #expect(
+            added.isEmpty,
+            """
+            New write methods with no CLI path (\(added.count)):
+            \(added.sorted().map { "  \($0)" }.joined(separator: "\n"))
+            This is the drift CROW-807 exists to stop. Give the method a `crow`
+            verb, or — if it genuinely cannot have one — add it to
+            `knownWriteExemptions` so the widening is explicit in review.
+            """)
+        #expect(
+            closed.isEmpty,
+            """
+            These writes now have a CLI path — remove them from
+            `knownWriteExemptions` so the burn-down stays accurate (\(closed.count)):
+            \(closed.sorted().map { "  \($0)" }.joined(separator: "\n"))
+            """)
+    }
+
+    // MARK: - Ledger hygiene
+
     @Test("Every declared CLI path is a real verb")
     func declaredCLIPathsResolve() {
         let verbs = Self.verbPaths()

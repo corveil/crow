@@ -74,10 +74,15 @@ if [ "$count" -lt "$MIN_METHODS" ]; then
   exit 1
 fi
 
-if ! diff -u <(registered_methods) <(ledger_methods) > "${TMPDIR:-/tmp}/cli-parity.diff" 2>&1; then
+# mktemp, not a fixed path: a predictable name in a shared /tmp is a symlink
+# footgun on a multi-user box, and this script is meant to be run locally too.
+DIFF_OUT="$(mktemp "${TMPDIR:-/tmp}/cli-parity.XXXXXX")"
+trap 'rm -f "$DIFF_OUT"' EXIT
+
+if ! diff -u <(registered_methods) <(ledger_methods) > "$DIFF_OUT" 2>&1; then
   echo "MISMATCH: registered RPC methods vs ParityLedger.rpcMethods" >&2
   echo "  (- registered but not ledgered, + ledgered but not registered)" >&2
-  tail -n +3 "${TMPDIR:-/tmp}/cli-parity.diff" >&2
+  tail -n +3 "$DIFF_OUT" >&2
   echo "" >&2
   echo "Add a row to ParityLedger.rpcMethods for each new method: either" >&2
   echo '  .write("your-method", cli: "your verb")   — it has a crow verb, or' >&2
