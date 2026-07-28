@@ -105,6 +105,20 @@ Patch; at least one flag required. Lists are edited incrementally (add/remove co
 Everything is live except `--binary` (agent discovery + `.claude/bin` symlinks are set up at startup) — that returns `restart_required`, *including on removal*. A non-executable path is saved with a warning, not rejected; `crow` is rejected as a binary name. `--provider`/`--cli` are independent — setting one warns via `provider_cli_mismatch` if the pair ends up crossed. `get` echoes all 9 fields, including the two `set` doesn't write (`exclude_dirs`, `mirror_claude_mcp_to_codex`).
 
 The review board filters on defaults ∪ every workspace's own `excludeReviewRepos`, so `--clear-exclude-review-repos` won't unhide a repo a workspace excludes.
+### Agent Commands
+
+Which coding harness Crow launches — `AppConfig.defaultAgentKind` + `agentsByKind`, the Settings → General Agent pickers. Resolution is `agentsByKind[<role>] ?? defaultAgentKind`; roles are `work|review|job|manager`.
+
+```
+crow agents list                                        → {"agents":{"known":[{kind,name,binary,available}],"default_agent_kind":…,"by_kind":{…},"effective":{work,review,job,manager},"config_readable":…}}
+crow agents set [--default <kind>] [--work|--review|--job|--manager <kind>] [--clear <role>]…
+                                                        → patch; echoes the same subtree plus {"saved":true}; live within ~1 board poll
+```
+
+- `known` lists **every** agent Crow ships, each with `available` — the same surface-but-disable roster the web pickers show (#879), so an off-PATH agent reads as "not installed" rather than vanishing. Availability is decided when `crowd` **starts**, so a newly installed agent needs a daemon restart.
+- Only `available: true` kinds are selectable. An unavailable one is **rejected and nothing is written** (stricter than `crow new-session --agent`, which falls back to the default); a known-but-uninstalled kind gets its own message naming the binary.
+- `--clear <role>` **removes** the override key, never writes a null — one null would make the whole `config.json` undecodable. Repeat per role; `--clear X` with `--X <kind>` is rejected.
+- If `effective` names a kind that isn't available, the CLI warns on stderr — that role's sessions will not launch.
 
 ### Job Commands
 

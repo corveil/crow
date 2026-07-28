@@ -793,3 +793,76 @@ import Testing
     #expect(parsed["not-a-header-line"] == nil)   // no colon → ignored
     #expect(parsed.count == 2)                    // ": missing-name" has empty name → ignored
 }
+
+// MARK: - Agent selection (CROW-811)
+//
+// `defaultAgentKind` + `agentsByKind` back `crow agents list|set` and the web
+// Settings → General Agent pickers. The map is keyed by `SessionKind.rawValue`
+// rather than `SessionKind` so JSON serializes it as an object literal — Swift's
+// `JSONEncoder` only treats `String`/`Int`-keyed dictionaries as JSON objects.
+
+@Test func agentSelectionSurvivesFullRoundTrip() throws {
+    var config = AppConfig()
+    config.defaultAgentKind = .cursor
+    config.agentsByKind = ["review": .codex, "manager": .claudeCode]
+
+    let data = try JSONEncoder().encode(config)
+    let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+
+    #expect(decoded.defaultAgentKind == .cursor)
+    #expect(decoded.agentsByKind == ["review": .codex, "manager": .claudeCode])
+
+    // …and on the wire it really is an object, not the alternating
+    // [key, value, key, value] array a non-String-keyed dictionary would produce.
+    let object = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+    let byKind = try #require(object["agentsByKind"] as? [String: Any])
+    #expect(byKind["review"] as? String == "codex")
+}
+
+/// Why `crow agents set --clear <role>` **removes** the key instead of writing a
+/// null: `AgentKind` decodes from a single-value String container and
+/// `AppConfig.init(from:)` decodes `agentsByKind` with `try`, not `try?`. So a
+/// single null value fails the *whole* AppConfig decode — `ConfigStore.loadConfig`
+/// then returns nil, every workspace, job and credential goes invisible, and each
+/// writer's `?? AppConfig()` fallback stands ready to overwrite the file with
+/// defaults. The web deletes the key for the same reason.
+@Test func agentsByKindWithANullValueMakesTheWholeConfigUndecodable() throws {
+    let json = #"{"workspaces": [], "agentsByKind": {"work": null}}"#.data(using: .utf8)!
+    #expect(throws: (any Error).self) {
+        _ = try JSONDecoder().decode(AppConfig.self, from: json)
+    }
+
+    // The same document without the null decodes fine — it really is the null,
+    // not the surrounding shape.
+    let ok = #"{"workspaces": [], "agentsByKind": {"work": "codex"}}"#.data(using: .utf8)!
+    #expect(try JSONDecoder().decode(AppConfig.self, from: ok).agentsByKind == ["work": .codex])
+}
+
+@Test func removingAnAgentOverrideFallsBackToTheDefault() {
+    var config = AppConfig()
+    config.defaultAgentKind = .claudeCode
+    config.agentsByKind = ["work": .codex]
+    #expect(config.agentKind(for: .work) == .codex)
+
+    config.agentsByKind.removeValue(forKey: "work")
+    #expect(config.agentKind(for: .work) == .claudeCode)
+}
+
+@Test func agentKindResolutionPrefersTheOverrideForEveryRole() {
+    for role in SessionKind.allCases {
+        var config = AppConfig()
+        config.defaultAgentKind = .claudeCode
+        config.agentsByKind = [role.rawValue: .codex]
+        #expect(config.agentKind(for: role) == .codex)
+        for other in SessionKind.allCases where other != role {
+            #expect(config.agentKind(for: other) == .claudeCode)
+        }
+    }
+}
+
+/// A 5th session kind must not be addable without the agents surface noticing —
+/// `allCases` drives the per-role map `crow agents list` reports and the roles
+/// `crow agents set --clear` accepts.
+@Test func sessionKindAllCasesCoversEveryRole() {
+    #expect(SessionKind.allCases == [.work, .review, .job, .manager])
+}

@@ -408,6 +408,8 @@ The General-tab settings that were previously web-only. Every `set` is a patch �
 
 Booleans take an explicit value (`--enabled true`), not a bare flag, so that a patch can express "set to false" as distinct from "leave alone". Only the literals `true` and `false` are accepted.
 
+Agent selection is a General-tab setting too, but has its own group — see [Agent Commands](#agent-commands).
+
 ### `crow telemetry get | set`
 
 Session-analytics collection over Claude Code's OpenTelemetry exporter.
@@ -626,6 +628,80 @@ Copy a job. The copy is created **disabled**, with a uniquified name, so it can 
 ```bash
 crow job duplicate --id <job-uuid>
 ```
+---
+
+## Agent Commands
+
+Which coding harness Crow launches — `AppConfig.defaultAgentKind` plus the per-role overrides in `AppConfig.agentsByKind`, the same fields the web Settings → General "Agent" pickers edit. Resolution is `agentsByKind[<role>]` falling back to `defaultAgentKind`.
+
+The four roles are `work` (coding sessions), `review` (PR reviews), `job` (scheduled jobs), and `manager` (the Manager session).
+
+Writes land under the shared config lock and take effect within about one board poll — no restart, and an open browser tab repaints within a couple of seconds. There is no `restart_required` in the response for that reason.
+
+### `crow agents list`
+
+Show what this daemon can launch, what you configured, and what each role resolves to.
+
+```bash
+crow agents list
+crow agents list | jq -r '.agents.effective'
+```
+
+Takes no flags.
+
+```json
+{
+  "agents": {
+    "known": [
+      { "kind": "claude-code", "name": "Claude Code", "binary": "claude", "available": true },
+      { "kind": "codex", "name": "OpenAI Codex", "binary": "codex", "available": true },
+      { "kind": "antigravity", "name": "Antigravity", "binary": "agy", "available": false }
+    ],
+    "default_agent_kind": "claude-code",
+    "by_kind": { "review": "codex" },
+    "effective": {
+      "work": "claude-code",
+      "review": "codex",
+      "job": "claude-code",
+      "manager": "claude-code"
+    },
+    "config_readable": true
+  }
+}
+```
+
+### `crow agents set`
+
+Change the default agent or a per-role override. Only the flags you pass change; at least one is required.
+
+```bash
+crow agents set --default codex
+crow agents set --work codex --review cursor
+crow agents set --clear review --clear job
+```
+
+| Flag              | Required | Description                                                        |
+| ----------------- | -------- | ------------------------------------------------------------------ |
+| `--default`       | no       | Agent for sessions with no per-role override                       |
+| `--work`          | no       | Agent for new coding sessions                                      |
+| `--review`        | no       | Agent for PR-review sessions                                       |
+| `--job`           | no       | Agent for scheduled-job sessions                                   |
+| `--manager`       | no       | Agent for the Manager session                                      |
+| `--clear <role>`  | no       | Remove that role's override; repeatable (`work\|review\|job\|manager`) |
+
+Returns the same `agents` subtree as `list`, plus `"saved": true`.
+
+Notes:
+
+- **`known` lists every agent Crow ships, installed or not**, each with an `available` flag — the same surface-but-disable roster the web pickers show ([#879](https://github.com/corveil/crow/issues/879)), so an off-PATH harness reads as "not installed" rather than vanishing from the list. `binary` is the `PATH` token to install (never the resolved absolute path, which would leak the daemon host's layout).
+- **`available` is decided when `crowd` starts** and is binary-dependent — Codex, Cursor, OpenCode and Antigravity register only if their CLI was on `PATH` at boot. Installing an agent therefore needs a daemon restart before it can be selected.
+- **Only `available: true` kinds are selectable; anything else is rejected and nothing is written** — no lock taken, no `config.json` rewrite. This is stricter than `crow new-session --agent`, which falls back to the default instead; here the configured value is trusted at launch time, so a typo would persist sessions that never start. A kind that's listed but uninstalled gets its own message naming the binary, rather than an "expected one of" list that would be confusing when the agent is right there in `crow agents list`.
+- **`--clear <role>` removes the override key**; it does not write a null. (`agentsByKind` is a `[String: AgentKind]` map that cannot decode a JSON null — a single one would make the whole `config.json` undecodable.) Passing `--clear X` together with `--X <kind>` is rejected rather than resolved by precedence.
+- Patch semantics: a role you don't mention keeps its stored value.
+- `config_readable: false` means `config.json` exists but would not decode. The values shown are then defaults, not your settings.
+- `effective` reports what a new session of each role *would* get. If it names a kind that isn't available — an agent whose binary left `PATH`, say — the CLI warns on stderr: that role's sessions will not launch.
+- `by_kind` echoes the stored map verbatim, including a hand-edited key that isn't a real role. Such a key shows up in `by_kind` and is absent from `effective`; that difference is the tell.
+- Not to be confused with the older web-facing `list-agents` RPC, whose per-agent `default` flag means the *registry* default (whichever agent registered first). `default_agent_kind` here is the *configured* default; a `known` row deliberately carries no `default` field.
 
 ---
 

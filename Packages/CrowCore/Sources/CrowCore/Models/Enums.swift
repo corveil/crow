@@ -2,7 +2,13 @@ import Foundation
 
 /// What kind of session this is. Multiple `.manager` sessions can coexist;
 /// the one with `AppState.managerSessionID` is the back-compat "primary".
-public enum SessionKind: String, Codable, Sendable {
+///
+/// `CaseIterable` because these double as the roles of `AppConfig.agentsByKind`
+/// (CROW-811): `allCases` drives the per-role agent resolution `crow agents list`
+/// reports, the role names in its rejection messages, and — via ArgumentParser's
+/// conditional `ExpressibleByArgument` — the values `crow agents set --clear`
+/// lists in `--help`. Declaration order is that surface's display order.
+public enum SessionKind: String, Codable, Sendable, CaseIterable {
     case work    // Normal development session (default)
     case review  // PR review session
     case job     // Session spun up by a scheduled job (CROW-317)
