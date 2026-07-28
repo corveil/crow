@@ -473,7 +473,7 @@ crow create-manager [--agent <agent>]
 
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |
-| `--agent` | `<agent>` | no | Coding agent kind (claude-code, cursor, codex, opencode); default agent when omitted |
+| `--agent` | `<agent>` | no | Coding agent kind (claude-code, cursor, codex, opencode, antigravity, grok); default agent when omitted |
 
 ---
 
@@ -708,7 +708,7 @@ crow handoff-agent --session <session> --agent <agent> [--note <note>]
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |
 | `--session` | `<session>` | yes | Session UUID |
-| `--agent` | `<agent>` | yes | Target agent kind (claude-code, cursor, codex, opencode, antigravity) |
+| `--agent` | `<agent>` | yes | Target agent kind (claude-code, cursor, codex, opencode, grok, antigravity) |
 | `--note` | `<note>` | no | Optional note for the incoming agent about where to resume |
 
 ---

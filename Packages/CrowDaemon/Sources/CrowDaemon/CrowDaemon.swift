@@ -10,6 +10,7 @@ import CrowCodex
 import CrowCursor
 import CrowOpenCode
 import CrowAntigravity
+import CrowGrok
 import CrowEngine
 import CrowProvider
 import CrowGit
@@ -962,6 +963,11 @@ public enum CrowDaemon {
         // updating ADR 0014). Crow never installs `agy` itself — it only resolves
         // whatever the official `antigravity.google` installer placed.
         registerDiscovered(AntigravityAgent())
+        // Grok Build (`grok`, xai-org/grok-build) — #859. `registerDiscovered`
+        // uses the override-aware `findBinary()`, so a `defaults.binaries.grok`
+        // pin resolves the `superagent-ai/grok-cli` name collision; off-PATH ⇒
+        // shown disabled in the picker rather than silently absent (#879).
+        registerDiscovered(GrokAgent())
     }
 
     /// (Re)populate `appState` from the store snapshot — sessions + their

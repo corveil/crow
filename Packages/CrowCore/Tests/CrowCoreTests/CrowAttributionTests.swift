@@ -48,7 +48,20 @@ import Testing
     #expect(CrowAttribution.agentDisplayName(for: .claudeCode) == "Claude Code")
     #expect(CrowAttribution.agentDisplayName(for: .cursor) == "Cursor")
     #expect(CrowAttribution.agentDisplayName(for: .codex) == "OpenAI Codex")
+    #expect(CrowAttribution.agentDisplayName(for: .openCode) == "OpenCode")
+    #expect(CrowAttribution.agentDisplayName(for: .grok) == "Grok Build")
     #expect(CrowAttribution.agentDisplayName(for: nil) == "Claude Code")
+}
+
+/// The registration-independent display-name set the orphan-window reaper unions
+/// with the registry (#861 review r10) covers every built-in kind — so a pane for
+/// a kind whose binary later stopped resolving is still reapable, and a new kind
+/// added to the table is picked up with zero reaper edits.
+@Test func crowAttributionAllKnownDisplayNames() {
+    let all = CrowAttribution.allKnownDisplayNames
+    for name in ["Claude Code", "Cursor", "OpenAI Codex", "OpenCode", "Antigravity", "Grok Build"] {
+        #expect(all.contains(name))
+    }
 }
 
 @Test func crowAttributionReadsDisplayNameFromEnvironment() {
@@ -95,6 +108,17 @@ import Testing
     let expanded = CrowAttribution.expandSkillBody(body, agentKind: .codex)
     #expect(expanded.contains("via OpenAI Codex"))
     #expect(!expanded.contains("via Claude Code"))
+}
+
+@Test func crowAttributionExpandSkillBodyForGrok() {
+    // #861 review round 6: the inlined `.grok` review skill footer must attribute
+    // "via Grok Build", not fall back to "via Claude Code" (which happened when
+    // `knownDisplayNames` / setup.sh's `agent_display_name` omitted grok).
+    let body = "[🐦‍⬛ Reviewed by Crow via ${CROW_AGENT_DISPLAY_NAME:-Claude Code}](https://github.com/corveil/crow)"
+    let expanded = CrowAttribution.expandSkillBody(body, agentKind: .grok)
+    #expect(expanded.contains("via Grok Build"))
+    #expect(!expanded.contains("via Claude Code"))
+    #expect(!expanded.contains("${CROW_AGENT_DISPLAY_NAME"))
 }
 
 /// Normalize footer text so a trailing source-file newline does not fail the drift

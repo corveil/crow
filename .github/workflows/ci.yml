@@ -56,7 +56,7 @@ jobs:
       - name: Build & test Linux packages
         run: |
           LINUX_PACKAGES=(CrowCore CrowIPC CrowClaude CrowCodex CrowCursor \
-                          CrowAntigravity CrowGit CrowOpenCode CrowPersistence CrowProvider CrowCLI)
+                          CrowAntigravity CrowGit CrowOpenCode CrowGrok CrowPersistence CrowProvider CrowCLI)
           for pkg in "${LINUX_PACKAGES[@]}"; do
             echo "==> Building & testing $pkg on Linux..."
             swift build --package-path "Packages/$pkg"

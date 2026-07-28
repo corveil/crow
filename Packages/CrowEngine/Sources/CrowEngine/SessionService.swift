@@ -4,6 +4,7 @@ import CrowCodex
 import CrowCore
 import CrowCursor
 import CrowGit
+import CrowGrok
 import CrowPersistence
 import CrowProvider
 import CrowTerminal
@@ -243,7 +244,7 @@ public final class SessionService {
                         ClaudeTrustSeeder.seedTrust(projectPath: managerCwd)
                     }
                 }
-                writeManagerGatewayEnv()
+                writeManagerGatewayEnv(managerKind: reconciled.agentKind)
                 // Remote-control bookkeeping reflects what the agent actually
                 // emitted — `supportsRemoteControl` is per-agent capability,
                 // but per-launch the Cursor Manager intentionally omits `--rc`
@@ -615,12 +616,29 @@ public final class SessionService {
                 // managed work terminals, exactly the set launchClaude handles —
                 // so the Manager (whose RC is seeded in hydrateState) is untouched.
                 if trackReadiness {
-                    // Re-write hook config so the adopted Claude's hooks still
-                    // route back to the correct session if the config was lost.
+                    // Re-write the adopted session's OWN hook config so its hooks
+                    // still route back to the correct session if the config was
+                    // lost. Resolve the session's agent writer rather than
+                    // hardcoding `ClaudeHookConfigWriter`: for a Grok session that
+                    // would plant `.claude/settings.local.json`, which Grok
+                    // compat-loads alongside its own `.grok/hooks/crow.json` — every
+                    // event then double-fires, reverting
+                    // `stripPriorCompatHooksForGrokHandoff` on the next warm crowd
+                    // restart (#861 review r10). Every writer this now reaches is
+                    // per-worktree and session-scoped (Cursor `.cursor/hooks.json`,
+                    // OpenCode `.opencode/plugins/crow-hooks.js`, Grok
+                    // `.grok/hooks/crow.json`, Antigravity `.agents/hooks.json`) or a
+                    // literal no-op (Codex — its config is global, installed once at
+                    // boot), so the widened write rewrites each session's own config
+                    // with its own UUID — the repair, not a new risk. It also fixes
+                    // an adopted Cursor/OpenCode/Antigravity session whose own config
+                    // was lost, which the Claude-hardcoded version silently skipped.
                     if let crowPath = ClaudeHookConfigWriter.resolveCrowBinary(devRoot: ConfigStore.loadDevRoot()),
-                       let worktree = appState.primaryWorktree(for: terminal.sessionID) {
+                       let worktree = appState.primaryWorktree(for: terminal.sessionID),
+                       let session = appState.sessions.first(where: { $0.id == terminal.sessionID }),
+                       let agent = AgentRegistry.shared.agent(for: session.agentKind) {
                         do {
-                            try ClaudeHookConfigWriter().writeHookConfig(
+                            try agent.hookConfigWriter.writeHookConfig(
                                 worktreePath: worktree.worktreePath,
                                 sessionID: terminal.sessionID,
                                 crowPath: crowPath
@@ -782,11 +800,26 @@ public final class SessionService {
         var text = command
         if let session = appState.sessions.first(where: { $0.id == sessionID }),
            let agent = AgentRegistry.shared.agent(for: session.agentKind) {
+            let worktreePath = appState.primaryWorktree(for: sessionID)?.worktreePath
+            // Strip a Grok `.review` clone's committed config, then pre-seed folder
+            // trust — both via the one shared gate (#861 review r11/r14, unified r17).
+            // A brand-new managed terminal from `crow new-terminal --command` — how
+            // `/crow-workspace` creates `.work` sessions, and how a `.review` clone can
+            // be (re)opened in Grok — dispatches here, not through `launchAgent`. Must
+            // precede `prepareAgentLaunchText` below, which (re)writes Crow's own clean
+            // `.grok/hooks/crow.json`. The strip is a no-op unless this is a Grok
+            // `.review` clone; the seed a no-op for `.review` or a trustless agent.
+            if let worktreePath {
+                Self.prepareWorktreeForAgentLaunch(
+                    agentKind: session.agentKind,
+                    sessionKind: session.kind,
+                    worktreePath: worktreePath)
+            }
             text = AgentLaunch.prepareAgentLaunchText(
                 command: command,
                 agent: agent,
                 sessionID: sessionID,
-                worktreePath: appState.primaryWorktree(for: sessionID)?.worktreePath,
+                worktreePath: worktreePath,
                 crowPath: ClaudeHookConfigWriter.resolveCrowBinary(devRoot: ConfigStore.loadDevRoot()),
                 telemetryPort: telemetryPort
             ).text
@@ -794,6 +827,102 @@ public final class SessionService {
         // Ensure a trailing newline so TmuxBackend.sendText delivers Enter.
         TerminalRouter.send(routedTerminal, text: text.hasSuffix("\n") ? text : text + "\n")
         appState.terminalReadiness[terminalID] = .agentLaunched
+    }
+
+    /// Whether to pre-seed the agent's folder-trust store for a launch of
+    /// `agentKind` on a `sessionKind` worktree. Pure so the gate is testable
+    /// without touching the user's real global trust files.
+    ///
+    /// Claude seeds unconditionally (its trust file is the only gate; CROW-600).
+    /// Codex (#830) and Grok (#859) seed too — but **never a `.review` clone**: its
+    /// tree is `gh repo clone` output at the PR author's head, so trusting it would
+    /// arm a committed `.codex`/`.grok` hook on launch. Review falls back to the
+    /// agent's own trust prompt (the human-gated path), and `prepareReviewClone`
+    /// strips committed agent config as defense-in-depth. Cursor/OpenCode/
+    /// Antigravity have no folder-trust store, so they never seed.
+    nonisolated static func shouldSeedFolderTrust(
+        agentKind: AgentKind, sessionKind: SessionKind) -> Bool {
+        switch agentKind {
+        case .claudeCode: return true
+        case .codex, .grok: return sessionKind != .review
+        default: return false
+        }
+    }
+
+    /// Whether `agentKind` compat-loads Crow's `.claude/settings.local.json` — i.e.
+    /// its `env` (which can hold the gateway `Authorization: Bearer`) and `hooks`
+    /// run under that harness. Grok and Codex read Claude's project settings for
+    /// compatibility; Cursor/OpenCode/Antigravity do not read that file at all.
+    ///
+    /// Gates the *gateway-env clear* on a non-Claude launch (#861 review r18,
+    /// Yellow 2): a compat-loader must have any prior Claude bearer cleared, but
+    /// clearing it for a non-reader would be a pure rewrite of a file it never
+    /// reads — per-launch churn `Scaffolder` deliberately avoids, and (if the user
+    /// hand-edited the file into invalid JSON) a silent overwrite that drops their
+    /// `permissions.allow`. Claude itself takes the *write* arm, not the clear arm,
+    /// so it's intentionally not listed here. A future compat-loading harness is a
+    /// one-line addition.
+    nonisolated static func readsClaudeCompatSettings(_ agentKind: AgentKind) -> Bool {
+        switch agentKind {
+        case .grok, .codex: return true
+        default: return false
+        }
+    }
+
+    /// Everything that must be applied to a worktree **before an agent process
+    /// opens it**, as ONE gate so no launch path can drift (#861 review r17,
+    /// Yellow 1 / Green 1). Two independent, each self-gated steps:
+    ///
+    ///  1. **Strip** a Grok `.review` clone's committed config (`.grok/`,
+    ///     `.cursor/`, `.claude/settings{,.local}.json`, repo-root `.mcp.json`)
+    ///     BEFORE any hook rewrite, so a hostile hook restored by the review
+    ///     skill's `gh pr checkout` can't fire once the clone is (cascade-)trusted.
+    ///     Gated to Grok + `.review` via `shouldStripGrokReviewClone`.
+    ///  2. **Seed** the agent's folder trust (Claude/Codex/Grok, never `.review`),
+    ///     gated via `shouldSeedFolderTrust`.
+    ///
+    /// Both are no-ops for the agents/kinds that don't need them, so this is safe
+    /// to call from every launch path unconditionally. **The call sites of this
+    /// symbol ARE the answer to "how many Grok launch paths open a review clone"**
+    /// — `rg prepareWorktreeForAgentLaunch`, never a hand-maintained count (which
+    /// went stale four rounds running). Today: `pasteDeferredLaunch`,
+    /// `launchAgent`, `handoffAgent`, `createManagerTerminal` (seed only — Manager
+    /// is never `.review`), and the `send` RPC (`EngineRouter`). `prepareReviewClone`
+    /// strips at *clone-creation* time and deliberately does NOT go through here:
+    /// it must strip WITHOUT seeding, since the clone is not yet a launch target.
+    nonisolated static func prepareWorktreeForAgentLaunch(
+        agentKind: AgentKind, sessionKind: SessionKind, worktreePath: String) {
+        if shouldStripGrokReviewClone(agentKind: agentKind, sessionKind: sessionKind) {
+            stripGrokConfigFromReviewClone(clonePath: worktreePath)
+        }
+        seedTrustIfNeeded(
+            agentKind: agentKind, sessionKind: sessionKind, worktreePath: worktreePath)
+    }
+
+    /// Pre-seed the agent's folder trust for `worktreePath` so an unattended launch
+    /// isn't blocked (Claude/Codex) or silently hook-skipped (Grok) on the "trust
+    /// this folder?" gate. `nonisolated static` so `prepareWorktreeForAgentLaunch`
+    /// (and, through it, the `send` RPC in `EngineRouter`) can reach it off the
+    /// MainActor. Callers route through `prepareWorktreeForAgentLaunch`, not here
+    /// directly, so the strip can't be forgotten alongside the seed.
+    /// Gating lives in `shouldSeedFolderTrust`; a real seed failure is audible.
+    nonisolated static func seedTrustIfNeeded(
+        agentKind: AgentKind, sessionKind: SessionKind, worktreePath: String) {
+        guard Self.shouldSeedFolderTrust(agentKind: agentKind, sessionKind: sessionKind) else { return }
+        switch agentKind {
+        case .claudeCode:
+            ClaudeTrustSeeder.seedTrust(projectPath: worktreePath)
+        case .codex:
+            if case let .failed(msg) = CodexTrustSeeder.seedTrust(projectPath: worktreePath) {
+                CrowLog.info("[SessionService] Codex trust seed failed for \(worktreePath): \(msg)")
+            }
+        case .grok:
+            if case let .failed(msg) = GrokTrustSeeder.seedTrust(projectPath: worktreePath) {
+                CrowLog.info("[SessionService] Grok trust seed failed for \(worktreePath): \(msg)")
+            }
+        default:
+            break
+        }
     }
 
     /// Re-arm the tmux readiness watch for a terminal whose first attempt
@@ -869,8 +998,18 @@ public final class SessionService {
         // `new-terminal` pins on managed agent windows, so orphaned agents are
         // identified positively and the anchor/infra is never touched.
         let keep = Set(appState.terminals.values.flatMap { $0 }.compactMap { $0.tmuxBinding?.windowIndex })
-        let agentNames = Set([AgentKind.claudeCode, .cursor, .codex, .openCode, .antigravity]
-            .map { CrowAttribution.agentDisplayName(for: $0) })
+        // Derive the agent-window-name set from the registry (windows are pinned
+        // with the agent's `displayName` — `registerTerminal` → `newWindow(name:)`,
+        // and on handoff `target.displayName`), unioned with the registration-
+        // independent `CrowAttribution.allKnownDisplayNames`. The union keeps both
+        // properties (#861 review r9-r10): registry covers any downstream-only kind
+        // not in the static table, and the static table still matches a built-in
+        // kind whose binary later stopped resolving (uninstalled / mid-upgrade /
+        // shim dir dropped from the login-shell PATH) — whose orphaned pane the
+        // registry alone would miss. No per-kind edit here either way; mirrors the
+        // cross-agent cleanup loop in `writeManagerHookConfig`.
+        let agentNames = CrowAttribution.allKnownDisplayNames
+            .union(AgentRegistry.shared.allAgents().map(\.displayName))
         TmuxBackend.shared.reconcileOrphanWindows(keepWindowIndices: keep, agentWindowNames: agentNames)
     }
 
@@ -903,6 +1042,20 @@ public final class SessionService {
               let worktree = appState.primaryWorktree(for: sessionID),
               let agent = AgentRegistry.shared.agent(for: session.agentKind) else { return }
 
+        // Strip a Grok `.review` clone's committed config, then pre-seed folder
+        // trust — one shared gate so a launch path can't do one without the other
+        // (#861 review r11/r17). Strip MUST precede `writeHookConfig` below (which
+        // recreates Crow's clean `.grok/hooks/crow.json`): `launchAgent` fires on
+        // every warm crowd restart (`hydrateState` re-arms managed review terminals)
+        // and via `crow launch-agent`, and the review skill's `gh pr checkout`
+        // restores the attacker's `.grok/hooks/*.json` from the PR head, so the
+        // creation-time strip alone is not enough. The strip is a no-op unless this
+        // is a Grok `.review` clone; the seed a no-op for `.review` / a trustless
+        // agent (never `--dangerously-bypass`; Claude CROW-600, Codex #830, Grok #859).
+        Self.prepareWorktreeForAgentLaunch(
+            agentKind: agent.kind, sessionKind: session.kind,
+            worktreePath: worktree.worktreePath)
+
         // Write/refresh hook config (Claude path). Codex's writer is a
         // no-op — its global config was installed once at app launch.
         if let crowPath = ClaudeHookConfigWriter.resolveCrowBinary(devRoot: ConfigStore.loadDevRoot()) {
@@ -917,31 +1070,6 @@ public final class SessionService {
             }
         }
 
-        // Pre-trust the worktree so the agent's "do you trust this folder?"
-        // gate never blocks an unattended auto-launch. Trust does not inherit
-        // from parent directories, so every fresh worktree/clone would
-        // otherwise prompt (CROW-600 for Claude; #830 for Codex — persist trust
-        // for this worktree, never `--dangerously-bypass`).
-        switch agent.kind {
-        case .claudeCode:
-            ClaudeTrustSeeder.seedTrust(projectPath: worktree.worktreePath)
-        case .codex:
-            // Never trust a `.review` clone: its working tree is `gh repo clone`
-            // output checked out at the PR author's head — attacker-controlled.
-            // Trusting it would arm a committed `.codex/hooks.json` on launch
-            // (#843 review round 5). `prepareReviewClone` also strips any
-            // committed `.codex/` as defense-in-depth. Crow-created `.work`/
-            // `.job` worktrees branch off a trusted base, so they're safe to
-            // trust; the review clone falls back to Codex's folder-trust prompt
-            // (acceptable — review is the human-gated path anyway).
-            if session.kind != .review {
-                if case let .failed(msg) = CodexTrustSeeder.seedTrust(projectPath: worktree.worktreePath) {
-                    CrowLog.info("[SessionService] Codex trust seed failed for \(worktree.worktreePath): \(msg)")
-                }
-            }
-        default:
-            break
-        }
 
         // Resolve and apply the workspace's AI gateway for Claude sessions
         // (CROW-402). Write the resolved env block into the worktree's
@@ -956,6 +1084,20 @@ public final class SessionService {
             ClaudeHookConfigWriter.writeGatewayEnv(
                 dirPath: worktree.worktreePath, resolved: gatewayResolved)
             gatewayPrefix = ClaudeLaunchArgs.gatewayEnvPrefix(gatewayResolved)
+        } else if Self.readsClaudeCompatSettings(agent.kind) {
+            // #861 review r17/r18 (Yellow 2): the gateway `env` block carries the
+            // workspace's `ANTHROPIC_*` / `Authorization: Bearer` header, and
+            // Grok/Codex compat-load `.claude/settings.local.json` (that's exactly
+            // why the review-clone strip deletes it). So on a launch of a
+            // compat-loading harness — e.g. a `.work` session first run under Claude,
+            // then handed off to Grok, relaunched here — actively CLEAR the env
+            // (`resolved: nil`) so a prior Claude launch's bearer can't enter it.
+            // Scoped to compat-loaders: Cursor/OpenCode/Antigravity never read this
+            // file, so a clear there would be a pure rewrite (churn + a data-loss
+            // risk on a user's hand-edited `permissions`). `writeGatewayEnv` rewrites
+            // whenever a file exists; it only truly no-ops when none is present.
+            ClaudeHookConfigWriter.writeGatewayEnv(
+                dirPath: worktree.worktreePath, resolved: nil)
         }
         // Cursor worker launching → ensure its global Jira MCP is synced.
         if agent.kind == .cursor {
@@ -1236,23 +1378,47 @@ public final class SessionService {
             throw AgentHandoffError.launchFailed(error.localizedDescription)
         }
 
-        // Agent-specific prep (trust + gateway) before the new process starts.
-        // Idempotent file writes — safe to run before teardown.
+        // Agent-specific prep before the new process starts. Idempotent file
+        // writes — safe to run before teardown. Handoff dispatches via
+        // `pendingLaunchCommands`, which `pasteDeferredLaunch` consumes on
+        // `.shellReady` (that later paste re-runs this same strip+seed and writes
+        // the handed-off session's `.grok/hooks/crow.json`). We do the strip+seed
+        // **eagerly here** anyway so it lands before teardown and doesn't depend on
+        // the readiness watch firing (which can time out). For a Grok `.review`
+        // handoff this strips every project config layer Grok discovers (`.grok/`,
+        // `.claude/settings{,.local}.json`, `.cursor/`, repo-root `.mcp.json`) that
+        // `prepareReviewClone` only stripped if Grok was the *creation-time* review
+        // agent — a handoff flips a review created under another agent onto a clone
+        // never stripped for Grok. Seed is a no-op for `.review` / trustless agents.
+        Self.prepareWorktreeForAgentLaunch(
+            agentKind: target.kind, sessionKind: session.kind,
+            worktreePath: worktree.worktreePath)
         if target.kind == .claudeCode {
-            ClaudeTrustSeeder.seedTrust(projectPath: worktree.worktreePath)
-            let gatewayResolved = workspaceGatewayResolved(for: sessionID)
+            // Claude inherits the workspace AI gateway env on handoff.
             ClaudeHookConfigWriter.writeGatewayEnv(
-                dirPath: worktree.worktreePath, resolved: gatewayResolved)
-        } else if target.kind == .codex, session.kind != .review {
-            // Seed Codex trust on handoff too, or `crow handoff-agent --agent
-            // codex` opens in an untrusted folder and the (possibly unattended)
-            // session stalls on the folder-trust gate (#843 review round 5).
-            // Handoff dispatches via `pendingLaunchCommands`, so `launchAgent`'s
-            // seeding never fires for it. Skip `.review` for the same
-            // attacker-controlled-clone reason as `launchAgent`.
-            if case let .failed(msg) = CodexTrustSeeder.seedTrust(projectPath: worktree.worktreePath) {
-                CrowLog.info("[SessionService] Codex trust seed failed for \(worktree.worktreePath): \(msg)")
-            }
+                dirPath: worktree.worktreePath,
+                resolved: workspaceGatewayResolved(for: sessionID))
+        } else if Self.readsClaudeCompatSettings(target.kind) {
+            // #861 review r17/r18 (Yellow 2): a Grok/Codex target compat-loads
+            // `.claude/settings.local.json`, so clear any `Authorization: Bearer`
+            // env a prior Claude launch wrote — otherwise a corporate gateway
+            // credential goes live inside a different vendor's binary. (`.review`
+            // already had the whole file deleted by the strip above.) Scoped to
+            // compat-loaders — Cursor/OpenCode/Antigravity never read the file, so a
+            // clear there is churn + a data-loss risk, not a security gain.
+            ClaudeHookConfigWriter.writeGatewayEnv(
+                dirPath: worktree.worktreePath, resolved: nil)
+        }
+        if target.kind == .grok, session.kind != .review {
+            // A `.work`/`.job` handoff from Claude/Cursor leaves that prior
+            // agent's Crow-managed hook config on disk (same session UUID, same
+            // event names Grok registers), which Grok compat-loads alongside its
+            // own `.grok/hooks/crow.json` → every hook event fires twice. Strip
+            // the prior compat hooks — touches only hook config, never the file's
+            // permissions/`env`/non-hook keys (though the Claude arm drops managed
+            // event keys wholesale — see helper doc). The incoming Grok config is a
+            // separate `.grok/` file. Full double-fire rationale in the helper (r8).
+            Self.stripPriorCompatHooksForGrokHandoff(worktreePath: worktree.worktreePath)
         }
         // Handing off to Cursor → sync its global Jira MCP (this path selects
         // Cursor without touching config, so the boot-time gate would miss it).
@@ -1476,10 +1642,21 @@ public final class SessionService {
 
     /// Write the Manager's gateway `env` block to `{devRoot}/.claude/settings.local.json`
     /// (or clear it when unset) so manual `claude` re-runs in the Manager terminal
-    /// inherit the same routing as the initial launch (CROW-402).
-    private func writeManagerGatewayEnv() {
+    /// inherit the same routing as the initial launch (CROW-402). `managerKind` gates
+    /// the bearer: a non-Claude Manager (Grok/Codex) compat-loads this file, so it
+    /// gets `resolved: nil` — clearing any prior Claude Manager's token rather than
+    /// re-applying it into another vendor's env on every hydrate (#861 review r17/r18,
+    /// Yellow 2). Scoped to compat-loaders: a Cursor/OpenCode/Antigravity Manager
+    /// never reads this file, so it's left untouched (no per-hydrate rewrite churn).
+    /// Mirrors the `createManagerTerminal` write site.
+    private func writeManagerGatewayEnv(managerKind: AgentKind) {
         guard let devRoot = ConfigStore.loadDevRoot() else { return }
-        ClaudeHookConfigWriter.writeGatewayEnv(dirPath: devRoot, resolved: managerGatewayResolved())
+        if managerKind == .claudeCode {
+            ClaudeHookConfigWriter.writeGatewayEnv(
+                dirPath: devRoot, resolved: managerGatewayResolved())
+        } else if Self.readsClaudeCompatSettings(managerKind) {
+            ClaudeHookConfigWriter.writeGatewayEnv(dirPath: devRoot, resolved: nil)
+        }
     }
 
     /// Write the Manager's Claude Code hook config into `dirPath`'s
@@ -1513,12 +1690,26 @@ public final class SessionService {
         // prevent survives exactly when the guard bails. It removes only *other*
         // agents' configs, so ordering it ahead of our own write is safe.
         //
-        // Claude is skipped: its `removeHookConfig` strips managed event keys
-        // wholesale (not marker-scoped like Cursor's), and the devRoot's
-        // `.claude/settings.local.json` commonly holds the user's own Manager
-        // config — so cleaning it on every boot could drop a user's hand-authored
-        // devRoot hooks. A stale Claude config left when switching to a non-Claude
-        // Manager is inert anyway (Claude isn't launched there).
+        // Claude is skipped from this loop — but NOT because a stale Claude config
+        // is inert. For a **Grok** Manager it is not: Grok compat-loads the
+        // devRoot's `.claude/settings.local.json` (the same fact that makes
+        // `stripGrokConfigFromReviewClone` / `stripPriorCompatHooksForGrokHandoff`
+        // strip it on the review + handoff paths). It's skipped because Claude's
+        // `removeHookConfig` is wholesale — it drops the entire managed event key,
+        // taking any user's hand-authored devRoot Manager hook under that name with
+        // it (unlike Cursor's marker-scoped removal) — and the devRoot commonly
+        // holds exactly such user config, so auto-stripping on every Manager boot
+        // would risk dropping it.
+        //
+        // KNOWN LIMITATION (#861 review r10, deferred): running Grok as the Manager
+        // therefore double-fires — the prior Claude Manager's devRoot
+        // `.claude/settings.local.json` (same fixed managerSessionID, same event
+        // names) fires alongside Grok's own `.grok/hooks/crow.json`. Left as-is for
+        // the wholesale-removal reason above, and because a *concurrent* live Claude
+        // Manager in the same devRoot (`crow create-manager --agent grok` beside a
+        // Claude primary) has load-bearing hooks we must not strip — so a blanket
+        // extension would break that. Mitigation if it bites: clear the devRoot
+        // `.claude/settings.local.json` by hand when switching the Manager to Grok.
         for other in AgentRegistry.shared.allAgents()
             where other.kind != session.agentKind && other.kind != .claudeCode {
             other.hookConfigWriter.removeHookConfig(worktreePath: dirPath)
@@ -1708,23 +1899,33 @@ public final class SessionService {
         // can carry a bearer token) is the final write; both merge into the same
         // {devRoot}/.claude/settings.local.json without clobbering each other.
         writeManagerHookConfig(for: session, dirPath: cwd)
-        // CROW-600: a brand-new devRoot would otherwise block the Manager on
-        // the agent's trust gate. No-ops when already trusted (#830 extends
-        // this to Codex Managers).
-        switch session.agentKind {
-        case .claudeCode:
-            ClaudeTrustSeeder.seedTrust(projectPath: cwd)
-        case .codex:
-            if case let .failed(msg) = CodexTrustSeeder.seedTrust(projectPath: cwd) {
-                CrowLog.info("[SessionService] Codex trust seed failed for \(cwd): \(msg)")
-            }
-        default:
-            break
-        }
+        // CROW-600: a brand-new devRoot would otherwise block the Manager on the
+        // agent's trust gate. No-ops when already trusted (#830 Codex, #861 Grok).
+        // ⚠️ Grok's folder trust cascades to subdirectories, so seeding the devRoot
+        // makes every review clone under `{devRoot}` Grok-trusted — the review-clone
+        // strip is therefore the *only* guard between that cascade and committed-hook
+        // RCE, so every path that opens Grok in a review clone MUST strip before it
+        // opens. That invariant now lives in ONE place: every launch path routes
+        // through `prepareWorktreeForAgentLaunch` (grep its call sites), so a new
+        // path can't forget the strip (#861 review r8/r17). Manager sessions are
+        // never `.review`, so here the shared helper only seeds (the strip no-ops).
+        Self.prepareWorktreeForAgentLaunch(
+            agentKind: session.agentKind, sessionKind: session.kind, worktreePath: cwd)
         // CROW-402: write the Manager gateway env block to {devRoot}/.claude so
         // manual `claude` re-runs in this terminal inherit the same routing. The
-        // Manager's cwd is the devRoot.
-        ClaudeHookConfigWriter.writeGatewayEnv(dirPath: cwd, resolved: managerGatewayResolved())
+        // Manager's cwd is the devRoot. #861 review r17/r18 (Yellow 2): the env can
+        // carry an `Authorization: Bearer`, and a Grok/Codex Manager compat-loads
+        // `.claude/settings.local.json` in a devRoot the seed above just trusted —
+        // so write the bearer only for a Claude Manager, and for a compat-loading
+        // Manager actively CLEAR it (`resolved: nil`) so a prior Claude Manager's
+        // token can't linger in a now-trusted devRoot. A Cursor/OpenCode/Antigravity
+        // Manager never reads the file, so it's left untouched (no rewrite churn).
+        if session.agentKind == .claudeCode {
+            ClaudeHookConfigWriter.writeGatewayEnv(
+                dirPath: cwd, resolved: managerGatewayResolved())
+        } else if Self.readsClaudeCompatSettings(session.agentKind) {
+            ClaudeHookConfigWriter.writeGatewayEnv(dirPath: cwd, resolved: nil)
+        }
         let rawTerminal = SessionTerminal(
             sessionID: session.id,
             name: session.name,
@@ -2711,6 +2912,143 @@ public final class SessionService {
         }
     }
 
+    /// Whether Grok is about to open a `.review` clone and must therefore strip
+    /// its committed config layers first. This is only the pure *predicate*; the
+    /// anti-drift guarantee comes from routing — every launch path calls
+    /// `prepareWorktreeForAgentLaunch` (grep its call sites), and creation-time
+    /// `prepareReviewClone` strips directly — not from any enumeration here (#861
+    /// review, Red; mirrors `shouldStripCursorReviewCloneOnHandoff`). Only a
+    /// `.review` session on Grok strips: `.work`/`.job` branch off a trusted base,
+    /// and a `.review` on any other agent must not strip a surface that agent
+    /// doesn't load.
+    nonisolated static func shouldStripGrokReviewClone(
+        agentKind: AgentKind, sessionKind: SessionKind) -> Bool {
+        agentKind == .grok && sessionKind == .review
+    }
+
+    /// Neutralize a review clone's committed config layers that **Grok
+    /// discovers and merges** — not just `.grok/`. With `compat.*.hooks = true`
+    /// (on by default), Grok loads project hooks from `.grok/hooks/*.json`,
+    /// `.claude/settings.json` **and** `.claude/settings.local.json`, and
+    /// `.cursor/hooks.json`; and it loads project MCP servers from
+    /// `.cursor/mcp.json`, `.grok/config.toml [mcp_servers]`, **and repo-root
+    /// `.mcp.json`** (verified against `xai-org/grok-build`: `10-hooks.md`,
+    /// `07-mcp-servers.md`, and `xai-grok-workspace/src/{folder_trust,servers}.rs`,
+    /// where `.mcp.json` is scanned from repo root down to cwd). On an
+    /// attacker-controlled review-clone head every one is arbitrary-command RCE
+    /// once the folder is trusted — and on a local/dev Grok build folder-trust is
+    /// inert (everything trusted), or on a release build trust cascades from a
+    /// trusted parent — so the strip is the durable defense (#861 review rounds
+    /// 2-3, Red).
+    ///
+    /// So this neutralizes the whole discovered surface:
+    /// - `.grok/` — Grok's native project hooks, plus `.grok/config.toml`
+    ///   `[mcp_servers]` and `.grok/lsp.json` (all removed by the dir wipe).
+    /// - `.cursor/` — `hooks.json` + `mcp.json` Grok loads via Cursor compat.
+    ///   Reuses `stripCursorConfigFromReviewClone` so both agents share one
+    ///   primitive.
+    /// - `.claude/settings.local.json` **and** `.claude/settings.json` — both
+    ///   loaded via Claude compat (their `hooks` + `env` spawn subprocesses).
+    ///   Removing `settings.json` here is safe at creation: this strip runs
+    ///   *before* `prepareReviewClone` rewrites it with bundled-safe content
+    ///   (`Scaffolder.bundledSettings()`), so the clone still ends Crow-owned. On
+    ///   the re-strip paths (`launchAgent`/handoff) it removes a hostile
+    ///   `settings.json` that `git restore`/`gh pr checkout` brought back — which
+    ///   the one-shot creation overwrite can't reach (#861 review r12, Red).
+    ///   `.claude/skills/` is untouched (the Grok review inlines the skill into
+    ///   its prompt, so it isn't read as a file).
+    /// - `.mcp.json` (repo root) — a project MCP source independent of
+    ///   `.cursor/mcp.json`; a `{mcpServers:{…command}}` there auto-spawns.
+    ///
+    /// Idempotent; no-ops for any layer the clone doesn't ship. Two kinds of
+    /// caller: creation-time `prepareReviewClone` (strip only — the clone isn't a
+    /// launch target yet), and every *launch* path via the shared
+    /// `prepareWorktreeForAgentLaunch` gate (grep its call sites) — so no path can
+    /// open Grok in a review clone without stripping first. A real removal failure
+    /// is audible (`CrowLog.error`).
+    nonisolated static func stripGrokConfigFromReviewClone(clonePath: String) {
+        let base = clonePath as NSString
+        removeReviewCloneConfig(
+            base.appendingPathComponent(".grok"), label: ".grok/", clonePath: clonePath)
+        // .cursor/ (hooks.json + mcp.json) — same primitive Cursor reviews use.
+        stripCursorConfigFromReviewClone(clonePath: clonePath)
+        // `.claude/settings.local.json` + `.claude/settings.json` — both loaded
+        // via Claude compat. See the doc above for why removing `settings.json`
+        // is safe at creation (strip precedes the bundled rewrite) yet essential
+        // on the re-strip paths (a restored hostile one, #861 review r12, Red).
+        removeReviewCloneConfig(
+            base.appendingPathComponent(".claude/settings.local.json"),
+            label: ".claude/settings.local.json", clonePath: clonePath)
+        removeReviewCloneConfig(
+            base.appendingPathComponent(".claude/settings.json"),
+            label: ".claude/settings.json", clonePath: clonePath)
+        // Repo-root `.mcp.json` — a project MCP source Grok loads independently
+        // of `.cursor/mcp.json`. For a review clone cwd == clone root, so the
+        // repo-root file is the only one in Grok's root→cwd scan chain.
+        removeReviewCloneConfig(
+            base.appendingPathComponent(".mcp.json"),
+            label: ".mcp.json", clonePath: clonePath)
+    }
+
+    /// Strip the PRIOR agent's Crow-managed hook config from the two project
+    /// compat sources Grok also loads — `.claude/settings.local.json` (Claude)
+    /// and `.cursor/hooks.json` (Cursor) — on a `.work`/`.job` handoff to Grok.
+    ///
+    /// Distinct from `stripGrokConfigFromReviewClone` in both scope and method:
+    /// that wholesale-wipes attacker config *files* off a hostile *review* clone;
+    /// this runs on a *trusted* work worktree and calls each writer's
+    /// `removeHookConfig`, which touches only the hook config — never the file's
+    /// other settings (Claude's `permissions` block, the gateway `env`, Cursor's
+    /// non-hook keys) nor a user's own `.grok/hooks/*.json`.
+    ///
+    /// ⚠️ The two writers differ in granularity, and the Claude arm is **not**
+    /// marker-scoped: `CursorHookConfigWriter.removeHookConfig` prunes only Crow's
+    /// own groups (a user's hooks under the same event name survive), but
+    /// `ClaudeHookConfigWriter.removeHookConfig` drops each managed event key
+    /// *wholesale* — so a user's hand-authored `Stop`/`PreToolUse`/… hook in the
+    /// worktree's `.claude/settings.local.json` is removed with it (the same caveat
+    /// spelled out at `writeManagerHookConfig`). An accepted trade for closing the
+    /// double-fire: hand-authored hooks in a per-session `.work` worktree are rare,
+    /// and leaving the double-fire is worse.
+    ///
+    /// Why it's needed: nothing else on the worker path removes a prior agent's
+    /// hooks — `launchAgent` / the deferred-paste only *write* the incoming
+    /// agent's, and the cross-agent loop in `writeManagerHookConfig` is
+    /// Manager-only. So a Claude→Grok (or Cursor→Grok) handoff leaves the prior
+    /// `.claude/settings.local.json` / `.cursor/hooks.json` — same session UUID,
+    /// same PascalCase event names Grok registers — on disk, and Grok (compat on
+    /// by default) loads BOTH it and its own `.grok/hooks/crow.json`. Every hook
+    /// event then fires twice: doubled `taskComplete`/`agentWaiting` notifications
+    /// and a doubled `crow hook-event` subprocess for the session's life, because
+    /// `EngineRouter.presentHookNotification` is per-event, not state-gated
+    /// (#861 review r8).
+    ///
+    /// Idempotent and no-op when the file/keys are absent, so it's called
+    /// unconditionally (prior Codex/OpenCode → nothing to strip) and never
+    /// touches the incoming `.grok/hooks/crow.json` (a separate file, written
+    /// later on the deferred paste).
+    nonisolated static func stripPriorCompatHooksForGrokHandoff(worktreePath: String) {
+        ClaudeHookConfigWriter().removeHookConfig(worktreePath: worktreePath)
+        CursorHookConfigWriter().removeHookConfig(worktreePath: worktreePath)
+    }
+
+    /// Remove one review-clone config path, quiet when it isn't present (the
+    /// common case) but **audible** on a real removal failure — a swallowed
+    /// error would leave an attacker-controlled config layer in place. Shared by
+    /// the Grok strip's several layers.
+    private nonisolated static func removeReviewCloneConfig(
+        _ path: String, label: String, clonePath: String) {
+        do {
+            try FileManager.default.removeItem(atPath: path)
+        } catch let error as NSError
+            where error.domain == NSCocoaErrorDomain
+            && error.code == NSFileNoSuchFileError {
+            // Not shipped — the common, expected case. Stay quiet.
+        } catch {
+            CrowLog.error("[SessionService] Failed to strip \(label) from review clone \(clonePath): \(error.localizedDescription)")
+        }
+    }
+
     /// Off-main-actor preparation for a review session: fetch PR metadata,
     /// clone the repo (if needed), check out the PR branch, and stage the
     /// review prompt / skill / settings files. Returns the metadata the
@@ -2802,6 +3140,17 @@ public final class SessionService {
         if reviewAgentKind == .cursor {
             _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "checkout", "--", ".cursor"])
         }
+        // Same restore-before-pull for Grok reviews (#859, extended #861 rounds
+        // 2-3, r12): Grok's strip below neutralizes *every* project source Grok
+        // discovers (`.grok/`, `.cursor/`, **both** `.claude/settings.json` and
+        // `settings.local.json`, repo-root `.mcp.json`), each applied as an
+        // unstaged deletion of tracked files — so restore all of them before the
+        // pull, or `git pull` refuses when the new head touches any.
+        if reviewAgentKind == .grok {
+            for path in [".grok", ".cursor", ".claude/settings.json", ".claude/settings.local.json", ".mcp.json"] {
+                _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "checkout", "--", path])
+            }
+        }
         _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "fetch", "origin", headBranch])
         _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "checkout", headBranch])
         _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "pull", "origin", headBranch])
@@ -2839,6 +3188,24 @@ public final class SessionService {
         // prep so a `git pull` can't reintroduce it.
         if reviewAgentKind == .antigravity {
             try? fm.removeItem(atPath: (clonePath as NSString).appendingPathComponent(".agents"))
+        }
+        // Defense-in-depth for Grok reviews (#859, extended #861 rounds 2-3, r12):
+        // Grok discovers & merges project config from `.grok/hooks/*.json`,
+        // `.claude/settings.json` + `settings.local.json`, `.cursor/hooks.json`,
+        // and project MCP servers from `.cursor/mcp.json` +
+        // `.grok/config.toml` + repo-root `.mcp.json` — `compat.*.hooks = true`
+        // by default. On an attacker-controlled review head each is
+        // arbitrary-command RCE once the folder is trusted, and the strip is the
+        // durable guard (dev builds trust everything; a trusted parent cascades
+        // on release). `stripGrokConfigFromReviewClone` neutralizes the full set
+        // (`.grok/` + `.cursor/` + `.claude/settings{,.local}.json` + `.mcp.json`);
+        // `.claude/settings.json` is re-written bundled-safe below at creation, and
+        // left absent on the launch-time re-strip paths, which is safe. This is the
+        // creation-time strip; every launch-time strip runs via the shared
+        // `prepareWorktreeForAgentLaunch` gate (grep its call sites), so the set of
+        // paths can't drift out of sync with a stale count here.
+        if reviewAgentKind == .grok {
+            Self.stripGrokConfigFromReviewClone(clonePath: clonePath)
         }
         // Same defense-in-depth for Cursor reviews (#829 review round 9). This
         // PR makes project `.cursor/hooks.json` Crow's load-bearing hook
@@ -2885,13 +3252,27 @@ public final class SessionService {
             atomically: true, encoding: .utf8
         )
 
-        // Copy settings.json into the clone's .claude/ for permissions
+        // (Re)write `.claude/settings.json` with Crow's bundled-safe permissions
+        // at creation. `stripGrokConfigFromReviewClone` above already removed any
+        // committed `settings.json` for Grok reviews (Grok, like Claude, loads it
+        // via compat — hooks + `env` run subprocesses, #861 review r12); this is
+        // what gives the fresh clone a valid Crow-owned one, for Claude and Grok
+        // reviews alike. **Fail closed** (#861 review round 4, Yellow): remove any
+        // file FIRST, then write, so a write failure can't leave a stale/attacker
+        // file — and make a real write failure audible. NB the two Grok re-strip
+        // paths (`launchAgent`/handoff) do NOT re-run this write: there a restored
+        // hostile `settings.json` is removed and left absent, which is safe — Grok
+        // just falls back to no compat settings.
         let cloneSettingsDir = (clonePath as NSString).appendingPathComponent(".claude")
+        let settingsPath = (cloneSettingsDir as NSString).appendingPathComponent("settings.json")
+        removeReviewCloneConfig(settingsPath, label: ".claude/settings.json", clonePath: clonePath)
         let settingsContent = Scaffolder.bundledSettings()
-        try? settingsContent.write(
-            toFile: (cloneSettingsDir as NSString).appendingPathComponent("settings.json"),
-            atomically: true, encoding: .utf8
-        )
+        do {
+            try fm.createDirectory(atPath: cloneSettingsDir, withIntermediateDirectories: true)
+            try settingsContent.write(toFile: settingsPath, atomically: true, encoding: .utf8)
+        } catch {
+            CrowLog.error("[SessionService] Failed to write bundled .claude/settings.json to review clone \(clonePath): \(error.localizedDescription) (any committed file was already removed — fail-closed)")
+        }
 
         return ReviewClonePrep(
             prTitle: prTitle,
@@ -3144,15 +3525,15 @@ public final class SessionService {
     /// `ProcessInfo.processInfo.arguments[0]`).
     nonisolated static func buildReviewPrompt(prURL: String, prTitle: String, repoSlug: String, prNumber: Int, agentKind: AgentKind) -> String {
         switch agentKind {
-        case .cursor, .openCode, .codex:
-            // Cursor, OpenCode, and Codex all lack a Crow slash-command engine,
-            // so they get the whole crow-review-pr SKILL body inlined into the
-            // prompt file (a self-contained brief). Without this, a Codex review
-            // would receive a bare `/crow-review-pr <URL>` line it can't resolve,
-            // never run `gh pr review`, and so never satisfy the review-
-            // completion contract — the loop #830 set out to remove (#843
-            // review round 2). `agentKind` is threaded through so the posted
-            // review footer names the right agent.
+        case .cursor, .openCode, .codex, .grok:
+            // Cursor, OpenCode, Codex, and Grok all lack a Crow slash-command
+            // engine, so they get the whole crow-review-pr SKILL body inlined
+            // into the prompt file (a self-contained brief). Without this, the
+            // review would receive a bare `/crow-review-pr <URL>` line it can't
+            // resolve, never run `gh pr review`, and so never satisfy the review-
+            // completion contract — the loop #830 set out to remove (#843 review
+            // round 2 for Codex; #861 review round 5 for Grok). `agentKind` is
+            // threaded through so the posted review footer names the right agent.
             return cursorReviewPrompt(
                 skillBody: Scaffolder.bundledReviewSkill(),
                 prURL: prURL,

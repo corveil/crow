@@ -1079,11 +1079,31 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                        terminal.isManaged,
                        let session = capturedAppState.sessions.first(where: { $0.id == sessionID }),
                        let agent = AgentRegistry.shared.agent(for: session.agentKind) {
+                        let wtPath = capturedAppState.primaryWorktree(for: sessionID)?.worktreePath
+                        // #861 review r17 (Yellow 1): the `send` RPC is a launch path
+                        // too. An operator recovering a dead Grok `.review` pane the
+                        // documented way — `crow send <term> "grok -c"` — reopens the
+                        // clone right here; `commandLaunchesToken("grok -c", "grok")`
+                        // matches. So strip the clone's committed config + seed trust
+                        // FIRST, via the SAME shared gate as the four SessionService
+                        // paths, before `prepareAgentLaunchText` (re)writes Crow's clean
+                        // `.grok/hooks/crow.json` — otherwise a hostile `.grok/hooks/*.json`
+                        // restored by the review skill's `gh pr checkout` fires on that
+                        // resume. Gated on the same agent-launch detection as the hook
+                        // write, so a plain `crow send "yes"` doesn't re-strip. Strip is
+                        // a no-op unless this is a Grok `.review` clone.
+                        if let wtPath,
+                           AgentLaunch.commandLaunchesToken(text, token: agent.launchCommandToken) {
+                            SessionService.prepareWorktreeForAgentLaunch(
+                                agentKind: session.agentKind,
+                                sessionKind: session.kind,
+                                worktreePath: wtPath)
+                        }
                         let prepared = AgentLaunch.prepareAgentLaunchText(
                             command: text,
                             agent: agent,
                             sessionID: sessionID,
-                            worktreePath: capturedAppState.primaryWorktree(for: sessionID)?.worktreePath,
+                            worktreePath: wtPath,
                             crowPath: crowPath,
                             telemetryPort: capturedTelemetryPort
                         )

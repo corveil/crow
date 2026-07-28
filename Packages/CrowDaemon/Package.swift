@@ -26,6 +26,7 @@ let package = Package(
         .package(path: "../CrowCursor"),
         .package(path: "../CrowOpenCode"),
         .package(path: "../CrowAntigravity"),
+        .package(path: "../CrowGrok"),
         // OTLP receiver + telemetry.db, so the daemon produces the per-session
         // analytics the web strip and the scorecard read (#772). Darwin-only
         // (Network.framework) — CrowDaemon already is, via CrowTerminal, and
@@ -54,6 +55,7 @@ let package = Package(
                 .product(name: "CrowCursor", package: "CrowCursor"),
                 .product(name: "CrowOpenCode", package: "CrowOpenCode"),
                 .product(name: "CrowAntigravity", package: "CrowAntigravity"),
+                .product(name: "CrowGrok", package: "CrowGrok"),
                 .product(name: "CrowTelemetry", package: "CrowTelemetry"),
                 .product(name: "Hummingbird", package: "hummingbird"),
                 .product(name: "HummingbirdWebSocket", package: "hummingbird-websocket"),
