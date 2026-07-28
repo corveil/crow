@@ -169,7 +169,7 @@ public final class WorkerRunner {
         let workerID = config.resolvedWorkerID()
         guard !apiKey.isEmpty else {
             if !warnedMissingKey {
-                NSLog("[WorkerRunner] runner enabled but CORVEIL_API_KEY is not set in the crowd environment; idle")
+                CrowLog.info("[WorkerRunner] runner enabled but CORVEIL_API_KEY is not set in the crowd environment; idle")
                 warnedMissingKey = true
             }
             return
@@ -205,8 +205,7 @@ public final class WorkerRunner {
                    !SessionService.wipeWorkerRunScratch(scratchDir) {
                     continue
                 }
-                NSLog("[WorkerRunner] worker-run session %@ has incomplete linkage; failing closed",
-                      session.id.uuidString)
+                CrowLog.info("[WorkerRunner] worker-run session \(session.id.uuidString) has incomplete linkage; failing closed")
                 sessionService.completeSession(id: session.id)
                 continue
             }
@@ -243,7 +242,7 @@ public final class WorkerRunner {
         for entry in entries {
             let path = (root as NSString).appendingPathComponent(entry)
             guard !live.contains(path) else { continue }
-            NSLog("[WorkerRunner] sweeping orphan worker-run scratch dir %@", path)
+            CrowLog.info("[WorkerRunner] sweeping orphan worker-run scratch dir \(path)")
             SessionService.wipeWorkerRunScratch(path)
         }
     }
@@ -257,7 +256,7 @@ public final class WorkerRunner {
                 try await backend.heartbeat(run.runID, workerID: run.workerID, leaseSeconds: leaseSeconds)
                 watchedRuns[sessionID]?.lastHeartbeatAt = now
             } catch {
-                NSLog("[WorkerRunner] heartbeat failed for run %@: %@", run.runID, String(describing: error))
+                CrowLog.error("[WorkerRunner] heartbeat failed for run \(run.runID): \(String(describing: error))")
             }
         }
     }
@@ -275,8 +274,7 @@ public final class WorkerRunner {
             // would open a duplicate-runner / racing-write window (review). Stop:
             // fail the dead claim, complete the local session, free the slot.
             if now.timeIntervalSince(run.lastHeartbeatAt) >= TimeInterval(leaseSeconds) {
-                NSLog("[WorkerRunner] lease lost for run %@ (no successful heartbeat within %ds); failing",
-                      run.runID, leaseSeconds)
+                CrowLog.info("[WorkerRunner] lease lost for run \(run.runID) (no successful heartbeat within \(leaseSeconds)s); failing")
                 await failClosed(run: run, sessionID: sessionID, backend: backend,
                                  reason: "lease lost — runner could not heartbeat within the lease window")
                 continue
@@ -387,7 +385,7 @@ public final class WorkerRunner {
                 title: args.title, content: args.content, output: args.output, error: args.error
             )
         } catch {
-            NSLog("[WorkerRunner] complete failed for run %@: %@", run.runID, String(describing: error))
+            CrowLog.error("[WorkerRunner] complete failed for run \(run.runID): \(String(describing: error))")
         }
     }
 
@@ -404,8 +402,7 @@ public final class WorkerRunner {
             return runs
         } catch {
             if !warnedListError {
-                NSLog("[WorkerRunner] listClaimable failed (kind=%@): %@ — runner will keep retrying",
-                      kind ?? "*", String(describing: error))
+                CrowLog.error("[WorkerRunner] listClaimable failed (kind=\(kind ?? "*")): \(String(describing: error)) — runner will keep retrying")
                 warnedListError = true
             }
             return []
@@ -454,7 +451,7 @@ public final class WorkerRunner {
                 // Lost the race — someone else claimed it. Try the next.
                 continue
             } catch {
-                NSLog("[WorkerRunner] claim failed for run %@: %@", runID, String(describing: error))
+                CrowLog.error("[WorkerRunner] claim failed for run \(runID): \(String(describing: error))")
                 continue
             }
         }
@@ -509,7 +506,7 @@ public final class WorkerRunner {
             return
         }
         guard polls < maxLaunchWaitPolls else {
-            NSLog("[WorkerRunner] agent never launched for session %@; failing the run", sessionID.uuidString)
+            CrowLog.info("[WorkerRunner] agent never launched for session \(sessionID.uuidString); failing the run")
             Task { @MainActor [weak self] in await self?.handleLaunchTimeout(sessionID: sessionID) }
             return
         }

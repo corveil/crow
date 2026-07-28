@@ -223,8 +223,7 @@ public struct ClaudeHookConfigWriter: HookConfigWriter {
                 [.posixPermissions: 0o600], ofItemAtPath: settingsPath)
             return true
         } catch {
-            NSLog("[ClaudeHookConfigWriter] Failed to write Corveil run env to %@: %@",
-                  settingsPath, error.localizedDescription)
+            CrowLog.error("[ClaudeHookConfigWriter] Failed to write Corveil run env to \(settingsPath): \(error.localizedDescription)")
             return false
         }
     }

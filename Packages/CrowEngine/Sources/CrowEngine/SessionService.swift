@@ -1944,7 +1944,7 @@ public final class SessionService {
                 // this into an arbitrary recursive delete (review — consistent
                 // threat model across both teardown paths).
                 if isWorkerRun && !isWorkerRunScratchPath(item.worktreePath) {
-                    NSLog("[SessionService] Refusing to remove non-scratch worker-run path: \(item.worktreePath)")
+                    CrowLog.info("[SessionService] Refusing to remove non-scratch worker-run path: \(item.worktreePath)")
                     continue
                 }
                 guard FileManager.default.fileExists(atPath: item.worktreePath) else { continue }
@@ -3218,8 +3218,7 @@ public final class SessionService {
         // launch into dirty state — the tick-level orphan sweep will retry it.
         if FileManager.default.fileExists(atPath: scratchDir),
            !Self.wipeWorkerRunScratch(scratchDir) {
-            NSLog("[SessionService] Worker run '%@': stale scratch dir could not be cleared at %@; aborting",
-                  run.id, scratchDir)
+            CrowLog.info("[SessionService] Worker run '\(run.id)': stale scratch dir could not be cleared at \(scratchDir); aborting")
             return nil
         }
 
@@ -3238,8 +3237,7 @@ public final class SessionService {
             try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: parent)
             try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: scratchDir)
         } catch {
-            NSLog("[SessionService] Worker run '%@': failed to create scratch dir %@: %@",
-                  run.id, scratchDir, error.localizedDescription)
+            CrowLog.error("[SessionService] Worker run '\(run.id)': failed to create scratch dir \(scratchDir): \(error.localizedDescription)")
             Self.wipeWorkerRunScratch(scratchDir)
             return nil
         }
@@ -3252,8 +3250,7 @@ public final class SessionService {
         do {
             try prompt.write(toFile: promptPath, atomically: true, encoding: .utf8)
         } catch {
-            NSLog("[SessionService] Worker run '%@': failed to write %@: %@",
-                  run.id, promptPath, error.localizedDescription)
+            CrowLog.error("[SessionService] Worker run '\(run.id)': failed to write \(promptPath): \(error.localizedDescription)")
             Self.wipeWorkerRunScratch(scratchDir)
             return nil
         }
@@ -3270,7 +3267,7 @@ public final class SessionService {
             runID: run.id,
             workerID: workerID
         ) else {
-            NSLog("[SessionService] Worker run '%@': failed to inject Corveil credentials; aborting", run.id)
+            CrowLog.error("[SessionService] Worker run '\(run.id)': failed to inject Corveil credentials; aborting")
             Self.wipeWorkerRunScratch(scratchDir)
             return nil
         }
@@ -3320,8 +3317,7 @@ public final class SessionService {
             data.terminals.append(preparedTerminal)
         }
 
-        NSLog("[SessionService] Worker run '%@': created session '%@' at %@",
-              run.id, session.name, scratchDir)
+        CrowLog.info("[SessionService] Worker run '\(run.id)': created session '\(session.name)' at \(scratchDir)")
         return (session.id, preparedTerminal.id, scratchDir)
     }
 
@@ -3342,7 +3338,7 @@ public final class SessionService {
     nonisolated static func wipeWorkerRunScratch(_ path: String) -> Bool {
         guard isWorkerRunScratchPath(path) else {
             if !path.isEmpty {
-                NSLog("[SessionService] Refusing to wipe non-scratch path: %@", path)
+                CrowLog.info("[SessionService] Refusing to wipe non-scratch path: \(path)")
             }
             return true  // not ours to remove — don't loop retrying it
         }
@@ -3352,8 +3348,7 @@ public final class SessionService {
         } catch {
             // Already gone is success; a real failure leaves the key on disk.
             if !FileManager.default.fileExists(atPath: path) { return true }
-            NSLog("[SessionService] Failed to wipe worker-run scratch %@: %@ (will retry)",
-                  path, error.localizedDescription)
+            CrowLog.error("[SessionService] Failed to wipe worker-run scratch \(path): \(error.localizedDescription) (will retry)")
             return false
         }
     }
