@@ -51,12 +51,15 @@ struct GrokLaunchArgsTests {
         )
         // Both the headless leg and the resumed TUI carry the bounded flags.
         #expect(cmd.contains("'grok' --permission-mode auto"))
-        // Two occurrences of the mode flag: headless + flagged resume. The bare
-        // `|| 'grok' -c` fallback carries none.
+        // Two occurrences of the mode flag: flagged headless + flagged resume. The
+        // bare `||` fallbacks on each leg carry none.
         let occurrences = cmd.components(separatedBy: "--permission-mode auto").count - 1
         #expect(occurrences == 2)
-        // Flag-rejection fallback: flagged resume `|| ` bare resume (#861 r12), so
-        // an upstream `--permission-mode`/`--deny` rename can't strand the job.
+        // Flag-rejection fallback on BOTH legs (#861 r12+r13): the headless leg
+        // (carries the prompt) and the resume leg each `|| ` to a bare form, so an
+        // upstream `--permission-mode`/`--deny` rename neither loses the prompt nor
+        // strands the resume.
+        #expect(cmd.contains("--prompt-file '/tmp/p.md' || 'grok' --prompt-file '/tmp/p.md'"))
         #expect(cmd.contains(" -c || 'grok' -c\n"))
     }
 
@@ -101,6 +104,16 @@ struct GrokLaunchArgsTests {
         #expect(GrokLaunchArgs.resumeLeg(bin: "'grok'", flags: "") == "'grok' -c")
         #expect(GrokLaunchArgs.resumeLeg(bin: "'grok'", flags: " --permission-mode auto")
             == "'grok' --permission-mode auto -c || 'grok' -c")
+    }
+
+    @Test func headlessLegFallbackHasNoFlags() {
+        // Same shape as `resumeLeg` for the prompt-consuming leg (#861 r13): bare
+        // `|| <bin> --prompt-file <p>` when flags are present so a flag rejection
+        // still consumes the prompt (at `ask`), and no fallback when they're empty.
+        #expect(GrokLaunchArgs.headlessLeg(bin: "'grok'", flags: "", quotedPath: "'/p.md'")
+            == "'grok' --prompt-file '/p.md'")
+        #expect(GrokLaunchArgs.headlessLeg(bin: "'grok'", flags: " --permission-mode auto", quotedPath: "'/p.md'")
+            == "'grok' --permission-mode auto --prompt-file '/p.md' || 'grok' --prompt-file '/p.md'")
     }
 
     @Test func bareCommandIsJustTheQuotedBinary() {

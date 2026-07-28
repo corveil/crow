@@ -44,10 +44,10 @@ struct SessionServiceGrokReviewCloneStripTests {
     /// Grok also discovers project `.claude/settings*.json`, `.cursor/hooks.json`
     /// + `.cursor/mcp.json`, and repo-root `.mcp.json` via compat / MCP scanning
     /// — all attacker-controlled RCE on a review-clone head. The strip must
-    /// neutralize the **full** discovered set (#861 review rounds 2-3, Red):
-    /// `.cursor/` gone, `.claude/settings.local.json` gone, repo-root `.mcp.json`
-    /// gone, while the Crow-overwritten `.claude/settings.json` and the review
-    /// skill survive.
+    /// neutralize the **full** discovered set (#861 review rounds 2-3, r12):
+    /// `.cursor/` gone, **both** `.claude/settings.local.json` and `settings.json`
+    /// gone, repo-root `.mcp.json` gone. `.claude/skills/` (not a Grok-loaded
+    /// source — the review inlines the skill into its prompt) is left in place.
     @Test func neutralizesAllGrokDiscoveredSources() {
         let clone = Self.makeTempDir(name: "compat")
         defer { try? FileManager.default.removeItem(atPath: clone) }

@@ -275,7 +275,12 @@ All harnesses report lifecycle events by shelling out to `crow hook-event`, but
   the re-strip paths a hostile one restored by `git restore`/`gh pr checkout` is
   removed and left absent (the one-shot creation overwrite can't reach it). The
   review skill lives in `.claude/skills/` (never read by Grok, which inlines it
-  into the prompt) and is left in place (#861). On a local/dev
+  into the prompt) and is left in place (#861). Side effect of the re-strip: a
+  Grok review clone that reached `launchAgent`/handoff then has *no*
+  `.claude/settings.json`, so handing that session back to Claude Code (whose
+  handoff arm only writes the gateway env) runs the Claude review without Crow's
+  bundled permissions — it prompt-gates under default-on `reviewAutoPermissionMode`
+  rather than auto-approving. Fail-safe (more restrictive), not a hole. On a local/dev
   Grok build folder-trust is inert (everything trusted), and on release trust
   cascades from a trusted parent, so the strip — not trust-skipping — is the
   durable guard. **Deferred / re-check:** the *global* `~/.claude`/`~/.cursor`

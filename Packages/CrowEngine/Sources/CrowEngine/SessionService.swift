@@ -3064,13 +3064,13 @@ public final class SessionService {
             _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "checkout", "--", ".cursor"])
         }
         // Same restore-before-pull for Grok reviews (#859, extended #861 rounds
-        // 2-3): Grok's strip below neutralizes *every* project source Grok
-        // discovers (`.grok/`, `.cursor/`, `.claude/settings.local.json`,
-        // repo-root `.mcp.json`), each applied as an unstaged deletion of tracked
-        // files — so restore all of them before the pull, or `git pull` refuses
-        // when the new head touches any.
+        // 2-3, r12): Grok's strip below neutralizes *every* project source Grok
+        // discovers (`.grok/`, `.cursor/`, **both** `.claude/settings.json` and
+        // `settings.local.json`, repo-root `.mcp.json`), each applied as an
+        // unstaged deletion of tracked files — so restore all of them before the
+        // pull, or `git pull` refuses when the new head touches any.
         if reviewAgentKind == .grok {
-            for path in [".grok", ".cursor", ".claude/settings.local.json", ".mcp.json"] {
+            for path in [".grok", ".cursor", ".claude/settings.json", ".claude/settings.local.json", ".mcp.json"] {
                 _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "checkout", "--", path])
             }
         }

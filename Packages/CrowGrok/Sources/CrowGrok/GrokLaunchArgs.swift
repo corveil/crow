@@ -16,10 +16,10 @@ import Foundation
 /// `OpenCodeLaunchArgs` uses. `--prompt-file` (not `-p "$(cat …)"`) so a large
 /// inlined review-skill body never becomes a giant argv or rides a `$(cat …)`
 /// subshell. Semicolon (not `&&`) so the TUI still opens if the headless leg
-/// exits non-zero, and — when the bounded auto flags are on — the resume leg
-/// carries a bare `|| grok -c` fallback so a *flag* rejection (upstream churn)
-/// degrades to "runs in the TUI at Grok's default `ask` policy" rather than a
-/// dead pane (see `resumeLeg`).
+/// exits non-zero, and — when the bounded auto flags are on — **both** legs carry
+/// a bare `|| <bin> …` fallback so a *flag* rejection (upstream churn) degrades to
+/// "prompt consumed / TUI open at Grok's default `ask` policy" rather than a lost
+/// prompt and a dead pane (see `headlessLeg` / `resumeLeg`).
 ///
 /// **Bounded auto-permission (`.job` only, never `--yolo`).** Grok has no
 /// sandbox flag; its only prompt-reducing modes are `--permission-mode auto`
@@ -87,8 +87,26 @@ public enum GrokLaunchArgs {
         let bin = shellQuote(binary)
         let quotedPath = shellQuote(promptPath)
         let flags = autoPermissionSuffix(autoPermissionMode: autoPermissionMode)
-        return "\(bin)\(flags) --prompt-file \(quotedPath)"
+        return "\(headlessLeg(bin: bin, flags: flags, quotedPath: quotedPath))"
             + "; \(resumeLeg(bin: bin, flags: flags))\n"
+    }
+
+    /// The headless prompt-consuming leg (`grok --prompt-file <p>`). Like
+    /// `resumeLeg`, when the bounded flags are present it appends a bare
+    /// `|| <bin> --prompt-file <p>` fallback: if a `--permission-mode`/`--deny`
+    /// rename/removal makes the flagged form a usage error, the prompt is still
+    /// consumed at Grok's default `ask` policy — *more* restrictive than the
+    /// dropped `--permission-mode auto` + `--deny`, so nothing is loosened —
+    /// instead of the prompt being lost forever. That loss is permanent without
+    /// this: `launchAgent` sets `reviewPromptDispatched = true` unconditionally
+    /// after dispatch, so a first launch whose headless leg failed never re-sends
+    /// the prompt — every later launch takes the resume-only branch (#861 r13).
+    /// The flag rejection is a parse-time failure (no work done before the bare
+    /// retry). No fallback when flags are empty (`.work`/`.review`).
+    static func headlessLeg(bin: String, flags: String, quotedPath: String) -> String {
+        flags.isEmpty
+            ? "\(bin) --prompt-file \(quotedPath)"
+            : "\(bin)\(flags) --prompt-file \(quotedPath) || \(bin) --prompt-file \(quotedPath)"
     }
 
     /// Resume the last Grok session in the interactive TUI (`-c`/`--continue`).
