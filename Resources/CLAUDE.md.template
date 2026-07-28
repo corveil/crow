@@ -36,7 +36,14 @@ crow cleanup get                                                        → {"cl
 crow cleanup set [--enabled true|false] [--retention-hours N]           → patch; live within ~1 board poll. Deletes completed/archived sessions incl. worktree + branch
 crow ui get                                                             → {"ui":{"sidebar":{"hide_session_details":…}}}
 crow ui set --hide-session-details true|false                           → patch; connected browsers repaint within ~2s
+crow defaults get                                                       → {"defaults":{…9 fields…},"config_readable":bool}
+crow defaults set [--provider github|gitlab] [--cli gh|glab] [--branch-prefix 'feat/']
+crow defaults set --binary NAME=PATH                                    → merge; NAME= removes. Local-only; needs a crowd restart
+crow defaults set --add-exclude-review-repo R | --remove-exclude-review-repo R | --clear-exclude-review-repos
+                  (same trio for --…-exclude-ticket-repo and --…-ignore-review-label)
 ```
+
+`crow defaults` patches `AppConfig.defaults`; at least one flag required. Lists are edited incrementally and matched case-insensitively — `--clear-X` is exclusive with add/remove for that list only. Everything is live except `--binary`, which needs a `crowd` restart (including on removal).
 
 ### Worktree Commands
 ```

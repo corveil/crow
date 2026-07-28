@@ -147,8 +147,22 @@ enum RPCWebSocketHandler {
     /// methods would only push remote callers back onto the whole-config blob,
     /// which puts workspaces, jobs, gateway URLs and credential shells on the wire
     /// instead of five scalars. Un-gating is the *smaller* surface, not merely the
-    /// consistent one. None of them can reach `defaults.binaries`, which stays the
-    /// sole local-only config field.
+    /// consistent one. None of them can reach `defaults.binaries`.
+    ///
+    /// `defaults-get` / `defaults-set` (CROW-810) split along that same line, with
+    /// one carve-out. `defaults-get` is NOT gated: it returns a strict subset of
+    /// what un-gated `get-config` already sends every authenticated remote
+    /// browser — `SettingsSecrets.strippedForTransport` blanks the Jira token, the
+    /// webAuth hash/salt and gateway header values, but *not* `defaults.binaries`,
+    /// and `settings.js` renders the corveil path (read-only) for remote peers
+    /// today. The rule that falls out and is worth keeping: gate a *read* only
+    /// when it returns what stripping would have removed. `gateway-get` with
+    /// `reveal` does; this doesn't.
+    ///
+    /// `defaults-set` IS gated, but only when the request carries a `binaries`
+    /// param — see the case below for why presence and not a diff.
+    /// `defaults.binaries` therefore remains the sole local-only config field,
+    /// now enforced across two methods instead of one.
     ///
     /// Note this gate only guards the HTTP/WebSocket `/rpc` path. Every method here
     /// also has a `crow` CLI verb (CROW-818), and the CLI reaches the daemon over its
@@ -169,6 +183,31 @@ enum RPCWebSocketHandler {
         case "set-config":
             guard setConfigTouchesPrivilegedFields(request, devRoot: devRoot) else { return nil }
             return "set-config binaries is local-only"
+        case "defaults-set":
+            // The only granular settings RPC that can reach `defaults.binaries`
+            // — absolute local paths that execute at the next agent launch.
+            // Gated on the *presence* of the param, not on a diff against disk
+            // like `set-config` above.
+            //
+            // `set-config` needs the diff because it is a whole-blob replace:
+            // every remote Settings save re-sends the binaries it just read
+            // through `get-config`, and denying those would break the web
+            // Settings tab (`setConfigUnchangedBinariesAndJobsIsAllowed`).
+            // `defaults-set` is a PATCH — a caller that doesn't mean to touch
+            // binaries omits the key — so there is no innocent echo to make room
+            // for. A diff here would have to re-implement
+            // `DefaultsRPC.mergeBinaries`' semantics (`"name": ""` deletes)
+            // *inside a security predicate*, against a config read outside
+            // `withConfigLock`. Two merge implementations, one of them the
+            // boundary, is a strictly worse failure mode than denying a remote
+            // no-op nobody sends.
+            //
+            // Deliberately `!= nil` on the raw `JSONValue` rather than
+            // `?.objectValue`: key presence is then decided without the decoder's
+            // cooperation, so a wrong-typed or null `binaries` is denied rather
+            // than waved through to fail later in the handler.
+            guard request.params?["binaries"] != nil else { return nil }
+            return "defaults-set binaries is local-only"
         default:
             return nil
         }

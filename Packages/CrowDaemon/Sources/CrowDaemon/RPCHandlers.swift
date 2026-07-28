@@ -1708,7 +1708,108 @@ func makeCommandRouter(
                 ]
             }
         },
+
+        // Workspace/automation defaults for `crow defaults` (CROW-810) — the
+        // `AppConfig.defaults` subtree behind Settings → Workspaces (provider,
+        // branch prefix), → Automation (the review/ticket exclude lists) and
+        // → General (the corveil binary path).
+        //
+        // This is the one granular settings verb that can reach
+        // `defaults.binaries`, so `defaults-set` IS gated in
+        // `RPCWebSocketHandler.localOnlyDenial` — but only when the request
+        // carries a `binaries` param. `defaults-get` is un-gated; see the
+        // rationale ledger there.
+        "defaults-get": { _ in
+            // `loadConfigReportingReadability`, not the bare
+            // `loadConfig ?? AppConfig()` the telemetry/cleanup/ui gets use:
+            // `ConfigStore.loadConfig` returns nil both for "no config yet"
+            // (the defaults really do apply) and "present but undecodable" (they
+            // are a fiction). Someone debugging why an exclude list isn't
+            // working must not be shown an invented empty list as fact.
+            let (config, readable) = loadConfigReportingReadability(devRoot: devRoot)
+            return [
+                "defaults": DefaultsRPC.defaultsJSON(config.defaults),
+                "config_readable": .bool(readable),
+            ]
+        },
+        "defaults-set": { params in
+            try await mapRPCError {
+                let provider = try DefaultsRPC.patchProvider(params)
+                let cli = try DefaultsRPC.patchCLI(params)
+                let branchPrefix = try DefaultsRPC.patchBranchPrefix(params)
+                let binaries = try DefaultsRPC.patchBinaries(params)
+                let excludeReviewRepos =
+                    try DefaultsRPC.patchStringList(params, "exclude_review_repos")
+                let excludeTicketRepos =
+                    try DefaultsRPC.patchStringList(params, "exclude_ticket_repos")
+                let ignoreReviewLabels =
+                    try DefaultsRPC.patchStringList(params, "ignore_review_labels")
+
+                guard provider != nil || cli != nil || branchPrefix != nil || binaries != nil
+                        || excludeReviewRepos != nil || excludeTicketRepos != nil
+                        || ignoreReviewLabels != nil else {
+                    throw RPCError.invalidParams(
+                        "Nothing to set — provide at least one of provider, cli, branch_prefix, "
+                      + "binaries, or an add_/remove_/clear_ param for a list.")
+                }
+
+                let (old, new) = try mutateConfig(devRoot: devRoot) {
+                    config -> (ConfigDefaults, ConfigDefaults) in
+                    let before = config.defaults
+                    if let provider { config.defaults.provider = provider }
+                    if let cli { config.defaults.cli = cli }
+                    if let branchPrefix { config.defaults.branchPrefix = branchPrefix }
+                    if let binaries {
+                        config.defaults.binaries =
+                            DefaultsRPC.mergeBinaries(binaries, into: config.defaults.binaries)
+                    }
+                    if let patch = excludeReviewRepos {
+                        config.defaults.excludeReviewRepos =
+                            patch.apply(to: config.defaults.excludeReviewRepos)
+                    }
+                    if let patch = excludeTicketRepos {
+                        config.defaults.excludeTicketRepos =
+                            patch.apply(to: config.defaults.excludeTicketRepos)
+                    }
+                    if let patch = ignoreReviewLabels {
+                        config.defaults.ignoreReviewLabels =
+                            patch.apply(to: config.defaults.ignoreReviewLabels)
+                    }
+                    return (before, config.defaults)
+                }
+
+                return [
+                    "defaults": DefaultsRPC.defaultsJSON(new),
+                    "saved": .bool(true),
+                    "restart_required": .bool(DefaultsRPC.restartRequired(old: old, new: new)),
+                    // Both advisories are always present — like `promotionJSON`'s
+                    // `added`/`already_global` — so a scripted caller can test
+                    // them without a key-presence dance.
+                    "binaries_not_executable": .array(
+                        nonExecutableBinaryPaths(binaries ?? [:]).map { .string($0) }),
+                    "provider_cli_mismatch": .bool(
+                        DefaultsRPC.providerCLIMismatch(provider: new.provider, cli: new.cli)),
+                ]
+            }
+        },
     ], fallback: fallback)
+}
+
+/// Paths this call just set that aren't executable right now.
+///
+/// Advisory only: pointing at a tool you haven't installed yet is a legitimate
+/// flow, and `Scaffolder` already skips a non-executable target rather than
+/// failing the scaffold. But its only signal today is an `NSLog` in the daemon's
+/// stderr, which a CLI user never sees — so a typo'd path would otherwise land
+/// as an unqualified `{"saved": true}`.
+///
+/// Only the paths this call SET are checked: a pre-existing broken entry
+/// shouldn't generate noise on an unrelated `--provider` write. Lives here
+/// rather than in `DefaultsRPC` because it touches disk, and that enum's
+/// contract — like `SettingsRPC`'s — is "no socket, no disk".
+private func nonExecutableBinaryPaths(_ patch: [String: String]) -> [String] {
+    let fm = FileManager.default
+    return patch.values.filter { !$0.isEmpty && !fm.isExecutableFile(atPath: $0) }.sorted()
 }
 
 /// Load the config, reporting whether it was actually readable.

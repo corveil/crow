@@ -86,6 +86,25 @@ crow ui get                                                             → {"ui
 crow ui set --hide-session-details true|false                           → patch; connected browsers repaint within ~2s
 ```
 
+### Defaults
+
+`AppConfig.defaults` — Settings → Workspaces (provider, branch prefix), → Automation (board filter lists), → General (corveil binary path).
+
+```
+crow defaults get                                                       → {"defaults":{…all 9 fields…},"config_readable":bool}
+crow defaults set [--provider github|gitlab] [--cli gh|glab] [--branch-prefix 'feat/']
+crow defaults set --binary NAME=PATH ...                                → merge; NAME= removes. LOCAL-ONLY; needs a crowd restart
+crow defaults set --add-exclude-review-repo R | --remove-exclude-review-repo R | --clear-exclude-review-repos
+                  --add-exclude-ticket-repo R | --remove-exclude-ticket-repo R | --clear-exclude-ticket-repos
+                  --add-ignore-review-label L | --remove-ignore-review-label L | --clear-ignore-review-labels
+```
+
+Patch; at least one flag required. Lists are edited incrementally (add/remove compose, remove applied first; `--clear-X` is exclusive with add/remove **for that list only**) and matched case-insensitively, like the board filters. `--add-*-repo` takes one `*` wildcard; labels are exact.
+
+Everything is live except `--binary` (agent discovery + `.claude/bin` symlinks are set up at startup) — that returns `restart_required`, *including on removal*. A non-executable path is saved with a warning, not rejected; `crow` is rejected as a binary name. `--provider`/`--cli` are independent — setting one warns via `provider_cli_mismatch` if the pair ends up crossed. `get` echoes all 9 fields, including the two `set` doesn't write (`exclude_dirs`, `mirror_claude_mcp_to_codex`).
+
+The review board filters on defaults ∪ every workspace's own `excludeReviewRepos`, so `--clear-exclude-review-repos` won't unhide a repo a workspace excludes.
+
 ### Worktree Commands
 ```
 crow add-worktree --session <uuid> --repo "name" --repo-path "/main/repo" --path "/worktree/path" --branch "feature/..." [--primary]

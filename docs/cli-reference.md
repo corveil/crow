@@ -416,6 +416,54 @@ crow ui set --hide-session-details true
 
 Settings are grouped by the config block they belong to, so `get` returns `{"ui": {"sidebar": {...}}}` and gains further blocks as more view options become configurable. Connected browsers pick the change up within a couple of seconds — no reload.
 
+### `crow defaults get | set`
+
+Workspace and automation defaults — the `defaults` block of `config.json`, behind Settings → Workspaces (provider, branch prefix), → Automation (the board filter lists) and → General (the corveil binary path).
+
+```bash
+crow defaults get
+
+crow defaults set --provider gitlab --cli glab
+crow defaults set --branch-prefix 'feat/'
+crow defaults set --add-exclude-review-repo 'acme/legacy-*' --add-exclude-review-repo acme/docs
+crow defaults set --remove-ignore-review-label wip
+crow defaults set --clear-exclude-ticket-repos
+crow defaults set --binary corveil=/opt/corveil/bin/corveil
+crow defaults set --binary corveil=                       # remove the override
+```
+
+| Flag                             | Required | Description                                                                 |
+| -------------------------------- | -------- | --------------------------------------------------------------------------- |
+| `--provider`                     | no¹      | Forge for new workspaces: `github` or `gitlab`                              |
+| `--cli`                          | no¹      | Forge CLI for new workspaces: `gh` or `glab`                                |
+| `--branch-prefix`                | no¹      | Prefix for new session branches, e.g. `feature/`; empty means no prefix     |
+| `--binary NAME=PATH`             | no¹      | Absolute binary path override, repeatable; `NAME=` removes the entry        |
+| `--add-exclude-review-repo`      | no¹      | Hide a repo from the review board, repeatable; one `*` wildcard allowed     |
+| `--remove-exclude-review-repo`   | no¹      | Stop hiding a repo from the review board, repeatable                        |
+| `--clear-exclude-review-repos`   | no¹      | Empty the review-board repo exclusions                                      |
+| `--add-exclude-ticket-repo`      | no¹      | Hide a repo from the ticket board, repeatable; one `*` wildcard allowed     |
+| `--remove-exclude-ticket-repo`   | no¹      | Stop hiding a repo from the ticket board, repeatable                        |
+| `--clear-exclude-ticket-repos`   | no¹      | Empty the ticket-board repo exclusions                                      |
+| `--add-ignore-review-label`      | no¹      | PR label that hides a review, repeatable; exact match, no wildcards         |
+| `--remove-ignore-review-label`   | no¹      | Stop ignoring a PR label, repeatable                                        |
+| `--clear-ignore-review-labels`   | no¹      | Empty the ignored review labels                                             |
+
+¹ At least one flag is required.
+
+`get` echoes the whole block — including `exclude_dirs` and `mirror_claude_mcp_to_codex`, which `set` does not write and which have no Settings UI either. It also returns `config_readable`; when that is `false`, `config.json` exists but could not be decoded and the values shown are the built-in defaults rather than yours.
+
+**Lists are edited incrementally**, not replaced — excluding one more repo shouldn't mean restating the list. `--add-` and `--remove-` compose in one call (remove is applied first, so naming a value in both means "ensure it's there"); `--clear-` is rejected alongside `--add-`/`--remove-` **for that same list**, but clearing one list while editing another is fine. Matching is case-insensitive, mirroring how the board filters actually compare — `--remove-exclude-review-repo ACME/Docs` removes a stored `acme/docs`. Re-adding a value that is already stored keeps the stored casing.
+
+Note that the review board filters on the **union** of this list and every workspace's own `excludeReviewRepos`, so `--clear-exclude-review-repos` does not unhide a repo a workspace excludes. `--add-exclude-ticket-repo` and `--add-ignore-review-label` have no workspace-level counterpart.
+
+Most of these are live: `--provider`/`--cli` are re-read on each repo scan, the three lists on each board poll (about a minute), and `--branch-prefix` when a workspace is created. **`--binary` is the exception** — agent binary discovery and the `{devRoot}/.claude/bin` symlinks are both set up at startup, so a change returns `"restart_required": true` and needs a `crowd` restart. That includes *removing* one: nothing re-scaffolds on a config change, so the stale symlink keeps shadowing `PATH` until the next launch. `crow` is rejected as a binary name — Crow re-points that symlink at its own CLI every launch, so an override there could never take effect.
+
+A path that isn't executable right now is **saved with a warning**, not rejected (`binaries_not_executable` in the response) — pointing at a tool you haven't installed yet is a legitimate flow, and the symlink is simply skipped until the target appears. `--provider` and `--cli` are stored independently and neither implies the other, matching how repo scanning reads them; setting only one warns via `provider_cli_mismatch` if the resulting pair is crossed.
+
+`crow defaults set --binary` is **local-only** — binary overrides are absolute paths that execute at the next agent launch, so the remote `/rpc` path refuses any `defaults-set` carrying them. Every other flag, and `defaults get`, work remotely.
+
+> **Concurrent edits.** An open web Settings modal snapshots the whole config when you open it and re-sends all of it on Save, so saving a stale modal reverts a CLI write made in the meantime. This applies equally to `crow notifications set`, `crow ui set` and `crow job add`; close or reopen Settings after a CLI change.
+
 ---
 
 ## Worktree Commands

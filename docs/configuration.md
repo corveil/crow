@@ -71,6 +71,10 @@ All persistent state lives under `~/Library/Application Support/crow/` (see `Pac
 - **`excludeTicketRepos`** — repos to hide from the ticket board (e.g., `["zarf-dev/zarf"]`). Supports `*` wildcards (e.g., `"zarf-dev/*"`). Matching issues are filtered out from the board, pipeline counts, and auto-create candidates. Editable in Settings → Automation → Tickets.
 - **`customInstructions`** — optional free-text instructions appended to the session prompt as a `## Custom Instructions` section. Use this for workspace-specific conventions, e.g., "Always run `npm test` before committing" or "Use the auth middleware in `src/middleware/auth.ts` as a pattern."
 - **`gateway`** — optional AI gateway for this workspace's `claude` launches. See [AI Gateway](#ai-gateway) below.
+- **`ignoreReviewLabels`** — PR labels that hide a review from the board. Exact match, case-insensitive, no wildcards. Editable in Settings → Automation → Reviews.
+- **`binaries`** — absolute-path overrides keyed by tool name, e.g. `{"corveil": "/opt/corveil/bin/corveil"}`. Serves both agent binary discovery (keyed by agent kind: `claude-code`, `codex`, `cursor`, …) and external tool installers. Read at startup only, and each key becomes a symlink at `{devRoot}/.claude/bin/<name>` — so a change needs a `crowd` restart. Settings → General exposes only the `corveil` slot, and only from a local browser.
+
+The `defaults` block is also editable from the CLI with `crow defaults get|set` — see the [CLI reference](cli-reference.md#crow-defaults-get--set). The three list fields are edited incrementally there (`--add-…` / `--remove-…` / `--clear-…`) rather than by replacement, and `--binary` is local-only.
 
 For the full set of automation toggles backed by this config, see [automation.md](automation.md).
 
