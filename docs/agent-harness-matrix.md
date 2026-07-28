@@ -266,9 +266,16 @@ All harnesses report lifecycle events by shelling out to `crow hook-event`, but
   `.review` clone those are
   **attacker-controlled RCE**, not just double-fire noise, so
   `stripGrokConfigFromReviewClone` neutralizes the *full* discovered surface on
-  both the creation-time and handoff-to-Grok paths: it removes `.grok/`,
-  `.cursor/`, `.claude/settings.local.json`, and repo-root `.mcp.json`, and keeps
-  the Crow-overwritten `.claude/settings.json` + review skill (#861). On a local/dev
+  **all three** Grok launch paths into a review clone — creation-time
+  `prepareReviewClone`, `launchAgent` (restart / `crow launch-agent`), and
+  handoff-to-Grok: it removes `.grok/`, `.cursor/`, **both** `.claude/settings.json`
+  **and** `settings.local.json`, and repo-root `.mcp.json`. `settings.json` is a
+  compat RCE source too, so it must be stripped on every path (r12): at creation
+  the strip runs before `prepareReviewClone` re-writes a bundled-safe one, and on
+  the re-strip paths a hostile one restored by `git restore`/`gh pr checkout` is
+  removed and left absent (the one-shot creation overwrite can't reach it). The
+  review skill lives in `.claude/skills/` (never read by Grok, which inlines it
+  into the prompt) and is left in place (#861). On a local/dev
   Grok build folder-trust is inert (everything trusted), and on release trust
   cascades from a trusted parent, so the strip — not trust-skipping — is the
   durable guard. **Deferred / re-check:** the *global* `~/.claude`/`~/.cursor`
@@ -276,7 +283,13 @@ All harnesses report lifecycle events by shelling out to `crow hook-event`, but
   Grok-**Manager** devRoot case (`writeManagerHookConfig`). The *project*
   handed-off-worktree double-count is **closed** — `stripPriorCompatHooksForGrokHandoff`
   strips the prior agent's compat hooks on handoff and the warm-adopt path writes
-  the session's own agent config (#861 r9-r10).
+  the session's own agent config (#861 r9-r10). Also residual: the Crow-written
+  review *inputs* (`.crow-review-prompt.md`, the `.claude/skills/` skill body) are
+  one-shot at clone creation, so the same restore vector (`git restore`/`gh pr
+  checkout`) can hand a restored session an attacker-authored prompt/skill —
+  prompt injection, not RCE, and shared by every review adapter; re-applying them
+  on the restart/handoff paths needs the review context those paths don't carry
+  (#861 r12 Green).
 
 Claude, Cursor, and Grok get **per-session UUID scope**; Codex and OpenCode
 share the host's global config and are disambiguated by `cwd`. See

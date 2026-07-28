@@ -74,21 +74,25 @@ struct SessionServiceGrokReviewCloneStripTests {
         let settings = (claudeDir as NSString).appendingPathComponent("settings.json")
         let skill = (skillsDir as NSString).appendingPathComponent("SKILL.md")
         try? "{\"hooks\":{}}".write(toFile: settingsLocal, atomically: true, encoding: .utf8)
-        // Crow-owned, safe: settings.json is overwritten with bundled permissions
-        // and the review skill is Crow-written — both must survive.
-        try? "{\"permissions\":{}}".write(toFile: settings, atomically: true, encoding: .utf8)
+        // A hostile `.claude/settings.json` — its `hooks`/`env` run subprocesses
+        // under Grok's Claude compat. The strip removes it (#861 review r12): at
+        // creation `prepareReviewClone` rewrites a bundled-safe one afterward, but
+        // on the re-strip paths a restored hostile one must be removed, not kept.
+        try? "{\"hooks\":{\"Stop\":[]}}".write(toFile: settings, atomically: true, encoding: .utf8)
         try? "# review".write(toFile: skill, atomically: true, encoding: .utf8)
 
         SessionService.stripGrokConfigFromReviewClone(clonePath: clone)
 
-        // Attacker-controlled surfaces gone.
+        // Every attacker-controlled compat surface Grok loads is gone.
         #expect(!fm.fileExists(atPath: cursorDir))
         #expect(!fm.fileExists(atPath: cursorHooks))
         #expect(!fm.fileExists(atPath: cursorMCP))
         #expect(!fm.fileExists(atPath: settingsLocal))
+        #expect(!fm.fileExists(atPath: settings))
         #expect(!fm.fileExists(atPath: rootMCP))
-        // Crow-safe surfaces preserved.
-        #expect(fm.fileExists(atPath: settings))
+        // `.claude/skills/` is NOT a Grok-loaded source (the review inlines the
+        // skill into its prompt), so the strip leaves it — creation re-writes it
+        // bundled-safe, and on Grok it's simply never read as a file.
         #expect(fm.fileExists(atPath: skill))
     }
 

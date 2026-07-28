@@ -16,7 +16,10 @@ import Foundation
 /// `OpenCodeLaunchArgs` uses. `--prompt-file` (not `-p "$(cat …)"`) so a large
 /// inlined review-skill body never becomes a giant argv or rides a `$(cat …)`
 /// subshell. Semicolon (not `&&`) so the TUI still opens if the headless leg
-/// exits non-zero.
+/// exits non-zero, and — when the bounded auto flags are on — the resume leg
+/// carries a bare `|| grok -c` fallback so a *flag* rejection (upstream churn)
+/// degrades to "runs in the TUI at Grok's default `ask` policy" rather than a
+/// dead pane (see `resumeLeg`).
 ///
 /// **Bounded auto-permission (`.job` only, never `--yolo`).** Grok has no
 /// sandbox flag; its only prompt-reducing modes are `--permission-mode auto`
@@ -85,7 +88,7 @@ public enum GrokLaunchArgs {
         let quotedPath = shellQuote(promptPath)
         let flags = autoPermissionSuffix(autoPermissionMode: autoPermissionMode)
         return "\(bin)\(flags) --prompt-file \(quotedPath)"
-            + "; \(bin)\(flags) -c\n"
+            + "; \(resumeLeg(bin: bin, flags: flags))\n"
     }
 
     /// Resume the last Grok session in the interactive TUI (`-c`/`--continue`).
@@ -96,8 +99,25 @@ public enum GrokLaunchArgs {
         binary: String,
         autoPermissionMode: Bool
     ) -> String {
+        let bin = shellQuote(binary)
         let flags = autoPermissionSuffix(autoPermissionMode: autoPermissionMode)
-        return "\(shellQuote(binary))\(flags) -c\n"
+        return "\(resumeLeg(bin: bin, flags: flags))\n"
+    }
+
+    /// The interactive-resume leg (`grok -c`). When the bounded auto-permission
+    /// flags are present, append a bare `|| <bin> -c` fallback: if a future
+    /// upstream rename/removal of `--permission-mode`/`--deny` (this mirror churns
+    /// — the ticket's pinned probe reported `--permission-mode auto` *absent*, the
+    /// current docs *present*) turns the flagged resume into a usage error, the
+    /// bare resume still opens the TUI at Grok's default `ask` policy instead of
+    /// the pane silently dying. The `;`-not-`&&` chain alone can't survive that,
+    /// because the headless leg carries the *same* flags — so both flagged legs
+    /// fail together, and every later `resumeTUICommand` restart fails identically.
+    /// `||` (not a trailing `;`) so the fallback fires only on a non-zero flagged
+    /// resume, not after a clean TUI exit. No fallback when flags are empty
+    /// (`.work`/`.review`): a bare `grok -c` has no flags to reject (#861 review r12).
+    static func resumeLeg(bin: String, flags: String) -> String {
+        flags.isEmpty ? "\(bin) -c" : "\(bin)\(flags) -c || \(bin) -c"
     }
 
     /// Bare interactive TUI launch — the `.work` path, where the user types

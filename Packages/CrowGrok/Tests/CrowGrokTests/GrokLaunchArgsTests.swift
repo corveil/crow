@@ -51,9 +51,13 @@ struct GrokLaunchArgsTests {
         )
         // Both the headless leg and the resumed TUI carry the bounded flags.
         #expect(cmd.contains("'grok' --permission-mode auto"))
-        // Two occurrences of the mode flag (one per leg).
+        // Two occurrences of the mode flag: headless + flagged resume. The bare
+        // `|| 'grok' -c` fallback carries none.
         let occurrences = cmd.components(separatedBy: "--permission-mode auto").count - 1
         #expect(occurrences == 2)
+        // Flag-rejection fallback: flagged resume `|| ` bare resume (#861 r12), so
+        // an upstream `--permission-mode`/`--deny` rename can't strand the job.
+        #expect(cmd.contains(" -c || 'grok' -c\n"))
     }
 
     @Test func firstLaunchChainedCommandShellQuotesPromptPath() {
@@ -77,6 +81,7 @@ struct GrokLaunchArgsTests {
     }
 
     @Test func resumeTUICommandContinuesTheSession() {
+        // No auto flags → bare resume, no fallback needed (nothing to reject).
         #expect(GrokLaunchArgs.resumeTUICommand(binary: "grok", autoPermissionMode: false)
             == "'grok' -c\n")
     }
@@ -84,7 +89,18 @@ struct GrokLaunchArgsTests {
     @Test func resumeTUICommandCarriesAutoForResumedJobs() {
         let cmd = GrokLaunchArgs.resumeTUICommand(binary: "grok", autoPermissionMode: true)
         #expect(cmd.contains("--permission-mode auto"))
-        #expect(cmd.contains(" -c\n"))
+        // Every restart of an auto job also gets the flag-rejection fallback, so a
+        // later upstream flag change can't make each restart die identically (r12).
+        #expect(cmd.hasSuffix(" -c || 'grok' -c\n"))
+    }
+
+    @Test func resumeLegFallbackHasNoFlags() {
+        // The `|| <bin> -c` fallback is bare on purpose: if the flags are what got
+        // rejected, retrying them would fail identically. And no fallback at all
+        // when there are no flags to reject.
+        #expect(GrokLaunchArgs.resumeLeg(bin: "'grok'", flags: "") == "'grok' -c")
+        #expect(GrokLaunchArgs.resumeLeg(bin: "'grok'", flags: " --permission-mode auto")
+            == "'grok' --permission-mode auto -c || 'grok' -c")
     }
 
     @Test func bareCommandIsJustTheQuotedBinary() {

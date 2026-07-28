@@ -2871,28 +2871,40 @@ public final class SessionService {
     /// - `.cursor/` — `hooks.json` + `mcp.json` Grok loads via Cursor compat.
     ///   Reuses `stripCursorConfigFromReviewClone` so both agents share one
     ///   primitive.
-    /// - `.claude/settings.local.json` — loaded via Claude compat and, unlike
-    ///   `.claude/settings.json` (which `prepareReviewClone` overwrites with
-    ///   bundled-safe permissions), never neutralized elsewhere. Only this file
-    ///   is removed, so the Crow-written `settings.json` + `.claude/skills/`
-    ///   review skill survive.
+    /// - `.claude/settings.local.json` **and** `.claude/settings.json` — both
+    ///   loaded via Claude compat (their `hooks` + `env` spawn subprocesses).
+    ///   Removing `settings.json` here is safe at creation: this strip runs
+    ///   *before* `prepareReviewClone` rewrites it with bundled-safe content
+    ///   (`Scaffolder.bundledSettings()`), so the clone still ends Crow-owned. On
+    ///   the re-strip paths (`launchAgent`/handoff) it removes a hostile
+    ///   `settings.json` that `git restore`/`gh pr checkout` brought back — which
+    ///   the one-shot creation overwrite can't reach (#861 review r12, Red).
+    ///   `.claude/skills/` is untouched (the Grok review inlines the skill into
+    ///   its prompt, so it isn't read as a file).
     /// - `.mcp.json` (repo root) — a project MCP source independent of
     ///   `.cursor/mcp.json`; a `{mcpServers:{…command}}` there auto-spawns.
     ///
-    /// Idempotent; no-ops for any layer the clone doesn't ship. Shared by
-    /// `prepareReviewClone` (creation-time review agent) and the Grok handoff arm
-    /// so the gate can't drift. A real removal failure is audible (`CrowLog.error`).
+    /// Idempotent; no-ops for any layer the clone doesn't ship. Shared by all
+    /// three Grok launch paths into a review clone — creation-time
+    /// `prepareReviewClone`, `launchAgent` (restart / `crow launch-agent`), and the
+    /// handoff arm — so the gate can't drift. A real removal failure is audible
+    /// (`CrowLog.error`).
     nonisolated static func stripGrokConfigFromReviewClone(clonePath: String) {
         let base = clonePath as NSString
         removeReviewCloneConfig(
             base.appendingPathComponent(".grok"), label: ".grok/", clonePath: clonePath)
         // .cursor/ (hooks.json + mcp.json) — same primitive Cursor reviews use.
         stripCursorConfigFromReviewClone(clonePath: clonePath)
-        // Only the un-overwritten `.claude/settings.local.json` — keep the
-        // Crow-safe settings.json + review skill.
+        // `.claude/settings.local.json` + `.claude/settings.json` — both loaded
+        // via Claude compat. See the doc above for why removing `settings.json`
+        // is safe at creation (strip precedes the bundled rewrite) yet essential
+        // on the re-strip paths (a restored hostile one, #861 review r12, Red).
         removeReviewCloneConfig(
             base.appendingPathComponent(".claude/settings.local.json"),
             label: ".claude/settings.local.json", clonePath: clonePath)
+        removeReviewCloneConfig(
+            base.appendingPathComponent(".claude/settings.json"),
+            label: ".claude/settings.json", clonePath: clonePath)
         // Repo-root `.mcp.json` — a project MCP source Grok loads independently
         // of `.cursor/mcp.json`. For a review clone cwd == clone root, so the
         // repo-root file is the only one in Grok's root→cwd scan chain.
@@ -3100,7 +3112,7 @@ public final class SessionService {
         if reviewAgentKind == .antigravity {
             try? fm.removeItem(atPath: (clonePath as NSString).appendingPathComponent(".agents"))
         }
-        // Defense-in-depth for Grok reviews (#859, extended #861 rounds 2-3):
+        // Defense-in-depth for Grok reviews (#859, extended #861 rounds 2-3, r12):
         // Grok discovers & merges project config from `.grok/hooks/*.json`,
         // `.claude/settings.json` + `settings.local.json`, `.cursor/hooks.json`,
         // and project MCP servers from `.cursor/mcp.json` +
@@ -3109,10 +3121,10 @@ public final class SessionService {
         // arbitrary-command RCE once the folder is trusted, and the strip is the
         // durable guard (dev builds trust everything; a trusted parent cascades
         // on release). `stripGrokConfigFromReviewClone` neutralizes the full set
-        // (`.grok/` + `.cursor/` + `.claude/settings.local.json` + `.mcp.json`,
-        // keeping the Crow-overwritten `settings.json` + skill). Gated to Grok
-        // reviews; shared with the Grok handoff arm so the two call sites can't
-        // drift.
+        // (`.grok/` + `.cursor/` + `.claude/settings{,.local}.json` + `.mcp.json`);
+        // `.claude/settings.json` is re-written bundled-safe below at creation, and
+        // left absent on the re-strip paths (`launchAgent`/handoff), which is safe.
+        // Shared across all three Grok launch paths so the call sites can't drift.
         if reviewAgentKind == .grok {
             Self.stripGrokConfigFromReviewClone(clonePath: clonePath)
         }
@@ -3161,14 +3173,17 @@ public final class SessionService {
             atomically: true, encoding: .utf8
         )
 
-        // Overwrite `.claude/settings.json` with Crow's bundled-safe permissions.
-        // For a **Grok** review this overwrite is the RCE control for that file:
-        // the strip deliberately keeps `settings.json` (Grok, like Claude, loads
-        // it via compat — hooks + `env` there run subprocesses), so a committed
-        // hostile one must be replaced, not left. **Fail closed** (#861 review
-        // round 4, Yellow): remove any committed file FIRST, then write, so a
-        // write failure can't silently leave the attacker's file in place — and
-        // make a real write failure audible, matching every other strip layer.
+        // (Re)write `.claude/settings.json` with Crow's bundled-safe permissions
+        // at creation. `stripGrokConfigFromReviewClone` above already removed any
+        // committed `settings.json` for Grok reviews (Grok, like Claude, loads it
+        // via compat — hooks + `env` run subprocesses, #861 review r12); this is
+        // what gives the fresh clone a valid Crow-owned one, for Claude and Grok
+        // reviews alike. **Fail closed** (#861 review round 4, Yellow): remove any
+        // file FIRST, then write, so a write failure can't leave a stale/attacker
+        // file — and make a real write failure audible. NB the two Grok re-strip
+        // paths (`launchAgent`/handoff) do NOT re-run this write: there a restored
+        // hostile `settings.json` is removed and left absent, which is safe — Grok
+        // just falls back to no compat settings.
         let cloneSettingsDir = (clonePath as NSString).appendingPathComponent(".claude")
         let settingsPath = (cloneSettingsDir as NSString).appendingPathComponent("settings.json")
         removeReviewCloneConfig(settingsPath, label: ".claude/settings.json", clonePath: clonePath)
