@@ -82,15 +82,20 @@ public actor CursorLauncher {
     /// launches — `agent` is a collision-prone token, so we don't hardcode it.
     ///
     /// This one-shot handoff command intentionally does **not** carry the
-    /// auto-permission flags — like `ClaudeLauncher.launchCommand`, it feeds the
-    /// prompt only; `CursorAgent.autoLaunchCommand` applies the flags on
-    /// the (re)launch path that follows a handoff.
+    /// auto-permission flags (`--force --approve-mcps`) — like
+    /// `ClaudeLauncher.launchCommand`, it feeds the prompt only, and
+    /// `CursorAgent.autoLaunchCommand` applies those on the (re)launch that
+    /// follows. It **does** carry the `--trust` workspace-trust seed
+    /// (`CursorLaunchArgs.trustSuffix`): trust is orthogonal to auto-permission,
+    /// and a first Cursor launch in a worktree another agent set up is fresh from
+    /// Cursor's trust ledger, so it would otherwise block on the folder-trust
+    /// dialog (CROW-890).
     public func launchCommand(sessionID: UUID, worktreePath: String, prompt: String, binary: String = "agent") throws -> String {
         let tmpDir = FileManager.default.temporaryDirectory
         let promptPath = tmpDir.appendingPathComponent("crow-cursor-\(sessionID.uuidString)-prompt.md")
         try prompt.write(to: promptPath, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes(
             [.posixPermissions: 0o600], ofItemAtPath: promptPath.path)
-        return "cd \(CursorLaunchArgs.shellQuote(worktreePath)) && \(CursorLaunchArgs.shellQuote(binary)) \"$(cat \(CursorLaunchArgs.shellQuote(promptPath.path)))\"\n"
+        return "cd \(CursorLaunchArgs.shellQuote(worktreePath)) && \(CursorLaunchArgs.shellQuote(binary))\(CursorLaunchArgs.trustSuffix) \"$(cat \(CursorLaunchArgs.shellQuote(promptPath.path)))\"\n"
     }
 }

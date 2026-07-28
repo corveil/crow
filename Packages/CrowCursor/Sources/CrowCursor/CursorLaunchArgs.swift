@@ -10,6 +10,37 @@ public enum CursorLaunchArgs {
         "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
+    /// Workspace-trust seed appended to **every** Crow-launched Cursor command
+    /// (auto-launch, Manager, and the handoff one-shot). A leading-space suffix
+    /// so callers concatenate it onto the shell-quoted binary path.
+    ///
+    /// `--trust` trusts the current workspace up front, skips the "Do you trust
+    /// the files in this folder?" dialog, and records the same saved trust
+    /// decision as accepting it. This is the per-launch analogue of
+    /// `ClaudeTrustSeeder` (which pre-writes `hasTrustDialogAccepted` into
+    /// `~/.claude.json`) and `CodexTrustSeeder` (`trust_level = "trusted"` in
+    /// `~/.codex/config.toml`): Cursor tracks trust per workspace and it doesn't
+    /// inherit, so a fresh worktree or review clone would otherwise block an
+    /// auto-launched session on the folder-trust prompt (CROW-890 — closes the
+    /// residual gap #829 deliberately left open).
+    ///
+    /// **Interactive as of Cursor CLI 2026.07.20**
+    /// ([changelog](https://cursor.com/docs/cli/changelog): "`--trust` works in
+    /// interactive sessions"), verified empirically against `agent 2026.07.23`
+    /// whose `--help` lists `--trust` as a general flag with **no "(headless mode
+    /// only)" qualifier** and **no `--print` gating** (unlike `--output-format`).
+    /// The [parameter reference](https://cursor.com/docs/cli/reference/parameters)
+    /// still says headless-only, but the installed binary's own help is
+    /// authoritative and disagrees — which is why the earlier audit's
+    /// headless-only omission is now reversed.
+    ///
+    /// **Bounded to workspace trust — NOT `--yolo`/full-bypass.** It only
+    /// suppresses the folder-trust dialog; per-tool approval still applies unless
+    /// `autoPermissionSuffix` adds `--force`. Trust and auto-permission are
+    /// orthogonal, so this seed is unconditional while `--force --approve-mcps`
+    /// stays gated on the caller's opt-in (see `launchSuffix`).
+    public static let trustSuffix = " --trust"
+
     /// Auto-permission flags for unattended launches (`.job`, `.review`, the
     /// opt-in work coder view, and the Manager when its auto-permission toggle
     /// is on). Returns a leading-space suffix — e.g. `" --force --approve-mcps"`
@@ -35,10 +66,21 @@ public enum CursorLaunchArgs {
     /// rather than imposing (or disabling) one.
     ///
     /// Still deliberately **not** used: `--yolo` (alias for `--force`, no added
-    /// value), the undocumented/unstable `--auto-review`, and `--trust`
-    /// (headless-only per the audit; this adapter uses the interactive TUI).
+    /// value) and the undocumented/unstable `--auto-review`. (`--trust` *is* now
+    /// emitted — but as the separate, unconditional `trustSuffix` workspace-trust
+    /// seed, not an auto-permission flag; see `trustSuffix` / `launchSuffix`.)
     public static func autoPermissionSuffix(_ autoPermissionMode: Bool) -> String {
         guard autoPermissionMode else { return "" }
         return " --force --approve-mcps"
+    }
+
+    /// The full flag suffix for a Crow-driven (non-handoff) Cursor launch: the
+    /// unconditional `--trust` seed, plus `--force --approve-mcps` when the
+    /// caller opted into auto-permission. Callers append it to the shell-quoted
+    /// binary path. Never empty — `--trust` is always present. The handoff
+    /// one-shot uses `trustSuffix` alone; it deliberately omits auto-permission
+    /// (see `CursorLauncher.launchCommand`).
+    public static func launchSuffix(autoPermissionMode: Bool) -> String {
+        trustSuffix + autoPermissionSuffix(autoPermissionMode)
     }
 }

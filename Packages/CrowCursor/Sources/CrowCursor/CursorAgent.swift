@@ -73,24 +73,27 @@ public struct CursorAgent: CodingAgent {
         // alternative. A bare `'agent'` (findBinary→nil) would NOT match that
         // regex — but that path is unreachable while the launch gate excludes
         // unavailable kinds.
-        // Auto-permission flags (`--force --approve-mcps`) when the caller opted
-        // in — empty otherwise. Parity with Claude's `--permission-mode auto`;
-        // see `CursorLaunchArgs.autoPermissionSuffix` for why `--sandbox` is
-        // deliberately left unset (#829).
-        let autoArgs = CursorLaunchArgs.autoPermissionSuffix(autoPermissionMode)
+        // Every Crow-launched Cursor command carries the `--trust` workspace-trust
+        // seed (skips the folder-trust dialog on a fresh worktree — the per-launch
+        // analogue of `ClaudeTrustSeeder`, CROW-890), plus `--force --approve-mcps`
+        // when the caller opted into auto-permission. Parity with Claude's trust
+        // seed + `--permission-mode auto`; see `CursorLaunchArgs` for why the
+        // trust seed is unconditional and `--sandbox` is deliberately left unset
+        // (#829).
+        let launchArgs = CursorLaunchArgs.launchSuffix(autoPermissionMode: autoPermissionMode)
 
         switch session.kind {
         case .work:
             // Interactive TUI — the user types their prompt. No env prefix
             // (Cursor reads `CURSOR_API_KEY` from the shell; GUI-stored creds
             // are inherited otherwise), no `--continue` (resume is scoped to
-            // `.job`/`.review` restart, #829; a fresh work TUI launching bare
-            // is a deliberate product choice), no remote-control flag (remote
+            // `.job`/`.review` restart, #829; a fresh work TUI without resume is
+            // a deliberate product choice), no remote-control flag (remote
             // control is `crow send` typing into the TUI — agent-agnostic,
-            // handled by the `send` RPC → `TerminalRouter.send`). Auto-
-            // permission flags apply when the opt-in coder-view toggle is on
-            // (#586).
-            return "\(agentPath)\(autoArgs)\n"
+            // handled by the `send` RPC → `TerminalRouter.send`). The `--trust`
+            // seed always applies, and the auto-permission flags when the opt-in
+            // coder-view toggle is on (#586) — both come from `launchArgs`.
+            return "\(agentPath)\(launchArgs)\n"
         case .job, .review:
             // Jobs and reviews share the same dispatch shape: a pre-written
             // initial prompt file (`.crow-job-prompt.md` / `.crow-review-prompt.md`)
@@ -119,9 +122,9 @@ public struct CursorAgent: CodingAgent {
                 // Quote the path so a devRoot containing spaces
                 // (`/Users/x/My Projects/…`) doesn't split `cat`'s argv and
                 // resolve the positional prompt to empty.
-                return "\(agentPath)\(autoArgs) \"$(cat \(CursorLaunchArgs.shellQuote(promptPath)))\"\n"
+                return "\(agentPath)\(launchArgs) \"$(cat \(CursorLaunchArgs.shellQuote(promptPath)))\"\n"
             }
-            return "\(agentPath)\(autoArgs) --continue\n"
+            return "\(agentPath)\(launchArgs) --continue\n"
         case .manager:
             // Manager sessions never auto-launch an agent — Crow drives them
             // externally. Returning nil here is the contract, not a gap.
@@ -166,8 +169,10 @@ public struct CursorAgent: CodingAgent {
     ) -> String {
         // Cursor's Manager is an orchestration TUI in the devRoot — no
         // auto-prompt, no `--continue`. Cursor has no `--rc`/`--name`
-        // equivalent, so remote control doesn't apply (CROW-433), but the
-        // auto-permission flags do so `crow`/`gh`/`git` orchestration runs
+        // equivalent, so remote control doesn't apply (CROW-433). It carries the
+        // `--trust` workspace-trust seed (the devRoot may be fresh to Cursor's
+        // trust ledger — parity with Claude seeding the Manager cwd, CROW-890),
+        // plus the auto-permission flags so `crow`/`gh`/`git` orchestration runs
         // without per-call approval when the Manager toggle is on (parity with
         // Claude's `--permission-mode auto`; `--sandbox` deliberately unset so
         // the Manager's out-of-workspace `crow`/`gh`/`git worktree` calls aren't
@@ -175,7 +180,7 @@ public struct CursorAgent: CodingAgent {
         // appends the submitting Enter, so we return the command without a
         // trailing newline to match the cross-agent convention.
         let agentPath = CursorLaunchArgs.shellQuote(findBinary() ?? "agent")
-        return agentPath + CursorLaunchArgs.autoPermissionSuffix(autoPermissionMode)
+        return agentPath + CursorLaunchArgs.launchSuffix(autoPermissionMode: autoPermissionMode)
     }
 
     /// Cursor CLI exposes `/rename` for naming sessions (CROW-629).

@@ -23,6 +23,20 @@ deliberate, documented gaps (full grid in the
 > [capability matrix](../agent-harness-matrix.md) column and are governed by the
 > Tier-2 rationale below.
 
+> **Amendment (2026-07-28, #890):** Cursor's `--trust` — omitted by the original
+> gap audit as headless-only (§3a) under the "honest gap over faked capability"
+> principle in **Alternatives considered** below — **went interactive in Cursor
+> CLI 2026.07.20** ([changelog](https://cursor.com/docs/cli/changelog)), confirmed
+> against `agent 2026.07.23` (its `--help` lists `--trust` as a general flag with
+> no headless-only qualifier and no `--print` gating). So it is now wired as a
+> bounded, per-launch **workspace-trust seed** (`CursorLaunchArgs.trustSuffix`,
+> the analogue of `ClaudeTrustSeeder`), applied on auto-launch, the Manager, and
+> the handoff one-shot — closing the "fresh worktree may prompt" residual. This
+> does **not** relax the honesty principle: the flag is real and verified, so
+> emitting it is honest rather than a papered-over gap, and it stays bounded to
+> workspace trust — **not** `--yolo`/full-bypass, with auto-permission still
+> supplied separately by `--force --approve-mcps`.
+
 Until now, the *why* behind each gap lived only in scattered code comments —
 several of them **pinned to a specific upstream version** ("sync-only as of
 v0.139.0"). That makes the reasons easy to lose and, worse, easy to leave stale:
