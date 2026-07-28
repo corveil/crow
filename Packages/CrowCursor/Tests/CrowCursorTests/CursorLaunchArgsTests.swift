@@ -30,12 +30,22 @@ struct CursorLaunchArgsTests {
     }
 
     @Test func launchSuffixSeedsTrustThenAutoPermission() {
-        // Trust seed is unconditional; the auto-permission flags gate on the
-        // caller's toggle and follow the seed.
-        #expect(CursorLaunchArgs.launchSuffix(autoPermissionMode: false) == " --trust")
-        #expect(CursorLaunchArgs.launchSuffix(autoPermissionMode: true) == " --trust --force --approve-mcps")
+        // With seedTrust on: the `--trust` seed leads, auto-permission gates on
+        // its own toggle and follows.
+        #expect(CursorLaunchArgs.launchSuffix(seedTrust: true, autoPermissionMode: false) == " --trust")
+        #expect(CursorLaunchArgs.launchSuffix(seedTrust: true, autoPermissionMode: true) == " --trust --force --approve-mcps")
         // Still bounded to workspace trust — never the full-bypass --yolo.
-        #expect(CursorLaunchArgs.launchSuffix(autoPermissionMode: true).contains("--yolo") == false)
+        #expect(CursorLaunchArgs.launchSuffix(seedTrust: true, autoPermissionMode: true).contains("--yolo") == false)
+    }
+
+    @Test func launchSuffixWithholdsTrustForReviewClones() {
+        // seedTrust=false (the `.review` case) drops `--trust` entirely while
+        // still honoring auto-permission — mirrors the Codex `!= .review` guard
+        // so an attacker-controlled review clone is never auto-trusted (CROW-890
+        // review, Red 1).
+        #expect(CursorLaunchArgs.launchSuffix(seedTrust: false, autoPermissionMode: false) == "")
+        #expect(CursorLaunchArgs.launchSuffix(seedTrust: false, autoPermissionMode: true) == " --force --approve-mcps")
+        #expect(CursorLaunchArgs.launchSuffix(seedTrust: false, autoPermissionMode: true).contains("--trust") == false)
     }
 
     @Test func shellQuoteEscapesSingleQuotes() {

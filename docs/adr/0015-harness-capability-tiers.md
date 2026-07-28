@@ -35,17 +35,21 @@ deliberate, documented gaps (full grid in the
 > does **not** relax the honesty principle: the flag is real and verified, so
 > emitting it is honest rather than a papered-over gap, and it stays bounded to
 > workspace trust — **not** `--yolo`/full-bypass, with auto-permission still
-> supplied separately by `--force --approve-mcps`. "Bounded" means *scoped, not
-> inert*: workspace trust is precisely the gate that governs whether repo-supplied
-> agent config (`.cursor/rules`, MCP entries, repo instructions) is honored, so on
-> `.review` clones of third-party branches a Cursor session now launches with
-> trust granted and (with review auto-permission on) approval off — the same
-> posture `ClaudeTrustSeeder` + `--permission-mode auto` already ship, consistency
-> rather than a new exposure. Requires **Cursor CLI ≥ 2026.07.20**: the seed is
-> emitted on every launch path unconditionally, so an older binary is out of
-> support (the flag is recognized on older builds and most likely no-ops
-> interactively, but that reject-vs-no-op behavior is unprobed — gate emission on
-> a version check if a user on an older CLI reports broken launches).
+> supplied separately by `--force --approve-mcps`. "Bounded" also means *scoped*:
+> workspace trust is the gate that governs whether repo-supplied agent config
+> (`.cursor/rules`, MCP entries, repo instructions) is honored, so the seed is
+> **withheld from `.review` sessions** — their working tree is an
+> attacker-controlled `gh` clone at the PR author's head. This mirrors the
+> `session.kind != .review` guard already on `CodexTrustSeeder` and is a
+> deliberate **divergence from `ClaudeTrustSeeder`**, which is ungated on kind
+> (`SessionService.launchAgent`): Cursor follows the Codex precedent, so review
+> clones fall back to Cursor's folder-trust dialog as their human gate rather
+> than launching pre-trusted (CROW-890 review, Red 1). Requires **Cursor CLI ≥
+> 2026.07.20**; the seed is emitted on every non-`.review` path, so an older
+> binary is out of support. Probed 2026.07.23 that the arg parser silently
+> ignores a mode-gated flag used outside its mode (`agent --output-format json
+> --version` exits 0, no error), so a pre-floor build recognizing `--trust`
+> would no-op it and degrade to the old prompt rather than reject the launch.
 
 Until now, the *why* behind each gap lived only in scattered code comments —
 several of them **pinned to a specific upstream version** ("sync-only as of

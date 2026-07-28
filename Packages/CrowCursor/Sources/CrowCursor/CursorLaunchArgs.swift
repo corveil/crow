@@ -16,13 +16,19 @@ public enum CursorLaunchArgs {
     ///
     /// `--trust` trusts the current workspace up front, skips the "Do you trust
     /// the files in this folder?" dialog, and records the same saved trust
-    /// decision as accepting it. This is the per-launch analogue of
-    /// `ClaudeTrustSeeder` (which pre-writes `hasTrustDialogAccepted` into
+    /// decision as accepting it (per the [changelog](https://cursor.com/docs/cli/changelog):
+    /// "recording the same saved trust decision the dialog writes when you
+    /// accept" — the `--help` line is terser). This is the per-launch analogue
+    /// of `ClaudeTrustSeeder` (which pre-writes `hasTrustDialogAccepted` into
     /// `~/.claude.json`) and `CodexTrustSeeder` (`trust_level = "trusted"` in
     /// `~/.codex/config.toml`): Cursor tracks trust per workspace and it doesn't
-    /// inherit, so a fresh worktree or review clone would otherwise block an
-    /// auto-launched session on the folder-trust prompt (CROW-890 — closes the
-    /// residual gap #829 deliberately left open).
+    /// inherit, so a fresh worktree would otherwise block an auto-launched
+    /// session on the folder-trust prompt (CROW-890 — closes the residual gap
+    /// #829 deliberately left open).
+    ///
+    /// **Withheld from `.review` sessions** (see `launchSuffix`), mirroring the
+    /// `session.kind != .review` guard on `CodexTrustSeeder`: a review working
+    /// tree is an attacker-controlled `gh` clone, so it is never auto-trusted.
     ///
     /// **Interactive as of Cursor CLI 2026.07.20**
     /// ([changelog](https://cursor.com/docs/cli/changelog): "`--trust` works in
@@ -37,21 +43,24 @@ public enum CursorLaunchArgs {
     /// **Bounded to workspace trust — NOT `--yolo`/full-bypass.** It only
     /// suppresses the folder-trust dialog; per-tool approval still applies unless
     /// `autoPermissionSuffix` adds `--force`. Trust and auto-permission are
-    /// orthogonal, so this seed is unconditional while `--force --approve-mcps`
-    /// stays gated on the caller's opt-in (see `launchSuffix`).
+    /// orthogonal, so this seed is unconditional (outside `.review`) while
+    /// `--force --approve-mcps` stays gated on the caller's opt-in (see
+    /// `launchSuffix`).
     ///
     /// **Minimum Cursor CLI: ≥ 2026.07.20** — the build that made `--trust`
-    /// interactive. Emitted unconditionally on every launch path, so on an older
+    /// interactive. Emitted on every non-`.review` launch path, so on an older
     /// binary the effect depends on that binary's handling. `--trust` has been a
-    /// *recognized* flag since well before 07.20 (the param reference lists it as
+    /// *recognized* flag since before 07.20 (the param reference lists it,
     /// headless-only), so an older `agent` parses it rather than erroring on an
-    /// unknown option; the pre-07.20 "headless mode only" restriction gated the
-    /// flag's *effect*, not a parse-time rejection keyed on other flags — so an
-    /// interactive launch most likely no-ops the flag and degrades to the old
-    /// fresh-worktree prompt rather than failing. That last step is **reasoned,
-    /// not probed** (no pre-07.20 binary on hand to confirm reject-vs-no-op); if a
-    /// user on an older CLI reports broken launches, gate emission on a version
-    /// check. The floor is also recorded in the matrix re-check row and ADR 0015.
+    /// unknown option. **Probed 2026.07.23:** the arg parser silently *ignores* a
+    /// `--print`-only flag used outside print mode — `agent --output-format json
+    /// --version` exits 0 and prints the version, no error — so an older build
+    /// recognizing `--trust` outside `--print` would no-op it and degrade to the
+    /// old fresh-worktree prompt, **not** reject the launch (a cross-version
+    /// inference on the same commander-based parser, now grounded in observed
+    /// behavior). If a user on an older CLI ever reports broken launches, gate
+    /// emission on a version check. Floor also recorded in the matrix re-check
+    /// row and ADR 0015.
     public static let trustSuffix = " --trust"
 
     /// Auto-permission flags for unattended launches (`.job`, `.review`, the
@@ -88,12 +97,19 @@ public enum CursorLaunchArgs {
     }
 
     /// The full flag suffix for a Crow-driven (non-handoff) Cursor launch: the
-    /// unconditional `--trust` seed, plus `--force --approve-mcps` when the
-    /// caller opted into auto-permission. Callers append it to the shell-quoted
-    /// binary path. Never empty — `--trust` is always present. The handoff
-    /// one-shot uses `trustSuffix` alone; it deliberately omits auto-permission
-    /// (see `CursorLauncher.launchCommand`).
-    public static func launchSuffix(autoPermissionMode: Bool) -> String {
-        trustSuffix + autoPermissionSuffix(autoPermissionMode)
+    /// `--trust` seed when `seedTrust` is on, plus `--force --approve-mcps` when
+    /// the caller opted into auto-permission. Callers append it to the
+    /// shell-quoted binary path.
+    ///
+    /// `seedTrust` is `session.kind != .review` at the call sites. A `.review`
+    /// working tree is a `gh` clone checked out at the PR author's head
+    /// (attacker-controlled), so — mirroring the `session.kind != .review` guard
+    /// on `CodexTrustSeeder` in `SessionService` — it is **never** auto-trusted:
+    /// review keeps Cursor's folder-trust dialog as its human gate (CROW-890
+    /// review, Red 1). Auto-permission is orthogonal and unchanged on `.review`.
+    /// `.work`/`.job` worktrees branch off a trusted base and the Manager runs in
+    /// the devRoot, so those seed normally.
+    public static func launchSuffix(seedTrust: Bool, autoPermissionMode: Bool) -> String {
+        (seedTrust ? trustSuffix : "") + autoPermissionSuffix(autoPermissionMode)
     }
 }

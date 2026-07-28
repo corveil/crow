@@ -1229,7 +1229,8 @@ public final class SessionService {
             launchCommand = try await target.launchCommand(
                 sessionID: sessionID,
                 worktreePath: worktree.worktreePath,
-                prompt: prompt
+                prompt: prompt,
+                sessionKind: session.kind
             )
         } catch {
             throw AgentHandoffError.launchFailed(error.localizedDescription)

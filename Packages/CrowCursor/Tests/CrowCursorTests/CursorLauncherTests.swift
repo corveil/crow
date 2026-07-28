@@ -43,4 +43,14 @@ struct CursorLauncherTests {
         #expect(cmd.contains("'agent' --trust \"$(cat "))  // seed, before the prompt
         #expect(cmd.contains("--force") == false)          // no auto-permission
     }
+
+    @Test func launchCommandWithholdsTrustSeedForReviewClone() async throws {
+        // CROW-890 review (Red 1): `seedTrust: false` (the `.review` handoff
+        // case) drops `--trust` — the binary is followed directly by the prompt,
+        // so an attacker-controlled review clone keeps the folder-trust gate.
+        let cmd = try await CursorLauncher().launchCommand(
+            sessionID: UUID(), worktreePath: "/w", prompt: "p", seedTrust: false)
+        #expect(cmd.contains("--trust") == false)
+        #expect(cmd.contains("'agent' \"$(cat "))
+    }
 }

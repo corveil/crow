@@ -340,17 +340,19 @@ the two Manager gateway writes noted below):
   blocks an auto-launched session (CROW-600). Runs at **four** call sites:
   `SessionService.launchAgent`, `handoffAgent`, and the two Manager paths.
 - **Trust seeding (Cursor)** — the per-launch analogue of the Claude seed:
-  `CursorLaunchArgs.trustSuffix` appends `--trust` to **every** Crow-driven
-  launch (auto-launch, Manager, and the handoff one-shot), so a fresh worktree or
-  review clone doesn't block on Cursor's folder-trust dialog (CROW-890). Cursor
-  tracks trust per workspace and it doesn't inherit, so — like Claude's
-  `~/.claude.json` seed and Codex's `config.toml` `trust_level` — an
-  auto-launched session would otherwise prompt. **Interactive since Cursor CLI
-  2026.07.20** ([changelog](https://cursor.com/docs/cli/changelog)); verified
+  `CursorLaunchArgs.trustSuffix` appends `--trust` to every Crow-driven launch
+  (auto-launch, Manager, and the handoff one-shot) **except `.review`**, so a
+  fresh `.work`/`.job` worktree doesn't block on Cursor's folder-trust dialog
+  (CROW-890). A `.review` clone is an attacker-controlled `gh` checkout at the PR
+  author's head, so — mirroring the `session.kind != .review` guard on
+  `CodexTrustSeeder` — it is **never** auto-trusted; review keeps the folder-trust
+  dialog as its human gate (CROW-890 review, Red 1). **Interactive since Cursor
+  CLI 2026.07.20** ([changelog](https://cursor.com/docs/cli/changelog)); verified
   against `agent 2026.07.23`, whose `--help` drops the "(headless mode only)"
   qualifier the [param reference](https://cursor.com/docs/cli/reference/parameters)
   still carries. **Workspace trust only** — not `--yolo`; auto-permission stays
-  in the separate `--force --approve-mcps`.
+  in the separate `--force --approve-mcps` (which still applies on `.review`,
+  unchanged).
 - **AI-gateway env** — two mechanisms for the workspace's `ANTHROPIC_BASE_URL` /
   `ANTHROPIC_CUSTOM_HEADERS` (CROW-402): `ClaudeHookConfigWriter.writeGatewayEnv`
   writes the env block into `settings.local.json` (Claude-gated at `launchAgent`
@@ -469,7 +471,7 @@ against current upstream CLIs.
 | Codex reuses Claude's hook engine (`ClaudeHooksEngine`, byte-compatible schemas) | verified against **codex 0.123.0** | `CodexSignalSource` | 2026-07-24 |
 | Claude background-recap subagent must not elevate state | Claude Code **≥ 2.1.108** (`awaySummaryEnabled`) | `ClaudeHookSignalSource` | 2026-07-24 |
 | Cursor `PostToolUse` / `Notification` async timing unconfirmed | — (empirical) | `CursorSignalSource` | 2026-07-24 |
-| Cursor interactive `--trust` (workspace-trust seed) — reverses the earlier headless-only omission | **min: Cursor CLI ≥ 2026.07.20** (changelog: interactive); verified `agent 2026.07.23` (`--help` drops "headless mode only") | `CursorLaunchArgs.trustSuffix` | 2026-07-28 — emitted unconditionally, so a pre-2026.07.20 CLI is out of support; the flag is *recognized* on older builds (most likely no-ops interactively, unprobed). Re-probe if `--help` ever restores the headless-only qualifier |
+| Cursor interactive `--trust` (workspace-trust seed) — reverses the earlier headless-only omission; withheld from `.review` clones | **min: Cursor CLI ≥ 2026.07.20** (changelog: interactive); verified `agent 2026.07.23` (`--help` drops "headless mode only") | `CursorLaunchArgs.trustSuffix` | 2026-07-28 — emitted on every non-`.review` path (review keeps the folder-trust gate, mirroring the Codex `!= .review` guard). Pre-2026.07.20 CLI out of support; probed 2026.07.23 that the parser ignores a mode-gated flag (`--output-format json --version` exits 0), so older builds no-op `--trust` rather than reject. Re-probe if `--help` ever restores the headless-only qualifier |
 | OpenCode `session.idle` "done" semantics unconfirmed for TUI | — (CROW-545) | `OpenCodeHookConfigWriter` | 2026-07-24 |
 | Antigravity flags (`agy` hooks events, `-p` non-TTY stdout, `-c`/`--conversation` resume) | `agy` **v1.1.7 (2026-07-26)** | `AntigravityAgent` / `AntigravityHookConfigWriter` | 2026-07-26 — re-probe on upgrade |
 | Antigravity structured-stdout (would promote toward first-class parity) | upstream FRs **#119/#597** (`--output-format stream-json`), **#31** (ACP) | `AntigravitySignalSource` | 2026-07-26 — hooks are the only transport until either lands |

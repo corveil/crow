@@ -87,6 +87,10 @@ struct CursorAgentTests {
         #expect(cmd?.contains(".crow-review-prompt.md") == true)
         #expect(cmd?.contains(".crow-job-prompt.md") == false)
         #expect(cmd?.hasSuffix("\n") == true)
+        // CROW-890 review (Red 1): a `.review` clone is attacker-controlled, so
+        // it must NOT be auto-trusted — the `--trust` seed is withheld, leaving
+        // Cursor's folder-trust dialog as the human gate.
+        #expect(cmd?.contains("--trust") == false)
     }
 
     @Test func autoLaunchCommandReviewSessionSubsequentLaunch() {
@@ -105,6 +109,36 @@ struct CursorAgentTests {
         #expect(cmd != nil)
         #expect(cmd?.contains(".crow-review-prompt.md") == false)
         #expect(cmd?.hasSuffix("--continue\n") == true)
+        // Resume of a `.review` session stays untrusted too (Red 1).
+        #expect(cmd?.contains("--trust") == false)
+    }
+
+    @Test func autoLaunchCommandReviewOmitsTrustSeedEvenWithAutoPermission() {
+        // CROW-890 review, Red 1 — the exact shipped-default exploit config
+        // (`reviewAutoPermissionMode == true`). A `.review` clone is
+        // attacker-controlled, so it must NEVER be auto-trusted even with review
+        // auto-permission on. Auto-permission (`--force --approve-mcps`) is
+        // unchanged; only the `--trust` seed is withheld, leaving Cursor's
+        // folder-trust dialog as the human gate — mirrors the Codex
+        // `session.kind != .review` guard.
+        let session = Session(name: "review", kind: .review, agentKind: .cursor)
+        let cmd = agent.autoLaunchCommand(
+            session: session, worktreePath: "/tmp/wt",
+            remoteControlEnabled: false, autoPermissionMode: true, telemetryPort: nil)
+        #expect(cmd?.contains("--force --approve-mcps") == true)
+        #expect(cmd?.contains("--trust") == false)
+    }
+
+    @Test func launchCommandHandoffWithholdsTrustForReview() async throws {
+        // The kind-aware handoff launch (`SessionService.handoffAgent` passes the
+        // live `session.kind`): a `.review` handoff to Cursor omits the trust
+        // seed (attacker-controlled clone), a `.work` handoff keeps it (Red 1).
+        let review = try await agent.launchCommand(
+            sessionID: UUID(), worktreePath: "/w", prompt: "p", sessionKind: .review)
+        #expect(review.contains("--trust") == false)
+        let work = try await agent.launchCommand(
+            sessionID: UUID(), worktreePath: "/w", prompt: "p", sessionKind: .work)
+        #expect(work.contains("--trust") == true)
     }
 
     @Test func autoLaunchCommandManagerSessionUnsupported() {

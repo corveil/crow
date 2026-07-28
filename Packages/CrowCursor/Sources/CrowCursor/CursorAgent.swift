@@ -73,16 +73,21 @@ public struct CursorAgent: CodingAgent {
         // alternative. A bare `'agent'` (findBinary→nil) would NOT match that
         // regex — but that path is unreachable while the launch gate excludes
         // unavailable kinds.
-        // Every Crow-launched Cursor command carries the `--trust` workspace-trust
-        // seed (skips the folder-trust dialog on a fresh worktree — the per-launch
-        // analogue of `ClaudeTrustSeeder`, CROW-890), plus `--force --approve-mcps`
-        // when the caller opted into auto-permission. Parity with Claude's trust
-        // seed + `--permission-mode auto`; see `CursorLaunchArgs` for why the
-        // trust seed is unconditional and `--sandbox` is deliberately left unset
-        // (#829). The seed rides the `--continue` resume path too — harmless: the
-        // first launch already recorded the saved trust decision, so one
-        // unconditional suffix is simpler than special-casing resume.
-        let launchArgs = CursorLaunchArgs.launchSuffix(autoPermissionMode: autoPermissionMode)
+        // The `--trust` workspace-trust seed (skips the folder-trust dialog on a
+        // fresh worktree — the per-launch analogue of `ClaudeTrustSeeder`,
+        // CROW-890) rides every launch path EXCEPT `.review`: a review working
+        // tree is an attacker-controlled `gh` clone at the PR author's head, so —
+        // mirroring the `session.kind != .review` guard on `CodexTrustSeeder` in
+        // `SessionService` — it is never auto-trusted and keeps the folder-trust
+        // dialog as its human gate (CROW-890 review, Red 1). The auto-permission
+        // flags (`--force --approve-mcps`) still apply per the caller's opt-in,
+        // including on `.review` (unchanged). See `CursorLaunchArgs` for why
+        // `--sandbox` is left unset (#829). On the non-review paths the seed also
+        // rides `--continue` resume — harmless: the first launch already recorded
+        // the saved trust decision.
+        let launchArgs = CursorLaunchArgs.launchSuffix(
+            seedTrust: session.kind != .review,
+            autoPermissionMode: autoPermissionMode)
 
         switch session.kind {
         case .work:
@@ -163,6 +168,28 @@ public struct CursorAgent: CodingAgent {
         )
     }
 
+    /// Kind-aware handoff launch. Overrides the `CodingAgent` default so a
+    /// `.review` handoff to Cursor does **not** carry the `--trust` seed — the
+    /// review clone is attacker-controlled (a `gh` checkout at the PR author's
+    /// head), so it keeps Cursor's folder-trust dialog as its human gate,
+    /// mirroring the `session.kind != .review` guard on `CodexTrustSeeder`
+    /// (CROW-890 review, Red 1). `SessionService.handoffAgent` calls this with
+    /// the live `session.kind`; every other kind seeds trust as before.
+    public func launchCommand(
+        sessionID: UUID,
+        worktreePath: String,
+        prompt: String,
+        sessionKind: SessionKind
+    ) async throws -> String {
+        try await launcher.launchCommand(
+            sessionID: sessionID,
+            worktreePath: worktreePath,
+            prompt: prompt,
+            binary: findBinary() ?? "agent",
+            seedTrust: sessionKind != .review
+        )
+    }
+
     public func managerLaunchCommand(
         sessionName: String,
         remoteControlEnabled: Bool,
@@ -182,7 +209,8 @@ public struct CursorAgent: CodingAgent {
         // appends the submitting Enter, so we return the command without a
         // trailing newline to match the cross-agent convention.
         let agentPath = CursorLaunchArgs.shellQuote(findBinary() ?? "agent")
-        return agentPath + CursorLaunchArgs.launchSuffix(autoPermissionMode: autoPermissionMode)
+        return agentPath + CursorLaunchArgs.launchSuffix(
+            seedTrust: true, autoPermissionMode: autoPermissionMode)
     }
 
     /// Cursor CLI exposes `/rename` for naming sessions (CROW-629).
