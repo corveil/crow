@@ -53,3 +53,4 @@ Don't delete the old file. Update its `Status` to `Superseded by NNNN` and point
 | 0014 | [Pluggable `CodingAgent` adapter](./0014-pluggable-coding-agent-adapter.md) | Accepted | 2026-07-23 |
 | 0015 | [Harness capability tiers & phased parity](./0015-harness-capability-tiers.md) | Accepted | 2026-07-23 |
 | 0016 | [Every user-mutable capability has a CLI path](./0016-cli-control-plane-parity.md) | Accepted | 2026-07-27 |
+| 0017 | [No blocking I/O on the MainActor: logging goes through `CrowLog`](./0017-non-blocking-logging.md) | Accepted | 2026-07-27 |
