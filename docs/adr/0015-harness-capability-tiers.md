@@ -35,7 +35,17 @@ deliberate, documented gaps (full grid in the
 > does **not** relax the honesty principle: the flag is real and verified, so
 > emitting it is honest rather than a papered-over gap, and it stays bounded to
 > workspace trust — **not** `--yolo`/full-bypass, with auto-permission still
-> supplied separately by `--force --approve-mcps`.
+> supplied separately by `--force --approve-mcps`. "Bounded" means *scoped, not
+> inert*: workspace trust is precisely the gate that governs whether repo-supplied
+> agent config (`.cursor/rules`, MCP entries, repo instructions) is honored, so on
+> `.review` clones of third-party branches a Cursor session now launches with
+> trust granted and (with review auto-permission on) approval off — the same
+> posture `ClaudeTrustSeeder` + `--permission-mode auto` already ship, consistency
+> rather than a new exposure. Requires **Cursor CLI ≥ 2026.07.20**: the seed is
+> emitted on every launch path unconditionally, so an older binary is out of
+> support (the flag is recognized on older builds and most likely no-ops
+> interactively, but that reject-vs-no-op behavior is unprobed — gate emission on
+> a version check if a user on an older CLI reports broken launches).
 
 Until now, the *why* behind each gap lived only in scattered code comments —
 several of them **pinned to a specific upstream version** ("sync-only as of

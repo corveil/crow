@@ -39,6 +39,19 @@ public enum CursorLaunchArgs {
     /// `autoPermissionSuffix` adds `--force`. Trust and auto-permission are
     /// orthogonal, so this seed is unconditional while `--force --approve-mcps`
     /// stays gated on the caller's opt-in (see `launchSuffix`).
+    ///
+    /// **Minimum Cursor CLI: ≥ 2026.07.20** — the build that made `--trust`
+    /// interactive. Emitted unconditionally on every launch path, so on an older
+    /// binary the effect depends on that binary's handling. `--trust` has been a
+    /// *recognized* flag since well before 07.20 (the param reference lists it as
+    /// headless-only), so an older `agent` parses it rather than erroring on an
+    /// unknown option; the pre-07.20 "headless mode only" restriction gated the
+    /// flag's *effect*, not a parse-time rejection keyed on other flags — so an
+    /// interactive launch most likely no-ops the flag and degrades to the old
+    /// fresh-worktree prompt rather than failing. That last step is **reasoned,
+    /// not probed** (no pre-07.20 binary on hand to confirm reject-vs-no-op); if a
+    /// user on an older CLI reports broken launches, gate emission on a version
+    /// check. The floor is also recorded in the matrix re-check row and ADR 0015.
     public static let trustSuffix = " --trust"
 
     /// Auto-permission flags for unattended launches (`.job`, `.review`, the

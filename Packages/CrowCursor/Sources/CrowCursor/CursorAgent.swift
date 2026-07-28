@@ -79,7 +79,9 @@ public struct CursorAgent: CodingAgent {
         // when the caller opted into auto-permission. Parity with Claude's trust
         // seed + `--permission-mode auto`; see `CursorLaunchArgs` for why the
         // trust seed is unconditional and `--sandbox` is deliberately left unset
-        // (#829).
+        // (#829). The seed rides the `--continue` resume path too — harmless: the
+        // first launch already recorded the saved trust decision, so one
+        // unconditional suffix is simpler than special-casing resume.
         let launchArgs = CursorLaunchArgs.launchSuffix(autoPermissionMode: autoPermissionMode)
 
         switch session.kind {
