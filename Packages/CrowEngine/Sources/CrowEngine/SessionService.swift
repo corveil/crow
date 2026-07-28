@@ -992,6 +992,24 @@ public final class SessionService {
               let worktree = appState.primaryWorktree(for: sessionID),
               let agent = AgentRegistry.shared.agent(for: session.agentKind) else { return }
 
+        // Neutralize a Grok `.review` clone's committed config layers FIRST — this
+        // is the THIRD Grok launch path into a review clone (#861 review r11, Red),
+        // besides creation-time `prepareReviewClone` and `handoffAgent`. `launchAgent`
+        // fires on every warm crowd restart (`hydrateState` re-arms managed review
+        // terminals) and via `crow launch-agent`, so the creation-time strip is not
+        // enough: the strip is a working-tree deletion of *tracked* files, and any
+        // `git restore`/`gh pr checkout` (Step 1 of the review skill) an unattended
+        // reviewer runs restores the attacker's `.grok/hooks/*.json` from the PR
+        // head. Grok's trust cascades from a Manager-seeded `{devRoot}` (and is
+        // inert on dev builds), so without a re-strip here that restored hook
+        // executes on the next `grok -c`. Must run before `writeHookConfig` below,
+        // which recreates Crow's own clean `.grok/hooks/crow.json`. Shares the
+        // gate with the other two paths so it can't drift.
+        if Self.shouldStripGrokReviewClone(
+            agentKind: agent.kind, sessionKind: session.kind) {
+            Self.stripGrokConfigFromReviewClone(clonePath: worktree.worktreePath)
+        }
+
         // Write/refresh hook config (Claude path). Codex's writer is a
         // no-op — its global config was installed once at app launch.
         if let crowPath = ClaudeHookConfigWriter.resolveCrowBinary(devRoot: ConfigStore.loadDevRoot()) {
@@ -1328,9 +1346,10 @@ public final class SessionService {
             // agent's Crow-managed hook config on disk (same session UUID, same
             // event names Grok registers), which Grok compat-loads alongside its
             // own `.grok/hooks/crow.json` → every hook event fires twice. Strip
-            // the prior compat hooks (marker-scoped, preserves user settings; the
-            // incoming Grok config is a separate `.grok/` file). See helper doc
-            // for the full double-fire rationale (#861 review r8).
+            // the prior compat hooks — touches only hook config, never the file's
+            // permissions/`env`/non-hook keys (though the Claude arm drops managed
+            // event keys wholesale — see helper doc). The incoming Grok config is a
+            // separate `.grok/` file. Full double-fire rationale in the helper (r8).
             Self.stripPriorCompatHooksForGrokHandoff(worktreePath: worktree.worktreePath)
         }
         // Handing off to Cursor → sync its global Jira MCP (this path selects
@@ -1364,8 +1383,8 @@ public final class SessionService {
         // where folder-trust is inert, or a release build whose reviews workspace
         // sits under a trusted parent, since trust cascades). Mirrors the Cursor
         // handoff arm above.
-        if Self.shouldStripGrokReviewCloneOnHandoff(
-            targetKind: target.kind, sessionKind: session.kind) {
+        if Self.shouldStripGrokReviewClone(
+            agentKind: target.kind, sessionKind: session.kind) {
             Self.stripGrokConfigFromReviewClone(clonePath: worktree.worktreePath)
         }
 
@@ -2818,15 +2837,17 @@ public final class SessionService {
         }
     }
 
-    /// Whether a handoff should strip the review clone's committed `.grok/` — the
-    /// exact gate the Grok handoff arm and `prepareReviewClone` share so it can't
-    /// drift (#861 review, Red; mirrors `shouldStripCursorReviewCloneOnHandoff`).
-    /// Only a `.review` handoff *to Grok* strips: `.work`/`.job` handoffs to Grok
-    /// branch off a trusted base, and a `.review` handoff to any other agent must
-    /// not strip a surface that agent doesn't load.
-    nonisolated static func shouldStripGrokReviewCloneOnHandoff(
-        targetKind: AgentKind, sessionKind: SessionKind) -> Bool {
-        targetKind == .grok && sessionKind == .review
+    /// Whether Grok is about to open a `.review` clone and must therefore strip
+    /// its committed config layers first — the exact gate shared by **all three**
+    /// Grok launch paths into a clone (`launchAgent` on restart/`crow launch-agent`,
+    /// `handoffAgent`, and — as `reviewAgentKind == .grok` — creation-time
+    /// `prepareReviewClone`) so the strip can't drift (#861 review, Red; mirrors
+    /// `shouldStripCursorReviewCloneOnHandoff`). Only a `.review` session on Grok
+    /// strips: `.work`/`.job` branch off a trusted base, and a `.review` on any
+    /// other agent must not strip a surface that agent doesn't load.
+    nonisolated static func shouldStripGrokReviewClone(
+        agentKind: AgentKind, sessionKind: SessionKind) -> Bool {
+        agentKind == .grok && sessionKind == .review
     }
 
     /// Neutralize a review clone's committed config layers that **Grok
@@ -2885,11 +2906,21 @@ public final class SessionService {
     /// and `.cursor/hooks.json` (Cursor) — on a `.work`/`.job` handoff to Grok.
     ///
     /// Distinct from `stripGrokConfigFromReviewClone` in both scope and method:
-    /// that wholesale-wipes attacker configs off a hostile *review* clone; this
-    /// runs on a *trusted* work worktree, so it uses each writer's marker-scoped
-    /// `removeHookConfig` — strips only Crow's managed event entries, preserving
-    /// user settings and the Claude gateway `env` block — rather than deleting
-    /// whole files.
+    /// that wholesale-wipes attacker config *files* off a hostile *review* clone;
+    /// this runs on a *trusted* work worktree and calls each writer's
+    /// `removeHookConfig`, which touches only the hook config — never the file's
+    /// other settings (Claude's `permissions` block, the gateway `env`, Cursor's
+    /// non-hook keys) nor a user's own `.grok/hooks/*.json`.
+    ///
+    /// ⚠️ The two writers differ in granularity, and the Claude arm is **not**
+    /// marker-scoped: `CursorHookConfigWriter.removeHookConfig` prunes only Crow's
+    /// own groups (a user's hooks under the same event name survive), but
+    /// `ClaudeHookConfigWriter.removeHookConfig` drops each managed event key
+    /// *wholesale* — so a user's hand-authored `Stop`/`PreToolUse`/… hook in the
+    /// worktree's `.claude/settings.local.json` is removed with it (the same caveat
+    /// spelled out at `writeManagerHookConfig`). An accepted trade for closing the
+    /// double-fire: hand-authored hooks in a per-session `.work` worktree are rare,
+    /// and leaving the double-fire is worse.
     ///
     /// Why it's needed: nothing else on the worker path removes a prior agent's
     /// hooks — `launchAgent` / the deferred-paste only *write* the incoming

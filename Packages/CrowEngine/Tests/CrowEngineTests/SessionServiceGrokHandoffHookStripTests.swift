@@ -91,10 +91,13 @@ struct SessionServiceGrokHandoffHookStripTests {
         #expect(FileManager.default.fileExists(atPath: marker))
     }
 
-    /// A user's own non-managed key in `.claude/settings.local.json` survives —
-    /// the strip is marker-scoped (only Crow's managed event entries), not the
-    /// wholesale wipe the review-clone path performs. Guards against neutering a
-    /// real work worktree's user config on handoff.
+    /// A user's own non-managed *top-level* key in `.claude/settings.local.json`
+    /// survives — `removeHookConfig` touches only the `hooks` map, never
+    /// permissions/`env`/other keys, so the strip never neuters a real work
+    /// worktree's non-hook config. (NB: within `hooks`, the Claude arm is
+    /// wholesale — a user hook under a managed event name would be dropped; see
+    /// `stripPriorCompatHooksForGrokHandoff`'s doc. This test pins the non-hook
+    /// guarantee, which is the one that matters for a `.work` worktree.)
     @Test func preservesUserSettingsInClaudeFile() throws {
         let wt = Self.makeTempDir()
         defer { try? FileManager.default.removeItem(atPath: wt) }

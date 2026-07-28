@@ -130,32 +130,32 @@ struct SessionServiceGrokReviewCloneStripTests {
         #expect(FileManager.default.fileExists(atPath: codexDir))
     }
 
-    // MARK: - Handoff gate
+    // MARK: - Strip gate (shared by launchAgent, handoff, creation-time)
 
-    /// Only a `.review` handoff *to Grok* strips — the gate that, when missing
-    /// (#861 review, Red), left Grok running in an unstripped hostile clone after
-    /// a handoff from another agent.
-    @Test func handoffGateFiresOnlyForGrokReview() {
-        #expect(SessionService.shouldStripGrokReviewCloneOnHandoff(
-            targetKind: .grok, sessionKind: .review))
+    /// Only a `.review` session on Grok strips — the gate that, when missing on a
+    /// launch path (#861 review, Red rounds 1 & 11), left Grok running in an
+    /// unstripped hostile clone.
+    @Test func stripGateFiresOnlyForGrokReview() {
+        #expect(SessionService.shouldStripGrokReviewClone(
+            agentKind: .grok, sessionKind: .review))
     }
 
-    /// A `.work`/`.job` handoff to Grok is a normal working clone branched off a
-    /// trusted base, not an attacker-controlled review head — no strip.
-    @Test func handoffGateSkipsNonReviewGrok() {
-        #expect(!SessionService.shouldStripGrokReviewCloneOnHandoff(
-            targetKind: .grok, sessionKind: .work))
-        #expect(!SessionService.shouldStripGrokReviewCloneOnHandoff(
-            targetKind: .grok, sessionKind: .job))
+    /// A `.work`/`.job` on Grok is a normal working clone branched off a trusted
+    /// base, not an attacker-controlled review head — no strip.
+    @Test func stripGateSkipsNonReviewGrok() {
+        #expect(!SessionService.shouldStripGrokReviewClone(
+            agentKind: .grok, sessionKind: .work))
+        #expect(!SessionService.shouldStripGrokReviewClone(
+            agentKind: .grok, sessionKind: .job))
     }
 
-    /// A `.review` handoff to any *other* agent must not strip `.grok/` —
-    /// stripping a surface the reviewing agent doesn't load would just hide the
-    /// files a hostile PR ships.
-    @Test func handoffGateSkipsReviewForNonGrokAgents() {
+    /// A `.review` on any *other* agent must not strip `.grok/` — stripping a
+    /// surface the reviewing agent doesn't load would just hide the files a
+    /// hostile PR ships.
+    @Test func stripGateSkipsReviewForNonGrokAgents() {
         for k: AgentKind in [.claudeCode, .codex, .cursor, .openCode] {
-            #expect(!SessionService.shouldStripGrokReviewCloneOnHandoff(
-                targetKind: k, sessionKind: .review))
+            #expect(!SessionService.shouldStripGrokReviewClone(
+                agentKind: k, sessionKind: .review))
         }
     }
 }
