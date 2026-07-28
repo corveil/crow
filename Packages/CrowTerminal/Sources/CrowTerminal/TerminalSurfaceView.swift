@@ -135,7 +135,7 @@ public struct TerminalSurfaceView: NSViewRepresentable {
         do {
             return try TmuxBackend.shared.cockpitSurface()
         } catch {
-            NSLog("[TerminalSurfaceView] tmux cockpitSurface failed: \(error). Rendering blank — tmux is required.")
+            CrowLog.info("[TerminalSurfaceView] tmux cockpitSurface failed: \(error). Rendering blank — tmux is required.")
             return nil
         }
     }

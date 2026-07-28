@@ -2423,8 +2423,7 @@ public final class IssueTracker {
                     prNumber: attribution.prNumber
                 )
             } catch {
-                NSLog("[Crow] fetchPRChangedFiles failed for %@: %@",
-                      attribution.prURL as NSString, error.localizedDescription as NSString)
+                CrowLog.info("[Crow] fetchPRChangedFiles failed for \(attribution.prURL): \(error.localizedDescription)")
                 continue
             }
             guard !files.isEmpty else { continue }
@@ -2466,8 +2465,7 @@ public final class IssueTracker {
             do {
                 commits = try await backend.fetchRecentDefaultBranchCommits(repoSlug: repo, since: since)
             } catch {
-                NSLog("[Crow] fetchRecentDefaultBranchCommits failed for %@: %@",
-                      repo as NSString, error.localizedDescription as NSString)
+                CrowLog.info("[Crow] fetchRecentDefaultBranchCommits failed for \(repo): \(error.localizedDescription)")
                 continue
             }
             // Re-read inside the loop so a prior repo's writes are visible.
@@ -2716,8 +2714,7 @@ public final class IssueTracker {
                 prNumber: pr.number
             )
         } catch {
-            NSLog("[Crow] fetchCrowAuthoredCommits failed for %@: %@",
-                  pr.url as NSString, error.localizedDescription as NSString)
+            CrowLog.info("[Crow] fetchCrowAuthoredCommits failed for \(pr.url): \(error.localizedDescription)")
             return false
         }
         recordPRAttribution(pr: pr, commits: commits)
@@ -3714,7 +3711,7 @@ public final class IssueTracker {
         do {
             try await backend.ensureMergeLabel(repo: repo)
             try await backend.addMergeLabel(prURL: prLink.url)
-            NSLog("[Crow] Added crow:merge to %@", prLink.url as NSString)
+            CrowLog.info("[Crow] Added crow:merge to \(prLink.url)")
             // Optimistically flip the merge icon so the user sees the label
             // land immediately, rather than waiting for — and getting stuck
             // behind — the next full poll's snapshot (#838). The sticky marker

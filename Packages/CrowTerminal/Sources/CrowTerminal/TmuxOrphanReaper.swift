@@ -1,3 +1,4 @@
+import CrowCore
 import Foundation
 
 /// Reaps orphaned, *legacy PID-keyed* tmux sockets left behind by pre-#330
@@ -51,11 +52,11 @@ public enum TmuxOrphanReaper {
             let socketPath = (tmpdir as NSString).appendingPathComponent(name)
             killServer(tmuxBinary: tmuxBinary, socketPath: socketPath)
             try? fm.removeItem(atPath: socketPath)
-            NSLog("[CrowTelemetry tmux:orphan_reaped pid=\(pid) socket=\(socketPath)]")
+            CrowLog.info("[CrowTelemetry tmux:orphan_reaped pid=\(pid) socket=\(socketPath)]")
             reaped += 1
         }
         if reaped > 0 {
-            NSLog("[Crow] Reaped \(reaped) orphan tmux server(s) from past Crow runs")
+            CrowLog.info("[Crow] Reaped \(reaped) orphan tmux server(s) from past Crow runs")
         }
         return reaped
     }

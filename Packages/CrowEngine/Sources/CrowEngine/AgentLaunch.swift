@@ -30,8 +30,7 @@ public enum AgentLaunch {
                     crowPath: crowPath
                 )
             } catch {
-                NSLog("[AgentLaunch] Failed to write hook config for session %@: %@",
-                      sessionID.uuidString, error.localizedDescription)
+                CrowLog.info("[AgentLaunch] Failed to write hook config for session \(sessionID.uuidString): \(error.localizedDescription)")
             }
         }
         // Cursor launching via a brand-new terminal (#408 deferred paste) or

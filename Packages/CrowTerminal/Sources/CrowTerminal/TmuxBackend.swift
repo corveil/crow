@@ -189,7 +189,7 @@ public final class TmuxBackend {
     ///     `kill-server` and unlink the per-terminal scratch files.
     public func shutdown(killServer: Bool = true) {
         if controller != nil {
-            NSLog("[CrowTelemetry tmux:\(killServer ? "server_killed" : "server_detach") bindings=\(bindings.count)]")
+            CrowLog.info("[CrowTelemetry tmux:\(killServer ? "server_killed" : "server_detach") bindings=\(bindings.count)]")
         }
         // Destroy the surface BEFORE kill-server: destroy() nils the surface's
         // onProcessExit synchronously, and killServer's waitUntilExit pumps the
@@ -410,7 +410,7 @@ public final class TmuxBackend {
         // Operator-greppable: `[CrowTelemetry tmux:tab_switch_ms=…]`. Easy
         // to graph from logs today; trivially re-routed to a real metrics
         // pipeline once one exists.
-        NSLog("[CrowTelemetry tmux:tab_switch_ms=\(elapsedMS) terminal=\(id)]")
+        CrowLog.info("[CrowTelemetry tmux:tab_switch_ms=\(elapsedMS) terminal=\(id)]")
     }
 
     /// Settle time between `paste-buffer` and the submitting `Enter`.
@@ -825,7 +825,7 @@ public final class TmuxBackend {
             return true
         } catch {
             reportIfTimeout(error)
-            NSLog("[Crow] could not set alternate-screen on window \(index): \(error)")
+            CrowLog.info("[Crow] could not set alternate-screen on window \(index): \(error)")
             return false
         }
     }
@@ -863,12 +863,12 @@ public final class TmuxBackend {
                 agentWindowNames: agentWindowNames,
                 seenOrphanedLastPass: previouslyOrphaned.contains(w.index)) {
                 ctrl.killWindow(index: w.index)
-                NSLog("[CrowTelemetry tmux:orphan_window_reaped index=\(w.index) name=\(w.name) command=\(w.command)]")
+                CrowLog.info("[CrowTelemetry tmux:orphan_window_reaped index=\(w.index) name=\(w.name) command=\(w.command)]")
                 reaped += 1
             }
         }
         orphanGraceWindows = stillOrphanedAgents
-        if reaped > 0 { NSLog("[Crow] Reaped \(reaped) orphaned cockpit window(s) (CROW-581)") }
+        if reaped > 0 { CrowLog.info("[Crow] Reaped \(reaped) orphaned cockpit window(s) (CROW-581)") }
         return reaped
     }
 
@@ -924,11 +924,11 @@ public final class TmuxBackend {
         var reaped = 0
         for window in windows where Self.shouldReapWindow(index: window.index, command: window.command, keep: keep) {
             ctrl.killWindow(index: window.index)
-            NSLog("[CrowTelemetry tmux:orphan_window_reaped index=\(window.index) command=\(window.command)]")
+            CrowLog.info("[CrowTelemetry tmux:orphan_window_reaped index=\(window.index) command=\(window.command)]")
             reaped += 1
         }
         if reaped > 0 {
-            NSLog("[Crow] Reaped \(reaped) orphaned bare-shell cockpit window(s) (#408)")
+            CrowLog.info("[Crow] Reaped \(reaped) orphaned bare-shell cockpit window(s) (#408)")
         }
         return reaped
     }
@@ -990,7 +990,7 @@ public final class TmuxBackend {
                 let (nextSaw, fired) = Self.advanceExitMonitor(sawAgentRunning: sawAgentRunning, sample: sample)
                 sawAgentRunning = nextSaw
                 if fired {
-                    NSLog("[CrowTelemetry manager:exit_detected terminal=\(id) command=\(sample ?? "")]")
+                    CrowLog.info("[CrowTelemetry manager:exit_detected terminal=\(id) command=\(sample ?? "")]")
                     onExit()
                     return
                 }
@@ -1025,10 +1025,10 @@ public final class TmuxBackend {
         // (#588). Wired here (not by the caller) so every recreated surface is
         // automatically re-armed after recovery.
         view.onProcessExit = { [weak self] code in
-            NSLog("[CrowTelemetry tmux:cockpit_client_exited code=\(code)]")
+            CrowLog.info("[CrowTelemetry tmux:cockpit_client_exited code=\(code)]")
             self?.onCockpitExit?(code)
         }
-        NSLog("[TmuxBackend] created cockpit surface attach=%@", attachCommand)
+        CrowLog.info("[TmuxBackend] created cockpit surface attach=\(attachCommand)")
         // Cache before SwiftUI re-parents into the visible tab container.
         // WKWebView must load in a visible window — do not park offscreen or
         // xterm.js never initializes.
@@ -1086,7 +1086,7 @@ public final class TmuxBackend {
             // identically). Fire BEFORE resurrecting so the handler can
             // observe the dead state; it's reentrancy-guarded and hops to a
             // later main-actor turn, so recovery never races this call.
-            NSLog("[CrowTelemetry tmux:server_died_midrun bindings=\(bindings.count)]")
+            CrowLog.info("[CrowTelemetry tmux:server_died_midrun bindings=\(bindings.count)]")
             onServerLost?()
         }
         guard !tmuxBinary.isEmpty, !socketPath.isEmpty else {
@@ -1136,15 +1136,15 @@ public final class TmuxBackend {
         let serverStart = serverStartTime(controller: controller)
 
         guard shouldReconcile(configMTime: confMTime, serverStartTime: serverStart) else {
-            NSLog("[CrowTelemetry tmux:config_reconcile_skipped reason=fresh]")
+            CrowLog.info("[CrowTelemetry tmux:config_reconcile_skipped reason=fresh]")
             return
         }
 
         do {
             try controller.run(["source-file", confPath])
-            NSLog("[CrowTelemetry tmux:config_reconciled path=\(confPath)]")
+            CrowLog.info("[CrowTelemetry tmux:config_reconciled path=\(confPath)]")
         } catch {
-            NSLog("[CrowTelemetry tmux:config_reconcile_failed error=\"\(error)\"]")
+            CrowLog.info("[CrowTelemetry tmux:config_reconcile_failed error=\"\(error)\"]")
         }
     }
 
@@ -1167,10 +1167,10 @@ public final class TmuxBackend {
         }
         do {
             try ctrl.run(["source-file", confURL.path])
-            NSLog("[CrowTelemetry tmux:config_reloaded_by_user path=\(confURL.path)]")
+            CrowLog.info("[CrowTelemetry tmux:config_reloaded_by_user path=\(confURL.path)]")
             return nil
         } catch {
-            NSLog("[CrowTelemetry tmux:config_reload_failed error=\"\(error)\"]")
+            CrowLog.info("[CrowTelemetry tmux:config_reload_failed error=\"\(error)\"]")
             return "\(error)"
         }
     }
@@ -1263,7 +1263,7 @@ public final class TmuxBackend {
                 let elapsed = Int(Date().timeIntervalSince(startedAt) * 1000)
                 let exists = FileManager.default.fileExists(atPath: sentinelPath)
                 _ = self  // keep the capture; method-level NSLog is fine
-                NSLog("[CrowTelemetry tmux:first_prompt_progress terminal=\(id) elapsed_ms=\(elapsed) sentinel_exists=\(exists)]")
+                CrowLog.info("[CrowTelemetry tmux:first_prompt_progress terminal=\(id) elapsed_ms=\(elapsed) sentinel_exists=\(exists)]")
             }
         }
         let waiterTask = Task { [weak self] in
@@ -1284,7 +1284,7 @@ public final class TmuxBackend {
                 guard let self, self.bindings[id] != nil else { return }
                 if let elapsed {
                     let ms = Int(elapsed * 1000)
-                    NSLog("[CrowTelemetry tmux:first_prompt_ms=\(ms) terminal=\(id)]")
+                    CrowLog.info("[CrowTelemetry tmux:first_prompt_ms=\(ms) terminal=\(id)]")
                     self.onReadinessChanged?(id, .shellReady)
                 } else {
                     // Genuine timeout. Most likely the shell is alive but its
@@ -1302,12 +1302,12 @@ public final class TmuxBackend {
                     // `didBecomeActive` observer also re-arms automatically
                     // when the app returns to the foreground.
                     let ms = Int(timeoutBudget * 1000)
-                    NSLog("[CrowTelemetry tmux:first_prompt_timeout terminal=\(id) budget_ms=\(ms)]")
+                    CrowLog.info("[CrowTelemetry tmux:first_prompt_timeout terminal=\(id) budget_ms=\(ms)]")
                     // Capture stage-by-stage diagnostics and dump them to the
                     // system log alongside the timeout marker. The UI surfaces
                     // the same bundle via "Copy diagnostics" (issue #256).
                     let bundle = self.captureDiagnostics(id: id)
-                    NSLog("[CrowTelemetry tmux:first_prompt_diagnostics terminal=\(id)]\n\(bundle)")
+                    CrowLog.info("[CrowTelemetry tmux:first_prompt_diagnostics terminal=\(id)]\n\(bundle)")
                     self.onReadinessChanged?(id, .timedOut)
                 }
             }
@@ -1517,7 +1517,7 @@ public final class TmuxBackend {
     /// already handles.
     private func reportIfTimeout(_ error: Error) {
         if let tmuxError = error as? TmuxError, case .timedOut = tmuxError {
-            NSLog("[CrowTelemetry tmux:server_unresponsive error=\"\(tmuxError)\"]")
+            CrowLog.info("[CrowTelemetry tmux:server_unresponsive error=\"\(tmuxError)\"]")
             onUnresponsive?(tmuxError)
         }
     }

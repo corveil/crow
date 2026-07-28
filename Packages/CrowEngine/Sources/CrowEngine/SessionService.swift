@@ -337,7 +337,7 @@ public final class SessionService {
                 do {
                     try TmuxBackend.shared.adoptTerminal(id: terminal.id, binding: binding, trackReadiness: false)
                 } catch {
-                    NSLog("[SessionService] client-mode adopt failed for \(terminal.id): \(error.localizedDescription)")
+                    CrowLog.info("[SessionService] client-mode adopt failed for \(terminal.id): \(error.localizedDescription)")
                 }
             }
         }
@@ -431,7 +431,7 @@ public final class SessionService {
     public func takeOverTerminalSurfaces() -> Bool {
         let recreate = Self.shouldRecreateSurfacesOnTakeover(
             cockpitSessionIsLive: TmuxBackend.shared.cockpitSessionIsLive())
-        NSLog(recreate
+        CrowLog.info(recreate
             ? "[CrowTelemetry takeover:recreate] tmux cockpit gone (reboot/kill-server) — recreating windows + relaunching agents (CROW-747)"
             : "[CrowTelemetry takeover:adopt] tmux cockpit alive — adopting surviving surfaces in place")
         rebuildAllSurfaces(forceRegister: recreate)
@@ -490,7 +490,7 @@ public final class SessionService {
     public func recreateTerminalSurface(sessionID: UUID, terminalID: UUID, devRoot: String) -> Bool {
         guard appState.sessions.contains(where: { $0.id == sessionID }),
               let terminal = appState.terminals(for: sessionID).first(where: { $0.id == terminalID }) else {
-            NSLog("[SessionService] recreateTerminalSurface: terminal \(terminalID) not found in session \(sessionID)")
+            CrowLog.info("[SessionService] recreateTerminalSurface: terminal \(terminalID) not found in session \(sessionID)")
             return false
         }
 
@@ -530,7 +530,7 @@ public final class SessionService {
             }
         }
 
-        NSLog("[CrowTelemetry tmux:scrollback_recreate terminal=\(terminalID) session=\(sessionID)]")
+        CrowLog.info("[CrowTelemetry tmux:scrollback_recreate terminal=\(terminalID) session=\(sessionID)]")
         let updated = rehydrateTerminalSurface(seed, trackReadiness: trackReadiness)
 
         guard updated.tmuxBinding != nil else {
@@ -538,7 +538,7 @@ public final class SessionService {
             // window is untouched (still live/degraded), so restore the readiness
             // we re-armed and report failure. The RPC surfaces it and the ⚠ /
             // Recreate affordance persists for a retry (review).
-            NSLog("[SessionService] recreateTerminalSurface: re-register failed for \(terminalID); keeping the existing degraded window")
+            CrowLog.info("[SessionService] recreateTerminalSurface: re-register failed for \(terminalID); keeping the existing degraded window")
             if trackReadiness {
                 appState.terminalReadiness[terminalID] = priorReadiness
                 if !priorAutoLaunch { appState.autoLaunchTerminals.remove(terminalID) }
@@ -570,7 +570,7 @@ public final class SessionService {
     @MainActor
     private func rehydrateTerminalSurface(_ terminal: SessionTerminal, trackReadiness: Bool) -> SessionTerminal {
         guard !TmuxBackend.shared.tmuxBinary.isEmpty else {
-            NSLog("[SessionService] tmux not configured this run — terminal \(terminal.id) will not render")
+            CrowLog.info("[SessionService] tmux not configured this run — terminal \(terminal.id) will not render")
             return terminal
         }
 
@@ -626,7 +626,7 @@ public final class SessionService {
                                 crowPath: crowPath
                             )
                         } catch {
-                            NSLog("[SessionService] adopt: hook config rewrite failed for \(terminal.sessionID): \(error.localizedDescription)")
+                            CrowLog.info("[SessionService] adopt: hook config rewrite failed for \(terminal.sessionID): \(error.localizedDescription)")
                         }
                     }
                     // Re-seed the RemoteControl badge for adopted --rc terminals.
@@ -647,7 +647,7 @@ public final class SessionService {
                 }
                 return terminal  // binding unchanged → no redundant persist
             } catch {
-                NSLog("[SessionService] tmux adopt failed (\(error)) for \(terminal.id); creating a fresh window")
+                CrowLog.info("[SessionService] tmux adopt failed (\(error)) for \(terminal.id); creating a fresh window")
             }
         }
 
@@ -670,7 +670,7 @@ public final class SessionService {
             updated.tmuxBinding = binding
             return updated
         } catch {
-            NSLog("[SessionService] tmux re-register failed on hydrate (\(error)) for \(terminal.id); terminal will not render this run")
+            CrowLog.info("[SessionService] tmux re-register failed on hydrate (\(error)) for \(terminal.id); terminal will not render this run")
             return terminal
         }
     }
@@ -694,11 +694,11 @@ public final class SessionService {
     }
 
     public func wireTerminalReadiness() {
-        NSLog("[SessionService] wireTerminalReadiness — setting tmux readiness callback")
+        CrowLog.info("[SessionService] wireTerminalReadiness — setting tmux readiness callback")
         TmuxBackend.shared.onReadinessChanged = { [weak self] terminalID, readiness in
             guard let self else { return }
             guard let currentState = self.appState.terminalReadiness[terminalID] else { return }
-            NSLog("[SessionService] tmux readiness: terminal=\(terminalID), state=\(readiness), current=\(currentState)")
+            CrowLog.info("[SessionService] tmux readiness: terminal=\(terminalID), state=\(readiness), current=\(currentState)")
             if readiness == .shellReady, currentState < .shellReady {
                 self.appState.terminalReadiness[terminalID] = .shellReady
                 // Brand-new managed terminals created via `new-terminal --command`
@@ -771,7 +771,7 @@ public final class SessionService {
             terminals.contains(where: { $0.id == terminalID })
         })?.key,
               let routedTerminal = appState.terminals[sessionID]?.first(where: { $0.id == terminalID }) else {
-            NSLog("[SessionService] pasteDeferredLaunch: no terminal record for \(terminalID); cannot send")
+            CrowLog.info("[SessionService] pasteDeferredLaunch: no terminal record for \(terminalID); cannot send")
             return
         }
 
@@ -815,7 +815,7 @@ public final class SessionService {
     public func copyDiagnostics(terminalID: UUID) {
         let bundle = TmuxBackend.shared.captureDiagnostics(id: terminalID)
         hostBridge.copyToClipboard(bundle)
-        NSLog("[SessionService] copied tmux diagnostics for terminal=\(terminalID) bytes=\(bundle.utf8.count)")
+        CrowLog.info("[SessionService] copied tmux diagnostics for terminal=\(terminalID) bytes=\(bundle.utf8.count)")
     }
 
     /// Reap leaked orphan cockpit windows once at launch — bare-shell windows
@@ -828,7 +828,7 @@ public final class SessionService {
     public func reapOrphanedCockpitWindows() {
         let keep = Set(appState.terminals.values.flatMap { $0 }.compactMap { $0.tmuxBinding?.windowIndex })
         let n = TmuxBackend.shared.reapUnboundCockpitWindows(keepWindowIndices: keep)
-        if n > 0 { NSLog("[SessionService] reaped \(n) orphaned cockpit window(s) at launch (#408)") }
+        if n > 0 { CrowLog.info("[SessionService] reaped \(n) orphaned cockpit window(s) at launch (#408)") }
     }
 
     /// Reconcile persisted terminals ↔ live cockpit tmux windows (CROW-581).
@@ -862,7 +862,7 @@ public final class SessionService {
         if !deadIDs.isEmpty {
             let dead = Set(deadIDs)
             store.mutate { $0.terminals.removeAll { dead.contains($0.id) } }
-            NSLog("[SessionService] pruned \(deadIDs.count) dead terminal record(s) (CROW-581)")
+            CrowLog.info("[SessionService] pruned \(deadIDs.count) dead terminal record(s) (CROW-581)")
         }
 
         // (2) Reap orphaned cockpit windows. Agent window names are exactly what
@@ -882,7 +882,7 @@ public final class SessionService {
         for (terminalID, state) in appState.terminalReadiness {
             guard appState.autoLaunchTerminals.contains(terminalID) else { continue }
             guard state == .timedOut else { continue }
-            NSLog("[SessionService] re-arming stuck tmux readiness watch for terminal=\(terminalID)")
+            CrowLog.info("[SessionService] re-arming stuck tmux readiness watch for terminal=\(terminalID)")
             retryReadiness(terminalID: terminalID)
         }
     }
@@ -913,8 +913,7 @@ public final class SessionService {
                     crowPath: crowPath
                 )
             } catch {
-                NSLog("[SessionService] Failed to write hook config for session %@: %@",
-                      sessionID.uuidString, error.localizedDescription)
+                CrowLog.info("[SessionService] Failed to write hook config for session \(sessionID.uuidString): \(error.localizedDescription)")
             }
         }
 
@@ -937,7 +936,7 @@ public final class SessionService {
             // (acceptable — review is the human-gated path anyway).
             if session.kind != .review {
                 if case let .failed(msg) = CodexTrustSeeder.seedTrust(projectPath: worktree.worktreePath) {
-                    NSLog("[SessionService] Codex trust seed failed for %@: %@", worktree.worktreePath, msg)
+                    CrowLog.info("[SessionService] Codex trust seed failed for \(worktree.worktreePath): \(msg)")
                 }
             }
         default:
@@ -989,8 +988,7 @@ public final class SessionService {
             autoPermissionMode: autoPermissionMode,
             telemetryPort: telemetryPort
         ) else {
-            NSLog("[SessionService] Agent %@ could not build a launch command for session %@ (kind=%@)",
-                  agent.kind.rawValue, sessionID.uuidString, String(describing: session.kind))
+            CrowLog.info("[SessionService] Agent \(agent.kind.rawValue) could not build a launch command for session \(sessionID.uuidString) (kind=\(String(describing: session.kind)))")
             // Surface the failure where the user is already looking — paste a
             // shell-comment + echo line into the terminal so they aren't stuck
             // staring at an idle prompt wondering why nothing happened (#424).
@@ -1015,7 +1013,7 @@ public final class SessionService {
             let promptPath = (worktree.worktreePath as NSString)
                 .appendingPathComponent(initialPromptFile)
             if !FileManager.default.fileExists(atPath: promptPath) {
-                NSLog("[SessionService] launchAgent: initial prompt missing at \(promptPath) for session \(sessionID.uuidString); refusing to dispatch")
+                CrowLog.info("[SessionService] launchAgent: initial prompt missing at \(promptPath) for session \(sessionID.uuidString); refusing to dispatch")
                 if let routedTerminal = appState.terminals[sessionID]?.first(where: { $0.id == terminalID }) {
                     let msg = "echo '⚠️  Crow: \(session.kind.rawValue) prompt missing at \(promptPath); not launching \(agent.displayName).'\n"
                     TerminalRouter.send(routedTerminal, text: msg)
@@ -1032,7 +1030,7 @@ public final class SessionService {
         if let routedTerminal = appState.terminals[sessionID]?.first(where: { $0.id == terminalID }) {
             TerminalRouter.send(routedTerminal, text: gatewayPrefix + command)
         } else {
-            NSLog("[SessionService] launchAgent: no terminal record for \(terminalID); cannot send")
+            CrowLog.info("[SessionService] launchAgent: no terminal record for \(terminalID); cannot send")
         }
 
         appState.terminalReadiness[terminalID] = .agentLaunched
@@ -1157,7 +1155,7 @@ public final class SessionService {
         }
 
         appState.managerProcessExited = false
-        NSLog("[CrowTelemetry manager:restart]")
+        CrowLog.info("[CrowTelemetry manager:restart]")
 
         // Session row still exists, so this only recreates the terminal.
         ensureManagerSession(devRoot: resolvedDevRoot)
@@ -1252,7 +1250,7 @@ public final class SessionService {
             // seeding never fires for it. Skip `.review` for the same
             // attacker-controlled-clone reason as `launchAgent`.
             if case let .failed(msg) = CodexTrustSeeder.seedTrust(projectPath: worktree.worktreePath) {
-                NSLog("[SessionService] Codex trust seed failed for %@: %@", worktree.worktreePath, msg)
+                CrowLog.info("[SessionService] Codex trust seed failed for \(worktree.worktreePath): \(msg)")
             }
         }
         // Handing off to Cursor → sync its global Jira MCP (this path selects
@@ -1322,13 +1320,7 @@ public final class SessionService {
             data.terminals.append(prepared)
         }
 
-        NSLog(
-            "[CrowTelemetry agent:handoff] session=%@ from=%@ to=%@ terminal=%@",
-            sessionID.uuidString,
-            priorKind.rawValue,
-            targetKind.rawValue,
-            prepared.id.uuidString
-        )
+        CrowLog.info("[CrowTelemetry agent:handoff] session=\(sessionID.uuidString) from=\(priorKind.rawValue) to=\(targetKind.rawValue) terminal=\(prepared.id.uuidString)")
         return prepared.id
     }
 
@@ -1341,7 +1333,7 @@ public final class SessionService {
     /// confirmation alert in `AppDelegate.restartTmuxServer`.
     @MainActor
     public func restartTmuxServer() {
-        NSLog("[CrowTelemetry tmux:server_restart_by_user]")
+        CrowLog.info("[CrowTelemetry tmux:server_restart_by_user]")
         // A manual restart supersedes any in-flight crash recovery — clear the
         // flag so the crash overlay doesn't linger over the user-driven rebuild.
         appState.tmuxCrashRecovering = false
@@ -1398,7 +1390,7 @@ public final class SessionService {
     public func handleCockpitClientExit() {
         guard !appState.tmuxCrashRecovering else { return }
         if TmuxBackend.shared.isRunning {
-            NSLog("[CrowTelemetry tmux:cockpit_client_reattach]")
+            CrowLog.info("[CrowTelemetry tmux:cockpit_client_reattach]")
             TmuxBackend.shared.recycleCockpitSurface()
             // Same SwiftUI re-render trick as recycleTmuxServerAndRebuild: a
             // same-value reassignment makes TerminalSurfaceView re-create the
@@ -1422,11 +1414,11 @@ public final class SessionService {
     public func handleTmuxServerCrash() {
         guard !appState.tmuxCrashRecovering else { return }
         if let last = lastCrashRecoveryAt, Date().timeIntervalSince(last) < 10 {
-            NSLog("[CrowTelemetry tmux:server_crash_recovery_debounced]")
+            CrowLog.info("[CrowTelemetry tmux:server_crash_recovery_debounced]")
             return
         }
         lastCrashRecoveryAt = Date()
-        NSLog("[CrowTelemetry tmux:server_crash_autorecovery]")
+        CrowLog.info("[CrowTelemetry tmux:server_crash_autorecovery]")
         // Set the flag BEFORE shutdown: the subprocess waits inside the rebuild
         // pump the main run loop, so a re-entrant crash signal during recovery
         // must find the guard already up.
@@ -1440,7 +1432,7 @@ public final class SessionService {
             try? await Task.sleep(nanoseconds: 120 * 1_000_000_000)
             guard let self, !Task.isCancelled else { return }
             if self.appState.tmuxCrashRecovering {
-                NSLog("[CrowTelemetry tmux:server_crash_recovery_timeout]")
+                CrowLog.info("[CrowTelemetry tmux:server_crash_recovery_timeout]")
                 self.appState.tmuxCrashRecovering = false
             }
         }
@@ -1539,8 +1531,7 @@ public final class SessionService {
                 crowPath: crowPath
             )
         } catch {
-            NSLog("[SessionService] Failed to write Manager hook config for session %@: %@",
-                  session.id.uuidString, error.localizedDescription)
+            CrowLog.info("[SessionService] Failed to write Manager hook config for session \(session.id.uuidString): \(error.localizedDescription)")
         }
     }
 
@@ -1646,7 +1637,7 @@ public final class SessionService {
             ClaudeTrustSeeder.seedTrust(projectPath: cwd)
         case .codex:
             if case let .failed(msg) = CodexTrustSeeder.seedTrust(projectPath: cwd) {
-                NSLog("[SessionService] Codex trust seed failed for %@: %@", cwd, msg)
+                CrowLog.info("[SessionService] Codex trust seed failed for \(cwd): \(msg)")
             }
         default:
             break
@@ -1844,17 +1835,17 @@ public final class SessionService {
                 guard FileManager.default.fileExists(atPath: item.worktreePath) else { continue }
                 do {
                     try FileManager.default.removeItem(atPath: item.worktreePath)
-                    NSLog("[SessionService] Cleaned up review clone: \(item.worktreePath)")
+                    CrowLog.info("[SessionService] Cleaned up review clone: \(item.worktreePath)")
                 } catch {
                     let msg = "Failed to remove review clone: \(error.localizedDescription)"
-                    NSLog("[SessionService] \(msg) (\(item.worktreePath))")
+                    CrowLog.info("[SessionService] \(msg) (\(item.worktreePath))")
                     if firstFatalError == nil { firstFatalError = msg }
                 }
                 continue
             }
 
             if item.isMainCheckout {
-                NSLog("Skipping worktree cleanup for main checkout: \(item.worktreePath) (branch: \(item.branch))")
+                CrowLog.info("Skipping worktree cleanup for main checkout: \(item.worktreePath) (branch: \(item.branch))")
                 continue
             }
 
@@ -1869,24 +1860,24 @@ public final class SessionService {
             var gitRemoveFailed = false
             do {
                 let removeResult = try runShellSync(["git", "-C", item.repoPath, "worktree", "remove", "--force", item.worktreePath])
-                NSLog("Removed worktree: \(item.worktreePath) \(removeResult)")
+                CrowLog.info("Removed worktree: \(item.worktreePath) \(removeResult)")
 
                 if !SessionWorktree.isProtectedBranch(item.branch) {
                     do {
                         _ = try runShellSync(["git", "-C", item.repoPath, "branch", "-D", item.branch])
                     } catch {
-                        NSLog("[SessionService] Failed to delete branch \(item.branch): \(error)")
+                        CrowLog.info("[SessionService] Failed to delete branch \(item.branch): \(error)")
                     }
                 }
 
                 do {
                     _ = try runShellSync(["git", "-C", item.repoPath, "worktree", "prune"])
                 } catch {
-                    NSLog("[SessionService] Failed to prune worktree metadata: \(error)")
+                    CrowLog.info("[SessionService] Failed to prune worktree metadata: \(error)")
                 }
             } catch {
                 gitRemoveFailed = true
-                NSLog("[SessionService] Failed to remove worktree \(item.worktreePath): \(error)")
+                CrowLog.info("[SessionService] Failed to remove worktree \(item.worktreePath): \(error)")
             }
 
             // Either way, ensure the directory is gone.
@@ -1894,7 +1885,7 @@ public final class SessionService {
                 do {
                     try FileManager.default.removeItem(atPath: item.worktreePath)
                 } catch {
-                    NSLog("[SessionService] Failed to remove directory \(item.worktreePath): \(error)")
+                    CrowLog.info("[SessionService] Failed to remove directory \(item.worktreePath): \(error)")
                     if gitRemoveFailed && firstFatalError == nil {
                         firstFatalError = "Could not remove worktree at \(item.worktreePath): \(error.localizedDescription)"
                     }
@@ -2072,7 +2063,7 @@ public final class SessionService {
                     if SessionWorktree.isProtectedBranch(wt.branch) { continue }
 
                     // This is an orphan — recover it
-                    NSLog("[SessionService] Recovered orphan worktree: \(wt.path) branch=\(wt.branch)")
+                    CrowLog.info("[SessionService] Recovered orphan worktree: \(wt.path) branch=\(wt.branch)")
                     await recoverOrphan(worktreePath: wt.path, branch: wt.branch, repoName: repoDir, repoPath: repoPath)
                 }
             }
@@ -2176,7 +2167,7 @@ public final class SessionService {
               let pr = try? await backend.linkedPR(repo: repoSlug, branch: branch) else {
             return nil
         }
-        NSLog("[SessionService] Found PR #\(pr.number) for branch '\(branch)'")
+        CrowLog.info("[SessionService] Found PR #\(pr.number) for branch '\(branch)'")
         return SessionLink(sessionID: sessionID, label: "PR #\(pr.number)", url: pr.url, linkType: .pr)
     }
 
@@ -2263,7 +2254,7 @@ public final class SessionService {
             data.links.append(contentsOf: links)
         }
 
-        NSLog("[SessionService] Recovered session '\(dirName)' — ticket=#\(ticket.number.map(String.init) ?? "none") title=\(ticket.title ?? "unknown")")
+        CrowLog.info("[SessionService] Recovered session '\(dirName)' — ticket=#\(ticket.number.map(String.init) ?? "none") title=\(ticket.title ?? "unknown")")
     }
 
     // MARK: - Terminal Tab Management
@@ -2424,14 +2415,14 @@ public final class SessionService {
         // not racy. Belt-and-suspenders for the auto-review watcher race
         // (CROW-406) and any future caller that re-enters during a kickoff.
         if let existing = appState.existingReviewSession(forPRURL: prURL) {
-            NSLog("[SessionService] Skipping duplicate review session for \(prURL); reusing \(existing.id)")
+            CrowLog.info("[SessionService] Skipping duplicate review session for \(prURL); reusing \(existing.id)")
             if selectAfterCreate { appState.selectedSessionID = existing.id }
             return existing.id
         }
 
         // Parse org/repo and PR number from URL like "https://github.com/org/repo/pull/123"
         guard let parsed = Session.parseReviewPR(url: prURL) else {
-            NSLog("[SessionService] Could not parse PR URL: \(prURL)")
+            CrowLog.info("[SessionService] Could not parse PR URL: \(prURL)")
             return nil
         }
         let owner = parsed.owner
@@ -2441,7 +2432,7 @@ public final class SessionService {
 
         // Determine clone path
         guard let devRoot = ConfigStore.loadDevRoot() else {
-            NSLog("[SessionService] No devRoot configured")
+            CrowLog.info("[SessionService] No devRoot configured")
             return nil
         }
 
@@ -2464,13 +2455,13 @@ public final class SessionService {
         let prMetadata: PRMetadata
         do {
             guard let manager = providerManager else {
-                NSLog("[SessionService] No providerManager wired; cannot prepare review for \(prURL)")
+                CrowLog.info("[SessionService] No providerManager wired; cannot prepare review for \(prURL)")
                 return nil
             }
             let backend = manager.codeBackend(for: .github)!
             prMetadata = try await backend.fetchPRMetadata(prURL: prURL)
         } catch {
-            NSLog("[SessionService] Failed to fetch PR metadata for \(prURL): \(error.localizedDescription)")
+            CrowLog.info("[SessionService] Failed to fetch PR metadata for \(prURL): \(error.localizedDescription)")
             return nil
         }
 
@@ -2489,7 +2480,7 @@ public final class SessionService {
                 )
             }.value
         } catch {
-            NSLog("[SessionService] Failed to prepare review clone for \(prURL): \(error.localizedDescription)")
+            CrowLog.info("[SessionService] Failed to prepare review clone for \(prURL): \(error.localizedDescription)")
             return nil
         }
 
@@ -2562,7 +2553,7 @@ public final class SessionService {
             appState.selectedSessionID = session.id
         }
 
-        NSLog("[SessionService] Created review session '\(session.name)' for \(prURL)")
+        CrowLog.info("[SessionService] Created review session '\(session.name)' for \(prURL)")
         return session.id
     }
 
@@ -2636,8 +2627,7 @@ public final class SessionService {
             // mount, etc.) leaves the attacker's config layer in place, so this
             // security control must be audible rather than swallowed (#829
             // review round 11, Green 1).
-            NSLog("[SessionService] Failed to strip .cursor/ from review clone %@: %@",
-                  clonePath, error.localizedDescription)
+            CrowLog.info("[SessionService] Failed to strip .cursor/ from review clone \(clonePath): \(error.localizedDescription)")
         }
     }
 
@@ -2687,7 +2677,7 @@ public final class SessionService {
         // path that doesn't exist, and the agent would launch with an empty
         // prompt. Throwing here aborts session creation cleanly.
         if !fm.fileExists(atPath: (clonePath as NSString).appendingPathComponent(".git")) {
-            NSLog("[SessionService] Cloning \(repoSlug) into \(clonePath)")
+            CrowLog.info("[SessionService] Cloning \(repoSlug) into \(clonePath)")
             do {
                 _ = try await runShellAsync(env: env, args: ["gh", "repo", "clone", repoSlug, clonePath])
             } catch {
@@ -2844,7 +2834,7 @@ public final class SessionService {
     /// the worktree can't be created.
     func runJob(_ job: JobConfig, devRoot: String) async -> (sessionID: UUID, terminalID: UUID)? {
         guard let firstPrompt = job.prompts.first(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
-            NSLog("[SessionService] Job '\(job.name)' has no prompts; skipping")
+            CrowLog.info("[SessionService] Job '\(job.name)' has no prompts; skipping")
             return nil
         }
 
@@ -2868,7 +2858,7 @@ public final class SessionService {
             repoPath = layout.repoPath
             if !FileManager.default.fileExists(atPath: (repoPath as NSString).appendingPathComponent(".git")) {
                 guard await cloneJobRepo(job: job, devRoot: devRoot, into: repoPath) else {
-                    NSLog("[SessionService] Job '\(job.name)': repo '\(job.repo)' is not cloned and clone-on-demand failed")
+                    CrowLog.info("[SessionService] Job '\(job.name)': repo '\(job.repo)' is not cloned and clone-on-demand failed")
                     return nil
                 }
             }
@@ -2879,7 +2869,7 @@ public final class SessionService {
             let repos = ((try? await gitManager.discoverRepos()) ?? [])
                 .sorted { $0.path < $1.path }
             guard let repoInfo = repos.first(where: { $0.name == job.repo }) else {
-                NSLog("[SessionService] Job '\(job.name)': repo '\(job.repo)' not found under devRoot")
+                CrowLog.info("[SessionService] Job '\(job.name)': repo '\(job.repo)' not found under devRoot")
                 return nil
             }
             repoPath = repoInfo.path
@@ -2898,7 +2888,7 @@ public final class SessionService {
                 repoPath: repoPath, worktreePath: worktreePath, branch: branch
             )
         } catch {
-            NSLog("[SessionService] Job '\(job.name)': createWorktree failed: \(error.localizedDescription)")
+            CrowLog.info("[SessionService] Job '\(job.name)': createWorktree failed: \(error.localizedDescription)")
             return nil
         }
 
@@ -2910,11 +2900,11 @@ public final class SessionService {
         do {
             try firstPrompt.write(toFile: promptPath, atomically: true, encoding: .utf8)
         } catch {
-            NSLog("[SessionService] Job '\(job.name)': failed to write \(promptPath): \(error.localizedDescription)")
+            CrowLog.info("[SessionService] Job '\(job.name)': failed to write \(promptPath): \(error.localizedDescription)")
             return nil
         }
         guard FileManager.default.fileExists(atPath: promptPath) else {
-            NSLog("[SessionService] Job '\(job.name)': prompt file missing at \(promptPath) after write")
+            CrowLog.info("[SessionService] Job '\(job.name)': prompt file missing at \(promptPath) after write")
             return nil
         }
 
@@ -2953,7 +2943,7 @@ public final class SessionService {
             data.terminals.append(preparedTerminal)
         }
 
-        NSLog("[SessionService] Job '\(job.name)': created session '\(session.name)' at \(worktreePath)")
+        CrowLog.info("[SessionService] Job '\(job.name)': created session '\(session.name)' at \(worktreePath)")
         return (session.id, preparedTerminal.id)
     }
 
@@ -2982,7 +2972,7 @@ public final class SessionService {
     /// whether a `.git` checkout exists at `destination` afterward.
     private func cloneJobRepo(job: JobConfig, devRoot: String, into destination: String) async -> Bool {
         guard job.repo.contains("/") else {
-            NSLog("[SessionService] Job '\(job.name)': repo '\(job.repo)' is not an owner/repo slug; cannot clone")
+            CrowLog.info("[SessionService] Job '\(job.name)': repo '\(job.repo)' is not an owner/repo slug; cannot clone")
             return false
         }
         let workspace = ConfigStore.loadConfig(devRoot: devRoot)?
@@ -2996,7 +2986,7 @@ public final class SessionService {
             withIntermediateDirectories: true
         )
 
-        NSLog("[SessionService] Job '\(job.name)': cloning \(job.repo) into \(destination)")
+        CrowLog.info("[SessionService] Job '\(job.name)': cloning \(job.repo) into \(destination)")
         do {
             if provider == "gitlab" {
                 var env: [String: String] = [:]
@@ -3006,7 +2996,7 @@ public final class SessionService {
                 _ = try await shell("gh", "repo", "clone", job.repo, destination)
             }
         } catch {
-            NSLog("[SessionService] Job '\(job.name)': clone failed: \(error.localizedDescription)")
+            CrowLog.info("[SessionService] Job '\(job.name)': clone failed: \(error.localizedDescription)")
         }
         return FileManager.default.fileExists(atPath: (destination as NSString).appendingPathComponent(".git"))
     }
@@ -3196,9 +3186,10 @@ public final class SessionService {
             ? fresh
             : appState.existingHookState(for: id)?.analytics
         guard let analytics, !analytics.isEmpty else {
-            NSLog(
-                "[SessionService] Skipped analytics snapshot for %@ (%@): no telemetry data — telemetry disabled, not restarted since enabling, or the session produced none",
-                id.uuidString, status.rawValue)
+            CrowLog.info(
+                "[SessionService] Skipped analytics snapshot for \(id.uuidString) (\(status.rawValue)): "
+                    + "no telemetry data — telemetry disabled, not restarted since enabling, "
+                    + "or the session produced none")
             appState.analyticsSnapshotSkipCount += 1
             appState.lastAnalyticsSnapshotSkipAt = Date()
             return
@@ -3249,7 +3240,7 @@ public final class SessionService {
             if store.data.analyticsSnapshots?[key] != nil { written += 1 }
         }
         if written > 0 {
-            NSLog("[SessionService] Backfilled %d analytics snapshot(s) from telemetry.db", written)
+            CrowLog.info("[SessionService] Backfilled \(written) analytics snapshot(s) from telemetry.db")
         }
         return written
     }
@@ -3457,7 +3448,7 @@ public final class SessionService {
     private func prepareTerminal(_ terminal: SessionTerminal, trackReadiness: Bool) -> SessionTerminal {
         var t = terminal
         guard !TmuxBackend.shared.tmuxBinary.isEmpty else {
-            NSLog("[SessionService] tmux not configured; terminal \(t.id) will not render")
+            CrowLog.info("[SessionService] tmux not configured; terminal \(t.id) will not render")
             return t
         }
         let session = appState.sessions.first(where: { $0.id == t.sessionID })
@@ -3476,7 +3467,7 @@ public final class SessionService {
             )
             t.tmuxBinding = binding
         } catch {
-            NSLog("[SessionService] tmux registerTerminal failed (\(error)); terminal \(t.id) will not render")
+            CrowLog.info("[SessionService] tmux registerTerminal failed (\(error)); terminal \(t.id) will not render")
         }
         return t
     }

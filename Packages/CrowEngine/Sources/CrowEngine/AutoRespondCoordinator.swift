@@ -33,8 +33,7 @@ public final class AutoRespondCoordinator {
         let cfg = settingsProvider()
         for t in transitions {
             if shouldSkipReviewSession(t) {
-                NSLog("[AutoRespond] Skipping %@ for session %@: review session",
-                      t.kind.rawValue, t.sessionID.uuidString)
+                CrowLog.info("[AutoRespond] Skipping \(t.kind.rawValue) for session \(t.sessionID.uuidString): review session")
                 continue
             }
             switch t.kind {
@@ -59,19 +58,16 @@ public final class AutoRespondCoordinator {
     private func dispatch(_ transition: PRStatusTransition) {
         let terminals = appState.terminals(for: transition.sessionID)
         guard let terminal = terminals.first(where: { $0.isManaged }) else {
-            NSLog("[AutoRespond] Skipping %@ for session %@: no managed terminal",
-                  transition.kind.rawValue, transition.sessionID.uuidString)
+            CrowLog.info("[AutoRespond] Skipping \(transition.kind.rawValue) for session \(transition.sessionID.uuidString): no managed terminal")
             return
         }
         guard TerminalRouter.canSend(terminal) else {
-            NSLog("[AutoRespond] Skipping %@ for session %@: terminal surface not initialized",
-                  transition.kind.rawValue, transition.sessionID.uuidString)
+            CrowLog.info("[AutoRespond] Skipping \(transition.kind.rawValue) for session \(transition.sessionID.uuidString): terminal surface not initialized")
             return
         }
 
         let prompt = AutoRespondPrompts.build(for: transition, codeBackend: resolveCodeBackend(forSessionID: transition.sessionID))
-        NSLog("[AutoRespond] Sending %@ prompt to terminal %@ (%d chars)",
-              transition.kind.rawValue, terminal.id.uuidString, prompt.count)
+        CrowLog.info("[AutoRespond] Sending \(transition.kind.rawValue) prompt to terminal \(terminal.id.uuidString) (\(prompt.count) chars)")
         TerminalRouter.send(terminal, text: prompt)
     }
 
@@ -92,25 +88,21 @@ public final class AutoRespondCoordinator {
         // code-modifying actions on review sessions; `reReview` is the correct
         // reviewer affordance and stays allowed.
         if session?.kind == .review, action.modifiesCodeUnderReview {
-            NSLog("[QuickAction] Refusing %@ for session %@: review session must not modify the branch under review",
-                  action.rawValue, sessionID.uuidString)
+            CrowLog.info("[QuickAction] Refusing \(action.rawValue) for session \(sessionID.uuidString): review session must not modify the branch under review")
             return .forbiddenOnReviewSession
         }
 
         let terminals = appState.terminals(for: sessionID)
         guard let terminal = terminals.first(where: { $0.isManaged }) else {
-            NSLog("[QuickAction] Skipping %@ for session %@: no managed terminal",
-                  action.rawValue, sessionID.uuidString)
+            CrowLog.info("[QuickAction] Skipping \(action.rawValue) for session \(sessionID.uuidString): no managed terminal")
             return .noManagedTerminal
         }
         guard TerminalRouter.canSend(terminal) else {
-            NSLog("[QuickAction] Skipping %@ for session %@: terminal surface not initialized",
-                  action.rawValue, sessionID.uuidString)
+            CrowLog.info("[QuickAction] Skipping \(action.rawValue) for session \(sessionID.uuidString): terminal surface not initialized")
             return .surfaceNotReady
         }
         guard let prLink = appState.links(for: sessionID).first(where: { $0.linkType == .pr }) else {
-            NSLog("[QuickAction] Skipping %@ for session %@: no PR link",
-                  action.rawValue, sessionID.uuidString)
+            CrowLog.info("[QuickAction] Skipping \(action.rawValue) for session \(sessionID.uuidString): no PR link")
             return .noPRLink
         }
 
@@ -122,8 +114,7 @@ public final class AutoRespondCoordinator {
             prNumber: prNumber,
             lastReviewedHeadSha: session?.lastReviewedHeadSha
         )
-        NSLog("[QuickAction] Sending %@ prompt to terminal %@ (%d chars)",
-              action.rawValue, terminal.id.uuidString, prompt.count)
+        CrowLog.info("[QuickAction] Sending \(action.rawValue) prompt to terminal \(terminal.id.uuidString) (\(prompt.count) chars)")
         TerminalRouter.send(terminal, text: prompt)
         return .sent
     }

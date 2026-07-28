@@ -2,6 +2,7 @@
 // Not part of the Linux headless build; compiles away there.
 #if canImport(AppKit)
 import AppKit
+import CrowCore
 import Foundation
 
 /// Floating search affordance pinned to the top of a terminal container
@@ -135,7 +136,7 @@ public final class TerminalSearchBar: NSView, NSSearchFieldDelegate {
             )
             hasActiveSearch = true
         } catch {
-            NSLog("[TerminalSearchBar] search failed: \(error)")
+            CrowLog.info("[TerminalSearchBar] search failed: \(error)")
         }
     }
 
@@ -148,7 +149,7 @@ public final class TerminalSearchBar: NSView, NSSearchFieldDelegate {
         do {
             try TmuxBackend.shared.searchAgain(id: id, reverse: false)
         } catch {
-            NSLog("[TerminalSearchBar] search-again failed: \(error)")
+            CrowLog.info("[TerminalSearchBar] search-again failed: \(error)")
         }
     }
 
@@ -160,7 +161,7 @@ public final class TerminalSearchBar: NSView, NSSearchFieldDelegate {
         do {
             try TmuxBackend.shared.searchAgain(id: id, reverse: true)
         } catch {
-            NSLog("[TerminalSearchBar] search-reverse failed: \(error)")
+            CrowLog.info("[TerminalSearchBar] search-reverse failed: \(error)")
         }
     }
 
