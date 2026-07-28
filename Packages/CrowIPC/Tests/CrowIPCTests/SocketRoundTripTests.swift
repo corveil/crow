@@ -286,12 +286,18 @@ private func startServer(
 }
 
 /// A missing daemon surfaces as `connectionFailed`, which `forwardHookEvent`
-/// catches to stay a silent no-op — so `post` must raise the same error `send`
-/// would for an absent socket.
+/// catches to stay a silent no-op — so `post` must raise that specific case for
+/// an absent socket (not merely some `SocketError`; `createFailed` wouldn't be
+/// caught).
 @Test func postToNonexistentSocketThrows() {
     let client = SocketClient(socketPath: "/tmp/nonexistent-crow-post-test.sock")
-    #expect(throws: SocketError.self) {
+    do {
         try client.post(method: "hook-event")
+        Issue.record("expected post to throw for an absent socket")
+    } catch SocketError.connectionFailed {
+        // expected
+    } catch {
+        Issue.record("expected connectionFailed, got \(error)")
     }
 }
 

@@ -17,8 +17,21 @@ public struct ClaudeHookConfigWriter: HookConfigWriter {
     ]
 
     /// Post-execution events that can safely run async (fire-and-forget).
-    /// PreToolUse is intentionally NOT async — it must arrive before
-    /// PermissionRequest so the state machine ordering is reliable.
+    /// PreToolUse stays non-async so the agent waits for its hook process to
+    /// exit before firing the next hook — which keeps PreToolUse *accepted* by
+    /// the daemon ahead of the following PermissionRequest.
+    ///
+    /// Note (#903): pre-fire-and-forget, non-async also gave end-to-end *apply*
+    /// ordering — the hook process blocked on the daemon's reply, written only
+    /// after the transition was applied, so event N was applied before N+1 was
+    /// sent. `crow hook-event` no longer waits for that reply, and the daemon
+    /// applies hook-events on independently-scheduled `MainActor` tasks
+    /// (`SocketServer` fans each connection out concurrently), so accept order
+    /// no longer implies apply order. Keeping PreToolUse non-async still narrows
+    /// the reorder window to that MainActor scheduling race (vs. also racing the
+    /// writes if it were async), and any inversion self-heals on the next event;
+    /// restoring a hard guarantee needs per-session server-side sequencing —
+    /// the daemon-side follow-up scoped out of #903.
     private static let asyncEvents: Set<String> = [
         "PostToolUse", "PostToolUseFailure",
     ]
