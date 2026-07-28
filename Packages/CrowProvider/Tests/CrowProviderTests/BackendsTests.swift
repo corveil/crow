@@ -302,17 +302,35 @@ final class BackendsTests: XCTestCase {
         XCTAssertTrue(listing.closed.isEmpty)
     }
 
+    /// #894: GitHub nullifies individual `viewer.pullRequests.nodes` entries for
+    /// org PRs behind SAML enforcement and returns the rest. This test used a
+    /// clean nodes array, so the all-or-nothing `as? [[String: Any]]` cast that
+    /// dropped every accessible PR never showed up. The fixture now interleaves
+    /// nulls at the head, middle, and tail, and asserts that check state — the
+    /// payload the Fix Checks button keys off — survives with the PRs.
     func testListMonitoredPRsRecoversAccessiblePRsOnSAML() async throws {
         let blob = """
         {"data":{
           "viewerPRs":{"pullRequests":{"nodes":[
-            {"number":12,"url":"https://github.com/ok/repo/pull/12","state":"OPEN",
-             "headRefName":"feat","baseRefName":"main","repository":{"nameWithOwner":"ok/repo"}}
+            null,
+            {"number":885,"url":"https://github.com/ok/repo/pull/885","state":"OPEN",
+             "headRefName":"feat","baseRefName":"main","repository":{"nameWithOwner":"ok/repo"},
+             "labels":{"nodes":[{"name":"crow:merge","color":"1D76DB"}]},
+             "statusCheckRollup":{"state":"FAILURE","contexts":{"nodes":[
+               {"__typename":"CheckRun","name":"Build & Test","conclusion":"FAILURE","status":"COMPLETED"},
+               {"__typename":"CheckRun","name":"Lint","conclusion":"SUCCESS","status":"COMPLETED"}
+             ]}}},
+            null,
+            null,
+            {"number":837,"url":"https://github.com/ok/repo/pull/837","state":"OPEN",
+             "headRefName":"other","baseRefName":"main","repository":{"nameWithOwner":"ok/repo"},
+             "statusCheckRollup":{"state":"SUCCESS","contexts":{"nodes":[]}}},
+            null
           ]}},
           "reviewPRs":{"nodes":[]},
           "viewer":{"login":"me"},
           "rateLimit":{"remaining":4980,"limit":5000,"resetAt":"2026-01-01T00:00:00Z","cost":1}
-        },"errors":[{"type":"FORBIDDEN","message":"Resource protected by organization SAML enforcement. You must grant your OAuth token access to an organization within this enterprise."}]}
+        },"errors":[{"type":"FORBIDDEN","path":["viewerPRs","pullRequests","nodes",0],"message":"Resource protected by organization SAML enforcement. You must grant your OAuth token access to an organization within this enterprise."}]}
         gh: Resource protected by organization SAML enforcement. You must grant your OAuth token access to an organization within this enterprise.
         """
         let fake = FakeShellRunner()
@@ -320,9 +338,387 @@ final class BackendsTests: XCTestCase {
         let backend = GitHubCodeBackend(shellRunner: fake)
         let listing = try await backend.listMonitoredPRs()
         XCTAssertTrue(listing.samlRestricted)
-        XCTAssertEqual(listing.viewerPRs.count, 1)
-        XCTAssertEqual(listing.viewerPRs.first?.number, 12)
+        // Pre-#894 this was 0: one NSNull nilled the whole array cast.
+        XCTAssertEqual(listing.viewerPRs.count, 2)
+        XCTAssertEqual(listing.viewerPRs.map(\.number), [885, 837])
         XCTAssertEqual(listing.viewerLogin, "me")
+        XCTAssertEqual(listing.rateLimit?.remaining, 4980)
+
+        // The regression that made this user-visible: CI state must survive.
+        let failing = try XCTUnwrap(listing.viewerPRs.first { $0.number == 885 })
+        XCTAssertEqual(failing.checksState, "FAILURE")
+        XCTAssertEqual(failing.failedCheckNames, ["Build & Test"])
+        XCTAssertEqual(failing.labels.map(\.name), ["crow:merge"])
+
+        let green = try XCTUnwrap(listing.viewerPRs.first { $0.number == 837 })
+        XCTAssertEqual(green.checksState, "SUCCESS")
+        XCTAssertTrue(green.failedCheckNames.isEmpty)
+    }
+
+    /// #894, one level down: nulls can appear inside *any* nullable-element
+    /// connection, not just the top-level `nodes`. A null in `labels.nodes`,
+    /// `statusCheckRollup.contexts.nodes`, `latestReviews.nodes`,
+    /// `commits.nodes`, or `closingIssuesReferences.nodes` must drop only that
+    /// element — not the surrounding array and not the PR itself.
+    func testParsePRNodeSurvivesNullsInsideNestedConnections() throws {
+        let json = """
+        {"data":{
+          "viewerPRs":{"pullRequests":{"nodes":[
+            {"number":7,"url":"https://github.com/a/b/pull/7","state":"OPEN",
+             "repository":{"nameWithOwner":"a/b"},
+             "labels":{"nodes":[null,{"name":"bug","color":"red"},null]},
+             "closingIssuesReferences":{"nodes":[
+               null,{"number":42,"repository":{"nameWithOwner":"a/b"}}
+             ]},
+             "statusCheckRollup":{"state":"FAILURE","contexts":{"nodes":[
+               null,
+               {"__typename":"CheckRun","name":"Build","conclusion":"FAILURE","status":"COMPLETED"},
+               null,
+               {"__typename":"StatusContext","context":"ci/legacy","state":"ERROR"}
+             ]}},
+             "latestReviews":{"nodes":[
+               null,
+               {"state":"CHANGES_REQUESTED","submittedAt":"2026-06-07T10:00:00Z"},
+               null
+             ]},
+             "commits":{"nodes":[
+               null,
+               {"commit":{"oid":"1","messageHeadline":"real fix",
+                          "committedDate":"2026-06-01T00:00:00Z","parents":{"totalCount":1}}},
+               null
+             ]}}
+          ]}},
+          "reviewPRs":{"nodes":[]},
+          "viewer":{"login":"me"}
+        }}
+        """
+        let listing = try GitHubCodeBackend.parseMonitoredPRsResponse(json)
+        let pr = try XCTUnwrap(listing.viewerPRs.first)
+        XCTAssertEqual(pr.labels.map(\.name), ["bug"])
+        XCTAssertEqual(pr.linkedIssueReferences.map(\.number), [42])
+        XCTAssertEqual(pr.checksState, "FAILURE")
+        // Both context shapes survive: CheckRun keys off conclusion/name,
+        // StatusContext off state/context.
+        XCTAssertEqual(pr.failedCheckNames, ["Build", "ci/legacy"])
+        XCTAssertEqual(pr.latestReviewStates, ["CHANGES_REQUESTED"])
+        // Epoch-constructed so a nil-vs-nil co-failure can't pass this.
+        XCTAssertEqual(pr.lastChangesRequestedAt, Date(timeIntervalSince1970: 1780826400))
+        XCTAssertEqual(pr.lastSubstantiveCommitAt, Date(timeIntervalSince1970: 1780272000))
+    }
+
+    /// A connection whose `nodes` is itself `null` (GraphQL nullifies to the
+    /// nearest nullable parent when the whole connection errors) must degrade
+    /// to empty, not take the PR down with it.
+    func testParsePRNodeToleratesWhollyNullConnections() throws {
+        let json = """
+        {"data":{
+          "viewerPRs":{"pullRequests":{"nodes":[
+            {"number":8,"url":"https://github.com/a/b/pull/8","state":"OPEN",
+             "repository":{"nameWithOwner":"a/b"},
+             "labels":{"nodes":null},
+             "statusCheckRollup":null,
+             "latestReviews":null,
+             "commits":{"nodes":[]}}
+          ]}},
+          "reviewPRs":{"nodes":[]},
+          "viewer":{"login":"me"}
+        }}
+        """
+        let listing = try GitHubCodeBackend.parseMonitoredPRsResponse(json)
+        let pr = try XCTUnwrap(listing.viewerPRs.first)
+        XCTAssertEqual(pr.number, 8)
+        XCTAssertTrue(pr.labels.isEmpty)
+        XCTAssertEqual(pr.checksState, "")
+        XCTAssertTrue(pr.failedCheckNames.isEmpty)
+        XCTAssertTrue(pr.latestReviewStates.isEmpty)
+        XCTAssertNil(pr.lastSubstantiveCommitAt)
+    }
+
+    /// The `reviewPRs: search(…)` connection nullifies elements the same way
+    /// (#894). Covers the top-level `nodes` array and a null inside a PR's own
+    /// `reviews.nodes`, which feeds `viewerLastReviewedAt`.
+    func testParseReviewRequestsSkipsNullNodes() throws {
+        let json = """
+        {"data":{
+          "viewerPRs":{"pullRequests":{"nodes":[]}},
+          "reviewPRs":{"nodes":[
+            null,
+            {"number":21,"title":"Review me","url":"https://github.com/a/b/pull/21",
+             "state":"OPEN","isDraft":false,"updatedAt":"2026-06-07T10:00:00.000Z",
+             "headRefName":"feat","baseRefName":"main",
+             "author":{"login":"someone"},"repository":{"nameWithOwner":"a/b"},
+             "labels":{"nodes":[null,{"name":"needs-review","color":"blue"}]},
+             "reviews":{"nodes":[
+               null,
+               {"author":{"login":"me"},"state":"APPROVED","submittedAt":"2026-06-06T10:00:00.000Z"},
+               null
+             ]}},
+            null
+          ]},
+          "viewer":{"login":"me"}
+        }}
+        """
+        let listing = try GitHubCodeBackend.parseMonitoredPRsResponse(json)
+        XCTAssertEqual(listing.reviewRequests.count, 1)
+        let req = try XCTUnwrap(listing.reviewRequests.first)
+        XCTAssertEqual(req.prNumber, 21)
+        XCTAssertEqual(req.labels.map(\.name), ["needs-review"])
+        // The viewer's own review survived the null siblings.
+        XCTAssertNotNil(req.viewerLastReviewedAt)
+    }
+
+    /// #894 issue-side counterpart: one SAML-nulled assigned issue dropped the
+    /// entire ticket list. Note the *existing* SAML fixture above already
+    /// carried `"path":["openIssues","nodes",3]` in its errors array while its
+    /// `nodes` array was clean — it described the null without reproducing it.
+    func testListAssignedRecoversIssuesWhenNodesContainNulls() async throws {
+        let blob = """
+        {"data":{
+          "openIssues":{"nodes":[
+            null,
+            {"number":7,"title":"Accessible","url":"https://github.com/ok/repo/issues/7","state":"open",
+             "repository":{"nameWithOwner":"ok/repo"},
+             "labels":{"nodes":[null,{"name":"bug","color":"red"}]},
+             "projectItems":{"nodes":[null,{"fieldValueByName":{"name":"In Progress"}}]}},
+            null,
+            {"number":9,"title":"Also accessible","url":"https://github.com/ok/repo/issues/9","state":"open",
+             "repository":{"nameWithOwner":"ok/repo"},"labels":{"nodes":[]},
+             "projectItems":{"nodes":[]}}
+          ]},
+          "closedIssues":{"issueCount":2,"nodes":[
+            null,
+            {"number":3,"title":"Done","url":"https://github.com/ok/repo/issues/3","state":"closed",
+             "repository":{"nameWithOwner":"ok/repo"},"labels":{"nodes":[]}}
+          ]},
+          "rateLimit":{"remaining":4990,"limit":5000,"resetAt":"2026-01-01T00:00:00Z","cost":1}
+        },"errors":[{"type":"FORBIDDEN","path":["openIssues","nodes",0],"message":"Resource protected by organization SAML enforcement. You must grant your OAuth token access to an organization within this enterprise."}]}
+        gh: Resource protected by organization SAML enforcement. You must grant your OAuth token access to an organization within this enterprise.
+        """
+        let fake = FakeShellRunner()
+        fake.responses = [.failure(ShellRunnerError.nonZeroExit(exitCode: 1, output: blob))]
+        let backend = GitHubTaskBackend(shellRunner: fake)
+        let listing = try await backend.listAssigned(includeClosed: true)
+        XCTAssertTrue(listing.samlRestricted)
+        // Pre-#894: 0.
+        XCTAssertEqual(listing.open.count, 2)
+        XCTAssertEqual(listing.open.map(\.number), [7, 9])
+        XCTAssertEqual(listing.closed.count, 1)
+        // A null sibling in labels.nodes / projectItems.nodes must not erase
+        // the surviving entries.
+        let first = try XCTUnwrap(listing.open.first)
+        XCTAssertEqual(first.labels.map(\.name), ["bug"])
+        XCTAssertEqual(first.projectStatus, .inProgress)
+        XCTAssertEqual(listing.rateLimit?.remaining, 4990)
+    }
+
+    /// #894: a nulled project item must not hide the surviving one. Before the
+    /// fix, `[null, {…}]` failed the array cast in BOTH
+    /// `resolveProjectFieldOption` and `hasProjectItems`, so the backend
+    /// concluded "no board" and quietly wrote a `crow:` fallback label onto an
+    /// issue that IS on a board. Also covers a null inside `field.options`.
+    func testSetTaskStatusResolvesOptionDespiteNullProjectItemsAndOptions() async throws {
+        let fake = FakeShellRunner()
+        let lookup = """
+        {"data":{"repository":{"issue":{"projectItems":{"nodes":[
+          null,
+          {"id":"ITEM_1","project":{"id":"PROJ_1"},
+           "fieldValueByName":{"name":"Backlog",
+             "field":{"id":"FIELD_1","options":[
+               null,
+               {"id":"OPT_INREVIEW","name":"In Review"},
+               null,
+               {"id":"OPT_DONE","name":"Done"}
+             ]}}},
+          null
+        ]}}}}}
+        """
+        fake.responses = [.success(lookup), .success(#"{"data":{}}"#)]
+        let backend = GitHubTaskBackend(shellRunner: fake)
+        try await backend.setTaskStatus(url: "https://github.com/a/b/issues/1", status: .inReview)
+        // Two calls == lookup + mutation. Pre-fix this took the label-fallback
+        // path instead.
+        XCTAssertEqual(fake.calls.count, 2)
+        XCTAssertTrue(fake.calls.last?.args.contains { $0.contains("OPT_INREVIEW") } ?? false)
+    }
+
+    /// `hasProjectItems` must see through nulls: `[null, {…}]` means the issue
+    /// IS on a board, so a missing Status option is `unimplemented`, not a
+    /// silent `crow:` label write. This is the one intentional behavior change
+    /// in #894 — it restores the semantics the function's doc comment claimed.
+    func testHasProjectItemsSeesThroughNullEntries() {
+        let allNull = #"{"data":{"repository":{"issue":{"projectItems":{"nodes":[null,null]}}}}}"#
+        XCTAssertFalse(GitHubTaskBackend.hasProjectItems(allNull))
+
+        let mixed = """
+        {"data":{"repository":{"issue":{"projectItems":{"nodes":[
+          null,{"id":"ITEM_1","project":{"id":"PROJ_1"}}
+        ]}}}}}
+        """
+        XCTAssertTrue(GitHubTaskBackend.hasProjectItems(mixed))
+
+        XCTAssertFalse(GitHubTaskBackend.hasProjectItems(
+            #"{"data":{"repository":{"issue":{"projectItems":{"nodes":[]}}}}}"#
+        ))
+        XCTAssertFalse(GitHubTaskBackend.hasProjectItems("not json"))
+    }
+
+    func testFindRecentPRsForBranchesSkipsNullNodes() async throws {
+        let fake = FakeShellRunner()
+        let json = """
+        {"data":{
+          "pr0":{"pullRequests":{"nodes":[
+            null,
+            {"number":5,"url":"https://github.com/a/b/pull/5","state":"OPEN",
+             "updatedAt":"2026-06-07T10:00:00.000Z","headRefName":"feat/x"},
+            null
+          ]}},
+          "pr1":null
+        }}
+        """
+        fake.responses = [.success(json)]
+        let backend = GitHubCodeBackend(shellRunner: fake)
+        let matches = try await backend.findRecentPRsForBranches([
+            BranchCandidate(repoSlug: "a/b", branch: "feat/x"),
+            BranchCandidate(repoSlug: "blocked/repo", branch: "feat/y")
+        ])
+        // The null-only alias contributes nothing; the surviving node survives.
+        XCTAssertEqual(matches.count, 1)
+        XCTAssertEqual(matches.first?.number, 5)
+    }
+
+    /// #894: `prStates` feeds session-linked PRs absent from
+    /// `viewer.pullRequests(first: 50)` — including SAML-restricted PRs, which
+    /// are *permanently* absent from that connection. Without the rollup those
+    /// PRs could never show CI status. `parsePRNode` is shared, so only the
+    /// query needed the field.
+    func testPRStatesRequestsAndParsesStatusCheckRollup() async throws {
+        let fake = FakeShellRunner()
+        let json = """
+        {"data":{
+          "pr0":{"pullRequest":{"number":885,"url":"https://github.com/a/b/pull/885","state":"OPEN",
+                 "repository":{"nameWithOwner":"a/b"},
+                 "labels":{"nodes":[{"name":"crow:merge","color":"1D76DB"}]},
+                 "statusCheckRollup":{"state":"FAILURE","contexts":{"nodes":[
+                   null,
+                   {"__typename":"CheckRun","name":"Build & Test","conclusion":"FAILURE","status":"COMPLETED"},
+                   {"__typename":"CheckRun","name":"Lint","conclusion":"SUCCESS","status":"COMPLETED"}
+                 ]}}}}
+        }}
+        """
+        fake.responses = [.success(json)]
+        let backend = GitHubCodeBackend(shellRunner: fake)
+        let ref = PRRef(owner: "a", repo: "b", number: 885)
+        let states = try await backend.prStates(refs: [ref])
+        XCTAssertEqual(states[ref]?.checksState, "FAILURE")
+        XCTAssertEqual(states[ref]?.failedCheckNames, ["Build & Test"])
+        XCTAssertEqual(states[ref]?.labels.map(\.name), ["crow:merge"])
+        // The batched query actually asks for it.
+        XCTAssertTrue(fake.calls.first?.args.contains { $0.contains("statusCheckRollup") } ?? false)
+        XCTAssertTrue(fake.calls.first?.args.contains { $0.contains("contexts(first: 25)") } ?? false)
+    }
+
+    /// #894: `prStates` batches every stale ref into one aliased query, so a
+    /// single SAML-restricted repo made `gh` exit non-zero and threw away state
+    /// for EVERY stale PR in the cycle. Symmetric with `listMonitoredPRs`:
+    /// recover the aliases that resolved.
+    func testPRStatesRecoversAccessibleRefsOnSAML() async throws {
+        let blob = """
+        {"data":{
+          "pr0":{"pullRequest":{"number":1,"url":"https://github.com/ok/repo/pull/1","state":"MERGED",
+                 "mergeCommit":{"oid":"0123456789abcdef"},
+                 "repository":{"nameWithOwner":"ok/repo"},
+                 "labels":{"nodes":[]},
+                 "statusCheckRollup":{"state":"SUCCESS","contexts":{"nodes":[]}}}},
+          "pr1":null,
+          "pr2":{"pullRequest":{"number":3,"url":"https://github.com/ok/repo/pull/3","state":"CLOSED",
+                 "repository":{"nameWithOwner":"ok/repo"},"labels":{"nodes":[]}}}
+        },"errors":[{"type":"FORBIDDEN","path":["pr1"],"message":"Resource protected by organization SAML enforcement. You must grant your OAuth token access to an organization within this enterprise."}]}
+        gh: Resource protected by organization SAML enforcement. You must grant your OAuth token access to an organization within this enterprise.
+        """
+        let fake = FakeShellRunner()
+        fake.responses = [.failure(ShellRunnerError.nonZeroExit(exitCode: 1, output: blob))]
+        let backend = GitHubCodeBackend(shellRunner: fake)
+        let ok = PRRef(owner: "ok", repo: "repo", number: 1)
+        let blocked = PRRef(owner: "blocked", repo: "repo", number: 2)
+        let alsoOK = PRRef(owner: "ok", repo: "repo", number: 3)
+        // Pre-#894 this threw and the caller lost all three.
+        let states = try await backend.prStates(refs: [ok, blocked, alsoOK])
+        XCTAssertEqual(states.count, 2)
+        XCTAssertEqual(states[ok]?.state, "MERGED")
+        XCTAssertEqual(states[ok]?.mergeCommitOid, "0123456789abcdef")
+        XCTAssertEqual(states[alsoOK]?.state, "CLOSED")
+        // The restricted ref is simply absent — auto-completion requires
+        // positive evidence (`guard let pr = prsByURL[...]`), so an absent
+        // record can never be mistaken for "closed".
+        XCTAssertNil(states[blocked])
+    }
+
+    /// Non-SAML failures must still throw — the recovery path is narrow.
+    func testPRStatesStillThrowsOnNonSAMLFailure() async {
+        let fake = FakeShellRunner()
+        fake.responses = [.failure(ShellRunnerError.nonZeroExit(
+            exitCode: 1, output: "API rate limit exceeded"
+        ))]
+        let backend = GitHubCodeBackend(shellRunner: fake)
+        do {
+            _ = try await backend.prStates(refs: [PRRef(owner: "a", repo: "b", number: 1)])
+            XCTFail("expected throw")
+        } catch let error as ProviderError {
+            if case .samlRestricted = error {
+                XCTFail("non-SAML failure must not take the recovery path")
+            }
+        } catch {
+            XCTFail("unexpected error \(error)")
+        }
+    }
+
+    /// gh emitted only an error line, no body — degrade to empty, never throw.
+    func testRecoverPartialStalePRStatesEmptyWhenNoJSON() {
+        let states = GitHubCodeBackend.recoverPartialStalePRStates(
+            fromSAMLBlob: "gh: Resource protected by organization SAML enforcement.",
+            refs: [PRRef(owner: "a", repo: "b", number: 1)]
+        )
+        XCTAssertTrue(states.isEmpty)
+    }
+
+    /// Companion to `testHasProjectItemsSeesThroughNullEntries`: a board whose
+    /// ONLY project item is nulled still counts as "no board", so the label
+    /// fallback keeps working. Guards against over-correcting that change.
+    func testSetTaskStatusStillFallsBackToLabelWhenAllProjectItemsAreNull() async throws {
+        let fake = FakeShellRunner()
+        let lookup = #"{"data":{"repository":{"issue":{"projectItems":{"nodes":[null,null]}}}}}"#
+        fake.responses = [.success(lookup), .success(""), .success(""), .success("")]
+        let backend = GitHubTaskBackend(shellRunner: fake)
+        try await backend.setTaskStatus(url: "https://github.com/a/b/issues/1", status: .inReview)
+        XCTAssertEqual(fake.calls.count, 4)
+        XCTAssertEqual(Array(fake.calls.dropFirst().first?.args.prefix(4) ?? []), ["gh", "label", "create", "crow:in-review"])
+    }
+
+    // MARK: - LenientJSON (#894)
+
+    /// The primitive the whole fix rests on. Pinned directly so a refactor that
+    /// "simplifies" it back to `as? [[String: Any]]` fails here first, with a
+    /// message pointing at the cause rather than at a parse result three layers
+    /// up.
+    func testLenientJSONDropsNullsInsteadOfFailingTheArray() throws {
+        let raw = try JSONSerialization.jsonObject(
+            with: Data(#"{"c":{"nodes":[null,{"n":1},null,{"n":2}]},"plain":[null,{"id":"x"}],"nullNodes":{"nodes":null},"notArray":{"nodes":{"n":1}}}"#.utf8)
+        ) as? [String: Any]
+        let obj = try XCTUnwrap(raw)
+
+        // The exact failure #894 is about.
+        XCTAssertNil((obj["c"] as? [String: Any])?["nodes"] as? [[String: Any]])
+        XCTAssertEqual(LenientJSON.nodes(obj, "c").count, 2)
+        XCTAssertEqual(LenientJSON.nodes(obj, "c").compactMap { $0["n"] as? Int }, [1, 2])
+
+        XCTAssertEqual(LenientJSON.objects(obj["plain"]).count, 1)
+        XCTAssertTrue(LenientJSON.nodes(obj, "nullNodes").isEmpty)
+        XCTAssertTrue(LenientJSON.nodes(obj, "notArray").isEmpty)
+        XCTAssertTrue(LenientJSON.nodes(obj, "absent").isEmpty)
+        XCTAssertTrue(LenientJSON.nodes(nil, "anything").isEmpty)
+        XCTAssertTrue(LenientJSON.nodes(nil).isEmpty)
+        XCTAssertTrue(LenientJSON.objects(nil).isEmpty)
+        XCTAssertTrue(LenientJSON.objects(NSNull()).isEmpty)
     }
 
     func testGitHubTaskBackendSetTaskStatusRunsMutation() async throws {

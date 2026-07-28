@@ -827,9 +827,10 @@ public final class IssueTracker {
     /// Merge two `ViewerPR` records for the same URL. The record with the
     /// higher state rank wins the state/isDraft/number fields; empty fields
     /// on the winner are backfilled from the loser so that (e.g.) an
-    /// OPEN→MERGED demotion mid-refresh still carries the checks/reviews
-    /// from the OPEN record (the stale-PR follow-up query leaves those
-    /// fields empty).
+    /// OPEN→MERGED demotion mid-refresh still carries the reviews from the
+    /// OPEN record (the stale-PR follow-up query leaves those fields empty;
+    /// since #894 it does fetch checks, but the backfill still matters for a
+    /// GitLab stale MR, which carries neither).
     ///
     /// Labels are **unioned** rather than picked from one side (#838): a
     /// freshly added `crow:merge` can arrive on whichever record wins the
@@ -964,9 +965,10 @@ public final class IssueTracker {
         case ProviderError.rateLimited(let stderr):
             _ = handleGraphQLRateLimit(stderr: stderr)
         case ProviderError.samlRestricted:
-            // Secondary calls (prStates, findRecentPRsForBranches) don't
-            // recover partial data; route their SAML failures to the same
-            // one-time warning instead of spamming the console each cycle.
+            // `findRecentPRsForBranches` doesn't recover partial data; route
+            // its SAML failures to the same one-time warning instead of
+            // spamming the console each cycle. (`prStates` recovers its
+            // accessible aliases since #894, so it no longer lands here.)
             reportSAMLWarning()
         default:
             print("[IssueTracker] \(operation) failed: \(error.localizedDescription)")
@@ -1013,11 +1015,15 @@ public final class IssueTracker {
     /// MR (with `GITLAB_HOST` set per host). A failure on either side marks
     /// the result incomplete but doesn't suppress the other side's PRs.
     /// Returns minimal `ViewerPR` records — `state`, `url`, repo, branch refs,
-    /// and `labels` are populated; checks/reviews are left empty since they're
-    /// moot for closed PRs. Labels are fetched (#838) so a session-linked PR
+    /// `labels`, and checks are populated; reviews and commits are left empty.
+    /// Labels are fetched (#838) so a session-linked PR
     /// that flows through the stale path — rather than the open-viewer query —
     /// still carries its `crow:merge` label into `dedupedByURL`/`mergePRRecords`
-    /// instead of shadowing the fresh label with an empty set.
+    /// instead of shadowing the fresh label with an empty set. Checks are
+    /// fetched for the same reason (#894): a PR past
+    /// `viewer.pullRequests(first: 50)`, or one in a SAML-restricted org (a
+    /// permanent hole in that connection), reaches the UI only through here, so
+    /// without `statusCheckRollup` it could never show CI state at all.
     private func fetchStalePRStates(urls: [String]) async -> StalePRFetchResult {
         // Bucket URLs by (provider, host). GitLab self-hosted needs the host so the
         // backend pins the right GITLAB_HOST env var.

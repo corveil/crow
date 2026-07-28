@@ -109,6 +109,16 @@ public struct GitHubCodeBackend: CodeBackend {
                   mergeCommit { oid }
                   repository { nameWithOwner }
                   labels(first: 20) { nodes { name color } }
+                  statusCheckRollup {
+                    state
+                    contexts(first: 25) {
+                      nodes {
+                        __typename
+                        ... on CheckRun { name conclusion status }
+                        ... on StatusContext { context state }
+                      }
+                    }
+                  }
                 }
               }
             """)
@@ -131,7 +141,14 @@ public struct GitHubCodeBackend: CodeBackend {
         do {
             output = try await shellRunner.run(args: args, env: [:], cwd: nil)
         } catch ShellRunnerError.nonZeroExit(_, let stderr) {
-            throw GitHubTaskBackend.classifyGraphQLError(stderr)
+            let err = GitHubTaskBackend.classifyGraphQLError(stderr)
+            if case .samlRestricted(let blob) = err {
+                // One SAML-restricted repo in the batch nullifies only its own
+                // `prN` alias; every other alias resolved. Recover those rather
+                // than losing state for every stale PR in the cycle (#894).
+                return Self.recoverPartialStalePRStates(fromSAMLBlob: blob, refs: refs)
+            }
+            throw err
         }
         return Self.parseStalePRResponse(output, refs: refs)
     }
@@ -447,9 +464,10 @@ public struct GitHubCodeBackend: CodeBackend {
     }
 
     static func parseViewerPRs(_ viewerObj: [String: Any]?) -> [PRRecord] {
-        guard let pullRequests = viewerObj?["pullRequests"] as? [String: Any],
-              let nodes = pullRequests["nodes"] as? [[String: Any]] else { return [] }
-        return nodes.compactMap { parsePRNode($0) }
+        // `LenientJSON`, not `as? [[String: Any]]` (#894): GitHub nullifies the
+        // individual nodes it won't resolve under SAML enforcement, and the
+        // all-or-nothing array cast dropped every accessible PR alongside them.
+        LenientJSON.nodes(viewerObj, "pullRequests").compactMap { parsePRNode($0) }
     }
 
     static func parsePRNode(_ node: [String: Any]) -> PRRecord? {
@@ -465,12 +483,12 @@ public struct GitHubCodeBackend: CodeBackend {
         let baseRefName = (node["baseRefName"] as? String) ?? ""
         let mergeCommitOid = (node["mergeCommit"] as? [String: Any])?["oid"] as? String
         let repoName = (node["repository"] as? [String: Any])?["nameWithOwner"] as? String ?? ""
-        let labels = ((node["labels"] as? [String: Any])?["nodes"] as? [[String: Any]])?
+        let labels = LenientJSON.nodes(node, "labels")
             .compactMap { labelNode -> LabelInfo? in
                 guard let name = labelNode["name"] as? String else { return nil }
                 return LabelInfo(name: name, color: labelNode["color"] as? String)
-            } ?? []
-        let linkedNodes = (node["closingIssuesReferences"] as? [String: Any])?["nodes"] as? [[String: Any]] ?? []
+            }
+        let linkedNodes = LenientJSON.nodes(node, "closingIssuesReferences")
         let linkedRefs: [LinkedIssueRef] = linkedNodes.compactMap { ref in
             guard let n = ref["number"] as? Int else { return nil }
             let r = (ref["repository"] as? [String: Any])?["nameWithOwner"] as? String ?? ""
@@ -478,7 +496,7 @@ public struct GitHubCodeBackend: CodeBackend {
         }
         let rollup = node["statusCheckRollup"] as? [String: Any]
         let checksState = (rollup?["state"] as? String) ?? ""
-        let contextNodes = ((rollup?["contexts"] as? [String: Any])?["nodes"] as? [[String: Any]]) ?? []
+        let contextNodes = LenientJSON.nodes(rollup, "contexts")
         let failedCheckNames: [String] = contextNodes.compactMap { ctx in
             if let conclusion = ctx["conclusion"] as? String, conclusion == "FAILURE" {
                 return ctx["name"] as? String
@@ -488,7 +506,7 @@ public struct GitHubCodeBackend: CodeBackend {
             }
             return nil
         }
-        let latestReviewNodes = (node["latestReviews"] as? [String: Any])?["nodes"] as? [[String: Any]] ?? []
+        let latestReviewNodes = LenientJSON.nodes(node, "latestReviews")
         let reviewStates = latestReviewNodes.compactMap { $0["state"] as? String }
         // Stateless "needs refine" rule (CROW-508): the latest CHANGES_REQUESTED
         // submission timestamp anchors "since when does the agent owe a
@@ -521,7 +539,7 @@ public struct GitHubCodeBackend: CodeBackend {
         // `lastSubstantiveCommitAt` — a false negative the rule accepts as
         // the cost of avoiding a tree-equals-parents API call per PR per
         // poll. The ticket calls the tree check optional; we skip it in v1.
-        let commitNodes = (node["commits"] as? [String: Any])?["nodes"] as? [[String: Any]] ?? []
+        let commitNodes = LenientJSON.nodes(node, "commits")
         let lastSubstantiveCommitAt = commitNodes
             .compactMap { node -> Date? in
                 guard let commit = node["commit"] as? [String: Any] else { return nil }
@@ -596,7 +614,7 @@ public struct GitHubCodeBackend: CodeBackend {
         dateFormatter: ISO8601DateFormatter,
         viewerLogin: String?
     ) -> [ReviewRequest] {
-        guard let nodes = searchObj?["nodes"] as? [[String: Any]] else { return [] }
+        let nodes = LenientJSON.nodes(searchObj)
         let satisfyingStates: Set<String> = ["APPROVED", "CHANGES_REQUESTED", "DISMISSED"]
         var requests: [ReviewRequest] = []
         for node in nodes {
@@ -610,15 +628,14 @@ public struct GitHubCodeBackend: CodeBackend {
             let headRefOid = node["headRefOid"] as? String
             let baseBranch = (node["baseRefName"] as? String) ?? ""
             let updatedAt = (node["updatedAt"] as? String).flatMap { dateFormatter.date(from: $0) }
-            let labels = ((node["labels"] as? [String: Any])?["nodes"] as? [[String: Any]])?
+            let labels = LenientJSON.nodes(node, "labels")
                 .compactMap { labelNode -> LabelInfo? in
                     guard let name = labelNode["name"] as? String else { return nil }
                     return LabelInfo(name: name, color: labelNode["color"] as? String)
-                } ?? []
+                }
             var viewerLastReviewedAt: Date?
-            if let viewerLogin,
-               let reviewNodes = ((node["reviews"] as? [String: Any])?["nodes"]) as? [[String: Any]] {
-                for review in reviewNodes {
+            if let viewerLogin {
+                for review in LenientJSON.nodes(node, "reviews") {
                     guard let author = (review["author"] as? [String: Any])?["login"] as? String,
                           author == viewerLogin,
                           let state = review["state"] as? String,
@@ -654,6 +671,20 @@ public struct GitHubCodeBackend: CodeBackend {
         guard let data = output.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let dataObj = json["data"] as? [String: Any] else { return [:] }
+        return parseStalePRData(dataObj, refs: refs)
+    }
+
+    /// Parse an already-decoded GraphQL `data` object into per-ref records.
+    ///
+    /// Split out of `parseStalePRResponse` so the SAML partial-recovery path can
+    /// feed it `GitHubTaskBackend.decodeGraphQLData`'s output — that helper peels
+    /// the trailing `gh:` error line off the merged stdout+stderr blob, which a
+    /// plain `JSONSerialization` pass on the raw blob cannot do.
+    ///
+    /// Per-ref nulls are already tolerated: GitHub nullifies the whole `prN`
+    /// alias for a repo the token can't reach, and `dataObj["pr\(i)"] as?
+    /// [String: Any]` yields nil for `NSNull`, so that ref is simply absent.
+    static func parseStalePRData(_ dataObj: [String: Any], refs: [PRRef]) -> [PRRef: PRRecord] {
         var out: [PRRef: PRRecord] = [:]
         for (i, ref) in refs.enumerated() {
             guard let repoObj = dataObj["pr\(i)"] as? [String: Any],
@@ -662,6 +693,20 @@ public struct GitHubCodeBackend: CodeBackend {
             out[ref] = rec
         }
         return out
+    }
+
+    /// Recover the accessible-repo PR states GitHub returned alongside a SAML
+    /// `errors` entry. Symmetric with `recoverPartialMonitoredPRs`: `prStates`
+    /// batches every stale ref into one aliased query, so one SAML-restricted
+    /// repo made `gh` exit non-zero and took every *other* ref's state down
+    /// with it (#894). GitHub nullifies only the offending `prN` alias and
+    /// resolves the rest; recover those.
+    ///
+    /// Returns `[:]` when no body is recoverable — the caller treats that
+    /// identically to "no stale states", and this never throws.
+    static func recoverPartialStalePRStates(fromSAMLBlob blob: String, refs: [PRRef]) -> [PRRef: PRRecord] {
+        guard let dataObj = GitHubTaskBackend.decodeGraphQLData(blob) else { return [:] }
+        return parseStalePRData(dataObj, refs: refs)
     }
 
     static func parseRecentPRsResponse(
@@ -675,10 +720,8 @@ public struct GitHubCodeBackend: CodeBackend {
         dateFmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         var matches: [BranchPRMatch] = []
         for p in parsed {
-            guard let repoObj = dataObj["pr\(p.idx)"] as? [String: Any],
-                  let prs = repoObj["pullRequests"] as? [String: Any],
-                  let nodes = prs["nodes"] as? [[String: Any]] else { continue }
-            for node in nodes {
+            let repoObj = dataObj["pr\(p.idx)"] as? [String: Any]
+            for node in LenientJSON.nodes(repoObj, "pullRequests") {
                 guard let number = node["number"] as? Int,
                       let url = node["url"] as? String,
                       let state = node["state"] as? String else { continue }
