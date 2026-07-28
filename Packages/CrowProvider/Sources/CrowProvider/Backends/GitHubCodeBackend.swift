@@ -8,6 +8,7 @@ import CrowCore
 /// - `.batchedPRStates` — batches multiple PR states in one GraphQL call.
 /// - `.autoMerge` — supports `gh pr merge --auto --squash --delete-branch`.
 /// - `.updateBranch` — supports `gh pr update-branch`.
+/// - `.directMerge` — supports `gh pr merge --squash --delete-branch` (no `--auto`).
 ///
 /// See ADR 0005 for the protocol contract.
 public struct GitHubCodeBackend: CodeBackend {
@@ -17,7 +18,8 @@ public struct GitHubCodeBackend: CodeBackend {
         .autoMergeLabel,
         .batchedPRStates,
         .autoMerge,
-        .updateBranch
+        .updateBranch,
+        .directMerge
     ]
 
     private let shellRunner: ShellRunner
@@ -107,7 +109,7 @@ public struct GitHubCodeBackend: CodeBackend {
                   number url state mergeable mergeStateStatus reviewDecision isDraft
                   headRefName headRefOid baseRefName
                   mergeCommit { oid }
-                  repository { nameWithOwner }
+                  repository { nameWithOwner autoMergeAllowed }
                   labels(first: 20) { nodes { name color } }
                   statusCheckRollup {
                     state
@@ -331,6 +333,19 @@ public struct GitHubCodeBackend: CodeBackend {
         )
     }
 
+    /// Same invocation as `enableAutoMerge` minus `--auto`, which is the whole
+    /// difference: `--auto` queues the merge behind GitHub's required checks
+    /// and reviews, while this merges immediately. GitHub still refuses if the
+    /// PR is genuinely unmergeable, but it will NOT wait for pending checks —
+    /// so callers must have verified greenness themselves (#888).
+    public func mergeNow(prURL: String) async throws {
+        _ = try await shellRunner.run(
+            args: ["gh", "pr", "merge", prURL, "--squash", "--delete-branch"],
+            env: [:],
+            cwd: NSTemporaryDirectory()
+        )
+    }
+
     public func updateBranch(prURL: String) async throws {
         _ = try await shellRunner.run(
             args: ["gh", "pr", "update-branch", prURL],
@@ -368,7 +383,7 @@ public struct GitHubCodeBackend: CodeBackend {
         pullRequests(first: 50, states: [OPEN], orderBy: {field: UPDATED_AT, direction: DESC}) {
           nodes {
             number url state mergeable mergeStateStatus reviewDecision isDraft headRefName headRefOid baseRefName
-            repository { nameWithOwner }
+            repository { nameWithOwner autoMergeAllowed }
             labels(first: 20) { nodes { name color } }
             closingIssuesReferences(first: 5) { nodes { number repository { nameWithOwner } } }
             statusCheckRollup {
@@ -483,6 +498,13 @@ public struct GitHubCodeBackend: CodeBackend {
         let baseRefName = (node["baseRefName"] as? String) ?? ""
         let mergeCommitOid = (node["mergeCommit"] as? [String: Any])?["oid"] as? String
         let repoName = (node["repository"] as? [String: Any])?["nameWithOwner"] as? String ?? ""
+        // `Repository.autoMergeAllowed` — the repo's "Allow auto-merge" setting.
+        // Deliberately NOT defaulted to a Bool: a query that didn't select the
+        // field (or a partial SAML recovery) must read as unknown, not as
+        // "auto-merge is forbidden", which would strand every PR in the repo
+        // (#888). Same manual cast as `repoName` above — `repository` is a plain
+        // object, not a connection, so `LenientJSON.nodes` (#896) doesn't apply.
+        let repoAutoMergeAllowed = (node["repository"] as? [String: Any])?["autoMergeAllowed"] as? Bool
         let labels = LenientJSON.nodes(node, "labels")
             .compactMap { labelNode -> LabelInfo? in
                 guard let name = labelNode["name"] as? String else { return nil }
@@ -569,7 +591,8 @@ public struct GitHubCodeBackend: CodeBackend {
             latestReviewStates: reviewStates,
             lastChangesRequestedAt: lastChangesRequestedAt,
             lastSubstantiveCommitAt: lastSubstantiveCommitAt,
-            mergeCommitOid: mergeCommitOid
+            mergeCommitOid: mergeCommitOid,
+            repoAutoMergeAllowed: repoAutoMergeAllowed
         )
     }
 

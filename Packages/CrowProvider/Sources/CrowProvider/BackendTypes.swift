@@ -76,6 +76,14 @@ public struct PRRecord: Sendable {
     /// only once the PR is MERGED; `nil` otherwise. Revert-detection anchor
     /// (#694): a revert of a squash-merged PR names this SHA, not a branch SHA.
     public let mergeCommitOid: String?
+    /// Whether the PR's repository has GitHub's "Allow auto-merge" setting on
+    /// (GraphQL `Repository.autoMergeAllowed`). `nil` means *unknown*, not
+    /// *false*: GitLab never sets it, and a SAML-restricted or otherwise
+    /// partial fetch can omit it. Callers must treat `nil` as "proceed as
+    /// before" — only an explicit `false` is a licence to change behaviour
+    /// (#888), because guessing wrong here either freezes a healthy PR or
+    /// merges one Crow shouldn't touch.
+    public let repoAutoMergeAllowed: Bool?
 
     public init(
         number: Int,
@@ -97,7 +105,8 @@ public struct PRRecord: Sendable {
         lastChangesRequestedAt: Date? = nil,
         lastSubstantiveCommitAt: Date? = nil,
         updatedAt: Date? = nil,
-        mergeCommitOid: String? = nil
+        mergeCommitOid: String? = nil,
+        repoAutoMergeAllowed: Bool? = nil
     ) {
         self.number = number
         self.url = url
@@ -119,6 +128,7 @@ public struct PRRecord: Sendable {
         self.lastSubstantiveCommitAt = lastSubstantiveCommitAt
         self.updatedAt = updatedAt
         self.mergeCommitOid = mergeCommitOid
+        self.repoAutoMergeAllowed = repoAutoMergeAllowed
     }
 }
 

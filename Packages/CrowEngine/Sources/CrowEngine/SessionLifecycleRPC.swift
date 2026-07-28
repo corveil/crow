@@ -50,7 +50,17 @@ public enum SessionLifecycleRPC {
     /// Response body for the two provider-side verbs. `ok` is what the web UI
     /// has always read; `session_id` is additive, so a CLI caller piping to `jq`
     /// can correlate the receipt with the session it acted on.
-    public static func okResult(id: UUID) -> [String: JSONValue] {
-        ["ok": .bool(true), "session_id": .string(id.uuidString)]
+    ///
+    /// `warning` is additive in the same spirit, and answers a different
+    /// question than `ok`: the verb *did* what it says (so `ok` stays true),
+    /// but a `crow:merge` label merges nothing when the watcher is off or the
+    /// repo forbids auto-merge — and the old receipt was silent about that,
+    /// which is how a labeled PR could sit unmerged forever with no signal
+    /// (#888). Omitted entirely when there's nothing to say, so `jq -e .warning`
+    /// is a clean test and no existing consumer sees a new null.
+    public static func okResult(id: UUID, warning: String? = nil) -> [String: JSONValue] {
+        var body: [String: JSONValue] = ["ok": .bool(true), "session_id": .string(id.uuidString)]
+        if let warning, !warning.isEmpty { body["warning"] = .string(warning) }
+        return body
     }
 }

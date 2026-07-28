@@ -9,7 +9,7 @@ const { JSDOM } = require('jsdom');
 const epilogue = `
 ;globalThis.__t = {
   sessionRow(s){ return sessionRow(s); },
-  prStatusInline(pr){ return prStatusInline(pr); },
+  prStatusInline(pr, am, enabled){ return prStatusInline(pr, am, enabled); },
   set live(v){ liveById = v; },
   set hideDetails(v){ uiConfig.hideSessionDetails = v; },
 };
@@ -50,12 +50,31 @@ const SESSION = {
 };
 
 // Render a row with the given live `pr` entry, returning { row, glyphs }.
-function render(pr, overrides) {
-  T.live = pr === undefined ? {} : { 'sess-1': { pr } };
+// `autoMergeState` populates the live `auto_merge_state` sibling of `pr` (#888).
+function render(pr, overrides, autoMergeState) {
+  const live = pr === undefined ? {} : { 'sess-1': { pr } };
+  if (autoMergeState && live['sess-1']) live['sess-1'].auto_merge_state = autoMergeState;
+  T.live = live;
   const row = T.sessionRow({ ...SESSION, ...(overrides || {}) });
   return { row, glyphs: [...row.querySelectorAll('.pr-badge .pr-ico')].map((n) => n.textContent) };
 }
 const badge = (row) => row.querySelector('.pr-badge');
+// Every icon child of the pill, in order. Parts with an `icon` render as SVG
+// `.ico` spans and only glyph-only parts as `.pr-ico` text — the CROW-802 drift
+// the `r.glyphs` assertions below still trip over. The auto-merge part is
+// appended last, so its presence is a count delta and its tint is the last
+// child's color; both are real structural assertions rather than a restatement
+// of the aria-label.
+const pillIcons = (row) => [...row.querySelectorAll('.pr-badge .ico, .pr-badge .pr-ico')];
+const autoIco = (row) => {
+  const icons = pillIcons(row);
+  return icons.length ? icons[icons.length - 1] : null;
+};
+// checks ✔ + review ✔ + 🏷 = three icons before any auto-merge chip.
+const GREEN_PR = { has_pr: true, checks: 'passing', review: 'approved', merge: 'mergeable',
+  is_merged: false, has_blockers: false, ready_to_merge: true, failed_checks: [], has_merge_label: true };
+const GREEN_PR_ICONS = 3;
+const hasAutoChip = (row) => pillIcons(row).length === GREEN_PR_ICONS + 1;
 
 console.log('Failing checks + changes requested:');
 let r = render({ has_pr: true, checks: 'failing', review: 'changesRequested', merge: 'MERGEABLE',
@@ -102,17 +121,15 @@ check('three glyphs (checks, review, conflict)', r.glyphs.length === 3);
 check('third glyph is ⚠', r.glyphs[2] === '⚠');
 
 console.log('\ncrow:merge label vs auto-merge enabled (two independent signals):');
-r = render({ has_pr: true, checks: 'passing', review: 'approved', merge: 'mergeable',
-  is_merged: false, has_blockers: false, ready_to_merge: true, failed_checks: [], has_merge_label: true });
+r = render(GREEN_PR);
 check('🏷 present when has_merge_label', r.glyphs.includes('🏷'));
-check('no ⛙ when auto_merge is false', !r.row.querySelector('.automerge'));
+check('no ⛙ when auto_merge is false and no verdict', !hasAutoChip(r.row));
 r = render({ has_pr: true, checks: 'passing', review: 'approved', merge: 'mergeable',
   is_merged: false, has_blockers: false, ready_to_merge: true, failed_checks: [] });
 check('no 🏷 when has_merge_label absent', !r.glyphs.includes('🏷'));
-r = render({ has_pr: true, checks: 'passing', review: 'approved', merge: 'mergeable',
-  is_merged: false, has_blockers: false, ready_to_merge: true, failed_checks: [], has_merge_label: true },
-  { auto_merge: true });
-check('🏷 and ⛙ can both show', r.glyphs.includes('🏷') && !!r.row.querySelector('.automerge'));
+r = render(GREEN_PR, { auto_merge: true });
+check('🏷 and ⛙ can both show',
+  hasAutoChip(r.row) && /crow:merge label/.test(badge(r.row).getAttribute('aria-label')));
 // CROW-846: the visible chip dropped the redundant trailing "label", but the
 // sidebar pill is glyph-only — its aria-label/title is the sole screen-reader
 // channel, so the noun must survive there via PR_MERGE_LABEL_GLYPH.a11yLabel.
@@ -120,11 +137,58 @@ check('🏷 and ⛙ can both show', r.glyphs.includes('🏷') && !!r.row.querySe
 // (or reverting `label` to `'crow:merge label'`) can't silently unwind either.
 check('sidebar aria keeps the unambiguous "crow:merge label" noun',
   /crow:merge label/.test(badge(r.row).getAttribute('aria-label')));
-const mergeChips = [...T.prStatusInline({ has_pr: true, checks: 'passing', review: 'approved',
-  merge: 'mergeable', is_merged: false, has_blockers: false, ready_to_merge: true,
-  failed_checks: [], has_merge_label: true }).querySelectorAll('.pr-stat-label')].map((n) => n.textContent);
+const mergeChips = [...T.prStatusInline(GREEN_PR).querySelectorAll('.pr-stat-label')].map((n) => n.textContent);
 check('detail chip reads the concise "crow:merge"', mergeChips.includes('crow:merge'));
 check('detail chip drops the redundant "crow:merge label"', !mergeChips.includes('crow:merge label'));
+
+// #888 — the whole point: a labeled PR that will never merge must not look like
+// a healthy pending one. The ⛙ mark is shared; the TINT carries the verdict.
+console.log('\nAuto-merge verdict (#888):');
+const BLOCKED = { phase: 'blocked', reason: 'repo-disallows-auto-merge', permanent: true,
+  message: 'corveil/corveil has GitHub\'s "Allow auto-merge" setting turned off.' };
+r = render(GREEN_PR, {}, BLOCKED);
+check('blocked verdict adds a ⛙ to the pill', hasAutoChip(r.row));
+check('blocked ⛙ is red', autoIco(r.row).style.color === 'var(--red)');
+check('the human sentence rides the pill tooltip', badge(r.row).title.includes(BLOCKED.message));
+check('the human sentence is not sighted-only',
+  badge(r.row).getAttribute('aria-label').includes(BLOCKED.message));
+check('aria still names the blocked state itself',
+  /Auto-merge blocked/.test(badge(r.row).getAttribute('aria-label')));
+
+r = render(GREEN_PR, {}, { phase: 'stalled', reason: 'not-in-viewer-prs', permanent: false, message: 'Not in the last fetch.' });
+check('stalled verdict is orange, not red', autoIco(r.row).style.color === 'var(--orange)');
+r = render(GREEN_PR, {}, { phase: 'off', reason: 'watcher-off', permanent: false, message: 'The watcher is off.' });
+check('watcher-off verdict is muted', autoIco(r.row).style.color === 'var(--text-muted)');
+r = render(GREEN_PR, {}, { phase: 'enabled', reason: 'already-enabled', permanent: false, message: 'Waiting on GitHub.' });
+check('enabled verdict is green', autoIco(r.row).style.color === 'var(--green)');
+r = render(GREEN_PR, {}, { phase: 'merged', reason: 'direct-merge', permanent: false, message: 'Crow merged it directly.' });
+check('direct-merge verdict is purple', autoIco(r.row).style.color === 'var(--purple)');
+
+// The suppression contract: reasons the pill already renders (conflicts, review
+// state) must never be re-reported as an auto-merge verdict, or the two
+// surfaces start disagreeing about one PR — the exact thing CROW-773 fixed.
+r = render({ ...GREEN_PR, merge: 'conflicting' }, {});
+check('a conflicting PR gets no auto-merge chip of its own',
+  !/Auto-merge/.test(badge(r.row).getAttribute('aria-label')));
+
+r = render({ ...GREEN_PR, is_merged: true }, {}, BLOCKED);
+check('merged PR drops the auto-merge chip',
+  pillIcons(r.row).length === 1 && !/Auto-merge/.test(badge(r.row).getAttribute('aria-label')));
+
+r = render(GREEN_PR, { auto_merge: true });
+check('older daemon falls back to the persisted auto_merge flag',
+  hasAutoChip(r.row) && autoIco(r.row).style.color === 'var(--green)');
+r = render(GREEN_PR, { auto_merge: false });
+check('no chip at all when there is nothing to report', !hasAutoChip(r.row));
+
+check('the trailing ⛙ is gone — folded into the pill',
+  !render(GREEN_PR, { auto_merge: true }).row.querySelector('.automerge'));
+
+const blockedChips = [...T.prStatusInline(GREEN_PR, BLOCKED).querySelectorAll('.pr-stat')];
+const blockedLabels = blockedChips.map((n) => n.querySelector('.pr-stat-label').textContent);
+check('detail chip labels the blocked state', blockedLabels.includes('Auto-merge blocked'));
+check('detail chip carries the sentence as a title',
+  blockedChips.some((c) => c.title === BLOCKED.message));
 
 console.log('\nGraceful degradation (older daemon payload / no PR status):');
 r = render(undefined);

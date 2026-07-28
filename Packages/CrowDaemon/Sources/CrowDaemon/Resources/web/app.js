@@ -170,6 +170,7 @@ const DEFAULT_EVENT_SOUND = {
   // Automation events (CROW-768) — Basso for conflicts so "needs attention" is
   // audibly distinct from the success events beside it.
   autoWorkspaceCreated: 'Hero', autoMergeEnabled: 'Glass',
+  autoMergeBlocked: 'Basso',
   autoRebasePushed: 'Bottle', autoRebaseConflicts: 'Basso', configReloaded: 'Tink',
 };
 
@@ -180,6 +181,7 @@ const EVENT_LABEL = {
   reviewRequested: 'Review Requested', changesRequested: 'Changes Requested',
   checksFailing: 'CI Failing',
   autoWorkspaceCreated: 'Auto-Workspace Created', autoMergeEnabled: 'Auto-Merge Enabled',
+  autoMergeBlocked: 'Auto-Merge Blocked',
   autoRebasePushed: 'Branch Rebased', autoRebaseConflicts: 'Rebase Conflicts',
   configReloaded: 'Config Reloaded',
 };
@@ -191,6 +193,7 @@ const EVENT_DESC = {
   checksFailing: 'CI checks started failing on your PR',
   autoWorkspaceCreated: 'Crow auto-created a workspace for an assigned issue',
   autoMergeEnabled: 'Crow enabled auto-merge on a PR',
+  autoMergeBlocked: "Crow can't auto-merge a crow:merge PR and has stopped trying",
   autoRebasePushed: 'Crow rebased a PR branch onto its base and pushed',
   autoRebaseConflicts: 'An auto-rebase hit conflicts that need attention',
   configReloaded: 'Crow reloaded its configuration',
@@ -199,7 +202,7 @@ const EVENT_DESC = {
 // NotificationEvent.isAutomationEvent (CrowCore) — the events the daemon pushes
 // rather than the client deriving them from polled state (CROW-768).
 const AUTOMATION_EVENTS = [
-  'autoWorkspaceCreated', 'autoMergeEnabled', 'autoRebasePushed',
+  'autoWorkspaceCreated', 'autoMergeEnabled', 'autoMergeBlocked', 'autoRebasePushed',
   'autoRebaseConflicts', 'configReloaded',
 ];
 // Every event the notification layer knows about, in the Settings tab's order.
@@ -1208,7 +1211,10 @@ function sessionRow(s) {
 
   const trail = el('div', 'row-trail');
   if (s.locked) trail.appendChild(el('span', 'lock', '🔒'));
-  if (s.auto_merge) { const am = el('span', 'automerge', '⛙'); am.title = 'Auto-merge'; trail.appendChild(am); }
+  // The auto-merge ⛙ used to live here, untinted and structurally divorced from
+  // the PR pill. It now lives IN the pill (see prAutoMergeGlyph), where a color
+  // can distinguish "armed" from "Crow gave up" — two ⛙ marks on one row
+  // meaning different things would be worse than the bug (#888, CROW-773).
   // Trailing glowing status dot.
   const dot = el('span', 'dot glow' + (ind.pulse ? ' pulse' : ''));
   dot.style.background = ind.color;
@@ -1255,7 +1261,7 @@ function sessionRow(s) {
     const prb = el('span', 'pr-badge', prLink.label || 'PR');
     prb.style.color = color;
     prb.style.borderColor = color;
-    const parts = prBadgeParts(pr);
+    const parts = prBadgeParts(pr, liveFor(s.id).auto_merge_state, s.auto_merge);
     for (const part of parts) {
       const ico = part.icon ? icon(part.icon, 10) : el('span', 'pr-ico', part.glyph);
       ico.style.color = part.color;
@@ -1264,8 +1270,12 @@ function sessionRow(s) {
     // Glyph + color must not be the only channel — mirrors native PRBadge's
     // `accessibilityDescription` ("#123, Checks pass, Approved").
     const desc = [prLink.label || 'PR', ...parts.map((p) => p.a11yLabel || p.label)].join(', ');
-    prb.title = desc;
-    prb.setAttribute('aria-label', desc);
+    // The auto-merge part carries a whole sentence — too long for the comma
+    // list, but it IS the answer to "why is nothing happening?", so it gets its
+    // own tooltip line and rides the aria-label rather than being sighted-only.
+    const detail = parts.map((p) => p.detail).filter(Boolean).join(' ');
+    prb.title = detail ? desc + '\n' + detail : desc;
+    prb.setAttribute('aria-label', detail ? desc + '. ' + detail : desc);
     badges.appendChild(prb);
   }
   // Activity badge (Working/Waiting/Done/…) is redundant on managers — they
@@ -1339,6 +1349,31 @@ const PR_CONFLICT_GLYPH = { glyph: '⚠', icon: 'warning', color: 'var(--red)', 
 // text); the aria path keeps it via `a11yLabel` — there the glyph is never
 // announced, so the noun is the only signal it's a label (CROW-846).
 const PR_MERGE_LABEL_GLYPH = { glyph: '🏷', icon: 'tag', color: 'var(--gold)', label: 'crow:merge', a11yLabel: 'crow:merge label' };
+// Auto-merge lifecycle — one FAMILY (the ⛙ merge mark), five COLORS for the
+// five outcomes. Before #888 the row drew the same untinted ⛙ whether Crow was
+// about to merge the PR or had permanently given up on it, so "armed" and
+// "dead" were indistinguishable. Here the mark says "this is about auto-merge"
+// and the color says which way it went.
+// `detail` is the daemon's full sentence: too long for the chip, so it rides
+// the tooltip/aria channel only — the same chip-vs-a11y split as
+// PR_MERGE_LABEL_GLYPH (CROW-846).
+const PR_AUTOMERGE_GLYPH = {
+  enabled: { glyph: '⛙', icon: 'merge', color: 'var(--green)', label: 'Auto-merge on', a11yLabel: 'Auto-merge enabled' },
+  merged: { glyph: '⛙', icon: 'merge', color: 'var(--purple)', label: 'Merged by Crow', a11yLabel: 'Merged by Crow' },
+  stalled: { glyph: '⛙', icon: 'merge', color: 'var(--orange)', label: 'Auto-merge waiting', a11yLabel: 'Auto-merge waiting to retry' },
+  blocked: { glyph: '⛙', icon: 'merge', color: 'var(--red)', label: 'Auto-merge blocked', a11yLabel: 'Auto-merge blocked' },
+  off: { glyph: '⛙', icon: 'merge', color: 'var(--text-muted)', label: 'Auto-merge off', a11yLabel: 'Auto-merge watcher is off' },
+};
+
+// The auto-merge part for one row, or null when there's nothing to say.
+// `am` is the live `auto_merge_state` object (absent on pre-#888 daemons);
+// `enabled` is the persisted `session.auto_merge` bool, which is ALL an older
+// daemon sends — so it stays the fallback rather than the primary source.
+function prAutoMergeGlyph(am, enabled) {
+  const base = am && am.phase && PR_AUTOMERGE_GLYPH[am.phase];
+  if (base) return am.message ? Object.assign({}, base, { detail: am.message }) : base;
+  return enabled ? PR_AUTOMERGE_GLYPH.enabled : null;
+}
 
 function prChecksGlyph(pr) {
   const base = PR_CHECKS_GLYPH[pr.checks] || PR_CHECKS_GLYPH.unknown;
@@ -1355,13 +1390,18 @@ function prReviewGlyph(pr) {
 
 // The ordered glyphs for a session-row PR pill, mirroring native `PRBadge`:
 // merged collapses to a single check, otherwise checks + review, plus the
-// conflict and crow:merge-label markers the native pill folded into its tint.
-function prBadgeParts(pr) {
+// conflict and crow:merge-label markers the native pill folded into its tint,
+// then what Crow's watcher did about it. The auto-merge part goes LAST so the
+// pill reads left-to-right as "state of the PR, then what Crow did about it";
+// a merged PR short-circuits, because its auto-merge state is history.
+function prBadgeParts(pr, am, autoMergeEnabled) {
   if (!pr || !pr.has_pr) return [];
   if (pr.is_merged) return [PR_MERGED_GLYPH];
   const parts = [prChecksGlyph(pr), prReviewGlyph(pr)];
   if (pr.merge === 'conflicting') parts.push(PR_CONFLICT_GLYPH);
   if (pr.has_merge_label) parts.push(PR_MERGE_LABEL_GLYPH);
+  const auto = prAutoMergeGlyph(am, autoMergeEnabled);
+  if (auto) parts.push(auto);
   return parts;
 }
 
@@ -1572,9 +1612,20 @@ async function openHandoffAgentMenu(session, anchorEl) {
   setTimeout(() => document.addEventListener('click', closeContextMenu, { once: true }), 0);
 }
 
+// Fire a session RPC from the row menu. A verb can succeed and still not have
+// done the whole job: the RPC returns `ok:true` plus an additive `warning`
+// (e.g. the crow:merge label landed but the auto-merge watcher is off). That's
+// not an error — but staying quiet about it is exactly how #888 happened, so
+// surface it. Read generically rather than per-verb: any of these verbs may
+// grow a warning, and a special case for one is how the next one gets missed.
+// Deliberately a modal and NOT quickAction's terminal line — `term` is the
+// SELECTED session's surface while this runs from any row's context menu, so a
+// terminal write would land in an unrelated session's scrollback.
 async function sessionAction(method, id, extra) {
-  try { await rpc(method, Object.assign({ session_id: id }, extra || {})); }
-  catch (e) { alertModal(method + ' failed: ' + (e.message || e)); }
+  try {
+    const res = await rpc(method, Object.assign({ session_id: id }, extra || {}));
+    if (res && typeof res.warning === 'string' && res.warning) alertModal(res.warning);
+  } catch (e) { alertModal(method + ' failed: ' + (e.message || e)); }
 }
 
 // "In Review" with an in-flight spinner — mirrors native's ProgressView swap
@@ -1784,7 +1835,9 @@ function renderHeader(s) {
     chip.textContent = (link.type === 'ticket' && s.ticket_badge) || link.label || link.type || 'link';
     headerRow.appendChild(chip);
   }
-  if (pr && pr.has_pr) headerRow.appendChild(prStatusInline(pr));
+  if (pr && pr.has_pr) {
+    headerRow.appendChild(prStatusInline(pr, liveFor(s.id).auto_merge_state, s.auto_merge));
+  }
 
   // Right-aligned action cluster: PR quick-actions, then status transitions + delete.
   const actions = el('div', 'actions-cluster');
@@ -1871,7 +1924,7 @@ function renderSessionAnalyticsStrip(s, root) {
 // Inline PR status, mirroring the desktop PRStatusDetail. Same glyph/color
 // vocabulary as the sidebar row pill (`prBadgeParts`) — spelled out with labels
 // here, glyph-only there (CROW-773).
-function prStatusInline(pr) {
+function prStatusInline(pr, am, autoMergeEnabled) {
   const wrap = el('div', 'pr-status-inline');
   if (pr.is_merged) {
     wrap.appendChild(prStatusPart(PR_MERGED_GLYPH));
@@ -1886,6 +1939,8 @@ function prStatusInline(pr) {
   if (pr.has_merge_label) {
     wrap.appendChild(prStatusPart(PR_MERGE_LABEL_GLYPH));
   }
+  const auto = prAutoMergeGlyph(am, autoMergeEnabled);
+  if (auto) wrap.appendChild(prStatusPart(auto));
   return wrap;
 }
 
@@ -1895,6 +1950,9 @@ function prStatusInline(pr) {
 function prStatusPart(part) {
   const chip = el('span', 'pr-stat');
   chip.style.color = part.color;
+  // The daemon's full sentence, when there is one — the chip label is a
+  // two-word summary and the reason is the actionable half (#888).
+  if (part.detail) chip.title = part.detail;
   chip.appendChild(part.icon ? icon(part.icon, 12) : el('span', 'pr-stat-glyph', part.glyph));
   chip.appendChild(el('span', 'pr-stat-label', part.label));
   return chip;

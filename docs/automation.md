@@ -101,17 +101,25 @@ PR #299 added a single toggle that lets Crow enable GitHub's native auto-merge o
 
 Backed by `AppConfig.autoMergeWatcherEnabled`. Hand-written PRs without the Crow trailer are ignored even when labeled. Crow lazily creates the `crow:merge` label in the repo on first observation so repo owners don't need to pre-seed it.
 
+**The label is a request, not an action** (#888). Applying it — via the session menu, `crow add-merge-label`, or GitHub itself — does not merge anything on its own; the watcher decides. When the watcher can't act, it now says so instead of only writing to `crowd-automation.log`:
+
+- The session's PR pill carries a tinted ⛙ chip — green (auto-merge enabled, waiting on GitHub), purple (Crow merged it directly), orange (will retry), red (permanently blocked), grey (the watcher is off) — with the full reason in its tooltip and `aria-label`. The chip appears only on PRs that actually asked for auto-merge: a PR Crow has never seen carrying `crow:merge`, and has never armed, is left alone rather than described in auto-merge vocabulary it never earned.
+- A permanent block also fires an **Auto-Merge Blocked** notification, once per PR rather than once per poll.
+- `crow add-merge-label` still applies the label and still returns `ok: true`, but adds a `warning` field when the label can't lead to a merge.
+- When the repo has GitHub's **Allow auto-merge** setting off, `gh pr merge --auto` can never succeed. Crow reads `Repository.autoMergeAllowed` from the same GraphQL fetch it already makes, so it knows this before attempting the mutation, and **falls back to a direct squash merge** (`gh pr merge --squash --delete-branch`) when the PR is OPEN, non-draft, `CLEAN`, `MERGEABLE`, checks `SUCCESS`, `APPROVED`, and Crow-authored. Anything short of that is reported as blocked rather than merged — a direct merge has no server-side gate, so every check GitHub would have enforced is re-checked first.
+
 ## Automation notifications
 
 Every automation above acts without you asking, so each one announces itself. Alongside the
 five agent/PR events (Task Complete, Agent Waiting, Review Requested, Changes Requested, CI
-Failing), the daemon pushes five **automation** events to connected clients at the moment a
+Failing), the daemon pushes six **automation** events to connected clients at the moment a
 watcher acts:
 
 | Event                    | Fires when                                                              |
 | ------------------------ | ----------------------------------------------------------------------- |
 | Auto-Workspace Created   | A `crow:auto`-labeled assigned issue triggered `/crow-workspace`         |
 | Auto-Merge Enabled       | Crow enabled auto-merge on a `crow:merge`-labeled PR                     |
+| Auto-Merge Blocked       | Crow gave up on a `crow:merge` PR (needs attention — a permanent skip latches, so nothing re-announces it) |
 | Branch Rebased           | An auto-rebase succeeded and force-pushed                               |
 | Rebase Conflicts         | An auto-rebase hit conflicts (needs attention — deliberately harsher tone) |
 | Config Reloaded          | `{devRoot}/.claude/config.json` changed and was picked up               |
@@ -159,7 +167,9 @@ When a PR linked to an active Crow session carries the `crow:merge` label, the I
 
 Crow does not babysit the merge — GitHub queues it server-side and fires once required checks settle. Enablement is one-shot per PR: `Session.autoMergeEnabledAt` is persisted on success, and an in-memory dedupe set protects the gap between dispatch and persistence. Trailer-with-unknown-session is treated as not-Crow-authored (defensive: someone copy-pasting our trailer convention into a hand-written commit should not be able to trigger auto-merge). If the repo has GitHub **Allow auto-merge** disabled (`enablePullRequestAutoMerge`), Crow logs once and stops retrying for that PR for the process lifetime rather than spamming every poll (CROW-621); transient `gh` failures still retry.
 
-Audit trail: each enable writes `[Crow] Auto-merge enabled on <pr-url> (session <uuid>, squash)` to the system log and posts a banner notification.
+#888 addressed the silence around that permanent skip. Crow now reads `Repository.autoMergeAllowed` from the GraphQL fetch it was already making, so the repo-policy case is detected *before* the failed mutation rather than by string-matching its error (the error match survives as a backstop for records where the field wasn't fetched). The twelve skip reasons — previously six enum cases plus six ad-hoc string literals — are one enum carrying a log-stable `rawValue`, a human sentence, and a permanence flag; the verdict is published to `AppState.autoMergeState` and shipped on `list-sessions-live` as `auto_merge_state` (`{phase, reason, message, permanent}`). Reasons the PR pill already renders (conflicts, changes-requested, no label) are deliberately *not* republished, so two surfaces can't disagree about one PR (CROW-773). A repo that forbids auto-merge now also gets a direct squash-merge fallback for fully green, approved, Crow-authored PRs.
+
+Audit trail: each enable writes `[Crow] Auto-merge enabled on <pr-url> (session <uuid>, squash)` to the system log and posts a banner notification; each permanent block writes an `auto-merge:` line and fires an **Auto-Merge Blocked** notification, once per (PR, reason).
 
 ### #137 — Session analytics via OpenTelemetry
 
@@ -177,6 +187,8 @@ Claude Code's OpenTelemetry exporter is wired up so each session emits standard 
 | Auto-create / auto-respond loop  | `Packages/CrowEngine/Sources/CrowEngine/IssueTracker.swift` (60s polling cycle)                                         |
 | Review session auto-start        | `Packages/CrowEngine/Sources/CrowEngine/IssueTracker.swift` + per-workspace flag in `AppConfig`                         |
 | Auto-merge watcher (`crow:merge`)| `Packages/CrowEngine/Sources/CrowEngine/IssueTracker.swift` (`applyAutoMerge`, `extractCrowSessionUUIDs`, `crowAuthored`) |
+| Auto-merge verdict → UI          | `Packages/CrowEngine/Sources/CrowEngine/IssueTracker.swift` (`AutoMergeSkipReason.state`, `publishAutoMergeVerdict`) → `Packages/CrowDaemon/Sources/CrowDaemon/RPCHandlers.swift` (`list-sessions-live` → `auto_merge_state`) → `.../web/app.js` (`PR_AUTOMERGE_GLYPH`, `prAutoMergeGlyph`) |
+| Direct-merge fallback            | `Packages/CrowEngine/Sources/CrowEngine/IssueTracker.swift` (`shouldDirectMerge`, `directMergeGatesPass`, `performDirectMerge`) + `CodeBackend.mergeNow` |
 | Automation notification push     | `Packages/CrowDaemon/Sources/CrowDaemon/CrowDaemon.swift` (`wireTrackerAutomations`) + `EventHub.notifyFrame`             |
 | Notification events + defaults   | `Packages/CrowCore/Sources/CrowCore/Models/NotificationEvent.swift`                                                       |
 | Chime / browser notification     | `Packages/CrowDaemon/Sources/CrowDaemon/Resources/web/app.js` (`onServerNotify`, `emitEvent`)                             |

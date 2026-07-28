@@ -252,6 +252,15 @@ public final class AppState {
     /// Must be cleaned up when a session is deleted (see `SessionService.deleteSession`).
     public var prStatus: [UUID: PRStatus] = [:]
 
+    /// What the auto-merge watcher concluded about each session's PR on the
+    /// last poll (#888). In-memory only and deliberately absent from
+    /// `DaemonStateSnapshot`: it is re-derived from scratch every poll, so
+    /// persisting it would only let a stale verdict outlive its cause — a
+    /// "permanently blocked" chip surviving the repo setting that caused it is
+    /// worse than no chip at all. Cleared alongside `prStatus` when a session
+    /// is deleted (see `SessionService.deleteSession`).
+    public var autoMergeState: [UUID: AutoMergeState] = [:]
+
     // MARK: - Review Requests
 
     /// PRs where the current user has been requested as a reviewer.

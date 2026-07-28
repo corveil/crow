@@ -760,7 +760,9 @@ html, body {
 .row-trail { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
 .dot.glow { box-shadow: 0 0 5px 0 currentColor; }
 .rc-glyph { color: var(--gold); display: inline-flex; align-items: center; flex: 0 0 auto; }
-.automerge { font-size: 11px; opacity: 0.75; }
+/* `.automerge` (the row-trail ⛙) was removed in #888 — the auto-merge state is
+   now a tinted chip inside the PR pill, so its color can distinguish "armed"
+   from "Crow gave up". See PR_AUTOMERGE_GLYPH in app.js. */
 
 /* ---- Custom right-click context menu ---- */
 .ctx-menu {

@@ -88,6 +88,17 @@ public protocol CodeBackend: Sendable {
     /// `ProviderError.unimplemented`.
     func enableAutoMerge(prURL: String) async throws
 
+    /// Merge the PR at `prURL` **right now** (squash + delete branch), without
+    /// queueing it behind the host's checks/reviews gate. Capability-gated on
+    /// `.directMerge`.
+    ///
+    /// This is the escape hatch for repos with GitHub's "Allow auto-merge"
+    /// turned off, where `enableAutoMerge` can never succeed (#888). It is a
+    /// strictly more dangerous operation than `enableAutoMerge`: nothing on the
+    /// host side re-checks eligibility, so the *caller* owes a full green-state
+    /// verification before invoking it (see `IssueTracker.shouldDirectMerge`).
+    func mergeNow(prURL: String) async throws
+
     /// Trigger a "Update branch" rebase/merge from the base branch on the PR
     /// at `prURL`. Capability-gated on `.updateBranch`. Backends without the
     /// capability throw `ProviderError.unimplemented`.
@@ -122,6 +133,14 @@ public extension CodeBackend {
     func addMergeLabel(prURL: String) async throws {
         throw ProviderError.unimplemented("addMergeLabel not supported by \(provider)")
     }
+
+    /// Default: backends without `.directMerge` can't merge a PR outright.
+    /// GitHub overrides this; others inherit the throw. Defaulted rather than
+    /// required so adding the direct-merge fallback (#888) didn't force every
+    /// conformer to grow a method that only the GitHub path can use.
+    func mergeNow(prURL: String) async throws {
+        throw ProviderError.unimplemented("mergeNow not supported by \(provider)")
+    }
 }
 
 /// Optional capabilities a `CodeBackend` may declare.
@@ -144,6 +163,13 @@ public enum CodeCapability: Sendable, Hashable {
     /// Supports `gh pr update-branch` (or equivalent). Gates `updateBranch`.
     /// GitHub declares this; GitLab does not.
     case updateBranch
+
+    /// Supports merging a PR outright (`gh pr merge --squash`, no `--auto`).
+    /// Gates `mergeNow`. GitHub declares this; GitLab does not. Distinct from
+    /// `.autoMerge` on purpose: a repo can forbid the host's auto-merge queue
+    /// while still allowing an ordinary merge, which is exactly the case that
+    /// used to leave `crow:merge` PRs stranded forever (#888).
+    case directMerge
 }
 
 /// Minimal PR/MR identity returned from `CodeBackend.linkedPR`.
