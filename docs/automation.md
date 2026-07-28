@@ -18,6 +18,10 @@ A fully automated ticket walks through these stages:
 
 PR #228 split every automation toggle out of General into its own tab. Open **Settings → Automation** to find:
 
+> **Also drivable from the CLI (#812).** `crow automation get` prints the whole tab as one JSON payload; `crow automation set` patches the toggles. Both surfaces write the same `config.json` through the same lock, and the daemon's mtime poll broadcasts `configReloaded`, so an open Settings modal and a CLI write stay in agreement. See [CLI Reference → Automation Commands](cli-reference.md#automation-commands). The config key named in each toggle entry below is its flag name in kebab-case (`autoMergeWatcherEnabled` → `--auto-merge-watcher-enabled`).
+>
+> The tab's three **list** fields under Reviews and Tickets are `AppConfig.defaults` fields, so `crow defaults set` writes them (`--add-exclude-review-repo`, …) — `crow automation get` echoes them read-only. The **Manager AI gateway** editor has its own local-only verb (`crow gateway`), and the **Jira (status fetch)** credential stays UI-only.
+
 ### Reviews
 
 - **Excluded Repos** — comma-separated list of repos to hide from the review board, sidebar badge counts, and review notifications. Supports `*` wildcards: `zarf-dev/*` hides every repo in the org; `bmlt-enabled/yap` hides one. Backed by `defaults.excludeReviewRepos` in `{devRoot}/.claude/config.json`. Per-workspace auto-review opt-ins (#209) are configured separately in **Workspaces → edit workspace**.
@@ -166,6 +170,8 @@ Claude Code's OpenTelemetry exporter is wired up so each session emits standard 
 | Concern                          | File                                                                                              |
 | -------------------------------- | ------------------------------------------------------------------------------------------------- |
 | Settings tab UI                  | `Packages/CrowDaemon/Sources/CrowDaemon/Resources/web/settings.js`                                     |
+| CLI verb (`crow automation`)     | `Packages/CrowCLI/Sources/CrowCLILib/Commands/AutomationCommands.swift`                                |
+| `automation-*` RPC handlers      | `Packages/CrowDaemon/Sources/CrowDaemon/RPCHandlers.swift` + `Packages/CrowEngine/Sources/CrowEngine/SettingsRPCSupport.swift` (`SettingsRPC.automationJSON`, `ListPatch`) |
 | Persisted toggles                | `Packages/CrowCore/Sources/CrowCore/Models/AppConfig.swift` (`ConfigDefaults`, `AutoRespondSettings`) |
 | Manager auto-permission decision | `Packages/CrowEngine/Sources/CrowEngine/SessionService.swift` (Manager command rebuild)                                    |
 | Auto-create / auto-respond loop  | `Packages/CrowEngine/Sources/CrowEngine/IssueTracker.swift` (60s polling cycle)                                         |

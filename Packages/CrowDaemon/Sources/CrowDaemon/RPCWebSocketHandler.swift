@@ -140,14 +140,18 @@ enum RPCWebSocketHandler {
     /// the web, so gating them here would break that surface. They shell out on the
     /// daemon host but launch nothing on its GUI. `LocalOnlyRPCGateTests` pins this.
     ///
-    /// The `telemetry-*` / `cleanup-*` / `ui-*` settings RPCs (CROW-814) are also
-    /// NOT gated. An authenticated remote peer can already change every one of
-    /// those fields through the un-gated `set-config` path — that is precisely what
-    /// `setConfigHarmlessToggleIsAllowedRemotely` asserts — so gating the granular
+    /// The `telemetry-*` / `cleanup-*` / `ui-*` settings RPCs (CROW-814) and
+    /// `automation-*` (CROW-812) are also NOT gated. An authenticated remote peer
+    /// can already change every one of those fields through the un-gated
+    /// `set-config` path — that is precisely what
+    /// `setConfigHarmlessToggleIsAllowedRemotely` asserts, using
+    /// `remoteControlEnabled`, an automation field — so gating the granular
     /// methods would only push remote callers back onto the whole-config blob,
     /// which puts workspaces, jobs, gateway URLs and credential shells on the wire
-    /// instead of five scalars. Un-gating is the *smaller* surface, not merely the
-    /// consistent one. None of them can reach `defaults.binaries`.
+    /// instead of a handful of scalars. Un-gating is the *smaller* surface, not
+    /// merely the consistent one. Settings → Automation is a core web surface, so
+    /// gating only the CLI's path to it would be inconsistent, not safer. None of
+    /// them can reach `defaults.binaries`.
     ///
     /// `defaults-get` / `defaults-set` (CROW-810) split along that same line, with
     /// one carve-out. `defaults-get` is NOT gated: it returns a strict subset of
