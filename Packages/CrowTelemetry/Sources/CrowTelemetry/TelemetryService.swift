@@ -37,14 +37,14 @@ public final class TelemetryService: Sendable {
     public func start() async throws {
         try await database.open()
         receiver.start()
-        NSLog("[TelemetryService] Started on port %d", port)
+        CrowLog.info("[TelemetryService] Started on port \(port)")
     }
 
     /// Stop receiving telemetry. Stops the listener and closes the database.
     public func stop() async {
         receiver.stop()
         await database.close()
-        NSLog("[TelemetryService] Stopped")
+        CrowLog.info("[TelemetryService] Stopped")
     }
 
     /// Get analytics for a Crow session.

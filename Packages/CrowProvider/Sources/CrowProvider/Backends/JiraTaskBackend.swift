@@ -122,7 +122,7 @@ public struct JiraTaskBackend: TaskBackend {
             case .success(let items):
                 open = Self.parseAssigned(items: items, site: config.site, statusOverride: nil, statusMap: config.statusMap)
             case .failure(let error):
-                NSLog("[JiraTaskBackend] REST listAssigned failed for %@: %@", site, String(describing: error))
+                CrowLog.info("[JiraTaskBackend] REST listAssigned failed for \(site): \(String(describing: error))")
                 return AssignedListing(open: [], closed: [])
             }
 
@@ -221,8 +221,7 @@ public struct JiraTaskBackend: TaskBackend {
             case .success(.transitioned):
                 return
             case .success(.noMatchingTransition(let available)):
-                NSLog("[JiraTaskBackend] No transition to \"%@\" available for %@ (reachable: %@); skipping",
-                      targetName, parsed.key, available.isEmpty ? "none" : available.joined(separator: ", "))
+                CrowLog.info("[JiraTaskBackend] No transition to \"\(targetName)\" available for \(parsed.key) (reachable: \(available.isEmpty ? "none" : available.joined(separator: ", "))); skipping")
                 return
             case .failure(let error):
                 throw ProviderError.commandFailed("Jira REST transition failed for \(parsed.key): \(error)")

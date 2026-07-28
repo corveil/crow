@@ -147,8 +147,7 @@ public struct ClaudeHookConfigWriter: HookConfigWriter {
             try? FileManager.default.setAttributes(
                 [.posixPermissions: 0o600], ofItemAtPath: settingsPath)
         } catch {
-            NSLog("[ClaudeHookConfigWriter] Failed to write gateway env to %@: %@",
-                  settingsPath, error.localizedDescription)
+            CrowLog.info("[ClaudeHookConfigWriter] Failed to write gateway env to \(settingsPath): \(error.localizedDescription)")
         }
     }
 
@@ -179,8 +178,7 @@ public struct ClaudeHookConfigWriter: HookConfigWriter {
             do {
                 try FileManager.default.removeItem(atPath: settingsPath)
             } catch {
-                NSLog("[ClaudeHookConfigWriter] Failed to remove empty settings file at %@: %@",
-                      settingsPath, error.localizedDescription)
+                CrowLog.info("[ClaudeHookConfigWriter] Failed to remove empty settings file at \(settingsPath): \(error.localizedDescription)")
             }
         } else {
             do {
@@ -188,8 +186,7 @@ public struct ClaudeHookConfigWriter: HookConfigWriter {
                     withJSONObject: settings, options: [.prettyPrinted, .sortedKeys])
                 try updatedData.write(to: URL(fileURLWithPath: settingsPath))
             } catch {
-                NSLog("[ClaudeHookConfigWriter] Failed to write updated settings to %@: %@",
-                      settingsPath, error.localizedDescription)
+                CrowLog.info("[ClaudeHookConfigWriter] Failed to write updated settings to \(settingsPath): \(error.localizedDescription)")
             }
         }
     }

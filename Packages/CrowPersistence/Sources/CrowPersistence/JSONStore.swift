@@ -168,8 +168,8 @@ public final class JSONStore: Sendable {
                 self._data = try decoder.decode(StoreData.self, from: data)
             } catch {
                 // Log the error so we know WHY decoding failed — this was silently wiping the store
-                NSLog("[JSONStore] ERROR: Failed to decode store.json: \(error.localizedDescription)")
-                NSLog("[JSONStore] Backing up corrupt store to store.json.bak")
+                CrowLog.info("[JSONStore] ERROR: Failed to decode store.json: \(error.localizedDescription)")
+                CrowLog.info("[JSONStore] Backing up corrupt store to store.json.bak")
                 let backupURL = dir.appendingPathComponent("store.json.bak")
                 try? FileManager.default.removeItem(at: backupURL)
                 try? FileManager.default.copyItem(at: fileURL, to: backupURL)
@@ -261,13 +261,12 @@ public final class JSONStore: Sendable {
     private func detectExternalWrite(context: String) {
         guard let expected = lastWrittenSignature, let actual = currentSignature(),
               actual != expected else { return }
-        NSLog(
-            "[JSONStore] EXTERNAL WRITE DETECTED (%@): store.json at %@ changed under pid %d "
-                + "— a second writer is touching store.json (expected mtime=%@ size=%d, "
-                + "found mtime=%@ size=%d). Whole-file writes mean the losing writer's sessions "
-                + "vanish; only ONE crowd may write this store.",
-            context, fileURL.path, getpid(),
-            "\(expected.modified)", expected.size, "\(actual.modified)", actual.size)
+        CrowLog.info(
+            "[JSONStore] EXTERNAL WRITE DETECTED (\(context)): store.json at \(fileURL.path) "
+                + "changed under pid \(getpid()) — a second writer is touching store.json "
+                + "(expected mtime=\(expected.modified) size=\(expected.size), "
+                + "found mtime=\(actual.modified) size=\(actual.size)). Whole-file writes mean "
+                + "the losing writer's sessions vanish; only ONE crowd may write this store.")
     }
 
     private static func save(_ data: StoreData, to url: URL) {
@@ -275,7 +274,7 @@ public final class JSONStore: Sendable {
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let jsonData = try? encoder.encode(data) else {
-            NSLog("[JSONStore] ERROR: Failed to encode store data")
+            CrowLog.info("[JSONStore] ERROR: Failed to encode store data")
             return
         }
         do {
@@ -284,7 +283,7 @@ public final class JSONStore: Sendable {
             try FileManager.default.setAttributes(
                 [.posixPermissions: 0o600], ofItemAtPath: url.path)
         } catch {
-            NSLog("[JSONStore] ERROR: Failed to write store.json: \(error.localizedDescription)")
+            CrowLog.info("[JSONStore] ERROR: Failed to write store.json: \(error.localizedDescription)")
         }
     }
 }

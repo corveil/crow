@@ -55,7 +55,7 @@ public enum GatewayResolver {
                 if let secret = resolveSecret(value) {
                     resolvedHeaders[name] = secret
                 } else {
-                    NSLog("[GatewayResolver] Failed to resolve secret reference for header '%@' (op read failed or op not signed in); dropping this header — the gateway will reject the request", name)
+                    CrowLog.info("[GatewayResolver] Failed to resolve secret reference for header '\(name)' (op read failed or op not signed in); dropping this header — the gateway will reject the request")
                 }
             } else {
                 resolvedHeaders[name] = value
@@ -85,7 +85,7 @@ public enum GatewayResolver {
         do {
             try process.run()
         } catch {
-            NSLog("[GatewayResolver] Failed to launch `op` for secret resolution: %@", error.localizedDescription)
+            CrowLog.info("[GatewayResolver] Failed to launch `op` for secret resolution: \(error.localizedDescription)")
             return nil
         }
 
@@ -99,12 +99,12 @@ public enum GatewayResolver {
         }
         if done.wait(timeout: deadline) == .timedOut {
             process.terminate()
-            NSLog("[GatewayResolver] `op read` timed out resolving a secret reference")
+            CrowLog.info("[GatewayResolver] `op read` timed out resolving a secret reference")
             return nil
         }
 
         guard process.terminationStatus == 0 else {
-            NSLog("[GatewayResolver] `op read` exited with status %d", process.terminationStatus)
+            CrowLog.info("[GatewayResolver] `op read` exited with status \(process.terminationStatus)")
             return nil
         }
 

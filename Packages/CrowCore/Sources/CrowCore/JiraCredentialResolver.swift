@@ -25,20 +25,20 @@ public enum JiraCredentialResolver {
 
         let username = credential.username.trimmingCharacters(in: .whitespaces)
         guard !username.isEmpty else {
-            NSLog("[JiraCredentialResolver] No username set; cannot build Jira auth header")
+            CrowLog.info("[JiraCredentialResolver] No username set; cannot build Jira auth header")
             return nil
         }
 
         let tokenRef = credential.tokenRef.trimmingCharacters(in: .whitespaces)
         guard !tokenRef.isEmpty else {
-            NSLog("[JiraCredentialResolver] No API token set; cannot build Jira auth header")
+            CrowLog.info("[JiraCredentialResolver] No API token set; cannot build Jira auth header")
             return nil
         }
 
         let token: String
         if tokenRef.hasPrefix("op://") {
             guard let secret = resolveSecret(tokenRef) else {
-                NSLog("[JiraCredentialResolver] Failed to resolve API token reference (op read failed or op not signed in)")
+                CrowLog.info("[JiraCredentialResolver] Failed to resolve API token reference (op read failed or op not signed in)")
                 return nil
             }
             token = secret

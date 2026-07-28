@@ -1,3 +1,4 @@
+import CrowCore
 import Foundation
 
 /// Registers the Jira MCP server into OpenCode's config so OpenCode sessions
@@ -98,7 +99,7 @@ public enum OpenCodeMCPConfigWriter {
             guard let data = fm.contents(atPath: targetPath),
                   let parsed = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
             else {
-                NSLog("[OpenCodeMCPConfigWriter] %@ exists but is not a JSON object; refusing to modify it", targetPath)
+                CrowLog.info("[OpenCodeMCPConfigWriter] \(targetPath) exists but is not a JSON object; refusing to modify it")
                 return .skippedUnparseable
             }
             root = parsed
@@ -127,7 +128,7 @@ public enum OpenCodeMCPConfigWriter {
                 return .noSource
             }
             guard entryIsOurs else {
-                NSLog("[OpenCodeMCPConfigWriter] mcp.%@ not written by Crow; leaving it alone", serverName)
+                CrowLog.info("[OpenCodeMCPConfigWriter] mcp.\(serverName) not written by Crow; leaving it alone")
                 return .skippedUserOwned
             }
             mcp.removeValue(forKey: serverName)
@@ -147,7 +148,7 @@ public enum OpenCodeMCPConfigWriter {
         // 4b. Source present but untranslatable (e.g. a half-edited entry) →
         //     leave the mirror alone rather than deleting it.
         guard let translated = translateClaudeServer(sourceServer!) else {
-            NSLog("[OpenCodeMCPConfigWriter] Claude mcpServers.%@ present but not translatable; leaving OpenCode config unchanged", serverName)
+            CrowLog.info("[OpenCodeMCPConfigWriter] Claude mcpServers.\(serverName) present but not translatable; leaving OpenCode config unchanged")
             return .noSource
         }
 
@@ -155,7 +156,7 @@ public enum OpenCodeMCPConfigWriter {
         //     record still present). Treat the deletion as intent and don't
         //     re-add it — deleting behaves the same as editing.
         if existing == nil, recorded != nil {
-            NSLog("[OpenCodeMCPConfigWriter] mcp.%@ removed after Crow wrote it; honoring the opt-out", serverName)
+            CrowLog.info("[OpenCodeMCPConfigWriter] mcp.\(serverName) removed after Crow wrote it; honoring the opt-out")
             return .skippedUserOwned
         }
 
@@ -168,7 +169,7 @@ public enum OpenCodeMCPConfigWriter {
             let why = recorded == nil
                 ? "no Crow record for it (user-authored, or the mirror sidecar was lost)"
                 : "it differs from Crow's record (user-edited)"
-            NSLog("[OpenCodeMCPConfigWriter] mcp.%@ left as-is — %@; not overwriting", serverName, why)
+            CrowLog.info("[OpenCodeMCPConfigWriter] mcp.\(serverName) left as-is — \(why); not overwriting")
             return .skippedUserOwned
         }
 
@@ -212,7 +213,7 @@ public enum OpenCodeMCPConfigWriter {
             try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
             return nil
         } catch {
-            NSLog("[OpenCodeMCPConfigWriter] Failed to write %@: %@", path, error.localizedDescription)
+            CrowLog.info("[OpenCodeMCPConfigWriter] Failed to write \(path): \(error.localizedDescription)")
             return .failed(error.localizedDescription)
         }
     }
@@ -253,7 +254,7 @@ public enum OpenCodeMCPConfigWriter {
             try data.write(to: URL(fileURLWithPath: path), options: .atomic)
             try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
         } catch {
-            NSLog("[OpenCodeMCPConfigWriter] Failed to write mirror record %@: %@", path, error.localizedDescription)
+            CrowLog.info("[OpenCodeMCPConfigWriter] Failed to write mirror record \(path): \(error.localizedDescription)")
         }
     }
 
@@ -273,7 +274,7 @@ public enum OpenCodeMCPConfigWriter {
         guard let data = fm.contents(atPath: claudeJSONPath),
               let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
         else {
-            NSLog("[OpenCodeMCPConfigWriter] %@ exists but is not a JSON object; ignoring", claudeJSONPath)
+            CrowLog.info("[OpenCodeMCPConfigWriter] \(claudeJSONPath) exists but is not a JSON object; ignoring")
             return .unparseable
         }
         let servers = root["mcpServers"] as? [String: Any]

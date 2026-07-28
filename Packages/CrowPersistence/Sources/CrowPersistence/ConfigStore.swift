@@ -24,7 +24,7 @@ public final class ConfigStore: Sendable {
             return nil
         }
         if !FileManager.default.fileExists(atPath: path) {
-            NSLog("[ConfigStore] devRoot path does not exist on disk: %@", path)
+            CrowLog.info("[ConfigStore] devRoot path does not exist on disk: \(path)")
         }
         return path
     }
@@ -77,7 +77,7 @@ public final class ConfigStore: Sendable {
         do {
             return try JSONDecoder().decode(AppConfig.self, from: data)
         } catch {
-            NSLog("[ConfigStore] Failed to decode config at %@: %@", configURL.path, error.localizedDescription)
+            CrowLog.info("[ConfigStore] Failed to decode config at \(configURL.path): \(error.localizedDescription)")
             return nil
         }
     }
