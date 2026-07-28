@@ -468,11 +468,15 @@ public enum ParityLedger {
         // MARK: Automation toggles (web Settings tab + `crow automation`)
 
         // Covered since CROW-812 (#884): `crow automation get` reads all eleven
-        // and `crow automation set` patches them. `remoteControlEnabled` is the
-        // one to watch — it is the master switch for the daemon's remote surface,
-        // so a remote caller flipping its own access on is a widening; the verb
-        // is safe because the CLI reaches the daemon over the 0600 Unix socket,
-        // never `/rpc`.
+        // and `crow automation set` patches them. Neither method is on
+        // `RPCWebSocketHandler.localOnlyDenial`, so an authenticated remote
+        // `/rpc` peer can write these fields too — deliberately, because that
+        // same peer already reaches every one of them through the whole-blob
+        // `set-config`, and the granular verb is the smaller surface
+        // (`DaemonSecurityTests.settingsRPCsAreAllowedRemotely` pins it).
+        // `remoteControlEnabled` is no exception to that: it decides whether
+        // coding-agent sessions launch with `--rc` (claude.ai / mobile control),
+        // not who may reach `crowd`.
         .field("remoteControlEnabled", read: "automation get", write: "automation set"),
         .field("managerAutoPermissionMode", read: "automation get", write: "automation set"),
         .field("jobsAutoPermissionMode", read: "automation get", write: "automation set"),
