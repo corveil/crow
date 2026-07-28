@@ -787,41 +787,27 @@ public enum CrowDaemon {
                 // the session's link/reviewSessionID land).
                 let fingerprint = "\(request.id)\n\(request.headRefOid ?? "")"
                 guard autoReviewed.insert(fingerprint).inserted else { continue }
-                // B-fallback: tear down the stale round's review session before
+                // B-fallback: retire the stale round's review session before
                 // enqueuing so `reviewSessions` doesn't double up for this PR.
-                // DELETE it — not `onCompleteSession`, which only flips it to
-                // `.completed`. A completed `review-<repo>-<pr>` row is invisible
-                // to `existingReviewSession(forPRURL:)` (that dedup guard excludes
-                // completed/archived) yet still renders, so each re-review round
-                // left another identical row piling up in Completed (CROW-877).
-                // Deleting also drops its `.pr` link, so the create below can't
-                // reuse the stale session via that same guard.
-                //
-                // This always tears down a *live* round-1 review clone (kickoff
-                // only returns `.reReview` while that session is still open):
-                // `rm -rf` on its PR clone, `TerminalRouter.destroy` on its
-                // terminal, and its raw telemetry rows are dropped. That's
-                // intended — round 1 is reviewing a now-dead SHA — but it's a
-                // harder teardown than the old status flip.
-                let url = request.url
-                let staleReviewID: UUID?
-                if case let .reReview(id) = action { staleReviewID = id } else { staleReviewID = nil }
-                Task {
-                    if let staleReviewID {
-                        await sessionService.deleteSession(id: staleReviewID)
-                        // `deleteSession` no-ops on a concurrent delete (its
-                        // `isDeletingSession` guard) and bails on a disk-cleanup
-                        // failure — both leave the stale session AND its `.pr`
-                        // link intact, which would make `createReviewSession`'s
-                        // dedup guard return the stale session and swallow the new
-                        // round. Fall back to completing it (the old path's effect)
-                        // so it's at least invisible to that guard (CROW-877 review).
-                        if appState.sessions.contains(where: { $0.id == staleReviewID }) {
-                            sessionService.completeSession(id: staleReviewID)
-                        }
-                    }
-                    _ = await reviewSerializer.enqueue { await sessionService.createReviewSession(prURL: url, selectAfterCreate: false) }
+                // Complete it (not delete): completing writes its end-of-round
+                // `SessionAnalyticsSnapshot` and keeps its telemetry, whereas
+                // `deleteSession` transitions no status — so no snapshot is
+                // written — and then drops the raw rows, silently erasing round
+                // 1's tokens/cost from the scorecard on Crow's own auto-review
+                // flow (CROW-877 review). Completing also makes it invisible to
+                // `existingReviewSession(forPRURL:)` (that dedup guard excludes
+                // completed/archived), so the create below starts the new round
+                // instead of reusing the stale session. The identical completed
+                // `review-<repo>-<pr>` rows that used to pile up in Completed are
+                // now folded into one by the sidebar's within-section collapse
+                // (`groupSessions` in app.js), which also cleans up pre-existing
+                // pile-ups — so the visible-duplicate half no longer needs a
+                // destructive teardown here.
+                if case let .reReview(staleID) = action {
+                    appState.onCompleteSession?(staleID)
                 }
+                let url = request.url
+                Task { _ = await reviewSerializer.enqueue { await sessionService.createReviewSession(prURL: url, selectAfterCreate: false) } }
             }
         }
     }

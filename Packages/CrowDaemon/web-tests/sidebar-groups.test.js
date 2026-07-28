@@ -137,5 +137,18 @@ console.log('CROW-877 sidebar grouping:');
   check('manager sessions are excluded from all groups', rowCount([mgr]) === 0);
 }
 
+// 9. Two LIVE sessions for one PR in the same section are never collapsed — a
+//    manual "Start Review" racing the auto-review clone lands two open reviews
+//    in "Reviews", and hiding either would strand a running agent (CROW-877
+//    review, Yellow 1). Collapse is gated to terminal rows only.
+{
+  const r1 = { id: 'live1', kind: 'review', status: 'active', links: prLink(9) };
+  const r2 = { id: 'live2', kind: 'review', status: 'inReview', links: prLink(9) };
+  const g = groupsOf([r1, r2]);
+  check('two open reviews for one PR both stay in Reviews',
+    (g['Reviews'] || []).includes('live1') && (g['Reviews'] || []).includes('live2'));
+  check('a live session is never collapsed away', rowCount([r1, r2]) === 2);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

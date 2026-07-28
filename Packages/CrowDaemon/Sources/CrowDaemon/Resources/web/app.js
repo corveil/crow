@@ -667,29 +667,42 @@ const GROUPS = [
 //   2. first-match grouping — each session lands in the FIRST group it matches,
 //      not every one, so a `kind:'review'` + `status:'inReview'` session can't
 //      appear in both "Reviews" and "In Review";
-//   3. collapse same-PR duplicates WITHIN a section — a merged PR (its completed
-//      work row + completed review clone both land in "Completed") and any
-//      pile-up of identical completed `review-<repo>-<pr>` clones become one row.
+//   3. collapse same-PR duplicates WITHIN a section, and only among
+//      completed/archived rows — a merged PR (its completed work row + completed
+//      review clone both land in "Completed") and any pile-up of identical
+//      completed `review-<repo>-<pr>` clones become one row.
 // Collapsing AFTER assignment, never across sections, is deliberate: a live work
 // row in "Active"/"In Review" is never hidden by an open review clone in
 // "Reviews", and a collapse survivor can never be a row that matches no group —
-// the two failure modes of a pre-assignment collapse (CROW-877 review).
+// the two failure modes of a pre-assignment collapse. Restricting collapse to
+// TERMINAL rows is equally deliberate: two live sessions can legitimately share
+// a PR within one section (e.g. a manual "Start Review" racing the auto-review
+// clone lands two open reviews in "Reviews"), and hiding either would strand a
+// running agent with no way to select or delete it (CROW-877 review).
 // Managers carry no PR link and match no GROUP, so they drop out here and are
 // rendered by renderSidebar's dedicated managers pass.
 function prURLOf(s) {
+  // The persisted `links` array is authoritative for the terminal rows this
+  // collapse touches — a completed review clone always carries its `.pr` link
+  // there. (Live sessions can hold a PR link only in the app's in-memory
+  // `liveFor(id).pr_link`, but those are non-terminal and never collapsed.)
   const link = (s.links || []).find((l) => l.type === 'pr');
   return link ? link.url : null;
 }
-// Collapse rows that describe the same PR, keeping one. A non-review (work) row
-// represents the PR over a review clone (a merged PR shows its work row, not the
-// leftover completed clone); otherwise the first seen stays. Rows without a PR
-// link are never collapsed. Only ever called on rows already in the same section.
+function isTerminal(s) {
+  return s.status === 'completed' || s.status === 'archived';
+}
+// Collapse rows that describe the same PR, keeping one. Only completed/archived
+// rows are ever collapsed, so a live session is never hidden. A non-review (work)
+// row represents the PR over a review clone (a merged PR shows its work row, not
+// the leftover completed clone); otherwise the first seen stays. Only ever called
+// on rows already in the same section.
 function collapsePRDuplicates(rows) {
   const byPR = new Map();     // PR URL -> index into `out`
   const out = [];
   for (const s of rows) {
     const url = prURLOf(s);
-    if (!url) { out.push(s); continue; }
+    if (!url || !isTerminal(s)) { out.push(s); continue; }
     const idx = byPR.get(url);
     if (idx === undefined) { byPR.set(url, out.length); out.push(s); continue; }
     if (out[idx].kind === 'review' && s.kind !== 'review') out[idx] = s;   // work wins
