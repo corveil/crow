@@ -69,6 +69,36 @@ private func codeBlocks(of markdown: String) -> String {
     return blocks.joined(separator: "\n")
 }
 
+/// Whether `invocation` appears in `examples` as a complete command token.
+///
+/// A plain `contains` would let one verb be covered by a longer one that merely
+/// starts the same way — a future `crow set-status-bulk` example would satisfy
+/// `crow set-status`. So the match must begin a token and must not be followed
+/// by a character that continues the verb (letter, digit, or hyphen).
+///
+/// Parent groups still pass on a child's example: `crow job` is followed by a
+/// space in `crow job list`. That is intended — a bare `crow job` only prints
+/// help, so demanding a standalone example for it would add a line nobody would
+/// ever run. A group is documented when its subcommands are.
+private func mentionsCommand(_ invocation: String, in examples: String) -> Bool {
+    for line in examples.components(separatedBy: "\n") {
+        var searchStart = line.startIndex
+        while let found = line.range(of: invocation, range: searchStart..<line.endIndex) {
+            let startsToken = found.lowerBound == line.startIndex
+                || " \t|(`$".contains(line[line.index(before: found.lowerBound)])
+            let endsToken = found.upperBound == line.endIndex
+                || !isVerbCharacter(line[found.upperBound])
+            if startsToken, endsToken { return true }
+            searchStart = found.upperBound
+        }
+    }
+    return false
+}
+
+private func isVerbCharacter(_ character: Character) -> Bool {
+    character.isLetter || character.isNumber || character == "-"
+}
+
 /// The body of one `## \`crow …\`` section of the generated reference.
 private func section(_ invocation: String, in markdown: String) -> String? {
     guard let start = markdown.range(of: "## `\(invocation)`\n") else { return nil }
@@ -101,15 +131,29 @@ private func section(_ invocation: String, in markdown: String) -> String? {
         )
     }
 
+    var asserted = 0
     for (invocation, type) in commandTypesByInvocation() {
         guard let body = section(invocation, in: markdown) else { continue }
-        for flag in longFlagNames(of: type) {
+        for flag in try longFlagNames(of: type) {
             #expect(
                 body.contains("`\(flag)`"),
                 "`\(invocation)` accepts \(flag) but the generated reference omits it"
             )
+            asserted += 1
         }
     }
+
+    // Positive control. Failing closed on a decode error is not enough on its
+    // own: a dump that decodes cleanly but yields no flags would make every
+    // assertion above vacuous and still pass. Pin one flag-rich command exactly,
+    // and floor the total, so "the independent pass looked at nothing" is itself
+    // a failure. The real figure is 147 — the floor leaves room to delete verbs.
+    let jobAdd = try longFlagNames(of: JobAdd.self).sorted()
+    #expect(jobAdd == [
+        "--daily-at", "--disabled", "--interval-seconds", "--name", "--prompt",
+        "--prompt-file", "--repo", "--weekdays", "--workspace",
+    ])
+    #expect(asserted > 100, "only \(asserted) flags were checked — the independent dump is failing open")
 }
 
 /// Flag rendering the tables are easy to get quietly wrong: `@OptionGroup`
@@ -147,6 +191,26 @@ private func section(_ invocation: String, in markdown: String) -> String? {
     #expect(!markdown.contains("| `--help` |"))
 }
 
+/// `mentionsCommand` decides whether every hand-written doc check passes, so pin
+/// its boundary behaviour instead of trusting it by inspection.
+@Test func mentionsCommandRequiresAWholeCommandToken() {
+    // Ordinary examples, including one behind a pipe.
+    #expect(mentionsCommand("crow set-status", in: "crow set-status --session <uuid> active"))
+    #expect(mentionsCommand("crow resync-jira", in: "crow resync-jira"))
+    #expect(mentionsCommand("crow web-password set", in: #"printf '%s' "$PW" | crow web-password set --stdin"#))
+
+    // A longer verb must not satisfy a shorter one — the reason plain
+    // `contains` was not enough.
+    #expect(!mentionsCommand("crow set-status", in: "crow set-status-bulk --session <uuid>"))
+    #expect(!mentionsCommand("crow job get", in: "crow job getx --id <uuid>"))
+
+    // Nor may a match that does not start its own token.
+    #expect(!mentionsCommand("crow send", in: "xcrow send hello"))
+
+    // A parent group is satisfied by a child's example, deliberately.
+    #expect(mentionsCommand("crow job", in: "crow job list"))
+}
+
 // MARK: - The committed reference is current
 
 @Test func committedGeneratedDocIsUpToDate() throws {
@@ -175,9 +239,9 @@ private func section(_ invocation: String, in markdown: String) -> String? {
     ]
 
     for invocation in invocations where exempt[invocation] == nil {
-        // Bound to a Bool first: expanding `examples.contains(…)` inside the
-        // macro puts the whole 1000-line document in the failure output.
-        let documented = examples.contains(invocation)
+        // Bound to a Bool first: expanding the match inside the macro puts the
+        // whole 1000-line document in the failure output.
+        let documented = mentionsCommand(invocation, in: examples)
         #expect(
             documented,
             "`\(invocation)` has no worked example in docs/cli-reference.md — write it up, or exempt it with a reason"
@@ -208,7 +272,7 @@ private func section(_ invocation: String, in markdown: String) -> String? {
     ]
 
     for invocation in invocations where exempt[invocation] == nil {
-        let documented = examples.contains(invocation)
+        let documented = mentionsCommand(invocation, in: examples)
         #expect(
             documented,
             "`\(invocation)` is missing from CLAUDE.md's CLI Reference — the Manager agent reads it to learn what it can run"
@@ -237,7 +301,18 @@ private func commandTypesByInvocation() -> [(String, ParsableCommand.Type)] {
 /// The long flag names one command accepts, read straight out of its own
 /// `--experimental-dump-help` payload. `--help` / `--version` are inherited by
 /// every command and documented once in the reference's preamble.
-private func longFlagNames(of type: ParsableCommand.Type) -> [String] {
+///
+/// Deliberately fails closed. This is the independent check on the generator, so
+/// swallowing a decode error and returning `[]` would let a `_dumpHelp()` shape
+/// change silently skip every flag assertion while the test still reported
+/// green.
+///
+/// `arguments` is therefore decoded as **required** — ArgumentParser appends a
+/// help flag to every command, so the key is always present, and treating it as
+/// optional would turn a renamed key into the same quiet no-op `try?` was.
+/// `names` stays optional because positional arguments genuinely have none; the
+/// positive control in the caller is what guards *that* key against renaming.
+private func longFlagNames(of type: ParsableCommand.Type) throws -> [String] {
     struct Dump: Decodable {
         struct Command: Decodable {
             struct Argument: Decodable {
@@ -245,19 +320,18 @@ private func longFlagNames(of type: ParsableCommand.Type) -> [String] {
                     let kind: String
                     let name: String
                 }
+                /// Absent for positionals.
                 let names: [Name]?
             }
-            let arguments: [Argument]?
+            let arguments: [Argument]
         }
         let command: Command
     }
 
-    guard let dump = try? JSONDecoder().decode(
-        Dump.self, from: Data(type._dumpHelp().utf8)
-    ) else { return [] }
+    let dump = try JSONDecoder().decode(Dump.self, from: Data(type._dumpHelp().utf8))
 
     var flags: [String] = []
-    for argument in dump.command.arguments ?? [] {
+    for argument in dump.command.arguments {
         for name in argument.names ?? [] where name.kind == "long" {
             let flag = "--" + name.name
             if flag != "--help", flag != "--version" { flags.append(flag) }
