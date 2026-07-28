@@ -1,4 +1,4 @@
-.PHONY: build daemon app run setup install uninstall clean check test help daemon-run
+.PHONY: build daemon app run setup install uninstall clean check test help daemon-run docs
 
 # Install destination and build config (override on the command line, e.g.
 # `make install BINDIR=/usr/local/bin` or `make build CONFIG=release`).
@@ -53,6 +53,7 @@ help:
 	@echo "  setup      Check build prerequisites"
 	@echo "  check      Verify all build and runtime prerequisites"
 	@echo "  test       Run all package tests"
+	@echo "  docs       Regenerate docs/cli.md from the CLI's ArgumentParser metadata"
 	@echo "  install    Symlink crow + crowd into ~/.local/bin (override BINDIR=, CONFIG=release)"
 	@echo "  uninstall  Remove installed crow + crowd symlinks"
 	@echo "  clean      Remove .build/ and the desktop app's target/"
@@ -97,6 +98,14 @@ test:
 	done
 	@echo "==> Checking notification-event catalogs (CROW-768)..."
 	@./scripts/check-notification-events.sh
+
+# Regenerate the CLI reference from the commands themselves (CROW-808). Run
+# after adding or changing a subcommand — a stale docs/cli.md fails CrowCLI's
+# test suite, which is what keeps the docs honest.
+docs:
+	@bash scripts/generate-build-info.sh
+	@swift build $(if $(filter release,$(CONFIG)),-c release,) --product crow
+	@$(BUILD_OUT)/crow generate-docs
 
 clean:
 	rm -rf .build

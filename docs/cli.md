@@ -1,0 +1,1553 @@
+<!-- Generated from ArgumentParser metadata by `crow generate-docs`. Do not edit by hand. -->
+<!-- Regenerate with `make docs` after changing anything in Packages/CrowCLI/Sources/CrowCLILib/Commands/. -->
+
+# `crow` CLI — generated reference
+
+CLI for Crow — manage sessions, terminals, and metadata.
+
+Every subcommand and flag the `crow` binary accepts, generated from the commands themselves so it cannot drift. For prose, worked examples, JSON response shapes and the gotchas that matter in practice, read [`cli-reference.md`](cli-reference.md) instead — this file is the exhaustive surface, that one is the guide.
+
+`--help` is accepted everywhere and `crow --version` prints the build version; neither is repeated per command below. Commands marked **hidden** are omitted from `crow --help` but still work.
+
+---
+
+## Command index
+
+| Command | Summary |
+| --- | --- |
+| [`crow add-link`](#crow-add-link) | Add a link to a session |
+| [`crow add-merge-label`](#crow-add-merge-label) | Add the crow:merge label to the session's PR |
+| [`crow add-worktree`](#crow-add-worktree) | Register a worktree for a session |
+| [`crow autostart`](#crow-autostart) | Start crowd at login (install/uninstall/status) |
+| [`crow autostart install`](#crow-autostart-install) | Register crowd to start at login (idempotent; re-points after an upgrade) |
+| [`crow autostart status`](#crow-autostart-status) | Report whether crowd is set to start at login, and whether it's running |
+| [`crow autostart uninstall`](#crow-autostart-uninstall) | Remove the login item (leaves a running crowd alone) |
+| [`crow batch-work-on-issues`](#crow-batch-work-on-issues) | Start working on several tickets in one batch |
+| [`crow cleanup`](#crow-cleanup) | View or change automatic session cleanup |
+| [`crow cleanup get`](#crow-cleanup-get) | Show the current cleanup settings |
+| [`crow cleanup set`](#crow-cleanup-set) | Change automatic session cleanup |
+| [`crow close-terminal`](#crow-close-terminal) | Close a terminal tab in a session |
+| [`crow codex-notify`](#crow-codex-notify) | Bridge Codex's notify command into Crow's hook-event pipeline |
+| [`crow complete-session`](#crow-complete-session) | Mark a session completed |
+| [`crow create-manager`](#crow-create-manager) | Create an additional Manager session |
+| [`crow defaults`](#crow-defaults) | View or change workspace and automation defaults |
+| [`crow defaults get`](#crow-defaults-get) | Show the current workspace and automation defaults |
+| [`crow defaults set`](#crow-defaults-set) | Change workspace and automation defaults |
+| [`crow delete-session`](#crow-delete-session) | Delete a session |
+| [`crow edit-link`](#crow-edit-link) | Edit a link's label, URL, or type in place |
+| [`crow gateway`](#crow-gateway) | Manage AI gateways (local-only) |
+| [`crow gateway clear`](#crow-gateway-clear) | Remove a gateway |
+| [`crow gateway get`](#crow-gateway-get) | Show a gateway's base URL and header names |
+| [`crow gateway set`](#crow-gateway-set) | Set a gateway's base URL and headers |
+| [`crow generate-docs`](#crow-generate-docs) | Regenerate the generated CLI reference from ArgumentParser metadata |
+| [`crow get-scorecard`](#crow-get-scorecard) | Print the efficiency scorecard as JSON |
+| [`crow get-session`](#crow-get-session) | Get session details |
+| [`crow get-state`](#crow-get-state) | Print the daemon's full render-state snapshot as JSON |
+| [`crow handoff-agent`](#crow-handoff-agent) | Switch a session to a different coding agent (e.g. when credits run out) |
+| [`crow hook-event`](#crow-hook-event) | Forward an agent hook event to the app (reads JSON from stdin) |
+| [`crow job`](#crow-job) | Manage scheduled jobs |
+| [`crow job add`](#crow-job-add) | Create a job |
+| [`crow job delete`](#crow-job-delete) | Delete a job |
+| [`crow job disable`](#crow-job-disable) | Disable a job |
+| [`crow job duplicate`](#crow-job-duplicate) | Duplicate a job (the copy starts disabled with a unique name) |
+| [`crow job edit`](#crow-job-edit) | Update fields on an existing job |
+| [`crow job enable`](#crow-job-enable) | Enable a job |
+| [`crow job get`](#crow-job-get) | Show one job's full details |
+| [`crow job list`](#crow-job-list) | List all jobs |
+| [`crow job run`](#crow-job-run) | Run a job now, regardless of its schedule or enabled flag |
+| [`crow launch-agent`](#crow-launch-agent) | Launch the session's coding agent in a ready terminal |
+| [`crow list-allowlist`](#crow-list-allowlist) | List allowlist patterns and where each one is defined |
+| [`crow list-artifacts`](#crow-list-artifacts) | List images an agent dropped in a session's artifacts directory |
+| [`crow list-links`](#crow-list-links) | List links for a session |
+| [`crow list-reviews`](#crow-list-reviews) | List requested PR reviews (with unseen count and loading state) |
+| [`crow list-sessions`](#crow-list-sessions) | List all sessions |
+| [`crow list-terminals`](#crow-list-terminals) | List terminals for a session |
+| [`crow list-tickets`](#crow-list-tickets) | List the ticket board (issues, per-status counts, loading state) |
+| [`crow list-worktrees`](#crow-list-worktrees) | List worktrees for a session |
+| [`crow mark-in-review`](#crow-mark-in-review) | Move a session to In Review |
+| [`crow mark-issue-done`](#crow-mark-issue-done) | Close the session's linked issue and complete the session |
+| [`crow new-session`](#crow-new-session) | Create a new session |
+| [`crow new-terminal`](#crow-new-terminal) | Create a terminal tab inside Crow (tmux) |
+| [`crow notifications`](#crow-notifications) | Read and write notification settings |
+| [`crow notifications get`](#crow-notifications-get) | Show notification settings |
+| [`crow notifications set`](#crow-notifications-set) | Change notification settings |
+| [`crow open-in-vscode`](#crow-open-in-vscode) | Open the session's worktree in VS Code on the host |
+| [`crow open-terminal`](#crow-open-terminal) | Open a macOS Terminal.app window at the session's worktree (host GUI) |
+| [`crow promote-allowlist`](#crow-promote-allowlist) | Copy worktree-local allowlist patterns into ~/.claude/settings.json |
+| [`crow quick-action`](#crow-quick-action) | Dispatch a PR quick action into a session's agent terminal |
+| [`crow rebuild-scorecard`](#crow-rebuild-scorecard) | Backfill analytics snapshots and recompute the scorecard |
+| [`crow recreate-terminal`](#crow-recreate-terminal) | Recreate a terminal to restore full scrollback (CROW-804) |
+| [`crow refresh-allowlist`](#crow-refresh-allowlist) | Re-scan global and worktree settings files for allowlist patterns |
+| [`crow refresh-tickets`](#crow-refresh-tickets) | Re-poll the ticket provider now |
+| [`crow reload-tmux-config`](#crow-reload-tmux-config) | Reload the bundled tmux config into the running server |
+| [`crow remove-link`](#crow-remove-link) | Remove a link from a session |
+| [`crow rename-session`](#crow-rename-session) | Rename a session |
+| [`crow rename-terminal`](#crow-rename-terminal) | Rename a terminal tab |
+| [`crow restart-manager`](#crow-restart-manager) | Relaunch the Manager's agent process in place |
+| [`crow restart-tmux-server`](#crow-restart-tmux-server) | Restart the tmux server, rebuilding every terminal (destructive) |
+| [`crow resync-jira`](#crow-resync-jira) | Re-sync Jira ticket statuses from Crow session state |
+| [`crow retry-readiness`](#crow-retry-readiness) | Re-arm the readiness watch for a stuck terminal |
+| [`crow select-session`](#crow-select-session) | Switch to a session |
+| [`crow send`](#crow-send) | Send text to a terminal |
+| [`crow set-goal`](#crow-set-goal) | Set or clear the org-goal tag on a session |
+| [`crow set-locked`](#crow-set-locked) | Lock/unlock a session to protect it from auto-cleanup |
+| [`crow set-pinned`](#crow-set-pinned) | Deprecated alias for set-locked |
+| [`crow set-session-active`](#crow-set-session-active) | Return a session to active |
+| [`crow set-status`](#crow-set-status) | Set session status |
+| [`crow set-ticket`](#crow-set-ticket) | Set ticket metadata |
+| [`crow setup`](#crow-setup) | First-time setup for Crow |
+| [`crow start-review`](#crow-start-review) | Start a review session for a pull request |
+| [`crow telemetry`](#crow-telemetry) | View or change session-analytics collection |
+| [`crow telemetry get`](#crow-telemetry-get) | Show the current telemetry settings |
+| [`crow telemetry set`](#crow-telemetry-set) | Change telemetry settings |
+| [`crow transition-ticket`](#crow-transition-ticket) | Transition a session's ticket to a pipeline status |
+| [`crow ui`](#crow-ui) | View or change UI display preferences |
+| [`crow ui get`](#crow-ui-get) | Show the current UI display preferences |
+| [`crow ui set`](#crow-ui-set) | Change UI display preferences |
+| [`crow web-password`](#crow-web-password) | Manage the web-access password (local-only) |
+| [`crow web-password clear`](#crow-web-password-clear) | Remove the web-access password |
+| [`crow web-password set`](#crow-web-password-set) | Set or change the web-access password |
+| [`crow web-password status`](#crow-web-password-status) | Report whether a web-access password is set |
+| [`crow work-on-issue`](#crow-work-on-issue) | Start working on a ticket (types /crow-workspace into the Manager) |
+
+---
+
+## `crow add-link`
+
+Add a link to a session.
+
+```
+crow add-link --session <session> --label <label> --url <url> [--type <type>]
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--session` | `<session>` | yes | Session UUID |
+| `--label` | `<label>` | yes | Link label |
+| `--url` | `<url>` | yes | Link URL |
+| `--type` | `<type>` | no | Link type: ticket, pr, repo, custom. Default: `custom`. |
+
+---
+
+## `crow add-merge-label`
+
+Add the crow:merge label to the session's PR.
+
+```
+crow add-merge-label --session <session>
+```
+
+Requires a linked PR (attach one with `crow add-link --type pr --url …`) and a provider whose backend supports auto-merge labels.
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--session` | `<session>` | yes | Session UUID |
+
+---
+
+## `crow add-worktree`
+
+Register a worktree for a session.
+
+```
+crow add-worktree --session <session> --repo <repo> --path <path> --branch <branch> [--repo-path <repo-path>] [--primary]
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--session` | `<session>` | yes | Session UUID |
+| `--repo` | `<repo>` | yes | Repo name |
+| `--path` | `<path>` | yes | Worktree path |
+| `--branch` | `<branch>` | yes | Branch name |
+| `--repo-path` | `<repo-path>` | no | Main repo path (for git commands) |
+| `--primary` | — | no | Mark as primary worktree |
+
+---
+
+## `crow autostart`
+
+Start crowd at login (install/uninstall/status).
+
+```
+crow autostart [install|uninstall|status]
+```
+
+Subcommands: [`install`](#crow-autostart-install), [`uninstall`](#crow-autostart-uninstall), [`status`](#crow-autostart-status).
+
+Bare `crow autostart` runs `status`.
+
+---
+
+## `crow autostart install`
+
+Register crowd to start at login (idempotent; re-points after an upgrade).
+
+```
+crow autostart install [--binary <binary>] [--host <host>] [--port <port>] [--dev-root <dev-root>] [--socket <socket>] [--json]
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--binary` | `<binary>` | no | Path to the crowd binary, launched at login as-is (default: next to this crow, then PATH) |
+| `--host` | `<host>` | no | Bind host to pass to crowd (default: crowd's own default) |
+| `--port` | `<port>` | no | HTTP port to pass to crowd |
+| `--dev-root` | `<dev-root>` | no | Development root to pass to crowd |
+| `--socket` | `<socket>` | no | Unix socket path to pass to crowd |
+| `--json` | — | no | Print the status as JSON |
+
+---
+
+## `crow autostart status`
+
+Report whether crowd is set to start at login, and whether it's running.
+
+```
+crow autostart status [--binary <binary>] [--socket <socket>] [--json]
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--binary` | `<binary>` | no | Path to the crowd binary to compare against (stale-plist detection) |
+| `--socket` | `<socket>` | no | Unix socket to probe for a running crowd (default: the login item's, else the well-known socket) |
+| `--json` | — | no | Print the status as JSON |
+
+---
+
+## `crow autostart uninstall`
+
+Remove the login item (leaves a running crowd alone).
+
+```
+crow autostart uninstall [--json]
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--json` | — | no | Print the status as JSON |
+
+---
+
+## `crow batch-work-on-issues`
+
+Start working on several tickets in one batch.
+
+```
+crow batch-work-on-issues [--url <url> ...] [--urls-file <urls-file>]
+```
+
+URLs are sent in order: every --url first, then the lines of --urls-file. Malformed URLs are not rejected locally — the daemon drops them into the `rejected` array and starts the rest, so one bad ticket can't block the batch.
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--url` | `<url>` _(repeatable)_ | no | Ticket / issue URL (repeatable) |
+| `--urls-file` | `<urls-file>` | no | Read newline-delimited URLs from a file; '-' reads stdin |
+
+---
+
+## `crow cleanup`
+
+View or change automatic session cleanup.
+
+```
+crow cleanup <get|set>
+```
+
+Subcommands: [`get`](#crow-cleanup-get), [`set`](#crow-cleanup-set).
+
+---
+
+## `crow cleanup get`
+
+Show the current cleanup settings.
+
+```
+crow cleanup get
+```
+
+---
+
+## `crow cleanup set`
+
+Change automatic session cleanup.
+
+```
+crow cleanup set [--enabled <enabled>] [--retention-hours <retention-hours>]
+```
+
+Only the flags you pass change; at least one is required.
+
+Auto-cleanup deletes completed and archived sessions after the retention period, including their worktree and branch. Manager, virtual, and locked sessions are never deleted.
+
+This setting is live: the board poll re-reads it from disk each cycle, so enabling it starts deleting eligible sessions within about a minute. No restart, and no confirmation prompt.
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--enabled` | `<enabled>` | no | Enable auto-cleanup (true or false) |
+| `--retention-hours` | `<retention-hours>` | no | Hours to keep completed/archived sessions (minimum 1, default 24) |
+
+---
+
+## `crow close-terminal`
+
+Close a terminal tab in a session.
+
+```
+crow close-terminal --session <session> --terminal <terminal>
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--session` | `<session>` | yes | Session UUID |
+| `--terminal` | `<terminal>` | yes | Terminal UUID |
+
+---
+
+## `crow codex-notify`
+
+Bridge Codex's notify command into Crow's hook-event pipeline.
+
+```
+crow codex-notify [<payload-arg> ...]
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| _(positional)_ | `<payload-arg>` _(repeatable)_ | no | Codex notify JSON payload (final positional arg) |
+
+---
+
+## `crow complete-session`
+
+Mark a session completed.
+
+```
+crow complete-session --session <session>
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--session` | `<session>` | yes | Session UUID |
+
+---
+
+## `crow create-manager`
+
+Create an additional Manager session.
+
+```
+crow create-manager [--agent <agent>]
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--agent` | `<agent>` | no | Coding agent kind (claude-code, cursor, codex, opencode); default agent when omitted |
+
+---
+
+## `crow defaults`
+
+View or change workspace and automation defaults.
+
+```
+crow defaults <get|set>
+```
+
+These are the `defaults` block of config.json: the forge provider and CLI used for new workspaces, the branch prefix for new session branches, the repo/label lists that filter the review and ticket boards, and the binary path overrides.
+
+Subcommands: [`get`](#crow-defaults-get), [`set`](#crow-defaults-set).
+
+---
+
+## `crow defaults get`
+
+Show the current workspace and automation defaults.
+
+```
+crow defaults get
+```
+
+Echoes the whole defaults block, including `exclude_dirs` and `mirror_claude_mcp_to_codex`, which `set` does not write — neither has a Settings UI either, and omitting them would make this a worse answer to "what is my config?".
+
+`config_readable` is false when config.json exists but could not be decoded: the values shown are then the built-in defaults rather than yours, which matters when you are working out why a filter isn't firing.
+
+---
+
+## `crow defaults set`
+
+Change workspace and automation defaults.
+
+```
+crow defaults set [--provider <provider>] [--cli <cli>] [--branch-prefix <branch-prefix>] [--binary <binary> ...] [--add-exclude-review-repo <add-exclude-review-repo> ...] [--remove-exclude-review-repo <remove-exclude-review-repo> ...] [--clear-exclude-review-repos] [--add-exclude-ticket-repo <add-exclude-ticket-repo> ...] [--remove-exclude-ticket-repo <remove-exclude-ticket-repo> ...] [--clear-exclude-ticket-repos] [--add-ignore-review-label <add-ignore-review-label> ...] [--remove-ignore-review-label <remove-ignore-review-label> ...] [--clear-ignore-review-labels]
+```
+
+Only the flags you pass change; at least one is required.
+
+Most of these are live. The provider and CLI are re-read on each repo scan, the board lists are re-read on each board poll (about a minute), and the branch prefix is read when a workspace is created. --binary is the exception: agent binary discovery and the .claude/bin symlinks are both set up at startup, so a change there returns "restart_required" and needs a crowd restart — including when you remove one, since the stale symlink keeps shadowing PATH until then.
+
+--provider and --cli are stored independently and neither implies the other, matching how GitManager reads them; setting only one warns if the resulting pair is crossed.
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--provider` | `<provider>` | no | Forge for new workspaces (github or gitlab) |
+| `--cli` | `<cli>` | no | Forge CLI for new workspaces (gh or glab) |
+| `--branch-prefix` | `<branch-prefix>` | no | Prefix for new session branches, e.g. 'feature/' (empty for none) |
+| `--binary` | `<binary>` _(repeatable)_ | no | Binary path override as NAME=PATH, e.g. corveil=/opt/corveil/bin/corveil; NAME= removes it (repeatable) |
+| `--add-exclude-review-repo` | `<add-exclude-review-repo>` _(repeatable)_ | no | Repo to hide from the review board; supports one wildcard, e.g. 'owner/*' (repeatable) |
+| `--remove-exclude-review-repo` | `<remove-exclude-review-repo>` _(repeatable)_ | no | Repo to stop hiding from the review board (repeatable) |
+| `--clear-exclude-review-repos` | — | no | Empty the review-board repo exclusions |
+| `--add-exclude-ticket-repo` | `<add-exclude-ticket-repo>` _(repeatable)_ | no | Repo to hide from the ticket board; supports one wildcard (repeatable) |
+| `--remove-exclude-ticket-repo` | `<remove-exclude-ticket-repo>` _(repeatable)_ | no | Repo to stop hiding from the ticket board (repeatable) |
+| `--clear-exclude-ticket-repos` | — | no | Empty the ticket-board repo exclusions |
+| `--add-ignore-review-label` | `<add-ignore-review-label>` _(repeatable)_ | no | PR label that hides a review from the board; exact match, no wildcards (repeatable) |
+| `--remove-ignore-review-label` | `<remove-ignore-review-label>` _(repeatable)_ | no | PR label to stop ignoring (repeatable) |
+| `--clear-ignore-review-labels` | — | no | Empty the ignored review labels |
+
+---
+
+## `crow delete-session`
+
+Delete a session.
+
+```
+crow delete-session --session <session>
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--session` | `<session>` | yes | Session UUID |
+
+---
+
+## `crow edit-link`
+
+Edit a link's label, URL, or type in place.
+
+```
+crow edit-link --session <session> [--id <id>] [--url <url>] [--label <label>] [--new-url <new-url>] [--type <type>]
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--session` | `<session>` | yes | Session UUID |
+| `--id` | `<id>` | no | Link ID (from list-links) |
+| `--url` | `<url>` | no | Current link URL to match (alternative to --id) |
+| `--label` | `<label>` | no | New label |
+| `--new-url` | `<new-url>` | no | New URL |
+| `--type` | `<type>` | no | New link type: ticket, pr, repo, custom |
+
+---
+
+## `crow gateway`
+
+Manage AI gateways (local-only).
+
+```
+crow gateway <get|set|clear>
+```
+
+Subcommands: [`get`](#crow-gateway-get), [`set`](#crow-gateway-set), [`clear`](#crow-gateway-clear).
+
+---
+
+## `crow gateway clear`
+
+Remove a gateway.
+
+```
+crow gateway clear [--manager] [--workspace <workspace>]
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--manager` | — | no | Target the Manager AI gateway |
+| `--workspace` | `<workspace>` | no | Target a workspace's AI gateway (workspace name or UUID) |
+
+---
+
+## `crow gateway get`
+
+Show a gateway's base URL and header names.
+
+```
+crow gateway get [--manager] [--workspace <workspace>] [--reveal]
+```
+
+Header values are blanked by default so the output is safe to share. Pass --reveal to print the stored values (which may be op:// references rather than the secrets themselves).
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--manager` | — | no | Target the Manager AI gateway |
+| `--workspace` | `<workspace>` | no | Target a workspace's AI gateway (workspace name or UUID) |
+| `--reveal` | — | no | Print header values instead of blanking them |
+
+---
+
+## `crow gateway set`
+
+Set a gateway's base URL and headers.
+
+```
+crow gateway set [--manager] [--workspace <workspace>] --base-url <base-url> [--header <header> ...]
+```
+
+Replaces the whole gateway: --base-url and at least one --header are both required (a gateway needs both, or neither). A --header with a blank value keeps the secret already stored under that name, so the base URL can be changed without restating credentials:
+
+```
+crow gateway set --manager --base-url https://gw.example.com --header "X-Api-Key:"
+```
+
+Header values may be op:// 1Password references, resolved at agent launch so the secret never rests in config.json.
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--manager` | — | no | Target the Manager AI gateway |
+| `--workspace` | `<workspace>` | no | Target a workspace's AI gateway (workspace name or UUID) |
+| `--base-url` | `<base-url>` | yes | Gateway base URL |
+| `--header` | `<header>` _(repeatable)_ | no | Header as 'Name: Value' (repeatable) |
+
+---
+
+## `crow generate-docs`
+
+Regenerate the generated CLI reference from ArgumentParser metadata.
+
+**Hidden** — not listed in `crow --help`.
+
+```
+crow generate-docs [--output <output>] [--check]
+```
+
+Writes every subcommand and flag the binary accepts to docs/cli.md. Run it after adding or changing a command; `make docs` does exactly this. Use --check in a script to assert the committed file is current without writing anything — it exits non-zero when the file is stale or missing.
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--output` | `<output>` | no | Path to write (default: docs/cli.md, relative to the current directory) |
+| `--check` | — | no | Verify the file on disk instead of writing it; exits non-zero when stale |
+
+---
+
+## `crow get-scorecard`
+
+Print the efficiency scorecard as JSON.
+
+```
+crow get-scorecard
+```
+
+Grade, weekly rollups, baseline medians, and per-session rows. Grading runs daemon-side so the CLI, web, and desktop can never drift. With telemetry off the result is an empty shell — check telemetryEnabled and snapshotCount. All timestamps are epoch milliseconds.
+
+---
+
+## `crow get-session`
+
+Get session details.
+
+```
+crow get-session --session <session>
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--session` | `<session>` | yes | Session UUID |
+
+---
+
+## `crow get-state`
+
+Print the daemon's full render-state snapshot as JSON.
+
+```
+crow get-state
+```
+
+Sessions, terminals, worktrees, links, PR status, review requests, assigned issues, allowlist entries, and config (credentials stripped). This is the whole snapshot in one call and it is large — prefer list-sessions / get-session / list-links when you want one slice.
+
+---
+
+## `crow handoff-agent`
+
+Switch a session to a different coding agent (e.g. when credits run out).
+
+```
+crow handoff-agent --session <session> --agent <agent> [--note <note>]
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--session` | `<session>` | yes | Session UUID |
+| `--agent` | `<agent>` | yes | Target agent kind (claude-code, cursor, codex, opencode, antigravity) |
+| `--note` | `<note>` | no | Optional note for the incoming agent about where to resume |
+
+---
+
+## `crow hook-event`
+
+Forward an agent hook event to the app (reads JSON from stdin).
+
+```
+crow hook-event [--session <session>] --event <event> [--agent <agent>]
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--session` | `<session>` | no | Session UUID (omit to resolve from payload cwd) |
+| `--event` | `<event>` | yes | Event name (e.g., Stop, Notification, PreToolUse) |
+| `--agent` | `<agent>` | no | Agent kind (e.g., claude-code, codex). Defaults to the session's stored agent. |
+
+---
+
+## `crow job`
+
+Manage scheduled jobs.
+
+```
+crow job <list|get|add|edit|enable|disable|run|delete|duplicate>
+```
+
+Subcommands: [`list`](#crow-job-list), [`get`](#crow-job-get), [`add`](#crow-job-add), [`edit`](#crow-job-edit), [`enable`](#crow-job-enable), [`disable`](#crow-job-disable), [`run`](#crow-job-run), [`delete`](#crow-job-delete), [`duplicate`](#crow-job-duplicate).
+
+---
+
+## `crow job add`
+
+Create a job.
+
+```
+crow job add --name <name> --workspace <workspace> --repo <repo> [--prompt <prompt> ...] [--prompt-file <prompt-file> ...] [--interval-seconds <interval-seconds>] [--daily-at <daily-at>] [--weekdays <weekdays>] [--disabled]
+```
+
+Prompts are sent in order: every --prompt first, then the contents of every --prompt-file. Exactly one schedule is required: --interval-seconds or --daily-at HH:MM (optionally restricted with --weekdays).
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--name` | `<name>` | yes | Job name (must be unique) |
+| `--workspace` | `<workspace>` | yes | Workspace name (folder under the dev root) |
+| `--repo` | `<repo>` | yes | Repository slug (owner/repo) |
+| `--prompt` | `<prompt>` _(repeatable)_ | no | Prompt text (repeatable; sent in order) |
+| `--prompt-file` | `<prompt-file>` _(repeatable)_ | no | Read a prompt from a file; '-' reads stdin (repeatable) |
+| `--interval-seconds` | `<interval-seconds>` | no | Run every N seconds |
+| `--daily-at` | `<daily-at>` | no | Run daily at HH:MM (24-hour, local time) |
+| `--weekdays` | `<weekdays>` | no | Comma-separated weekdays for --daily-at (sun,mon,… or 1-7); omit for every day |
+| `--disabled` | — | no | Create the job disabled |
+
+---
+
+## `crow job delete`
+
+Delete a job.
+
+```
+crow job delete --id <id>
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--id` | `<id>` | yes | Job UUID |
+
+---
+
+## `crow job disable`
+
+Disable a job.
+
+```
+crow job disable --id <id>
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--id` | `<id>` | yes | Job UUID |
+
+---
+
+## `crow job duplicate`
+
+Duplicate a job (the copy starts disabled with a unique name).
+
+```
+crow job duplicate --id <id>
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--id` | `<id>` | yes | Job UUID |
+
+---
+
+## `crow job edit`
+
+Update fields on an existing job.
+
+```
+crow job edit --id <id> [--name <name>] [--workspace <workspace>] [--repo <repo>] [--prompt <prompt> ...] [--prompt-file <prompt-file> ...] [--interval-seconds <interval-seconds>] [--daily-at <daily-at>] [--weekdays <weekdays>]
+```
+
+Only the provided flags change; everything else keeps its value. Any --prompt/--prompt-file replaces the job's whole prompt list, and any schedule flag replaces the whole schedule — so changing --weekdays requires restating --daily-at. Use enable/disable to toggle the enabled flag.
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--id` | `<id>` | yes | Job UUID |
+| `--name` | `<name>` | no | New job name (must be unique) |
+| `--workspace` | `<workspace>` | no | New workspace name |
+| `--repo` | `<repo>` | no | New repository slug (owner/repo) |
+| `--prompt` | `<prompt>` _(repeatable)_ | no | Replacement prompt text (repeatable; replaces all prompts) |
+| `--prompt-file` | `<prompt-file>` _(repeatable)_ | no | Read a replacement prompt from a file; '-' reads stdin (repeatable) |
+| `--interval-seconds` | `<interval-seconds>` | no | Run every N seconds |
+| `--daily-at` | `<daily-at>` | no | Run daily at HH:MM (24-hour, local time) |
+| `--weekdays` | `<weekdays>` | no | Comma-separated weekdays for --daily-at (sun,mon,… or 1-7); omit for every day |
+
+---
+
+## `crow job enable`
+
+Enable a job.
+
+```
+crow job enable --id <id>
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--id` | `<id>` | yes | Job UUID |
+
+---
+
+## `crow job get`
+
+Show one job's full details.
+
+```
+crow job get --id <id>
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--id` | `<id>` | yes | Job UUID |
+
+---
+
+## `crow job list`
+
+List all jobs.
+
+```
+crow job list
+```
+
+---
+
+## `crow job run`
+
+Run a job now, regardless of its schedule or enabled flag.
+
+```
+crow job run --id <id>
+```
+
+Returns the launched session and terminal ids. The run continues in the app even if the CLI times out waiting (e.g. while a repo is cloned on demand).
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--id` | `<id>` | yes | Job UUID |
+
+---
+
+## `crow launch-agent`
+
+Launch the session's coding agent in a ready terminal.
+
+```
+crow launch-agent --terminal <terminal>
+```
+
+Takes only `--terminal` — the terminal id alone identifies the surface, so unlike `new-terminal` / `send` there is no `--session` flag.
+
+The daemon applies this only to a terminal that is shell-ready and still pending auto-launch; in any other state it is a no-op. `{"ok": true}` means the request was accepted, not that an agent was started.
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--terminal` | `<terminal>` | yes | Terminal UUID |
+
+---
+
+## `crow list-allowlist`
+
+List allowlist patterns and where each one is defined.
+
+```
+crow list-allowlist
+```
+
+Reads the daemon's last scan rather than re-reading disk — run refresh-allowlist first if a settings file changed underneath it.
+
+---
+
+## `crow list-artifacts`
+
+List images an agent dropped in a session's artifacts directory.
+
+```
+crow list-artifacts --session <session>
+```
+
+Each image reports an absolute on-disk path plus a url that only resolves against the daemon's own web server. The directory is the one agents see as $CROW_ARTIFACTS_DIR; it lives under $TMPDIR and does not survive a reboot.
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--session` | `<session>` | yes | Session UUID |
+
+---
+
+## `crow list-links`
+
+List links for a session.
+
+```
+crow list-links --session <session>
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--session` | `<session>` | yes | Session UUID |
+
+---
+
+## `crow list-reviews`
+
+List requested PR reviews (with unseen count and loading state).
+
+```
+crow list-reviews
+```
+
+---
+
+## `crow list-sessions`
+
+List all sessions.
+
+```
+crow list-sessions
+```
+
+---
+
+## `crow list-terminals`
+
+List terminals for a session.
+
+```
+crow list-terminals --session <session>
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--session` | `<session>` | yes | Session UUID |
+
+---
+
+## `crow list-tickets`
+
+List the ticket board (issues, per-status counts, loading state).
+
+```
+crow list-tickets
+```
+
+---
+
+## `crow list-worktrees`
+
+List worktrees for a session.
+
+```
+crow list-worktrees --session <session>
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--session` | `<session>` | yes | Session UUID |
+
+---
+
+## `crow mark-in-review`
+
+Move a session to In Review.
+
+```
+crow mark-in-review --session <session>
+```
+
+Requires a linked ticket (attach one with `crow set-ticket --url …`). Writes session status only — use `crow transition-ticket --to inReview` to move the provider's board.
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--session` | `<session>` | yes | Session UUID |
+
+---
+
+## `crow mark-issue-done`
+
+Close the session's linked issue and complete the session.
+
+```
+crow mark-issue-done --session <session>
+```
+
+GitHub/GitLab close the issue; Jira and Corveil transition it to the mapped done status. On success the session flips to completed. Requires a linked ticket and a provider-configured daemon.
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--session` | `<session>` | yes | Session UUID |
+
+---
+
+## `crow new-session`
+
+Create a new session.
+
+```
+crow new-session --name <name> [--kind <kind>] [--agent <agent>]
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--name` | `<name>` | yes | Session name |
+| `--kind` | `<kind>` | no | Session kind: work (default) or manager |
+| `--agent` | `<agent>` | no | Agent kind (e.g. claude-code). Defaults to the configured default agent. |
+
+---
+
+## `crow new-terminal`
+
+Create a terminal tab inside Crow (tmux).
+
+```
+crow new-terminal --session <session> --cwd <cwd> [--name <name>] [--command <command>] [--managed]
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--session` | `<session>` | yes | Session UUID |
+| `--cwd` | `<cwd>` | yes | Working directory |
+| `--name` | `<name>` | no | Terminal name |
+| `--command` | `<command>` | no | Command to run |
+| `--managed` | — | no | Mark as managed Claude Code terminal |
+
+---
+
+## `crow notifications`
+
+Read and write notification settings.
+
+```
+crow notifications <get|set>
+```
+
+Notifications cascade: a notification fires only if globalMute is off, the matching global category toggle is on, AND the per-event toggle is on. Global flags apply to every event; the --event-* flags apply to the single event named by --event.
+
+Subcommands: [`get`](#crow-notifications-get), [`set`](#crow-notifications-set).
+
+---
+
+## `crow notifications get`
+
+Show notification settings.
+
+```
+crow notifications get [--event <event>]
+```
+
+Lists the global toggles, every event's effective settings, and the built-in sound names. Events absent from config.json are reported with the defaults they will actually fire with. --event narrows the event list to one entry; the global toggles are always included, since they can be the reason an event never fires.
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--event` | `<event>` | no | Restrict the event list to one event. Values: `taskComplete`, `agentWaiting`, `reviewRequested`, `changesRequested`, `checksFailing`, `autoWorkspaceCreated`, `autoMergeEnabled`, `autoRebasePushed`, `autoRebaseConflicts`, `configReloaded`. |
+
+---
+
+## `crow notifications set`
+
+Change notification settings.
+
+```
+crow notifications set [--global-mute|--no-global-mute] [--sound-enabled|--no-sound-enabled] [--system-notifications-enabled|--no-system-notifications-enabled] [--event <event>] [--event-enabled|--no-event-enabled] [--event-sound-enabled|--no-event-sound-enabled] [--event-system-notification-enabled|--no-event-system-notification-enabled] [--event-sound-name <event-sound-name>]
+```
+
+Only the provided flags change; everything else keeps its value. Each toggle takes a --flag / --no-flag pair. The --event-* flags require --event and apply to that event alone. --event-sound-name accepts the built-in sounds listed by `crow notifications get` (case-insensitive).
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--global-mute`, `--no-global-mute` | — | no | Master mute — suppresses every sound and system notification |
+| `--sound-enabled`, `--no-sound-enabled` | — | no | Global sound-playback toggle |
+| `--system-notifications-enabled`, `--no-system-notifications-enabled` | — | no | Global system-notification toggle |
+| `--event` | `<event>` | no | Event to change (required by every --event-* flag). Values: `taskComplete`, `agentWaiting`, `reviewRequested`, `changesRequested`, `checksFailing`, `autoWorkspaceCreated`, `autoMergeEnabled`, `autoRebasePushed`, `autoRebaseConflicts`, `configReloaded`. |
+| `--event-enabled`, `--no-event-enabled` | — | no | Whether this event notifies at all |
+| `--event-sound-enabled`, `--no-event-sound-enabled` | — | no | Whether this event plays a sound |
+| `--event-system-notification-enabled`, `--no-event-system-notification-enabled` | — | no | Whether this event posts a system notification |
+| `--event-sound-name` | `<event-sound-name>` | no | Sound for this event (a built-in sound name) |
+
+---
+
+## `crow open-in-vscode`
+
+Open the session's worktree in VS Code on the host.
+
+```
+crow open-in-vscode --session <session>
+```
+
+Launches the `code` CLI at the session's primary worktree. Requires that CLI on PATH (or in a standard VS Code install location) and a worktree attached to the session.
+
+Host-app launches are restricted to local callers; the CLI qualifies, since it talks to the daemon over its Unix socket.
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--session` | `<session>` | yes | Session UUID |
+
+---
+
+## `crow open-terminal`
+
+Open a macOS Terminal.app window at the session's worktree (host GUI).
+
+```
+crow open-terminal --session <session>
+```
+
+This is NOT a Crow terminal tab — it opens Terminal.app on the daemon host, cd'd to the session's primary worktree. Use `new-terminal` to create a tab inside Crow.
+
+macOS only. Host-app launches are restricted to local callers; the CLI qualifies, since it talks to the daemon over its Unix socket.
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--session` | `<session>` | yes | Session UUID |
+
+---
+
+## `crow promote-allowlist`
+
+Copy worktree-local allowlist patterns into ~/.claude/settings.json.
+
+```
+crow promote-allowlist [--pattern <pattern> ...]
+```
+
+Patterns already in the global file are reported under already_global and left alone. Quote patterns — parentheses and '*' are shell metacharacters: --pattern 'Bash(npm test:*)'.
+
+Promote everything not yet global:
+```
+crow list-allowlist | jq -r '.entries[] | select(.is_global | not) | "--pattern", .pattern' | xargs crow promote-allowlist
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--pattern` | `<pattern>` _(repeatable)_ | no | Allowlist pattern to promote, e.g. 'Bash(npm test:*)' (repeatable) |
+
+---
+
+## `crow quick-action`
+
+Dispatch a PR quick action into a session's agent terminal.
+
+```
+crow quick-action --session <session> --action <action>
+```
+
+A skipped dispatch is reported as {"dispatched": false, "reason": "…"} with a zero exit code — the RPC succeeded, the session just had no terminal to send to (or no linked PR). Check `dispatched` rather than the exit code.
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--session` | `<session>` | yes | Session UUID |
+| `--action` | `<action>` | yes | Action: fixConflicts, addressChanges, fixChecks, mergePR, reReview |
+
+---
+
+## `crow rebuild-scorecard`
+
+Backfill analytics snapshots and recompute the scorecard.
+
+```
+crow rebuild-scorecard
+```
+
+Idempotent, and overlapping callers coalesce into one rebuild. Errors when telemetry is disabled — there is no database to rebuild from.
+
+---
+
+## `crow recreate-terminal`
+
+Recreate a terminal to restore full scrollback (CROW-804).
+
+```
+crow recreate-terminal --session <session> --terminal <terminal>
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--session` | `<session>` | yes | Session UUID |
+| `--terminal` | `<terminal>` | yes | Terminal UUID |
+
+---
+
+## `crow refresh-allowlist`
+
+Re-scan global and worktree settings files for allowlist patterns.
+
+```
+crow refresh-allowlist
+```
+
+---
+
+## `crow refresh-tickets`
+
+Re-poll the ticket provider now.
+
+```
+crow refresh-tickets
+```
+
+---
+
+## `crow reload-tmux-config`
+
+Reload the bundled tmux config into the running server.
+
+```
+crow reload-tmux-config
+```
+
+Runs `tmux source-file` against the bundled crow-tmux.conf. Non-destructive: windows, sessions, and running agents are unaffected. Errors if the tmux server isn't running or the bundled config is missing.
+
+---
+
+## `crow remove-link`
+
+Remove a link from a session.
+
+```
+crow remove-link --session <session> [--id <id>] [--url <url>]
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--session` | `<session>` | yes | Session UUID |
+| `--id` | `<id>` | no | Link ID (from list-links) |
+| `--url` | `<url>` | no | Link URL (alternative to --id) |
+
+---
+
+## `crow rename-session`
+
+Rename a session.
+
+```
+crow rename-session --session <session> <name>
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--session` | `<session>` | yes | Session UUID |
+| _(positional)_ | `<name>` | yes | New name |
+
+---
+
+## `crow rename-terminal`
+
+Rename a terminal tab.
+
+```
+crow rename-terminal --session <session> --terminal <terminal> <name>
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--session` | `<session>` | yes | Session UUID |
+| `--terminal` | `<terminal>` | yes | Terminal UUID |
+| _(positional)_ | `<name>` | yes | New name |
+
+---
+
+## `crow restart-manager`
+
+Relaunch the Manager's agent process in place.
+
+```
+crow restart-manager
+```
+
+Tears down the Manager's dead terminal surface and recreates a fresh one (new terminal UUID) with the current remote-control / auto-permission args. The Manager session row and its id are preserved.
+
+Only the primary Manager session is restarted — secondary Managers are untouched.
+
+---
+
+## `crow restart-tmux-server`
+
+Restart the tmux server, rebuilding every terminal (destructive).
+
+```
+crow restart-tmux-server
+```
+
+Kills the shared tmux server — every agent in every session dies — then relaunches each persisted terminal (the Manager via its stored command, work sessions via `claude --continue`).
+
+The web UI confirms first; from the CLI the caller owns that choice, the same stance as `recreate-terminal`.
+
+Returns as soon as the teardown is done — the per-terminal rebuild continues in the background, so don't chain a `crow send` straight after this or you'll race a half-rebuilt surface.
+
+---
+
+## `crow resync-jira`
+
+Re-sync Jira ticket statuses from Crow session state.
+
+```
+crow resync-jira
+```
+
+---
+
+## `crow retry-readiness`
+
+Re-arm the readiness watch for a stuck terminal.
+
+```
+crow retry-readiness --terminal <terminal>
+```
+
+Starts a longer-budget readiness watch on a terminal whose first attempt timed out, clearing the Retry overlay in the UI.
+
+Takes only `--terminal` — no `--session` flag.
+
+The daemon applies this only to a terminal that timed out or never reached shell-ready; in any other state it is a no-op. `{"ok": true}` means the request was accepted, not that a watch was re-armed.
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--terminal` | `<terminal>` | yes | Terminal UUID |
+
+---
+
+## `crow select-session`
+
+Switch to a session.
+
+```
+crow select-session --session <session>
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--session` | `<session>` | yes | Session UUID |
+
+---
+
+## `crow send`
+
+Send text to a terminal.
+
+```
+crow send --session <session> --terminal <terminal> <text>
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--session` | `<session>` | yes | Session UUID |
+| `--terminal` | `<terminal>` | yes | Terminal UUID |
+| _(positional)_ | `<text>` | yes | Text to send |
+
+---
+
+## `crow set-goal`
+
+Set or clear the org-goal tag on a session.
+
+```
+crow set-goal --session <session> [--goal <goal>] [--clear]
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--session` | `<session>` | yes | Session UUID |
+| `--goal` | `<goal>` | no | Org goal/KPI this session's work ladders up to |
+| `--clear` | — | no | Clear the org-goal tag |
+
+---
+
+## `crow set-locked`
+
+Lock/unlock a session to protect it from auto-cleanup.
+
+```
+crow set-locked --session <session> <locked>
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--session` | `<session>` | yes | Session UUID |
+| _(positional)_ | `<locked>` | yes | Locked state: true or false |
+
+---
+
+## `crow set-pinned`
+
+Deprecated alias for set-locked.
+
+**Hidden** — not listed in `crow --help`.
+
+```
+crow set-pinned --session <session> <pinned>
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--session` | `<session>` | yes | Session UUID |
+| _(positional)_ | `<pinned>` | yes | Locked state: true or false |
+
+---
+
+## `crow set-session-active`
+
+Return a session to active.
+
+```
+crow set-session-active --session <session>
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--session` | `<session>` | yes | Session UUID |
+
+---
+
+## `crow set-status`
+
+Set session status.
+
+```
+crow set-status --session <session> <status>
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--session` | `<session>` | yes | Session UUID |
+| _(positional)_ | `<status>` | yes | Status: active, paused, inReview, completed, archived |
+
+---
+
+## `crow set-ticket`
+
+Set ticket metadata.
+
+```
+crow set-ticket --session <session> [--url <url>] [--title <title>] [--number <number>] [--priority <priority>]
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--session` | `<session>` | yes | Session UUID |
+| `--url` | `<url>` | no | Ticket URL |
+| `--title` | `<title>` | no | Ticket title |
+| `--number` | `<number>` | no | Ticket number |
+| `--priority` | `<priority>` | no | Ticket priority: highest, high, medium, low, or lowest |
+
+---
+
+## `crow setup`
+
+First-time setup for Crow.
+
+```
+crow setup [--dev-root <dev-root>]
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--dev-root` | `<dev-root>` | no | Development root path |
+
+---
+
+## `crow start-review`
+
+Start a review session for a pull request.
+
+```
+crow start-review --url <url>
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--url` | `<url>` | yes | Pull request URL |
+
+---
+
+## `crow telemetry`
+
+View or change session-analytics collection.
+
+```
+crow telemetry <get|set>
+```
+
+Subcommands: [`get`](#crow-telemetry-get), [`set`](#crow-telemetry-set).
+
+---
+
+## `crow telemetry get`
+
+Show the current telemetry settings.
+
+```
+crow telemetry get
+```
+
+---
+
+## `crow telemetry set`
+
+Change telemetry settings.
+
+```
+crow telemetry set [--enabled <enabled>] [--port <port>] [--retention-days <retention-days>]
+```
+
+Only the flags you pass change; at least one is required.
+
+--enabled and --port are read once when crowd starts, and the port is baked into every agent launch's OTEL_EXPORTER_OTLP_ENDPOINT, so changing either returns "restart_required": true — restart crowd to apply it. --retention-days drives the prune that runs at startup, so it likewise applies at the next daemon start.
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--enabled` | `<enabled>` | no | Enable the OTLP receiver (true or false) |
+| `--port` | `<port>` | no | OTLP HTTP receiver port (1024-65535, default 4318) |
+| `--retention-days` | `<retention-days>` | no | Days of telemetry to keep; 0 keeps forever (default 180) |
+
+---
+
+## `crow transition-ticket`
+
+Transition a session's ticket to a pipeline status.
+
+```
+crow transition-ticket --session <session> --to <to>
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--session` | `<session>` | yes | Session UUID |
+| `--to` | `<to>` | yes | Target status: inProgress, inReview, or done |
+
+---
+
+## `crow ui`
+
+View or change UI display preferences.
+
+```
+crow ui <get|set>
+```
+
+Display preferences only — this does not start, stop, or open the web UI.
+
+Settings are grouped by the config block they belong to, so `get` returns {"ui": {"sidebar": {...}}} and gains further blocks as more view options become configurable.
+
+Subcommands: [`get`](#crow-ui-get), [`set`](#crow-ui-set).
+
+---
+
+## `crow ui get`
+
+Show the current UI display preferences.
+
+```
+crow ui get
+```
+
+---
+
+## `crow ui set`
+
+Change UI display preferences.
+
+```
+crow ui set [--hide-session-details <hide-session-details>]
+```
+
+Only the flags you pass change; at least one is required. Connected browsers pick the change up within a couple of seconds — no reload.
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--hide-session-details` | `<hide-session-details>` | no | Hide ticket title and repo/branch lines in sidebar rows (true or false) |
+
+---
+
+## `crow web-password`
+
+Manage the web-access password (local-only).
+
+```
+crow web-password <status|set|clear>
+```
+
+Subcommands: [`status`](#crow-web-password-status), [`set`](#crow-web-password-set), [`clear`](#crow-web-password-clear).
+
+---
+
+## `crow web-password clear`
+
+Remove the web-access password.
+
+```
+crow web-password clear
+```
+
+With no password set, remote web clients are no longer challenged — check how the daemon is bound before clearing it.
+
+---
+
+## `crow web-password set`
+
+Set or change the web-access password.
+
+```
+crow web-password set [--stdin]
+```
+
+Prompts twice with echo off. For scripts, pipe the password and pass --stdin:
+
+```
+printf '%s' "$PW" | crow web-password set --stdin
+```
+
+There is no --password flag on purpose — a plaintext password in argv is visible in shell history and to local `ps`. Changing the password does not require the old one; the local-only gate is the control.
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--stdin` | — | no | Read the password from stdin instead of prompting |
+
+---
+
+## `crow web-password status`
+
+Report whether a web-access password is set.
+
+```
+crow web-password status
+```
+
+---
+
+## `crow work-on-issue`
+
+Start working on a ticket (types /crow-workspace into the Manager).
+
+```
+crow work-on-issue --url <url>
+```
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--url` | `<url>` | yes | Ticket / issue URL |
+
+---
+

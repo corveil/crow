@@ -23,6 +23,7 @@ crow select-session --session <uuid>            → {"session_id":"..."}
 crow list-sessions                              → {"sessions":[...]}
 crow get-session --session <uuid>               → {id, name, status, ticket_url, ...}
 crow set-status --session <uuid> active|paused|inReview|completed|archived
+crow set-locked --session <uuid> true|false     → exempt a session from (or return it to) the retention reaper
 crow handoff-agent --session <uuid> --agent cursor [--note "..."] → {"session_id":"...","agent_kind":"...","terminal_id":"..."}
 crow delete-session --session <uuid>            → {"deleted":true}
 ```
@@ -105,6 +106,26 @@ Everything is live except `--binary` (agent discovery + `.claude/bin` symlinks a
 
 The review board filters on defaults ∪ every workspace's own `excludeReviewRepos`, so `--clear-exclude-review-repos` won't unhide a repo a workspace excludes.
 
+### Job Commands
+
+Scheduled prompt-sets scoped to one repo in a workspace (CROW-604) — the Jobs sidebar, as CLI verbs. Jobs are addressed by UUID; `crow job list` prints them. Mutations hit the app's live config, so the scheduler and Settings UI see them immediately.
+
+```
+crow job list                                   → {"jobs":[...]}
+crow job get --id <job-uuid>                    → {"job":{...}}
+crow job add --name "..." --workspace "..." --repo owner/repo --prompt "..." (--interval-seconds N | --daily-at HH:MM [--weekdays mon,tue])
+crow job edit --id <job-uuid> [--name ...] [--prompt ...] [--daily-at HH:MM] [--weekdays ...]
+crow job enable --id <job-uuid>                 → {"job":{...}}
+crow job disable --id <job-uuid>                → {"job":{...}}
+crow job run --id <job-uuid>                    → {"job_id":"...","session_id":"...","terminal_id":"..."}   needs tmux; ignores schedule + enabled
+crow job delete --id <job-uuid>                 → {"deleted":true,"job_id":"..."}
+crow job duplicate --id <job-uuid>              → {"job":{...}}   the copy starts disabled with a uniquified name
+```
+
+- `add` needs exactly one schedule (`--interval-seconds` **or** `--daily-at`) and at least one `--prompt`/`--prompt-file`. `--prompt` and `--prompt-file` are repeatable and sent in that order; `--prompt-file -` reads stdin (at most once).
+- On `edit`, any `--prompt` replaces the **whole** prompt list and any schedule flag replaces the **whole** schedule — so changing `--weekdays` means restating `--daily-at`. Use `enable`/`disable` instead of `edit` to toggle enabled.
+- `job run` can take a while on first run (it may clone the repo); the run continues in the app even if the CLI stops waiting.
+
 ### Worktree Commands
 ```
 crow add-worktree --session <uuid> --repo "name" --repo-path "/main/repo" --path "/worktree/path" --branch "feature/..." [--primary]
@@ -116,6 +137,8 @@ crow list-worktrees --session <uuid>
 crow new-terminal --session <uuid> --cwd "/path" [--name "Claude Code"] [--command "claude ..."] [--managed]
 crow list-terminals --session <uuid>
 crow close-terminal --session <uuid> --terminal <uuid>
+crow rename-terminal --session <uuid> --terminal <uuid> "new name"
+crow recreate-terminal --session <uuid> --terminal <uuid>   → DESTRUCTIVE: rebuilds the pane to restore scrollback; relaunches the agent with --continue
 crow send --session <uuid> --terminal <uuid> "text to send"
 ```
 

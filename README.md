@@ -190,7 +190,8 @@ Handy for Rust/window work, but each relaunch re-runs the launch logic and tears
 ## Documentation
 
 - [**Getting Started**](docs/getting-started.md) — Clone, build, authenticate, and run
-- [**CLI Reference**](docs/cli-reference.md) — Every `crow` subcommand and its flags
+- [**CLI Reference**](docs/cli-reference.md) — Every `crow` subcommand and its flags, with examples and gotchas
+- [**CLI (generated)**](docs/cli.md) — The same surface generated from the commands themselves; regenerate with `make docs`
 - [**Architecture**](docs/architecture.md) — Packages, key components, data flow
 - [**Configuration**](docs/configuration.md) — File locations, workspace config, directory layout, session lifecycle
 - [**Automation**](docs/automation.md) — Auto-create, auto-respond, auto-complete, and the Settings → Automation tab
