@@ -342,7 +342,10 @@ identity (`if …kind == .claudeCode`), because no other harness has an analogue
   no-registered-agent fallback). The **two** Manager
   gateway writes — `createManagerTerminal` and the hydrate path's
   `writeManagerGatewayEnv` — are **unconditional** (harmless: a non-Claude agent
-  ignores `settings.local.json`).
+  ignores `settings.local.json`). Which workspace's gateway applies is resolved
+  by worktree path, falling back to the PR's `owner/repo` for review clones,
+  which live outside any workspace folder (CROW-891) — see
+  [configuration.md](configuration.md#which-gateway-applies).
 - **OTEL telemetry env** — `AgentLaunch.prepareAgentLaunchText` prepends the
   `OTEL_*` exporter vars, gated on `agent.kind == .claudeCode` (Codex has no OTLP
   equivalent).

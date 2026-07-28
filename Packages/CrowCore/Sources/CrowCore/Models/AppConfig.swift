@@ -97,6 +97,36 @@ public struct AppConfig: Codable, Sendable, Equatable {
         defaults.excludeReviewRepos + workspaces.flatMap(\.excludeReviewRepos)
     }
 
+    /// The workspace that owns a repo, addressed by its `owner/repo` slug.
+    ///
+    /// Membership is `alwaysInclude` ∪ `autoReviewRepos` — the two lists that name
+    /// repos a workspace *works on*. `excludeReviewRepos` is deliberately **not**
+    /// subtracted: it's a review-board *visibility* filter, not a membership
+    /// statement, so a repo hidden from the board still belongs to the workspace
+    /// and still gets its gateway (CROW-891).
+    ///
+    /// Patterns use ``repoMatchesPatterns`` glob semantics — case-insensitive, one
+    /// `*`. Ambiguity resolves deterministically so two workspaces claiming the
+    /// same repo can't flip the answer between launches: a workspace naming the
+    /// slug **exactly** beats one matching only through a glob, and among equals
+    /// the earlier entry in `workspaces` (config file order) wins.
+    ///
+    /// Returns nil when no workspace claims the slug. Callers must treat that as
+    /// "unset", not "inherit" — see `SessionService.workspaceGatewayResolved`.
+    public func workspace(forRepoSlug slug: String) -> WorkspaceInfo? {
+        let lowerSlug = slug.lowercased()
+        var globMatch: WorkspaceInfo?
+        for workspace in workspaces {
+            let patterns = workspace.alwaysInclude + workspace.autoReviewRepos
+            guard repoMatchesPatterns(slug, patterns: patterns) else { continue }
+            if patterns.contains(where: { $0.lowercased() == lowerSlug }) {
+                return workspace  // exact beats glob; first exact in config order wins
+            }
+            if globMatch == nil { globMatch = workspace }
+        }
+        return globMatch
+    }
+
     public init(
         workspaces: [WorkspaceInfo] = [],
         defaults: ConfigDefaults = ConfigDefaults(),
