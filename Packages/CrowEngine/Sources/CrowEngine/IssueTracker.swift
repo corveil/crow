@@ -2767,9 +2767,25 @@ public final class IssueTracker {
             guard let pr = byURL[prLink.url] else {
                 // The PR is linked to a live session but absent from the
                 // viewer-PR fetch — a fetch/scope problem, not an eligibility
-                // one, and invisible before CROW-782.
+                // one, and invisible before CROW-782. The log line is
+                // unconditional (it's fetch health, not an auto-merge verdict);
+                // the *chip* is not.
                 skips.append("\(prLink.url):\(AutoMergeSkipReason.notInViewerPRs.rawValue)")
-                publishAutoMergeVerdict(.notInViewerPRs, session: session, pr: nil)
+                // Only speak auto-merge vocabulary about a PR that actually
+                // asked for auto-merge. `pr` is nil here, so the label can't be
+                // read off the record — fall back to what we already know:
+                // the last fetch that *did* see it, or the fact that Crow has
+                // already armed it. Without that, an ordinary feature PR aging
+                // out of the 50-most-recently-updated window would grow an
+                // "Auto-merge waiting" chip it never earned — the exact class
+                // of misleading signal #888 exists to remove (review #899).
+                let everArmed = appState.prStatus[session.id]?.hasMergeLabel == true
+                    || session.autoMergeEnabledAt != nil
+                if everArmed {
+                    publishAutoMergeVerdict(.notInViewerPRs, session: session, pr: nil)
+                } else {
+                    appState.autoMergeState.removeValue(forKey: session.id)
+                }
                 continue
             }
             if let reason = Self.autoMergeSkipReason(pr: pr, session: session) {
@@ -2974,11 +2990,20 @@ public final class IssueTracker {
     /// auto-merge, and has already checked authorship — can reuse it without
     /// re-fetching the PR's commits.
     ///
-    /// Failure is treated as permanent on purpose. `gh pr merge` without
-    /// `--auto` fails for reasons a 60s retry does not fix (branch protection,
-    /// a missing permission, a race with someone else's push), and retrying a
-    /// merge in a loop is the one failure mode worth ruling out by
-    /// construction.
+    /// **Every** failure is latched as permanent, deliberately — including a
+    /// transient one. This conflates "the host refused the merge" with "we
+    /// couldn't reach the host" (review #899), and the two are not the same
+    /// thing: a rate-limit or network blip parks the PR until a daemon restart.
+    /// It is still the right default *here* specifically because this path has
+    /// no host-side backstop. `enableAutoMerge` can retry freely — GitHub holds
+    /// the queued request and re-checks eligibility itself, so a wasted attempt
+    /// costs nothing. A direct merge acts immediately on a snapshot, so an
+    /// automatic retry loop is the one failure mode that could merge on stale
+    /// state. Distinguishing the two would mean pattern-matching `gh` stderr,
+    /// which is the brittleness `repoAutoMergeAllowed` was added to escape.
+    /// Stop and let a human look. If the false-permanent rate proves annoying
+    /// in practice, the fix is bounded retries keyed on `headRefOid` (as
+    /// `autoUpdateBranchAttempted` does), not a looser catch.
     private func performDirectMerge(session: Session, pr: ViewerPR, backend: CodeBackend) async {
         guard backend.capabilities.contains(.directMerge) else {
             autoMergePermanentSkips[pr.url] = AutoMergeSkipReason.backendLacksAutoMerge.rawValue
