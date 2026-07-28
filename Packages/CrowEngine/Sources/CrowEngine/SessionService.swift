@@ -2907,12 +2907,18 @@ public final class SessionService {
     /// the working-tree `.agents/` directory. A hostile PR head can commit
     /// `.agents/hooks.json` with arbitrary command hooks that `agy` runs with no
     /// approval gate, so once Antigravity loads the clone as its project root the
-    /// hooks fire unsandboxed on the reviewer's machine. Working-tree removal
-    /// only (the git index entry survives), same as
-    /// `stripCursorConfigFromReviewClone`. Shared by `prepareReviewClone`
-    /// (creation-time review agent) and the Antigravity branch of `handoffAgent`
-    /// so the gate can't drift. Idempotent; no-ops when the clone ships no
-    /// `.agents/`.
+    /// hooks fire unsandboxed on the reviewer's machine. Removing the whole
+    /// `.agents/` dir also covers any project-scope config Crow's deferred MCP
+    /// bridge would place there (modeled on `CursorMCPConfigWriter`'s
+    /// `.cursor/mcp.json`); whether `agy` *also* honors a project MCP config
+    /// **outside** `.agents/` is unverified and tracked in the pinned-gaps table.
+    /// Working-tree removal only (the git index entry survives), same as
+    /// `stripCursorConfigFromReviewClone` — so a *committed* `.agents/hooks.json`
+    /// still trips `AntigravityHookConfigWriter`'s git-tracked guard and Crow's
+    /// own state-detection hooks aren't written for that clone; that is expected,
+    /// not a regression. Shared by `prepareReviewClone` (creation-time review
+    /// agent) and the Antigravity branch of `handoffAgent` so the gate can't
+    /// drift. Idempotent; no-ops when the clone ships no `.agents/`.
     nonisolated static func stripAntigravityConfigFromReviewClone(clonePath: String) {
         let agentsDir = (clonePath as NSString).appendingPathComponent(".agents")
         do {
@@ -3202,6 +3208,17 @@ public final class SessionService {
             for path in [".grok", ".cursor", ".claude/settings.json", ".claude/settings.local.json", ".mcp.json"] {
                 _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "checkout", "--", path])
             }
+        }
+        // Same restore-before-pull for Antigravity reviews (#902 review, Yellow):
+        // the `.agents/` strip below applies as an unstaged deletion of tracked
+        // files, so a re-prep of a reused clone dir would make `git pull` refuse
+        // ("local changes would be overwritten") whenever the new head touches
+        // `.agents/` — and because the pull is `try?`-swallowed, the clone would
+        // silently stay at the stale head while `.crow-review-prompt.md` is
+        // rewritten with the current PR URL. Restore first; the strip re-applies
+        // afterward.
+        if reviewAgentKind == .antigravity {
+            _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "checkout", "--", ".agents"])
         }
         _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "fetch", "origin", headBranch])
         _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "checkout", headBranch])

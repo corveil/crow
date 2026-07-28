@@ -476,7 +476,12 @@ review clone's committed `.agents/` is stripped (creation-time in
 `prepareReviewClone`, and on a handoff that flips a review session to Antigravity)
 so a hostile PR head's hooks can't fire when `agy` loads the clone.
 It ships **Tier-2** ([ADR 0015](adr/0015-harness-capability-tiers.md))
-with honest, documented gaps (#860).
+with honest, documented gaps (#860). **Review-approval posture is unverified**
+(#902 end-to-end pass pending): `agy` review inherits `.job`'s launch shape but
+has no bounded auto-permission flag (`autoPermissionSuffix` is `""` on v1.1.7)
+and no confirmed non-interactive posture, so — unlike `.job` — a review that
+stalls on an approval gate would leave the Reviews board waiting with no signal.
+Tracked in the auto-permission pinned-gaps row below; re-check on the manual pass.
 
 **Hooks are its single strongest point — but the schema is Antigravity's own,
 not Claude's.** Verified against [`antigravity.google/docs/hooks`](https://antigravity.google/docs/hooks):
@@ -562,6 +567,7 @@ against current upstream CLIs.
 | Antigravity structured-stdout (would promote toward first-class parity) | upstream FRs **#119/#597** (`--output-format stream-json`), **#31** (ACP) | `AntigravitySignalSource` | 2026-07-26 — hooks are the only transport until either lands |
 | Antigravity bounded auto-permission has no verified interactive launch flag | `agy` **v1.1.7**; headless `-p` ignores `permissions.allow` (issue #548) | `AntigravityLaunchArgs.autoPermissionSuffix` | 2026-07-26 |
 | Antigravity official-installer provenance (supply-chain gate) unconfirmed | `google-antigravity` org `is_verified: false`; pin `antigravity.google` | `AntigravityAgent.fallbackCandidates` | 2026-07-26 — confirm before promoting out of Tier-2 |
+| Antigravity review-clone MCP strip scope: does `agy` honor a project MCP config **outside** `.agents/`? | `agy` **v1.1.7**; Crow's MCP bridge is deferred, so no writer exists yet to confirm the read path | `stripAntigravityConfigFromReviewClone` | 2026-07-28 (#902) — the strip removes all of `.agents/`; verify no repo-root/other project-scope MCP file before wiring the bridge or promoting out of Tier-2 |
 | **Entire Grok flag set** — hooks event names, `-p`/`--single`, `-c`/`-r`, `--allow`/`--deny`, `--permission-mode`, `--trust`, `/rename` | `xai-org/grok-build` **@ 2026-07-25** (periodic mirror of xAI's monorepo, **PRs closed** → churn likely) | `GrokAgent` / `GrokLaunchArgs` / `GrokHookConfigWriter` / `GrokSignalSource` | 2026-07-26 — verified against repo source (`crates/codegen/xai-grok-*`), not blog posts |
 | Grok `grok` binary collides with community `superagent-ai/grok-cli` | — (collision; pin path via `defaults.binaries.grok`) | `GrokAgent.fallbackCandidates` | 2026-07-26 |
 | Grok **`--permission-mode auto` now exists** — the ticket's pinned probe (#859) reported it absent; current docs show `grok --permission-mode auto`. Bounded `.job` posture stays `--permission-mode auto` + a minimal `--deny` backstop (never `--yolo`) regardless | Grok mirror **@ 2026-07-25** | `GrokLaunchArgs.autoPermissionSuffix` | 2026-07-26 |

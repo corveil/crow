@@ -19,8 +19,7 @@ deliberate, documented gaps (full grid in the
 > honest, documented gaps (closed-source + Google-auth-locked ⇒ a *permanent*
 > self-host ❌, hooks-only state detection, no review [closed #902 — see below],
 > no MCP bridge, a supply-chain gate on its binary provenance). It is the first
-> harness added
-> under the tiering this ADR defines; its gaps live in the same
+> harness added under the tiering this ADR defines; its gaps live in the same
 > [capability matrix](../agent-harness-matrix.md) column and are governed by the
 > Tier-2 rationale below.
 
