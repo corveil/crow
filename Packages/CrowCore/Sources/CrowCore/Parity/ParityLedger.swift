@@ -216,8 +216,6 @@ public enum ParityLedger {
         .write("cleanup-set", cli: "cleanup set"),
         .read("ui-get", cli: "ui get"),
         .write("ui-set", cli: "ui set"),
-        .read("automation-get", cli: "automation get"),
-        .write("automation-set", cli: "automation set"),
         .read("notifications-get", cli: "notifications get"),
         .write("notifications-set", cli: "notifications set"),
         .read(
