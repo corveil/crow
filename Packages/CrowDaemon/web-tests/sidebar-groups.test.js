@@ -49,6 +49,11 @@ function groupsOf(list) {
 function rowCount(list) {
   return T.groupSessions(list).reduce((n, g) => n + g.rows.length, 0);
 }
+// The select-all id set for a section (survivors + PR-collapsed rows).
+function allIdsFor(list, title) {
+  const g = T.groupSessions(list).find((x) => x.title === title);
+  return g ? g.allIds : [];
+}
 
 const PR = (n) => `https://github.com/corveil/crow/pull/${n}`;
 const prLink = (n) => [{ label: `PR #${n}`, url: PR(n), type: 'pr' }];
@@ -148,6 +153,31 @@ console.log('CROW-877 sidebar grouping:');
   check('two open reviews for one PR both stay in Reviews',
     (g['Reviews'] || []).includes('live1') && (g['Reviews'] || []).includes('live2'));
   check('a live session is never collapsed away', rowCount([r1, r2]) === 2);
+}
+
+// 10. Two independent WORK/JOB sessions sharing a PR are never collapsed — only
+//     a review-clone pair folds. Two completed work sessions on one PR (a
+//     follow-up session, or a manual `add-link`) would otherwise silently lose
+//     one, worktree and branch stranded on disk (CROW-877 review, Yellow 2).
+{
+  const w1 = { id: 'ww1', kind: 'work', status: 'completed', links: prLink(10) };
+  const w2 = { id: 'ww2', kind: 'work', status: 'archived', links: prLink(10) };
+  const g = groupsOf([w1, w2]);
+  check('two work rows for one PR both render (not a clone pair)',
+    (g['Completed'] || []).includes('ww1') && (g['Completed'] || []).includes('ww2'));
+  check('work+work sharing a PR is never collapsed', rowCount([w1, w2]) === 2);
+}
+
+// 11. A collapsed review clone stays reachable for bulk-delete: the section's
+//     select-all id set (`allIds`) includes the folded-away clone even though it
+//     renders no row (CROW-877 review, Yellow 3).
+{
+  const work = { id: 'w11', kind: 'work', status: 'completed', links: prLink(11) };
+  const clone = { id: 'c11', kind: 'review', status: 'completed', links: prLink(11) };
+  check('merged PR renders only the work row', rowCount([work, clone]) === 1);
+  const ids = allIdsFor([work, clone], 'Completed');
+  check('select-all still reaches the collapsed review clone',
+    ids.includes('w11') && ids.includes('c11'));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

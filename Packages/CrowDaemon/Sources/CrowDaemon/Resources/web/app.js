@@ -681,45 +681,58 @@ const GROUPS = [
 // running agent with no way to select or delete it (CROW-877 review).
 // Managers carry no PR link and match no GROUP, so they drop out here and are
 // rendered by renderSidebar's dedicated managers pass.
-function prURLOf(s) {
-  // The persisted `links` array is authoritative for the terminal rows this
-  // collapse touches — a completed review clone always carries its `.pr` link
-  // there. (Live sessions can hold a PR link only in the app's in-memory
-  // `liveFor(id).pr_link`, but those are non-terminal and never collapsed.)
-  const link = (s.links || []).find((l) => l.type === 'pr');
-  return link ? link.url : null;
-}
 function isTerminal(s) {
   return s.status === 'completed' || s.status === 'archived';
 }
-// Collapse rows that describe the same PR, keeping one. Only completed/archived
-// rows are ever collapsed, so a live session is never hidden. A non-review (work)
-// row represents the PR over a review clone (a merged PR shows its work row, not
-// the leftover completed clone); otherwise the first seen stays. Only ever called
-// on rows already in the same section.
+// Collapse a PR's duplicate rows within one section, keeping one survivor.
+// Returns { rows, collapsedIds }: the rows to render, plus the ids folded away
+// so the section's select-all can still reach them (they'd otherwise be
+// undeletable from the sidebar — CROW-877 review). Only terminal rows collapse,
+// so a live session is never hidden. A pair collapses only when at least one
+// side is a review CLONE — a merged PR's work row + its completed review clone,
+// or a pile-up of completed clones. Two independent work/job sessions that
+// happen to share a PR (a follow-up session, or a manual `add-link`) are NEVER
+// folded; both render. A work row represents the PR over a review clone.
+// Uses the shared `prUrlForSession` (hoisted; defined below) so "does this row
+// have a PR" means one thing across the file.
 function collapsePRDuplicates(rows) {
-  const byPR = new Map();     // PR URL -> index into `out`
+  const byPR = new Map();       // PR URL -> index into `out`
   const out = [];
+  const collapsedIds = [];
   for (const s of rows) {
-    const url = prURLOf(s);
+    const url = prUrlForSession(s);
     if (!url || !isTerminal(s)) { out.push(s); continue; }
     const idx = byPR.get(url);
     if (idx === undefined) { byPR.set(url, out.length); out.push(s); continue; }
-    if (out[idx].kind === 'review' && s.kind !== 'review') out[idx] = s;   // work wins
+    const prior = out[idx];
+    if (prior.kind !== 'review' && s.kind !== 'review') { out.push(s); continue; }  // two non-clones: keep both
+    if (prior.kind === 'review' && s.kind !== 'review') {                            // work supersedes a clone
+      collapsedIds.push(prior.id);
+      out[idx] = s;
+    } else {                                                                          // clone folds into the survivor
+      collapsedIds.push(s.id);
+    }
   }
-  return out;
+  return { rows: out, collapsedIds };
 }
 function groupSessions(list) {
   const seenIds = new Set();
-  const out = GROUPS.map((g) => ({ title: g.title, rows: [] }));
+  const buckets = GROUPS.map((g) => ({ title: g.title, assigned: [] }));
   for (const s of list) {
     if (seenIds.has(s.id)) continue;
     seenIds.add(s.id);
     const gi = GROUPS.findIndex((g) => g.match(s));
-    if (gi >= 0) out[gi].rows.push(s);
+    if (gi >= 0) buckets[gi].assigned.push(s);
   }
-  for (const g of out) g.rows = collapsePRDuplicates(g.rows);
-  return out.filter((g) => g.rows.length);
+  const out = [];
+  for (const b of buckets) {
+    if (!b.assigned.length) continue;
+    const { rows, collapsedIds } = collapsePRDuplicates(b.assigned);
+    // `allIds` = rendered survivors + folded-away ids, so a section's "select
+    // all" (and thus bulk-delete) still reaches the hidden collapsed rows.
+    out.push({ title: b.title, rows, allIds: rows.map((r) => r.id).concat(collapsedIds) });
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -813,8 +826,8 @@ function renderSidebar() {
   for (const m of managers.slice(1)) root.appendChild(sessionRow(m));
 
   let shown = 0;
-  for (const { title, rows } of groupSessions(sessions)) {
-    root.appendChild(selectionMode ? sectionHeader(title, rows) : el('div', 'divider', title));
+  for (const { title, rows, allIds } of groupSessions(sessions)) {
+    root.appendChild(selectionMode ? sectionHeader(title, allIds) : el('div', 'divider', title));
     for (const s of rows) { root.appendChild(sessionRow(s)); shown++; }
   }
   if ((sessionsLoaded || sidebarCacheHit) && !shown && !managers.length) {
@@ -850,11 +863,11 @@ function toggleSelect(id) {
 }
 
 // Section divider with a per-section select-all/clear toggle (mirrors the
-// desktop section header checklist button).
-function sectionHeader(title, rows) {
+// desktop section header checklist button). `ids` is the section's full id set
+// (survivors + PR-collapsed rows), so "select all" reaches the hidden rows too.
+function sectionHeader(title, ids) {
   const head = el('div', 'divider divider-sel');
   head.appendChild(el('span', 'divider-label', title));
-  const ids = rows.map((r) => r.id);
   const allSel = ids.length && ids.every((id) => selectedSessionIDs.has(id));
   const btn = el('button', 'divider-selall', allSel ? 'Clear' : 'All');
   btn.title = allSel ? 'Deselect all in section' : 'Select all in section';
