@@ -108,9 +108,12 @@ public actor GitManager {
     /// - **Verifies HEAD is on `branch`** before rebasing, so a worktree that
     ///   was switched to another branch is left alone (`.failed`).
     /// - **Requires the local branch to match the remote PR head** before
-    ///   rewriting — committed-but-unpushed local commits (or a stale local
-    ///   branch) yield `.outOfSyncWithRemote` so a force-push can't publish
-    ///   unpushed work or revert remote commits.
+    ///   rewriting. A branch that is *strictly behind* its remote is
+    ///   fast-forwarded onto it first (loss-free — the tree is already known
+    ///   clean), because that is the only way the rebase can target the head
+    ///   the PR is actually about (#889). Only *ahead* and *diverged* yield
+    ///   `.outOfSyncWithRemote`, so a force-push can't publish unpushed work
+    ///   or revert remote commits.
     /// - **Aborts on conflict** to restore a clean checkout, then reports
     ///   `.conflicts` so the caller can hand resolution to a Claude session.
     /// - **`--force-with-lease`** (against the remote head of `branch` fetched
@@ -143,17 +146,47 @@ public actor GitManager {
             // `--force-with-lease` baseline reflect the current remote state.
             _ = try await run(["git", "-C", worktreePath, "fetch", "origin", baseBranch, branch])
 
-            // Refuse to rewrite a branch that isn't in sync with its remote:
-            // local commits not yet pushed (ahead) would be published
-            // unexpectedly, and a stale local branch (behind/diverged) would
-            // revert remote commits on force-push. Only proceed when the local
-            // head exactly matches the remote PR head.
+            // Reconcile the local branch with the remote PR head before
+            // rewriting it. The three ways they can differ need different
+            // answers, so classify rather than comparing for equality:
+            //
+            //   behind   → fast-forward onto the remote head and carry on. The
+            //              tree is clean (checked above), so this is loss-free,
+            //              and it's the only way the rebase targets the commit
+            //              the PR is actually about. Refusing here instead left
+            //              a clean-but-stale worktree retrying forever (#889).
+            //   ahead    → refuse: force-pushing would publish unpushed work.
+            //   diverged → refuse: force-pushing would revert remote commits.
             let localSha = try await run(["git", "-C", worktreePath, "rev-parse", "HEAD"])
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             let remoteSha = try await run(["git", "-C", worktreePath, "rev-parse", "origin/\(branch)"])
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            guard localSha == remoteSha else {
-                return .outOfSyncWithRemote
+            if localSha != remoteSha {
+                // `merge-base --is-ancestor` signals via exit code, which `run`
+                // surfaces only as a thrown `GitError` — so probe with `try?`.
+                let isBehind = (try? await run([
+                    "git", "-C", worktreePath, "merge-base", "--is-ancestor", "HEAD", "origin/\(branch)",
+                ])) != nil
+                guard isBehind else {
+                    let isAhead = (try? await run([
+                        "git", "-C", worktreePath, "merge-base", "--is-ancestor", "origin/\(branch)", "HEAD",
+                    ])) != nil
+                    return .outOfSyncWithRemote(isAhead ? .ahead : .diverged)
+                }
+                // Equality was ruled out above, so this is a strict
+                // fast-forward. It can still fail if the remote moved between
+                // the fetch and here — report that rather than rebasing (and
+                // then force-pushing) from a head we didn't intend.
+                do {
+                    _ = try await run([
+                        "git", "-C", worktreePath, "merge", "--ff-only", "origin/\(branch)",
+                    ])
+                } catch let error as GitError {
+                    if case .commandFailed(_, _, let stderr) = error {
+                        return .failed("fast-forward to origin/\(branch) failed: \(stderr.prefix(300))")
+                    }
+                    return .failed("fast-forward to origin/\(branch) failed")
+                }
             }
 
             // Attempt the rebase. A failure here is almost always conflicts.
@@ -277,14 +310,25 @@ public enum RebaseOutcome: Sendable, Equatable {
     /// The worktree had uncommitted changes; nothing was touched. Transient —
     /// retry once the tree is clean.
     case dirtyWorktree
-    /// The local branch head doesn't match the remote PR head — there are
-    /// committed-but-unpushed local commits (ahead) or the worktree is stale
-    /// relative to the remote (behind/diverged). Nothing was touched, since a
-    /// rebase + force-push would either publish unpushed work or revert remote
-    /// commits. Transient — retry once the branch is back in sync.
-    case outOfSyncWithRemote
+    /// The local branch can't be safely force-pushed: it is ahead of, or has
+    /// diverged from, the remote PR head. Nothing was touched, since a rebase +
+    /// force-push would either publish unpushed work or revert remote commits.
+    /// Transient — retry once the branch is back in sync. A branch that is
+    /// merely *behind* is fast-forwarded instead of reported here (#889).
+    case outOfSyncWithRemote(RemoteDivergence)
     /// Any other failure (branch mismatch, fetch error, rejected push, …).
     case failed(String)
+}
+
+/// Why a local branch can't be safely force-pushed onto its remote. Raw values
+/// are grep-stable — they are written verbatim to the automation log (#889).
+public enum RemoteDivergence: String, Sendable, Equatable {
+    /// Local has commits `origin/<branch>` doesn't — force-pushing would
+    /// publish committed-but-unpushed work.
+    case ahead
+    /// Both sides have commits the other doesn't — force-pushing would revert
+    /// the remote's.
+    case diverged
 }
 
 public struct RepoInfo: Sendable {

@@ -150,4 +150,52 @@ struct IssueTrackerAutoRebaseTests {
         #expect(!IssueTracker.shouldRetryFailedRebase(failureCount: 3))
         #expect(!IssueTracker.shouldRetryFailedRebase(failureCount: 4))
     }
+
+    // MARK: - Deferral backoff (#889)
+
+    @Test func firstDeferralRetriesOnTheNextPoll() {
+        // The common transient case (agent mid-edit) must still recover
+        // promptly — one poll interval, not a long backoff.
+        #expect(IssueTracker.autoRebaseDeferralBackoff(deferralCount: 1)
+            == IssueTracker.autoRebaseDeferralBaseDelay)
+    }
+
+    @Test func backoffDoublesPerConsecutiveDeferral() {
+        let base = IssueTracker.autoRebaseDeferralBaseDelay
+        #expect(IssueTracker.autoRebaseDeferralBackoff(deferralCount: 2) == base * 2)
+        #expect(IssueTracker.autoRebaseDeferralBackoff(deferralCount: 3) == base * 4)
+        #expect(IssueTracker.autoRebaseDeferralBackoff(deferralCount: 4) == base * 8)
+    }
+
+    @Test func backoffIsMonotonicAndSaturatesAtTheCap() {
+        let cap = IssueTracker.autoRebaseDeferralMaxDelay
+        var previous: TimeInterval = 0
+        for count in 1...64 {
+            let delay = IssueTracker.autoRebaseDeferralBackoff(deferralCount: count)
+            #expect(delay >= previous)
+            #expect(delay <= cap)
+            previous = delay
+        }
+        // Saturated, and stable well past the cap — no overflow to 0 or inf
+        // from the repeated doubling.
+        #expect(IssueTracker.autoRebaseDeferralBackoff(deferralCount: 64) == cap)
+        #expect(IssueTracker.autoRebaseDeferralBackoff(deferralCount: 100_000) == cap)
+    }
+
+    @Test func backoffHandlesNonPositiveCountsDefensively() {
+        #expect(IssueTracker.autoRebaseDeferralBackoff(deferralCount: 0)
+            == IssueTracker.autoRebaseDeferralBaseDelay)
+        #expect(IssueTracker.autoRebaseDeferralBackoff(deferralCount: -1)
+            == IssueTracker.autoRebaseDeferralBaseDelay)
+    }
+
+    // MARK: - Deferral reasons
+
+    /// These land verbatim in `crowd-automation.log` as `deferred:<raw>`;
+    /// changing one breaks anyone grepping the log for a stuck branch.
+    @Test func deferReasonRawValuesAreStableForGrepping() {
+        #expect(IssueTracker.AutoRebaseDeferReason.dirtyWorktree.rawValue == "dirty-worktree")
+        #expect(IssueTracker.AutoRebaseDeferReason.outOfSyncAhead.rawValue == "out-of-sync-ahead")
+        #expect(IssueTracker.AutoRebaseDeferReason.outOfSyncDiverged.rawValue == "out-of-sync-diverged")
+    }
 }
