@@ -787,8 +787,22 @@ public enum CrowDaemon {
                 // the session's link/reviewSessionID land).
                 let fingerprint = "\(request.id)\n\(request.headRefOid ?? "")"
                 guard autoReviewed.insert(fingerprint).inserted else { continue }
-                // B-fallback: tear down the stale round-1 session before enqueuing
-                // so `reviewSessions` doesn't double up for this PR.
+                // B-fallback: retire the stale round's review session before
+                // enqueuing so `reviewSessions` doesn't double up for this PR.
+                // Complete it (not delete): completing writes its end-of-round
+                // `SessionAnalyticsSnapshot` and keeps its telemetry, whereas
+                // `deleteSession` transitions no status — so no snapshot is
+                // written — and then drops the raw rows, silently erasing round
+                // 1's tokens/cost from the scorecard on Crow's own auto-review
+                // flow (CROW-877 review). Completing also makes it invisible to
+                // `existingReviewSession(forPRURL:)` (that dedup guard excludes
+                // completed/archived), so the create below starts the new round
+                // instead of reusing the stale session. The identical completed
+                // `review-<repo>-<pr>` rows that used to pile up in Completed are
+                // now folded into one by the sidebar's within-section collapse
+                // (`groupSessions` in app.js), which also cleans up pre-existing
+                // pile-ups — so the visible-duplicate half no longer needs a
+                // destructive teardown here.
                 if case let .reReview(staleID) = action {
                     appState.onCompleteSession?(staleID)
                 }

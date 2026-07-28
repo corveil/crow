@@ -2,9 +2,9 @@
   "name": "crow-web-tests",
   "version": "1.0.0",
   "private": true,
-  "description": "Headless jsdom regression tests for the web UI (Ticket Board; terminal touch- and wheel-scroll; terminal key handling; sidebar session rows). Drives the real app.js from Resources/web against mocks.",
+  "description": "Headless jsdom regression tests for the web UI (Ticket Board; terminal touch- and wheel-scroll; terminal key handling; sidebar session rows; sidebar grouping/collapse). Drives the real app.js from Resources/web against mocks.",
   "scripts": {
-    "test": "node board.test.js && node touch-scroll.test.js && node wheel-scroll.test.js && node key-handler.test.js && node row.test.js"
+    "test": "fail=0; for f in board touch-scroll wheel-scroll key-handler row sidebar-groups; do node \"$f.test.js\" || fail=1; done; exit $fail"
   },
   "devDependencies": {
     "jsdom": "^24.0.0"
