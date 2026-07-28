@@ -40,6 +40,17 @@ struct SessionServiceGatewayResolutionTests {
                 == "crow-reviews")
     }
 
+    /// …and because that literal *is* a plausible workspace name, resolution must
+    /// treat it as reserved rather than looking it up. A workspace that had taken
+    /// the name would otherwise match the path fast path and capture every review
+    /// session, shadowing the slug fallback entirely (PR #898 review).
+    @Test func reviewCloneDirNameIsReservedForWorkspaces() {
+        let path = "\(Self.devRoot)/crow-reviews/props-pr-42"
+        let wsName = SessionService.workspaceName(
+            forWorktreePath: path, devRoot: Self.devRoot)
+        #expect(wsName.map(DevRootLayout.isReservedWorkspaceName) == true)
+    }
+
     @Test func workspaceNameNilOutsideDevRoot() {
         #expect(
             SessionService.workspaceName(

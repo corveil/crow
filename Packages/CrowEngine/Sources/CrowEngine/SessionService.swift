@@ -1604,9 +1604,17 @@ public final class SessionService {
         // 1. Path fast path. Case-insensitive: APFS is case-preserving but
         // case-insensitive, so an on-disk folder can differ in case from the
         // configured workspace name and still be the same directory.
+        //
+        // Reserved dev-root directories are skipped rather than looked up. A
+        // review clone's first path component is `crow-reviews`, so a workspace
+        // that had taken that name would match here and bind *every* review to
+        // itself, shadowing the slug fallback below. `validateName` now rejects
+        // the name, but a config written before that still has to resolve
+        // correctly.
         if let worktree = appState.primaryWorktree(for: sessionID),
            let wsName = Self.workspaceName(
-               forWorktreePath: worktree.worktreePath, devRoot: devRoot) {
+               forWorktreePath: worktree.worktreePath, devRoot: devRoot),
+           !DevRootLayout.isReservedWorkspaceName(wsName) {
             matched = config.workspaces.first { $0.name.lowercased() == wsName.lowercased() }
         }
 
@@ -2732,7 +2740,7 @@ public final class SessionService {
         // the PR head advances without an explicit re-request (CROW-290).
         let headRefOid: String? = prMetadata.headRefOid.isEmpty ? nil : prMetadata.headRefOid
 
-        let reviewsDir = (devRoot as NSString).appendingPathComponent("crow-reviews")
+        let reviewsDir = DevRootLayout.reviewsDir(devRoot: devRoot)
         let cloneDirName = "\(repoName)-pr-\(prNumber)"
         let clonePath = (reviewsDir as NSString).appendingPathComponent(cloneDirName)
 

@@ -20,7 +20,7 @@ All persistent state lives under `~/Library/Application Support/crow/` (see `Pac
 | `{devRoot}/.claude/skills/crow-workspace/setup.sh`                    | Deterministic setup script called by the skill                |
 | `{devRoot}/.claude/skills/crow-review-pr/SKILL.md`                    | PR review skill invoked via `/crow-review-pr`                 |
 | `{devRoot}/.claude/skills/crow-batch-workspace/SKILL.md`              | Batch workspace setup skill                                   |
-| `{devRoot}/crow-reviews/`                                             | Temporary clones used when reviewing PRs                      |
+| `{devRoot}/crow-reviews/`                                             | Temporary clones used when reviewing PRs (reserved name)      |
 
 ## Workspace Configuration
 
@@ -157,7 +157,7 @@ When no workspace claims the session — or the one that does has **no** `gatewa
 
 Crow resolves a session's workspace two ways, in order:
 
-1. **By worktree location** — work and job worktrees live at `{devRoot}/{workspace}/{repo}-{n}-{slug}`, so the folder directly under the dev root names the workspace. Matched case-insensitively.
+1. **By worktree location** — work and job worktrees live at `{devRoot}/{workspace}/{repo}-{n}-{slug}`, so the folder directly under the dev root names the workspace. Matched case-insensitively. Crow-owned dev-root directories are skipped rather than looked up, so `crow-reviews` is reserved and cannot be a workspace name.
 2. **By repo** — review sessions clone to `{devRoot}/crow-reviews/{repo}-pr-{N}`, which sits outside any workspace folder, so there's no path to read a workspace from. Crow instead takes the PR's `owner/repo` and finds the workspace that claims it: a slug matching `alwaysInclude` or `autoReviewRepos` (the same `org/*` glob syntax those lists use elsewhere). Before CROW-891 this step didn't exist, so **every** review silently ran with `ANTHROPIC_*` unset regardless of its workspace's gateway.
 
 Notes on the repo lookup:

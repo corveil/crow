@@ -78,7 +78,7 @@ public struct Scaffolder {
         try fm.createDirectory(atPath: showImageSkillsDir, withIntermediateDirectories: true)
 
         // Create crow-reviews directory for PR review clones
-        let reviewsDir = (devRoot as NSString).appendingPathComponent("crow-reviews")
+        let reviewsDir = DevRootLayout.reviewsDir(devRoot: devRoot)
         try fm.createDirectory(atPath: reviewsDir, withIntermediateDirectories: true)
 
         // Always update CLAUDE.md — but preserve the "Known Issues / Corrections" section

@@ -636,6 +636,13 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
         if name == "." || name == ".." {
             return "Name cannot be “.” or “..”"
         }
+        // Crow owns some dev-root directories that aren't workspaces. A workspace
+        // folder of that name would collide with them on disk, and anything
+        // deriving a workspace from a path would bind those sessions to it —
+        // review sessions in particular (CROW-891).
+        if DevRootLayout.isReservedWorkspaceName(name) {
+            return "“\(name)” is reserved by Crow and cannot be a workspace name"
+        }
         let lowercased = name.lowercased()
         if existingNames.contains(where: { $0.lowercased() == lowercased }) {
             return "A workspace with this name already exists"
