@@ -405,6 +405,38 @@ struct WorkspaceRPCSupportTests {
         var stranded = WorkspaceInfo(name: "Acme", provider: "github", host: "gitlab.acme.io")
         try WorkspaceRPC.applyPatch(["host": .string("")], to: &stranded)
         #expect(stranded.host == nil)
+
+        // …including a single entry of the status map, which is a *map* patch
+        // rather than a scalar. The coherence check has to look inside it to
+        // tell a clear from a write, or the documented per-key clear becomes
+        // unreachable the moment a workspace leaves Jira.
+        var strandedMap = WorkspaceInfo(
+            name: "Acme", provider: "github",
+            jiraStatusMap: ["Ready": "To Do", "Done": "Closed"])
+        try WorkspaceRPC.applyPatch(
+            ["jira_status_map": .object(["Ready": .string("")])], to: &strandedMap)
+        #expect(strandedMap.jiraStatusMap == ["Done": "Closed"])
+
+        // And clearing the whole map stays available too.
+        try WorkspaceRPC.applyPatch(["clear_jira_status_map": .bool(true)], to: &strandedMap)
+        #expect(strandedMap.jiraStatusMap == nil)
+    }
+
+    /// The other side of that: a map patch carrying any real value is still a
+    /// write, so it must still be refused on a non-Jira workspace.
+    @Test func applyPatchStillRejectsAStrandedStatusMapWrite() {
+        var target = WorkspaceInfo(name: "Acme", provider: "github")
+        #expect(throws: RPCError.self) {
+            _ = try WorkspaceRPC.applyPatch(
+                ["jira_status_map": .object(["Ready": .string("To Do")])], to: &target)
+        }
+        // Mixed clear-and-write counts as a write — the write is the part that
+        // would be silently ignored.
+        #expect(throws: RPCError.self) {
+            _ = try WorkspaceRPC.applyPatch(
+                ["jira_status_map": .object(["Ready": .string(""), "Done": .string("Closed")])],
+                to: &target)
+        }
     }
 
     // MARK: - workspaceJSON

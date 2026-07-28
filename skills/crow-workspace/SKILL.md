@@ -74,7 +74,7 @@ The example above lets the SecurityScorecard coordination layer's SessionStart `
 
 **Template tokens** (resolved from setup.sh's per-session vars): `{{session_name}}`, `{{slug}}`, `{{branch}}`, `{{ticket_number}}`, `{{repo}}`, `{{workspace}}`, `{{worktree_path}}`, `{{ticket_url}}`. Unknown tokens are left untouched.
 
-Backward-compatible: with no `sessionEnv` map and no `--session-env` flag, `setup.sh` writes no `.env` block beyond what attribution/gateway already require. The file is `chmod 600` (a session-env value may carry a secret) and stays in the worktree's git exclude list. Gateway and attribution keys are never clobbered by a same-named session-env key.
+Backward-compatible: with no `sessionEnv` map and no `--session-env` flag, `setup.sh` writes no `.env` block beyond what attribution/gateway already require. The file is `chmod 600` and stays in the worktree's git exclude list. Note that `sessionEnv` is **not** a credential store: unlike a gateway header, its values are kept as plaintext in `config.json`, are not stripped by `SettingsSecrets`, and are readable through the remote `workspace-list` / `workspace-get` RPCs. Put tokens in a workspace gateway header (`crow gateway set`) instead — the `chmod 600` here is defence in depth, not a reason to store one. Gateway and attribution keys are never clobbered by a same-named session-env key.
 
 ## Multi-Workspace Discovery
 

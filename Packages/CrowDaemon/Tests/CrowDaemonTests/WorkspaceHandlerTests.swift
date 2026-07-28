@@ -296,6 +296,33 @@ import CrowPersistence
         #expect(workspaces(devRoot).first?.sessionEnv == nil)
     }
 
+    /// `crow workspace edit --workspace X --jira-status-ready ""` on a workspace
+    /// that has since left Jira. Clearing a stranded value must stay possible —
+    /// the coherence check refuses *writes* to a field the workspace won't read,
+    /// not the removal of one already there.
+    @Test @MainActor func strandedJiraStatusEntryCanStillBeCleared() async throws {
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        let acme = WorkspaceInfo(
+            name: "Acme", provider: "github",
+            jiraStatusMap: ["Ready": "To Do", "Done": "Closed"])
+        try ConfigStore.saveConfig(AppConfig(workspaces: [acme]), devRoot: devRoot)
+
+        let cleared = await call("workspace-edit", [
+            "workspace": .string("Acme"),
+            "jira_status_map": .object(["Ready": .string("")]),
+        ], devRoot: devRoot)
+        #expect(cleared.error == nil)
+        #expect(workspaces(devRoot).first?.jiraStatusMap == ["Done": "Closed"])
+
+        // A real value in the same field is still refused.
+        let written = await call("workspace-edit", [
+            "workspace": .string("Acme"),
+            "jira_status_map": .object(["Ready": .string("To Do")]),
+        ], devRoot: devRoot)
+        #expect(written.error?.message.contains("Jira workspaces only") == true)
+    }
+
     // MARK: - rename guard
 
     @Test @MainActor func renameSucceedsWhenNothingReferencesTheWorkspace() async throws {

@@ -367,12 +367,26 @@ public enum WorkspaceRPC {
     public static func validateCoherence(
         _ workspace: WorkspaceInfo, params: [String: JSONValue]
     ) throws {
+        // Clearing a field is always allowed — you must be able to blank a value
+        // that a provider change has stranded, and refusing that would make the
+        // stranded value unreachable rather than merely inert.
+        //
+        // "Is this a clear?" has to be asked of the *contents*, not the JSON
+        // type. A map patch is a set of independent per-key edits, so
+        // `{"Ready": ""}` is a clear while `{"Ready": "To Do"}` is a write — and
+        // a mix counts as a write, since the write is the half that would be
+        // silently ignored.
+        func isBlank(_ value: JSONValue) -> Bool {
+            if let text = value.stringValue {
+                return text.trimmingCharacters(in: .whitespaces).isEmpty
+            }
+            if let object = value.objectValue { return object.values.allSatisfy(isBlank) }
+            return false
+        }
+
         func wrote(_ key: String) -> Bool {
             guard let value = params[key], value != .null else { return false }
-            // Clearing a field is always allowed — you must be able to blank a
-            // value that a provider change has stranded.
-            if let text = value.stringValue { return !text.trimmingCharacters(in: .whitespaces).isEmpty }
-            return true
+            return !isBlank(value)
         }
 
         if wrote("host"), workspace.provider != "gitlab" {
