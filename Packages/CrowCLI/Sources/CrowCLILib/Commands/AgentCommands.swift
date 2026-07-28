@@ -38,11 +38,13 @@ public struct Agents: ParsableCommand {
 public struct AgentsList: ParsableCommand {
     public static let configuration = CommandConfiguration(
         commandName: "list",
-        abstract: "Show available agents, the configured default, and the agent each role resolves to",
+        abstract: "Show known agents, the configured default, and the agent each role resolves to",
         discussion: """
-        `available` is what this daemon can actually launch; `default_agent_kind` \
-        and `by_kind` are what you configured; `effective` is what a new session of \
-        each role would get.
+        `known` lists every agent Crow ships, each flagged `available` — an agent \
+        whose binary wasn't on PATH when crowd started is listed but not \
+        selectable, so it reads as "not installed" rather than vanishing. \
+        `default_agent_kind` and `by_kind` are what you configured; `effective` is \
+        what a new session of each role would get.
 
         `config_readable` is false when config.json exists but could not be \
         decoded — the values shown are then defaults, not your settings.
@@ -98,9 +100,23 @@ public struct AgentsSet: ParsableCommand {
 
     /// The four role flags as (role, kind) pairs, in `SessionKind` declaration
     /// order so messages and the emitted payload are stable.
+    ///
+    /// Kinds are trimmed here so a shell-quoting slip (`--work "codex "`) is
+    /// treated as the kind the user meant rather than sent verbatim and bounced
+    /// by the daemon as "'codex ' is not an available agent" — an error that
+    /// points at availability when the real problem is a stray space. The
+    /// trimmed value is what `validate()` blank-checks and what `run()` sends,
+    /// so the two can't disagree.
     private var overrides: [(role: SessionKind, kind: String)] {
         [(SessionKind.work, work), (.review, review), (.job, job), (.manager, manager)]
-            .compactMap { role, kind in kind.map { (role, $0) } }
+            .compactMap { role, kind in
+                kind.map { (role, $0.trimmingCharacters(in: .whitespaces)) }
+            }
+    }
+
+    /// `--default`, trimmed on the same rationale as `overrides`.
+    private var trimmedDefaultAgent: String? {
+        defaultAgent?.trimmingCharacters(in: .whitespaces)
     }
 
     public func validate() throws {
@@ -125,17 +141,20 @@ public struct AgentsSet: ParsableCommand {
         // registered at boot (binary-dependent), and `AgentKind` is an open struct
         // with no closed case list to check against. The daemon's registry is the
         // single gate, same as `crow new-session --agent`.
-        if let defaultAgent, defaultAgent.trimmingCharacters(in: .whitespaces).isEmpty {
+        if let trimmedDefaultAgent, trimmedDefaultAgent.isEmpty {
             throw ValidationError("--default must not be blank.")
         }
-        for (role, kind) in overrides where kind.trimmingCharacters(in: .whitespaces).isEmpty {
+        for (role, kind) in overrides where kind.isEmpty {
             throw ValidationError("--\(role.rawValue) must not be blank.")
         }
     }
 
-    public func run() throws {
+    /// The `agents-set` payload these flags produce. Split out of `run()` so the
+    /// wire shape — trimming, the role->kind map, clear dedup — is assertable
+    /// without a socket.
+    func sentParams() -> [String: JSONValue] {
         var params: [String: JSONValue] = [:]
-        if let defaultAgent { params["default_agent_kind"] = .string(defaultAgent) }
+        if let trimmedDefaultAgent { params["default_agent_kind"] = .string(trimmedDefaultAgent) }
         if !overrides.isEmpty {
             var byKind: [String: JSONValue] = [:]
             for (role, kind) in overrides { byKind[role.rawValue] = .string(kind) }
@@ -149,7 +168,11 @@ public struct AgentsSet: ParsableCommand {
             params["clear"] = .array(
                 SessionKind.allCases.filter(unique.contains).map { .string($0.rawValue) })
         }
-        let result = try rpc("agents-set", params: params)
+        return params
+    }
+
+    public func run() throws {
+        let result = try rpc("agents-set", params: sentParams())
         printJSON(result)
         warnAboutStrandedRoles(result)
     }

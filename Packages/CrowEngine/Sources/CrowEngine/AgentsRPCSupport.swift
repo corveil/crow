@@ -122,7 +122,9 @@ public enum AgentsRPC {
             guard let raw = kindValue.stringValue else {
                 throw RPCError.invalidParams("\(key).\(roleName) must be a string")
             }
-            result[role] = try decodeAgentKind(raw, available: available, label: "\(key).\(roleName)")
+            let kind = try decodeAgentKind(raw, available: available, label: "\(key).\(roleName)")
+            try validateRoleSupportsAgent(role: role, kind: kind, label: "\(key).\(roleName)")
+            result[role] = kind
         }
         return result
     }
@@ -156,6 +158,39 @@ public enum AgentsRPC {
                 "'\(raw)' is not a session role (\(context)). Expected one of: \(allRoleNames)")
         }
         return role
+    }
+
+    /// Reject pinning a role to an agent that cannot run that kind of session.
+    ///
+    /// Today that is only review-on-Antigravity: `autoLaunchCommand(.review)`
+    /// returns nil for that harness, so the session would be created, persist
+    /// `antigravity`, and then simply never launch an agent — the same
+    /// "configured but unlaunchable" outcome `decodeAgentKind`'s registry gate
+    /// exists to prevent, just reached by a different route.
+    ///
+    /// Delegates to `SessionService.shouldRefuseReviewHandoff`, the predicate
+    /// `handoffAgent` already throws on, so the two surfaces cannot drift: it
+    /// would be incoherent for `crow handoff-agent --agent antigravity` to be
+    /// refused on a review session while `crow agents set --review antigravity`
+    /// quietly configured every future one.
+    ///
+    /// Scope note: this validates only what the caller is *changing*, not the
+    /// resolved outcome of the whole config. Rejecting on resolution would mean
+    /// a pre-existing `defaultAgentKind: antigravity` (settable from web
+    /// Settings, which does not run this gate) made every later `agents set`
+    /// fail — including patches to unrelated roles. A default that resolves
+    /// review to a review-incapable agent instead surfaces at launch time, where
+    /// `SessionService` already writes an explanatory line into the terminal.
+    public static func validateRoleSupportsAgent(
+        role: SessionKind, kind: AgentKind, label: String
+    ) throws {
+        guard SessionService.shouldRefuseReviewHandoff(targetKind: kind, sessionKind: role) else {
+            return
+        }
+        throw RPCError.invalidParams(
+            "'\(kind.rawValue)' cannot run \(role.rawValue) sessions (\(label)) — it has no "
+                + "review dispatch, so review sessions would be created but never launch an agent. "
+                + "Pick a different agent for this role.")
     }
 
     /// `--clear X` alongside `--X <kind>` is contradictory, not a precedence

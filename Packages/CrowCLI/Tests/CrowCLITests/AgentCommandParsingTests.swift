@@ -84,6 +84,16 @@ import CrowCore
     #expect(throws: (any Error).self) { _ = try AgentsSet.parse(["--clear", "deploy"]) }
 }
 
+/// Repeats collapse and the list is emitted in declaration order — the server is
+/// idempotent either way, but a duplicated echo in an error message reads like a bug.
+@Test func agentsSetDedupesAndOrdersClearOnTheWire() throws {
+    let cmd = try AgentsSet.parse([
+        "--clear", "job", "--clear", "work", "--clear", "job",
+    ])
+    try cmd.validate()
+    #expect(cmd.sentParams()["clear"] == .array([.string("work"), .string("job")]))
+}
+
 // MARK: - set: rejections
 
 @Test func agentsSetRejectsNoFlags() {
@@ -106,6 +116,21 @@ import CrowCore
 @Test func agentsSetRejectsABlankKind() {
     #expect(setParseError(["--work", "   "]).contains("--work"))
     #expect(setParseError(["--default", ""]).contains("--default"))
+}
+
+/// A shell-quoting slip shouldn't come back as "'codex ' is not an available
+/// agent" — an error pointing at availability when the problem is a stray space
+/// (#886 review). Trimming happens before both the blank check and the send, so
+/// validation and the wire payload can't disagree.
+@Test func agentsSetTrimsSurroundingWhitespaceFromKinds() throws {
+    let cmd = try AgentsSet.parse([
+        "--default", " codex ", "--work", "codex\t", "--review", "  cursor",
+    ])
+    try cmd.validate()
+    #expect(cmd.sentParams()["default_agent_kind"] == .string("codex"))
+    #expect(cmd.sentParams()["by_kind"] == .object([
+        "work": .string("codex"), "review": .string("cursor"),
+    ]))
 }
 
 /// The registry gate is server-side by design: the valid set is whatever crowd

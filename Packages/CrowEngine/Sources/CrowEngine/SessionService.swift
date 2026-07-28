@@ -997,7 +997,8 @@ public final class SessionService {
             if let routedTerminal = appState.terminals[sessionID]?.first(where: { $0.id == terminalID }) {
                 let msg = "echo '⚠️  Crow: agent \"\(agent.displayName)\" cannot launch a "
                     + "\(session.kind.rawValue) session. Switch the agent for this action type "
-                    + "(Settings → Agents) or pick a session kind this agent supports.'\n"
+                    + "(Settings → General, or: crow agents set --\(session.kind.rawValue) <kind>) "
+                    + "or pick a session kind this agent supports.'\n"
                 TerminalRouter.send(routedTerminal, text: msg)
             }
             // Park readiness so the deferred-launch loop doesn't keep retrying.

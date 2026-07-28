@@ -140,6 +140,91 @@ struct AgentsRPCSupportTests {
         }
     }
 
+    // MARK: - Role/agent capability gate (#886 review)
+
+    /// A registry snapshot that includes Antigravity, so the capability gate is
+    /// reached rather than short-circuited by the availability gate. Injected as
+    /// a value — deliberately not registered in `AgentRegistry.shared`, which is
+    /// process-wide and shared with every parallel suite.
+    private var availableWithAntigravity: [AgentsRPC.KnownAgent] {
+        // `available: true` on purpose — the capability gate must reject review
+        // even for an Antigravity that IS installed. Marking it unavailable would
+        // pass the test for the wrong reason (the availability gate firing first).
+        available + [.init(kind: .antigravity, name: "Antigravity", binary: "agy", available: true)]
+    }
+
+    /// Review-on-Antigravity would create sessions that persist the kind and then
+    /// never launch (`autoLaunchCommand(.review)` → nil). Refusing here matches
+    /// `handoffAgent`, which already throws `reviewNotSupported` for the same
+    /// pair — it would be incoherent to refuse the handoff but configure it.
+    @Test func decodeByKindRejectsAnAgentThatCannotRunTheRole() {
+        do {
+            _ = try AgentsRPC.decodeByKind(
+                ["by_kind": .object(["review": .string("antigravity")])],
+                available: availableWithAntigravity)
+            Issue.record("expected a rejection")
+        } catch {
+            let message = String(describing: error)
+            #expect(message.contains("antigravity"))
+            #expect(message.contains("review"))
+            // Must not be mistaken for the availability gate — it *is* available.
+            #expect(!message.contains("Expected one of"))
+        }
+    }
+
+    /// The gate is per-role, not a blanket ban: Antigravity runs work and job
+    /// sessions fine, and only `.review` is unsupported.
+    @Test func decodeByKindAllowsAntigravityForRolesItCanRun() throws {
+        for role in SessionKind.allCases where role != .review {
+            let params: [String: JSONValue] = [
+                "by_kind": .object([role.rawValue: .string("antigravity")])
+            ]
+            #expect(
+                try AgentsRPC.decodeByKind(params, available: availableWithAntigravity)
+                    == [role: .antigravity])
+        }
+    }
+
+    /// …and review itself stays open to every other agent.
+    @Test func decodeByKindAllowsReviewCapableAgents() throws {
+        for kind in [AgentKind.claudeCode, .codex] {
+            let params: [String: JSONValue] = [
+                "by_kind": .object(["review": .string(kind.rawValue)])
+            ]
+            #expect(
+                try AgentsRPC.decodeByKind(params, available: availableWithAntigravity)
+                    == [.review: kind])
+        }
+    }
+
+    @Test func validateRoleSupportsAgentMirrorsTheHandoffPredicate() throws {
+        // Exactly the pair `handoffAgent` refuses, and nothing else.
+        for role in SessionKind.allCases {
+            for kind in [AgentKind.claudeCode, .codex, .cursor, .openCode, .antigravity] {
+                let refused = SessionService.shouldRefuseReviewHandoff(
+                    targetKind: kind, sessionKind: role)
+                if refused {
+                    #expect(throws: RPCError.self) {
+                        try AgentsRPC.validateRoleSupportsAgent(role: role, kind: kind, label: "x")
+                    }
+                } else {
+                    try AgentsRPC.validateRoleSupportsAgent(role: role, kind: kind, label: "x")
+                }
+            }
+        }
+    }
+
+    /// The gate deliberately does NOT fire on `default_agent_kind`. Validating the
+    /// *resolved* outcome would make a pre-existing default (settable from web
+    /// Settings, which doesn't run this gate) fail every later patch — including
+    /// ones touching unrelated roles.
+    @Test func defaultAgentKindIsNotSubjectToTheRoleCapabilityGate() throws {
+        let params: [String: JSONValue] = ["default_agent_kind": .string("antigravity")]
+        #expect(
+            try AgentsRPC.decodeDefaultAgentKind(params, available: availableWithAntigravity)
+                == .antigravity)
+    }
+
     // MARK: - decodeClear
 
     @Test func decodeClearReturnsEmptyForAbsentAndNull() throws {

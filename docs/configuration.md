@@ -115,7 +115,7 @@ Crow can drive five coding agents. Which one a session launches is resolved from
 
 Codex, Cursor, OpenCode, and Antigravity are registered only when their CLI binary is found (via `defaults.binaries.<kind>`, then `PATH`, then known install locations) — otherwise they silently stay out of the agent pickers. Claude Code is always available.
 
-Configure the default and per-kind overrides in **Settings → Agents**, or from the CLI with `crow agents list` / `crow agents set` (see [cli-reference.md](cli-reference.md#agent-commands)). Note that both surfaces only offer the agents this daemon registered **at startup**, so a newly installed agent needs a `crowd` restart before it can be selected.
+Configure the default and per-kind overrides in **Settings → General**, or from the CLI with `crow agents list` / `crow agents set` (see [cli-reference.md](cli-reference.md#agent-commands)). Note that both surfaces only offer the agents this daemon registered **at startup**, so a newly installed agent needs a `crowd` restart before it can be selected.
 
 ## AI Gateway
 
