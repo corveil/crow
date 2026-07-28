@@ -65,6 +65,61 @@ enum LaunchScaffold {
         return warning
     }
 
+    /// Repair Crow-written Claude hook blocks that have gone stale on disk
+    /// (#897) — commands naming a `crow` binary that no longer exists, or a
+    /// session that has been deleted. Both make every hook event in that
+    /// directory fail, which is noisy *and* silently drops all telemetry for
+    /// sessions run there.
+    ///
+    /// Runs on every boot, right after `run(...)` has re-pointed the
+    /// `{devRoot}/.claude/bin/crow` symlink, and before `startBoardPoll` —
+    /// whose first tick calls `ensureManagerSession` — so it never races the
+    /// Manager's own hook writer.
+    ///
+    /// Set `CROW_HOOK_REPAIR=0` to disable: this is the only code that mutates
+    /// `settings.local.json` files Crow did not itself just write, so it ships
+    /// with an escape hatch.
+    static func repairStaleHooks(devRoot: String, configured: Bool, appState: AppState) async {
+        guard configured else { return }
+        guard ProcessInfo.processInfo.environment["CROW_HOOK_REPAIR"] != "0" else {
+            CrowDaemon.log("hook repair: skipped (CROW_HOOK_REPAIR=0)")
+            return
+        }
+
+        // Snapshot the live state as values so the scan itself needs no actor.
+        let (liveSessionIDs, sessionByWorktreePath) = await MainActor.run {
+            let live = Set(appState.sessions.map(\.id))
+            // `uniquingKeysWith`, not `uniqueKeysWithValues`: the latter traps
+            // on duplicate keys, and two rows sharing a worktree path is
+            // reachable through orphan recovery.
+            let byPath = Dictionary(
+                appState.worktrees.values.flatMap { $0 }.map {
+                    (($0.worktreePath as NSString).standardizingPath, $0.sessionID)
+                },
+                uniquingKeysWith: { first, _ in first })
+            return (live, byPath)
+        }
+
+        let crowPath = ClaudeHookConfigWriter.resolveCrowBinary(devRoot: devRoot)
+        let excludeDirs = Set(ConfigStore.loadConfig(devRoot: devRoot)?.defaults.excludeDirs ?? [])
+
+        // Detached: a filesystem walk is blocking I/O and must not sit on the
+        // MainActor (#892). Awaiting the task keeps boot ordering intact.
+        let summary = await Task.detached(priority: .utility) {
+            ClaudeHookRepair.sweep(
+                devRoot: devRoot,
+                crowPath: crowPath,
+                liveSessionIDs: liveSessionIDs,
+                sessionByWorktreePath: sessionByWorktreePath,
+                managerSessionID: AppState.managerSessionID,
+                excludeDirs: excludeDirs)
+        }.value
+
+        if summary.scanned > 0 {
+            CrowDaemon.log("hook repair: \(summary.logLine)")
+        }
+    }
+
     /// Per-agent dev-root files and global hook configs, each gated on the agent
     /// actually being registered (i.e. its binary resolved on PATH or via a
     /// `defaults.binaries.*` override) — so a user without Codex installed never
@@ -72,7 +127,7 @@ enum LaunchScaffold {
     /// idempotent and preserve the user-edited `## Known Issues / Corrections`
     /// section, so co-existence is safe.
     private static func scaffoldAgents(devRoot: String, mirrorClaudeMCPToCodex: Bool) {
-        let crowPath = ClaudeHookConfigWriter.findCrowBinary(devRoot: devRoot)
+        let crowPath = ClaudeHookConfigWriter.resolveCrowBinary(devRoot: devRoot)
 
         if AgentRegistry.shared.agent(for: .codex) != nil {
             attempt("Codex scaffold") { try CodexScaffolder.scaffold(devRoot: devRoot) }

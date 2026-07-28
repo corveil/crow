@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import CrowCore
+import CrowClaude
 @testable import CrowEngine
 
 /// Re-homes the root-suite coverage for launch-token detection and the shared
@@ -157,5 +158,33 @@ private struct MockAgent: CodingAgent {
             worktreePath: nil, crowPath: nil, telemetryPort: 4318)
         #expect(didLaunch)
         #expect(text == "cursor-agent chat")
+    }
+
+    /// #897 end-to-end on the wiring: the launch path resolves its crow binary
+    /// the way production does, so what lands in the hook file is the stable
+    /// `{devRoot}/.claude/bin/crow` symlink — never the `.build/…` product of
+    /// whichever worktree the daemon happened to be built in.
+    @Test func launchResolvesTheStableSymlinkNotABuildProduct() throws {
+        let fm = FileManager.default
+        let devRoot = fm.temporaryDirectory.appendingPathComponent("agentlaunch-crowpath-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: devRoot) }
+        let buildDir = devRoot.appendingPathComponent(".build/arm64-apple-macosx/debug")
+        try fm.createDirectory(at: buildDir, withIntermediateDirectories: true)
+        let appBinary = buildDir.appendingPathComponent("crow")
+        try Data("#!/bin/sh\n".utf8).write(to: appBinary)
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: appBinary.path)
+
+        let a = agent(.claudeCode)
+        let sid = UUID()
+        _ = AgentLaunch.prepareAgentLaunchText(
+            command: "claude --continue", agent: a, sessionID: sid,
+            worktreePath: "/tmp/wt",
+            crowPath: ClaudeHookConfigWriter.resolveCrowBinary(
+                devRoot: devRoot.path, appCrowPath: appBinary.path),
+            telemetryPort: nil)
+
+        let written = try #require(a.spy.calls.first)
+        #expect(written.crowPath == devRoot.appendingPathComponent(".claude/bin/crow").path)
+        #expect(!written.crowPath.contains("/.build/"))
     }
 }

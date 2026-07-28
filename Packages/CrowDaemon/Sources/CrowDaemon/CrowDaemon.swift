@@ -108,6 +108,15 @@ public enum CrowDaemon {
             devRoot: options.devRoot, configured: options.devRootConfigured)
         await MainActor.run { appState.corveilSkillInstallWarning = scaffoldWarning }
 
+        // Repair hook blocks left dangling by an earlier build (#897). Must run
+        // AFTER `LaunchScaffold.run` (which re-points `.claude/bin/crow`, the
+        // path repairs are written with) and after `seedAppState` above (whose
+        // sessions decide what is still live), but BEFORE `startBoardPoll` —
+        // its first tick runs `ensureManagerSession`, the Manager's own hook
+        // writer.
+        await LaunchScaffold.repairStaleHooks(
+            devRoot: options.devRoot, configured: options.devRootConfigured, appState: appState)
+
         // Providers back both the board tracker (M-C) and the spawn engine
         // (M-E2). Zero-config at construction — it reads gh/glab/config lazily.
         let providerManager = ProviderManager()

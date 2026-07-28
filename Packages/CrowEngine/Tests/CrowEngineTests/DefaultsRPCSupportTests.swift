@@ -217,7 +217,7 @@ struct DefaultsRPCSupportTests {
     }
 
     /// `crow` is owned by `Scaffolder`: `managedBinarySymlinks` exempts it from
-    /// reaping and `installCrowCLISymlink` overwrites it every launch, while
+    /// reaping and `ensureCrowCLISymlink` overwrites it every launch, while
     /// `BinaryOverrides` never consults it (not an `AgentKind`). Accepting it
     /// would answer `saved: true, restart_required: true` for a write that cannot
     /// take effect.
