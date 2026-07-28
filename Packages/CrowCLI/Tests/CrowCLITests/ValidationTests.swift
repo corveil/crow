@@ -267,3 +267,71 @@ import Foundation
         }
     }
 }
+
+// MARK: - Defaults (CROW-810)
+//
+// These mirror the server-side checks in `DefaultsRPC` for fast local feedback.
+// The provider/CLI lists and the branch-prefix and binary-name predicates all
+// come from `ConfigDefaults` in CrowCore, so there is one source of truth rather
+// than the hand-kept copy `validQuickActions` warns about.
+
+@Test func providerAcceptsKnownForges() throws {
+    try validateProvider("github")
+    try validateProvider("gitlab")
+}
+
+@Test func providerRejectsUnknownAndMiscasedForges() {
+    // `GitManager` compares with `==`, so "GitHub" is a real mismatch that would
+    // silently fall through to the gitlab branch — not a cosmetic one.
+    for bad in ["bitbucket", "GitHub", "GITLAB", "gitea", ""] {
+        #expect(throws: (any Error).self, "expected provider '\(bad)' to be rejected") {
+            try validateProvider(bad)
+        }
+    }
+}
+
+@Test func forgeCLIAcceptsKnownCLIs() throws {
+    try validateForgeCLI("gh")
+    try validateForgeCLI("glab")
+}
+
+@Test func forgeCLIRejectsUnknownCLIs() {
+    for bad in ["hub", "GH", "git", ""] {
+        #expect(throws: (any Error).self, "expected cli '\(bad)' to be rejected") {
+            try validateForgeCLI(bad)
+        }
+    }
+}
+
+@Test func branchPrefixAcceptsValidRefPrefixes() throws {
+    try validateBranchPrefix("feature/")
+    try validateBranchPrefix("feat/")
+    try validateBranchPrefix("")            // empty means "no prefix"
+    try validateBranchPrefix("  feature/ ") // trimmed before validating
+}
+
+@Test func branchPrefixRejectsWhatGitWouldRefuse() {
+    for bad in ["bad..prefix", "has space/", "tilde~/", "caret^/", "colon:/",
+                "question?/", "star*/", "bracket[/", "trailing.", "at@{x}/"] {
+        #expect(throws: (any Error).self, "expected prefix '\(bad)' to be rejected") {
+            try validateBranchPrefix(bad)
+        }
+    }
+}
+
+@Test func normalizedListValuesTrimsDropsBlanksAndDedupes() throws {
+    // Case-insensitive, unlike `normalizedAllowlistPatterns`: these values are
+    // matched case-insensitively by their consumers, so `Owner/Repo` and
+    // `owner/repo` are one entry. First-seen casing wins.
+    #expect(try normalizedListValues(
+        ["  acme/docs  ", "acme/docs", "ACME/DOCS", "   ", "acme/api"], flag: "--add-x")
+        == ["acme/docs", "acme/api"])
+}
+
+@Test func normalizedListValuesRejectsAnAllBlankFlag() {
+    for raw in [[""], ["   "], ["", "  "]] {
+        #expect(throws: (any Error).self, "expected \(raw) to be rejected") {
+            _ = try normalizedListValues(raw, flag: "--add-x")
+        }
+    }
+}

@@ -614,6 +614,41 @@ public struct ConfigDefaults: Codable, Sendable, Equatable {
     /// deliberately keeps credentials in one place can suppress the duplication.
     public var mirrorClaudeMCPToCodex: Bool
 
+    /// Forge providers the Settings → Workspaces picker offers.
+    ///
+    /// Lives on the model, not in the CLI or the RPC layer, so `crow defaults
+    /// set --provider` and the `defaults-set` handler validate against one list
+    /// (CROW-810). `GitManager` compares `provider` with `==`, so a casing
+    /// variant is a real mismatch, not a cosmetic one — hence no lowercasing
+    /// anywhere; callers are told the exact accepted spellings.
+    public static let validProviders = ["github", "gitlab"]
+
+    /// Forge CLIs `GitManager` shells out to. Paired with `validProviders`, but
+    /// stored independently — see `provider`/`cli` in `GitManager`.
+    public static let validCLIs = ["gh", "glab"]
+
+    /// Binary-override name `Scaffolder` owns outright.
+    ///
+    /// Mirrors its `managedBinarySymlinks`: the reap loop skips this key and
+    /// `installCrowCLISymlink` re-points it at the running app's own CLI on
+    /// every launch, while `BinaryOverrides` never consults it (it is not an
+    /// `AgentKind`). An override here can therefore never take effect.
+    public static let reservedBinaryName = "crow"
+
+    /// Whether a `binaries` key is safe to write.
+    ///
+    /// The name becomes `{devRoot}/.claude/bin/<name>` in
+    /// `Scaffolder.installBinarySymlinks`, which builds that path with
+    /// `appendingPathComponent` and then `removeItem`s it before symlinking. A
+    /// **blank** name resolves to the bin *directory*, which that code would
+    /// delete and replace with a symlink; a name containing a path separator
+    /// escapes the directory entirely, and the reap loop (which walks
+    /// `contentsOfDirectory`) could never clean the orphan up.
+    public static func isValidBinaryName(_ name: String) -> Bool {
+        guard !name.isEmpty, name != reservedBinaryName else { return false }
+        return !name.contains("/") && !name.contains("\\") && name != "." && name != ".."
+    }
+
     /// Characters that are invalid in git ref names (see `git check-ref-format`).
     private static let invalidBranchChars = CharacterSet(charactersIn: " ~^:?*[\\")
 

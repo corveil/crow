@@ -112,6 +112,31 @@ func normalizedAllowlistPatterns(_ raw: [String]) throws -> [String] {
     return cleaned
 }
 
+/// Normalize repeatable `crow defaults set --add-…` / `--remove-…` values
+/// (#810): trim each, drop blanks, dedupe preserving first-seen order, and
+/// require at least one survivor. Returns a value rather than `Void` because
+/// `validate()` and `run()` share it.
+///
+/// Deduping is case-INSENSITIVE, unlike `normalizedAllowlistPatterns` above.
+/// These values are matched case-insensitively by their consumers
+/// (`repoMatchesPatterns` lowercases both sides; ignored labels go through a
+/// lowercased Set), so `Owner/Repo` and `owner/repo` are one entry. Allowlist
+/// patterns are matched literally, so there the two really are different rules.
+///
+/// - Throws: `ValidationError` when no non-blank value remains — a flag passed
+///   with only whitespace is a typo, and sending it would be an inert write
+///   reported as a success.
+func normalizedListValues(_ raw: [String], flag: String) throws -> [String] {
+    var seen = Set<String>()
+    let cleaned = raw
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { !$0.isEmpty && seen.insert($0.lowercased()).inserted }
+    guard !cleaned.isEmpty else {
+        throw ValidationError("\(flag) needs at least one non-blank value.")
+    }
+    return cleaned
+}
+
 /// Valid `quick-action --action` values (CROW-817). Mirrors CrowCore's
 /// `QuickAction` cases; CrowCLI doesn't depend on CrowCore, so this is a
 /// hand-kept copy — the daemon re-validates and returns the same list in its
@@ -177,6 +202,91 @@ func validateRetentionHours(_ value: Int) throws {
     guard value >= 1 else {
         throw ValidationError("'\(value)' is not a valid retention. Expected 1 hour or more.")
     }
+}
+
+/// Validate `crow defaults set --provider` (#810). Delegates to
+/// `ConfigDefaults.validProviders` rather than keeping a copy — `GitManager`
+/// compares the stored value with `==`, so an accepted casing variant would
+/// silently fall through to the wrong forge branch.
+///
+/// - Throws: `ValidationError` listing the accepted providers.
+func validateProvider(_ value: String) throws {
+    guard ConfigDefaults.validProviders.contains(value) else {
+        throw ValidationError("'\(value)' is not a valid provider. Expected one of: \(ConfigDefaults.validProviders.joined(separator: ", "))")
+    }
+}
+
+/// Validate `crow defaults set --cli` (#810), the forge CLI `GitManager` shells
+/// out to. Stored independently of `--provider`, so a crossed pair is legal but
+/// warned about server-side.
+///
+/// - Throws: `ValidationError` listing the accepted CLIs.
+func validateForgeCLI(_ value: String) throws {
+    guard ConfigDefaults.validCLIs.contains(value) else {
+        throw ValidationError("'\(value)' is not a valid forge CLI. Expected one of: \(ConfigDefaults.validCLIs.joined(separator: ", "))")
+    }
+}
+
+/// Validate `crow defaults set --branch-prefix` (#810) against the model's own
+/// `ConfigDefaults.isValidBranchPrefix`, so the CLI and the daemon can't drift
+/// on what git will accept as a ref. Trimmed first, matching the handler: a
+/// pasted trailing space is a typo, not a request for an invalid prefix. An
+/// empty prefix is legal and means "no prefix".
+///
+/// - Throws: `ValidationError` for a prefix git would reject as a ref name.
+func validateBranchPrefix(_ value: String) throws {
+    guard ConfigDefaults.isValidBranchPrefix(value.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+        throw ValidationError("'\(value)' is not a valid branch prefix. It must not contain a space, any of ~^:?*[\\, '..', '@{', or end in '.'")
+    }
+}
+
+/// Parse repeatable `crow defaults set --binary NAME=PATH` values into the map
+/// the `binaries` param carries (#810). Returns a value rather than `Void` like
+/// most of its neighbours because `validate()` and `run()` share it.
+///
+/// Splits on the **first** `=` only, so a path may contain one
+/// (`--binary codex=/opt/codex=v2/bin/codex`). A blank PATH is meaningful — it
+/// removes the entry — and is the only way to unset an override.
+///
+/// `~` is expanded here rather than server-side: `Scaffolder` probes the target
+/// with `isExecutableFile(atPath:)`, which does no tilde expansion, so an
+/// unexpanded `~/bin/x` would be stored happily and then silently never resolve.
+/// Relative paths are rejected for the same reason — that call resolves them
+/// against the *daemon's* cwd, not the caller's shell.
+///
+/// A duplicate NAME is rejected rather than resolved last-wins: two `--binary`
+/// values for one tool are contradictory, and silently discarding one is the
+/// mistake `notifications-set` avoided with `@Flag(exclusivity: .exclusive)`.
+///
+/// - Throws: `ValidationError` for a missing `=`, a blank/path-like/reserved
+///   name, a relative path, or a repeated name.
+func parseBinaryOverrides(_ raw: [String]) throws -> [String: String] {
+    var result: [String: String] = [:]
+    for entry in raw {
+        guard let separator = entry.firstIndex(of: "=") else {
+            throw ValidationError("'\(entry)' is not a valid --binary value. Expected NAME=PATH (e.g. corveil=/opt/corveil/bin/corveil); NAME= removes the entry.")
+        }
+        let name = String(entry[..<separator]).trimmingCharacters(in: .whitespaces)
+        guard name != ConfigDefaults.reservedBinaryName else {
+            throw ValidationError("'\(ConfigDefaults.reservedBinaryName)' is reserved — Crow always points {devRoot}/.claude/bin/crow at the running app's own CLI, so an override here is overwritten on every launch.")
+        }
+        guard ConfigDefaults.isValidBinaryName(name) else {
+            throw ValidationError("'\(name)' is not a valid binary name. Expected a plain name like corveil or codex.")
+        }
+        guard result[name] == nil else {
+            throw ValidationError("--binary \(name) was given more than once. Pass one value per binary.")
+        }
+        var path = String(entry[entry.index(after: separator)...])
+            .trimmingCharacters(in: .whitespaces)
+        if path == "~" || path.hasPrefix("~/") {
+            path = NSString(string: path).expandingTildeInPath
+        }
+        guard path.isEmpty || path.hasPrefix("/") else {
+            throw ValidationError("'\(path)' is not an absolute path. --binary needs an absolute path (it is resolved by the daemon, not your shell); use NAME= to remove the entry.")
+        }
+        result[name] = path
+    }
+    return result
 }
 
 /// Validate a `crow gateway set --header` value: `Name: Value`.

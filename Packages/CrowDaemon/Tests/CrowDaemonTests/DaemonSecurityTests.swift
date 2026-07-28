@@ -1006,5 +1006,81 @@ import CrowPersistence
         ])
         #expect(RPCWebSocketHandler.localOnlyDenial(for: set, devRoot: devRoot) == nil)
     }
+
+    @Test func defaultsGetIsAllowedRemotely() throws {
+        // CROW-810: `defaults-get` returns a strict subset of what un-gated
+        // `get-config` already sends every authenticated remote browser —
+        // `SettingsSecrets.strippedForTransport` does not touch
+        // `defaults.binaries`, and settings.js renders the corveil path
+        // (read-only) for remote peers today. Gate a read only when it returns
+        // what stripping would have removed; this returns nothing of the sort.
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        try ConfigStore.saveConfig(AppConfig(), devRoot: devRoot)
+
+        let req = JSONRPCRequest(id: 1, method: "defaults-get", params: [:])
+        #expect(RPCWebSocketHandler.localOnlyDenial(for: req, devRoot: devRoot) == nil)
+    }
+
+    @Test func defaultsSetWithoutBinariesIsAllowedRemotely() throws {
+        // Everything except `binaries` is already remotely writable through
+        // un-gated `set-config`, so gating the granular path would only push a
+        // remote caller back onto the whole-config blob.
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        try ConfigStore.saveConfig(AppConfig(), devRoot: devRoot)
+
+        let paramSets: [[String: JSONValue]] = [
+            ["provider": .string("gitlab")],
+            ["cli": .string("glab")],
+            ["branch_prefix": .string("feat/")],
+            ["add_exclude_review_repos": .array([.string("acme/docs")])],
+            ["clear_ignore_review_labels": .bool(true)],
+        ]
+        for params in paramSets {
+            let req = JSONRPCRequest(id: 1, method: "defaults-set", params: params)
+            #expect(
+                RPCWebSocketHandler.localOnlyDenial(for: req, devRoot: devRoot) == nil,
+                "defaults-set \(params.keys.sorted()) must stay reachable from a remote /rpc peer")
+        }
+    }
+
+    @Test func defaultsSetWithBinariesIsLocalOnly() throws {
+        // `defaults.binaries` remains the sole local-only config field — now
+        // reachable from two methods, so both must deny. Gated on the *presence*
+        // of the param rather than a diff against disk (unlike `set-config`,
+        // which needs the diff to let the web tab re-send what it just read):
+        // `defaults-set` is a PATCH, so a caller not touching binaries omits the
+        // key entirely and there is no innocent echo to accommodate.
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        var stored = AppConfig()
+        stored.defaults.binaries = ["corveil": "/opt/corveil/bin/corveil"]
+        try ConfigStore.saveConfig(stored, devRoot: devRoot)
+
+        // `.object([:])`, `.null` and `.string` are what pin "presence, not
+        // decode": the gate must not depend on the payload being well-formed, or
+        // a malformed one would sail past it and be rejected only afterwards, by
+        // which point it has already proven the method is remotely reachable.
+        // The last case is also an unchanged-value echo, denied on purpose.
+        let payloads: [JSONValue] = [
+            .object(["corveil": .string("/evil/corveil")]),
+            .object(["corveil": .string("")]),
+            .object([:]),
+            .null,
+            .string("oops"),
+            .object(["corveil": .string("/opt/corveil/bin/corveil")]),
+        ]
+        for payload in payloads {
+            let req = JSONRPCRequest(id: 1, method: "defaults-set", params: [
+                "provider": .string("github"),
+                "binaries": payload,
+            ])
+            #expect(
+                RPCWebSocketHandler.localOnlyDenial(for: req, devRoot: devRoot)
+                    == "defaults-set binaries is local-only",
+                "defaults-set with binaries: \(payload) must be denied")
+        }
+    }
 }
 
