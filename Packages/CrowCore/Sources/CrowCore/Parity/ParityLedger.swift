@@ -198,6 +198,18 @@ public enum ParityLedger {
         .write("defaults-set", cli: "defaults set"),
         .read("agents-get", cli: "agents list"),
         .write("agents-set", cli: "agents set"),
+        // CROW-812. Ledgered here rather than in #884 because that PR and the
+        // gate itself (#883) landed concurrently, so neither saw the other —
+        // `main` fails this check without these two rows.
+        .read("automation-get", cli: "automation get"),
+        .write("automation-set", cli: "automation set"),
+        // CROW-809. Un-gated on `/rpc`: the payloads carry no credential, since
+        // the per-workspace gateway is excluded from them rather than gated.
+        .read("workspace-list", cli: "workspace list"),
+        .read("workspace-get", cli: "workspace get"),
+        .write("workspace-add", cli: "workspace add"),
+        .write("workspace-edit", cli: "workspace edit"),
+        .write("workspace-remove", cli: "workspace remove"),
         .read("telemetry-get", cli: "telemetry get"),
         .write("telemetry-set", cli: "telemetry set"),
         .read("cleanup-get", cli: "cleanup get"),
@@ -416,100 +428,42 @@ public enum ParityLedger {
         .field("defaultAgentKind", read: "agents list", write: "agents set"),
         .field("agentsByKind", read: "agents list", write: "agents set"),
 
-        // MARK: Exempt — workspaces (no CLI surface at all)
+        // MARK: Workspaces — `crow workspace` (CROW-809)
+        //
+        // Every field below was exempt as "no CLI surface whatsoever" until these
+        // verbs existed. `workspace get`/`list` read the block; `workspace add`
+        // and `edit` write it. `cli` is the one exception: it is derived from
+        // `provider` on every write rather than being separately settable.
+        //
+        // The per-workspace `gateway` is NOT here — it lives with the credential
+        // rows above, is excluded from every `workspace-*` payload, and is
+        // authored only by the local-only `gateway set`.
 
-        .field(
-            "workspaces[].id",
-            noCLI: """
-                Workspaces have no CLI surface whatsoever: they are created by the \
-                `crow setup` wizard and edited in the web Settings tab. This UUID is \
-                the identity the rest of the block hangs off.
-                """),
-        .field(
-            "workspaces[].name",
-            noCLI: """
-                Workspace folder name under the dev root. Setup wizard / web Settings \
-                only — see `workspaces[].id`. `WorkspaceInfo.validateName` guards it.
-                """),
-        .field(
-            "workspaces[].provider",
-            noCLI: """
-                Forge provider (`github`/`gitlab`) for the workspace. No verb reads or \
-                writes any workspace field — see `workspaces[].id`.
-                """),
-        .field(
-            "workspaces[].cli",
-            noCLI: """
-                Provider CLI for this workspace, kept for config-file compatibility. \
-                No workspace field has a verb — see `workspaces[].id`.
-                """),
-        .field(
-            "workspaces[].host",
-            noCLI: """
-                Self-hosted GitLab host for the workspace. No workspace field has a \
-                verb — see `workspaces[].id`.
-                """),
-        .field(
-            "workspaces[].alwaysInclude",
-            noCLI: """
-                Repos always listed in the Manager's prompt table. No workspace field \
-                has a verb — see `workspaces[].id`.
-                """),
-        .field(
-            "workspaces[].autoReviewRepos",
-            noCLI: """
-                Repos whose review requests auto-create a review session. No workspace \
-                field has a verb — see `workspaces[].id`.
-                """),
-        .field(
-            "workspaces[].excludeReviewRepos",
-            noCLI: """
-                Per-workspace review-board exclusions, unioned with the global \
-                defaults. No workspace field has a verb — see `workspaces[].id`.
-                """),
-        .field(
-            "workspaces[].customInstructions",
-            noCLI: """
-                Free-text instructions appended to session prompts for this \
-                workspace. No workspace field has a verb — see `workspaces[].id`.
-                """),
-        .field(
-            "workspaces[].taskProvider",
-            noCLI: """
-                Which ticket backend this workspace uses (github/gitlab/jira). No \
-                workspace field has a verb — see `workspaces[].id`.
-                """),
-        .field(
-            "workspaces[].jiraProjectKey",
-            noCLI: """
-                Jira project key for ticket-board queries. No workspace field has a \
-                verb — see `workspaces[].id`.
-                """),
-        .field(
-            "workspaces[].jiraJQL",
-            noCLI: """
-                Custom JQL overriding the default ticket-board query. No workspace \
-                field has a verb — see `workspaces[].id`.
-                """),
-        .field(
-            "workspaces[].jiraSite",
-            noCLI: """
-                Jira site hostname for issue links. No workspace field has a verb — \
-                see `workspaces[].id`.
-                """),
-        .field(
-            "workspaces[].jiraStatusMap",
-            noCLI: """
-                Maps Crow pipeline states to this project's Jira workflow names; \
-                honoured by `crow transition-ticket`, but only editable in the web \
-                Settings tab. No workspace field has a verb — see `workspaces[].id`.
-                """),
-        .field(
-            "workspaces[].corveilHost",
-            noCLI: """
-                Corveil task-backend host for this workspace. No workspace field has a \
-                verb — see `workspaces[].id`.
-                """),
+        .field("workspaces[].id", read: "workspace get", writeNoCLI: """
+            Workspace identity, minted on `workspace add` and never rewritten: \
+            `SettingsSecrets.preservingSecrets` matches stored gateways by it, so \
+            an editable id would silently orphan a workspace's credential.
+            """),
+        .field("workspaces[].name", read: "workspace get", write: "workspace edit"),
+        .field("workspaces[].provider", read: "workspace get", write: "workspace edit"),
+        .field("workspaces[].cli", read: "workspace get", writeNoCLI: """
+            Derived from `provider` (`gh`/`glab`) on every write and kept only for \
+            config-file compatibility, so there is no flag to set it directly. \
+            `WorkspaceRPC.applyPatch` re-derives it, which also repairs a stale \
+            value written by an older build.
+            """),
+        .field("workspaces[].host", read: "workspace get", write: "workspace edit"),
+        .field("workspaces[].alwaysInclude", read: "workspace get", write: "workspace edit"),
+        .field("workspaces[].autoReviewRepos", read: "workspace get", write: "workspace edit"),
+        .field("workspaces[].excludeReviewRepos", read: "workspace get", write: "workspace edit"),
+        .field("workspaces[].customInstructions", read: "workspace get", write: "workspace edit"),
+        .field("workspaces[].taskProvider", read: "workspace get", write: "workspace edit"),
+        .field("workspaces[].jiraProjectKey", read: "workspace get", write: "workspace edit"),
+        .field("workspaces[].jiraJQL", read: "workspace get", write: "workspace edit"),
+        .field("workspaces[].jiraSite", read: "workspace get", write: "workspace edit"),
+        .field("workspaces[].jiraStatusMap", read: "workspace get", write: "workspace edit"),
+        .field("workspaces[].corveilHost", read: "workspace get", write: "workspace edit"),
+        .field("workspaces[].sessionEnv", read: "workspace get", write: "workspace edit"),
 
         // MARK: Exempt — automation toggles (web Settings tab)
 
