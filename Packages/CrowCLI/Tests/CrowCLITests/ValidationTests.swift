@@ -393,3 +393,17 @@ import CrowCore
         #expect(throws: (any Error).self) { try validateSessionEnvEntry(bad) }
     }
 }
+
+/// A key no shell can reference is an entry that can never be read back. The CLI
+/// can't produce a key containing `=` (it splits on the first one), but it can
+/// produce one containing a space — so this is the half of
+/// `WorkspaceRPC.decodeSessionEnv`'s key rules that the CLI can actually reach.
+@Test func sessionEnvEntryRejectsUnaddressableKeys() {
+    for bad in ["FOO BAR=v", "FOO\tBAR=v", "FOO\u{0}BAR=v"] {
+        #expect(throws: (any Error).self, "expected '\(bad)' to be rejected") {
+            try validateSessionEnvEntry(bad)
+        }
+    }
+    // Surrounding space is a typo, not a bad name — `parseSessionEnv` trims it.
+    #expect(throws: Never.self) { try validateSessionEnvEntry("  AWS_PROFILE  =dev") }
+}

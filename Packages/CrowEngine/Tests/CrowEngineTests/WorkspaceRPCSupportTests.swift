@@ -275,6 +275,39 @@ struct WorkspaceRPCSupportTests {
         }
     }
 
+    /// The other half of the same delimiter contract. `setup.sh` splits each
+    /// flattened line at the **first** `=` (`key="${kv%%=*}"`), so a key carrying
+    /// one comes back as a different variable than the one stored:
+    /// `{"FOO=BAR": "baz"}` flattens to `FOO=BAR=baz` and splits back to key
+    /// `FOO`, value `BAR=baz`.
+    ///
+    /// Unreachable from the CLI — `parseSessionEnv` splits on the first `=`, so a
+    /// key can never contain one — which is exactly why it has to be caught here,
+    /// on the remote `/rpc` path.
+    @Test func applyPatchRejectsEqualsInSessionEnvKeys() {
+        for key in ["FOO=BAR", "=LEADING", "TRAILING="] {
+            var target = WorkspaceInfo(name: "Acme")
+            #expect(throws: RPCError.self, "expected key '\(key)' to be rejected") {
+                _ = try WorkspaceRPC.applyPatch(
+                    ["session_env": .object([key: .string("baz")])], to: &target)
+            }
+            #expect(target.sessionEnv == nil, "a rejected patch must store nothing")
+        }
+    }
+
+    /// Whitespace and control characters in a key aren't a delimiter problem —
+    /// they're simply not addressable, so an entry carrying one could never be
+    /// read back by any shell.
+    @Test func applyPatchRejectsUnaddressableSessionEnvKeys() {
+        for key in ["FOO BAR", "FOO\tBAR", "FOO\u{0}BAR", "FOO\u{7}"] {
+            var target = WorkspaceInfo(name: "Acme")
+            #expect(throws: RPCError.self, "expected key '\(key)' to be rejected") {
+                _ = try WorkspaceRPC.applyPatch(
+                    ["session_env": .object([key: .string("v")])], to: &target)
+            }
+        }
+    }
+
     /// The guard must not over-reach: values with `=`, spaces, or `#` are ordinary
     /// env values, and an empty value differs meaningfully from an unset one.
     @Test func applyPatchAllowsOrdinarySessionEnvValues() throws {

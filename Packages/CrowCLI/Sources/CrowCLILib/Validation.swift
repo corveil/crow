@@ -349,8 +349,14 @@ func validateWorkspaceTaskProvider(_ value: String) throws {
 /// value is exported into the agent's shell environment, where an embedded
 /// newline would read as a second statement.
 ///
-/// - Throws: `ValidationError` when the entry has no `=`, a blank key, or an
-///   embedded newline.
+/// The key is checked for whitespace and control characters as well. Splitting
+/// on the first `=` means a key here can never contain one — but it can contain
+/// a space, and `FOO BAR` is an entry no shell can ever reference. Mirrors
+/// `WorkspaceRPC.decodeSessionEnv`, which enforces the same rules for the remote
+/// `/rpc` writers this function never sees.
+///
+/// - Throws: `ValidationError` when the entry has no `=`, a blank key, an
+///   embedded newline, or a key carrying whitespace or control characters.
 func validateSessionEnvEntry(_ value: String) throws {
     // CharacterSet, not `contains("\n")`: Swift treats CRLF as a single
     // Character, so a grapheme comparison misses "\r\n" entirely.
@@ -358,10 +364,21 @@ func validateSessionEnvEntry(_ value: String) throws {
         throw ValidationError(
             "A --session-env entry must be a single line — '\(value)' contains a newline.")
     }
-    guard let split = value.firstIndex(of: "="),
-          !String(value[..<split]).trimmingCharacters(in: .whitespaces).isEmpty else {
+    guard let split = value.firstIndex(of: "=") else {
         throw ValidationError(
             "'\(value)' is not a valid env entry. Expected 'KEY=VALUE' (e.g. \"AWS_PROFILE=dev\").")
+    }
+    // Trimmed to match `WorkspaceFieldArgs.parseSessionEnv`, which trims the key
+    // before sending it — so surrounding spaces are a typo, not a rejection.
+    let key = String(value[..<split]).trimmingCharacters(in: .whitespaces)
+    guard !key.isEmpty else {
+        throw ValidationError(
+            "'\(value)' is not a valid env entry. Expected 'KEY=VALUE' (e.g. \"AWS_PROFILE=dev\").")
+    }
+    guard key.rangeOfCharacter(from: .whitespacesAndNewlines) == nil,
+          key.rangeOfCharacter(from: .controlCharacters) == nil else {
+        throw ValidationError(
+            "'\(key)' is not a valid env variable name — it must not contain whitespace or control characters.")
     }
 }
 

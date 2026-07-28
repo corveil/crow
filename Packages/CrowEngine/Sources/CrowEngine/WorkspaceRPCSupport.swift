@@ -158,27 +158,43 @@ public enum WorkspaceRPC {
         return map
     }
 
-    /// Validate a `session_env` map: no newline in any key or value.
+    /// Validate a `session_env` map against the round-trip its consumer performs.
     ///
-    /// This is a **line-injection** guard, not tidiness. The map's consumer is
-    /// `skills/crow-workspace/setup.sh`, which reads it as one `KEY=VALUE` per
-    /// line:
+    /// This is a **delimiter-integrity** guard, not tidiness. The map's consumer
+    /// is `skills/crow-workspace/setup.sh`, which flattens it to one
+    /// `KEY=VALUE` per line and then splits each line back apart:
     ///
     /// ```
-    /// jq -r '… | .sessionEnv // {} | to_entries[] | "\(.key)=\(.value)"'
+    /// jq -r '… | .sessionEnv // {} | to_entries[] | "\(.key)=\(.value)"'   # flatten
+    /// key="${kv%%=*}"; value="${kv#*=}"                                     # split
     /// ```
     ///
-    /// piped into a `while IFS= read -r kv` loop. A value containing a newline
-    /// therefore emits *two* lines, and the second is parsed as an additional
-    /// pair — so a single stored `{"FOO": "bar\nEVIL=injected"}` becomes both
-    /// `FOO=bar` and `EVIL=injected` in the session's `settings.local.json`
-    /// `.env` block.
+    /// That round-trip has exactly two delimiters — the newline between entries
+    /// and the first `=` within one — so a key or value carrying either comes
+    /// back as something the operator never wrote:
     ///
-    /// The CLI already refuses this in `validateSessionEnvEntry`, but the CLI is
+    /// - **Newline in a value.** `{"FOO": "bar\nEVIL=injected"}` emits two lines,
+    ///   and the second parses as its own pair — smuggling `EVIL=injected` into
+    ///   the session's `settings.local.json` `.env` block.
+    /// - **`=` in a key.** `{"FOO=BAR": "baz"}` emits `FOO=BAR=baz`, which splits
+    ///   at the *first* `=` back into key `FOO`, value `BAR=baz` — a different
+    ///   variable than the one stored.
+    ///
+    /// A `=` in a **value** is fine and common (connection strings, base64), since
+    /// the split takes only the first one.
+    ///
+    /// Whitespace and control characters in a key are rejected too. They aren't a
+    /// delimiter problem — they're simply not addressable: no shell can reference
+    /// `FOO BAR`, so accepting one writes an entry that can never be read.
+    ///
+    /// The CLI already refuses these in `validateSessionEnvEntry`, but the CLI is
     /// not the only writer: `workspace-*` is intentionally reachable from a
     /// remote `/rpc` peer (see `RPCWebSocketHandler.localOnlyDenial`'s ledger),
     /// which never passes through `ParsableCommand.validate()`. The check has to
     /// live here to actually hold.
+    ///
+    /// Reads are never validated — a config hand-authored before these rules
+    /// still loads unchanged; only writes are constrained.
     public static func decodeSessionEnv(_ map: [String: String]) throws -> [String: String] {
         for (key, value) in map {
             // CharacterSet, not `contains("\n")`: Swift treats CRLF as a single
@@ -186,6 +202,15 @@ public enum WorkspaceRPC {
             guard key.rangeOfCharacter(from: .newlines) == nil else {
                 throw RPCError.invalidParams(
                     "session_env keys must not contain a newline (key: \"\(key)\")")
+            }
+            guard !key.contains("=") else {
+                throw RPCError.invalidParams(
+                    "session_env keys must not contain '=' — the consumer splits each entry at the first '=', so \"\(key)\" would come back as a different variable")
+            }
+            guard key.rangeOfCharacter(from: .whitespacesAndNewlines) == nil,
+                  key.rangeOfCharacter(from: .controlCharacters) == nil else {
+                throw RPCError.invalidParams(
+                    "session_env keys must not contain whitespace or control characters — no shell can reference \"\(key)\"")
             }
             guard value.rangeOfCharacter(from: .newlines) == nil else {
                 throw RPCError.invalidParams(

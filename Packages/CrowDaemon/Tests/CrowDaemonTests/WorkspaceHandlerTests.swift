@@ -279,6 +279,23 @@ import CrowPersistence
         #expect(workspaces(devRoot).count == 1)
     }
 
+    /// The `=` half of the same delimiter contract, over the same remote-reachable
+    /// path. `setup.sh` splits each flattened entry at the first `=`, so a key
+    /// carrying one is stored as `FOO=BAR` and read back as `FOO`.
+    @Test @MainActor func sessionEnvKeyWithEqualsIsRejectedOverRPC() async throws {
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        try ConfigStore.saveConfig(AppConfig(workspaces: [WorkspaceInfo(name: "Acme")]), devRoot: devRoot)
+
+        let resp = await call("workspace-edit", [
+            "workspace": .string("Acme"),
+            "session_env": .object(["FOO=BAR": .string("baz")]),
+        ], devRoot: devRoot)
+
+        #expect(resp.error?.message.contains("'='") == true)
+        #expect(workspaces(devRoot).first?.sessionEnv == nil)
+    }
+
     // MARK: - rename guard
 
     @Test @MainActor func renameSucceedsWhenNothingReferencesTheWorkspace() async throws {
