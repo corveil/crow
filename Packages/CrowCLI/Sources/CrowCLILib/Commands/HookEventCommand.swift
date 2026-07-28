@@ -50,20 +50,24 @@ public struct HookEventCmd: ParsableCommand {
     }
 }
 
-/// Forward a hook-event RPC over the Unix socket.
+/// Forward a hook-event RPC over the Unix socket, fire-and-forget.
 ///
-/// Silently no-ops when the Crow app is not running (socket connection
-/// refused or socket file absent). Hooks are fire-and-forget — a missing
-/// listener is an expected state, not an error, so we must not exit
-/// non-zero or write to stderr (it pollutes the agent's hook output).
-/// Other socket errors (timeout, write/read failures) and JSON-RPC
-/// errors still propagate so genuine misbehavior is visible.
+/// Hooks are fire-and-forget: we write the event and return without waiting for
+/// the daemon's reply. That reply was only ever used to print RPC errors, but
+/// because the daemon serializes every request on its `@MainActor`, waiting for
+/// it stalled the hook whenever the daemon was busy (board poll, git op,
+/// whole-store write, a burst of hook-events) — right up to the agent's hook
+/// timeout (#903). Dropping the wait removes that stall; the daemon still
+/// processes the event once its MainActor frees.
+///
+/// Silently no-ops when the Crow app is not running (socket connection refused
+/// or socket file absent): a missing listener is an expected state, not an
+/// error, so we must not exit non-zero or write to stderr (it pollutes the
+/// agent's hook output). Other socket errors (create/write failures) still
+/// propagate so genuine misbehavior is visible.
 func forwardHookEvent(params: [String: JSONValue]) throws {
     do {
-        let result = try rpc("hook-event", params: params)
-        if result["error"] != nil {
-            printJSON(result)
-        }
+        try rpcNotify("hook-event", params: params)
     } catch SocketError.connectionFailed {
         return
     }
