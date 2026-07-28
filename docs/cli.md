@@ -18,6 +18,9 @@ Every subcommand and flag the `crow` binary accepts, generated from the commands
 | [`crow add-link`](#crow-add-link) | Add a link to a session |
 | [`crow add-merge-label`](#crow-add-merge-label) | Add the crow:merge label to the session's PR |
 | [`crow add-worktree`](#crow-add-worktree) | Register a worktree for a session |
+| [`crow agents`](#crow-agents) | Show and change which coding agent Crow launches |
+| [`crow agents list`](#crow-agents-list) | Show known agents, the configured default, and the agent each role resolves to |
+| [`crow agents set`](#crow-agents-set) | Change the default agent or a per-role override |
 | [`crow autostart`](#crow-autostart) | Start crowd at login (install/uninstall/status) |
 | [`crow autostart install`](#crow-autostart-install) | Register crowd to start at login (idempotent; re-points after an upgrade) |
 | [`crow autostart status`](#crow-autostart-status) | Report whether crowd is set to start at login, and whether it's running |
@@ -161,6 +164,61 @@ crow add-worktree --session <session> --repo <repo> --path <path> --branch <bran
 | `--branch` | `<branch>` | yes | Branch name |
 | `--repo-path` | `<repo-path>` | no | Main repo path (for git commands) |
 | `--primary` | — | no | Mark as primary worktree |
+
+---
+
+## `crow agents`
+
+Show and change which coding agent Crow launches.
+
+```
+crow agents <list|set>
+```
+
+Resolution is agentsByKind[<role>] falling back to defaultAgentKind. The four roles are work (coding sessions), review (PR reviews), job (scheduled jobs), and manager (the Manager session).
+
+Only agents whose CLI binary crowd found at startup can be selected — run `crow agents list` for the set. Changes apply within about one board poll; no restart.
+
+Subcommands: [`list`](#crow-agents-list), [`set`](#crow-agents-set).
+
+---
+
+## `crow agents list`
+
+Show known agents, the configured default, and the agent each role resolves to.
+
+```
+crow agents list
+```
+
+`known` lists every agent Crow ships, each flagged `available` — an agent whose binary wasn't on PATH when crowd started is listed but not selectable, so it reads as "not installed" rather than vanishing. `default_agent_kind` and `by_kind` are what you configured; `effective` is what a new session of each role would get.
+
+`config_readable` is false when config.json exists but could not be decoded — the values shown are then defaults, not your settings.
+
+---
+
+## `crow agents set`
+
+Change the default agent or a per-role override.
+
+```
+crow agents set [--default <default>] [--work <work>] [--review <review>] [--job <job>] [--manager <manager>] [--clear <clear> ...]
+```
+
+Only the flags you pass change; at least one is required.
+
+--clear <role> removes that role's override so the role falls back to the default; repeat the flag per role. Setting and clearing the same role in one call is rejected.
+
+An agent kind that is not currently available is rejected and nothing is written — run `crow agents list` for the set. Note availability is decided when crowd starts, so a newly installed agent needs a daemon restart before it can be selected.
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--default` | `<default>` | no | Agent for sessions with no per-role override |
+| `--work` | `<work>` | no | Agent for new coding sessions |
+| `--review` | `<review>` | no | Agent for PR-review sessions |
+| `--job` | `<job>` | no | Agent for scheduled-job sessions |
+| `--manager` | `<manager>` | no | Agent for the Manager session |
+| `--clear` | `<clear>` _(repeatable)_ | no | Role whose override to remove, falling back to the default (repeatable). Values: `work`, `review`, `job`, `manager`. |
 
 ---
 

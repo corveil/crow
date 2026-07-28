@@ -1794,6 +1794,58 @@ func makeCommandRouter(
                 ]
             }
         },
+
+        // Agent selection for `crow agents` (CROW-811) — `AppConfig.defaultAgentKind`
+        // and `AppConfig.agentsByKind`, the Settings → General "Agent" group. Same
+        // locked read-modify-write as the settings verbs above. No
+        // `restart_required`: the board tick calls `applyConfigToAppState` ->
+        // `AppState.applyAgentConfig`, so a change is live within one poll.
+        //
+        // Distinct from `list-agents` further up, which answers "what harnesses are
+        // registered in this process" and returns `agents` as an *array*. Its
+        // per-agent `default` flag is the *registry* default (first-registered);
+        // `default_agent_kind` here is the *configured* default. `available`
+        // deliberately carries no such field so the two can't be read as one thing.
+        //
+        // Un-gated in `RPCWebSocketHandler.localOnlyDenial` for the same reason as
+        // `notifications-*`: agent kinds carry no secrets, and a remote peer can
+        // already change both fields through the un-gated `set-config` blob.
+        "agents-get": { _ in
+            let (config, readable) = loadConfigReportingReadability(devRoot: devRoot)
+            return ["agents": AgentsRPC.agentsJSON(
+                config, available: knownAgents(), configReadable: readable)]
+        },
+        "agents-set": { params in
+            try await mapRPCError {
+                // One snapshot for the whole call, so the gate that rejects a kind
+                // and the `available` list echoed back can't disagree mid-flight.
+                let available = knownAgents()
+                let defaultKind = try AgentsRPC.decodeDefaultAgentKind(params, available: available)
+                let setting = try AgentsRPC.decodeByKind(params, available: available)
+                let clearing = try AgentsRPC.decodeClear(params)
+                // Conflict before emptiness: a call carrying both a value and a
+                // clear for the same role passes the emptiness check, so the
+                // generic message would bury the actual mistake.
+                try AgentsRPC.validateNoClearConflict(setting: setting, clearing: clearing)
+                guard defaultKind != nil || !setting.isEmpty || !clearing.isEmpty else {
+                    throw RPCError.invalidParams(
+                        "Nothing to set — provide at least one of default_agent_kind, by_kind, clear.")
+                }
+                // Every decode above throws before `mutateConfig` is entered, so a
+                // rejected kind or role leaves config.json untouched — no lock
+                // taken, no partial write, no mtime bump.
+                let config = try mutateConfig(devRoot: devRoot) { config -> AppConfig in
+                    if let defaultKind { config.defaultAgentKind = defaultKind }
+                    AgentsRPC.applyByKind(
+                        &config.agentsByKind, setting: setting, clearing: clearing)
+                    return config
+                }
+                return [
+                    "agents": AgentsRPC.agentsJSON(config, available: available),
+                    "saved": .bool(true),
+                ]
+            }
+        },
     ], fallback: fallback)
 }
 
@@ -1812,6 +1864,31 @@ func makeCommandRouter(
 private func nonExecutableBinaryPaths(_ patch: [String: String]) -> [String] {
     let fm = FileManager.default
     return patch.values.filter { !$0.isEmpty && !fm.isExecutableFile(atPath: $0) }.sorted()
+}
+
+/// Snapshot this process's known agents for the `agents-*` handlers.
+///
+/// Reuses `AgentRegistry.agentListings()` — the shared projection #879/#880 added
+/// so every surface serializes one contract — rather than re-deriving the roster.
+/// That means `crow agents list` shows the same five rows the web pickers do,
+/// each carrying `available`, instead of silently omitting an off-PATH agent
+/// (the exact complaint #879 filed against the web).
+///
+/// Availability rides along per row rather than filtering the list: the launch
+/// gate stays `available == true` (an unavailable kind never enters the
+/// registry's launchable map, so `registeredKind`/`agent(for:)` still refuse
+/// it), but a caller can now see that Antigravity exists and needs installing.
+///
+/// No `MainActor.run` hop, unlike the neighbouring `list-agents`: `AgentRegistry`
+/// is `@unchecked Sendable` behind its own `NSLock` and `CodingAgent` is
+/// `Sendable`, so nothing here is main-actor bound. Kept a named function rather
+/// than inlined twice so a future `@MainActor` on `CodingAgent` has exactly one
+/// place to break.
+private func knownAgents() -> [AgentsRPC.KnownAgent] {
+    AgentRegistry.shared.agentListings().map {
+        AgentsRPC.KnownAgent(
+            kind: $0.kind, name: $0.displayName, binary: $0.binary, available: $0.available)
+    }
 }
 
 /// Load the config, reporting whether it was actually readable.

@@ -43,6 +43,7 @@ public struct CrowCommand: ParsableCommand {
             UI.self,
             Notifications.self,
             Defaults.self,
+            Agents.self,
             Gateway.self,
             WebPassword.self,
             AddWorktree.self,
