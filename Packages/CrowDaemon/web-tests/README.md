@@ -37,6 +37,18 @@ swallowing a non-mouse mode like `?25`), including xterm's params-object and
 sub-parameter shapes; and graceful degradation when `activeTerminal` is null or
 an older daemon omits `agent_surface`.
 
+## `key-handler.test.js` — terminal copy/paste keys (#875)
+
+Drives `handleTerminalKey` and `pasteIntoTerminal` against a fake xterm +
+clipboard. Coverage: the #875 regression — Cmd+V is left entirely to the
+browser, so the native paste (which xterm already bracketed-paste-wraps) is the
+only one that fires, instead of that plus an explicit `term.paste` for a double
+paste; the right-click menu still pasting exactly once, and degrading without
+throwing where `navigator.clipboard` is absent (plain http); Cmd/Ctrl+C copying
+the selection and cancelling the browser default, while Ctrl+C with no
+selection still falls through as SIGINT; Cmd+F cancelling the browser find bar
+and opening ours; and non-keydown / unmodified keys passing through untouched.
+
 ## `row.test.js` — sidebar session rows (CROW-773)
 
 Drives `sessionRow`. Coverage: the PR pill's status glyphs for every

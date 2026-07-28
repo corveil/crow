@@ -3636,25 +3636,7 @@ function ensureTerminal() {
     term.loadAddon(webglAddon);
   } catch (_) { /* WebGL unavailable → canvas/DOM renderer */ }
   term.onData(sendToPTY);
-  // Cmd/Ctrl+C copies the selection (falling through to SIGINT when nothing is
-  // selected so Ctrl+C still interrupts); Cmd+V pastes. Lets the browser own
-  // copy/paste instead of tmux's copy-mode.
-  term.attachCustomKeyEventHandler((e) => {
-    if (e.type !== 'keydown') return true;
-    const mod = e.metaKey || e.ctrlKey;
-    if (mod && (e.key === 'c' || e.key === 'C') && term.hasSelection()) {
-      copyToClipboard(term.getSelection());
-      return false;
-    }
-    if (e.metaKey && (e.key === 'v' || e.key === 'V')) { pasteIntoTerminal(); return false; }
-    if (e.metaKey && (e.key === 'f' || e.key === 'F')) {
-      textPrompt('Find in terminal', '', { okLabel: 'Find' }).then((q) => {
-        if (q && searchAddon) { try { searchAddon.findNext(q); } catch (_) {} }
-      });
-      return false;
-    }
-    return true;
-  });
+  term.attachCustomKeyEventHandler(handleTerminalKey);
   enableTouchScroll(document.getElementById('terminal'));
   enableWheelScroll(document.getElementById('terminal'));
   enableFileDrop(document.getElementById('terminal'));
@@ -3882,8 +3864,56 @@ async function uploadDroppedFiles(files) {
   }
 }
 
+// The terminal's custom key handler (attached in ensureTerminal). At module
+// scope so the jsdom suite can drive it directly — same reason swallowMouseMode
+// lives out here.
+//
+// Cmd/Ctrl+C copies the selection (falling through to SIGINT when nothing is
+// selected so Ctrl+C still interrupts), Cmd+F opens our find prompt. Lets the
+// browser own copy instead of tmux's copy-mode.
+//
+// A branch that shadows a browser default must preventDefault(): returning
+// false only makes xterm skip its OWN key handling (its _keyDown returns early,
+// before any cancel()), so the browser's default gesture still runs (#875).
+function handleTerminalKey(e) {
+  if (e.type !== 'keydown') return true;
+  const mod = e.metaKey || e.ctrlKey;
+  if (mod && (e.key === 'c' || e.key === 'C') && term.hasSelection()) {
+    copyToClipboard(term.getSelection());
+    // Safe to own the gesture: copyToClipboard always delivers — writeText, or
+    // fallbackCopy's execCommand in a non-secure context.
+    e.preventDefault();
+    e.stopPropagation();
+    return false;
+  }
+  // #875: Cmd+V is deliberately NOT handled here. Pasting explicitly *and*
+  // returning false double-pasted, because the browser's native paste gesture
+  // still fired xterm's own `paste` listener (on the helper textarea) and wrote
+  // the clipboard a second time. Leaving the event alone gives exactly one
+  // paste — xterm's listener routes it through paste(), so bracketed-paste
+  // wrapping is applied once, then onData → sendToPTY. macOS Cmd+V produces no
+  // key data in xterm, so nothing leaks to the PTY either.
+  //
+  // The native gesture is also strictly more capable than reading the clipboard
+  // ourselves: it needs no clipboard-read permission and works over plain http
+  // (`--host 0.0.0.0`), where navigator.clipboard doesn't exist at all. The
+  // right-click menu still calls pasteIntoTerminal() — a click is not a paste
+  // gesture, so there it's the only path.
+  if (e.metaKey && (e.key === 'f' || e.key === 'F')) {
+    // Without this the browser's own find bar opens over our prompt.
+    e.preventDefault();
+    e.stopPropagation();
+    textPrompt('Find in terminal', '', { okLabel: 'Find' }).then((q) => {
+      if (q && searchAddon) { try { searchAddon.findNext(q); } catch (_) {} }
+    });
+    return false;
+  }
+  return true;
+}
+
 // Paste the browser clipboard into the terminal (writes to the PTY, same path
-// as typing). readText() needs a user gesture — the menu click / Cmd+V is one.
+// as typing). readText() needs a user gesture — the right-click menu click is
+// one. Cmd+V never comes through here (#875); the browser pastes it natively.
 function pasteIntoTerminal() {
   if (!term || !(navigator.clipboard && navigator.clipboard.readText)) return;
   navigator.clipboard.readText().then((text) => {
