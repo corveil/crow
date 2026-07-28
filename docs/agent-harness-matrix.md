@@ -36,7 +36,7 @@ capabilities, update this table in the same PR.
 | MCP (e.g. Jira) | ✅ `jira` MCP server via `~/.claude.json` | ✅ `jira` bridged into `~/.cursor/mcp.json` (#829) | ✅ mirrored from `~/.claude.json` into `config.toml` | ❌ falls back to `acli` | ❌ falls back to `acli` (file bridge deferred) |
 | Review (`/crow-review-pr`) | ✅ slash-command | ✅ inlined skill body | ✅ inlined skill body | ✅ inlined skill body | ❌ unsupported in Phase A (`autoLaunchCommand(.review)` → nil) |
 | Initial-prompt injection | ✅ `$(cat …-prompt.md)` + deferred paste | ✅ `$(cat …)` job/review; handoff launcher auto-wired (#829); `.work` bare | ✅ `.job` + `.review` (`$(cat …-prompt.md)`) | ✅ run-then-`--continue` | ✅ `-p "$(cat …-job-prompt.md)"` (`.job`); `.work` bare |
-| Gateway env / trust seed / telemetry | ✅ Claude special-case | ❌ | ⚠️ trust seed only (`[projects."…"]` in `config.toml`) | ❌ | ❌ |
+| Gateway env / trust seed / telemetry | ✅ Claude special-case | ⚠️ trust seed only (`--trust`, per-launch, except `.review`) | ⚠️ trust seed only (`[projects."…"]` in `config.toml`) | ❌ | ❌ |
 | Rename passthrough (`/rename`) | ✅ | ✅ | ✅ | ✅ | ❌ unverified on v1.1.7 (opt-out `nil`) |
 | Self-host / local models | provider-dependent | provider-dependent | provider-dependent | provider-dependent | ❌ **permanent** — closed-source, Google-Sign-In/GCP-locked (Gemini 3 Pro / Claude Sonnet 4.5 only) |
 
@@ -171,8 +171,11 @@ harness's sessions
   blocks network at the syscall level — `.review`'s `gh pr review`, `.job`'s
   `git push`, and the Manager's `crow`-socket / `gh` / sibling `git worktree add`
   all need network the sandbox would kill; `--sandbox` is left unset so Cursor
-  honors the user's own config), `--yolo`, the undocumented `--auto-review`, or
-  the headless-only `--trust`.
+  honors the user's own config), `--yolo`, and the undocumented `--auto-review`.
+  (`--trust` **is** emitted — but as a per-launch workspace-**trust seed**, not an
+  auto-permission flag; see "Gateway env / trust seed / telemetry" below. It went
+  interactive in Cursor CLI 2026.07.20, reversing the earlier headless-only
+  omission, #890.)
 - **Codex:** honored for `.job` sessions on the **interactive** launch —
   `codex -a never -s workspace-write "$(cat …-prompt.md)"` (approval off, sandbox
   still bounded; the analogue of Claude's `--permission-mode auto`, **not** the
@@ -326,14 +329,33 @@ harness (CROW-439) — it's gated on the prompt-file convention, not on agent ki
 
 ### Gateway env / trust seed / telemetry
 
-Three Claude-specific capabilities the protocol doesn't abstract key on Claude
-identity (`if …kind == .claudeCode`), because no other harness has an analogue
-(gating is exhaustive except the two Manager gateway writes noted below):
+Three capabilities the protocol doesn't abstract — historically Claude-specific
+and gated on Claude identity (`if …kind == .claudeCode`). Trust seeding now has
+bounded per-harness analogues (Cursor's `--trust`, Codex's `config.toml`); the
+AI-gateway env and telemetry legs remain Claude-only (gating is exhaustive except
+the two Manager gateway writes noted below):
 
 - **Trust seeding** — `ClaudeTrustSeeder.seedTrust` pre-trusts the worktree in
   `~/.claude.json` so the "Do you trust the files in this folder?" dialog never
   blocks an auto-launched session (CROW-600). Runs at **four** call sites:
   `SessionService.launchAgent`, `handoffAgent`, and the two Manager paths.
+- **Trust seeding (Cursor)** — the per-launch analogue of the Claude seed:
+  `CursorLaunchArgs.trustSuffix` appends `--trust` to every Crow-driven launch
+  (auto-launch, Manager, and the handoff one-shot) **except `.review`**, so a
+  fresh `.work`/`.job` worktree doesn't block on Cursor's folder-trust dialog
+  (CROW-890). A `.review` clone is an attacker-controlled `gh` checkout at the PR
+  author's head, so — mirroring the `session.kind != .review` guard on
+  `CodexTrustSeeder` — Crow **never** auto-trusts it; the intent is that review
+  falls back to Cursor's folder-trust dialog as its human gate, though whether
+  `--force` (review's default auto-permission) still surfaces that dialog is
+  unverified — withholding `--trust` is never worse than emitting it (CROW-890
+  review, Red 1). **Interactive since Cursor
+  CLI 2026.07.20** ([changelog](https://cursor.com/docs/cli/changelog)); verified
+  against `agent 2026.07.23`, whose `--help` drops the "(headless mode only)"
+  qualifier the [param reference](https://cursor.com/docs/cli/reference/parameters)
+  still carries. **Workspace trust only** — not `--yolo`; auto-permission stays
+  in the separate `--force --approve-mcps` (which still applies on `.review`,
+  unchanged).
 - **AI-gateway env** — two mechanisms for the workspace's `ANTHROPIC_BASE_URL` /
   `ANTHROPIC_CUSTOM_HEADERS` (CROW-402): `ClaudeHookConfigWriter.writeGatewayEnv`
   writes the env block into `settings.local.json` (Claude-gated at `launchAgent`
@@ -452,6 +474,7 @@ against current upstream CLIs.
 | Codex reuses Claude's hook engine (`ClaudeHooksEngine`, byte-compatible schemas) | verified against **codex 0.123.0** | `CodexSignalSource` | 2026-07-24 |
 | Claude background-recap subagent must not elevate state | Claude Code **≥ 2.1.108** (`awaySummaryEnabled`) | `ClaudeHookSignalSource` | 2026-07-24 |
 | Cursor `PostToolUse` / `Notification` async timing unconfirmed | — (empirical) | `CursorSignalSource` | 2026-07-24 |
+| Cursor interactive `--trust` (workspace-trust seed) — reverses the earlier headless-only omission; withheld from `.review` clones | **min: Cursor CLI ≥ 2026.07.20** (changelog: interactive); verified `agent 2026.07.23` (`--help` drops "headless mode only") | `CursorLaunchArgs.trustSuffix` | 2026-07-28 — emitted on every non-`.review` path (Crow never auto-trusts review clones, mirroring the Codex `!= .review` guard; intended fallback is the folder-trust dialog, dialog-under-`--force` unverified). Pre-2026.07.20 CLI out of support; probed 2026.07.23 that the parser ignores a mode-gated flag (`--output-format json --version` exits 0), so older builds no-op `--trust` rather than reject. Re-probe if `--help` ever restores the headless-only qualifier |
 | OpenCode `session.idle` "done" semantics unconfirmed for TUI | — (CROW-545) | `OpenCodeHookConfigWriter` | 2026-07-24 |
 | Antigravity flags (`agy` hooks events, `-p` non-TTY stdout, `-c`/`--conversation` resume) | `agy` **v1.1.7 (2026-07-26)** | `AntigravityAgent` / `AntigravityHookConfigWriter` | 2026-07-26 — re-probe on upgrade |
 | Antigravity structured-stdout (would promote toward first-class parity) | upstream FRs **#119/#597** (`--output-format stream-json`), **#31** (ACP) | `AntigravitySignalSource` | 2026-07-26 — hooks are the only transport until either lands |

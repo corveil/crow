@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import CrowCursor
 @testable import CrowCore
@@ -29,5 +30,28 @@ struct CursorLauncherTests {
     @Test func jiraPromptWithoutKeyStillMentionsMCP() async {
         let prompt = await jiraPrompt("https://x.atlassian.net/unparseable")
         #expect(prompt.contains("`jira` MCP server") || prompt.contains("jira_get_issue"))
+    }
+
+    @Test func launchCommandCarriesTrustSeedNotAutoPermission() async throws {
+        // #890: the handoff one-shot is the only seed site that applies
+        // `CursorLaunchArgs.trustSuffix` directly (not via `launchSuffix`), so
+        // it needs its own assertion — the shared-helper tests can't guard it.
+        // With `seedTrust: true` it carries the `--trust` workspace-trust seed
+        // but deliberately omits the auto-permission flags (trust is orthogonal
+        // to approval).
+        let cmd = try await CursorLauncher().launchCommand(
+            sessionID: UUID(), worktreePath: "/w", prompt: "p", seedTrust: true)
+        #expect(cmd.contains("'agent' --trust \"$(cat "))  // seed, before the prompt
+        #expect(cmd.contains("--force") == false)          // no auto-permission
+    }
+
+    @Test func launchCommandWithholdsTrustSeedForReviewClone() async throws {
+        // CROW-890 review (Red 1): `seedTrust: false` (the `.review` handoff
+        // case) drops `--trust` — the binary is followed directly by the prompt,
+        // so an attacker-controlled review clone keeps the folder-trust gate.
+        let cmd = try await CursorLauncher().launchCommand(
+            sessionID: UUID(), worktreePath: "/w", prompt: "p", seedTrust: false)
+        #expect(cmd.contains("--trust") == false)
+        #expect(cmd.contains("'agent' \"$(cat "))
     }
 }

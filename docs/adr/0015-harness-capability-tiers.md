@@ -23,6 +23,37 @@ deliberate, documented gaps (full grid in the
 > [capability matrix](../agent-harness-matrix.md) column and are governed by the
 > Tier-2 rationale below.
 
+> **Amendment (2026-07-28, #890):** Cursor's `--trust` — omitted by the original
+> gap audit as headless-only (§3a) under the "honest gap over faked capability"
+> principle in **Alternatives considered** below — **went interactive in Cursor
+> CLI 2026.07.20** ([changelog](https://cursor.com/docs/cli/changelog)), confirmed
+> against `agent 2026.07.23` (its `--help` lists `--trust` as a general flag with
+> no headless-only qualifier and no `--print` gating). So it is now wired as a
+> bounded, per-launch **workspace-trust seed** (`CursorLaunchArgs.trustSuffix`,
+> the analogue of `ClaudeTrustSeeder`), applied on auto-launch, the Manager, and
+> the handoff one-shot — closing the "fresh worktree may prompt" residual. This
+> does **not** relax the honesty principle: the flag is real and verified, so
+> emitting it is honest rather than a papered-over gap, and it stays bounded to
+> workspace trust — **not** `--yolo`/full-bypass, with auto-permission still
+> supplied separately by `--force --approve-mcps`. "Bounded" also means *scoped*:
+> workspace trust is the gate that governs whether repo-supplied agent config
+> (`.cursor/rules`, MCP entries, repo instructions) is honored, so the seed is
+> **withheld from `.review` sessions** — their working tree is an
+> attacker-controlled `gh` clone at the PR author's head. This mirrors the
+> `session.kind != .review` guard already on `CodexTrustSeeder` and is a
+> deliberate **divergence from `ClaudeTrustSeeder`**, which is ungated on kind
+> (`SessionService.launchAgent`): Cursor follows the Codex precedent, so review
+> clones are not auto-trusted by Crow — the intent is they fall back to Cursor's
+> folder-trust dialog rather than launching pre-trusted, though whether `--force`
+> (review's default auto-permission) still surfaces that dialog is unverified;
+> withholding `--trust` is never worse than emitting it (CROW-890 review, Red 1).
+> Requires **Cursor CLI ≥
+> 2026.07.20**; the seed is emitted on every non-`.review` path, so an older
+> binary is out of support. Probed 2026.07.23 that the arg parser silently
+> ignores a mode-gated flag used outside its mode (`agent --output-format json
+> --version` exits 0, no error), so a pre-floor build recognizing `--trust`
+> would no-op it and degrade to the old prompt rather than reject the launch.
+
 Until now, the *why* behind each gap lived only in scattered code comments —
 several of them **pinned to a specific upstream version** ("sync-only as of
 v0.139.0"). That makes the reasons easy to lose and, worse, easy to leave stale:

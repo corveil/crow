@@ -84,6 +84,20 @@ public protocol CodingAgent: Sendable {
         prompt: String
     ) async throws -> String
 
+    /// Kind-aware variant of `launchCommand`. Agents whose launch depends on the
+    /// session kind override this — e.g. Cursor withholds its workspace-trust
+    /// seed (`--trust`) from attacker-controlled `.review` handoff clones,
+    /// mirroring the `session.kind != .review` guard on `CodexTrustSeeder`. The
+    /// protocol-extension default ignores `sessionKind` and delegates to the
+    /// three-argument `launchCommand`, so agents with no kind-dependent launch
+    /// (Claude, Codex, OpenCode, Antigravity) need not implement it.
+    func launchCommand(
+        sessionID: UUID,
+        worktreePath: String,
+        prompt: String,
+        sessionKind: SessionKind
+    ) async throws -> String
+
     /// Build the shell command that the Manager tab uses to launch this
     /// agent in the devRoot. Unlike `autoLaunchCommand`, this is the
     /// terminal's pre-populated `command` string — it runs before the
@@ -115,6 +129,21 @@ public extension CodingAgent {
     /// declare an empty array. Agents with known install locations should
     /// override this.
     var fallbackCandidates: [String] { [] }
+
+    /// Default kind-aware launch: ignore `sessionKind` and delegate to the
+    /// three-argument `launchCommand`. Overridden only by agents whose launch
+    /// varies by kind (today just Cursor's trust seed). A protocol *requirement*
+    /// with an extension default, so a call on `any CodingAgent` still
+    /// dynamically dispatches to an overriding conformer.
+    func launchCommand(
+        sessionID: UUID,
+        worktreePath: String,
+        prompt: String,
+        sessionKind: SessionKind
+    ) async throws -> String {
+        try await launchCommand(
+            sessionID: sessionID, worktreePath: worktreePath, prompt: prompt)
+    }
 
     /// Default binary discovery: explicit `BinaryOverrides` → PATH walk
     /// (using the agent's `launchCommandToken` as the binary name) →

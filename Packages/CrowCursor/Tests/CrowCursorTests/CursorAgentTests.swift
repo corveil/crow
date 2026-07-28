@@ -25,10 +25,12 @@ struct CursorAgentTests {
             autoPermissionMode: false,
             telemetryPort: nil
         )
-        // Work sessions launch a bare `agent` — prefer the absolute binary
-        // path when `findBinary()` resolves, otherwise fall back to the bare
-        // token. Either way the tail is `agent\n` (no prompt, no flags).
-        #expect(cmd?.hasSuffix("agent'\n") == true)  // binary is shell-quoted
+        // Work sessions launch `agent` with the unconditional `--trust`
+        // workspace-trust seed and no auto-permission flags (autoPermissionMode
+        // off) — prefer the absolute binary path when `findBinary()` resolves,
+        // otherwise the bare token; either way the tail is `agent' --trust\n`
+        // (no prompt, no --force).
+        #expect(cmd?.hasSuffix("agent' --trust\n") == true)  // binary is shell-quoted
         #expect(cmd?.contains(".crow-job-prompt.md") == false)
     }
 
@@ -44,6 +46,7 @@ struct CursorAgentTests {
             telemetryPort: nil
         )
         #expect(cmd?.hasSuffix(" --force --approve-mcps\n") == true)
+        #expect(cmd?.contains("--trust") == true)  // trust seed always present
         #expect(cmd?.contains(".crow-job-prompt.md") == false)
     }
 
@@ -59,7 +62,7 @@ struct CursorAgentTests {
             autoPermissionMode: false,
             telemetryPort: 4318
         )
-        #expect(cmd?.hasSuffix("agent'\n") == true)  // binary is shell-quoted
+        #expect(cmd?.hasSuffix("agent' --trust\n") == true)  // binary is shell-quoted
         // No OTEL env-var prefix and no review/job prompt file should be
         // referenced for a plain work session.
         #expect(cmd?.contains("OTEL_") == false)
@@ -84,6 +87,10 @@ struct CursorAgentTests {
         #expect(cmd?.contains(".crow-review-prompt.md") == true)
         #expect(cmd?.contains(".crow-job-prompt.md") == false)
         #expect(cmd?.hasSuffix("\n") == true)
+        // CROW-890 review (Red 1): a `.review` clone is attacker-controlled, so
+        // it must NOT be auto-trusted — the `--trust` seed is withheld, leaving
+        // Cursor's folder-trust dialog as the human gate.
+        #expect(cmd?.contains("--trust") == false)
     }
 
     @Test func autoLaunchCommandReviewSessionSubsequentLaunch() {
@@ -102,6 +109,62 @@ struct CursorAgentTests {
         #expect(cmd != nil)
         #expect(cmd?.contains(".crow-review-prompt.md") == false)
         #expect(cmd?.hasSuffix("--continue\n") == true)
+        // Resume of a `.review` session stays untrusted too (Red 1).
+        #expect(cmd?.contains("--trust") == false)
+    }
+
+    @Test func autoLaunchCommandReviewOmitsTrustSeedEvenWithAutoPermission() {
+        // CROW-890 review, Red 1 — the exact shipped-default exploit config
+        // (`reviewAutoPermissionMode == true`). A `.review` clone is
+        // attacker-controlled, so it must NEVER be auto-trusted even with review
+        // auto-permission on. Auto-permission (`--force --approve-mcps`) is
+        // unchanged; only the `--trust` seed is withheld, leaving Cursor's
+        // folder-trust dialog as the human gate — mirrors the Codex
+        // `session.kind != .review` guard.
+        let session = Session(name: "review", kind: .review, agentKind: .cursor)
+        let cmd = agent.autoLaunchCommand(
+            session: session, worktreePath: "/tmp/wt",
+            remoteControlEnabled: false, autoPermissionMode: true, telemetryPort: nil)
+        #expect(cmd?.contains("--force --approve-mcps") == true)
+        #expect(cmd?.contains("--trust") == false)
+    }
+
+    @Test func launchCommandHandoffWithholdsTrustForReview() async throws {
+        // The kind-aware handoff launch (`SessionService.handoffAgent` passes the
+        // live `session.kind`): a `.review` handoff to Cursor omits the trust
+        // seed (attacker-controlled clone), a `.work` handoff keeps it (Red 1).
+        let review = try await agent.launchCommand(
+            sessionID: UUID(), worktreePath: "/w", prompt: "p", sessionKind: .review)
+        #expect(review.contains("--trust") == false)
+        let work = try await agent.launchCommand(
+            sessionID: UUID(), worktreePath: "/w", prompt: "p", sessionKind: .work)
+        #expect(work.contains("--trust") == true)
+    }
+
+    @Test func existentialDispatchReachesCursorOverride() async throws {
+        // CROW-890 review, Yellow 1: `SessionService.handoffAgent` holds the
+        // agent as `any CodingAgent` and calls the `sessionKind:` overload
+        // through the existential. Pin that dynamic dispatch reaches CursorAgent's
+        // override — if the protocol *requirement* were dropped (leaving only the
+        // extension default), a `.review` handoff would silently start emitting
+        // `--trust` again with an otherwise-green suite (verified counterfactual).
+        let erased: any CodingAgent = CursorAgent()
+        let review = try await erased.launchCommand(
+            sessionID: UUID(), worktreePath: "/w", prompt: "p", sessionKind: .review)
+        #expect(review.contains("--trust") == false)
+        let work = try await erased.launchCommand(
+            sessionID: UUID(), worktreePath: "/w", prompt: "p", sessionKind: .work)
+        #expect(work.contains("--trust") == true)
+    }
+
+    @Test func launchCommandThreeArgFailsClosed() async throws {
+        // CROW-890 review, Yellow 2: the kindless three-argument requirement
+        // (no production caller) must NEVER seed trust — fail closed, so a future
+        // caller of the bare form can't reopen the review-clone hole. The
+        // kind-aware overload above is the only seeding path.
+        let cmd = try await agent.launchCommand(
+            sessionID: UUID(), worktreePath: "/w", prompt: "p")
+        #expect(cmd.contains("--trust") == false)
     }
 
     @Test func autoLaunchCommandManagerSessionUnsupported() {
@@ -156,10 +219,10 @@ struct CursorAgentTests {
     }
 
     @Test func autoLaunchCommandJobAutoPermissionBounded() {
-        // With auto-permission on, a first job launch carries the auto flags
-        // (approval off, no sandbox — parity with Claude auto) and NOT
-        // --yolo/--auto-review/--trust (#829 review). Positional prompt still
-        // fed, flags precede it.
+        // With auto-permission on, a first job launch carries the `--trust`
+        // seed + the auto flags (approval off, no sandbox — parity with Claude
+        // auto + trust seed) and NOT --yolo/--auto-review (#829 review, CROW-890).
+        // Positional prompt still fed, flags precede it.
         let session = Session(name: "job", kind: .job, agentKind: .cursor)
         let cmd = agent.autoLaunchCommand(
             session: session,
@@ -173,7 +236,7 @@ struct CursorAgentTests {
         #expect(cmd?.contains("--sandbox") == false)
         #expect(cmd?.contains("--yolo") == false)
         #expect(cmd?.contains("--auto-review") == false)
-        #expect(cmd?.contains("--trust") == false)
+        #expect(cmd?.contains("--trust") == true)  // workspace-trust seed
     }
 
     @Test func autoLaunchCommandJobResumeCarriesAutoPermission() {
@@ -195,18 +258,19 @@ struct CursorAgentTests {
     @Test func managerLaunchCommandAppliesAutoPermission() {
         // Manager honors its auto-permission toggle (parity with Claude's
         // --permission-mode auto) and returns no trailing newline (backend
-        // appends Enter).
+        // appends Enter). The `--trust` seed is unconditional (parity with
+        // Claude seeding the Manager cwd, CROW-890).
         let plain = agent.managerLaunchCommand(
             sessionName: "Manager", remoteControlEnabled: false,
             autoPermissionMode: false, telemetryPort: nil)
-        #expect(plain.hasSuffix("agent'"))  // binary is shell-quoted
+        #expect(plain.hasSuffix("agent' --trust"))  // trust seed, no auto-permission
         #expect(plain.contains("--force") == false)
 
         let auto = agent.managerLaunchCommand(
             sessionName: "Manager", remoteControlEnabled: false,
             autoPermissionMode: true, telemetryPort: nil)
         #expect(auto.contains("--force --approve-mcps"))
-        #expect(auto.contains("--trust") == false)
+        #expect(auto.contains("--trust") == true)
         #expect(auto.hasSuffix("\n") == false)
     }
 
