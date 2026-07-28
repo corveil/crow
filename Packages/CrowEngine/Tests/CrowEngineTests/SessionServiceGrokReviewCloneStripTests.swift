@@ -162,4 +162,49 @@ struct SessionServiceGrokReviewCloneStripTests {
                 agentKind: k, sessionKind: .review))
         }
     }
+
+    // MARK: - Unified launch-prep gate (#861 review r17, Yellow 1 / Green 1)
+
+    /// `prepareWorktreeForAgentLaunch` is the ONE gate every launch path (incl. the
+    /// `send` RPC) routes through, so a new path can't open Grok in a review clone
+    /// without stripping. It composes the strip gate + the trust seed. Verified
+    /// here at the strip layer with two cases that both skip the seed — a Grok
+    /// `.review` (seed gated out by `.review`) and a Cursor `.review` (Cursor has no
+    /// trust store) — so the assertion touches ZERO global trust state.
+    @Test func prepareStripsWhenGateFires() {
+        let clone = Self.makeTempDir(name: "prep-grok-review")
+        defer { try? FileManager.default.removeItem(atPath: clone) }
+        let grokDir = (clone as NSString).appendingPathComponent(".grok")
+        try? FileManager.default.createDirectory(
+            atPath: grokDir, withIntermediateDirectories: true)
+        try? "{}".write(
+            toFile: (grokDir as NSString).appendingPathComponent("hooks.json"),
+            atomically: true, encoding: .utf8)
+
+        // Grok + .review → strip fires; seed is skipped (shouldSeedFolderTrust is
+        // false for `.review`), so no global trust file is written by this call.
+        SessionService.prepareWorktreeForAgentLaunch(
+            agentKind: .grok, sessionKind: .review, worktreePath: clone)
+
+        #expect(!FileManager.default.fileExists(atPath: grokDir))
+    }
+
+    /// The other half of the same gate: a launch whose agent/kind doesn't match the
+    /// strip gate leaves a committed `.grok/` in place — the helper is a no-op strip
+    /// there (and Cursor seeds nothing), so it never collaterally deletes config on
+    /// a path that shouldn't. Uses Cursor to keep the call seed-free.
+    @Test func prepareLeavesCloneWhenGateSkips() {
+        let clone = Self.makeTempDir(name: "prep-cursor-review")
+        defer { try? FileManager.default.removeItem(atPath: clone) }
+        let grokDir = (clone as NSString).appendingPathComponent(".grok")
+        try? FileManager.default.createDirectory(
+            atPath: grokDir, withIntermediateDirectories: true)
+
+        // Cursor + .review → strip gate false (not Grok), seed gate false (no trust
+        // store): a pure no-op that leaves the tree untouched.
+        SessionService.prepareWorktreeForAgentLaunch(
+            agentKind: .cursor, sessionKind: .review, worktreePath: clone)
+
+        #expect(FileManager.default.fileExists(atPath: grokDir))
+    }
 }

@@ -422,10 +422,17 @@ the two Manager gateway writes noted below):
   writes the env block into `settings.local.json` (Claude-gated at `launchAgent`
   and `handoffAgent`), and `ClaudeLaunchArgs.gatewayEnvPrefix` adds the
   launch-line `export …` prefix (at `launchAgent`, plus `managerCommand`'s
-  no-registered-agent fallback). The **two** Manager
-  gateway writes — `createManagerTerminal` and the hydrate path's
-  `writeManagerGatewayEnv` — are **unconditional** (harmless: a non-Claude agent
-  ignores `settings.local.json`). Which workspace's gateway applies is resolved
+  no-registered-agent fallback). All four `settings.local.json` writes — worker
+  `launchAgent` / `handoffAgent` and the **two** Manager writes
+  (`createManagerTerminal` + the hydrate path's `writeManagerGatewayEnv`) — are
+  **Claude-gated**: a Claude target gets the resolved env, and every *non-Claude*
+  target gets `resolved: nil`, which actively **clears** the block. This is not
+  cosmetic — the `ANTHROPIC_CUSTOM_HEADERS` can carry an `Authorization: Bearer`,
+  and Grok/Codex **compat-load `.claude/settings.local.json`** (the very reason
+  the review-clone strip deletes it), so an unconditional write would leak a
+  corporate gateway credential into a different vendor's process env on a
+  Claude→Grok handoff or a Grok Manager (#861 review r17, Yellow 2). Which
+  workspace's gateway applies is resolved
   by worktree path, falling back to the PR's `owner/repo` for review clones,
   which live outside any workspace folder (CROW-891) — see
   [configuration.md](configuration.md#which-gateway-applies).

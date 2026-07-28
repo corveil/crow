@@ -244,7 +244,7 @@ public final class SessionService {
                         ClaudeTrustSeeder.seedTrust(projectPath: managerCwd)
                     }
                 }
-                writeManagerGatewayEnv()
+                writeManagerGatewayEnv(managerKind: reconciled.agentKind)
                 // Remote-control bookkeeping reflects what the agent actually
                 // emitted — `supportsRemoteControl` is per-agent capability,
                 // but per-launch the Cursor Manager intentionally omits `--rc`
@@ -801,34 +801,19 @@ public final class SessionService {
         if let session = appState.sessions.first(where: { $0.id == sessionID }),
            let agent = AgentRegistry.shared.agent(for: session.agentKind) {
             let worktreePath = appState.primaryWorktree(for: sessionID)?.worktreePath
-            // Pre-seed folder trust for THIS path too (#861 review r11): a
-            // brand-new managed terminal from `crow new-terminal --command` — how
-            // `/crow-workspace` creates `.work` sessions — dispatches here, not
-            // through `launchAgent`, so without this a Grok `.work` worktree gets
-            // its `.grok/hooks/crow.json` written (below, via prepareAgentLaunchText)
-            // but is never trusted, and Grok silently skips those hooks → the whole
-            // state bridge is inert. Shared helper, same `.review`-skip gate as the
-            // other three seed sites.
+            // Strip a Grok `.review` clone's committed config, then pre-seed folder
+            // trust — both via the one shared gate (#861 review r11/r14, unified r17).
+            // A brand-new managed terminal from `crow new-terminal --command` — how
+            // `/crow-workspace` creates `.work` sessions, and how a `.review` clone can
+            // be (re)opened in Grok — dispatches here, not through `launchAgent`. Must
+            // precede `prepareAgentLaunchText` below, which (re)writes Crow's own clean
+            // `.grok/hooks/crow.json`. The strip is a no-op unless this is a Grok
+            // `.review` clone; the seed a no-op for `.review` or a trustless agent.
             if let worktreePath {
-                seedTrustIfNeeded(
+                Self.prepareWorktreeForAgentLaunch(
                     agentKind: session.agentKind,
                     sessionKind: session.kind,
                     worktreePath: worktreePath)
-            }
-            // Neutralize a Grok `.review` clone's committed config layers FIRST —
-            // this is the FOURTH path that can open Grok in a review clone (#861
-            // review r14), besides `prepareReviewClone`, `launchAgent`, and the
-            // handoff arm. `crow new-terminal --session <review> --command grok
-            // --managed` dispatches here, and the clone may already be Grok-trusted
-            // via a Manager-seeded `{devRoot}` trust cascade — so a committed
-            // `.grok/hooks/*.json` would fire even though this path seeds no new
-            // trust. Must precede `prepareAgentLaunchText` below, which (re)writes
-            // Crow's own clean `.grok/hooks/crow.json`. Same shared gate as the
-            // other three strips so they can't drift.
-            if let worktreePath,
-               Self.shouldStripGrokReviewClone(
-                   agentKind: session.agentKind, sessionKind: session.kind) {
-                Self.stripGrokConfigFromReviewClone(clonePath: worktreePath)
             }
             text = AgentLaunch.prepareAgentLaunchText(
                 command: command,
@@ -864,14 +849,44 @@ public final class SessionService {
         }
     }
 
+    /// Everything that must be applied to a worktree **before an agent process
+    /// opens it**, as ONE gate so no launch path can drift (#861 review r17,
+    /// Yellow 1 / Green 1). Two independent, each self-gated steps:
+    ///
+    ///  1. **Strip** a Grok `.review` clone's committed config (`.grok/`,
+    ///     `.cursor/`, `.claude/settings{,.local}.json`, repo-root `.mcp.json`)
+    ///     BEFORE any hook rewrite, so a hostile hook restored by the review
+    ///     skill's `gh pr checkout` can't fire once the clone is (cascade-)trusted.
+    ///     Gated to Grok + `.review` via `shouldStripGrokReviewClone`.
+    ///  2. **Seed** the agent's folder trust (Claude/Codex/Grok, never `.review`),
+    ///     gated via `shouldSeedFolderTrust`.
+    ///
+    /// Both are no-ops for the agents/kinds that don't need them, so this is safe
+    /// to call from every launch path unconditionally. **The call sites of this
+    /// symbol ARE the answer to "how many Grok launch paths open a review clone"**
+    /// — `rg prepareWorktreeForAgentLaunch`, never a hand-maintained count (which
+    /// went stale four rounds running). Today: `pasteDeferredLaunch`,
+    /// `launchAgent`, `handoffAgent`, `createManagerTerminal` (seed only — Manager
+    /// is never `.review`), and the `send` RPC (`EngineRouter`). `prepareReviewClone`
+    /// strips at *clone-creation* time and deliberately does NOT go through here:
+    /// it must strip WITHOUT seeding, since the clone is not yet a launch target.
+    nonisolated static func prepareWorktreeForAgentLaunch(
+        agentKind: AgentKind, sessionKind: SessionKind, worktreePath: String) {
+        if shouldStripGrokReviewClone(agentKind: agentKind, sessionKind: sessionKind) {
+            stripGrokConfigFromReviewClone(clonePath: worktreePath)
+        }
+        seedTrustIfNeeded(
+            agentKind: agentKind, sessionKind: sessionKind, worktreePath: worktreePath)
+    }
+
     /// Pre-seed the agent's folder trust for `worktreePath` so an unattended launch
     /// isn't blocked (Claude/Codex) or silently hook-skipped (Grok) on the "trust
-    /// this folder?" gate. Shared by every launch path that opens a Crow-created
-    /// worktree/devRoot — `launchAgent`, `handoffAgent`, `createManagerTerminal`,
-    /// and the `pasteDeferredLaunch` new-terminal path — so a fifth path can't
-    /// reopen the "hooks written but folder untrusted" gap (#861 review r11).
+    /// this folder?" gate. `nonisolated static` so `prepareWorktreeForAgentLaunch`
+    /// (and, through it, the `send` RPC in `EngineRouter`) can reach it off the
+    /// MainActor. Callers route through `prepareWorktreeForAgentLaunch`, not here
+    /// directly, so the strip can't be forgotten alongside the seed.
     /// Gating lives in `shouldSeedFolderTrust`; a real seed failure is audible.
-    func seedTrustIfNeeded(
+    nonisolated static func seedTrustIfNeeded(
         agentKind: AgentKind, sessionKind: SessionKind, worktreePath: String) {
         guard Self.shouldSeedFolderTrust(agentKind: agentKind, sessionKind: sessionKind) else { return }
         switch agentKind {
@@ -1007,23 +1022,19 @@ public final class SessionService {
               let worktree = appState.primaryWorktree(for: sessionID),
               let agent = AgentRegistry.shared.agent(for: session.agentKind) else { return }
 
-        // Neutralize a Grok `.review` clone's committed config layers FIRST — this
-        // is the THIRD Grok launch path into a review clone (#861 review r11, Red),
-        // besides creation-time `prepareReviewClone` and `handoffAgent`. `launchAgent`
-        // fires on every warm crowd restart (`hydrateState` re-arms managed review
-        // terminals) and via `crow launch-agent`, so the creation-time strip is not
-        // enough: the strip is a working-tree deletion of *tracked* files, and any
-        // `git restore`/`gh pr checkout` (Step 1 of the review skill) an unattended
-        // reviewer runs restores the attacker's `.grok/hooks/*.json` from the PR
-        // head. Grok's trust cascades from a Manager-seeded `{devRoot}` (and is
-        // inert on dev builds), so without a re-strip here that restored hook
-        // executes on the next `grok -c`. Must run before `writeHookConfig` below,
-        // which recreates Crow's own clean `.grok/hooks/crow.json`. Shares the
-        // gate with the other two paths so it can't drift.
-        if Self.shouldStripGrokReviewClone(
-            agentKind: agent.kind, sessionKind: session.kind) {
-            Self.stripGrokConfigFromReviewClone(clonePath: worktree.worktreePath)
-        }
+        // Strip a Grok `.review` clone's committed config, then pre-seed folder
+        // trust — one shared gate so a launch path can't do one without the other
+        // (#861 review r11/r17). Strip MUST precede `writeHookConfig` below (which
+        // recreates Crow's clean `.grok/hooks/crow.json`): `launchAgent` fires on
+        // every warm crowd restart (`hydrateState` re-arms managed review terminals)
+        // and via `crow launch-agent`, and the review skill's `gh pr checkout`
+        // restores the attacker's `.grok/hooks/*.json` from the PR head, so the
+        // creation-time strip alone is not enough. The strip is a no-op unless this
+        // is a Grok `.review` clone; the seed a no-op for `.review` / a trustless
+        // agent (never `--dangerously-bypass`; Claude CROW-600, Codex #830, Grok #859).
+        Self.prepareWorktreeForAgentLaunch(
+            agentKind: agent.kind, sessionKind: session.kind,
+            worktreePath: worktree.worktreePath)
 
         // Write/refresh hook config (Claude path). Codex's writer is a
         // no-op — its global config was installed once at app launch.
@@ -1039,16 +1050,6 @@ public final class SessionService {
             }
         }
 
-        // Pre-trust the worktree so the agent's "do you trust this folder?" gate
-        // never blocks an unattended auto-launch (Claude CROW-600; Codex #830;
-        // Grok #859 — persist trust for this worktree, never `--dangerously-bypass`).
-        // Trust doesn't inherit from parent dirs, so every fresh worktree would
-        // otherwise prompt (or, for Grok, silently skip its project hooks). Never a
-        // `.review` clone (attacker-controlled `gh repo clone` head) — that gate,
-        // and the per-agent reasoning, live in `shouldSeedFolderTrust`.
-        seedTrustIfNeeded(
-            agentKind: agent.kind, sessionKind: session.kind,
-            worktreePath: worktree.worktreePath)
 
         // Resolve and apply the workspace's AI gateway for Claude sessions
         // (CROW-402). Write the resolved env block into the worktree's
@@ -1063,6 +1064,17 @@ public final class SessionService {
             ClaudeHookConfigWriter.writeGatewayEnv(
                 dirPath: worktree.worktreePath, resolved: gatewayResolved)
             gatewayPrefix = ClaudeLaunchArgs.gatewayEnvPrefix(gatewayResolved)
+        } else {
+            // #861 review r17 (Yellow 2): the gateway `env` block carries the
+            // workspace's `ANTHROPIC_*` / `Authorization: Bearer` header, and
+            // Codex/Grok compat-load `.claude/settings.local.json` (that's exactly
+            // why the review-clone strip deletes it). So on a *non-Claude* launch —
+            // e.g. a `.work` session first run under Claude, then handed off to Grok,
+            // relaunched here — actively CLEAR the env (`resolved: nil`) so a prior
+            // Claude launch's bearer token can't enter a different vendor's process.
+            // No-op when there's nothing to clear.
+            ClaudeHookConfigWriter.writeGatewayEnv(
+                dirPath: worktree.worktreePath, resolved: nil)
         }
         // Cursor worker launching → ensure its global Jira MCP is synced.
         if agent.kind == .cursor {
@@ -1345,18 +1357,31 @@ public final class SessionService {
 
         // Agent-specific prep before the new process starts. Idempotent file
         // writes — safe to run before teardown. Handoff dispatches via
-        // `pendingLaunchCommands`, so neither `launchAgent` nor
-        // `pasteDeferredLaunch` seeds trust for it — seed here via the shared
-        // helper (same `.review`-skip gate as the other three sites).
-        seedTrustIfNeeded(
+        // `pendingLaunchCommands`, so neither `launchAgent` nor `pasteDeferredLaunch`
+        // runs for it — do the shared strip+seed here. For a Grok `.review` handoff
+        // this strips every project config layer Grok discovers (`.grok/`,
+        // `.claude/settings{,.local}.json`, `.cursor/`, repo-root `.mcp.json`) that
+        // `prepareReviewClone` only stripped if Grok was the *creation-time* review
+        // agent — a handoff flips a review created under another agent onto a clone
+        // never stripped for Grok. Seed is a no-op for `.review` / trustless agents.
+        Self.prepareWorktreeForAgentLaunch(
             agentKind: target.kind, sessionKind: session.kind,
             worktreePath: worktree.worktreePath)
         if target.kind == .claudeCode {
-            // Claude also inherits the workspace AI gateway env on handoff.
-            let gatewayResolved = workspaceGatewayResolved(for: sessionID)
+            // Claude inherits the workspace AI gateway env on handoff.
             ClaudeHookConfigWriter.writeGatewayEnv(
-                dirPath: worktree.worktreePath, resolved: gatewayResolved)
-        } else if target.kind == .grok, session.kind != .review {
+                dirPath: worktree.worktreePath,
+                resolved: workspaceGatewayResolved(for: sessionID))
+        } else {
+            // #861 review r17 (Yellow 2): a non-Claude target compat-loads
+            // `.claude/settings.local.json`, so clear any `Authorization: Bearer`
+            // env a prior Claude launch wrote — otherwise a corporate gateway
+            // credential goes live inside a different vendor's binary. (`.review`
+            // already had the whole file deleted by the strip above.)
+            ClaudeHookConfigWriter.writeGatewayEnv(
+                dirPath: worktree.worktreePath, resolved: nil)
+        }
+        if target.kind == .grok, session.kind != .review {
             // A `.work`/`.job` handoff from Claude/Cursor leaves that prior
             // agent's Crow-managed hook config on disk (same session UUID, same
             // event names Grok registers), which Grok compat-loads alongside its
@@ -1385,22 +1410,6 @@ public final class SessionService {
                 Self.stripCursorConfigFromReviewClone(clonePath: worktree.worktreePath)
             }
             syncCursorMCPBridge()
-        }
-        // Handing off to Grok on a `.review` → neutralize every project config
-        // layer Grok discovers FIRST (#861 review). `prepareReviewClone` strips
-        // them only when Grok is the *creation-time* review agent; a handoff
-        // flips a review created under Claude/Codex/Cursor/OpenCode onto a clone
-        // that was never stripped for Grok. Grok merges project config from
-        // `.grok/`, `.claude/settings*.json`, `.cursor/`, and repo-root
-        // `.mcp.json` (compat on by default), so `stripGrokConfigFromReviewClone`
-        // removes the full set before launch — without it the hostile PR head's
-        // committed hooks/MCP stay on disk (and fire on a local/dev Grok build
-        // where folder-trust is inert, or a release build whose reviews workspace
-        // sits under a trusted parent, since trust cascades). Mirrors the Cursor
-        // handoff arm above.
-        if Self.shouldStripGrokReviewClone(
-            agentKind: target.kind, sessionKind: session.kind) {
-            Self.stripGrokConfigFromReviewClone(clonePath: worktree.worktreePath)
         }
 
         // Persist the new agent only after launch prep succeeds so register /
@@ -1605,10 +1614,16 @@ public final class SessionService {
 
     /// Write the Manager's gateway `env` block to `{devRoot}/.claude/settings.local.json`
     /// (or clear it when unset) so manual `claude` re-runs in the Manager terminal
-    /// inherit the same routing as the initial launch (CROW-402).
-    private func writeManagerGatewayEnv() {
+    /// inherit the same routing as the initial launch (CROW-402). `managerKind` gates
+    /// the bearer: a non-Claude Manager (Grok/Codex) compat-loads this file, so it
+    /// gets `resolved: nil` — clearing any prior Claude Manager's token rather than
+    /// re-applying it into another vendor's env on every hydrate (#861 review r17,
+    /// Yellow 2). Mirrors the `createManagerTerminal` write site.
+    private func writeManagerGatewayEnv(managerKind: AgentKind) {
         guard let devRoot = ConfigStore.loadDevRoot() else { return }
-        ClaudeHookConfigWriter.writeGatewayEnv(dirPath: devRoot, resolved: managerGatewayResolved())
+        ClaudeHookConfigWriter.writeGatewayEnv(
+            dirPath: devRoot,
+            resolved: managerKind == .claudeCode ? managerGatewayResolved() : nil)
     }
 
     /// Write the Manager's Claude Code hook config into `dirPath`'s
@@ -1855,17 +1870,25 @@ public final class SessionService {
         // agent's trust gate. No-ops when already trusted (#830 Codex, #861 Grok).
         // ⚠️ Grok's folder trust cascades to subdirectories, so seeding the devRoot
         // makes every review clone under `{devRoot}` Grok-trusted — the review-clone
-        // strip (`stripGrokConfigFromReviewClone`, run on both launch paths that can
-        // open a `.review` clone in Grok) is therefore the *only* guard between that
-        // cascade and committed-hook RCE; any future Grok launch path into a review
-        // clone MUST strip before it opens (#861 review r8). Manager sessions are
-        // never `.review`, so the shared helper always seeds here.
-        seedTrustIfNeeded(
+        // strip is therefore the *only* guard between that cascade and committed-hook
+        // RCE, so every path that opens Grok in a review clone MUST strip before it
+        // opens. That invariant now lives in ONE place: every launch path routes
+        // through `prepareWorktreeForAgentLaunch` (grep its call sites), so a new
+        // path can't forget the strip (#861 review r8/r17). Manager sessions are
+        // never `.review`, so here the shared helper only seeds (the strip no-ops).
+        Self.prepareWorktreeForAgentLaunch(
             agentKind: session.agentKind, sessionKind: session.kind, worktreePath: cwd)
         // CROW-402: write the Manager gateway env block to {devRoot}/.claude so
         // manual `claude` re-runs in this terminal inherit the same routing. The
-        // Manager's cwd is the devRoot.
-        ClaudeHookConfigWriter.writeGatewayEnv(dirPath: cwd, resolved: managerGatewayResolved())
+        // Manager's cwd is the devRoot. #861 review r17 (Yellow 2): the env can
+        // carry an `Authorization: Bearer`, and a Grok/Codex Manager compat-loads
+        // `.claude/settings.local.json` in a devRoot the seed above just trusted —
+        // so write the bearer only for a Claude Manager, and for any other harness
+        // actively CLEAR it (`resolved: nil`) so a prior Claude Manager's token
+        // can't linger in a devRoot the new harness now trusts.
+        ClaudeHookConfigWriter.writeGatewayEnv(
+            dirPath: cwd,
+            resolved: session.agentKind == .claudeCode ? managerGatewayResolved() : nil)
         let rawTerminal = SessionTerminal(
             sessionID: session.id,
             name: session.name,
@@ -2899,11 +2922,12 @@ public final class SessionService {
     /// - `.mcp.json` (repo root) — a project MCP source independent of
     ///   `.cursor/mcp.json`; a `{mcpServers:{…command}}` there auto-spawns.
     ///
-    /// Idempotent; no-ops for any layer the clone doesn't ship. Shared by all
-    /// three Grok launch paths into a review clone — creation-time
-    /// `prepareReviewClone`, `launchAgent` (restart / `crow launch-agent`), and the
-    /// handoff arm — so the gate can't drift. A real removal failure is audible
-    /// (`CrowLog.error`).
+    /// Idempotent; no-ops for any layer the clone doesn't ship. Two kinds of
+    /// caller: creation-time `prepareReviewClone` (strip only — the clone isn't a
+    /// launch target yet), and every *launch* path via the shared
+    /// `prepareWorktreeForAgentLaunch` gate (grep its call sites) — so no path can
+    /// open Grok in a review clone without stripping first. A real removal failure
+    /// is audible (`CrowLog.error`).
     nonisolated static func stripGrokConfigFromReviewClone(clonePath: String) {
         let base = clonePath as NSString
         removeReviewCloneConfig(
@@ -3138,8 +3162,10 @@ public final class SessionService {
         // on release). `stripGrokConfigFromReviewClone` neutralizes the full set
         // (`.grok/` + `.cursor/` + `.claude/settings{,.local}.json` + `.mcp.json`);
         // `.claude/settings.json` is re-written bundled-safe below at creation, and
-        // left absent on the re-strip paths (`launchAgent`/handoff), which is safe.
-        // Shared across all three Grok launch paths so the call sites can't drift.
+        // left absent on the launch-time re-strip paths, which is safe. This is the
+        // creation-time strip; every launch-time strip runs via the shared
+        // `prepareWorktreeForAgentLaunch` gate (grep its call sites), so the set of
+        // paths can't drift out of sync with a stale count here.
         if reviewAgentKind == .grok {
             Self.stripGrokConfigFromReviewClone(clonePath: clonePath)
         }
