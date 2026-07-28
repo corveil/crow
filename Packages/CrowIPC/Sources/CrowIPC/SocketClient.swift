@@ -9,8 +9,9 @@ import Glibc
 ///
 /// Creates a new connection per request and sends a newline-delimited JSON-RPC
 /// message. `send` then reads the response (30-second read timeout, 1 MB size
-/// limit matching the server's request limit); `post` returns without reading
-/// for fire-and-forget notifications that must not block the caller (#903).
+/// limit matching the server's request limit); `post` returns without reading,
+/// for fire-and-forget notifications that must not block the caller on a reply
+/// (#903).
 public struct SocketClient: Sendable {
     private let socketPath: String
 
@@ -74,11 +75,18 @@ public struct SocketClient: Sendable {
     /// reading (or waiting for) a response.
     ///
     /// Used by hooks (`crow hook-event`), which are notifications the agent must
-    /// not block on. The daemon still processes the request once its serialized
-    /// `@MainActor` frees; because the client never reads a reply, a busy daemon
-    /// (board poll, git op, whole-store write, a burst of hook-events) can no
-    /// longer stall the agent up to its hook timeout waiting for a response it
-    /// wouldn't use anyway (#903).
+    /// not block on the daemon's reply for. The daemon still processes the
+    /// request once its serialized `@MainActor` frees; because the client never
+    /// reads a reply, a busy daemon (board poll, git op, whole-store write, a
+    /// burst of hook-events) can no longer stall the agent waiting for a
+    /// response it wouldn't use anyway (#903).
+    ///
+    /// This bounds the wait to the `write()`, not a full round-trip. For the
+    /// measured `PreToolUse:Bash` payloads that returns immediately, but no send
+    /// timeout is set (only `SO_RCVTIMEO`), so a payload larger than the socket
+    /// send buffer — e.g. a `Write`/`Edit` hook forwarding a whole file body —
+    /// can still block in `write()` until the daemon drains it. The agent's own
+    /// hook timeout bounds that worst case.
     ///
     /// The connection is closed as soon as the request is written. Data already
     /// accepted into a Unix stream socket's buffer is delivered to the peer

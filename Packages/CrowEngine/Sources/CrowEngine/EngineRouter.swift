@@ -1207,6 +1207,10 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
             },
             "hook-event": { @Sendable params in
                 guard let eventName = params["event_name"]?.stringValue else {
+                    // hook-event is fire-and-forget: the client never reads this
+                    // error, so a server-side log is the only channel that keeps a
+                    // dropped event diagnosable (#903).
+                    CrowLog.error("[hook-event] dropped: missing event_name in params")
                     throw RPCError.invalidParams("event_name required")
                 }
                 let payload = params["payload"]?.objectValue ?? [:]
@@ -1275,10 +1279,14 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                     // them.
                     //
                     // Deliberately never throws for an unknown-but-provided id:
-                    // `crow hook-event` surfaces an RPC error as a non-zero
-                    // exit, which Claude Code renders as the very "hook error"
-                    // noise this change exists to remove. Unresolvable ids fall
-                    // through with today's behavior, minus the store write.
+                    // recording the event under the id the hook handed us beats
+                    // dropping it. (Before #903 there was a second reason — a
+                    // thrown RPC error became a non-zero `crow hook-event` exit
+                    // that Claude Code rendered as "hook error" noise — but
+                    // hook-event is fire-and-forget now, so the client never
+                    // reads the reply. Dropping the event is still the worse
+                    // outcome.) Unresolvable ids fall through with today's
+                    // behavior, minus the store write.
                     let liveSessionIDs = Set(capturedAppState.sessions.map(\.id))
                     let sessionID: UUID
                     if let provided = providedSessionID, liveSessionIDs.contains(provided) {
@@ -1288,6 +1296,17 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                     } else if let provided = providedSessionID {
                         sessionID = provided
                     } else {
+                        // No id, and no worktree matched the payload cwd: every
+                        // event for this session is dropped. Since the client no
+                        // longer surfaces this (fire-and-forget, #903), log it —
+                        // the usual cause is a global hook config with no
+                        // --session run from a cwd outside any registered
+                        // worktree (Codex/OpenCode/Antigravity; cf. #897).
+                        CrowLog.error(
+                            "[hook-event] dropped \(eventName): unresolved session "
+                            + "(session_id=\(providedSessionID?.uuidString ?? "none"), "
+                            + "cwd=\(cwd ?? "none"))"
+                        )
                         throw RPCError.invalidParams("session_id required or resolvable from payload cwd")
                     }
                     let sessionIsLive = liveSessionIDs.contains(sessionID)

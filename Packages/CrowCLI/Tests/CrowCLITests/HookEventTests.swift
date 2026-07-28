@@ -65,3 +65,33 @@ import CrowIPC
         "payload": .object([:]),
     ])
 }
+
+/// #903: `forwardHookEvent` must be wired to the fire-and-forget path, not a
+/// blocking round-trip. Against a live daemon whose handler never replies within
+/// the test, `rpc` would hang on the read until the socket timeout; `rpcNotify`
+/// returns as soon as the request is written. Reverting the call site back to
+/// `rpc` fails here — which the absent-socket test above cannot catch, since it
+/// never reaches the read.
+@Test func forwardHookEventDoesNotBlockOnSlowDaemon() throws {
+    let path = NSTemporaryDirectory() + "crow-test-\(UUID().uuidString).sock"
+    let router = CommandRouter(handlers: [
+        "hook-event": { @Sendable _ in
+            try await Task.sleep(nanoseconds: 60_000_000_000) // 60s — never replies in test
+            return [:]
+        },
+    ])
+    let server = SocketServer(socketPath: path, router: router)
+    try server.start()
+    defer { server.stop(); try? FileManager.default.removeItem(atPath: path) }
+    Thread.sleep(forTimeInterval: 0.05) // let the accept loop come up
+
+    setenv("CROW_SOCKET", path, 1)
+    defer { unsetenv("CROW_SOCKET") }
+
+    let start = Date()
+    try forwardHookEvent(params: [
+        "event_name": .string("PreToolUse"),
+        "payload": .object([:]),
+    ])
+    #expect(Date().timeIntervalSince(start) < 5)
+}
