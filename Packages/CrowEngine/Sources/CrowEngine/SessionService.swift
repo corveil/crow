@@ -617,7 +617,7 @@ public final class SessionService {
                 if trackReadiness {
                     // Re-write hook config so the adopted Claude's hooks still
                     // route back to the correct session if the config was lost.
-                    if let crowPath = ClaudeHookConfigWriter.findCrowBinary(devRoot: ConfigStore.loadDevRoot()),
+                    if let crowPath = ClaudeHookConfigWriter.resolveCrowBinary(devRoot: ConfigStore.loadDevRoot()),
                        let worktree = appState.primaryWorktree(for: terminal.sessionID) {
                         do {
                             try ClaudeHookConfigWriter().writeHookConfig(
@@ -787,7 +787,7 @@ public final class SessionService {
                 agent: agent,
                 sessionID: sessionID,
                 worktreePath: appState.primaryWorktree(for: sessionID)?.worktreePath,
-                crowPath: ClaudeHookConfigWriter.findCrowBinary(devRoot: ConfigStore.loadDevRoot()),
+                crowPath: ClaudeHookConfigWriter.resolveCrowBinary(devRoot: ConfigStore.loadDevRoot()),
                 telemetryPort: telemetryPort
             ).text
         }
@@ -905,7 +905,7 @@ public final class SessionService {
 
         // Write/refresh hook config (Claude path). Codex's writer is a
         // no-op — its global config was installed once at app launch.
-        if let crowPath = ClaudeHookConfigWriter.findCrowBinary(devRoot: ConfigStore.loadDevRoot()) {
+        if let crowPath = ClaudeHookConfigWriter.resolveCrowBinary(devRoot: ConfigStore.loadDevRoot()) {
             do {
                 try agent.hookConfigWriter.writeHookConfig(
                     worktreePath: worktree.worktreePath,
@@ -1523,7 +1523,7 @@ public final class SessionService {
             other.hookConfigWriter.removeHookConfig(worktreePath: dirPath)
         }
         guard let agent = AgentRegistry.shared.agent(for: session.agentKind),
-              let crowPath = ClaudeHookConfigWriter.findCrowBinary(devRoot: ConfigStore.loadDevRoot()) else { return }
+              let crowPath = ClaudeHookConfigWriter.resolveCrowBinary(devRoot: ConfigStore.loadDevRoot()) else { return }
         do {
             try agent.hookConfigWriter.writeHookConfig(
                 worktreePath: dirPath,
@@ -1577,29 +1577,102 @@ public final class SessionService {
         return GatewayResolver.resolve(gateway)
     }
 
-    /// Resolve the AI gateway for a non-Manager session from its worktree's
-    /// workspace (CROW-402). The worktree lives at `{devRoot}/{workspace}/…`, so
-    /// the workspace folder name is the first path component under devRoot.
-    /// Returns nil when there's no matching workspace or no (non-empty) gateway.
+    /// Resolve the AI gateway for a non-Manager session (CROW-402, CROW-891).
+    ///
+    /// Two lookups, in order:
+    ///
+    /// 1. **Path** — `.work`/`.job` worktrees live at `{devRoot}/{workspace}/…`,
+    ///    so the first component under devRoot names the workspace. Fast, and the
+    ///    only lookup that can tell apart two workspaces sharing a repo.
+    /// 2. **Repo slug** — a `.review` clone lives at `{devRoot}/crow-reviews/…`,
+    ///    so path math yields the literal `"crow-reviews"` and matches nothing.
+    ///    That silently unset the gateway for *every* review (CROW-891). Fall
+    ///    back to the PR link's `owner/repo` and ask which workspace claims it.
+    ///
+    /// Returns nil when nothing claims the session — deliberate and logged, not
+    /// an oversight: the callers then **unset** `ANTHROPIC_*` so a global
+    /// `~/.zshrc` export (or a sibling workspace's gateway) can't bleed into a
+    /// session Crow has no gateway for. There is no `managerGateway` fallback —
+    /// the Manager's gateway is the Manager's alone.
     private func workspaceGatewayResolved(for sessionID: UUID) -> GatewayResolver.Resolved? {
         guard let devRoot = ConfigStore.loadDevRoot(),
-              let config = ConfigStore.loadConfig(devRoot: devRoot),
-              let worktree = appState.primaryWorktree(for: sessionID),
-              let wsName = Self.workspaceName(forWorktreePath: worktree.worktreePath, devRoot: devRoot),
-              let workspace = config.workspaces.first(where: { $0.name == wsName }),
+              let config = ConfigStore.loadConfig(devRoot: devRoot)
+        else { return nil }
+
+        var matched: WorkspaceInfo?
+
+        // 1. Path fast path. Case-insensitive: APFS is case-preserving but
+        // case-insensitive, so an on-disk folder can differ in case from the
+        // configured workspace name and still be the same directory.
+        //
+        // Reserved dev-root directories are skipped rather than looked up. A
+        // review clone's first path component is `crow-reviews`, so a workspace
+        // that had taken that name would match here and bind *every* review to
+        // itself, shadowing the slug fallback below. `validateName` now rejects
+        // the name, but a config written before that still has to resolve
+        // correctly.
+        if let worktree = appState.primaryWorktree(for: sessionID),
+           let wsName = Self.workspaceName(
+               forWorktreePath: worktree.worktreePath, devRoot: devRoot),
+           !DevRootLayout.isReservedWorkspaceName(wsName) {
+            matched = config.workspaces.first { $0.name.lowercased() == wsName.lowercased() }
+        }
+
+        // 2. Repo-slug fallback — reviews, and any session whose worktree isn't
+        // under a configured workspace folder. Gated on the precondition rather
+        // than `session.kind == .review` because work sessions also carry `.pr`
+        // links once their PR opens, and one whose path lookup failed should
+        // inherit its repo's workspace gateway too.
+        if matched == nil, let slug = Self.repoSlug(fromPRLinks: appState.links(for: sessionID)) {
+            matched = config.workspace(forRepoSlug: slug)
+            if matched == nil {
+                CrowLog.info(
+                    "[SessionService] No workspace claims repo \(slug) (session \(sessionID)); "
+                        + "ANTHROPIC_* will be unset for this session")
+            }
+        }
+
+        guard let workspace = matched,
               let gateway = workspace.gateway, !gateway.isEmpty
         else { return nil }
         return GatewayResolver.resolve(gateway)
     }
 
+    /// First parseable `owner/repo` slug among a session's PR links, or nil.
+    ///
+    /// Uses the same `Session.parseReviewPR` that `createReviewSession` used to
+    /// build the clone directory, so gateway resolution can never disagree with
+    /// what creation decided the repo was. Extracted as a pure function so the
+    /// link-selection rule is unit-testable without standing up the terminal
+    /// machinery (same reasoning as `shouldStripCursorReviewCloneOnHandoff`).
+    ///
+    /// GitLab MR URLs don't fit `parseReviewPR`'s shape and yield a slug that
+    /// claims nothing — which lands on "unset", exactly today's behavior. The
+    /// mis-parse is upstream of here (clone naming uses the same parser).
+    nonisolated static func repoSlug(fromPRLinks links: [SessionLink]) -> String? {
+        for link in links where link.linkType == .pr {
+            if let parsed = Session.parseReviewPR(url: link.url) {
+                return "\(parsed.owner)/\(parsed.repo)"
+            }
+        }
+        return nil
+    }
+
     /// Derive the workspace folder name from a worktree path:
-    /// `{devRoot}/{workspace}/{repo-folder}` → `{workspace}`. Pure path math.
+    /// `{devRoot}/{workspace}/{repo-folder}` → `{workspace}`. Pure path math, so
+    /// `nonisolated` — it touches no instance state and is unit-testable without
+    /// hopping to the main actor.
     ///
     /// Public because this string *is* the link between a session and its
     /// workspace — there is no id on either side — so `workspace-edit` and
     /// `workspace-remove` need it to count what a rename or removal would orphan
     /// (CROW-809).
-    public static func workspaceName(forWorktreePath path: String, devRoot: String) -> String? {
+    ///
+    /// Review clones live at `{devRoot}/crow-reviews/{repo}-pr-{N}`, so this
+    /// returns the literal `"crow-reviews"` for them — never a workspace name.
+    /// That's what `workspaceGatewayResolved`'s slug fallback exists for
+    /// (CROW-891).
+    public nonisolated static func workspaceName(forWorktreePath path: String, devRoot: String) -> String? {
         let root = (devRoot as NSString).standardizingPath
         let full = (path as NSString).standardizingPath
         guard full.hasPrefix(root + "/") else { return nil }
@@ -2668,7 +2741,7 @@ public final class SessionService {
         // the PR head advances without an explicit re-request (CROW-290).
         let headRefOid: String? = prMetadata.headRefOid.isEmpty ? nil : prMetadata.headRefOid
 
-        let reviewsDir = (devRoot as NSString).appendingPathComponent("crow-reviews")
+        let reviewsDir = DevRootLayout.reviewsDir(devRoot: devRoot)
         let cloneDirName = "\(repoName)-pr-\(prNumber)"
         let clonePath = (reviewsDir as NSString).appendingPathComponent(cloneDirName)
 

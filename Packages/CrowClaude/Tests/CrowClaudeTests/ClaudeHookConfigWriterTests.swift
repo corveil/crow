@@ -77,3 +77,109 @@ struct ClaudeHookConfigWriterTests {
         #expect(try posixPerms(at: dir) == 0o600)
     }
 }
+
+/// #897: a hook command must never name a build product. An old dev build baked
+/// its own `.build/{arch}/debug/crow` into every command it wrote; when that
+/// worktree was reaped the commands became permanently dangling, so every hook
+/// event failed and all telemetry from that directory was silently lost.
+@Suite("ClaudeHookConfigWriter crow-path resolution")
+struct ClaudeHookConfigWriterCrowPathTests {
+    /// A temp dev root plus a fake "app binary" living under a `.build/` tree,
+    /// standing in for a `swift build` product inside a worktree.
+    private func makeDevRootWithBuildProduct() throws -> (devRoot: URL, appBinary: String) {
+        let devRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("claude-crowpath-\(UUID().uuidString)")
+        let buildDir = devRoot.appendingPathComponent(".build/arm64-apple-macosx/debug")
+        try FileManager.default.createDirectory(at: buildDir, withIntermediateDirectories: true)
+        let binary = buildDir.appendingPathComponent("crow")
+        try Data("#!/bin/sh\n".utf8).write(to: binary)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: binary.path)
+        return (devRoot, binary.path)
+    }
+
+    @Test func resolveReturnsStableSymlinkNotBuildProduct() throws {
+        let (devRoot, appBinary) = try makeDevRootWithBuildProduct()
+        defer { try? FileManager.default.removeItem(at: devRoot) }
+
+        let resolved = try #require(
+            ClaudeHookConfigWriter.resolveCrowBinary(devRoot: devRoot.path, appCrowPath: appBinary))
+
+        #expect(resolved == devRoot.appendingPathComponent(".claude/bin/crow").path)
+        #expect(!resolved.contains("/.build/"))
+        // The link is what makes the path stable; its target is the build product.
+        #expect(try FileManager.default.destinationOfSymbolicLink(atPath: resolved) == appBinary)
+    }
+
+    /// The issue's explicit acceptance criterion.
+    @Test func generatedCommandsNeverContainABuildPath() throws {
+        let (devRoot, appBinary) = try makeDevRootWithBuildProduct()
+        defer { try? FileManager.default.removeItem(at: devRoot) }
+
+        let crowPath = try #require(
+            ClaudeHookConfigWriter.resolveCrowBinary(devRoot: devRoot.path, appCrowPath: appBinary))
+        let hooks = ClaudeHookConfigWriter.generateHooks(sessionID: UUID(), crowPath: crowPath)
+
+        #expect(hooks.count == ClaudeHookConfigWriter.allEvents.count)
+        for event in ClaudeHookConfigWriter.allEvents {
+            let groups = try #require(hooks[event] as? [[String: Any]])
+            let entries = try #require(groups.first?["hooks"] as? [[String: Any]])
+            let command = try #require(entries.first?["command"] as? String)
+            #expect(!command.contains("/.build/"), "\(event) command names a build product: \(command)")
+        }
+    }
+
+    /// A dev root containing a space used to kill all 17 hooks: the path was
+    /// interpolated raw into a command Claude runs through `/bin/sh -c`.
+    @Test func commandsAreShellSafeForDevRootsContainingSpaces() throws {
+        let session = UUID()
+        let command = ClaudeHookConfigWriter.hookCommand(
+            crowPath: "/Users/x/My Dev/.claude/bin/crow", sessionID: session, event: "Stop")
+
+        #expect(command.hasPrefix("'/Users/x/My Dev/.claude/bin/crow' "))
+        let parsed = try #require(ClaudeHookRepair.parseCrowHookCommand(command))
+        #expect(parsed.binary == "/Users/x/My Dev/.claude/bin/crow")
+        #expect(parsed.sessionID == session)
+        #expect(parsed.event == "Stop")
+    }
+
+    @Test func ensureRepairsADanglingLinkAndIsIdempotent() throws {
+        let (devRoot, appBinary) = try makeDevRootWithBuildProduct()
+        defer { try? FileManager.default.removeItem(at: devRoot) }
+        let fm = FileManager.default
+        let binDir = devRoot.appendingPathComponent(".claude/bin")
+        try fm.createDirectory(at: binDir, withIntermediateDirectories: true)
+        let link = binDir.appendingPathComponent("crow").path
+
+        // A link left over from a worktree that has since been deleted.
+        try fm.createSymbolicLink(atPath: link, withDestinationPath: "/nonexistent/gone/crow")
+
+        #expect(ClaudeHookConfigWriter.ensureCrowCLISymlink(devRoot: devRoot.path, appCrowPath: appBinary) == link)
+        #expect(try fm.destinationOfSymbolicLink(atPath: link) == appBinary)
+
+        // Second pass must not unlink+relink — that window is one where a
+        // concurrently firing hook sees ENOENT.
+        let inodeBefore = try #require(
+            (try fm.attributesOfItem(atPath: link)[.systemFileNumber] as? NSNumber)?.uint64Value)
+        #expect(ClaudeHookConfigWriter.ensureCrowCLISymlink(devRoot: devRoot.path, appCrowPath: appBinary) == link)
+        let inodeAfter = try #require(
+            (try fm.attributesOfItem(atPath: link)[.systemFileNumber] as? NSNumber)?.uint64Value)
+        #expect(inodeBefore == inodeAfter)
+    }
+
+    @Test func ensureNeverReplacesANonSymlinkFile() throws {
+        let (devRoot, appBinary) = try makeDevRootWithBuildProduct()
+        defer { try? FileManager.default.removeItem(at: devRoot) }
+        let fm = FileManager.default
+        let binDir = devRoot.appendingPathComponent(".claude/bin")
+        try fm.createDirectory(at: binDir, withIntermediateDirectories: true)
+        let link = binDir.appendingPathComponent("crow")
+        try Data("user's own script".utf8).write(to: link)
+
+        _ = ClaudeHookConfigWriter.ensureCrowCLISymlink(devRoot: devRoot.path, appCrowPath: appBinary)
+
+        // Still the user's file, untouched — we only ever own symlinks here.
+        #expect(try String(contentsOf: link, encoding: .utf8) == "user's own script")
+        let attrs = try fm.attributesOfItem(atPath: link.path)
+        #expect((attrs[.type] as? FileAttributeType) != .typeSymbolicLink)
+    }
+}

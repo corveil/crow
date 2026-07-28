@@ -78,7 +78,7 @@ public struct Scaffolder {
         try fm.createDirectory(atPath: showImageSkillsDir, withIntermediateDirectories: true)
 
         // Create crow-reviews directory for PR review clones
-        let reviewsDir = (devRoot as NSString).appendingPathComponent("crow-reviews")
+        let reviewsDir = DevRootLayout.reviewsDir(devRoot: devRoot)
         try fm.createDirectory(atPath: reviewsDir, withIntermediateDirectories: true)
 
         // Always update CLAUDE.md — but preserve the "Known Issues / Corrections" section
@@ -196,7 +196,18 @@ public struct Scaffolder {
         // user rc — so `corveil`, `codex`, `cursor` resolve to the
         // user-configured binary regardless of what's on PATH.
         installBinarySymlinks(binaryOverrides, claudeDir: claudeDir)
-        installCrowCLISymlink(claudeDir: claudeDir, appCrowPath: appCrowBinaryPath)
+        // Always re-point `{devRoot}/.claude/bin/crow` at the running app's own
+        // CLI (CROW-552). Independent of `defaults.binaries` so every agent kind
+        // discovers `crow` via the tmux shell wrapper's PATH prepend, and run
+        // AFTER `installBinarySymlinks` so a user-set `defaults.binaries["crow"]`
+        // is overwritten here by design — the app binary always wins.
+        //
+        // Lives in `ClaudeHookConfigWriter` because that is also where hook
+        // commands resolve their crow path, and the two must agree: the link is
+        // what makes a written hook command survive the worktree its build came
+        // from being deleted (#897).
+        ClaudeHookConfigWriter.ensureCrowCLISymlink(
+            devRoot: devRoot, appCrowPath: appCrowBinaryPath)
 
         // Re-install the embedded /query-corveil slash command from the
         // user-configured corveil binary on every launch (CROW-482). Failure
@@ -264,48 +275,6 @@ public struct Scaffolder {
             } catch {
                 CrowLog.info("[Scaffolder] failed to symlink \(link) -> \(trimmed): \(error.localizedDescription)")
             }
-        }
-    }
-
-    /// Always materialize `{devRoot}/.claude/bin/crow` pointing at the running
-    /// app's own CLI (CROW-552). Independent of `defaults.binaries` so every
-    /// agent kind discovers `crow` via the tmux shell wrapper's PATH prepend.
-    /// Runs after `installBinarySymlinks`, so a user-set
-    /// `defaults.binaries["crow"]` is overwritten here by design — the app
-    /// binary always wins for PATH discovery.
-    /// Idempotent — re-run on every scaffold pass; only ever owns symlinks.
-    private func installCrowCLISymlink(claudeDir: String, appCrowPath: String?) {
-        let fm = FileManager.default
-        let binDir = (claudeDir as NSString).appendingPathComponent("bin")
-        let link = (binDir as NSString).appendingPathComponent("crow")
-        let resolved = appCrowPath ?? ClaudeHookConfigWriter.appCrowBinary()
-
-        guard let target = resolved, fm.isExecutableFile(atPath: target) else {
-            if let attrs = try? fm.attributesOfItem(atPath: link),
-               (attrs[.type] as? FileAttributeType) == .typeSymbolicLink {
-                try? fm.removeItem(atPath: link)
-            }
-            if let resolved {
-                CrowLog.info("[Scaffolder] app crow binary not executable at \(resolved) — skipping symlink")
-            }
-            return
-        }
-
-        // Drive off attributesOfItem, not fileExists — the latter follows
-        // symlinks, so a dangling `crow` link (target moved/deleted) looks
-        // absent and we'd skip removal, then createSymbolicLink hits EEXIST.
-        if let attrs = try? fm.attributesOfItem(atPath: link) {
-            guard (attrs[.type] as? FileAttributeType) == .typeSymbolicLink else {
-                CrowLog.info("[Scaffolder] crow exists at \(link) but is not a symlink — leaving alone")
-                return
-            }
-            try? fm.removeItem(atPath: link)
-        }
-
-        do {
-            try fm.createSymbolicLink(atPath: link, withDestinationPath: target)
-        } catch {
-            CrowLog.info("[Scaffolder] failed to symlink \(link) -> \(target): \(error.localizedDescription)")
         }
     }
 

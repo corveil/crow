@@ -32,7 +32,7 @@ public actor GitManager {
             // crow-reviews holds transient PR-review clones (full clones that
             // resolve to the same org/repo slug as the canonical checkout); never
             // discover them or they'd duplicate the real repo in the summary scan.
-            guard wsDir != "crow-reviews" else { continue }
+            guard !DevRootLayout.isReservedWorkspaceName(wsDir) else { continue }
 
             let wsConfig = config.workspaces[wsDir]
             let provider = wsConfig?.provider ?? config.defaults.provider

@@ -20,7 +20,7 @@ All persistent state lives under `~/Library/Application Support/crow/` (see `Pac
 | `{devRoot}/.claude/skills/crow-workspace/setup.sh`                    | Deterministic setup script called by the skill                |
 | `{devRoot}/.claude/skills/crow-review-pr/SKILL.md`                    | PR review skill invoked via `/crow-review-pr`                 |
 | `{devRoot}/.claude/skills/crow-batch-workspace/SKILL.md`              | Batch workspace setup skill                                   |
-| `{devRoot}/crow-reviews/`                                             | Temporary clones used when reviewing PRs                      |
+| `{devRoot}/crow-reviews/`                                             | Temporary clones used when reviewing PRs (reserved name)      |
 
 ## Workspace Configuration
 
@@ -139,17 +139,35 @@ A workspace can route its Claude Code sessions through a proxy/gateway (e.g. an 
 }
 ```
 
-- **`baseURL`** — exported as `ANTHROPIC_BASE_URL` for the workspace's `claude` launches.
+- **`baseURL`** — exported as `ANTHROPIC_BASE_URL` for the session's `claude` launches.
 - **`customHeaders`** — a `Name: Value` map exported as `ANTHROPIC_CUSTOM_HEADERS` (newline-separated). Both fields must be set together; a `baseURL` with no headers (or vice versa) is rejected when the config is loaded.
 
-When a workspace has a `gateway`, Crow injects these vars two ways so they apply on the initial launch *and* survive manual `claude` re-runs:
+When a session resolves to a workspace with a `gateway`, Crow injects these vars two ways so they apply on the initial launch *and* survive manual `claude` re-runs:
 
 1. **Launch line** — the `claude` invocation is prefixed with the env-var assignments, overriding any global `~/.zshrc` export for that launch. (When a workspace has multiple headers, the header value can't go on the line — an embedded newline would submit the command early — so it's carried by `settings.local.json` and the launch line instead `unset`s any inherited `ANTHROPIC_CUSTOM_HEADERS` so the gateway's `baseURL` is never paired with stale global headers.)
 2. **`settings.local.json`** — the resolved values are written to the worktree's `.claude/settings.local.json` `env` block (gitignored, mode `0600`), which Claude Code reads on every run.
 
-When a workspace has **no** `gateway`, Crow instead prefixes the launch with `unset ANTHROPIC_BASE_URL ANTHROPIC_CUSTOM_HEADERS` so a global shell export — or a sibling workspace's gateway — can't bleed into it. Edit a workspace's gateway in **Settings → Workspaces**.
+When no workspace claims the session — or the one that does has **no** `gateway` — Crow instead prefixes the launch with `unset ANTHROPIC_BASE_URL ANTHROPIC_CUSTOM_HEADERS` so a global shell export, or a sibling workspace's gateway, can't bleed into it. Edit a workspace's gateway in **Settings → Workspaces**.
 
 > **Precedence note:** the launch-line assignment is what reliably overrides a value exported by your shell for the initial launch. Whether Claude Code's `settings.local.json` `env` block *alone* overrides an inherited shell variable (e.g. an `ANTHROPIC_BASE_URL` still left in `~/.zshrc`) is not something Crow controls — so the intended end state is to delete the global `~/.zshrc` exports once per-workspace gateways are configured, leaving `config.json` the single source of truth.
+
+> **Applied at launch:** the gateway env is resolved and written when the agent **starts** (or is handed off to another agent). A session that was already running when you edited a gateway keeps the environment it launched with — relaunch it, or hand it off, to pick up the change.
+
+### Which gateway applies
+
+Crow resolves a session's workspace two ways, in order:
+
+1. **By worktree location** — work and job worktrees live at `{devRoot}/{workspace}/{repo}-{n}-{slug}`, so the folder directly under the dev root names the workspace. Matched case-insensitively. Crow-owned dev-root directories are skipped rather than looked up, so `crow-reviews` is reserved and cannot be a workspace name.
+2. **By repo** — review sessions clone to `{devRoot}/crow-reviews/{repo}-pr-{N}`, which sits outside any workspace folder, so there's no path to read a workspace from. Crow instead takes the PR's `owner/repo` and finds the workspace that claims it: a slug matching `alwaysInclude` or `autoReviewRepos` (the same `org/*` glob syntax those lists use elsewhere). Before CROW-891 this step didn't exist, so **every** review silently ran with `ANTHROPIC_*` unset regardless of its workspace's gateway.
+
+Notes on the repo lookup:
+
+- **`excludeReviewRepos` is not consulted.** It controls what the review board *shows*, not which workspace a repo belongs to — a repo you've hidden from the board still gets its workspace's gateway when you review it manually.
+- **Ambiguity is deterministic.** If two workspaces claim the same repo, one naming it exactly (`acme/widget`) beats one matching only through a glob (`acme/*`); among equals, the earlier workspace in `config.json` wins.
+- **A `"*"` pattern claims everything**, making that workspace the fallback owner for any repo no other workspace names.
+- **No match means unset, not inherit.** A PR in a repo no workspace claims runs against the vanilla Anthropic API and logs `No workspace claims repo …`. The Manager's gateway is never inherited by other sessions — see [Manager gateway](#manager-gateway).
+
+Both membership lists are editable from **Settings → Workspaces** or with `crow workspace edit --workspace NAME --always-include acme/widget --auto-review-repo 'acme/*'` (note those flags replace the whole list rather than appending — see [cli-reference.md](cli-reference.md#workspace-commands)). So a review that resolved to no gateway is usually fixed by adding its repo to the owning workspace.
 
 ### Secret storage
 
@@ -159,6 +177,8 @@ A header value can be either:
 - **A plaintext value** — stored as-is in `config.json` (mode `0600`). Convenient for local dev, but **anyone with read access to the file can see the key**. The Settings UI shows a warning. Prefer an `op://` reference for production keys.
 
 `op://` keeps secrets out of `config.json` — but note it does **not** mean "no secret on disk." The *resolved* value is written into the worktree's `.claude/settings.local.json` `env` block (so manual re-runs inherit it) and cached there for the worktree's lifetime. That file is gitignored and written `0600` (owner-only), the same protection `config.json` gets. Resolved secret values are never logged.
+
+Since CROW-891 this also applies to **review clones**, which contain code from the PR's author. The file is still `0600` and Crow never executes the clone, but the resolved header now lives inside a directory of untrusted code — so an agent in a review session can read it if a hostile PR talks it into doing so. If that matters for your gateway key, exclude those repos from the workspace's `alwaysInclude`/`autoReviewRepos` so reviews on them resolve to no gateway.
 
 ### Manager gateway
 

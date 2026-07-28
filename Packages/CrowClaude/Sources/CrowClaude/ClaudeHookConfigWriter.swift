@@ -27,13 +27,24 @@ public struct ClaudeHookConfigWriter: HookConfigWriter {
 
     // MARK: - Generate Hook Configuration
 
+    /// The exact hook command Crow writes. Single source of truth shared with
+    /// `ClaudeHookRepair`, which both parses this shape to decide what it owns
+    /// and re-emits it when repairing a stale entry (#897).
+    ///
+    /// `crowPath` is shell-quoted: Claude runs hook commands through `/bin/sh
+    /// -c`, so an unquoted dev root containing a space (`/Users/x/My Dev`)
+    /// silently broke all 17 hooks. Matches `CursorHookConfigWriter` and
+    /// `AntigravityHookConfigWriter`, which already quote for this reason.
+    static func hookCommand(crowPath: String, sessionID: UUID, event: String) -> String {
+        "\(ClaudeLaunchArgs.shellQuote(crowPath)) hook-event --session \(sessionID.uuidString) --event \(event)"
+    }
+
     /// Generate the hooks dictionary for a session.
     static func generateHooks(sessionID: UUID, crowPath: String) -> [String: Any] {
-        let sid = sessionID.uuidString
         var hooks: [String: Any] = [:]
 
         for event in allEvents {
-            let command = "\(crowPath) hook-event --session \(sid) --event \(event)"
+            let command = hookCommand(crowPath: crowPath, sessionID: sessionID, event: event)
             var hookEntry: [String: Any] = [
                 "type": "command",
                 "command": command,
@@ -196,7 +207,7 @@ public struct ClaudeHookConfigWriter: HookConfigWriter {
     /// Resolve the running app's own `crow` CLI — the bundled binary in a
     /// release `.app` (`Contents/MacOS/crow`), or `.build/{config}/crow` in
     /// dev. Does not consult `{devRoot}/.claude/bin/crow`; use that for
-    /// agent-facing resolution via `findCrowBinary(devRoot:)`.
+    /// agent-facing resolution via `resolveCrowBinary(devRoot:)`.
     public static func appCrowBinary() -> String? {
         // Same directory as the running executable (dev + release bundles).
         let execURL = URL(fileURLWithPath: ProcessInfo.processInfo.arguments[0])
@@ -226,6 +237,12 @@ public struct ClaudeHookConfigWriter: HookConfigWriter {
     /// Find the `crow` binary agents and hook configs should invoke. Prefers
     /// `{devRoot}/.claude/bin/crow` when scaffolded and executable (CROW-552),
     /// then falls back to `appCrowBinary()` and common install locations.
+    ///
+    /// Read-only — it never *creates* the symlink, so a dev build whose link is
+    /// missing or dangling falls through to a `.build/…/debug/crow` path that
+    /// dies with the worktree it was built in. Anything whose result is written
+    /// to disk must use `resolveCrowBinary` instead (#897); this stays for
+    /// callers that only need to *locate* a crow to run right now.
     public static func findCrowBinary(devRoot: String? = nil) -> String? {
         if let devRoot {
             let symlink = (devRoot as NSString).appendingPathComponent(".claude/bin/crow")
@@ -234,5 +251,100 @@ public struct ClaudeHookConfigWriter: HookConfigWriter {
             }
         }
         return appCrowBinary()
+    }
+
+    /// Materialize `{devRoot}/.claude/bin/crow` → `appCrowPath ?? appCrowBinary()`,
+    /// returning the **link** path once it resolves to an executable (`nil`
+    /// otherwise). Idempotent; safe to call on every launch.
+    ///
+    /// The link is the stable anchor that makes hook commands survive worktree
+    /// churn: only its target moves when a dev build is rebuilt elsewhere, so
+    /// one relink at boot heals every `settings.local.json` at once (#897).
+    ///
+    /// Two deliberate behaviors, both load-bearing:
+    /// - A link already pointing at `target` is left alone rather than
+    ///   unlink+relink'd — that window is one where a concurrently firing hook
+    ///   sees ENOENT.
+    /// - A **non-symlink** `crow` at that path is never replaced. We only ever
+    ///   own symlinks here; a real file is the user's.
+    ///
+    /// `appCrowPath` is injectable for tests. All errors are logged and
+    /// swallowed — this is best-effort and must never fail a launch.
+    @discardableResult
+    public static func ensureCrowCLISymlink(devRoot: String, appCrowPath: String? = nil) -> String? {
+        let fm = FileManager.default
+        let binDir = (devRoot as NSString).appendingPathComponent(".claude/bin")
+        let link = (binDir as NSString).appendingPathComponent("crow")
+        let resolved = appCrowPath ?? appCrowBinary()
+
+        guard let target = resolved, fm.isExecutableFile(atPath: target) else {
+            // Drop a link we can no longer back, so a broken pointer doesn't
+            // shadow a working PATH install.
+            if let attrs = try? fm.attributesOfItem(atPath: link),
+               (attrs[.type] as? FileAttributeType) == .typeSymbolicLink {
+                try? fm.removeItem(atPath: link)
+            }
+            if let resolved {
+                CrowLog.info("[ClaudeHookConfigWriter] app crow binary not executable at \(resolved) — skipping symlink")
+            }
+            return nil
+        }
+
+        // Unlike Scaffolder, this can run against a dev root no scaffold pass
+        // has touched yet (a `crow send` before the first boot scaffold), so
+        // create the directory rather than assuming it.
+        do {
+            try fm.createDirectory(atPath: binDir, withIntermediateDirectories: true)
+        } catch {
+            CrowLog.info("[ClaudeHookConfigWriter] could not create bin dir \(binDir): \(error.localizedDescription)")
+            return nil
+        }
+
+        // Drive off attributesOfItem, not fileExists — the latter follows
+        // symlinks, so a dangling `crow` link (target moved/deleted) looks
+        // absent and we'd skip removal, then createSymbolicLink hits EEXIST.
+        if let attrs = try? fm.attributesOfItem(atPath: link) {
+            guard (attrs[.type] as? FileAttributeType) == .typeSymbolicLink else {
+                CrowLog.info("[ClaudeHookConfigWriter] crow exists at \(link) but is not a symlink — leaving alone")
+                return fm.isExecutableFile(atPath: link) ? link : nil
+            }
+            if (try? fm.destinationOfSymbolicLink(atPath: link)) == target {
+                return link
+            }
+            try? fm.removeItem(atPath: link)
+        }
+
+        do {
+            try fm.createSymbolicLink(atPath: link, withDestinationPath: target)
+            return link
+        } catch {
+            CrowLog.info("[ClaudeHookConfigWriter] failed to symlink \(link) -> \(target): \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    /// The `crow` path to bake into a hook command (or any other file on disk).
+    ///
+    /// Ensures the stable `{devRoot}/.claude/bin/crow` symlink first and returns
+    /// *that*, so an emitted command never contains a `.build/…` product path
+    /// belonging to whichever worktree the running daemon happened to be built
+    /// in — the root cause of #897.
+    ///
+    /// Falls back to `appCrowBinary()` only when there is no dev root or the
+    /// link could not be created, warning loudly if that fallback is itself a
+    /// build product. Deliberately not a `precondition`: crashing the daemon
+    /// over an unwritable dev root would be worse than the noise it prevents.
+    public static func resolveCrowBinary(devRoot: String?, appCrowPath: String? = nil) -> String? {
+        if let devRoot, let link = ensureCrowCLISymlink(devRoot: devRoot, appCrowPath: appCrowPath) {
+            return link
+        }
+        let fallback = appCrowPath ?? appCrowBinary()
+        if let fallback, fallback.contains("/.build/") {
+            CrowLog.info(
+                "[ClaudeHookConfigWriter] WARNING: falling back to build-product crow path \(fallback)"
+                + " — hook commands written now will break when that build directory is removed."
+                + " Check that \(devRoot ?? "<no dev root>")/.claude/bin is writable.")
+        }
+        return fallback
     }
 }

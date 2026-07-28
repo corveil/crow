@@ -1058,6 +1058,11 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                 text = text.replacingOccurrences(of: "\\n", with: "\n")
                 text = text.replacingOccurrences(of: "\\t", with: "\t")
                 CrowLog.info("crow send: text length=\(text.count), ends_with_newline=\(text.hasSuffix("\n")), ends_with_cr=\(text.hasSuffix("\r"))")
+                // Resolved OFF the MainActor: `resolveCrowBinary` stats and may
+                // create the `.claude/bin/crow` symlink, and blocking I/O on the
+                // MainActor is what wedged the daemon's RPC surface in #892.
+                // It only needs `devRoot`, so hoisting costs nothing.
+                let crowPath = ClaudeHookConfigWriter.resolveCrowBinary(devRoot: devRoot)
                 await MainActor.run {
                     let routedTerminal = capturedAppState.terminals[sessionID]?.first(where: { $0.id == terminalID })
                     // tmux-backed terminals already have their window from
@@ -1079,7 +1084,7 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                             agent: agent,
                             sessionID: sessionID,
                             worktreePath: capturedAppState.primaryWorktree(for: sessionID)?.worktreePath,
-                            crowPath: ClaudeHookConfigWriter.findCrowBinary(devRoot: devRoot),
+                            crowPath: crowPath,
                             telemetryPort: capturedTelemetryPort
                         )
                         text = prepared.text
@@ -1258,16 +1263,34 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                 }()
 
                 return try await MainActor.run {
-                    // Resolve session — explicit param wins, else look up by
-                    // worktree path matching `cwd`.
+                    // Resolve session — an explicit param wins only if it names
+                    // a session we still have; otherwise fall back to the
+                    // worktree matching `cwd`.
+                    //
+                    // A stale `settings.local.json` bakes in a `--session` uuid
+                    // that can outlive the session itself (#897), and trusting
+                    // it unconditionally minted hook state — and a persisted
+                    // `hookStates` row — for a session that no longer exists.
+                    // Rerouting by cwd repairs those events instead of dropping
+                    // them.
+                    //
+                    // Deliberately never throws for an unknown-but-provided id:
+                    // `crow hook-event` surfaces an RPC error as a non-zero
+                    // exit, which Claude Code renders as the very "hook error"
+                    // noise this change exists to remove. Unresolvable ids fall
+                    // through with today's behavior, minus the store write.
+                    let liveSessionIDs = Set(capturedAppState.sessions.map(\.id))
                     let sessionID: UUID
-                    if let provided = providedSessionID {
+                    if let provided = providedSessionID, liveSessionIDs.contains(provided) {
                         sessionID = provided
                     } else if let cwd, let resolved = capturedAppState.sessionID(forWorktreePath: cwd) {
                         sessionID = resolved
+                    } else if let provided = providedSessionID {
+                        sessionID = provided
                     } else {
                         throw RPCError.invalidParams("session_id required or resolvable from payload cwd")
                     }
+                    let sessionIsLive = liveSessionIDs.contains(sessionID)
                     let sessionIDStr = sessionID.uuidString
 
                     if hookDebug {
@@ -1370,8 +1393,13 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                     // Persist the color-driving state only when it actually changed,
                     // so sidebar colors survive a quit→relaunch (#367). Excluding
                     // lastToolActivity means frequent PostToolUse events don't write.
+                    //
+                    // Gated on the session still existing: a stale hook block
+                    // naming a deleted session would otherwise keep appending
+                    // `hookStates` rows keyed to a uuid nothing ever prunes
+                    // (#897). `reseed` only filters those on read.
                     let snapshotAfter = state.persistedSnapshot
-                    if snapshotAfter != snapshotBefore {
+                    if sessionIsLive && snapshotAfter != snapshotBefore {
                         capturedStore.mutate { data in
                             var map = data.hookStates ?? [:]
                             map[sessionIDStr] = snapshotAfter
