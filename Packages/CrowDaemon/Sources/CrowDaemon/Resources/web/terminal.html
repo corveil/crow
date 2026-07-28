@@ -114,9 +114,9 @@
         }
       }
 
-      // Copy/paste. Cross-platform combos that never steal the shell's Ctrl+C
-      // (SIGINT): Cmd+C/V on macOS, Ctrl+Shift+C/V elsewhere. Copy is a no-op
-      // (passes through) when there's no selection.
+      // Copy. Cross-platform combos that never steal the shell's Ctrl+C
+      // (SIGINT): Cmd+C on macOS, Ctrl+Shift+C elsewhere. A no-op (passes
+      // through) when there's no selection.
       function copySelection() {
         const sel = term.getSelection();
         if (sel) { navigator.clipboard.writeText(sel).catch(function () {}); }
@@ -130,10 +130,22 @@
         if (e.type !== 'keydown') return true;
         const copyCombo = (e.metaKey && !e.ctrlKey) || (e.ctrlKey && e.shiftKey);
         if (copyCombo && (e.key === 'c' || e.key === 'C')) {
-          if (term.hasSelection()) { copySelection(); return false; }
+          if (term.hasSelection()) {
+            copySelection();
+            // Returning false only makes xterm skip its own key handling — the
+            // browser's default gesture keeps going unless we cancel it (#875).
+            e.preventDefault();
+            e.stopPropagation();
+            return false;
+          }
           return true; // no selection → let it through (e.g. Ctrl+C SIGINT)
         }
-        if (copyCombo && (e.key === 'v' || e.key === 'V')) { pasteClipboard(); return false; }
+        // #875: the paste combos are deliberately NOT handled here. Pasting
+        // explicitly *and* returning false double-pasted, because the browser's
+        // native paste still fired xterm's own `paste` listener. Left alone,
+        // that listener pastes exactly once (bracketed-paste wrapped), needs no
+        // clipboard-read permission, and works over plain http. The right-click
+        // menu still calls pasteClipboard() — a click is not a paste gesture.
         return true;
       });
 

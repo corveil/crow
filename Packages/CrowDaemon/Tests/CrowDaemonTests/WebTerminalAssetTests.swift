@@ -42,6 +42,20 @@ import Testing
             "no `const MOUSE_MODES` declaration")
     }
 
+    /// `source` with `//` line comments removed, for assertions about what the
+    /// code *does*. The prose around a handler legitimately names the thing the
+    /// handler must not call (e.g. #875's "the right-click menu still calls
+    /// pasteIntoTerminal()"), and that explanation is the part most worth
+    /// keeping — so it must not trip the guard.
+    private static func stripLineComments(_ source: String) -> String {
+        source.split(separator: "\n", omittingEmptySubsequences: false)
+            .map { line -> Substring in
+                guard let marker = line.range(of: "//") else { return line }
+                return line[..<marker.lowerBound]
+            }
+            .joined(separator: "\n")
+    }
+
     /// The body of a top-level `function <name>(` … `\n}` block, for asserting on
     /// one handler rather than the whole file.
     private static func functionBody(_ name: String, in source: String) throws -> Substring {
@@ -173,5 +187,52 @@ import Testing
         #expect(
             source.contains("macOptionClickForcesSelection: true"),
             "⌥-drag selection must be enabled explicitly (xterm.js defaults it to false)")
+    }
+
+    /// #875: neither surface may handle the paste chord in its key handler, and
+    /// any branch that DOES shadow a browser default must cancel the event.
+    ///
+    /// `attachCustomKeyEventHandler` returning `false` only makes xterm skip its
+    /// own key handling — xterm's `_keyDown` returns early, before any
+    /// `cancel()` — so the browser's default gesture still runs. Handling Cmd+V
+    /// there pasted once explicitly and once more when the native paste fired
+    /// xterm's own `paste` listener (registered on the helper textarea), with
+    /// bracketed-paste wrapping applied twice. Leaving the chord alone is what
+    /// makes it exactly one paste: xterm's listener already wraps and forwards
+    /// it, needs no clipboard-read permission, and works over plain http
+    /// (`--host 0.0.0.0`), where `navigator.clipboard` doesn't exist and the
+    /// explicit path was a no-op anyway. The right-click menu keeps the explicit
+    /// path — a click is not a paste gesture, so nothing native fires there.
+    ///
+    /// Asserted on both surfaces because they carry separate implementations of
+    /// the same handler (the drift this suite exists to prevent).
+    @Test func keyHandlersLeavePasteToTheBrowserAndCancelWhatTheyDoHandle() throws {
+        let appJS = try Self.webAsset("app.js")
+        let body = Self.stripLineComments(String(try Self.functionBody("handleTerminalKey", in: appJS)))
+        #expect(
+            !body.contains("pasteIntoTerminal"),
+            "app.js's key handler must not paste on Cmd+V — the native paste already does (#875)")
+        #expect(
+            !body.lowercased().contains("e.key === 'v'"),
+            "app.js's key handler must not claim the paste chord at all (#875)")
+        for cancel in ["e.preventDefault();", "e.stopPropagation();"] {
+            #expect(
+                body.contains(cancel),
+                "a branch that shadows a browser default must cancel the event: \(cancel)")
+        }
+        #expect(
+            appJS.contains("action: pasteIntoTerminal"),
+            "the right-click menu keeps the explicit paste path — it has no native gesture")
+
+        let debugPage = try Self.webAsset("terminal.html")
+        #expect(
+            !Self.stripLineComments(debugPage).lowercased().contains("e.key === 'v'"),
+            "terminal.html's key handler must not claim the paste chord either (#875)")
+        #expect(
+            debugPage.contains("addItem('Paste', true, pasteClipboard)"),
+            "terminal.html's right-click menu keeps the explicit paste path")
+        #expect(
+            debugPage.contains("e.preventDefault();") && debugPage.contains("e.stopPropagation();"),
+            "terminal.html's copy branch must cancel the browser default")
     }
 }
