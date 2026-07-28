@@ -118,4 +118,70 @@ struct GrokHookConfigWriterTests {
             atPath: hooksDir.appendingPathComponent("crow.json").path))
         #expect(FileManager.default.fileExists(atPath: userHook.path))
     }
+
+    // MARK: - .gitignore commit guard (#861 review r11)
+
+    /// `writeHookConfig` drops a self-scoped `.gitignore` beside `crow.json` so an
+    /// agent's `git add -A` can't stage Crow's generated file (which embeds the
+    /// absolute `crow` path + a per-machine session UUID) into the user's repo.
+    /// Scoped to `crow.json` + itself, NOT `*.json`, so a user's own hook files
+    /// stay tracked; and it's not `.json`, so Grok (which merges only `*.json`)
+    /// ignores it.
+    @Test func writeHookConfigWritesSelfScopedGitignore() throws {
+        let worktree = try makeTempWorktree()
+        defer { try? FileManager.default.removeItem(at: worktree) }
+
+        try GrokHookConfigWriter().writeHookConfig(
+            worktreePath: worktree.path, sessionID: UUID(), crowPath: "/bin/crow")
+
+        let gi = worktree.appendingPathComponent(".grok/hooks/.gitignore")
+        let body = try String(contentsOf: gi, encoding: .utf8)
+        #expect(body.contains("crow.json"))
+        #expect(body.contains(".gitignore"))
+        #expect(!body.contains("*.json"))
+    }
+
+    /// A pre-existing `.gitignore` we didn't write (a user's own rules) is left
+    /// untouched — `.grok/hooks/` is the user's directory.
+    @Test func writeHookConfigPreservesUserGitignore() throws {
+        let worktree = try makeTempWorktree()
+        defer { try? FileManager.default.removeItem(at: worktree) }
+        let hooksDir = worktree.appendingPathComponent(".grok/hooks")
+        try FileManager.default.createDirectory(at: hooksDir, withIntermediateDirectories: true)
+        let gi = hooksDir.appendingPathComponent(".gitignore")
+        try "# mine\nsecret.json".write(to: gi, atomically: true, encoding: .utf8)
+
+        try GrokHookConfigWriter().writeHookConfig(
+            worktreePath: worktree.path, sessionID: UUID(), crowPath: "/bin/crow")
+
+        #expect(try String(contentsOf: gi, encoding: .utf8) == "# mine\nsecret.json")
+    }
+
+    /// `removeHookConfig` drops our `.gitignore` (when it still holds exactly our
+    /// content) but never a user's own — same provenance discipline as the write.
+    @Test func removeHookConfigDropsOwnGitignoreButKeepsUsers() throws {
+        let worktree = try makeTempWorktree()
+        defer { try? FileManager.default.removeItem(at: worktree) }
+        let writer = GrokHookConfigWriter()
+        let ourGi = worktree.appendingPathComponent(".grok/hooks/.gitignore")
+
+        try writer.writeHookConfig(worktreePath: worktree.path, sessionID: UUID(), crowPath: "/bin/crow")
+        #expect(FileManager.default.fileExists(atPath: ourGi.path))
+        writer.removeHookConfig(worktreePath: worktree.path)
+        #expect(!FileManager.default.fileExists(atPath: ourGi.path))
+
+        // A user's own `.gitignore` + hook file both survive teardown.
+        let hooksDir = worktree.appendingPathComponent(".grok/hooks")
+        try FileManager.default.createDirectory(at: hooksDir, withIntermediateDirectories: true)
+        let userGi = hooksDir.appendingPathComponent(".gitignore")
+        try "# mine".write(to: userGi, atomically: true, encoding: .utf8)
+        let userHook = hooksDir.appendingPathComponent("mine.json")
+        try "{}".write(to: userHook, atomically: true, encoding: .utf8)
+
+        try writer.writeHookConfig(worktreePath: worktree.path, sessionID: UUID(), crowPath: "/bin/crow")
+        writer.removeHookConfig(worktreePath: worktree.path)
+
+        #expect(try String(contentsOf: userGi, encoding: .utf8) == "# mine")
+        #expect(FileManager.default.fileExists(atPath: userHook.path))
+    }
 }

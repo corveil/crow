@@ -111,6 +111,16 @@ public struct GrokHookConfigWriter: HookConfigWriter {
         let data = try JSONSerialization.data(
             withJSONObject: document, options: [.prettyPrinted, .sortedKeys])
         try data.write(to: URL(fileURLWithPath: filePath))
+        // `crow.json` embeds the absolute `crow` path and the session UUID and
+        // lives inside the user's git worktree, where an agent's `git add -A`
+        // (an unattended `.job` runs with `--permission-mode auto`) could stage
+        // it — and a committed hook pointing at a dead per-machine UUID breaks
+        // every teammate who then opens the repo in Grok. A self-scoped
+        // `.gitignore` (ignoring `crow.json` + itself, NOT `*.json`, so a user's
+        // own hook files in this dir stay visible to git) keeps our generated file
+        // out of the index. Inert to Grok, which merges only `*.json`. Same guard
+        // OpenCode's per-worktree writer ships (#861 review r11).
+        Self.writeGitignore(inDir: hooksDir)
     }
 
     /// Remove our `crow.json` from a worktree's `.grok/hooks/`, leaving any
@@ -122,8 +132,42 @@ public struct GrokHookConfigWriter: HookConfigWriter {
         let hooksDir = Self.hooksDir(worktreePath)
         let filePath = (hooksDir as NSString).appendingPathComponent(Self.fileName)
         try? FileManager.default.removeItem(atPath: filePath)
+        // Drop our `.gitignore` only when it still holds exactly our content — a
+        // user may have replaced it with their own rules (same provenance
+        // discipline as `writeGitignore`). Not early-returned on a missing
+        // `crow.json`, so a user who deleted it by hand isn't left with an
+        // orphaned self-ignoring `.gitignore` (mirrors OpenCode).
+        let gitignorePath = (hooksDir as NSString).appendingPathComponent(".gitignore")
+        if (try? String(contentsOfFile: gitignorePath, encoding: .utf8)) == Self.gitignoreBody {
+            try? FileManager.default.removeItem(atPath: gitignorePath)
+        }
         Self.removeIfEmpty(hooksDir)
         Self.removeIfEmpty((worktreePath as NSString).appendingPathComponent(".grok"))
+    }
+
+    /// The exact body Crow writes to `.grok/hooks/.gitignore`. Single source of
+    /// truth so `writeGitignore` and `removeHookConfig` agree on what "ours"
+    /// means. Ignores our `crow.json` and the `.gitignore` itself — deliberately
+    /// NOT `*.json`, so a user's own `.grok/hooks/*.json` files stay tracked.
+    static let gitignoreBody = """
+    # Crow-generated — safe to delete.
+    \(fileName)
+    .gitignore
+    """
+
+    /// Write a self-scoped `.gitignore` into `dir` so an agent's `git add -A`
+    /// never stages our generated `crow.json`. `.grok/hooks/` is the *user's*
+    /// directory (their own hook files can live here), so this never clobbers a
+    /// pre-existing `.gitignore` — it writes only into an empty slot or over our
+    /// own previous body. Idempotent; best effort.
+    private static func writeGitignore(inDir dir: String) {
+        let path = (dir as NSString).appendingPathComponent(".gitignore")
+        if let existing = try? String(contentsOfFile: path, encoding: .utf8),
+           existing != gitignoreBody {
+            // A `.gitignore` we didn't write (user's own rules) — leave it.
+            return
+        }
+        try? gitignoreBody.write(to: URL(fileURLWithPath: path), atomically: true, encoding: .utf8)
     }
 
     // MARK: - Paths

@@ -624,11 +624,15 @@ public final class SessionService {
                     // compat-loads alongside its own `.grok/hooks/crow.json` — every
                     // event then double-fires, reverting
                     // `stripPriorCompatHooksForGrokHandoff` on the next warm crowd
-                    // restart (#861 review r10). Using the session's writer also
-                    // repairs an adopted Cursor/Codex/OpenCode session whose own
-                    // config was lost, which the Claude-hardcoded version silently
-                    // skipped; Codex/OpenCode writers are no-op / global, so the
-                    // call is harmless for them.
+                    // restart (#861 review r10). Every writer this now reaches is
+                    // per-worktree and session-scoped (Cursor `.cursor/hooks.json`,
+                    // OpenCode `.opencode/plugins/crow-hooks.js`, Grok
+                    // `.grok/hooks/crow.json`, Antigravity `.agents/hooks.json`) or a
+                    // literal no-op (Codex — its config is global, installed once at
+                    // boot), so the widened write rewrites each session's own config
+                    // with its own UUID — the repair, not a new risk. It also fixes
+                    // an adopted Cursor/OpenCode/Antigravity session whose own config
+                    // was lost, which the Claude-hardcoded version silently skipped.
                     if let crowPath = ClaudeHookConfigWriter.resolveCrowBinary(devRoot: ConfigStore.loadDevRoot()),
                        let worktree = appState.primaryWorktree(for: terminal.sessionID),
                        let session = appState.sessions.first(where: { $0.id == terminal.sessionID }),
@@ -796,11 +800,26 @@ public final class SessionService {
         var text = command
         if let session = appState.sessions.first(where: { $0.id == sessionID }),
            let agent = AgentRegistry.shared.agent(for: session.agentKind) {
+            let worktreePath = appState.primaryWorktree(for: sessionID)?.worktreePath
+            // Pre-seed folder trust for THIS path too (#861 review r11): a
+            // brand-new managed terminal from `crow new-terminal --command` — how
+            // `/crow-workspace` creates `.work` sessions — dispatches here, not
+            // through `launchAgent`, so without this a Grok `.work` worktree gets
+            // its `.grok/hooks/crow.json` written (below, via prepareAgentLaunchText)
+            // but is never trusted, and Grok silently skips those hooks → the whole
+            // state bridge is inert. Shared helper, same `.review`-skip gate as the
+            // other three seed sites.
+            if let worktreePath {
+                seedTrustIfNeeded(
+                    agentKind: session.agentKind,
+                    sessionKind: session.kind,
+                    worktreePath: worktreePath)
+            }
             text = AgentLaunch.prepareAgentLaunchText(
                 command: command,
                 agent: agent,
                 sessionID: sessionID,
-                worktreePath: appState.primaryWorktree(for: sessionID)?.worktreePath,
+                worktreePath: worktreePath,
                 crowPath: ClaudeHookConfigWriter.resolveCrowBinary(devRoot: ConfigStore.loadDevRoot()),
                 telemetryPort: telemetryPort
             ).text
@@ -808,6 +827,52 @@ public final class SessionService {
         // Ensure a trailing newline so TmuxBackend.sendText delivers Enter.
         TerminalRouter.send(routedTerminal, text: text.hasSuffix("\n") ? text : text + "\n")
         appState.terminalReadiness[terminalID] = .agentLaunched
+    }
+
+    /// Whether to pre-seed the agent's folder-trust store for a launch of
+    /// `agentKind` on a `sessionKind` worktree. Pure so the gate is testable
+    /// without touching the user's real global trust files.
+    ///
+    /// Claude seeds unconditionally (its trust file is the only gate; CROW-600).
+    /// Codex (#830) and Grok (#859) seed too — but **never a `.review` clone**: its
+    /// tree is `gh repo clone` output at the PR author's head, so trusting it would
+    /// arm a committed `.codex`/`.grok` hook on launch. Review falls back to the
+    /// agent's own trust prompt (the human-gated path), and `prepareReviewClone`
+    /// strips committed agent config as defense-in-depth. Cursor/OpenCode/
+    /// Antigravity have no folder-trust store, so they never seed.
+    nonisolated static func shouldSeedFolderTrust(
+        agentKind: AgentKind, sessionKind: SessionKind) -> Bool {
+        switch agentKind {
+        case .claudeCode: return true
+        case .codex, .grok: return sessionKind != .review
+        default: return false
+        }
+    }
+
+    /// Pre-seed the agent's folder trust for `worktreePath` so an unattended launch
+    /// isn't blocked (Claude/Codex) or silently hook-skipped (Grok) on the "trust
+    /// this folder?" gate. Shared by every launch path that opens a Crow-created
+    /// worktree/devRoot — `launchAgent`, `handoffAgent`, `createManagerTerminal`,
+    /// and the `pasteDeferredLaunch` new-terminal path — so a fifth path can't
+    /// reopen the "hooks written but folder untrusted" gap (#861 review r11).
+    /// Gating lives in `shouldSeedFolderTrust`; a real seed failure is audible.
+    func seedTrustIfNeeded(
+        agentKind: AgentKind, sessionKind: SessionKind, worktreePath: String) {
+        guard Self.shouldSeedFolderTrust(agentKind: agentKind, sessionKind: sessionKind) else { return }
+        switch agentKind {
+        case .claudeCode:
+            ClaudeTrustSeeder.seedTrust(projectPath: worktreePath)
+        case .codex:
+            if case let .failed(msg) = CodexTrustSeeder.seedTrust(projectPath: worktreePath) {
+                CrowLog.info("[SessionService] Codex trust seed failed for \(worktreePath): \(msg)")
+            }
+        case .grok:
+            if case let .failed(msg) = GrokTrustSeeder.seedTrust(projectPath: worktreePath) {
+                CrowLog.info("[SessionService] Grok trust seed failed for \(worktreePath): \(msg)")
+            }
+        default:
+            break
+        }
     }
 
     /// Re-arm the tmux readiness watch for a terminal whose first attempt
@@ -941,45 +1006,16 @@ public final class SessionService {
             }
         }
 
-        // Pre-trust the worktree so the agent's "do you trust this folder?"
-        // gate never blocks an unattended auto-launch. Trust does not inherit
-        // from parent directories, so every fresh worktree/clone would
-        // otherwise prompt (CROW-600 for Claude; #830 for Codex — persist trust
-        // for this worktree, never `--dangerously-bypass`).
-        switch agent.kind {
-        case .claudeCode:
-            ClaudeTrustSeeder.seedTrust(projectPath: worktree.worktreePath)
-        case .codex:
-            // Never trust a `.review` clone: its working tree is `gh repo clone`
-            // output checked out at the PR author's head — attacker-controlled.
-            // Trusting it would arm a committed `.codex/hooks.json` on launch
-            // (#843 review round 5). `prepareReviewClone` also strips any
-            // committed `.codex/` as defense-in-depth. Crow-created `.work`/
-            // `.job` worktrees branch off a trusted base, so they're safe to
-            // trust; the review clone falls back to Codex's folder-trust prompt
-            // (acceptable — review is the human-gated path anyway).
-            if session.kind != .review {
-                if case let .failed(msg) = CodexTrustSeeder.seedTrust(projectPath: worktree.worktreePath) {
-                    CrowLog.info("[SessionService] Codex trust seed failed for \(worktree.worktreePath): \(msg)")
-                }
-            }
-        case .grok:
-            // Same posture as Codex: seed Grok folder-trust
-            // (`~/.grok/trusted_folders.toml`) so project `.grok/hooks/*.json`
-            // aren't silently skipped on an unattended launch — but never for a
-            // `.review` clone (attacker-controlled `gh repo clone` head; trusting
-            // it would arm a committed `.grok/hooks/*.json`). `.work`/`.job`
-            // worktrees branch off a trusted base; the review clone falls back to
-            // Grok's own folder-trust prompt, and `prepareReviewClone` strips any
-            // committed `.grok/` as defense-in-depth (#859).
-            if session.kind != .review {
-                if case let .failed(msg) = GrokTrustSeeder.seedTrust(projectPath: worktree.worktreePath) {
-                    NSLog("[SessionService] Grok trust seed failed for %@: %@", worktree.worktreePath, msg)
-                }
-            }
-        default:
-            break
-        }
+        // Pre-trust the worktree so the agent's "do you trust this folder?" gate
+        // never blocks an unattended auto-launch (Claude CROW-600; Codex #830;
+        // Grok #859 — persist trust for this worktree, never `--dangerously-bypass`).
+        // Trust doesn't inherit from parent dirs, so every fresh worktree would
+        // otherwise prompt (or, for Grok, silently skip its project hooks). Never a
+        // `.review` clone (attacker-controlled `gh repo clone` head) — that gate,
+        // and the per-agent reasoning, live in `shouldSeedFolderTrust`.
+        seedTrustIfNeeded(
+            agentKind: agent.kind, sessionKind: session.kind,
+            worktreePath: worktree.worktreePath)
 
         // Resolve and apply the workspace's AI gateway for Claude sessions
         // (CROW-402). Write the resolved env block into the worktree's
@@ -1274,32 +1310,20 @@ public final class SessionService {
             throw AgentHandoffError.launchFailed(error.localizedDescription)
         }
 
-        // Agent-specific prep (trust + gateway) before the new process starts.
-        // Idempotent file writes — safe to run before teardown.
+        // Agent-specific prep before the new process starts. Idempotent file
+        // writes — safe to run before teardown. Handoff dispatches via
+        // `pendingLaunchCommands`, so neither `launchAgent` nor
+        // `pasteDeferredLaunch` seeds trust for it — seed here via the shared
+        // helper (same `.review`-skip gate as the other three sites).
+        seedTrustIfNeeded(
+            agentKind: target.kind, sessionKind: session.kind,
+            worktreePath: worktree.worktreePath)
         if target.kind == .claudeCode {
-            ClaudeTrustSeeder.seedTrust(projectPath: worktree.worktreePath)
+            // Claude also inherits the workspace AI gateway env on handoff.
             let gatewayResolved = workspaceGatewayResolved(for: sessionID)
             ClaudeHookConfigWriter.writeGatewayEnv(
                 dirPath: worktree.worktreePath, resolved: gatewayResolved)
-        } else if target.kind == .codex, session.kind != .review {
-            // Seed Codex trust on handoff too, or `crow handoff-agent --agent
-            // codex` opens in an untrusted folder and the (possibly unattended)
-            // session stalls on the folder-trust gate (#843 review round 5).
-            // Handoff dispatches via `pendingLaunchCommands`, so `launchAgent`'s
-            // seeding never fires for it. Skip `.review` for the same
-            // attacker-controlled-clone reason as `launchAgent`.
-            if case let .failed(msg) = CodexTrustSeeder.seedTrust(projectPath: worktree.worktreePath) {
-                CrowLog.info("[SessionService] Codex trust seed failed for \(worktree.worktreePath): \(msg)")
-            }
         } else if target.kind == .grok, session.kind != .review {
-            // Seed Grok trust on handoff too, for the same reason as Codex:
-            // `crow handoff-agent --agent grok` dispatches via
-            // `pendingLaunchCommands`, so `launchAgent`'s seeding never fires for
-            // it, and an untrusted folder silently skips the project hooks Crow's
-            // state detection relies on. Skip `.review` (attacker-controlled clone).
-            if case let .failed(msg) = GrokTrustSeeder.seedTrust(projectPath: worktree.worktreePath) {
-                NSLog("[SessionService] Grok trust seed failed for %@: %@", worktree.worktreePath, msg)
-            }
             // A `.work`/`.job` handoff from Claude/Cursor leaves that prior
             // agent's Crow-managed hook config on disk (same session UUID, same
             // event names Grok registers), which Grok compat-loads alongside its
@@ -1793,30 +1817,17 @@ public final class SessionService {
         // can carry a bearer token) is the final write; both merge into the same
         // {devRoot}/.claude/settings.local.json without clobbering each other.
         writeManagerHookConfig(for: session, dirPath: cwd)
-        // CROW-600: a brand-new devRoot would otherwise block the Manager on
-        // the agent's trust gate. No-ops when already trusted (#830 extends
-        // this to Codex Managers).
-        switch session.agentKind {
-        case .claudeCode:
-            ClaudeTrustSeeder.seedTrust(projectPath: cwd)
-        case .codex:
-            if case let .failed(msg) = CodexTrustSeeder.seedTrust(projectPath: cwd) {
-                CrowLog.info("[SessionService] Codex trust seed failed for \(cwd): \(msg)")
-            }
-        case .grok:
-            // ⚠️ Grok's folder trust cascades to subdirectories, so seeding the
-            // devRoot here makes every review clone under `{devRoot}` Grok-trusted.
-            // The review-clone strip (`stripGrokConfigFromReviewClone`, run on both
-            // launch paths that can open a `.review` clone in Grok) is therefore the
-            // *only* guard between that cascade and committed-hook RCE — any future
-            // third Grok launch path into a review clone MUST strip before it opens
-            // (#861 review r8).
-            if case let .failed(msg) = GrokTrustSeeder.seedTrust(projectPath: cwd) {
-                NSLog("[SessionService] Grok trust seed failed for %@: %@", cwd, msg)
-            }
-        default:
-            break
-        }
+        // CROW-600: a brand-new devRoot would otherwise block the Manager on the
+        // agent's trust gate. No-ops when already trusted (#830 Codex, #861 Grok).
+        // ⚠️ Grok's folder trust cascades to subdirectories, so seeding the devRoot
+        // makes every review clone under `{devRoot}` Grok-trusted — the review-clone
+        // strip (`stripGrokConfigFromReviewClone`, run on both launch paths that can
+        // open a `.review` clone in Grok) is therefore the *only* guard between that
+        // cascade and committed-hook RCE; any future Grok launch path into a review
+        // clone MUST strip before it opens (#861 review r8). Manager sessions are
+        // never `.review`, so the shared helper always seeds here.
+        seedTrustIfNeeded(
+            agentKind: session.agentKind, sessionKind: session.kind, worktreePath: cwd)
         // CROW-402: write the Manager gateway env block to {devRoot}/.claude so
         // manual `claude` re-runs in this terminal inherit the same routing. The
         // Manager's cwd is the devRoot.
@@ -2849,7 +2860,7 @@ public final class SessionService {
     ///
     /// Idempotent; no-ops for any layer the clone doesn't ship. Shared by
     /// `prepareReviewClone` (creation-time review agent) and the Grok handoff arm
-    /// so the gate can't drift. A real removal failure is audible (`NSLog`).
+    /// so the gate can't drift. A real removal failure is audible (`CrowLog.error`).
     nonisolated static func stripGrokConfigFromReviewClone(clonePath: String) {
         let base = clonePath as NSString
         removeReviewCloneConfig(
@@ -2914,8 +2925,7 @@ public final class SessionService {
             && error.code == NSFileNoSuchFileError {
             // Not shipped — the common, expected case. Stay quiet.
         } catch {
-            NSLog("[SessionService] Failed to strip %@ from review clone %@: %@",
-                  label, clonePath, error.localizedDescription)
+            CrowLog.error("[SessionService] Failed to strip \(label) from review clone \(clonePath): \(error.localizedDescription)")
         }
     }
 
@@ -3136,8 +3146,7 @@ public final class SessionService {
             try fm.createDirectory(atPath: cloneSettingsDir, withIntermediateDirectories: true)
             try settingsContent.write(toFile: settingsPath, atomically: true, encoding: .utf8)
         } catch {
-            NSLog("[SessionService] Failed to write bundled .claude/settings.json to review clone %@: %@ (any committed file was already removed — fail-closed)",
-                  clonePath, error.localizedDescription)
+            CrowLog.error("[SessionService] Failed to write bundled .claude/settings.json to review clone \(clonePath): \(error.localizedDescription) (any committed file was already removed — fail-closed)")
         }
 
         return ReviewClonePrep(

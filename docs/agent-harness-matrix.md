@@ -272,9 +272,11 @@ All harnesses report lifecycle events by shelling out to `crow hook-event`, but
   Grok build folder-trust is inert (everything trusted), and on release trust
   cascades from a trusted parent, so the strip — not trust-skipping — is the
   durable guard. **Deferred / re-check:** the *global* `~/.claude`/`~/.cursor`
-  double-fire on handoff (user-controlled config, state-machine noise not RCE),
-  and whether Grok's project-hook merge double-counts in a handed-off worktree
-  (dedup, cf. Codex §3b).
+  double-fire (user-controlled config, no Crow session UUID, not RCE), and the
+  Grok-**Manager** devRoot case (`writeManagerHookConfig`). The *project*
+  handed-off-worktree double-count is **closed** — `stripPriorCompatHooksForGrokHandoff`
+  strips the prior agent's compat hooks on handoff and the warm-adopt path writes
+  the session's own agent config (#861 r9-r10).
 
 Claude, Cursor, and Grok get **per-session UUID scope**; Codex and OpenCode
 share the host's global config and are disambiguated by `cwd`. See
