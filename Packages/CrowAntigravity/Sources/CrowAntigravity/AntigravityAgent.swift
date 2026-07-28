@@ -9,11 +9,12 @@ import CrowCore
 /// Structurally a near-clone of `CursorAgent`: hooks are Claude-Code-style, so
 /// the `HookConfigWriter` / `StateSignalSource` pair does real work (not a
 /// `cwd`-scoped fallback); remote control is faked via `crow send` typing into
-/// the interactive TUI (no native RC protocol); `.review` is unsupported in
-/// Phase A (like Codex). What Antigravity *can't* do is self-host — the CLI is
-/// closed-source and Google-Sign-In/GCP-authed, so it runs only against Google's
-/// cloud models (Gemini 3 Pro default, Claude Sonnet 4.5). That fails Corveil's
-/// self-host axis and is a **permanent** gap, not a phase.
+/// the interactive TUI (no native RC protocol); `.review` dispatches the
+/// inlined `crow-review-pr` SKILL body via `-p` (like Cursor/Codex/OpenCode —
+/// #902). What Antigravity *can't* do is self-host — the CLI is closed-source
+/// and Google-Sign-In/GCP-authed, so it runs only against Google's cloud models
+/// (Gemini 3 Pro default, Claude Sonnet 4.5). That fails Corveil's self-host
+/// axis and is a **permanent** gap, not a phase.
 public struct AntigravityAgent: CodingAgent {
     public let kind: AgentKind = .antigravity
     public let displayName: String = "Antigravity"
@@ -106,13 +107,26 @@ public struct AntigravityAgent: CodingAgent {
             }
             return "\(agentPath)\(autoArgs) -c\n"
         case .review:
-            // Review-on-Antigravity is unsupported in Phase A: the
-            // `/crow-review-pr` flow isn't wired for this harness yet. Returning
-            // nil makes Crow log the skip rather than dispatch a review it can't
-            // satisfy (no posted-verdict path). A documented Tier-2 gap — unlike
-            // Codex/Cursor/OpenCode, which inline the skill body, Antigravity has
-            // no review dispatch until a follow-up wires one.
-            return nil
+            // Review-on-Antigravity (#902): same unattended dispatch shape as
+            // `.job` above, only the prompt file differs. `.crow-review-prompt.md`
+            // holds the *inlined* `crow-review-pr` SKILL body (Antigravity has no
+            // Crow slash-command engine, so `SessionService.buildReviewPrompt`
+            // hands it the self-contained brief — not a bare `/crow-review-pr`
+            // line it couldn't resolve). The inlined SKILL runs `gh pr review`
+            // itself, so the verdict path needs no extra plumbing. Restart resumes
+            // with `-c` (same machine-global most-recent caveat as `.job`).
+            //
+            // The review clone is an attacker-controlled `gh` checkout at the PR
+            // head: `prepareReviewClone` strips its committed `.agents/` before
+            // `agy` launches, and `launchAgent` never trusts a review clone.
+            if !session.reviewPromptDispatched {
+                let promptPath = (worktreePath as NSString)
+                    .appendingPathComponent(".crow-review-prompt.md")
+                // Quote the path so a devRoot containing spaces doesn't split
+                // `cat`'s argv and resolve the prompt to empty.
+                return "\(agentPath)\(autoArgs) -p \"$(cat \(AntigravityLaunchArgs.shellQuote(promptPath)))\"\n"
+            }
+            return "\(agentPath)\(autoArgs) -c\n"
         case .manager:
             // Manager sessions never auto-launch an agent — Crow drives them
             // externally. Returning nil is the contract, not a gap.

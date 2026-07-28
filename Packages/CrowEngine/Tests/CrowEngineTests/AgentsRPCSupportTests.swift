@@ -147,35 +147,24 @@ struct AgentsRPCSupportTests {
     /// a value — deliberately not registered in `AgentRegistry.shared`, which is
     /// process-wide and shared with every parallel suite.
     private var availableWithAntigravity: [AgentsRPC.KnownAgent] {
-        // `available: true` on purpose — the capability gate must reject review
-        // even for an Antigravity that IS installed. Marking it unavailable would
-        // pass the test for the wrong reason (the availability gate firing first).
         available + [.init(kind: .antigravity, name: "Antigravity", binary: "agy", available: true)]
     }
 
-    /// Review-on-Antigravity would create sessions that persist the kind and then
-    /// never launch (`autoLaunchCommand(.review)` → nil). Refusing here matches
-    /// `handoffAgent`, which already throws `reviewNotSupported` for the same
-    /// pair — it would be incoherent to refuse the handoff but configure it.
-    @Test func decodeByKindRejectsAnAgentThatCannotRunTheRole() {
-        do {
-            _ = try AgentsRPC.decodeByKind(
+    /// Review-on-Antigravity is allowed since #902 wired its review dispatch:
+    /// `crow agents set --review antigravity` configures the role, matching
+    /// `handoffAgent` (which no longer throws `reviewNotSupported` for the pair).
+    @Test func decodeByKindAllowsReviewOnAntigravity() throws {
+        #expect(
+            try AgentsRPC.decodeByKind(
                 ["by_kind": .object(["review": .string("antigravity")])],
                 available: availableWithAntigravity)
-            Issue.record("expected a rejection")
-        } catch {
-            let message = String(describing: error)
-            #expect(message.contains("antigravity"))
-            #expect(message.contains("review"))
-            // Must not be mistaken for the availability gate — it *is* available.
-            #expect(!message.contains("Expected one of"))
-        }
+                == [.review: .antigravity])
     }
 
-    /// The gate is per-role, not a blanket ban: Antigravity runs work and job
-    /// sessions fine, and only `.review` is unsupported.
-    @Test func decodeByKindAllowsAntigravityForRolesItCanRun() throws {
-        for role in SessionKind.allCases where role != .review {
+    /// The gate is not a role ban: Antigravity now runs every session role,
+    /// including `.review` (#902).
+    @Test func decodeByKindAllowsAntigravityForEveryRole() throws {
+        for role in SessionKind.allCases {
             let params: [String: JSONValue] = [
                 "by_kind": .object([role.rawValue: .string("antigravity")])
             ]
@@ -198,7 +187,10 @@ struct AgentsRPCSupportTests {
     }
 
     @Test func validateRoleSupportsAgentMirrorsTheHandoffPredicate() throws {
-        // Exactly the pair `handoffAgent` refuses, and nothing else.
+        // Mirrors `handoffAgent` exactly: it throws iff `shouldRefuseReviewHandoff`
+        // does. That predicate refuses nothing today (every agent runs review
+        // since #902), so this asserts no throw across the board — and keeps the
+        // two surfaces coupled should a future review-incapable agent flip it.
         for role in SessionKind.allCases {
             for kind in [AgentKind.claudeCode, .codex, .cursor, .openCode, .antigravity] {
                 let refused = SessionService.shouldRefuseReviewHandoff(

@@ -17,8 +17,9 @@ deliberate, documented gaps (full grid in the
 > `agy` CLI) — joined as an explicit **Tier-2 / experimental** target: a real,
 > driveable CLI that lands below the self-hostable harnesses and ships with
 > honest, documented gaps (closed-source + Google-auth-locked ⇒ a *permanent*
-> self-host ❌, hooks-only state detection, no review, no MCP bridge, a
-> supply-chain gate on its binary provenance). It is the first harness added
+> self-host ❌, hooks-only state detection, no review [closed #902 — see below],
+> no MCP bridge, a supply-chain gate on its binary provenance). It is the first
+> harness added
 > under the tiering this ADR defines; its gaps live in the same
 > [capability matrix](../agent-harness-matrix.md) column and are governed by the
 > Tier-2 rationale below.
@@ -53,6 +54,27 @@ deliberate, documented gaps (full grid in the
 > ignores a mode-gated flag used outside its mode (`agent --output-format json
 > --version` exits 0, no error), so a pre-floor build recognizing `--trust`
 > would no-op it and degrade to the old prompt rather than reject the launch.
+
+> **Amendment (2026-07-28, #902):** Antigravity's **review** gap — recorded as a
+> Tier-2 deferral (its `autoLaunchCommand(.review)` returned `nil`, so a review
+> session assigned to it never launched) — **closes**. Review now dispatches the
+> **inlined `crow-review-pr` SKILL body** via `agy -p "$(cat …-review-prompt.md)"`,
+> exactly the path Cursor/Codex/OpenCode already take (Antigravity has no Crow
+> slash-command engine, so the terse `/crow-review-pr <URL>` form was never an
+> option). The inlined SKILL runs `gh pr review` itself, so the posted-verdict
+> path needs no extra plumbing; the footer names Antigravity via the threaded
+> `agentKind`. The security posture that justified deferring — `agy` runs a
+> committed `.agents/hooks.json` with **no approval gate** — is handled by the
+> same **strip-not-trust** pattern the other review harnesses use: the review
+> clone's `.agents/` is removed at creation (`prepareReviewClone`) and on a
+> handoff that flips a review session to Antigravity, and review clones are never
+> auto-trusted. With review wired, the old **`shouldRefuseReviewHandoff`
+> refusal** (which gated both `crow agents set --review antigravity` and the
+> review handoff) is retired — the predicate now refuses nothing, kept only as
+> the single coupling point for a hypothetical future review-incapable harness.
+> Antigravity's **self-host** axis gap remains **permanent** (closed-source,
+> Google-auth-locked); this amendment closes only the review deferral, not the
+> Tier-2 classification.
 
 Until now, the *why* behind each gap lived only in scattered code comments —
 several of them **pinned to a specific upstream version** ("sync-only as of

@@ -34,8 +34,8 @@ capabilities, update this table in the same PR.
 | Hook → session scope | ✅ per-session UUID | ✅ per-session UUID (#829) | ❌ `cwd` match (per-worktree UUID deferred) | ❌ `cwd` match | ✅ per-session UUID | ✅ per-session UUID |
 | Hook async delivery | ✅ `PostToolUse*` async | ⚠️ declared, timing unverified | ❌ sync-only (v0.141.0) | ⚠️ names verified, timing unverified | ❌ sync-only (async support unverified) | ❌ no `async` in Antigravity's schema — all sync |
 | MCP (e.g. Jira) | ✅ `jira` MCP server via `~/.claude.json` | ✅ `jira` bridged into `~/.cursor/mcp.json` (#829) | ✅ mirrored from `~/.claude.json` into `config.toml` | ❌ falls back to `acli` | ❌ falls back to `acli` (Jira MCP bridge deferred; Grok *does* read Claude/Cursor MCP configs) | ❌ falls back to `acli` (file bridge deferred) |
-| Review (`/crow-review-pr`) | ✅ slash-command | ✅ inlined skill body | ✅ inlined skill body | ✅ inlined skill body | ✅ inlined skill body (human-gated) | ❌ unsupported in Phase A (`autoLaunchCommand(.review)` → nil) |
-| Initial-prompt injection | ✅ `$(cat …-prompt.md)` + deferred paste | ✅ `$(cat …)` job/review; handoff launcher auto-wired (#829); `.work` bare | ✅ `.job` + `.review` (`$(cat …-prompt.md)`) | ✅ run-then-`--continue` | ✅ run-then-`-c` (`.job`/`.review`); `.work` bare | ✅ `-p "$(cat …-job-prompt.md)"` (`.job`); `.work` bare |
+| Review (`/crow-review-pr`) | ✅ slash-command | ✅ inlined skill body | ✅ inlined skill body | ✅ inlined skill body | ✅ inlined skill body (human-gated) | ✅ inlined skill body (#902) |
+| Initial-prompt injection | ✅ `$(cat …-prompt.md)` + deferred paste | ✅ `$(cat …)` job/review; handoff launcher auto-wired (#829); `.work` bare | ✅ `.job` + `.review` (`$(cat …-prompt.md)`) | ✅ run-then-`--continue` | ✅ run-then-`-c` (`.job`/`.review`); `.work` bare | ✅ `-p "$(cat …-{job,review}-prompt.md)"` (`.job`/`.review`, #902); `.work` bare |
 | Gateway env / trust seed / telemetry | ✅ Claude special-case | ⚠️ trust seed only (`--trust`, per-launch, except `.review`) | ⚠️ trust seed only (`[projects."…"]` in `config.toml`) | ❌ | ⚠️ trust seed only (`[folders."…"]` in `~/.grok/trusted_folders.toml`) | ❌ |
 | Rename passthrough (`/rename`) | ✅ | ✅ | ✅ | ✅ | ✅ (alias `/title`) | ❌ unverified on v1.1.7 (opt-out `nil`) |
 | Self-host / local models | provider-dependent | provider-dependent | provider-dependent | provider-dependent | ✅ `config.toml` `[model.*]` → any OpenAI/Anthropic-compatible or local (Ollama) endpoint | ❌ **permanent** — closed-source, Google-Sign-In/GCP-locked (Gemini 3 Pro / Claude Sonnet 4.5 only) |
@@ -356,8 +356,9 @@ share the host's global config and are disambiguated by `cwd`. See
 
 - **Claude** gets the terse slash-command form `/crow-review-pr <URL>`; the
   bundled `.claude/skills/crow-review-pr/SKILL.md` supplies the instructions.
-- **Cursor & OpenCode** have no slash-command engine, so Crow **inlines the whole
-  skill body** into the prompt file (`cursorReviewPrompt`, #431).
+- **Cursor, OpenCode & Antigravity** have no slash-command engine, so Crow
+  **inlines the whole skill body** into the prompt file (`cursorReviewPrompt`,
+  #431; Antigravity wired the same way, #902).
 - **Codex** inlines the skill body too (`buildReviewPrompt` `.codex` arm, #830):
   the native `codex review` subcommand only prints local findings and posts no
   GitHub verdict, so it can't satisfy `decideReviewCompletions`. Runs
@@ -390,6 +391,9 @@ harness (CROW-439) — it's gated on the prompt-file convention, not on agent ki
   session in the TUI with a fresh stdin. Uses `--prompt-file` (not `-p "$(cat …)"`)
   so a large inlined review-skill body never becomes a giant argv or rides a
   subshell (#861). `.job`/`.review` only; `.work` launches `grok` bare.
+- **Antigravity:** `agy -p "$(cat …)"` for job/review (path shell-quoted); the
+  tmux PTY means the non-TTY `-p` stdout-drop doesn't bite. Restart resumes with
+  `-c`. `.work` launches `agy` bare (#902).
 
 ### Gateway env / trust seed / telemetry
 
@@ -466,8 +470,11 @@ it through the same `CodingAgent` protocol as the others — its adapter
 lifecycle events (JSON on stdin, JSON verdict on stdout) so the
 `HookConfigWriter`/`StateSignalSource` pair does real work; per-worktree
 `.agents/hooks.json` with the session UUID baked in (per-session scope, not
-`cwd`); remote control faked via `crow send`; `.review` unsupported in Phase A
-(no review dispatch — unlike Codex/Cursor/OpenCode, which inline the skill body).
+`cwd`); remote control faked via `crow send`; `.review` dispatches the inlined
+`crow-review-pr` SKILL body via `-p` (#902), like Codex/Cursor/OpenCode — its
+review clone's committed `.agents/` is stripped (creation-time in
+`prepareReviewClone`, and on a handoff that flips a review session to Antigravity)
+so a hostile PR head's hooks can't fire when `agy` loads the clone.
 It ships **Tier-2** ([ADR 0015](adr/0015-harness-capability-tiers.md))
 with honest, documented gaps (#860).
 

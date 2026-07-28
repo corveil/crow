@@ -162,17 +162,18 @@ public enum AgentsRPC {
 
     /// Reject pinning a role to an agent that cannot run that kind of session.
     ///
-    /// Today that is only review-on-Antigravity: `autoLaunchCommand(.review)`
-    /// returns nil for that harness, so the session would be created, persist
-    /// `antigravity`, and then simply never launch an agent — the same
-    /// "configured but unlaunchable" outcome `decodeAgentKind`'s registry gate
-    /// exists to prevent, just reached by a different route.
+    /// **No agent is role-incapable today** — review-on-Antigravity was the last
+    /// such case and its review dispatch landed in #902, so
+    /// `shouldRefuseReviewHandoff` is now `false` for every kind and this never
+    /// throws. It is retained as the coupling point that keeps `crow agents set`
+    /// in lockstep with `handoffAgent`: were a future harness to ship without
+    /// review dispatch, gating it in `shouldRefuseReviewHandoff` would refuse it
+    /// on both surfaces at once, preventing a "configured but unlaunchable"
+    /// outcome — the same failure `decodeAgentKind`'s registry gate prevents,
+    /// reached by a different route.
     ///
     /// Delegates to `SessionService.shouldRefuseReviewHandoff`, the predicate
-    /// `handoffAgent` already throws on, so the two surfaces cannot drift: it
-    /// would be incoherent for `crow handoff-agent --agent antigravity` to be
-    /// refused on a review session while `crow agents set --review antigravity`
-    /// quietly configured every future one.
+    /// `handoffAgent` already throws on, so the two surfaces cannot drift.
     ///
     /// Scope note: this validates only what the caller is *changing*, not the
     /// resolved outcome of the whole config. Rejecting on resolution would mean

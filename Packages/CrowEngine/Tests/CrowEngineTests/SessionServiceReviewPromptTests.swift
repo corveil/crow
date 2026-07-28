@@ -119,6 +119,25 @@ struct SessionServiceReviewPromptTests {
         #expect(!prompt.hasPrefix("/crow-review-pr"))
     }
 
+    @Test func buildReviewPromptAntigravityBranchInlinesSkillBody() {
+        // #902: Antigravity has no Crow slash-command engine, so like
+        // Cursor/Codex/OpenCode it MUST get the inlined SKILL body — not the bare
+        // `/crow-review-pr <URL>` one-liner it can't resolve (which would leave
+        // the review unable to run `gh pr review` and post a verdict). Guards the
+        // regression where `.antigravity` silently fell into the Claude `default`
+        // branch.
+        let prompt = SessionService.buildReviewPrompt(
+            prURL: Self.prURL,
+            prTitle: Self.prTitle,
+            repoSlug: Self.repoSlug,
+            prNumber: Self.prNumber,
+            agentKind: .antigravity
+        )
+
+        #expect(!prompt.isEmpty)
+        #expect(!prompt.hasPrefix("/crow-review-pr"))
+    }
+
     @Test func buildReviewPromptClaudeBranchIsTerseSlashCommand() {
         let prompt = SessionService.buildReviewPrompt(
             prURL: Self.prURL,
