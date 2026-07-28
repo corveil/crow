@@ -55,12 +55,13 @@ struct GrokLaunchArgsTests {
         // bare `||` fallbacks on each leg carry none.
         let occurrences = cmd.components(separatedBy: "--permission-mode auto").count - 1
         #expect(occurrences == 2)
-        // Flag-rejection fallback on BOTH legs (#861 r12+r13): the headless leg
-        // (carries the prompt) and the resume leg each `|| ` to a bare form, so an
-        // upstream `--permission-mode`/`--deny` rename neither loses the prompt nor
-        // strands the resume.
-        #expect(cmd.contains("--prompt-file '/tmp/p.md' || 'grok' --prompt-file '/tmp/p.md'"))
-        #expect(cmd.contains(" -c || 'grok' -c\n"))
+        // Flag-rejection fallback on BOTH legs (#861 r12-r14): the headless leg
+        // (carries the prompt) and the resume leg each fall back to a bare form —
+        // gated on clap's exit-2 usage error, so an upstream `--permission-mode`/
+        // `--deny` rename neither loses the prompt nor strands the resume, while a
+        // mid-turn failure or Ctrl-C does NOT trigger a re-run.
+        #expect(cmd.contains("--prompt-file '/tmp/p.md' || { [ $? -eq 2 ] && 'grok' --prompt-file '/tmp/p.md'; }"))
+        #expect(cmd.contains(" -c || { [ $? -eq 2 ] && 'grok' -c; }\n"))
     }
 
     @Test func firstLaunchChainedCommandShellQuotesPromptPath() {
@@ -92,28 +93,28 @@ struct GrokLaunchArgsTests {
     @Test func resumeTUICommandCarriesAutoForResumedJobs() {
         let cmd = GrokLaunchArgs.resumeTUICommand(binary: "grok", autoPermissionMode: true)
         #expect(cmd.contains("--permission-mode auto"))
-        // Every restart of an auto job also gets the flag-rejection fallback, so a
-        // later upstream flag change can't make each restart die identically (r12).
-        #expect(cmd.hasSuffix(" -c || 'grok' -c\n"))
+        // Every restart of an auto job also gets the exit-2 flag-rejection fallback,
+        // so a later upstream flag change can't make each restart die identically.
+        #expect(cmd.hasSuffix(" -c || { [ $? -eq 2 ] && 'grok' -c; }\n"))
     }
 
-    @Test func resumeLegFallbackHasNoFlags() {
-        // The `|| <bin> -c` fallback is bare on purpose: if the flags are what got
-        // rejected, retrying them would fail identically. And no fallback at all
-        // when there are no flags to reject.
+    @Test func resumeLegFallbackIsExitTwoGated() {
+        // No flags → bare resume, no fallback (nothing to reject).
         #expect(GrokLaunchArgs.resumeLeg(bin: "'grok'", flags: "") == "'grok' -c")
+        // Flags present → retry bare ONLY on clap's exit-2 usage error, never on a
+        // Ctrl-C (130) or other non-zero — so the pane doesn't reopen on quit.
         #expect(GrokLaunchArgs.resumeLeg(bin: "'grok'", flags: " --permission-mode auto")
-            == "'grok' --permission-mode auto -c || 'grok' -c")
+            == "'grok' --permission-mode auto -c || { [ $? -eq 2 ] && 'grok' -c; }")
     }
 
-    @Test func headlessLegFallbackHasNoFlags() {
-        // Same shape as `resumeLeg` for the prompt-consuming leg (#861 r13): bare
-        // `|| <bin> --prompt-file <p>` when flags are present so a flag rejection
-        // still consumes the prompt (at `ask`), and no fallback when they're empty.
+    @Test func headlessLegFallbackIsExitTwoGated() {
+        // Same exit-2-gated shape for the prompt-consuming leg (#861 r14): a flag
+        // rejection still consumes the prompt (at `ask`), but a mid-turn failure
+        // does NOT re-run the whole job. No fallback when flags are empty.
         #expect(GrokLaunchArgs.headlessLeg(bin: "'grok'", flags: "", quotedPath: "'/p.md'")
             == "'grok' --prompt-file '/p.md'")
         #expect(GrokLaunchArgs.headlessLeg(bin: "'grok'", flags: " --permission-mode auto", quotedPath: "'/p.md'")
-            == "'grok' --permission-mode auto --prompt-file '/p.md' || 'grok' --prompt-file '/p.md'")
+            == "'grok' --permission-mode auto --prompt-file '/p.md' || { [ $? -eq 2 ] && 'grok' --prompt-file '/p.md'; }")
     }
 
     @Test func bareCommandIsJustTheQuotedBinary() {

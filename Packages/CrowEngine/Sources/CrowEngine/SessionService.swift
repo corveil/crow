@@ -815,6 +815,21 @@ public final class SessionService {
                     sessionKind: session.kind,
                     worktreePath: worktreePath)
             }
+            // Neutralize a Grok `.review` clone's committed config layers FIRST —
+            // this is the FOURTH path that can open Grok in a review clone (#861
+            // review r14), besides `prepareReviewClone`, `launchAgent`, and the
+            // handoff arm. `crow new-terminal --session <review> --command grok
+            // --managed` dispatches here, and the clone may already be Grok-trusted
+            // via a Manager-seeded `{devRoot}` trust cascade — so a committed
+            // `.grok/hooks/*.json` would fire even though this path seeds no new
+            // trust. Must precede `prepareAgentLaunchText` below, which (re)writes
+            // Crow's own clean `.grok/hooks/crow.json`. Same shared gate as the
+            // other three strips so they can't drift.
+            if let worktreePath,
+               Self.shouldStripGrokReviewClone(
+                   agentKind: session.agentKind, sessionKind: session.kind) {
+                Self.stripGrokConfigFromReviewClone(clonePath: worktreePath)
+            }
             text = AgentLaunch.prepareAgentLaunchText(
                 command: command,
                 agent: agent,

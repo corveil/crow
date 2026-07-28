@@ -17,9 +17,11 @@ import Foundation
 /// inlined review-skill body never becomes a giant argv or rides a `$(cat …)`
 /// subshell. Semicolon (not `&&`) so the TUI still opens if the headless leg
 /// exits non-zero, and — when the bounded auto flags are on — **both** legs carry
-/// a bare `|| <bin> …` fallback so a *flag* rejection (upstream churn) degrades to
-/// "prompt consumed / TUI open at Grok's default `ask` policy" rather than a lost
-/// prompt and a dead pane (see `headlessLeg` / `resumeLeg`).
+/// an `|| { [ $? -eq 2 ] && <bin> … }` fallback so a *flag* rejection (clap usage
+/// error, exit 2 — upstream churn) degrades to "prompt consumed / TUI open at
+/// Grok's default `ask` policy" rather than a lost prompt and a dead pane. Gated
+/// on exit 2, not any non-zero, so a mid-turn failure or Ctrl-C doesn't re-run the
+/// job or reopen the pane (see `headlessLeg` / `resumeLeg`).
 ///
 /// **Bounded auto-permission (`.job` only, never `--yolo`).** Grok has no
 /// sandbox flag; its only prompt-reducing modes are `--permission-mode auto`
@@ -92,21 +94,25 @@ public enum GrokLaunchArgs {
     }
 
     /// The headless prompt-consuming leg (`grok --prompt-file <p>`). Like
-    /// `resumeLeg`, when the bounded flags are present it appends a bare
-    /// `|| <bin> --prompt-file <p>` fallback: if a `--permission-mode`/`--deny`
-    /// rename/removal makes the flagged form a usage error, the prompt is still
-    /// consumed at Grok's default `ask` policy — *more* restrictive than the
-    /// dropped `--permission-mode auto` + `--deny`, so nothing is loosened —
-    /// instead of the prompt being lost forever. That loss is permanent without
-    /// this: `launchAgent` sets `reviewPromptDispatched = true` unconditionally
-    /// after dispatch, so a first launch whose headless leg failed never re-sends
-    /// the prompt — every later launch takes the resume-only branch (#861 r13).
-    /// The flag rejection is a parse-time failure (no work done before the bare
-    /// retry). No fallback when flags are empty (`.work`/`.review`).
+    /// `resumeLeg`, when the bounded flags are present it appends a fallback that
+    /// re-runs the *bare* form so a `--permission-mode`/`--deny` rename/removal
+    /// still consumes the prompt at Grok's default `ask` policy — *more*
+    /// restrictive than the dropped `--permission-mode auto` + `--deny`, so nothing
+    /// is loosened — instead of the prompt being lost forever. That loss is
+    /// permanent without this: `launchAgent` sets `reviewPromptDispatched = true`
+    /// unconditionally after dispatch, so a first launch whose headless leg failed
+    /// never re-sends the prompt (#861 r13).
+    ///
+    /// The fallback is gated on **exit code 2** — clap's argument-parse failure —
+    /// not any non-zero exit (#861 review r14). A blanket `||` would also re-run
+    /// the whole job prompt when Grok fails *mid-turn* (API 5xx, tool error) after
+    /// it already edited/committed, risking duplicated work; `[ $? -eq 2 ]`
+    /// restricts the retry to a genuine usage error, where nothing ran first. No
+    /// fallback when flags are empty (`.work`/`.review`).
     static func headlessLeg(bin: String, flags: String, quotedPath: String) -> String {
-        flags.isEmpty
-            ? "\(bin) --prompt-file \(quotedPath)"
-            : "\(bin)\(flags) --prompt-file \(quotedPath) || \(bin) --prompt-file \(quotedPath)"
+        let flagged = "\(bin)\(flags) --prompt-file \(quotedPath)"
+        guard !flags.isEmpty else { return flagged }
+        return "\(flagged) || { [ $? -eq 2 ] && \(bin) --prompt-file \(quotedPath); }"
     }
 
     /// Resume the last Grok session in the interactive TUI (`-c`/`--continue`).
@@ -123,19 +129,24 @@ public enum GrokLaunchArgs {
     }
 
     /// The interactive-resume leg (`grok -c`). When the bounded auto-permission
-    /// flags are present, append a bare `|| <bin> -c` fallback: if a future
+    /// flags are present, append a fallback that resumes *bare* if a future
     /// upstream rename/removal of `--permission-mode`/`--deny` (this mirror churns
     /// — the ticket's pinned probe reported `--permission-mode auto` *absent*, the
-    /// current docs *present*) turns the flagged resume into a usage error, the
-    /// bare resume still opens the TUI at Grok's default `ask` policy instead of
-    /// the pane silently dying. The `;`-not-`&&` chain alone can't survive that,
-    /// because the headless leg carries the *same* flags — so both flagged legs
-    /// fail together, and every later `resumeTUICommand` restart fails identically.
-    /// `||` (not a trailing `;`) so the fallback fires only on a non-zero flagged
-    /// resume, not after a clean TUI exit. No fallback when flags are empty
-    /// (`.work`/`.review`): a bare `grok -c` has no flags to reject (#861 review r12).
+    /// current docs *present*) turns the flagged resume into a usage error, so the
+    /// TUI still opens at Grok's default `ask` policy instead of the pane silently
+    /// dying. The `;`-not-`&&` chain alone can't survive that, because the headless
+    /// leg carries the *same* flags — so both flagged legs fail together, and every
+    /// later `resumeTUICommand` restart fails identically.
+    ///
+    /// Gated on **exit code 2** (clap usage error), not any non-zero exit (#861
+    /// review r14): a bare `||` would re-open the TUI on a user Ctrl-C (130) too,
+    /// so the pane reopens Grok instead of returning to the shell. `[ $? -eq 2 ]`
+    /// fires only on a genuine flag rejection. No fallback when flags are empty
+    /// (`.work`/`.review`): a bare `grok -c` has no flags to reject (#861 r12).
     static func resumeLeg(bin: String, flags: String) -> String {
-        flags.isEmpty ? "\(bin) -c" : "\(bin)\(flags) -c || \(bin) -c"
+        let flagged = "\(bin)\(flags) -c"
+        guard !flags.isEmpty else { return flagged }
+        return "\(flagged) || { [ $? -eq 2 ] && \(bin) -c; }"
     }
 
     /// Bare interactive TUI launch — the `.work` path, where the user types
