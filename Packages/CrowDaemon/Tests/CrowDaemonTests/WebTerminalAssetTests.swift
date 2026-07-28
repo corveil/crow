@@ -42,13 +42,26 @@ import Testing
             "no `const MOUSE_MODES` declaration")
     }
 
-    /// `source` with `//` line comments removed, for assertions about what the
-    /// code *does*. The prose around a handler legitimately names the thing the
+    /// `source` with its comments removed, for assertions about what the code
+    /// *does*. The prose around a handler legitimately names the thing the
     /// handler must not call (e.g. #875's "the right-click menu still calls
     /// pasteIntoTerminal()"), and that explanation is the part most worth
     /// keeping — so it must not trip the guard.
-    private static func stripLineComments(_ source: String) -> String {
-        source.split(separator: "\n", omittingEmptySubsequences: false)
+    ///
+    /// Both `/* … */` and `//` forms, so a block comment can't smuggle a
+    /// mention past a negative assertion (review). Only *closed* block comments
+    /// are dropped: an unterminated `/*` is left in place, which can make a
+    /// guard fail loudly but never pass silently.
+    private static func stripComments(_ source: String) -> String {
+        var withoutBlocks = ""
+        var rest = Substring(source)
+        while let open = rest.range(of: "/*"),
+              let close = rest.range(of: "*/", range: open.upperBound..<rest.endIndex) {
+            withoutBlocks += rest[..<open.lowerBound]
+            rest = rest[close.upperBound...]
+        }
+        withoutBlocks += rest
+        return withoutBlocks.split(separator: "\n", omittingEmptySubsequences: false)
             .map { line -> Substring in
                 guard let marker = line.range(of: "//") else { return line }
                 return line[..<marker.lowerBound]
@@ -208,7 +221,7 @@ import Testing
     /// the same handler (the drift this suite exists to prevent).
     @Test func keyHandlersLeavePasteToTheBrowserAndCancelWhatTheyDoHandle() throws {
         let appJS = try Self.webAsset("app.js")
-        let body = Self.stripLineComments(String(try Self.functionBody("handleTerminalKey", in: appJS)))
+        let body = Self.stripComments(String(try Self.functionBody("handleTerminalKey", in: appJS)))
         #expect(
             !body.contains("pasteIntoTerminal"),
             "app.js's key handler must not paste on Cmd+V — the native paste already does (#875)")
@@ -226,7 +239,7 @@ import Testing
 
         let debugPage = try Self.webAsset("terminal.html")
         #expect(
-            !Self.stripLineComments(debugPage).lowercased().contains("e.key === 'v'"),
+            !Self.stripComments(debugPage).lowercased().contains("e.key === 'v'"),
             "terminal.html's key handler must not claim the paste chord either (#875)")
         #expect(
             debugPage.contains("addItem('Paste', true, pasteClipboard)"),
@@ -234,5 +247,31 @@ import Testing
         #expect(
             debugPage.contains("e.preventDefault();") && debugPage.contains("e.stopPropagation();"),
             "terminal.html's copy branch must cancel the browser default")
+    }
+
+    /// Cancelling a gesture and being able to perform it are one decision: a
+    /// surface may only `preventDefault()` the copy chord if its copy always
+    /// delivers. `navigator.clipboard` is absent over plain http (a
+    /// `--host 0.0.0.0` daemon) and `writeText` can reject where it exists, so
+    /// without the legacy `execCommand` path cancelling turns Cmd+C into a
+    /// silent no-op — the same non-secure-context trap that decided #875's paste
+    /// direction, which is why the debug page's copy was left cancelling with no
+    /// fallback in the first cut (review).
+    ///
+    /// Reading the clipboard is guarded rather than fallback'd: there is no
+    /// `execCommand('paste')` for a web page, so the menu simply does nothing
+    /// where the API is missing — and Cmd+V still pastes, natively.
+    @Test(arguments: ["app.js", "terminal.html"])
+    func clipboardWritesAlwaysDeliverAndReadsAreGuarded(asset: String) throws {
+        let source = try Self.webAsset(asset)
+        #expect(
+            source.contains("navigator.clipboard && navigator.clipboard.writeText"),
+            "\(asset) must feature-detect writeText before using it")
+        #expect(
+            source.contains("execCommand('copy')"),
+            "\(asset) must keep the non-secure-context copy fallback")
+        #expect(
+            source.contains("navigator.clipboard && navigator.clipboard.readText"),
+            "\(asset) must guard readText — it has no fallback to reach for")
     }
 }

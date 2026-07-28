@@ -119,9 +119,33 @@
       // through) when there's no selection.
       function copySelection() {
         const sel = term.getSelection();
-        if (sel) { navigator.clipboard.writeText(sel).catch(function () {}); }
+        if (!sel) return;
+        // The key handler cancels the browser's own copy, so this must always
+        // deliver — mirrors app.js's copyToClipboard/fallbackCopy pair. Over
+        // plain http (a `--host 0.0.0.0` daemon) navigator.clipboard is absent
+        // entirely, and writeText can still reject where it exists; without the
+        // legacy fallback either case would be a silent no-op (review).
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(sel).catch(function () { fallbackCopy(sel); });
+        } else {
+          fallbackCopy(sel);
+        }
+      }
+      function fallbackCopy(text) {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand('copy'); } catch (_) { /* best effort */ }
+        document.body.removeChild(ta);
       }
       function pasteClipboard() {
+        // Guarded like app.js's pasteIntoTerminal: navigator.clipboard is absent
+        // over plain http, where this would otherwise throw out of the menu
+        // click. Cmd+V is unaffected either way — the browser pastes it natively.
+        if (!(navigator.clipboard && navigator.clipboard.readText)) return;
         // Route through xterm so bracketed-paste wraps it — hidden newlines in the
         // clipboard would otherwise auto-execute in the shell (review).
         navigator.clipboard.readText().then(function (t) { if (t) term.paste(t); }).catch(function () {});

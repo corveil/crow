@@ -88,9 +88,9 @@ function withoutClipboard() {
 
 // xterm hands the handler the raw KeyboardEvent; we count the cancellation calls
 // the handler makes on it.
-function key(k, { meta = false, ctrl = false, type = 'keydown' } = {}) {
+function key(k, { meta = false, ctrl = false, shift = false, type = 'keydown' } = {}) {
   const e = {
-    type, key: k, metaKey: meta, ctrlKey: ctrl,
+    type, key: k, metaKey: meta, ctrlKey: ctrl, shiftKey: shift,
     prevented: 0, stopped: 0,
     preventDefault() { e.prevented++; },
     stopPropagation() { e.stopped++; },
@@ -120,13 +120,19 @@ async function main() {
     check('does not cancel the native paste gesture', e.prevented === 0 && e.stopped === 0);
   }
   {
-    // Shift/caps-lock variant of the same chord.
+    // The chord arrives with an uppercase `key` under Shift, and under caps
+    // lock with no Shift at all — the old handler matched both, so both must
+    // stay unhandled.
     withClipboard();
     setup();
-    const e = key('V', { meta: true });
-    check('Cmd+Shift+V is left alone too', T.handleTerminalKey(e) === true);
+    const shifted = key('V', { meta: true, shift: true });
+    check('Cmd+Shift+V is left alone too', T.handleTerminalKey(shifted) === true);
+    const capsLocked = key('V', { meta: true });
+    check('caps-locked Cmd+V is left alone too', T.handleTerminalKey(capsLocked) === true);
     await settle();
-    check('...and still pastes nothing explicitly', pasted.length === 0);
+    check('...and neither pastes explicitly', pasted.length === 0);
+    check('...nor cancels the native paste',
+      shifted.prevented === 0 && capsLocked.prevented === 0);
   }
   {
     // Ctrl+V was never handled here (it's literal-next in readline/tmux) and
