@@ -519,6 +519,12 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                 await MainActor.run { capturedAppState.onSetSessionActive?(id) }
                 return ["ok": .bool(true)]
             },
+            // NOTE (#888): shadowed by the daemon's own `add-merge-label`, which
+            // `makeCommandRouter` registers unconditionally — `CommandRouter`
+            // only reaches a fallback for an UNregistered method. It also can't
+            // grow the daemon's additive `warning` field: `onAddMergeLabel` is
+            // `(UUID) -> Void`, so it returns before the provider call happens.
+            // The canonical shape lives in CrowDaemon/RPCHandlers.swift.
             "add-merge-label": { @Sendable params in
                 guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
                     throw RPCError.invalidParams("session_id required")

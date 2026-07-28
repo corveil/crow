@@ -43,6 +43,7 @@
     reviewRequested: 'Review Requested', changesRequested: 'Changes Requested',
     checksFailing: 'CI Failing',
     autoWorkspaceCreated: 'Auto-Workspace Created', autoMergeEnabled: 'Auto-Merge Enabled',
+    autoMergeBlocked: 'Auto-Merge Blocked',
     autoRebasePushed: 'Branch Rebased', autoRebaseConflicts: 'Rebase Conflicts',
     configReloaded: 'Config Reloaded',
   };
@@ -56,6 +57,7 @@
     checksFailing: 'CI checks started failing on your PR.',
     autoWorkspaceCreated: 'Crow auto-created a workspace for a crow:auto-labeled issue.',
     autoMergeEnabled: 'Crow enabled auto-merge on a crow:merge-labeled PR.',
+    autoMergeBlocked: "Crow gave up auto-merging a crow:merge PR — e.g. the repo has GitHub's \"Allow auto-merge\" off.",
     autoRebasePushed: 'Crow rebased a PR branch onto its base and force-pushed.',
     autoRebaseConflicts: 'An auto-rebase hit conflicts that need attention.',
     configReloaded: 'Crow picked up a change to config.json.',
@@ -63,16 +65,16 @@
   // Canonical NotificationEvent set + defaults (CrowCore NotificationEvent) —
   // the config only stores events the user has touched, so we render all of them
   // and materialize any missing ones with their default sound (CROW-593). The
-  // trailing five are Crow's own automation events (CROW-768).
+  // trailing six are Crow's own automation events (CROW-768, #888).
   const EVENT_ORDER = [
     'taskComplete', 'agentWaiting', 'reviewRequested', 'changesRequested', 'checksFailing',
-    'autoWorkspaceCreated', 'autoMergeEnabled', 'autoRebasePushed', 'autoRebaseConflicts',
-    'configReloaded',
+    'autoWorkspaceCreated', 'autoMergeEnabled', 'autoMergeBlocked', 'autoRebasePushed',
+    'autoRebaseConflicts', 'configReloaded',
   ];
   const EVENT_DEFAULT_SOUND = {
     taskComplete: 'Glass', agentWaiting: 'Funk', reviewRequested: 'Glass',
     changesRequested: 'Funk', checksFailing: 'Sosumi',
-    autoWorkspaceCreated: 'Hero', autoMergeEnabled: 'Glass',
+    autoWorkspaceCreated: 'Hero', autoMergeEnabled: 'Glass', autoMergeBlocked: 'Basso',
     autoRebasePushed: 'Bottle', autoRebaseConflicts: 'Basso', configReloaded: 'Tink',
   };
   const BUILT_IN_SOUNDS = [

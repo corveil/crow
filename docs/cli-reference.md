@@ -152,9 +152,9 @@ Preconditions are enforced server-side, because the browser enforces them by hid
 | `crow complete-session`   | Session status → `completed` | — |
 | `crow set-session-active` | Session status → `active`    | — |
 | `crow mark-issue-done`    | Closes the linked issue on the provider, then completes the session | A linked ticket + a resolvable provider |
-| `crow add-merge-label`    | Adds the `crow:merge` label to the session's PR | A linked PR + a backend supporting auto-merge labels |
+| `crow add-merge-label`    | Adds the `crow:merge` label to the session's PR (warns when the watcher can't act on it) | A linked PR + a backend supporting auto-merge labels |
 
-The two provider-side verbs report real outcomes: an unmet precondition (no ticket, no PR, no provider, provider lacks the capability, unparseable repo slug) **and** a failed provider call both exit non-zero with the reason. They never print a success receipt for an action that didn't happen.
+The two provider-side verbs report real outcomes: an unmet precondition (no ticket, no PR, no provider, provider lacks the capability, unparseable repo slug) **and** a failed provider call both exit non-zero with the reason. They never print a success receipt for an action that didn't happen — and when an action *did* happen but can't have its intended effect, the receipt carries a `warning` rather than a bare all-clear.
 
 ```bash
 crow mark-in-review --session <uuid>
@@ -169,6 +169,16 @@ crow add-merge-label --session <uuid>
 | `--session` | yes      | Session UUID |
 
 The three status verbs return `{"session_id": "…", "status": "…"}`; `mark-issue-done` and `add-merge-label` return `{"ok": true, "session_id": "…"}`.
+
+`add-merge-label` additionally returns a `warning` string when the label landed but auto-merge won't follow — the watcher is off, or Crow has already given up on that PR (e.g. the repo has GitHub's **Allow auto-merge** setting disabled). `ok` stays `true`, because the label really is on the PR; the key is omitted entirely when there's nothing to warn about, so `jq -e .warning` is a reliable test (#888).
+
+```json
+{
+  "ok": true,
+  "session_id": "3f2a…",
+  "warning": "The label was added, but Crow's auto-merge watcher is off, so nothing will merge this PR. Turn it on in Settings → Automation, or run `crow automation set --auto-merge-watcher-enabled true`."
+}
+```
 
 Manager sessions are rejected by all five — they stay always-active and never move through the review/complete lifecycle, matching the web UI, which never offers these actions for a Manager.
 

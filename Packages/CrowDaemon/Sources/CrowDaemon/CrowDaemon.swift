@@ -658,6 +658,14 @@ public enum CrowDaemon {
                    title: "Auto-merge enabled — \(sessionName(sessionID))",
                    body: "PR #\(number) will merge once required reviews and checks pass.")
         }
+        // The counterpart, and the one that actually needed a channel: a
+        // permanent skip latches, so no later poll re-announces it. Before #888
+        // the only trace was one line in crowd-automation.log (CROW-621).
+        tracker.onAutoMergeBlocked = { sessionID, _, number, state in
+            notify(.autoMergeBlocked, key: sessionID.uuidString,
+                   title: "Auto-merge blocked — \(sessionName(sessionID))",
+                   body: "PR #\(number): \(state.message)")
+        }
     }
 
     /// Wire the automation hooks that need somewhere to act: the daemon's Manager

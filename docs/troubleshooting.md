@@ -23,7 +23,7 @@
 | Sidebar status dot stuck gray                            | Terminal never initialized — click the session tab to trigger `createSurface()` |
 | Sidebar status dot stuck yellow                          | Shell is spawning but the probe file never appeared. Check `[TerminalManager]` logs for shell-startup errors |
 | Auto-respond didn't fire on a failed CI run              | Toggle is at **Settings → Automation → Auto-respond**, off by default. The session must have an active Claude Code terminal that `TerminalRouter.canSend` accepts; a torn-down terminal won't receive the prompt. See [automation.md](automation.md) for full coverage. |
-| Auto-merge never enables on a `crow:merge` PR            | Check `~/Library/Logs/crow/crowd-automation.log` — every poll writes an `auto-merge:` line naming each candidate and its skip reason (`no-crow-merge-label`, `changes-requested`, `not-in-viewer-prs`, …). A `skipped entirely — autoMergeWatcherEnabledProvider() is false` line means the watcher is off in Settings. Before #782, a `crowd` started without tmux on its PATH disabled every automation silently; the `startup:` line in that log now records whether tmux was found. |
+| Auto-merge never enables on a `crow:merge` PR            | Look at the session's PR pill first (#888): a **red ⛙** means Crow permanently gave up (hover for the reason), **orange** means it will retry, **grey** means the watcher is off in **Settings → Automation**. The most common permanent cause is the repo having GitHub's **Allow auto-merge** setting disabled — Crow direct-squash-merges a fully green, approved, Crow-authored PR in that case, and reports a blocked verdict when the PR isn't eligible for that. For the full history, `~/Library/Logs/crow/crowd-automation.log` writes an `auto-merge:` line every poll naming each candidate and its skip reason: `already-enabled`, `not-open`, `draft`, `no-crow-merge-label`, `conflicting`, `changes-requested`, `in-flight`, `not-in-viewer-prs`, `update-branch-already-attempted-for-head`, `no-crow-session-trailer`, `backend-lacks-auto-merge-capability`, `repo-disallows-auto-merge`, `repo-disallows-auto-merge-not-yet-mergeable`, `watcher-off`, `direct-merge-failed`. A `skipped entirely — autoMergeWatcherEnabledProvider() is false` line means the watcher is off. Before #782, a `crowd` started without tmux on its PATH disabled every automation silently; the `startup:` line in that log now records whether tmux was found. |
 | Sidebar shows "working" forever after a `※ recap:` line  | The Claude Code session recap (`awaySummaryEnabled`, on by default in v2.1.108+) fires hook events after a turn's `Stop`. Crow now ignores those — if you're on an older build, disable the recap by setting `"awaySummaryEnabled": false` in `~/.claude/settings.json`, toggling "Session recap" off via `/config` inside Claude Code, or exporting `CLAUDE_CODE_ENABLE_AWAY_SUMMARY=0`. |
 
 ## Debugging
@@ -63,9 +63,14 @@ tail -f ~/Library/Logs/crow/crowd-automation.log
 grep 'auto-merge' ~/Library/Logs/crow/crowd-automation.log | tail -20
 ```
 
-Each poll emits one `auto-merge:` summary (`dispatched=… updateBranch=… skipped=…`
-with a per-PR reason list), plus a `startup:` line recording whether tmux was found
-and which automation flags were armed. The file rotates to `…log.1` past 5 MB.
+Each poll emits one `auto-merge:` summary (`dispatched=… updateBranch=… directMerge=…
+skipped=…` with a per-PR reason list), plus a `startup:` line recording whether tmux
+was found and which automation flags were armed. The file rotates to `…log.1` past 5 MB.
+
+Since #888 the log is the audit trail rather than the only channel: the same verdict
+also reaches the web UI as a tinted ⛙ chip on the PR pill (with the reason in its
+tooltip), and a *permanent* block additionally fires an **Auto-Merge Blocked**
+notification — once per PR, not once per 60s poll.
 
 ## Unsigned Builds
 

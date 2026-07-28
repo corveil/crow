@@ -20,6 +20,11 @@ public enum NotificationEvent: String, Codable, Sendable, CaseIterable, Identifi
     // NotificationManager (ADR-0010); emitted by the daemon's watchers.
     case autoWorkspaceCreated
     case autoMergeEnabled
+    // The counterpart to `autoMergeEnabled`: the watcher looked at a
+    // `crow:merge` PR and concluded it will never merge it (#888). Permanent
+    // skips are latched, so this is the ONLY channel besides the log file —
+    // there is no later poll to notice it.
+    case autoMergeBlocked
     case autoRebasePushed
     case autoRebaseConflicts
     case configReloaded
@@ -35,6 +40,7 @@ public enum NotificationEvent: String, Codable, Sendable, CaseIterable, Identifi
         case .checksFailing: "CI Failing"
         case .autoWorkspaceCreated: "Auto-Workspace Created"
         case .autoMergeEnabled: "Auto-Merge Enabled"
+        case .autoMergeBlocked: "Auto-Merge Blocked"
         case .autoRebasePushed: "Branch Rebased"
         case .autoRebaseConflicts: "Rebase Conflicts"
         case .configReloaded: "Config Reloaded"
@@ -50,6 +56,7 @@ public enum NotificationEvent: String, Codable, Sendable, CaseIterable, Identifi
         case .checksFailing: "CI checks started failing on your PR"
         case .autoWorkspaceCreated: "Crow auto-created a workspace for an assigned issue"
         case .autoMergeEnabled: "Crow enabled auto-merge on a PR"
+        case .autoMergeBlocked: "Crow can't auto-merge a crow:merge PR and has stopped trying"
         case .autoRebasePushed: "Crow rebased a PR branch onto its base and pushed"
         case .autoRebaseConflicts: "An auto-rebase hit conflicts that need attention"
         case .configReloaded: "Crow reloaded its configuration"
@@ -67,8 +74,10 @@ public enum NotificationEvent: String, Codable, Sendable, CaseIterable, Identifi
         case .autoMergeEnabled: "Glass"
         case .autoRebasePushed: "Bottle"
         // Deliberately harsh, so a conflict is audibly distinct from the
-        // success events it sits next to (CROW-768).
-        case .autoRebaseConflicts: "Basso"
+        // success events it sits next to (CROW-768). `autoMergeBlocked` joins
+        // it for the same reason: it is the one auto-merge event that means
+        // "Crow stopped and needs you", not "Crow handled it" (#888).
+        case .autoRebaseConflicts, .autoMergeBlocked: "Basso"
         case .configReloaded: "Tink"
         }
     }
@@ -78,7 +87,7 @@ public enum NotificationEvent: String, Codable, Sendable, CaseIterable, Identifi
     /// daemon and always carry their own notification body.
     public var isAutomationEvent: Bool {
         switch self {
-        case .autoWorkspaceCreated, .autoMergeEnabled, .autoRebasePushed,
+        case .autoWorkspaceCreated, .autoMergeEnabled, .autoMergeBlocked, .autoRebasePushed,
              .autoRebaseConflicts, .configReloaded:
             true
         case .taskComplete, .agentWaiting, .reviewRequested, .changesRequested, .checksFailing:

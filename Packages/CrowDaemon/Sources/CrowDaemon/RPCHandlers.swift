@@ -950,6 +950,23 @@ func makeCommandRouter(
                     if let prLink = appState.links(for: id).first(where: { $0.linkType == .pr }) {
                         entry["pr_link"] = .object(["label": .string(prLink.label), "url": .string(prLink.url)])
                     }
+                    // What the auto-merge watcher decided about this PR — a
+                    // SIBLING of `pr`, not a member of it. `pr` mirrors what the
+                    // forge says about the pull request; this is what *Crow*
+                    // decided about it, and the two have different lifetimes: a
+                    // PR missing from the viewer fetch has no `prStatus` at all,
+                    // yet that absence is itself a verdict worth showing (#888).
+                    // Absent key means "nothing to report", which is also what
+                    // every pre-#888 daemon sends — so old clients degrade to
+                    // the persisted `auto_merge` bool on `list-sessions`.
+                    if let autoMerge = appState.autoMergeState[id] {
+                        entry["auto_merge_state"] = .object([
+                            "phase": .string(autoMerge.phase.rawValue),
+                            "reason": .string(autoMerge.reason),
+                            "message": .string(autoMerge.message),
+                            "permanent": .bool(autoMerge.permanent),
+                        ])
+                    }
                     // Per-session analytics strip (CROW-722). Prefer the live
                     // in-memory hook aggregate (open sessions); fall back to the
                     // durable end-of-session snapshot (terminal sessions). Mirrors
@@ -1381,8 +1398,11 @@ func makeCommandRouter(
             }
             return try await mapRPCError {
                 let id = try SessionLifecycleRPC.sessionID(from: params)
-                try await tracker.addMergeLabel(sessionID: id)
-                return SessionLifecycleRPC.okResult(id: id)
+                // The label really did land (a failure throws above), so `ok`
+                // stays true — but a label the watcher will never act on is
+                // exactly #888's silent failure, hence the additive warning.
+                let warning = try await tracker.addMergeLabel(sessionID: id)
+                return SessionLifecycleRPC.okResult(id: id, warning: warning)
             }
         },
 

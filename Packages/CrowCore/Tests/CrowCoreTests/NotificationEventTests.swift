@@ -3,8 +3,19 @@ import Testing
 @testable import CrowCore
 
 @Test func notificationEventAllCasesCount() {
-    // 5 agent/PR events + 5 automation events (CROW-768).
-    #expect(NotificationEvent.allCases.count == 10)
+    // 5 agent/PR events + 6 automation events (CROW-768, plus autoMergeBlocked
+    // in #888).
+    #expect(NotificationEvent.allCases.count == 11)
+}
+
+@Test func autoMergeBlockedIsAnAutomationEvent() {
+    // The daemon pushes it at the point the watcher gives up — no client can
+    // derive it from polled state, because a permanent skip latches and no
+    // later poll re-announces it (#888).
+    #expect(NotificationEvent.autoMergeBlocked.isAutomationEvent)
+    // Harsh by design: unlike its `autoMergeEnabled` sibling this one means
+    // "Crow stopped and needs you", not "Crow handled it".
+    #expect(NotificationEvent.autoMergeBlocked.defaultSound == "Basso")
 }
 
 @Test func notificationEventDefaultSoundsNonEmpty() {
@@ -80,7 +91,7 @@ import Testing
 
 @Test func automationEventsArePresentAndClassified() {
     let automation: [NotificationEvent] = [
-        .autoWorkspaceCreated, .autoMergeEnabled, .autoRebasePushed,
+        .autoWorkspaceCreated, .autoMergeEnabled, .autoMergeBlocked, .autoRebasePushed,
         .autoRebaseConflicts, .configReloaded,
     ]
     for event in automation {

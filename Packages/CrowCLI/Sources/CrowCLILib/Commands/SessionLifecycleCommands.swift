@@ -104,6 +104,11 @@ public struct AddMergeLabel: ParsableCommand {
         discussion: """
         Requires a linked PR (attach one with `crow add-link --type pr --url …`) \
         and a provider whose backend supports auto-merge labels.
+
+        The label is applied even when Crow's auto-merge watcher can't act on it \
+        (the watcher is off, or the repo has GitHub "Allow auto-merge" disabled). \
+        In that case the response carries an additional `warning` field explaining \
+        why nothing will merge; `ok` is still true, because the label did land.
         """
     )
 
