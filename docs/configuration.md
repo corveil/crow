@@ -167,6 +167,8 @@ Notes on the repo lookup:
 - **A `"*"` pattern claims everything**, making that workspace the fallback owner for any repo no other workspace names.
 - **No match means unset, not inherit.** A PR in a repo no workspace claims runs against the vanilla Anthropic API and logs `No workspace claims repo …`. The Manager's gateway is never inherited by other sessions — see [Manager gateway](#manager-gateway).
 
+Both membership lists are editable from **Settings → Workspaces** or with `crow workspace edit --workspace NAME --always-include acme/widget --auto-review-repo 'acme/*'` (note those flags replace the whole list rather than appending — see [cli-reference.md](cli-reference.md#workspace-commands)). So a review that resolved to no gateway is usually fixed by adding its repo to the owning workspace.
+
 ### Secret storage
 
 A header value can be either:
