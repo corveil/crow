@@ -27,12 +27,20 @@ public struct PRRef: Sendable, Hashable {
 /// - reconcile branch matches (`CodeBackend.findRecentPRsForBranches`)
 ///
 /// Not every field is populated by every call — for example, `prStates` skips
-/// checks/reviews because they're moot for the closed PRs that query targets.
-/// (GitHub's `prStates` does fetch `labels`, since a session-linked PR reached
-/// only via the stale path must still carry its `crow:merge` label — #838;
-/// GitLab's stale-MR path still omits them, which is fine while auto-merge is
-/// GitHub-only.) Callers merge records by URL using the `merge` helper to fill
-/// in gaps as more data arrives.
+/// reviews and commits, so the CROW-508 needs-refine rule only ever fires off
+/// the open-viewer query. (GitHub's `prStates` does fetch `labels`, since a
+/// session-linked PR reached only via the stale path must still carry its
+/// `crow:merge` label — #838; it also fetches `statusCheckRollup` — #894, see
+/// below; GitLab's stale-MR path still omits both, which is fine while
+/// auto-merge is GitHub-only.) Callers merge records by URL using the `merge`
+/// helper to fill in gaps as more data arrives.
+///
+/// `prStates` fetches checks despite once being documented as "moot for closed
+/// PRs" (#894): the stale set is not exclusively closed PRs. A PR past
+/// `viewer.pullRequests(first: 50)`, or one in a SAML-restricted org — which is
+/// a permanent hole in that connection, not a transient one — reaches this
+/// record only via `prStates`, so without the rollup it could never show CI
+/// state at all. Don't drop the field as dead weight.
 public struct PRRecord: Sendable {
     public let number: Int
     public let url: String

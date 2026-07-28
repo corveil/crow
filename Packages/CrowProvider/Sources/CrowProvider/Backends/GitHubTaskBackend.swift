@@ -332,17 +332,19 @@ public struct GitHubTaskBackend: TaskBackend {
     /// Whether the project-item lookup response shows the issue on at least
     /// one Project board. Distinguishes "no board at all" (→ label fallback)
     /// from "on a board but no matching Status option" (→ unimplemented).
+    ///
+    /// Reads the nodes leniently (#894): a SAML-nulled project item used to
+    /// fail the whole array cast, so an issue that IS on a board read as
+    /// "no board" and got a `crow:` fallback label written onto it instead.
     static func hasProjectItems(_ output: String) -> Bool {
         guard let data = output.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let dataObj = json["data"] as? [String: Any],
               let repo = dataObj["repository"] as? [String: Any],
-              let issue = repo["issue"] as? [String: Any],
-              let projectItems = issue["projectItems"] as? [String: Any],
-              let nodes = projectItems["nodes"] as? [[String: Any]] else {
+              let issue = repo["issue"] as? [String: Any] else {
             return false
         }
-        return !nodes.isEmpty
+        return !LenientJSON.nodes(issue, "projectItems").isEmpty
     }
 
     /// Walk the project-item lookup response and find the (itemID, projectID,
@@ -356,20 +358,17 @@ public struct GitHubTaskBackend: TaskBackend {
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let dataObj = json["data"] as? [String: Any],
               let repo = dataObj["repository"] as? [String: Any],
-              let issue = repo["issue"] as? [String: Any],
-              let projectItems = issue["projectItems"] as? [String: Any],
-              let nodes = projectItems["nodes"] as? [[String: Any]] else {
+              let issue = repo["issue"] as? [String: Any] else {
             return nil
         }
-        for node in nodes {
+        for node in LenientJSON.nodes(issue, "projectItems") {
             guard let itemID = node["id"] as? String,
                   let project = node["project"] as? [String: Any],
                   let projectID = project["id"] as? String,
                   let fv = node["fieldValueByName"] as? [String: Any],
                   let field = fv["field"] as? [String: Any],
-                  let fieldID = field["id"] as? String,
-                  let options = field["options"] as? [[String: Any]] else { continue }
-            for option in options {
+                  let fieldID = field["id"] as? String else { continue }
+            for option in LenientJSON.objects(field["options"]) {
                 guard let name = option["name"] as? String,
                       let optionID = option["id"] as? String else { continue }
                 // Route through the aliasing constructor so e.g. "Review",
@@ -579,18 +578,20 @@ public struct GitHubTaskBackend: TaskBackend {
         defaultState: String,
         projectStatusOverride: TicketStatus? = nil
     ) -> [AssignedIssue] {
-        guard let nodes = searchObj?["nodes"] as? [[String: Any]] else { return [] }
-        return nodes.compactMap { node -> AssignedIssue? in
+        // `LenientJSON`, not `as? [[String: Any]]` (#894): GitHub nullifies the
+        // individual nodes it won't resolve under SAML enforcement, and the
+        // all-or-nothing array cast emptied the whole ticket board alongside them.
+        return LenientJSON.nodes(searchObj).compactMap { node -> AssignedIssue? in
             guard let number = node["number"] as? Int,
                   let title = node["title"] as? String,
                   let url = node["url"] as? String else { return nil }
             let state = (node["state"] as? String ?? defaultState).lowercased()
             let repoName = (node["repository"] as? [String: Any])?["nameWithOwner"] as? String ?? ""
-            let labels = ((node["labels"] as? [String: Any])?["nodes"] as? [[String: Any]])?
+            let labels = LenientJSON.nodes(node, "labels")
                 .compactMap { labelNode -> LabelInfo? in
                     guard let name = labelNode["name"] as? String else { return nil }
                     return LabelInfo(name: name, color: labelNode["color"] as? String)
-                } ?? []
+                }
             // Tolerant parse (#751): GitHub GraphQL emits non-fractional
             // DateTime, which a `.withFractionalSeconds` formatter rejects —
             // that silently disabled updated/created sort + "opened … ago".
@@ -600,10 +601,8 @@ public struct GitHubTaskBackend: TaskBackend {
             let commentsCount = (node["comments"] as? [String: Any])?["totalCount"] as? Int
             let body = (node["bodyText"] as? String).flatMap(IssueBody.cap)
             var projectStatus: TicketStatus = projectStatusOverride ?? .unknown
-            if projectStatusOverride == nil,
-               let projectItems = node["projectItems"] as? [String: Any],
-               let itemNodes = projectItems["nodes"] as? [[String: Any]] {
-                for item in itemNodes {
+            if projectStatusOverride == nil {
+                for item in LenientJSON.nodes(node, "projectItems") {
                     if let fv = item["fieldValueByName"] as? [String: Any],
                        let statusName = fv["name"] as? String {
                         projectStatus = TicketStatus(projectBoardName: statusName)
