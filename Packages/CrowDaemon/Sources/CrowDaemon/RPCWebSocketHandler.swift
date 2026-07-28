@@ -164,6 +164,14 @@ enum RPCWebSocketHandler {
     /// `defaults.binaries` therefore remains the sole local-only config field,
     /// now enforced across two methods instead of one.
     ///
+    /// `agents-get` / `agents-set` (CROW-811) follow that same rule: they read and
+    /// write `AppConfig.defaultAgentKind` + `agentsByKind`, which name a harness
+    /// rather than carry a credential, and Settings → General's Agent pickers edit
+    /// them remotely through `set-config` already. Note the neighbouring
+    /// `defaults.binaries` — the *path* to an agent binary — stays local-only; the
+    /// distinction is between choosing among binaries the daemon already found and
+    /// telling it to execute a new one.
+    ///
     /// Note this gate only guards the HTTP/WebSocket `/rpc` path. Every method here
     /// also has a `crow` CLI verb (CROW-818), and the CLI reaches the daemon over its
     /// 0600 Unix socket, which never passes through `localOnlyDenial` — a CLI caller

@@ -1007,6 +1007,27 @@ import CrowPersistence
         #expect(RPCWebSocketHandler.localOnlyDenial(for: set, devRoot: devRoot) == nil)
     }
 
+    @Test func agentRPCsAreAllowedRemotely() throws {
+        // CROW-811: `defaultAgentKind` / `agentsByKind` name a harness rather than
+        // carry a credential, and Settings → General's Agent pickers already edit
+        // them remotely through un-gated `set-config`. Note the neighbouring
+        // `defaults.binaries` — the *path* to an agent binary — stays local-only;
+        // choosing among binaries the daemon already found is not the same as
+        // telling it to execute a new one. Deliberate: flip these to a denial
+        // string, not to nothing.
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        try ConfigStore.saveConfig(AppConfig(), devRoot: devRoot)
+
+        let get = JSONRPCRequest(id: 1, method: "agents-get", params: [:])
+        #expect(RPCWebSocketHandler.localOnlyDenial(for: get, devRoot: devRoot) == nil)
+
+        let set = JSONRPCRequest(id: 2, method: "agents-set", params: [
+            "default_agent_kind": .string("claude-code"),
+        ])
+        #expect(RPCWebSocketHandler.localOnlyDenial(for: set, devRoot: devRoot) == nil)
+    }
+
     @Test func defaultsGetIsAllowedRemotely() throws {
         // CROW-810: `defaults-get` returns a strict subset of what un-gated
         // `get-config` already sends every authenticated remote browser —
