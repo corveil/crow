@@ -265,10 +265,13 @@ All harnesses report lifecycle events by shelling out to `crow hook-event`, but
   `.mcp.json`** (Grok scans `.mcp.json` from repo root down to cwd). For a
   `.review` clone those are
   **attacker-controlled RCE**, not just double-fire noise, so
-  `stripGrokConfigFromReviewClone` neutralizes the *full* discovered surface on
-  **all three** Grok launch paths into a review clone — creation-time
-  `prepareReviewClone`, `launchAgent` (restart / `crow launch-agent`), and
-  handoff-to-Grok: it removes `.grok/`, `.cursor/`, **both** `.claude/settings.json`
+  `stripGrokConfigFromReviewClone` neutralizes the *full* discovered surface at
+  clone creation (`prepareReviewClone`) **and on every launch path** — every
+  launch routes through the shared `prepareWorktreeForAgentLaunch` gate (grep its
+  call sites, don't count: today `launchAgent`, `handoffAgent`, `pasteDeferredLaunch`,
+  `createManagerTerminal`, and the `send` RPC), so a new path can't open Grok in a
+  review clone without stripping. It removes `.grok/`, `.cursor/`, **both**
+  `.claude/settings.json`
   **and** `settings.local.json`, and repo-root `.mcp.json`. `settings.json` is a
   compat RCE source too, so it must be stripped on every path (r12): at creation
   the strip runs before `prepareReviewClone` re-writes a bundled-safe one, and on
@@ -276,7 +279,7 @@ All harnesses report lifecycle events by shelling out to `crow hook-event`, but
   removed and left absent (the one-shot creation overwrite can't reach it). The
   review skill lives in `.claude/skills/` (never read by Grok, which inlines it
   into the prompt) and is left in place (#861). Side effect of the re-strip: a
-  Grok review clone that reached `launchAgent`/handoff then has *no*
+  Grok review clone that reached any launch path then has *no*
   `.claude/settings.json`, so handing that session back to Claude Code (whose
   handoff arm only writes the gateway env) runs the Claude review without Crow's
   bundled permissions — it prompt-gates under default-on `reviewAutoPermissionMode`

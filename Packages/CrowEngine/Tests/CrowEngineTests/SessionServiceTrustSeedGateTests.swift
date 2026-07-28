@@ -38,4 +38,25 @@ struct SessionServiceTrustSeedGateTests {
             }
         }
     }
+
+    // MARK: - Compat-settings gate (#861 review r18, Yellow 2)
+
+    /// Only Grok and Codex compat-load Crow's `.claude/settings.local.json`, so
+    /// only they get the gateway-env *clear* on a non-Claude launch. Claude takes
+    /// the *write* arm, not the clear arm, so it is intentionally NOT a compat
+    /// reader here.
+    @Test func onlyGrokAndCodexReadClaudeCompatSettings() {
+        #expect(SessionService.readsClaudeCompatSettings(.grok))
+        #expect(SessionService.readsClaudeCompatSettings(.codex))
+    }
+
+    /// Cursor/OpenCode/Antigravity never read the file, so the clear must skip them
+    /// — clearing it there would be a pure rewrite (churn + a data-loss risk on a
+    /// user's hand-edited `permissions`). Claude is excluded too (it writes, not
+    /// clears).
+    @Test func nonCompatKindsDoNotReadClaudeSettings() {
+        for kind: AgentKind in [.claudeCode, .cursor, .openCode, .antigravity] {
+            #expect(!SessionService.readsClaudeCompatSettings(kind))
+        }
+    }
 }

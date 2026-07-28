@@ -1436,8 +1436,13 @@ launch_grok() {
   # consumes the prompt, then `; -c` resumes the same session in the interactive
   # TUI with a fresh terminal stdin. `--prompt-file` (not `-p "$(cat …)"`) so a
   # large prompt never becomes a giant argv or rides a subshell (#861). Brace
-  # group keeps both commands gated on a successful `cd`. Mirrors
-  # GrokLaunchArgs.firstLaunchChainedCommand — including its shell-quoting: unlike
+  # group keeps both commands gated on a successful `cd`. Mirrors the
+  # *no-auto-flags* form of GrokLaunchArgs.firstLaunchChainedCommand: this
+  # `/crow-workspace` path only ever launches `.work` (interactive, no
+  # auto-permission flags), so there is deliberately NO `|| { [ $? -eq 2 ] && … }`
+  # exit-2 fallback here — that fallback only guards the `--permission-mode auto` /
+  # `--deny` legs, which are emitted solely on `.job`/`.review` launches from the
+  # app, never from this script. Shell-quoting DOES match Swift exactly: unlike
   # the peers, `$bin`/`$prompt_path`/`$WORKTREE_PATH` are POSIX single-quoted via
   # `posix_quote` because `grok` collides with superagent-ai/grok-cli, so pinning a
   # (possibly spaced) `defaults.binaries.grok` is the *expected* config here. Single

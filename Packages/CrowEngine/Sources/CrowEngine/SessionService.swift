@@ -849,6 +849,26 @@ public final class SessionService {
         }
     }
 
+    /// Whether `agentKind` compat-loads Crow's `.claude/settings.local.json` — i.e.
+    /// its `env` (which can hold the gateway `Authorization: Bearer`) and `hooks`
+    /// run under that harness. Grok and Codex read Claude's project settings for
+    /// compatibility; Cursor/OpenCode/Antigravity do not read that file at all.
+    ///
+    /// Gates the *gateway-env clear* on a non-Claude launch (#861 review r18,
+    /// Yellow 2): a compat-loader must have any prior Claude bearer cleared, but
+    /// clearing it for a non-reader would be a pure rewrite of a file it never
+    /// reads — per-launch churn `Scaffolder` deliberately avoids, and (if the user
+    /// hand-edited the file into invalid JSON) a silent overwrite that drops their
+    /// `permissions.allow`. Claude itself takes the *write* arm, not the clear arm,
+    /// so it's intentionally not listed here. A future compat-loading harness is a
+    /// one-line addition.
+    nonisolated static func readsClaudeCompatSettings(_ agentKind: AgentKind) -> Bool {
+        switch agentKind {
+        case .grok, .codex: return true
+        default: return false
+        }
+    }
+
     /// Everything that must be applied to a worktree **before an agent process
     /// opens it**, as ONE gate so no launch path can drift (#861 review r17,
     /// Yellow 1 / Green 1). Two independent, each self-gated steps:
@@ -1064,15 +1084,18 @@ public final class SessionService {
             ClaudeHookConfigWriter.writeGatewayEnv(
                 dirPath: worktree.worktreePath, resolved: gatewayResolved)
             gatewayPrefix = ClaudeLaunchArgs.gatewayEnvPrefix(gatewayResolved)
-        } else {
-            // #861 review r17 (Yellow 2): the gateway `env` block carries the
+        } else if Self.readsClaudeCompatSettings(agent.kind) {
+            // #861 review r17/r18 (Yellow 2): the gateway `env` block carries the
             // workspace's `ANTHROPIC_*` / `Authorization: Bearer` header, and
-            // Codex/Grok compat-load `.claude/settings.local.json` (that's exactly
-            // why the review-clone strip deletes it). So on a *non-Claude* launch —
-            // e.g. a `.work` session first run under Claude, then handed off to Grok,
-            // relaunched here — actively CLEAR the env (`resolved: nil`) so a prior
-            // Claude launch's bearer token can't enter a different vendor's process.
-            // No-op when there's nothing to clear.
+            // Grok/Codex compat-load `.claude/settings.local.json` (that's exactly
+            // why the review-clone strip deletes it). So on a launch of a
+            // compat-loading harness — e.g. a `.work` session first run under Claude,
+            // then handed off to Grok, relaunched here — actively CLEAR the env
+            // (`resolved: nil`) so a prior Claude launch's bearer can't enter it.
+            // Scoped to compat-loaders: Cursor/OpenCode/Antigravity never read this
+            // file, so a clear there would be a pure rewrite (churn + a data-loss
+            // risk on a user's hand-edited `permissions`). `writeGatewayEnv` rewrites
+            // whenever a file exists; it only truly no-ops when none is present.
             ClaudeHookConfigWriter.writeGatewayEnv(
                 dirPath: worktree.worktreePath, resolved: nil)
         }
@@ -1372,12 +1395,14 @@ public final class SessionService {
             ClaudeHookConfigWriter.writeGatewayEnv(
                 dirPath: worktree.worktreePath,
                 resolved: workspaceGatewayResolved(for: sessionID))
-        } else {
-            // #861 review r17 (Yellow 2): a non-Claude target compat-loads
+        } else if Self.readsClaudeCompatSettings(target.kind) {
+            // #861 review r17/r18 (Yellow 2): a Grok/Codex target compat-loads
             // `.claude/settings.local.json`, so clear any `Authorization: Bearer`
             // env a prior Claude launch wrote — otherwise a corporate gateway
             // credential goes live inside a different vendor's binary. (`.review`
-            // already had the whole file deleted by the strip above.)
+            // already had the whole file deleted by the strip above.) Scoped to
+            // compat-loaders — Cursor/OpenCode/Antigravity never read the file, so a
+            // clear there is churn + a data-loss risk, not a security gain.
             ClaudeHookConfigWriter.writeGatewayEnv(
                 dirPath: worktree.worktreePath, resolved: nil)
         }
@@ -1617,13 +1642,18 @@ public final class SessionService {
     /// inherit the same routing as the initial launch (CROW-402). `managerKind` gates
     /// the bearer: a non-Claude Manager (Grok/Codex) compat-loads this file, so it
     /// gets `resolved: nil` — clearing any prior Claude Manager's token rather than
-    /// re-applying it into another vendor's env on every hydrate (#861 review r17,
-    /// Yellow 2). Mirrors the `createManagerTerminal` write site.
+    /// re-applying it into another vendor's env on every hydrate (#861 review r17/r18,
+    /// Yellow 2). Scoped to compat-loaders: a Cursor/OpenCode/Antigravity Manager
+    /// never reads this file, so it's left untouched (no per-hydrate rewrite churn).
+    /// Mirrors the `createManagerTerminal` write site.
     private func writeManagerGatewayEnv(managerKind: AgentKind) {
         guard let devRoot = ConfigStore.loadDevRoot() else { return }
-        ClaudeHookConfigWriter.writeGatewayEnv(
-            dirPath: devRoot,
-            resolved: managerKind == .claudeCode ? managerGatewayResolved() : nil)
+        if managerKind == .claudeCode {
+            ClaudeHookConfigWriter.writeGatewayEnv(
+                dirPath: devRoot, resolved: managerGatewayResolved())
+        } else if Self.readsClaudeCompatSettings(managerKind) {
+            ClaudeHookConfigWriter.writeGatewayEnv(dirPath: devRoot, resolved: nil)
+        }
     }
 
     /// Write the Manager's Claude Code hook config into `dirPath`'s
@@ -1880,15 +1910,19 @@ public final class SessionService {
             agentKind: session.agentKind, sessionKind: session.kind, worktreePath: cwd)
         // CROW-402: write the Manager gateway env block to {devRoot}/.claude so
         // manual `claude` re-runs in this terminal inherit the same routing. The
-        // Manager's cwd is the devRoot. #861 review r17 (Yellow 2): the env can
+        // Manager's cwd is the devRoot. #861 review r17/r18 (Yellow 2): the env can
         // carry an `Authorization: Bearer`, and a Grok/Codex Manager compat-loads
         // `.claude/settings.local.json` in a devRoot the seed above just trusted —
-        // so write the bearer only for a Claude Manager, and for any other harness
-        // actively CLEAR it (`resolved: nil`) so a prior Claude Manager's token
-        // can't linger in a devRoot the new harness now trusts.
-        ClaudeHookConfigWriter.writeGatewayEnv(
-            dirPath: cwd,
-            resolved: session.agentKind == .claudeCode ? managerGatewayResolved() : nil)
+        // so write the bearer only for a Claude Manager, and for a compat-loading
+        // Manager actively CLEAR it (`resolved: nil`) so a prior Claude Manager's
+        // token can't linger in a now-trusted devRoot. A Cursor/OpenCode/Antigravity
+        // Manager never reads the file, so it's left untouched (no rewrite churn).
+        if session.agentKind == .claudeCode {
+            ClaudeHookConfigWriter.writeGatewayEnv(
+                dirPath: cwd, resolved: managerGatewayResolved())
+        } else if Self.readsClaudeCompatSettings(session.agentKind) {
+            ClaudeHookConfigWriter.writeGatewayEnv(dirPath: cwd, resolved: nil)
+        }
         let rawTerminal = SessionTerminal(
             sessionID: session.id,
             name: session.name,
