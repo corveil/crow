@@ -45,6 +45,26 @@ crow defaults set --add-exclude-review-repo R | --remove-exclude-review-repo R |
 
 `crow defaults` patches `AppConfig.defaults`; at least one flag required. Lists are edited incrementally and matched case-insensitively — `--clear-X` is exclusive with add/remove for that list only. Everything is live except `--binary`, which needs a `crowd` restart (including on removal).
 
+### Automation Commands
+
+The Settings → Automation toggles. Every `set` flag is a patch; passing none is an error.
+```
+crow automation get                                → {"automation":{toggles, auto_respond, defaults, config_readable}}
+crow automation set --remote-control-enabled true|false
+                    --manager-auto-permission-mode true|false     → needs `crow restart-manager` (returns "manager_restart_required")
+                    --review-auto-permission-mode true|false
+                    --coder-view-auto-permission-mode true|false
+                    --jobs-auto-permission-mode true|false
+                    --attribution-trailers true|false             → new worktrees only
+                    --auto-create-watcher-enabled true|false      → crow:auto issue → workspace
+                    --auto-merge-watcher-enabled true|false       → crow:merge PR → merge
+                    --respond-to-changes-requested true|false
+                    --respond-to-failed-checks true|false
+                    --auto-rebase-and-resolve-conflicts true|false
+```
+
+Booleans need an explicit `true`/`false` — six of these default to **on**, and a bare flag can't express "leave alone". Everything is live within ~1 board poll (no `crowd` restart); the permission modes apply to newly launched sessions. The tab's three board-filter lists live under `crow defaults` above; `crow automation get` echoes them read-only under `defaults`, including the derived `effective_exclude_review_repos`.
+
 ### Worktree Commands
 ```
 crow add-worktree --session <uuid> --repo "name" --repo-path "/main/repo" --path "/worktree/path" --branch "feature/..." [--primary]

@@ -295,6 +295,7 @@ Crow can drive a ticket from assignment to merged with minimal manual steps. Tog
 - **Auto-start review sessions** for opted-in workspaces when a PR becomes reviewable
 - **Auto-respond** to changes-requested reviews and failed CI checks (off by default)
 - **Auto-merge** Crow-authored PRs labeled `crow:merge` via `gh pr merge --auto --squash` (off by default; only acts on PRs whose commits carry a `Crow-Session:` trailer matching a known session). Crow lazily creates the `crow:merge` label on first observation; to pre-seed it manually: `gh label create crow:merge --color 0E8A16 --description "Crow: enable auto-merge once mergeable"`
+- **Scriptable** — `crow automation get|set` drives every toggle on the tab: the five auto-permission modes, remote control, commit attribution, both label watchers, and the three auto-respond toggles. Same config as the UI, live within a board poll, no `crowd` restart. The tab's ticket/review board filters are `AppConfig.defaults` fields and belong to `crow defaults set` ([CLI reference](docs/cli-reference.md#automation-commands))
 
 ### Review Board
 

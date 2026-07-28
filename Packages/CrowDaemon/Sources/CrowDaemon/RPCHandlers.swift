@@ -1635,6 +1635,92 @@ func makeCommandRouter(
             }
         },
 
+        // Settings → Automation for `crow automation` (CROW-812). Same shape and
+        // the same `mutateConfig` lock as the CROW-814 settings verbs above, and
+        // likewise un-gated on remote `/rpc` — see the ledger in
+        // `RPCWebSocketHandler.localOnlyDenial`.
+        //
+        // Writes the eleven booleans only. The Automation tab also renders three
+        // board-filter lists, but those are `AppConfig.defaults` fields owned by
+        // `defaults-set` (CROW-810) — two writers for one field with two sets of
+        // list semantics is exactly the drift the parity work exists to prevent.
+        // `automation-get` echoes them read-only so the tab still reads as a
+        // whole from one call.
+        //
+        // Writing config is the *whole* job here: flipping one of these in the
+        // web Settings modal has no side effect either (`toggleField`'s onchange
+        // only marks the form dirty), because every consumer pulls from disk —
+        // `applyConfigToAppState` re-runs each board tick, the `IssueTracker`
+        // watcher gates are closures that reload config on every call, and
+        // `AutoRespondCoordinator` takes a `settingsProvider` closure.
+        "automation-get": { _ in
+            let (config, readable) = loadConfigReportingReadability(devRoot: devRoot)
+            return ["automation": SettingsRPC.automationJSON(config, configReadable: readable)]
+        },
+        "automation-set": { params in
+            try await mapRPCError {
+                let remoteControl = try SettingsRPC.patchBool(params, "remote_control_enabled")
+                let managerMode = try SettingsRPC.patchBool(
+                    params, "manager_auto_permission_mode")
+                let reviewMode = try SettingsRPC.patchBool(params, "review_auto_permission_mode")
+                let coderViewMode = try SettingsRPC.patchBool(
+                    params, "coder_view_auto_permission_mode")
+                let jobsMode = try SettingsRPC.patchBool(params, "jobs_auto_permission_mode")
+                let trailers = try SettingsRPC.patchBool(params, "attribution_trailers")
+                let autoCreate = try SettingsRPC.patchBool(params, "auto_create_watcher_enabled")
+                let autoMerge = try SettingsRPC.patchBool(params, "auto_merge_watcher_enabled")
+                let changesRequested = try SettingsRPC.patchBool(
+                    params, "respond_to_changes_requested")
+                let failedChecks = try SettingsRPC.patchBool(params, "respond_to_failed_checks")
+                let autoRebase = try SettingsRPC.patchBool(
+                    params, "auto_rebase_and_resolve_conflicts")
+
+                let booleans = [
+                    remoteControl, managerMode, reviewMode, coderViewMode, jobsMode, trailers,
+                    autoCreate, autoMerge, changesRequested, failedChecks, autoRebase,
+                ]
+                guard booleans.contains(where: { $0 != nil }) else {
+                    throw RPCError.invalidParams("Nothing to set — provide at least one field")
+                }
+
+                let (config, managerModeChanged) = try mutateConfig(devRoot: devRoot) {
+                    config -> (AppConfig, Bool) in
+                    let managerModeBefore = config.managerAutoPermissionMode
+                    if let remoteControl { config.remoteControlEnabled = remoteControl }
+                    if let managerMode { config.managerAutoPermissionMode = managerMode }
+                    if let reviewMode { config.reviewAutoPermissionMode = reviewMode }
+                    if let coderViewMode { config.coderViewAutoPermissionMode = coderViewMode }
+                    if let jobsMode { config.jobsAutoPermissionMode = jobsMode }
+                    if let trailers { config.attributionTrailers = trailers }
+                    if let autoCreate { config.autoCreateWatcherEnabled = autoCreate }
+                    if let autoMerge { config.autoMergeWatcherEnabled = autoMerge }
+                    if let changesRequested {
+                        config.autoRespond.respondToChangesRequested = changesRequested
+                    }
+                    if let failedChecks {
+                        config.autoRespond.respondToFailedChecks = failedChecks
+                    }
+                    if let autoRebase {
+                        config.autoRespond.autoRebaseAndResolveConflicts = autoRebase
+                    }
+                    return (config, managerModeBefore != config.managerAutoPermissionMode)
+                }
+                return [
+                    "automation": SettingsRPC.automationJSON(config),
+                    // `crowd` never needs a restart for any of these — reported
+                    // for symmetry with the other settings verbs.
+                    "restart_required": .bool(false),
+                    // `managerAutoPermissionMode` is the one exception to the
+                    // "everything re-reads from disk" rule: it is baked into the
+                    // Manager terminal's stored shell command by
+                    // `SessionService.managerCommand(for:)` and only re-read on a
+                    // Manager rebuild. Reported only when the value actually
+                    // moved, so re-setting it to what it already was doesn't nag.
+                    "manager_restart_required": .bool(managerModeChanged),
+                ]
+            }
+        },
+
         // Notification settings for `crow notifications` (CROW-813). Same
         // `AppConfig.notifications` subtree the web Settings → Notifications tab
         // edits; the write goes through the shared config lock, and the daemon's

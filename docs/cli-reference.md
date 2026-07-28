@@ -706,6 +706,93 @@ Notes:
 
 ---
 
+## Automation Commands
+
+Settings → Automation: which sessions launch in auto permission mode, whether Crow watches for `crow:auto` / `crow:merge` labels, and whether it responds to changes-requested reviews and failed checks on your behalf.
+
+The tab also renders three board-filter lists (excluded review repos, ignored review labels, excluded ticket repos). Those are `AppConfig.defaults` fields and are written by [`crow defaults set`](#crow-defaults-get--set) — one writer, one set of list semantics. `crow automation get` echoes them read-only so the tab still reads as a whole from one call.
+
+Same patch contract as the settings verbs above — only the flags you pass change, and passing none is an error rather than a silent no-op. Booleans take an explicit `true`/`false`, which matters more here than anywhere else: **six of these eleven toggles default to on**, so a bare-flag design could never turn one off.
+
+### `crow automation get | set`
+
+```bash
+crow automation get
+
+crow automation set --auto-merge-watcher-enabled true
+crow automation set --respond-to-failed-checks true --auto-rebase-and-resolve-conflicts true
+crow automation set --manager-auto-permission-mode false && crow restart-manager
+```
+
+**Permission modes** — each passes `--permission-mode auto` to the agent at launch. `--jobs-auto-permission-mode` is here rather than under `crow job` so all five read and write as one group, even though the web UI renders it on the Jobs tab.
+
+| Flag                                 | Default | Description                                                          |
+| ------------------------------------ | ------- | -------------------------------------------------------------------- |
+| `--remote-control-enabled`           | `false` | Launch new Claude Code sessions with `--rc` (drivable from claude.ai) |
+| `--manager-auto-permission-mode`     | `true`  | Manager terminal runs `crow`/`gh`/`git` without per-call approval     |
+| `--review-auto-permission-mode`      | `true`  | Code-review sessions run their review flow unattended                 |
+| `--coder-view-auto-permission-mode`  | `false` | New work coder views start in auto-accept instead of plan mode        |
+| `--jobs-auto-permission-mode`        | `true`  | Scheduled jobs run unattended                                         |
+
+**Attribution & watchers**
+
+| Flag                            | Default | Description                                                              |
+| ------------------------------- | ------- | ------------------------------------------------------------------------ |
+| `--attribution-trailers`        | `true`  | Write a per-worktree hook adding a `Crow-Session: <uuid>` commit trailer  |
+| `--auto-create-watcher-enabled` | `false` | Auto-launch a workspace for issues assigned to you labeled `crow:auto`    |
+| `--auto-merge-watcher-enabled`  | `false` | Auto-merge Crow-authored PRs labeled `crow:merge`                         |
+
+**Auto-respond** — Crow types an instruction into the session's agent terminal on its own.
+
+| Flag                                   | Default | Description                                                       |
+| -------------------------------------- | ------- | ----------------------------------------------------------------- |
+| `--respond-to-changes-requested`       | `true`  | Respond to a changes-requested review                             |
+| `--respond-to-failed-checks`           | `false` | Respond to failed CI checks                                       |
+| `--auto-rebase-and-resolve-conflicts`  | `false` | Rebase onto the base branch and `--force-with-lease` push          |
+
+At least one flag from any group is required.
+
+Returns:
+
+```json
+{
+  "automation": {
+    "remote_control_enabled": false,
+    "manager_auto_permission_mode": true,
+    "review_auto_permission_mode": true,
+    "coder_view_auto_permission_mode": false,
+    "jobs_auto_permission_mode": true,
+    "attribution_trailers": true,
+    "auto_create_watcher_enabled": false,
+    "auto_merge_watcher_enabled": true,
+    "auto_respond": {
+      "respond_to_changes_requested": true,
+      "respond_to_failed_checks": false,
+      "auto_rebase_and_resolve_conflicts": false
+    },
+    "defaults": {
+      "exclude_review_repos": ["corveil/*"],
+      "ignore_review_labels": [],
+      "exclude_ticket_repos": [],
+      "effective_exclude_review_repos": ["corveil/*", "acme/legacy"]
+    },
+    "config_readable": true
+  },
+  "restart_required": false,
+  "manager_restart_required": false
+}
+```
+
+Notes:
+
+- **Nothing here needs a `crowd` restart.** The daemon re-reads `config.json` rather than holding a snapshot, so `restart_required` is always `false` and every change is live within about one board poll (~60s). The permission modes and `--remote-control-enabled` apply to **newly launched** sessions and `--attribution-trailers` to **newly created** worktrees; running sessions and existing worktrees are untouched.
+- **`--manager-auto-permission-mode` is the one exception.** It is baked into the Manager terminal's stored shell command, so it only takes effect on a Manager rebuild. Changing it returns `"manager_restart_required": true` (plus a warning on stderr) — run [`crow restart-manager`](#crow-restart-manager) to apply it.
+- **The whole `defaults` block in the response is read-only here.** Write those three lists with [`crow defaults set`](#crow-defaults-get--set); `automation-set` ignores `add_*` / `remove_*` / `clear_*` params even if a hand-rolled RPC call sends them.
+- **`defaults.effective_exclude_review_repos` is additionally derived** — the global exclude list unioned with every workspace's own `excludeReviewRepos`, which is what the review board actually filters on. It is the only way to see the per-workspace half from the CLI, and explains why `crow defaults set --clear-exclude-review-repos` may not unhide a repo.
+- **`config_readable: false`** means `config.json` exists but could not be decoded: the values shown are defaults, not what is on disk. A `set` against such a file is refused rather than overwriting it.
+
+---
+
 ## Worktree Commands
 
 ### `crow add-worktree`

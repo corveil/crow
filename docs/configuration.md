@@ -228,7 +228,33 @@ The Manager tab runs Claude Code at the dev root and drives workspace orchestrat
 - **`remoteControlEnabled`** (default: `false`) — launches new Claude Code sessions with `--rc` so you can control them from claude.ai or the Claude mobile app.
 - **`managerGateway`** — optional AI gateway for the Manager's `claude` launch, with its own API key. See [Manager gateway](#manager-gateway).
 
-Changes take effect on next app launch — the Manager's stored command is rebuilt on hydration.
+Changes take effect on next app launch — the Manager's stored command is rebuilt on hydration, or on demand with `crow restart-manager`. `crow automation set --manager-auto-permission-mode …` returns `"manager_restart_required": true` on a real change to say so.
+
+## Automation
+
+The eleven booleans behind **Settings → Automation**, editable there or from the CLI (`crow automation get|set` — see the [CLI reference](cli-reference.md#automation-commands)). Eight are top-level keys in `{devRoot}/.claude/config.json`; three live under `autoRespond`.
+
+| Key                                          | Default | Applies to                                                       |
+| -------------------------------------------- | ------- | ---------------------------------------------------------------- |
+| `remoteControlEnabled`                       | `false` | Newly launched sessions (adds `--rc`)                            |
+| `managerAutoPermissionMode`                  | `true`  | The Manager terminal, on rebuild — see above                     |
+| `reviewAutoPermissionMode`                   | `true`  | Newly launched review sessions                                    |
+| `coderViewAutoPermissionMode`                | `false` | Newly launched work coder views                                   |
+| `jobsAutoPermissionMode`                     | `true`  | The next scheduled job run (Settings renders it on the Jobs tab) |
+| `attributionTrailers`                        | `true`  | Newly created worktrees (installs the commit-trailer hook)       |
+| `autoCreateWatcherEnabled`                   | `false` | The `crow:auto` issue watcher                                     |
+| `autoMergeWatcherEnabled`                    | `false` | The `crow:merge` PR watcher                                       |
+| `autoRespond.respondToChangesRequested`      | `true`  | Changes-requested reviews                                         |
+| `autoRespond.respondToFailedChecks`          | `false` | Failed CI checks                                                  |
+| `autoRespond.autoRebaseAndResolveConflicts`  | `false` | Conflicted PRs (rebase + `--force-with-lease` push)              |
+
+**Live — no `crowd` restart.** The daemon re-reads `config.json` rather than holding a snapshot: `applyConfigToAppState` runs each board tick, the watcher gates are closures that reload config on every call, and `AutoRespondCoordinator` takes a settings closure. So a change is picked up within about a minute. The "applies to" column is about *scope*, not latency — a permission-mode change reaches the next session you launch, not the ones already running.
+
+Six of the eleven default to **on**, which is why `crow automation set` takes explicit `true`/`false` values rather than bare flags: a bare-flag design could never turn one off.
+
+**Hand-editing note.** `autoRebaseAndResolveConflicts` replaced a pre-CROW-551 top-level `autoRebaseWatcherEnabled`. That legacy key is still honored on read as a one-way opt-in (a stored `true` forces the new field on) but is dropped on the next write, so an opt-out through Settings or the CLI sticks. If you are editing the file by hand, delete the legacy key rather than setting it to `false`.
+
+The Automation tab also carries three board-filter lists (`defaults.excludeReviewRepos`, `defaults.ignoreReviewLabels`, `defaults.excludeTicketRepos`). Those live in the `defaults` block above and are written by `crow defaults set`; `crow automation get` echoes them read-only alongside the derived `effective_exclude_review_repos`. The tab's `managerGateway` and `jiraCredential` blocks are documented elsewhere on this page.
 
 ## Telemetry, Cleanup & UI
 

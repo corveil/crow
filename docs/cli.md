@@ -21,6 +21,9 @@ Every subcommand and flag the `crow` binary accepts, generated from the commands
 | [`crow agents`](#crow-agents) | Show and change which coding agent Crow launches |
 | [`crow agents list`](#crow-agents-list) | Show known agents, the configured default, and the agent each role resolves to |
 | [`crow agents set`](#crow-agents-set) | Change the default agent or a per-role override |
+| [`crow automation`](#crow-automation) | View or change the automation settings |
+| [`crow automation get`](#crow-automation-get) | Show the current automation settings |
+| [`crow automation set`](#crow-automation-set) | Change the automation settings |
 | [`crow autostart`](#crow-autostart) | Start crowd at login (install/uninstall/status) |
 | [`crow autostart install`](#crow-autostart-install) | Register crowd to start at login (idempotent; re-points after an upgrade) |
 | [`crow autostart status`](#crow-autostart-status) | Report whether crowd is set to start at login, and whether it's running |
@@ -219,6 +222,70 @@ An agent kind that is not currently available is rejected and nothing is written
 | `--job` | `<job>` | no | Agent for scheduled-job sessions |
 | `--manager` | `<manager>` | no | Agent for the Manager session |
 | `--clear` | `<clear>` _(repeatable)_ | no | Role whose override to remove, falling back to the default (repeatable). Values: `work`, `review`, `job`, `manager`. |
+
+---
+
+## `crow automation`
+
+View or change the automation settings.
+
+```
+crow automation <get|set>
+```
+
+The Settings → Automation toggles: which sessions launch in auto permission mode, whether Crow watches for crow:auto / crow:merge labels, and whether it responds to changes-requested reviews and failed checks on your behalf.
+
+--jobs-auto-permission-mode is included here so all five permission modes read and write as one group, even though the web UI renders that one under the Jobs tab.
+
+The tab's three board-filter lists are `AppConfig.defaults` fields and are written by `crow defaults set`; `get` echoes them read-only here.
+
+Subcommands: [`get`](#crow-automation-get), [`set`](#crow-automation-set).
+
+---
+
+## `crow automation get`
+
+Show the current automation settings.
+
+```
+crow automation get
+```
+
+The `defaults` block is echoed read-only for context — write those three lists with `crow defaults set`. Within it, effective_exclude_review_repos is additionally *derived*: the global exclude list unioned with every workspace's own, which is what the review board actually filters on and is not stored anywhere as such.
+
+config_readable is false when config.json exists but could not be decoded — the settings shown are then defaults, not what is on disk.
+
+---
+
+## `crow automation set`
+
+Change the automation settings.
+
+```
+crow automation set [--remote-control-enabled <remote-control-enabled>] [--manager-auto-permission-mode <manager-auto-permission-mode>] [--review-auto-permission-mode <review-auto-permission-mode>] [--coder-view-auto-permission-mode <coder-view-auto-permission-mode>] [--jobs-auto-permission-mode <jobs-auto-permission-mode>] [--attribution-trailers <attribution-trailers>] [--auto-create-watcher-enabled <auto-create-watcher-enabled>] [--auto-merge-watcher-enabled <auto-merge-watcher-enabled>] [--respond-to-changes-requested <respond-to-changes-requested>] [--respond-to-failed-checks <respond-to-failed-checks>] [--auto-rebase-and-resolve-conflicts <auto-rebase-and-resolve-conflicts>]
+```
+
+Only the flags you pass change; at least one is required.
+
+Everything here is live within about one board poll (~60s) — the daemon re-reads config.json rather than holding a snapshot, so no crowd restart is needed. The permission modes and --remote-control-enabled apply to newly launched sessions, and --attribution-trailers to newly created worktrees; running sessions and existing worktrees are untouched.
+
+--manager-auto-permission-mode is the one exception: it is baked into the Manager terminal's stored command, so it needs `crow restart-manager` (or an app relaunch) to take effect. A change to it returns "manager_restart_required": true.
+
+The tab's three board-filter lists (excluded review repos, ignored review labels, excluded ticket repos) are `AppConfig.defaults` fields, so they belong to `crow defaults set` — one writer, one set of semantics. `crow automation get` echoes them read-only for context.
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--remote-control-enabled` | `<remote-control-enabled>` | no | Launch new Claude Code sessions with --rc (true or false) |
+| `--manager-auto-permission-mode` | `<manager-auto-permission-mode>` | no | Launch the Manager terminal in auto permission mode (true or false) |
+| `--review-auto-permission-mode` | `<review-auto-permission-mode>` | no | Launch code-review sessions in auto permission mode (true or false) |
+| `--coder-view-auto-permission-mode` | `<coder-view-auto-permission-mode>` | no | Launch new work coder views in auto permission mode (true or false) |
+| `--jobs-auto-permission-mode` | `<jobs-auto-permission-mode>` | no | Run scheduled jobs in auto permission mode (true or false) |
+| `--attribution-trailers` | `<attribution-trailers>` | no | Add a Crow-Session trailer to commits in new worktrees (true or false) |
+| `--auto-create-watcher-enabled` | `<auto-create-watcher-enabled>` | no | Auto-launch a workspace for crow:auto labeled issues (true or false) |
+| `--auto-merge-watcher-enabled` | `<auto-merge-watcher-enabled>` | no | Auto-merge Crow-authored PRs labeled crow:merge (true or false) |
+| `--respond-to-changes-requested` | `<respond-to-changes-requested>` | no | Type a fix-it instruction into the session on a changes-requested review (true or false) |
+| `--respond-to-failed-checks` | `<respond-to-failed-checks>` | no | Type a fix-it instruction into the session when CI checks fail (true or false) |
+| `--auto-rebase-and-resolve-conflicts` | `<auto-rebase-and-resolve-conflicts>` | no | Rebase onto the base branch and force-with-lease push on conflict (true or false) |
 
 ---
 

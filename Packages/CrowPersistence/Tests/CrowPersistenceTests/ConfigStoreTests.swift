@@ -316,3 +316,80 @@ import Testing
     #expect(loaded.notifications.soundEnabled == true)
     #expect(loaded.remoteControlEnabled == true)
 }
+
+// MARK: - Automation settings (CROW-812)
+
+/// What `crow automation set` does to the file: flip toggles across three
+/// different config subtrees (top-level, `autoRespond`, `defaults`) and have all
+/// of them survive a real save/load.
+///
+/// The top-level booleans are the ones worth pinning: six of them default to
+/// `true`, so a serialization bug that dropped a key would silently re-arm the
+/// automation the user just turned off, rather than failing loudly.
+@Test func configStoreAutomationMutationRoundTrips() throws {
+    let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let claudeDir = tmpDir.appendingPathComponent(".claude", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: tmpDir) }
+
+    var config = AppConfig()
+    config.remoteControlEnabled = true
+    config.managerAutoPermissionMode = false
+    config.reviewAutoPermissionMode = false
+    config.coderViewAutoPermissionMode = true
+    config.jobsAutoPermissionMode = false
+    config.attributionTrailers = false
+    config.autoCreateWatcherEnabled = true
+    config.autoMergeWatcherEnabled = true
+    config.autoRespond.respondToChangesRequested = false
+    config.autoRespond.respondToFailedChecks = true
+    config.autoRespond.autoRebaseAndResolveConflicts = true
+    config.defaults.excludeReviewRepos = ["corveil/*"]
+    config.defaults.ignoreReviewLabels = ["wip", "do not merge"]
+    config.defaults.excludeTicketRepos = ["owner/archive"]
+
+    try ConfigStore.saveConfig(config, to: claudeDir)
+    let loaded = try #require(
+        ConfigStore.loadConfig(from: claudeDir.appendingPathComponent("config.json")))
+
+    #expect(loaded.remoteControlEnabled == true)
+    #expect(loaded.managerAutoPermissionMode == false)
+    #expect(loaded.reviewAutoPermissionMode == false)
+    #expect(loaded.coderViewAutoPermissionMode == true)
+    #expect(loaded.jobsAutoPermissionMode == false)
+    #expect(loaded.attributionTrailers == false)
+    #expect(loaded.autoCreateWatcherEnabled == true)
+    #expect(loaded.autoMergeWatcherEnabled == true)
+    #expect(loaded.autoRespond.respondToChangesRequested == false)
+    #expect(loaded.autoRespond.respondToFailedChecks == true)
+    #expect(loaded.autoRespond.autoRebaseAndResolveConflicts == true)
+    // List order is meaningful — the chip editor appends, and so does the CLI.
+    #expect(loaded.defaults.excludeReviewRepos == ["corveil/*"])
+    #expect(loaded.defaults.ignoreReviewLabels == ["wip", "do not merge"])
+    #expect(loaded.defaults.excludeTicketRepos == ["owner/archive"])
+}
+
+/// The CROW-551 legacy migration is a one-way OR: a stored
+/// `autoRebaseWatcherEnabled: true` forces the new field on. That means a
+/// `crow automation set --auto-rebase-and-resolve-conflicts false` against a
+/// config still carrying the legacy key has to actually stick, or the opt-out
+/// silently reverts on every reload.
+@Test func automationAutoRebaseOptOutSurvivesTheLegacyKey() throws {
+    let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let claudeDir = tmpDir.appendingPathComponent(".claude", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: tmpDir) }
+    try FileManager.default.createDirectory(at: claudeDir, withIntermediateDirectories: true)
+    let configURL = claudeDir.appendingPathComponent("config.json")
+    try #"{"autoRebaseWatcherEnabled": true}"#.write(
+        to: configURL, atomically: true, encoding: .utf8)
+
+    // Load carries the legacy opt-in forward…
+    var config = try #require(ConfigStore.loadConfig(from: configURL))
+    #expect(config.autoRespond.autoRebaseAndResolveConflicts == true)
+
+    // …and the next write drops the legacy key, so the opt-out sticks.
+    config.autoRespond.autoRebaseAndResolveConflicts = false
+    try ConfigStore.saveConfig(config, to: claudeDir)
+
+    let reloaded = try #require(ConfigStore.loadConfig(from: configURL))
+    #expect(reloaded.autoRespond.autoRebaseAndResolveConflicts == false)
+}

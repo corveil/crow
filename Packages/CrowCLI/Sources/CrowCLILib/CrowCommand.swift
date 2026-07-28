@@ -41,6 +41,7 @@ public struct CrowCommand: ParsableCommand {
             Telemetry.self,
             Cleanup.self,
             UI.self,
+            Automation.self,
             Notifications.self,
             Defaults.self,
             Agents.self,

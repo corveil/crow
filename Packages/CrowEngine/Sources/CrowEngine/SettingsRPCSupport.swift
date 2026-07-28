@@ -3,7 +3,8 @@ import CrowIPC
 import Foundation
 
 /// Pure decode/encode helpers for the `telemetry-*` / `cleanup-*` / `ui-*` RPC
-/// handlers behind `crow telemetry` / `crow cleanup` / `crow ui` (CROW-814).
+/// handlers behind `crow telemetry` / `crow cleanup` / `crow ui` (CROW-814), and
+/// for `automation-*` behind `crow automation` (CROW-812).
 ///
 /// Same contract as `JobRPC`: no socket, no disk, so the param validation and
 /// response shapes are unit-testable in isolation.
@@ -77,6 +78,63 @@ public enum SettingsRPC {
             throw RPCError.invalidParams("\(key) must be an integer")
         }
         return number
+    }
+
+    // MARK: - Automation (CROW-812)
+
+    /// The Settings → Automation tab as one payload: the eight top-level
+    /// `AppConfig` booleans, the three `autoRespond` booleans, and the three
+    /// board-filter lists.
+    ///
+    /// `auto_respond` and `defaults` nest by *config-block* name, the same
+    /// reasoning as `uiJSON`'s `sidebar`: the board-filter lists genuinely live
+    /// under `AppConfig.defaults`, not at top level, and nesting keeps the wire
+    /// shape honest about where a hand edit would go.
+    ///
+    /// `effective_exclude_review_repos` is read-only and derived — the global
+    /// list unioned with every workspace's per-workspace `excludeReviewRepos`,
+    /// which is what the review board actually filters on. Without it the CLI is
+    /// blind to the per-workspace half and a caller can't explain why a repo is
+    /// still hidden. `automation-set` ignores it.
+    ///
+    /// `config_readable` follows `notifications-get`: `ConfigStore.loadConfig`
+    /// returns nil both for "no config yet" (defaults really apply) and for
+    /// "present but undecodable" (the defaults are a fiction). That matters more
+    /// here than for telemetry — six of these eleven booleans default to `true`,
+    /// so a caller shown invented settings as fact would conclude automation is
+    /// armed when the daemon can't read the file at all.
+    public static func automationJSON(
+        _ config: AppConfig, configReadable: Bool = true
+    ) -> JSONValue {
+        .object([
+            "remote_control_enabled": .bool(config.remoteControlEnabled),
+            "manager_auto_permission_mode": .bool(config.managerAutoPermissionMode),
+            "review_auto_permission_mode": .bool(config.reviewAutoPermissionMode),
+            "coder_view_auto_permission_mode": .bool(config.coderViewAutoPermissionMode),
+            "jobs_auto_permission_mode": .bool(config.jobsAutoPermissionMode),
+            "attribution_trailers": .bool(config.attributionTrailers),
+            "auto_create_watcher_enabled": .bool(config.autoCreateWatcherEnabled),
+            "auto_merge_watcher_enabled": .bool(config.autoMergeWatcherEnabled),
+            "auto_respond": .object([
+                "respond_to_changes_requested":
+                    .bool(config.autoRespond.respondToChangesRequested),
+                "respond_to_failed_checks": .bool(config.autoRespond.respondToFailedChecks),
+                "auto_rebase_and_resolve_conflicts":
+                    .bool(config.autoRespond.autoRebaseAndResolveConflicts),
+            ]),
+            "defaults": .object([
+                "exclude_review_repos": stringArray(config.defaults.excludeReviewRepos),
+                "ignore_review_labels": stringArray(config.defaults.ignoreReviewLabels),
+                "exclude_ticket_repos": stringArray(config.defaults.excludeTicketRepos),
+                "effective_exclude_review_repos":
+                    stringArray(config.effectiveExcludeReviewRepos),
+            ]),
+            "config_readable": .bool(configReadable),
+        ])
+    }
+
+    private static func stringArray(_ values: [String]) -> JSONValue {
+        .array(values.map { .string($0) })
     }
 
     // MARK: - Response encoding

@@ -120,19 +120,102 @@ struct SettingsRPCSupportTests {
     /// Unlike `get-config`, these responses carry no credential shell at all, so
     /// they need no `SettingsSecrets.strippedForTransport` pass. Pin that, because
     /// a future "just reuse the config encoder" refactor would quietly break it.
+    ///
+    /// `automationJSON` is the one that could plausibly regress: it takes a whole
+    /// `AppConfig`, so it is built from a config that *does* carry credentials.
     @Test func settingsResponsesNeverContainCredentialKeys() throws {
+        var loaded = AppConfig()
+        loaded.jiraCredential = JiraCredential(
+            username: "a@b.c", tokenRef: "op://vault/jira/SECRET-TOKEN")
+        loaded.managerGateway = WorkspaceGateway(
+            baseURL: "https://gw.example", customHeaders: ["X-Api-Key": "sk-live-SECRET-KEY"])
+        loaded.defaults.binaries = ["claude-code": "/opt/SECRET-PATH/claude"]
+
         let responses = [
             SettingsRPC.telemetryJSON(TelemetryConfig()),
             SettingsRPC.cleanupJSON(CleanupConfig()),
             SettingsRPC.uiJSON(SidebarSettings()),
+            SettingsRPC.automationJSON(AppConfig()),
+            SettingsRPC.automationJSON(loaded),
         ]
         for json in responses {
             let text = String(decoding: try JSONEncoder().encode(json), as: UTF8.self)
             for secret in ["tokenRef", "hashB64", "saltB64", "customHeaders",
-                           "jiraCredential", "webAuth", "managerGateway", "binaries"] {
+                           "jiraCredential", "webAuth", "managerGateway", "binaries",
+                           "SECRET-TOKEN", "SECRET-KEY", "SECRET-PATH"] {
                 #expect(!text.contains(secret), "\(secret) leaked into \(text)")
             }
         }
+    }
+
+    // MARK: - Automation (CROW-812)
+
+    @Test func automationJSONMirrorsConfigDefaults() throws {
+        let json = try #require(SettingsRPC.automationJSON(AppConfig()).objectValue)
+
+        // The six that ship on. A caller scripting against these needs the
+        // defaults to be exactly what `AppConfig()` says, not what "automation
+        // off by default" would suggest.
+        #expect(json["manager_auto_permission_mode"] == .bool(true))
+        #expect(json["review_auto_permission_mode"] == .bool(true))
+        #expect(json["jobs_auto_permission_mode"] == .bool(true))
+        #expect(json["attribution_trailers"] == .bool(true))
+        #expect(json["remote_control_enabled"] == .bool(false))
+        #expect(json["coder_view_auto_permission_mode"] == .bool(false))
+        #expect(json["auto_create_watcher_enabled"] == .bool(false))
+        #expect(json["auto_merge_watcher_enabled"] == .bool(false))
+        #expect(json["config_readable"] == .bool(true))
+
+        #expect(json["auto_respond"] == .object([
+            "respond_to_changes_requested": .bool(true),
+            "respond_to_failed_checks": .bool(false),
+            "auto_rebase_and_resolve_conflicts": .bool(false),
+        ]))
+        #expect(json["defaults"] == .object([
+            "exclude_review_repos": .array([]),
+            "ignore_review_labels": .array([]),
+            "exclude_ticket_repos": .array([]),
+            "effective_exclude_review_repos": .array([]),
+        ]))
+    }
+
+    /// Locks the nesting by config block for the same reason as `uiJSON`: the
+    /// board-filter lists live under `AppConfig.defaults`, not at top level, so
+    /// flattening them later is a conscious break rather than an accident.
+    @Test func automationJSONNestsListsUnderDefaults() throws {
+        var config = AppConfig()
+        config.defaults.excludeReviewRepos = ["corveil/*"]
+        config.defaults.ignoreReviewLabels = ["wip", "do not merge"]
+        config.defaults.excludeTicketRepos = ["owner/archive"]
+
+        let defaults = try #require(
+            SettingsRPC.automationJSON(config).objectValue?["defaults"]?.objectValue)
+        #expect(defaults["exclude_review_repos"] == .array([.string("corveil/*")]))
+        #expect(defaults["ignore_review_labels"]
+            == .array([.string("wip"), .string("do not merge")]))
+        #expect(defaults["exclude_ticket_repos"] == .array([.string("owner/archive")]))
+    }
+
+    /// The derived field earns its place: the CLI can't see per-workspace
+    /// excludes any other way, so without it a caller can't explain why a repo is
+    /// still hidden from the review board.
+    @Test func automationJSONReportsEffectiveExcludeReviewRepos() throws {
+        var config = AppConfig()
+        config.defaults.excludeReviewRepos = ["corveil/*"]
+        config.workspaces = [
+            WorkspaceInfo(name: "Acme", excludeReviewRepos: ["acme/legacy"]),
+        ]
+
+        let defaults = try #require(
+            SettingsRPC.automationJSON(config).objectValue?["defaults"]?.objectValue)
+        #expect(defaults["exclude_review_repos"] == .array([.string("corveil/*")]))
+        #expect(defaults["effective_exclude_review_repos"]
+            == .array([.string("corveil/*"), .string("acme/legacy")]))
+    }
+
+    @Test func automationJSONReportsConfigReadable() throws {
+        let json = SettingsRPC.automationJSON(AppConfig(), configReadable: false).objectValue
+        #expect(json?["config_readable"] == .bool(false))
     }
 
     // MARK: - restart_required

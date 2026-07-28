@@ -241,6 +241,31 @@ crow web-password clear                                                 → {"sa
 
 `gateway get` blanks header values unless `--reveal`. A `--header` with a blank value (`--header "X-Api-Key:"`) keeps the stored secret — that's how to change a base URL without restating credentials. `web-password set` prompts twice with echo off; pipe with `--stdin` for scripts. There is no `--password` flag on purpose (shell history / `ps`).
 
+### Automation Commands
+
+Settings → Automation as a CLI verb. Every `set` flag is a patch; passing none is an error.
+
+```
+crow automation get                                                     → {"automation":{toggles, auto_respond, defaults, config_readable}}
+crow automation set [--remote-control-enabled true|false]
+                    [--manager-auto-permission-mode true|false]         → needs `crow restart-manager`; returns "manager_restart_required"
+                    [--review-auto-permission-mode true|false]
+                    [--coder-view-auto-permission-mode true|false]
+                    [--jobs-auto-permission-mode true|false]
+                    [--attribution-trailers true|false]
+                    [--auto-create-watcher-enabled true|false]
+                    [--auto-merge-watcher-enabled true|false]
+                    [--respond-to-changes-requested true|false]
+                    [--respond-to-failed-checks true|false]
+                    [--auto-rebase-and-resolve-conflicts true|false]    → {"automation":{...},"restart_required":false,"manager_restart_required":bool}
+```
+
+Booleans take an explicit `true`/`false` — a bare flag can't express "leave alone", and six of these default to **on** (`manager`/`review`/`jobs` auto permission mode, `attribution-trailers`, `respond-to-changes-requested`). `--jobs-auto-permission-mode` lives here even though the web UI puts it under the Jobs tab, so all five permission modes read and write as one group.
+
+Everything applies within ~1 board poll (no `crowd` restart) — permission modes and `--remote-control-enabled` to newly launched sessions, `--attribution-trailers` to newly created worktrees. `--manager-auto-permission-mode` is the exception: it's baked into the Manager terminal's stored command, so a change returns `manager_restart_required: true` and needs `crow restart-manager`.
+
+The Automation tab's three board-filter lists are `AppConfig.defaults` fields, so **`crow defaults set` writes them** (above) — one writer, one set of list semantics. `crow automation get` echoes them read-only under `defaults`, including the derived `effective_exclude_review_repos` (the global list unioned with every workspace's own, which is what the review board actually filters on), so the tab still reads as a whole from one call.
+
 ## Important Notes
 
 - `--session` always expects a full UUID (e.g., `a1b2c3d4-e5f6-7890-abcd-ef1234567890`), not a session name
