@@ -2255,6 +2255,15 @@ private func workspaceRefParam(_ params: [String: JSONValue]) throws -> String {
 /// Sessions compare case-insensitively because the on-disk folder's case is the
 /// filesystem's to decide; jobs compare exactly, matching `validateJobWorkspace`
 /// — a job whose case already differs is already orphaned, not orphaned by this.
+///
+/// **Best-effort, by design.** The count is taken *before* `withConfigLock`, so a
+/// session or job created in the window between counting and writing is orphaned
+/// without ever tripping the guard. Closing that would mean re-counting under the
+/// lock, and the count reads `AppState` — a main-actor hop inside a held
+/// `NSLock`, which is exactly the shape that wedges the daemon (#874). The guard
+/// exists to stop a user renaming a workspace they can see is in use, not to be a
+/// transactional invariant; a rename racing a session launch is not a case worth
+/// deadlock risk to catch. The returned counts are likewise a snapshot.
 @MainActor
 private func workspaceReferences(
     to name: String, appState: AppState, config: AppConfig, devRoot: String

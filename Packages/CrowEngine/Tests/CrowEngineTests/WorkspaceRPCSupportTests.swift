@@ -250,6 +250,54 @@ struct WorkspaceRPCSupportTests {
         #expect(target.sessionEnv == nil)
     }
 
+    /// Line injection: `setup.sh` reads `sessionEnv` as one `KEY=VALUE` per line
+    /// (`jq -r '… | "\(.key)=\(.value)"'` into `while IFS= read -r kv`), so a
+    /// value carrying a newline emits a *second* pair and smuggles an extra
+    /// variable into the session's `settings.local.json` `.env`.
+    ///
+    /// The CLI refuses this in `validateSessionEnvEntry`, but `workspace-*` is
+    /// reachable from a remote `/rpc` peer that never runs the CLI's `validate()`
+    /// — so the guard has to hold here to hold at all.
+    @Test func applyPatchRejectsNewlinesInSessionEnv() {
+        for value in ["bar\nEVIL=injected", "bar\r\nEVIL=injected", "bar\rEVIL=injected"] {
+            var target = WorkspaceInfo(name: "Acme")
+            #expect(throws: RPCError.self) {
+                _ = try WorkspaceRPC.applyPatch(
+                    ["session_env": .object(["FOO": .string(value)])], to: &target)
+            }
+            #expect(target.sessionEnv == nil, "a rejected patch must store nothing")
+        }
+        // A newline in the *key* splits the line just as effectively.
+        var target = WorkspaceInfo(name: "Acme")
+        #expect(throws: RPCError.self) {
+            _ = try WorkspaceRPC.applyPatch(
+                ["session_env": .object(["FOO\nEVIL": .string("x")])], to: &target)
+        }
+    }
+
+    /// The guard must not over-reach: values with `=`, spaces, or `#` are ordinary
+    /// env values, and an empty value differs meaningfully from an unset one.
+    @Test func applyPatchAllowsOrdinarySessionEnvValues() throws {
+        var target = WorkspaceInfo(name: "Acme")
+        try WorkspaceRPC.applyPatch(["session_env": .object([
+            "DSN": .string("postgres://u:p@h/db?a=1&b=2"),
+            "MSG": .string("hello world # not a comment"),
+            "EMPTY": .string(""),
+        ])], to: &target)
+        #expect(target.sessionEnv?["DSN"] == "postgres://u:p@h/db?a=1&b=2")
+        #expect(target.sessionEnv?["EMPTY"] == "")
+    }
+
+    /// Keys arrive trimmed regardless of writer, so a padded key sent over `/rpc`
+    /// can't become a second entry alongside the CLI's (which trims in
+    /// `parseSessionEnv`).
+    @Test func applyPatchTrimsSessionEnvKeys() throws {
+        var target = WorkspaceInfo(name: "Acme")
+        try WorkspaceRPC.applyPatch(
+            ["session_env": .object(["  AWS_PROFILE  ": .string("dev")])], to: &target)
+        #expect(target.sessionEnv == ["AWS_PROFILE": "dev"])
+    }
+
     /// Drives the handler's skip-the-write path, so re-running an idempotent
     /// edit doesn't churn config.json and chime in every open browser.
     @Test func applyPatchReportsWhetherAnythingChanged() throws {

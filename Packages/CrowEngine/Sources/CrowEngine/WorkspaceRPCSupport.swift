@@ -88,6 +88,9 @@ public enum WorkspaceRPC {
     }
 
     /// - Returns: `nil` when the key is absent or null ("leave unchanged").
+    ///   Keys are **trimmed**, matching the CLI's `parseSessionEnv`; without that
+    ///   a padded `" AWS_PROFILE"` sent over `/rpc` would be stored as a distinct
+    ///   key from the one the CLI writes.
     /// - Throws: `RPCError.invalidParams` when present but not an object of
     ///   strings, or when any key is blank.
     public static func patchStringMap(_ params: [String: JSONValue], _ key: String) throws -> [String: String]? {
@@ -100,10 +103,11 @@ public enum WorkspaceRPC {
             guard let text = item.stringValue else {
                 throw RPCError.invalidParams("\(key)[\(name)] must be a string")
             }
-            guard !name.trimmingCharacters(in: .whitespaces).isEmpty else {
+            let trimmed = name.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty else {
                 throw RPCError.invalidParams("\(key) keys must not be blank")
             }
-            result[name] = text
+            result[trimmed] = text
         }
         return result
     }
@@ -150,6 +154,43 @@ public enum WorkspaceRPC {
         for key in map.keys where !valid.contains(key) {
             throw RPCError.invalidParams(
                 "jira_status_map key \"\(key)\" is not a pipeline status. Expected one of: \(jiraStatusKeys.joined(separator: ", "))")
+        }
+        return map
+    }
+
+    /// Validate a `session_env` map: no newline in any key or value.
+    ///
+    /// This is a **line-injection** guard, not tidiness. The map's consumer is
+    /// `skills/crow-workspace/setup.sh`, which reads it as one `KEY=VALUE` per
+    /// line:
+    ///
+    /// ```
+    /// jq -r '… | .sessionEnv // {} | to_entries[] | "\(.key)=\(.value)"'
+    /// ```
+    ///
+    /// piped into a `while IFS= read -r kv` loop. A value containing a newline
+    /// therefore emits *two* lines, and the second is parsed as an additional
+    /// pair — so a single stored `{"FOO": "bar\nEVIL=injected"}` becomes both
+    /// `FOO=bar` and `EVIL=injected` in the session's `settings.local.json`
+    /// `.env` block.
+    ///
+    /// The CLI already refuses this in `validateSessionEnvEntry`, but the CLI is
+    /// not the only writer: `workspace-*` is intentionally reachable from a
+    /// remote `/rpc` peer (see `RPCWebSocketHandler.localOnlyDenial`'s ledger),
+    /// which never passes through `ParsableCommand.validate()`. The check has to
+    /// live here to actually hold.
+    public static func decodeSessionEnv(_ map: [String: String]) throws -> [String: String] {
+        for (key, value) in map {
+            // CharacterSet, not `contains("\n")`: Swift treats CRLF as a single
+            // Character, so a grapheme comparison misses "\r\n" entirely.
+            guard key.rangeOfCharacter(from: .newlines) == nil else {
+                throw RPCError.invalidParams(
+                    "session_env keys must not contain a newline (key: \"\(key)\")")
+            }
+            guard value.rangeOfCharacter(from: .newlines) == nil else {
+                throw RPCError.invalidParams(
+                    "session_env values must not contain a newline — one entry must mean one variable (key: \"\(key)\")")
+            }
         }
         return map
     }
@@ -279,7 +320,7 @@ public enum WorkspaceRPC {
         // `--session-env` flag on one invocation is the complete set, matching how
         // the repo lists behave.
         if try flag(params, "clear_session_env") { workspace.sessionEnv = nil }
-        if let env = try patchStringMap(params, "session_env") {
+        if let env = try patchStringMap(params, "session_env").map(decodeSessionEnv) {
             workspace.sessionEnv = env.isEmpty ? nil : env
         }
 

@@ -251,6 +251,34 @@ import CrowPersistence
         #expect(workspaces(devRoot).first?.jiraJQL == nil)
     }
 
+    /// The end-to-end form of the line-injection guard: `workspace-*` is
+    /// remote-reachable, so this is the path a `/rpc` peer would actually take —
+    /// no `ParsableCommand.validate()` anywhere in it. A newline in a
+    /// `session_env` value would become a second `KEY=VALUE` line in
+    /// `setup.sh`'s jq read and inject an extra variable into the session's
+    /// `settings.local.json`.
+    @Test @MainActor func sessionEnvNewlineIsRejectedOverRPC() async throws {
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        try ConfigStore.saveConfig(AppConfig(workspaces: [WorkspaceInfo(name: "Acme")]), devRoot: devRoot)
+
+        let resp = await call("workspace-edit", [
+            "workspace": .string("Acme"),
+            "session_env": .object(["FOO": .string("bar\nEVIL=injected")]),
+        ], devRoot: devRoot)
+
+        #expect(resp.error?.message.contains("newline") == true)
+        #expect(workspaces(devRoot).first?.sessionEnv == nil)
+
+        // Same guard on the create path.
+        let added = await call("workspace-add", [
+            "name": .string("Other"),
+            "session_env": .object(["FOO": .string("bar\nEVIL=injected")]),
+        ], devRoot: devRoot)
+        #expect(added.error != nil)
+        #expect(workspaces(devRoot).count == 1)
+    }
+
     // MARK: - rename guard
 
     @Test @MainActor func renameSucceedsWhenNothingReferencesTheWorkspace() async throws {
