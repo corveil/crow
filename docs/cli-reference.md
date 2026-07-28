@@ -1182,6 +1182,187 @@ Notes:
 
 ---
 
+## Workspace Commands
+
+Read and write `AppConfig.workspaces` — the same list the web Settings → Workspaces tab edits. Writes land under the shared config lock, and the daemon's config poll broadcasts a `configReloaded` event, so an open web tab refreshes within a couple of seconds.
+
+A workspace maps to a directory under the dev root and decides which forge its repos live on, where its tickets come from, and what extra context its sessions get.
+
+`--workspace` accepts a **workspace name (case-insensitive) or a workspace UUID**. A name that matches more than one workspace is an error rather than a guess — nothing enforced name uniqueness before these verbs, so an older `config.json` can hold duplicates.
+
+The per-workspace **AI gateway** is not managed here: it carries credentials and is local-only, so it stays with [`crow gateway`](#gateway-commands). These verbs preserve a workspace's stored gateway across every edit and report only whether one is set.
+
+### `crow workspace list`
+
+List every configured workspace.
+
+```bash
+crow workspace list
+crow workspace list | jq '.workspaces[] | select(.task_provider == "jira") | .name'
+```
+
+Takes no flags. Returns `{"workspaces": [...], "config_readable": true}`, each entry in the shape shown under `get`. `config_readable` is `false` when `config.json` exists but could not be decoded, meaning the empty list is a fallback rather than the truth (the CLI also warns on stderr).
+
+### `crow workspace get`
+
+Show one workspace's full configuration.
+
+```bash
+crow workspace get --workspace Acme
+crow workspace get --workspace 3f7c1a90-2b4e-4f18-9c33-5a1d0e6b8742
+```
+
+| Flag          | Required | Description                    |
+| ------------- | -------- | ------------------------------ |
+| `--workspace` | yes      | Workspace name or UUID         |
+
+Returns:
+
+```json
+{
+  "workspace": {
+    "id": "3f7c1a90-2b4e-4f18-9c33-5a1d0e6b8742",
+    "name": "Acme",
+    "provider": "gitlab",
+    "cli": "glab",
+    "host": "gitlab.acme.io",
+    "task_provider": "jira",
+    "task_provider_explicit": true,
+    "jira_site": "acme.atlassian.net",
+    "jira_project_key": "PROPS",
+    "jira_jql": "assignee = currentUser() AND statusCategory != Done",
+    "jira_status_map": { "In Progress": "In Dev" },
+    "corveil_host": null,
+    "always_include": ["acme/api"],
+    "auto_review_repos": ["acme/web"],
+    "exclude_review_repos": [],
+    "custom_instructions": "Always run make test before pushing.",
+    "session_env": { "AWS_PROFILE": "dev" },
+    "gateway_set": true,
+    "gateway_base_url": "https://gw.acme.io"
+  }
+}
+```
+
+`task_provider` is the **effective** provider, so it falls back to `provider` when none is set; `task_provider_explicit` distinguishes "follow the code provider" from a task provider that happens to equal it. Unset optionals are explicit `null`s rather than missing keys. `gateway_set` and `gateway_base_url` are all a workspace payload ever reveals about its gateway — the auth header names and values are never included. Use `crow gateway get --workspace <name> --reveal` for those.
+
+### `crow workspace add`
+
+Create a workspace. Only `--name` is required; every other field takes its documented default and can be set later with `edit`.
+
+```bash
+crow workspace add --name Acme
+crow workspace add --name Acme --provider gitlab --host gitlab.acme.io \
+  --task-provider jira --jira-site acme.atlassian.net --jira-project-key PROPS \
+  --always-include acme/api --session-env AWS_PROFILE=dev
+```
+
+Takes `--name` plus every [field flag](#workspace-field-flags). Returns `{"workspace": {...}, "saved": true}`.
+
+The name becomes a directory under the dev root, so it must be non-blank, must not contain `/` or `:`, must not be `.` or `..`, and must not collide case-insensitively with an existing workspace. Creating a workspace does not create its directory — the daemon scaffolds it at next launch.
+
+### `crow workspace edit`
+
+Change fields on an existing workspace. Only the provided flags change.
+
+```bash
+crow workspace edit --workspace Acme --host gitlab.acme.io
+crow workspace edit --workspace Acme --always-include acme/api --always-include acme/web
+crow workspace edit --workspace Acme --clear-always-include
+crow workspace edit --workspace Acme --jira-status-in-progress "In Dev"
+crow workspace edit --workspace Acme --name Acme2 --force
+```
+
+| Flag          | Required | Description                                                     |
+| ------------- | -------- | --------------------------------------------------------------- |
+| `--workspace` | yes      | Workspace name or UUID                                          |
+| `--name`      | no¹      | New name — see the rename guard below                           |
+| `--force`     | no       | Rename even when sessions or jobs reference this workspace      |
+
+¹ At least one of `--name` or a field flag is required; `--force` alone is not a change.
+
+Returns `{"workspace": {...}, "saved": <bool>}`, plus `renamed_from`, `orphaned_sessions` and `orphaned_jobs` when the name changed.
+
+**Renaming is guarded.** Nothing stores a workspace id: a session is tied to its workspace only by its worktree living at `{devRoot}/{workspace}/{repo}`, and a job only by the `job.workspace` string. Renaming moves no directory, so it silently breaks AI-gateway resolution for those sessions, code-provider detection (which falls back to GitHub), job launches, and the `/crow-workspace` skill's config lookups — while the daemon scaffolds a *new* empty directory beside the old populated one. So a rename with live references is refused; `--force` proceeds and reports the counts.
+
+**An idempotent edit is free.** If every value you pass already holds, the response is `"saved": false` and `config.json` is not rewritten — re-running the same command doesn't churn the file or chime "Config reloaded" in every open browser.
+
+### `crow workspace remove`
+
+Delete a workspace from the configuration.
+
+```bash
+crow workspace remove --workspace Acme
+crow workspace remove --workspace Acme --force
+```
+
+| Flag          | Required | Description                                                     |
+| ------------- | -------- | --------------------------------------------------------------- |
+| `--workspace` | yes      | Workspace name or UUID                                          |
+| `--force`     | no       | Remove even when sessions or jobs reference this workspace      |
+
+Returns:
+
+```json
+{
+  "removed": true,
+  "id": "3f7c1a90-2b4e-4f18-9c33-5a1d0e6b8742",
+  "name": "Acme",
+  "worktree_dir_kept": "/Users/you/Dev/Acme",
+  "gateway_discarded": true,
+  "orphaned_sessions": 0,
+  "orphaned_jobs": 0
+}
+```
+
+Notes:
+
+- This removes the **config entry only**. The workspace directory under the dev root, its worktrees, and its branches are left on disk — same as the web UI. `worktree_dir_kept` names the path so a script can clean up deliberately.
+- Any AI gateway stored for the workspace is discarded with it, and there is no undo. `gateway_discarded` says whether one was lost; the CLI also warns on stderr.
+- Like rename, removal is refused while sessions or jobs still reference the workspace unless `--force` is passed.
+
+### Workspace field flags
+
+`add` and `edit` accept the same field flags.
+
+| Flag                         | Description                                                                |
+| ---------------------------- | -------------------------------------------------------------------------- |
+| `--provider`                 | Code/PR host: `github` or `gitlab`                                          |
+| `--host`                     | GitLab host, e.g. `gitlab.example.com` — GitLab workspaces only              |
+| `--task-provider`            | Where tickets live: `github`, `gitlab`, `jira`, `corveil`, or `""` to follow the code provider |
+| `--jira-site`                | Atlassian site, e.g. `acme.atlassian.net`                                   |
+| `--jira-project-key`         | Jira project key, e.g. `PROPS`                                              |
+| `--jira-jql`                 | JQL for this workspace's ticket board                                       |
+| `--jira-status-backlog`      | Jira workflow status name for **Backlog**                                   |
+| `--jira-status-ready`        | Jira workflow status name for **Ready**                                     |
+| `--jira-status-in-progress`  | Jira workflow status name for **In Progress**                               |
+| `--jira-status-in-review`    | Jira workflow status name for **In Review**                                 |
+| `--jira-status-done`         | Jira workflow status name for **Done**                                      |
+| `--clear-jira-status-map`    | Drop every Crow→Jira status mapping                                         |
+| `--corveil-host`             | Self-hosted Corveil host — blank means the public `corveil.io`               |
+| `--custom-instructions`      | Free text appended to this workspace's session prompts                      |
+| `--custom-instructions-file` | Read `--custom-instructions` from a file; `-` reads stdin                   |
+| `--always-include`           | Repo always listed in the prompt table (repeatable)                         |
+| `--clear-always-include`     | Empty the always-include list                                               |
+| `--auto-review-repo`         | Repo whose review requests auto-create a session (repeatable)               |
+| `--clear-auto-review-repos`  | Empty the auto-review list                                                  |
+| `--exclude-review-repo`      | Repo hidden from the review board (repeatable)                              |
+| `--clear-exclude-review-repos` | Empty the exclude-from-reviews list                                       |
+| `--session-env`              | `KEY=VALUE` exported into agents in this workspace (repeatable)             |
+| `--clear-session-env`        | Drop every session env var                                                  |
+
+Notes:
+
+- **Clearing.** An optional scalar clears with an empty string — `--host ""` — matching the Settings form, where blanking a text input stores nothing. Lists and maps can't say "empty" that way, so they take an explicit `--clear-*` flag. `--jira-status-ready ""` clears just that one mapping.
+- **Repeatable flags replace, they don't append.** Every `--always-include` on one invocation is the complete new list, matching `crow job edit --prompt`. Same for `--auto-review-repo`, `--exclude-review-repo`, and `--session-env`.
+- **`--jira-status-*` patches per key.** Setting one leaves the other four alone — unlike the list flags.
+- **Fields are checked against the resulting workspace.** `--host` on a GitHub workspace, or any `--jira-*` flag on a workspace whose task provider isn't Jira, is an error rather than a value that would be stored and never read. Set the provider in the same invocation and both apply. Clearing a stranded field is always allowed.
+- **`--session-env` values are not credentials.** Unlike a gateway header they are stored in plain `config.json` and are not stripped from the web Settings payload. Put tokens in a gateway header instead.
+- **`cli` is derived, never set.** It follows `--provider` (`gh` / `glab`) on every write, so a stale value from an older config is repaired by any edit.
+- There is no `--gateway` flag; see [Gateway Commands](#gateway-commands).
+
+---
+
 ## Board & Workflow Commands
 
 The CLI half of the actions the web Ticket Board and Reviews board expose as buttons — so a Manager agent or a shell script can drive the board without a browser.

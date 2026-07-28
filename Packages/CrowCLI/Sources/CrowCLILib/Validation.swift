@@ -317,6 +317,54 @@ func validateHeaderLine(_ value: String) throws {
     }
 }
 
+/// Validate a workspace code provider for `crow workspace add|edit` (CROW-809).
+/// Delegates to `WorkspaceInfo.validProviders` — the same list the handler enforces
+/// with — so the two can't drift.
+///
+/// - Throws: `ValidationError` when not github or gitlab.
+func validateWorkspaceProvider(_ value: String) throws {
+    guard WorkspaceInfo.validProviders.contains(value.trimmingCharacters(in: .whitespaces)) else {
+        throw ValidationError("'\(value)' is not a valid provider. Expected one of: \(WorkspaceInfo.validProviders.joined(separator: ", "))")
+    }
+}
+
+/// Validate a workspace task provider. An empty string is legal and means
+/// "follow the code provider" — the Settings dropdown's blank option.
+///
+/// - Throws: `ValidationError` when not one of the four providers or "".
+func validateWorkspaceTaskProvider(_ value: String) throws {
+    let provider = value.trimmingCharacters(in: .whitespaces)
+    guard provider.isEmpty || WorkspaceInfo.validTaskProviders.contains(provider) else {
+        throw ValidationError("'\(value)' is not a valid task provider. Expected one of: \(WorkspaceInfo.validTaskProviders.joined(separator: ", ")), or \"\" to follow the code provider")
+    }
+}
+
+/// Validate a `crow workspace --session-env` entry: `KEY=VALUE`.
+///
+/// A blank *value* is legal — an env var set to the empty string is meaningfully
+/// different from an unset one. A missing `=` or blank key is rejected so a
+/// typo'd flag fails loudly instead of being silently dropped by the parser.
+///
+/// Newlines are rejected for the same reason as in `validateHeaderLine`: the
+/// value is exported into the agent's shell environment, where an embedded
+/// newline would read as a second statement.
+///
+/// - Throws: `ValidationError` when the entry has no `=`, a blank key, or an
+///   embedded newline.
+func validateSessionEnvEntry(_ value: String) throws {
+    // CharacterSet, not `contains("\n")`: Swift treats CRLF as a single
+    // Character, so a grapheme comparison misses "\r\n" entirely.
+    guard value.rangeOfCharacter(from: .newlines) == nil else {
+        throw ValidationError(
+            "A --session-env entry must be a single line — '\(value)' contains a newline.")
+    }
+    guard let split = value.firstIndex(of: "="),
+          !String(value[..<split]).trimmingCharacters(in: .whitespaces).isEmpty else {
+        throw ValidationError(
+            "'\(value)' is not a valid env entry. Expected 'KEY=VALUE' (e.g. \"AWS_PROFILE=dev\").")
+    }
+}
+
 /// Validate the set-goal argument shape: exactly one of `--goal`/`--clear`,
 /// and a provided goal must not be blank (a whitespace goal would silently
 /// fail to earn the on-goal alignment multiplier).

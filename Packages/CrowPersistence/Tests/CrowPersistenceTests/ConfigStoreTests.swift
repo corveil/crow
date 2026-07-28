@@ -393,3 +393,67 @@ import Testing
     let reloaded = try #require(ConfigStore.loadConfig(from: configURL))
     #expect(reloaded.autoRespond.autoRebaseAndResolveConflicts == false)
 }
+
+// MARK: - Workspaces (CROW-809)
+
+/// What `crow workspace edit` does to the file: change one workspace's fields
+/// and leave every neighbouring workspace, job and settings block alone. The
+/// handler mutates in place under the config lock; this pins that the result
+/// actually survives a real save/load rather than only an in-memory round-trip.
+@Test func configStoreWorkspaceMutationRoundTrips() throws {
+    let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let claudeDir = tmpDir.appendingPathComponent(".claude", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: tmpDir) }
+
+    var config = AppConfig()
+    config.workspaces = [
+        WorkspaceInfo(name: "Acme", provider: "gitlab", cli: "glab",
+                      sessionEnv: ["AWS_PROFILE": "dev"]),
+        WorkspaceInfo(name: "Other", alwaysInclude: ["other/api"]),
+    ]
+    config.jobs = [JobConfig(name: "nightly", workspace: "Acme", repo: "acme/api",
+                             prompts: ["go"], schedule: .interval(seconds: 60))]
+    config.telemetry = TelemetryConfig(enabled: true, port: 4319, retentionDays: 30)
+
+    config.workspaces[0].host = "gitlab.acme.io"
+    config.workspaces[0].jiraStatusMap = ["In Progress": "In Dev"]
+
+    try ConfigStore.saveConfig(config, to: claudeDir)
+    let loaded = try #require(ConfigStore.loadConfig(from: claudeDir.appendingPathComponent("config.json")))
+
+    #expect(loaded.workspaces.count == 2)
+    #expect(loaded.workspaces[0].host == "gitlab.acme.io")
+    #expect(loaded.workspaces[0].jiraStatusMap == ["In Progress": "In Dev"])
+    // The edited workspace keeps the fields the patch didn't name…
+    #expect(loaded.workspaces[0].sessionEnv == ["AWS_PROFILE": "dev"])
+    #expect(loaded.workspaces[0].id == config.workspaces[0].id)
+    // …and nothing else in the file moved.
+    #expect(loaded.workspaces[1].alwaysInclude == ["other/api"])
+    #expect(loaded.jobs.count == 1)
+    #expect(loaded.telemetry.port == 4319)
+}
+
+/// A hand-authored `sessionEnv` block must survive the save that every config
+/// write performs. Before CROW-809 the key was missing from `WorkspaceInfo`'s
+/// `CodingKeys`, and since `encode(to:)` is synthesized from that list, the
+/// block was silently deleted on the next write — leaving
+/// `skills/crow-workspace/setup.sh`'s jq read returning empty with no error.
+@Test func configStorePreservesHandAuthoredSessionEnv() throws {
+    let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: tmpDir) }
+    try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+    let configURL = tmpDir.appendingPathComponent("config.json")
+
+    try #"""
+    {"workspaces": [{"id": "00000000-0000-0000-0000-000000000001", "name": "Acme",
+      "provider": "github", "cli": "gh", "sessionEnv": {"AWS_PROFILE": "dev", "TZ": "UTC"}}]}
+    """#.write(to: configURL, atomically: true, encoding: .utf8)
+
+    let loaded = try #require(ConfigStore.loadConfig(from: configURL))
+    #expect(loaded.workspaces[0].sessionEnv == ["AWS_PROFILE": "dev", "TZ": "UTC"])
+
+    // The round-trip that used to lose it.
+    try ConfigStore.saveConfig(loaded, to: tmpDir)
+    let rewritten = try #require(ConfigStore.loadConfig(from: configURL))
+    #expect(rewritten.workspaces[0].sessionEnv == ["AWS_PROFILE": "dev", "TZ": "UTC"])
+}

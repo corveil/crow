@@ -1,4 +1,5 @@
 import CrowCore
+import CrowEngine
 import CrowIPC
 import Foundation
 
@@ -43,25 +44,18 @@ enum SecretsRPC {
 
     /// Find a workspace by UUID, falling back to a case-insensitive name match.
     ///
-    /// `WorkspaceInfo.validateName` enforces case-insensitive uniqueness, so a
-    /// name matches at most one workspace — but a config hand-edited before that
-    /// rule existed could hold duplicates, so ambiguity is an error rather than
-    /// a coin flip.
+    /// Delegates to ``WorkspaceRPC/resolveIndex(_:in:)`` so `gateway-*` and
+    /// `workspace-*` can't drift on what `--workspace Corveil` means; the only
+    /// thing added here is the error-type translation for the gateway handlers,
+    /// which predate `mapRPCError` and throw `DaemonRPCError` directly.
     static func resolveWorkspace(_ ref: String, in config: AppConfig) throws -> Int {
-        if let uid = UUID(uuidString: ref),
-           let index = config.workspaces.firstIndex(where: { $0.id == uid }) {
-            return index
-        }
-        let lowered = ref.lowercased()
-        let matches = config.workspaces.indices.filter {
-            config.workspaces[$0].name.lowercased() == lowered
-        }
-        switch matches.count {
-        case 1: return matches[0]
-        case 0: throw DaemonRPCError.invalidParams("Unknown workspace '\(ref)'")
-        default:
-            throw DaemonRPCError.invalidParams(
-                "'\(ref)' matches \(matches.count) workspaces — use the workspace UUID")
+        do {
+            return try WorkspaceRPC.resolveIndex(ref, in: config)
+        } catch let error as RPCError {
+            switch error {
+            case .invalidParams(let message): throw DaemonRPCError.invalidParams(message)
+            case .applicationError(let message): throw DaemonRPCError.applicationError(message)
+            }
         }
     }
 

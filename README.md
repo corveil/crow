@@ -312,6 +312,12 @@ Crow can drive a ticket from assignment to merged with minimal manual steps. Tog
 - Rename tabs from the UI or via `crow rename-terminal`
 - tmux maintenance from the CLI as well as Settings → About: `crow restart-manager`, `crow restart-tmux-server`, `crow reload-tmux-config`, `crow launch-agent`, `crow retry-readiness`, plus `crow open-in-vscode` / `crow open-terminal` for the session's worktree on the host. See [docs/cli-reference.md](docs/cli-reference.md#maintenance-commands).
 
+### Workspaces
+
+- A workspace maps a folder under your dev root to a forge (GitHub or GitLab), a ticket source (GitHub, GitLab, Jira, or Corveil), the repos it always lists or auto-reviews, and free-text instructions appended to its session prompts
+- Manage from Settings → Workspaces or from the CLI with `crow workspace list|get|add|edit|remove` — both write the same config, and an open browser tab picks up a CLI change within a couple of seconds
+- Renaming or removing a workspace is guarded: sessions are tied to it only by their worktree path and jobs only by its name, so both refuse while references exist and report what `--force` would orphan. See [docs/cli-reference.md](docs/cli-reference.md#workspace-commands).
+
 ### Notifications
 
 - Ten event categories — task complete, agent waiting, review requested, changes requested, CI failing, plus the five automation events Crow emits when it acts on your behalf

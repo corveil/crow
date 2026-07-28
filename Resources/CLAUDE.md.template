@@ -65,6 +65,17 @@ crow automation set --remote-control-enabled true|false
 
 Booleans need an explicit `true`/`false` — six of these default to **on**, and a bare flag can't express "leave alone". Everything is live within ~1 board poll (no `crowd` restart); the permission modes apply to newly launched sessions. The tab's three board-filter lists live under `crow defaults` above; `crow automation get` echoes them read-only under `defaults`, including the derived `effective_exclude_review_repos`.
 
+### Workspace Commands
+```
+crow workspace list                                      → {"workspaces":[...],"config_readable":bool}
+crow workspace get --workspace <name|uuid>               → {"workspace":{...}}
+crow workspace add --name NAME [field flags]             → {"workspace":{...},"saved":true}
+crow workspace edit --workspace <name|uuid> [flags]      → patch; {"saved":false} when nothing changed (no write)
+crow workspace remove --workspace <name|uuid> [--force]  → {"removed":true,"gateway_discarded":bool,...}
+```
+
+`--workspace` takes a name (case-insensitive) or UUID. Field flags for `add`/`edit`: `--provider github|gitlab`, `--host`, `--task-provider github|gitlab|jira|corveil`, `--jira-site`, `--jira-project-key`, `--jira-jql`, `--jira-status-{backlog,ready,in-progress,in-review,done}`, `--corveil-host`, `--custom-instructions[-file]`, `--always-include`, `--auto-review-repo`, `--exclude-review-repo`, `--session-env KEY=VALUE`, plus `--clear-*` for each list/map. Scalars clear with `""`; repeatable flags replace the whole list. Rename and remove refuse while sessions/jobs reference the workspace (`--force` overrides) and never touch the filesystem. The per-workspace AI gateway stays with `crow gateway` (local-only).
+
 ### Worktree Commands
 ```
 crow add-worktree --session <uuid> --repo "name" --repo-path "/main/repo" --path "/worktree/path" --branch "feature/..." [--primary]

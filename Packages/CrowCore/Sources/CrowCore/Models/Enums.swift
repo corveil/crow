@@ -30,7 +30,7 @@ public enum SessionStatus: String, Codable, Sendable {
 /// (where the work-unit lives) and a code host (where the PR lives). `.jira` is
 /// a **task-only** provider (no embedded git, like `.corveil`): a Jira-tasked
 /// session pairs with a GitHub/GitLab `CodeBackend` via `Session.codeProvider`.
-public enum Provider: String, Codable, Sendable {
+public enum Provider: String, Codable, Sendable, CaseIterable {
     case github
     case gitlab
     case corveil

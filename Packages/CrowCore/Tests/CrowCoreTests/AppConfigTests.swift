@@ -518,6 +518,76 @@ import Testing
     #expect(config.workspaces[0].jiraStatusMap == nil)
 }
 
+// MARK: - sessionEnv (CROW-809)
+//
+// `WorkspaceInfo.encode(to:)` is synthesized from `CodingKeys`, so a key absent
+// from that list is not merely ignored on read — it is *deleted* on the next
+// write. `sessionEnv` was in exactly that state: `skills/crow-workspace/setup.sh`
+// reads `.workspaces[].sessionEnv` with jq and the skill documents it, but the
+// model had no such field, so every Settings save silently dropped it and the
+// jq read then returned empty with no error. These pin the round-trip.
+
+@Test func workspaceSessionEnvSurvivesEncodeDecode() throws {
+    let config = AppConfig(workspaces: [
+        WorkspaceInfo(name: "Org", sessionEnv: ["AWS_PROFILE": "dev", "NODE_ENV": "development"])
+    ])
+    let data = try JSONEncoder().encode(config)
+    let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+    #expect(decoded.workspaces[0].sessionEnv == ["AWS_PROFILE": "dev", "NODE_ENV": "development"])
+}
+
+/// The regression proper: a hand-authored `sessionEnv` read off disk must still
+/// be there after the re-encode that every config write performs.
+@Test func workspaceSessionEnvSurvivesAConfigRewrite() throws {
+    let json = """
+    {"workspaces": [{"id": "00000000-0000-0000-0000-000000000001", "name": "Org",
+      "provider": "github", "cli": "gh", "sessionEnv": {"AWS_PROFILE": "dev"}}]}
+    """.data(using: .utf8)!
+    let loaded = try JSONDecoder().decode(AppConfig.self, from: json)
+    let rewritten = try JSONDecoder().decode(
+        AppConfig.self, from: try JSONEncoder().encode(loaded))
+    #expect(rewritten.workspaces[0].sessionEnv == ["AWS_PROFILE": "dev"])
+}
+
+@Test func workspaceSessionEnvDefaultsNilWhenKeyMissing() throws {
+    let json = """
+    {"workspaces": [{"id": "00000000-0000-0000-0000-000000000001", "name": "Org", "provider": "github", "cli": "gh"}]}
+    """.data(using: .utf8)!
+    let config = try JSONDecoder().decode(AppConfig.self, from: json)
+    #expect(config.workspaces[0].sessionEnv == nil)
+}
+
+/// Every field `crow workspace` can write must survive a round-trip together —
+/// a field added to the struct but forgotten in `CodingKeys` would pass its own
+/// in-memory test and still be dropped on save.
+@Test func workspaceFullRoundTripKeepsEveryField() throws {
+    let workspace = WorkspaceInfo(
+        name: "Org", provider: "gitlab", cli: "glab", host: "gitlab.acme.io",
+        alwaysInclude: ["acme/api"], autoReviewRepos: ["acme/web"],
+        excludeReviewRepos: ["acme/legacy"], customInstructions: "Run make test.",
+        taskProvider: "jira", jiraProjectKey: "PROPS", jiraJQL: "assignee = currentUser()",
+        jiraSite: "acme.atlassian.net", jiraStatusMap: ["In Progress": "In Dev"],
+        corveilHost: "corveil.acme.io", sessionEnv: ["AWS_PROFILE": "dev"],
+        gateway: WorkspaceGateway(baseURL: "https://gw.acme.io", customHeaders: ["X-Key": "sk-1"]))
+    let data = try JSONEncoder().encode(AppConfig(workspaces: [workspace]))
+    let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+    #expect(decoded.workspaces[0] == workspace)
+}
+
+// MARK: - Provider domains (CROW-809)
+
+/// The CLI's `--provider` / `--task-provider` rejection messages and the
+/// `workspace-*` handler's validation both read these, so they are the one
+/// source for what a workspace may be set to.
+@Test func workspaceProviderDomainsComeFromTheProviderEnum() {
+    // Task-only providers have no git surface, so they're never a code provider.
+    #expect(WorkspaceInfo.validProviders == ["github", "gitlab"])
+    #expect(Set(WorkspaceInfo.validTaskProviders) == Set(Provider.allCases.map(\.rawValue)))
+    for provider in WorkspaceInfo.validProviders {
+        #expect(Provider(rawValue: provider)?.isTaskOnly == false)
+    }
+}
+
 @Test func workspaceNameValidation() {
     // Valid name
     #expect(WorkspaceInfo.validateName("MyOrg", existingNames: []) == nil)
