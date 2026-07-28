@@ -107,7 +107,7 @@ public struct CursorHookConfigWriter: HookConfigWriter {
         // Checked unconditionally (not gated on the file existing) so a
         // tracked-but-deleted file — `rm` without `git rm` — is still caught.
         if Self.isGitTracked(worktreePath: worktreePath, relativePath: ".cursor/hooks.json") {
-            NSLog("[CursorHookConfigWriter] %@/.cursor/hooks.json is git-tracked; not writing Crow's session hooks into a committed file. Gitignore/untrack it to enable hook-based state detection for this worktree.", worktreePath)
+            CrowLog.info("[CursorHookConfigWriter] \(worktreePath)/.cursor/hooks.json is git-tracked; not writing Crow's session hooks into a committed file. Gitignore/untrack it to enable hook-based state detection for this worktree.")
             return
         }
 
@@ -119,7 +119,7 @@ public struct CursorHookConfigWriter: HookConfigWriter {
         var root: [String: Any] = [:]
         if let data = FileManager.default.contents(atPath: hooksPath) {
             guard let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                NSLog("[CursorHookConfigWriter] %@ exists but is unparseable; leaving it untouched (would otherwise drop the user's own hook groups)", hooksPath)
+                CrowLog.info("[CursorHookConfigWriter] \(hooksPath) exists but is unparseable; leaving it untouched (would otherwise drop the user's own hook groups)")
                 return
             }
             root = parsed
@@ -223,8 +223,7 @@ public struct CursorHookConfigWriter: HookConfigWriter {
                 withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
             try out.write(to: URL(fileURLWithPath: hooksPath), options: [.atomic])
         } catch {
-            NSLog("[CursorHookConfigWriter] Failed to rewrite %@: %@",
-                  hooksPath, error.localizedDescription)
+            CrowLog.info("[CursorHookConfigWriter] Failed to rewrite \(hooksPath): \(error.localizedDescription)")
         }
     }
 

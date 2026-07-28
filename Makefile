@@ -106,6 +106,8 @@ parity:
 	@./scripts/check-notification-events.sh
 	@echo "==> Checking CLI/RPC control-plane parity (CROW-807)..."
 	@./scripts/check-cli-parity.sh
+	@echo "==> Checking for banned NSLog (CROW-874)..."
+	@./scripts/check-no-nslog.sh
 
 # Regenerate the CLI reference from the commands themselves (CROW-808). Run
 # after adding or changing a subcommand — a stale docs/cli.md fails CrowCLI's

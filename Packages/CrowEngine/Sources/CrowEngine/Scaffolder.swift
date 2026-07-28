@@ -230,7 +230,7 @@ public struct Scaffolder {
         do {
             try fm.createDirectory(atPath: binDir, withIntermediateDirectories: true)
         } catch {
-            NSLog("[Scaffolder] could not create bin dir %@: %@", binDir, error.localizedDescription)
+            CrowLog.info("[Scaffolder] could not create bin dir \(binDir): \(error.localizedDescription)")
             return
         }
 
@@ -254,8 +254,7 @@ public struct Scaffolder {
                 // broken pointer doesn't shadow a working PATH install.
                 try? fm.removeItem(atPath: link)
                 if !trimmed.isEmpty {
-                    NSLog("[Scaffolder] defaults.binaries.%@ not executable at %@ — skipping symlink",
-                          name, trimmed)
+                    CrowLog.info("[Scaffolder] defaults.binaries.\(name) not executable at \(trimmed) — skipping symlink")
                 }
                 continue
             }
@@ -263,8 +262,7 @@ public struct Scaffolder {
             do {
                 try fm.createSymbolicLink(atPath: link, withDestinationPath: trimmed)
             } catch {
-                NSLog("[Scaffolder] failed to symlink %@ -> %@: %@",
-                      link, trimmed, error.localizedDescription)
+                CrowLog.info("[Scaffolder] failed to symlink \(link) -> \(trimmed): \(error.localizedDescription)")
             }
         }
     }
@@ -288,7 +286,7 @@ public struct Scaffolder {
                 try? fm.removeItem(atPath: link)
             }
             if let resolved {
-                NSLog("[Scaffolder] app crow binary not executable at %@ — skipping symlink", resolved)
+                CrowLog.info("[Scaffolder] app crow binary not executable at \(resolved) — skipping symlink")
             }
             return
         }
@@ -298,7 +296,7 @@ public struct Scaffolder {
         // absent and we'd skip removal, then createSymbolicLink hits EEXIST.
         if let attrs = try? fm.attributesOfItem(atPath: link) {
             guard (attrs[.type] as? FileAttributeType) == .typeSymbolicLink else {
-                NSLog("[Scaffolder] crow exists at %@ but is not a symlink — leaving alone", link)
+                CrowLog.info("[Scaffolder] crow exists at \(link) but is not a symlink — leaving alone")
                 return
             }
             try? fm.removeItem(atPath: link)
@@ -307,8 +305,7 @@ public struct Scaffolder {
         do {
             try fm.createSymbolicLink(atPath: link, withDestinationPath: target)
         } catch {
-            NSLog("[Scaffolder] failed to symlink %@ -> %@: %@",
-                  link, target, error.localizedDescription)
+            CrowLog.info("[Scaffolder] failed to symlink \(link) -> \(target): \(error.localizedDescription)")
         }
     }
 
@@ -337,7 +334,7 @@ public struct Scaffolder {
         }
         let fm = FileManager.default
         guard fm.isExecutableFile(atPath: path) else {
-            NSLog("[Scaffolder] corveil binary not executable: %@", path)
+            CrowLog.info("[Scaffolder] corveil binary not executable: \(path)")
             return "Corveil skill install skipped — binary at \(path) is missing or not executable. Check Settings → General → Corveil CLI."
         }
 
@@ -345,7 +342,7 @@ public struct Scaffolder {
         do {
             try fm.createDirectory(atPath: commandsDir, withIntermediateDirectories: true)
         } catch {
-            NSLog("[Scaffolder] could not create commands dir: %@", error.localizedDescription)
+            CrowLog.info("[Scaffolder] could not create commands dir: \(error.localizedDescription)")
             return "Corveil skill install failed — could not create .claude/commands directory."
         }
         let target = (commandsDir as NSString).appendingPathComponent("query-corveil.md")
@@ -363,7 +360,7 @@ public struct Scaffolder {
         do {
             try proc.run()
         } catch {
-            NSLog("[Scaffolder] corveil launch failed: %@", error.localizedDescription)
+            CrowLog.info("[Scaffolder] corveil launch failed: \(error.localizedDescription)")
             return "Corveil skill install failed — \(error.localizedDescription). Check path in Settings."
         }
 
@@ -379,19 +376,18 @@ public struct Scaffolder {
         let timedOut = watchdog.cancel()
 
         if timedOut {
-            NSLog("[Scaffolder] corveil skill install timed out after %.1fs", Self.corveilInstallTimeout)
+            CrowLog.info("[Scaffolder] corveil skill install timed out after \(String(format: "%.1f", Self.corveilInstallTimeout))s")
             return "Corveil skill install timed out after \(Int(Self.corveilInstallTimeout))s — binary may be hung. Check path in Settings."
         }
         if proc.terminationStatus != 0 {
             let stderr = (try? stderrPipe.fileHandleForReading.readToEnd())
                 .flatMap { String(data: $0, encoding: .utf8) }?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            NSLog("[Scaffolder] corveil skill install exit=%d stderr=%@",
-                  proc.terminationStatus, stderr)
+            CrowLog.info("[Scaffolder] corveil skill install exit=\(proc.terminationStatus) stderr=\(stderr)")
             let detail = stderr.isEmpty ? "exit code \(proc.terminationStatus)" : stderr
             return "Corveil skill install failed — \(detail). Check path in Settings."
         }
-        NSLog("[Scaffolder] corveil skill installed at %@", target)
+        CrowLog.info("[Scaffolder] corveil skill installed at \(target)")
         return nil
     }
 
@@ -770,7 +766,7 @@ public struct Scaffolder {
                 if let content = try? String(contentsOf: filePath) {
                     return content
                 }
-                NSLog("[Scaffolder] File not found at repo path: %@", filePath.path)
+                CrowLog.info("[Scaffolder] File not found at repo path: \(filePath.path)")
                 return nil
             }
             dir = dir.deletingLastPathComponent()

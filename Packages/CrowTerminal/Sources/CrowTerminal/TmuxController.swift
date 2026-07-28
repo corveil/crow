@@ -1,3 +1,4 @@
+import CrowCore
 import Foundation
 
 /// Thin wrapper around the `tmux` CLI.
@@ -15,7 +16,8 @@ import Foundation
 /// child and throws `.timedOut`; callers wire that into a watchdog flow
 /// that offers the user "Restart tmux server" (spec §10.1).
 ///
-/// All methods are blocking until the spawned tmux process exits.
+/// All methods block the calling thread until the spawned tmux process exits
+/// and its output is drained (both bounded — see `run`).
 public struct TmuxController: Sendable {
     public let tmuxBinary: String
     public let socketPath: String
@@ -24,6 +26,16 @@ public struct TmuxController: Sendable {
     /// Default per-call timeout. 2s is well above the p95 (~74ms in the
     /// spike) and matches the watchdog threshold in spec §10.1.
     public static let defaultTimeout: TimeInterval = 2.0
+
+    /// Grace for the post-exit pipe drain.
+    ///
+    /// Deliberately **not** derived from `timeout`: that bounds the *child*,
+    /// this bounds a drain whose child has already exited, so every remaining
+    /// byte is already sitting in a ≤64 KB kernel pipe buffer. The only thing
+    /// this budget must absorb is GCD worker bring-up under contention. Tying it
+    /// to `timeout` would hand `capturePane` a pointless 10s stall — on the
+    /// MainActor — for microseconds of actual work.
+    public static let drainGrace: TimeInterval = 0.25
 
     public init(tmuxBinary: String, socketPath: String, sessionName: String) {
         self.tmuxBinary = tmuxBinary
@@ -38,10 +50,15 @@ public struct TmuxController: Sendable {
     /// `TmuxError.timedOut` if the child doesn't exit within `timeout`.
     ///
     /// Stdout/stderr are drained on background threads **while** waiting for
-    /// the child. Reading only after `waitUntilExit` deadlocks once output
+    /// the child. Reading only after the child exits deadlocks once output
     /// exceeds the ~64 KB pipe buffer — `capture-pane -pe -S -N` for a rich
     /// TUI pane routinely does, which made CROW-606 web-terminal replay
     /// silently no-op (`try?` swallowed the timeout).
+    ///
+    /// Both waits are bounded. The drain in particular gets `drainGrace` rather
+    /// than running unbounded: EOF needs *every* copy of the pipe's write end to
+    /// close, and a process that inherited one at spawn time can hold it open
+    /// long after the tmux child is reaped (CROW-874).
     @discardableResult
     public func run(_ args: [String], timeout: TimeInterval = TmuxController.defaultTimeout) throws -> String {
         let p = Process()
@@ -56,34 +73,34 @@ public struct TmuxController: Sendable {
         try p.run()
 
         // Drain both pipes concurrently so a large capture can't fill the OS
-        // pipe buffer and stall tmux before it exits. Boxes keep the mutable
-        // Data off the caller's stack so the concurrent readers don't race a
-        // local `var`.
-        final class PipeBox: @unchecked Sendable { var data = Data() }
+        // pipe buffer and stall tmux before it exits.
         let stdoutBox = PipeBox()
         let stderrBox = PipeBox()
         let group = DispatchGroup()
-        group.enter()
-        DispatchQueue.global(qos: .userInitiated).async {
-            stdoutBox.data = stdout.fileHandleForReading.readDataToEndOfFile()
-            group.leave()
-        }
-        group.enter()
-        DispatchQueue.global(qos: .userInitiated).async {
-            stderrBox.data = stderr.fileHandleForReading.readDataToEndOfFile()
-            group.leave()
-        }
-
+        drain(stdout.fileHandleForReading, into: stdoutBox, group: group)
+        drain(stderr.fileHandleForReading, into: stderrBox, group: group)
         let watchdog = ProcessWatchdog(p, timeout: timeout)
         done.wait()
         watchdog.cancel()
-        group.wait()
+        let drainIncomplete = group.wait(timeout: .now() + Self.drainGrace) == .timedOut
 
-        let outString = String(data: stdoutBox.data, encoding: .utf8) ?? ""
-        let errString = String(data: stderrBox.data, encoding: .utf8) ?? ""
+        let outString = String(data: stdoutBox.snapshot(), encoding: .utf8) ?? ""
+        let errString = String(data: stderrBox.snapshot(), encoding: .utf8) ?? ""
 
         if watchdog.didFire {
             throw TmuxError.timedOut(args: args, after: timeout)
+        }
+        if drainIncomplete {
+            // NOT an error: `done.wait()` returned, so the child exited and
+            // wrote everything it will ever write — and because the readers are
+            // incremental, we already hold those bytes. Only the EOF notice is
+            // missing. Throwing here would be actively harmful: `.timedOut`
+            // drives TmuxBackend.onUnresponsive, which offers the user "Restart
+            // tmux server" — destroying their terminals over our own fd hygiene.
+            CrowLog.info(
+                "[TmuxController] pipe drain hit \(Self.drainGrace)s without EOF for "
+                    + "`tmux \(args.joined(separator: " "))` (status \(p.terminationStatus)); "
+                    + "another process inherited the pipe. Continuing with the captured output.")
         }
         guard p.terminationStatus == 0 else {
             throw TmuxError.cliFailed(
@@ -285,6 +302,14 @@ public struct TmuxController: Sendable {
         let done = makeTerminationSignal(for: p)
         try p.run()
 
+        // Drain stderr concurrently rather than lazily on the failure path: a
+        // read that only happens after the child exits deadlocks once the output
+        // exceeds the pipe buffer. `load-buffer` error text is short, so that
+        // was latent rather than live — but it is the same bug as CROW-606.
+        let stderrBox = PipeBox()
+        let group = DispatchGroup()
+        drain(stderr.fileHandleForReading, into: stderrBox, group: group)
+
         let watchdog = ProcessWatchdog(p, timeout: timeout)
         do {
             try stdin.fileHandleForWriting.write(contentsOf: data)
@@ -292,6 +317,7 @@ public struct TmuxController: Sendable {
         } catch {
             done.wait()
             watchdog.cancel()
+            _ = group.wait(timeout: .now() + Self.drainGrace)
             if watchdog.didFire {
                 throw TmuxError.timedOut(args: args, after: timeout)
             }
@@ -300,20 +326,17 @@ public struct TmuxController: Sendable {
 
         done.wait()
         watchdog.cancel()
+        _ = group.wait(timeout: .now() + Self.drainGrace)
 
         if watchdog.didFire {
             throw TmuxError.timedOut(args: args, after: timeout)
         }
         guard p.terminationStatus == 0 else {
-            let errString = String(
-                data: stderr.fileHandleForReading.readDataToEndOfFile(),
-                encoding: .utf8
-            ) ?? ""
             throw TmuxError.cliFailed(
                 args: args,
                 status: p.terminationStatus,
                 stdout: "",
-                stderr: errString
+                stderr: String(data: stderrBox.snapshot(), encoding: .utf8) ?? ""
             )
         }
     }
@@ -374,19 +397,98 @@ public struct TmuxController: Sendable {
     }
 
     public static func versionString(tmuxBinary: String) -> String? {
+        // Reachable from `captureDiagnostics` on the MainActor, so it needs the
+        // same two bounds as `run()`. It previously had neither: no watchdog at
+        // all, and a `readDataToEndOfFile()` *after* the exit wait — the >64 KB
+        // deadlock the doc on `run()` warns about (CROW-874).
         let p = Process()
         p.executableURL = URL(fileURLWithPath: tmuxBinary)
         p.arguments = ["-V"]
         let out = Pipe()
+        let err = Pipe()
         p.standardOutput = out
-        p.standardError = Pipe()
+        p.standardError = err
         // Arm the termination signal BEFORE run() (see makeTerminationSignal, #653).
         let done = makeTerminationSignal(for: p)
         guard (try? p.run()) != nil else { return nil }
+
+        let outBox = PipeBox()
+        let errBox = PipeBox()
+        let group = DispatchGroup()
+        drain(out.fileHandleForReading, into: outBox, group: group)
+        drain(err.fileHandleForReading, into: errBox, group: group)
+
+        let watchdog = ProcessWatchdog(p, timeout: defaultTimeout)
         done.wait()
-        guard p.terminationStatus == 0 else { return nil }
-        let data = out.fileHandleForReading.readDataToEndOfFile()
-        return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        watchdog.cancel()
+        _ = group.wait(timeout: .now() + drainGrace)
+
+        guard !watchdog.didFire, p.terminationStatus == 0 else { return nil }
+        return String(data: outBox.snapshot(), encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+/// Read `handle` into `box` until EOF, on a background queue.
+///
+/// Uses raw `read(2)` rather than any `FileHandle` read method, and that is
+/// load-bearing (CROW-874):
+///
+/// - `readDataToEndOfFile()` is all-or-nothing — it buffers internally and hands
+///   back a `Data` only at EOF, so on a bounded-drain timeout the box would hold
+///   **zero** bytes rather than the output the child already wrote.
+/// - `read(upToCount:)` reads that many bytes, not *up to* that many: measured
+///   on Darwin, it blocks until the full count or EOF, so with a 64 KB request
+///   it behaves exactly like `readDataToEndOfFile()` for our purposes.
+/// - `availableData` returns after one read, but raises an uncatchable
+///   Objective-C exception on read error.
+///
+/// A single `read(2)` returns as soon as any bytes are available, so once the
+/// child has exited every byte it wrote is in the box even when EOF never
+/// arrives because some other process inherited the write end.
+///
+/// The closure retains `handle`, which owns the descriptor — the reader may
+/// outlive the call that started it, and closing an fd under a blocked `read(2)`
+/// is undefined behavior on Darwin.
+private func drain(_ handle: FileHandle, into box: PipeBox, group: DispatchGroup) {
+    group.enter()
+    DispatchQueue.global(qos: .userInitiated).async {
+        let fd = handle.fileDescriptor
+        var buffer = [UInt8](repeating: 0, count: 64 * 1024)
+        while true {
+            let n = buffer.withUnsafeMutableBytes { read(fd, $0.baseAddress, 64 * 1024) }
+            if n > 0 {
+                box.append(Data(buffer[0..<n]))
+                continue
+            }
+            if n < 0 && errno == EINTR { continue }
+            break  // 0 = EOF; < 0 = a real error, nothing more to read.
+        }
+        group.leave()
+    }
+}
+
+/// Lock-protected accumulator for a pipe drain.
+/// Once the drain wait is bounded, the reader can still be running when the
+/// caller snapshots — there is no way to interrupt a blocking read on a pipe fd,
+/// and closing the fd out from under it is undefined behavior on Darwin and
+/// invites fd-number reuse. So the accessor has to be race-free on its own
+/// rather than relying on the wait having guaranteed the writers finished; that
+/// guarantee is exactly what bounding the wait gives up.
+private final class PipeBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var data = Data()
+
+    func append(_ chunk: Data) {
+        lock.lock()
+        data.append(chunk)
+        lock.unlock()
+    }
+
+    func snapshot() -> Data {
+        lock.lock()
+        defer { lock.unlock() }
+        return data
     }
 }
 
@@ -438,25 +540,37 @@ private func makeTerminationSignal(for p: Process) -> DispatchSemaphore {
     return done
 }
 
-/// One-shot SIGTERM watchdog for a child Process. Schedules a timer
-/// on a background queue at construction; if the timer fires before
-/// `cancel()` is called, the wrapped process is sent `terminate()` and
-/// `didFire` flips to true. Used by `run()` and `loadBufferFromStdin`
-/// to keep the UI thread from wedging on a hung tmux server (spec
-/// §10.1).
+/// One-shot SIGTERM watchdog for a child Process, escalating to SIGKILL.
+/// Schedules a timer on a background queue at construction; if the timer
+/// fires before `cancel()` is called, the wrapped process is sent
+/// `terminate()` and `didFire` flips to true. Used by `run()` and
+/// `loadBufferFromStdin` to keep the caller from wedging on a hung tmux
+/// server (spec §10.1).
+///
+/// The timer repeats so a child that ignores or blocks SIGTERM gets SIGKILL on
+/// the next tick. Without that, `done.wait()` is bounded only in theory: the
+/// semaphore is signalled by `terminationHandler`, which needs the child to
+/// actually die (CROW-874).
 private final class ProcessWatchdog: @unchecked Sendable {
     private let timer: DispatchSourceTimer
     private let lock = NSLock()
     private var fired = false
 
-    init(_ p: Process, timeout: TimeInterval) {
+    init(_ p: Process, timeout: TimeInterval, killAfter: TimeInterval = 1.0) {
         let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
-        timer.schedule(deadline: .now() + timeout)
+        timer.schedule(deadline: .now() + timeout, repeating: killAfter)
         self.timer = timer
         timer.setEventHandler { [weak p, weak self] in
-            guard let p, p.isRunning else { return }
-            self?.fire()
-            p.terminate()
+            guard let self else { return }
+            guard let p, p.isRunning else { self.timer.cancel(); return }
+            if self.didFire {
+                // Second tick: SIGTERM was ignored or the child is wedged.
+                kill(p.processIdentifier, SIGKILL)
+                self.timer.cancel()
+            } else {
+                self.fire()
+                p.terminate()
+            }
         }
         timer.resume()
     }

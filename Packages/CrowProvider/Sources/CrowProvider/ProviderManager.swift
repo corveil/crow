@@ -290,7 +290,7 @@ public actor ProviderManager {
                 return []
             }
         } catch {
-            NSLog("[ProviderManager] listRepos failed for owner '\(owner)': \(error.localizedDescription)")
+            CrowLog.info("[ProviderManager] listRepos failed for owner '\(owner)': \(error.localizedDescription)")
             return []
         }
     }

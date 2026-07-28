@@ -883,7 +883,7 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                         // launch succeeded (#408): surface it so the UI shows a
                         // Retry affordance and the CLI caller reports honestly
                         // instead of leaving a silent window-less terminal.
-                        NSLog("[Crow] tmux registerTerminal failed after retries (\(error)); surfacing launch failure")
+                        CrowLog.info("[Crow] tmux registerTerminal failed after retries (\(error)); surfacing launch failure")
                         launchFailed = true
                         if trackReadiness {
                             capturedAppState.terminalReadiness[terminal.id] = .failed
@@ -1051,7 +1051,7 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                 // Process escape sequences: literal \n in the text becomes a real newline
                 text = text.replacingOccurrences(of: "\\n", with: "\n")
                 text = text.replacingOccurrences(of: "\\t", with: "\t")
-                NSLog("crow send: text length=\(text.count), ends_with_newline=\(text.hasSuffix("\n")), ends_with_cr=\(text.hasSuffix("\r"))")
+                CrowLog.info("crow send: text length=\(text.count), ends_with_newline=\(text.hasSuffix("\n")), ends_with_cr=\(text.hasSuffix("\r"))")
                 await MainActor.run {
                     let routedTerminal = capturedAppState.terminals[sessionID]?.first(where: { $0.id == terminalID })
                     // tmux-backed terminals already have their window from
@@ -1086,7 +1086,7 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                         TerminalRouter.send(routedTerminal, text: text)
                     } else {
                         // No SessionTerminal row known — nothing to route to.
-                        NSLog("[Crow] crow send for unknown terminal \(terminalID); ignoring")
+                        CrowLog.info("[Crow] crow send for unknown terminal \(terminalID); ignoring")
                     }
                 }
                 return ["sent": .bool(true)]
@@ -1267,7 +1267,7 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                     if hookDebug {
                         let shortID = String(sessionIDStr.prefix(8))
                         let keys = payload.keys.sorted().joined(separator: ",")
-                        NSLog("[hook-event] session=\(shortID) event=\(eventName) payload-keys=[\(keys)]")
+                        CrowLog.info("[hook-event] session=\(shortID) event=\(eventName) payload-keys=[\(keys)]")
                     }
 
                     let event = HookEvent(
@@ -1358,7 +1358,7 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
 
                     if hookDebug && state.activityState != stateBefore {
                         let shortID = String(sessionIDStr.prefix(8))
-                        NSLog("[hook-event] session=\(shortID) event=\(eventName) state=\(stateBefore.rawValue)→\(state.activityState.rawValue)")
+                        CrowLog.info("[hook-event] session=\(shortID) event=\(eventName) state=\(stateBefore.rawValue)→\(state.activityState.rawValue)")
                     }
 
                     // Persist the color-driving state only when it actually changed,

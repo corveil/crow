@@ -235,7 +235,7 @@ public final class JobScheduler {
             return
         }
         guard polls < maxLaunchWaitPolls else {
-            NSLog("[JobScheduler] gave up waiting for agent launch on \(terminalID)")
+            CrowLog.info("[JobScheduler] gave up waiting for agent launch on \(terminalID)")
             return
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
@@ -257,7 +257,7 @@ public final class JobScheduler {
             guard let terminal = self.appState.terminals.values
                 .flatMap({ $0 })
                 .first(where: { $0.id == terminalID }) else {
-                NSLog("[JobScheduler] terminal \(terminalID) gone; stopping prompt delivery")
+                CrowLog.info("[JobScheduler] terminal \(terminalID) gone; stopping prompt delivery")
                 // Delivery aborted — stop watching this run for completion too.
                 self.watchedRuns[sessionID] = nil
                 return

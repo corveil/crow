@@ -1,3 +1,4 @@
+import CrowCore
 import CrowTerminal
 import Foundation
 
@@ -49,7 +50,7 @@ struct TerminalCockpit: Sendable {
             historyLimit: w.historyLimit,
             alternateOn: w.alternateOn,
             alternateScreenEnabled: w.alternateScreenEnabled) {
-            NSLog("[CrowTelemetry tmux:scrollback_degraded index=\(w.index) history_limit=\(w.historyLimit) alternate_on=\(w.alternateOn ? 1 : 0)]")
+            CrowLog.info("[CrowTelemetry tmux:scrollback_degraded index=\(w.index) history_limit=\(w.historyLimit) alternate_on=\(w.alternateOn ? 1 : 0)]")
         }
     }
 

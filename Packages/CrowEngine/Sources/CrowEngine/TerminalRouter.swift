@@ -17,7 +17,7 @@ public enum TerminalRouter {
         do {
             try TmuxBackend.shared.sendText(id: terminal.id, text: text)
         } catch {
-            NSLog("[TerminalRouter] tmux sendText failed for \(terminal.id): \(error)")
+            CrowLog.info("[TerminalRouter] tmux sendText failed for \(terminal.id): \(error)")
         }
     }
 

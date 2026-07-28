@@ -1,3 +1,4 @@
+import CrowCore
 import Foundation
 #if canImport(Glibc)
 import Glibc  // POSIX `rename`/`errno` on Linux (Darwin re-exports them via Foundation on macOS)
@@ -81,15 +82,15 @@ public enum CursorMCPConfigWriter {
             let tmp = (dir as NSString).appendingPathComponent(".crow-mcp-\(UUID().uuidString).tmp")
             guard FileManager.default.createFile(
                 atPath: tmp, contents: out, attributes: [.posixPermissions: 0o600]) else {
-                NSLog("[CursorMCPConfigWriter] Failed to create temp for %@", path)
+                CrowLog.info("[CursorMCPConfigWriter] Failed to create temp for \(path)")
                 return
             }
             if rename(tmp, path) != 0 {
-                NSLog("[CursorMCPConfigWriter] atomic rename to %@ failed (errno %d)", path, errno)
+                CrowLog.info("[CursorMCPConfigWriter] atomic rename to \(path) failed (errno \(errno))")
                 try? FileManager.default.removeItem(atPath: tmp)
             }
         } catch {
-            NSLog("[CursorMCPConfigWriter] Failed to write %@: %@", path, error.localizedDescription)
+            CrowLog.info("[CursorMCPConfigWriter] Failed to write \(path): \(error.localizedDescription)")
         }
     }
 
@@ -132,7 +133,7 @@ public enum CursorMCPConfigWriter {
             reapManagedJira(cursorMCPPath: cursorPath)
             return
         case .sourceUnavailable:
-            NSLog("[CursorMCPConfigWriter] %@ missing/unreadable; leaving ~/.cursor/mcp.json untouched", claudePath)
+            CrowLog.info("[CursorMCPConfigWriter] \(claudePath) missing/unreadable; leaving ~/.cursor/mcp.json untouched")
             return
         }
 
@@ -144,7 +145,7 @@ public enum CursorMCPConfigWriter {
         var root: [String: Any] = [:]
         if let existing = FileManager.default.contents(atPath: cursorPath) {
             guard let parsed = try? JSONSerialization.jsonObject(with: existing) as? [String: Any] else {
-                NSLog("[CursorMCPConfigWriter] %@ exists but is unparseable; leaving it untouched (would otherwise drop the user's other MCP servers)", cursorPath)
+                CrowLog.info("[CursorMCPConfigWriter] \(cursorPath) exists but is unparseable; leaving it untouched (would otherwise drop the user's other MCP servers)")
                 return
             }
             root = parsed
@@ -154,7 +155,7 @@ public enum CursorMCPConfigWriter {
 
         if let current = servers[serverKey] as? [String: Any] {
             if !managed.contains(serverKey) {
-                NSLog("[CursorMCPConfigWriter] %@ already has a user-authored `jira` MCP server; leaving it untouched", cursorPath)
+                CrowLog.info("[CursorMCPConfigWriter] \(cursorPath) already has a user-authored `jira` MCP server; leaving it untouched")
                 return
             }
             if NSDictionary(dictionary: current).isEqual(to: jiraEntry) {
@@ -197,7 +198,7 @@ public enum CursorMCPConfigWriter {
         } else {
             atomicWriteJSON(root, to: cursorMCPPath)
         }
-        NSLog("[CursorMCPConfigWriter] Reaped bridged `jira` MCP from %@ — no longer in Claude's config", cursorMCPPath)
+        CrowLog.info("[CursorMCPConfigWriter] Reaped bridged `jira` MCP from \(cursorMCPPath) — no longer in Claude's config")
     }
 
     /// Outcome of looking for a `jira` server in Claude's config.
@@ -237,7 +238,7 @@ public enum CursorMCPConfigWriter {
                    let jira = servers[serverKey] as? [String: Any] {
                     // Visibility: a project-scoped Claude MCP token is about to
                     // be promoted into Cursor's *global* config (every session).
-                    NSLog("[CursorMCPConfigWriter] Promoting project-scoped `jira` MCP from %@ into global ~/.cursor/mcp.json", key)
+                    CrowLog.info("[CursorMCPConfigWriter] Promoting project-scoped `jira` MCP from \(key) into global ~/.cursor/mcp.json")
                     return .found(jira)
                 }
             }

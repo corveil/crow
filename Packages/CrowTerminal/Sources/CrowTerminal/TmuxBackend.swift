@@ -189,14 +189,17 @@ public final class TmuxBackend {
     ///     `kill-server` and unlink the per-terminal scratch files.
     public func shutdown(killServer: Bool = true) {
         if controller != nil {
-            NSLog("[CrowTelemetry tmux:\(killServer ? "server_killed" : "server_detach") bindings=\(bindings.count)]")
+            CrowLog.info("[CrowTelemetry tmux:\(killServer ? "server_killed" : "server_detach") bindings=\(bindings.count)]")
         }
         // Destroy the surface BEFORE kill-server: destroy() nils the surface's
-        // onProcessExit synchronously, and killServer's waitUntilExit pumps the
-        // main run loop — without this order the attach client's death would be
-        // delivered mid-shutdown and a deliberate restart would masquerade as
-        // a server crash (#588). Guarded for the Linux daemon build, where the
-        // AppKit surface doesn't exist (b982621).
+        // onProcessExit synchronously, so the attach client's death can no
+        // longer be delivered mid-shutdown and a deliberate restart can't
+        // masquerade as a server crash (#588). (The original reason given here
+        // was that killServer's waitUntilExit pumps the main run loop; that has
+        // not been true since #653 replaced the wait with a semaphore. The
+        // ordering still matters, for the synchronous-nil reason above.)
+        // Guarded for the Linux daemon build, where the AppKit surface doesn't
+        // exist (b982621).
         #if canImport(AppKit)
         sharedSurface?.destroy()
         sharedSurface = nil
@@ -410,7 +413,7 @@ public final class TmuxBackend {
         // Operator-greppable: `[CrowTelemetry tmux:tab_switch_ms=…]`. Easy
         // to graph from logs today; trivially re-routed to a real metrics
         // pipeline once one exists.
-        NSLog("[CrowTelemetry tmux:tab_switch_ms=\(elapsedMS) terminal=\(id)]")
+        CrowLog.info("[CrowTelemetry tmux:tab_switch_ms=\(elapsedMS) terminal=\(id)]")
     }
 
     /// Settle time between `paste-buffer` and the submitting `Enter`.
@@ -825,7 +828,7 @@ public final class TmuxBackend {
             return true
         } catch {
             reportIfTimeout(error)
-            NSLog("[Crow] could not set alternate-screen on window \(index): \(error)")
+            CrowLog.info("[Crow] could not set alternate-screen on window \(index): \(error)")
             return false
         }
     }
@@ -863,12 +866,12 @@ public final class TmuxBackend {
                 agentWindowNames: agentWindowNames,
                 seenOrphanedLastPass: previouslyOrphaned.contains(w.index)) {
                 ctrl.killWindow(index: w.index)
-                NSLog("[CrowTelemetry tmux:orphan_window_reaped index=\(w.index) name=\(w.name) command=\(w.command)]")
+                CrowLog.info("[CrowTelemetry tmux:orphan_window_reaped index=\(w.index) name=\(w.name) command=\(w.command)]")
                 reaped += 1
             }
         }
         orphanGraceWindows = stillOrphanedAgents
-        if reaped > 0 { NSLog("[Crow] Reaped \(reaped) orphaned cockpit window(s) (CROW-581)") }
+        if reaped > 0 { CrowLog.info("[Crow] Reaped \(reaped) orphaned cockpit window(s) (CROW-581)") }
         return reaped
     }
 
@@ -924,11 +927,11 @@ public final class TmuxBackend {
         var reaped = 0
         for window in windows where Self.shouldReapWindow(index: window.index, command: window.command, keep: keep) {
             ctrl.killWindow(index: window.index)
-            NSLog("[CrowTelemetry tmux:orphan_window_reaped index=\(window.index) command=\(window.command)]")
+            CrowLog.info("[CrowTelemetry tmux:orphan_window_reaped index=\(window.index) command=\(window.command)]")
             reaped += 1
         }
         if reaped > 0 {
-            NSLog("[Crow] Reaped \(reaped) orphaned bare-shell cockpit window(s) (#408)")
+            CrowLog.info("[Crow] Reaped \(reaped) orphaned bare-shell cockpit window(s) (#408)")
         }
         return reaped
     }
@@ -974,7 +977,8 @@ public final class TmuxBackend {
                 guard let self else { return }
                 // Capture the tmux handle + window index on the main actor, then
                 // read `#{pane_current_command}` off it: `TmuxController.run`
-                // blocks on `waitUntilExit()`, so keep that subprocess off the UI
+                // blocks the calling thread (on a semaphore since #653, without
+                // pumping the run loop), so keep that subprocess off the UI
                 // thread. A missing binding/controller yields a `nil` sample (skip).
                 let ctrl = self.controller
                 let windowIndex = self.bindings[id]
@@ -990,7 +994,7 @@ public final class TmuxBackend {
                 let (nextSaw, fired) = Self.advanceExitMonitor(sawAgentRunning: sawAgentRunning, sample: sample)
                 sawAgentRunning = nextSaw
                 if fired {
-                    NSLog("[CrowTelemetry manager:exit_detected terminal=\(id) command=\(sample ?? "")]")
+                    CrowLog.info("[CrowTelemetry manager:exit_detected terminal=\(id) command=\(sample ?? "")]")
                     onExit()
                     return
                 }
@@ -1025,10 +1029,10 @@ public final class TmuxBackend {
         // (#588). Wired here (not by the caller) so every recreated surface is
         // automatically re-armed after recovery.
         view.onProcessExit = { [weak self] code in
-            NSLog("[CrowTelemetry tmux:cockpit_client_exited code=\(code)]")
+            CrowLog.info("[CrowTelemetry tmux:cockpit_client_exited code=\(code)]")
             self?.onCockpitExit?(code)
         }
-        NSLog("[TmuxBackend] created cockpit surface attach=%@", attachCommand)
+        CrowLog.info("[TmuxBackend] created cockpit surface attach=\(attachCommand)")
         // Cache before SwiftUI re-parents into the visible tab container.
         // WKWebView must load in a visible window — do not park offscreen or
         // xterm.js never initializes.
@@ -1086,7 +1090,7 @@ public final class TmuxBackend {
             // identically). Fire BEFORE resurrecting so the handler can
             // observe the dead state; it's reentrancy-guarded and hops to a
             // later main-actor turn, so recovery never races this call.
-            NSLog("[CrowTelemetry tmux:server_died_midrun bindings=\(bindings.count)]")
+            CrowLog.info("[CrowTelemetry tmux:server_died_midrun bindings=\(bindings.count)]")
             onServerLost?()
         }
         guard !tmuxBinary.isEmpty, !socketPath.isEmpty else {
@@ -1136,15 +1140,15 @@ public final class TmuxBackend {
         let serverStart = serverStartTime(controller: controller)
 
         guard shouldReconcile(configMTime: confMTime, serverStartTime: serverStart) else {
-            NSLog("[CrowTelemetry tmux:config_reconcile_skipped reason=fresh]")
+            CrowLog.info("[CrowTelemetry tmux:config_reconcile_skipped reason=fresh]")
             return
         }
 
         do {
             try controller.run(["source-file", confPath])
-            NSLog("[CrowTelemetry tmux:config_reconciled path=\(confPath)]")
+            CrowLog.info("[CrowTelemetry tmux:config_reconciled path=\(confPath)]")
         } catch {
-            NSLog("[CrowTelemetry tmux:config_reconcile_failed error=\"\(error)\"]")
+            CrowLog.info("[CrowTelemetry tmux:config_reconcile_failed error=\"\(error)\"]")
         }
     }
 
@@ -1157,22 +1161,37 @@ public final class TmuxBackend {
     /// can surface in a banner. Idempotent: `source-file` against a live
     /// server updates server-scoped options in place; existing windows and
     /// sessions are unaffected.
-    @MainActor
-    public func reloadBundledConfig() -> String? {
-        guard let ctrl = controller, ctrl.hasSession() else {
+    ///
+    /// `async` and off the main actor: both `hasSession()` and `run()` block the
+    /// calling thread, and the RPC handler invokes this from `MainActor.run`, so
+    /// on the main actor they stall every other MainActor-bound RPC behind them
+    /// (CROW-874). `TmuxController` is a `Sendable` struct of three strings, so
+    /// it crosses cleanly — the same shape `startManagerExitMonitor` uses.
+    ///
+    /// This is one of ~24 `@MainActor` entry points on this type that call
+    /// `TmuxController` synchronously; bounding `run()` itself is what fixes the
+    /// class. Moving the rest needs `sendText`/`makeActive` and friends to stop
+    /// being sync `throws` APIs, which touches every caller.
+    public func reloadBundledConfig() async -> String? {
+        guard let ctrl = controller else {
             return "tmux server is not running"
         }
         guard let confURL = BundledResources.tmuxConfURL else {
             return "bundled crow-tmux.conf not found"
         }
-        do {
-            try ctrl.run(["source-file", confURL.path])
-            NSLog("[CrowTelemetry tmux:config_reloaded_by_user path=\(confURL.path)]")
-            return nil
-        } catch {
-            NSLog("[CrowTelemetry tmux:config_reload_failed error=\"\(error)\"]")
-            return "\(error)"
-        }
+        return await Task.detached {
+            guard ctrl.hasSession() else {
+                return "tmux server is not running"
+            }
+            do {
+                try ctrl.run(["source-file", confURL.path])
+                CrowLog.info("[CrowTelemetry tmux:config_reloaded_by_user path=\(confURL.path)]")
+                return nil
+            } catch {
+                CrowLog.info("[CrowTelemetry tmux:config_reload_failed error=\"\(error)\"]")
+                return "\(error)"
+            }
+        }.value
     }
 
     /// Pure policy: reconcile when either timestamp is missing (conservative
@@ -1196,20 +1215,25 @@ public final class TmuxBackend {
     /// Ensure the cockpit session is live, adopting an existing one if a
     /// concurrent caller won the `new-session` race.
     ///
-    /// The cockpit session may already be live even though `controller` is
-    /// nil. `TmuxController.run` blocks on `Process.waitUntilExit()`, which
-    /// pumps the main run loop — so the `new-session` we're about to issue can
-    /// be re-entered by another `ensureRunningServer()` caller before we cache
-    /// `controller`. On launch this is the norm: every persisted terminal
-    /// hydrates as its own `Task { @MainActor }` (#293) and, with multiple
-    /// Manager sessions (#326), six-plus of them race here at once. Whoever
-    /// wins creates `crow-cockpit`; the rest must ADOPT it, not re-create it
-    /// (`new-session` errors with "duplicate session", and because that throws
-    /// the loser never cached `controller` — so every subsequent call kept
-    /// failing and every terminal rendered blank).
+    /// **The adopt branch below is load-bearing — do not delete it.** Its
+    /// original justification was in-process: `TmuxController.run` blocked on
+    /// `Process.waitUntilExit()`, which pumps the main run loop, so a
+    /// `new-session` could be re-entered by another `ensureRunningServer()`
+    /// caller before `controller` was cached. That mechanism is gone — since
+    /// #653 the wait is a semaphore that does not pump — but the race is not.
+    ///
+    /// It is now a **cross-process** TOCTOU, which no in-process argument can
+    /// close: `TerminalCockpit.ensureSession` in `crowd` performs the identical
+    /// `hasSession()` → `newSessionDetached` against the *same* socket
+    /// (`appTmuxSocketPath()`, #330), and runs it on every daemon startup.
+    /// Whoever wins creates `crow-cockpit`; the rest must ADOPT it, not
+    /// re-create it — `new-session` errors with "duplicate session", and
+    /// because that throws, the loser never cached `controller`, so every
+    /// subsequent call kept failing and every terminal rendered blank (#326).
     ///
     /// `nonisolated static` so the adopt branch is testable without a real
-    /// tmux server or the main actor — it touches no instance/actor state.
+    /// tmux server or the main actor — it touches no instance/actor state, and
+    /// nothing pins it to the main actor.
     nonisolated static func ensureCockpitSession(
         _ ctrl: CockpitSessionStarter,
         configPath: String?,
@@ -1263,7 +1287,7 @@ public final class TmuxBackend {
                 let elapsed = Int(Date().timeIntervalSince(startedAt) * 1000)
                 let exists = FileManager.default.fileExists(atPath: sentinelPath)
                 _ = self  // keep the capture; method-level NSLog is fine
-                NSLog("[CrowTelemetry tmux:first_prompt_progress terminal=\(id) elapsed_ms=\(elapsed) sentinel_exists=\(exists)]")
+                CrowLog.info("[CrowTelemetry tmux:first_prompt_progress terminal=\(id) elapsed_ms=\(elapsed) sentinel_exists=\(exists)]")
             }
         }
         let waiterTask = Task { [weak self] in
@@ -1284,7 +1308,7 @@ public final class TmuxBackend {
                 guard let self, self.bindings[id] != nil else { return }
                 if let elapsed {
                     let ms = Int(elapsed * 1000)
-                    NSLog("[CrowTelemetry tmux:first_prompt_ms=\(ms) terminal=\(id)]")
+                    CrowLog.info("[CrowTelemetry tmux:first_prompt_ms=\(ms) terminal=\(id)]")
                     self.onReadinessChanged?(id, .shellReady)
                 } else {
                     // Genuine timeout. Most likely the shell is alive but its
@@ -1302,12 +1326,12 @@ public final class TmuxBackend {
                     // `didBecomeActive` observer also re-arms automatically
                     // when the app returns to the foreground.
                     let ms = Int(timeoutBudget * 1000)
-                    NSLog("[CrowTelemetry tmux:first_prompt_timeout terminal=\(id) budget_ms=\(ms)]")
+                    CrowLog.info("[CrowTelemetry tmux:first_prompt_timeout terminal=\(id) budget_ms=\(ms)]")
                     // Capture stage-by-stage diagnostics and dump them to the
                     // system log alongside the timeout marker. The UI surfaces
                     // the same bundle via "Copy diagnostics" (issue #256).
                     let bundle = self.captureDiagnostics(id: id)
-                    NSLog("[CrowTelemetry tmux:first_prompt_diagnostics terminal=\(id)]\n\(bundle)")
+                    CrowLog.info("[CrowTelemetry tmux:first_prompt_diagnostics terminal=\(id)]\n\(bundle)")
                     self.onReadinessChanged?(id, .timedOut)
                 }
             }
@@ -1517,7 +1541,7 @@ public final class TmuxBackend {
     /// already handles.
     private func reportIfTimeout(_ error: Error) {
         if let tmuxError = error as? TmuxError, case .timedOut = tmuxError {
-            NSLog("[CrowTelemetry tmux:server_unresponsive error=\"\(tmuxError)\"]")
+            CrowLog.info("[CrowTelemetry tmux:server_unresponsive error=\"\(tmuxError)\"]")
             onUnresponsive?(tmuxError)
         }
     }

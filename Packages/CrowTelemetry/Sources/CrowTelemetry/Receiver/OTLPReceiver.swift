@@ -40,11 +40,11 @@ public final class OTLPReceiver: Sendable {
         listener.stateUpdateHandler = { [weak self] state in
             switch state {
             case .ready:
-                NSLog("[OTLPReceiver] Listening on localhost:%d", self?.port ?? 0)
+                CrowLog.info("[OTLPReceiver] Listening on localhost:\(self?.port ?? 0)")
             case .failed(let error):
-                NSLog("[OTLPReceiver] Listener failed: %@", error.localizedDescription)
+                CrowLog.info("[OTLPReceiver] Listener failed: \(error.localizedDescription)")
             case .cancelled:
-                NSLog("[OTLPReceiver] Listener cancelled")
+                CrowLog.info("[OTLPReceiver] Listener cancelled")
             default:
                 break
             }
@@ -83,7 +83,7 @@ public final class OTLPReceiver: Sendable {
             }
 
             if let error {
-                NSLog("[OTLPReceiver] Receive error: %@", error.localizedDescription)
+                CrowLog.info("[OTLPReceiver] Receive error: \(error.localizedDescription)")
                 connection.cancel()
                 return
             }
@@ -100,14 +100,13 @@ public final class OTLPReceiver: Sendable {
                     // Backstop: the parser can only reject what it can frame,
                     // so never let one connection buffer without bound while it
                     // keeps asking for more.
-                    NSLog("[OTLPReceiver] Buffered %d bytes without a complete request; closing",
-                          accumulated.count)
+                    CrowLog.info("[OTLPReceiver] Buffered \(accumulated.count) bytes without a complete request; closing")
                     self.sendResponse(HTTPResponse.badRequest(message: "Request too large"), on: connection)
                 } else {
                     self.receiveData(on: connection, buffer: accumulated)
                 }
             case .error(let message):
-                NSLog("[OTLPReceiver] Parse error: %@", message)
+                CrowLog.info("[OTLPReceiver] Parse error: \(message)")
                 self.sendResponse(HTTPResponse.badRequest(message: message), on: connection)
             }
         }
@@ -167,7 +166,7 @@ public final class OTLPReceiver: Sendable {
         decoder.userInfo[.otlpDiagnostics] = diagnostics
         let payload = try decoder.decode(T.self, from: request.body)
         if let summary = diagnostics.summary {
-            NSLog("[OTLPReceiver] %@: skipped malformed %@", request.path, summary)
+            CrowLog.info("[OTLPReceiver] \(request.path): skipped malformed \(summary)")
         }
         return payload
     }
@@ -198,7 +197,7 @@ public final class OTLPReceiver: Sendable {
                 .replacingOccurrences(of: "\n", with: " ")
             message += "\n  body[0..<\(prefix.count)]: \(text)"
         }
-        NSLog("%@", message)
+        CrowLog.info("\(message)")
     }
 
     private static var logRawBodies: Bool {

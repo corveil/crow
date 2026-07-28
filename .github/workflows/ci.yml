@@ -88,6 +88,9 @@ jobs:
       - name: Notification-event catalogs (CROW-768)
         run: bash scripts/check-notification-events.sh
 
+      - name: NSLog ban (CROW-874)
+        run: bash scripts/check-no-nslog.sh
+
   desktop:
     name: Desktop (Tauri) Build
     runs-on: macos-15
@@ -97,6 +100,9 @@ jobs:
       - name: Build crow-desktop (Rust/Tauri)
         run: cargo build --manifest-path crow-desktop/src-tauri/Cargo.toml
 
+  # Cheap cross-cutting invariants that no compiler enforces. These live in
+  # `make test` too, but that only runs locally — before this job, nothing ran
+  # them in CI at all.
   shellcheck:
     name: Shell Lint
     runs-on: ubuntu-latest

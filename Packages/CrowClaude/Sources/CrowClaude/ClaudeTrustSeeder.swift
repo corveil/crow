@@ -1,3 +1,4 @@
+import CrowCore
 import Foundation
 
 /// Seeds per-project trust into `~/.claude.json` so Claude Code skips the
@@ -60,7 +61,7 @@ public enum ClaudeTrustSeeder {
             guard let data = fm.contents(atPath: jsonPath),
                   let parsed = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
             else {
-                NSLog("[ClaudeTrustSeeder] %@ exists but is not a JSON object; refusing to modify it", jsonPath)
+                CrowLog.info("[ClaudeTrustSeeder] \(jsonPath) exists but is not a JSON object; refusing to modify it")
                 return .skippedUnparseable
             }
             root = parsed
@@ -94,7 +95,7 @@ public enum ClaudeTrustSeeder {
             let perms = existingPerms ?? NSNumber(value: 0o600)
             try? fm.setAttributes([.posixPermissions: perms], ofItemAtPath: jsonPath)
         } catch {
-            NSLog("[ClaudeTrustSeeder] Failed to write %@: %@", jsonPath, error.localizedDescription)
+            CrowLog.info("[ClaudeTrustSeeder] Failed to write \(jsonPath): \(error.localizedDescription)")
             return .failed(error.localizedDescription)
         }
         return .seeded

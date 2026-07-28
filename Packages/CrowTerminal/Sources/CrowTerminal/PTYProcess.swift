@@ -91,7 +91,21 @@ public final class PTYProcess: @unchecked Sendable {
             throw PTYProcessError.spawnFailed(errno)
         }
         defer { posix_spawnattr_destroy(&attrs) }
+        // CLOEXEC_DEFAULT closes every descriptor NOT named in `actions` above.
+        // Without it, posix_spawn hands the child a copy of the entire fd table
+        // as it stood at spawn time — and this child is a cockpit attach client
+        // that lives for the whole browser session or app run. A
+        // `TmuxController.run()` pipe write end captured that way keeps its pipe
+        // from ever reaching EOF, so the reader blocks and the caller wedges for
+        // as long as the attach client survives (CROW-874). The explicit dup2s
+        // above are exempt from the flag, so the PTY wiring is unaffected.
+        #if canImport(Darwin)
+        posix_spawnattr_setflags(&attrs, Int16(POSIX_SPAWN_SETSID | POSIX_SPAWN_CLOEXEC_DEFAULT))
+        #else
+        // Linux has no CLOEXEC_DEFAULT. The daemon's own pipes are opened
+        // O_CLOEXEC by Foundation there, so this is a narrower gap, not none.
         posix_spawnattr_setflags(&attrs, Int16(POSIX_SPAWN_SETSID))
+        #endif
 
         var envStrings = ProcessInfo.processInfo.environment.map { "\($0.key)=\($0.value)" }
         if !envStrings.contains(where: { $0.hasPrefix("TERM=") }) {

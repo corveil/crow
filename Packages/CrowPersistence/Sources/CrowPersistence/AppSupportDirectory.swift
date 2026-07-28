@@ -1,3 +1,4 @@
+import CrowCore
 import Foundation
 
 /// Provides the canonical Application Support directory for Crow, performing
@@ -15,9 +16,9 @@ enum AppSupportDirectory {
            FileManager.default.fileExists(atPath: oldDir.path) {
             do {
                 try FileManager.default.copyItem(at: oldDir, to: crowDir)
-                NSLog("[AppSupportDirectory] Migrated data from rm-ai-ide to crow")
+                CrowLog.info("[AppSupportDirectory] Migrated data from rm-ai-ide to crow")
             } catch {
-                NSLog("[AppSupportDirectory] Failed to migrate rm-ai-ide data: %@", error.localizedDescription)
+                CrowLog.info("[AppSupportDirectory] Failed to migrate rm-ai-ide data: \(error.localizedDescription)")
             }
         }
         return crowDir

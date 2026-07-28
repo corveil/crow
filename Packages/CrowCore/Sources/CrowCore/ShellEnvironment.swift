@@ -76,7 +76,7 @@ public final class ShellEnvironment: Sendable {
         do {
             try process.run()
         } catch {
-            NSLog("[Crow] Failed to launch login shell for PATH resolution: %@", error.localizedDescription)
+            CrowLog.info("[Crow] Failed to launch login shell for PATH resolution: \(error.localizedDescription)")
             return nil
         }
 
@@ -89,12 +89,12 @@ public final class ShellEnvironment: Sendable {
         }
         if done.wait(timeout: deadline) == .timedOut {
             process.terminate()
-            NSLog("[Crow] Login shell PATH resolution timed out")
+            CrowLog.info("[Crow] Login shell PATH resolution timed out")
             return nil
         }
 
         guard process.terminationStatus == 0 else {
-            NSLog("[Crow] Login shell exited with status %d", process.terminationStatus)
+            CrowLog.info("[Crow] Login shell exited with status \(process.terminationStatus)")
             return nil
         }
 
@@ -109,13 +109,13 @@ public final class ShellEnvironment: Sendable {
             .trimmingCharacters(in: .whitespaces)
 
         guard let path, !path.isEmpty else { return nil }
-        NSLog("[Crow] Resolved PATH from login shell (%d components)", path.split(separator: ":").count)
+        CrowLog.info("[Crow] Resolved PATH from login shell (\(path.split(separator: ":").count) components)")
         return path
     }
 
     /// Appends well-known tool directories to the inherited PATH.
     private static func fallbackPATH(inherited: [String: String]) -> String {
-        NSLog("[Crow] Using fallback PATH resolution")
+        CrowLog.info("[Crow] Using fallback PATH resolution")
         let current = inherited["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
         let existing = Set(current.split(separator: ":").map(String.init))
 
