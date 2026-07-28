@@ -617,7 +617,7 @@ public final class SessionService {
                 if trackReadiness {
                     // Re-write hook config so the adopted Claude's hooks still
                     // route back to the correct session if the config was lost.
-                    if let crowPath = ClaudeHookConfigWriter.findCrowBinary(devRoot: ConfigStore.loadDevRoot()),
+                    if let crowPath = ClaudeHookConfigWriter.resolveCrowBinary(devRoot: ConfigStore.loadDevRoot()),
                        let worktree = appState.primaryWorktree(for: terminal.sessionID) {
                         do {
                             try ClaudeHookConfigWriter().writeHookConfig(
@@ -787,7 +787,7 @@ public final class SessionService {
                 agent: agent,
                 sessionID: sessionID,
                 worktreePath: appState.primaryWorktree(for: sessionID)?.worktreePath,
-                crowPath: ClaudeHookConfigWriter.findCrowBinary(devRoot: ConfigStore.loadDevRoot()),
+                crowPath: ClaudeHookConfigWriter.resolveCrowBinary(devRoot: ConfigStore.loadDevRoot()),
                 telemetryPort: telemetryPort
             ).text
         }
@@ -905,7 +905,7 @@ public final class SessionService {
 
         // Write/refresh hook config (Claude path). Codex's writer is a
         // no-op — its global config was installed once at app launch.
-        if let crowPath = ClaudeHookConfigWriter.findCrowBinary(devRoot: ConfigStore.loadDevRoot()) {
+        if let crowPath = ClaudeHookConfigWriter.resolveCrowBinary(devRoot: ConfigStore.loadDevRoot()) {
             do {
                 try agent.hookConfigWriter.writeHookConfig(
                     worktreePath: worktree.worktreePath,
@@ -1523,7 +1523,7 @@ public final class SessionService {
             other.hookConfigWriter.removeHookConfig(worktreePath: dirPath)
         }
         guard let agent = AgentRegistry.shared.agent(for: session.agentKind),
-              let crowPath = ClaudeHookConfigWriter.findCrowBinary(devRoot: ConfigStore.loadDevRoot()) else { return }
+              let crowPath = ClaudeHookConfigWriter.resolveCrowBinary(devRoot: ConfigStore.loadDevRoot()) else { return }
         do {
             try agent.hookConfigWriter.writeHookConfig(
                 worktreePath: dirPath,

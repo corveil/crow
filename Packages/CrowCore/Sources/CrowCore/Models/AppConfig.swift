@@ -664,9 +664,9 @@ public struct ConfigDefaults: Codable, Sendable, Equatable {
     /// Binary-override name `Scaffolder` owns outright.
     ///
     /// Mirrors its `managedBinarySymlinks`: the reap loop skips this key and
-    /// `installCrowCLISymlink` re-points it at the running app's own CLI on
-    /// every launch, while `BinaryOverrides` never consults it (it is not an
-    /// `AgentKind`). An override here can therefore never take effect.
+    /// `ClaudeHookConfigWriter.ensureCrowCLISymlink` re-points it at the running
+    /// app's own CLI on every launch, while `BinaryOverrides` never consults it
+    /// (it is not an `AgentKind`). An override here can therefore never take effect.
     public static let reservedBinaryName = "crow"
 
     /// Whether a `binaries` key is safe to write.
