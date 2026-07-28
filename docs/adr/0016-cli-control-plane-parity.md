@@ -125,14 +125,16 @@ compiled into shipped binaries. Encoding it as Swift rather than JSON buys the
 type-enforced exemption reason and removes a hand-written decoder that could
 itself drift, which is worth more than the bytes.
 
-The gate records today's honest state, and it is not flattering: all of
-`workspaces[].*` and `terminal.*` have no CLI path at all, and `set-config`/
-`run-setup`/`batch-start-review`/`run-job` are writes with no verb. Freezing that
-inventory in a file is what makes it shrinkable — and it already works in both
-directions: rebasing onto CROW-810 turned the gate red until the nine
-`defaults.*` rows were moved from exempt to covered, which is also how the two
-fields that ticket left readable-but-not-writable (`defaults.excludeDirs`,
-`defaults.mirrorClaudeMCPToCodex`) came to light.
+The gate records today's honest state, and it is not flattering: `terminal.*` and
+`jiraCredential.*` have no CLI path at all, and `set-config`/`run-setup`/
+`batch-start-review`/`run-job` are writes with no verb. Freezing that inventory in
+a file is what makes it shrinkable — and it already works in both directions:
+rebasing onto CROW-810 turned the gate red until the nine `defaults.*` rows were
+moved from exempt to covered, which is also how the two fields that ticket left
+readable-but-not-writable (`defaults.excludeDirs`,
+`defaults.mirrorClaudeMCPToCodex`) came to light. CROW-809 (#885) then did the
+same for `workspaces[].*`, which this branch absorbed on a rebase — the exempt
+list is one PR shorter than when this ADR was drafted.
 
 The gate's own first miss is instructive (#806). CROW-812 (#884) and the gate
 (#883) were in review at the same time and merged in that order, so the ledger

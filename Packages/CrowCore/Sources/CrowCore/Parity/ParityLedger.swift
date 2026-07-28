@@ -307,12 +307,19 @@ public enum ParityLedger {
     /// `ParityGateTests`. The two sets must match exactly, so a new config field
     /// fails the build until someone decides whether it gets a verb.
     ///
-    /// The exempt rows below are the honest state of the milestone as of CROW-807:
-    /// the settings blocks that already have verbs (`telemetry`, `cleanup`,
-    /// `sidebar`, `notifications`, gateways, jobs, `defaults` since CROW-810 and
-    /// agent selection since CROW-811) are covered, and everything the web
-    /// Settings tab owns exclusively — `workspaces[].*`, the automation toggles,
-    /// `terminal.*` — is not.
+    /// The rows below are the honest state of the milestone. The settings blocks
+    /// that already have verbs are covered: `telemetry`, `cleanup`, `sidebar`,
+    /// `notifications`, gateways and jobs, `defaults` since CROW-810, agent
+    /// selection since CROW-811, `workspaces[].*` since CROW-809 and the
+    /// automation toggles since CROW-812. What the web Settings tab still owns
+    /// exclusively is `terminal.*` and `jiraCredential.*`; the `webAuth` hash and
+    /// salt are writable but readable nowhere.
+    ///
+    /// Coverage is per-direction, so a covered block can still hold a read-only
+    /// row — the server-assigned `jobs[].id`/`createdAt`/`lastRunAt`,
+    /// `workspaces[].id`/`cli`, `defaults.excludeDirs` and
+    /// `defaults.mirrorClaudeMCPToCodex` all carry a write exemption. Read the
+    /// row, not the `MARK` above it.
     public static let configFields: [ConfigEntry] = [
         // MARK: Covered — settings blocks with dedicated verbs
 
