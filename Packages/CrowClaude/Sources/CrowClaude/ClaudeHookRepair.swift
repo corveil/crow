@@ -265,7 +265,30 @@ public enum ClaudeHookRepair {
     /// cwd-authoritative `hook-event` resolution drops it when it fires inside a
     /// *worktree* session, and accepts it when it fires in the main clone itself.
     ///
-    /// Performs blocking file I/O; call off the MainActor (#892).
+    /// ## Actor context
+    ///
+    /// Performs blocking file I/O, and **the launch path deliberately runs it on
+    /// the MainActor** (`SessionService.prepareWorktreeForAgentLaunch`, which is
+    /// synchronous and MainActor-bound). That is not an oversight and must not be
+    /// "fixed" by detaching: the block has to be gone from disk *before* the agent
+    /// process opens the directory, and the launch paths type the agent's command
+    /// into its pane in the same synchronous block. A detached reconcile would
+    /// race the very launch it exists to protect — the agent would start with the
+    /// inherited block still live, which is the bug.
+    ///
+    /// The cost is bounded so that is affordable: one `stat` for anything that is
+    /// not a linked worktree (main clones, review clones, the Manager's dev root —
+    /// the early-out in `resolveMainClone`), and for a real worktree three more
+    /// small reads (`.git`, `commondir`, the settings file). A *write* happens only
+    /// when a block is actually stale or foreign, which is a once-per-defect event,
+    /// not once per launch. `prepareWorktreeForAgentLaunch` already does MainActor
+    /// file I/O for the trust seed and the Grok/Antigravity strip, so this adds no
+    /// new category of work to that gate (#892).
+    ///
+    /// The reaper reaches it through `Task.detached` instead — there is no launch
+    /// to order against there, and it is already off the MainActor. Taking the
+    /// AppState facts as a value snapshot (`HookOwnership`) is what makes that
+    /// possible: this function needs no actor of its own.
     public static func reconcileMainClone(
         worktreePath: String,
         crowPath: String?,

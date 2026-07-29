@@ -872,8 +872,12 @@ public final class SessionService {
     }
 
     /// The AppState facts `ClaudeHookRepair.reconcileMainClone` needs, captured
-    /// as values so the reconciliation itself (blocking file I/O) stays off the
-    /// MainActor (#892).
+    /// as values so the reconciliation needs no actor of its own.
+    ///
+    /// That is what lets the **reaper** run it inside `Task.detached`
+    /// (`performDiskCleanup`). The **launch** path deliberately runs it inline on
+    /// the MainActor instead — see `reconcileMainCloneHooks` for why detaching
+    /// there would race the launch it protects.
     struct HookOwnership: Sendable {
         /// The binary to write into repaired commands. `nil` means nothing can
         /// be repaired, so a foreign block is stripped instead — which still
@@ -939,7 +943,10 @@ public final class SessionService {
     ///     loads the main clone's `.claude/settings.local.json` in addition to
     ///     its own, so a stale block there breaks hooks and telemetry for every
     ///     session on that repo, and a merely foreign one misattributes their
-    ///     events. No-op when `worktreePath` is not a linked worktree.
+    ///     events. No-op when `worktreePath` is not a linked worktree. Like the
+    ///     other two, it runs **inline on the MainActor** — every step of this
+    ///     gate must complete before the caller launches the agent, so none of
+    ///     them may be detached (`reconcileMainCloneHooks` documents the cost).
     ///
     /// All are no-ops for the agents/kinds/layouts that don't need them, so this
     /// is safe to call from every launch path unconditionally. **The call sites of
@@ -975,6 +982,15 @@ public final class SessionService {
     /// `.claude/settings.local.json` either way, and Grok/Codex read Claude-compat
     /// settings — so a Cursor or Codex session in a worktree is just as exposed to
     /// a stale block in the repo's main clone as a Claude one.
+    ///
+    /// **Runs inline on the MainActor, by design.** `prepareWorktreeForAgentLaunch`
+    /// is synchronous and MainActor-bound, and its callers type the agent's launch
+    /// command into the pane in the same block — so the reconcile must finish
+    /// first. Detaching it (the reflex for blocking I/O under #892) would let the
+    /// agent start while the inherited block is still on disk, which is precisely
+    /// the failure this exists to prevent. The I/O is bounded to a single `stat`
+    /// for anything that is not a linked worktree and three small reads for one
+    /// that is; see `ClaudeHookRepair.reconcileMainClone` for the full accounting.
     nonisolated static func reconcileMainCloneHooks(
         worktreePath: String, ownership: HookOwnership) {
         logMainCloneOutcome(ClaudeHookRepair.reconcileMainClone(
