@@ -249,6 +249,43 @@ import Testing
             "terminal.html's copy branch must cancel the browser default")
     }
 
+    /// CROW-916: both live surfaces must rewrite Shift+Enter to a sequence the
+    /// agent can tell apart from a plain Enter.
+    ///
+    /// xterm.js's key table has no `shiftKey` branch for keyCode 13
+    /// (`e.altKey ? ESC+CR : CR`), so without this the two chords reach the PTY
+    /// as the same bare `\r` and Claude Code submits on both. CSI-u is the right
+    /// sequence because `crow-tmux.conf`'s extended-keys setup carries it to
+    /// apps that negotiate extended keys and downgrades it to a plain `\r` for
+    /// apps that don't — a literal `ESC CR` would reach vim as "leave insert
+    /// mode, then Enter".
+    ///
+    /// This is the guard that was missing. #599 added the handler to
+    /// CrowTerminal's `terminal.html` and pinned it there
+    /// (`BundledResourcesTests.terminalHTMLHandlesModifiedEnter`) — but ADR 0010
+    /// retired that surface, so the passing test covered a page nothing loads
+    /// while both shipping surfaces regressed unasserted. Parameterized over the
+    /// live assets so it can't happen the same way twice.
+    ///
+    /// Asserted on the comment-stripped source: the rationale prose names the
+    /// sequence too, and a guard that a comment can satisfy guards nothing. The
+    /// branch is matched as one contiguous condition rather than as separate
+    /// `'Enter'` / `shiftKey` mentions — `app.js`'s modal dialogs already test
+    /// `e.key === 'Enter'`, so the loose form passes on the unfixed file.
+    @Test(arguments: ["app.js", "terminal.html"])
+    func modifiedEnterIsDistinguishableFromPlainEnter(asset: String) throws {
+        let code = Self.stripComments(try Self.webAsset(asset))
+        #expect(
+            code.contains(#"sendToPTY('\x1b[13;2u')"#),
+            "\(asset) must SEND CSI-u for Shift+Enter, not a bare \\r (CROW-916)")
+        #expect(
+            code.contains("e.key === 'Enter' && e.shiftKey"),
+            "\(asset)'s terminal key handler must branch on Shift+Enter")
+        #expect(
+            code.contains("e.preventDefault();") && code.contains("e.stopPropagation();"),
+            "\(asset)'s Shift+Enter branch must cancel the event — returning false leaves xterm's own cancel unreached, so the keypress phase writes a second \\r (#875)")
+    }
+
     /// Cancelling a gesture and being able to perform it are one decision: a
     /// surface may only `preventDefault()` the copy chord if its copy always
     /// delivers. `navigator.clipboard` is absent over plain http (a

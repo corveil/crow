@@ -82,6 +82,15 @@ struct BundledResourcesTests {
         // Claude Code submits instead of inserting a newline. The xterm
         // resources get re-vendored wholesale (see Resources/xterm/VERSION),
         // so pin the handler's presence against an accidental overwrite.
+        //
+        // CROW-916: this pins a RETIRED surface. ADR 0010 removed the macOS app
+        // the day after #599 landed, so this test kept passing while both
+        // shipping surfaces had no modified-Enter handling at all. The guard
+        // that covers the live pages is
+        // `WebTerminalAssetTests.modifiedEnterIsDistinguishableFromPlainEnter`,
+        // parameterized over `Resources/web/{app.js,terminal.html}` — change
+        // that one when the behavior changes. Kept here only so the retired page
+        // and its live descendants stay comparable while it remains in tree.
         let url = try #require(BundledResources.terminalHTMLURL)
         let body = try String(contentsOf: url, encoding: .utf8)
         #expect(body.contains("attachCustomKeyEventHandler"))

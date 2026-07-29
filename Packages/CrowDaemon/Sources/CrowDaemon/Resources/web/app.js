@@ -4361,13 +4361,41 @@ async function uploadDroppedFiles(files) {
 //
 // Cmd/Ctrl+C copies the selection (falling through to SIGINT when nothing is
 // selected so Ctrl+C still interrupts), Cmd+F opens our find prompt. Lets the
-// browser own copy instead of tmux's copy-mode.
+// browser own copy instead of tmux's copy-mode. Shift+Enter is rewritten to a
+// distinguishable CSI-u sequence (see the branch).
 //
 // A branch that shadows a browser default must preventDefault(): returning
 // false only makes xterm skip its OWN key handling (its _keyDown returns early,
 // before any cancel()), so the browser's default gesture still runs (#875).
 function handleTerminalKey(e) {
   if (e.type !== 'keydown') return true;
+  // Shift+Enter → CSI-u, so Claude Code can tell it from a plain Enter and
+  // inserts a newline instead of submitting (#598/CROW-916). xterm.js's key
+  // table has no shiftKey branch for keyCode 13 — `e.altKey ? ESC+CR : CR` —
+  // so both chords otherwise arrive at the PTY as the same bare \r, and
+  // xterm.js 6.0 has no CSI-u/modifyOtherKeys support of its own to turn on.
+  // crow-tmux.conf's `extended-keys on` + `xterm*:extkeys` carries this to
+  // apps that negotiate extended keys and downgrades it to a plain \r for apps
+  // that don't, so nothing leaks into vim or a shell.
+  //
+  // Option+Enter is deliberately NOT handled: xterm already maps altKey + Enter
+  // to ESC CR natively, so a branch here would only restate the library.
+  // `!e.altKey` keeps Shift+Option+Enter on that native path.
+  //
+  // preventDefault() is load-bearing, not cosmetic. xterm cancels Enter itself
+  // (`o.cancel = true`), but returning false makes its _keyDown return BEFORE
+  // that cancel (#875) — and this handler waves the keypress phase straight
+  // through, so an uncancelled keydown would let keypress fire and write a
+  // second \r.
+  //
+  // Ported from CrowTerminal's terminal.html (#599), which stopped being a live
+  // surface when the macOS app was retired (ADR 0010).
+  if (e.key === 'Enter' && e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey) {
+    sendToPTY('\x1b[13;2u');
+    e.preventDefault();
+    e.stopPropagation();
+    return false;
+  }
   const mod = e.metaKey || e.ctrlKey;
   if (mod && (e.key === 'c' || e.key === 'C') && term.hasSelection()) {
     copyToClipboard(term.getSelection());

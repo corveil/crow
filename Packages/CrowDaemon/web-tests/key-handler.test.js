@@ -13,12 +13,16 @@ const { JSDOM } = require('jsdom');
 // keydown, its return value deciding only whether xterm runs its OWN key
 // handling. Returning false does NOT cancel the event — that's the bug this
 // file pins.
+//
+// CROW-916 adds the Shift+Enter cases. `termWs` is exposed too so those can
+// assert the bytes that actually reach the socket, through the real sendToPTY.
 const epilogue = `
 ;globalThis.__t = {
   handleTerminalKey(e){ return handleTerminalKey(e); },
   pasteIntoTerminal(){ return pasteIntoTerminal(); },
   set term(v){ term = v; },
   set searchAddon(v){ searchAddon = v; },
+  set termWs(v){ termWs = v; },
 };
 `;
 const APP_JS = __dirname + '/../Sources/CrowDaemon/Resources/web/app.js';
@@ -53,14 +57,17 @@ const check = (name, cond) => { if (cond) { pass++; console.log('  ✓ ' + name)
 // ---- Fakes -----------------------------------------------------------------
 
 // A fake xterm plus recorders for everything the handler can reach: what got
-// pasted into the terminal and what got written to the system clipboard.
+// pasted into the terminal, what got written to the system clipboard, and what
+// reached the PTY socket.
 const pasted = [];
 const copied = [];
+const sent = [];
 let clipboardText = '';
 
 function setup({ selection = '' } = {}) {
   pasted.length = 0;
   copied.length = 0;
+  sent.length = 0;
   window.document.querySelectorAll('.text-prompt-backdrop').forEach((n) => n.remove());
   T.term = {
     hasSelection: () => selection.length > 0,
@@ -69,6 +76,12 @@ function setup({ selection = '' } = {}) {
     focus() {},
   };
   T.searchAddon = { findNext() {} };
+  // The real sendToPTY writes UTF-8 bytes to this, so decoding here measures
+  // exactly what the PTY would receive.
+  T.termWs = {
+    readyState: window.WebSocket.OPEN,
+    send: (bytes) => sent.push(new TextDecoder().decode(bytes)),
+  };
 }
 
 // navigator.clipboard is absent in jsdom (and in a real browser over plain
@@ -88,9 +101,9 @@ function withoutClipboard() {
 
 // xterm hands the handler the raw KeyboardEvent; we count the cancellation calls
 // the handler makes on it.
-function key(k, { meta = false, ctrl = false, shift = false, type = 'keydown' } = {}) {
+function key(k, { meta = false, ctrl = false, shift = false, alt = false, type = 'keydown' } = {}) {
   const e = {
-    type, key: k, metaKey: meta, ctrlKey: ctrl, shiftKey: shift,
+    type, key: k, metaKey: meta, ctrlKey: ctrl, shiftKey: shift, altKey: alt,
     prevented: 0, stopped: 0,
     preventDefault() { e.prevented++; },
     stopPropagation() { e.stopped++; },
@@ -231,6 +244,71 @@ async function main() {
     check('cancels the browser default (its find bar would open over ours)',
       e.prevented === 1 && e.stopped === 1);
     check('opens the find prompt', !!window.document.querySelector('.text-prompt-backdrop'));
+  }
+
+  // ---- Shift+Enter (CROW-916) ------------------------------------------------
+
+  // xterm.js emits the same bare \r for Enter and Shift+Enter, so Claude Code
+  // submitted on both. The handler rewrites Shift+Enter to CSI-u, which tmux
+  // carries to extended-keys apps and downgrades to \r for everything else.
+  console.log('\nShift+Enter reaches the PTY as CSI-u, not a bare \\r:');
+  {
+    withClipboard();
+    setup();
+    const e = key('Enter', { shift: true });
+    const result = T.handleTerminalKey(e);
+    check('returns false so xterm skips its own \\r', result === false);
+    check('sends exactly the CSI-u sequence', sent.join() === '\x1b[13;2u');
+    check('sends it once', sent.length === 1);
+    // Without this the keydown's default survives and the keypress phase —
+    // which this handler waves through — writes a second \r (#875).
+    check('cancels the event', e.prevented === 1 && e.stopped === 1);
+  }
+  {
+    // The criterion that keeps the terminal usable: plain Enter must stay
+    // untouched so xterm's own \r still submits.
+    withClipboard();
+    setup();
+    const e = key('Enter');
+    const result = T.handleTerminalKey(e);
+    check('plain Enter passes through', result === true);
+    check('...sending nothing of our own', sent.length === 0);
+    check('...and is not cancelled', e.prevented === 0 && e.stopped === 0);
+  }
+  {
+    // Deliberately unhandled: xterm's key table already maps altKey + Enter to
+    // ESC CR (`e.altKey ? ESC+CR : CR`), so a branch here would restate the
+    // library. Pinned so a future "add Option+Enter for symmetry" has to
+    // confront the duplication.
+    withClipboard();
+    setup();
+    const e = key('Enter', { alt: true });
+    check('Option+Enter is left to xterm, which sends ESC CR natively',
+      T.handleTerminalKey(e) === true && sent.length === 0 && e.prevented === 0);
+    const both = key('Enter', { alt: true, shift: true });
+    check('Shift+Option+Enter stays on that same native path',
+      T.handleTerminalKey(both) === true && sent.length === 0);
+  }
+  {
+    // Ctrl+Enter and Cmd+Enter are the app's/browser's business, not ours.
+    withClipboard();
+    setup();
+    for (const [label, mods] of [['Ctrl', { ctrl: true }], ['Cmd', { meta: true }]]) {
+      const e = key('Enter', { ...mods, shift: true });
+      check(`${label}+Shift+Enter is untouched`,
+        T.handleTerminalKey(e) === true && e.prevented === 0);
+    }
+    check('...and none of them wrote to the PTY', sent.length === 0);
+  }
+  {
+    withClipboard();
+    setup();
+    for (const type of ['keyup', 'keypress']) {
+      const e = key('Enter', { shift: true, type });
+      check(`Shift+Enter on ${type} is ignored (keydown only)`,
+        T.handleTerminalKey(e) === true && e.prevented === 0);
+    }
+    check('...so the sequence is sent exactly once per press', sent.length === 0);
   }
 
   // ---- Everything else passes through ---------------------------------------
