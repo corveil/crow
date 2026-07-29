@@ -2907,32 +2907,46 @@ public final class SessionService {
         agentKind == .antigravity && sessionKind == .review
     }
 
-    /// Neutralize a review clone's committed Antigravity config layer by removing
-    /// the working-tree `.agents/` directory. A hostile PR head can commit
-    /// `.agents/hooks.json` with arbitrary command hooks that `agy` runs with no
-    /// approval gate, so once Antigravity loads the clone as its project root the
-    /// hooks fire unsandboxed on the reviewer's machine. Removing the whole
-    /// `.agents/` dir also covers any project-scope config Crow's deferred MCP
-    /// bridge would place there (modeled on `CursorMCPConfigWriter`'s
-    /// `.cursor/mcp.json`); whether `agy` *also* honors a project MCP config
-    /// **outside** `.agents/` is unverified and tracked in the pinned-gaps table.
+    /// Neutralize a review clone's committed Antigravity config layers by removing
+    /// the working-tree config dirs `agy` may discover. A hostile PR head can
+    /// commit `.agents/hooks.json` with arbitrary command hooks that `agy` runs
+    /// with no approval gate, so once Antigravity loads the clone as its project
+    /// root the hooks fire unsandboxed on the reviewer's machine. Because this is
+    /// Antigravity's **only** defense (no trust gate behind it), it strips the
+    /// whole plausibly-discovered surface rather than the native dir alone —
+    /// mirroring `stripGrokConfigFromReviewClone`, which strips `.grok/` **plus**
+    /// `.cursor/`/`.claude/`/`.mcp.json` for the same reason (#861 r12, Red):
+    ///  - `.agents/` — Antigravity's native project hooks (and any project-scope
+    ///    config Crow's deferred MCP bridge would place there, modeled on
+    ///    `CursorMCPConfigWriter`'s `.cursor/mcp.json`).
+    ///  - `.gemini/` — `agy` is Gemini-derived (`GEMINI_CONFIG_HOME`, default
+    ///    `~/.gemini/config`, `LaunchScaffold`), so a project-scope
+    ///    `.gemini/settings.json` can carry `mcpServers` (a `{command,args}` server
+    ///    spawned at startup) or an `always-proceed` approval mode that would
+    ///    disarm the gate the review otherwise leans on. Stripped **defensively**
+    ///    pending the v1.1.7 probe (#902 review r7, Red): removing a path `agy`
+    ///    turns out not to read costs nothing on a throwaway review clone, and a
+    ///    miss here is unsandboxed RCE with no second layer.
     /// Working-tree removal only (the git index entry survives), same as
     /// `stripCursorConfigFromReviewClone` — so a *committed* `.agents/hooks.json`
     /// still trips `AntigravityHookConfigWriter`'s git-tracked guard and Crow's
     /// own state-detection hooks aren't written for that clone; that is expected,
     /// not a regression. Shared by `prepareReviewClone` (creation-time) and
     /// `prepareWorktreeForAgentLaunch` (every launch path — where the review
-    /// skill's `gh pr checkout` may have restored a committed `.agents/` from the
-    /// head) so the gate can't drift. Idempotent; no-ops when the clone ships no
-    /// `.agents/`. Delegates to `removeReviewCloneConfig` so a genuine removal
-    /// failure is **audible** (`CrowLog.error`, not `info`): the strip is
-    /// Antigravity's *only* defense — it has no trust gate behind it — so a
-    /// swallowed failure would leave live attacker hooks in place with nothing to
-    /// show for it (#902 review r3, Yellow 1).
+    /// skill's `gh pr checkout` may have restored a committed layer from the head)
+    /// so the gate can't drift. Idempotent; each layer no-ops when absent.
+    /// Delegates to `removeReviewCloneConfig` so a genuine removal failure is
+    /// **audible** (`CrowLog.error`, not `info`): the strip is Antigravity's only
+    /// defense, so a swallowed failure would leave live attacker config in place
+    /// with nothing to show for it (#902 review r3, Yellow 1).
     nonisolated static func stripAntigravityConfigFromReviewClone(clonePath: String) {
+        let base = clonePath as NSString
         removeReviewCloneConfig(
-            (clonePath as NSString).appendingPathComponent(".agents"),
+            base.appendingPathComponent(".agents"),
             label: ".agents/", clonePath: clonePath)
+        removeReviewCloneConfig(
+            base.appendingPathComponent(".gemini"),
+            label: ".gemini/", clonePath: clonePath)
     }
 
     /// Neutralize a review clone's committed Cursor config layer by removing the
@@ -3213,18 +3227,21 @@ public final class SessionService {
             }
         }
         // Same restore-before-pull for Antigravity reviews (#902 review): the
-        // `.agents/` strip below applies as an unstaged deletion of tracked files.
-        // A fast-forward `git pull` silently restores the deleted path (verified),
-        // but a non-fast-forward merge that touches `.agents/` refuses ("local
-        // changes would be overwritten"); since the pull is `try?`-swallowed, that
-        // would leave the clone at the stale head while `.crow-review-prompt.md` is
-        // rewritten with the current PR URL. Restore first for parity with the
+        // strip below applies as an unstaged deletion of tracked files.
+        // A fast-forward `git pull` silently restores the deleted paths (verified),
+        // but a non-fast-forward merge that touches them refuses ("local changes
+        // would be overwritten"); since the pull is `try?`-swallowed, that would
+        // leave the clone at the stale head while `.crow-review-prompt.md` is
+        // rewritten with the current PR URL. Restore both stripped layers
+        // (`.agents/` **and** `.gemini/`, #902 review r7) first, for parity with the
         // `.codex`/`.cursor`/`.grok` arms and clean re-prep. This is re-prep
         // hygiene, NOT the security boundary: the load-bearing defense is the strip
         // in `prepareWorktreeForAgentLaunch`, which re-fires on every launch after
-        // the SKILL's `gh pr checkout` may have restored the hooks.
+        // the SKILL's `gh pr checkout` may have restored a committed layer.
         if reviewAgentKind == .antigravity {
-            _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "checkout", "--", ".agents"])
+            for path in [".agents", ".gemini"] {
+                _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "checkout", "--", path])
+            }
         }
         _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "fetch", "origin", headBranch])
         _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "checkout", headBranch])

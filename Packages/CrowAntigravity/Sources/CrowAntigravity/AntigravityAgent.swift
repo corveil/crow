@@ -85,12 +85,14 @@ public struct AntigravityAgent: CodingAgent {
             // no resume flag (a fresh work TUI launching bare is deliberate), no
             // RC flag (remote control is `crow send` into the TUI).
             return "\(agentPath)\(autoArgs)\n"
-        case .job:
-            // Unattended dispatch: feed the pre-written `.crow-job-prompt.md` as
-            // the initial prompt via `-p` on first launch. Crow runs `agy` inside
-            // a tmux window — a real PTY — so the non-TTY `-p` stdout-drop
-            // (headless *pipe* case, upstream FRs #119/#597) doesn't apply here;
-            // no PTY shim is needed on this path.
+        case .job, .review:
+            // Jobs and reviews share one dispatch shape (collapsed into a single
+            // branch so the two can't drift, mirroring Cursor/Grok/OpenCode): feed
+            // the pre-written prompt file (`.crow-job-prompt.md` /
+            // `.crow-review-prompt.md`) as the initial prompt via `-p` on first
+            // launch. Crow runs `agy` inside a tmux window — a real PTY — so the
+            // non-TTY `-p` stdout-drop (headless *pipe* case, upstream FRs
+            // #119/#597) doesn't apply here; no PTY shim is needed.
             //
             // On restart we resume with `-c` (continue most-recent conversation).
             // Caveat (documented Tier-2 gap): `-c` is machine-global "most recent"
@@ -98,40 +100,35 @@ public struct AntigravityAgent: CodingAgent {
             // so we can't capture a specific handle — in a per-worktree tmux
             // window the most-recent conversation is almost always this session's,
             // the same heuristic Cursor/OpenCode rely on.
-            if !session.reviewPromptDispatched {
-                let promptPath = (worktreePath as NSString)
-                    .appendingPathComponent(".crow-job-prompt.md")
-                // Quote the path so a devRoot containing spaces doesn't split
-                // `cat`'s argv and resolve the prompt to empty.
-                return "\(agentPath)\(autoArgs) -p \"$(cat \(AntigravityLaunchArgs.shellQuote(promptPath)))\"\n"
-            }
-            return "\(agentPath)\(autoArgs) -c\n"
-        case .review:
-            // Review-on-Antigravity (#902): same unattended dispatch shape as
-            // `.job` above, only the prompt file differs. `.crow-review-prompt.md`
-            // holds the *inlined* `crow-review-pr` SKILL body (Antigravity has no
-            // Crow slash-command engine, so `SessionService.buildReviewPrompt`
-            // hands it the self-contained brief — not a bare `/crow-review-pr`
-            // line it couldn't resolve). The inlined SKILL runs `gh pr review`
-            // itself, so the verdict path needs no extra plumbing. Restart resumes
-            // with `-c` (same machine-global most-recent caveat as `.job`).
             //
-            // The review clone is an attacker-controlled `gh` checkout at the PR
-            // head. Antigravity seeds no folder trust and `agy` runs a committed
-            // `.agents/hooks.json` with no approval gate, so — unlike Codex/Cursor,
-            // where trust-gating is a second layer — stripping `.agents/` is the
-            // *only* defense. It therefore runs at clone creation
+            // `.review` is dispatched via the inlined `crow-review-pr` SKILL body
+            // (Antigravity has no Crow slash-command engine, so
+            // `SessionService.buildReviewPrompt` hands it the self-contained brief).
+            // The inlined SKILL runs `gh pr review` itself, so the verdict path
+            // needs no extra plumbing.
+            //
+            // SECURITY (`.review` only): the review clone is an attacker-controlled
+            // `gh` checkout at the PR head. Antigravity seeds no folder trust and
+            // `agy` runs a committed `.agents/hooks.json` (and a Gemini-derived
+            // `.gemini/settings.json` `mcpServers`) with no approval gate, so —
+            // unlike Codex/Cursor, where trust-gating is a second layer — stripping
+            // that config is the *only* defense. It runs at clone creation
             // (`prepareReviewClone`) AND on every launch path
-            // (`prepareWorktreeForAgentLaunch`), because the SKILL's `gh pr
-            // checkout` / a head-advancing re-review can restore the hooks from the
-            // head between launches (#902 review Red). This launch-time strip
-            // assumes `agy` reads hooks *once at process start*, not per-event — an
-            // unverified premise (agy v1.1.7) tracked in the pinned-gaps table and
-            // the manual-pass checklist; if it re-reads mid-session, a restore
-            // between the SKILL's `gh pr checkout` and `Stop` would fire unmitigated.
+            // (`prepareWorktreeForAgentLaunch`), and covers the whole
+            // plausibly-discovered surface (`.agents/` + `.gemini/`), because the
+            // SKILL's `gh pr checkout` / a head-advancing re-review can restore a
+            // committed layer from the head between launches (#902 review Red).
+            // This launch-time strip assumes `agy` reads config *once at process
+            // start*, not per-event — an unverified premise (agy v1.1.7) tracked in
+            // the pinned-gaps table and the manual-pass checklist; if it re-reads
+            // mid-session, a restore between `gh pr checkout` and `Stop` would fire
+            // unmitigated.
             if !session.reviewPromptDispatched {
+                let promptFile = session.kind == .review
+                    ? ".crow-review-prompt.md"
+                    : ".crow-job-prompt.md"
                 let promptPath = (worktreePath as NSString)
-                    .appendingPathComponent(".crow-review-prompt.md")
+                    .appendingPathComponent(promptFile)
                 // Quote the path so a devRoot containing spaces doesn't split
                 // `cat`'s argv and resolve the prompt to empty.
                 return "\(agentPath)\(autoArgs) -p \"$(cat \(AntigravityLaunchArgs.shellQuote(promptPath)))\"\n"

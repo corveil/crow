@@ -65,14 +65,18 @@ deliberate, documented gaps (full grid in the
 > `agentKind`. The security posture that justified deferring — `agy` runs a
 > committed `.agents/hooks.json` with **no approval gate** — is handled by the
 > same **strip-not-trust** pattern the other review harnesses use: the review
-> clone's `.agents/` is removed at creation (`prepareReviewClone`) **and on every
-> launch path** (`prepareWorktreeForAgentLaunch` — the one gate `launchAgent`,
+> clone's committed config (`.agents/` **and**, defensively, the Gemini-derived
+> `.gemini/` — #902 r7) is removed at creation (`prepareReviewClone`) **and on
+> every launch path** (`prepareWorktreeForAgentLaunch` — the one gate `launchAgent`,
 > `pasteDeferredLaunch`, `createManagerTerminal`, the `send` RPC, and handoff all
 > route through), and review clones are never auto-trusted. The launch-path strip
 > is load-bearing, not redundant: `agy` has no trust gate behind the strip, and a
 > warm `crowd` restart or an operator `crow send "agy -c"` reopens the clone after
-> the review skill's `gh pr checkout` may have restored a committed `.agents/` from
+> the review skill's `gh pr checkout` may have restored a committed layer from
 > the head — so a creation-only strip would be insufficient (#902 review r2/r3).
+> Because the strip is Antigravity's *only* defense, it removes the whole
+> plausibly-discovered surface rather than the native dir alone, matching
+> `stripGrokConfigFromReviewClone`.
 > With review wired, the old **`shouldRefuseReviewHandoff`
 > refusal** (which gated both `crow agents set --review antigravity` and the
 > review handoff) is retired — the predicate now refuses nothing, kept only as

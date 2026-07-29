@@ -492,14 +492,17 @@ lifecycle events (JSON on stdin, JSON verdict on stdout) so the
 `.agents/hooks.json` with the session UUID baked in (per-session scope, not
 `cwd`); remote control faked via `crow send`; `.review` dispatches the inlined
 `crow-review-pr` SKILL body via `-p` (#902), like Codex/Cursor/OpenCode — its
-review clone's committed `.agents/` is stripped at creation
+review clone's committed config (`.agents/` **and**, defensively, the
+Gemini-derived `.gemini/` — #902 r7) is stripped at creation
 (`prepareReviewClone`) **and on every launch path** (`prepareWorktreeForAgentLaunch`
 — the one gate `launchAgent`, `pasteDeferredLaunch`, `createManagerTerminal`, the
-`send` RPC, and handoff route through), so a hostile PR head's hooks can't fire
-when `agy` loads the clone. The launch-path strip is load-bearing, not redundant:
-`agy` has no trust gate behind it, and a warm `crowd` restart or `crow send
-"agy -c"` reopens the clone after the review skill's `gh pr checkout` may have
-restored `.agents/` from the head (#902 review r2/r3).
+`send` RPC, and handoff route through), so a hostile PR head's hooks/MCP servers
+can't fire when `agy` loads the clone. The launch-path strip is load-bearing, not
+redundant: `agy` has no trust gate behind it, and a warm `crowd` restart or `crow
+send "agy -c"` reopens the clone after the review skill's `gh pr checkout` may have
+restored a committed layer from the head (#902 review r2/r3). Because the strip is
+the *only* defense, it removes the whole plausibly-discovered surface rather than
+the native dir alone — the same posture `stripGrokConfigFromReviewClone` takes.
 It ships **Tier-2** ([ADR 0015](adr/0015-harness-capability-tiers.md))
 with honest, documented gaps (#860). **Review-approval posture is unverified**
 (#902 end-to-end pass pending): `agy` review inherits `.job`'s launch shape but
@@ -507,6 +510,14 @@ has no bounded auto-permission flag (`autoPermissionSuffix` is `""` on v1.1.7)
 and no confirmed non-interactive posture, so — unlike `.job` — a review that
 stalls on an approval gate would leave the Reviews board waiting with no signal.
 Tracked in the auto-permission pinned-gaps row below; re-check on the manual pass.
+**Review-on-Antigravity is opt-in and experimental**: it is never a default — it
+requires an explicit `crow agents set --review antigravity` (or Settings → Agents
+→ Review = Antigravity) *and* `agy` on `PATH`. Two premises behind its only
+defense remain unverified on v1.1.7 — the strip-list exhaustiveness and whether
+`agy` re-reads config per-event (the in-session restore window). Both are pinned
+below and the **manual pass that confirms them is a precondition for treating the
+capability as production-ready**, not just for promoting Antigravity out of
+Tier-2. Until then it ships as an experimental opt-in on a Tier-2 harness.
 
 **Hooks are its single strongest point — but the schema is Antigravity's own,
 not Claude's.** Verified against [`antigravity.google/docs/hooks`](https://antigravity.google/docs/hooks):
@@ -592,7 +603,7 @@ against current upstream CLIs.
 | Antigravity structured-stdout (would promote toward first-class parity) | upstream FRs **#119/#597** (`--output-format stream-json`), **#31** (ACP) | `AntigravitySignalSource` | 2026-07-26 — hooks are the only transport until either lands |
 | Antigravity bounded auto-permission has no verified interactive launch flag | `agy` **v1.1.7**; headless `-p` ignores `permissions.allow` (issue #548) | `AntigravityLaunchArgs.autoPermissionSuffix` | 2026-07-26 |
 | Antigravity official-installer provenance (supply-chain gate) unconfirmed | `google-antigravity` org `is_verified: false`; pin `antigravity.google` | `AntigravityAgent.fallbackCandidates` | 2026-07-26 — confirm before promoting out of Tier-2 |
-| Antigravity review-clone strip scope: does `agy` honor any project-scope config **outside** `.agents/` — a project MCP config, **or** an approval-mode `settings.json` (`always-proceed` etc.)? | `agy` **v1.1.7**; Crow's MCP bridge is deferred (no writer to confirm the read path), and `AntigravityLaunchArgs` notes approval posture is governed by `settings.json` modes | `stripAntigravityConfigFromReviewClone` | 2026-07-28 (#902) — the strip removes all of `.agents/`; a hostile head could disarm the approval gate via a project `settings.json` the strip wouldn't cover. **Probe a repo-root `.gemini/` first**: `GEMINI_CONFIG_HOME` (default `~/.gemini/config`, `LaunchScaffold.swift`) is the *user*-scope config home, so a project-scope `.gemini/` is the most likely surface — one-command check on the manual pass. Verify no repo-root/other project-scope MCP **or** approval-mode config before wiring the bridge or promoting out of Tier-2 |
+| Antigravity review-clone strip list exhaustiveness: is any project-scope config `agy` reads **outside** `.agents/` + `.gemini/` still uncovered? | `agy` **v1.1.7**; Crow's MCP bridge is deferred (no writer to confirm the read path), and `AntigravityLaunchArgs` notes approval posture is governed by `settings.json` modes | `stripAntigravityConfigFromReviewClone` | 2026-07-28 (#902 r7) — the strip now removes `.agents/` **and** `.gemini/` **defensively** (a project `.gemini/settings.json` could carry `mcpServers`/`always-proceed`; `GEMINI_CONFIG_HOME` default `~/.gemini/config` is only the *user*-scope home). So the question is no longer "is the strip sufficient" but "is the strip **list exhaustive**" — confirm no other project-scope surface on the manual pass before promoting out of Tier-2 |
 | Antigravity hook re-read timing: does `agy` read `.agents/hooks.json` **once at process start**, or per-event? | `agy` **v1.1.7** — unverified; assumed start-only | `prepareWorktreeForAgentLaunch` (launch-time strip) | 2026-07-28 (#902) — the launch-time strip mitigates a hook restored *between* launches. If `agy` re-reads per-event, a mid-session restore (SKILL's `gh pr checkout` fast-forwards → silently restores `.agents/`) would fire unmitigated, since no strip re-runs mid-session and there is no trust gate behind it. Confirm on the manual pass before promoting out of Tier-2 |
 | **Entire Grok flag set** — hooks event names, `-p`/`--single`, `-c`/`-r`, `--allow`/`--deny`, `--permission-mode`, `--trust`, `/rename` | `xai-org/grok-build` **@ 2026-07-25** (periodic mirror of xAI's monorepo, **PRs closed** → churn likely) | `GrokAgent` / `GrokLaunchArgs` / `GrokHookConfigWriter` / `GrokSignalSource` | 2026-07-26 — verified against repo source (`crates/codegen/xai-grok-*`), not blog posts |
 | Grok `grok` binary collides with community `superagent-ai/grok-cli` | — (collision; pin path via `defaults.binaries.grok`) | `GrokAgent.fallbackCandidates` | 2026-07-26 |

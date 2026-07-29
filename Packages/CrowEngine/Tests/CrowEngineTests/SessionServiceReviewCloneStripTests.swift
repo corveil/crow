@@ -132,31 +132,38 @@ struct SessionServiceReviewCloneStripTests {
         }
     }
 
-    // MARK: - Antigravity `.agents/` strip (#902 — RCE vector on review clones)
+    // MARK: - Antigravity strip (#902 — RCE vector on review clones)
 
-    /// The executable surface — `.agents/hooks.json` (arbitrary command hooks,
-    /// no approval gate) — is gone from the working tree after the strip, so a
-    /// hostile PR head's hooks can't fire when `agy` loads the clone.
-    @Test func removesCommittedAgentsConfigLayer() {
+    /// Both executable surfaces `agy` may discover — `.agents/hooks.json`
+    /// (arbitrary command hooks, no approval gate) and a Gemini-derived
+    /// `.gemini/settings.json` (`mcpServers` `{command}` / approval mode) — are
+    /// gone from the working tree after the strip, so a hostile PR head can't fire
+    /// either when `agy` loads the clone.
+    @Test func removesCommittedAntigravityConfigLayers() {
         let clone = Self.makeTempDir(name: "agy-hostile")
         defer { try? FileManager.default.removeItem(atPath: clone) }
         let agentsDir = (clone as NSString).appendingPathComponent(".agents")
-        try? FileManager.default.createDirectory(
-            atPath: agentsDir, withIntermediateDirectories: true)
-        let hooks = (agentsDir as NSString).appendingPathComponent("hooks.json")
-        try? "{\"version\":1}".write(toFile: hooks, atomically: true, encoding: .utf8)
+        let geminiDir = (clone as NSString).appendingPathComponent(".gemini")
+        for d in [agentsDir, geminiDir] {
+            try? FileManager.default.createDirectory(
+                atPath: d, withIntermediateDirectories: true)
+            try? "{\"mcpServers\":{}}".write(
+                toFile: (d as NSString).appendingPathComponent("settings.json"),
+                atomically: true, encoding: .utf8)
+        }
         #expect(FileManager.default.fileExists(atPath: agentsDir))
+        #expect(FileManager.default.fileExists(atPath: geminiDir))
 
         SessionService.stripAntigravityConfigFromReviewClone(clonePath: clone)
 
         #expect(!FileManager.default.fileExists(atPath: agentsDir))
-        #expect(!FileManager.default.fileExists(atPath: hooks))
+        #expect(!FileManager.default.fileExists(atPath: geminiDir))
     }
 
-    /// Idempotent: a clone that ships no `.agents/` is left untouched and the
-    /// call doesn't throw. Guards the handoff path, which fires unconditionally
-    /// for a `.review` handoff to Antigravity.
-    @Test func noOpsWhenNoAgentsDirectory() {
+    /// Idempotent: a clone that ships neither `.agents/` nor `.gemini/` is left
+    /// untouched and the call doesn't throw. Guards the launch-gate path, which
+    /// fires unconditionally for a `.review` on Antigravity.
+    @Test func noOpsWhenNoAntigravityConfig() {
         let clone = Self.makeTempDir(name: "agy-clean")
         defer { try? FileManager.default.removeItem(atPath: clone) }
         let prompt = (clone as NSString).appendingPathComponent(".crow-review-prompt.md")
@@ -168,15 +175,17 @@ struct SessionServiceReviewCloneStripTests {
         #expect(FileManager.default.fileExists(atPath: prompt))
     }
 
-    /// The strip is scoped to `.agents/` — a sibling agent's config (`.cursor/`,
-    /// the review prompt) survives, so stripping for an Antigravity review never
-    /// collaterally hides another surface.
+    /// The strip is scoped to the layers `agy` discovers (`.agents/`, `.gemini/`)
+    /// — a sibling agent's config (`.cursor/`, the review prompt) survives, so
+    /// stripping for an Antigravity review never collaterally hides a surface
+    /// `agy` doesn't read.
     @Test func antigravityStripLeavesSiblingConfigUntouched() {
         let clone = Self.makeTempDir(name: "agy-siblings")
         defer { try? FileManager.default.removeItem(atPath: clone) }
         let agentsDir = (clone as NSString).appendingPathComponent(".agents")
+        let geminiDir = (clone as NSString).appendingPathComponent(".gemini")
         let cursorDir = (clone as NSString).appendingPathComponent(".cursor")
-        for d in [agentsDir, cursorDir] {
+        for d in [agentsDir, geminiDir, cursorDir] {
             try? FileManager.default.createDirectory(
                 atPath: d, withIntermediateDirectories: true)
             try? "{}".write(
@@ -187,6 +196,7 @@ struct SessionServiceReviewCloneStripTests {
         SessionService.stripAntigravityConfigFromReviewClone(clonePath: clone)
 
         #expect(!FileManager.default.fileExists(atPath: agentsDir))
+        #expect(!FileManager.default.fileExists(atPath: geminiDir))
         #expect(FileManager.default.fileExists(atPath: cursorDir))
     }
 
