@@ -50,20 +50,32 @@ public struct HookEventCmd: ParsableCommand {
     }
 }
 
-/// Forward a hook-event RPC over the Unix socket.
+/// Forward a hook-event RPC over the Unix socket, fire-and-forget.
 ///
-/// Silently no-ops when the Crow app is not running (socket connection
-/// refused or socket file absent). Hooks are fire-and-forget — a missing
-/// listener is an expected state, not an error, so we must not exit
-/// non-zero or write to stderr (it pollutes the agent's hook output).
-/// Other socket errors (timeout, write/read failures) and JSON-RPC
-/// errors still propagate so genuine misbehavior is visible.
+/// Hooks are fire-and-forget: we write the event and return without reading the
+/// daemon's reply. Because the daemon serializes every request on its
+/// `@MainActor`, the old blocking round-trip stalled the hook whenever the
+/// daemon was busy (board poll, git op, whole-store write, a burst of
+/// hook-events) — right up to the agent's hook timeout (#903). Dropping the read
+/// removes that stall; the daemon still processes the event once its MainActor
+/// frees.
+///
+/// The only behavior this drops is error *surfacing*. The old call went through
+/// `rpc()`, which throws on a daemon RPC error, so a failed hook-event exited
+/// non-zero with a stderr message; the `printJSON(result)` branch it also had
+/// was dead, since `rpc()` returns only the success `result`, which never
+/// carries an `error` key. Losing that surfacing is a win here: it silences the
+/// `session_id required or resolvable from payload cwd` noise that global-hook
+/// agents hit (#897) and keeps any error text off the hook's output.
+///
+/// Silently no-ops when the Crow app is not running (socket connection refused
+/// or socket file absent): a missing listener is an expected state, not an
+/// error, so we must not exit non-zero or write to stderr (it pollutes the
+/// agent's hook output). Other socket errors (create/write failures) still
+/// propagate so genuine misbehavior is visible.
 func forwardHookEvent(params: [String: JSONValue]) throws {
     do {
-        let result = try rpc("hook-event", params: params)
-        if result["error"] != nil {
-            printJSON(result)
-        }
+        try rpcNotify("hook-event", params: params)
     } catch SocketError.connectionFailed {
         return
     }

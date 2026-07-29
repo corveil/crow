@@ -813,6 +813,19 @@ import CrowPersistence
             == "run-setup is local-only")
     }
 
+    @Test func hookEventIsLocalOnly() {
+        // Agent hook processes emit hook-event over the daemon's 0600 Unix
+        // socket; a remote /rpc peer has no legitimate use for it and could
+        // otherwise forge per-session hook state or poison the unresolved-drop
+        // log's dedup cap (#903 review).
+        let req = JSONRPCRequest(id: 1, method: "hook-event", params: [
+            "event_name": .string("PreToolUse"),
+            "payload": .object(["cwd": .string("/tmp/x")]),
+        ])
+        #expect(RPCWebSocketHandler.localOnlyDenial(for: req, devRoot: tempDevRoot())
+            == "hook-event is local-only")
+    }
+
     @Test func openHostAppsAreLocalOnly() {
         // The host-launch RPCs spawn a GUI app (`code` / `/usr/bin/open`) on the
         // daemon host — a remote `/rpc` peer must never reach them (CROW-749).

@@ -19,6 +19,21 @@ public func rpc(_ method: String, params: [String: JSONValue] = [:], timeoutSeco
     return response.result ?? [:]
 }
 
+/// Fire-and-forget a JSON-RPC request to the running Crow app via Unix socket.
+///
+/// Writes the request and returns without reading a response, so the agent
+/// doesn't wait on the daemon's reply: the app still processes the event once
+/// its serialized MainActor frees, but a busy daemon can't stall the hook up to
+/// its timeout (#903). See `SocketClient.post` for the one residual wait — a
+/// payload past the socket send buffer can still block in `write()` until the
+/// daemon drains it.
+///
+/// - Throws: `SocketError.connectionFailed` when the app isn't running (callers
+///   treat this as an expected no-op); other socket errors propagate.
+public func rpcNotify(_ method: String, params: [String: JSONValue] = [:]) throws {
+    try SocketClient().post(method: method, params: params)
+}
+
 /// Pretty-print a JSON dictionary to stdout with sorted keys.
 public func printJSON(_ dict: [String: JSONValue]) {
     let encoder = JSONEncoder()

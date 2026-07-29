@@ -64,10 +64,13 @@ public struct GrokHookConfigWriter: HookConfigWriter {
     ]
 
     /// Grok's hook runtime async-delivery support is unverified, so — like
-    /// Codex — we register everything synchronously. Sync `PreToolUse` also
-    /// keeps ordering reliable (it arrives before a permission `Notification`).
-    /// Kept as a seam so a future upstream confirmation can opt specific
-    /// post-tool events into async without reshaping the writer.
+    /// Codex — we register everything synchronously. Sync `PreToolUse` keeps
+    /// *arrival* ordering (it is accepted before a following permission event).
+    /// Note (#903): since `crow hook-event` is fire-and-forget, arrival order no
+    /// longer implies apply order — see the "Hook async delivery" apply-order
+    /// caveat in docs/agent-harness-matrix.md. Kept as a seam so a future
+    /// upstream confirmation can opt specific post-tool events into async
+    /// without reshaping the writer.
     private static let asyncEvents: Set<String> = []
 
     public init() {}
