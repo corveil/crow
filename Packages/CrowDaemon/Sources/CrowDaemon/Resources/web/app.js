@@ -1260,8 +1260,9 @@ function renderStatusBar() {
   }
 }
 
-// Settings + Select, stacked vertically to the right of the Tickets card
-// (outside the box): Settings on top, Select below.
+// Notifications + Settings, side by side to the right of the Tickets card
+// (outside the box). The Select-sessions toggle moved down to navPillRow row 1,
+// next to Scorecard (CROW-913).
 function sidebarToolsStack() {
   const stack = el('div', 'sidebar-tools');
   // Notification center (CROW-909): bell + unread badge, first so it's the most
@@ -1278,11 +1279,6 @@ function sidebarToolsStack() {
   gear.appendChild(icon('wrench', 14));
   gear.onclick = () => { if (window.openSettings) window.openSettings(); };
   stack.appendChild(gear);
-  const selBtn = el('button', 'tk-tool' + (selectionMode ? ' nav-selecting' : ''));
-  selBtn.title = selectionMode ? 'Cancel selection' : 'Select sessions';
-  selBtn.appendChild(icon(selectionMode ? 'close' : 'checkSquare', 14));
-  selBtn.onclick = () => { selectionMode = !selectionMode; if (!selectionMode) selectedSessionIDs.clear(); renderSidebar(); };
-  stack.appendChild(selBtn);
   return stack;
 }
 
@@ -1290,7 +1286,7 @@ function sidebarToolsStack() {
 function navPillRow() {
   const wrap = el('div', 'nav-pills');
 
-  // Row 1: Reviews · Allowlist · Scorecard (kept together, no mid-group wrap).
+  // Row 1: Reviews · Allowlist · Scorecard · Select (kept together, no mid-group wrap).
   const row1 = el('div', 'nav-pills-row');
   const rev = navPill('Reviews', selectedBoard === 'reviews', () => selectBoard('reviews'));
   const unseen = (boardData.reviews && boardData.reviews.unseen) || 0;
@@ -1298,6 +1294,15 @@ function navPillRow() {
   row1.appendChild(rev);
   row1.appendChild(navPill('Allowlist', selectedBoard === 'allowlist', () => selectBoard('allowlist')));
   row1.appendChild(navPill('Scorecard', selectedBoard === 'scorecard', () => selectBoard('scorecard')));
+  // Select-sessions toggle (CROW-913): moved out of the sidebar tools stack to sit
+  // beside Scorecard as an aligned icon button. Same behavior — toggles selectionMode,
+  // clears the selection on cancel, and reads red (.nav-selecting) while active.
+  const sel = el('button', 'nav-select' + (selectionMode ? ' nav-selecting' : ''));
+  sel.title = selectionMode ? 'Cancel selection' : 'Select sessions';
+  sel.setAttribute('aria-label', sel.title);
+  sel.appendChild(icon(selectionMode ? 'close' : 'checkSquare', 14));
+  sel.onclick = () => { selectionMode = !selectionMode; if (!selectionMode) selectedSessionIDs.clear(); renderSidebar(); };
+  row1.appendChild(sel);
   wrap.appendChild(row1);
 
   // Row 2: Manager pill (when a primary manager session exists) + the "+" new-manager button.
