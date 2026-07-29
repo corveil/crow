@@ -237,6 +237,15 @@ enum LaunchScaffold {
                 AntigravityHookConfigWriter.removeManagedGlobalConfig(geminiConfigHome: geminiConfigHome)
             }
         }
+
+        // Grok Build has no arm here, by design (not omission): it installs no
+        // global config a prior Crow could leave behind — its hooks are the
+        // per-worktree `.grok/hooks/crow.json` written by the engine's generic
+        // `agent.hookConfigWriter` path, its trust store is seeded per-worktree by
+        // `GrokTrustSeeder`, and it has no dev-root scaffold or global MCP bridge
+        // in Phase A (the launcher prompt uses `acli` for Jira). Nothing to clean
+        // up at daemon boot, so there's no `AgentRegistry.shared.agent(for: .grok)`
+        // block (#861 review r8).
     }
 
     /// The value of environment variable `name`, or `nil` when it is unset or

@@ -25,6 +25,9 @@ let package = Package(
         .package(path: "../CrowCodex"),
         .package(path: "../CrowCursor"),
         .package(path: "../CrowOpenCode"),
+        // `CrowGrok` (Grok Build trust seeder + hook writer) linked by the
+        // library target below.
+        .package(path: "../CrowGrok"),
     ],
     targets: [
         .target(
@@ -38,6 +41,7 @@ let package = Package(
                 "CrowClaude",
                 "CrowCodex",
                 "CrowCursor",
+                "CrowGrok",
                 "CrowIPC",
             ]
         ),
@@ -55,6 +59,7 @@ let package = Package(
                 "CrowCodex",
                 "CrowCursor",
                 "CrowOpenCode",
+                "CrowGrok",
             ]
         ),
     ]

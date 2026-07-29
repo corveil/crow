@@ -1,0 +1,187 @@
+import Foundation
+import Testing
+@testable import CrowGrok
+
+@Suite("GrokHookConfigWriter")
+struct GrokHookConfigWriterTests {
+
+    private func makeTempWorktree() throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("grok-wt-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    // MARK: - Document shape
+
+    @Test func generateDocumentBakesInSessionAndEvents() throws {
+        let sid = UUID()
+        let doc = GrokHookConfigWriter.generateDocument(sessionID: sid, crowPath: "/usr/local/bin/crow")
+        let hooks = try #require(doc["hooks"] as? [String: Any])
+
+        // Every registered event is present, Claude-compatible schema.
+        for event in GrokHookConfigWriter.allEvents {
+            let groups = try #require(hooks[event] as? [[String: Any]])
+            let inner = try #require((groups.first?["hooks"]) as? [[String: Any]])
+            let entry = try #require(inner.first)
+            #expect(entry["type"] as? String == "command")
+            let command = try #require(entry["command"] as? String)
+            // crowPath is shell-quoted (Grok runs the hook via `sh -c`), so a
+            // path with a space can't word-split.
+            #expect(command == "'/usr/local/bin/crow' hook-event --session \(sid.uuidString) --event \(event)")
+            #expect(entry["timeout"] as? Int == 5)
+            // No matcher key (match-all).
+            #expect(groups.first?["matcher"] == nil)
+            // Sync-only for now (Grok async delivery unverified).
+            #expect(entry["async"] == nil)
+        }
+    }
+
+    @Test func shellQuotesSpacedCrowPath() throws {
+        // A `crow` binary at a path with a space must stay a single argument
+        // under Grok's `sh -c` execution.
+        let doc = GrokHookConfigWriter.generateDocument(
+            sessionID: UUID(), crowPath: "/Users/me/My Apps/crow")
+        let hooks = try #require(doc["hooks"] as? [String: Any])
+        let stop = try #require(hooks["Stop"] as? [[String: Any]])
+        let entry = try #require(((stop.first?["hooks"]) as? [[String: Any]])?.first)
+        let command = try #require(entry["command"] as? String)
+        #expect(command.hasPrefix("'/Users/me/My Apps/crow' hook-event"))
+    }
+
+    @Test func registersTheVerifiedGrokEventSet() {
+        // The ticket's core loop needs a real Stop + Notification; these are the
+        // events GrokSignalSource handles.
+        let events = Set(GrokHookConfigWriter.allEvents)
+        for expected in ["SessionStart", "SessionEnd", "Stop", "StopFailure",
+                         "Notification", "PreToolUse", "PostToolUse", "UserPromptSubmit"] {
+            #expect(events.contains(expected))
+        }
+    }
+
+    // MARK: - Write / remove
+
+    @Test func writeHookConfigWritesPerWorktreeSessionScopedFile() throws {
+        let worktree = try makeTempWorktree()
+        defer { try? FileManager.default.removeItem(at: worktree) }
+
+        let sid = UUID()
+        try GrokHookConfigWriter().writeHookConfig(
+            worktreePath: worktree.path, sessionID: sid, crowPath: "/bin/crow")
+
+        // Lands in `<worktree>/.grok/hooks/crow.json`.
+        let path = worktree.appendingPathComponent(".grok/hooks/crow.json")
+        #expect(FileManager.default.fileExists(atPath: path.path))
+
+        let data = try #require(FileManager.default.contents(atPath: path.path))
+        let root = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let hooks = try #require(root["hooks"] as? [String: Any])
+        let stop = try #require(hooks["Stop"] as? [[String: Any]])
+        let entry = try #require(((stop.first?["hooks"]) as? [[String: Any]])?.first)
+        // The session UUID is baked into the command (exact per-session scope).
+        #expect((entry["command"] as? String)?.contains("--session \(sid.uuidString)") == true)
+    }
+
+    @Test func removeHookConfigDeletesFileAndPrunesEmptyDirs() throws {
+        let worktree = try makeTempWorktree()
+        defer { try? FileManager.default.removeItem(at: worktree) }
+
+        let writer = GrokHookConfigWriter()
+        try writer.writeHookConfig(worktreePath: worktree.path, sessionID: UUID(), crowPath: "/bin/crow")
+        writer.removeHookConfig(worktreePath: worktree.path)
+
+        #expect(!FileManager.default.fileExists(
+            atPath: worktree.appendingPathComponent(".grok/hooks/crow.json").path))
+        // Crow-created empty dirs are pruned.
+        #expect(!FileManager.default.fileExists(
+            atPath: worktree.appendingPathComponent(".grok").path))
+        // Removing again is a safe no-op.
+        writer.removeHookConfig(worktreePath: worktree.path)
+    }
+
+    @Test func removeHookConfigPreservesUserHookFiles() throws {
+        let worktree = try makeTempWorktree()
+        defer { try? FileManager.default.removeItem(at: worktree) }
+
+        // A user's own hook file sits alongside ours in `.grok/hooks/`.
+        let hooksDir = worktree.appendingPathComponent(".grok/hooks")
+        try FileManager.default.createDirectory(at: hooksDir, withIntermediateDirectories: true)
+        let userHook = hooksDir.appendingPathComponent("my-hook.json")
+        try "{\"hooks\":{}}".write(to: userHook, atomically: true, encoding: .utf8)
+
+        let writer = GrokHookConfigWriter()
+        try writer.writeHookConfig(worktreePath: worktree.path, sessionID: UUID(), crowPath: "/bin/crow")
+        writer.removeHookConfig(worktreePath: worktree.path)
+
+        // Ours is gone; theirs (and the non-empty dir) survive.
+        #expect(!FileManager.default.fileExists(
+            atPath: hooksDir.appendingPathComponent("crow.json").path))
+        #expect(FileManager.default.fileExists(atPath: userHook.path))
+    }
+
+    // MARK: - .gitignore commit guard (#861 review r11)
+
+    /// `writeHookConfig` drops a self-scoped `.gitignore` beside `crow.json` so an
+    /// agent's `git add -A` can't stage Crow's generated file (which embeds the
+    /// absolute `crow` path + a per-machine session UUID) into the user's repo.
+    /// Scoped to `crow.json` + itself, NOT `*.json`, so a user's own hook files
+    /// stay tracked; and it's not `.json`, so Grok (which merges only `*.json`)
+    /// ignores it.
+    @Test func writeHookConfigWritesSelfScopedGitignore() throws {
+        let worktree = try makeTempWorktree()
+        defer { try? FileManager.default.removeItem(at: worktree) }
+
+        try GrokHookConfigWriter().writeHookConfig(
+            worktreePath: worktree.path, sessionID: UUID(), crowPath: "/bin/crow")
+
+        let gi = worktree.appendingPathComponent(".grok/hooks/.gitignore")
+        let body = try String(contentsOf: gi, encoding: .utf8)
+        #expect(body.contains("crow.json"))
+        #expect(body.contains(".gitignore"))
+        #expect(!body.contains("*.json"))
+    }
+
+    /// A pre-existing `.gitignore` we didn't write (a user's own rules) is left
+    /// untouched — `.grok/hooks/` is the user's directory.
+    @Test func writeHookConfigPreservesUserGitignore() throws {
+        let worktree = try makeTempWorktree()
+        defer { try? FileManager.default.removeItem(at: worktree) }
+        let hooksDir = worktree.appendingPathComponent(".grok/hooks")
+        try FileManager.default.createDirectory(at: hooksDir, withIntermediateDirectories: true)
+        let gi = hooksDir.appendingPathComponent(".gitignore")
+        try "# mine\nsecret.json".write(to: gi, atomically: true, encoding: .utf8)
+
+        try GrokHookConfigWriter().writeHookConfig(
+            worktreePath: worktree.path, sessionID: UUID(), crowPath: "/bin/crow")
+
+        #expect(try String(contentsOf: gi, encoding: .utf8) == "# mine\nsecret.json")
+    }
+
+    /// `removeHookConfig` drops our `.gitignore` (when it still holds exactly our
+    /// content) but never a user's own — same provenance discipline as the write.
+    @Test func removeHookConfigDropsOwnGitignoreButKeepsUsers() throws {
+        let worktree = try makeTempWorktree()
+        defer { try? FileManager.default.removeItem(at: worktree) }
+        let writer = GrokHookConfigWriter()
+        let ourGi = worktree.appendingPathComponent(".grok/hooks/.gitignore")
+
+        try writer.writeHookConfig(worktreePath: worktree.path, sessionID: UUID(), crowPath: "/bin/crow")
+        #expect(FileManager.default.fileExists(atPath: ourGi.path))
+        writer.removeHookConfig(worktreePath: worktree.path)
+        #expect(!FileManager.default.fileExists(atPath: ourGi.path))
+
+        // A user's own `.gitignore` + hook file both survive teardown.
+        let hooksDir = worktree.appendingPathComponent(".grok/hooks")
+        try FileManager.default.createDirectory(at: hooksDir, withIntermediateDirectories: true)
+        let userGi = hooksDir.appendingPathComponent(".gitignore")
+        try "# mine".write(to: userGi, atomically: true, encoding: .utf8)
+        let userHook = hooksDir.appendingPathComponent("mine.json")
+        try "{}".write(to: userHook, atomically: true, encoding: .utf8)
+
+        try writer.writeHookConfig(worktreePath: worktree.path, sessionID: UUID(), crowPath: "/bin/crow")
+        writer.removeHookConfig(worktreePath: worktree.path)
+
+        #expect(try String(contentsOf: userGi, encoding: .utf8) == "# mine")
+        #expect(FileManager.default.fileExists(atPath: userHook.path))
+    }
+}

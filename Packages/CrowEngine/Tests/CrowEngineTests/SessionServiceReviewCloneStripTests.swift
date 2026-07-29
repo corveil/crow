@@ -102,7 +102,7 @@ struct SessionServiceReviewCloneStripTests {
     /// stripping a surface the reviewing agent doesn't load would just hide the
     /// files a hostile PR ships (same reasoning as the `.codex/` gate).
     @Test func handoffGateSkipsReviewForNonCursorAgents() {
-        for k: AgentKind in [.claudeCode, .codex, .openCode] {
+        for k: AgentKind in [.claudeCode, .codex, .openCode, .grok] {
             #expect(!SessionService.shouldStripCursorReviewCloneOnHandoff(
                 targetKind: k, sessionKind: .review))
         }

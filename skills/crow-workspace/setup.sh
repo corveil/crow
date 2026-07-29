@@ -178,6 +178,7 @@ agent_display_name() {
     cursor)      echo "Cursor" ;;
     codex)       echo "OpenAI Codex" ;;
     opencode)    echo "OpenCode" ;;
+    grok)        echo "Grok Build" ;;
     *)           echo "Claude Code" ;;
   esac
 }
@@ -463,8 +464,8 @@ parse_args() {
   # Validate --agent-kind early so bad values fail fast rather than at launch.
   if [[ -n "$AGENT_KIND" ]]; then
     case "$AGENT_KIND" in
-      claude-code|cursor|codex|opencode) ;;
-      *) die "parse_args" "Unknown --agent-kind: $AGENT_KIND (expected claude-code | cursor | codex | opencode)" ;;
+      claude-code|cursor|codex|opencode|grok) ;;
+      *) die "parse_args" "Unknown --agent-kind: $AGENT_KIND (expected claude-code | cursor | codex | opencode | grok)" ;;
     esac
   fi
 }
@@ -1416,6 +1417,42 @@ launch_opencode() {
   create_agent_terminal "OpenCode" "$launch_cmd"
 }
 
+launch_grok() {
+  local prompt_path="$1"
+  local override_bin="$2"
+  local bin
+  if [[ -n "$override_bin" ]]; then
+    bin="$override_bin"
+  else
+    bin=$(resolve_binary "grok" "grok" \
+      "/opt/homebrew/bin/grok" \
+      "/usr/local/bin/grok" \
+      "$HOME/.local/bin/grok" \
+      "$HOME/.grok/bin/grok") || \
+      die "launch_agent" "grok binary not found at PATH or known locations; provide --agent-binary or set defaults.binaries.grok in config.json (note: 'grok' collides with superagent-ai/grok-cli — pin xAI's Grok Build there)"
+  fi
+  log "Resolved grok binary: $bin"
+  # Grok: any prompt arg forces headless mode, so headless `--prompt-file`
+  # consumes the prompt, then `; -c` resumes the same session in the interactive
+  # TUI with a fresh terminal stdin. `--prompt-file` (not `-p "$(cat …)"`) so a
+  # large prompt never becomes a giant argv or rides a subshell (#861). Brace
+  # group keeps both commands gated on a successful `cd`. Mirrors the
+  # *no-auto-flags* form of GrokLaunchArgs.firstLaunchChainedCommand: this
+  # `/crow-workspace` path only ever launches `.work` (interactive, no
+  # auto-permission flags), so there is deliberately NO `|| { [ $? -eq 2 ] && … }`
+  # exit-2 fallback here — that fallback only guards the `--permission-mode auto` /
+  # `--deny` legs, which are emitted solely on `.job`/`.review` launches from the
+  # app, never from this script. Shell-quoting DOES match Swift exactly: unlike
+  # the peers, `$bin`/`$prompt_path`/`$WORKTREE_PATH` are POSIX single-quoted via
+  # `posix_quote` because `grok` collides with superagent-ai/grok-cli, so pinning a
+  # (possibly spaced) `defaults.binaries.grok` is the *expected* config here. Single
+  # quotes (not double) so a `$`/backtick/`\` in the pinned path is preserved
+  # literally rather than re-expanded when `crow new-terminal --command` pastes it —
+  # exact parity with Swift's `GrokLaunchArgs.shellQuote` (#861 review r10).
+  local launch_cmd="cd $(posix_quote "$WORKTREE_PATH") && { $(posix_quote "$bin") --prompt-file $(posix_quote "$prompt_path"); $(posix_quote "$bin") -c; }"
+  create_agent_terminal "Grok Build" "$launch_cmd"
+}
+
 # Shared terminal creation + readiness polling, used by every launch_<kind>.
 # Sets TERMINAL_ID on success. Polls `crow list-terminals` for up to 15s.
 create_agent_terminal() {
@@ -1506,7 +1543,8 @@ launch_agent() {
     cursor)      launch_cursor "$prompt_path" "$override_bin" ;;
     codex)       launch_codex "$prompt_path" "$override_bin" ;;
     opencode)    launch_opencode "$prompt_path" "$override_bin" ;;
-    *) die "launch_agent" "Unknown agent kind: $kind (expected claude-code | cursor | codex | opencode)" ;;
+    grok)        launch_grok "$prompt_path" "$override_bin" ;;
+    *) die "launch_agent" "Unknown agent kind: $kind (expected claude-code | cursor | codex | opencode | grok)" ;;
   esac
 }
 

@@ -26,6 +26,9 @@ public struct AgentKind: Hashable, Sendable, Codable, RawRepresentable {
     /// The Google Antigravity agent (CLI binary `agy`). Tier-2 / experimental —
     /// closed-source, Google-auth-locked, hooks-only state detection (#860).
     public static let antigravity = AgentKind(rawValue: "antigravity")
+
+    /// The Grok Build agent (xai-org/grok-build, binary `grok`).
+    public static let grok = AgentKind(rawValue: "grok")
 }
 
 public extension AgentKind {
