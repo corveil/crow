@@ -1348,8 +1348,10 @@ public final class SessionService {
         // so this never throws today — it's retained as the single place a future
         // review-incapable harness would be refused, kept in lockstep with
         // `AgentsRPCSupport.validateRoleSupportsAgent`. Handing a review session
-        // off to Antigravity is safe because the Antigravity arm below strips the
-        // clone's attacker-committed `.agents/` before `agy` launches.
+        // off to Antigravity is safe because the shared launch gate below
+        // (`prepareWorktreeForAgentLaunch`, which this handoff routes through)
+        // strips the clone's attacker-committed `.agents/` before `agy` launches —
+        // there is no bespoke Antigravity handoff arm.
         guard !Self.shouldRefuseReviewHandoff(targetKind: targetKind, sessionKind: session.kind) else {
             throw AgentHandoffError.reviewNotSupported(targetKind.rawValue)
         }
@@ -2870,13 +2872,15 @@ public final class SessionService {
     /// --review <kind>`) to an agent that can't perform reviews. **No agent is
     /// review-incapable today** — Antigravity was the last one and its review
     /// dispatch landed in #902 (`autoLaunchCommand(.review)` inlines the SKILL
-    /// body, `prepareReviewClone` + the handoff arm strip its `.agents/`). The
-    /// predicate is retained as the single coupling point both surfaces share
-    /// (`handoffAgent` and `AgentsRPCSupport.validateRoleSupportsAgent`) so a
-    /// future review-incapable harness can be gated in one place without the two
-    /// drifting. Extracted as a pure predicate so the gate stays unit-testable
-    /// without the full `handoffAgent` machinery (mirrors
-    /// `shouldStripCursorReviewCloneOnHandoff`).
+    /// body; `prepareReviewClone` **and every launch path**
+    /// (`prepareWorktreeForAgentLaunch`) strip its `.agents/`, not just at
+    /// creation — a warm `crowd` restart / `crow send "agy -c"` reopens the clone
+    /// through neither creation nor a handoff arm). The predicate is retained as
+    /// the single coupling point both surfaces share (`handoffAgent` and
+    /// `AgentsRPCSupport.validateRoleSupportsAgent`) so a future review-incapable
+    /// harness can be gated in one place without the two drifting. Extracted as a
+    /// pure predicate so the gate stays unit-testable without the full
+    /// `handoffAgent` machinery (mirrors `shouldStripCursorReviewCloneOnHandoff`).
     nonisolated static func shouldRefuseReviewHandoff(
         targetKind: AgentKind, sessionKind: SessionKind) -> Bool {
         // Intentionally always `false`: every registered harness now supports

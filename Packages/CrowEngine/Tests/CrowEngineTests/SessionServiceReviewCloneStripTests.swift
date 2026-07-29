@@ -210,7 +210,7 @@ struct SessionServiceReviewCloneStripTests {
     /// Antigravity loads it, so stripping for another agent would just hide the
     /// files a hostile PR ships (same reasoning as the `.cursor/`/`.codex/` gates).
     @Test func antigravityStripGateSkipsReviewForOtherAgents() {
-        for k: AgentKind in [.claudeCode, .cursor, .codex, .openCode] {
+        for k: AgentKind in [.claudeCode, .cursor, .codex, .openCode, .grok] {
             #expect(!SessionService.shouldStripAntigravityReviewClone(
                 agentKind: k, sessionKind: .review))
         }

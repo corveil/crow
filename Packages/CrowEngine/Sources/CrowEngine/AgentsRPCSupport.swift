@@ -182,10 +182,22 @@ public enum AgentsRPC {
     /// fail — including patches to unrelated roles. A default that resolves
     /// review to a review-incapable agent instead surfaces at launch time, where
     /// `SessionService` already writes an explanatory line into the terminal.
+    /// `refuses` is an injectable seam (#902 review r5, Green 2): the production
+    /// predicate is a constant `false` today, so without a way to force the
+    /// refused branch no test could catch this `throw` being deleted — the
+    /// coupling would rest on convention alone. `nil` (the default) uses the real
+    /// predicate; a test passes `{ _, _ in true }` to lock the refuse-path. (The
+    /// real predicate is resolved in the body, not as a default-arg value, because
+    /// `shouldRefuseReviewHandoff` is internal and a `public` default argument may
+    /// only reference public symbols.)
     public static func validateRoleSupportsAgent(
-        role: SessionKind, kind: AgentKind, label: String
+        role: SessionKind, kind: AgentKind, label: String,
+        refuses: ((AgentKind, SessionKind) -> Bool)? = nil
     ) throws {
-        guard SessionService.shouldRefuseReviewHandoff(targetKind: kind, sessionKind: role) else {
+        let refuse = refuses ?? {
+            SessionService.shouldRefuseReviewHandoff(targetKind: $0, sessionKind: $1)
+        }
+        guard refuse(kind, role) else {
             return
         }
         throw RPCError.invalidParams(

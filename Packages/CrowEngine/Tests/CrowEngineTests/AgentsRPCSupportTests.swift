@@ -206,6 +206,28 @@ struct AgentsRPCSupportTests {
         }
     }
 
+    /// The refuse-path actually fires when the predicate says so (#902 review r5,
+    /// Green 2). The production predicate is a constant `false`, so the previous
+    /// test only ever exercises the no-throw branch — deleting the `throw` in
+    /// `validateRoleSupportsAgent` wouldn't fail anything. The injectable `refuses`
+    /// seam forces the refused branch, so the coupling breaks *loudly* rather than
+    /// on convention alone.
+    @Test func validateRoleSupportsAgentThrowsWhenPredicateRefuses() {
+        #expect(throws: RPCError.self) {
+            try AgentsRPC.validateRoleSupportsAgent(
+                role: .review, kind: .antigravity, label: "x",
+                refuses: { _, _ in true })
+        }
+    }
+
+    /// …and stays silent when the predicate allows — the same seam, negative half,
+    /// so the guard can't be inverted to "always throw" undetected.
+    @Test func validateRoleSupportsAgentIsSilentWhenPredicateAllows() throws {
+        try AgentsRPC.validateRoleSupportsAgent(
+            role: .review, kind: .antigravity, label: "x",
+            refuses: { _, _ in false })
+    }
+
     /// The gate deliberately does NOT fire on `default_agent_kind`. Validating the
     /// *resolved* outcome would make a pre-existing default (settable from web
     /// Settings, which doesn't run this gate) fail every later patch — including
