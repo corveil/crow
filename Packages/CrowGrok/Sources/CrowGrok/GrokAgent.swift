@@ -1,5 +1,4 @@
 import Foundation
-import os
 import CrowCore
 
 /// `CodingAgent` conformer for Grok Build (`xai-org/grok-build`, binary
@@ -244,15 +243,10 @@ public struct GrokAgent: CodingAgent {
         runner: any ShellRunner,
         timeoutNanos: UInt64 = probeTimeoutNanos
     ) async -> String {
-        let gate = OSAllocatedUnfairLock(initialState: false)
+        let gate = ResumeOnceGate()
         return await withCheckedContinuation { (cont: CheckedContinuation<String, Never>) in
             @Sendable func finish(_ result: String) {
-                let shouldResume = gate.withLock { resumed -> Bool in
-                    if resumed { return false }
-                    resumed = true
-                    return true
-                }
-                if shouldResume { cont.resume(returning: result) }
+                if gate.claim() { cont.resume(returning: result) }
             }
             let work = Task {
                 let out: String
@@ -271,5 +265,22 @@ public struct GrokAgent: CodingAgent {
                 finish("")
             }
         }
+    }
+}
+
+/// A cross-platform (no Darwin `os`) resume-once guard for `probeArg`'s
+/// race: `claim()` returns `true` exactly once — for the first of the run and
+/// timeout tasks to finish — so the continuation is resumed a single time. An
+/// `NSLock`-backed `Bool` rather than `OSAllocatedUnfairLock`, which is
+/// Apple-platforms-only and breaks the Linux CI build (#912).
+private final class ResumeOnceGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var resumed = false
+
+    func claim() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        if resumed { return false }
+        resumed = true
+        return true
     }
 }
