@@ -933,33 +933,29 @@ public enum CrowDaemon {
         }
 
         // Register a discovered agent as *known*, marking it available iff its
-        // binary resolves. Logs either the resolved path or a "not found on PATH"
-        // line so the boot log matches what the picker shows — a greyed-out row
-        // now has a corresponding log entry (#879).
+        // binary resolves **and** passes identity checks. `AgentDiscovery.evaluate`
+        // owns the decision (resolve → probe a non-override match); this wrapper
+        // only writes the registry + logs, so the "greyed-out row ⇒ matching boot
+        // log line" contract (#879) holds for all three outcomes.
         //
-        // A resolved binary is additionally identity-probed for collision-prone
-        // launch tokens (`agent.verifyBinaryIdentity`) so a foreign same-named
-        // binary is shown disabled rather than falsely active — today only Grok
-        // Build, whose `grok` token collides with `superagent-ai/grok-cli`
-        // (CROW-911). The probe is **skipped for an explicit `defaults.binaries.<kind>`
-        // pin**: the user has named the exact binary, so it's authoritative
-        // (matching `findBinary()`'s override-first resolution) and can't be
-        // greyed out by a version-pinned probe that upstream churn broke.
+        // A resolved binary is identity-probed for collision-prone launch tokens
+        // so a foreign same-named binary is shown disabled rather than falsely
+        // active — today only Grok Build, whose `grok` token collides with
+        // `superagent-ai/grok-cli` (CROW-911). The probe is skipped for an
+        // explicit `defaults.binaries.<kind>` pin (`.available(viaOverride:)`):
+        // the user has named the exact binary, so it's authoritative.
         func registerDiscovered(_ agent: any CodingAgent) async {
-            guard let path = agent.findBinary() else {
+            switch await AgentDiscovery.evaluate(agent) {
+            case .unavailableNotFound:
                 AgentRegistry.shared.registerKnown(agent, available: false)
                 log("\(agent.displayName) agent not found on PATH — shown disabled in the picker")
-                return
-            }
-            let pinned = BinaryOverrides.shared.path(for: agent.kind)
-                .map { FileManager.default.isExecutableFile(atPath: $0) } ?? false
-            if !pinned, await !agent.verifyBinaryIdentity(atPath: path) {
+            case .unavailableFailedProbe(let path):
                 AgentRegistry.shared.registerKnown(agent, available: false)
                 log("\(agent.displayName) binary at \(path) failed the identity probe (likely a different tool sharing the name) — shown disabled; pin the real path via defaults.binaries.\(agent.kind.rawValue)")
-                return
+            case .available(let path, _):
+                AgentRegistry.shared.registerKnown(agent, available: true)
+                log("\(agent.displayName) agent registered at \(path)")
             }
-            AgentRegistry.shared.registerKnown(agent, available: true)
-            log("\(agent.displayName) agent registered at \(path)")
         }
 
         // Claude Code is the baseline harness and the registry fallback default,

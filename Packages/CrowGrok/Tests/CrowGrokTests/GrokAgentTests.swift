@@ -260,6 +260,20 @@ struct GrokAgentTests {
         let agent = GrokAgent(probeRunner: runner)
         #expect(await agent.verifyBinaryIdentity(atPath: "/opt/homebrew/bin/grok") == true)
     }
+
+    /// The Red from #912 review: a `grok` that never exits and ignores
+    /// cancellation must not stall boot. `probeArg`'s timeout is a *hard* bound
+    /// on the awaiting task — it returns `""` at the cap even against a runner
+    /// that never completes. Uses a tiny injected timeout so the test is instant.
+    @Test func probeArgHardBoundsAgainstNeverCompletingRunner() async {
+        let out = await GrokAgent.probeArg(
+            "/opt/homebrew/bin/grok",
+            "--help",
+            runner: NeverRunner(),
+            timeoutNanos: 50_000_000  // 50ms
+        )
+        #expect(out == "")
+    }
 }
 
 /// Canned `--version` / `--help` responder for the identity probe, keyed by the
@@ -278,5 +292,17 @@ private struct FakeProbeRunner: ShellRunner {
             throw ShellRunnerError.nonZeroExit(exitCode: 2, output: out)
         }
         return out
+    }
+}
+
+/// A `ShellRunner` that never completes and ignores cancellation — the exact
+/// shape from the #912 review repro. Proves `probeArg`'s timeout bounds the
+/// awaiting task rather than relying on the runner cooperating. Uses an *unsafe*
+/// continuation deliberately: the leak (never resumed) is the intended scenario,
+/// so a checked continuation would only emit a spurious misuse diagnostic.
+private struct NeverRunner: ShellRunner {
+    func run(args: [String], env: [String: String], cwd: String?) async throws -> String {
+        await withUnsafeContinuation { (_: UnsafeContinuation<Void, Never>) in }
+        return ""  // unreachable
     }
 }

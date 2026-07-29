@@ -1,4 +1,5 @@
 import Foundation
+import os
 import CrowCore
 
 /// `CodingAgent` conformer for Grok Build (`xai-org/grok-build`, binary
@@ -200,52 +201,75 @@ public struct GrokAgent: CodingAgent {
     ]
 
     /// Identity-probe the resolved `grok` binary before registration marks it
-    /// available (CROW-911). Runs `grok --version` and `grok --help`, then looks
-    /// for any `identityMarkers` substring — a match means xAI's grok-build, no
-    /// match (or empty output, e.g. a binary that fails/hangs) means the
-    /// colliding community `grok` and the agent is shown disabled.
+    /// available (CROW-911). Probes `grok --help` (and, only if that yields no
+    /// marker, `grok --version`) and looks for any `identityMarkers` substring —
+    /// a match means xAI's grok-build, no match means the colliding community
+    /// `grok` and the agent is shown disabled.
     ///
     /// Only reached for a PATH/fallback match: an explicit `defaults.binaries.grok`
-    /// pin is trusted without probing (see `CrowDaemon.registerAgents`).
+    /// pin is trusted without probing (`AgentDiscovery.evaluate`).
     public func verifyBinaryIdentity(atPath path: String) async -> Bool {
-        let haystack = await Self.probeText(binary: path, runner: probeRunner).lowercased()
-        guard !haystack.isEmpty else { return false }
-        return Self.identityMarkers.contains { haystack.contains($0) }
+        // `--help` first: every marker is a `--help` flag, so a genuine
+        // grok-build matches on the first spawn and `--version` never runs (one
+        // fewer subprocess per boot). `--version` is only a fallback for a
+        // foreign binary that prints its banner there instead. An empty result
+        // (a binary that prints nothing, or a probe timeout) simply matches no
+        // marker and returns false — no separate empty-string branch needed.
+        for arg in ["--help", "--version"] {
+            let out = await Self.probeArg(path, arg, runner: probeRunner).lowercased()
+            if Self.identityMarkers.contains(where: { out.contains($0) }) { return true }
+        }
+        return false
     }
 
-    /// Combined `<binary> --version` + `<binary> --help` output, tolerating a
-    /// non-zero exit (both flags normally exit 0, but a foreign tool might not —
-    /// its stderr is still captured for marker matching). Each probe is bounded
-    /// by a short timeout so a binary that blocks on stdin can't stall daemon
-    /// boot; a timed-out probe contributes empty text.
-    static func probeText(binary: String, runner: any ShellRunner) async -> String {
-        let version = await probeArg(binary, "--version", runner: runner)
-        let help = await probeArg(binary, "--help", runner: runner)
-        return version + "\n" + help
-    }
+    /// Per-leg cap for the `--help` / `--version` probe. Injectable via
+    /// `probeArg` so tests exercise the timeout without a real 3s wait.
+    static let probeTimeoutNanos: UInt64 = 3 * 1_000_000_000
 
-    /// Run `<binary> <arg>` and return its merged stdout+stderr regardless of
-    /// exit status, or `""` on spawn failure / timeout. The 3s cap protects
-    /// daemon boot: cancelling the race can't kill the subprocess (it may
-    /// linger harmlessly), but control returns so registration proceeds.
-    private static func probeArg(_ binary: String, _ arg: String, runner: any ShellRunner) async -> String {
-        await withTaskGroup(of: String?.self) { group in
-            group.addTask {
-                do {
-                    return try await runner.run(args: [binary, arg], env: [:], cwd: nil)
-                } catch let ShellRunnerError.nonZeroExit(_, output) {
-                    return output
-                } catch {
-                    return nil
+    /// Run `<binary> <arg>` and return its merged stdout+stderr, or `""` on spawn
+    /// failure **or timeout**. The cap is a *hard* bound on the awaiting task: it
+    /// races the run against a sleep behind a resume-once guard and returns
+    /// whichever finishes first — so even a runner that never completes and
+    /// ignores cancellation (a `grok` that reads stdin, or forks a child holding
+    /// the stdout pipe so `readDataToEndOfFile()` never sees EOF) **cannot stall
+    /// `registerAgents` at boot** (CROW-911 review — the earlier `withTaskGroup`
+    /// form awaited the losing child and so bounded nothing).
+    ///
+    /// On timeout the run `Task` is cancelled: with the cancellation-aware
+    /// `ProcessShellRunner` that `terminate()`s the child so it doesn't leak; a
+    /// genuinely uncancellable runner leaks one blocked reader but boot proceeds.
+    static func probeArg(
+        _ binary: String,
+        _ arg: String,
+        runner: any ShellRunner,
+        timeoutNanos: UInt64 = probeTimeoutNanos
+    ) async -> String {
+        let gate = OSAllocatedUnfairLock(initialState: false)
+        return await withCheckedContinuation { (cont: CheckedContinuation<String, Never>) in
+            @Sendable func finish(_ result: String) {
+                let shouldResume = gate.withLock { resumed -> Bool in
+                    if resumed { return false }
+                    resumed = true
+                    return true
                 }
+                if shouldResume { cont.resume(returning: result) }
             }
-            group.addTask {
-                try? await Task.sleep(nanoseconds: 3 * 1_000_000_000)
-                return nil
+            let work = Task {
+                let out: String
+                do {
+                    out = try await runner.run(args: [binary, arg], env: [:], cwd: nil)
+                } catch let ShellRunnerError.nonZeroExit(_, output) {
+                    out = output
+                } catch {
+                    out = ""
+                }
+                finish(out)
             }
-            let first = await group.next() ?? nil
-            group.cancelAll()
-            return first ?? ""
+            Task {
+                try? await Task.sleep(nanoseconds: timeoutNanos)
+                work.cancel()
+                finish("")
+            }
         }
     }
 }

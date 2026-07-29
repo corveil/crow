@@ -68,28 +68,45 @@ public struct ProcessShellRunner: ShellRunner {
         if let cwd { process.currentDirectoryURL = URL(fileURLWithPath: cwd) }
         process.standardOutput = pipe
         process.standardError = pipe
+        // No `ShellRunner` caller feeds stdin (the protocol has no stdin knob),
+        // so detach it from the parent's — under a foreground `crowd` that's the
+        // controlling tty. A subprocess that reads stdin then EOFs immediately
+        // instead of blocking, which matters for the boot-time identity probe
+        // that runs an unvetted third-party `grok` (CROW-911).
+        process.standardInput = FileHandle.nullDevice
 
         // Drain the pipe on a background task so a >64KB output can't deadlock waitUntilExit.
-        return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<String, Error>) in
-            Task.detached {
-                do {
-                    try process.run()
-                } catch {
-                    cont.resume(throwing: error)
-                    return
-                }
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                process.waitUntilExit()
-                let output = String(data: data, encoding: .utf8) ?? ""
-                if process.terminationStatus == 0 {
-                    cont.resume(returning: output)
-                } else {
-                    cont.resume(throwing: ShellRunnerError.nonZeroExit(
-                        exitCode: process.terminationStatus,
-                        output: output
-                    ))
+        // Wrapped in a cancellation handler so a cancelled run (e.g. the identity
+        // probe's timeout losing the race) best-effort `terminate()`s the child
+        // rather than leaving it running. `onCancel` only signals the process; the
+        // detached task remains the sole resumer of the continuation, so there's
+        // no double-resume.
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<String, Error>) in
+                Task.detached {
+                    do {
+                        try process.run()
+                    } catch {
+                        cont.resume(throwing: error)
+                        return
+                    }
+                    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                    process.waitUntilExit()
+                    let output = String(data: data, encoding: .utf8) ?? ""
+                    if process.terminationStatus == 0 {
+                        cont.resume(returning: output)
+                    } else {
+                        cont.resume(throwing: ShellRunnerError.nonZeroExit(
+                            exitCode: process.terminationStatus,
+                            output: output
+                        ))
+                    }
                 }
             }
+        } onCancel: {
+            // `isRunning` is false before launch (terminate() would raise) and
+            // after exit, so this is a no-op outside the running window.
+            if process.isRunning { process.terminate() }
         }
     }
 }

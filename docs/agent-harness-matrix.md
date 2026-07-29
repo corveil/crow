@@ -96,20 +96,32 @@ managed-terminal command needs hook/env prep.
   (`ClaudeCodeAgent`, `CursorAgent`, `OpenAICodexAgent`, `OpenCodeAgent`,
   `GrokAgent`, `AntigravityAgent`).
 - **Cursor's token is `agent`, a generic name.** CI runners (Azure DevOps,
-  TeamCity) also ship a binary called `agent`; Crow accepts the false-positive
-  risk and lets users pin the real path via `defaults.binaries.cursor`
-  (`CursorAgent.swift` launch-token comment, CROW-484).
+  TeamCity) also ship a binary called `agent` — and, confirmed in the field,
+  **xAI's grok-build installer symlinks `agent → grok`** (`~/.grok/bin/agent`,
+  mirrored into `~/.local/bin/agent`), so on a box with grok-build ahead of
+  Cursor on PATH the `agent` token resolves to grok-build, not Cursor. Crow
+  still only accepts the false-positive risk here and lets users pin the real
+  path via `defaults.binaries.cursor` (`CursorAgent.swift` launch-token comment,
+  CROW-484). The durable fix is to adopt the CROW-911 identity-probe seam for
+  Cursor — with a PATH-walk-that-verifies (take the first `agent` on PATH that
+  passes the probe, since the wrong one can be first) — tracked as a follow-up.
 - **Grok's token is `grok`, which collides** with the community
   `superagent-ai/grok-cli` (also installs `grok`). Unlike Cursor, Crow does
   **not** just accept the false positive: registration **identity-probes** a
-  bare PATH/fallback match (`grok --version` / `--help`, matched against
-  grok-build-specific flag markers in `GrokAgent.identityMarkers`) and shows
+  bare PATH/fallback match — `grok --help` (then `--version`), matched against
+  grok-build-specific flag markers in `GrokAgent.identityMarkers` — and shows
   Grok Build **disabled** when the resolved binary is the foreign `grok-cli`
-  (`GrokAgent.verifyBinaryIdentity`, CROW-911). An explicit
-  `defaults.binaries.grok` pin is authoritative and **skips the probe**
-  (`CrowDaemon.registerAgents`); `BinaryOverrides` keys on
-  `AgentKind.rawValue` = `"grok"`. The probe is a reusable `CodingAgent` seam
-  Cursor's `agent` token can adopt later.
+  (`GrokAgent.verifyBinaryIdentity`, CROW-911). The decision is the pure
+  `AgentDiscovery.evaluate` (resolve → probe a non-override match), which
+  `CrowDaemon.registerAgents` wraps with registry writes + logging. An explicit
+  `defaults.binaries.grok` pin is authoritative and **skips the probe**;
+  `BinaryOverrides` keys on `AgentKind.rawValue` = `"grok"`. The probe is a
+  reusable `CodingAgent` seam Cursor's `agent` token can adopt (see above).
+  ⚠️ **Trust-boundary delta:** `crowd` now *executes* the PATH-resolved `grok`
+  (an unvetted third-party binary) at boot to probe it — inherent to identity
+  probing, on the user's own PATH, output only substring-matched (never logged
+  or evaluated); the probe is hard-bounded so a hanging binary can't stall boot
+  (`GrokAgent.probeArg`).
 - **Registration order = default.** `AgentRegistry.register` sets the default to
   the *first* kind registered
   ([`AgentRegistry.swift`](../Packages/CrowCore/Sources/CrowCore/Agent/AgentRegistry.swift)).
@@ -582,7 +594,7 @@ against current upstream CLIs.
 | Antigravity bounded auto-permission has no verified interactive launch flag | `agy` **v1.1.7**; headless `-p` ignores `permissions.allow` (issue #548) | `AntigravityLaunchArgs.autoPermissionSuffix` | 2026-07-26 |
 | Antigravity official-installer provenance (supply-chain gate) unconfirmed | `google-antigravity` org `is_verified: false`; pin `antigravity.google` | `AntigravityAgent.fallbackCandidates` | 2026-07-26 — confirm before promoting out of Tier-2 |
 | **Entire Grok flag set** — hooks event names, `-p`/`--single`, `-c`/`-r`, `--allow`/`--deny`, `--permission-mode`, `--trust`, `/rename` | `xai-org/grok-build` **@ 2026-07-25** (periodic mirror of xAI's monorepo, **PRs closed** → churn likely) | `GrokAgent` / `GrokLaunchArgs` / `GrokHookConfigWriter` / `GrokSignalSource` | 2026-07-26 — verified against repo source (`crates/codegen/xai-grok-*`), not blog posts |
-| Grok `grok` binary collides with community `superagent-ai/grok-cli` | **Identity probe** at registration (`grok --version`/`--help` vs grok-build flag markers) greys out the foreign `grok`; explicit `defaults.binaries.grok` pin bypasses the probe. Probe markers (`--prompt-file`, `--prompt-json`, `--permission-mode`, `--always-approve`) are the same upstream flag set as the row above — re-verify together | `GrokAgent.identityMarkers` / `verifyBinaryIdentity` · `CrowDaemon.registerAgents` | 2026-07-29 (CROW-911) |
+| Grok `grok` binary collides with community `superagent-ai/grok-cli` | **Identity probe** at registration (`grok --help`/`--version` vs grok-build flag markers) greys out the foreign `grok`; explicit `defaults.binaries.grok` pin bypasses it. Decision is pure `AgentDiscovery.evaluate`; probe markers (`--prompt-file`, `--prompt-json`, `--permission-mode`, `--always-approve`) are the same upstream flag set as the row above — re-verify together | `GrokAgent.identityMarkers` / `verifyBinaryIdentity` · `AgentDiscovery.evaluate` | 2026-07-26 (CROW-911) |
 | Grok **`--permission-mode auto` now exists** — the ticket's pinned probe (#859) reported it absent; current docs show `grok --permission-mode auto`. Bounded `.job` posture stays `--permission-mode auto` + a minimal `--deny` backstop (never `--yolo`) regardless | Grok mirror **@ 2026-07-25** | `GrokLaunchArgs.autoPermissionSuffix` | 2026-07-26 |
 | Grok `Stop` / `Notification` fire on the transitions Crow's state machine needs — **confirm empirically** | — (empirical, #859) | `GrokSignalSource` | 2026-07-26 |
 | Grok double-fire: only the **global** `~/.claude`/`~/.cursor` hook configs Grok also discovers (its compat scanning) firing alongside `.grok/hooks/crow.json` — dedup deferred (genuinely user-controlled config, no Crow session UUID, not RCE; cf. Codex §3b). *Project* compat sources are handled: stripped on `.review` clones (`stripGrokConfigFromReviewClone`, RCE) and neutralized on `.work`/`.job` handoff + warm-adopt (`stripPriorCompatHooksForGrokHandoff` + session-own adopt write, #861 r9-r10). The Grok-**Manager** devRoot case stays a documented limitation (`writeManagerHookConfig`). | — (empirical, #859) | `GrokHookConfigWriter` / `SessionService` | 2026-07-27 |
