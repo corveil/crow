@@ -305,4 +305,28 @@ import Testing
             !(try Self.webAsset("app.css")).contains(".board-empty-hint"),
             "the board-empty-hint CSS rule is dead once the hint is gone")
     }
+
+    /// CROW-913: the Select-sessions toggle moved out of `sidebarToolsStack`
+    /// (Notifications + Settings only now) into `navPillRow` row 1, beside the
+    /// Scorecard pill, as a `.nav-select` icon button. Pin the move so the toggle
+    /// can't drift back into the tools stack, and pin the now-dead
+    /// `.tk-tool.nav-selecting` rule out of app.css — after the move only
+    /// `.nav-select` and `.action-btn` ever take `nav-selecting`.
+    @Test func selectToggleLivesInNavRowNotTheToolsStack() throws {
+        let js = try Self.webAsset("app.js")
+        #expect(
+            try !Self.functionBody("sidebarToolsStack", in: js).contains("checkSquare"),
+            "the Select toggle must not be rebuilt in the sidebar tools stack (CROW-913)")
+        let navRow = try Self.functionBody("navPillRow", in: js)
+        #expect(
+            navRow.contains("'nav-select'") && navRow.contains("checkSquare"),
+            "navPillRow must render the Select toggle beside Scorecard as a .nav-select button")
+        let css = try Self.webAsset("app.css")
+        #expect(
+            !css.contains(".tk-tool.nav-selecting"),
+            "the .tk-tool.nav-selecting rule is dead once Select leaves the tools stack")
+        #expect(
+            css.contains(".nav-select"),
+            "the relocated Select toggle needs its .nav-select styles")
+    }
 }

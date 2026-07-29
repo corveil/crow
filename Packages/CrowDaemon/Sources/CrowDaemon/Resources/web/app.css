@@ -66,7 +66,6 @@ html, body {
 }
 
 /* ---- Multi-select (#5) ---- */
-.nav-plus.nav-selecting { color: var(--red); border-color: var(--red); }
 .divider.divider-sel { display: flex; align-items: center; gap: 8px; }
 .divider-label { flex: 1 1 auto; }
 .divider-selall {
@@ -649,13 +648,10 @@ html, body {
 }
 .tickets-card:hover { border-color: var(--border-strong); }
 .tickets-card.selected { border-color: var(--gold); }
-/* Title left, refresh right (CROW-913): the compact .tickets-card is too narrow for a
-   centred title with an absolutely-positioned refresh (they'd overlap), so the head is a
-   space-between flex row and the refresh sits in-flow. */
-.tickets-head { display: flex; align-items: center; justify-content: space-between; gap: 4px; }
-.tickets-title { color: var(--gold); font-weight: 700; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.tickets-head { display: flex; align-items: center; justify-content: center; position: relative; }
+.tickets-title { color: var(--gold); font-weight: 700; font-size: 13px; }
 .tickets-refresh {
-  flex: 0 0 auto;
+  position: absolute; right: 0; top: 50%; transform: translateY(-50%);
   display: inline-flex; align-items: center; justify-content: center;
   width: 22px; height: 22px; padding: 0; border-radius: 6px; cursor: pointer; line-height: 1;
   border: 1px solid var(--border-subtle); background: var(--bg-card); color: var(--text-secondary); font-size: 12px;
@@ -666,13 +662,14 @@ html, body {
    matching the detail-header action-button spinner (CROW-749). */
 .tickets-refresh.spinning { opacity: 0.6; cursor: default; }
 .tickets-row { display: flex; align-items: stretch; gap: 6px; margin: 2px 2px 8px; }
-/* Compact ticket box (CROW-913): was flex:1 1 auto, which grew it to fill the whole
-   row and dominate the sidebar top. Now a fixed, compact card sitting beside the
-   Notifications+Settings tools cluster. Target was the two 30px buttons' width (66px),
-   but that truncates the "Tickets" header; 92px is the tightest width that renders the
-   header + refresh + wrapped counts cleanly (verified in-browser). The head switches to
-   space-between and the counts wrap so the card degrades gracefully at this width. */
-.tickets-row .tickets-card { flex: 0 0 92px; width: 92px; margin: 0; }
+/* Compact ticket box (CROW-913): was flex:1 1 auto, which grew it to fill the whole row
+   and dominate the sidebar top. Now content-sized within a range instead of a hard px pin
+   — a fixed width clipped the "Tickets" header (and stacked the counts) once a raised
+   browser minimum-font-size or 3-digit counts made the font-relative text outgrow the
+   fixed box (review). The range keeps it compact at typical counts yet lets it expand into
+   the ~161px of otherwise-dead row width, so the header self-heals and the counts stay
+   ~2 rows. Sits beside the horizontal Notifications+Settings tools cluster. */
+.tickets-row .tickets-card { flex: 0 1 auto; width: max-content; min-width: 92px; max-width: 160px; margin: 0; }
 .sidebar-tools { display: flex; flex-direction: row; align-items: center; gap: 6px; flex: 0 0 auto; }
 .tickets-counts { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 8px; margin-top: 8px; padding: 0 2px; }
 .tk-tool {
