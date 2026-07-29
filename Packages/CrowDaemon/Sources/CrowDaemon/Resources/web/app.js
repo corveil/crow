@@ -1323,9 +1323,9 @@ function sidebarLeftStack() {
   // Row 2: the primary Manager pill, spanning the full left-column width. Only
   // appended when a primary manager exists — an empty .nav-pills-row still consumes
   // a flex-gap slot, so appending one would leave a stray 6px gap below row 1. (The
-  // separate concern — a shorter left column dividing the right icon column's four
-  // flex:1 buttons below the 24px WCAG floor on a Manager-less / cold-start render —
-  // is handled by `.sidebar-right > button { min-height: 24px }`, not by this guard.)
+  // right icon column no longer divides the left column's height — its buttons are a
+  // fixed-size centered stack since CROW-922 — so a Manager-less render can't shrink
+  // them below the WCAG floor.)
   const primaryManager = sessions.find((s) => s.kind === 'manager');
   if (primaryManager) {
     const row2 = el('div', 'nav-pills-row');
