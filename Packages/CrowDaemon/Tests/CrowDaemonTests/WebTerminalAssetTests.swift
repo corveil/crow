@@ -293,6 +293,14 @@ import Testing
         #expect(
             try Self.functionBody("renderAllowlist", in: source).contains("Scanning allowlist"),
             "renderAllowlist must show a scanning state, not 'No allowlist entries', mid-scan")
+        // The allowlist never polls or caches, so `scanning` keys on `d == null`;
+        // refreshBoard must seed a settled snapshot on a failed read or that
+        // scanning state strands forever (a spinner that lies — the very thing
+        // CROW-907 removes).
+        #expect(
+            try Self.functionBody("refreshBoard", in: source)
+                .contains("boardData.allowlist = { entries: [], loading: false }"),
+            "refreshBoard must seed the allowlist on a failed read so it can't wedge on 'Scanning…'")
         #expect(
             !(try Self.webAsset("app.css")).contains(".board-empty-hint"),
             "the board-empty-hint CSS rule is dead once the hint is gone")

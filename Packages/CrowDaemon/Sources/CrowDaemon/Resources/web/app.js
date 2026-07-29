@@ -2417,6 +2417,17 @@ async function refreshBoard(key) {
     // A failed read leaves us with no fresh word on the daemon's in-flight
     // flag, and a stale `true` never self-clears (CROW-771).
     if (key === 'tickets') clearDaemonRefreshFlag();
+    // The allowlist never polls or caches (it's manual-refresh-only), so a failed
+    // FIRST read would strand its cold-open "Scanning…" state forever —
+    // renderAllowlist keys that on `boardData.allowlist == null`. Seed an empty,
+    // settled snapshot so it lands on "No allowlist entries" like the pre-CROW-907
+    // board did (the disconnected banner is the real daemon-down signal); a later
+    // manual Refresh still replaces it. A failed LATER read keeps the last-good
+    // snapshot (d already non-null), so only the null case needs this.
+    if (key === 'allowlist' && !boardData.allowlist) {
+      boardData.allowlist = { entries: [], loading: false };
+      if (selectedBoard === 'allowlist') renderBoard();
+    }
     return;
   }
   const changed = JSON.stringify(boardData[key]) !== JSON.stringify(data);
@@ -3477,10 +3488,13 @@ function renderAllowlist(root) {
   const d = boardData.allowlist;
   // The allowlist is never cached (persistSidebarCache stores only tickets/
   // reviews) and never polled — it's manual-refresh-only, auto-scanned once on
-  // open (CROW-593). So a cold open renders before the first `list-allowlist`
-  // read lands (d == null), and `d.loading` marks a scan the daemon reports as
-  // still running. In both, the board isn't known-empty yet — distinguish that
-  // from a genuinely empty allowlist below so it doesn't flash "No entries".
+  // open (CROW-593). So `d == null` means no read has come back yet: the board
+  // isn't known-empty, and rendering "No entries" would flash a false empty
+  // during the cold-open scan. refreshBoard seeds a settled snapshot even on a
+  // failed read (see its catch), so `d == null` can't mean "read failed" and
+  // strand this forever. `d.loading` is defensive only — AllowListService.scan()
+  // is synchronous, so `list-allowlist` never lands mid-scan today; it's the
+  // right shape if that ever goes async, and costs nothing.
   const scanning = !d || d.loading;
   let entries = ((d && d.entries) || []).slice();
   if (allowlistHideGlobal) entries = entries.filter((e) => !e.is_global);
@@ -3528,8 +3542,10 @@ function renderAllowlist(root) {
   root.appendChild(boardFilterInput('allow-filter', allowlistFilter, 'Filter patterns…', (v) => { allowlistFilter = v; }));
 
   if (!entries.length) {
-    // Unfiltered + not yet loaded ⇒ say so rather than claim "empty" mid-scan.
-    if (scanning && !filter) { root.appendChild(boardEmpty('Scanning allowlist…')); return; }
+    // Not loaded yet ⇒ say we're scanning rather than assert empty / no-match —
+    // honest whether or not a filter is active (allowlistFilter survives board
+    // switches, so a cold open can carry one).
+    if (scanning) { root.appendChild(boardEmpty('Scanning allowlist…')); return; }
     root.appendChild(boardEmpty(filter ? 'No matching entries' : 'No allowlist entries'));
     return;
   }
