@@ -546,8 +546,8 @@ let activeTerminal = null; // { id, name, window }
 let liveById = {};
 
 // Boards (Ticket Board / Reviews / Allowlist), mirroring the desktop's
-// full-pane boards. Data is forwarded to the desktop app, so it's empty when
-// the app isn't running.
+// full-pane boards. Served by `crowd` off its own IssueTracker/AllowListService
+// (CROW-581 M-C), so they populate whether or not the desktop app is running.
 let selectedBoard = null; // 'tickets' | 'reviews' | 'allowlist' | 'scorecard' | null
 const boardData = { tickets: null, reviews: null, allowlist: null, scorecard: null };
 
@@ -2862,10 +2862,14 @@ function labelPills(labels, maxVisible) {
   return wrap;
 }
 
+// An empty board is just an empty list, not an error. `crowd` serves the boards
+// off its own IssueTracker/AllowListService (CROW-581 M-C), so we only reach here
+// when the `list-*` RPC succeeded and returned zero items — the daemon is up and
+// the board is genuinely empty. No "desktop app required" hint: it's stale post
+// native→web migration (ADR 0010) and read as a false error/warning (CROW-907).
 function boardEmpty(msg) {
   const wrap = el('div', 'board-empty');
   wrap.appendChild(el('div', null, msg));
-  wrap.appendChild(el('div', 'board-empty-hint', 'Boards require the Crow desktop app to be running.'));
   return wrap;
 }
 
