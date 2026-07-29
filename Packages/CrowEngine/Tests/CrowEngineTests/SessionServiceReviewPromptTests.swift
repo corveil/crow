@@ -119,6 +119,36 @@ struct SessionServiceReviewPromptTests {
         #expect(!prompt.hasPrefix("/crow-review-pr"))
     }
 
+    @Test func buildReviewPromptAntigravityBranchInlinesSkillBody() {
+        // #902: Antigravity has no Crow slash-command engine, so like
+        // Cursor/Codex/OpenCode it MUST get the inlined SKILL body — not the bare
+        // `/crow-review-pr <URL>` one-liner it can't resolve (which would leave
+        // the review unable to run `gh pr review` and post a verdict). Guards the
+        // regression where `.antigravity` silently fell into the Claude `default`
+        // branch.
+        let prompt = SessionService.buildReviewPrompt(
+            prURL: Self.prURL,
+            prTitle: Self.prTitle,
+            repoSlug: Self.repoSlug,
+            prNumber: Self.prNumber,
+            agentKind: .antigravity
+        )
+
+        #expect(!prompt.isEmpty)
+        #expect(!prompt.hasPrefix("/crow-review-pr"))
+        // Pin the *exact* inline branch (not merely "any non-Claude branch") and
+        // the `.antigravity` agentKind threading: the output must equal the
+        // inline-SKILL helper called with `.antigravity`. Independent of whether
+        // `bundledReviewSkill()` returns the real skill or the test-env stub —
+        // both sides resolve it identically — so this catches a stray `.antigravity`
+        // in a different non-Claude branch OR a wrong-agentKind footer (#902 review
+        // Green 1).
+        #expect(prompt == SessionService.cursorReviewPrompt(
+            skillBody: Scaffolder.bundledReviewSkill(),
+            prURL: Self.prURL,
+            agentKind: .antigravity))
+    }
+
     @Test func buildReviewPromptClaudeBranchIsTerseSlashCommand() {
         let prompt = SessionService.buildReviewPrompt(
             prURL: Self.prURL,

@@ -108,31 +108,163 @@ struct SessionServiceReviewCloneStripTests {
         }
     }
 
-    // MARK: - Antigravity review-handoff refusal (#862 review — RCE vector)
+    // MARK: - Antigravity review support (#902 — was #862 refusal, now wired)
 
-    /// A `.review` handoff to Antigravity is refused: review is unsupported on
-    /// this Tier-2 harness and it has no `.agents/` strip / trust gate, so a
-    /// handoff would launch `agy` in an attacker-controlled clone and run
-    /// committed `.agents/hooks.json` unsandboxed.
-    @Test func refuseGateFiresForAntigravityReview() {
-        #expect(SessionService.shouldRefuseReviewHandoff(
+    /// Antigravity review dispatch landed in #902, so the refusal gate no longer
+    /// fires: a `.review` handoff to Antigravity is allowed (the shared launch gate
+    /// — `prepareWorktreeForAgentLaunch`, which every launch path including handoff
+    /// routes through — strips its `.agents/`, and `autoLaunchCommand(.review)`
+    /// inlines the SKILL). Guards against the gate being reintroduced and
+    /// re-blocking review-on-Antigravity.
+    @Test func refuseGateDoesNotFireForAntigravityReview() {
+        #expect(!SessionService.shouldRefuseReviewHandoff(
             targetKind: .antigravity, sessionKind: .review))
     }
 
-    /// A `.work`/`.job` handoff to Antigravity is a normal working clone — allowed.
-    @Test func refuseGateAllowsNonReviewAntigravity() {
-        #expect(!SessionService.shouldRefuseReviewHandoff(
-            targetKind: .antigravity, sessionKind: .work))
-        #expect(!SessionService.shouldRefuseReviewHandoff(
-            targetKind: .antigravity, sessionKind: .job))
+    /// No registered agent is review-incapable today, so the refusal gate is
+    /// uniformly `false` across every kind × session-kind combination.
+    @Test func refuseGateNeverFires() {
+        for k: AgentKind in [.claudeCode, .cursor, .codex, .openCode, .grok, .antigravity] {
+            for sk: SessionKind in [.work, .job, .review, .manager] {
+                #expect(!SessionService.shouldRefuseReviewHandoff(
+                    targetKind: k, sessionKind: sk))
+            }
+        }
     }
 
-    /// A `.review` handoff to a review-capable agent is NOT refused — they have
-    /// their own strip + trust protections.
-    @Test func refuseGateAllowsReviewForOtherAgents() {
-        for k: AgentKind in [.claudeCode, .cursor, .codex, .openCode] {
-            #expect(!SessionService.shouldRefuseReviewHandoff(
-                targetKind: k, sessionKind: .review))
+    // MARK: - Antigravity strip (#902 — RCE vector on review clones)
+
+    /// Both executable surfaces `agy` may discover — `.agents/hooks.json`
+    /// (arbitrary command hooks, no approval gate) and a Gemini-derived
+    /// `.gemini/settings.json` (`mcpServers` `{command}` / approval mode) — are
+    /// gone from the working tree after the strip, so a hostile PR head can't fire
+    /// either when `agy` loads the clone.
+    @Test func removesCommittedAntigravityConfigLayers() {
+        let clone = Self.makeTempDir(name: "agy-hostile")
+        defer { try? FileManager.default.removeItem(atPath: clone) }
+        let agentsDir = (clone as NSString).appendingPathComponent(".agents")
+        let geminiDir = (clone as NSString).appendingPathComponent(".gemini")
+        for d in [agentsDir, geminiDir] {
+            try? FileManager.default.createDirectory(
+                atPath: d, withIntermediateDirectories: true)
+            try? "{\"mcpServers\":{}}".write(
+                toFile: (d as NSString).appendingPathComponent("settings.json"),
+                atomically: true, encoding: .utf8)
         }
+        #expect(FileManager.default.fileExists(atPath: agentsDir))
+        #expect(FileManager.default.fileExists(atPath: geminiDir))
+
+        SessionService.stripAntigravityConfigFromReviewClone(clonePath: clone)
+
+        #expect(!FileManager.default.fileExists(atPath: agentsDir))
+        #expect(!FileManager.default.fileExists(atPath: geminiDir))
+    }
+
+    /// Idempotent: a clone that ships neither `.agents/` nor `.gemini/` is left
+    /// untouched and the call doesn't throw. Guards the launch-gate path, which
+    /// fires unconditionally for a `.review` on Antigravity.
+    @Test func noOpsWhenNoAntigravityConfig() {
+        let clone = Self.makeTempDir(name: "agy-clean")
+        defer { try? FileManager.default.removeItem(atPath: clone) }
+        let prompt = (clone as NSString).appendingPathComponent(".crow-review-prompt.md")
+        try? "review this".write(toFile: prompt, atomically: true, encoding: .utf8)
+
+        SessionService.stripAntigravityConfigFromReviewClone(clonePath: clone)
+
+        #expect(FileManager.default.fileExists(atPath: clone))
+        #expect(FileManager.default.fileExists(atPath: prompt))
+    }
+
+    /// The strip is scoped to the layers `agy` discovers (`.agents/`, `.gemini/`)
+    /// — a sibling agent's config (`.cursor/`, the review prompt) survives, so
+    /// stripping for an Antigravity review never collaterally hides a surface
+    /// `agy` doesn't read.
+    @Test func antigravityStripLeavesSiblingConfigUntouched() {
+        let clone = Self.makeTempDir(name: "agy-siblings")
+        defer { try? FileManager.default.removeItem(atPath: clone) }
+        let agentsDir = (clone as NSString).appendingPathComponent(".agents")
+        let geminiDir = (clone as NSString).appendingPathComponent(".gemini")
+        let cursorDir = (clone as NSString).appendingPathComponent(".cursor")
+        for d in [agentsDir, geminiDir, cursorDir] {
+            try? FileManager.default.createDirectory(
+                atPath: d, withIntermediateDirectories: true)
+            try? "{}".write(
+                toFile: (d as NSString).appendingPathComponent("config"),
+                atomically: true, encoding: .utf8)
+        }
+
+        SessionService.stripAntigravityConfigFromReviewClone(clonePath: clone)
+
+        #expect(!FileManager.default.fileExists(atPath: agentsDir))
+        #expect(!FileManager.default.fileExists(atPath: geminiDir))
+        #expect(FileManager.default.fileExists(atPath: cursorDir))
+    }
+
+    /// Only a `.review` clone *on Antigravity* strips: the gate that keeps every
+    /// launch path (`prepareWorktreeForAgentLaunch`) — warm restart, `crow send`,
+    /// handoff — from launching `agy` in an unstripped hostile clone after the
+    /// review skill's `gh pr checkout` restores committed `.agents/` hooks.
+    @Test func antigravityStripGateFiresOnlyForReview() {
+        #expect(SessionService.shouldStripAntigravityReviewClone(
+            agentKind: .antigravity, sessionKind: .review))
+    }
+
+    /// A `.work`/`.job` Antigravity session is a normal working clone — no strip.
+    @Test func antigravityStripGateSkipsNonReview() {
+        #expect(!SessionService.shouldStripAntigravityReviewClone(
+            agentKind: .antigravity, sessionKind: .work))
+        #expect(!SessionService.shouldStripAntigravityReviewClone(
+            agentKind: .antigravity, sessionKind: .job))
+    }
+
+    /// A `.review` on any *other* agent must not strip `.agents/` — only
+    /// Antigravity loads it, so stripping for another agent would just hide the
+    /// files a hostile PR ships (same reasoning as the `.cursor/`/`.codex/` gates).
+    @Test func antigravityStripGateSkipsReviewForOtherAgents() {
+        for k: AgentKind in [.claudeCode, .cursor, .codex, .openCode, .grok] {
+            #expect(!SessionService.shouldStripAntigravityReviewClone(
+                agentKind: k, sessionKind: .review))
+        }
+    }
+
+    // MARK: - The launch-gate wiring itself (the round-2 RCE fix)
+
+    /// `prepareWorktreeForAgentLaunch` is the ONE gate every launch path routes
+    /// through (`launchAgent` on warm restart, `pasteDeferredLaunch`,
+    /// `createManagerTerminal`, the `send` RPC, handoff), so this covers the wiring
+    /// the predicate/helper tests above can't: delete the
+    /// `shouldStripAntigravityReviewClone` arm of `prepareWorktreeForAgentLaunch`
+    /// and only this test fails. `.antigravity` seeds no folder trust on any kind,
+    /// so the call touches zero global trust state — no `.review`-only framing
+    /// needed (unlike the Grok equivalent).
+    @Test func prepareStripsAgentsWhenGateFires() {
+        let clone = Self.makeTempDir(name: "prep-agy-review")
+        defer { try? FileManager.default.removeItem(atPath: clone) }
+        let agentsDir = (clone as NSString).appendingPathComponent(".agents")
+        try? FileManager.default.createDirectory(
+            atPath: agentsDir, withIntermediateDirectories: true)
+        try? "{\"hooks\":\"EVIL\"}".write(
+            toFile: (agentsDir as NSString).appendingPathComponent("hooks.json"),
+            atomically: true, encoding: .utf8)
+
+        SessionService.prepareWorktreeForAgentLaunch(
+            agentKind: .antigravity, sessionKind: .review, worktreePath: clone)
+
+        #expect(!FileManager.default.fileExists(atPath: agentsDir))
+    }
+
+    /// The gate is scoped: a `.work` Antigravity session is a normal working
+    /// clone, so `prepareWorktreeForAgentLaunch` leaves its `.agents/` in place.
+    @Test func prepareLeavesAgentsForNonReview() {
+        let clone = Self.makeTempDir(name: "prep-agy-work")
+        defer { try? FileManager.default.removeItem(atPath: clone) }
+        let agentsDir = (clone as NSString).appendingPathComponent(".agents")
+        try? FileManager.default.createDirectory(
+            atPath: agentsDir, withIntermediateDirectories: true)
+
+        SessionService.prepareWorktreeForAgentLaunch(
+            agentKind: .antigravity, sessionKind: .work, worktreePath: clone)
+
+        #expect(FileManager.default.fileExists(atPath: agentsDir))
     }
 }

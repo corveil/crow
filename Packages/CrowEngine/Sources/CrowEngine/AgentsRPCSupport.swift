@@ -162,17 +162,18 @@ public enum AgentsRPC {
 
     /// Reject pinning a role to an agent that cannot run that kind of session.
     ///
-    /// Today that is only review-on-Antigravity: `autoLaunchCommand(.review)`
-    /// returns nil for that harness, so the session would be created, persist
-    /// `antigravity`, and then simply never launch an agent — the same
-    /// "configured but unlaunchable" outcome `decodeAgentKind`'s registry gate
-    /// exists to prevent, just reached by a different route.
+    /// **No agent is role-incapable today** — review-on-Antigravity was the last
+    /// such case and its review dispatch landed in #902, so
+    /// `shouldRefuseReviewHandoff` is now `false` for every kind and this never
+    /// throws. It is retained as the coupling point that keeps `crow agents set`
+    /// in lockstep with `handoffAgent`: were a future harness to ship without
+    /// review dispatch, gating it in `shouldRefuseReviewHandoff` would refuse it
+    /// on both surfaces at once, preventing a "configured but unlaunchable"
+    /// outcome — the same failure `decodeAgentKind`'s registry gate prevents,
+    /// reached by a different route.
     ///
     /// Delegates to `SessionService.shouldRefuseReviewHandoff`, the predicate
-    /// `handoffAgent` already throws on, so the two surfaces cannot drift: it
-    /// would be incoherent for `crow handoff-agent --agent antigravity` to be
-    /// refused on a review session while `crow agents set --review antigravity`
-    /// quietly configured every future one.
+    /// `handoffAgent` already throws on, so the two surfaces cannot drift.
     ///
     /// Scope note: this validates only what the caller is *changing*, not the
     /// resolved outcome of the whole config. Rejecting on resolution would mean
@@ -181,10 +182,30 @@ public enum AgentsRPC {
     /// fail — including patches to unrelated roles. A default that resolves
     /// review to a review-incapable agent instead surfaces at launch time, where
     /// `SessionService` already writes an explanatory line into the terminal.
+    /// Public entry point (production callers). Delegates to the `internal`
+    /// `refuses:` overload with the real predicate, so the override seam stays out
+    /// of the module's public surface — the module never ships a public way to
+    /// skip a security gate (#902 review r6, Green 1).
     public static func validateRoleSupportsAgent(
         role: SessionKind, kind: AgentKind, label: String
     ) throws {
-        guard SessionService.shouldRefuseReviewHandoff(targetKind: kind, sessionKind: role) else {
+        try validateRoleSupportsAgent(role: role, kind: kind, label: label, refuses: nil)
+    }
+
+    /// `internal` seam for tests (#902 review r5 Green 2 / r6 Green 1): `refuses`
+    /// forces the refused branch so deleting the `throw` fails loudly. `nil` uses
+    /// the real predicate (resolved in the body, since `shouldRefuseReviewHandoff`
+    /// is `internal` and a `public` default-arg may only reference public symbols).
+    /// `refuses` is required (no default) so the 3-arg public call above stays
+    /// unambiguous; `@testable import CrowEngine` gives the tests access.
+    static func validateRoleSupportsAgent(
+        role: SessionKind, kind: AgentKind, label: String,
+        refuses: ((AgentKind, SessionKind) -> Bool)?
+    ) throws {
+        let refuse = refuses ?? {
+            SessionService.shouldRefuseReviewHandoff(targetKind: $0, sessionKind: $1)
+        }
+        guard refuse(kind, role) else {
             return
         }
         throw RPCError.invalidParams(

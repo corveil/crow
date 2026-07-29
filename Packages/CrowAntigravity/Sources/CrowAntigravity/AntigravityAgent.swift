@@ -9,11 +9,12 @@ import CrowCore
 /// Structurally a near-clone of `CursorAgent`: hooks are Claude-Code-style, so
 /// the `HookConfigWriter` / `StateSignalSource` pair does real work (not a
 /// `cwd`-scoped fallback); remote control is faked via `crow send` typing into
-/// the interactive TUI (no native RC protocol); `.review` is unsupported in
-/// Phase A (like Codex). What Antigravity *can't* do is self-host — the CLI is
-/// closed-source and Google-Sign-In/GCP-authed, so it runs only against Google's
-/// cloud models (Gemini 3 Pro default, Claude Sonnet 4.5). That fails Corveil's
-/// self-host axis and is a **permanent** gap, not a phase.
+/// the interactive TUI (no native RC protocol); `.review` dispatches the
+/// inlined `crow-review-pr` SKILL body via `-p` (like Cursor/Codex/OpenCode —
+/// #902). What Antigravity *can't* do is self-host — the CLI is closed-source
+/// and Google-Sign-In/GCP-authed, so it runs only against Google's cloud models
+/// (Gemini 3 Pro default, Claude Sonnet 4.5). That fails Corveil's self-host
+/// axis and is a **permanent** gap, not a phase.
 public struct AntigravityAgent: CodingAgent {
     public let kind: AgentKind = .antigravity
     public let displayName: String = "Antigravity"
@@ -84,12 +85,14 @@ public struct AntigravityAgent: CodingAgent {
             // no resume flag (a fresh work TUI launching bare is deliberate), no
             // RC flag (remote control is `crow send` into the TUI).
             return "\(agentPath)\(autoArgs)\n"
-        case .job:
-            // Unattended dispatch: feed the pre-written `.crow-job-prompt.md` as
-            // the initial prompt via `-p` on first launch. Crow runs `agy` inside
-            // a tmux window — a real PTY — so the non-TTY `-p` stdout-drop
-            // (headless *pipe* case, upstream FRs #119/#597) doesn't apply here;
-            // no PTY shim is needed on this path.
+        case .job, .review:
+            // Jobs and reviews share one dispatch shape (collapsed into a single
+            // branch so the two can't drift, mirroring Cursor/Grok/OpenCode): feed
+            // the pre-written prompt file (`.crow-job-prompt.md` /
+            // `.crow-review-prompt.md`) as the initial prompt via `-p` on first
+            // launch. Crow runs `agy` inside a tmux window — a real PTY — so the
+            // non-TTY `-p` stdout-drop (headless *pipe* case, upstream FRs
+            // #119/#597) doesn't apply here; no PTY shim is needed.
             //
             // On restart we resume with `-c` (continue most-recent conversation).
             // Caveat (documented Tier-2 gap): `-c` is machine-global "most recent"
@@ -97,22 +100,40 @@ public struct AntigravityAgent: CodingAgent {
             // so we can't capture a specific handle — in a per-worktree tmux
             // window the most-recent conversation is almost always this session's,
             // the same heuristic Cursor/OpenCode rely on.
+            //
+            // `.review` is dispatched via the inlined `crow-review-pr` SKILL body
+            // (Antigravity has no Crow slash-command engine, so
+            // `SessionService.buildReviewPrompt` hands it the self-contained brief).
+            // The inlined SKILL runs `gh pr review` itself, so the verdict path
+            // needs no extra plumbing.
+            //
+            // SECURITY (`.review` only): the review clone is an attacker-controlled
+            // `gh` checkout at the PR head. Antigravity seeds no folder trust and
+            // `agy` runs a committed `.agents/hooks.json` (and a Gemini-derived
+            // `.gemini/settings.json` `mcpServers`) with no approval gate, so —
+            // unlike Codex/Cursor, where trust-gating is a second layer — stripping
+            // that config is the *only* defense. It runs at clone creation
+            // (`prepareReviewClone`) AND on every launch path
+            // (`prepareWorktreeForAgentLaunch`), and covers the whole
+            // plausibly-discovered surface (`.agents/` + `.gemini/`), because the
+            // SKILL's `gh pr checkout` / a head-advancing re-review can restore a
+            // committed layer from the head between launches (#902 review Red).
+            // This launch-time strip assumes `agy` reads config *once at process
+            // start*, not per-event — an unverified premise (agy v1.1.7) tracked in
+            // the pinned-gaps table and the manual-pass checklist; if it re-reads
+            // mid-session, a restore between `gh pr checkout` and `Stop` would fire
+            // unmitigated.
             if !session.reviewPromptDispatched {
+                let promptFile = session.kind == .review
+                    ? ".crow-review-prompt.md"
+                    : ".crow-job-prompt.md"
                 let promptPath = (worktreePath as NSString)
-                    .appendingPathComponent(".crow-job-prompt.md")
+                    .appendingPathComponent(promptFile)
                 // Quote the path so a devRoot containing spaces doesn't split
                 // `cat`'s argv and resolve the prompt to empty.
                 return "\(agentPath)\(autoArgs) -p \"$(cat \(AntigravityLaunchArgs.shellQuote(promptPath)))\"\n"
             }
             return "\(agentPath)\(autoArgs) -c\n"
-        case .review:
-            // Review-on-Antigravity is unsupported in Phase A: the
-            // `/crow-review-pr` flow isn't wired for this harness yet. Returning
-            // nil makes Crow log the skip rather than dispatch a review it can't
-            // satisfy (no posted-verdict path). A documented Tier-2 gap — unlike
-            // Codex/Cursor/OpenCode, which inline the skill body, Antigravity has
-            // no review dispatch until a follow-up wires one.
-            return nil
         case .manager:
             // Manager sessions never auto-launch an agent — Crow drives them
             // externally. Returning nil is the contract, not a gap.

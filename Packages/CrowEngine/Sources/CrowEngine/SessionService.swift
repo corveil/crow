@@ -877,15 +877,21 @@ public final class SessionService {
     ///     `.cursor/`, `.claude/settings{,.local}.json`, repo-root `.mcp.json`)
     ///     BEFORE any hook rewrite, so a hostile hook restored by the review
     ///     skill's `gh pr checkout` can't fire once the clone is (cascade-)trusted.
-    ///     Gated to Grok + `.review` via `shouldStripGrokReviewClone`.
+    ///     Gated to Grok + `.review` via `shouldStripGrokReviewClone`. Same for an
+    ///     Antigravity `.review` clone's `.agents/` (`shouldStripAntigravityReviewClone`,
+    ///     #902 review Red): `agy` runs committed `.agents/hooks.json` with **no**
+    ///     approval gate and Antigravity seeds no trust, so the strip is the *only*
+    ///     defense — it MUST re-run here, not just at creation, because the review
+    ///     skill's `gh pr checkout` (or a head-advancing re-review) restores the
+    ///     attacker's hooks from the PR head.
     ///  2. **Seed** the agent's folder trust (Claude/Codex/Grok, never `.review`),
     ///     gated via `shouldSeedFolderTrust`.
     ///
     /// Both are no-ops for the agents/kinds that don't need them, so this is safe
     /// to call from every launch path unconditionally. **The call sites of this
-    /// symbol ARE the answer to "how many Grok launch paths open a review clone"**
-    /// — `rg prepareWorktreeForAgentLaunch`, never a hand-maintained count (which
-    /// went stale four rounds running). Today: `pasteDeferredLaunch`,
+    /// symbol ARE the answer to "how many Grok/Antigravity launch paths open a
+    /// review clone"** — `rg prepareWorktreeForAgentLaunch`, never a hand-maintained
+    /// count (which went stale four rounds running). Today: `pasteDeferredLaunch`,
     /// `launchAgent`, `handoffAgent`, `createManagerTerminal` (seed only — Manager
     /// is never `.review`), and the `send` RPC (`EngineRouter`). `prepareReviewClone`
     /// strips at *clone-creation* time and deliberately does NOT go through here:
@@ -894,6 +900,9 @@ public final class SessionService {
         agentKind: AgentKind, sessionKind: SessionKind, worktreePath: String) {
         if shouldStripGrokReviewClone(agentKind: agentKind, sessionKind: sessionKind) {
             stripGrokConfigFromReviewClone(clonePath: worktreePath)
+        }
+        if shouldStripAntigravityReviewClone(agentKind: agentKind, sessionKind: sessionKind) {
+            stripAntigravityConfigFromReviewClone(clonePath: worktreePath)
         }
         seedTrustIfNeeded(
             agentKind: agentKind, sessionKind: sessionKind, worktreePath: worktreePath)
@@ -1334,19 +1343,15 @@ public final class SessionService {
         guard target.findBinary() != nil else {
             throw AgentHandoffError.agentBinaryMissing(targetKind.rawValue)
         }
-        // Refuse handing a *review* session off to Antigravity. Review is
-        // unsupported on this Tier-2 harness (`autoLaunchCommand(.review)` → nil),
-        // and the handoff path launches via `AntigravityLauncher.launchCommand`
-        // (`agy -p …`) regardless — which would start `agy` inside the review
-        // clone. A hostile PR head can commit `.agents/hooks.json` with arbitrary
-        // command hooks that Antigravity runs with **no approval gate**, and
-        // Crow's git-tracked guard then declines to overwrite that committed file
-        // (leaving the attacker's hooks live) — i.e. RCE on the reviewer's
-        // machine. Unlike Cursor/Codex (which support review and strip
-        // `.cursor/`/`.codex/` + trust-gate), Antigravity has no legitimate
-        // review launch, so refusing the handoff outright closes the vector at
-        // its source rather than relying on a strip. `prepareReviewClone` also
-        // strips `.agents/` for Antigravity review clones as defense-in-depth.
+        // Review-handoff gate. `shouldRefuseReviewHandoff` is now `false` for
+        // every registered agent (Antigravity's review dispatch landed in #902),
+        // so this never throws today — it's retained as the single place a future
+        // review-incapable harness would be refused, kept in lockstep with
+        // `AgentsRPCSupport.validateRoleSupportsAgent`. Handing a review session
+        // off to Antigravity is safe because the shared launch gate below
+        // (`prepareWorktreeForAgentLaunch`, which this handoff routes through)
+        // strips the clone's attacker-committed `.agents/` before `agy` launches —
+        // there is no bespoke Antigravity handoff arm.
         guard !Self.shouldRefuseReviewHandoff(targetKind: targetKind, sessionKind: session.kind) else {
             throw AgentHandoffError.reviewNotSupported(targetKind.rawValue)
         }
@@ -1389,7 +1394,10 @@ public final class SessionService {
         // `.claude/settings{,.local}.json`, `.cursor/`, repo-root `.mcp.json`) that
         // `prepareReviewClone` only stripped if Grok was the *creation-time* review
         // agent — a handoff flips a review created under another agent onto a clone
-        // never stripped for Grok. Seed is a no-op for `.review` / trustless agents.
+        // never stripped for Grok. Same for an Antigravity `.review` handoff — the
+        // gate strips `.agents/` (#902 review Red), which is why this PR needs no
+        // bespoke Antigravity handoff arm. Seed is a no-op for `.review` / trustless
+        // agents.
         Self.prepareWorktreeForAgentLaunch(
             agentKind: target.kind, sessionKind: session.kind,
             worktreePath: worktree.worktreePath)
@@ -2860,18 +2868,85 @@ public final class SessionService {
         targetKind == .cursor && sessionKind == .review
     }
 
-    /// Gate for refusing a review-session handoff to an agent that can't perform
-    /// reviews. Today only Antigravity: its `.review` is unsupported in Phase A
-    /// (`autoLaunchCommand(.review)` → nil) AND it has no `.agents/` strip / trust
-    /// gate, so a review handoff would launch `agy` in an attacker-controlled
-    /// clone and run committed `.agents/hooks.json` unsandboxed. Extracted as a
-    /// pure predicate so the security gate is unit-testable without the full
+    /// Gate for refusing a review-session handoff (and `crow agents set
+    /// --review <kind>`) to an agent that can't perform reviews. **No agent is
+    /// review-incapable today** — Antigravity was the last one and its review
+    /// dispatch landed in #902 (`autoLaunchCommand(.review)` inlines the SKILL
+    /// body; `prepareReviewClone` **and every launch path**
+    /// (`prepareWorktreeForAgentLaunch`) strip its `.agents/`, not just at
+    /// creation — a warm `crowd` restart / `crow send "agy -c"` reopens the clone
+    /// through neither creation nor a handoff arm). The predicate is retained as
+    /// the single coupling point both surfaces share (`handoffAgent` and
+    /// `AgentsRPCSupport.validateRoleSupportsAgent`) so a future review-incapable
+    /// harness can be gated in one place without the two drifting. Extracted as a
+    /// pure predicate so the gate stays unit-testable without the full
     /// `handoffAgent` machinery (mirrors `shouldStripCursorReviewCloneOnHandoff`).
-    /// Codex/Cursor/OpenCode are deliberately excluded — they support review
-    /// handoff with their own strip + trust protections.
     nonisolated static func shouldRefuseReviewHandoff(
         targetKind: AgentKind, sessionKind: SessionKind) -> Bool {
-        targetKind == .antigravity && sessionKind == .review
+        // Intentionally always `false`: every registered harness now supports
+        // review. Add a `targetKind == X && sessionKind == .review` clause here
+        // if a future agent ships without review dispatch.
+        false
+    }
+
+    /// Whether Antigravity is about to open a `.review` clone and must therefore
+    /// strip its committed `.agents/` first. This is only the pure *predicate*;
+    /// the anti-drift guarantee comes from routing — every launch path calls
+    /// `prepareWorktreeForAgentLaunch` (grep its call sites), and creation-time
+    /// `prepareReviewClone` strips directly — not from any enumeration here (#902
+    /// review, Red; mirrors `shouldStripGrokReviewClone`). Only a `.review`
+    /// session on Antigravity strips: `.work`/`.job` branch off a trusted base,
+    /// and a `.review` on any other agent must not strip a surface that agent
+    /// doesn't load. Antigravity has no trust gate (`agy` runs `.agents/hooks.json`
+    /// unapproved and seeds no folder trust), so unlike Cursor — whose bespoke
+    /// handoff strip is defense-in-depth behind its `.review` trust carve-out —
+    /// the strip is Antigravity's *only* defense and must re-fire on every launch,
+    /// which is why this routes through the shared gate rather than a handoff arm.
+    nonisolated static func shouldStripAntigravityReviewClone(
+        agentKind: AgentKind, sessionKind: SessionKind) -> Bool {
+        agentKind == .antigravity && sessionKind == .review
+    }
+
+    /// Neutralize a review clone's committed Antigravity config layers by removing
+    /// the working-tree config dirs `agy` may discover. A hostile PR head can
+    /// commit `.agents/hooks.json` with arbitrary command hooks that `agy` runs
+    /// with no approval gate, so once Antigravity loads the clone as its project
+    /// root the hooks fire unsandboxed on the reviewer's machine. Because this is
+    /// Antigravity's **only** defense (no trust gate behind it), it strips the
+    /// whole plausibly-discovered surface rather than the native dir alone —
+    /// mirroring `stripGrokConfigFromReviewClone`, which strips `.grok/` **plus**
+    /// `.cursor/`/`.claude/`/`.mcp.json` for the same reason (#861 r12, Red):
+    ///  - `.agents/` — Antigravity's native project hooks (and any project-scope
+    ///    config Crow's deferred MCP bridge would place there, modeled on
+    ///    `CursorMCPConfigWriter`'s `.cursor/mcp.json`).
+    ///  - `.gemini/` — `agy` is Gemini-derived (`GEMINI_CONFIG_HOME`, default
+    ///    `~/.gemini/config`, `LaunchScaffold`), so a project-scope
+    ///    `.gemini/settings.json` can carry `mcpServers` (a `{command,args}` server
+    ///    spawned at startup) or an `always-proceed` approval mode that would
+    ///    disarm the gate the review otherwise leans on. Stripped **defensively**
+    ///    pending the v1.1.7 probe (#902 review r7, Red): removing a path `agy`
+    ///    turns out not to read costs nothing on a throwaway review clone, and a
+    ///    miss here is unsandboxed RCE with no second layer.
+    /// Working-tree removal only (the git index entry survives), same as
+    /// `stripCursorConfigFromReviewClone` — so a *committed* `.agents/hooks.json`
+    /// still trips `AntigravityHookConfigWriter`'s git-tracked guard and Crow's
+    /// own state-detection hooks aren't written for that clone; that is expected,
+    /// not a regression. Shared by `prepareReviewClone` (creation-time) and
+    /// `prepareWorktreeForAgentLaunch` (every launch path — where the review
+    /// skill's `gh pr checkout` may have restored a committed layer from the head)
+    /// so the gate can't drift. Idempotent; each layer no-ops when absent.
+    /// Delegates to `removeReviewCloneConfig` so a genuine removal failure is
+    /// **audible** (`CrowLog.error`, not `info`): the strip is Antigravity's only
+    /// defense, so a swallowed failure would leave live attacker config in place
+    /// with nothing to show for it (#902 review r3, Yellow 1).
+    nonisolated static func stripAntigravityConfigFromReviewClone(clonePath: String) {
+        let base = clonePath as NSString
+        removeReviewCloneConfig(
+            base.appendingPathComponent(".agents"),
+            label: ".agents/", clonePath: clonePath)
+        removeReviewCloneConfig(
+            base.appendingPathComponent(".gemini"),
+            label: ".gemini/", clonePath: clonePath)
     }
 
     /// Neutralize a review clone's committed Cursor config layer by removing the
@@ -3151,6 +3226,23 @@ public final class SessionService {
                 _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "checkout", "--", path])
             }
         }
+        // Same restore-before-pull for Antigravity reviews (#902 review): the
+        // strip below applies as an unstaged deletion of tracked files.
+        // A fast-forward `git pull` silently restores the deleted paths (verified),
+        // but a non-fast-forward merge that touches them refuses ("local changes
+        // would be overwritten"); since the pull is `try?`-swallowed, that would
+        // leave the clone at the stale head while `.crow-review-prompt.md` is
+        // rewritten with the current PR URL. Restore both stripped layers
+        // (`.agents/` **and** `.gemini/`, #902 review r7) first, for parity with the
+        // `.codex`/`.cursor`/`.grok` arms and clean re-prep. This is re-prep
+        // hygiene, NOT the security boundary: the load-bearing defense is the strip
+        // in `prepareWorktreeForAgentLaunch`, which re-fires on every launch after
+        // the SKILL's `gh pr checkout` may have restored a committed layer.
+        if reviewAgentKind == .antigravity {
+            for path in [".agents", ".gemini"] {
+                _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "checkout", "--", path])
+            }
+        }
         _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "fetch", "origin", headBranch])
         _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "checkout", headBranch])
         _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "pull", "origin", headBranch])
@@ -3175,19 +3267,21 @@ public final class SessionService {
         if reviewAgentKind == .codex {
             try? fm.removeItem(atPath: (clonePath as NSString).appendingPathComponent(".codex"))
         }
-        // Defense-in-depth for Antigravity review clones (#862 review): a hostile
-        // PR head can commit `.agents/hooks.json` with arbitrary command hooks
-        // that `agy` runs with no approval gate. Antigravity review handoff is
-        // refused outright (`shouldRefuseReviewHandoff`), so this normally guards
-        // a path that can't be reached today — but if any future code launches
-        // `agy` in a review clone (e.g. Antigravity becoming a valid review
-        // agent), the committed `.agents/` is already neutralized. Gated to
-        // Antigravity reviews for the same reason as `.codex`/`.cursor`: only
-        // Antigravity loads `.agents/`, so stripping it for another agent's
-        // review would just hide the files a hostile PR ships. Re-run on every
-        // prep so a `git pull` can't reintroduce it.
+        // Defense-in-depth for Antigravity review clones (#862 review, #902): a
+        // hostile PR head can commit `.agents/hooks.json` with arbitrary command
+        // hooks that `agy` runs with no approval gate. Now that Antigravity
+        // supports review (`autoLaunchCommand(.review)` dispatches the inlined
+        // SKILL), this strip is load-bearing — and because `agy` has no trust
+        // gate, `stripAntigravityConfigFromReviewClone` is also wired into
+        // `prepareWorktreeForAgentLaunch` (every launch path), so the review
+        // skill's `gh pr checkout` / a head-advancing re-review can't restore the
+        // hooks for the next `agy` launch. Gated to Antigravity reviews for the
+        // same reason as `.codex`/`.cursor`: only Antigravity loads `.agents/`, so
+        // stripping it for another agent's review would just hide the files a
+        // hostile PR ships. Re-run on every prep so a `git pull` can't
+        // reintroduce it.
         if reviewAgentKind == .antigravity {
-            try? fm.removeItem(atPath: (clonePath as NSString).appendingPathComponent(".agents"))
+            Self.stripAntigravityConfigFromReviewClone(clonePath: clonePath)
         }
         // Defense-in-depth for Grok reviews (#859, extended #861 rounds 2-3, r12):
         // Grok discovers & merges project config from `.grok/hooks/*.json`,
@@ -3525,15 +3619,16 @@ public final class SessionService {
     /// `ProcessInfo.processInfo.arguments[0]`).
     nonisolated static func buildReviewPrompt(prURL: String, prTitle: String, repoSlug: String, prNumber: Int, agentKind: AgentKind) -> String {
         switch agentKind {
-        case .cursor, .openCode, .codex, .grok:
-            // Cursor, OpenCode, Codex, and Grok all lack a Crow slash-command
-            // engine, so they get the whole crow-review-pr SKILL body inlined
-            // into the prompt file (a self-contained brief). Without this, the
-            // review would receive a bare `/crow-review-pr <URL>` line it can't
-            // resolve, never run `gh pr review`, and so never satisfy the review-
-            // completion contract — the loop #830 set out to remove (#843 review
-            // round 2 for Codex; #861 review round 5 for Grok). `agentKind` is
-            // threaded through so the posted review footer names the right agent.
+        case .cursor, .openCode, .codex, .grok, .antigravity:
+            // Cursor, OpenCode, Codex, Grok, and Antigravity all lack a Crow
+            // slash-command engine, so they get the whole crow-review-pr SKILL
+            // body inlined into the prompt file (a self-contained brief). Without
+            // this, the review would receive a bare `/crow-review-pr <URL>` line
+            // it can't resolve, never run `gh pr review`, and so never satisfy the
+            // review-completion contract — the loop #830 set out to remove (#843
+            // review round 2 for Codex; #861 review round 5 for Grok; Antigravity
+            // wired the same way, #902). `agentKind` is threaded through so the
+            // posted review footer names the right agent.
             return cursorReviewPrompt(
                 skillBody: Scaffolder.bundledReviewSkill(),
                 prURL: prURL,

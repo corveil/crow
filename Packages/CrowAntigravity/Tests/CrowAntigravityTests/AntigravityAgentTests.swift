@@ -75,12 +75,41 @@ struct AntigravityAgentTests {
         #expect(cmd?.hasSuffix(" -c\n") == true)
     }
 
-    @Test func reviewSessionUnsupportedPhaseA() {
+    @Test func reviewFirstLaunchInjectsPromptViaDashP() {
+        // #902: review now dispatches the inlined SKILL body via
+        // `-p "$(cat '…/.crow-review-prompt.md')"`, same shape as `.job`.
         let session = Session(name: "review", kind: .review, agentKind: .antigravity)
         let cmd = agent.autoLaunchCommand(
             session: session, worktreePath: "/tmp/wt",
             remoteControlEnabled: false, autoPermissionMode: false, telemetryPort: nil)
-        #expect(cmd == nil)
+        #expect(cmd != nil)
+        #expect(cmd?.contains(" -p \"$(cat ") == true)
+        #expect(cmd?.contains(".crow-review-prompt.md") == true)
+        // NOT the job prompt file — review reads its own.
+        #expect(cmd?.contains(".crow-job-prompt.md") == false)
+        #expect(cmd?.hasSuffix("\n") == true)
+    }
+
+    @Test func reviewFirstLaunchQuotesPromptPathWithSpaces() {
+        // A worktree under `/Users/x/My Projects/…` must not split `cat`'s argv:
+        // the prompt path is single-quoted inside the `$(cat …)` substitution.
+        let session = Session(name: "review", kind: .review, agentKind: .antigravity)
+        let cmd = agent.autoLaunchCommand(
+            session: session, worktreePath: "/Users/x/My Projects/wt",
+            remoteControlEnabled: false, autoPermissionMode: false, telemetryPort: nil)
+        #expect(cmd?.contains("-p \"$(cat '/Users/x/My Projects/wt/.crow-review-prompt.md')\"") == true)
+    }
+
+    @Test func reviewSubsequentLaunchResumesWithDashC() {
+        // Restart mid-review resumes with `-c` (continue most-recent) rather than
+        // re-running the whole review prompt.
+        var session = Session(name: "review", kind: .review, agentKind: .antigravity)
+        session.reviewPromptDispatched = true
+        let cmd = agent.autoLaunchCommand(
+            session: session, worktreePath: "/tmp/wt",
+            remoteControlEnabled: false, autoPermissionMode: false, telemetryPort: nil)
+        #expect(cmd?.contains(".crow-review-prompt.md") == false)
+        #expect(cmd?.hasSuffix(" -c\n") == true)
     }
 
     @Test func managerSessionUnsupported() {

@@ -34,8 +34,8 @@ capabilities, update this table in the same PR.
 | Hook → session scope | ✅ per-session UUID | ✅ per-session UUID (#829) | ❌ `cwd` match (per-worktree UUID deferred) | ❌ `cwd` match | ✅ per-session UUID | ✅ per-session UUID |
 | Hook async delivery | ✅ `PostToolUse*` async | ⚠️ declared, timing unverified | ❌ sync-only (v0.141.0) | ⚠️ names verified, timing unverified | ❌ sync-only (async support unverified) | ❌ no `async` in Antigravity's schema — all sync |
 | MCP (e.g. Jira) | ✅ `jira` MCP server via `~/.claude.json` | ✅ `jira` bridged into `~/.cursor/mcp.json` (#829) | ✅ mirrored from `~/.claude.json` into `config.toml` | ❌ falls back to `acli` | ❌ falls back to `acli` (Jira MCP bridge deferred; Grok *does* read Claude/Cursor MCP configs) | ❌ falls back to `acli` (file bridge deferred) |
-| Review (`/crow-review-pr`) | ✅ slash-command | ✅ inlined skill body | ✅ inlined skill body | ✅ inlined skill body | ✅ inlined skill body (human-gated) | ❌ unsupported in Phase A (`autoLaunchCommand(.review)` → nil) |
-| Initial-prompt injection | ✅ `$(cat …-prompt.md)` + deferred paste | ✅ `$(cat …)` job/review; handoff launcher auto-wired (#829); `.work` bare | ✅ `.job` + `.review` (`$(cat …-prompt.md)`) | ✅ run-then-`--continue` | ✅ run-then-`-c` (`.job`/`.review`); `.work` bare | ✅ `-p "$(cat …-job-prompt.md)"` (`.job`); `.work` bare |
+| Review (`/crow-review-pr`) | ✅ slash-command | ✅ inlined skill body | ✅ inlined skill body | ✅ inlined skill body | ✅ inlined skill body (human-gated) | ✅ inlined skill body (#902) |
+| Initial-prompt injection | ✅ `$(cat …-prompt.md)` + deferred paste | ✅ `$(cat …)` job/review; handoff launcher auto-wired (#829); `.work` bare | ✅ `.job` + `.review` (`$(cat …-prompt.md)`) | ✅ run-then-`--continue` | ✅ run-then-`-c` (`.job`/`.review`); `.work` bare | ✅ `-p "$(cat …-{job,review}-prompt.md)"` (`.job`/`.review`, #902); `.work` bare |
 | Gateway env / trust seed / telemetry | ✅ Claude special-case | ⚠️ trust seed only (`--trust`, per-launch, except `.review`) | ⚠️ trust seed only (`[projects."…"]` in `config.toml`) | ❌ | ⚠️ trust seed only (`[folders."…"]` in `~/.grok/trusted_folders.toml`) | ❌ |
 | Rename passthrough (`/rename`) | ✅ | ✅ | ✅ | ✅ | ✅ (alias `/title`) | ❌ unverified on v1.1.7 (opt-out `nil`) |
 | Self-host / local models | provider-dependent | provider-dependent | provider-dependent | provider-dependent | ✅ `config.toml` `[model.*]` → any OpenAI/Anthropic-compatible or local (Ollama) endpoint | ❌ **permanent** — closed-source, Google-Sign-In/GCP-locked (Gemini 3 Pro / Claude Sonnet 4.5 only) |
@@ -394,8 +394,9 @@ share the host's global config and are disambiguated by `cwd`. See
 
 - **Claude** gets the terse slash-command form `/crow-review-pr <URL>`; the
   bundled `.claude/skills/crow-review-pr/SKILL.md` supplies the instructions.
-- **Cursor & OpenCode** have no slash-command engine, so Crow **inlines the whole
-  skill body** into the prompt file (`cursorReviewPrompt`, #431).
+- **Cursor, OpenCode & Antigravity** have no slash-command engine, so Crow
+  **inlines the whole skill body** into the prompt file (`cursorReviewPrompt`,
+  #431; Antigravity wired the same way, #902).
 - **Codex** inlines the skill body too (`buildReviewPrompt` `.codex` arm, #830):
   the native `codex review` subcommand only prints local findings and posts no
   GitHub verdict, so it can't satisfy `decideReviewCompletions`. Runs
@@ -428,6 +429,9 @@ harness (CROW-439) — it's gated on the prompt-file convention, not on agent ki
   session in the TUI with a fresh stdin. Uses `--prompt-file` (not `-p "$(cat …)"`)
   so a large inlined review-skill body never becomes a giant argv or rides a
   subshell (#861). `.job`/`.review` only; `.work` launches `grok` bare.
+- **Antigravity:** `agy -p "$(cat …)"` for job/review (path shell-quoted); the
+  tmux PTY means the non-TTY `-p` stdout-drop doesn't bite. Restart resumes with
+  `-c`. `.work` launches `agy` bare (#902).
 
 ### Gateway env / trust seed / telemetry
 
@@ -504,10 +508,34 @@ it through the same `CodingAgent` protocol as the others — its adapter
 lifecycle events (JSON on stdin, JSON verdict on stdout) so the
 `HookConfigWriter`/`StateSignalSource` pair does real work; per-worktree
 `.agents/hooks.json` with the session UUID baked in (per-session scope, not
-`cwd`); remote control faked via `crow send`; `.review` unsupported in Phase A
-(no review dispatch — unlike Codex/Cursor/OpenCode, which inline the skill body).
+`cwd`); remote control faked via `crow send`; `.review` dispatches the inlined
+`crow-review-pr` SKILL body via `-p` (#902), like Codex/Cursor/OpenCode — its
+review clone's committed config (`.agents/` **and**, defensively, the
+Gemini-derived `.gemini/` — #902 r7) is stripped at creation
+(`prepareReviewClone`) **and on every launch path** (`prepareWorktreeForAgentLaunch`
+— the one gate `launchAgent`, `pasteDeferredLaunch`, `createManagerTerminal`, the
+`send` RPC, and handoff route through), so a hostile PR head's hooks/MCP servers
+can't fire when `agy` loads the clone. The launch-path strip is load-bearing, not
+redundant: `agy` has no trust gate behind it, and a warm `crowd` restart or `crow
+send "agy -c"` reopens the clone after the review skill's `gh pr checkout` may have
+restored a committed layer from the head (#902 review r2/r3). Because the strip is
+the *only* defense, it removes the whole plausibly-discovered surface rather than
+the native dir alone — the same posture `stripGrokConfigFromReviewClone` takes.
 It ships **Tier-2** ([ADR 0015](adr/0015-harness-capability-tiers.md))
-with honest, documented gaps (#860).
+with honest, documented gaps (#860). **Review-approval posture is unverified**
+(#902 end-to-end pass pending): `agy` review inherits `.job`'s launch shape but
+has no bounded auto-permission flag (`autoPermissionSuffix` is `""` on v1.1.7)
+and no confirmed non-interactive posture, so — unlike `.job` — a review that
+stalls on an approval gate would leave the Reviews board waiting with no signal.
+Tracked in the auto-permission pinned-gaps row below; re-check on the manual pass.
+**Review-on-Antigravity is opt-in and experimental**: it is never a default — it
+requires an explicit `crow agents set --review antigravity` (or Settings → Agents
+→ Review = Antigravity) *and* `agy` on `PATH`. Two premises behind its only
+defense remain unverified on v1.1.7 — the strip-list exhaustiveness and whether
+`agy` re-reads config per-event (the in-session restore window). Both are pinned
+below and the **manual pass that confirms them is a precondition for treating the
+capability as production-ready**, not just for promoting Antigravity out of
+Tier-2. Until then it ships as an experimental opt-in on a Tier-2 harness.
 
 **Hooks are its single strongest point — but the schema is Antigravity's own,
 not Claude's.** Verified against [`antigravity.google/docs/hooks`](https://antigravity.google/docs/hooks):
@@ -593,6 +621,8 @@ against current upstream CLIs.
 | Antigravity structured-stdout (would promote toward first-class parity) | upstream FRs **#119/#597** (`--output-format stream-json`), **#31** (ACP) | `AntigravitySignalSource` | 2026-07-26 — hooks are the only transport until either lands |
 | Antigravity bounded auto-permission has no verified interactive launch flag | `agy` **v1.1.7**; headless `-p` ignores `permissions.allow` (issue #548) | `AntigravityLaunchArgs.autoPermissionSuffix` | 2026-07-26 |
 | Antigravity official-installer provenance (supply-chain gate) unconfirmed | `google-antigravity` org `is_verified: false`; pin `antigravity.google` | `AntigravityAgent.fallbackCandidates` | 2026-07-26 — confirm before promoting out of Tier-2 |
+| Antigravity review-clone strip list exhaustiveness: is any project-scope config `agy` reads **outside** `.agents/` + `.gemini/` still uncovered? | `agy` **v1.1.7**; Crow's MCP bridge is deferred (no writer to confirm the read path), and `AntigravityLaunchArgs` notes approval posture is governed by `settings.json` modes | `stripAntigravityConfigFromReviewClone` | 2026-07-28 (#902 r7) — the strip now removes `.agents/` **and** `.gemini/` **defensively** (a project `.gemini/settings.json` could carry `mcpServers`/`always-proceed`; `GEMINI_CONFIG_HOME` default `~/.gemini/config` is only the *user*-scope home). So the question is no longer "is the strip sufficient" but "is the strip **list exhaustive**" — confirm no other project-scope surface on the manual pass before promoting out of Tier-2 |
+| Antigravity hook re-read timing: does `agy` read `.agents/hooks.json` **once at process start**, or per-event? | `agy` **v1.1.7** — unverified; assumed start-only | `prepareWorktreeForAgentLaunch` (launch-time strip) | 2026-07-28 (#902) — the launch-time strip mitigates a hook restored *between* launches. If `agy` re-reads per-event, a mid-session restore (SKILL's `gh pr checkout` fast-forwards → silently restores `.agents/`) would fire unmitigated, since no strip re-runs mid-session and there is no trust gate behind it. Confirm on the manual pass before promoting out of Tier-2 |
 | **Entire Grok flag set** — hooks event names, `-p`/`--single`, `-c`/`-r`, `--allow`/`--deny`, `--permission-mode`, `--trust`, `/rename` | `xai-org/grok-build` **@ 2026-07-25** (periodic mirror of xAI's monorepo, **PRs closed** → churn likely) | `GrokAgent` / `GrokLaunchArgs` / `GrokHookConfigWriter` / `GrokSignalSource` | 2026-07-26 — verified against repo source (`crates/codegen/xai-grok-*`), not blog posts |
 | Grok `grok` binary collides with community `superagent-ai/grok-cli` | **Identity probe** at registration (`grok --help`/`--version` vs grok-build flag markers) greys out the foreign `grok`; explicit `defaults.binaries.grok` pin bypasses it. Decision is pure `AgentDiscovery.evaluate`; probe markers (`--prompt-file`, `--prompt-json`, `--permission-mode`, `--always-approve`) are the same upstream flag set as the row above — re-verify together | `GrokAgent.identityMarkers` / `verifyBinaryIdentity` · `AgentDiscovery.evaluate` | 2026-07-26 (CROW-911) |
 | Grok **`--permission-mode auto` now exists** — the ticket's pinned probe (#859) reported it absent; current docs show `grok --permission-mode auto`. Bounded `.job` posture stays `--permission-mode auto` + a minimal `--deny` backstop (never `--yolo`) regardless | Grok mirror **@ 2026-07-25** | `GrokLaunchArgs.autoPermissionSuffix` | 2026-07-26 |
