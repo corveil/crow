@@ -306,24 +306,25 @@ import Testing
             "the board-empty-hint CSS rule is dead once the hint is gone")
     }
 
-    /// CROW-913: the Select-sessions toggle moved out of `sidebarToolsStack`
-    /// (Notifications + Settings only now) into `navPillRow` row 1, beside the
-    /// Scorecard pill, as a `.nav-select` icon button. Pin the move so the toggle
-    /// can't drift back into the tools stack, and pin the now-dead
-    /// `.tk-tool.nav-selecting` rule out of app.css — after the move only
-    /// `.nav-select` and `.action-btn` ever take `nav-selecting`.
-    @Test func selectToggleLivesInNavRowNotTheToolsStack() throws {
+    /// CROW-917: the Select-sessions toggle lives in the far-right icon column
+    /// (`sidebarIconColumn`, stacked under bell/gear/+), NOT in the left stack
+    /// (`sidebarLeftStack`, which holds the Tickets card + nav rows). Pin the
+    /// placement so the toggle can't drift into the left stack, and keep the
+    /// now-dead `.tk-tool.nav-selecting` rule out of app.css — only `.nav-select`
+    /// and `.action-btn` ever take `nav-selecting`. (Supersedes CROW-913's
+    /// nav-row-vs-tools-stack pinning, which this PR reverses.)
+    @Test func selectToggleLivesInIconColumnNotTheLeftStack() throws {
         let js = try Self.webAsset("app.js")
         // Anchor on the behaviour (selectionMode), not the icon name: a Select
-        // toggle re-added to the tools stack with any glyph should still fail.
+        // toggle re-added to the left stack with any glyph should still fail.
         #expect(
-            try !Self.stripComments(String(Self.functionBody("sidebarToolsStack", in: js)))
+            try !Self.stripComments(String(Self.functionBody("sidebarLeftStack", in: js)))
                 .contains("selectionMode"),
-            "the Select toggle's selection logic must not live in the sidebar tools stack (CROW-913)")
-        let navRow = try Self.functionBody("navPillRow", in: js)
+            "the Select toggle's selection logic must not live in the left sidebar stack (CROW-917)")
+        let iconCol = try Self.functionBody("sidebarIconColumn", in: js)
         #expect(
-            navRow.contains("'nav-select'") && navRow.contains("selectionMode"),
-            "navPillRow must render the Select toggle (its selectionMode logic) beside Scorecard")
+            iconCol.contains("'nav-select'") && iconCol.contains("selectionMode"),
+            "sidebarIconColumn must render the Select toggle (its selectionMode logic) in the icon column")
         let css = try Self.webAsset("app.css")
         #expect(
             !css.contains(".tk-tool.nav-selecting"),
@@ -337,19 +338,48 @@ import Testing
             "the relocated Select toggle needs its .nav-select styles")
     }
 
-    /// CROW-913 ask #2: the ticket box is capped compact. The width churned every
-    /// round (92 → self-healing range → 160 → content-sized), so pin the mechanism
-    /// that holds it: content-sized (`width: max-content`) with a 160px ceiling, kept
-    /// narrow by a TWO-column counts grid (max-content is two cells wide, ~91px, not
-    /// the five-cell ~160px row). The two-column grid is also what makes the card's
-    /// height count-invariant, so it's load-bearing, not cosmetic.
-    @Test func ticketBoxIsCompactAndContentSized() throws {
+    /// CROW-917: two layout decisions with no other pin, both verified to regress
+    /// silently (deleting either leaves every suite green). The right column's four
+    /// `flex:1` icons divide the left column's height, so a short Manager-less /
+    /// cold-start column would push them under the WCAG 2.2 §2.5.8 target-size
+    /// minimum without the `min-height` floor a prior review round mandated; and
+    /// relocating the new-manager `"+"` into that column (out of the nav rows) is
+    /// half this PR's purpose, yet the Select pin above only anchors on `.nav-select`.
+    @Test func iconColumnHasWcagFloorAndHoldsTheNewManagerButton() throws {
+        // stripComments the CSS: the floor's value is also named in the rule's doc
+        // comment, so a bare whole-file `contains` false-passes off the prose once
+        // the declaration itself is deleted (caught by mutation-testing this pin).
+        let css = Self.stripComments(try Self.webAsset("app.css"))
+        #expect(
+            css.contains("min-height: 24px"),
+            "the right column's icon buttons need the 24px WCAG 2.5.8 target-size floor (CROW-917 review)")
+        // Pin the append, not the `el('button', 'nav-plus', …)` construction: the
+        // regression the review names is the "+" being built but not rendered, so a
+        // `contains("'nav-plus'")` would miss a dropped appendChild (also mutation-checked).
+        let js = try Self.webAsset("app.js")
+        let iconCol = try Self.functionBody("sidebarIconColumn", in: js)
+        #expect(
+            iconCol.contains("col.appendChild(plus)"),
+            "the new-manager \"+\" must be appended to the icon column, not the nav rows (CROW-917)")
+    }
+
+    /// CROW-917: the ticket box spans the full width of the left column and is
+    /// only ~2 button-rows tall, so it lines up with the Notifications+Settings
+    /// pair in the right icon column. Pin `min-height` (NOT a hard `height`, which
+    /// would clip the counts row out the bottom when a raised browser min-font
+    /// grows them — the #913 fixed-px failure mode) and the single-row flex counts
+    /// (the #913 two-column grid only existed to keep the width-capped box narrow;
+    /// #917 supersedes that cap, so the counts are one horizontal row again).
+    @Test func ticketBoxIsFullWidthAndShort() throws {
         let css = try Self.webAsset("app.css")
         #expect(
-            css.contains("width: max-content; max-width: 160px"),
-            "the ticket card must be content-sized with a 160px ceiling, not fill the row (CROW-913 ask #2)")
+            css.contains("min-height: 64px"),
+            "the ticket card must be ~2 button-rows tall via min-height (not a clipping fixed height) (CROW-917)")
         #expect(
-            css.contains("grid-template-columns: repeat(2, auto)"),
-            "the counts must be a two-column grid so the card stays compact and its height is count-invariant")
+            css.contains(".tickets-counts { display: flex;"),
+            "the counts must be a single horizontal flex row now the full-width box no longer needs the compact two-column grid (CROW-917)")
+        #expect(
+            !css.contains("width: max-content; max-width: 160px"),
+            "the #913 content-sized width cap is superseded — the card is full-width in the left column now")
     }
 }
