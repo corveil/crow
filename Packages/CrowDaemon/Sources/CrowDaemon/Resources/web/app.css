@@ -639,7 +639,6 @@ html, body {
 }
 
 .board-empty { color: var(--text-muted); text-align: center; padding: 48px 12px; }
-.board-empty-hint { font-size: 11px; margin-top: 8px; opacity: 0.7; }
 
 /* ---- Sidebar: brandmark, Tickets card, nav pills ---- */
 #brand-img { display: block; width: 120px; height: 120px; object-fit: contain; margin: 6px auto 12px; opacity: 0.7; }

@@ -546,8 +546,8 @@ let activeTerminal = null; // { id, name, window }
 let liveById = {};
 
 // Boards (Ticket Board / Reviews / Allowlist), mirroring the desktop's
-// full-pane boards. Data is forwarded to the desktop app, so it's empty when
-// the app isn't running.
+// full-pane boards. Served by `crowd` off its own IssueTracker/AllowListService
+// (CROW-581 M-C), so they populate whether or not the desktop app is running.
 let selectedBoard = null; // 'tickets' | 'reviews' | 'allowlist' | 'scorecard' | null
 const boardData = { tickets: null, reviews: null, allowlist: null, scorecard: null };
 
@@ -2417,6 +2417,17 @@ async function refreshBoard(key) {
     // A failed read leaves us with no fresh word on the daemon's in-flight
     // flag, and a stale `true` never self-clears (CROW-771).
     if (key === 'tickets') clearDaemonRefreshFlag();
+    // The allowlist never polls or caches (it's manual-refresh-only), so a failed
+    // FIRST read would strand its cold-open "Scanning…" state forever —
+    // renderAllowlist keys that on `boardData.allowlist == null`. Seed an empty,
+    // settled snapshot so it lands on "No allowlist entries" like the pre-CROW-907
+    // board did (the disconnected banner is the real daemon-down signal); a later
+    // manual Refresh still replaces it. A failed LATER read keeps the last-good
+    // snapshot (d already non-null), so only the null case needs this.
+    if (key === 'allowlist' && !boardData.allowlist) {
+      boardData.allowlist = { entries: [], loading: false };
+      if (selectedBoard === 'allowlist') renderBoard();
+    }
     return;
   }
   const changed = JSON.stringify(boardData[key]) !== JSON.stringify(data);
@@ -2862,11 +2873,16 @@ function labelPills(labels, maxVisible) {
   return wrap;
 }
 
+// An empty board is just an empty list, not an error — `crowd` serves the boards
+// off its own IssueTracker/AllowListService (CROW-581 M-C), so a "requires the
+// Crow desktop app" hint would be stale post native→web migration (ADR 0010) and
+// read as a false error/warning (CROW-907). Just render the caller's context
+// message ("No review requests", …). NOTE: this is reachable before the first
+// read lands (the pre-refresh paint at selectBoard) — a caller that must not
+// conflate "not loaded yet" with "empty" gates the message itself, as
+// renderAllowlist does with its scanning state.
 function boardEmpty(msg) {
-  const wrap = el('div', 'board-empty');
-  wrap.appendChild(el('div', null, msg));
-  wrap.appendChild(el('div', 'board-empty-hint', 'Boards require the Crow desktop app to be running.'));
-  return wrap;
+  return el('div', 'board-empty', msg);
 }
 
 // A spawning action (Start Working / Start Review): disable the button, let the
@@ -3470,6 +3486,16 @@ function reviewCard(r) {
 // -- Allowlist --
 function renderAllowlist(root) {
   const d = boardData.allowlist;
+  // The allowlist is never cached (persistSidebarCache stores only tickets/
+  // reviews) and never polled — it's manual-refresh-only, auto-scanned once on
+  // open (CROW-593). So `d == null` means no read has come back yet: the board
+  // isn't known-empty, and rendering "No entries" would flash a false empty
+  // during the cold-open scan. refreshBoard seeds a settled snapshot even on a
+  // failed read (see its catch), so `d == null` can't mean "read failed" and
+  // strand this forever. `d.loading` is defensive only — AllowListService.scan()
+  // is synchronous, so `list-allowlist` never lands mid-scan today; it's the
+  // right shape if that ever goes async, and costs nothing.
+  const scanning = !d || d.loading;
   let entries = ((d && d.entries) || []).slice();
   if (allowlistHideGlobal) entries = entries.filter((e) => !e.is_global);
   // #701: case-insensitive substring filter on pattern (mirrors desktop's
@@ -3486,7 +3512,9 @@ function renderAllowlist(root) {
   for (const p of [...allowlistSelection]) if (!visiblePromotable.has(p)) allowlistSelection.delete(p);
 
   const head = el('div', 'board-head');
-  head.appendChild(el('div', 'board-title', 'Allowlist'));
+  const title = el('div', 'board-title', 'Allowlist');
+  if (scanning) title.appendChild(el('span', 'action-spinner'));
+  head.appendChild(title);
   const hide = el('button', 'action-btn' + (allowlistHideGlobal ? ' active' : ''), allowlistHideGlobal ? 'Show Global' : 'Hide Global');
   hide.onclick = () => { allowlistHideGlobal = !allowlistHideGlobal; renderBoard(); };
   head.appendChild(hide);
@@ -3514,6 +3542,10 @@ function renderAllowlist(root) {
   root.appendChild(boardFilterInput('allow-filter', allowlistFilter, 'Filter patterns…', (v) => { allowlistFilter = v; }));
 
   if (!entries.length) {
+    // Not loaded yet ⇒ say we're scanning rather than assert empty / no-match —
+    // honest whether or not a filter is active (allowlistFilter survives board
+    // switches, so a cold open can carry one).
+    if (scanning) { root.appendChild(boardEmpty('Scanning allowlist…')); return; }
     root.appendChild(boardEmpty(filter ? 'No matching entries' : 'No allowlist entries'));
     return;
   }
