@@ -35,16 +35,22 @@ public struct GrokAgent: CodingAgent {
 
     private let launcher: GrokLauncher
 
+    /// Runs the `--version` / `--help` identity probe. Injectable so tests can
+    /// stub the binary's output without spawning a real subprocess; production
+    /// uses `ProcessShellRunner` (the same runner provider backends use).
+    private let probeRunner: any ShellRunner
+
     /// Last-resort search paths for the `grok` binary, used only when the
     /// configured `BinaryOverrides` and a PATH walk both miss (CROW-484).
     ///
     /// ⚠️ **`grok` collides** with the community `superagent-ai/grok-cli`, which
-    /// also installs a binary named `grok`. Like Cursor's generic `agent` token
-    /// (CROW-484), we accept the false-positive risk — a real workstation rarely
-    /// has both — and users pin xAI's Grok Build via `defaults.binaries.grok`
-    /// in `{devRoot}/.claude/config.json`; the explicit override is consulted
+    /// also installs a binary named `grok`. So a bare PATH/fallback match is
+    /// **identity-probed** before registration marks Grok Build available
+    /// (`verifyBinaryIdentity` — a foreign `grok` is shown disabled, CROW-911).
+    /// Users can also pin xAI's Grok Build via `defaults.binaries.grok` in
+    /// `{devRoot}/.claude/config.json`; that explicit override is consulted
     /// before the PATH walk (`BinaryOverrides`, keyed on `AgentKind.rawValue` =
-    /// `"grok"`).
+    /// `"grok"`) **and bypasses the probe** as authoritative.
     public let fallbackCandidates: [String] = [
         "/opt/homebrew/bin/grok",
         "/usr/local/bin/grok",
@@ -54,10 +60,12 @@ public struct GrokAgent: CodingAgent {
 
     public init(
         hookConfigWriter: any HookConfigWriter = GrokHookConfigWriter(),
-        stateSignalSource: any StateSignalSource = GrokSignalSource()
+        stateSignalSource: any StateSignalSource = GrokSignalSource(),
+        probeRunner: any ShellRunner = ProcessShellRunner()
     ) {
         self.hookConfigWriter = hookConfigWriter
         self.stateSignalSource = stateSignalSource
+        self.probeRunner = probeRunner
         self.launcher = GrokLauncher()
     }
 
@@ -164,5 +172,80 @@ public struct GrokAgent: CodingAgent {
     /// stays in sync (CROW-629).
     public func sessionRenameSlashCommand(newName: String) -> String? {
         "/rename \(newName)\n"
+    }
+
+    /// Substrings that identify a resolved `grok` binary as xAI's grok-build
+    /// rather than the colliding community `superagent-ai/grok-cli`. Matched
+    /// case-insensitively against the combined `grok --version` + `grok --help`
+    /// output; **any** one match confirms identity (OR, not AND) so a single
+    /// upstream flag rename can't grey out a genuine install, while the Node-
+    /// based community CLI — which carries none of these — is rejected.
+    ///
+    /// These are all grok-build-specific **flag names** already verified against
+    /// `xai-org/grok-build@main` in `GrokLaunchArgs` (headless + permission
+    /// surface); clap lists every flag in `--help`, so a real grok-build always
+    /// prints them. Deliberately **not** vendor branding (`xai` / `x.ai`): the
+    /// community `grok-cli` is *itself* an xAI Grok API client and may reference
+    /// xAI in its own help text, which would false-positive a branding match.
+    /// The conversational Node CLI has a wholly different flag set (`--model`,
+    /// `--api-key`, …) and none of these.
+    ///
+    /// ⚠️ **Version-pinned re-check target** — grok-build's `--help`/`--version`
+    /// text is upstream (a PR-closed mirror of xAI's monorepo, same as the
+    /// launch flags), so re-verify these markers on each sync. If a rewrite ever
+    /// drops all of them, the user's escape hatch is an explicit
+    /// `defaults.binaries.grok` pin, which bypasses this probe entirely.
+    static let identityMarkers = [
+        "--prompt-file", "--prompt-json", "--permission-mode", "--always-approve",
+    ]
+
+    /// Identity-probe the resolved `grok` binary before registration marks it
+    /// available (CROW-911). Runs `grok --version` and `grok --help`, then looks
+    /// for any `identityMarkers` substring — a match means xAI's grok-build, no
+    /// match (or empty output, e.g. a binary that fails/hangs) means the
+    /// colliding community `grok` and the agent is shown disabled.
+    ///
+    /// Only reached for a PATH/fallback match: an explicit `defaults.binaries.grok`
+    /// pin is trusted without probing (see `CrowDaemon.registerAgents`).
+    public func verifyBinaryIdentity(atPath path: String) async -> Bool {
+        let haystack = await Self.probeText(binary: path, runner: probeRunner).lowercased()
+        guard !haystack.isEmpty else { return false }
+        return Self.identityMarkers.contains { haystack.contains($0) }
+    }
+
+    /// Combined `<binary> --version` + `<binary> --help` output, tolerating a
+    /// non-zero exit (both flags normally exit 0, but a foreign tool might not —
+    /// its stderr is still captured for marker matching). Each probe is bounded
+    /// by a short timeout so a binary that blocks on stdin can't stall daemon
+    /// boot; a timed-out probe contributes empty text.
+    static func probeText(binary: String, runner: any ShellRunner) async -> String {
+        let version = await probeArg(binary, "--version", runner: runner)
+        let help = await probeArg(binary, "--help", runner: runner)
+        return version + "\n" + help
+    }
+
+    /// Run `<binary> <arg>` and return its merged stdout+stderr regardless of
+    /// exit status, or `""` on spawn failure / timeout. The 3s cap protects
+    /// daemon boot: cancelling the race can't kill the subprocess (it may
+    /// linger harmlessly), but control returns so registration proceeds.
+    private static func probeArg(_ binary: String, _ arg: String, runner: any ShellRunner) async -> String {
+        await withTaskGroup(of: String?.self) { group in
+            group.addTask {
+                do {
+                    return try await runner.run(args: [binary, arg], env: [:], cwd: nil)
+                } catch let ShellRunnerError.nonZeroExit(_, output) {
+                    return output
+                } catch {
+                    return nil
+                }
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: 3 * 1_000_000_000)
+                return nil
+            }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first ?? ""
+        }
     }
 }

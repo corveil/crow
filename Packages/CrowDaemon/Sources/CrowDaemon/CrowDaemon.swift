@@ -927,7 +927,7 @@ public enum CrowDaemon {
     /// (#879). Reads binary overrides from the same on-disk config the app uses
     /// so both hosts gate identically (CROW-581, M-B).
     @MainActor
-    private static func registerAgents(devRoot: String) {
+    private static func registerAgents(devRoot: String) async {
         if let config = ConfigStore.loadConfig(devRoot: devRoot) {
             BinaryOverrides.shared.set(config.defaults.binaries)
         }
@@ -936,14 +936,30 @@ public enum CrowDaemon {
         // binary resolves. Logs either the resolved path or a "not found on PATH"
         // line so the boot log matches what the picker shows — a greyed-out row
         // now has a corresponding log entry (#879).
-        func registerDiscovered(_ agent: any CodingAgent) {
-            if let path = agent.findBinary() {
-                AgentRegistry.shared.registerKnown(agent, available: true)
-                log("\(agent.displayName) agent registered at \(path)")
-            } else {
+        //
+        // A resolved binary is additionally identity-probed for collision-prone
+        // launch tokens (`agent.verifyBinaryIdentity`) so a foreign same-named
+        // binary is shown disabled rather than falsely active — today only Grok
+        // Build, whose `grok` token collides with `superagent-ai/grok-cli`
+        // (CROW-911). The probe is **skipped for an explicit `defaults.binaries.<kind>`
+        // pin**: the user has named the exact binary, so it's authoritative
+        // (matching `findBinary()`'s override-first resolution) and can't be
+        // greyed out by a version-pinned probe that upstream churn broke.
+        func registerDiscovered(_ agent: any CodingAgent) async {
+            guard let path = agent.findBinary() else {
                 AgentRegistry.shared.registerKnown(agent, available: false)
                 log("\(agent.displayName) agent not found on PATH — shown disabled in the picker")
+                return
             }
+            let pinned = BinaryOverrides.shared.path(for: agent.kind)
+                .map { FileManager.default.isExecutableFile(atPath: $0) } ?? false
+            if !pinned, await !agent.verifyBinaryIdentity(atPath: path) {
+                AgentRegistry.shared.registerKnown(agent, available: false)
+                log("\(agent.displayName) binary at \(path) failed the identity probe (likely a different tool sharing the name) — shown disabled; pin the real path via defaults.binaries.\(agent.kind.rawValue)")
+                return
+            }
+            AgentRegistry.shared.registerKnown(agent, available: true)
+            log("\(agent.displayName) agent registered at \(path)")
         }
 
         // Claude Code is the baseline harness and the registry fallback default,
@@ -954,20 +970,22 @@ public enum CrowDaemon {
         // to the honest-availability rule is intentional; don't "fix" it.
         AgentRegistry.shared.registerKnown(ClaudeCodeAgent(), available: true)
 
-        registerDiscovered(OpenAICodexAgent())
-        registerDiscovered(CursorAgent())
-        registerDiscovered(OpenCodeAgent())
+        await registerDiscovered(OpenAICodexAgent())
+        await registerDiscovered(CursorAgent())
+        await registerDiscovered(OpenCodeAgent())
         // Google Antigravity (`agy`) — Tier-2 / experimental (#860). Surfaced in
         // the picker regardless of install state; off-PATH ⇒ shown disabled with
         // a "not found on PATH" tooltip rather than silently absent (#879,
         // updating ADR 0014). Crow never installs `agy` itself — it only resolves
         // whatever the official `antigravity.google` installer placed.
-        registerDiscovered(AntigravityAgent())
+        await registerDiscovered(AntigravityAgent())
         // Grok Build (`grok`, xai-org/grok-build) — #859. `registerDiscovered`
         // uses the override-aware `findBinary()`, so a `defaults.binaries.grok`
-        // pin resolves the `superagent-ai/grok-cli` name collision; off-PATH ⇒
-        // shown disabled in the picker rather than silently absent (#879).
-        registerDiscovered(GrokAgent())
+        // pin resolves the `superagent-ai/grok-cli` name collision; without a
+        // pin, a bare PATH match is identity-probed (`grok --version`/`--help`)
+        // so the foreign `grok` is shown disabled rather than falsely active
+        // (CROW-911); genuinely off-PATH ⇒ shown disabled too (#879).
+        await registerDiscovered(GrokAgent())
     }
 
     /// (Re)populate `appState` from the store snapshot — sessions + their

@@ -46,6 +46,24 @@ public protocol CodingAgent: Sendable {
     /// and the launch-command builder below.
     func findBinary() -> String?
 
+    /// Confirm the binary resolved at `path` is genuinely *this* agent and not
+    /// a different tool that happens to share the launch token (CROW-911).
+    ///
+    /// Registration runs this after `findBinary()` resolves a path **via the
+    /// PATH walk or `fallbackCandidates`** — never for an explicit
+    /// `defaults.binaries.<kind>` pin, which is authoritative (the user has
+    /// named the exact binary). A `false` return marks the agent unavailable
+    /// even though a same-named binary exists, so a colliding tool is shown
+    /// disabled rather than falsely active.
+    ///
+    /// The default returns `true`: an unambiguous launch token is trusted on a
+    /// bare match, preserving today's behavior for every agent. Only agents
+    /// whose token is known to collide override this to run a cheap
+    /// `--version` / `--help` identity probe — today just Grok Build (`grok`
+    /// collides with the community `superagent-ai/grok-cli`); Cursor's generic
+    /// `agent` token has the same shape and can adopt this seam later.
+    func verifyBinaryIdentity(atPath path: String) async -> Bool
+
     /// Build the full shell command (ending with `\n`) that auto-launches
     /// this agent in `worktreePath`. Returns `nil` when the agent can't be
     /// launched — typically because the binary is missing or the session
@@ -168,6 +186,12 @@ public extension CodingAgent {
         // 3. Hardcoded last-resort fallback covers the exotic-PATH case.
         return fallbackCandidates.first { fm.isExecutableFile(atPath: $0) }
     }
+
+    /// Default identity check: trust a bare match. Agents with an unambiguous
+    /// launch token don't need to probe — overridden only by collision-prone
+    /// tokens (Grok Build today) so a foreign same-named binary is shown
+    /// disabled instead of falsely active (CROW-911).
+    func verifyBinaryIdentity(atPath path: String) async -> Bool { true }
 
     /// Default Manager launch command: invoke the agent's CLI binary by
     /// name with no extra flags. The tmux terminal backend owns
