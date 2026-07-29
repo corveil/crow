@@ -1006,7 +1006,7 @@ function renderSidebar() {
 
   // Two-column sidebar top (CROW-917): a left stack [tickets → Reviews/Allowlist/
   // Scorecard → Manager] over a far-right column of four stacked icon buttons
-  // [bell, gear, +, select], which flex evenly to align alongside the left rows.
+  // [bell, gear, +, select], grouped and centered in the column (CROW-922).
   const top = el('div', 'sidebar-top');
   top.appendChild(sidebarLeftStack());
   top.appendChild(sidebarIconColumn());
@@ -1264,8 +1264,8 @@ function renderStatusBar() {
 
 // Far-right sidebar column (CROW-917): the four global icon buttons stacked
 // vertically — Notifications bell, Settings gear, "+" new-manager, and the
-// Select-sessions toggle. They flex evenly to align alongside the left stack's
-// rows (tickets = 2 rows, Reviews-row = 1, Manager-row = 1 → 4 icons).
+// Select-sessions toggle. Fixed-size and centered as a block in the column
+// (CROW-922), not stretched to divide its height.
 function sidebarIconColumn() {
   const col = el('div', 'sidebar-right');
   // Notification center (CROW-909): bell + unread badge, first so it's the most
@@ -1323,9 +1323,9 @@ function sidebarLeftStack() {
   // Row 2: the primary Manager pill, spanning the full left-column width. Only
   // appended when a primary manager exists — an empty .nav-pills-row still consumes
   // a flex-gap slot, so appending one would leave a stray 6px gap below row 1. (The
-  // separate concern — a shorter left column dividing the right icon column's four
-  // flex:1 buttons below the 24px WCAG floor on a Manager-less / cold-start render —
-  // is handled by `.sidebar-right > button { min-height: 24px }`, not by this guard.)
+  // right icon column no longer divides the left column's height — its buttons are a
+  // fixed-size centered stack since CROW-922 — so a Manager-less render can't shrink
+  // them below the WCAG floor.)
   const primaryManager = sessions.find((s) => s.kind === 'manager');
   if (primaryManager) {
     const row2 = el('div', 'nav-pills-row');
