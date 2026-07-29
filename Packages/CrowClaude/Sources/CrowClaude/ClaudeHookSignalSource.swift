@@ -36,6 +36,22 @@ public struct ClaudeHookSignalSource: StateSignalSource {
                 ))
                 transition.newActivityState = .waiting
                 transition.toolActivity = .clear
+            } else if currentNotificationType == "permission_prompt" {
+                // Apply-order defense (#903). PreToolUse and PermissionRequest
+                // for the same tool can now apply out of order — the client no
+                // longer blocks on the daemon's reply, so the daemon may apply
+                // PermissionRequest first. If it did (permission_prompt already
+                // pending, state already .waiting), a later PreToolUse must NOT
+                // blanket-clear that badge and flip the card to .working while
+                // the agent is parked at the prompt — there is no "next event"
+                // to heal it until the user acts. Preserve both; still record
+                // the tool. Symmetric to PermissionRequest's `!= "question"`
+                // guard below. Normal (in-order) PreToolUse never sees a pending
+                // permission_prompt, so this branch can't fire there.
+                transition.notification = .leave
+                transition.toolActivity = .set(ToolActivity(
+                    toolName: toolName, isActive: true
+                ))
             } else {
                 transition.toolActivity = .set(ToolActivity(
                     toolName: toolName, isActive: true

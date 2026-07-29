@@ -290,7 +290,7 @@ private func startServer(
 /// an absent socket (not merely some `SocketError`; `createFailed` wouldn't be
 /// caught).
 @Test func postToNonexistentSocketThrows() {
-    let client = SocketClient(socketPath: "/tmp/nonexistent-crow-post-test.sock")
+    let client = SocketClient(socketPath: tempSocketPath())
     do {
         try client.post(method: "hook-event")
         Issue.record("expected post to throw for an absent socket")

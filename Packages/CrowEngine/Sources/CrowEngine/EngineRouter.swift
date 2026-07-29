@@ -62,28 +62,34 @@ func hookToolName(from payload: [String: JSONValue]) -> String? {
     return payload["toolCall"]?.objectValue?["name"]?.stringValue
 }
 
-/// (session_id, cwd) pairs already logged as unresolved hook-event drops. An
-/// unmapped global hook config re-fires on every event, so without this the
-/// only diagnostic channel left after #903 (see the hook-event handler) would
-/// flood an unrotated launchd log. Bounded so a pathological spread of cwds
-/// can't grow it without limit; MainActor-isolated since its sole caller runs
-/// inside the handler's `MainActor.run`.
+/// Payload `cwd`s already logged as unresolved hook-event drops. An unmapped
+/// global hook config re-fires on every event, so without this the only
+/// diagnostic channel left after #903 (see the hook-event handler) would flood
+/// an unrotated launchd log. Capped so a pathological spread of cwds can't grow
+/// it without limit; MainActor-isolated since its sole caller runs inside the
+/// handler's `MainActor.run`.
 @MainActor private var loggedUnresolvedHookDrops: Set<String> = []
 
-/// Log an unresolved hook-event drop at most once per (session_id, cwd).
-/// `eventName`/`cwd` are caller-supplied (via the local agent), so newlines are
-/// escaped — an embedded newline in a payload `cwd` must not forge a second log
-/// record.
-@MainActor private func logUnresolvedHookDropOnce(eventName: String, sessionID: String?, cwd: String?) {
-    let key = "\(sessionID ?? "none")\u{1}\(cwd ?? "none")"
-    guard loggedUnresolvedHookDrops.insert(key).inserted else { return }
-    if loggedUnresolvedHookDrops.count > 256 { loggedUnresolvedHookDrops.removeAll() }
+/// Log an unresolved hook-event drop at most once per `cwd`. Only the no-id /
+/// no-cwd-match branch calls this, where `session_id` is always absent — so the
+/// key is `cwd` alone. `eventName`/`cwd` are caller-supplied (via the local
+/// agent), so newlines are escaped: an embedded newline in a payload `cwd` must
+/// not forge a second log record.
+@MainActor private func logUnresolvedHookDropOnce(eventName: String, cwd: String?) {
+    let key = cwd ?? "none"
+    guard !loggedUnresolvedHookDrops.contains(key) else { return }
+    // Hold the cap by refusing new keys once full (rather than clearing, which
+    // would re-log every already-seen key on the next cycle). Beyond the cap,
+    // novel cwds go unlogged — acceptable for a diagnostic bounded to the small
+    // set of real worktrees in practice.
+    guard loggedUnresolvedHookDrops.count < 256 else { return }
+    loggedUnresolvedHookDrops.insert(key)
     func oneLine(_ s: String) -> String {
         s.replacingOccurrences(of: "\n", with: "\\n").replacingOccurrences(of: "\r", with: "\\r")
     }
     CrowLog.error(
         "[hook-event] dropped \(oneLine(eventName)): unresolved session "
-        + "(session_id=\(sessionID ?? "none"), cwd=\(oneLine(cwd ?? "none")))"
+        + "(no session_id, cwd=\(oneLine(cwd ?? "none")))"
     )
 }
 
@@ -1252,10 +1258,11 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
             },
             "hook-event": { @Sendable params in
                 guard let eventName = params["event_name"]?.stringValue else {
-                    // hook-event is fire-and-forget: the client never reads this
-                    // error, so a server-side log is the only channel that keeps a
-                    // dropped event diagnosable (#903).
-                    CrowLog.error("[hook-event] dropped: missing event_name in params")
+                    // Deliberately not logged: a params-shaped request is a
+                    // caller bug (the CLI makes --event required), the RPC error
+                    // already signals it, and an un-deduped per-request log here
+                    // would be the flood the unresolved-session site below is
+                    // written to avoid (#903 review).
                     throw RPCError.invalidParams("event_name required")
                 }
                 let payload = params["payload"]?.objectValue ?? [:]
@@ -1344,15 +1351,11 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                         // No id, and no worktree matched the payload cwd: every
                         // event for this session is dropped. Since the client no
                         // longer surfaces this (fire-and-forget, #903), log it —
-                        // deduped per (session_id, cwd), because a global hook
-                        // config with no --session run from a cwd outside any
-                        // registered worktree (Codex/OpenCode/Antigravity; cf.
-                        // #897) re-fires it on every event.
-                        logUnresolvedHookDropOnce(
-                            eventName: eventName,
-                            sessionID: providedSessionID?.uuidString,
-                            cwd: cwd
-                        )
+                        // deduped per cwd, because a global hook config with no
+                        // --session run from a cwd outside any registered
+                        // worktree (Codex/OpenCode/Antigravity; cf. #897)
+                        // re-fires it on every event.
+                        logUnresolvedHookDropOnce(eventName: eventName, cwd: cwd)
                         throw RPCError.invalidParams("session_id required or resolvable from payload cwd")
                     }
                     let sessionIsLive = liveSessionIDs.contains(sessionID)

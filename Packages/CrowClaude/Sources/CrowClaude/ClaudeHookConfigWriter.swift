@@ -29,9 +29,13 @@ public struct ClaudeHookConfigWriter: HookConfigWriter {
     /// (`SocketServer` fans each connection out concurrently), so accept order
     /// no longer implies apply order. Keeping PreToolUse non-async still narrows
     /// the reorder window to that MainActor scheduling race (vs. also racing the
-    /// writes if it were async), and any inversion self-heals on the next event;
-    /// restoring a hard guarantee needs per-session server-side sequencing —
-    /// the daemon-side follow-up scoped out of #903.
+    /// writes if it were async). The one inversion that would NOT self-heal —
+    /// PreToolUse applied after PermissionRequest, wiping the permission badge
+    /// while the agent is parked at the prompt — is guarded directly in
+    /// `ClaudeHookSignalSource` (PreToolUse leaves a pending `permission_prompt`
+    /// intact); other inversions self-heal on the next event. A hard transport
+    /// guarantee (per-session server-side sequencing) is the daemon-side
+    /// follow-up scoped out of #903.
     private static let asyncEvents: Set<String> = [
         "PostToolUse", "PostToolUseFailure",
     ]
