@@ -201,4 +201,108 @@ struct GrokAgentTests {
         #expect(cmd.contains("--prompt-file"))
         #expect(cmd.contains(" -c"))
     }
+
+    // MARK: - Identity probe (CROW-911)
+
+    /// A resolved binary whose `--help` lists grok-build's own flags is xAI's
+    /// grok-build — even with no vendor branding — so the probe accepts it.
+    @Test func identityProbeAcceptsGrokBuildFlags() async {
+        let runner = FakeProbeRunner(outputs: [
+            "--version": "grok 0.4.1",
+            "--help": """
+                Usage: grok [OPTIONS]
+                Options:
+                  --prompt-file <PATH>     Read the prompt from a file (headless)
+                  --prompt-json <JSON>     Structured prompt input
+                  --permission-mode <MODE> ask | auto | bypassPermissions
+                  --always-approve         Approve every tool call (alias --yolo)
+                  -c, --continue           Resume the last session
+                """,
+        ])
+        let agent = GrokAgent(probeRunner: runner)
+        #expect(await agent.verifyBinaryIdentity(atPath: "/opt/homebrew/bin/grok") == true)
+    }
+
+    /// The colliding community `superagent-ai/grok-cli` (a Node conversational
+    /// client for xAI's API) carries none of grok-build's flags — even though it
+    /// legitimately mentions xAI — so the probe rejects it. This is the exact
+    /// false-positive CROW-911 fixes.
+    @Test func identityProbeRejectsCommunityGrokCli() async {
+        let runner = FakeProbeRunner(outputs: [
+            "--version": "1.2.3",
+            "--help": """
+                Grok CLI — a conversational AI assistant powered by xAI's Grok.
+                Usage: grok [prompt]
+                Options:
+                  --model <NAME>   Model to use
+                  --api-key <KEY>  xAI API key
+                  --help           Show help
+                """,
+        ])
+        let agent = GrokAgent(probeRunner: runner)
+        #expect(await agent.verifyBinaryIdentity(atPath: "/opt/homebrew/bin/grok") == false)
+    }
+
+    /// A binary that prints nothing (or a spawn failure that yields `""`) can't
+    /// be identified, so it's treated as the foreign tool and rejected.
+    @Test func identityProbeRejectsEmptyOutput() async {
+        let agent = GrokAgent(probeRunner: FakeProbeRunner(outputs: [:]))
+        #expect(await agent.verifyBinaryIdentity(atPath: "/opt/homebrew/bin/grok") == false)
+    }
+
+    /// A foreign `grok --version` may exit non-zero yet still print a marker; the
+    /// probe merges stdout+stderr and matches it regardless of exit status.
+    @Test func identityProbeToleratesNonZeroExit() async {
+        let runner = FakeProbeRunner(
+            outputs: ["--version": "grok --prompt-file supported", "--help": ""],
+            failing: ["--version"]
+        )
+        let agent = GrokAgent(probeRunner: runner)
+        #expect(await agent.verifyBinaryIdentity(atPath: "/opt/homebrew/bin/grok") == true)
+    }
+
+    /// The Red from #912 review: a `grok` that never exits and ignores
+    /// cancellation must not stall boot. `probeArg`'s timeout is a *hard* bound
+    /// on the awaiting task — it returns `""` at the cap even against a runner
+    /// that never completes. Uses a tiny injected timeout so the test is instant.
+    @Test func probeArgHardBoundsAgainstNeverCompletingRunner() async {
+        let out = await GrokAgent.probeArg(
+            "/opt/homebrew/bin/grok",
+            "--help",
+            runner: NeverRunner(),
+            timeoutNanos: 50_000_000  // 50ms
+        )
+        #expect(out == "")
+    }
+}
+
+/// Canned `--version` / `--help` responder for the identity probe, keyed by the
+/// probe arg — lets a test hand `verifyBinaryIdentity` grok-build vs the
+/// colliding community `grok` output without spawning a subprocess. Args listed
+/// in `failing` throw `.nonZeroExit` carrying their output (a foreign binary
+/// that exits non-zero but still prints).
+private struct FakeProbeRunner: ShellRunner {
+    let outputs: [String: String]
+    var failing: Set<String> = []
+
+    func run(args: [String], env: [String: String], cwd: String?) async throws -> String {
+        let arg = args.dropFirst().first ?? ""
+        let out = outputs[arg] ?? ""
+        if failing.contains(arg) {
+            throw ShellRunnerError.nonZeroExit(exitCode: 2, output: out)
+        }
+        return out
+    }
+}
+
+/// A `ShellRunner` that never completes and ignores cancellation — the exact
+/// shape from the #912 review repro. Proves `probeArg`'s timeout bounds the
+/// awaiting task rather than relying on the runner cooperating. Uses an *unsafe*
+/// continuation deliberately: the leak (never resumed) is the intended scenario,
+/// so a checked continuation would only emit a spurious misuse diagnostic.
+private struct NeverRunner: ShellRunner {
+    func run(args: [String], env: [String: String], cwd: String?) async throws -> String {
+        await withUnsafeContinuation { (_: UnsafeContinuation<Void, Never>) in }
+        return ""  // unreachable
+    }
 }

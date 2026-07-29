@@ -35,16 +35,22 @@ public struct GrokAgent: CodingAgent {
 
     private let launcher: GrokLauncher
 
+    /// Runs the `--version` / `--help` identity probe. Injectable so tests can
+    /// stub the binary's output without spawning a real subprocess; production
+    /// uses `ProcessShellRunner` (the same runner provider backends use).
+    private let probeRunner: any ShellRunner
+
     /// Last-resort search paths for the `grok` binary, used only when the
     /// configured `BinaryOverrides` and a PATH walk both miss (CROW-484).
     ///
     /// ⚠️ **`grok` collides** with the community `superagent-ai/grok-cli`, which
-    /// also installs a binary named `grok`. Like Cursor's generic `agent` token
-    /// (CROW-484), we accept the false-positive risk — a real workstation rarely
-    /// has both — and users pin xAI's Grok Build via `defaults.binaries.grok`
-    /// in `{devRoot}/.claude/config.json`; the explicit override is consulted
+    /// also installs a binary named `grok`. So a bare PATH/fallback match is
+    /// **identity-probed** before registration marks Grok Build available
+    /// (`verifyBinaryIdentity` — a foreign `grok` is shown disabled, CROW-911).
+    /// Users can also pin xAI's Grok Build via `defaults.binaries.grok` in
+    /// `{devRoot}/.claude/config.json`; that explicit override is consulted
     /// before the PATH walk (`BinaryOverrides`, keyed on `AgentKind.rawValue` =
-    /// `"grok"`).
+    /// `"grok"`) **and bypasses the probe** as authoritative.
     public let fallbackCandidates: [String] = [
         "/opt/homebrew/bin/grok",
         "/usr/local/bin/grok",
@@ -54,10 +60,12 @@ public struct GrokAgent: CodingAgent {
 
     public init(
         hookConfigWriter: any HookConfigWriter = GrokHookConfigWriter(),
-        stateSignalSource: any StateSignalSource = GrokSignalSource()
+        stateSignalSource: any StateSignalSource = GrokSignalSource(),
+        probeRunner: any ShellRunner = ProcessShellRunner()
     ) {
         self.hookConfigWriter = hookConfigWriter
         self.stateSignalSource = stateSignalSource
+        self.probeRunner = probeRunner
         self.launcher = GrokLauncher()
     }
 
@@ -164,5 +172,115 @@ public struct GrokAgent: CodingAgent {
     /// stays in sync (CROW-629).
     public func sessionRenameSlashCommand(newName: String) -> String? {
         "/rename \(newName)\n"
+    }
+
+    /// Substrings that identify a resolved `grok` binary as xAI's grok-build
+    /// rather than the colliding community `superagent-ai/grok-cli`. Matched
+    /// case-insensitively against the combined `grok --version` + `grok --help`
+    /// output; **any** one match confirms identity (OR, not AND) so a single
+    /// upstream flag rename can't grey out a genuine install, while the Node-
+    /// based community CLI — which carries none of these — is rejected.
+    ///
+    /// These are all grok-build-specific **flag names** already verified against
+    /// `xai-org/grok-build@main` in `GrokLaunchArgs` (headless + permission
+    /// surface); clap lists every flag in `--help`, so a real grok-build always
+    /// prints them. Deliberately **not** vendor branding (`xai` / `x.ai`): the
+    /// community `grok-cli` is *itself* an xAI Grok API client and may reference
+    /// xAI in its own help text, which would false-positive a branding match.
+    /// The conversational Node CLI has a wholly different flag set (`--model`,
+    /// `--api-key`, …) and none of these.
+    ///
+    /// ⚠️ **Version-pinned re-check target** — grok-build's `--help`/`--version`
+    /// text is upstream (a PR-closed mirror of xAI's monorepo, same as the
+    /// launch flags), so re-verify these markers on each sync. If a rewrite ever
+    /// drops all of them, the user's escape hatch is an explicit
+    /// `defaults.binaries.grok` pin, which bypasses this probe entirely.
+    static let identityMarkers = [
+        "--prompt-file", "--prompt-json", "--permission-mode", "--always-approve",
+    ]
+
+    /// Identity-probe the resolved `grok` binary before registration marks it
+    /// available (CROW-911). Probes `grok --help` (and, only if that yields no
+    /// marker, `grok --version`) and looks for any `identityMarkers` substring —
+    /// a match means xAI's grok-build, no match means the colliding community
+    /// `grok` and the agent is shown disabled.
+    ///
+    /// Only reached for a PATH/fallback match: an explicit `defaults.binaries.grok`
+    /// pin is trusted without probing (`AgentDiscovery.evaluate`).
+    public func verifyBinaryIdentity(atPath path: String) async -> Bool {
+        // `--help` first: every marker is a `--help` flag, so a genuine
+        // grok-build matches on the first spawn and `--version` never runs (one
+        // fewer subprocess per boot). `--version` is only a fallback for a
+        // foreign binary that prints its banner there instead. An empty result
+        // (a binary that prints nothing, or a probe timeout) simply matches no
+        // marker and returns false — no separate empty-string branch needed.
+        for arg in ["--help", "--version"] {
+            let out = await Self.probeArg(path, arg, runner: probeRunner).lowercased()
+            if Self.identityMarkers.contains(where: { out.contains($0) }) { return true }
+        }
+        return false
+    }
+
+    /// Per-leg cap for the `--help` / `--version` probe. Injectable via
+    /// `probeArg` so tests exercise the timeout without a real 3s wait.
+    static let probeTimeoutNanos: UInt64 = 3 * 1_000_000_000
+
+    /// Run `<binary> <arg>` and return its merged stdout+stderr, or `""` on spawn
+    /// failure **or timeout**. The cap is a *hard* bound on the awaiting task: it
+    /// races the run against a sleep behind a resume-once guard and returns
+    /// whichever finishes first — so even a runner that never completes and
+    /// ignores cancellation (a `grok` that reads stdin, or forks a child holding
+    /// the stdout pipe so `readDataToEndOfFile()` never sees EOF) **cannot stall
+    /// `registerAgents` at boot** (CROW-911 review — the earlier `withTaskGroup`
+    /// form awaited the losing child and so bounded nothing).
+    ///
+    /// On timeout the run `Task` is cancelled: with the cancellation-aware
+    /// `ProcessShellRunner` that `terminate()`s the child so it doesn't leak; a
+    /// genuinely uncancellable runner leaks one blocked reader but boot proceeds.
+    static func probeArg(
+        _ binary: String,
+        _ arg: String,
+        runner: any ShellRunner,
+        timeoutNanos: UInt64 = probeTimeoutNanos
+    ) async -> String {
+        let gate = ResumeOnceGate()
+        return await withCheckedContinuation { (cont: CheckedContinuation<String, Never>) in
+            @Sendable func finish(_ result: String) {
+                if gate.claim() { cont.resume(returning: result) }
+            }
+            let work = Task {
+                let out: String
+                do {
+                    out = try await runner.run(args: [binary, arg], env: [:], cwd: nil)
+                } catch let ShellRunnerError.nonZeroExit(_, output) {
+                    out = output
+                } catch {
+                    out = ""
+                }
+                finish(out)
+            }
+            Task {
+                try? await Task.sleep(nanoseconds: timeoutNanos)
+                work.cancel()
+                finish("")
+            }
+        }
+    }
+}
+
+/// A cross-platform (no Darwin `os`) resume-once guard for `probeArg`'s
+/// race: `claim()` returns `true` exactly once — for the first of the run and
+/// timeout tasks to finish — so the continuation is resumed a single time. An
+/// `NSLock`-backed `Bool` rather than `OSAllocatedUnfairLock`, which is
+/// Apple-platforms-only and breaks the Linux CI build (#912).
+private final class ResumeOnceGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var resumed = false
+
+    func claim() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        if resumed { return false }
+        resumed = true
+        return true
     }
 }
