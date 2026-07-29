@@ -469,13 +469,19 @@ let notifHistory = [];         // [{ event, key, title, body, ts, seen, kind, ta
 function restoreNotifHistory() {
   try {
     const raw = localStorage.getItem(NOTIF_HISTORY_KEY);
-    if (!raw) return;
+    // Missing key means "empty", not "no change" — a purge in another tab fires a
+    // storage event with newValue === null, and returning early here would leave
+    // this tab's in-memory copy intact, which its next seen-marking would then
+    // persist straight back, re-creating the key the logout just dropped (review).
+    // Safe for the compose path too: recordNotification only reaches here with the
+    // key already absent, where in-memory is [] anyway.
+    if (!raw) { notifHistory = []; return; }
     const data = JSON.parse(raw);
     // Filter to well-formed entries: a parseable-but-wrong array (`[null, …]`, a
     // foreign schema) would otherwise let a later `e.seen` read throw inside
     // notifUnreadCount → sidebarSignature → every renderSidebar, wedging the
-    // whole sidebar until the key is cleared by hand. The `ts` check also keeps
-    // a ts-less entry from rendering "Invalid Date" in relTime (review).
+    // whole sidebar until the key is cleared by hand. The `ts` check also keeps a
+    // ts-less entry from rendering "Invalid Date" in notifRelTime (review).
     if (Array.isArray(data)) {
       notifHistory = data
         .filter((e) => e && typeof e === 'object' && typeof e.ts === 'number')
@@ -508,9 +514,10 @@ function scheduleNotifRepaint() {
   });
 }
 
-// Another tab wrote the shared history (append, mark-seen, or clear). Re-read so
-// this tab's badge/panel reflect it instead of drifting, then repaint. Does not
-// fire in the tab that made the change, so there's no write→event loop (review).
+// Another tab wrote the shared history (append, mark-seen, clear, or purge on
+// logout — restoreNotifHistory treats the removed key as empty). Re-read so this
+// tab's badge/panel reflect it instead of drifting, then repaint. Does not fire
+// in the tab that made the change, so there's no write→event loop (review).
 window.addEventListener('storage', (e) => {
   if (e.key !== NOTIF_HISTORY_KEY) return;
   restoreNotifHistory();
@@ -562,9 +569,13 @@ function recordNotification(event, key, detail) {
   scheduleNotifRepaint();
 }
 
-// Relative "5m ago" timestamp for panel rows; falls back to a locale date past a
-// week so old entries stay legible.
-function relTime(ts) {
+// Relative "5m ago" timestamp for panel rows, from epoch ms; falls back to a
+// locale date past a week so old entries stay legible. NOT named `relTime` — a
+// pre-existing `relTime(iso)` (the card helper, #594) takes an ISO string, and
+// in a classic <script> the later top-level declaration would win for BOTH, so
+// every call would resolve to one of them. Distinct name, distinct input unit
+// (review, CROW-909).
+function notifRelTime(ts) {
   const s = Math.max(0, Math.floor((Date.now() - ts) / 1000));
   if (s < 45) return 'just now';
   const m = Math.floor(s / 60);
@@ -1433,7 +1444,7 @@ function openNotificationPanel(anchorEl) {
       const item = el('div', 'notif-item' + (navigable ? '' : ' notif-static'));
       const line1 = el('div', 'notif-row1');
       line1.appendChild(el('span', 'notif-item-title', entry.title || EVENT_LABEL[entry.event] || entry.event));
-      line1.appendChild(el('span', 'notif-time', relTime(entry.ts)));
+      line1.appendChild(el('span', 'notif-time', notifRelTime(entry.ts)));
       item.appendChild(line1);
       if (entry.body) item.appendChild(el('div', 'notif-item-body', entry.body));
       if (navigable) {

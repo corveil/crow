@@ -250,4 +250,52 @@ import Testing
             try Self.functionBody("scheduleNotifRepaint", in: source).contains("Promise.resolve().then"),
             "the repaint must coalesce on a microtask")
     }
+
+    /// Third-round Red 1: app.js is loaded as a classic <script>, so two top-level
+    /// `function foo(` declarations in one scope don't error — the LATER one
+    /// silently wins for every call. The new `notifRelTime(ts)` (epoch ms) shipped
+    /// as `relTime`, colliding with the pre-existing `relTime(iso)` card helper, so
+    /// every panel timestamp resolved to the ISO version and rendered empty. Guard
+    /// the whole class rather than the instance: assert no duplicate top-level
+    /// function names. (A per-function assertion can't catch it — `functionBody`
+    /// matches the first declaration, i.e. the dead one.)
+    @Test func noDuplicateTopLevelFunctionNames() throws {
+        let source = try Self.webAsset("app.js")
+        var counts: [String: Int] = [:]
+        for rawLine in source.split(separator: "\n", omittingEmptySubsequences: false) {
+            // Top-level declarations start at column 0 — nested/method functions and
+            // function expressions are indented or preceded by `= `/`(`.
+            for prefix in ["function ", "async function "] where rawLine.hasPrefix(prefix) {
+                let after = rawLine.dropFirst(prefix.count)
+                guard let paren = after.firstIndex(of: "(") else { break }
+                let name = after[..<paren]
+                if !name.isEmpty,
+                   name.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "_" || $0 == "$" }) {
+                    counts[String(name), default: 0] += 1
+                }
+                break
+            }
+        }
+        let dups = counts.filter { $0.value > 1 }.keys.sorted()
+        #expect(
+            dups.isEmpty,
+            "duplicate top-level function name(s) in app.js — in a classic <script> the later declaration silently wins for every call: \(dups)")
+    }
+
+    /// Third-round Yellow 2: restoreNotifHistory must treat a MISSING key as
+    /// "empty", not "no change". A purge in another tab fires a storage event with
+    /// newValue === null; an early return would leave this tab's stale in-memory
+    /// history intact, which its next seen-marking would persist straight back —
+    /// re-creating the key logout just dropped. The `notifRelTime` rename must have
+    /// landed too (no lingering epoch-ms call to the ISO `relTime`).
+    @Test func restoreTreatsMissingKeyAsEmptyAndTimestampUsesTheRenamedHelper() throws {
+        let source = try Self.webAsset("app.js")
+        #expect(
+            try Self.functionBody("restoreNotifHistory", in: source)
+                .contains("if (!raw) { notifHistory = []; return; }"),
+            "a removed key must reset the in-memory history, so a cross-tab purge can't be re-persisted")
+        #expect(
+            source.contains("notif-time', notifRelTime(entry.ts)"),
+            "the panel timestamp must call the renamed epoch-ms helper, not the ISO relTime")
+    }
 }
