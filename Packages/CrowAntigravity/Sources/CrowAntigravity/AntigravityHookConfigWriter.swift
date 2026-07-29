@@ -36,14 +36,16 @@ import CrowCore
 /// `PostToolUse` (whose reply is a harmless `{}`).
 ///
 /// **Every command emits its own stdout verdict.** Antigravity reads the hook's
-/// stdout as JSON. `crow hook-event` is observational and may print a JSON-RPC
-/// error on failure, so each command **suppresses** hook-event's output and then
-/// `printf '{}'`s the empty-object verdict itself — the documented no-op reply
-/// for `PostToolUse`/`PreInvocation`/`PostInvocation`, and a non-`continue` reply
-/// for `Stop` (i.e. "allow the agent to stop"). Using `;` (not `&&`) plus the
-/// trailing `printf` guarantees the verdict is emitted and the hook exits 0 even
-/// when hook-event fails — so a Crow hook can never block a tool or loop the
-/// agent.
+/// stdout as JSON. `crow hook-event` is observational and prints nothing to
+/// stdout (fire-and-forget since #903 — it no longer even prints RPC errors),
+/// so each command still `printf '{}'`s the empty-object verdict itself — the
+/// documented no-op reply for `PostToolUse`/`PreInvocation`/`PostInvocation`,
+/// and a non-`continue` reply for `Stop` (i.e. "allow the agent to stop"). The
+/// leading output-suppression is now belt-and-suspenders, but kept so a future
+/// hook-event that does print can't leak into the verdict. Using `;` (not `&&`)
+/// plus the trailing `printf` guarantees the verdict is emitted and the hook
+/// exits 0 even when hook-event fails — so a Crow hook can never block a tool or
+/// loop the agent.
 ///
 /// **`.agents/hooks.json` is a shared workspace file** (like Cursor's
 /// `.cursor/hooks.json`), so this writer keeps Cursor's protections: a

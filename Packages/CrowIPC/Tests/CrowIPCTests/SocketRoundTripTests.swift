@@ -255,6 +255,52 @@ private func startServer(
     #expect(response.result?["prompts"] == prompts)
 }
 
+// MARK: - Fire-and-Forget (post) Tests
+
+/// #903: `post` must not block on the handler. The handler here records receipt
+/// and then sleeps far longer than the test — yet `post` returns promptly and
+/// the daemon still processes the event. `send` would have stalled on the reply.
+@Test func postReturnsWithoutWaitingForHandler() throws {
+    let path = tempSocketPath()
+    // Signaled by the handler on entry; a DispatchSemaphore is Sendable, so it
+    // is safe to capture in the @Sendable handler closure.
+    let received = DispatchSemaphore(value: 0)
+    let server = try startServer(path: path, handlers: [
+        "hook-event": { @Sendable _ in
+            received.signal()
+            try await Task.sleep(nanoseconds: 60_000_000_000) // 60s — never replies in test
+            return [:]
+        },
+    ])
+    defer { server.stop(); unlink(path) }
+
+    let client = SocketClient(socketPath: path)
+    let start = Date()
+    try client.post(method: "hook-event", params: ["event_name": .string("Stop")])
+    // The client returned without reading, so it can't have waited on the 60s
+    // handler; this guards against a regression that reintroduces the read.
+    #expect(Date().timeIntervalSince(start) < 5)
+
+    // The daemon still processes the event once its handler runs.
+    #expect(received.wait(timeout: .now() + 2) == .success)
+}
+
+/// A missing daemon surfaces as `connectionFailed`, which `forwardHookEvent`
+/// catches to stay a silent no-op — so `post` must raise that specific case for
+/// an absent socket (not merely some `SocketError`; `createFailed` wouldn't be
+/// caught).
+@Test func postToNonexistentSocketThrows() {
+    let client = SocketClient(socketPath: tempSocketPath())
+    do {
+        try client.post(method: "hook-event")
+        Issue.record("expected post to throw for an absent socket")
+    } catch SocketError.connectionFailed {
+        // expected
+    } catch {
+        Issue.record("expected connectionFailed, got \(error)")
+    }
+}
+
 @Test func clientAcceptsPerCallTimeout() throws {
     // `job run` passes a longer read timeout; a short one must still time out.
     let path = tempSocketPath()

@@ -7,9 +7,11 @@ import Glibc
 
 /// Unix domain socket client for sending JSON-RPC 2.0 requests.
 ///
-/// Creates a new connection per request, sends a newline-delimited JSON-RPC
-/// message, and reads the response. Applies a 30-second read timeout and
-/// a 1 MB response size limit matching the server's request limit.
+/// Creates a new connection per request and sends a newline-delimited JSON-RPC
+/// message. `send` then reads the response (30-second read timeout, 1 MB size
+/// limit matching the server's request limit); `post` returns without reading,
+/// for fire-and-forget notifications that must not block the caller on a reply
+/// (#903).
 public struct SocketClient: Sendable {
     private let socketPath: String
 
@@ -38,6 +40,75 @@ public struct SocketClient: Sendable {
         params: [String: JSONValue] = [:],
         timeoutSeconds: Int = SocketClient.readTimeoutSeconds
     ) throws -> JSONRPCResponse {
+        let fd = try connectAndWrite(method: method, params: params)
+        defer { close(fd) }
+
+        // Set read timeout so a hung server doesn't block the CLI indefinitely
+        var timeout = timeval(tv_sec: timeoutSeconds, tv_usec: 0)
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+
+        // Read response until newline (with size limit and timeout awareness)
+        var responseData = Data()
+        var byte: UInt8 = 0
+        while true {
+            let bytesRead = read(fd, &byte, 1)
+            if bytesRead < 0 {
+                if errno == EINTR { continue }  // interrupted by signal; retry
+                if errno == EAGAIN || errno == EWOULDBLOCK {
+                    throw SocketError.timeout
+                }
+                throw SocketError.readFailed(errno)
+            }
+            if bytesRead == 0 { break }
+            if byte == UInt8(ascii: "\n") { break }
+            responseData.append(byte)
+            if responseData.count >= SocketServer.maxMessageSize {
+                throw SocketError.responseTooLarge
+            }
+        }
+
+        let decoder = JSONDecoder()
+        return try decoder.decode(JSONRPCResponse.self, from: responseData)
+    }
+
+    /// Fire-and-forget a JSON-RPC request: connect, write, and return without
+    /// reading (or waiting for) a response.
+    ///
+    /// Used by hooks (`crow hook-event`), which are notifications the agent must
+    /// not block on the daemon's reply for. The daemon still processes the
+    /// request once its serialized `@MainActor` frees; because the client never
+    /// reads a reply, a busy daemon (board poll, git op, whole-store write, a
+    /// burst of hook-events) can no longer stall the agent waiting for a reply
+    /// the fire-and-forget path discards (#903).
+    ///
+    /// This bounds the wait to the `write()`, not a full round-trip. For the
+    /// measured `PreToolUse:Bash` payloads that returns immediately, but no send
+    /// timeout is set (only `SO_RCVTIMEO`), so a payload larger than the socket
+    /// send buffer — e.g. a `Write`/`Edit` hook forwarding a whole file body —
+    /// can still block in `write()` until the daemon drains it. The agent's own
+    /// hook timeout bounds that worst case.
+    ///
+    /// The connection is closed as soon as the request is written. Data already
+    /// accepted into a Unix stream socket's buffer is delivered to the peer
+    /// before the FIN, so the server still receives the full request; if it
+    /// later replies to the now-closed connection, its `SIGPIPE`-ignoring write
+    /// path drops the response harmlessly.
+    ///
+    /// - Throws: `SocketError.connectionFailed` when the daemon isn't running
+    ///   (callers treat this as an expected no-op); other socket errors
+    ///   (`createFailed`, `writeFailed`) still propagate.
+    public func post(method: String, params: [String: JSONValue] = [:]) throws {
+        let fd = try connectAndWrite(method: method, params: params)
+        close(fd)
+    }
+
+    /// Open a connection and write the encoded JSON-RPC request, returning the
+    /// connected file descriptor. The caller owns the fd and must `close` it.
+    ///
+    /// Shared by `send` (which then reads a response) and `post` (fire-and-forget,
+    /// which closes immediately). On any failure after the socket is created the
+    /// fd is closed before throwing, so callers never leak a descriptor.
+    private func connectAndWrite(method: String, params: [String: JSONValue]) throws -> Int32 {
         // Ignore SIGPIPE so a write to a peer-closed socket returns EPIPE
         // rather than killing the process on Linux. See SocketServer.start().
         _ = signal(SIGPIPE, SIG_IGN)
@@ -46,7 +117,9 @@ public struct SocketClient: Sendable {
         guard fd >= 0 else {
             throw SocketError.createFailed(errno)
         }
-        defer { close(fd) }
+        // Hand the fd back on success; close it on any throw below.
+        var keepOpen = false
+        defer { if !keepOpen { close(fd) } }
 
         // Connect
         var addr = sockaddr_un()
@@ -67,10 +140,6 @@ public struct SocketClient: Sendable {
         guard connectResult == 0 else {
             throw SocketError.connectionFailed(errno)
         }
-
-        // Set read timeout so a hung server doesn't block the CLI indefinitely
-        var timeout = timeval(tv_sec: timeoutSeconds, tv_usec: 0)
-        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
 
         // Send request
         let request = JSONRPCRequest(id: 1, method: method, params: params.isEmpty ? nil : params)
@@ -95,27 +164,7 @@ public struct SocketClient: Sendable {
         }
         guard writeOK else { throw SocketError.writeFailed(errno) }
 
-        // Read response until newline (with size limit and timeout awareness)
-        var responseData = Data()
-        var byte: UInt8 = 0
-        while true {
-            let bytesRead = read(fd, &byte, 1)
-            if bytesRead < 0 {
-                if errno == EINTR { continue }  // interrupted by signal; retry
-                if errno == EAGAIN || errno == EWOULDBLOCK {
-                    throw SocketError.timeout
-                }
-                throw SocketError.readFailed(errno)
-            }
-            if bytesRead == 0 { break }
-            if byte == UInt8(ascii: "\n") { break }
-            responseData.append(byte)
-            if responseData.count >= SocketServer.maxMessageSize {
-                throw SocketError.responseTooLarge
-            }
-        }
-
-        let decoder = JSONDecoder()
-        return try decoder.decode(JSONRPCResponse.self, from: responseData)
+        keepOpen = true
+        return fd
     }
 }
