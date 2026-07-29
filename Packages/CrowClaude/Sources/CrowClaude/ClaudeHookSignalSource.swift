@@ -40,18 +40,18 @@ public struct ClaudeHookSignalSource: StateSignalSource {
                 // Apply-order defense (#903). PreToolUse and PermissionRequest
                 // for the same tool can now apply out of order — the client no
                 // longer blocks on the daemon's reply, so the daemon may apply
-                // PermissionRequest first. If it did (permission_prompt already
-                // pending, state already .waiting), a later PreToolUse must NOT
-                // blanket-clear that badge and flip the card to .working while
-                // the agent is parked at the prompt — there is no "next event"
-                // to heal it until the user acts. Preserve both; still record
-                // the tool. Symmetric to PermissionRequest's `!= "question"`
-                // guard below. Normal (in-order) PreToolUse never sees a pending
-                // permission_prompt, so this branch can't fire there.
+                // PermissionRequest first. If it did (permission_prompt pending,
+                // state already .waiting, tool activity already cleared), a late
+                // PreToolUse must NOT blanket-clear the badge or flip the card to
+                // .working while the agent is parked at the prompt — there is no
+                // "next event" to heal it until the user acts. Preserving the
+                // notification is enough: newActivityState and toolActivity stay
+                // at their .leave defaults, so the parked state is identical to
+                // the in-order case (which also ends .waiting with tool activity
+                // cleared by PermissionRequest). Symmetric to PermissionRequest's
+                // `!= "question"` guard below; normal in-order PreToolUse never
+                // sees a pending permission_prompt, so this can't fire there.
                 transition.notification = .leave
-                transition.toolActivity = .set(ToolActivity(
-                    toolName: toolName, isActive: true
-                ))
             } else {
                 transition.toolActivity = .set(ToolActivity(
                     toolName: toolName, isActive: true

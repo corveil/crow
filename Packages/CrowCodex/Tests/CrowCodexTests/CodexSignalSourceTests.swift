@@ -62,6 +62,26 @@ struct CodexSignalSourceTests {
         }
     }
 
+    /// #903 apply-order defense (mirrors the Claude guard): Codex is sync-only,
+    /// so a fire-and-forget daemon can apply PermissionRequest before the same
+    /// tool's PreToolUse. A late PreToolUse must then leave the pending
+    /// permission_prompt + parked state intact instead of flipping to .working.
+    @Test func preToolUseKeepsPendingPermissionPrompt() {
+        let t = source.transition(
+            for: event("PreToolUse", toolName: "Bash"),
+            currentActivityState: .waiting,
+            currentNotificationType: "permission_prompt",
+            currentLastTopLevelStopAt: nil
+        )
+        #expect(t.newActivityState == nil)
+        if case .leave = t.notification {} else {
+            Issue.record("expected pending permission_prompt to be left intact")
+        }
+        if case .leave = t.toolActivity {} else {
+            Issue.record("expected tool activity to be left untouched")
+        }
+    }
+
     @Test func postToolUseMarksInactive() {
         let t = source.transition(
             for: event("PostToolUse", toolName: "Bash"),
@@ -139,8 +159,12 @@ struct CodexSignalSourceTests {
     // MARK: - Blanket clear
 
     @Test func nonPermissionRequestClearsPendingNotification() {
+        // PostToolUse represents the blanket-clear policy here: PreToolUse is now
+        // special-cased to *preserve* a pending permission_prompt (see
+        // preToolUseKeepsPendingPermissionPrompt), so it's no longer the right
+        // stand-in for "any non-PermissionRequest event clears."
         let t = source.transition(
-            for: event("PreToolUse", toolName: "Bash"),
+            for: event("PostToolUse", toolName: "Bash"),
             currentActivityState: .waiting,
             currentNotificationType: "permission_prompt",
             currentLastTopLevelStopAt: nil

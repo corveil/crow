@@ -81,7 +81,9 @@ func hookToolName(from payload: [String: JSONValue]) -> String? {
     // Hold the cap by refusing new keys once full (rather than clearing, which
     // would re-log every already-seen key on the next cycle). Beyond the cap,
     // novel cwds go unlogged — acceptable for a diagnostic bounded to the small
-    // set of real worktrees in practice.
+    // set of real worktrees in practice. `hook-event` is gated local-only
+    // (RPCWebSocketHandler.localOnlyDenial), so filling this cap needs local
+    // socket access, not a remote /rpc peer.
     guard loggedUnresolvedHookDrops.count < 256 else { return }
     loggedUnresolvedHookDrops.insert(key)
     func oneLine(_ s: String) -> String {

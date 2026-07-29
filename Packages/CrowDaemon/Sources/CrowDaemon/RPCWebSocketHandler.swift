@@ -194,6 +194,14 @@ enum RPCWebSocketHandler {
         switch request.method {
         case "run-setup":
             return "run-setup is local-only"
+        case "hook-event":
+            // Agent hook processes emit this over the daemon's 0600 Unix socket
+            // (never /rpc), so a remote caller has no legitimate use for it. It
+            // also mutates per-session hook state and appends to the bounded
+            // unresolved-drop diagnostic log — gating it loopback-only keeps an
+            // authenticated remote peer from poisoning that log's dedup cap or
+            // forging session state (#903 review).
+            return "hook-event is local-only"
         case "open-in-vscode", "open-terminal":
             // These launch a GUI app on the daemon host (VS Code / Terminal at
             // the worktree path). Restrict to loopback callers — a remote web
