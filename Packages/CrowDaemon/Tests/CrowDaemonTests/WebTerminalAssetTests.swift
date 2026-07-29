@@ -315,7 +315,8 @@ import Testing
     @Test func selectToggleLivesInNavRowNotTheToolsStack() throws {
         let js = try Self.webAsset("app.js")
         #expect(
-            try !Self.functionBody("sidebarToolsStack", in: js).contains("checkSquare"),
+            try !Self.stripComments(String(Self.functionBody("sidebarToolsStack", in: js)))
+                .contains("checkSquare"),
             "the Select toggle must not be rebuilt in the sidebar tools stack (CROW-913)")
         let navRow = try Self.functionBody("navPillRow", in: js)
         #expect(
@@ -325,8 +326,12 @@ import Testing
         #expect(
             !css.contains(".tk-tool.nav-selecting"),
             "the .tk-tool.nav-selecting rule is dead once Select leaves the tools stack")
+        // `.nav-select` alone is a substring of `.nav-selecting` (app.css:531's
+        // `.action-btn.nav-selecting`), so anchor to the rule opening AND the
+        // compound form — the latter is what keeps the active toggle red over
+        // `:hover`, so it's the part most worth freezing (review).
         #expect(
-            css.contains(".nav-select"),
+            css.contains(".nav-select {") && css.contains(".nav-select.nav-selecting"),
             "the relocated Select toggle needs its .nav-select styles")
     }
 }

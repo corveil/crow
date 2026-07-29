@@ -663,13 +663,15 @@ html, body {
 .tickets-refresh.spinning { opacity: 0.6; cursor: default; }
 .tickets-row { display: flex; align-items: stretch; gap: 6px; margin: 2px 2px 8px; }
 /* Compact ticket box (CROW-913): was flex:1 1 auto, which grew it to fill the whole row
-   and dominate the sidebar top. Now content-sized within a range instead of a hard px pin
-   — a fixed width clipped the "Tickets" header (and stacked the counts) once a raised
-   browser minimum-font-size or 3-digit counts made the font-relative text outgrow the
-   fixed box (review). The range keeps it compact at typical counts yet lets it expand into
-   the ~161px of otherwise-dead row width, so the header self-heals and the counts stay
-   ~2 rows. Sits beside the horizontal Notifications+Settings tools cluster. */
-.tickets-row .tickets-card { flex: 0 1 auto; width: max-content; min-width: 92px; max-width: 160px; margin: 0; }
+   and dominate the sidebar top. Now content-sized with a 160px ceiling instead of a hard
+   px pin. With the five pipeline counts present it sits at that ceiling (~160px) in
+   practice — the cap is what caps it, not a magic fixed number — but a *ceiling* is the
+   point: the header slot scales with the box, so a raised browser minimum-font-size can't
+   clip "Tickets" the way a fixed px width did (review), and the counts wrap (2 rows
+   typically, 3 at large fonts) instead of forcing the card wider. No min-width: the
+   350px grid never shrinks it, and 92px would be below where the centred head clears the
+   refresh anyway. Sits beside the horizontal Notifications+Settings tools cluster. */
+.tickets-row .tickets-card { flex: 0 1 auto; width: max-content; max-width: 160px; margin: 0; }
 .sidebar-tools { display: flex; flex-direction: row; align-items: center; gap: 6px; flex: 0 0 auto; }
 .tickets-counts { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 8px; margin-top: 8px; padding: 0 2px; }
 .tk-tool {
