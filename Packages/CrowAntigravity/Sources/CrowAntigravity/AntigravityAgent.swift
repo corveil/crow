@@ -117,8 +117,14 @@ public struct AntigravityAgent: CodingAgent {
             // with `-c` (same machine-global most-recent caveat as `.job`).
             //
             // The review clone is an attacker-controlled `gh` checkout at the PR
-            // head: `prepareReviewClone` strips its committed `.agents/` before
-            // `agy` launches, and `launchAgent` never trusts a review clone.
+            // head. Antigravity seeds no folder trust and `agy` runs a committed
+            // `.agents/hooks.json` with no approval gate, so — unlike Codex/Cursor,
+            // where trust-gating is a second layer — stripping `.agents/` is the
+            // *only* defense. It therefore runs at clone creation
+            // (`prepareReviewClone`) AND on every launch path
+            // (`prepareWorktreeForAgentLaunch`), because the SKILL's `gh pr
+            // checkout` / a head-advancing re-review can restore the hooks from the
+            // head between launches (#902 review Red).
             if !session.reviewPromptDispatched {
                 let promptPath = (worktreePath as NSString)
                     .appendingPathComponent(".crow-review-prompt.md")

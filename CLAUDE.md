@@ -117,7 +117,7 @@ crow agents set [--default <kind>] [--work|--review|--job|--manager <kind>] [--c
 
 - `known` lists **every** agent Crow ships, each with `available` — the same surface-but-disable roster the web pickers show (#879), so an off-PATH agent reads as "not installed" rather than vanishing. Availability is decided when `crowd` **starts**, so a newly installed agent needs a daemon restart.
 - Only `available: true` kinds are selectable. An unavailable one is **rejected and nothing is written** (stricter than `crow new-session --agent`, which falls back to the default); a known-but-uninstalled kind gets its own message naming the binary.
-- A role flag also rejects an agent that can't run that session kind — today only `--review antigravity` (no review dispatch), mirroring `crow handoff-agent`. `--default` is not gated this way on purpose.
+- A role flag also rejects an agent that can't run that session kind — but **no agent is review-incapable today** (Antigravity's review dispatch landed in #902), so the gate refuses nothing right now; it's kept in lockstep with `crow handoff-agent` for a future harness. `--default` is not gated this way on purpose.
 - `--clear <role>` **removes** the override key, never writes a null — one null would make the whole `config.json` undecodable. Repeat per role; `--clear X` with `--X <kind>` is rejected.
 - If `effective` names a kind that isn't available, the CLI warns on stderr — that role's sessions will not launch.
 

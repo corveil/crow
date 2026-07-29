@@ -136,6 +136,17 @@ struct SessionServiceReviewPromptTests {
 
         #expect(!prompt.isEmpty)
         #expect(!prompt.hasPrefix("/crow-review-pr"))
+        // Pin the *exact* inline branch (not merely "any non-Claude branch") and
+        // the `.antigravity` agentKind threading: the output must equal the
+        // inline-SKILL helper called with `.antigravity`. Independent of whether
+        // `bundledReviewSkill()` returns the real skill or the test-env stub —
+        // both sides resolve it identically — so this catches a stray `.antigravity`
+        // in a different non-Claude branch OR a wrong-agentKind footer (#902 review
+        // Green 1).
+        #expect(prompt == SessionService.cursorReviewPrompt(
+            skillBody: Scaffolder.bundledReviewSkill(),
+            prURL: Self.prURL,
+            agentKind: .antigravity))
     }
 
     @Test func buildReviewPromptClaudeBranchIsTerseSlashCommand() {

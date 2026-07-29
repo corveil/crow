@@ -189,29 +189,30 @@ struct SessionServiceReviewCloneStripTests {
         #expect(FileManager.default.fileExists(atPath: cursorDir))
     }
 
-    /// Only a `.review` handoff *to Antigravity* strips: the exact gate that
-    /// keeps a review session flipped to Antigravity after prep from launching
-    /// `agy` in an unstripped hostile clone.
-    @Test func antigravityHandoffGateFiresOnlyForReview() {
-        #expect(SessionService.shouldStripAntigravityReviewCloneOnHandoff(
-            targetKind: .antigravity, sessionKind: .review))
+    /// Only a `.review` clone *on Antigravity* strips: the gate that keeps every
+    /// launch path (`prepareWorktreeForAgentLaunch`) — warm restart, `crow send`,
+    /// handoff — from launching `agy` in an unstripped hostile clone after the
+    /// review skill's `gh pr checkout` restores committed `.agents/` hooks.
+    @Test func antigravityStripGateFiresOnlyForReview() {
+        #expect(SessionService.shouldStripAntigravityReviewClone(
+            agentKind: .antigravity, sessionKind: .review))
     }
 
-    /// A `.work`/`.job` handoff to Antigravity is a normal working clone — no strip.
-    @Test func antigravityHandoffGateSkipsNonReview() {
-        #expect(!SessionService.shouldStripAntigravityReviewCloneOnHandoff(
-            targetKind: .antigravity, sessionKind: .work))
-        #expect(!SessionService.shouldStripAntigravityReviewCloneOnHandoff(
-            targetKind: .antigravity, sessionKind: .job))
+    /// A `.work`/`.job` Antigravity session is a normal working clone — no strip.
+    @Test func antigravityStripGateSkipsNonReview() {
+        #expect(!SessionService.shouldStripAntigravityReviewClone(
+            agentKind: .antigravity, sessionKind: .work))
+        #expect(!SessionService.shouldStripAntigravityReviewClone(
+            agentKind: .antigravity, sessionKind: .job))
     }
 
-    /// A `.review` handoff to any *other* agent must not strip `.agents/` — only
+    /// A `.review` on any *other* agent must not strip `.agents/` — only
     /// Antigravity loads it, so stripping for another agent would just hide the
     /// files a hostile PR ships (same reasoning as the `.cursor/`/`.codex/` gates).
-    @Test func antigravityHandoffGateSkipsReviewForOtherAgents() {
+    @Test func antigravityStripGateSkipsReviewForOtherAgents() {
         for k: AgentKind in [.claudeCode, .cursor, .codex, .openCode] {
-            #expect(!SessionService.shouldStripAntigravityReviewCloneOnHandoff(
-                targetKind: k, sessionKind: .review))
+            #expect(!SessionService.shouldStripAntigravityReviewClone(
+                agentKind: k, sessionKind: .review))
         }
     }
 }
