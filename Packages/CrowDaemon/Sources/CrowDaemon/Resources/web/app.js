@@ -1004,11 +1004,13 @@ function renderSidebar() {
   brand.alt = 'Crow';
   root.appendChild(brand);
 
-  const trow = el('div', 'tickets-row');
-  trow.appendChild(ticketsCard());
-  trow.appendChild(sidebarToolsStack());
-  root.appendChild(trow);
-  root.appendChild(navPillRow());
+  // Two-column sidebar top (CROW-917): a left stack [tickets → Reviews/Allowlist/
+  // Scorecard → Manager] over a far-right column of four stacked icon buttons
+  // [bell, gear, +, select], which flex evenly to align alongside the left rows.
+  const top = el('div', 'sidebar-top');
+  top.appendChild(sidebarLeftStack());
+  top.appendChild(sidebarIconColumn());
+  root.appendChild(top);
   if (selectionMode) root.appendChild(bulkActionBar());
 
   // Cold start only: structured skeleton rows so the left pane isn't blank
@@ -1260,11 +1262,12 @@ function renderStatusBar() {
   }
 }
 
-// Notifications + Settings, side by side to the right of the Tickets card
-// (outside the box). The Select-sessions toggle moved down to navPillRow row 1,
-// next to Scorecard (CROW-913).
-function sidebarToolsStack() {
-  const stack = el('div', 'sidebar-tools');
+// Far-right sidebar column (CROW-917): the four global icon buttons stacked
+// vertically — Notifications bell, Settings gear, "+" new-manager, and the
+// Select-sessions toggle. They flex evenly to align alongside the left stack's
+// rows (tickets = 2 rows, Reviews-row = 1, Manager-row = 1 → 4 icons).
+function sidebarIconColumn() {
+  const col = el('div', 'sidebar-right');
   // Notification center (CROW-909): bell + unread badge, first so it's the most
   // prominent global affordance. Visible in every view (sessions and boards).
   const bell = el('button', 'tk-tool tk-bell');
@@ -1273,20 +1276,38 @@ function sidebarToolsStack() {
   bell.appendChild(icon('bell', 14));
   if (unread) bell.appendChild(el('span', 'notif-badge', unread > 99 ? '99+' : String(unread)));
   bell.onclick = () => openNotificationPanel(bell);
-  stack.appendChild(bell);
+  col.appendChild(bell);
+
   const gear = el('button', 'tk-tool');
   gear.title = 'Settings';
   gear.appendChild(icon('wrench', 14));
   gear.onclick = () => { if (window.openSettings) window.openSettings(); };
-  stack.appendChild(gear);
-  return stack;
+  col.appendChild(gear);
+
+  const plus = el('button', 'nav-plus', '+');
+  plus.title = 'New Manager session';
+  plus.onclick = () => openNewManagerMenu(plus);
+  col.appendChild(plus);
+
+  // Select-sessions toggle (CROW-913 → moved into this column, CROW-917): toggles
+  // selectionMode, clears the selection on cancel, reads red (.nav-selecting) active.
+  const sel = el('button', 'nav-select' + (selectionMode ? ' nav-selecting' : ''));
+  sel.title = selectionMode ? 'Cancel selection' : 'Select sessions';
+  sel.setAttribute('aria-label', sel.title);
+  sel.appendChild(icon(selectionMode ? 'close' : 'checkSquare', 14));
+  sel.onclick = () => { selectionMode = !selectionMode; if (!selectionMode) selectedSessionIDs.clear(); renderSidebar(); };
+  col.appendChild(sel);
+
+  return col;
 }
 
-// Reviews / Allowlist / Manager pills + "+" (new manager).
-function navPillRow() {
-  const wrap = el('div', 'nav-pills');
+// Left sidebar-top stack (CROW-917): the Tickets card over two nav-pill rows —
+// row 1 Reviews · Allowlist · Scorecard, row 2 the full-width Manager pill.
+function sidebarLeftStack() {
+  const wrap = el('div', 'sidebar-left');
+  wrap.appendChild(ticketsCard());
 
-  // Row 1: Reviews · Allowlist · Scorecard · Select (kept together, no mid-group wrap).
+  // Row 1: Reviews · Allowlist · Scorecard (each its own non-wrapping flex line).
   const row1 = el('div', 'nav-pills-row');
   const rev = navPill('Reviews', selectedBoard === 'reviews', () => selectBoard('reviews'));
   const unseen = (boardData.reviews && boardData.reviews.unseen) || 0;
@@ -1294,18 +1315,9 @@ function navPillRow() {
   row1.appendChild(rev);
   row1.appendChild(navPill('Allowlist', selectedBoard === 'allowlist', () => selectBoard('allowlist')));
   row1.appendChild(navPill('Scorecard', selectedBoard === 'scorecard', () => selectBoard('scorecard')));
-  // Select-sessions toggle (CROW-913): moved out of the sidebar tools stack to sit
-  // beside Scorecard as an aligned icon button. Same behavior — toggles selectionMode,
-  // clears the selection on cancel, and reads red (.nav-selecting) while active.
-  const sel = el('button', 'nav-select' + (selectionMode ? ' nav-selecting' : ''));
-  sel.title = selectionMode ? 'Cancel selection' : 'Select sessions';
-  sel.setAttribute('aria-label', sel.title);
-  sel.appendChild(icon(selectionMode ? 'close' : 'checkSquare', 14));
-  sel.onclick = () => { selectionMode = !selectionMode; if (!selectionMode) selectedSessionIDs.clear(); renderSidebar(); };
-  row1.appendChild(sel);
   wrap.appendChild(row1);
 
-  // Row 2: Manager pill (when a primary manager session exists) + the "+" new-manager button.
+  // Row 2: the primary Manager pill, spanning the full left-column width.
   const row2 = el('div', 'nav-pills-row');
   const primaryManager = sessions.find((s) => s.kind === 'manager');
   if (primaryManager) {
@@ -1317,10 +1329,6 @@ function navPillRow() {
     if (liveFor(primaryManager.id).remote_control_active) mgr.appendChild(rcGlyph());
     row2.appendChild(mgr);
   }
-  const plus = el('button', 'nav-plus', '+');
-  plus.title = 'New Manager session';
-  plus.onclick = () => openNewManagerMenu(plus);
-  row2.appendChild(plus);
   wrap.appendChild(row2);
 
   return wrap;
