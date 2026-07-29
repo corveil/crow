@@ -2862,15 +2862,16 @@ function labelPills(labels, maxVisible) {
   return wrap;
 }
 
-// An empty board is just an empty list, not an error. `crowd` serves the boards
-// off its own IssueTracker/AllowListService (CROW-581 M-C), so we only reach here
-// when the `list-*` RPC succeeded and returned zero items — the daemon is up and
-// the board is genuinely empty. No "desktop app required" hint: it's stale post
-// native→web migration (ADR 0010) and read as a false error/warning (CROW-907).
+// An empty board is just an empty list, not an error — `crowd` serves the boards
+// off its own IssueTracker/AllowListService (CROW-581 M-C), so a "requires the
+// Crow desktop app" hint would be stale post native→web migration (ADR 0010) and
+// read as a false error/warning (CROW-907). Just render the caller's context
+// message ("No review requests", …). NOTE: this is reachable before the first
+// read lands (the pre-refresh paint at selectBoard) — a caller that must not
+// conflate "not loaded yet" with "empty" gates the message itself, as
+// renderAllowlist does with its scanning state.
 function boardEmpty(msg) {
-  const wrap = el('div', 'board-empty');
-  wrap.appendChild(el('div', null, msg));
-  return wrap;
+  return el('div', 'board-empty', msg);
 }
 
 // A spawning action (Start Working / Start Review): disable the button, let the
@@ -3474,6 +3475,13 @@ function reviewCard(r) {
 // -- Allowlist --
 function renderAllowlist(root) {
   const d = boardData.allowlist;
+  // The allowlist is never cached (persistSidebarCache stores only tickets/
+  // reviews) and never polled — it's manual-refresh-only, auto-scanned once on
+  // open (CROW-593). So a cold open renders before the first `list-allowlist`
+  // read lands (d == null), and `d.loading` marks a scan the daemon reports as
+  // still running. In both, the board isn't known-empty yet — distinguish that
+  // from a genuinely empty allowlist below so it doesn't flash "No entries".
+  const scanning = !d || d.loading;
   let entries = ((d && d.entries) || []).slice();
   if (allowlistHideGlobal) entries = entries.filter((e) => !e.is_global);
   // #701: case-insensitive substring filter on pattern (mirrors desktop's
@@ -3490,7 +3498,9 @@ function renderAllowlist(root) {
   for (const p of [...allowlistSelection]) if (!visiblePromotable.has(p)) allowlistSelection.delete(p);
 
   const head = el('div', 'board-head');
-  head.appendChild(el('div', 'board-title', 'Allowlist'));
+  const title = el('div', 'board-title', 'Allowlist');
+  if (scanning) title.appendChild(el('span', 'action-spinner'));
+  head.appendChild(title);
   const hide = el('button', 'action-btn' + (allowlistHideGlobal ? ' active' : ''), allowlistHideGlobal ? 'Show Global' : 'Hide Global');
   hide.onclick = () => { allowlistHideGlobal = !allowlistHideGlobal; renderBoard(); };
   head.appendChild(hide);
@@ -3518,6 +3528,8 @@ function renderAllowlist(root) {
   root.appendChild(boardFilterInput('allow-filter', allowlistFilter, 'Filter patterns…', (v) => { allowlistFilter = v; }));
 
   if (!entries.length) {
+    // Unfiltered + not yet loaded ⇒ say so rather than claim "empty" mid-scan.
+    if (scanning && !filter) { root.appendChild(boardEmpty('Scanning allowlist…')); return; }
     root.appendChild(boardEmpty(filter ? 'No matching entries' : 'No allowlist entries'));
     return;
   }
