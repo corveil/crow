@@ -2,19 +2,19 @@ const fs = require('fs');
 const vm = require('vm');
 const { JSDOM } = require('jsdom');
 
-// CROW-913 behaviour test: the Select-sessions toggle moved from the sidebar
-// tools stack into nav-pills row 1. Runs the REAL app.js under jsdom and drives
-// the relocated `.nav-select` button — a string guard proves only that the code
-// moved files; this proves the behaviour survived the move (toggles
-// `selectionMode`, and clears `selectedSessionIDs` on cancel). Same loader shape
-// as board.test.js / sidebar-groups.test.js. renderSidebar is neutered so the
-// click exercises just the handler, not a full re-render.
+// CROW-917 behaviour test: the Select-sessions toggle lives in the far-right
+// sidebar icon column (`sidebarIconColumn`), stacked under bell/gear/+. Runs the
+// REAL app.js under jsdom and drives the `.nav-select` button — a string guard
+// proves only that the code moved files; this proves the behaviour survived the
+// move (toggles `selectionMode`, and clears `selectedSessionIDs` on cancel). Same
+// loader shape as board.test.js / sidebar-groups.test.js. renderSidebar is
+// neutered so the click exercises just the handler, not a full re-render.
 const epilogue = `
 ;globalThis.__t = {
   get selectionMode(){ return selectionMode; },
   set selectionMode(v){ selectionMode = v; },
   get selectedSessionIDs(){ return selectedSessionIDs; },
-  navPillRow(){ return navPillRow(); },
+  sidebarIconColumn(){ return sidebarIconColumn(); },
   neuterRender(){ renderSidebar = function(){}; },
 };
 `;
@@ -46,7 +46,7 @@ if (!T) { console.log('FATAL: epilogue did not run (app.js threw before it)'); p
 
 let pass = 0, fail = 0;
 const check = (name, cond) => { if (cond) { pass++; console.log('  ✓ ' + name); } else { fail++; console.log('  ✗ ' + name); } };
-const selBtn = () => T.navPillRow().querySelector('.nav-select');
+const selBtn = () => T.sidebarIconColumn().querySelector('.nav-select');
 
 T.neuterRender();
 
@@ -54,7 +54,7 @@ console.log('\nSelect toggle — idle → active:');
 T.selectionMode = false;
 T.selectedSessionIDs.clear();
 let sel = selBtn();
-check('.nav-select renders in nav-pills row 1', !!sel);
+check('.nav-select renders in the sidebar icon column', !!sel);
 check('idle: not red (no nav-selecting)', !sel.className.includes('nav-selecting'));
 check('idle: title + aria-label = "Select sessions"',
   sel.title === 'Select sessions' && sel.getAttribute('aria-label') === 'Select sessions');

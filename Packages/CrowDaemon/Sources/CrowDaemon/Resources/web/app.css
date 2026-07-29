@@ -646,8 +646,13 @@ html, body {
   background: var(--bg-surface); border: 1px solid var(--border-subtle);
   border-radius: 8px; padding: 8px; cursor: pointer;
   /* Full width of the left column, ~2 button-rows tall so it lines up with the
-     Notifications+Settings pair in the right icon column (CROW-917). */
-  margin: 0; box-sizing: border-box; height: 64px;
+     Notifications+Settings pair in the right icon column (CROW-917). `min-height`
+     not `height`: a raised browser minimum-font-size grows the title/counts past
+     the resting 46px content box, and a hard height would clip the counts row out
+     the bottom border (the #913 fixed-px failure mode). Growing is safe — the
+     right column stretches to whatever the left resolves to, re-deriving the
+     4-icon alignment for free. */
+  margin: 0; box-sizing: border-box; min-height: 64px;
   display: flex; flex-direction: column; justify-content: space-between;
 }
 .tickets-card:hover { border-color: var(--border-strong); }

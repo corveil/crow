@@ -1273,6 +1273,7 @@ function sidebarIconColumn() {
   const bell = el('button', 'tk-tool tk-bell');
   const unread = notifUnreadCount();
   bell.title = unread ? unread + ' unread notification' + (unread === 1 ? '' : 's') : 'Notifications';
+  bell.setAttribute('aria-label', bell.title);
   bell.appendChild(icon('bell', 14));
   if (unread) bell.appendChild(el('span', 'notif-badge', unread > 99 ? '99+' : String(unread)));
   bell.onclick = () => openNotificationPanel(bell);
@@ -1280,12 +1281,14 @@ function sidebarIconColumn() {
 
   const gear = el('button', 'tk-tool');
   gear.title = 'Settings';
+  gear.setAttribute('aria-label', 'Settings');
   gear.appendChild(icon('wrench', 14));
   gear.onclick = () => { if (window.openSettings) window.openSettings(); };
   col.appendChild(gear);
 
   const plus = el('button', 'nav-plus', '+');
   plus.title = 'New Manager session';
+  plus.setAttribute('aria-label', 'New Manager session');
   plus.onclick = () => openNewManagerMenu(plus);
   col.appendChild(plus);
 
@@ -1317,10 +1320,15 @@ function sidebarLeftStack() {
   row1.appendChild(navPill('Scorecard', selectedBoard === 'scorecard', () => selectBoard('scorecard')));
   wrap.appendChild(row1);
 
-  // Row 2: the primary Manager pill, spanning the full left-column width.
-  const row2 = el('div', 'nav-pills-row');
+  // Row 2: the primary Manager pill, spanning the full left-column width. Only
+  // appended when a primary manager exists — an empty row would drop a pill's
+  // worth of height (plus a stray 6px gap) off the left column, squashing the
+  // right icon column's four flex:1 buttons below the 24px WCAG target floor and
+  // breaking the "4 rows ↔ 4 icons" alignment (also on the cold-start no-cache
+  // render, where sessions is still empty — CROW-917 review).
   const primaryManager = sessions.find((s) => s.kind === 'manager');
   if (primaryManager) {
+    const row2 = el('div', 'nav-pills-row');
     const mgr = navPill('Manager', selectedId === primaryManager.id, () => selectSession(primaryManager.id));
     const ind = activityIndicator(primaryManager);
     const dot = el('span', 'pill-dot' + (ind.pulse ? ' pulse' : ''));
@@ -1328,8 +1336,8 @@ function sidebarLeftStack() {
     mgr.insertBefore(dot, mgr.firstChild);
     if (liveFor(primaryManager.id).remote_control_active) mgr.appendChild(rcGlyph());
     row2.appendChild(mgr);
+    wrap.appendChild(row2);
   }
-  wrap.appendChild(row2);
 
   return wrap;
 }
