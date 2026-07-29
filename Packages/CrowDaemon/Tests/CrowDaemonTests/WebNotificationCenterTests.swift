@@ -176,4 +176,78 @@ import Testing
             !body.contains("innerHTML"),
             "the panel must not use innerHTML — user/server strings go through el()'s textContent")
     }
+
+    /// Second-round Red 1: the outside-click closer must be removable, not
+    /// `{ once: true }`. A click inside a menu that stopPropagations never reaches
+    /// document, so a once-listener stays armed with no menu on screen and the
+    /// next open's click bubbles up and tears the fresh menu straight down. Every
+    /// menu opener must arm through the shared helper, and closeContextMenu must
+    /// remove the handle — so no site is left on the leaky pattern.
+    @Test func outsideClickCloserIsRemovableNotOnce() throws {
+        let source = try Self.webAsset("app.js")
+        #expect(
+            !source.contains("closeContextMenu, { once: true }"),
+            "no menu may arm the outside-click close as a leaky { once: true } listener")
+        #expect(
+            try Self.functionBody("closeContextMenu", in: source)
+                .contains("removeEventListener('click', _ctxMenuCloser)"),
+            "closeContextMenu must remove the armed outside-click listener")
+        // Every left-click/anchored menu opener arms through the one helper.
+        let arms = source.components(separatedBy: "armContextMenuClose();").count - 1
+        #expect(arms >= 6, "all menu openers must arm via armContextMenuClose(); found \(arms)")
+    }
+
+    /// Second-round Red 2: the notification history holds the same class of data
+    /// as the sidebar cache (session names, PR/issue titles, issue URLs), so it
+    /// must be purged at both auth boundaries — otherwise the next user on a
+    /// shared browser can open the bell and read the previous user's workspace.
+    /// One helper drops both keys; both the logout and cookie-death paths call it.
+    @Test func authBoundariesPurgeTheNotificationHistory() throws {
+        let source = try Self.webAsset("app.js")
+        let helper = try Self.functionBody("purgeSharedBrowserCaches", in: source)
+        #expect(
+            helper.contains("clearSidebarCache()") && helper.contains("removeItem(NOTIF_HISTORY_KEY)"),
+            "the purge helper must drop BOTH the sidebar cache and the notif history key")
+        #expect(
+            try Self.functionBody("handleAuthOnDisconnect", in: source)
+                .contains("purgeSharedBrowserCaches()"),
+            "the cookie-death path must purge the shared caches")
+        // The logout handler is an inline onclick, not a named function — assert
+        // there are at least two call sites (logout + cookie death), and that the
+        // boot-catch recovery is NOT one of them (it must keep a valid history).
+        let calls = source.components(separatedBy: "purgeSharedBrowserCaches();").count - 1
+        #expect(calls >= 2, "both auth boundaries must call the purge helper; found \(calls)")
+    }
+
+    /// Second-round Yellow 3: the center honors the MASTER notification levels —
+    /// globalMute and the per-event `enabled` toggle — so a muted / switched-off
+    /// event doesn't pile up an un-opt-out-able badge. The sub-toggles and focus
+    /// rule stay bypassed (the log isn't an interruption); this only pins the two
+    /// master gates.
+    @Test func recordHonorsGlobalMuteAndThePerEventToggle() throws {
+        let body = try Self.functionBody("recordNotification", in: Self.webAsset("app.js"))
+        #expect(body.contains("N.globalMute"), "record must respect global mute")
+        #expect(
+            body.contains("cfg.enabled === false"),
+            "record must respect the per-event master toggle")
+    }
+
+    /// Second-round Yellow 4: appends coalesce to one sidebar repaint per task,
+    /// not one per event — a detector tick transitioning k sessions must not do k
+    /// full innerHTML rebuilds. record must schedule (not call renderSidebar
+    /// directly), and the scheduler must use a microtask so onServerNotify still
+    /// paints within the turn.
+    @Test func recordCoalescesTheSidebarRepaint() throws {
+        let source = try Self.webAsset("app.js")
+        let body = try Self.functionBody("recordNotification", in: source)
+        #expect(
+            body.contains("scheduleNotifRepaint()"),
+            "record must schedule a coalesced repaint")
+        #expect(
+            !body.contains("renderSidebar()"),
+            "record must not call renderSidebar() directly per event")
+        #expect(
+            try Self.functionBody("scheduleNotifRepaint", in: source).contains("Promise.resolve().then"),
+            "the repaint must coalesce on a microtask")
+    }
 }
