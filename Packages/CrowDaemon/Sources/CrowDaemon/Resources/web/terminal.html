@@ -152,6 +152,28 @@
       }
       term.attachCustomKeyEventHandler(function (e) {
         if (e.type !== 'keydown') return true;
+        // Shift+Enter → CSI-u, so Claude Code can tell it from a plain Enter
+        // and inserts a newline instead of submitting (#598/CROW-916). xterm's
+        // key table has no shiftKey branch for keyCode 13, so both chords
+        // otherwise reach the PTY as the same bare \r. crow-tmux.conf's
+        // `extended-keys on` + `xterm*:extkeys` carries this to apps that
+        // negotiate extended keys and downgrades it to a plain \r for apps
+        // that don't, so nothing leaks into vim or a shell.
+        //
+        // Option+Enter is deliberately NOT handled: xterm maps altKey + Enter
+        // to ESC CR natively, so a branch here would only restate the library.
+        // `!e.altKey` keeps Shift+Option+Enter on that native path.
+        //
+        // preventDefault() is required: returning false makes xterm's _keyDown
+        // return before its own cancel (#875), and this handler waves the
+        // keypress phase through — an uncancelled keydown would write a second
+        // \r there.
+        if (e.key === 'Enter' && e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey) {
+          sendToPTY('\x1b[13;2u');
+          e.preventDefault();
+          e.stopPropagation();
+          return false;
+        }
         const copyCombo = (e.metaKey && !e.ctrlKey) || (e.ctrlKey && e.shiftKey);
         if (copyCombo && (e.key === 'c' || e.key === 'C')) {
           if (term.hasSelection()) {
