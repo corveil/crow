@@ -1006,7 +1006,7 @@ function renderSidebar() {
 
   // Two-column sidebar top (CROW-917): a left stack [tickets → Reviews/Allowlist/
   // Scorecard → Manager] over a far-right column of four stacked icon buttons
-  // [bell, gear, +, select], which flex evenly to align alongside the left rows.
+  // [bell, gear, +, select], grouped and centered in the column (CROW-922).
   const top = el('div', 'sidebar-top');
   top.appendChild(sidebarLeftStack());
   top.appendChild(sidebarIconColumn());
@@ -1264,8 +1264,8 @@ function renderStatusBar() {
 
 // Far-right sidebar column (CROW-917): the four global icon buttons stacked
 // vertically — Notifications bell, Settings gear, "+" new-manager, and the
-// Select-sessions toggle. They flex evenly to align alongside the left stack's
-// rows (tickets = 2 rows, Reviews-row = 1, Manager-row = 1 → 4 icons).
+// Select-sessions toggle. Fixed-size and centered as a block in the column
+// (CROW-922), not stretched to divide its height.
 function sidebarIconColumn() {
   const col = el('div', 'sidebar-right');
   // Notification center (CROW-909): bell + unread badge, first so it's the most

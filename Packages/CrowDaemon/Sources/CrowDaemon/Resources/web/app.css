@@ -645,13 +645,11 @@ html, body {
 .tickets-card {
   background: var(--bg-surface); border: 1px solid var(--border-subtle);
   border-radius: 8px; padding: 8px; cursor: pointer;
-  /* Full width of the left column, ~2 button-rows tall so it lines up with the
-     Notifications+Settings pair in the right icon column (CROW-917). `min-height`
-     not `height`: a raised browser minimum-font-size grows the title/counts past
-     the resting 46px content box, and a hard height would clip the counts row out
-     the bottom border (the #913 fixed-px failure mode). Growing is safe — the
-     right column stretches to whatever the left resolves to, re-deriving the
-     4-icon alignment for free. */
+  /* Full width of the left column. `min-height` not `height`: a raised browser
+     minimum-font-size grows the title/counts past the resting 46px content box, and
+     a hard height would clip the counts row out the bottom border (the #913 fixed-px
+     failure mode). The right icon column no longer divides the left's height
+     (CROW-922), so growing here just makes the row taller — nothing to re-derive. */
   margin: 0; box-sizing: border-box; min-height: 64px;
   display: flex; flex-direction: column; justify-content: space-between;
 }
@@ -675,24 +673,30 @@ html, body {
    matching the detail-header action-button spinner (CROW-749). */
 .tickets-refresh.spinning { opacity: 0.6; cursor: default; }
 /* Two-column sidebar top (CROW-917): left stack (tickets over the nav rows) beside
-   a one-icon-wide right column. `align-items: stretch` still makes the right column
-   as tall as the left, but its icon buttons no longer flex-fill — `justify-content:
-   center` groups them as a centered block instead of spreading across the height
-   (CROW-922). */
+   a one-icon-wide right column. `align-items: stretch` keeps the two columns the
+   same height — whichever is taller sets it (usually the left, though the fixed
+   4-icon right stack can win on a Manager-less / cold-start render). The right
+   column's buttons no longer flex-fill: `justify-content: center` groups them as a
+   centered block rather than spreading across the height (CROW-922). */
 .sidebar-top { display: flex; align-items: stretch; gap: 6px; margin: 2px 2px 8px; }
 .sidebar-left { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
 .sidebar-right { flex: 0 0 auto; width: 30px; display: flex; flex-direction: column; justify-content: center; gap: 6px; }
-/* Each icon button keeps a fixed square size instead of stretching, so bell/gear/+/
-   select read as one tight centered stack (CROW-922). The 28px height stays above
-   the WCAG 2.2 §2.5.8 target-size minimum (24px) — the sidebar is the full-width
-   touch view on mobile — and `width: 100%` keeps them column-wide. */
-.sidebar-right > button { flex: 0 0 auto; width: 100%; height: 28px; }
+/* Each icon button keeps its natural size (grouped, not stretched) with a 28px
+   floor, so bell/gear/+/select read as one tight centered stack (CROW-922).
+   `min-height` not `height` — same reasoning as .tickets-card above — keeps it
+   grow-safe: .nav-plus renders a 15px text "+" that a raised browser min-font-size
+   would push past a fixed box. 28px clears the WCAG 2.2 §2.5.8 target-size minimum
+   (24px; box-sizing: border-box, so the 30×28 border box counts), and the sidebar
+   is the full-width touch view on mobile. `width: 100%` keeps them column-wide. */
+.sidebar-right > button { flex: 0 0 auto; width: 100%; min-height: 28px; }
 /* 5 status mini-counts grouped and centered rather than spread edge-to-edge
    (CROW-922); each .tk-count is content-sized so glyph+number stay together. */
 .tickets-counts { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 0 2px; }
+/* Bell + gear live only in .sidebar-right, so `.sidebar-right > button` owns their
+   box size (column width + 28px floor); this rule carries just the chrome (CROW-922). */
 .tk-tool {
   display: inline-flex; align-items: center; justify-content: center;
-  width: 30px; height: 29px; border-radius: 6px; cursor: pointer;
+  border-radius: 6px; cursor: pointer;
   border: 1px solid var(--border-subtle); background: var(--bg-card); color: var(--gold-dark);
 }
 .tk-tool:hover { color: var(--gold); border-color: var(--border-strong); }

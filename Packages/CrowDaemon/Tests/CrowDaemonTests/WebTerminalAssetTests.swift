@@ -375,21 +375,21 @@ import Testing
             "the relocated Select toggle needs its .nav-select styles")
     }
 
-    /// CROW-917: two layout decisions with no other pin, both verified to regress
-    /// silently (deleting either leaves every suite green). The right column's four
-    /// `flex:1` icons divide the left column's height, so a short Manager-less /
-    /// cold-start column would push them under the WCAG 2.2 §2.5.8 target-size
-    /// minimum without the `min-height` floor a prior review round mandated; and
-    /// relocating the new-manager `"+"` into that column (out of the nav rows) is
-    /// half this PR's purpose, yet the Select pin above only anchors on `.nav-select`.
+    /// CROW-917/922: two layout decisions with no other pin, both verified to regress
+    /// silently (deleting either leaves every suite green). The right column's icon
+    /// buttons are fixed-size with a `min-height` floor (CROW-922 replaced the earlier
+    /// flex:1 divide-the-column-height), keeping them above the WCAG 2.2 §2.5.8
+    /// target-size minimum and grow-safe against a raised browser min-font-size; and
+    /// relocating the new-manager `"+"` into that column (out of the nav rows) is half
+    /// this PR's purpose, yet the Select pin above only anchors on `.nav-select`.
     @Test func iconColumnHasWcagFloorAndHoldsTheNewManagerButton() throws {
         // stripComments the CSS: the floor's value is also named in the rule's doc
         // comment, so a bare whole-file `contains` false-passes off the prose once
         // the declaration itself is deleted (caught by mutation-testing this pin).
         let css = Self.stripComments(try Self.webAsset("app.css"))
         #expect(
-            css.contains("min-height: 24px"),
-            "the right column's icon buttons need the 24px WCAG 2.5.8 target-size floor (CROW-917 review)")
+            css.contains("min-height: 28px"),
+            "the right column's icon buttons need the min-height floor above the WCAG 2.5.8 target-size minimum (CROW-917/922)")
         // Pin the append, not the `el('button', 'nav-plus', …)` construction: the
         // regression the review names is the "+" being built but not rendered, so a
         // `contains("'nav-plus'")` would miss a dropped appendChild (also mutation-checked).
