@@ -364,6 +364,27 @@ function sessionNameFor(id) {
   return (s && s.name) || 'Session';
 }
 
+// Derive the { title, body } for an event, enriched with the session name (for
+// session events) or the review's repo (for reviews). A server-supplied
+// title/body (automation events) is used verbatim. Shared by the transient
+// browser/Tauri banner and the notification center so both read identically
+// (CROW-909).
+function eventNotificationText(event, key, detail) {
+  const isSession = !!sessions.find((x) => x.id === key);
+  const title = (detail && detail.title) || EVENT_LABEL[event] || event;
+  let body = (detail && detail.body) || '';
+  if (!body) {
+    body = EVENT_DESC[event] || '';
+    if (isSession) {
+      body = `${sessionNameFor(key)} — ${body}`;
+    } else {
+      const r = ((boardData.reviews && boardData.reviews.reviews) || []).find((x) => x.id === key);
+      if (r && r.repo) body = `${r.repo} — ${body}`;
+    }
+  }
+  return { title, body };
+}
+
 // `detail` (optional) carries a server-supplied { title, body } for automation
 // events, whose text is specific (PR number, issue title) rather than derivable
 // from EVENT_DESC (CROW-768).
@@ -394,17 +415,7 @@ function showEventNotification(event, key, detail) {
 
   // A server-supplied title/body already names the PR / issue / session, so it's
   // used verbatim; derived events get the label plus a subject prefix.
-  const label = (detail && detail.title) || EVENT_LABEL[event] || event;
-  let body = (detail && detail.body) || '';
-  if (!body) {
-    body = EVENT_DESC[event] || '';
-    if (isSession) {
-      body = `${sessionNameFor(key)} — ${body}`;
-    } else {
-      const r = ((boardData.reviews && boardData.reviews.reviews) || []).find((x) => x.id === key);
-      if (r && r.repo) body = `${r.repo} — ${body}`;
-    }
-  }
+  const { title: label, body } = eventNotificationText(event, key, detail);
   try {
     // In the desktop app, WKWebView lacks the Web Notification API — post via the
     // Tauri plugin instead. (Click-to-focus below stays web-only.)
@@ -438,6 +449,98 @@ function showEventNotification(event, key, detail) {
 function emitEvent(event, key, detail) {
   playEventSound(event, key);
   showEventNotification(event, key, detail);
+  recordNotification(event, key, detail);
+}
+
+// --- Notification center: history + unread counter (CROW-909) ---------------
+// The sound + banner above are fire-and-forget. The center keeps a client-side
+// history of every event that reaches emitEvent — recorded UNGATED (unlike the
+// banner, which self-suppresses on focus/mute), so the panel is a faithful log
+// even for events whose transient popup you never saw. Per-client (localStorage,
+// same pattern as the sidebar cache): each web tab / the desktop app keep their
+// own; a server-synced history would be a larger follow-up.
+const NOTIF_HISTORY_KEY = 'crow.notif.history';
+const NOTIF_HISTORY_CAP = 100; // keep the last ~100; older entries drop off
+let notifHistory = [];         // [{ id, event, key, title, body, ts, seen, kind, target }]
+let _notifSeq = 0;             // disambiguates entries appended in the same ms
+
+function restoreNotifHistory() {
+  try {
+    const raw = localStorage.getItem(NOTIF_HISTORY_KEY);
+    if (!raw) return;
+    const data = JSON.parse(raw);
+    if (Array.isArray(data)) notifHistory = data.slice(-NOTIF_HISTORY_CAP);
+  } catch (_) { /* corrupt cache — start empty */ }
+}
+function persistNotifHistory() {
+  try { localStorage.setItem(NOTIF_HISTORY_KEY, JSON.stringify(notifHistory)); }
+  catch (_) { /* quota / private mode */ }
+}
+function notifUnreadCount() {
+  let n = 0;
+  for (const e of notifHistory) if (!e.seen) n++;
+  return n;
+}
+
+// Classify the click-through target at append time (event type is stable),
+// while leaving the live lookup (review→session, session existence) to click
+// time where the state is fresh. Mirrors the routing in showEventNotification's
+// Notification.onclick (CROW-909).
+function classifyNotification(event, key) {
+  if (sessions.find((x) => x.id === key)) return { kind: 'session', target: key };
+  if (AUTOMATION_EVENTS.indexOf(event) === -1) return { kind: 'review', target: key };
+  // Automation keyed by an issue URL opens externally; `config`/other → no target.
+  if (typeof key === 'string' && /^https?:\/\//.test(key)) return { kind: 'url', target: key };
+  return { kind: 'none', target: null };
+}
+
+// Append one event to the history and bump the unread counter. Called from
+// emitEvent unconditionally: the detectors already gate on the arm window, so
+// this can't be flooded by a page load.
+function recordNotification(event, key, detail) {
+  const { title, body } = eventNotificationText(event, key, detail);
+  const { kind, target } = classifyNotification(event, key);
+  notifHistory.push({
+    id: Date.now() + '.' + (_notifSeq++),
+    event, key: key || '', title, body, ts: Date.now(), seen: false, kind, target,
+  });
+  if (notifHistory.length > NOTIF_HISTORY_CAP) {
+    notifHistory = notifHistory.slice(-NOTIF_HISTORY_CAP);
+  }
+  persistNotifHistory();
+  // The unread count is part of sidebarSignature, so this repaints the badge.
+  try { renderSidebar(); } catch (_) { /* pre-boot — badge paints on first render */ }
+}
+
+// Relative "5m ago" timestamp for panel rows; falls back to a locale date past a
+// week so old entries stay legible.
+function relTime(ts) {
+  const s = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+  if (s < 45) return 'just now';
+  const m = Math.floor(s / 60);
+  if (m < 60) return m + 'm ago';
+  const h = Math.floor(m / 60);
+  if (h < 24) return h + 'h ago';
+  const d = Math.floor(h / 24);
+  if (d < 7) return d + 'd ago';
+  try { return new Date(ts).toLocaleDateString(); } catch (_) { return ''; }
+}
+
+// Route a history entry to its origin, reusing the live state so a review whose
+// session started after the event still lands on that session (CROW-909).
+function navigateToNotification(entry) {
+  try {
+    if (entry.kind === 'session') {
+      if (sessions.find((x) => x.id === entry.target)) selectSession(entry.target);
+    } else if (entry.kind === 'review') {
+      const r = ((boardData.reviews && boardData.reviews.reviews) || []).find((x) => x.id === entry.target);
+      if (r && r.review_session_id) selectSession(r.review_session_id);
+      else selectBoard('reviews');
+    } else if (entry.kind === 'url') {
+      window.open(entry.target, '_blank', 'noopener');
+    }
+    // kind 'none' (config reload, non-URL automation) has no in-app target.
+  } catch (_) { /* nav best-effort */ }
 }
 
 // Server-pushed automation event (CROW-768). The daemon fires these at the point
@@ -786,6 +889,9 @@ function sidebarSignature() {
     boardData.tickets && boardData.tickets.counts,
     boardData.tickets && boardData.tickets.done_last_24h,
     boardData.reviews && boardData.reviews.unseen,
+    // The bell's unread badge (CROW-909) — not store-backed, so name it here so
+    // an appended notification actually repaints the badge.
+    notifUnreadCount(),
     // The ↻ spins off this, and the local half isn't in `boardData` (CROW-771).
     ticketsRefreshing(),
   ]);
@@ -1064,6 +1170,15 @@ function renderStatusBar() {
 // (outside the box): Settings on top, Select below.
 function sidebarToolsStack() {
   const stack = el('div', 'sidebar-tools');
+  // Notification center (CROW-909): bell + unread badge, first so it's the most
+  // prominent global affordance. Visible in every view (sessions and boards).
+  const bell = el('button', 'tk-tool tk-bell');
+  const unread = notifUnreadCount();
+  bell.title = unread ? unread + ' unread notification' + (unread === 1 ? '' : 's') : 'Notifications';
+  bell.appendChild(icon('bell', 14));
+  if (unread) bell.appendChild(el('span', 'notif-badge', unread > 99 ? '99+' : String(unread)));
+  bell.onclick = () => openNotificationPanel(bell);
+  stack.appendChild(bell);
   const gear = el('button', 'tk-tool');
   gear.title = 'Settings';
   gear.appendChild(icon('wrench', 14));
@@ -1181,6 +1296,72 @@ async function openNewManagerMenu(anchorEl) {
   setTimeout(() => document.addEventListener('click', closeContextMenu, { once: true }), 0);
 }
 
+// Notification center panel (CROW-909): an anchored popover mirroring
+// openNewManagerMenu — reuses the .ctx-menu shell (so closeContextMenu closes
+// it) with a .notif-panel modifier for the wider, scrollable, two-line layout.
+// Opening marks every entry seen (clears the unread badge). Clicking a row
+// navigates to its origin; a "Clear all" empties the history.
+function openNotificationPanel(anchorEl) {
+  // Toggle: a second click on the bell dismisses the open panel.
+  if (document.querySelector('.notif-panel')) { closeContextMenu(); return; }
+  closeContextMenu();
+
+  // Opening is "reading" — mark all seen and drop the unread badge.
+  if (notifUnreadCount()) {
+    for (const e of notifHistory) e.seen = true;
+    persistNotifHistory();
+    renderSidebar();
+  }
+
+  const menu = el('div', 'ctx-menu notif-panel');
+  const header = el('div', 'notif-header');
+  header.appendChild(el('span', 'notif-title', 'Notifications'));
+  if (notifHistory.length) {
+    const clear = el('button', 'notif-clear', 'Clear all');
+    clear.onclick = (ev) => {
+      ev.stopPropagation();
+      notifHistory = [];
+      persistNotifHistory();
+      closeContextMenu();
+      renderSidebar();
+    };
+    header.appendChild(clear);
+  }
+  menu.appendChild(header);
+
+  if (!notifHistory.length) {
+    menu.appendChild(el('div', 'notif-empty', 'No notifications yet'));
+  } else {
+    const list = el('div', 'notif-list');
+    // Newest first.
+    for (let i = notifHistory.length - 1; i >= 0; i--) {
+      const entry = notifHistory[i];
+      const navigable = entry.kind === 'session' || entry.kind === 'review' || entry.kind === 'url';
+      const item = el('div', 'notif-item' + (navigable ? '' : ' notif-static'));
+      const line1 = el('div', 'notif-row1');
+      line1.appendChild(el('span', 'notif-item-title', entry.title || EVENT_LABEL[entry.event] || entry.event));
+      line1.appendChild(el('span', 'notif-time', relTime(entry.ts)));
+      item.appendChild(line1);
+      if (entry.body) item.appendChild(el('div', 'notif-item-body', entry.body));
+      if (navigable) {
+        item.onclick = (ev) => { ev.stopPropagation(); closeContextMenu(); navigateToNotification(entry); };
+      } else {
+        item.onclick = (ev) => ev.stopPropagation();
+      }
+      list.appendChild(item);
+    }
+    menu.appendChild(list);
+  }
+
+  document.body.appendChild(menu);
+  const rect = anchorEl.getBoundingClientRect();
+  const x = Math.min(rect.left, window.innerWidth - menu.offsetWidth - 8);
+  const y = Math.min(rect.bottom + 4, window.innerHeight - menu.offsetHeight - 8);
+  menu.style.left = Math.max(4, x) + 'px';
+  menu.style.top = Math.max(4, y) + 'px';
+  setTimeout(() => document.addEventListener('click', closeContextMenu, { once: true }), 0);
+}
+
 // Sidebar status/activity indicator, mirroring the desktop: for active
 // sessions the dot is driven by hook activity (working / needs-attention /
 // done); otherwise by session status.
@@ -1208,6 +1389,7 @@ const ICONS = {
   code: '<path d="M6 5 2.5 8 6 11"/><path d="M10 5l3.5 3-3.5 3"/>',
   terminal: '<rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M4.5 6.5 6.5 8l-2 1.5"/><path d="M8 9.5h3"/>',
   comment: '<path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z"/>',
+  bell: '<path d="M4.5 7a3.5 3.5 0 0 1 7 0c0 3 1 4 1.5 4.5H3C3.5 11 4.5 10 4.5 7Z"/><path d="M6.6 13a1.6 1.6 0 0 0 2.8 0"/>',
 };
 function icon(name, size) {
   const span = el('span', 'ico');
@@ -4535,6 +4717,7 @@ document.getElementById('terminal-wrap').addEventListener('contextmenu', showTer
 // cache entry must not abort the rest of boot (polls / refreshSessions).
 try {
   restoreSidebarCache();
+  restoreNotifHistory();
   renderSidebar();
 } catch (_) {
   clearSidebarCache();

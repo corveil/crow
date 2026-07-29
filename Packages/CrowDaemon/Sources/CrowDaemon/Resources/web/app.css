@@ -675,6 +675,44 @@ html, body {
 .tk-tool:hover { color: var(--gold); border-color: var(--border-strong); }
 .tk-tool.nav-selecting { color: var(--red); border-color: var(--red); }
 
+/* Notification bell (CROW-909): unread count as a badge over the top-right
+   corner of the bell button. Mirrors the Reviews pill's badge palette. */
+.tk-bell { position: relative; }
+.notif-badge {
+  position: absolute; top: -5px; right: -5px; min-width: 15px; height: 15px;
+  padding: 0 3px; box-sizing: border-box;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 8px; font-size: 9px; font-weight: 700; line-height: 1;
+  font-variant-numeric: tabular-nums;
+  background: var(--gold); color: var(--bg-deep);
+  border: 1px solid var(--bg-card);
+}
+
+/* Notification center panel: a wider, scrollable variant of the .ctx-menu shell
+   with a header (title + Clear all) and two-line rows. */
+.notif-panel { width: 320px; max-width: calc(100vw - 16px); padding: 0; }
+.notif-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 12px; border-bottom: 1px solid var(--border-subtle);
+}
+.notif-title { font-size: 12px; font-weight: 700; color: var(--gold); }
+.notif-clear {
+  padding: 2px 8px; border-radius: 5px; cursor: pointer;
+  font-size: 11px; font-weight: 600; color: var(--text-secondary);
+  background: transparent; border: 1px solid var(--border-subtle);
+}
+.notif-clear:hover { color: var(--text-primary); border-color: var(--border-strong); }
+.notif-empty { padding: 18px 12px; text-align: center; font-size: 12px; color: var(--text-secondary); }
+.notif-list { max-height: 340px; overflow-y: auto; padding: 4px; }
+.notif-item { padding: 7px 9px; border-radius: 6px; cursor: pointer; }
+.notif-item:hover { background: rgba(221, 196, 130, 0.14); }
+.notif-item.notif-static { cursor: default; }
+.notif-item.notif-static:hover { background: transparent; }
+.notif-row1 { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.notif-item-title { font-size: 12px; font-weight: 600; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.notif-time { flex: 0 0 auto; font-size: 10px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.notif-item-body { margin-top: 2px; font-size: 11px; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* ---- Fixed connection/status bar (bottom-left, CROW-593) ---- */
 #statusbar {
   position: fixed;
