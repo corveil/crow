@@ -453,12 +453,14 @@ function emitEvent(event, key, detail) {
 }
 
 // --- Notification center: history + unread counter (CROW-909) ---------------
-// The sound + banner above are fire-and-forget. The center keeps a client-side
-// history of every event that reaches emitEvent — recorded UNGATED (unlike the
-// banner, which self-suppresses on focus/mute), so the panel is a faithful log
-// even for events whose transient popup you never saw. Per-client (localStorage,
-// same pattern as the sidebar cache): each web tab / the desktop app keep their
-// own; a server-synced history would be a larger follow-up.
+// The sound + banner above are fire-and-forget. The center keeps a history of
+// every event that reaches emitEvent — recorded UNGATED (unlike the banner,
+// which self-suppresses on focus/mute), so the panel is a faithful log even for
+// events whose transient popup you never saw. Per-browser, not per-tab:
+// localStorage is shared across every tab on the origin, so a `storage` listener
+// keeps the tabs in sync and each mutate re-reads first to compose rather than
+// clobber (review). Not server-synced — a shared, cross-device history is a
+// larger follow-up.
 const NOTIF_HISTORY_KEY = 'crow.notif.history';
 const NOTIF_HISTORY_CAP = 100; // keep the last ~100; older entries drop off
 let notifHistory = [];         // [{ id, event, key, title, body, ts, seen, kind, target }]
@@ -469,7 +471,13 @@ function restoreNotifHistory() {
     const raw = localStorage.getItem(NOTIF_HISTORY_KEY);
     if (!raw) return;
     const data = JSON.parse(raw);
-    if (Array.isArray(data)) notifHistory = data.slice(-NOTIF_HISTORY_CAP);
+    // Filter to plain objects: a parseable-but-wrong array (`[null, …]`, a
+    // foreign schema) would otherwise let a later `e.seen` read throw inside
+    // notifUnreadCount → sidebarSignature → every renderSidebar, wedging the
+    // whole sidebar until the key is cleared by hand (review).
+    if (Array.isArray(data)) {
+      notifHistory = data.filter((e) => e && typeof e === 'object').slice(-NOTIF_HISTORY_CAP);
+    }
   } catch (_) { /* corrupt cache — start empty */ }
 }
 function persistNotifHistory() {
@@ -478,9 +486,18 @@ function persistNotifHistory() {
 }
 function notifUnreadCount() {
   let n = 0;
-  for (const e of notifHistory) if (!e.seen) n++;
+  for (const e of notifHistory) if (e && !e.seen) n++;
   return n;
 }
+
+// Another tab wrote the shared history (append, mark-seen, or clear). Re-read so
+// this tab's badge/panel reflect it instead of drifting, then repaint. Does not
+// fire in the tab that made the change, so there's no write→event loop (review).
+window.addEventListener('storage', (e) => {
+  if (e.key !== NOTIF_HISTORY_KEY) return;
+  restoreNotifHistory();
+  try { renderSidebar(); } catch (_) { /* pre-boot */ }
+});
 
 // Classify the click-through target at append time (event type is stable),
 // while leaving the live lookup (review→session, session existence) to click
@@ -496,13 +513,23 @@ function classifyNotification(event, key) {
 
 // Append one event to the history and bump the unread counter. Called from
 // emitEvent unconditionally: the detectors already gate on the arm window, so
-// this can't be flooded by a page load.
+// this can't be flooded by a page load. A 2s per-(key,event) dedup mirrors the
+// sound/banner channels — a flapping poll or a repeated server push produced
+// duplicate popups there, and would produce duplicate rows here (review).
+const _lastRecordAt = {};
 function recordNotification(event, key, detail) {
+  const k = (key || '') + '|' + event;
+  const now = Date.now();
+  if (_lastRecordAt[k] && now - _lastRecordAt[k] < 2000) return;
+  _lastRecordAt[k] = now;
+  // Re-read the shared store first so a concurrent tab's entries compose with
+  // this append instead of being overwritten by our stale in-memory copy.
+  restoreNotifHistory();
   const { title, body } = eventNotificationText(event, key, detail);
   const { kind, target } = classifyNotification(event, key);
   notifHistory.push({
-    id: Date.now() + '.' + (_notifSeq++),
-    event, key: key || '', title, body, ts: Date.now(), seen: false, kind, target,
+    id: now + '.' + (_notifSeq++),
+    event, key: key || '', title, body, ts: now, seen: false, kind, target,
   });
   if (notifHistory.length > NOTIF_HISTORY_CAP) {
     notifHistory = notifHistory.slice(-NOTIF_HISTORY_CAP);
@@ -537,7 +564,13 @@ function navigateToNotification(entry) {
       if (r && r.review_session_id) selectSession(r.review_session_id);
       else selectBoard('reviews');
     } else if (entry.kind === 'url') {
-      window.open(entry.target, '_blank', 'noopener');
+      // Re-test the scheme at click time — `entry.target` came from localStorage,
+      // which same-origin script could have tampered with or an older build could
+      // have written under looser rules. classifyNotification already rejects
+      // javascript:/data: at record time; this is cheap defense-in-depth (review).
+      if (typeof entry.target === 'string' && /^https?:\/\//.test(entry.target)) {
+        window.open(entry.target, '_blank', 'noopener');
+      }
     }
     // kind 'none' (config reload, non-URL automation) has no in-app target.
   } catch (_) { /* nav best-effort */ }
@@ -591,6 +624,19 @@ window.crowTestNotify = function (event) {
   };
   if (Notification.permission === 'granted') fire();
   else Notification.requestPermission().then((p) => { if (p === 'granted') fire(); else console.warn('[crowNotify] permission:', p); });
+};
+
+// Manual test hook for the notification center (CROW-909). Unlike crowTestSound
+// / crowTestNotify — which call crowSound.play / new Notification directly and
+// so never touch the history — this drives the real emitEvent path, so it moves
+// the bell's unread badge and appends a row. crowTestEvent() fires taskComplete
+// against the first session; crowTestEvent('reviewRequested', '<id>') targets a
+// specific key. Subject to the same config gating as a real event.
+window.crowTestEvent = function (event, key) {
+  const ev = event || 'taskComplete';
+  const k = key || (sessions[0] && sessions[0].id) || 'test';
+  emitEvent(ev, k);
+  console.log('[crowEvent] test', ev, '→', k, '· unread now', notifUnreadCount());
 };
 
 // Event detection: diff successive state snapshots. Snapshots always update; the
@@ -1306,8 +1352,18 @@ function openNotificationPanel(anchorEl) {
   if (document.querySelector('.notif-panel')) { closeContextMenu(); return; }
   closeContextMenu();
 
-  // Opening is "reading" — mark all seen and drop the unread badge.
+  // Measure the anchor BEFORE the seen-marking repaint below: renderSidebar
+  // rebuilds the tools stack from scratch (root.innerHTML = ''), detaching this
+  // very `bell`. A detached node has no layout box, so a later
+  // getBoundingClientRect() would read all-zeros and the panel would clamp to
+  // the viewport corner instead of under the bell (review).
+  const rect = anchorEl.getBoundingClientRect();
+
+  // Opening is "reading" — mark all seen and drop the unread badge. Re-read
+  // first so a concurrent tab's newer entries aren't clobbered by writing back
+  // our stale in-memory copy (review).
   if (notifUnreadCount()) {
+    restoreNotifHistory();
     for (const e of notifHistory) e.seen = true;
     persistNotifHistory();
     renderSidebar();
@@ -1354,7 +1410,6 @@ function openNotificationPanel(anchorEl) {
   }
 
   document.body.appendChild(menu);
-  const rect = anchorEl.getBoundingClientRect();
   const x = Math.min(rect.left, window.innerWidth - menu.offsetWidth - 8);
   const y = Math.min(rect.bottom + 4, window.innerHeight - menu.offsetHeight - 8);
   menu.style.left = Math.max(4, x) + 'px';
@@ -4722,6 +4777,9 @@ try {
 } catch (_) {
   clearSidebarCache();
   sessions = [];
+  // A poisoned notif history is filtered on restore, but reset here too so this
+  // recovery path can't itself re-throw on the retry render below (review).
+  notifHistory = [];
   lastSidebarSig = null;
   try { renderSidebar(); } catch (_) { /* keep going — RPC refresh will paint */ }
 }

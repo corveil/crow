@@ -1,0 +1,179 @@
+import Foundation
+import Testing
+@testable import CrowDaemon
+
+/// Drift guard for the notification center served out of `Resources/web/app.js`
+/// (CROW-909). There's no JS test runner in this repo, so — like
+/// `WebTerminalAssetTests` — these pin the non-obvious invariants of the feature
+/// against the `app.js` source a reviewer actually edits. The bugs each one
+/// guards were all live at first review (PR #910): a detached-anchor mispositon,
+/// a poisoned-cache render wedge, a multi-tab last-writer-wins clobber, and a
+/// dedup gap.
+@Suite struct WebNotificationCenterTests {
+    /// Walk up to `Resources/web/<name>` and read it (the assets are `.copy`d, so
+    /// the repo copy is the source of truth). Mirrors `WebTerminalAssetTests`.
+    private static func webAsset(_ name: String) throws -> String {
+        var dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        var found: URL?
+        for _ in 0..<10 {
+            let candidate = dir.appendingPathComponent(
+                "Sources/CrowDaemon/Resources/web/\(name)")
+            if FileManager.default.fileExists(atPath: candidate.path) {
+                found = candidate
+                break
+            }
+            dir = dir.deletingLastPathComponent()
+        }
+        let url = try #require(found, "could not locate Resources/web/\(name)")
+        return try String(contentsOf: url, encoding: .utf8)
+    }
+
+    /// The body of a top-level `function <name>(` … `\n}` block, so an assertion
+    /// is about one handler rather than the whole file. Same shape as
+    /// `WebTerminalAssetTests.functionBody`.
+    private static func functionBody(_ name: String, in source: String) throws -> Substring {
+        let start = try #require(source.range(of: "function \(name)("), "no \(name)")
+        let rest = source[start.upperBound...]
+        let end = try #require(rest.range(of: "\n}\n"), "unterminated \(name)")
+        return rest[..<end.lowerBound]
+    }
+
+    /// `source` with `/* … */` and `//` comments removed, for negative
+    /// assertions where the prose legitimately names the thing the code must not
+    /// do. Copied from `WebTerminalAssetTests.stripComments`.
+    private static func stripComments(_ source: String) -> String {
+        var withoutBlocks = ""
+        var rest = Substring(source)
+        while let open = rest.range(of: "/*"),
+              let close = rest.range(of: "*/", range: open.upperBound..<rest.endIndex) {
+            withoutBlocks += rest[..<open.lowerBound]
+            rest = rest[close.upperBound...]
+        }
+        withoutBlocks += rest
+        return withoutBlocks.split(separator: "\n", omittingEmptySubsequences: false)
+            .map { line -> Substring in
+                guard let marker = line.range(of: "//") else { return line }
+                return line[..<marker.lowerBound]
+            }
+            .joined(separator: "\n")
+    }
+
+    /// Every event funnels through `emitEvent`, so the history append lives there
+    /// — the one chokepoint the whole feature hangs off. If this call is dropped,
+    /// nothing is ever recorded and the bell stays permanently empty.
+    @Test func emitEventRecordsToTheCenter() throws {
+        let body = try Self.functionBody("emitEvent", in: Self.webAsset("app.js"))
+        #expect(
+            body.contains("recordNotification(event, key, detail)"),
+            "emitEvent must append to the history, not just play the sound/banner")
+    }
+
+    /// The Red from review: `renderSidebar()` does `root.innerHTML = ''` and
+    /// rebuilds the tools stack, detaching the `bell` passed in as the anchor. A
+    /// detached node measures all-zeros, so the panel must capture
+    /// getBoundingClientRect BEFORE the seen-marking repaint or it clamps to the
+    /// viewport corner instead of under the bell — and that path fires exactly
+    /// when the badge is showing, i.e. the normal reason to open it.
+    @Test func panelMeasuresAnchorBeforeTheSeenMarkingRepaint() throws {
+        let body = String(try Self.functionBody("openNotificationPanel", in: Self.webAsset("app.js")))
+        let measure = try #require(body.range(of: "getBoundingClientRect("), "panel must measure the anchor")
+        let repaint = try #require(body.range(of: "renderSidebar()"), "panel must repaint after marking seen")
+        #expect(
+            measure.lowerBound < repaint.lowerBound,
+            "the anchor rect must be captured before renderSidebar() detaches the bell")
+    }
+
+    /// The Yellow that wedges the sidebar: `restoreNotifHistory` must drop
+    /// non-object entries, or a parseable-but-wrong array (`[null, …]`, a foreign
+    /// schema) lets a later `e.seen` read throw inside notifUnreadCount →
+    /// sidebarSignature → every renderSidebar, and the sidebar stays dead until
+    /// the key is cleared by hand.
+    @Test func restoreFiltersPoisonedEntries() throws {
+        let body = try Self.functionBody("restoreNotifHistory", in: Self.webAsset("app.js"))
+        #expect(
+            body.contains("typeof e === 'object'"),
+            "restore must filter to plain objects so a poisoned array can't wedge the render")
+    }
+
+    /// The boot recovery path must reset `notifHistory` too, not only the sidebar
+    /// cache — otherwise a poisoned history survives into the retry render (and
+    /// every later poll-driven render, some outside a try) and the recovery
+    /// itself re-throws.
+    @Test func bootCatchResetsTheHistory() throws {
+        let source = Self.stripComments(try Self.webAsset("app.js"))
+        // The boot recovery block is the only place that clears the sidebar cache
+        // and resets `sessions` back-to-back — anchor on that pair so a different
+        // clearSidebarCache() caller (the logout button) isn't matched.
+        let anchor = try #require(
+            source.range(of: "clearSidebarCache();\n  sessions = [];"),
+            "no boot recovery block")
+        let window = source[anchor.lowerBound...].prefix(200)
+        #expect(
+            window.contains("notifHistory = []"),
+            "the boot catch must reset notifHistory so a poisoned key self-heals")
+    }
+
+    /// The multi-tab Yellow: localStorage is per-origin, so `recordNotification`
+    /// must re-read the shared store before appending (compose, not clobber a
+    /// concurrent tab), and a `storage` listener must re-sync this tab. Without
+    /// both, tabs silently drop each other's entries and the badge re-inflates.
+    @Test func recordReReadsAndTabsStayInSync() throws {
+        let source = try Self.webAsset("app.js")
+        let body = try Self.functionBody("recordNotification", in: source)
+        #expect(
+            body.contains("restoreNotifHistory();"),
+            "record must re-read the shared store before appending (multi-tab compose)")
+        #expect(
+            source.contains("addEventListener('storage'"),
+            "a storage listener must re-sync history across tabs on the same origin")
+    }
+
+    /// Record-time dedup mirroring the sound/banner channels' 2s per-(key,event)
+    /// window — a flapping poll or repeated server push produced duplicate popups
+    /// there, and would produce duplicate rows here.
+    @Test func recordDedupsWithinTwoSeconds() throws {
+        let body = try Self.functionBody("recordNotification", in: Self.webAsset("app.js"))
+        #expect(
+            body.contains("_lastRecordAt[k]") && body.contains("< 2000"),
+            "record must carry the same 2s per-(key,event) dedup as the sibling channels")
+    }
+
+    /// The unread count is not store-backed, so it must be named in
+    /// `sidebarSignature` or an appended notification never repaints the badge
+    /// (the signature guard would short-circuit the render).
+    @Test func unreadCountIsInTheSidebarSignature() throws {
+        let body = try Self.functionBody("sidebarSignature", in: Self.webAsset("app.js"))
+        #expect(
+            body.contains("notifUnreadCount()"),
+            "sidebarSignature must include the unread count so the badge repaints")
+    }
+
+    /// External navigation is gated: `classifyNotification` only tags an entry
+    /// `url` after an http(s) scheme test, so `javascript:`/`data:` keys can never
+    /// reach window.open, and the open severs the opener. Both must hold.
+    @Test func externalOpenIsSchemeGuardedAndOpenerSevered() throws {
+        let source = try Self.webAsset("app.js")
+        let classify = try Self.functionBody("classifyNotification", in: source)
+        #expect(
+            classify.contains(#"/^https?:\/\//.test(key)"#),
+            "only http(s) keys may be classified as an external URL")
+        let nav = try Self.functionBody("navigateToNotification", in: source)
+        #expect(
+            nav.contains("'_blank', 'noopener'"),
+            "external open must sever the opener reference")
+        #expect(
+            nav.contains(#"/^https?:\/\//.test(entry.target)"#),
+            "the stored target's scheme must be re-tested at click time (defense-in-depth)")
+    }
+
+    /// The panel renders every user/server string through `el(...)` (textContent),
+    /// never innerHTML — the property that keeps a hostile PR title / issue body
+    /// from being an XSS vector.
+    @Test func panelBuildsRowsWithoutInnerHTML() throws {
+        let body = Self.stripComments(String(
+            try Self.functionBody("openNotificationPanel", in: Self.webAsset("app.js"))))
+        #expect(
+            !body.contains("innerHTML"),
+            "the panel must not use innerHTML — user/server strings go through el()'s textContent")
+    }
+}
