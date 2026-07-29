@@ -651,21 +651,28 @@ html, body {
      failure mode). The right icon column no longer divides the left's height
      (CROW-922), so growing here just makes the row taller — nothing to re-derive. */
   margin: 0; box-sizing: border-box; min-height: 64px;
+  /* Refresh-button edge, shared by .tickets-refresh's box and the mirror spacer track in
+     .tickets-head — one source of truth so the two can't drift and silently de-centre the
+     title (CROW-924). At/below the WCAG 2.2 §2.5.8 24px target min today; a future bump to
+     match the sibling icon column (app.css :688 uses 28px) is a one-token change here. */
+  --tk-refresh: 22px;
   display: flex; flex-direction: column; justify-content: space-between;
 }
 .tickets-card:hover { border-color: var(--border-strong); }
 .tickets-card.selected { border-color: var(--gold); }
 /* Centred title, refresh right (CROW-924): now the .tickets-card is full-width (CROW-922)
    the compact-card overlap that forced a left-aligned space-between row (CROW-913) is gone.
-   A 3-column grid — a spacer matching the button width, the title in 1fr, then the refresh —
-   centres the title relative to the whole box while the ↻ stays balanced at the right edge
-   and in-flow (no overlap even when the title ellipsises under a raised min-font-size). */
-.tickets-head { display: grid; grid-template-columns: 22px 1fr 22px; align-items: center; gap: 4px; }
+   A 3-column grid — a left spacer track that mirrors the button width via --tk-refresh, the
+   title in 1fr, then the refresh — centres the title relative to the whole box while the ↻
+   stays balanced at the right edge and in-flow (no overlap even when the title ellipsises
+   under a raised min-font-size). Both spacer and button read the one --tk-refresh so they
+   can't disagree and drift the title off-centre. */
+.tickets-head { display: grid; grid-template-columns: var(--tk-refresh) 1fr var(--tk-refresh); align-items: center; gap: 4px; }
 .tickets-title { grid-column: 2; text-align: center; color: var(--gold); font-weight: 700; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .tickets-refresh {
   grid-column: 3;
   display: inline-flex; align-items: center; justify-content: center;
-  width: 22px; height: 22px; padding: 0; border-radius: 6px; cursor: pointer; line-height: 1;
+  width: var(--tk-refresh); height: var(--tk-refresh); padding: 0; border-radius: 6px; cursor: pointer; line-height: 1;
   border: 1px solid var(--border-subtle); background: var(--bg-card); color: var(--text-secondary); font-size: 12px;
 }
 .tickets-refresh:hover { color: var(--text-primary); border-color: var(--border-strong); }

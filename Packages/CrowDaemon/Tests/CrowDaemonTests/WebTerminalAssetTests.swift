@@ -431,4 +431,26 @@ import Testing
             !css.contains("width: max-content; max-width: 160px"),
             "the #913 content-sized width cap is superseded — the card is full-width in the left column now")
     }
+
+    /// CROW-924: the "Tickets" title centres in the full-width box, superseding the
+    /// left-pinning `space-between` head CROW-913 used while the card was compact. The
+    /// centring is a 3-column grid whose two outer tracks both read `--tk-refresh` — the
+    /// same token the refresh button sizes from — so the left spacer can't drift from the
+    /// button's width and silently de-centre the title. That single source of truth is the
+    /// durability fix; the two literal `22px`s it replaces were a standing, untested trap
+    /// (a WCAG target-size bump to one would de-centre with every suite still green). Pin
+    /// the whole grid rule (a revert to `space-between` or to hardcoded outer widths fails
+    /// here) and that the button derives its box from the same token.
+    @Test func ticketTitleCentresViaGrid() throws {
+        // stripComments: `--tk-refresh`, "grid", and "space-between" all appear in the
+        // .tickets-card / .tickets-head doc comments, so a raw-file `contains` would
+        // false-pass off the prose once a declaration is deleted (mutation-checked).
+        let css = Self.stripComments(try Self.webAsset("app.css"))
+        #expect(
+            css.contains(".tickets-head { display: grid; grid-template-columns: var(--tk-refresh) 1fr var(--tk-refresh); align-items: center; gap: 4px; }"),
+            "the title must centre via the var-driven 3-column grid, not a left-pinning space-between row (CROW-924)")
+        #expect(
+            css.contains("width: var(--tk-refresh); height: var(--tk-refresh);"),
+            "the refresh button must size from --tk-refresh so the mirror spacer track can't drift from it and de-centre the title (CROW-924)")
+    }
 }
