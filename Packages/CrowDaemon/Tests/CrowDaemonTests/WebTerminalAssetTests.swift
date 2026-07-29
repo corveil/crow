@@ -375,21 +375,31 @@ import Testing
             "the relocated Select toggle needs its .nav-select styles")
     }
 
-    /// CROW-917/922: two layout decisions with no other pin, both verified to regress
-    /// silently (deleting either leaves every suite green). The right column's icon
-    /// buttons are fixed-size with a `min-height` floor (CROW-922 replaced the earlier
-    /// flex:1 divide-the-column-height), keeping them above the WCAG 2.2 §2.5.8
-    /// target-size minimum and grow-safe against a raised browser min-font-size; and
-    /// relocating the new-manager `"+"` into that column (out of the nav rows) is half
-    /// this PR's purpose, yet the Select pin above only anchors on `.nav-select`.
+    /// CROW-917/922: layout decisions with no other pin, verified to regress silently
+    /// (reverting any leaves every suite green). CROW-922 made the right column's icon
+    /// buttons natural-size (`flex: 0 0 auto`) with a `min-height` floor above the WCAG
+    /// 2.2 §2.5.8 target-size minimum, and centers the stack (`justify-content: center`)
+    /// so the non-stretching buttons don't bunch at the top under `align-items: stretch`
+    /// — both pinned as whole-rule text below, so a revert to `flex: 1 1 0` or a dropped
+    /// `justify-content` is caught, not just a changed floor value. Separately, relocating
+    /// the new-manager `"+"` into that column (out of the nav rows) is half CROW-917's
+    /// purpose, yet the Select pin above only anchors on `.nav-select`.
     @Test func iconColumnHasWcagFloorAndHoldsTheNewManagerButton() throws {
-        // stripComments the CSS: the floor's value is also named in the rule's doc
-        // comment, so a bare whole-file `contains` false-passes off the prose once
-        // the declaration itself is deleted (caught by mutation-testing this pin).
+        // stripComments the CSS: the floor value + `flex: 0 0 auto` are also named in the
+        // rules' doc comments, so a whole-file `contains` would false-pass off the prose
+        // once a declaration is deleted (this pin is mutation-checked against that).
         let css = Self.stripComments(try Self.webAsset("app.css"))
+        // Pin the whole button rule, not just the floor: the CROW-922 regressions to
+        // guard are `flex: 1 1 0` creeping back (buttons stretch again) and losing the
+        // 28px floor, so anchor both to the `.sidebar-right > button` selector.
         #expect(
-            css.contains("min-height: 28px"),
-            "the right column's icon buttons need the min-height floor above the WCAG 2.5.8 target-size minimum (CROW-917/922)")
+            css.contains(".sidebar-right > button { flex: 0 0 auto; width: 100%; min-height: 28px; }"),
+            "the right column's buttons must be natural-size (flex:0 0 auto) with the 28px WCAG 2.5.8 floor, not flex-filling (CROW-917/922)")
+        // And that the column centers its now-non-stretching stack — dropping this leaves
+        // the buttons bunched at the top under `.sidebar-top`'s `align-items: stretch`.
+        #expect(
+            css.contains(".sidebar-right { flex: 0 0 auto; width: 30px; display: flex; flex-direction: column; justify-content: center; gap: 6px; }"),
+            "the right icon column must center its fixed-size button stack (CROW-922)")
         // Pin the append, not the `el('button', 'nav-plus', …)` construction: the
         // regression the review names is the "+" being built but not rendered, so a
         // `contains("'nav-plus'")` would miss a dropped appendChild (also mutation-checked).
@@ -400,10 +410,12 @@ import Testing
             "the new-manager \"+\" must be appended to the icon column, not the nav rows (CROW-917)")
     }
 
-    /// CROW-917: the ticket box spans the full width of the left column and is
-    /// only ~2 button-rows tall, so it lines up with the Notifications+Settings
-    /// pair in the right icon column. Pin `min-height` (NOT a hard `height`, which
-    /// would clip the counts row out the bottom when a raised browser min-font
+    /// CROW-917/922: the ticket box spans the full width of the left column and is
+    /// only ~2 button-rows tall. (Pre-CROW-922 the same `min-height` also lined the
+    /// box up with the right column's icon pair; that column no longer derives its
+    /// height from the left, so `min-height: 64px` is now just the box's own size, not
+    /// load-bearing for cross-column alignment.) Pin `min-height` (NOT a hard `height`,
+    /// which would clip the counts row out the bottom when a raised browser min-font
     /// grows them — the #913 fixed-px failure mode) and the single-row flex counts
     /// (the #913 two-column grid only existed to keep the width-capped box narrow;
     /// #917 supersedes that cap, so the counts are one horizontal row again).
