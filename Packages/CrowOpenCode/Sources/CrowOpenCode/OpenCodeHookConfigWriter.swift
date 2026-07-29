@@ -251,6 +251,12 @@ public struct OpenCodeHookConfigWriter: HookConfigWriter {
               // no-op. This fires when OpenCode asks for a decision (agent is
               // now blocked). Observe only: we never set `_output.status`, so
               // the user's/agent's choice stands.
+              // Ordering (#903): permission.ask fires BEFORE tool.execute.before,
+              // so PermissionRequest is emitted ahead of PreToolUse. Under the
+              // fire-and-forget apply-order caveat (docs/agent-harness-matrix.md)
+              // that means an inversion lands on the correct final state and
+              // self-heals — OpenCode is not exposed to the non-self-healing
+              // permission-badge case Claude is.
               await emit($, cwd, "PermissionRequest");
             },
             "tool.execute.before": async (input) => {

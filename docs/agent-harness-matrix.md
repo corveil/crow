@@ -323,14 +323,20 @@ share the host's global config and are disambiguated by `cwd`. See
 > `PermissionRequest` — it no longer guarantees the two are *applied* in that
 > order. The daemon fans each hook-event connection onto an independently
 > scheduled `MainActor` task, so a `PreToolUse`/`PermissionRequest` (or
-> `PostToolUse`/`PreToolUse`) inversion can transiently show the wrong card
-> state (a permission badge wiped to `.working`, or the card stranded at
-> `.waiting`). The window is a few milliseconds and self-corrects on the next
-> state-changing event; the durable fix is per-session server-side sequencing of
-> hook-event application, tracked as the daemon-side follow-up to #903. A pure
-> client-side signal-source guard can't resolve it reliably — the event carries
-> no ordering key and `PermissionRequest` carries no verified tool identity to
-> match against — so none is attempted.
+> `PostToolUse`/`PreToolUse`) inversion can show the wrong card state. The two
+> directions differ: a `.waiting` strand while the agent is *working* self-heals
+> on the next event, but a `PreToolUse` applied *after* `PermissionRequest` wipes
+> the permission badge to `.working` while the agent is *parked at the prompt* —
+> and there is no next event until the user answers, so it does **not** self-heal.
+> Claude's only backstop is a separate `Notification(permission_prompt)` re-raising
+> the badge, read verbatim from the payload (never synthesized); a build that
+> doesn't emit it leaves the card `.working` for the whole prompt. Claude-specific
+> (Cursor keeps a `PermissionRequest` case for parity but doesn't emit it). The
+> reorder window is a few milliseconds; the durable fix is per-session server-side
+> sequencing of hook-event application, tracked as the daemon-side follow-up to
+> #903. A pure client-side signal-source guard can't resolve it — the event
+> carries no ordering key and `PermissionRequest` carries no verified tool
+> identity to match against — so none is attempted.
 
 ### MCP (Jira and beyond)
 

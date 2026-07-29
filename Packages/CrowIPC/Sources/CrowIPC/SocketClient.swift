@@ -78,8 +78,8 @@ public struct SocketClient: Sendable {
     /// not block on the daemon's reply for. The daemon still processes the
     /// request once its serialized `@MainActor` frees; because the client never
     /// reads a reply, a busy daemon (board poll, git op, whole-store write, a
-    /// burst of hook-events) can no longer stall the agent waiting for a
-    /// response it wouldn't use anyway (#903).
+    /// burst of hook-events) can no longer stall the agent waiting for a reply
+    /// the fire-and-forget path discards (#903).
     ///
     /// This bounds the wait to the `write()`, not a full round-trip. For the
     /// measured `PreToolUse:Bash` payloads that returns immediately, but no send

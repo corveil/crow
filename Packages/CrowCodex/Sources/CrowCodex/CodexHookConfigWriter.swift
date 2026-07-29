@@ -31,7 +31,10 @@ public struct CodexHookConfigWriter: HookConfigWriter {
     /// is sync-only as of v0.139.0 — declaring `async = true` causes the
     /// entry to be silently skipped on startup, which breaks Crow's
     /// session-state detection. Keep this empty until/unless Codex grows
-    /// real async support upstream.
+    /// real async support upstream. Note (#903): since `crow hook-event` is
+    /// fire-and-forget, even fully-sync registration no longer guarantees the
+    /// daemon *applies* events in arrival order — see the "Hook async delivery"
+    /// apply-order caveat in docs/agent-harness-matrix.md.
     private static let asyncEvents: Set<String> = []
 
     public init() {}

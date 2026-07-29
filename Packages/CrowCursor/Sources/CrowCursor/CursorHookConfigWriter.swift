@@ -65,7 +65,11 @@ public struct CursorHookConfigWriter: HookConfigWriter {
     /// daemon applies hook-events on independently-scheduled `MainActor` tasks.
     /// So the sync/async split still orders *arrival* but no longer guarantees
     /// *apply* order; per-session server-side sequencing is the daemon-side
-    /// follow-up scoped out of #903.
+    /// follow-up scoped out of #903. Unlike Claude, the non-self-healing
+    /// permission-badge inversion doesn't arise here: Cursor keeps a
+    /// `PermissionRequest` case for parity but doesn't emit it
+    /// (`CursorSignalSource`), so no permission_prompt badge is ever pending for
+    /// a later PreToolUse to wipe.
     private static let asyncCrowEvents: Set<String> = ["PostToolUse", "Notification"]
 
     public init() {}

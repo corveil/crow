@@ -67,16 +67,21 @@ func hookToolName(from payload: [String: JSONValue]) -> String? {
 /// diagnostic channel left after #903 (see the hook-event handler) would flood
 /// an unrotated launchd log. Capped so a pathological spread of cwds can't grow
 /// it without limit; MainActor-isolated since its sole caller runs inside the
-/// handler's `MainActor.run`.
+/// handler's `MainActor.run`. Never reset for the daemon's lifetime, so a drop
+/// that gets fixed (worktree registered) and later regresses won't re-log —
+/// acceptable for a diagnostic.
 @MainActor private var loggedUnresolvedHookDrops: Set<String> = []
 
 /// Log an unresolved hook-event drop at most once per `cwd`. Only the no-id /
 /// no-cwd-match branch calls this, where `session_id` is always absent — so the
-/// key is `cwd` alone. `eventName`/`cwd` are caller-supplied (via the local
-/// agent), so newlines are escaped: an embedded newline in a payload `cwd` must
-/// not forge a second log record.
+/// key is `cwd` alone (a `nil` cwd and a literal cwd of "none" are kept
+/// distinct). `eventName`/`cwd` are caller-supplied (via the local agent), so
+/// each is control-stripped and length-capped before it reaches the log: an
+/// embedded newline/ANSI can't forge or mangle a record, and a value bounded
+/// only by the 1 MB message limit can't turn the count cap into a size flood.
 @MainActor private func logUnresolvedHookDropOnce(eventName: String, cwd: String?) {
-    let key = cwd ?? "none"
+    // Distinguish nil from a literal "none" path so the dedup key can't collide.
+    let key = cwd.map { "cwd:" + $0 } ?? "<nil>"
     guard !loggedUnresolvedHookDrops.contains(key) else { return }
     // Hold the cap by refusing new keys once full (rather than clearing, which
     // would re-log every already-seen key on the next cycle). Beyond the cap,
@@ -86,18 +91,18 @@ func hookToolName(from payload: [String: JSONValue]) -> String? {
     // socket access, not a remote /rpc peer.
     guard loggedUnresolvedHookDrops.count < 256 else { return }
     loggedUnresolvedHookDrops.insert(key)
-    // Escape every C0 control (and DEL), not just \n/\r: a payload cwd is
-    // caller-supplied, and an embedded ESC/ANSI sequence would otherwise mangle
-    // a terminal that `cat`s the launchd log. \n/\r get readable forms; the rest
-    // become \xNN.
+    // Neutralize caller-supplied values before logging: cap length (the count
+    // cap bounds record *count*; this bounds record *size*), and escape every C0
+    // control (and DEL) so an embedded ESC/ANSI sequence can't mangle a terminal
+    // that `cat`s the launchd log. \n/\r get readable forms; the rest become \xNN.
     func oneLine(_ s: String) -> String {
         var out = ""
-        for scalar in s.unicodeScalars {
+        for scalar in String(s.prefix(200)).unicodeScalars {
             switch scalar {
             case "\n": out += "\\n"
             case "\r": out += "\\r"
             case let c where c.value < 0x20 || c.value == 0x7F:
-                out += "\\x" + String(c.value, radix: 16, uppercase: false)
+                out += String(format: "\\x%02x", c.value)
             default: out.unicodeScalars.append(scalar)
             }
         }
@@ -105,7 +110,7 @@ func hookToolName(from payload: [String: JSONValue]) -> String? {
     }
     CrowLog.error(
         "[hook-event] dropped \(oneLine(eventName)): unresolved session "
-        + "(no session_id, cwd=\(oneLine(cwd ?? "none")))"
+        + "(no session_id, cwd=\(cwd.map(oneLine) ?? "<none>"))"
     )
 }
 

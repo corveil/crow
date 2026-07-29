@@ -32,17 +32,31 @@ public struct ClaudeHookConfigWriter: HookConfigWriter {
     /// writes if it were async).
     ///
     /// Known limitation until the fix lands: a PreToolUse/PermissionRequest
-    /// inversion can transiently show the wrong card state — e.g. PreToolUse
-    /// applied after PermissionRequest wipes the permission badge and reads
-    /// `.working` while the agent is parked at the prompt, or (the reverse)
-    /// a PostToolUse racing a later PreToolUse strands the card at `.waiting`.
+    /// inversion can show the wrong card state. Two directions, and they are not
+    /// equally benign:
+    ///   - PostToolUse racing a *later* PreToolUse can strand the card at
+    ///     `.waiting` while the agent is actively working — this self-corrects,
+    ///     because the agent keeps emitting events (the next PreToolUse/Stop
+    ///     fixes it).
+    ///   - PreToolUse applied *after* PermissionRequest blanket-clears the
+    ///     permission badge and sets `.working` — and this does NOT self-correct.
+    ///     The agent is parked at the prompt, so no further hook fires until the
+    ///     user answers. The only backstop is a separate `Notification` carrying
+    ///     `notification_type == "permission_prompt"`, which re-raises the badge
+    ///     (`ClaudeHookSignalSource`); that field is read verbatim from the
+    ///     payload, never synthesized, so on any Claude build that doesn't emit
+    ///     it the card can read `.working` for the whole prompt and Crow never
+    ///     surfaces "waiting". This is Claude-specific — Cursor keeps a
+    ///     `PermissionRequest` case for parity but doesn't emit it, so the
+    ///     permission-badge case can't arise there.
+    ///
     /// A pure client-side signal source can't reliably tell "this PreToolUse is
     /// the one the pending prompt is for" (the event carries no ordering key and
     /// `PermissionRequest` carries no verified tool identity), so the correct fix
     /// is per-session server-side sequencing of hook-event application — the
     /// daemon-side follow-up scoped out of #903 (see docs/agent-harness-matrix.md
-    /// "Hook async delivery"). The window is a few milliseconds and self-corrects
-    /// on the next state-changing event.
+    /// "Hook async delivery"). The reorder *window* is a few milliseconds; the
+    /// resulting wrong state persists as described above.
     private static let asyncEvents: Set<String> = [
         "PostToolUse", "PostToolUseFailure",
     ]
