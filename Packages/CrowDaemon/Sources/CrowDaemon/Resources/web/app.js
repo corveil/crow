@@ -364,6 +364,27 @@ function sessionNameFor(id) {
   return (s && s.name) || 'Session';
 }
 
+// Derive the { title, body } for an event, enriched with the session name (for
+// session events) or the review's repo (for reviews). A server-supplied
+// title/body (automation events) is used verbatim. Shared by the transient
+// browser/Tauri banner and the notification center so both read identically
+// (CROW-909).
+function eventNotificationText(event, key, detail) {
+  const isSession = !!sessions.find((x) => x.id === key);
+  const title = (detail && detail.title) || EVENT_LABEL[event] || event;
+  let body = (detail && detail.body) || '';
+  if (!body) {
+    body = EVENT_DESC[event] || '';
+    if (isSession) {
+      body = `${sessionNameFor(key)} — ${body}`;
+    } else {
+      const r = ((boardData.reviews && boardData.reviews.reviews) || []).find((x) => x.id === key);
+      if (r && r.repo) body = `${r.repo} — ${body}`;
+    }
+  }
+  return { title, body };
+}
+
 // `detail` (optional) carries a server-supplied { title, body } for automation
 // events, whose text is specific (PR number, issue title) rather than derivable
 // from EVENT_DESC (CROW-768).
@@ -394,17 +415,7 @@ function showEventNotification(event, key, detail) {
 
   // A server-supplied title/body already names the PR / issue / session, so it's
   // used verbatim; derived events get the label plus a subject prefix.
-  const label = (detail && detail.title) || EVENT_LABEL[event] || event;
-  let body = (detail && detail.body) || '';
-  if (!body) {
-    body = EVENT_DESC[event] || '';
-    if (isSession) {
-      body = `${sessionNameFor(key)} — ${body}`;
-    } else {
-      const r = ((boardData.reviews && boardData.reviews.reviews) || []).find((x) => x.id === key);
-      if (r && r.repo) body = `${r.repo} — ${body}`;
-    }
-  }
+  const { title: label, body } = eventNotificationText(event, key, detail);
   try {
     // In the desktop app, WKWebView lacks the Web Notification API — post via the
     // Tauri plugin instead. (Click-to-focus below stays web-only.)
@@ -434,10 +445,169 @@ function showEventNotification(event, key, detail) {
   } catch (_) { /* Notification ctor can throw in restricted contexts */ }
 }
 
-// Both channels fire from one call in the detectors below; each self-gates.
+// All three channels fire from one call in the detectors below; each self-gates
+// (sound + banner on the full toggle cascade, the history on the master levels).
 function emitEvent(event, key, detail) {
   playEventSound(event, key);
   showEventNotification(event, key, detail);
+  recordNotification(event, key, detail);
+}
+
+// --- Notification center: history + unread counter (CROW-909) ---------------
+// The sound + banner above are fire-and-forget. The center keeps a history of
+// every event that reaches emitEvent — recorded UNGATED (unlike the banner,
+// which self-suppresses on focus/mute), so the panel is a faithful log even for
+// events whose transient popup you never saw. Per-browser, not per-tab:
+// localStorage is shared across every tab on the origin, so a `storage` listener
+// keeps the tabs in sync and each mutate re-reads first to compose rather than
+// clobber (review). Not server-synced — a shared, cross-device history is a
+// larger follow-up.
+const NOTIF_HISTORY_KEY = 'crow.notif.history';
+const NOTIF_HISTORY_CAP = 100; // keep the last ~100; older entries drop off
+let notifHistory = [];         // [{ event, key, title, body, ts, seen, kind, target }]
+
+function restoreNotifHistory() {
+  try {
+    const raw = localStorage.getItem(NOTIF_HISTORY_KEY);
+    // Missing key means "empty", not "no change" — a purge in another tab fires a
+    // storage event with newValue === null, and returning early here would leave
+    // this tab's in-memory copy intact, which its next seen-marking would then
+    // persist straight back, re-creating the key the logout just dropped (review).
+    // Safe for the compose path too: recordNotification only reaches here with the
+    // key already absent, where in-memory is [] anyway.
+    if (!raw) { notifHistory = []; return; }
+    const data = JSON.parse(raw);
+    // Filter to well-formed entries: a parseable-but-wrong array (`[null, …]`, a
+    // foreign schema) would otherwise let a later `e.seen` read throw inside
+    // notifUnreadCount → sidebarSignature → every renderSidebar, wedging the
+    // whole sidebar until the key is cleared by hand. The `ts` check also keeps a
+    // ts-less entry from rendering "Invalid Date" in notifRelTime (review).
+    if (Array.isArray(data)) {
+      notifHistory = data
+        .filter((e) => e && typeof e === 'object' && typeof e.ts === 'number')
+        .slice(-NOTIF_HISTORY_CAP);
+    }
+  } catch (_) { /* corrupt cache — start empty */ }
+}
+function persistNotifHistory() {
+  try { localStorage.setItem(NOTIF_HISTORY_KEY, JSON.stringify(notifHistory)); }
+  catch (_) { /* quota / private mode */ }
+}
+function notifUnreadCount() {
+  let n = 0;
+  for (const e of notifHistory) if (e && !e.seen) n++;
+  return n;
+}
+
+// One coalesced sidebar repaint per task, so a detector tick that records k
+// events triggers a single innerHTML rebuild rather than k of them (the unread
+// count is in sidebarSignature, so the cheap signature short-circuit never
+// applies to an append). A microtask, not rAF, so the badge is current before
+// the next paint and onServerNotify still repaints within the same turn (review).
+let _notifRepaintScheduled = false;
+function scheduleNotifRepaint() {
+  if (_notifRepaintScheduled) return;
+  _notifRepaintScheduled = true;
+  Promise.resolve().then(() => {
+    _notifRepaintScheduled = false;
+    try { renderSidebar(); } catch (_) { /* pre-boot — badge paints on first render */ }
+  });
+}
+
+// Another tab wrote the shared history (append, mark-seen, clear, or purge on
+// logout — restoreNotifHistory treats the removed key as empty). Re-read so this
+// tab's badge/panel reflect it instead of drifting, then repaint. Does not fire
+// in the tab that made the change, so there's no write→event loop (review).
+window.addEventListener('storage', (e) => {
+  if (e.key !== NOTIF_HISTORY_KEY) return;
+  restoreNotifHistory();
+  try { renderSidebar(); } catch (_) { /* pre-boot */ }
+});
+
+// Classify the click-through target at append time (event type is stable),
+// while leaving the live lookup (review→session, session existence) to click
+// time where the state is fresh. Mirrors the routing in showEventNotification's
+// Notification.onclick (CROW-909).
+function classifyNotification(event, key) {
+  if (sessions.find((x) => x.id === key)) return { kind: 'session', target: key };
+  if (AUTOMATION_EVENTS.indexOf(event) === -1) return { kind: 'review', target: key };
+  // Automation keyed by an issue URL opens externally; `config`/other → no target.
+  if (typeof key === 'string' && /^https?:\/\//.test(key)) return { kind: 'url', target: key };
+  return { kind: 'none', target: null };
+}
+
+// Append one event to the history and bump the unread counter. Gated on only the
+// MASTER levels — globalMute and the per-event `enabled` toggle — so a user who
+// muted everything, or switched this event category off in Settings, doesn't get
+// a growing badge they can't opt out of. The per-event sound/system SUB-toggles
+// and the focus-suppression rule are deliberately NOT applied: the center is a
+// passive log, not an interruption, so it keeps events whose transient banner you
+// chose not to see live. A 2s per-(key,event) dedup mirrors the sound/banner
+// channels, where repeated pushes / a flapping poll produced duplicate popups
+// (review).
+const _lastRecordAt = {};
+function recordNotification(event, key, detail) {
+  const N = uiConfig.notifications;
+  if (!N) return;                          // config not loaded — mirror the sibling channels
+  if (N.globalMute) return;                // master mute silences the log too
+  const cfg = N.events[event] || {};
+  if (cfg.enabled === false) return;       // event category switched off entirely
+  const k = (key || '') + '|' + event;
+  const now = Date.now();
+  if (_lastRecordAt[k] && now - _lastRecordAt[k] < 2000) return;
+  _lastRecordAt[k] = now;
+  // Re-read the shared store first so a concurrent tab's entries compose with
+  // this append instead of being overwritten by our stale in-memory copy.
+  restoreNotifHistory();
+  const { title, body } = eventNotificationText(event, key, detail);
+  const { kind, target } = classifyNotification(event, key);
+  notifHistory.push({ event, key: key || '', title, body, ts: now, seen: false, kind, target });
+  if (notifHistory.length > NOTIF_HISTORY_CAP) {
+    notifHistory = notifHistory.slice(-NOTIF_HISTORY_CAP);
+  }
+  persistNotifHistory();
+  scheduleNotifRepaint();
+}
+
+// Relative "5m ago" timestamp for panel rows, from epoch ms; falls back to a
+// locale date past a week so old entries stay legible. NOT named `relTime` — a
+// pre-existing `relTime(iso)` (the card helper, #594) takes an ISO string, and
+// in a classic <script> the later top-level declaration would win for BOTH, so
+// every call would resolve to one of them. Distinct name, distinct input unit
+// (review, CROW-909).
+function notifRelTime(ts) {
+  const s = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+  if (s < 45) return 'just now';
+  const m = Math.floor(s / 60);
+  if (m < 60) return m + 'm ago';
+  const h = Math.floor(m / 60);
+  if (h < 24) return h + 'h ago';
+  const d = Math.floor(h / 24);
+  if (d < 7) return d + 'd ago';
+  try { return new Date(ts).toLocaleDateString(); } catch (_) { return ''; }
+}
+
+// Route a history entry to its origin, reusing the live state so a review whose
+// session started after the event still lands on that session (CROW-909).
+function navigateToNotification(entry) {
+  try {
+    if (entry.kind === 'session') {
+      if (sessions.find((x) => x.id === entry.target)) selectSession(entry.target);
+    } else if (entry.kind === 'review') {
+      const r = ((boardData.reviews && boardData.reviews.reviews) || []).find((x) => x.id === entry.target);
+      if (r && r.review_session_id) selectSession(r.review_session_id);
+      else selectBoard('reviews');
+    } else if (entry.kind === 'url') {
+      // Re-test the scheme at click time — `entry.target` came from localStorage,
+      // which same-origin script could have tampered with or an older build could
+      // have written under looser rules. classifyNotification already rejects
+      // javascript:/data: at record time; this is cheap defense-in-depth (review).
+      if (typeof entry.target === 'string' && /^https?:\/\//.test(entry.target)) {
+        window.open(entry.target, '_blank', 'noopener');
+      }
+    }
+    // kind 'none' (config reload, non-URL automation) has no in-app target.
+  } catch (_) { /* nav best-effort */ }
 }
 
 // Server-pushed automation event (CROW-768). The daemon fires these at the point
@@ -488,6 +658,19 @@ window.crowTestNotify = function (event) {
   };
   if (Notification.permission === 'granted') fire();
   else Notification.requestPermission().then((p) => { if (p === 'granted') fire(); else console.warn('[crowNotify] permission:', p); });
+};
+
+// Manual test hook for the notification center (CROW-909). Unlike crowTestSound
+// / crowTestNotify — which call crowSound.play / new Notification directly and
+// so never touch the history — this drives the real emitEvent path, so it moves
+// the bell's unread badge and appends a row. crowTestEvent() fires taskComplete
+// against the first session; crowTestEvent('reviewRequested', '<id>') targets a
+// specific key. Subject to the same config gating as a real event.
+window.crowTestEvent = function (event, key) {
+  const ev = event || 'taskComplete';
+  const k = key || (sessions[0] && sessions[0].id) || 'test';
+  emitEvent(ev, k);
+  console.log('[crowEvent] test', ev, '→', k, '· unread now', notifUnreadCount());
 };
 
 // Event detection: diff successive state snapshots. Snapshots always update; the
@@ -560,6 +743,19 @@ let sidebarCacheHit = false;
 function clearSidebarCache() {
   try { localStorage.removeItem(SIDEBAR_CACHE_KEY); } catch (_) {}
   sidebarCacheHit = false;
+}
+// Drop EVERY localStorage payload that could leak one user's workspace to the
+// next on a shared/kiosk browser, at the two auth boundaries (explicit logout,
+// cookie death). The notification history holds the same class of data as the
+// sidebar cache — session names, server-supplied PR/issue titles and bodies,
+// issue URLs — so it has to be purged alongside it (review, CROW-909). One
+// helper so a future cached store can't be wired into one auth path and missed
+// on the other. NOT called from the boot-catch recovery, which only wants to
+// discard a *corrupt* sidebar cache, not a valid history.
+function purgeSharedBrowserCaches() {
+  clearSidebarCache();
+  notifHistory = [];
+  try { localStorage.removeItem(NOTIF_HISTORY_KEY); } catch (_) {}
 }
 function restoreSidebarCache() {
   try {
@@ -786,6 +982,9 @@ function sidebarSignature() {
     boardData.tickets && boardData.tickets.counts,
     boardData.tickets && boardData.tickets.done_last_24h,
     boardData.reviews && boardData.reviews.unseen,
+    // The bell's unread badge (CROW-909) — not store-backed, so name it here so
+    // an appended notification actually repaints the badge.
+    notifUnreadCount(),
     // The ↻ spins off this, and the local half isn't in `boardData` (CROW-771).
     ticketsRefreshing(),
   ]);
@@ -1003,10 +1202,10 @@ async function handleAuthOnDisconnect() {
   try {
     if (await sessionExpired()) {
       sessionDead = true;
-      // Parity with explicit logout: drop cached session/ticket payloads when
-      // the remote web cookie dies (crowd restart) so they don't linger in a
-      // shared browser (CROW-613 review).
-      clearSidebarCache();
+      // Parity with explicit logout: drop cached session/ticket payloads AND the
+      // notification history when the remote web cookie dies (crowd restart) so
+      // they don't linger in a shared browser (CROW-613 review / CROW-909).
+      purgeSharedBrowserCaches();
       renderStatusBar();
     }
   } finally {
@@ -1051,9 +1250,10 @@ function renderStatusBar() {
     out.onclick = async () => {
       if (!await confirmModal('Log out of this web session? You’ll need the web password to sign back in.', { title: 'Log out', okLabel: 'Log out' })) return;
       try { await fetch('/logout', { method: 'POST' }); } catch (_) {}
-      // Drop cached session/ticket payloads so a shared browser can't read them
-      // after logout of a password-protected remote session (CROW-613 review).
-      clearSidebarCache();
+      // Drop cached session/ticket payloads AND the notification history so a
+      // shared browser can't read them after logout of a password-protected
+      // remote session (CROW-613 review / CROW-909).
+      purgeSharedBrowserCaches();
       location.reload();  // now unauthenticated → the auth gate serves the login page
     };
     actions.appendChild(out);
@@ -1064,6 +1264,15 @@ function renderStatusBar() {
 // (outside the box): Settings on top, Select below.
 function sidebarToolsStack() {
   const stack = el('div', 'sidebar-tools');
+  // Notification center (CROW-909): bell + unread badge, first so it's the most
+  // prominent global affordance. Visible in every view (sessions and boards).
+  const bell = el('button', 'tk-tool tk-bell');
+  const unread = notifUnreadCount();
+  bell.title = unread ? unread + ' unread notification' + (unread === 1 ? '' : 's') : 'Notifications';
+  bell.appendChild(icon('bell', 14));
+  if (unread) bell.appendChild(el('span', 'notif-badge', unread > 99 ? '99+' : String(unread)));
+  bell.onclick = () => openNotificationPanel(bell);
+  stack.appendChild(bell);
   const gear = el('button', 'tk-tool');
   gear.title = 'Settings';
   gear.appendChild(icon('wrench', 14));
@@ -1178,7 +1387,82 @@ async function openNewManagerMenu(anchorEl) {
   const y = Math.min(rect.bottom + 4, window.innerHeight - menu.offsetHeight - 8);
   menu.style.left = Math.max(4, x) + 'px';
   menu.style.top = Math.max(4, y) + 'px';
-  setTimeout(() => document.addEventListener('click', closeContextMenu, { once: true }), 0);
+  armContextMenuClose();
+}
+
+// Notification center panel (CROW-909): an anchored popover mirroring
+// openNewManagerMenu — reuses the .ctx-menu shell (so closeContextMenu closes
+// it) with a .notif-panel modifier for the wider, scrollable, two-line layout.
+// Opening marks every entry seen (clears the unread badge). Clicking a row
+// navigates to its origin; a "Clear all" empties the history.
+function openNotificationPanel(anchorEl) {
+  // Toggle: a second click on the bell dismisses the open panel.
+  if (document.querySelector('.notif-panel')) { closeContextMenu(); return; }
+  closeContextMenu();
+
+  // Measure the anchor BEFORE the seen-marking repaint below: renderSidebar
+  // rebuilds the tools stack from scratch (root.innerHTML = ''), detaching this
+  // very `bell`. A detached node has no layout box, so a later
+  // getBoundingClientRect() would read all-zeros and the panel would clamp to
+  // the viewport corner instead of under the bell (review).
+  const rect = anchorEl.getBoundingClientRect();
+
+  // Opening is "reading" — mark all seen and drop the unread badge. Re-read
+  // first so a concurrent tab's newer entries aren't clobbered by writing back
+  // our stale in-memory copy (review).
+  if (notifUnreadCount()) {
+    restoreNotifHistory();
+    for (const e of notifHistory) e.seen = true;
+    persistNotifHistory();
+    renderSidebar();
+  }
+
+  const menu = el('div', 'ctx-menu notif-panel');
+  const header = el('div', 'notif-header');
+  header.appendChild(el('span', 'notif-title', 'Notifications'));
+  if (notifHistory.length) {
+    const clear = el('button', 'notif-clear', 'Clear all');
+    clear.onclick = (ev) => {
+      ev.stopPropagation();
+      notifHistory = [];
+      persistNotifHistory();
+      closeContextMenu();
+      renderSidebar();
+    };
+    header.appendChild(clear);
+  }
+  menu.appendChild(header);
+
+  if (!notifHistory.length) {
+    menu.appendChild(el('div', 'notif-empty', 'No notifications yet'));
+  } else {
+    const list = el('div', 'notif-list');
+    // Newest first.
+    for (let i = notifHistory.length - 1; i >= 0; i--) {
+      const entry = notifHistory[i];
+      const navigable = entry.kind === 'session' || entry.kind === 'review' || entry.kind === 'url';
+      const item = el('div', 'notif-item' + (navigable ? '' : ' notif-static'));
+      const line1 = el('div', 'notif-row1');
+      line1.appendChild(el('span', 'notif-item-title', entry.title || EVENT_LABEL[entry.event] || entry.event));
+      line1.appendChild(el('span', 'notif-time', notifRelTime(entry.ts)));
+      item.appendChild(line1);
+      if (entry.body) item.appendChild(el('div', 'notif-item-body', entry.body));
+      if (navigable) {
+        item.onclick = (ev) => { ev.stopPropagation(); closeContextMenu(); navigateToNotification(entry); };
+      } else {
+        item.onclick = (ev) => ev.stopPropagation();
+      }
+      list.appendChild(item);
+    }
+    menu.appendChild(list);
+  }
+
+  document.body.appendChild(menu);
+  const x = Math.min(rect.left, window.innerWidth - menu.offsetWidth - 8);
+  const y = Math.min(rect.bottom + 4, window.innerHeight - menu.offsetHeight - 8);
+  menu.style.left = Math.max(4, x) + 'px';
+  menu.style.top = Math.max(4, y) + 'px';
+  armContextMenuClose();
 }
 
 // Sidebar status/activity indicator, mirroring the desktop: for active
@@ -1208,6 +1492,7 @@ const ICONS = {
   code: '<path d="M6 5 2.5 8 6 11"/><path d="M10 5l3.5 3-3.5 3"/>',
   terminal: '<rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M4.5 6.5 6.5 8l-2 1.5"/><path d="M8 9.5h3"/>',
   comment: '<path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z"/>',
+  bell: '<path d="M4.5 7a3.5 3.5 0 0 1 7 0c0 3 1 4 1.5 4.5H3C3.5 11 4.5 10 4.5 7Z"/><path d="M6.6 13a1.6 1.6 0 0 0 2.8 0"/>',
 };
 function icon(name, size) {
   const span = el('span', 'ico');
@@ -1480,9 +1765,32 @@ function prBadgeParts(pr, am, autoMergeEnabled) {
 // ---------------------------------------------------------------------------
 // Session right-click context menu (custom — suppresses the browser default).
 // ---------------------------------------------------------------------------
+// The outside-click closer, held module-level so closeContextMenu can remove it.
+// Registered NOT as { once: true } on purpose: a click *inside* a menu that
+// stopPropagations (a notification row, "Clear all") never reaches document, so
+// a once-listener would stay armed with no menu on screen — and the next
+// menu-open's own click would then bubble to it and tear the fresh menu straight
+// back down. Tying the listener's lifetime to closeContextMenu instead of to
+// "some outside click eventually happens" fixes that for all six menu sites
+// (review, CROW-909).
+let _ctxMenuCloser = null;
 function closeContextMenu() {
   const m = document.querySelector('.ctx-menu');
   if (m) m.remove();
+  if (_ctxMenuCloser) {
+    document.removeEventListener('click', _ctxMenuCloser);
+    _ctxMenuCloser = null;
+  }
+}
+// Arm the outside-click close one tick out (so the opening click itself doesn't
+// immediately close the menu). Shared by every menu opener; the deferred arm
+// also means a listener still pending from a prior menu fires against an empty
+// document before this one registers.
+function armContextMenuClose() {
+  setTimeout(() => {
+    _ctxMenuCloser = closeContextMenu;
+    document.addEventListener('click', _ctxMenuCloser);
+  }, 0);
 }
 
 // Right-click a board card → a small menu to copy its link(s). Pass an array of
@@ -1504,7 +1812,7 @@ function showCardMenu(e, items) {
   const y = Math.min(e.clientY, window.innerHeight - menu.offsetHeight - 8);
   menu.style.left = Math.max(4, x) + 'px';
   menu.style.top = Math.max(4, y) + 'px';
-  setTimeout(() => document.addEventListener('click', closeContextMenu, { once: true }), 0);
+  armContextMenuClose();
 }
 
 // Clipboard with a legacy fallback (execCommand) for non-secure contexts where
@@ -1543,7 +1851,7 @@ function showSessionMenu(e, s) {
   const y = Math.min(e.clientY, window.innerHeight - menu.offsetHeight - 8);
   menu.style.left = Math.max(4, x) + 'px';
   menu.style.top = Math.max(4, y) + 'px';
-  setTimeout(() => document.addEventListener('click', closeContextMenu, { once: true }), 0);
+  armContextMenuClose();
 }
 
 // Long-press → context-menu bridge for touch devices. Fires `handler(x, y)` at
@@ -1681,7 +1989,7 @@ async function openHandoffAgentMenu(session, anchorEl) {
   const y = Math.min((rect.bottom || 80) + 4, window.innerHeight - menu.offsetHeight - 8);
   menu.style.left = Math.max(4, x) + 'px';
   menu.style.top = Math.max(4, y) + 'px';
-  setTimeout(() => document.addEventListener('click', closeContextMenu, { once: true }), 0);
+  armContextMenuClose();
 }
 
 // Fire a session RPC from the row menu. A verb can succeed and still not have
@@ -4121,7 +4429,7 @@ function showTerminalMenu(e) {
   const y = Math.min(e.clientY, window.innerHeight - menu.offsetHeight - 8);
   menu.style.left = Math.max(4, x) + 'px';
   menu.style.top = Math.max(4, y) + 'px';
-  setTimeout(() => document.addEventListener('click', closeContextMenu, { once: true }), 0);
+  armContextMenuClose();
 }
 
 function connectTerminalWs() {
@@ -4567,10 +4875,14 @@ document.getElementById('terminal-wrap').addEventListener('contextmenu', showTer
 // cache entry must not abort the rest of boot (polls / refreshSessions).
 try {
   restoreSidebarCache();
+  restoreNotifHistory();
   renderSidebar();
 } catch (_) {
   clearSidebarCache();
   sessions = [];
+  // A poisoned notif history is filtered on restore, but reset here too so this
+  // recovery path can't itself re-throw on the retry render below (review).
+  notifHistory = [];
   lastSidebarSig = null;
   try { renderSidebar(); } catch (_) { /* keep going — RPC refresh will paint */ }
 }
