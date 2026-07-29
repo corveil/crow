@@ -29,13 +29,20 @@ public struct ClaudeHookConfigWriter: HookConfigWriter {
     /// (`SocketServer` fans each connection out concurrently), so accept order
     /// no longer implies apply order. Keeping PreToolUse non-async still narrows
     /// the reorder window to that MainActor scheduling race (vs. also racing the
-    /// writes if it were async). The one inversion that would NOT self-heal —
-    /// PreToolUse applied after PermissionRequest, wiping the permission badge
-    /// while the agent is parked at the prompt — is guarded directly in
-    /// `ClaudeHookSignalSource` (PreToolUse leaves a pending `permission_prompt`
-    /// intact); other inversions self-heal on the next event. A hard transport
-    /// guarantee (per-session server-side sequencing) is the daemon-side
-    /// follow-up scoped out of #903.
+    /// writes if it were async).
+    ///
+    /// Known limitation until the fix lands: a PreToolUse/PermissionRequest
+    /// inversion can transiently show the wrong card state — e.g. PreToolUse
+    /// applied after PermissionRequest wipes the permission badge and reads
+    /// `.working` while the agent is parked at the prompt, or (the reverse)
+    /// a PostToolUse racing a later PreToolUse strands the card at `.waiting`.
+    /// A pure client-side signal source can't reliably tell "this PreToolUse is
+    /// the one the pending prompt is for" (the event carries no ordering key and
+    /// `PermissionRequest` carries no verified tool identity), so the correct fix
+    /// is per-session server-side sequencing of hook-event application — the
+    /// daemon-side follow-up scoped out of #903 (see docs/agent-harness-matrix.md
+    /// "Hook async delivery"). The window is a few milliseconds and self-corrects
+    /// on the next state-changing event.
     private static let asyncEvents: Set<String> = [
         "PostToolUse", "PostToolUseFailure",
     ]

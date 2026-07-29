@@ -67,32 +67,6 @@ struct ClaudeHookSignalSourceTests {
         }
     }
 
-    /// #903 apply-order defense: once hook-events are fire-and-forget, the daemon
-    /// can apply a tool's PermissionRequest before its PreToolUse. When that
-    /// happens the permission badge (`permission_prompt`, `.waiting`) is already
-    /// set and PermissionRequest has cleared tool activity, and a late PreToolUse
-    /// must not disturb any of it — it leaves the parked state byte-identical to
-    /// the in-order case rather than flipping the card to `.working` while the
-    /// agent waits at the prompt.
-    @Test func preToolUseKeepsPendingPermissionPrompt() {
-        let t = source.transition(
-            for: event("PreToolUse", toolName: "Bash"),
-            currentActivityState: .waiting,
-            currentNotificationType: "permission_prompt",
-            currentLastTopLevelStopAt: nil
-        )
-        // Does not downgrade .waiting → .working.
-        #expect(t.newActivityState == nil)
-        // Preserves the pending permission_prompt rather than blanket-clearing.
-        if case .leave = t.notification {} else {
-            Issue.record("expected pending permission_prompt to be left intact")
-        }
-        // Does not re-set a running tool over PermissionRequest's clear.
-        if case .leave = t.toolActivity {} else {
-            Issue.record("expected tool activity to be left untouched")
-        }
-    }
-
     // MARK: - PostToolUse
 
     @Test func postToolUseMarksActivityInactive() {

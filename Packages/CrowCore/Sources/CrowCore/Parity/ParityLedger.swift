@@ -269,7 +269,10 @@ public enum ParityLedger {
                 run must honour. `crow job run` is the user-facing verb.
                 """),
 
-        // Agent hooks
+        // Agent hooks — emitted by agent hook processes over the 0600 Unix
+        // socket only; local-only on `/rpc` (RPCWebSocketHandler.localOnlyDenial,
+        // #903) so a remote peer can't forge session state or poison the
+        // unresolved-drop log's dedup cap.
         .write("hook-event", cli: "hook-event"),
     ]
 

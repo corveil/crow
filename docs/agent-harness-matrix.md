@@ -306,8 +306,8 @@ share the host's global config and are disambiguated by `cwd`. See
 ### Hook async delivery
 
 - **Claude:** `PostToolUse` / `PostToolUseFailure` fire async; `PreToolUse` is
-  intentionally *not* async so it arrives before `PermissionRequest` and keeps
-  state-machine ordering reliable (`ClaudeHookConfigWriter.asyncEvents`).
+  intentionally *not* async so it is *accepted* by the daemon before the
+  following `PermissionRequest` (`ClaudeHookConfigWriter.asyncEvents`).
 - **Codex:** **sync-only as of v0.139.0** — declaring `async = true` makes Codex
   silently skip the entry on startup, breaking Crow's state detection;
   `asyncEvents` is deliberately empty (`CodexHookConfigWriter`). *(version-pinned
@@ -317,6 +317,20 @@ share the host's global config and are disambiguated by `cwd`. See
 - **OpenCode:** event *names* are verified; the *timing/semantics* (esp. whether
   `session.idle` is the right "done" signal for interactive TUI sessions) are an
   open empirical question (CROW-545, `OpenCodeHookConfigWriter`).
+
+> **Apply-order caveat (#903).** Since `crow hook-event` became fire-and-forget,
+> `PreToolUse` being non-async only guarantees the daemon *accepts* it ahead of
+> `PermissionRequest` — it no longer guarantees the two are *applied* in that
+> order. The daemon fans each hook-event connection onto an independently
+> scheduled `MainActor` task, so a `PreToolUse`/`PermissionRequest` (or
+> `PostToolUse`/`PreToolUse`) inversion can transiently show the wrong card
+> state (a permission badge wiped to `.working`, or the card stranded at
+> `.waiting`). The window is a few milliseconds and self-corrects on the next
+> state-changing event; the durable fix is per-session server-side sequencing of
+> hook-event application, tracked as the daemon-side follow-up to #903. A pure
+> client-side signal-source guard can't resolve it reliably — the event carries
+> no ordering key and `PermissionRequest` carries no verified tool identity to
+> match against — so none is attempted.
 
 ### MCP (Jira and beyond)
 

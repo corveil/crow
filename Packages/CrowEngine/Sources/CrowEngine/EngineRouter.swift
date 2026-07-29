@@ -86,8 +86,22 @@ func hookToolName(from payload: [String: JSONValue]) -> String? {
     // socket access, not a remote /rpc peer.
     guard loggedUnresolvedHookDrops.count < 256 else { return }
     loggedUnresolvedHookDrops.insert(key)
+    // Escape every C0 control (and DEL), not just \n/\r: a payload cwd is
+    // caller-supplied, and an embedded ESC/ANSI sequence would otherwise mangle
+    // a terminal that `cat`s the launchd log. \n/\r get readable forms; the rest
+    // become \xNN.
     func oneLine(_ s: String) -> String {
-        s.replacingOccurrences(of: "\n", with: "\\n").replacingOccurrences(of: "\r", with: "\\r")
+        var out = ""
+        for scalar in s.unicodeScalars {
+            switch scalar {
+            case "\n": out += "\\n"
+            case "\r": out += "\\r"
+            case let c where c.value < 0x20 || c.value == 0x7F:
+                out += "\\x" + String(c.value, radix: 16, uppercase: false)
+            default: out.unicodeScalars.append(scalar)
+            }
+        }
+        return out
     }
     CrowLog.error(
         "[hook-event] dropped \(oneLine(eventName)): unresolved session "

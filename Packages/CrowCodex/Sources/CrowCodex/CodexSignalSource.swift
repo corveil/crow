@@ -41,28 +41,11 @@ public struct CodexSignalSource: StateSignalSource {
             transition.lastTopLevelStopAt = .clear
 
         case "PreToolUse":
-            if currentNotificationType == "permission_prompt" {
-                // Apply-order defense (#903), mirroring ClaudeHookSignalSource.
-                // Codex registers both PreToolUse and PermissionRequest, and its
-                // hook runtime is sync-only (empty asyncEvents), so it lost all
-                // the end-to-end apply ordering this PR removes and gets no async
-                // compensation. If the daemon applied PermissionRequest first, a
-                // late PreToolUse must not clear the badge or flip the card to
-                // .working while the agent is parked at the approval prompt —
-                // there is no next event to heal it. Preserving the notification
-                // is enough; newActivityState and toolActivity stay at their
-                // .leave defaults, matching the in-order parked state. Codex's
-                // PreToolUse/PermissionRequest ordering is assumed to match
-                // Claude's (shared hook schema); if it's ever found to differ,
-                // this branch is where to note it.
-                transition.notification = .leave
-            } else {
-                let toolName = event.toolName ?? "unknown"
-                transition.toolActivity = .set(ToolActivity(
-                    toolName: toolName, isActive: true
-                ))
-                transition.newActivityState = .working
-            }
+            let toolName = event.toolName ?? "unknown"
+            transition.toolActivity = .set(ToolActivity(
+                toolName: toolName, isActive: true
+            ))
+            transition.newActivityState = .working
 
         case "PostToolUse":
             let toolName = event.toolName ?? "unknown"
