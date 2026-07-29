@@ -801,6 +801,7 @@ public final class SessionService {
         if let session = appState.sessions.first(where: { $0.id == sessionID }),
            let agent = AgentRegistry.shared.agent(for: session.agentKind) {
             let worktreePath = appState.primaryWorktree(for: sessionID)?.worktreePath
+            let crowPath = ClaudeHookConfigWriter.resolveCrowBinary(devRoot: ConfigStore.loadDevRoot())
             // Strip a Grok `.review` clone's committed config, then pre-seed folder
             // trust — both via the one shared gate (#861 review r11/r14, unified r17).
             // A brand-new managed terminal from `crow new-terminal --command` — how
@@ -813,14 +814,15 @@ public final class SessionService {
                 Self.prepareWorktreeForAgentLaunch(
                     agentKind: session.agentKind,
                     sessionKind: session.kind,
-                    worktreePath: worktreePath)
+                    worktreePath: worktreePath,
+                    ownership: HookOwnership.snapshot(appState, crowPath: crowPath))
             }
             text = AgentLaunch.prepareAgentLaunchText(
                 command: command,
                 agent: agent,
                 sessionID: sessionID,
                 worktreePath: worktreePath,
-                crowPath: ClaudeHookConfigWriter.resolveCrowBinary(devRoot: ConfigStore.loadDevRoot()),
+                crowPath: crowPath,
                 telemetryPort: telemetryPort
             ).text
         }
@@ -869,9 +871,56 @@ public final class SessionService {
         }
     }
 
+    /// The AppState facts `ClaudeHookRepair.reconcileMainClone` needs, captured
+    /// as values so the reconciliation itself (blocking file I/O) stays off the
+    /// MainActor (#892).
+    struct HookOwnership: Sendable {
+        /// The binary to write into repaired commands. `nil` means nothing can
+        /// be repaired, so a foreign block is stripped instead — which still
+        /// stops the hook errors.
+        let crowPath: String?
+        let liveSessionIDs: Set<UUID>
+        /// `standardizingPath`-normalized worktree path → owning session.
+        let sessionByWorktreePath: [String: UUID]
+
+        /// No binary, no sessions — every directory reads as unowned. For tests
+        /// exercising the *other* steps of the launch gate, and as the safe
+        /// value when there is nothing to snapshot. Deliberately not a default
+        /// argument on `prepareWorktreeForAgentLaunch`: a default is how a new
+        /// launch path silently skips reconciliation.
+        static let empty = HookOwnership(
+            crowPath: nil, liveSessionIDs: [], sessionByWorktreePath: [:])
+
+        @MainActor
+        static func snapshot(_ appState: AppState, crowPath: String?) -> HookOwnership {
+            HookOwnership(
+                crowPath: crowPath,
+                liveSessionIDs: Set(appState.sessions.map(\.id)),
+                // `uniquingKeysWith`, not `uniqueKeysWithValues`: the latter
+                // traps on duplicate keys, and two rows sharing a worktree path
+                // is reachable through orphan recovery. Matches
+                // `LaunchScaffold.repairStaleHooks`.
+                sessionByWorktreePath: Dictionary(
+                    appState.worktrees.values.flatMap { $0 }.map {
+                        (($0.worktreePath as NSString).standardizingPath, $0.sessionID)
+                    },
+                    uniquingKeysWith: { first, _ in first }))
+        }
+
+        /// The same snapshot with one session treated as already gone — what the
+        /// retention reaper needs, since it runs while the session is still in
+        /// `AppState`.
+        func excluding(sessionID: UUID) -> HookOwnership {
+            HookOwnership(
+                crowPath: crowPath,
+                liveSessionIDs: liveSessionIDs.subtracting([sessionID]),
+                sessionByWorktreePath: sessionByWorktreePath.filter { $0.value != sessionID })
+        }
+    }
+
     /// Everything that must be applied to a worktree **before an agent process
     /// opens it**, as ONE gate so no launch path can drift (#861 review r17,
-    /// Yellow 1 / Green 1). Two independent, each self-gated steps:
+    /// Yellow 1 / Green 1). Three independent, each self-gated steps:
     ///
     ///  1. **Strip** a Grok `.review` clone's committed config (`.grok/`,
     ///     `.cursor/`, `.claude/settings{,.local}.json`, repo-root `.mcp.json`)
@@ -886,18 +935,28 @@ public final class SessionService {
     ///     attacker's hooks from the PR head.
     ///  2. **Seed** the agent's folder trust (Claude/Codex/Grok, never `.review`),
     ///     gated via `shouldSeedFolderTrust`.
+    ///  3. **Reconcile the main clone's** hook block (#915). A linked worktree
+    ///     loads the main clone's `.claude/settings.local.json` in addition to
+    ///     its own, so a stale block there breaks hooks and telemetry for every
+    ///     session on that repo, and a merely foreign one misattributes their
+    ///     events. No-op when `worktreePath` is not a linked worktree.
     ///
-    /// Both are no-ops for the agents/kinds that don't need them, so this is safe
-    /// to call from every launch path unconditionally. **The call sites of this
-    /// symbol ARE the answer to "how many Grok/Antigravity launch paths open a
+    /// All are no-ops for the agents/kinds/layouts that don't need them, so this
+    /// is safe to call from every launch path unconditionally. **The call sites of
+    /// this symbol ARE the answer to "how many Grok/Antigravity launch paths open a
     /// review clone"** — `rg prepareWorktreeForAgentLaunch`, never a hand-maintained
     /// count (which went stale four rounds running). Today: `pasteDeferredLaunch`,
     /// `launchAgent`, `handoffAgent`, `createManagerTerminal` (seed only — Manager
     /// is never `.review`), and the `send` RPC (`EngineRouter`). `prepareReviewClone`
     /// strips at *clone-creation* time and deliberately does NOT go through here:
     /// it must strip WITHOUT seeding, since the clone is not yet a launch target.
+    ///
+    /// `ownership` is required rather than defaulted: a default would let a new
+    /// launch path silently skip step 3, which is the drift this gate exists to
+    /// prevent.
     nonisolated static func prepareWorktreeForAgentLaunch(
-        agentKind: AgentKind, sessionKind: SessionKind, worktreePath: String) {
+        agentKind: AgentKind, sessionKind: SessionKind, worktreePath: String,
+        ownership: HookOwnership) {
         if shouldStripGrokReviewClone(agentKind: agentKind, sessionKind: sessionKind) {
             stripGrokConfigFromReviewClone(clonePath: worktreePath)
         }
@@ -906,6 +965,51 @@ public final class SessionService {
         }
         seedTrustIfNeeded(
             agentKind: agentKind, sessionKind: sessionKind, worktreePath: worktreePath)
+        reconcileMainCloneHooks(worktreePath: worktreePath, ownership: ownership)
+    }
+
+    /// Step 3 of the launch gate: clear or repair the main clone's inherited
+    /// hook block (#915).
+    ///
+    /// Runs for every agent kind, not just Claude. The inherited file is
+    /// `.claude/settings.local.json` either way, and Grok/Codex read Claude-compat
+    /// settings — so a Cursor or Codex session in a worktree is just as exposed to
+    /// a stale block in the repo's main clone as a Claude one.
+    nonisolated static func reconcileMainCloneHooks(
+        worktreePath: String, ownership: HookOwnership) {
+        logMainCloneOutcome(ClaudeHookRepair.reconcileMainClone(
+            worktreePath: worktreePath,
+            crowPath: ownership.crowPath,
+            liveSessionIDs: ownership.liveSessionIDs,
+            sessionByWorktreePath: ownership.sessionByWorktreePath))
+    }
+
+    /// The same reconciliation for a directory already known to be a main clone
+    /// — the retention reaper's entry point, where the worktree that would have
+    /// resolved it is being deleted.
+    nonisolated static func reconcileMainCloneHooks(
+        directory: String, ownership: HookOwnership) {
+        logMainCloneOutcome(ClaudeHookRepair.reconcileHookBlock(
+            inDirectory: directory,
+            crowPath: ownership.crowPath,
+            liveSessionIDs: ownership.liveSessionIDs,
+            sessionByWorktreePath: ownership.sessionByWorktreePath))
+    }
+
+    private nonisolated static func logMainCloneOutcome(
+        _ outcome: ClaudeHookRepair.MainCloneOutcome) {
+        switch outcome {
+        case .notAWorktree, .noBlock, .healthy:
+            break  // The common case — stay quiet.
+        case .repaired(let dir):
+            CrowLog.info("[SessionService] repaired inherited hook block in main clone \(dir)")
+        case .stripped(let dir):
+            CrowLog.info("[SessionService] stripped inherited hook block from main clone \(dir)")
+        case .skipped(let dir):
+            CrowLog.info(
+                "[SessionService] could not reconcile the hook block in main clone \(dir)"
+                + " — sessions in this repo's worktrees may keep emitting hook errors.")
+        }
     }
 
     /// Pre-seed the agent's folder trust for `worktreePath` so an unattended launch
@@ -1061,13 +1165,15 @@ public final class SessionService {
         // creation-time strip alone is not enough. The strip is a no-op unless this
         // is a Grok `.review` clone; the seed a no-op for `.review` / a trustless
         // agent (never `--dangerously-bypass`; Claude CROW-600, Codex #830, Grok #859).
+        let crowPath = ClaudeHookConfigWriter.resolveCrowBinary(devRoot: ConfigStore.loadDevRoot())
         Self.prepareWorktreeForAgentLaunch(
             agentKind: agent.kind, sessionKind: session.kind,
-            worktreePath: worktree.worktreePath)
+            worktreePath: worktree.worktreePath,
+            ownership: HookOwnership.snapshot(appState, crowPath: crowPath))
 
         // Write/refresh hook config (Claude path). Codex's writer is a
         // no-op — its global config was installed once at app launch.
-        if let crowPath = ClaudeHookConfigWriter.resolveCrowBinary(devRoot: ConfigStore.loadDevRoot()) {
+        if let crowPath {
             do {
                 try agent.hookConfigWriter.writeHookConfig(
                     worktreePath: worktree.worktreePath,
@@ -1400,7 +1506,10 @@ public final class SessionService {
         // agents.
         Self.prepareWorktreeForAgentLaunch(
             agentKind: target.kind, sessionKind: session.kind,
-            worktreePath: worktree.worktreePath)
+            worktreePath: worktree.worktreePath,
+            ownership: HookOwnership.snapshot(
+                appState,
+                crowPath: ClaudeHookConfigWriter.resolveCrowBinary(devRoot: ConfigStore.loadDevRoot())))
         if target.kind == .claudeCode {
             // Claude inherits the workspace AI gateway env on handoff.
             ClaudeHookConfigWriter.writeGatewayEnv(
@@ -1918,7 +2027,10 @@ public final class SessionService {
         // path can't forget the strip (#861 review r8/r17). Manager sessions are
         // never `.review`, so here the shared helper only seeds (the strip no-ops).
         Self.prepareWorktreeForAgentLaunch(
-            agentKind: session.agentKind, sessionKind: session.kind, worktreePath: cwd)
+            agentKind: session.agentKind, sessionKind: session.kind, worktreePath: cwd,
+            ownership: HookOwnership.snapshot(
+                appState,
+                crowPath: ClaudeHookConfigWriter.resolveCrowBinary(devRoot: ConfigStore.loadDevRoot())))
         // CROW-402: write the Manager gateway env block to {devRoot}/.claude so
         // manual `claude` re-runs in this terminal inherit the same routing. The
         // Manager's cwd is the devRoot. #861 review r17/r18 (Yellow 2): the env can
@@ -2035,6 +2147,13 @@ public final class SessionService {
                 agentKind: session?.agentKind ?? .claudeCode
             )
         }
+        // Ownership as it will be *after* this delete: the session is still in
+        // `appState` here (it is removed once cleanup succeeds), so counting it
+        // as live would let a main clone keep a hook block naming a session that
+        // is going away — which is precisely how #897's stale file was created.
+        let ownershipAfterDelete = HookOwnership.snapshot(
+            appState, crowPath: ClaudeHookConfigWriter.resolveCrowBinary(devRoot: ConfigStore.loadDevRoot())
+        ).excluding(sessionID: id)
 
         appState.isDeletingSession[id] = true
         appState.sessionDeletionError.removeValue(forKey: id)
@@ -2042,7 +2161,8 @@ public final class SessionService {
         // Slow git + filesystem work runs on a background thread so the main actor
         // stays free to render the spinner and respond to other input.
         let cleanupError: String? = await Task.detached(priority: .utility) {
-            Self.performDiskCleanup(items: items, isReview: isReview)
+            Self.performDiskCleanup(
+                items: items, isReview: isReview, ownership: ownershipAfterDelete)
         }.value
 
         if let cleanupError {
@@ -2112,7 +2232,8 @@ public final class SessionService {
     /// Soft failures (branch delete, prune) only get NSLog'd.
     nonisolated static func performDiskCleanup(
         items: [WorktreeCleanupItem],
-        isReview: Bool
+        isReview: Bool,
+        ownership: HookOwnership
     ) -> String? {
         var firstFatalError: String? = nil
 
@@ -2145,6 +2266,17 @@ public final class SessionService {
             let cleanupWriter = AgentRegistry.shared.agent(for: item.agentKind)?.hookConfigWriter
                 ?? ClaudeHookConfigWriter()
             cleanupWriter.removeHookConfig(worktreePath: item.worktreePath)
+
+            // …and from the **main clone**, which this worktree's sessions were
+            // also loading (#915). Removing the worktree does not remove the
+            // block that named it, so without this a reaped worktree can leave
+            // its binary/session id behind in a long-lived clone — exactly the
+            // April artifact in #897 — until the next boot sweep. `repoPath` is
+            // the clone, and doing it here rather than after `git worktree
+            // remove` means we don't need the (soon-deleted) worktree's `.git`
+            // to resolve it. Non-fatal: this loop's first hard error aborts the
+            // whole session delete, and a settings file is not worth that.
+            reconcileMainCloneHooks(directory: item.repoPath, ownership: ownership)
 
             var gitRemoveFailed = false
             do {

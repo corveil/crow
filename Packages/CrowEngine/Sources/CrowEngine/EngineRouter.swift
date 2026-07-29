@@ -72,13 +72,29 @@ func hookToolName(from payload: [String: JSONValue]) -> String? {
 /// acceptable for a diagnostic.
 @MainActor private var loggedUnresolvedHookDrops: Set<String> = []
 
+/// Neutralize a caller-supplied value before it reaches the log: cap length (the
+/// per-set count caps bound record *count*; this bounds record *size*), and
+/// escape every C0 control (and DEL) so an embedded ESC/ANSI sequence can't
+/// mangle a terminal that `cat`s the launchd log. `\n`/`\r` get readable forms;
+/// the rest become `\xNN`. Shared by both hook-drop loggers below.
+private func oneLineForLog(_ s: String) -> String {
+    var out = ""
+    for scalar in String(s.prefix(200)).unicodeScalars {
+        switch scalar {
+        case "\n": out += "\\n"
+        case "\r": out += "\\r"
+        case let c where c.value < 0x20 || c.value == 0x7F:
+            out += String(format: "\\x%02x", c.value)
+        default: out.unicodeScalars.append(scalar)
+        }
+    }
+    return out
+}
+
 /// Log an unresolved hook-event drop at most once per `cwd`. Only the no-id /
 /// no-cwd-match branch calls this, where `session_id` is always absent — so the
 /// key is `cwd` alone (a `nil` cwd and a literal cwd of "none" are kept
-/// distinct). `eventName`/`cwd` are caller-supplied (via the local agent), so
-/// each is control-stripped and length-capped before it reaches the log: an
-/// embedded newline/ANSI can't forge or mangle a record, and a value bounded
-/// only by the 1 MB message limit can't turn the count cap into a size flood.
+/// distinct).
 @MainActor private func logUnresolvedHookDropOnce(eventName: String, cwd: String?) {
     // Distinguish nil from a literal "none" path so the dedup key can't collide.
     let key = cwd.map { "cwd:" + $0 } ?? "<nil>"
@@ -91,26 +107,41 @@ func hookToolName(from payload: [String: JSONValue]) -> String? {
     // socket access, not a remote /rpc peer.
     guard loggedUnresolvedHookDrops.count < 256 else { return }
     loggedUnresolvedHookDrops.insert(key)
-    // Neutralize caller-supplied values before logging: cap length (the count
-    // cap bounds record *count*; this bounds record *size*), and escape every C0
-    // control (and DEL) so an embedded ESC/ANSI sequence can't mangle a terminal
-    // that `cat`s the launchd log. \n/\r get readable forms; the rest become \xNN.
-    func oneLine(_ s: String) -> String {
-        var out = ""
-        for scalar in String(s.prefix(200)).unicodeScalars {
-            switch scalar {
-            case "\n": out += "\\n"
-            case "\r": out += "\\r"
-            case let c where c.value < 0x20 || c.value == 0x7F:
-                out += String(format: "\\x%02x", c.value)
-            default: out.unicodeScalars.append(scalar)
-            }
-        }
-        return out
-    }
     CrowLog.error(
-        "[hook-event] dropped \(oneLine(eventName)): unresolved session "
-        + "(no session_id, cwd=\(cwd.map(oneLine) ?? "<none>"))"
+        "[hook-event] dropped \(oneLineForLog(eventName)): unresolved session "
+        + "(no session_id, cwd=\(cwd.map(oneLineForLog) ?? "<none>"))"
+    )
+}
+
+/// Inherited-config drops already logged, keyed on `cwd` **and** the foreign
+/// session id — unlike the unresolved set above, one cwd can legitimately see
+/// several foreign ids over a daemon's life (a main clone rewritten for a new
+/// session while its worktrees keep running), and collapsing them onto `cwd`
+/// alone would hide all but the first.
+@MainActor private var loggedForeignHookDrops: Set<String> = []
+
+/// Log an inherited-block drop at most once per (cwd, foreign id) pair.
+///
+/// This one is worth a log line rather than silence: it is the visible symptom
+/// of a main clone still carrying a hook block, which `reconcileMainClone`
+/// should have cleared at launch. Seeing it repeatedly means reconciliation is
+/// not reaching that directory.
+///
+/// Same shape as the unresolved logger — 256-key cap held by refusing new keys,
+/// never reset for the daemon's lifetime — because this fires on essentially
+/// every tool call of every affected session.
+@MainActor private func logForeignHookDropOnce(
+    eventName: String, cwd: String, provided: UUID, resolved: UUID
+) {
+    let key = "\(cwd)|\(provided.uuidString)"
+    guard !loggedForeignHookDrops.contains(key) else { return }
+    guard loggedForeignHookDrops.count < 256 else { return }
+    loggedForeignHookDrops.insert(key)
+    CrowLog.error(
+        "[hook-event] dropped \(oneLineForLog(eventName)): hook config for session "
+        + "\(provided.uuidString) fired in \(oneLineForLog(cwd)), which belongs to "
+        + "\(resolved.uuidString) — an inherited main-clone block (#915). "
+        + "Its .claude/settings.local.json still carries Crow hooks."
     )
 }
 
@@ -1149,7 +1180,9 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                             SessionService.prepareWorktreeForAgentLaunch(
                                 agentKind: session.agentKind,
                                 sessionKind: session.kind,
-                                worktreePath: wtPath)
+                                worktreePath: wtPath,
+                                ownership: SessionService.HookOwnership.snapshot(
+                                    capturedAppState, crowPath: crowPath))
                         }
                         let prepared = AgentLaunch.prepareAgentLaunchText(
                             command: text,
@@ -1340,32 +1373,78 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                 }()
 
                 return try await MainActor.run {
-                    // Resolve session — an explicit param wins only if it names
-                    // a session we still have; otherwise fall back to the
-                    // worktree matching `cwd`.
+                    // Resolve session — `cwd` is authoritative, and a provided
+                    // id is trusted only when cwd can't answer.
                     //
-                    // A stale `settings.local.json` bakes in a `--session` uuid
-                    // that can outlive the session itself (#897), and trusting
-                    // it unconditionally minted hook state — and a persisted
-                    // `hookStates` row — for a session that no longer exists.
-                    // Rerouting by cwd repairs those events instead of dropping
-                    // them.
+                    // cwd wins because it describes which session is *actually
+                    // running*, whereas `--session` only describes which file
+                    // the command was written into — and one settings file is
+                    // read by more sessions than the one it was written for. A
+                    // git worktree's `.git` is a file pointing at the main
+                    // clone, and project-root resolution follows it, so a
+                    // worktree session loads the **main clone's**
+                    // `.claude/settings.local.json` in addition to its own
+                    // (#915). The main clone's block therefore fires inside
+                    // every worktree session of that repo.
                     //
-                    // Deliberately never throws for an unknown-but-provided id:
-                    // recording the event under the id the hook handed us beats
-                    // dropping it. (Before #903 there was a second reason — a
-                    // thrown RPC error became a non-zero `crow hook-event` exit
-                    // that Claude Code rendered as "hook error" noise — but
-                    // hook-event is fire-and-forget now, so the client never
-                    // reads the reply. Dropping the event is still the worse
-                    // outcome.) Unresolvable ids fall through with today's
-                    // behavior, minus the store write.
+                    // That block is not necessarily stale — if a session really
+                    // does run in the main clone, its uuid is live and
+                    // `ClaudeHookRepair` rightly leaves the file alone — so the
+                    // old "a live id wins" rule attributed every worktree
+                    // session's events to the main clone's session, and fired
+                    // each event twice (once per block). Dropping the mismatch
+                    // fixes attribution and the duplicate in one step, for the
+                    // files already on disk, with no change to what we write.
+                    //
+                    // Unchanged below the first branch: an unknown-but-provided
+                    // id is still recorded rather than dropped (#897 — a stale
+                    // file's uuid can outlive its session, and recording under
+                    // the id we were handed beats losing the event), and an
+                    // agent whose cwd matches no registered worktree still
+                    // falls back to the provided id.
                     let liveSessionIDs = Set(capturedAppState.sessions.map(\.id))
                     let sessionID: UUID
-                    if let provided = providedSessionID, liveSessionIDs.contains(provided) {
-                        sessionID = provided
-                    } else if let cwd, let resolved = capturedAppState.sessionID(forWorktreePath: cwd) {
-                        sessionID = resolved
+                    // Only *live* owners count. A row can outlive its session
+                    // (orphan recovery, a failed delete), and letting a dead one
+                    // own the directory would drop a live session's events.
+                    let owners = cwd.map {
+                        capturedAppState.sessionIDs(forWorktreePath: $0)
+                            .filter(liveSessionIDs.contains)
+                    } ?? []
+                    if let cwd, !owners.isEmpty {
+                        let provided = providedSessionID
+                        // Ids we honor over `owners`' arbitrary pick:
+                        //
+                        //  - One that owns the directory. With two rows on one
+                        //    path the pick is a coin flip, so an id that owns it
+                        //    is always preferred over whichever came first.
+                        //  - The Manager. Its block lives at devRoot and is
+                        //    matched by constant, never by path, everywhere else
+                        //    (cf. `ClaudeHookRepair.sweep`); if devRoot were ever
+                        //    registered as a worktree, path-based routing would
+                        //    hijack — or silence — the session that orchestrates
+                        //    everything.
+                        let honored = provided.map {
+                            owners.contains($0) || $0 == AppState.managerSessionID
+                        } ?? false
+                        // Anything else that is live is foreign to this
+                        // directory: an inherited block. A provided id that is
+                        // *not* live is #897's stale uuid, which
+                        // `unknownSessionFallsBackToCwd` re-routes here rather
+                        // than discards.
+                        if let provided, !honored, liveSessionIDs.contains(provided) {
+                            logForeignHookDropOnce(
+                                eventName: eventName, cwd: cwd,
+                                provided: provided, resolved: owners[0])
+                            throw RPCError.invalidParams(
+                                "hook config for session \(provided.uuidString) fired in a"
+                                + " worktree owned by \(owners[0].uuidString); dropped as inherited")
+                        }
+                        if let provided, honored {
+                            sessionID = provided
+                        } else {
+                            sessionID = owners[0]
+                        }
                     } else if let provided = providedSessionID {
                         sessionID = provided
                     } else {

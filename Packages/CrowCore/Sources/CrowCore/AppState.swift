@@ -538,13 +538,41 @@ public final class AppState {
     /// the agent (e.g. Codex) doesn't carry the session UUID in its hook
     /// invocation — the `cwd` field of the payload is matched against
     /// worktree paths to recover the session.
+    ///
+    /// Prefer `sessionIDs(forWorktreePath:)` where the answer decides routing:
+    /// `worktrees` is a dictionary, so "the first match" is a nondeterministic
+    /// pick when two sessions share a path — reachable through orphan recovery
+    /// and a `setup.sh` retry.
     public func sessionID(forWorktreePath path: String) -> UUID? {
-        for (sessionID, wts) in worktrees {
-            if wts.contains(where: { $0.worktreePath == path }) {
-                return sessionID
+        sessionIDs(forWorktreePath: path).first
+    }
+
+    /// Every session with a worktree registered at `path`.
+    ///
+    /// Normally zero or one. More than one is reachable — orphan recovery can
+    /// mint a second session for a path it already knows, a `setup.sh` retry
+    /// without `--session-id` re-runs `new-session` against the same worktree,
+    /// and a multi-repo session registers a secondary repo's *main clone* as a
+    /// worktree row, which a second such session registers again. Callers that
+    /// route on this must decide what an ambiguous answer means rather than
+    /// accept a coin flip; `sessionID(forWorktreePath:)` takes whichever the
+    /// dictionary yields first.
+    ///
+    /// Both sides are `standardizingPath`-normalized: an agent's reported cwd
+    /// and the stored row can disagree on spelling (trailing slash, `/tmp` vs
+    /// `/private/tmp`), and `LaunchScaffold.repairStaleHooks` already normalizes
+    /// its own view of the same data — routing and repair disagreeing about who
+    /// owns a directory is the failure this avoids.
+    ///
+    /// Ordered by session id so the result is stable across processes.
+    public func sessionIDs(forWorktreePath path: String) -> [UUID] {
+        let wanted = (path as NSString).standardizingPath
+        return worktrees
+            .filter { _, wts in
+                wts.contains { ($0.worktreePath as NSString).standardizingPath == wanted }
             }
-        }
-        return nil
+            .keys
+            .sorted { $0.uuidString < $1.uuidString }
     }
 
     public func links(for sessionID: UUID) -> [SessionLink] {
