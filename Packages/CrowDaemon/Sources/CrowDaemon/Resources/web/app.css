@@ -648,10 +648,14 @@ html, body {
 }
 .tickets-card:hover { border-color: var(--border-strong); }
 .tickets-card.selected { border-color: var(--gold); }
-.tickets-head { display: flex; align-items: center; justify-content: center; position: relative; }
-.tickets-title { color: var(--gold); font-weight: 700; font-size: 13px; }
+/* Title left, refresh right (CROW-913): the compact .tickets-card is too narrow for a
+   centred title + absolutely-positioned refresh (they overlap below ~110px), so the head
+   is a space-between row with the refresh in-flow. The title ellipsises only under a
+   heavily raised browser minimum-font-size, where the card also grows toward its cap. */
+.tickets-head { display: flex; align-items: center; justify-content: space-between; gap: 4px; }
+.tickets-title { color: var(--gold); font-weight: 700; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .tickets-refresh {
-  position: absolute; right: 0; top: 50%; transform: translateY(-50%);
+  flex: 0 0 auto;
   display: inline-flex; align-items: center; justify-content: center;
   width: 22px; height: 22px; padding: 0; border-radius: 6px; cursor: pointer; line-height: 1;
   border: 1px solid var(--border-subtle); background: var(--bg-card); color: var(--text-secondary); font-size: 12px;
@@ -662,18 +666,20 @@ html, body {
    matching the detail-header action-button spinner (CROW-749). */
 .tickets-refresh.spinning { opacity: 0.6; cursor: default; }
 .tickets-row { display: flex; align-items: stretch; gap: 6px; margin: 2px 2px 8px; }
-/* Compact ticket box (CROW-913): was flex:1 1 auto, which grew it to fill the whole row
-   and dominate the sidebar top. Now content-sized with a 160px ceiling instead of a hard
-   px pin. With the five pipeline counts present it sits at that ceiling (~160px) in
-   practice — the cap is what caps it, not a magic fixed number — but a *ceiling* is the
-   point: the header slot scales with the box, so a raised browser minimum-font-size can't
-   clip "Tickets" the way a fixed px width did (review), and the counts wrap (2 rows
-   typically, 3 at large fonts) instead of forcing the card wider. No min-width: the
-   350px grid never shrinks it, and 92px would be below where the centred head clears the
-   refresh anyway. Sits beside the horizontal Notifications+Settings tools cluster. */
+/* Compact ticket box (CROW-913 ask #2): was flex:1 1 auto, which grew it to fill the whole
+   row and dominate the sidebar top. Now content-sized: the counts render in a fixed TWO
+   columns (below), so the card's max-content is a narrow ~91px (two count cells + header)
+   rather than the five-cell-wide ~160px it would be on one line — measured 91px at typical
+   counts, 106px with 3-digit counts, as close to the Notifications+Settings cluster (66px)
+   as "Tickets" + the five counts allow. `max-width` is a far-off CEILING, not the resting
+   width: because the width tracks max-content, the box grows with the font, so a raised
+   browser minimum-font-size can't clip the header (grows to ~158px at a 24px floor) — the
+   failure a fixed px width had (review). Two columns also fix the height: it's a constant
+   ~95px regardless of 1-, 2-, or 3-digit counts, where a single wrapping row grew taller
+   with bigger numbers. Sits beside the horizontal Notifications+Settings tools cluster. */
 .tickets-row .tickets-card { flex: 0 1 auto; width: max-content; max-width: 160px; margin: 0; }
 .sidebar-tools { display: flex; flex-direction: row; align-items: center; gap: 6px; flex: 0 0 auto; }
-.tickets-counts { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 8px; margin-top: 8px; padding: 0 2px; }
+.tickets-counts { display: grid; grid-template-columns: repeat(2, auto); justify-content: center; gap: 4px 10px; margin-top: 8px; padding: 0 2px; }
 .tk-tool {
   display: inline-flex; align-items: center; justify-content: center;
   width: 30px; height: 29px; border-radius: 6px; cursor: pointer;
@@ -802,7 +808,7 @@ html, body {
    after Scorecard. Sized/coloured like .nav-plus so it stretches to the pill height;
    reads red while a selection is active, matching .nav-selecting elsewhere. */
 .nav-select {
-  flex: 0 0 auto; width: 30px; display: inline-flex; align-items: center; justify-content: center;
+  flex: 0 0 auto; width: 30px; padding: 0; display: inline-flex; align-items: center; justify-content: center;
   border-radius: 6px; cursor: pointer;
   background: var(--bg-surface); border: 1px solid rgba(179, 142, 70, 0.3); color: var(--gold-dark);
 }

@@ -1262,7 +1262,7 @@ function renderStatusBar() {
 
 // Notifications + Settings, side by side to the right of the Tickets card
 // (outside the box). The Select-sessions toggle moved down to navPillRow row 1,
-// next to Scorecard (CROW-913); these two now define the ticket box's width.
+// next to Scorecard (CROW-913).
 function sidebarToolsStack() {
   const stack = el('div', 'sidebar-tools');
   // Notification center (CROW-909): bell + unread badge, first so it's the most
@@ -1299,6 +1299,7 @@ function navPillRow() {
   // clears the selection on cancel, and reads red (.nav-selecting) while active.
   const sel = el('button', 'nav-select' + (selectionMode ? ' nav-selecting' : ''));
   sel.title = selectionMode ? 'Cancel selection' : 'Select sessions';
+  sel.setAttribute('aria-label', sel.title);
   sel.appendChild(icon(selectionMode ? 'close' : 'checkSquare', 14));
   sel.onclick = () => { selectionMode = !selectionMode; if (!selectionMode) selectedSessionIDs.clear(); renderSidebar(); };
   row1.appendChild(sel);
