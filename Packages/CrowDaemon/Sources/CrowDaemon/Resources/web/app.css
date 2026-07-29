@@ -683,8 +683,12 @@ html, body {
 .sidebar-right { flex: 0 0 auto; width: 30px; display: flex; flex-direction: column; gap: 6px; }
 /* Every icon button in the right column stretches to the column width and shares
    the height evenly, so bell/gear/+/select read as one aligned stack regardless of
-   each control's intrinsic size. */
-.sidebar-right > button { flex: 1 1 0; width: 100%; height: auto; }
+   each control's intrinsic size. `min-height: 24px` is a hard floor: the four
+   flex:1 buttons divide whatever height `.sidebar-left` resolves to, and a short
+   left column (no Manager pill / cold-start render) would otherwise divide to
+   ~20px — under the WCAG 2.2 §2.5.8 target-size minimum, and the sidebar is the
+   full-width touch view on mobile (CROW-917 review). */
+.sidebar-right > button { flex: 1 1 0; width: 100%; height: auto; min-height: 24px; }
 .tickets-counts { display: flex; align-items: center; justify-content: space-between; gap: 4px; padding: 0 2px; }
 .tk-tool {
   display: inline-flex; align-items: center; justify-content: center;
