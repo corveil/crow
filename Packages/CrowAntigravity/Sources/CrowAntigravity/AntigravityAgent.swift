@@ -124,7 +124,11 @@ public struct AntigravityAgent: CodingAgent {
             // (`prepareReviewClone`) AND on every launch path
             // (`prepareWorktreeForAgentLaunch`), because the SKILL's `gh pr
             // checkout` / a head-advancing re-review can restore the hooks from the
-            // head between launches (#902 review Red).
+            // head between launches (#902 review Red). This launch-time strip
+            // assumes `agy` reads hooks *once at process start*, not per-event — an
+            // unverified premise (agy v1.1.7) tracked in the pinned-gaps table and
+            // the manual-pass checklist; if it re-reads mid-session, a restore
+            // between the SKILL's `gh pr checkout` and `Stop` would fire unmitigated.
             if !session.reviewPromptDispatched {
                 let promptPath = (worktreePath as NSString)
                     .appendingPathComponent(".crow-review-prompt.md")

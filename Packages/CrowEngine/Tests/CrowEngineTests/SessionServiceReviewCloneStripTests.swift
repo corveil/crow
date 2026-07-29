@@ -123,7 +123,7 @@ struct SessionServiceReviewCloneStripTests {
     /// No registered agent is review-incapable today, so the refusal gate is
     /// uniformly `false` across every kind × session-kind combination.
     @Test func refuseGateNeverFires() {
-        for k: AgentKind in [.claudeCode, .cursor, .codex, .openCode, .antigravity] {
+        for k: AgentKind in [.claudeCode, .cursor, .codex, .openCode, .grok, .antigravity] {
             for sk: SessionKind in [.work, .job, .review, .manager] {
                 #expect(!SessionService.shouldRefuseReviewHandoff(
                     targetKind: k, sessionKind: sk))
@@ -214,5 +214,45 @@ struct SessionServiceReviewCloneStripTests {
             #expect(!SessionService.shouldStripAntigravityReviewClone(
                 agentKind: k, sessionKind: .review))
         }
+    }
+
+    // MARK: - The launch-gate wiring itself (the round-2 RCE fix)
+
+    /// `prepareWorktreeForAgentLaunch` is the ONE gate every launch path routes
+    /// through (`launchAgent` on warm restart, `pasteDeferredLaunch`,
+    /// `createManagerTerminal`, the `send` RPC, handoff), so this covers the wiring
+    /// the predicate/helper tests above can't: delete the two lines at
+    /// `SessionService.swift:904-906` and only this test fails. `.antigravity` seeds
+    /// no folder trust on any kind, so the call touches zero global trust state —
+    /// no `.review`-only framing needed (unlike the Grok equivalent).
+    @Test func prepareStripsAgentsWhenGateFires() {
+        let clone = Self.makeTempDir(name: "prep-agy-review")
+        defer { try? FileManager.default.removeItem(atPath: clone) }
+        let agentsDir = (clone as NSString).appendingPathComponent(".agents")
+        try? FileManager.default.createDirectory(
+            atPath: agentsDir, withIntermediateDirectories: true)
+        try? "{\"hooks\":\"EVIL\"}".write(
+            toFile: (agentsDir as NSString).appendingPathComponent("hooks.json"),
+            atomically: true, encoding: .utf8)
+
+        SessionService.prepareWorktreeForAgentLaunch(
+            agentKind: .antigravity, sessionKind: .review, worktreePath: clone)
+
+        #expect(!FileManager.default.fileExists(atPath: agentsDir))
+    }
+
+    /// The gate is scoped: a `.work` Antigravity session is a normal working
+    /// clone, so `prepareWorktreeForAgentLaunch` leaves its `.agents/` in place.
+    @Test func prepareLeavesAgentsForNonReview() {
+        let clone = Self.makeTempDir(name: "prep-agy-work")
+        defer { try? FileManager.default.removeItem(atPath: clone) }
+        let agentsDir = (clone as NSString).appendingPathComponent(".agents")
+        try? FileManager.default.createDirectory(
+            atPath: agentsDir, withIntermediateDirectories: true)
+
+        SessionService.prepareWorktreeForAgentLaunch(
+            agentKind: .antigravity, sessionKind: .work, worktreePath: clone)
+
+        #expect(FileManager.default.fileExists(atPath: agentsDir))
     }
 }

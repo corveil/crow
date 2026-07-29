@@ -2920,18 +2920,15 @@ public final class SessionService {
     /// `prepareWorktreeForAgentLaunch` (every launch path — where the review
     /// skill's `gh pr checkout` may have restored a committed `.agents/` from the
     /// head) so the gate can't drift. Idempotent; no-ops when the clone ships no
-    /// `.agents/`.
+    /// `.agents/`. Delegates to `removeReviewCloneConfig` so a genuine removal
+    /// failure is **audible** (`CrowLog.error`, not `info`): the strip is
+    /// Antigravity's *only* defense — it has no trust gate behind it — so a
+    /// swallowed failure would leave live attacker hooks in place with nothing to
+    /// show for it (#902 review r3, Yellow 1).
     nonisolated static func stripAntigravityConfigFromReviewClone(clonePath: String) {
-        let agentsDir = (clonePath as NSString).appendingPathComponent(".agents")
-        do {
-            try FileManager.default.removeItem(atPath: agentsDir)
-        } catch let error as NSError
-            where error.domain == NSCocoaErrorDomain
-            && error.code == NSFileNoSuchFileError {
-            // No `.agents/` shipped — the common, expected case. Stay quiet.
-        } catch {
-            CrowLog.info("[SessionService] Failed to strip .agents/ from review clone \(clonePath): \(error.localizedDescription)")
-        }
+        removeReviewCloneConfig(
+            (clonePath as NSString).appendingPathComponent(".agents"),
+            label: ".agents/", clonePath: clonePath)
     }
 
     /// Neutralize a review clone's committed Cursor config layer by removing the
