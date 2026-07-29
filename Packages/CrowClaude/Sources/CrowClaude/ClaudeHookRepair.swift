@@ -216,6 +216,282 @@ public enum ClaudeHookRepair {
         return candidates
     }
 
+    // MARK: - Main-clone reconciliation (#915)
+
+    /// What `reconcileMainClone` did, for the launch log.
+    public enum MainCloneOutcome: Equatable, Sendable {
+        /// `worktreePath` is not a linked worktree (its `.git` is a directory),
+        /// so there is no separate main clone to reconcile.
+        case notAWorktree
+        /// The main clone holds no Crow-managed hook block.
+        case noBlock
+        /// The block belongs to the session that owns that directory and is
+        /// healthy — left untouched.
+        case healthy
+        /// Rewritten to the owning session and a good binary.
+        case repaired(mainClone: String)
+        /// Crow entries removed: nothing legitimately runs from that directory.
+        case stripped(mainClone: String)
+        /// Present but not safely actionable (unparseable or unwritable).
+        case skipped(mainClone: String)
+    }
+
+    /// Reconcile the **main clone's** hook block before launching an agent in
+    /// one of its worktrees (#915).
+    ///
+    /// A linked worktree's `.git` is a file pointing at the main clone, and
+    /// project-root resolution follows it — so the main clone's
+    /// `.claude/settings.local.json` is loaded *in addition to* the worktree's
+    /// own, and both hook sets run. Crow writes the per-worktree file and treats
+    /// it as the session's configuration; it is not. One stale block in a main
+    /// clone breaks hooks and telemetry for **every** session on that repo, and
+    /// one merely *foreign* block (naming a different live session) misattributes
+    /// their events and fires each twice.
+    ///
+    /// `sweep` cannot cover this. It is boot-time only, walks devRoot at a fixed
+    /// depth of 2 (so a clone living anywhere else is invisible), and — decisively
+    /// — its health test is per-directory: a block naming a live session *is*
+    /// healthy by that test, which is exactly the case that must still go.
+    ///
+    /// The decision, given the directory the block sits in:
+    ///
+    /// | Main clone is… | Action |
+    /// |---|---|
+    /// | this session's own worktree | leave (it is this session's own block) |
+    /// | another live session's worktree | repair in place for that session |
+    /// | no live session's worktree | strip Crow entries |
+    ///
+    /// Note "repair" keeps a legitimately-hosted block working: the daemon's
+    /// cwd-authoritative `hook-event` resolution drops it when it fires inside a
+    /// *worktree* session, and accepts it when it fires in the main clone itself.
+    ///
+    /// ## Actor context
+    ///
+    /// Performs blocking file I/O, and **the launch path deliberately runs it on
+    /// the MainActor** (`SessionService.prepareWorktreeForAgentLaunch`, which is
+    /// synchronous and MainActor-bound). That is not an oversight and must not be
+    /// "fixed" by detaching: the block has to be gone from disk *before* the agent
+    /// process opens the directory, and the launch paths type the agent's command
+    /// into its pane in the same synchronous block. A detached reconcile would
+    /// race the very launch it exists to protect — the agent would start with the
+    /// inherited block still live, which is the bug.
+    ///
+    /// The cost is bounded so that is affordable: one `stat` for anything that is
+    /// not a linked worktree (main clones, review clones, the Manager's dev root —
+    /// the early-out in `resolveMainClone`), and for a real worktree three more
+    /// small reads (`.git`, `commondir`, the settings file). A *write* happens only
+    /// when a block is actually stale or foreign, which is a once-per-defect event,
+    /// not once per launch. `prepareWorktreeForAgentLaunch` already does MainActor
+    /// file I/O for the trust seed and the Grok/Antigravity strip, so this adds no
+    /// new category of work to that gate (#892).
+    ///
+    /// The reaper reaches it through `Task.detached` instead — there is no launch
+    /// to order against there, and it is already off the MainActor. Taking the
+    /// AppState facts as a value snapshot (`HookOwnership`) is what makes that
+    /// possible: this function needs no actor of its own.
+    public static func reconcileMainClone(
+        worktreePath: String,
+        crowPath: String?,
+        liveSessionIDs: Set<UUID>,
+        sessionByWorktreePath: [String: UUID]
+    ) -> MainCloneOutcome {
+        guard let mainClone = resolveMainClone(worktreePath: worktreePath) else {
+            return .notAWorktree
+        }
+        // A worktree whose main clone is itself (shouldn't happen, but a
+        // hand-made `.git` file could say so) needs no reconciliation.
+        let worktree = (worktreePath as NSString).standardizingPath
+        guard mainClone != worktree else { return .notAWorktree }
+
+        return reconcileHookBlock(
+            inDirectory: mainClone, crowPath: crowPath,
+            liveSessionIDs: liveSessionIDs, sessionByWorktreePath: sessionByWorktreePath)
+    }
+
+    /// `reconcileMainClone` for a directory already known to be the main clone.
+    ///
+    /// Split out for the retention reaper, which reconciles *after*
+    /// `git worktree remove` has deleted the worktree — so `resolveMainClone`
+    /// has no `.git` file left to read, but `WorktreeCleanupItem.repoPath`
+    /// already names the clone directly.
+    public static func reconcileHookBlock(
+        inDirectory dir: String,
+        crowPath: String?,
+        liveSessionIDs: Set<UUID>,
+        sessionByWorktreePath: [String: UUID]
+    ) -> MainCloneOutcome {
+        let dir = (dir as NSString).standardizingPath
+        // The session that legitimately owns that directory, if any. Only a
+        // *live* one counts — a row for a deleted session must not keep a block
+        // alive.
+        let owner = sessionByWorktreePath[dir].flatMap {
+            liveSessionIDs.contains($0) ? $0 : nil
+        }
+        return reconcileDirectory(dir, owner: owner, crowPath: crowPath)
+    }
+
+    /// The main clone backing a linked worktree, or `nil` when `worktreePath`
+    /// is not a linked worktree.
+    ///
+    /// Reads the gitdir chain directly rather than shelling out to
+    /// `git rev-parse --git-common-dir`: it is the same resolution, but with no
+    /// subprocess on the launch path, no dependency on `git` being found, and no
+    /// async hop in a `nonisolated static` caller. It also mirrors what the agent
+    /// harness itself does, which is the behavior we are compensating for.
+    ///
+    /// - `.git` a directory → this is a main clone (or a bare repo); no separate
+    ///   main clone exists.
+    /// - `.git` a file → `gitdir: <path>` names the worktree's private gitdir,
+    ///   e.g. `<main>/.git/worktrees/<name>`. The shared dir is that gitdir's
+    ///   `commondir` (git writes it, normally `../..`), and the main clone is its
+    ///   parent.
+    static func resolveMainClone(worktreePath: String) -> String? {
+        let fm = FileManager.default
+        let dotGit = (worktreePath as NSString).appendingPathComponent(".git")
+
+        var isDirectory: ObjCBool = false
+        guard fm.fileExists(atPath: dotGit, isDirectory: &isDirectory) else { return nil }
+        if isDirectory.boolValue { return nil }
+
+        guard let raw = try? String(contentsOfFile: dotGit, encoding: .utf8) else { return nil }
+        // A `.git` file is a single `gitdir: <path>` line. Anything else is not
+        // a shape we understand, and guessing would be worse than doing nothing.
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("gitdir:") else { return nil }
+        let pointer = String(trimmed.dropFirst("gitdir:".count))
+            .trimmingCharacters(in: .whitespaces)
+        guard !pointer.isEmpty else { return nil }
+        let gitDir = absolutePath(pointer, relativeTo: worktreePath)
+
+        // `commondir` is authoritative when present; the `../..` derivation is
+        // only a fallback for an oddly-shaped gitdir.
+        let commonDirFile = (gitDir as NSString).appendingPathComponent("commondir")
+        let commonDir: String
+        if let contents = try? String(contentsOfFile: commonDirFile, encoding: .utf8) {
+            let value = contents.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !value.isEmpty else { return nil }
+            commonDir = absolutePath(value, relativeTo: gitDir)
+        } else {
+            // No `commondir` — only trust the `../..` derivation when the gitdir
+            // has the shape git gives a linked worktree. Anything else and we do
+            // not know where the shared dir is; guessing would point the strip at
+            // an unrelated directory, so decline instead.
+            let parent = (gitDir as NSString).deletingLastPathComponent
+            guard (parent as NSString).lastPathComponent == "worktrees" else { return nil }
+            commonDir = (parent as NSString).deletingLastPathComponent
+        }
+
+        // `commonDir` is the main clone's `.git`; its parent is the working tree.
+        // Require that name: a shared dir called anything else means we did not
+        // resolve what we think we did.
+        guard (commonDir as NSString).lastPathComponent == ".git" else { return nil }
+        let mainClone = (commonDir as NSString).deletingLastPathComponent
+        guard !mainClone.isEmpty, mainClone != "/" else { return nil }
+        return (mainClone as NSString).standardizingPath
+    }
+
+    /// Resolve `path` against `base` when it is relative, then normalize.
+    private static func absolutePath(_ path: String, relativeTo base: String) -> String {
+        let joined = path.hasPrefix("/")
+            ? path
+            : (base as NSString).appendingPathComponent(path)
+        return (joined as NSString).standardizingPath
+    }
+
+    /// Apply the #915 decision to one directory's settings file.
+    ///
+    /// Distinct from `repairDirectory` in exactly one way, and it is the point of
+    /// the issue: health here means "every entry names `owner`", not merely "the
+    /// binary exists and the session is live". A block naming some *other* live
+    /// session passes the latter and must still fail the former.
+    private static func reconcileDirectory(
+        _ dir: String, owner: UUID?, crowPath: String?
+    ) -> MainCloneOutcome {
+        let fm = FileManager.default
+        let settingsPath = (dir as NSString).appendingPathComponent(".claude/settings.local.json")
+        guard let data = fm.contents(atPath: settingsPath) else { return .noBlock }
+        guard var settings = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let hooks = settings["hooks"] as? [String: Any] else {
+            // Same rule as `repairDirectory`: a file that exists but doesn't
+            // parse is left strictly alone — we can't tell our entries from the
+            // user's, and rewriting from `[:]` would drop every unrelated key.
+            return (try? JSONSerialization.jsonObject(with: data)) == nil
+                ? .skipped(mainClone: dir) : .noBlock
+        }
+
+        let parsed = parsedCrowHooks(in: hooks)
+        guard !parsed.isEmpty else { return .noBlock }
+
+        if let owner,
+           parsed.allSatisfy({
+               $0.sessionID == owner && fm.isExecutableFile(atPath: $0.binary)
+           }) {
+            return .healthy
+        }
+
+        let updatedHooks: [String: Any]
+        let outcome: MainCloneOutcome
+        if let owner, let crowPath {
+            updatedHooks = rewriteCommands(in: hooks, crowPath: crowPath, sessionID: owner)
+            outcome = .repaired(mainClone: dir)
+        } else {
+            // No live session owns this directory (or we have no good binary to
+            // write): nothing here can fire correctly, so remove only what we
+            // recognize as ours.
+            updatedHooks = stripCrowEntries(from: hooks)
+            outcome = .stripped(mainClone: dir)
+        }
+
+        if updatedHooks.isEmpty {
+            settings.removeValue(forKey: "hooks")
+        } else {
+            settings["hooks"] = updatedHooks
+        }
+
+        do {
+            try writeSettings(settings, to: settingsPath)
+        } catch {
+            CrowLog.info(
+                "[ClaudeHookRepair] failed to write \(settingsPath): \(error.localizedDescription)")
+            return .skipped(mainClone: dir)
+        }
+        return outcome
+    }
+
+    /// Every Crow-managed hook command in a `hooks` dictionary.
+    static func parsedCrowHooks(in hooks: [String: Any]) -> [ParsedCrowHook] {
+        var parsed: [ParsedCrowHook] = []
+        for event in ClaudeHookConfigWriter.allEvents {
+            for group in (hooks[event] as? [[String: Any]] ?? []) {
+                for entry in (group["hooks"] as? [[String: Any]] ?? []) {
+                    if let command = entry["command"] as? String,
+                       let hook = parseCrowHookCommand(command) {
+                        parsed.append(hook)
+                    }
+                }
+            }
+        }
+        return parsed
+    }
+
+    /// Write a settings dictionary back, deleting the file when nothing is left.
+    ///
+    /// NON-atomic on purpose: `writeGatewayEnv` chmods this file 0600 because its
+    /// `env` block can carry a gateway bearer token, and an atomic write replaces
+    /// the inode, resetting the mode to the umask default. Truncating in place
+    /// preserves both.
+    private static func writeSettings(_ settings: [String: Any], to path: String) throws {
+        if settings.isEmpty {
+            // Nothing of ours or the user's left — the file only ever held the
+            // stale block (exactly the reported case).
+            try FileManager.default.removeItem(atPath: path)
+        } else {
+            let out = try JSONSerialization.data(
+                withJSONObject: settings, options: [.prettyPrinted, .sortedKeys])
+            try out.write(to: URL(fileURLWithPath: path))
+        }
+    }
+
     // MARK: - Per-directory repair
 
     private static func repairDirectory(
@@ -240,17 +516,7 @@ public enum ClaudeHookRepair {
         }
 
         // Inventory first — decide before touching anything.
-        var parsed: [ParsedCrowHook] = []
-        for event in ClaudeHookConfigWriter.allEvents {
-            for group in (hooks[event] as? [[String: Any]] ?? []) {
-                for entry in (group["hooks"] as? [[String: Any]] ?? []) {
-                    if let command = entry["command"] as? String,
-                       let hook = parseCrowHookCommand(command) {
-                        parsed.append(hook)
-                    }
-                }
-            }
-        }
+        let parsed = parsedCrowHooks(in: hooks)
         guard !parsed.isEmpty else { return }
         summary.scanned += 1
 
@@ -279,19 +545,7 @@ public enum ClaudeHookRepair {
         }
 
         do {
-            if settings.isEmpty {
-                // Nothing of ours or the user's left — the file only ever held
-                // the stale block (exactly the reported case).
-                try fm.removeItem(atPath: settingsPath)
-            } else {
-                let out = try JSONSerialization.data(
-                    withJSONObject: settings, options: [.prettyPrinted, .sortedKeys])
-                // NON-atomic on purpose: `writeGatewayEnv` chmods this file 0600
-                // because its `env` block can carry a gateway bearer token, and
-                // an atomic write replaces the inode, resetting the mode to the
-                // umask default. Truncating in place preserves both.
-                try out.write(to: URL(fileURLWithPath: settingsPath))
-            }
+            try writeSettings(settings, to: settingsPath)
         } catch {
             CrowLog.info("[ClaudeHookRepair] failed to write \(settingsPath): \(error.localizedDescription)")
             summary.skipped.append(dir)

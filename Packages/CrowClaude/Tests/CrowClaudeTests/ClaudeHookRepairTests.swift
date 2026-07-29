@@ -432,3 +432,337 @@ struct ClaudeHookRepairSweepTests {
         #expect(try String(contentsOfFile: settingsPath(worktree), encoding: .utf8) == "{ not json")
     }
 }
+
+/// #915 — a linked worktree's `.git` is a file pointing at the main clone, and
+/// project-root resolution follows it, so the main clone's
+/// `.claude/settings.local.json` is loaded *in addition to* the worktree's own.
+/// One block in a main clone therefore reaches every session on the repo.
+///
+/// These use real `git init` + `git worktree add` rather than fabricated `.git`
+/// files: the resolution being compensated for is git's own, so a hand-made
+/// fixture could agree with the code while both disagree with git.
+@Suite("ClaudeHookRepair.reconcileMainClone")
+struct ClaudeHookRepairMainCloneTests {
+    private let deadSession = UUID(uuidString: "2BEF7A0D-743B-47A3-819A-C39C180F6977")!
+    private let deadBinary = "/Users/x/Dev/crow-136-session-analytics-otel/.build/arm64-apple-macosx/debug/crow"
+
+    private func std(_ url: URL) -> String { (url.path as NSString).standardizingPath }
+    private func std(_ path: String) -> String { (path as NSString).standardizingPath }
+
+    @discardableResult
+    private func git(_ args: [String], cwd: String? = nil) throws -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["git"] + args
+        if let cwd { process.currentDirectoryURL = URL(fileURLWithPath: cwd) }
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        try process.run()
+        let out = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        let text = String(decoding: out, as: UTF8.self)
+        guard process.terminationStatus == 0 else {
+            throw NSError(domain: "git", code: Int(process.terminationStatus),
+                          userInfo: [NSLocalizedDescriptionKey: text])
+        }
+        return text
+    }
+
+    /// A real main clone with one commit, plus one linked worktree beside it —
+    /// the `{devRoot}/{workspace}/{repo}` + `{repo}-{n}-{slug}` sibling layout
+    /// Crow uses.
+    private func makeRepoWithWorktree() throws -> (root: URL, mainClone: URL, worktree: URL, crowPath: String) {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("claude-mainclone-\(UUID().uuidString)")
+        let binDir = root.appendingPathComponent(".claude/bin")
+        try FileManager.default.createDirectory(at: binDir, withIntermediateDirectories: true)
+        let crow = binDir.appendingPathComponent("crow")
+        try Data("#!/bin/sh\n".utf8).write(to: crow)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: crow.path)
+
+        let mainClone = root.appendingPathComponent("ws/repo")
+        try FileManager.default.createDirectory(at: mainClone, withIntermediateDirectories: true)
+        try git(["init", "--initial-branch=main", mainClone.path])
+        try git(["-C", mainClone.path, "config", "user.email", "t@example.com"])
+        try git(["-C", mainClone.path, "config", "user.name", "T"])
+        try Data("x".utf8).write(to: mainClone.appendingPathComponent("README"))
+        try git(["-C", mainClone.path, "add", "README"])
+        try git(["-C", mainClone.path, "commit", "-m", "init"])
+
+        // Sibling, not child — the layout that makes `/x/repo` a string prefix
+        // of `/x/repo-1-slug` without being a parent of it.
+        let worktree = root.appendingPathComponent("ws/repo-1-slug")
+        try git(["-C", mainClone.path, "worktree", "add", worktree.path, "-b", "feature/x"])
+
+        return (root, mainClone, worktree, crow.path)
+    }
+
+    private func staleHookBlock(binary: String, session: UUID) -> [String: Any] {
+        var hooks: [String: Any] = [:]
+        for event in ClaudeHookConfigWriter.allEvents {
+            hooks[event] = [[
+                "hooks": [[
+                    "type": "command",
+                    "command": "\(binary) hook-event --session \(session.uuidString) --event \(event)",
+                    "timeout": 5,
+                ] as [String: Any]]
+            ] as [String: Any]]
+        }
+        return hooks
+    }
+
+    private func writeSettings(_ settings: [String: Any], into dir: URL) throws {
+        let claudeDir = dir.appendingPathComponent(".claude")
+        try FileManager.default.createDirectory(at: claudeDir, withIntermediateDirectories: true)
+        let data = try JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .sortedKeys])
+        try data.write(to: claudeDir.appendingPathComponent("settings.local.json"))
+    }
+
+    private func settingsPath(_ dir: URL) -> String {
+        dir.appendingPathComponent(".claude/settings.local.json").path
+    }
+
+    private func commands(in dir: URL, event: String) throws -> [String] {
+        let data = try #require(FileManager.default.contents(atPath: settingsPath(dir)))
+        let settings = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let hooks = try #require(settings["hooks"] as? [String: Any])
+        let groups = try #require(hooks[event] as? [[String: Any]])
+        return groups.flatMap { group in
+            (group["hooks"] as? [[String: Any]] ?? []).compactMap { $0["command"] as? String }
+        }
+    }
+
+    // MARK: - Resolution
+
+    @Test("resolves the main clone from a real linked worktree")
+    func resolvesMainCloneFromWorktree() throws {
+        let (root, mainClone, worktree, _) = try makeRepoWithWorktree()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        #expect(ClaudeHookRepair.resolveMainClone(worktreePath: worktree.path) == std(mainClone))
+        // Agrees with git's own answer, which is what the agent harness follows.
+        let commonDir = try git(["-C", worktree.path, "rev-parse", "--path-format=absolute",
+                                 "--git-common-dir"]).trimmingCharacters(in: .whitespacesAndNewlines)
+        #expect(std((commonDir as NSString).deletingLastPathComponent) == std(mainClone))
+    }
+
+    @Test("a main clone has no separate main clone")
+    func mainCloneResolvesToNil() throws {
+        let (root, mainClone, _, _) = try makeRepoWithWorktree()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        #expect(ClaudeHookRepair.resolveMainClone(worktreePath: mainClone.path) == nil)
+    }
+
+    @Test("a plain directory is not a worktree")
+    func plainDirectoryIsNotAWorktree() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("claude-notrepo-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        #expect(ClaudeHookRepair.resolveMainClone(worktreePath: dir.path) == nil)
+    }
+
+    /// A `.git` file we can't confidently interpret must resolve to nothing.
+    /// Guessing would aim the strip at an unrelated directory — and this code
+    /// deletes hook entries.
+    @Test("an unrecognizable gitdir pointer resolves to nothing")
+    func malformedGitFileResolvesToNil() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("claude-badgit-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        for (name, contents) in [
+            // No `commondir`, and not the `<main>/.git/worktrees/<name>` shape.
+            ("odd-shape", "gitdir: \(root.path)/somewhere/else"),
+            ("not-a-pointer", "just some text"),
+            ("empty-pointer", "gitdir:"),
+        ] {
+            let dir = root.appendingPathComponent(name)
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try Data(contents.utf8).write(to: dir.appendingPathComponent(".git"))
+            #expect(ClaudeHookRepair.resolveMainClone(worktreePath: dir.path) == nil,
+                    "\(name) should not resolve")
+        }
+    }
+
+    // MARK: - Reconciliation
+
+    /// The reported case: the main clone's file holds *only* the stale block, so
+    /// reconciliation removes the file outright and the repo's worktree sessions
+    /// stop erroring.
+    @Test("strips a stale block from a main clone no session owns")
+    func stripsStaleBlockFromUnownedMainClone() throws {
+        let (root, mainClone, worktree, crowPath) = try makeRepoWithWorktree()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let liveSession = UUID()
+
+        try writeSettings(
+            ["hooks": staleHookBlock(binary: deadBinary, session: deadSession)], into: mainClone)
+
+        let outcome = ClaudeHookRepair.reconcileMainClone(
+            worktreePath: worktree.path, crowPath: crowPath,
+            liveSessionIDs: [liveSession],
+            sessionByWorktreePath: [std(worktree): liveSession])
+
+        #expect(outcome == .stripped(mainClone: std(mainClone)))
+        #expect(!FileManager.default.fileExists(atPath: settingsPath(mainClone)))
+    }
+
+    /// The #915 case #900's sweep cannot see: the block is *healthy* by its
+    /// per-directory test (good binary, live session) and is left alone there —
+    /// yet it still fires in every worktree session of the repo.
+    @Test("strips a live-but-foreign block from a main clone no session owns")
+    func stripsHealthyForeignBlock() throws {
+        let (root, mainClone, worktree, crowPath) = try makeRepoWithWorktree()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let worktreeSession = UUID()
+        let otherLiveSession = UUID()
+
+        try writeSettings([
+            "hooks": staleHookBlock(binary: crowPath, session: otherLiveSession),
+            "permissions": ["allow": ["Bash(git status)"]],
+        ], into: mainClone)
+
+        let outcome = ClaudeHookRepair.reconcileMainClone(
+            worktreePath: worktree.path, crowPath: crowPath,
+            liveSessionIDs: [worktreeSession, otherLiveSession],
+            sessionByWorktreePath: [std(worktree): worktreeSession])
+
+        #expect(outcome == .stripped(mainClone: std(mainClone)))
+        // The user's own keys survive; only our entries go.
+        let data = try #require(FileManager.default.contents(atPath: settingsPath(mainClone)))
+        let settings = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(settings["hooks"] == nil)
+        #expect(settings["permissions"] != nil)
+    }
+
+    /// A main clone can legitimately host a session (`crow add-worktree` for an
+    /// `alwaysInclude` reference repo). Its block is repaired for that session
+    /// rather than removed — the daemon's cwd-authoritative resolution is what
+    /// keeps it from firing in the repo's *worktree* sessions.
+    @Test("repairs a stale block for the session that owns the main clone")
+    func repairsBlockOwnedByALiveSession() throws {
+        let (root, mainClone, worktree, crowPath) = try makeRepoWithWorktree()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let mainCloneSession = UUID()
+        let worktreeSession = UUID()
+
+        try writeSettings(
+            ["hooks": staleHookBlock(binary: deadBinary, session: deadSession)], into: mainClone)
+
+        let outcome = ClaudeHookRepair.reconcileMainClone(
+            worktreePath: worktree.path, crowPath: crowPath,
+            liveSessionIDs: [mainCloneSession, worktreeSession],
+            sessionByWorktreePath: [
+                std(mainClone): mainCloneSession, std(worktree): worktreeSession,
+            ])
+
+        #expect(outcome == .repaired(mainClone: std(mainClone)))
+        let stop = try commands(in: mainClone, event: "Stop")
+        #expect(stop.count == 1)
+        #expect(stop[0].contains(mainCloneSession.uuidString))
+        #expect(!stop[0].contains("/.build/"))
+    }
+
+    @Test("leaves a correct, owned block untouched")
+    func leavesHealthyOwnedBlockAlone() throws {
+        let (root, mainClone, worktree, crowPath) = try makeRepoWithWorktree()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let mainCloneSession = UUID()
+
+        try writeSettings(
+            ["hooks": staleHookBlock(binary: crowPath, session: mainCloneSession)], into: mainClone)
+        let before = try #require(FileManager.default.contents(atPath: settingsPath(mainClone)))
+
+        let outcome = ClaudeHookRepair.reconcileMainClone(
+            worktreePath: worktree.path, crowPath: crowPath,
+            liveSessionIDs: [mainCloneSession],
+            sessionByWorktreePath: [std(mainClone): mainCloneSession])
+
+        #expect(outcome == .healthy)
+        #expect(FileManager.default.contents(atPath: settingsPath(mainClone)) == before)
+    }
+
+    /// A row whose session is gone must not keep a block alive — otherwise a
+    /// failed delete leaves the repo emitting hook errors indefinitely.
+    @Test("a row for a dead session does not count as an owner")
+    func deadOwnerIsNotAnOwner() throws {
+        let (root, mainClone, worktree, crowPath) = try makeRepoWithWorktree()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let ghost = UUID()
+
+        try writeSettings(
+            ["hooks": staleHookBlock(binary: crowPath, session: ghost)], into: mainClone)
+
+        let outcome = ClaudeHookRepair.reconcileMainClone(
+            worktreePath: worktree.path, crowPath: crowPath,
+            liveSessionIDs: [],  // ghost is not live
+            sessionByWorktreePath: [std(mainClone): ghost])
+
+        #expect(outcome == .stripped(mainClone: std(mainClone)))
+    }
+
+    @Test("a main clone with no Crow block is left alone")
+    func noBlockIsANoOp() throws {
+        let (root, mainClone, worktree, crowPath) = try makeRepoWithWorktree()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try writeSettings(["permissions": ["allow": ["Bash(git status)"]]], into: mainClone)
+
+        let outcome = ClaudeHookRepair.reconcileMainClone(
+            worktreePath: worktree.path, crowPath: crowPath,
+            liveSessionIDs: [], sessionByWorktreePath: [:])
+
+        #expect(outcome == .noBlock)
+        #expect(FileManager.default.fileExists(atPath: settingsPath(mainClone)))
+    }
+
+    /// A user's own hook that happens to share a managed event name is not ours
+    /// to remove — the same boundary `stripCrowEntries` holds for the sweep.
+    @Test("a user's own hook under a managed event name survives a strip")
+    func userHookSurvivesStrip() throws {
+        let (root, mainClone, worktree, crowPath) = try makeRepoWithWorktree()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        var hooks = staleHookBlock(binary: deadBinary, session: deadSession)
+        hooks["Stop"] = [
+            [
+                "hooks": [
+                    ["type": "command",
+                     "command": "\(deadBinary) hook-event --session \(deadSession.uuidString) --event Stop",
+                     "timeout": 5] as [String: Any],
+                    ["type": "command", "command": "say done", "timeout": 5] as [String: Any],
+                ]
+            ] as [String: Any]
+        ]
+        try writeSettings(["hooks": hooks], into: mainClone)
+
+        let outcome = ClaudeHookRepair.reconcileMainClone(
+            worktreePath: worktree.path, crowPath: crowPath,
+            liveSessionIDs: [], sessionByWorktreePath: [:])
+
+        #expect(outcome == .stripped(mainClone: std(mainClone)))
+        #expect(try commands(in: mainClone, event: "Stop") == ["say done"])
+    }
+
+    /// The reaper's entry point: it reconciles after `git worktree remove`, so
+    /// the worktree that would have resolved the clone is already gone.
+    @Test("reconciles a main clone directly, without a worktree to resolve it")
+    func reconcilesDirectoryDirectly() throws {
+        let (root, mainClone, _, crowPath) = try makeRepoWithWorktree()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try writeSettings(
+            ["hooks": staleHookBlock(binary: deadBinary, session: deadSession)], into: mainClone)
+
+        let outcome = ClaudeHookRepair.reconcileHookBlock(
+            inDirectory: mainClone.path, crowPath: crowPath,
+            liveSessionIDs: [], sessionByWorktreePath: [:])
+
+        #expect(outcome == .stripped(mainClone: std(mainClone)))
+        #expect(!FileManager.default.fileExists(atPath: settingsPath(mainClone)))
+    }
+}

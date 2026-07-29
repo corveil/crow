@@ -310,10 +310,40 @@ public struct ClaudeHookConfigWriter: HookConfigWriter {
     /// swallowed — this is best-effort and must never fail a launch.
     @discardableResult
     public static func ensureCrowCLISymlink(devRoot: String, appCrowPath: String? = nil) -> String? {
-        let fm = FileManager.default
         let binDir = (devRoot as NSString).appendingPathComponent(".claude/bin")
         let link = (binDir as NSString).appendingPathComponent("crow")
-        let resolved = appCrowPath ?? appCrowBinary()
+        return materializeCrowSymlink(at: link, target: appCrowPath ?? appCrowBinary())
+    }
+
+    /// `{HOME}/.local/share/crow/bin/crow` — the stable link used when the dev
+    /// root's own cannot be made (unwritable, or no dev root at all).
+    ///
+    /// `~/.local/share/crow/` is already Crow's state directory (the daemon
+    /// socket lives there), so this introduces no new convention. It exists so
+    /// `resolveCrowBinary` always has *some* stable path to emit and never has
+    /// to fall back to a `.build/` product (#915) — the failure that put a dead
+    /// worktree's binary into every hook command in #897.
+    static func stableFallbackLinkPath() -> String {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".local/share/crow/bin/crow").path
+    }
+
+    /// Point `link` at `target`, creating the parent directory as needed.
+    /// Returns the **link** path once it resolves to an executable, `nil`
+    /// otherwise. Idempotent; safe to call on every launch.
+    ///
+    /// Two deliberate behaviors, both load-bearing:
+    /// - A link already pointing at `target` is left alone rather than
+    ///   unlink+relink'd — that window is one where a concurrently firing hook
+    ///   sees ENOENT.
+    /// - A **non-symlink** `crow` at that path is never replaced. We only ever
+    ///   own symlinks here; a real file is the user's.
+    ///
+    /// All errors are logged and swallowed — this is best-effort and must never
+    /// fail a launch.
+    private static func materializeCrowSymlink(at link: String, target resolved: String?) -> String? {
+        let fm = FileManager.default
+        let binDir = (link as NSString).deletingLastPathComponent
 
         guard let target = resolved, fm.isExecutableFile(atPath: target) else {
             // Drop a link we can no longer back, so a broken pointer doesn't
@@ -363,26 +393,53 @@ public struct ClaudeHookConfigWriter: HookConfigWriter {
 
     /// The `crow` path to bake into a hook command (or any other file on disk).
     ///
-    /// Ensures the stable `{devRoot}/.claude/bin/crow` symlink first and returns
-    /// *that*, so an emitted command never contains a `.build/…` product path
-    /// belonging to whichever worktree the running daemon happened to be built
-    /// in — the root cause of #897.
+    /// **Never returns a `.build/…` path.** A build product belongs to whichever
+    /// worktree the running daemon was built in; when that worktree is reaped the
+    /// command dies with it, every hook event fails in `/bin/sh` before `crow`
+    /// runs, and the session silently records no telemetry. That is the root
+    /// cause of #897, and — because a worktree session also loads its *main
+    /// clone's* settings — one such command breaks every session on the repo
+    /// (#915).
     ///
-    /// Falls back to `appCrowBinary()` only when there is no dev root or the
-    /// link could not be created, warning loudly if that fallback is itself a
-    /// build product. Deliberately not a `precondition`: crashing the daemon
-    /// over an unwritable dev root would be worse than the noise it prevents.
-    public static func resolveCrowBinary(devRoot: String?, appCrowPath: String? = nil) -> String? {
+    /// Resolution order, each step a stable path that survives a rebuild:
+    ///   1. `{devRoot}/.claude/bin/crow` (also on the agent's PATH)
+    ///   2. `~/.local/share/crow/bin/crow`, for an unwritable or absent dev root
+    ///   3. `appCrowBinary()`, but only when it is not itself a build product —
+    ///      i.e. a real install on PATH or in a release `.app`
+    ///   4. `nil`
+    ///
+    /// Returning `nil` means the caller writes no hook block at all. That costs
+    /// telemetry for the session, but it is strictly better than writing a
+    /// command that is already broken: a dangling block outlives the session,
+    /// and every worktree of the repo inherits its errors. Deliberately not a
+    /// `precondition` — crashing the daemon would be worse than either.
+    ///
+    /// `appCrowPath` and `stableFallbackLink` are injectable for tests, which
+    /// must not write into the real `~/.local/share` (ADR 0012).
+    public static func resolveCrowBinary(
+        devRoot: String?, appCrowPath: String? = nil, stableFallbackLink: String? = nil
+    ) -> String? {
         if let devRoot, let link = ensureCrowCLISymlink(devRoot: devRoot, appCrowPath: appCrowPath) {
             return link
         }
-        let fallback = appCrowPath ?? appCrowBinary()
-        if let fallback, fallback.contains("/.build/") {
+        let target = appCrowPath ?? appCrowBinary()
+        let fallbackLink = stableFallbackLink ?? stableFallbackLinkPath()
+        if let link = materializeCrowSymlink(at: fallbackLink, target: target) {
             CrowLog.info(
-                "[ClaudeHookConfigWriter] WARNING: falling back to build-product crow path \(fallback)"
-                + " — hook commands written now will break when that build directory is removed."
-                + " Check that \(devRoot ?? "<no dev root>")/.claude/bin is writable.")
+                "[ClaudeHookConfigWriter] \(devRoot ?? "<no dev root>")/.claude/bin is not usable"
+                + " — writing hook commands against \(link) instead.")
+            return link
         }
-        return fallback
+        // Both stable links failed. Only hand back the raw binary if it is one
+        // that will still exist after the next rebuild.
+        if let target, !target.contains("/.build/") {
+            return target
+        }
+        CrowLog.error(
+            "[ClaudeHookConfigWriter] no stable crow path available"
+            + " (candidate \(target ?? "<none>") is a build product); writing no hook config."
+            + " Check that \(devRoot ?? "<no dev root>")/.claude/bin or"
+            + " \(fallbackLink) is writable.")
+        return nil
     }
 }

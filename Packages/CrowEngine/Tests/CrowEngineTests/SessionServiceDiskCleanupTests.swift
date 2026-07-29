@@ -29,7 +29,7 @@ struct SessionServiceDiskCleanupTests {
             isMainCheckout: true
         )
 
-        let error = SessionService.performDiskCleanup(items: [item], isReview: true)
+        let error = SessionService.performDiskCleanup(items: [item], isReview: true, ownership: .empty)
 
         #expect(error == nil)
         #expect(!FileManager.default.fileExists(atPath: clone.path))
@@ -47,7 +47,7 @@ struct SessionServiceDiskCleanupTests {
             isMainCheckout: true
         )
 
-        let error = SessionService.performDiskCleanup(items: [item], isReview: true)
+        let error = SessionService.performDiskCleanup(items: [item], isReview: true, ownership: .empty)
 
         #expect(error == nil)
     }
@@ -63,7 +63,7 @@ struct SessionServiceDiskCleanupTests {
             isMainCheckout: true
         )
 
-        let error = SessionService.performDiskCleanup(items: [item], isReview: false)
+        let error = SessionService.performDiskCleanup(items: [item], isReview: false, ownership: .empty)
 
         #expect(error == nil)
         #expect(FileManager.default.fileExists(atPath: checkout.path))
@@ -82,7 +82,7 @@ struct SessionServiceDiskCleanupTests {
             isMainCheckout: true
         )
 
-        let error = SessionService.performDiskCleanup(items: [item], isReview: true)
+        let error = SessionService.performDiskCleanup(items: [item], isReview: true, ownership: .empty)
 
         #expect(error == nil)
         #expect(!FileManager.default.fileExists(atPath: clone.path))

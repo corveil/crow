@@ -182,4 +182,64 @@ struct ClaudeHookConfigWriterCrowPathTests {
         let attrs = try fm.attributesOfItem(atPath: link.path)
         #expect((attrs[.type] as? FileAttributeType) != .typeSymbolicLink)
     }
+
+    /// #915: `{devRoot}/.claude/bin` was found empty on a real install while
+    /// still first on PATH, and the writer fell through to a `.build/` path —
+    /// already stale on arrival. A second stable anchor outside the dev root
+    /// keeps hook commands durable when the first one can't be made.
+    @Test func fallsBackToAStableLinkOutsideAnUnusableDevRoot() throws {
+        let (devRoot, appBinary) = try makeDevRootWithBuildProduct()
+        defer { try? FileManager.default.removeItem(at: devRoot) }
+        let fm = FileManager.default
+        // A regular file where `.claude/bin` must be: the directory can never
+        // be created, so the dev-root link is unavailable.
+        try fm.createDirectory(
+            at: devRoot.appendingPathComponent(".claude"), withIntermediateDirectories: true)
+        try Data("not a directory".utf8).write(to: devRoot.appendingPathComponent(".claude/bin"))
+
+        let fallback = devRoot.appendingPathComponent("elsewhere/bin/crow").path
+        let resolved = try #require(ClaudeHookConfigWriter.resolveCrowBinary(
+            devRoot: devRoot.path, appCrowPath: appBinary, stableFallbackLink: fallback))
+
+        #expect(resolved == fallback)
+        #expect(!resolved.contains("/.build/"))
+        #expect(try fm.destinationOfSymbolicLink(atPath: resolved) == appBinary)
+    }
+
+    /// With no stable anchor available at all, refuse rather than bake in a
+    /// build product. The caller writes no hook block — that session loses
+    /// telemetry, but a dangling block outlives its session and breaks every
+    /// worktree of the repo that inherits it (#915).
+    @Test func refusesToEmitABuildProductWhenNoStableLinkIsPossible() throws {
+        let (devRoot, appBinary) = try makeDevRootWithBuildProduct()
+        defer { try? FileManager.default.removeItem(at: devRoot) }
+        let fm = FileManager.default
+        try fm.createDirectory(
+            at: devRoot.appendingPathComponent(".claude"), withIntermediateDirectories: true)
+        try Data("not a directory".utf8).write(to: devRoot.appendingPathComponent(".claude/bin"))
+        try Data("also not a directory".utf8).write(to: devRoot.appendingPathComponent("blocked"))
+
+        #expect(ClaudeHookConfigWriter.resolveCrowBinary(
+            devRoot: devRoot.path, appCrowPath: appBinary,
+            stableFallbackLink: devRoot.appendingPathComponent("blocked/bin/crow").path) == nil)
+    }
+
+    /// A real install on PATH is already stable, so it is returned directly
+    /// rather than refused when neither link can be made.
+    @Test func acceptsANonBuildBinaryWhenNoStableLinkIsPossible() throws {
+        let devRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("claude-crowpath-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: devRoot) }
+        let fm = FileManager.default
+        try fm.createDirectory(at: devRoot, withIntermediateDirectories: true)
+        let installed = devRoot.appendingPathComponent("usr-local-bin-crow")
+        try Data("#!/bin/sh\n".utf8).write(to: installed)
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: installed.path)
+        try Data("not a directory".utf8).write(to: devRoot.appendingPathComponent("blocked"))
+
+        #expect(ClaudeHookConfigWriter.resolveCrowBinary(
+            devRoot: nil, appCrowPath: installed.path,
+            stableFallbackLink: devRoot.appendingPathComponent("blocked/bin/crow").path)
+                == installed.path)
+    }
 }

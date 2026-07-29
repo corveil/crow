@@ -228,9 +228,29 @@ harness's sessions
 All harnesses report lifecycle events by shelling out to `crow hook-event`, but
 **where the hook config lives** and **how the session is resolved** differ.
 
+> **`cwd` outranks the baked UUID (#915).** A linked worktree's `.git` is a file
+> pointing at the main clone, and project-root resolution follows it — so a
+> worktree session loads the **main clone's** `.claude/settings.local.json` in
+> addition to its own, and *both* hook blocks fire. A baked `--session <UUID>`
+> therefore says which file the command was written into, not which session is
+> running. The handler resolves the payload's `cwd` against registered worktrees
+> first; a *live* UUID that doesn't own that directory is an inherited copy and
+> is **dropped**, since the session that owns the cwd reports the same event from
+> its own block. A UUID is still honored when it owns the cwd, when no worktree
+> matches (an agent that `cd`s away), when it is the Manager (matched by
+> constant, never by path), and when it is not live — that last one is #897's
+> stale uuid, which is re-routed by `cwd` rather than discarded.
+>
+> The inherited block is also removed *at launch*:
+> `ClaudeHookRepair.reconcileMainClone` resolves the main clone through the
+> gitdir chain and strips its Crow entries unless a live session owns that
+> directory, in which case it repairs them in place. That is the half the daemon
+> cannot do — a dangling binary fails in `/bin/sh` before `crow` ever runs.
+
 - **Claude** — per-worktree `.claude/settings.local.json`, written per session
   with `hook-event --session <UUID>`, so the session is resolved by **UUID**
-  ([`ClaudeHookConfigWriter`](../Packages/CrowClaude/Sources/CrowClaude/ClaudeHookConfigWriter.swift)).
+  ([`ClaudeHookConfigWriter`](../Packages/CrowClaude/Sources/CrowClaude/ClaudeHookConfigWriter.swift)),
+  subject to the `cwd` precedence above.
 - **Cursor** — per-worktree `.cursor/hooks.json`, written per session with
   `hook-event --session <UUID>`, resolved by **UUID** (#829,
   `CursorHookConfigWriter`). No global config: Cursor merges global + project and
