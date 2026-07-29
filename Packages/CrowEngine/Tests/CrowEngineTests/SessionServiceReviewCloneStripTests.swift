@@ -111,10 +111,11 @@ struct SessionServiceReviewCloneStripTests {
     // MARK: - Antigravity review support (#902 — was #862 refusal, now wired)
 
     /// Antigravity review dispatch landed in #902, so the refusal gate no longer
-    /// fires: a `.review` handoff to Antigravity is allowed (the Antigravity
-    /// handoff arm strips its `.agents/`, and `autoLaunchCommand(.review)` inlines
-    /// the SKILL). Guards against the gate being reintroduced and re-blocking
-    /// review-on-Antigravity.
+    /// fires: a `.review` handoff to Antigravity is allowed (the shared launch gate
+    /// — `prepareWorktreeForAgentLaunch`, which every launch path including handoff
+    /// routes through — strips its `.agents/`, and `autoLaunchCommand(.review)`
+    /// inlines the SKILL). Guards against the gate being reintroduced and
+    /// re-blocking review-on-Antigravity.
     @Test func refuseGateDoesNotFireForAntigravityReview() {
         #expect(!SessionService.shouldRefuseReviewHandoff(
             targetKind: .antigravity, sessionKind: .review))

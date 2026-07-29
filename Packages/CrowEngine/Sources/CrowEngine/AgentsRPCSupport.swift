@@ -182,17 +182,25 @@ public enum AgentsRPC {
     /// fail — including patches to unrelated roles. A default that resolves
     /// review to a review-incapable agent instead surfaces at launch time, where
     /// `SessionService` already writes an explanatory line into the terminal.
-    /// `refuses` is an injectable seam (#902 review r5, Green 2): the production
-    /// predicate is a constant `false` today, so without a way to force the
-    /// refused branch no test could catch this `throw` being deleted — the
-    /// coupling would rest on convention alone. `nil` (the default) uses the real
-    /// predicate; a test passes `{ _, _ in true }` to lock the refuse-path. (The
-    /// real predicate is resolved in the body, not as a default-arg value, because
-    /// `shouldRefuseReviewHandoff` is internal and a `public` default argument may
-    /// only reference public symbols.)
+    /// Public entry point (production callers). Delegates to the `internal`
+    /// `refuses:` overload with the real predicate, so the override seam stays out
+    /// of the module's public surface — the module never ships a public way to
+    /// skip a security gate (#902 review r6, Green 1).
     public static func validateRoleSupportsAgent(
+        role: SessionKind, kind: AgentKind, label: String
+    ) throws {
+        try validateRoleSupportsAgent(role: role, kind: kind, label: label, refuses: nil)
+    }
+
+    /// `internal` seam for tests (#902 review r5 Green 2 / r6 Green 1): `refuses`
+    /// forces the refused branch so deleting the `throw` fails loudly. `nil` uses
+    /// the real predicate (resolved in the body, since `shouldRefuseReviewHandoff`
+    /// is `internal` and a `public` default-arg may only reference public symbols).
+    /// `refuses` is required (no default) so the 3-arg public call above stays
+    /// unambiguous; `@testable import CrowEngine` gives the tests access.
+    static func validateRoleSupportsAgent(
         role: SessionKind, kind: AgentKind, label: String,
-        refuses: ((AgentKind, SessionKind) -> Bool)? = nil
+        refuses: ((AgentKind, SessionKind) -> Bool)?
     ) throws {
         let refuse = refuses ?? {
             SessionService.shouldRefuseReviewHandoff(targetKind: $0, sessionKind: $1)
