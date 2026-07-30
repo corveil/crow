@@ -431,4 +431,48 @@ import Testing
             !css.contains("width: max-content; max-width: 160px"),
             "the #913 content-sized width cap is superseded — the card is full-width in the left column now")
     }
+
+    /// CROW-924: the "Tickets" title centres in the full-width box, superseding the
+    /// left-pinning `space-between` head CROW-913 used while the card was compact. The
+    /// centring is a 3-column grid whose two outer tracks both read `--tk-refresh` — the
+    /// same token the refresh button sizes from — so the left spacer can't drift from the
+    /// button's width and silently de-centre the title. That single source of truth is the
+    /// durability fix; the two literal `22px`s it replaces were a standing, untested trap
+    /// (a WCAG target-size bump to one would de-centre with every suite still green). Pin
+    /// the whole grid rule (a revert to `space-between` or to hardcoded outer widths fails
+    /// here), the title's own centre-track placement + alignment (the invariant itself),
+    /// that the button derives its box from the same token, and that the token is actually
+    /// defined (a dangling var() drops the grid to `none` and the button to `auto`).
+    @Test func ticketTitleCentresViaGrid() throws {
+        // stripComments: `--tk-refresh`, "grid", and "space-between" all appear in the
+        // .tickets-card / .tickets-head doc comments, so a raw-file `contains` would
+        // false-pass off the prose once a declaration is deleted (mutation-checked).
+        let css = Self.stripComments(try Self.webAsset("app.css"))
+        #expect(
+            css.contains(".tickets-head { display: grid; grid-template-columns: var(--tk-refresh) 1fr var(--tk-refresh); align-items: center; gap: 4px; }"),
+            "the title must centre via the var-driven 3-column grid, not a left-pinning space-between row (CROW-924)")
+        #expect(
+            css.contains("width: var(--tk-refresh); height: var(--tk-refresh);"),
+            "the refresh button must size from --tk-refresh so the mirror spacer track can't drift from it and de-centre the title (CROW-924)")
+        // Pin the title's own placement + alignment — the invariant this change exists for.
+        // Both declarations are load-bearing and drop silently: without `text-align: center`
+        // the title left-aligns in the 1fr track (the pre-CROW-924 look); without
+        // `grid-column: 2` too, the title (first child) auto-places into the 22px spacer
+        // track and ellipsises to nothing at the left edge. Anchor on the selector so a
+        // revert of either fails here.
+        #expect(
+            css.contains(".tickets-title { grid-column: 2; text-align: center;"),
+            "the title must sit in the centre track and centre its text there, or it auto-places into the 22px spacer (CROW-924)")
+        // Pin the token's DEFINITION, not just its two consumers: an unresolvable var()
+        // computes to the property's unset value — grid-template-columns → `none` (the
+        // explicit grid vanishes, title no longer centred or ellipsising) and the button's
+        // width/height → `auto` (collapses to the glyph, losing the CROW-797 stationary box).
+        // stripComments drops the doc-comment mentions of the token, and `var(--tk-refresh)`
+        // has no colon, so `--tk-refresh:` matches ONLY the declaration and fails if it's
+        // deleted. Value-agnostic on purpose: the documented WCAG 2.5.8 bump (22px→28px)
+        // stays a genuine one-token edit here rather than a two-place change in this test too.
+        #expect(
+            css.contains("--tk-refresh:"),
+            "the --tk-refresh token both the head's spacer track and the button derive from must be defined, or the var() references resolve to `none`/`auto` (CROW-924)")
+    }
 }
