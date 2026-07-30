@@ -1460,10 +1460,6 @@ public final class TmuxBackend {
         return head + "\n…(truncated; \(s.count - max) chars omitted)"
     }
 
-    private func shellQuote(_ s: String) -> String {
-        "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
-    }
-
     /// Forward .timedOut errors to the unresponsive callback. Other errors
     /// pass through silently — they're regular CLI failures the caller
     /// already handles.

@@ -19,22 +19,6 @@ public enum BundledResources {
         Bundle.module.url(forResource: "crow-tmux", withExtension: "conf")
     }
 
-    /// Path to the xterm.js host page bundled with the terminal surface.
-    ///
-    /// RETIRED (ADR 0010). Its only caller was `XTermSurfaceView`, the macOS
-    /// WKWebView surface, now removed — `crowd` serves the browser terminal
-    /// from `CrowDaemon/Resources/web/` instead, and `StaticAssets` takes only
-    /// the xterm *library* files out of this bundle (see `xtermDirectoryURL`).
-    /// No Swift code reads this any more; terminal fixes go to
-    /// `Resources/web/app.js` and `Resources/web/terminal.html` (CROW-916).
-    public static var terminalHTMLURL: URL? {
-        Bundle.module.url(
-            forResource: "terminal",
-            withExtension: "html",
-            subdirectory: "xterm"
-        )
-    }
-
     /// Directory holding the bundled xterm.js assets (xterm.js, xterm.css,
     /// addons). The headless `crowd` daemon serves files from here over HTTP so
     /// the browser terminal reuses the exact same 6.0.0 assets as the macOS app

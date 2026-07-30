@@ -1,5 +1,4 @@
-/* Corveil theme tokens — ported from CrowUI/CorveilTheme.swift so the web UI
-   matches the macOS app (CROW-581). Dark-only. */
+/* Corveil theme tokens (CROW-581). Dark-only. */
 :root {
   --bg-deep: #121416;
   --bg-surface: #1A1D20;

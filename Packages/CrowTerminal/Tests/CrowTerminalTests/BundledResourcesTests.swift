@@ -75,47 +75,6 @@ struct BundledResourcesTests {
         #expect(body.contains("bind -T root TripleClick1Pane"))
     }
 
-    @Test func terminalHTMLHandlesModifiedEnter() throws {
-        // #598: xterm.js sends the same \r for Enter and Shift+Enter, so the
-        // host page must intercept modified Enter and emit distinct sequences
-        // (CSI-u \x1b[13;2u for Shift+Enter, ESC CR for Option+Enter) or
-        // Claude Code submits instead of inserting a newline. The xterm
-        // resources get re-vendored wholesale (see Resources/xterm/VERSION),
-        // so pin the handler's presence against an accidental overwrite.
-        //
-        // CROW-916: this pins a RETIRED surface. ADR 0010 removed the macOS app
-        // the day after #599 landed, so this test kept passing while both
-        // shipping surfaces had no modified-Enter handling at all. The guard
-        // that covers the live pages is
-        // `WebTerminalAssetTests.modifiedEnterIsDistinguishableFromPlainEnter`,
-        // parameterized over `Resources/web/{app.js,terminal.html}` — change
-        // that one when the behavior changes. Kept here only so the retired page
-        // and its live descendants stay comparable while it remains in tree.
-        let url = try #require(BundledResources.terminalHTMLURL)
-        let body = try String(contentsOf: url, encoding: .utf8)
-        #expect(body.contains("attachCustomKeyEventHandler"))
-        #expect(body.contains(#"\x1b[13;2u"#))
-        #expect(body.contains(#"\x1b\r"#))
-    }
-
-    @Test func terminalHTMLLoadsJumpToBottomAddon() throws {
-        // #668: jump-to-bottom (#633/#635) now lives in a shared xterm.js addon
-        // so the desktop AND web surfaces load one implementation. The host page
-        // must pull in the addon script and load it — pin that wiring against an
-        // accidental overwrite when the xterm resources get re-vendored wholesale
-        // (see Resources/xterm/VERSION). The behavior itself is pinned against
-        // the addon file below.
-        let url = try #require(BundledResources.terminalHTMLURL)
-        let body = try String(contentsOf: url, encoding: .utf8)
-        #expect(body.contains("xterm-addon-crow-jumpbottom.js"))
-        #expect(body.contains("CrowJumpBottomAddon"))
-        // The old inline control was deleted in favor of the addon — a stray
-        // `#crow-jump-bottom` id/style would mean the inline copy crept back in.
-        // (The addon script filename is `crow-jumpbottom`, no hyphen, so it
-        // doesn't trip this.)
-        #expect(!body.contains("crow-jump-bottom"))
-    }
-
     @Test func jumpToBottomAddonIsBundled() throws {
         // #668: the shared addon file is what actually implements the control
         // (button + scroll wiring), and the daemon serves this exact file to the

@@ -3,9 +3,8 @@
   RETIRED SURFACE — NOT SERVED BY `crowd`. Editing this page changes nothing a
   user can see.
 
-  This is the WKWebView host page for the macOS app, loaded over file:// by
-  XTermSurfaceView (itself reachable only via TerminalSurfaceView →
-  TmuxBackend.cockpitSurface(), all `#if canImport(AppKit)`). ADR 0010 retired
+  This was the WKWebView host page for the macOS app, loaded over file:// by
+  that app's terminal surface (removed with the app). ADR 0010 retired
   that app: the web UI is the only client. StaticAssets serves the xterm
   *library* files out of this directory (/xterm/:file) but never this page —
   and it couldn't run in a browser anyway, since its transport is
@@ -15,8 +14,9 @@
   (app.js — the real UI — and terminal.html — the debug page). CROW-916 is what
   this warning is for: #599 added the modified-Enter handler below, the macOS
   app was retired the next day, and the bug it fixed was live on the web
-  surfaces for a year while `terminalHTMLHandlesModifiedEnter` pinned this copy
-  and stayed green.
+  surfaces for a year while a test pinned only this retired copy and stayed
+  green (now guarded on the live pages by
+  WebTerminalAssetTests.modifiedEnterIsDistinguishableFromPlainEnter).
 -->
 <html lang="en">
 <head>
