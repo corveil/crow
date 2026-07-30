@@ -6,6 +6,9 @@ DerivedData/
 *.xcworkspace
 xcuserdata/
 
+# Coverage summaries (`make coverage`) — uploaded as a CI artifact, never committed
+coverage/
+
 # Generated sources
 Sources/Crow/Generated/
 Sources/CrowCLI/Generated/

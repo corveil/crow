@@ -63,8 +63,24 @@ jobs:
             # --no-parallel: the CrowIPC socket tests spin up real servers with
             # blocking I/O; running them in parallel starves each other on the
             # constrained CI runner and intermittently hits the read timeout.
-            swift test --no-parallel --package-path "Packages/$pkg"
+            # --enable-code-coverage leaves an llvm-cov export under
+            # Packages/$pkg/.build/<triple>/debug/codecov/ for the step below.
+            swift test --no-parallel --enable-code-coverage --package-path "Packages/$pkg"
           done
+
+      # Measurement only — no gate, no ratchet, no third-party upload (CROW-928).
+      # This lane can only ever see the 12 packages above: the 5 Darwin-only ones
+      # (CrowEngine, CrowDaemon, CrowTerminal, CrowTelemetry, CrowAutostart) are
+      # ~64% of the tree and refresh at release tags, per ADR 0007. The full
+      # picture lives in release.yml's macOS test job.
+      - name: Summarize coverage
+        run: bash scripts/coverage-summary.sh
+
+      - name: Upload coverage summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-summary-linux
+          path: coverage/
 
   # Source-level drift gates: cheap text checks that need no Swift build, so they
   # cover packages the Linux lane above cannot compile. `check-cli-parity.sh` is

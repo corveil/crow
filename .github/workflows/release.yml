@@ -24,9 +24,21 @@ jobs:
           for pkg in Packages/*/; do
             if [ -d "$pkg/Tests" ]; then
               echo "==> Testing $(basename "$pkg")..."
-              swift test --package-path "$pkg"
+              swift test --enable-code-coverage --package-path "$pkg"
             fi
           done
+
+      # The only lane that measures all 17 packages — the PR lane is Linux and
+      # cannot compile the 5 Darwin-only ones, which are ~64% of the tree and
+      # include the two worst-covered (ADR 0007, CROW-928).
+      - name: Summarize coverage
+        run: bash scripts/coverage-summary.sh
+
+      - name: Upload coverage summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-summary-macos
+          path: coverage/
 
   shellcheck:
     name: Shell Lint
