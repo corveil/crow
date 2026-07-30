@@ -653,8 +653,9 @@ html, body {
   margin: 0; box-sizing: border-box; min-height: 64px;
   /* Refresh-button edge, shared by .tickets-refresh's box and the mirror spacer track in
      .tickets-head — one source of truth so the two can't drift and silently de-centre the
-     title (CROW-924). At/below the WCAG 2.2 §2.5.8 24px target min today; a future bump to
-     match the sibling icon column (app.css :688 uses 28px) is a one-token change here. */
+     title (CROW-924). 22px is below the WCAG 2.2 §2.5.8 24px target-size minimum; a bump to
+     match the sibling `.sidebar-right > button` (28px) is a one-token change here, deferred
+     to a repo-wide a11y pass (the whole #917→#923 sidebar chain sits under 24px too). */
   --tk-refresh: 22px;
   display: flex; flex-direction: column; justify-content: space-between;
 }

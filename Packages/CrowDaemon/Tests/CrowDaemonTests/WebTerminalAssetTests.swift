@@ -440,7 +440,8 @@ import Testing
     /// durability fix; the two literal `22px`s it replaces were a standing, untested trap
     /// (a WCAG target-size bump to one would de-centre with every suite still green). Pin
     /// the whole grid rule (a revert to `space-between` or to hardcoded outer widths fails
-    /// here) and that the button derives its box from the same token.
+    /// here), that the button derives its box from the same token, and that the token is
+    /// actually defined (a dangling var() drops the grid to `none` and the button to `auto`).
     @Test func ticketTitleCentresViaGrid() throws {
         // stripComments: `--tk-refresh`, "grid", and "space-between" all appear in the
         // .tickets-card / .tickets-head doc comments, so a raw-file `contains` would
@@ -452,5 +453,14 @@ import Testing
         #expect(
             css.contains("width: var(--tk-refresh); height: var(--tk-refresh);"),
             "the refresh button must size from --tk-refresh so the mirror spacer track can't drift from it and de-centre the title (CROW-924)")
+        // Pin the token's DEFINITION, not just its two consumers: an unresolvable var()
+        // computes to the property's unset value — grid-template-columns → `none` (the
+        // explicit grid vanishes, title no longer centred or ellipsising) and the button's
+        // width/height → `auto` (collapses to the glyph, losing the CROW-797 stationary box).
+        // stripComments drops the doc-comment mentions of the token, so this matches only the
+        // real declaration and fails if it's deleted (the mutation the review found green).
+        #expect(
+            css.contains("--tk-refresh: 22px;"),
+            "the --tk-refresh token both the head's spacer track and the button derive from must be defined, or the var() references resolve to `none`/`auto` (CROW-924)")
     }
 }
