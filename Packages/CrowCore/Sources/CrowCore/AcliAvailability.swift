@@ -23,8 +23,8 @@ public enum JiraAvailability: Sendable, Equatable {
 
 /// Probes `acli` availability so the UI and backends can gate Jira features.
 ///
-/// Lives in CrowCore (rather than CrowProvider) so SwiftUI views in CrowUI can
-/// call it without pulling in the whole provider layer.
+/// Lives in CrowCore (rather than CrowProvider) so UI-facing callers can use it
+/// without pulling in the whole provider layer.
 public enum AcliProbe {
     /// Run `acli jira auth status`. Exit 0 ⇒ authenticated; a "command not found"
     /// style failure ⇒ not installed; anything else ⇒ installed but not authed.

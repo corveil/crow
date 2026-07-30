@@ -1,6 +1,3 @@
-#if canImport(AppKit)
-import AppKit  // only for the WKWebView cockpit surface (gated below); Linux uses the daemon's WebSocket terminal instead
-#endif
 import CrowCore
 import Foundation
 
@@ -19,16 +16,15 @@ protocol CockpitSessionStarter {
 ///
 /// Responsibilities:
 ///   - Lazily start a per-app tmux server with the bundled `crow-tmux.conf`.
-///   - Lazily create ONE `XTermSurfaceView` whose command is
-///     `tmux attach-session …` (the "shared cockpit" surface that every
-///     tmux-backed Crow tab re-parents into).
 ///   - Map terminal UUIDs to tmux window indices.
 ///   - Drive `select-window` / `new-window` / `kill-window` / `paste-buffer`
 ///     in response to UI events from the rest of the app.
 ///   - Track readiness via `SentinelWaiter` (replaces the historical 5s
 ///     sleep from the old per-terminal renderer path).
 ///
-/// Thread-safety: `@MainActor` — AppKit-thread access required for surface ops.
+/// Thread-safety: `@MainActor` — window/binding mutations are confined to the
+/// main actor. (The daemon renders terminals in-browser over the `/terminal`
+/// WebSocket; the retired macOS AppKit surface is gone — ADR 0010.)
 @MainActor
 public final class TmuxBackend {
     public static let shared = TmuxBackend()
@@ -55,17 +51,10 @@ public final class TmuxBackend {
     /// the caller for normal handling.
     public var onUnresponsive: ((TmuxError) -> Void)?
 
-    /// Fired when the cockpit attach client's PTY exits outside a deliberate
-    /// `shutdown()`/`destroy()` — i.e. the tmux server crashed out from under
-    /// the app, or the user detached the client (#588). Deliberate teardown
-    /// never fires this: `shutdown()` destroys the surface (which nils the
-    /// underlying `onProcessExit`) before touching the server.
-    public var onCockpitExit: ((Int32) -> Void)?
-
     /// Fired when a cached controller's cockpit session has vanished mid-run —
     /// the server died while the app was live (#588). A fresh launch (no
-    /// cached controller) never fires this. Secondary, lazy detection: it only
-    /// triggers on the next tmux command; the primary signal is `onCockpitExit`.
+    /// cached controller) never fires this. Lazy detection: it only triggers on
+    /// the next tmux command.
     public var onServerLost: (() -> Void)?
 
     // MARK: - Internal state
@@ -73,12 +62,6 @@ public final class TmuxBackend {
     /// Created on first use of the backend. Survives until app exit (or a
     /// `shutdown()` call from the watchdog flow in PROD #5).
     private var controller: TmuxController?
-
-    /// The single embedded surface attached to the cockpit session. Created
-    /// lazily on first use; WKWebView must load in a visible window.
-    #if canImport(AppKit)
-    private var sharedSurface: XTermSurfaceView?
-    #endif
 
     /// UUID → tmux window index for tabs registered with us.
     private var bindings: [UUID: Int] = [:]
@@ -89,8 +72,8 @@ public final class TmuxBackend {
     private var orphanGraceWindows: Set<Int> = []
 
     /// Terminal whose tmux window is currently selected, so `makeActive` can
-    /// skip a redundant `select-window`. SwiftUI re-runs `updateNSView` (→
-    /// `syncSurface` → `makeActive`) repeatedly for the same visible tab;
+    /// skip a redundant `select-window`. `makeActive` is called repeatedly for
+    /// the same visible tab (e.g. re-selecting an already-active terminal), and
     /// without this each call shells out another run-loop-pumping subprocess
     /// (review nit on #336). Keyed by UUID, not window index — tmux can reuse
     /// a freed index for a new window, and a UUID never collides that way.
@@ -191,19 +174,6 @@ public final class TmuxBackend {
         if controller != nil {
             CrowLog.info("[CrowTelemetry tmux:\(killServer ? "server_killed" : "server_detach") bindings=\(bindings.count)]")
         }
-        // Destroy the surface BEFORE kill-server: destroy() nils the surface's
-        // onProcessExit synchronously, so the attach client's death can no
-        // longer be delivered mid-shutdown and a deliberate restart can't
-        // masquerade as a server crash (#588). (The original reason given here
-        // was that killServer's waitUntilExit pumps the main run loop; that has
-        // not been true since #653 replaced the wait with a semaphore. The
-        // ordering still matters, for the synchronous-nil reason above.)
-        // Guarded for the Linux daemon build, where the AppKit surface doesn't
-        // exist (b982621).
-        #if canImport(AppKit)
-        sharedSurface?.destroy()
-        sharedSurface = nil
-        #endif
         if killServer {
             controller?.killServer()
         }
@@ -390,7 +360,7 @@ public final class TmuxBackend {
     /// (#653): the main thread blocks on the child without re-entering the
     /// in-flight CoreAnimation commit that used to SIGSEGV. Deliberately NOT moved
     /// off the main actor — doing so let two in-flight switches race and could
-    /// leave tmux focused on the wrong window until the next `updateNSView`
+    /// leave tmux focused on the wrong window until the next `makeActive`
     /// (PR #658 review).
     public func makeActive(id: UUID) throws {
         guard let windowIndex = bindings[id] else {
@@ -942,10 +912,10 @@ public final class TmuxBackend {
     /// its foreground command falls back to a bare login shell after the agent
     /// was seen running — i.e. the Manager's `claude`/`codex`/… process exited.
     ///
-    /// Under the shared xterm.js cockpit, `XTermSurfaceView.onProcessExit` only
-    /// fires when the whole `tmux attach-session` client dies, so it can't tell
-    /// a per-window agent exit apart (#558). We poll `#{pane_current_command}`
-    /// for the Manager window instead — the same signal the orphan reaper reads.
+    /// A `tmux attach-session` client only signals when the whole client dies,
+    /// so it can't tell a per-window agent exit apart (#558). We poll
+    /// `#{pane_current_command}` for the Manager window instead — the same
+    /// signal the orphan reaper reads.
     ///
     /// At most one monitor runs; a second call cancels the first. The poll skips
     /// samples where the binding is absent (async adopt on launch hasn't landed
@@ -1008,54 +978,12 @@ public final class TmuxBackend {
         managerExitMonitor = nil
     }
 
-    /// Return the shared cockpit xterm surface, lazily creating it the
-    /// first time. The surface attaches to the live tmux session via
-    /// `tmux -S … attach-session -t …` as its child command.
-    #if canImport(AppKit)
-    public func cockpitSurface() throws -> XTermSurfaceView {
-        if let existing = sharedSurface { return existing }
-        let ctrl = try ensureRunningServer()
-        let attachCommand =
-            "\(shellQuote(tmuxBinary)) -S \(shellQuote(ctrl.socketPath)) " +
-            "attach-session -t \(shellQuote(ctrl.sessionName))"
-        let view = XTermSurfaceView(
-            frame: NSRect(x: 0, y: 0, width: 800, height: 600),
-            workingDirectory: NSHomeDirectory(),
-            command: attachCommand
-        )
-        // The attach client exiting on its own means the server crashed or the
-        // user detached — deliberate teardown goes through destroy(), which
-        // nils onProcessExit first, so this only fires for the unexpected case
-        // (#588). Wired here (not by the caller) so every recreated surface is
-        // automatically re-armed after recovery.
-        view.onProcessExit = { [weak self] code in
-            CrowLog.info("[CrowTelemetry tmux:cockpit_client_exited code=\(code)]")
-            self?.onCockpitExit?(code)
-        }
-        CrowLog.info("[TmuxBackend] created cockpit surface attach=\(attachCommand)")
-        // Cache before SwiftUI re-parents into the visible tab container.
-        // WKWebView must load in a visible window — do not park offscreen or
-        // xterm.js never initializes.
-        sharedSurface = view
-        return view
-    }
-
-    /// Cached cockpit surface, or nil if it hasn't been created yet. Use this
-    /// from call sites that want to act ONLY when the cockpit is already live
-    /// (e.g. SwiftUI's updateNSView re-parent path) — unlike `cockpitSurface()`
-    /// this never creates the surface as a side effect.
-    public var existingCockpitSurface: XTermSurfaceView? {
-        sharedSurface
-    }
-    #endif
-
-    /// Destroy only the cockpit attach surface; the server, window bindings,
-    /// sentinels and readiness watches all survive. The next `cockpitSurface()`
-    /// call re-attaches to the live session. Used when the attach client died
-    /// but the server is still healthy (e.g. the user hit prefix-d) (#588).
+    /// Reset the cockpit's active-window marker so the next `makeActive` runs a
+    /// real `select-window` instead of short-circuiting. Called on the light
+    /// "attach client died, server still alive" recovery path (#588) — the
+    /// browser xterm.js client reconnects over the daemon's `/terminal`
+    /// WebSocket, so there is no native surface to tear down here.
     public func recycleCockpitSurface() {
-        sharedSurface?.destroy()
-        sharedSurface = nil
         // A fresh attach lands on the session's current window, which may not
         // match what we last selected — force the next makeActive to actually
         // run select-window instead of short-circuiting.

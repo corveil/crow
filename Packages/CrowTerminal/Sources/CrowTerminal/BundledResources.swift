@@ -21,13 +21,12 @@ public enum BundledResources {
 
     /// Path to the xterm.js host page bundled with the terminal surface.
     ///
-    /// RETIRED (ADR 0010). The only caller is `XTermSurfaceView`, the macOS
-    /// WKWebView surface, which nothing instantiates any more — `crowd` serves
-    /// the browser terminal from `CrowDaemon/Resources/web/` instead, and
-    /// `StaticAssets` takes only the xterm *library* files out of this bundle
-    /// (see `xtermDirectoryURL`). Terminal fixes go to `Resources/web/app.js`
-    /// and `Resources/web/terminal.html`; the page itself carries the same
-    /// warning, and CROW-916 is the bug that earned it.
+    /// RETIRED (ADR 0010). Its only caller was `XTermSurfaceView`, the macOS
+    /// WKWebView surface, now removed — `crowd` serves the browser terminal
+    /// from `CrowDaemon/Resources/web/` instead, and `StaticAssets` takes only
+    /// the xterm *library* files out of this bundle (see `xtermDirectoryURL`).
+    /// No Swift code reads this any more; terminal fixes go to
+    /// `Resources/web/app.js` and `Resources/web/terminal.html` (CROW-916).
     public static var terminalHTMLURL: URL? {
         Bundle.module.url(
             forResource: "terminal",

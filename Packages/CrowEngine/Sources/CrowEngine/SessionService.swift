@@ -111,7 +111,7 @@ public final class SessionService {
         let data = store.data
         appState.sessions = data.sessions
         // Mirror persisted analytics snapshots for the scorecard (#710) —
-        // CrowUI can't read the store, so the view computes from this.
+        // the web client can't read the store, so the scorecard computes from this.
         appState.analyticsSnapshots = data.analyticsSnapshots ?? [:]
         // Same for PR attributions: the v2 combined score's hygiene factor
         // (#699) reads this mirror; IssueTracker resyncs it after writes.
@@ -1666,9 +1666,9 @@ public final class SessionService {
         // route through `ensureManagerSession`, so re-arm it here (#558).
         armManagerExitMonitor()
 
-        // Re-assign selection (even to the same values) to force a SwiftUI
-        // re-render so TerminalSurfaceView re-creates the destroyed cockpit
-        // surface and re-attaches a fresh tmux client; preserves focus.
+        // Re-assign selection (even to the same values) to force the UI to
+        // re-render and re-attach a fresh tmux client after the rebuild;
+        // preserves focus.
         appState.selectedSessionID = savedSelection
         appState.activeTerminalID = savedActive
     }
@@ -1692,9 +1692,9 @@ public final class SessionService {
         if TmuxBackend.shared.isRunning {
             CrowLog.info("[CrowTelemetry tmux:cockpit_client_reattach]")
             TmuxBackend.shared.recycleCockpitSurface()
-            // Same SwiftUI re-render trick as recycleTmuxServerAndRebuild: a
-            // same-value reassignment makes TerminalSurfaceView re-create the
-            // destroyed cockpit surface and re-attach a fresh tmux client.
+            // Same re-render trick as recycleTmuxServerAndRebuild: a
+            // same-value reassignment forces the UI to re-render and re-attach
+            // a fresh tmux client.
             let savedSelection = appState.selectedSessionID
             let savedActive = appState.activeTerminalID
             appState.selectedSessionID = savedSelection
