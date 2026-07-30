@@ -19,23 +19,6 @@ public enum BundledResources {
         Bundle.module.url(forResource: "crow-tmux", withExtension: "conf")
     }
 
-    /// Path to the xterm.js host page bundled with the terminal surface.
-    ///
-    /// RETIRED (ADR 0010). The only caller is `XTermSurfaceView`, the macOS
-    /// WKWebView surface, which nothing instantiates any more — `crowd` serves
-    /// the browser terminal from `CrowDaemon/Resources/web/` instead, and
-    /// `StaticAssets` takes only the xterm *library* files out of this bundle
-    /// (see `xtermDirectoryURL`). Terminal fixes go to `Resources/web/app.js`
-    /// and `Resources/web/terminal.html`; the page itself carries the same
-    /// warning, and CROW-916 is the bug that earned it.
-    public static var terminalHTMLURL: URL? {
-        Bundle.module.url(
-            forResource: "terminal",
-            withExtension: "html",
-            subdirectory: "xterm"
-        )
-    }
-
     /// Directory holding the bundled xterm.js assets (xterm.js, xterm.css,
     /// addons). The headless `crowd` daemon serves files from here over HTTP so
     /// the browser terminal reuses the exact same 6.0.0 assets as the macOS app

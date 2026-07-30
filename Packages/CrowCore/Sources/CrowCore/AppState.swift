@@ -182,22 +182,22 @@ public final class AppState {
     /// Read-only mirror of the store's persisted per-session analytics
     /// snapshots, keyed by session UUID string — hydrated by SessionService on
     /// load and kept in sync as snapshots are written. The efficiency
-    /// scorecard (#710) computes entirely from this; CrowUI cannot read the
-    /// store directly.
+    /// scorecard (#710) computes entirely from this; the web client cannot read
+    /// the store directly.
     public var analyticsSnapshots: [String: SessionAnalyticsSnapshot] = [:]
 
     /// Read-only mirror of the store's persisted PR→session attributions
     /// (#693/#694), keyed by PR URL — hydrated by SessionService on load and
     /// resynced by IssueTracker after every attribution write. The v2
     /// combined score (#699) computes its weekly rework/hygiene factor from
-    /// this; CrowUI cannot read the store directly.
+    /// this; the web client cannot read the store directly.
     public var prAttributions: [String: PRSessionAttribution] = [:]
 
     /// Read-only mirror of the store's persisted Manager weekly usage rollups
     /// (#745), keyed by week-start "yyyy-MM-dd" — hydrated by SessionService
     /// on load and resynced by `refreshManagerUsage`. Rendered by the
-    /// scorecard as a separate, ungraded bucket; CrowUI cannot read the store
-    /// directly.
+    /// scorecard as a separate, ungraded bucket; the web client cannot read the
+    /// store directly.
     public var managerUsageWeekly: [String: ManagerWeeklyUsage] = [:]
 
     /// Live telemetry capture health (#745): refreshed at launch and on
@@ -593,7 +593,7 @@ public final class AppState {
 
     /// Resolves whether a session's task backend declares the
     /// `.projectBoardStatus` capability. Wired by `AppDelegate` using
-    /// `ProviderManager.taskBackend(for:)`. CrowUI does not depend on
+    /// `ProviderManager.taskBackend(for:)`. CrowCore does not depend on
     /// CrowProvider, so the capability lookup is injected as a closure
     /// (same pattern as `onMarkInReview`, `onListWorkspaceRepos`).
     /// Defaults to `nil` so unwired contexts (tests, previews) treat the
@@ -609,7 +609,7 @@ public final class AppState {
 
     /// Resolves whether a session's code backend declares the `.autoMergeLabel`
     /// capability (i.e. supports adding `crow:merge` to a PR). Wired by
-    /// `AppDelegate` using `ProviderManager.codeBackend(for:)`. CrowUI does not
+    /// `AppDelegate` using `ProviderManager.codeBackend(for:)`. CrowCore does not
     /// depend on CrowProvider, so the capability lookup is injected as a closure
     /// (same pattern as `canSetProjectStatusResolver`). Defaults to `nil` so
     /// unwired contexts (tests, previews) treat the capability as absent.

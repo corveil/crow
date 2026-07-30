@@ -496,8 +496,8 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                     for session in capturedAppState.sessions {
                         let id = session.id
                         let available = AgentRegistry.shared.agent(for: session.agentKind)?.supportsRemoteControl ?? false
-                        // Inline of CrowUI's internal isRemoteControlActive: any of
-                        // the session's terminals launched with --rc.
+                        // A session is remote-control-active when any of its
+                        // terminals launched with --rc.
                         let rcActive = capturedAppState.terminals(for: id)
                             .contains { capturedAppState.remoteControlActiveTerminals.contains($0.id) }
                         var entry: [String: JSONValue] = [

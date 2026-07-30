@@ -4,8 +4,8 @@ import Testing
 
 // #721 (ADR 0008 web parity): the `ScorecardDTO` is a lossless, JS-friendly
 // projection of `ScorecardModel`. These pin that the DTO carries exactly the
-// numbers the desktop `ScorecardView` reads — building server-side is what lets
-// the web match Core without re-implementing grading in JavaScript.
+// numbers the web scorecard reads — building server-side is what lets the web
+// match Core without re-implementing grading in JavaScript.
 
 private let utc: Calendar = {
     var calendar = Calendar(identifier: .iso8601)

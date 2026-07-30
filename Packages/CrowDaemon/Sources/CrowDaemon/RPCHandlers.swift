@@ -1022,12 +1022,11 @@ func makeCommandRouter(
             }
         },
 
-        // Private efficiency scorecard (ADR 0008; web parity #721). The desktop
-        // `ScorecardView` reads `ScorecardModel` off `appState.analyticsSnapshots`
-        // + `appState.prAttributions` directly; the web has no Swift value types,
-        // so we build the ONE Core `ScorecardModel.build(...)` here and ship its
-        // flattened `ScorecardDTO`. Building server-side is what guarantees the
-        // web grade/throughput/combined/baseline can never drift from desktop —
+        // Private efficiency scorecard (ADR 0008; web parity #721). The web has
+        // no Swift value types, so we build the ONE Core `ScorecardModel.build(...)`
+        // here — off `appState.analyticsSnapshots` + `appState.prAttributions` —
+        // and ship its flattened `ScorecardDTO`. Building the model server-side is
+        // the single source of truth for the grade/throughput/combined/baseline —
         // there is no JS re-implementation of the grading to keep in sync.
         // Read-only and always local (same posture as get-state).
         "get-scorecard": { _ in

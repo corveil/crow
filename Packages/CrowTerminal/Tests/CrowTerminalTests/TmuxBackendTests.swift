@@ -3,10 +3,8 @@ import Testing
 @testable import CrowCore
 @testable import CrowTerminal
 
-/// Integration tests for `TmuxBackend`'s tmux-side logic. The xterm.js
-/// surface side (`cockpitSurface()`) requires a visible NSWindow and is
-/// covered separately by the visual demo path. Skipped automatically
-/// when no tmux binary is present on the host.
+/// Integration tests for `TmuxBackend`'s tmux-side logic. Skipped
+/// automatically when no tmux binary is present on the host.
 @MainActor
 // Serialized: these are real-tmux integration tests that spawn login shells and
 // assert on readiness *timing* (e.g. a 0.15s watch budget). Run in parallel they
@@ -794,7 +792,6 @@ struct TmuxBackendTests {
 
         backend.recycleCockpitSurface()
 
-        #expect(backend.existingCockpitSurface == nil)
         #expect(backend.activeTerminalID == nil)
         #expect(backend.isRunning)  // server untouched
     }

@@ -2783,13 +2783,12 @@ function renderBoard() {
 }
 
 // ===== Scorecard (ADR 0008 web parity, #721) =====
-// Private weekly efficiency scorecard, mirroring the desktop `ScorecardView`.
-// Everything is computed by the one Core `ScorecardModel` on the daemon and
-// shipped as a flat `ScorecardDTO` over `get-scorecard`; this only renders it,
-// so web and desktop can never disagree on a number.
+// Private weekly efficiency scorecard. Everything is computed by the one Core
+// `ScorecardModel` on the daemon and shipped as a flat `ScorecardDTO` over
+// `get-scorecard`; this only renders it, so the numbers have a single source of
+// truth.
 
-// Formatters mirroring CrowUI's `AnalyticsFormatting` so the web reads the same
-// as the desktop cards.
+// Formatters so the web reads the same numbers Core computes.
 function fmtCost(cost) {
   if (cost > 0 && cost < 0.01) return '<$0.01';
   return '$' + Number(cost).toFixed(2);

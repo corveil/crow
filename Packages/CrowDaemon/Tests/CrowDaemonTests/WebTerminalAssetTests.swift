@@ -260,12 +260,10 @@ import Testing
     /// apps that don't — a literal `ESC CR` would reach vim as "leave insert
     /// mode, then Enter".
     ///
-    /// This is the guard that was missing. #599 added the handler to
-    /// CrowTerminal's `terminal.html` and pinned it there
-    /// (`BundledResourcesTests.terminalHTMLHandlesModifiedEnter`) — but ADR 0010
-    /// retired that surface, so the passing test covered a page nothing loads
-    /// while both shipping surfaces regressed unasserted. Parameterized over the
-    /// live assets so it can't happen the same way twice.
+    /// This is the guard that was missing. #599 added the handler only to the
+    /// macOS app's `terminal.html`, which ADR 0010 retired — so it covered a
+    /// page nothing loads while both shipping surfaces regressed unasserted.
+    /// Parameterized over the live assets so it can't happen the same way twice.
     ///
     /// Asserted on the comment-stripped source: the rationale prose names the
     /// sequence too, and a guard that a comment can satisfy guards nothing. The

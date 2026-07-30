@@ -1,12 +1,11 @@
 import Foundation
 
 /// A flat, `Codable`, JS-friendly projection of `ScorecardModel` for the web
-/// client (ADR 0008 web parity, #721). The macOS `ScorecardView` reads
-/// `ScorecardModel` directly; the web has no Swift value types, so `crowd`
-/// builds the model server-side and ships this DTO over `get-scorecard`. The
-/// web renders it verbatim — the grade, throughput, combined score, and
-/// baseline are all computed by the one Core `ScorecardModel.build(...)`, so
-/// web and desktop can never diverge on the numbers.
+/// client (ADR 0008 web parity, #721). The web has no Swift value types, so
+/// `crowd` builds the model server-side and ships this DTO over `get-scorecard`.
+/// The web renders it verbatim — the grade, throughput, combined score, and
+/// baseline are all computed by the one Core `ScorecardModel.build(...)`, so the
+/// numbers have a single source of truth.
 ///
 /// Flattening rules that keep the wire shape trivial for JavaScript:
 /// - The `GradeResult` / `CombinedScore.WeeklyResult` / `CostPerShipped`
@@ -259,7 +258,7 @@ public struct SessionRowDTO: Codable, Sendable, Equatable {
 }
 
 /// One ungraded Manager-usage week (#745, #767) — the three figures the
-/// desktop `ScorecardView`'s Manager row rendered, plus its week key. No
+/// scorecard's Manager row renders, plus its week key. No
 /// grade, by design: the always-on Manager session is visibility only.
 public struct ManagerUsageWeekDTO: Codable, Sendable, Equatable {
     public let weekStartMillis: Double

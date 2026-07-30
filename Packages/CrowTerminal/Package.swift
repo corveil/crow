@@ -26,9 +26,6 @@ let package = Package(
                 .copy("Resources/xterm"),
             ],
             linkerSettings: [
-                // WebKit backs the macOS xterm.js surface (XTermSurfaceView);
-                // those files are compiled-away on Linux via #if canImport(WebKit).
-                .linkedFramework("WebKit", .when(platforms: [.macOS])),
                 // libutil provides openpty(3) on Linux (declared via the CPty shim).
                 .linkedLibrary("util", .when(platforms: [.linux])),
             ]
