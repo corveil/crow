@@ -170,6 +170,7 @@ struct SettingsRPCSupportTests {
             "respond_to_changes_requested": .bool(true),
             "respond_to_failed_checks": .bool(false),
             "auto_rebase_and_resolve_conflicts": .bool(false),
+            "auto_re_request_review": .bool(true),
         ]))
         #expect(json["defaults"] == .object([
             "exclude_review_repos": .array([]),

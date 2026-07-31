@@ -722,7 +722,7 @@ Settings → Automation: which sessions launch in auto permission mode, whether 
 
 The tab also renders three board-filter lists (excluded review repos, ignored review labels, excluded ticket repos). Those are `AppConfig.defaults` fields and are written by [`crow defaults set`](#crow-defaults-get--set) — one writer, one set of list semantics. `crow automation get` echoes them read-only so the tab still reads as a whole from one call.
 
-Same patch contract as the settings verbs above — only the flags you pass change, and passing none is an error rather than a silent no-op. Booleans take an explicit `true`/`false`, which matters more here than anywhere else: **six of these eleven toggles default to on**, so a bare-flag design could never turn one off.
+Same patch contract as the settings verbs above — only the flags you pass change, and passing none is an error rather than a silent no-op. Booleans take an explicit `true`/`false`, which matters more here than anywhere else: **six of these twelve toggles default to on**, so a bare-flag design could never turn one off.
 
 ### `crow automation get | set`
 
@@ -752,13 +752,14 @@ crow automation set --manager-auto-permission-mode false && crow restart-manager
 | `--auto-create-watcher-enabled` | `false` | Auto-launch a workspace for issues assigned to you labeled `crow:auto`    |
 | `--auto-merge-watcher-enabled`  | `false` | Auto-merge Crow-authored PRs labeled `crow:merge`                         |
 
-**Auto-respond** — Crow types an instruction into the session's agent terminal on its own.
+**Auto-respond** — Crow acts on a PR's behalf without you asking: three of these type an instruction into the session's agent terminal, one calls the host API directly.
 
 | Flag                                   | Default | Description                                                       |
 | -------------------------------------- | ------- | ----------------------------------------------------------------- |
 | `--respond-to-changes-requested`       | `true`  | Respond to a changes-requested review                             |
 | `--respond-to-failed-checks`           | `false` | Respond to failed CI checks                                       |
 | `--auto-rebase-and-resolve-conflicts`  | `false` | Rebase onto the base branch and `--force-with-lease` push          |
+| `--auto-re-request-review`             | `true`  | Re-request review once a changes-requested PR's fix has landed     |
 
 At least one flag from any group is required.
 
@@ -778,7 +779,8 @@ Returns:
     "auto_respond": {
       "respond_to_changes_requested": true,
       "respond_to_failed_checks": false,
-      "auto_rebase_and_resolve_conflicts": false
+      "auto_rebase_and_resolve_conflicts": false,
+      "auto_re_request_review": true
     },
     "defaults": {
       "exclude_review_repos": ["corveil/*"],

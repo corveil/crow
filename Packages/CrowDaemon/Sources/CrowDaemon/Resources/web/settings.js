@@ -685,6 +685,8 @@
       'Types a "read the CI logs and fix it" prompt into the session terminal. Off by default.'));
     body.appendChild(toggleField('Auto-rebase onto base and resolve conflicts', cfg.autoRespond, 'autoRebaseAndResolveConflicts',
       'Rebases a behind/conflicting Crow-authored PR onto base and force-pushes (--force-with-lease). Off by default.'));
+    body.appendChild(toggleField('Re-request review once changes are addressed', cfg.autoRespond, 'autoReRequestReview',
+      'Re-adds the reviewers who requested changes once the fix lands, so the PR goes back on their queue instead of stalling.'));
   }
 
   // ---- Notifications ------------------------------------------------------

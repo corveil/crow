@@ -110,6 +110,13 @@ public final class IssueTracker {
     /// returning `false` so the path stays inert until AppDelegate wires it.
     public var respondToChangesRequestedProvider: () -> Bool = { false }
 
+    /// Reads the latest `AutoRespondSettings.autoReRequestReview` snapshot on
+    /// every poll. Gates the auto-re-request watcher (CROW-921). Defaults to a
+    /// closure returning `false` so the watcher is inert until CrowDaemon
+    /// wires it — the failure mode that left CROW-782 dark for weeks, and the
+    /// reason `wireTrackerAutomations` runs unconditionally.
+    public var autoReRequestReviewProvider: () -> Bool = { false }
+
     /// Fires after Crow rebased a PR branch and force-pushed it. Wired in
     /// AppDelegate to post a notification.
     public var onAutoRebasePushed: ((UUID, String, Int) -> Void)?
@@ -290,6 +297,63 @@ public final class IssueTracker {
     /// stall surfaces within ~3 poll cycles. Constant so it can be tuned if
     /// real-world telemetry calls for it.
     nonisolated static let needsRefineCooldown: TimeInterval = 7 * 60
+
+    /// Last automation line emitted per `(channel, PR URL)`, with its
+    /// timestamp (CROW-921). Two callers share it: the gated needs-refine
+    /// evaluation and the auto-re-request skip reasons.
+    ///
+    /// `applyPRStatuses` used to log only when needs-refine *fired*, so a PR
+    /// that sat in CHANGES_REQUESTED without ever dispatching left no trace at
+    /// all — diagnosing #921 meant pulling `prStatus` out of `crow get-state`
+    /// and hand-converting Apple reference-date timestamps. But a line every
+    /// poll is ~1440/day/PR, which buries the signal just as effectively. So a
+    /// line is emitted when the message *changes* (the interesting event) and
+    /// at most hourly otherwise — the same rate-limiting shape
+    /// `lastAutoRebaseIdleLogAt` uses. Ephemeral; pruned to live PR URLs.
+    var steadyStateLogDedupe: [String: (message: String, at: Date)] = [:]
+
+    /// Re-emit an unchanged steady-state line at most this often.
+    nonisolated static let steadyStateLogHeartbeat: TimeInterval = 3600
+
+    /// Channel prefixes for `steadyStateLogDedupe` keys. Two channels can
+    /// describe the same PR in one poll and must not evict each other.
+    nonisolated static let needsRefineLogChannel = "needs-refine"
+    nonisolated static let autoReReviewLogChannel = "auto-re-request"
+
+    nonisolated static func steadyStateLogKey(channel: String, prURL: String) -> String {
+        "\(channel)\n\(prURL)"
+    }
+
+    /// PR URLs with an auto-re-request-review call in flight (CROW-921).
+    /// Keyed by URL, cleared in the attempt's `defer`, so two sessions sharing
+    /// a PR can't both fire and a slow `gh` call can't be re-entered by the
+    /// next poll.
+    /// Internal (not private) so `@testable` tests can read the dispatch
+    /// decision without a live backend.
+    var autoReRequestInFlight: Set<String> = []
+
+    /// One re-request per (PR head, review round). Keyed
+    /// `"<url>\n<headRefOid>\n<lastChangesRequestedAt>"`: a new push or a new
+    /// reviewer submission is a genuinely new round and re-arms the watcher,
+    /// while a retried poll over identical data does not.
+    ///
+    /// Belt-and-braces rather than the primary guard — the watcher is
+    /// self-limiting, because a successful request flips
+    /// `changesRequestedReviewerIsPending` and the PR moves to
+    /// `.awaitingReviewer` on the next poll. This covers the window before
+    /// that snapshot arrives.
+    /// Internal for the same reason as `autoReRequestInFlight`.
+    var autoReRequestAttempted: Set<String> = []
+
+    /// Consecutive failed re-request attempts per round key. Bounds the retry
+    /// loop: the inputs to a re-request are fixed for the life of a round, so
+    /// a non-transient failure would otherwise re-dispatch every poll forever.
+    /// Cleared on success and pruned with `autoReRequestAttempted`.
+    var autoReReviewFailureCounts: [String: Int] = [:]
+
+    /// Hourly clock for the auto-re-request "enabled, nothing to do" line, so
+    /// a healthy steady state doesn't fill `crowd-automation.log`.
+    private var lastAutoReReviewIdleLogAt: Date?
 
     /// Sessions whose PR just had `crow:merge` added via `addMergeLabel` but
     /// whose next fetched snapshot may not yet reflect it (#838). Two windows
@@ -857,6 +921,17 @@ public final class IssueTracker {
     /// loser). Both the merge icon (`hasMergeLabel`) and the auto-merge watcher
     /// (`autoMergeSkipReason`) read this field, so a label GitHub reports on
     /// either record must survive the merge.
+    ///
+    /// **Every field must be carried here.** `PRRecord`'s initializer defaults
+    /// mean an omitted field compiles silently and reaches the watchers as
+    /// "absent" — which is how #838 blinded auto-merge (dropped `labels`) and
+    /// how the CROW-921 reviewer fields were dropped on their first cut
+    /// (review of #930): an empty `changesRequestedReviewerLogins` reads as
+    /// `.noReviewers` and the PR is never re-requested, while a lost
+    /// `hasPendingReviewRequest` demotes an `.awaitingReviewer` PR back to
+    /// `.needsRefine` and re-prompts the agent while the reviewer is already
+    /// looking. `IssueTrackerDedupTests.dedupedByURLUnionsLabelsAndReviewerFields`
+    /// is the assembly guard; extend it when `PRRecord` grows.
     nonisolated static func mergePRRecords(_ lhs: ViewerPR, _ rhs: ViewerPR) -> ViewerPR {
         let (winner, loser) = stateRank(lhs.state) >= stateRank(rhs.state)
             ? (lhs, rhs) : (rhs, lhs)
@@ -879,6 +954,19 @@ public final class IssueTracker {
             latestReviewStates: winner.latestReviewStates.isEmpty ? loser.latestReviewStates : winner.latestReviewStates,
             lastChangesRequestedAt: winner.lastChangesRequestedAt ?? loser.lastChangesRequestedAt,
             lastSubstantiveCommitAt: winner.lastSubstantiveCommitAt ?? loser.lastSubstantiveCommitAt,
+            // Same rule as `latestReviewStates` above, for the same reason:
+            // the stale-PR query doesn't select reviewer identity, so an empty
+            // array here means "not fetched", never "nobody" (CROW-921).
+            // Dropping these blinds the auto-re-request watcher exactly the
+            // way #838 blinded the auto-merge watcher by dropping `labels`.
+            changesRequestedReviewerLogins: winner.changesRequestedReviewerLogins.isEmpty
+                ? loser.changesRequestedReviewerLogins : winner.changesRequestedReviewerLogins,
+            pendingReviewerLogins: winner.pendingReviewerLogins.isEmpty
+                ? loser.pendingReviewerLogins : winner.pendingReviewerLogins,
+            // OR, not pick-a-side: `false` means "not fetched" on every path
+            // that doesn't select `reviewRequests` (the stale query, GitLab),
+            // so a `true` from either record is the only informative value.
+            hasPendingReviewRequest: winner.hasPendingReviewRequest || loser.hasPendingReviewRequest,
             mergeCommitOid: winner.mergeCommitOid ?? loser.mergeCommitOid,
             // Prefer whichever record actually knows the repo's auto-merge
             // policy — the stale-PR query and the viewer fetch don't always
@@ -1124,6 +1212,12 @@ public final class IssueTracker {
     /// substitute the session-link URL when the backend returned an empty
     /// `web_url` (defensive — GitLab's REST shape always populates it, but
     /// we'd rather preserve the link than lose the record).
+    ///
+    /// Copies every field. It previously dropped `mergeCommitOid` and
+    /// `repoAutoMergeAllowed` — inert, because the only caller is the GitLab
+    /// path where both are nil — but a "copy with one field changed" helper
+    /// that silently loses fields is a trap that gets worse every time
+    /// `PRRecord` grows.
     nonisolated static func withURL(_ pr: ViewerPR, url: String) -> ViewerPR {
         PRRecord(
             number: pr.number,
@@ -1144,7 +1238,12 @@ public final class IssueTracker {
             latestReviewStates: pr.latestReviewStates,
             lastChangesRequestedAt: pr.lastChangesRequestedAt,
             lastSubstantiveCommitAt: pr.lastSubstantiveCommitAt,
-            updatedAt: pr.updatedAt
+            changesRequestedReviewerLogins: pr.changesRequestedReviewerLogins,
+            pendingReviewerLogins: pr.pendingReviewerLogins,
+            hasPendingReviewRequest: pr.hasPendingReviewRequest,
+            updatedAt: pr.updatedAt,
+            mergeCommitOid: pr.mergeCommitOid,
+            repoAutoMergeAllowed: pr.repoAutoMergeAllowed
         )
     }
 
@@ -1897,14 +1996,18 @@ public final class IssueTracker {
             // Stateless "needs refine" rule (CROW-508). First-observation
             // skip uses the start-of-poll snapshot so two sessions sharing
             // a PR can't race each other through the gate.
-            if respondToChangesRequested,
-               session.kind != .review,
-               seenPRsAtStart.contains(prLink.url),
-               PRStatus.needsRefine(
-                   status: newStatus,
-                   terminalIdle: isManagedTerminalIdle(sessionID: session.id)
-               ),
-               cooldownElapsed(prURL: prLink.url, now: now) {
+            let terminalIdle = isManagedTerminalIdle(sessionID: session.id)
+            let firstObservation = !seenPRsAtStart.contains(prLink.url)
+            let cooldownOK = cooldownElapsed(prURL: prLink.url, now: now)
+            let refineGate = Self.needsRefineGate(
+                status: newStatus,
+                toggleOn: respondToChangesRequested,
+                isReviewSession: session.kind == .review,
+                firstObservation: firstObservation,
+                terminalIdle: terminalIdle,
+                cooldownElapsed: cooldownOK
+            )
+            if refineGate == nil {
                 lastRefineDispatchAt[prLink.url] = now
                 // Same-review cooldown re-fire suppresses the macOS
                 // notification (the dispatch + agent prompt are still
@@ -1925,11 +2028,31 @@ public final class IssueTracker {
                     failedCheckNames: [],
                     isCooldownReFire: isCooldownReFire
                 ))
+                lastNeedsRefineGateCleared(prURL: prLink.url)
                 CrowLog.automation(
                     "auto-respond: needs-refine fired — session=\(session.id.uuidString), "
                     + "sha=\(newStatus.headSha ?? ""), lastCR=\(Self.iso(newStatus.lastChangesRequestedAt)), "
                     + "lastCommit=\(Self.iso(newStatus.lastSubstantiveCommitAt)), "
                     + "reFire=\(isCooldownReFire ? "yes" : "no")")
+            } else if let gate = refineGate,
+                      gate != .reviewSession,
+                      newStatus.reviewStatus == .changesRequested,
+                      newStatus.isOpen {
+                // Suppressed evaluation (CROW-921). Only for PRs actually
+                // sitting in CHANGES_REQUESTED — logging every healthy PR
+                // every poll would bury the signal it exists to surface.
+                // `.reviewSession` is excluded too: a review session's linked
+                // PR being changes-requested is the *normal* outcome of a
+                // review, not a stall worth a line every hour.
+                logNeedsRefineGate(
+                    prURL: prLink.url,
+                    prNumber: pr.number,
+                    status: newStatus,
+                    gate: gate,
+                    terminalIdle: terminalIdle,
+                    cooldownElapsed: cooldownOK,
+                    now: now
+                )
             }
             seenPRs.insert(prLink.url)
 
@@ -1944,6 +2067,15 @@ public final class IssueTracker {
         if !seenPRs.isEmpty { seenPRs.formIntersection(livePRURLs) }
         lastRefineDispatchAt = lastRefineDispatchAt.filter { livePRURLs.contains($0.key) }
         lastNotifiedChangesRequestedAt = lastNotifiedChangesRequestedAt.filter { livePRURLs.contains($0.key) }
+        // Steady-state log dedupe is keyed `(channel, url)`, so build the live
+        // key set rather than intersecting on URL.
+        let liveLogKeys = Set(livePRURLs.flatMap {
+            [
+                Self.steadyStateLogKey(channel: Self.needsRefineLogChannel, prURL: $0),
+                Self.steadyStateLogKey(channel: Self.autoReReviewLogChannel, prURL: $0),
+            ]
+        })
+        steadyStateLogDedupe = steadyStateLogDedupe.filter { liveLogKeys.contains($0.key) }
         // Drop pending merge-label markers for sessions that no longer exist
         // (deleted mid-window). Keyed by session, so intersect with live
         // sessions rather than PR URLs (#838).
@@ -1957,6 +2089,99 @@ public final class IssueTracker {
 
         applyAutoMerge(viewerPRs: viewerPRs)
         applyAutoRebase(viewerPRs: viewerPRs)
+        applyAutoReRequestReview(viewerPRs: viewerPRs)
+    }
+
+    /// Why a needs-refine evaluation did NOT dispatch, or `nil` when it did
+    /// (CROW-921). Pure and `nonisolated static` so the gate is unit-testable
+    /// without an `IssueTracker`; raw values are grep-stable log strings, the
+    /// same convention as `AutoMergeSkipReason` / `AutoRebaseDeferReason`.
+    ///
+    /// Checked in the order a reader would ask the questions: is the feature
+    /// on, is this session even eligible, have we seen the PR before, what
+    /// state is the PR in, is the agent free, has the cooldown elapsed.
+    nonisolated static func needsRefineGate(
+        status: PRStatus,
+        toggleOn: Bool,
+        isReviewSession: Bool,
+        firstObservation: Bool,
+        terminalIdle: Bool,
+        cooldownElapsed: Bool
+    ) -> NeedsRefineGate? {
+        if !toggleOn { return .toggleOff }
+        if isReviewSession { return .reviewSession }
+        if firstObservation { return .firstObservation }
+        let state = PRStatus.changesRequestedState(status: status)
+        switch state {
+        case .notApplicable: return .notChangesRequested
+        case .awaitingReviewer: return .awaitingReviewer
+        case .awaitingReRequest: return .awaitingReRequest
+        case .needsRefine: break
+        }
+        if !terminalIdle { return .agentBusy }
+        if !cooldownElapsed { return .cooldown }
+        return nil
+    }
+
+    /// Grep-stable reasons a needs-refine evaluation was suppressed.
+    enum NeedsRefineGate: String, Sendable, Equatable {
+        case toggleOff = "respond-to-changes-requested-off"
+        case reviewSession = "review-session"
+        case firstObservation = "first-observation"
+        case notChangesRequested = "not-changes-requested-or-no-anchor"
+        case awaitingReviewer = "awaiting-reviewer"
+        case awaitingReRequest = "awaiting-re-request"
+        case agentBusy = "agent-busy"
+        case cooldown = "cooldown"
+    }
+
+    /// Forget the last gated line for a PR so the next suppression logs
+    /// immediately rather than waiting out the heartbeat — a dispatch means
+    /// the situation changed, and the next quiet poll is worth a line.
+    private func lastNeedsRefineGateCleared(prURL: String) {
+        steadyStateLogDedupe.removeValue(
+            forKey: Self.steadyStateLogKey(channel: Self.needsRefineLogChannel, prURL: prURL))
+    }
+
+    /// Emit `message` for `(channel, prURL)` unless the identical line was
+    /// already emitted for that pair within the heartbeat window. Returns
+    /// whether it was emitted, so callers can assert on it in tests.
+    @discardableResult
+    private func logSteadyState(
+        channel: String, prURL: String, message: String, now: Date
+    ) -> Bool {
+        let key = Self.steadyStateLogKey(channel: channel, prURL: prURL)
+        if let previous = steadyStateLogDedupe[key],
+           previous.message == message,
+           now.timeIntervalSince(previous.at) < Self.steadyStateLogHeartbeat {
+            return false
+        }
+        steadyStateLogDedupe[key] = (message: message, at: now)
+        CrowLog.automation(message)
+        return true
+    }
+
+    /// Emit one gated-evaluation line per PR. See `steadyStateLogDedupe`.
+    private func logNeedsRefineGate(
+        prURL: String,
+        prNumber: Int,
+        status: PRStatus,
+        gate: NeedsRefineGate,
+        terminalIdle: Bool,
+        cooldownElapsed: Bool,
+        now: Date
+    ) {
+        logSteadyState(
+            channel: Self.needsRefineLogChannel,
+            prURL: prURL,
+            message: "needs-refine: #\(prNumber) gated (reason=\(gate.rawValue), "
+                + "state=\(PRStatus.changesRequestedState(status: status).rawValue), "
+                + "lastCR=\(Self.iso(status.lastChangesRequestedAt)), "
+                + "lastCommit=\(Self.iso(status.lastSubstantiveCommitAt)), "
+                + "reviewerReRequested=\(status.changesRequestedReviewerIsPending ? "yes" : "no"), "
+                + "idle=\(terminalIdle ? "yes" : "no"), "
+                + "cooldown=\(cooldownElapsed ? "ok" : "waiting"))",
+            now: now)
     }
 
     /// True when the managed terminal for the session is at agent-launched
@@ -1970,6 +2195,29 @@ public final class IssueTracker {
             return false
         }
         guard appState.terminalReadiness[managedTerminal.id] == .agentLaunched else { return false }
+        let state = appState.hookState(for: sessionID).activityState
+        return state == .idle || state == .done
+    }
+
+    /// True when the session's agent has nothing in flight — either it is
+    /// idle/done, or there is no launched agent to wait for (CROW-921).
+    ///
+    /// Deliberately *not* `isManagedTerminalIdle`, whose "no launched
+    /// terminal ⇒ false" is right for prompting (you can't type at an agent
+    /// that isn't running) and wrong for re-requesting review (a closed
+    /// terminal would recreate exactly the permanent dead-end #921 is about).
+    ///
+    /// Gating on this at all is safe in a way the needs-refine gate is not:
+    /// `.awaitingReRequest` is a *stable* condition — it holds until somebody
+    /// adds the request — so waiting for the agent only ever delays the
+    /// re-request by a poll or two. It buys the guarantee that Crow doesn't
+    /// ping a reviewer (or, in auto-review repos, spawn a review session)
+    /// while the agent is still working through finding 2 of 3.
+    private func agentSettled(sessionID: UUID) -> Bool {
+        guard let managedTerminal = appState.terminals(for: sessionID).first(where: { $0.isManaged }),
+              appState.terminalReadiness[managedTerminal.id] == .agentLaunched else {
+            return true
+        }
         let state = appState.hookState(for: sessionID).activityState
         return state == .idle || state == .done
     }
@@ -3335,6 +3583,223 @@ public final class IssueTracker {
             + "(deferral \(count), retry in \(Int(delay))s)")
     }
 
+    // MARK: - Auto Re-Request Review Watcher (CROW-921)
+
+    /// Why a PR was not re-requested this poll. `nil` from
+    /// `autoReReviewSkipReason` means "go". Raw values are grep-stable log
+    /// strings — people search `crowd-automation.log` for these.
+    enum AutoReReviewSkipReason: String, Sendable, Equatable {
+        case reviewSession = "review-session"
+        case draft = "draft"
+        case notAwaitingReRequest = "not-awaiting-re-request"
+        case noReviewers = "no-changes-requested-reviewers"
+        case agentBusy = "agent-busy"
+    }
+
+    /// Pure eligibility check for the auto-re-request watcher.
+    /// `nonisolated static` so it is unit-testable without an `IssueTracker`,
+    /// matching `shouldAttemptAutoRebase` / `autoMergeSkipReason`.
+    ///
+    /// `.awaitingReRequest` is the whole decision — it already encodes "open",
+    /// "changes requested", "the fix landed after the review", and "nobody has
+    /// been asked to look again". Everything else here is about whether *this
+    /// session* should be the one to act.
+    nonisolated static func autoReReviewSkipReason(
+        pr: ViewerPR,
+        status: PRStatus,
+        isReviewSession: Bool,
+        agentSettled: Bool
+    ) -> AutoReReviewSkipReason? {
+        if isReviewSession { return .reviewSession }
+        if pr.isDraft { return .draft }
+        guard PRStatus.changesRequestedState(status: status) == .awaitingReRequest else {
+            return .notAwaitingReRequest
+        }
+        if pr.changesRequestedReviewerLogins.isEmpty { return .noReviewers }
+        if !agentSettled { return .agentBusy }
+        return nil
+    }
+
+    /// Sessions eligible to have their PR re-requested. Same exclusions as
+    /// auto-rebase: the Manager owns no PR, and a review session's linked PR
+    /// belongs to somebody else.
+    nonisolated static func sessionEligibleForAutoReReview(_ session: Session) -> Bool {
+        session.id != AppState.managerSessionID && session.kind != .review
+    }
+
+    /// Re-request review on PRs whose CHANGES_REQUESTED findings have been
+    /// addressed but which nobody has been asked to look at again (CROW-921).
+    ///
+    /// This is the missing third leg of the auto-respond loop. Before it, the
+    /// only thing that re-requested review was a sentence inside the
+    /// `addressChanges` prompt — reachable only while the agent still owed a
+    /// fix, and therefore never reachable once the fix landed. A PR fixed by
+    /// any other path (the agent's own in-flight work, an auto-rebase conflict
+    /// delegation, a human nudge) parked in CHANGES_REQUESTED forever,
+    /// invisible to the reviewer's queue and to `review-requested:@me` alike.
+    ///
+    /// Deterministic rather than prompt-driven, like `applyAutoMerge`: a
+    /// one-line API call routed through an agent turn costs a full turn's
+    /// tokens, can't be verified, and would re-inherit the very gate that
+    /// caused the bug. The prompt hint stays as belt-and-braces — adding a
+    /// reviewer who is already requested is a host-side no-op.
+    private func applyAutoReRequestReview(viewerPRs: [ViewerPR]) {
+        guard autoReRequestReviewProvider() else { return }
+        guard !viewerPRs.isEmpty else { return }
+        let byURL = Dictionary(viewerPRs.map { ($0.url, $0) }, uniquingKeysWith: Self.mergePRRecords)
+
+        // Prune the per-round guard against what this poll actually saw, so a
+        // new push or a new reviewer submission re-arms the watcher. Guarded
+        // by the non-empty check above: a failed fetch must not wipe live
+        // state and let a second request fire.
+        let liveRoundKeys = Set(viewerPRs.map {
+            Self.autoReReviewRoundKey(url: $0.url, headRefOid: $0.headRefOid, lastChangesRequestedAt: $0.lastChangesRequestedAt)
+        })
+        autoReRequestAttempted.formIntersection(liveRoundKeys)
+        autoReReviewFailureCounts = autoReReviewFailureCounts.filter { liveRoundKeys.contains($0.key) }
+
+        let now = Date()
+        var dispatched = 0
+        for session in appState.sessions where Self.sessionEligibleForAutoReReview(session) {
+            guard let prLink = appState.links(for: session.id).first(where: { $0.linkType == .pr }) else { continue }
+            guard !autoReRequestInFlight.contains(prLink.url) else { continue }
+            guard let pr = byURL[prLink.url] else { continue }
+
+            let status = Self.buildPRStatus(from: pr)
+            let skip = Self.autoReReviewSkipReason(
+                pr: pr,
+                status: status,
+                isReviewSession: session.kind == .review,
+                agentSettled: agentSettled(sessionID: session.id)
+            )
+            if let skip {
+                // Only the states a reader would wonder about get a line —
+                // `.notAwaitingReRequest` is the overwhelming majority of
+                // healthy PRs and is already covered by the needs-refine
+                // gated log. The rest go through the shared rate limiter: a
+                // PR parked on `.agentBusy` or `.noReviewers` would otherwise
+                // emit a line every 60s poll for as long as it stayed there.
+                if skip != .notAwaitingReRequest {
+                    logSteadyState(
+                        channel: Self.autoReReviewLogChannel,
+                        prURL: prLink.url,
+                        message: "auto-re-request: #\(pr.number) skipped:\(skip.rawValue)",
+                        now: now)
+                }
+                continue
+            }
+
+            let roundKey = Self.autoReReviewRoundKey(
+                url: prLink.url, headRefOid: pr.headRefOid, lastChangesRequestedAt: pr.lastChangesRequestedAt)
+            guard !autoReRequestAttempted.contains(roundKey) else { continue }
+            autoReRequestAttempted.insert(roundKey)
+            autoReRequestInFlight.insert(prLink.url)
+            dispatched += 1
+            let capturedSession = session
+            Task { await self.attemptReRequestReview(session: capturedSession, pr: pr, roundKey: roundKey) }
+        }
+        if dispatched == 0 {
+            if lastAutoReReviewIdleLogAt.map({ now.timeIntervalSince($0) >= Self.steadyStateLogHeartbeat }) ?? true {
+                lastAutoReReviewIdleLogAt = now
+                CrowLog.automation("auto-re-request: enabled, no candidates this poll")
+            }
+        } else {
+            lastAutoReReviewIdleLogAt = nil
+        }
+    }
+
+    /// One re-request per (PR, head, review round). A new push changes the
+    /// head; a new reviewer submission changes the CR timestamp. Either is a
+    /// genuinely new round.
+    nonisolated static func autoReReviewRoundKey(
+        url: String, headRefOid: String, lastChangesRequestedAt: Date?
+    ) -> String {
+        "\(url)\n\(headRefOid)\n\(iso(lastChangesRequestedAt))"
+    }
+
+    /// Give up on a round after this many failed attempts. The inputs to a
+    /// re-request are fixed for the life of a round — same PR, same logins —
+    /// so a failure that isn't transient will never stop being a failure.
+    /// Retrying forever would re-dispatch every 60s poll for the life of the
+    /// PR (review of #930).
+    nonisolated static let maxAutoReReviewFailureRetries = 3
+
+    /// Perform the re-request. Capability-gated like every other PR write, so
+    /// a provider without `.requestReviewers` degrades to a logged skip.
+    ///
+    /// Failure handling mirrors `attemptRebase`'s bounded-retry shape rather
+    /// than `attemptDirectMerge`'s latch-everything one: a re-request is
+    /// idempotent, so retrying a transient network failure is free, while
+    /// retrying forever is not. Both terminal conditions below leave the round
+    /// key latched, so they log once per round rather than once per poll.
+    private func attemptReRequestReview(session: Session, pr: ViewerPR, roundKey: String) async {
+        defer { autoReRequestInFlight.remove(pr.url) }
+        guard let backend = codeBackend(for: session) else {
+            // Terminal for this session, not transient: the provider is a
+            // property of the session and can't change under a live round.
+            // Latch, like the capability gate below.
+            logSteadyState(
+                channel: Self.autoReReviewLogChannel,
+                prURL: pr.url,
+                message: "auto-re-request: #\(pr.number) skipped:no-code-backend",
+                now: Date())
+            return
+        }
+        guard backend.capabilities.contains(.requestReviewers) else {
+            logSteadyState(
+                channel: Self.autoReReviewLogChannel,
+                prURL: pr.url,
+                message: "auto-re-request: #\(pr.number) skipped:provider-unsupported "
+                    + "(\(backend.provider.rawValue))",
+                now: Date())
+            return
+        }
+        let logins = pr.changesRequestedReviewerLogins
+        // Logged here rather than at dispatch so `grep dispatched` counts
+        // attempts that actually reached the host: both terminal guards above
+        // return before this point, and used to leave a "dispatched" line
+        // standing in front of a skip that contradicted it.
+        //
+        // Through the shared limiter, and stamped with the head: a retry
+        // within the same round repeats this message verbatim and is deduped,
+        // while a genuinely new round (new push or new reviewer submission)
+        // changes the sha or the timestamp and logs.
+        logSteadyState(
+            channel: Self.autoReReviewLogChannel,
+            prURL: pr.url,
+            message: "auto-re-request: dispatched #\(pr.number) → \(logins.joined(separator: ", ")) "
+                + "(sha=\(pr.headRefOid.prefix(8)), lastCR=\(Self.iso(pr.lastChangesRequestedAt)), "
+                + "lastCommit=\(Self.iso(pr.lastSubstantiveCommitAt)))",
+            now: Date())
+        do {
+            try await backend.requestReviewers(prURL: pr.url, logins: logins)
+            autoReReviewFailureCounts.removeValue(forKey: roundKey)
+            CrowLog.automation(
+                "auto-re-request: #\(pr.number) re-requested \(logins.joined(separator: ", ")) "
+                + "— session=\(session.id.uuidString)")
+        } catch {
+            let failures = (autoReReviewFailureCounts[roundKey] ?? 0) + 1
+            autoReReviewFailureCounts[roundKey] = failures
+            let giveUp = failures >= Self.maxAutoReReviewFailureRetries
+            if !giveUp {
+                // Clear the round key so the next poll retries. The PR is
+                // still in `.awaitingReRequest` (nothing changed host-side),
+                // so this is a genuine retry rather than a duplicate request —
+                // and if the call actually landed despite the error, re-adding
+                // a pending reviewer is a no-op.
+                autoReRequestAttempted.remove(roundKey)
+            }
+            logSteadyState(
+                channel: Self.autoReReviewLogChannel,
+                prURL: pr.url,
+                message: "auto-re-request: #\(pr.number) failed "
+                    + "(attempt \(failures)/\(Self.maxAutoReReviewFailureRetries)"
+                    + "\(giveUp ? ", giving up until the next round" : "")): "
+                    + "\(error.localizedDescription.prefix(200))",
+                now: Date())
+        }
+    }
+
     /// Pure projection of a provider PR record onto the UI-facing `PRStatus`.
     /// `nonisolated static` (like `shouldAttemptAutoMerge`) because it touches
     /// no tracker state — which also makes it directly unit-testable.
@@ -3393,6 +3858,14 @@ public final class IssueTracker {
             isOpen: pr.state == "OPEN",
             lastChangesRequestedAt: pr.lastChangesRequestedAt,
             lastSubstantiveCommitAt: pr.lastSubstantiveCommitAt,
+            // Reviewer-scoped, not PR-wide: an unrelated reviewer who is still
+            // pending from the original request must not read as "the ball is
+            // with the reviewer" (review of #930).
+            changesRequestedReviewerIsPending: PRStatus.changesRequestedReviewerIsPending(
+                changesRequestedReviewers: pr.changesRequestedReviewerLogins,
+                pendingReviewers: pr.pendingReviewerLogins,
+                anyPendingRequest: pr.hasPendingReviewRequest
+            ),
             // Same case-insensitive match `shouldAttemptAutoMerge` gates on —
             // surfaced for the UI so the sidebar can show "labeled for merge"
             // separately from "auto-merge already enabled" (CROW-773).

@@ -637,6 +637,11 @@ public enum CrowDaemon {
         tracker.respondToChangesRequestedProvider = { (config()?.autoRespond.respondToChangesRequested ?? false) }
         tracker.autoRebaseAndResolveConflictsProvider = { (config()?.autoRespond.autoRebaseAndResolveConflicts ?? false) }
 
+        // Auto re-request review (CROW-921). Needs no terminal at all — the
+        // daemon calls the host API directly — which is the point: the PRs it
+        // rescues are exactly the ones no prompt can reach.
+        tracker.autoReRequestReviewProvider = { (config()?.autoRespond.autoReRequestReview ?? false) }
+
         // Auto-rebase outcomes. The conflict hand-off dispatches to the session's
         // agent when a coordinator exists, but the notification fires either way —
         // conflicts need a human's attention even with no terminal to paste into.

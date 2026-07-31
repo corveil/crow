@@ -168,7 +168,7 @@ struct AutomationWatcherArgs: ParsableArguments {
     }
 }
 
-/// The three `AppConfig.autoRespond` toggles.
+/// The four `AppConfig.autoRespond` toggles.
 struct AutomationRespondArgs: ParsableArguments {
     @Option(
         name: .customLong("respond-to-changes-requested"),
@@ -185,9 +185,14 @@ struct AutomationRespondArgs: ParsableArguments {
         help: "Rebase onto the base branch and force-with-lease push on conflict (true or false)")
     var autoRebaseAndResolveConflicts: Bool?
 
+    @Option(
+        name: .customLong("auto-re-request-review"),
+        help: "Re-request review once a changes-requested PR's findings are addressed (true or false)")
+    var autoReRequestReview: Bool?
+
     var isEmpty: Bool {
         respondToChangesRequested == nil && respondToFailedChecks == nil
-            && autoRebaseAndResolveConflicts == nil
+            && autoRebaseAndResolveConflicts == nil && autoReRequestReview == nil
     }
 
     var params: [String: JSONValue] {
@@ -200,6 +205,9 @@ struct AutomationRespondArgs: ParsableArguments {
         }
         if let autoRebaseAndResolveConflicts {
             params["auto_rebase_and_resolve_conflicts"] = .bool(autoRebaseAndResolveConflicts)
+        }
+        if let autoReRequestReview {
+            params["auto_re_request_review"] = .bool(autoReRequestReview)
         }
         return params
     }

@@ -28,7 +28,7 @@ import Testing
 
 /// The reason these are `@Option ... Bool?` and not `@Flag`: a patch has to tell
 /// "set it to false" apart from "don't touch it", which a flag cannot express.
-/// Six of the eleven default to `true`, so a `@Flag` design could never turn one
+/// Six of the twelve default to `true`, so a `@Flag` design could never turn one
 /// off.
 @Test func automationSetParsesExplicitFalse() throws {
     let cmd = try AutomationSet.parse(["--manager-auto-permission-mode", "false"])
@@ -161,6 +161,7 @@ private func setParseError(_ args: [String]) -> String {
         "--respond-to-changes-requested", "false",
         "--respond-to-failed-checks", "true",
         "--auto-rebase-and-resolve-conflicts", "true",
+        "--auto-re-request-review", "false",
     ])
 
     #expect(Set(cmd.params.keys) == Set(automationWireKeys))
@@ -190,4 +191,5 @@ let automationWireKeys = [
     "respond_to_changes_requested",
     "respond_to_failed_checks",
     "auto_rebase_and_resolve_conflicts",
+    "auto_re_request_review",
 ]

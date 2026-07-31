@@ -384,7 +384,8 @@ final class BackendsTests: XCTestCase {
              "commits":{"nodes":[
                null,
                {"commit":{"oid":"1","messageHeadline":"real fix",
-                          "committedDate":"2026-06-01T00:00:00Z","parents":{"totalCount":1}}},
+                          "committedDate":"2026-06-01T00:00:00Z",
+                          "authoredDate":"2026-06-01T00:00:00Z","parents":{"totalCount":1}}},
                null
              ]}}
           ]}},
@@ -1510,12 +1511,8 @@ final class BackendsTests: XCTestCase {
     /// onto main with a merge commit would fool the rule into thinking the
     /// agent pushed a fix.
     ///
-    /// Known gap (documented in `parsePRNode`): a real `git rebase` rewrites
-    /// the *committer* date of the feature commits themselves. Those commits
-    /// are not merge commits, so they pass the filter and DO advance
-    /// `lastSubstantiveCommitAt`. This test does not cover that path; the
-    /// stateless rule accepts the false negative as the cost of not paying
-    /// for a tree-equals-parents API call per PR per poll.
+    /// The rebase gap this used to disclaim is closed — see
+    /// `testParseMonitoredPRsRebaseRestampDoesNotAdvanceSubstantiveCommit`.
     func testParseMonitoredPRsLastSubstantiveCommitExcludesMergeCommits() throws {
         let json = """
         {
@@ -1534,15 +1531,19 @@ final class BackendsTests: XCTestCase {
                       "nodes": [
                         {"commit": {"oid": "1", "messageHeadline": "real fix",
                                     "committedDate": "2026-06-01T00:00:00Z",
+                                    "authoredDate": "2026-06-01T00:00:00Z",
                                     "parents": {"totalCount": 1}}},
                         {"commit": {"oid": "2", "messageHeadline": "Merge branch 'main' into feature",
                                     "committedDate": "2026-06-05T00:00:00Z",
+                                    "authoredDate": "2026-06-05T00:00:00Z",
                                     "parents": {"totalCount": 2}}},
                         {"commit": {"oid": "3", "messageHeadline": "Merge remote-tracking branch 'upstream/main'",
                                     "committedDate": "2026-06-06T00:00:00Z",
+                                    "authoredDate": "2026-06-06T00:00:00Z",
                                     "parents": {"totalCount": 2}}},
                         {"commit": {"oid": "4", "messageHeadline": "Merge pull request #99",
                                     "committedDate": "2026-06-07T00:00:00Z",
+                                    "authoredDate": "2026-06-07T00:00:00Z",
                                     "parents": {"totalCount": 2}}}
                       ]
                     }
@@ -1563,6 +1564,172 @@ final class BackendsTests: XCTestCase {
         // CHANGES_REQUESTED timestamp test above.
         // 2026-06-01T00:00:00Z = 1780272000.
         XCTAssertEqual(listing.viewerPRs[0].lastSubstantiveCommitAt, Date(timeIntervalSince1970: 1780272000))
+    }
+
+    /// CROW-921: the rebase restamp. A `git rebase` replays the feature
+    /// commits with their *committer* date rewritten to ~now while preserving
+    /// the author date. Those commits aren't merge commits, so under the old
+    /// committer-date rule they advanced `lastSubstantiveCommitAt` and
+    /// needs-refine read a rebase as "the agent pushed a fix" — the false
+    /// negative that let a fixed-but-unrequested PR park in CHANGES_REQUESTED
+    /// forever.
+    ///
+    /// The fixture is the shape observed live on `corveil/corveil#1898`:
+    /// every feature commit sharing one committer timestamp from a single
+    /// rebase, author dates spread across the original working session.
+    func testParseMonitoredPRsRebaseRestampDoesNotAdvanceSubstantiveCommit() throws {
+        let json = """
+        {
+          "data": {
+            "viewerPRs": {
+              "pullRequests": {
+                "nodes": [
+                  {
+                    "number": 1898,
+                    "url": "https://github.com/a/b/pull/1898",
+                    "state": "OPEN",
+                    "reviewDecision": "CHANGES_REQUESTED",
+                    "headRefOid": "abc",
+                    "latestReviews": {"nodes": []},
+                    "commits": {
+                      "nodes": [
+                        {"commit": {"oid": "1", "messageHeadline": "fix one",
+                                    "committedDate": "2026-06-10T00:00:00Z",
+                                    "authoredDate": "2026-06-01T00:00:00Z",
+                                    "parents": {"totalCount": 1}}},
+                        {"commit": {"oid": "2", "messageHeadline": "fix two",
+                                    "committedDate": "2026-06-10T00:00:00Z",
+                                    "authoredDate": "2026-06-02T00:00:00Z",
+                                    "parents": {"totalCount": 1}}}
+                      ]
+                    }
+                  }
+                ]
+              }
+            },
+            "reviewPRs": {"nodes": []},
+            "viewer": {"login": "me"}
+          }
+        }
+        """
+        let listing = try GitHubCodeBackend.parseMonitoredPRsResponse(json)
+        let pr = try XCTUnwrap(listing.viewerPRs.first)
+        // 2026-06-02T00:00:00Z = 1780358400 — the later *author* date, not the
+        // 2026-06-10 rebase stamp both commits now carry.
+        XCTAssertEqual(pr.lastSubstantiveCommitAt, Date(timeIntervalSince1970: 1780358400))
+    }
+
+    /// CROW-921: who is blocking the PR, and has anyone been asked to look
+    /// again. `latestReviews` is one review per author, so filtering to
+    /// CHANGES_REQUESTED names exactly the reviewers whose verdict stands.
+    func testParseMonitoredPRsReviewerLoginsAndPendingRequest() throws {
+        let json = """
+        {
+          "data": {
+            "viewerPRs": {
+              "pullRequests": {
+                "nodes": [
+                  {
+                    "number": 11,
+                    "url": "https://github.com/a/b/pull/11",
+                    "state": "OPEN",
+                    "reviewDecision": "CHANGES_REQUESTED",
+                    "headRefOid": "abc",
+                    "latestReviews": {"nodes": [
+                      {"author": {"login": "dgershman"}, "state": "CHANGES_REQUESTED",
+                       "submittedAt": "2026-06-07T10:00:00Z"},
+                      {"author": {"login": "approver"}, "state": "APPROVED",
+                       "submittedAt": "2026-06-07T11:00:00Z"},
+                      null,
+                      {"author": null, "state": "CHANGES_REQUESTED",
+                       "submittedAt": "2026-06-07T12:00:00Z"}
+                    ]},
+                    "reviewRequests": {"totalCount": 0, "nodes": []},
+                    "commits": {"nodes": []}
+                  },
+                  {
+                    "number": 12,
+                    "url": "https://github.com/a/b/pull/12",
+                    "state": "OPEN",
+                    "reviewDecision": "CHANGES_REQUESTED",
+                    "headRefOid": "def",
+                    "latestReviews": {"nodes": []},
+                    "reviewRequests": {"totalCount": 1, "nodes": [
+                      {"requestedReviewer": {"__typename": "User", "login": "dgershman"}}
+                    ]},
+                    "commits": {"nodes": []}
+                  },
+                  {
+                    "number": 13,
+                    "url": "https://github.com/a/b/pull/13",
+                    "state": "OPEN",
+                    "headRefOid": "ghi",
+                    "commits": {"nodes": []}
+                  },
+                  {
+                    "number": 14,
+                    "url": "https://github.com/a/b/pull/14",
+                    "state": "OPEN",
+                    "reviewDecision": "CHANGES_REQUESTED",
+                    "headRefOid": "jkl",
+                    "latestReviews": {"nodes": [
+                      {"author": {"login": "a"}, "state": "CHANGES_REQUESTED",
+                       "submittedAt": "2026-06-07T10:00:00Z"}
+                    ]},
+                    "reviewRequests": {"totalCount": 2, "nodes": [
+                      null,
+                      {"requestedReviewer": {"__typename": "User", "login": "b"}},
+                      {"requestedReviewer": {"__typename": "Team", "slug": "reviewers"}}
+                    ]},
+                    "commits": {"nodes": []}
+                  }
+                ]
+              }
+            },
+            "reviewPRs": {"nodes": []},
+            "viewer": {"login": "me"}
+          }
+        }
+        """
+        let listing = try GitHubCodeBackend.parseMonitoredPRsResponse(json)
+        XCTAssertEqual(listing.viewerPRs.count, 4)
+        // Only the CHANGES_REQUESTED author; the approver and the null-author
+        // node are dropped rather than producing an empty-string reviewer.
+        XCTAssertEqual(listing.viewerPRs[0].changesRequestedReviewerLogins, ["dgershman"])
+        XCTAssertFalse(listing.viewerPRs[0].hasPendingReviewRequest)
+        XCTAssertEqual(listing.viewerPRs[0].pendingReviewerLogins, [])
+        // The live GitHub shape for "awaiting reviewer": the re-request
+        // emptied `latestReviews` while reviewDecision still says
+        // CHANGES_REQUESTED.
+        XCTAssertTrue(listing.viewerPRs[1].hasPendingReviewRequest)
+        XCTAssertEqual(listing.viewerPRs[1].pendingReviewerLogins, ["dgershman"])
+        XCTAssertEqual(listing.viewerPRs[1].changesRequestedReviewerLogins, [])
+        // Field absent entirely (stale-PR follow-up query shape) reads as
+        // "no pending request", never as a crash or a nil-vs-false confusion.
+        XCTAssertFalse(listing.viewerPRs[2].hasPendingReviewRequest)
+        XCTAssertEqual(listing.viewerPRs[2].pendingReviewerLogins, [])
+        // The multi-reviewer shape (review of #930): A blocks and is visible,
+        // B is still pending from the original request, and a Team request is
+        // visible only through `totalCount` — a Team carries no login, and
+        // folding a slug into the login list would risk colliding with a real
+        // user. Nulls survive via LenientJSON, as everywhere else.
+        XCTAssertEqual(listing.viewerPRs[3].changesRequestedReviewerLogins, ["a"])
+        XCTAssertEqual(listing.viewerPRs[3].pendingReviewerLogins, ["b"])
+        XCTAssertTrue(listing.viewerPRs[3].hasPendingReviewRequest)
+    }
+
+    /// A login that could be read as a `gh` flag must never reach argv.
+    /// Direct argv already rules out shell metacharacters; this closes flag
+    /// injection, the one thing it doesn't cover.
+    func testIsSafeReviewerLogin() {
+        XCTAssertTrue(GitHubCodeBackend.isSafeReviewerLogin("dgershman"))
+        XCTAssertTrue(GitHubCodeBackend.isSafeReviewerLogin("a-b-c9"))
+        XCTAssertFalse(GitHubCodeBackend.isSafeReviewerLogin(""))
+        XCTAssertFalse(GitHubCodeBackend.isSafeReviewerLogin("--add-label"))
+        XCTAssertFalse(GitHubCodeBackend.isSafeReviewerLogin("-x"))
+        XCTAssertFalse(GitHubCodeBackend.isSafeReviewerLogin("foo bar"))
+        XCTAssertFalse(GitHubCodeBackend.isSafeReviewerLogin("foo/bar"))
+        XCTAssertFalse(GitHubCodeBackend.isSafeReviewerLogin(String(repeating: "a", count: 40)))
     }
 
     /// Pure helper used by `parsePRNode`. Both Swift and tests share the
