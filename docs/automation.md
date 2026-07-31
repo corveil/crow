@@ -82,8 +82,28 @@ PR #214 added two opt-in toggles that let Crow type a follow-up instruction into
 
 - **Respond to "changes requested" reviews** — when a PR review requests changes, Crow types an instruction into the linked session's Claude Code terminal asking Claude to read the review and address each comment.
 - **Respond to failed CI checks** — when CI checks transition to failure, Crow types an instruction asking Claude to investigate the logs and push a fix.
+- **Re-request review once changes are addressed** (CROW-921, on by default) — the one auto-respond toggle that types nothing. When a changes-requested PR's fix has landed and nobody has been asked to look again, the daemon calls `gh pr edit --add-reviewer` itself for each reviewer whose latest review is `CHANGES_REQUESTED`.
 
 Both toggles read from `AutoRespondSettings` in `AppConfig`. The session must have an active Claude Code terminal for the instruction to land.
+
+#### Why the re-request is not a prompt
+
+A changes-requested PR has three states, and the loop used to model only two:
+
+| State                                                    | Action           |
+| -------------------------------------------------------- | ---------------- |
+| No commits since the review                              | prompt the agent |
+| Fix landed, **no pending review request**                | re-request       |
+| Review request pending                                   | wait             |
+
+The middle row is the one that was missing. The only thing that re-requested review was a sentence inside the changes-requested prompt — and that prompt is reachable only while the agent still *owes* a fix, so it could never fire once the fix landed. A PR fixed by any other path parked in `changesRequested` indefinitely: the host had already cleared the review request when the reviewer submitted, so the PR was invisible to the reviewer's queue and to Crow's `review-requested:@me` board alike (CROW-921).
+
+Doing it from the daemon rather than through the agent is what makes it reliable — a one-line API call routed through an agent turn costs a full turn's tokens, can't be verified, and would re-inherit the terminal gate that caused the dead-end. The prompt hint stays as belt-and-braces; re-requesting a reviewer who is already requested is a host-side no-op.
+
+Two supporting details:
+
+- **The commit anchor is the author date, not the committer date.** A rebase replays the feature commits with their committer date rewritten to ~now, which used to read as "the agent pushed a fix". Author dates survive a rebase, so a rebase-only advance no longer fires a no-op review round — or suppresses a genuine needs-refine. (`git commit --amend` and `cherry-pick` also preserve author dates, so an amend-delivered fix is indistinguishable from a rebase by dates alone; both failure directions are the safe one — Crow nudges the agent rather than pinging a reviewer.)
+- **Every suppressed needs-refine evaluation is logged.** `crowd-automation.log` gets a `needs-refine: #N gated (reason=…, state=…, lastCR=…, lastCommit=…, pendingRequest=…, idle=…, cooldown=…)` line naming which gate held, emitted when the reason changes and at most hourly otherwise. Previously only *firing* was logged, so a stuck PR left no trace at all.
 
 ### Auto-launch workspaces
 
@@ -187,6 +207,7 @@ Claude Code's OpenTelemetry exporter is wired up so each session emits standard 
 | Auto-create / auto-respond loop  | `Packages/CrowEngine/Sources/CrowEngine/IssueTracker.swift` (60s polling cycle)                                         |
 | Review session auto-start        | `Packages/CrowEngine/Sources/CrowEngine/IssueTracker.swift` + per-workspace flag in `AppConfig`                         |
 | Auto-merge watcher (`crow:merge`)| `Packages/CrowEngine/Sources/CrowEngine/IssueTracker.swift` (`applyAutoMerge`, `extractCrowSessionUUIDs`, `crowAuthored`) |
+| Auto re-request review            | `Packages/CrowEngine/Sources/CrowEngine/IssueTracker.swift` (`applyAutoReRequestReview`, `autoReReviewSkipReason`, `agentSettled`) + `PRStatus.changesRequestedState` + `CodeBackend.requestReviewers` |
 | Auto-merge verdict → UI          | `Packages/CrowEngine/Sources/CrowEngine/IssueTracker.swift` (`AutoMergeSkipReason.state`, `publishAutoMergeVerdict`) → `Packages/CrowDaemon/Sources/CrowDaemon/RPCHandlers.swift` (`list-sessions-live` → `auto_merge_state`) → `.../web/app.js` (`PR_AUTOMERGE_GLYPH`, `prAutoMergeGlyph`) |
 | Direct-merge fallback            | `Packages/CrowEngine/Sources/CrowEngine/IssueTracker.swift` (`shouldDirectMerge`, `directMergeGatesPass`, `performDirectMerge`) + `CodeBackend.mergeNow` |
 | Automation notification push     | `Packages/CrowDaemon/Sources/CrowDaemon/CrowDaemon.swift` (`wireTrackerAutomations`) + `EventHub.notifyFrame`             |

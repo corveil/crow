@@ -1665,7 +1665,7 @@ func makeCommandRouter(
         // likewise un-gated on remote `/rpc` — see the ledger in
         // `RPCWebSocketHandler.localOnlyDenial`.
         //
-        // Writes the eleven booleans only. The Automation tab also renders three
+        // Writes the twelve booleans only. The Automation tab also renders three
         // board-filter lists, but those are `AppConfig.defaults` fields owned by
         // `defaults-set` (CROW-810) — two writers for one field with two sets of
         // list semantics is exactly the drift the parity work exists to prevent.
@@ -1699,10 +1699,12 @@ func makeCommandRouter(
                 let failedChecks = try SettingsRPC.patchBool(params, "respond_to_failed_checks")
                 let autoRebase = try SettingsRPC.patchBool(
                     params, "auto_rebase_and_resolve_conflicts")
+                let autoReRequest = try SettingsRPC.patchBool(params, "auto_re_request_review")
 
                 let booleans = [
                     remoteControl, managerMode, reviewMode, coderViewMode, jobsMode, trailers,
                     autoCreate, autoMerge, changesRequested, failedChecks, autoRebase,
+                    autoReRequest,
                 ]
                 guard booleans.contains(where: { $0 != nil }) else {
                     throw RPCError.invalidParams("Nothing to set — provide at least one field")
@@ -1727,6 +1729,9 @@ func makeCommandRouter(
                     }
                     if let autoRebase {
                         config.autoRespond.autoRebaseAndResolveConflicts = autoRebase
+                    }
+                    if let autoReRequest {
+                        config.autoRespond.autoReRequestReview = autoReRequest
                     }
                     return (config, managerModeBefore != config.managerAutoPermissionMode)
                 }

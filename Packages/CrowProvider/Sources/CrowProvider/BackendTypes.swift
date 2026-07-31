@@ -64,11 +64,38 @@ public struct PRRecord: Sendable {
     /// whether the agent owes a response. `nil` when no CHANGES_REQUESTED
     /// review is visible or the provider doesn't surface timestamps.
     public let lastChangesRequestedAt: Date?
-    /// Max `committedDate` across the PR's commits that are NOT rebases or
+    /// Max `authoredDate` across the PR's commits that are NOT rebases or
     /// merges (parent count < 2 AND message does not start with a merge
     /// prefix). `nil` when commit data wasn't fetched (e.g. stale-PR
     /// follow-up query, GitLab today, or empty commit list).
+    ///
+    /// `authoredDate`, not `committedDate` (CROW-921): a rebase rewrites the
+    /// *committer* date of every replayed commit to ~now while preserving the
+    /// author date, so a committer-date rule reads a rebase as "the agent
+    /// pushed a fix". See `GitHubCodeBackend.parsePRNode` for the full note.
     public let lastSubstantiveCommitAt: Date?
+    /// Logins of the reviewers whose *latest* review on this PR is
+    /// CHANGES_REQUESTED — i.e. exactly who is blocking the PR right now, and
+    /// therefore who to re-request when the findings have been addressed
+    /// (CROW-921). Empty when no CHANGES_REQUESTED review is visible, when the
+    /// query didn't select reviewer identity (the stale-PR follow-up), or on
+    /// providers that don't surface it (GitLab today).
+    ///
+    /// Sourced from GraphQL `latestReviews`, which drops a review as soon as
+    /// its author is re-requested — so this is naturally empty in exactly the
+    /// state where re-requesting would be wrong.
+    public let changesRequestedReviewerLogins: [String]
+    /// Whether the PR currently has at least one *pending* review request
+    /// (GraphQL `reviewRequests.totalCount > 0`). GitHub clears the request
+    /// when a reviewer submits, so `false` on a CHANGES_REQUESTED PR means
+    /// nobody has been asked to look again.
+    ///
+    /// `false` also means "not fetched" — the field is absent from the
+    /// stale-PR follow-up query and from GitLab. That direction is deliberate:
+    /// the CROW-921 watcher additionally requires post-review commits and a
+    /// non-empty `changesRequestedReviewerLogins`, neither of which those paths
+    /// populate either, so an unknown here can't provoke a spurious re-request.
+    public let hasPendingReviewRequest: Bool
     /// Used by reconcile tie-breaking when multiple non-OPEN PRs exist on the same branch.
     public let updatedAt: Date?
     /// SHA of the merge/squash commit on the base branch. Populated only by
@@ -104,6 +131,8 @@ public struct PRRecord: Sendable {
         latestReviewStates: [String] = [],
         lastChangesRequestedAt: Date? = nil,
         lastSubstantiveCommitAt: Date? = nil,
+        changesRequestedReviewerLogins: [String] = [],
+        hasPendingReviewRequest: Bool = false,
         updatedAt: Date? = nil,
         mergeCommitOid: String? = nil,
         repoAutoMergeAllowed: Bool? = nil
@@ -126,6 +155,8 @@ public struct PRRecord: Sendable {
         self.latestReviewStates = latestReviewStates
         self.lastChangesRequestedAt = lastChangesRequestedAt
         self.lastSubstantiveCommitAt = lastSubstantiveCommitAt
+        self.changesRequestedReviewerLogins = changesRequestedReviewerLogins
+        self.hasPendingReviewRequest = hasPendingReviewRequest
         self.updatedAt = updatedAt
         self.mergeCommitOid = mergeCommitOid
         self.repoAutoMergeAllowed = repoAutoMergeAllowed

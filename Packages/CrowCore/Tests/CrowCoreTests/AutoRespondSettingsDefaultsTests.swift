@@ -64,4 +64,40 @@ struct AutoRespondSettingsDefaultsTests {
         let off = try JSONDecoder().decode(AutoRespondSettings.self, from: offJSON)
         #expect(off.autoRebaseAndResolveConflicts == false)
     }
+
+    // CROW-921: re-requesting review is idempotent and reversible, and the
+    // addressChanges prompt has always told the agent to do it — so this
+    // completes existing behaviour and defaults ON, like
+    // respondToChangesRequested rather than like the force-pushing rebase.
+    @Test func autoReRequestReviewDefaultsOn() throws {
+        #expect(AutoRespondSettings().autoReRequestReview == true)
+
+        // The upgrade path that matters: every existing config predates the
+        // key, so the dead-end has to close for them without an edit.
+        let json = "{}".data(using: .utf8)!
+        let decoded = try JSONDecoder().decode(AutoRespondSettings.self, from: json)
+        #expect(decoded.autoReRequestReview == true)
+    }
+
+    @Test func autoReRequestReviewExplicitChoiceIsSticky() throws {
+        let offJSON = #"{"autoReRequestReview": false}"#.data(using: .utf8)!
+        let off = try JSONDecoder().decode(AutoRespondSettings.self, from: offJSON)
+        #expect(off.autoReRequestReview == false)
+
+        let onJSON = #"{"autoReRequestReview": true}"#.data(using: .utf8)!
+        let on = try JSONDecoder().decode(AutoRespondSettings.self, from: onJSON)
+        #expect(on.autoReRequestReview == true)
+    }
+
+    @Test func autoReRequestReviewSurvivesAnEncodeDecodeRoundTrip() throws {
+        // Guards the CodingKeys trap (CROW-809): the synthesized encoder only
+        // writes cases listed in CodingKeys, so a missing case would silently
+        // drop the field on every config save and the toggle would appear to
+        // reset itself.
+        var settings = AutoRespondSettings()
+        settings.autoReRequestReview = false
+        let data = try JSONEncoder().encode(settings)
+        let decoded = try JSONDecoder().decode(AutoRespondSettings.self, from: data)
+        #expect(decoded.autoReRequestReview == false)
+    }
 }

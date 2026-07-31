@@ -9,6 +9,7 @@ import CrowCore
 /// - `.autoMerge` — supports `gh pr merge --auto --squash --delete-branch`.
 /// - `.updateBranch` — supports `gh pr update-branch`.
 /// - `.directMerge` — supports `gh pr merge --squash --delete-branch` (no `--auto`).
+/// - `.requestReviewers` — supports `gh pr edit --add-reviewer`.
 ///
 /// See ADR 0005 for the protocol contract.
 public struct GitHubCodeBackend: CodeBackend {
@@ -19,7 +20,8 @@ public struct GitHubCodeBackend: CodeBackend {
         .batchedPRStates,
         .autoMerge,
         .updateBranch,
-        .directMerge
+        .directMerge,
+        .requestReviewers
     ]
 
     private let shellRunner: ShellRunner
@@ -354,6 +356,46 @@ public struct GitHubCodeBackend: CodeBackend {
         )
     }
 
+    /// Re-request review (CROW-921). Same direct-argv + `$TMPDIR` cwd
+    /// convention as `addMergeLabel`: no `sh -c`, so nothing in `prURL` or a
+    /// login reaches a shell.
+    ///
+    /// Logins are additionally filtered through `isSafeReviewerLogin` before
+    /// they become argv. Direct argv already rules out shell metacharacters,
+    /// but not *flag* injection — a login of `--add-label` would be read by
+    /// `gh` as an option, not a value. Throws rather than silently sending a
+    /// short list, so the caller can log a real reason instead of recording a
+    /// success that re-requested nobody.
+    public func requestReviewers(prURL: String, logins: [String]) async throws {
+        let safe = logins.filter(Self.isSafeReviewerLogin)
+        guard !safe.isEmpty else {
+            throw ProviderError.commandFailed(
+                "requestReviewers: no usable reviewer logins in \(logins)")
+        }
+        guard safe.count == logins.count else {
+            throw ProviderError.commandFailed(
+                "requestReviewers: refusing malformed reviewer login in \(logins)")
+        }
+        _ = try await shellRunner.run(
+            args: ["gh", "pr", "edit", prURL] + safe.flatMap { ["--add-reviewer", $0] },
+            env: [:],
+            cwd: NSTemporaryDirectory()
+        )
+    }
+
+    /// A GitHub login: alphanumeric with interior hyphens, 1–39 characters.
+    /// Deliberately stricter than GitHub's own rule — anything that can't be a
+    /// login is rejected rather than normalized, because the only ways to get
+    /// here are a parse bug or a hostile API response, and both deserve an
+    /// error. `nonisolated static` so tests share the exact definition.
+    nonisolated static func isSafeReviewerLogin(_ login: String) -> Bool {
+        guard !login.isEmpty, login.count <= 39 else { return false }
+        guard let first = login.first, first.isASCII, first.isLetter || first.isNumber else {
+            return false
+        }
+        return login.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") }
+    }
+
     // MARK: - fetchPRMetadata
 
     public func fetchPRMetadata(prURL: String) async throws -> PRMetadata {
@@ -396,13 +438,15 @@ public struct GitHubCodeBackend: CodeBackend {
                 }
               }
             }
-            latestReviews(first: 20) { nodes { state submittedAt } }
+            latestReviews(first: 20) { nodes { author { login } state submittedAt } }
+            reviewRequests(first: 1) { totalCount }
             commits(last: 30) {
               nodes {
                 commit {
                   oid
                   messageHeadline
                   committedDate
+                  authoredDate
                   parents(first: 2) { totalCount }
                 }
               }
@@ -554,13 +598,25 @@ public struct GitHubCodeBackend: CodeBackend {
         // (default merge mode) and routine merges from main can't trick the
         // rule into thinking the agent pushed a fix.
         //
-        // Known gap: a real `git rebase` (or "Update with rebase" on the
-        // Update-branch dropdown) rewrites the *committer* date of the
-        // existing feature commits to ~now. Those commits are not merge
-        // commits, so they pass the filter and DO advance
-        // `lastSubstantiveCommitAt` — a false negative the rule accepts as
-        // the cost of avoiding a tree-equals-parents API call per PR per
-        // poll. The ticket calls the tree check optional; we skip it in v1.
+        // `authoredDate`, NOT `committedDate` (CROW-921). A real `git rebase`
+        // (or "Update with rebase" on the Update-branch dropdown) replays the
+        // existing feature commits with their *committer* date rewritten to
+        // ~now. Those commits aren't merge commits, so under the old
+        // committer-date rule they advanced `lastSubstantiveCommitAt` and the
+        // needs-refine rule read a rebase as "the agent pushed a fix" — the
+        // false negative that let CROW-921's PR park in CHANGES_REQUESTED
+        // forever. `authoredDate` survives a rebase untouched, costs nothing
+        // extra (same GraphQL node), and is cheaper than the tree-equality
+        // check CROW-508 deferred.
+        //
+        // Accepted gap: `git commit --amend` and `git cherry-pick` ALSO
+        // preserve `authoredDate` while rewriting `committedDate`, so a fix
+        // delivered by amending is indistinguishable from a rebase using
+        // dates alone (telling them apart needs the deferred tree check).
+        // Both failure directions are the safe ones — needs-refine keeps
+        // nudging the agent (bounded by its cooldown) and the CROW-921
+        // re-request watcher stays quiet, so nobody pings a human reviewer
+        // with a no-op review round.
         let commitNodes = LenientJSON.nodes(node, "commits")
         let lastSubstantiveCommitAt = commitNodes
             .compactMap { node -> Date? in
@@ -569,9 +625,27 @@ public struct GitHubCodeBackend: CodeBackend {
                 if parents >= 2 { return nil }
                 let message = (commit["messageHeadline"] as? String) ?? ""
                 if Self.isMergeCommitMessage(message) { return nil }
-                return (commit["committedDate"] as? String).flatMap(Self.parseGitHubDateTime)
+                return (commit["authoredDate"] as? String).flatMap(Self.parseGitHubDateTime)
             }
             .max()
+        // Who is blocking the PR right now, for the CROW-921 re-request
+        // watcher. `latestReviews` is one review per author, so filtering to
+        // CHANGES_REQUESTED yields exactly the reviewers whose verdict still
+        // stands. Deduped but order-stable so the log and the `gh` argv read
+        // the same way twice.
+        var seenLogins: Set<String> = []
+        let changesRequestedReviewerLogins = latestReviewNodes
+            .filter { ($0["state"] as? String) == "CHANGES_REQUESTED" }
+            .compactMap { ($0["author"] as? [String: Any])?["login"] as? String }
+            .filter { !$0.isEmpty && seenLogins.insert($0).inserted }
+        // Whether anyone has already been asked to look again. GitHub clears
+        // the request when a reviewer submits, so on a CHANGES_REQUESTED PR
+        // `false` means the ball is in the author's court and `true` means
+        // it's back with the reviewer. Absent field (stale-PR follow-up query)
+        // reads as `false`; see the `PRRecord` doc comment for why that
+        // direction can't provoke a spurious re-request.
+        let hasPendingReviewRequest =
+            ((node["reviewRequests"] as? [String: Any])?["totalCount"] as? Int ?? 0) > 0
         return PRRecord(
             number: number,
             url: url,
@@ -591,6 +665,8 @@ public struct GitHubCodeBackend: CodeBackend {
             latestReviewStates: reviewStates,
             lastChangesRequestedAt: lastChangesRequestedAt,
             lastSubstantiveCommitAt: lastSubstantiveCommitAt,
+            changesRequestedReviewerLogins: changesRequestedReviewerLogins,
+            hasPendingReviewRequest: hasPendingReviewRequest,
             mergeCommitOid: mergeCommitOid,
             repoAutoMergeAllowed: repoAutoMergeAllowed
         )

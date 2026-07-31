@@ -270,7 +270,7 @@ config_readable is false when config.json exists but could not be decoded — th
 Change the automation settings.
 
 ```
-crow automation set [--remote-control-enabled <remote-control-enabled>] [--manager-auto-permission-mode <manager-auto-permission-mode>] [--review-auto-permission-mode <review-auto-permission-mode>] [--coder-view-auto-permission-mode <coder-view-auto-permission-mode>] [--jobs-auto-permission-mode <jobs-auto-permission-mode>] [--attribution-trailers <attribution-trailers>] [--auto-create-watcher-enabled <auto-create-watcher-enabled>] [--auto-merge-watcher-enabled <auto-merge-watcher-enabled>] [--respond-to-changes-requested <respond-to-changes-requested>] [--respond-to-failed-checks <respond-to-failed-checks>] [--auto-rebase-and-resolve-conflicts <auto-rebase-and-resolve-conflicts>]
+crow automation set [--remote-control-enabled <remote-control-enabled>] [--manager-auto-permission-mode <manager-auto-permission-mode>] [--review-auto-permission-mode <review-auto-permission-mode>] [--coder-view-auto-permission-mode <coder-view-auto-permission-mode>] [--jobs-auto-permission-mode <jobs-auto-permission-mode>] [--attribution-trailers <attribution-trailers>] [--auto-create-watcher-enabled <auto-create-watcher-enabled>] [--auto-merge-watcher-enabled <auto-merge-watcher-enabled>] [--respond-to-changes-requested <respond-to-changes-requested>] [--respond-to-failed-checks <respond-to-failed-checks>] [--auto-rebase-and-resolve-conflicts <auto-rebase-and-resolve-conflicts>] [--auto-re-request-review <auto-re-request-review>]
 ```
 
 Only the flags you pass change; at least one is required.
@@ -294,6 +294,7 @@ The tab's three board-filter lists (excluded review repos, ignored review labels
 | `--respond-to-changes-requested` | `<respond-to-changes-requested>` | no | Type a fix-it instruction into the session on a changes-requested review (true or false) |
 | `--respond-to-failed-checks` | `<respond-to-failed-checks>` | no | Type a fix-it instruction into the session when CI checks fail (true or false) |
 | `--auto-rebase-and-resolve-conflicts` | `<auto-rebase-and-resolve-conflicts>` | no | Rebase onto the base branch and force-with-lease push on conflict (true or false) |
+| `--auto-re-request-review` | `<auto-re-request-review>` | no | Re-request review once a changes-requested PR's findings are addressed (true or false) |
 
 ---
 

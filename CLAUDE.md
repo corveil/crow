@@ -277,10 +277,13 @@ crow automation set [--remote-control-enabled true|false]
                     [--auto-merge-watcher-enabled true|false]
                     [--respond-to-changes-requested true|false]
                     [--respond-to-failed-checks true|false]
+                    [--auto-re-request-review true|false]
                     [--auto-rebase-and-resolve-conflicts true|false]    → {"automation":{...},"restart_required":false,"manager_restart_required":bool}
 ```
 
-Booleans take an explicit `true`/`false` — a bare flag can't express "leave alone", and six of these default to **on** (`manager`/`review`/`jobs` auto permission mode, `attribution-trailers`, `respond-to-changes-requested`). `--jobs-auto-permission-mode` lives here even though the web UI puts it under the Jobs tab, so all five permission modes read and write as one group.
+Booleans take an explicit `true`/`false` — a bare flag can't express "leave alone", and six of these default to **on** (`manager`/`review`/`jobs` auto permission mode, `attribution-trailers`, `respond-to-changes-requested`, `auto-re-request-review`). `--jobs-auto-permission-mode` lives here even though the web UI puts it under the Jobs tab, so all five permission modes read and write as one group.
+
+`--auto-re-request-review` (CROW-921) is the one auto-respond toggle that types nothing into a terminal: when a changes-requested PR's fix has landed and no review request is pending, the daemon runs `gh pr edit --add-reviewer` itself. That's deliberate — the PRs it rescues are exactly the ones no prompt can reach.
 
 Everything applies within ~1 board poll (no `crowd` restart) — permission modes and `--remote-control-enabled` to newly launched sessions, `--attribution-trailers` to newly created worktrees. `--manager-auto-permission-mode` is the exception: it's baked into the Manager terminal's stored command, so a change returns `manager_restart_required: true` and needs `crow restart-manager`.
 

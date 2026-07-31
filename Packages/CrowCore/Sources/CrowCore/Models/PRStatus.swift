@@ -20,12 +20,24 @@ public struct PRStatus: Codable, Sendable, Equatable {
     /// The stateless "needs refine" rule compares this against
     /// `lastSubstantiveCommitAt` to decide whether the agent owes a response.
     public var lastChangesRequestedAt: Date?
-    /// Max `committedDate` across the PR's commits that are NOT rebases or
+    /// Max `authoredDate` across the PR's commits that are NOT rebases or
     /// merges (parent count < 2 AND message does not start with a merge
     /// prefix). `nil` when no commit timestamp data is available. Used by
     /// the stateless rule to know whether the author has substantively
     /// responded since the latest CHANGES_REQUESTED review.
+    ///
+    /// Author date, not committer date (CROW-921) — a rebase rewrites the
+    /// latter on every replayed commit, which used to read as "the agent
+    /// pushed a fix". See `GitHubCodeBackend.parsePRNode` for the full note
+    /// including the amend/cherry-pick gap this deliberately accepts.
     public var lastSubstantiveCommitAt: Date?
+    /// Whether the PR currently has at least one *pending* review request.
+    /// The host clears the request when a reviewer submits, so on a
+    /// CHANGES_REQUESTED PR this is the difference between "the ball is in
+    /// the author's court" (`false`) and "somebody has already been asked to
+    /// look again" (`true`) — the third state the CROW-921 loop was missing.
+    /// `false` when the provider doesn't surface it (GitLab today).
+    public var hasPendingReviewRequest: Bool
     /// Whether the PR currently carries the `crow:merge` auto-merge label
     /// (`IssueTracker.autoMergeLabel`). Distinct from
     /// `Session.autoMergeEnabledAt`, which records that Crow has already
@@ -42,6 +54,7 @@ public struct PRStatus: Codable, Sendable, Equatable {
         isOpen: Bool = true,
         lastChangesRequestedAt: Date? = nil,
         lastSubstantiveCommitAt: Date? = nil,
+        hasPendingReviewRequest: Bool = false,
         hasMergeLabel: Bool = false
     ) {
         self.checksPass = checksPass
@@ -52,6 +65,7 @@ public struct PRStatus: Codable, Sendable, Equatable {
         self.isOpen = isOpen
         self.lastChangesRequestedAt = lastChangesRequestedAt
         self.lastSubstantiveCommitAt = lastSubstantiveCommitAt
+        self.hasPendingReviewRequest = hasPendingReviewRequest
         self.hasMergeLabel = hasMergeLabel
     }
 
@@ -65,12 +79,13 @@ public struct PRStatus: Codable, Sendable, Equatable {
         isOpen = try c.decodeIfPresent(Bool.self, forKey: .isOpen) ?? true
         lastChangesRequestedAt = try c.decodeIfPresent(Date.self, forKey: .lastChangesRequestedAt)
         lastSubstantiveCommitAt = try c.decodeIfPresent(Date.self, forKey: .lastSubstantiveCommitAt)
+        hasPendingReviewRequest = try c.decodeIfPresent(Bool.self, forKey: .hasPendingReviewRequest) ?? false
         hasMergeLabel = try c.decodeIfPresent(Bool.self, forKey: .hasMergeLabel) ?? false
     }
 
     private enum CodingKeys: String, CodingKey {
         case checksPass, reviewStatus, mergeable, failedCheckNames, headSha, isOpen
-        case lastChangesRequestedAt, lastSubstantiveCommitAt, hasMergeLabel
+        case lastChangesRequestedAt, lastSubstantiveCommitAt, hasPendingReviewRequest, hasMergeLabel
     }
 
     public enum CheckStatus: String, Codable, Sendable {
@@ -121,6 +136,61 @@ public struct PRStatus: Codable, Sendable, Equatable {
         !isMerged && (checksPass == .failing || reviewStatus == .changesRequested || mergeable == .conflicting)
     }
 
+    /// Where a CHANGES_REQUESTED PR sits in the review round-trip (CROW-921).
+    ///
+    /// The loop originally had two states and dead-ended between them: the
+    /// only thing that re-requested review was a sentence inside the
+    /// `addressChanges` prompt, and that prompt is reachable only while the
+    /// agent still owes a fix. Once the fix landed, the prompt could never
+    /// fire again and nothing re-requested review — so the PR was invisible to
+    /// the reviewer's queue *and* to `review-requested:@me`, forever.
+    ///
+    /// Naming the third state is what closes the loop. Raw values are
+    /// grep-stable: they land in `crowd-automation.log`.
+    public enum ChangesRequestedState: String, Sendable, Equatable {
+        /// Not a live CHANGES_REQUESTED PR, or no review timestamp to anchor
+        /// "since when" against. Nothing to decide.
+        case notApplicable
+        /// Changes requested and the agent hasn't substantively responded yet
+        /// → prompt the agent (the CROW-508 rule).
+        case needsRefine
+        /// The fix landed but nobody has been asked to look again → re-request
+        /// review. This is the state CROW-921 added.
+        case awaitingReRequest
+        /// A review request is already pending → the ball is with the
+        /// reviewer. Nothing for Crow to do.
+        case awaitingReviewer
+    }
+
+    /// Classify a PR's position in the changes-requested round-trip.
+    ///
+    /// `needsRefine` and the auto-re-request watcher are both derived from
+    /// this one function so they cannot drift into overlapping or
+    /// contradictory conditions — every CHANGES_REQUESTED PR is in exactly one
+    /// state, and the two actions are mutually exclusive by construction.
+    ///
+    /// Order matters. The pending-request check sits *above* the
+    /// `lastChangesRequestedAt` guard on purpose: GitHub drops a review from
+    /// `latestReviews` as soon as its author is re-requested, which nils the
+    /// timestamp. Checked in the other order, a PR genuinely awaiting its
+    /// reviewer would report `.notApplicable` and the gated-evaluation log
+    /// would say "no CR timestamp" instead of naming the real state.
+    ///
+    /// Nil tolerance is inherited from CROW-508:
+    /// - `lastChangesRequestedAt == nil`: the host said CHANGES_REQUESTED but
+    ///   surfaced no timestamped CR review. Refuse to classify — a missing
+    ///   timestamp can't anchor "since when", and guessing either way is worse
+    ///   than doing nothing.
+    /// - `lastSubstantiveCommitAt == nil`: no qualifying commits yet → the
+    ///   agent still owes a response.
+    public static func changesRequestedState(status: PRStatus) -> ChangesRequestedState {
+        guard status.reviewStatus == .changesRequested, status.isOpen else { return .notApplicable }
+        if status.hasPendingReviewRequest { return .awaitingReviewer }
+        guard let lastReview = status.lastChangesRequestedAt else { return .notApplicable }
+        guard let lastCommit = status.lastSubstantiveCommitAt else { return .needsRefine }
+        return lastCommit < lastReview ? .needsRefine : .awaitingReRequest
+    }
+
     /// The stateless "needs refine" rule (CROW-508). Returns `true` when the
     /// PR is sitting in CHANGES_REQUESTED, is still open, and the agent has
     /// not made a substantive commit since the latest CHANGES_REQUESTED
@@ -128,30 +198,15 @@ public struct PRStatus: Codable, Sendable, Equatable {
     /// it as a parameter here makes the rule fully derivable from the PR plus
     /// terminal state, with no per-session bookkeeping.
     ///
-    /// The rule is intentionally tolerant of nil timestamps:
-    /// - `lastChangesRequestedAt == nil`: GitHub said `reviewDecision ==
-    ///   CHANGES_REQUESTED` but didn't surface a timestamped CR review (rare;
-    ///   `latestReviews` paginates and can omit one). We refuse to fire — a
-    ///   missing timestamp can't anchor "since when," and a false fire would
-    ///   re-prompt the agent for no reviewer action.
-    /// - `lastSubstantiveCommitAt == nil`: the PR has no qualifying commits
-    ///   yet (or commit data wasn't fetched). Treat as "no response since
-    ///   review" → still needs refine.
-    ///
-    /// Anti-loop is automatic: as soon as the agent makes a non-merge,
+    /// Anti-loop is automatic: as soon as the agent authors a non-merge,
     /// non-rebase commit, `lastSubstantiveCommitAt` advances past
     /// `lastChangesRequestedAt` and this returns false on the next poll.
     /// A `Merge branch 'main'` commit does NOT advance the timestamp (it's
-    /// filtered out upstream when computing `lastSubstantiveCommitAt`), so
-    /// the GitHub "Update branch" button can't trick the rule into a false
-    /// negative.
+    /// filtered out upstream), so the GitHub "Update branch" button can't
+    /// trick the rule into a false negative — and since CROW-921 a rebase
+    /// can't either, because the timestamp is the *author* date.
     public static func needsRefine(status: PRStatus, terminalIdle: Bool) -> Bool {
         guard terminalIdle else { return false }
-        guard status.reviewStatus == .changesRequested, status.isOpen else { return false }
-        guard let lastReview = status.lastChangesRequestedAt else { return false }
-        if let lastCommit = status.lastSubstantiveCommitAt {
-            return lastCommit < lastReview
-        }
-        return true
+        return changesRequestedState(status: status) == .needsRefine
     }
 }

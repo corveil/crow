@@ -434,15 +434,28 @@ public struct AutoRespondSettings: Codable, Sendable, Equatable {
     /// so opt-in: defaults to false (CROW-551; formerly the top-level
     /// `autoRebaseWatcherEnabled`, CROW-318).
     public var autoRebaseAndResolveConflicts: Bool
+    /// Re-request review automatically when a CHANGES_REQUESTED PR's findings
+    /// have been addressed and nobody has been asked to look again (CROW-921).
+    /// Runs `gh pr edit --add-reviewer` from the daemon rather than asking the
+    /// agent to do it, so it works no matter which path fixed the PR.
+    ///
+    /// Defaults to **true**, alongside `respondToChangesRequested`: the
+    /// `addressChanges` prompt has always instructed the agent to re-request,
+    /// so this completes behaviour users already expect rather than adding a
+    /// new one. (Contrast `autoRebaseAndResolveConflicts`, which defaults off
+    /// because it force-pushes.) Re-requesting is idempotent and reversible.
+    public var autoReRequestReview: Bool
 
     public init(
         respondToChangesRequested: Bool = true,
         respondToFailedChecks: Bool = false,
-        autoRebaseAndResolveConflicts: Bool = false
+        autoRebaseAndResolveConflicts: Bool = false,
+        autoReRequestReview: Bool = true
     ) {
         self.respondToChangesRequested = respondToChangesRequested
         self.respondToFailedChecks = respondToFailedChecks
         self.autoRebaseAndResolveConflicts = autoRebaseAndResolveConflicts
+        self.autoReRequestReview = autoReRequestReview
     }
 
     public init(from decoder: Decoder) throws {
@@ -450,10 +463,12 @@ public struct AutoRespondSettings: Codable, Sendable, Equatable {
         respondToChangesRequested = try c.decodeIfPresent(Bool.self, forKey: .respondToChangesRequested) ?? true
         respondToFailedChecks = try c.decodeIfPresent(Bool.self, forKey: .respondToFailedChecks) ?? false
         autoRebaseAndResolveConflicts = try c.decodeIfPresent(Bool.self, forKey: .autoRebaseAndResolveConflicts) ?? false
+        autoReRequestReview = try c.decodeIfPresent(Bool.self, forKey: .autoReRequestReview) ?? true
     }
 
     private enum CodingKeys: String, CodingKey {
         case respondToChangesRequested, respondToFailedChecks, autoRebaseAndResolveConflicts
+        case autoReRequestReview
     }
 }
 

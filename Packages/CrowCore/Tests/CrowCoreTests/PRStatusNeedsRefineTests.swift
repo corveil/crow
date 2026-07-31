@@ -17,7 +17,8 @@ struct PRStatusNeedsRefineTests {
         review: PRStatus.ReviewStatus = .changesRequested,
         isOpen: Bool = true,
         lastChangesRequestedAt: Date? = nil,
-        lastSubstantiveCommitAt: Date? = nil
+        lastSubstantiveCommitAt: Date? = nil,
+        hasPendingReviewRequest: Bool = false
     ) -> PRStatus {
         PRStatus(
             checksPass: .pending,
@@ -27,7 +28,8 @@ struct PRStatusNeedsRefineTests {
             headSha: "abc",
             isOpen: isOpen,
             lastChangesRequestedAt: lastChangesRequestedAt,
-            lastSubstantiveCommitAt: lastSubstantiveCommitAt
+            lastSubstantiveCommitAt: lastSubstantiveCommitAt,
+            hasPendingReviewRequest: hasPendingReviewRequest
         )
     }
 
@@ -148,5 +150,146 @@ struct PRStatusNeedsRefineTests {
             lastSubstantiveCommitAt: beforeReview
         )
         #expect(!PRStatus.needsRefine(status: s, terminalIdle: true))
+    }
+
+    // MARK: - CROW-921 — the pending-request gate
+
+    @Test
+    func doesNotFireWhileAReviewRequestIsPending() {
+        // Somebody has already been asked to look again, so the ball is with
+        // the reviewer and there is nothing for the agent to do — even though
+        // no commit has landed since the review. Unreachable on GitHub today
+        // (it empties `latestReviews` when it re-requests, which nils the
+        // anchor), but the rule shouldn't depend on that quirk holding.
+        let s = status(
+            lastChangesRequestedAt: reviewAt,
+            lastSubstantiveCommitAt: beforeReview,
+            hasPendingReviewRequest: true
+        )
+        #expect(!PRStatus.needsRefine(status: s, terminalIdle: true))
+        #expect(PRStatus.changesRequestedState(status: s) == .awaitingReviewer)
+    }
+
+    @Test
+    func pendingRequestIsNamedEvenWithoutAChangesRequestedAnchor() {
+        // The real GitHub shape for state 3: the re-request emptied
+        // `latestReviews`, so there is no CR timestamp. The classifier must
+        // still say `awaitingReviewer` rather than `notApplicable` — the
+        // gated-evaluation log is only useful if it names the actual state.
+        let s = status(
+            lastChangesRequestedAt: nil,
+            lastSubstantiveCommitAt: afterReview,
+            hasPendingReviewRequest: true
+        )
+        #expect(PRStatus.changesRequestedState(status: s) == .awaitingReviewer)
+    }
+}
+
+/// CROW-921 — the three-state classifier `needsRefine` and the auto-re-request
+/// watcher both derive from. The states must partition: exactly one applies to
+/// any given PR, so the two actions can never both fire.
+@Suite("PRStatus.changesRequestedState (CROW-921)")
+struct PRStatusChangesRequestedStateTests {
+    private let reviewAt = Date(timeIntervalSince1970: 1_700_000_000)
+    private let beforeReview = Date(timeIntervalSince1970: 1_699_999_000)
+    private let afterReview = Date(timeIntervalSince1970: 1_700_001_000)
+
+    private func status(
+        review: PRStatus.ReviewStatus = .changesRequested,
+        isOpen: Bool = true,
+        lastChangesRequestedAt: Date? = nil,
+        lastSubstantiveCommitAt: Date? = nil,
+        hasPendingReviewRequest: Bool = false
+    ) -> PRStatus {
+        PRStatus(
+            reviewStatus: review,
+            headSha: "abc",
+            isOpen: isOpen,
+            lastChangesRequestedAt: lastChangesRequestedAt,
+            lastSubstantiveCommitAt: lastSubstantiveCommitAt,
+            hasPendingReviewRequest: hasPendingReviewRequest
+        )
+    }
+
+    @Test
+    func theFixedButUnrequestedPRIsTheStateThatWasMissing() {
+        // The #921 dead-end itself: the fix landed after the review, and the
+        // host cleared the review request when the reviewer submitted. Before
+        // this state existed, nothing in Crow could see this PR.
+        let s = status(
+            lastChangesRequestedAt: reviewAt,
+            lastSubstantiveCommitAt: afterReview,
+            hasPendingReviewRequest: false
+        )
+        #expect(PRStatus.changesRequestedState(status: s) == .awaitingReRequest)
+        #expect(!PRStatus.needsRefine(status: s, terminalIdle: true))
+    }
+
+    @Test
+    func noWorkSinceTheReviewIsNeedsRefine() {
+        let s = status(lastChangesRequestedAt: reviewAt, lastSubstantiveCommitAt: beforeReview)
+        #expect(PRStatus.changesRequestedState(status: s) == .needsRefine)
+    }
+
+    @Test
+    func noCommitsAtAllIsNeedsRefine() {
+        let s = status(lastChangesRequestedAt: reviewAt, lastSubstantiveCommitAt: nil)
+        #expect(PRStatus.changesRequestedState(status: s) == .needsRefine)
+    }
+
+    @Test
+    func aCommitAtExactlyReviewTimeCountsAsResponded() {
+        // `<` not `<=`, mirroring needsRefine — so the boundary lands in
+        // `.awaitingReRequest`, not `.needsRefine`.
+        let s = status(lastChangesRequestedAt: reviewAt, lastSubstantiveCommitAt: reviewAt)
+        #expect(PRStatus.changesRequestedState(status: s) == .awaitingReRequest)
+    }
+
+    @Test
+    func nonChangesRequestedAndClosedPRsAreNotApplicable() {
+        #expect(PRStatus.changesRequestedState(
+            status: status(review: .approved, lastChangesRequestedAt: reviewAt)) == .notApplicable)
+        #expect(PRStatus.changesRequestedState(
+            status: status(review: .reviewRequired, lastChangesRequestedAt: reviewAt)) == .notApplicable)
+        #expect(PRStatus.changesRequestedState(
+            status: status(isOpen: false, lastChangesRequestedAt: reviewAt)) == .notApplicable)
+    }
+
+    @Test
+    func missingAnchorIsNotApplicableRatherThanAGuess() {
+        // No CR timestamp and no pending request: we can't tell whether the
+        // fix predates the review, so neither action may fire.
+        let s = status(lastChangesRequestedAt: nil, lastSubstantiveCommitAt: afterReview)
+        #expect(PRStatus.changesRequestedState(status: s) == .notApplicable)
+    }
+
+    @Test
+    func statesPartitionSoTheTwoActionsCanNeverBothFire() {
+        // The invariant the whole design rests on. Sweep the cross-product of
+        // every input that feeds the classifier and assert that needs-refine
+        // and awaiting-re-request are never simultaneously true.
+        let dates: [Date?] = [nil, beforeReview, reviewAt, afterReview]
+        for reviewStatus in [PRStatus.ReviewStatus.changesRequested, .approved, .reviewRequired, .unknown] {
+            for isOpen in [true, false] {
+                for cr in dates {
+                    for commit in dates {
+                        for pending in [true, false] {
+                            let s = status(
+                                review: reviewStatus,
+                                isOpen: isOpen,
+                                lastChangesRequestedAt: cr,
+                                lastSubstantiveCommitAt: commit,
+                                hasPendingReviewRequest: pending
+                            )
+                            let state = PRStatus.changesRequestedState(status: s)
+                            #expect(
+                                PRStatus.needsRefine(status: s, terminalIdle: true)
+                                    == (state == .needsRefine))
+                            #expect(!(state == .needsRefine && state == .awaitingReRequest))
+                        }
+                    }
+                }
+            }
+        }
     }
 }

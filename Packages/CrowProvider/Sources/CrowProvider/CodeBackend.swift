@@ -104,6 +104,17 @@ public protocol CodeBackend: Sendable {
     /// capability throw `ProviderError.unimplemented`.
     func updateBranch(prURL: String) async throws
 
+    /// Re-request review on the PR at `prURL` from each login in `logins`.
+    /// Capability-gated on `.requestReviewers`.
+    ///
+    /// The host clears a pending review request the moment a reviewer submits,
+    /// so a PR whose CHANGES_REQUESTED findings have been addressed needs the
+    /// request *re-added* or it is invisible to both the reviewer's queue and
+    /// Crow's `review-requested:@me` board (CROW-921). Idempotent by nature:
+    /// adding a reviewer who is already requested is a host-side no-op, so the
+    /// caller may safely race the prompt-driven hint in `AutoRespondPrompts`.
+    func requestReviewers(prURL: String, logins: [String]) async throws
+
     /// Fetch the metadata SessionService needs to prep a review clone:
     /// title, head/base branch names, head commit SHA, number. Issues one
     /// `gh pr view` / `glab mr view` call.
@@ -141,6 +152,14 @@ public extension CodeBackend {
     func mergeNow(prURL: String) async throws {
         throw ProviderError.unimplemented("mergeNow not supported by \(provider)")
     }
+
+    /// Default: backends without `.requestReviewers` can't re-request review.
+    /// GitHub overrides this; others inherit the throw so a capability-gated
+    /// caller that slips through degrades to a logged error rather than a
+    /// silent no-op that would look like the re-request succeeded (CROW-921).
+    func requestReviewers(prURL: String, logins: [String]) async throws {
+        throw ProviderError.unimplemented("requestReviewers not supported by \(provider)")
+    }
 }
 
 /// Optional capabilities a `CodeBackend` may declare.
@@ -170,6 +189,13 @@ public enum CodeCapability: Sendable, Hashable {
     /// while still allowing an ordinary merge, which is exactly the case that
     /// used to leave `crow:merge` PRs stranded forever (#888).
     case directMerge
+
+    /// Supports re-requesting review from named logins (`gh pr edit
+    /// --add-reviewer`). Gates `requestReviewers`. GitHub declares this;
+    /// GitLab does not — `glab mr update --reviewer` exists, but the GitLab
+    /// listing path doesn't populate `changesRequestedReviewerLogins`, so the
+    /// watcher would have nobody to request (CROW-921).
+    case requestReviewers
 }
 
 /// Minimal PR/MR identity returned from `CodeBackend.linkedPR`.
