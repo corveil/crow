@@ -58,6 +58,27 @@ auto-merge-enabled glyph, the composed `aria-label`, graceful degradation when
 the live `pr` entry is missing or `has_pr: false`, and the ticket-label pills
 (2-pill cap + `+N` overflow, hidden under `hideSessionDetails`).
 
+## `rpc-timeout.test.js` — JSON-RPC deadlines + late responses (#931)
+
+Drives `rpc`, `rpcTimeoutFor`, `sessionAction` and `dismissModalDialog` against
+a fake `/rpc` socket and a controllable timer queue. Coverage: the per-method
+timeout table mirroring the CLI's (incl. the wire-name check — `crow job run`
+sends `job-run` while Settings' "Run now" sends `run-job`, so both must be
+listed) and the 30s default; a timeout rejecting with a tagged `err.rpcTimeout`
+while *retaining* the pending entry rather than deleting it; a late response
+routing to the `onLate` hook instead of vanishing into `onmessage`'s `!waiter`
+guard; `sessionAction` showing a "Still running" advisory rather than a "failed"
+modal, then dismissing it on late success, surfacing an additive `warning` (#888)
+if one comes back, and replacing it with the real error on late failure;
+`dismissModalDialog` refusing to yank a dialog that superseded its own;
+`ws.onclose` rejecting unsettled calls and dropping settled ones without firing
+`onLate`; and the settled-entry GC.
+
+Unlike the other files, this one's fake `WebSocket` actually fires `onopen` (so
+`rpcState.ready` resolves) and its `setTimeout`/`clearTimeout` are a controllable
+queue rather than no-ops — deadlines have to fire on demand, and firing them *by
+delay* is what proves each method was armed from the table.
+
 ## Run
 
 ```sh
