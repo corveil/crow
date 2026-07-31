@@ -1,4 +1,4 @@
-.PHONY: build daemon app run setup install uninstall clean check test parity help daemon-run docs
+.PHONY: build daemon app run setup install uninstall clean check test coverage parity help daemon-run docs
 
 # Install destination and build config (override on the command line, e.g.
 # `make install BINDIR=/usr/local/bin` or `make build CONFIG=release`).
@@ -53,6 +53,7 @@ help:
 	@echo "  setup      Check build prerequisites"
 	@echo "  check      Verify all build and runtime prerequisites"
 	@echo "  test       Run all package tests, then the parity gates"
+	@echo "  coverage   Run all package tests with coverage → coverage/coverage-summary.{json,md}"
 	@echo "  parity     Run just the source-level drift gates (catalogs + CLI/RPC parity)"
 	@echo "  docs       Regenerate docs/cli.md from the CLI's ArgumentParser metadata"
 	@echo "  install    Symlink crow + crowd into ~/.local/bin (override BINDIR=, CONFIG=release)"
@@ -98,6 +99,27 @@ test:
 		fi; \
 	done
 	@$(MAKE) --no-print-directory parity
+
+# Local twin of the CI coverage artifact (CROW-928). Runs the same suites as
+# `test` with instrumentation, then merges the per-package llvm-cov exports
+# through the same script CI uses, so a local run and a downloaded artifact are
+# byte-comparable over the same package set. This is a full sweep — budget ~30
+# minutes. All 17 packages build here; the Linux PR lane sees only 12, so its
+# artifact reports a different (smaller) tree. See docs/adr/0007-linux-ci-swift.md.
+#
+# `|| exit 1` matters: a shell for-loop does not abort on a failing iteration and
+# a recipe's status is the last iteration's, so without it a suite failing at
+# package 4 of 17 would still print an authoritative-looking table — built partly
+# from the *previous* run's export for the package that just failed — and exit 0.
+coverage:
+	@bash scripts/generate-build-info.sh
+	@for pkg in Packages/*/; do \
+		if [ -d "$$pkg/Tests" ]; then \
+			echo "==> Testing $$(basename $$pkg) with coverage..."; \
+			swift test --enable-code-coverage --package-path "$$pkg" || exit 1; \
+		fi; \
+	done
+	@bash scripts/coverage-summary.sh
 
 # Source-level drift gates. Cheap, no build required, and both also run in CI —
 # see the `parity` job in .github/workflows/ci.yml.
