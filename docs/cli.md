@@ -1012,7 +1012,9 @@ Move a session to In Review.
 crow mark-in-review --session <session>
 ```
 
-Requires a linked ticket (attach one with `crow set-ticket --url …`). Writes session status only — use `crow transition-ticket --to inReview` to move the provider's board.
+Moves the session's linked ticket to In Review on the provider's board (GitHub Projects, Jira workflow), then sets the session's status. Requires a linked ticket (attach one with `crow set-ticket --url …`).
+
+Fails without moving the session if the board transition fails. When the provider has no In Review status to move to — GitLab, or a board whose column isn't named "In Review" — the session still moves and the result carries an additive `warning` saying the ticket did not.
 
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |

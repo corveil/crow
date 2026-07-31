@@ -129,6 +129,58 @@ import CrowProvider
         }
     }
 
+    // MARK: - mark-in-review
+
+    /// #876: `markInReview` spent the post-ADR-0010 window with no callers, so
+    /// the RPC only wrote session status. It now moves the provider's board and
+    /// reports like its two siblings.
+
+    @Test func markInReviewReportsUnknownSession() async {
+        let (_, tracker, _) = seed()
+        await #expect(throws: SessionActionError.sessionNotFound) {
+            try await tracker.markInReview(sessionID: UUID())
+        }
+    }
+
+    @Test func markInReviewReportsMissingTicket() async {
+        let (_, tracker, session) = seed(ticketURL: nil)
+        await #expect(throws: SessionActionError.noTicketURL("mark-in-review")) {
+            try await tracker.markInReview(sessionID: session.id)
+        }
+    }
+
+    @Test func markInReviewReportsMissingProvider() async {
+        let (_, tracker, session) = seed(
+            ticketURL: "https://github.com/corveil/crow/issues/876", provider: nil)
+        await #expect(throws: SessionActionError.noProvider("mark-in-review")) {
+            try await tracker.markInReview(sessionID: session.id)
+        }
+    }
+
+    @Test func markInReviewRejectsManagerSession() async {
+        let (_, tracker, session) = seed(
+            kind: .manager, ticketURL: "https://github.com/corveil/crow/issues/876", provider: .github)
+        await #expect(throws: SessionActionError.managerSession("mark-in-review")) {
+            try await tracker.markInReview(sessionID: session.id)
+        }
+    }
+
+    /// The load-bearing asymmetry (#876): a provider with no board status to
+    /// move to is **not** a failure — nothing was ever going to move, and the
+    /// caller still wants the session transition. It returns a warning instead.
+    ///
+    /// GitLab is the hermetic case: `GitLabTaskBackend.setTaskStatus` throws
+    /// `.unimplemented` without shelling out. GitHub reaches the same branch for
+    /// any board whose column isn't named "In Review"/"Review", which is why
+    /// throwing here would have been a regression rather than a fix.
+    @Test func markInReviewWarnsRatherThanThrowsWhenBoardCannotMove() async throws {
+        let (_, tracker, session) = seed(
+            ticketURL: "https://gitlab.com/acme/api/-/issues/7", provider: .gitlab)
+        let warning = try await tracker.markInReview(sessionID: session.id)
+        #expect(warning != nil, "a board that cannot move must be disclosed, not swallowed")
+        #expect(warning?.contains("In Review") == true)
+    }
+
     // MARK: - messages
 
     /// A CLI user reading the error should learn how to fix it.

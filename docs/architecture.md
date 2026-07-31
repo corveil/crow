@@ -164,6 +164,14 @@ User starts a session via /crow-workspace (or triggers "Mark In Review")
   → On INSUFFICIENT_SCOPES, logs a hint to run `gh auth refresh -s project`
 ```
 
+Session start goes through `transitionTicket` (best-effort — failures are logged
+and swallowed, because `setup.sh` and `resync-jira` both fire and forget). "Mark
+In Review" goes through `markInReview`, which reports failures to its caller as
+`SessionActionError`; an issue on a board with no In Review column, or a
+provider with no board status at all, comes back as a warning rather than an
+error (#876). An issue on *no* board falls back to a `crow:in-review` label
+(#706, #790).
+
 ## Terminal rendering
 
 Crow renders each session's terminal with [xterm.js](https://xtermjs.org) **in the browser**, streamed from the daemon over a `/terminal` WebSocket. On the daemon side each connection drives a native PTY whose child command is `tmux attach-session` against a private grouped view of the shared cockpit, so many browsers (and the Manager) can watch different windows of the same tmux server at once. The web assets (including the vendored xterm.js) live under `Packages/CrowDaemon/Sources/CrowDaemon/Resources/web/`.

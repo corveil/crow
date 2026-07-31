@@ -11,9 +11,9 @@ import Foundation
 /// Preconditions (linked ticket, linked PR, not a Manager) are enforced
 /// server-side — the browser hides the menu items instead, which a CLI can't do.
 ///
-/// `mark-in-review` / `complete-session` / `set-session-active` write session
-/// status only. To move the *provider's* board (Jira workflow, GitHub Projects),
-/// use `crow transition-ticket --to …`.
+/// `complete-session` / `set-session-active` write session status only. To move
+/// the *provider's* board for those, use `crow transition-ticket --to …`.
+/// `mark-in-review` moves the board itself (#876).
 
 /// Move a session to In Review.
 public struct MarkInReview: ParsableCommand {
@@ -21,9 +21,14 @@ public struct MarkInReview: ParsableCommand {
         commandName: "mark-in-review",
         abstract: "Move a session to In Review",
         discussion: """
-        Requires a linked ticket (attach one with `crow set-ticket --url …`). \
-        Writes session status only — use `crow transition-ticket --to inReview` \
-        to move the provider's board.
+        Moves the session's linked ticket to In Review on the provider's board \
+        (GitHub Projects, Jira workflow), then sets the session's status. \
+        Requires a linked ticket (attach one with `crow set-ticket --url …`).
+
+        Fails without moving the session if the board transition fails. When the \
+        provider has no In Review status to move to — GitLab, or a board whose \
+        column isn't named "In Review" — the session still moves and the result \
+        carries an additive `warning` saying the ticket did not.
         """
     )
 

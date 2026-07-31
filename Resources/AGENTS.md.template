@@ -17,7 +17,7 @@ crow select-session --session <uuid>
 crow list-sessions
 crow get-session --session <uuid>
 crow set-status --session <uuid> active|paused|inReview|completed|archived
-crow mark-in-review --session <uuid>        → status inReview (needs a linked ticket)
+crow mark-in-review --session <uuid>        → move the ticket to In Review on the provider's board, then status inReview (needs a linked ticket)
 crow complete-session --session <uuid>      → status completed
 crow set-session-active --session <uuid>    → status active (reopen)
 crow mark-issue-done --session <uuid>       → close the linked issue, then complete the session

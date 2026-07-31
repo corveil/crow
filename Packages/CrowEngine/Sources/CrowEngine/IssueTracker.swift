@@ -40,7 +40,7 @@ public final class IssueTracker {
 
     /// Fires when a newly assigned issue carries the auto-create label and
     /// has no existing session. Wired in AppDelegate to dispatch the
-    /// `onWorkOnIssue` flow and post a notification.
+    /// work-on-issue flow and post a notification.
     public var onAutoCreateRequest: ((AssignedIssue) -> Void)?
 
     /// Callback fired on every successful review-request refresh with the full
@@ -4355,37 +4355,83 @@ public final class IssueTracker {
 
     // MARK: - Mark In Review
 
-    public func markInReview(sessionID: UUID) async {
-        guard let session = appState.sessions.first(where: { $0.id == sessionID }),
-              let ticketURL = session.ticketURL,
-              let taskProvider = session.provider else { return }
+    /// Move a session's linked ticket to its board's **In Review** status, then
+    /// flip the Crow session to `.inReview`.
+    ///
+    /// Throws `SessionActionError` rather than swallowing failures: the caller
+    /// (the `mark-in-review` RPC, and through it `crow mark-in-review` and the
+    /// web menu) has to be able to tell "moved the board" from "did nothing"
+    /// (#876 — the contract #816 gave `markIssueDone` / `addMergeLabel`). This
+    /// method spent the post-ADR-0010 window with no callers at all, which is
+    /// how `mark-in-review` came to be documented as session-status-only.
+    ///
+    /// Returns a warning sentence — rather than throwing — when the session
+    /// transition was the only thing that *could* have happened: the provider
+    /// has no board status at all (GitLab), or the issue sits on a board with
+    /// no column mapping to In Review. Those are not failures; nothing was ever
+    /// going to move, and the caller asked for the session transition too.
+    /// Every other provider error throws.
+    @discardableResult
+    public func markInReview(sessionID: UUID) async throws -> String? {
+        guard let session = appState.sessions.first(where: { $0.id == sessionID }) else {
+            throw SessionActionError.sessionNotFound
+        }
+        // The web menu never offers this for a Manager; match that server-side.
+        guard !session.isManager else {
+            throw SessionActionError.managerSession("mark-in-review")
+        }
+        guard let ticketURL = session.ticketURL, !ticketURL.isEmpty else {
+            throw SessionActionError.noTicketURL("mark-in-review")
+        }
+        guard let taskProvider = session.provider else {
+            throw SessionActionError.noProvider("mark-in-review")
+        }
 
         // For Jira, thread the matching workspace's per-project status-name map
-        // (#523) so the transition honors a renamed workflow ("In Progress" →
-        // "In Development"); other providers ignore the JiraConfig.
-        let jiraConfig: JiraConfig? = (taskProvider == .jira)
-            ? Self.jiraConfig(forTicket: ticketURL)
-            : nil
-        let backend = providerManager.taskBackend(for: taskProvider, jira: jiraConfig)
-        // Capability-gated across providers: GitHub Projects v2 and Jira workflow
-        // transitions both expose `.projectBoardStatus` and implement
-        // `setTaskStatus`. GitLab (no capability) returns early.
-        guard backend.capabilities.contains(.projectBoardStatus) else { return }
+        // (#523) so the transition honors a renamed workflow ("In Review" →
+        // "Code Review"). For every other provider, resolve provider + host
+        // straight from the URL so self-hosted GitLab/Corveil instances are
+        // targeted correctly — matching `markIssueDone`. Resolving by bare
+        // provider enum, as this method used to, drops the host.
+        let backend: TaskBackend
+        if taskProvider == .jira {
+            backend = providerManager.taskBackend(for: .jira, jira: Self.jiraConfig(forTicket: ticketURL))
+        } else {
+            backend = providerManager.taskBackend(forURL: ticketURL)
+        }
 
         appState.isMarkingInReview[sessionID] = true
         defer { appState.isMarkingInReview[sessionID] = false }
 
+        // No `.projectBoardStatus` pre-check: a backend without the capability
+        // reports exactly that as `.unimplemented` (GitLabTaskBackend does
+        // nothing else), and so does GitHub for a board with no In Review
+        // column. One rule for one fact, and no capability set to drift from
+        // what the backend actually does.
         do {
             try await backend.setTaskStatus(url: ticketURL, status: .inReview)
-        } catch ProviderError.insufficientScope {
-            reportScopeWarning("project")
-            return
         } catch ProviderError.unimplemented(let msg) {
+            // Not a failure: this provider/board has no In Review status to
+            // move to. Throwing here would make `crow mark-in-review` a hard
+            // error on every GitLab session, and on every GitHub board whose
+            // column is named something other than "In Review"/"Review".
             print("[IssueTracker] markInReview: \(msg)")
-            return
+            return "Session moved to In Review, but the ticket did not: "
+                + "no In Review status is available for \(ticketURL)."
+        } catch ProviderError.insufficientScope {
+            // `githubScopeWarning` is read by nothing since the app retired
+            // (ADR 0010), so the thrown message has to carry the whole fix.
+            reportScopeWarning("project")
+            throw SessionActionError.providerFailed(
+                "GitHub token missing 'project' scope — run `gh auth refresh -s project`")
+        } catch let error as ProviderError {
+            let detail = Self.providerFailureDetail(error)
+            print("[IssueTracker] markInReview failed for \(ticketURL): \(detail)")
+            throw SessionActionError.providerFailed(detail)
         } catch {
-            print("[IssueTracker] markInReview failed for \(ticketURL): \(error.localizedDescription.prefix(200))")
-            return
+            let detail = String(error.localizedDescription.prefix(200))
+            print("[IssueTracker] markInReview failed for \(ticketURL): \(detail)")
+            throw SessionActionError.providerFailed(detail)
         }
 
         // Update local state — match by URL so it works regardless of provider.
@@ -4395,8 +4441,30 @@ public final class IssueTracker {
 
         print("[IssueTracker] Marked \(ticketURL) as In Review")
 
-        // Update local session status to .inReview
+        // Flip the Crow session for in-process callers. The RPC handler applies
+        // the same transition itself (this callback is nil on a no-tmux host),
+        // and `updateSessionStatus` is idempotent, so the overlap is free.
         appState.onSetSessionInReview?(sessionID)
+        return nil
+    }
+
+    /// `ProviderError` has no `LocalizedError` conformance, so
+    /// `localizedDescription` on one is the useless "The operation couldn't be
+    /// completed. (CrowProvider.ProviderError error N.)" — and every
+    /// `setTaskStatus` failure is a typed `ProviderError` (see
+    /// `GitHubTaskBackend.classifyGraphQLError`). Pull the payload out by hand
+    /// so the sentence a CLI user reads is the real `gh`/`glab` error.
+    static func providerFailureDetail(_ error: ProviderError) -> String {
+        let raw: String
+        switch error {
+        case .invalidURL(let url): raw = "invalid ticket URL: \(url)"
+        case .commandFailed(let output): raw = output
+        case .unimplemented(let msg): raw = msg
+        case .insufficientScope(let scope): raw = "GitHub token missing '\(scope)' scope"
+        case .rateLimited(let output): raw = "rate limited: \(output)"
+        case .samlRestricted(let output): raw = "SAML-restricted: \(output)"
+        }
+        return String(raw.trimmingCharacters(in: .whitespacesAndNewlines).prefix(200))
     }
 
     // MARK: - Mark Issue Done
@@ -4481,7 +4549,10 @@ public final class IssueTracker {
     /// only owns the GitHub Projects-v2 mutation, so a Jira session never moved
     /// off Backlog before. Capability-gated (`.projectBoardStatus`), so GitLab
     /// (no board status) is a no-op. Best-effort: auth / unavailable-transition
-    /// failures are logged and swallowed, mirroring `markInReview`.
+    /// failures are logged and swallowed, because both callers are fire-and-
+    /// forget (`setup.sh` at session start, `resyncJira` over every session).
+    /// Contrast `markInReview`, whose caller is a user-facing verb and which
+    /// therefore reports failures as `SessionActionError` (#876).
     public func transitionTicket(sessionID: UUID, to status: TicketStatus) async {
         guard let session = appState.sessions.first(where: { $0.id == sessionID }),
               let ticketURL = session.ticketURL,

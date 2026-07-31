@@ -339,22 +339,6 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                     ]
                 }
             },
-            // CROW-581: trigger a PR-status quick action (fixConflicts /
-            // addressChanges / fixChecks / mergePR / reReview) — reuses the
-            // existing `onQuickAction` hook, which pastes the deterministic
-            // prompt into the session's managed agent terminal.
-            "quick-action": { @Sendable params in
-                guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
-                    throw RPCError.invalidParams("session_id required")
-                }
-                guard let actionStr = params["action"]?.stringValue, let action = QuickAction(rawValue: actionStr) else {
-                    throw RPCError.invalidParams("action required (fixConflicts, addressChanges, fixChecks, mergePR, reReview)")
-                }
-                await MainActor.run {
-                    capturedAppState.onQuickAction?(id, action)
-                }
-                return ["dispatched": .bool(true), "action": .string(action.rawValue)]
-            },
             // CROW-581: board data for the web UI. Ticket/review/allowlist state
             // lives only in the app's AppState (IssueTracker / AllowListService),
             // so the daemon forwards these reads here. Results are repo-exclude
@@ -445,47 +429,6 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                     ]
                 }
             },
-            // Board actions — invoke the app's existing callbacks. work-on-issue
-            // and start-review spawn workspaces via the same paths the desktop UI
-            // uses (onWorkOnIssue / onStartReview).
-            "work-on-issue": { @Sendable params in
-                guard let url = params["url"]?.stringValue, !url.isEmpty else {
-                    throw RPCError.invalidParams("url required")
-                }
-                // Mirror the daemon handler: only a plain http(s) URL with no
-                // control chars — the url can reach the Manager as keystrokes
-                // (review #4).
-                guard url.range(of: #"^https?://[^\s]+$"#, options: .regularExpression) != nil,
-                      !url.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7F }) else {
-                    throw RPCError.invalidParams("url must be a well-formed http(s) URL with no control characters")
-                }
-                await MainActor.run { capturedAppState.onWorkOnIssue?(url) }
-                return ["ok": .bool(true)]
-            },
-            "start-review": { @Sendable params in
-                guard let url = params["url"]?.stringValue, !url.isEmpty else {
-                    throw RPCError.invalidParams("url required")
-                }
-                await MainActor.run { capturedAppState.onStartReview?(url) }
-                return ["ok": .bool(true)]
-            },
-            "promote-allowlist": { @Sendable params in
-                guard let arr = params["patterns"]?.arrayValue else {
-                    throw RPCError.invalidParams("patterns array required")
-                }
-                let patterns = Set(arr.compactMap { $0.stringValue })
-                guard !patterns.isEmpty else { throw RPCError.invalidParams("patterns array required") }
-                await MainActor.run { capturedAppState.onPromoteToGlobal?(patterns) }
-                return ["ok": .bool(true)]
-            },
-            "refresh-tickets": { @Sendable _ in
-                await MainActor.run { capturedAppState.onManualRefresh?() }
-                return ["ok": .bool(true)]
-            },
-            "refresh-allowlist": { @Sendable _ in
-                await MainActor.run { capturedAppState.onLoadAllowList?() }
-                return ["ok": .bool(true)]
-            },
             // CROW-581: batched live per-session state (remote-control + PR) —
             // runtime-only, not in the store, so the daemon forwards here rather
             // than reading its store-seeded snapshot. One call replaces N
@@ -532,30 +475,6 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                     return ["sessions": .object(out)]
                 }
             },
-            // Board/session actions — invoke the app's existing callbacks.
-            "create-manager": { @Sendable params in
-                // Optional agent override (#583); nil = configured default.
-                // Security gate (CROW-593): only honor a kind that is actually
-                // registered in AgentRegistry, so a web/daemon caller can't
-                // request an arbitrary agent. An unknown/unavailable kind falls
-                // back to the configured default (launch is additionally gated
-                // in managerCommand's AgentRegistry fallback). Shared with the
-                // other creation surfaces via `registeredKind` (#834).
-                let requested = params["agent_kind"]?.stringValue.flatMap { AgentKind(rawValue: $0) }
-                let agent = AgentRegistry.shared.registeredKind(requested)
-                await MainActor.run { capturedAppState.onCreateManager?(agent) }
-                return ["ok": .bool(true)]
-            },
-            // CROW-593: run a scheduled job on demand from the web Jobs list.
-            // Reuses the app's `onRunJob` hook (bound to `JobScheduler.runNow`),
-            // which fires the job regardless of its enabled flag or schedule.
-            "run-job": { @Sendable params in
-                guard let idStr = params["job_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
-                    throw RPCError.invalidParams("job_id required")
-                }
-                await MainActor.run { capturedAppState.onRunJob?(id) }
-                return ["ok": .bool(true)]
-            },
             // Available coding agents for the web's new-manager menu (#2 /
             // CROW-593). Mirrors the desktop's AgentRegistry-backed picker.
             // Returns **all known** agents with an `available` flag + `binary`
@@ -573,47 +492,6 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                     }
                     return ["agents": .array(items)]
                 }
-            },
-            "mark-in-review": { @Sendable params in
-                guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
-                    throw RPCError.invalidParams("session_id required")
-                }
-                await MainActor.run { capturedAppState.onMarkInReview?(id) }
-                return ["ok": .bool(true)]
-            },
-            "mark-issue-done": { @Sendable params in
-                guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
-                    throw RPCError.invalidParams("session_id required")
-                }
-                await MainActor.run { capturedAppState.onMarkIssueDone?(id) }
-                return ["ok": .bool(true)]
-            },
-            "complete-session": { @Sendable params in
-                guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
-                    throw RPCError.invalidParams("session_id required")
-                }
-                await MainActor.run { capturedAppState.onCompleteSession?(id) }
-                return ["ok": .bool(true)]
-            },
-            "set-session-active": { @Sendable params in
-                guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
-                    throw RPCError.invalidParams("session_id required")
-                }
-                await MainActor.run { capturedAppState.onSetSessionActive?(id) }
-                return ["ok": .bool(true)]
-            },
-            // NOTE (#888): shadowed by the daemon's own `add-merge-label`, which
-            // `makeCommandRouter` registers unconditionally — `CommandRouter`
-            // only reaches a fallback for an UNregistered method. It also can't
-            // grow the daemon's additive `warning` field: `onAddMergeLabel` is
-            // `(UUID) -> Void`, so it returns before the provider call happens.
-            // The canonical shape lives in CrowDaemon/RPCHandlers.swift.
-            "add-merge-label": { @Sendable params in
-                guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr) else {
-                    throw RPCError.invalidParams("session_id required")
-                }
-                await MainActor.run { capturedAppState.onAddMergeLabel?(id) }
-                return ["ok": .bool(true)]
             },
             "set-status": { @Sendable params in
                 guard let idStr = params["session_id"]?.stringValue, let id = UUID(uuidString: idStr),

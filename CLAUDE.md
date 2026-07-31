@@ -33,14 +33,14 @@ crow delete-session --session <uuid>            → {"deleted":true}
 The web session-menu actions, as CLI verbs. All take only `--session`. Preconditions are enforced server-side (the browser hides menu items instead); current status is **not** gated, so these are safe to re-run.
 
 ```
-crow mark-in-review --session <uuid>            → {"session_id":"...","status":"inReview"}    needs a linked ticket
+crow mark-in-review --session <uuid>            → {"session_id":"...","status":"inReview","warning":"…"}  moves the ticket to In Review on the provider's board, then the session; needs a linked ticket
 crow complete-session --session <uuid>          → {"session_id":"...","status":"completed"}
 crow set-session-active --session <uuid>        → {"session_id":"...","status":"active"}      reopen a completed session
 crow mark-issue-done --session <uuid>           → {"ok":true,"session_id":"..."}              closes the linked issue, then completes the session
 crow add-merge-label --session <uuid>           → {"ok":true,"session_id":"...","warning":"…"}  adds crow:merge to the session's PR; needs a linked PR. `warning` is present only when the label won't lead to a merge (watcher off, repo forbids auto-merge)
 ```
 
-These write Crow's session status. To move the **provider's** board (Jira workflow, GitHub Projects), use `crow transition-ticket --to ...` — `mark-in-review` does not perform the provider-side transition. Manager sessions are rejected.
+`complete-session` / `set-session-active` write Crow's session status only — to move the **provider's** board for those, use `crow transition-ticket --to ...`. `mark-in-review` moves the board itself: it transitions the ticket **first**, so a failed transition errors instead of leaving the session marked. When the provider has no In Review status to move to (GitLab, or a board whose column isn't named "In Review"), the session still moves and `warning` says the ticket did not. Manager sessions are rejected.
 
 ### Daemon Autostart
 

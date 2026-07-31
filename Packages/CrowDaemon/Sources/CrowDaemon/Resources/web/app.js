@@ -2040,7 +2040,11 @@ async function markInReviewAction(btn, id) {
   btn.innerHTML = '';
   btn.appendChild(el('span', 'action-spinner'));
   try {
-    await rpc('mark-in-review', { session_id: id });
+    const res = await rpc('mark-in-review', { session_id: id });
+    // The session moved but the board didn't — e.g. GitLab, or a board with no
+    // column mapping to In Review (#876). Not an error, but the button's name
+    // promises a board move, so say so rather than looking like a clean success.
+    if (res && typeof res.warning === 'string' && res.warning) alertModal(res.warning);
     // Leave the button disabled: the ensuing state push re-renders the header.
   } catch (e) {
     btn.disabled = false;
@@ -3630,8 +3634,8 @@ async function refreshTickets() {
   try {
     try { await rpc('refresh-tickets'); } catch (_) { /* app down, or >10s — the
       daemon's own `loading` flag covers the rest; never leave the spinner on */ }
-    // The engine path (`onManualRefresh`) returns before the fetch lands, so
-    // keep the settle delay rather than re-reading an unchanged board.
+    // `refresh-tickets` returns before the fetch lands, so keep the settle
+    // delay rather than re-reading an unchanged board.
     await new Promise((r) => setTimeout(r, 1200));
     await refreshBoard('tickets');
   } finally {

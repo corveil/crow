@@ -6,9 +6,10 @@ import CrowIPC
 
 /// Param decoding and response shapes for the session-lifecycle verbs (#816).
 ///
-/// `requireTicketURL` backs `mark-in-review`, which writes status directly and
-/// so has no tracker call to report for it. The provider-side verbs' guards
-/// live in `IssueTracker` as `SessionActionError` instead — see
+/// The ticket guard that used to live here (`requireTicketURL`, for the
+/// status-only `mark-in-review`) went away in #876, when the verb started
+/// moving the provider's board: its preconditions now come from `IssueTracker`
+/// as `SessionActionError`, like every other provider-side verb — see
 /// `SessionActionReportingTests`.
 @Suite("Session lifecycle RPC support") struct SessionLifecycleRPCTests {
     private let id = UUID()
@@ -33,41 +34,31 @@ import CrowIPC
         }
     }
 
-    // MARK: - ticket guard
-
-    @Test func acceptsTicketURL() throws {
-        let url = try SessionLifecycleRPC.requireTicketURL(
-            "https://github.com/corveil/crow/issues/816", verb: "mark-in-review")
-        #expect(url == "https://github.com/corveil/crow/issues/816")
-    }
-
-    @Test func rejectsMissingOrBlankTicketURL() {
-        for value: String? in [nil, "", "   ", "\n"] {
-            #expect(throws: RPCError.self) {
-                _ = try SessionLifecycleRPC.requireTicketURL(value, verb: "mark-in-review")
-            }
-        }
-    }
-
-    /// The message has to name a fix — a bare "invalid" leaves a CLI user stuck.
-    @Test func ticketErrorNamesTheVerbAndTheFix() {
-        do {
-            _ = try SessionLifecycleRPC.requireTicketURL(nil, verb: "mark-issue-done")
-            Issue.record("expected a throw")
-        } catch let error as RPCError {
-            #expect(error.errorDescription?.contains("mark-issue-done") == true)
-            #expect(error.errorDescription?.contains("crow set-ticket") == true)
-        } catch {
-            Issue.record("expected RPCError, got \(error)")
-        }
-    }
-
     // MARK: - response shapes
 
     @Test func statusResultMatchesSetStatusShape() {
         let result = SessionLifecycleRPC.statusResult(id: id, status: .inReview)
         #expect(result["session_id"]?.stringValue == id.uuidString)
         #expect(result["status"]?.stringValue == "inReview")
+    }
+
+    /// `warning` is additive (#876, following #888's shape): omitted entirely
+    /// when there's nothing to say, so `jq -e .warning` stays a clean test and
+    /// `complete-session` / `set-session-active` responses are unchanged.
+    @Test func statusResultOmitsEmptyWarning() {
+        for warning: String? in [nil, ""] {
+            let result = SessionLifecycleRPC.statusResult(id: id, status: .inReview, warning: warning)
+            #expect(result["warning"] == nil)
+            #expect(result.count == 2)
+        }
+    }
+
+    @Test func statusResultCarriesWarningWithoutDisturbingStatus() {
+        let result = SessionLifecycleRPC.statusResult(
+            id: id, status: .inReview, warning: "board did not move")
+        #expect(result["warning"]?.stringValue == "board did not move")
+        #expect(result["status"]?.stringValue == "inReview")
+        #expect(result["session_id"]?.stringValue == id.uuidString)
     }
 
     /// `ok` is what the web UI has always read; dropping it would break the
