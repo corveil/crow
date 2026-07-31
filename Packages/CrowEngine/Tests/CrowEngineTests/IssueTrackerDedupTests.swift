@@ -25,7 +25,10 @@ struct IssueTrackerDedupTests {
         failedCheckNames: [String] = [],
         latestReviewStates: [String] = [],
         lastChangesRequestedAt: Date? = nil,
-        lastSubstantiveCommitAt: Date? = nil
+        lastSubstantiveCommitAt: Date? = nil,
+        changesRequestedReviewerLogins: [String] = [],
+        pendingReviewerLogins: [String] = [],
+        hasPendingReviewRequest: Bool = false
     ) -> IssueTracker.ViewerPR {
         IssueTracker.ViewerPR(
             number: number,
@@ -45,7 +48,10 @@ struct IssueTrackerDedupTests {
             failedCheckNames: failedCheckNames,
             latestReviewStates: latestReviewStates,
             lastChangesRequestedAt: lastChangesRequestedAt,
-            lastSubstantiveCommitAt: lastSubstantiveCommitAt
+            lastSubstantiveCommitAt: lastSubstantiveCommitAt,
+            changesRequestedReviewerLogins: changesRequestedReviewerLogins,
+            pendingReviewerLogins: pendingReviewerLogins,
+            hasPendingReviewRequest: hasPendingReviewRequest
         )
     }
 
@@ -220,17 +226,76 @@ struct IssueTrackerDedupTests {
         #expect(merged.labels.count == 2) // crow:merge + documentation, no dup
     }
 
-    @Test func dedupedByURLUnionsLabelsAcrossViewerAndStaleRecords() {
+    @Test func dedupedByURLUnionsLabelsAndReviewerFields() {
         // End-to-end assembly guard: the same PR arriving once from the
-        // open-viewer query (labels present) and once from the stale path
-        // (labels empty pre-#838) must dedupe to a single record that still
-        // reports `crow:merge` — neither the merge icon nor the auto-merge
-        // watcher can see the label if this drops it.
+        // open-viewer query (fields present) and once from the stale path
+        // (fields empty — that query selects neither labels nor reviewer
+        // identity) must dedupe to a single record that still reports all of
+        // them.
+        //
+        // Reachable whenever the session's stored `.pr` link URL isn't
+        // byte-identical to GitHub's canonical form — `collectStalePRURLs`
+        // excludes open PRs by exact string compare while `prStates` returns
+        // the canonical URL — so it repeats on every poll for that session
+        // rather than being a one-poll blip.
+        //
+        // Each field here is one shipped bug: `labels` blinded the auto-merge
+        // watcher (#838), and the three reviewer fields blinded the
+        // auto-re-request watcher on their first cut (review of #930). Extend
+        // this when `PRRecord` grows — the initializer defaults mean an
+        // omission in `mergePRRecords` compiles silently.
         let url = "https://github.com/corveil/crow/pull/836"
-        let viewer = makeViewerPR(url: url, state: "OPEN", labels: [Self.crowMerge])
+        let viewer = makeViewerPR(
+            url: url, state: "OPEN", labels: [Self.crowMerge],
+            changesRequestedReviewerLogins: ["dgershman"],
+            pendingReviewerLogins: ["someoneelse"],
+            hasPendingReviewRequest: true)
         let stale = makeViewerPR(url: url, state: "MERGED", labels: [])
         let deduped = IssueTracker.dedupedByURL([viewer, stale])
         #expect(deduped.count == 1)
         #expect(hasCrowMerge(deduped[0]))
+        // Without these, the watcher skips with `.noReviewers` and the PR is
+        // never re-requested — the CROW-921 dead-end, reintroduced.
+        #expect(deduped[0].changesRequestedReviewerLogins == ["dgershman"])
+        #expect(deduped[0].pendingReviewerLogins == ["someoneelse"])
+        #expect(deduped[0].hasPendingReviewRequest)
+    }
+
+    @Test func mergePRRecordsCarriesReviewerFieldsFromEitherSide() {
+        // The stale record wins the state rank here (MERGED > OPEN), so the
+        // fields have to be backfilled *from the loser* — the direction the
+        // omission actually broke.
+        let url = "https://github.com/corveil/crow/pull/836"
+        let viewer = makeViewerPR(
+            url: url, state: "OPEN",
+            changesRequestedReviewerLogins: ["a"],
+            pendingReviewerLogins: ["b"],
+            hasPendingReviewRequest: true)
+        let stale = makeViewerPR(url: url, state: "MERGED")
+
+        for merged in [
+            IssueTracker.mergePRRecords(viewer, stale),
+            IssueTracker.mergePRRecords(stale, viewer),
+        ] {
+            #expect(merged.changesRequestedReviewerLogins == ["a"])
+            #expect(merged.pendingReviewerLogins == ["b"])
+            #expect(merged.hasPendingReviewRequest)
+        }
+    }
+
+    @Test func aPopulatedWinnerIsNotOverwrittenByAnEmptyLoser() {
+        // The reverse guard: backfill must not clobber real data with the
+        // stale query's blanks.
+        let url = "https://github.com/corveil/crow/pull/836"
+        let winner = makeViewerPR(
+            url: url, state: "MERGED",
+            changesRequestedReviewerLogins: ["a"],
+            pendingReviewerLogins: ["b"],
+            hasPendingReviewRequest: true)
+        let loser = makeViewerPR(url: url, state: "OPEN")
+        let merged = IssueTracker.mergePRRecords(winner, loser)
+        #expect(merged.changesRequestedReviewerLogins == ["a"])
+        #expect(merged.pendingReviewerLogins == ["b"])
+        #expect(merged.hasPendingReviewRequest)
     }
 }

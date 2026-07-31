@@ -921,6 +921,17 @@ public final class IssueTracker {
     /// loser). Both the merge icon (`hasMergeLabel`) and the auto-merge watcher
     /// (`autoMergeSkipReason`) read this field, so a label GitHub reports on
     /// either record must survive the merge.
+    ///
+    /// **Every field must be carried here.** `PRRecord`'s initializer defaults
+    /// mean an omitted field compiles silently and reaches the watchers as
+    /// "absent" — which is how #838 blinded auto-merge (dropped `labels`) and
+    /// how the CROW-921 reviewer fields were dropped on their first cut
+    /// (review of #930): an empty `changesRequestedReviewerLogins` reads as
+    /// `.noReviewers` and the PR is never re-requested, while a lost
+    /// `hasPendingReviewRequest` demotes an `.awaitingReviewer` PR back to
+    /// `.needsRefine` and re-prompts the agent while the reviewer is already
+    /// looking. `IssueTrackerDedupTests.dedupedByURLUnionsLabelsAndReviewerFields`
+    /// is the assembly guard; extend it when `PRRecord` grows.
     nonisolated static func mergePRRecords(_ lhs: ViewerPR, _ rhs: ViewerPR) -> ViewerPR {
         let (winner, loser) = stateRank(lhs.state) >= stateRank(rhs.state)
             ? (lhs, rhs) : (rhs, lhs)
@@ -943,6 +954,19 @@ public final class IssueTracker {
             latestReviewStates: winner.latestReviewStates.isEmpty ? loser.latestReviewStates : winner.latestReviewStates,
             lastChangesRequestedAt: winner.lastChangesRequestedAt ?? loser.lastChangesRequestedAt,
             lastSubstantiveCommitAt: winner.lastSubstantiveCommitAt ?? loser.lastSubstantiveCommitAt,
+            // Same rule as `latestReviewStates` above, for the same reason:
+            // the stale-PR query doesn't select reviewer identity, so an empty
+            // array here means "not fetched", never "nobody" (CROW-921).
+            // Dropping these blinds the auto-re-request watcher exactly the
+            // way #838 blinded the auto-merge watcher by dropping `labels`.
+            changesRequestedReviewerLogins: winner.changesRequestedReviewerLogins.isEmpty
+                ? loser.changesRequestedReviewerLogins : winner.changesRequestedReviewerLogins,
+            pendingReviewerLogins: winner.pendingReviewerLogins.isEmpty
+                ? loser.pendingReviewerLogins : winner.pendingReviewerLogins,
+            // OR, not pick-a-side: `false` means "not fetched" on every path
+            // that doesn't select `reviewRequests` (the stale query, GitLab),
+            // so a `true` from either record is the only informative value.
+            hasPendingReviewRequest: winner.hasPendingReviewRequest || loser.hasPendingReviewRequest,
             mergeCommitOid: winner.mergeCommitOid ?? loser.mergeCommitOid,
             // Prefer whichever record actually knows the repo's auto-merge
             // policy — the stale-PR query and the viewer fetch don't always
@@ -3671,18 +3695,6 @@ public final class IssueTracker {
             autoReRequestAttempted.insert(roundKey)
             autoReRequestInFlight.insert(prLink.url)
             dispatched += 1
-            let logins = pr.changesRequestedReviewerLogins
-            // Through the shared limiter, and stamped with the head: a retry
-            // within the same round repeats this message verbatim and is
-            // deduped, while a genuinely new round (new push or new reviewer
-            // submission) changes the sha or the timestamp and logs.
-            logSteadyState(
-                channel: Self.autoReReviewLogChannel,
-                prURL: prLink.url,
-                message: "auto-re-request: dispatched #\(pr.number) → \(logins.joined(separator: ", ")) "
-                    + "(sha=\(pr.headRefOid.prefix(8)), lastCR=\(Self.iso(pr.lastChangesRequestedAt)), "
-                    + "lastCommit=\(Self.iso(pr.lastSubstantiveCommitAt)))",
-                now: now)
             let capturedSession = session
             Task { await self.attemptReRequestReview(session: capturedSession, pr: pr, roundKey: roundKey) }
         }
@@ -3743,6 +3755,22 @@ public final class IssueTracker {
             return
         }
         let logins = pr.changesRequestedReviewerLogins
+        // Logged here rather than at dispatch so `grep dispatched` counts
+        // attempts that actually reached the host: both terminal guards above
+        // return before this point, and used to leave a "dispatched" line
+        // standing in front of a skip that contradicted it.
+        //
+        // Through the shared limiter, and stamped with the head: a retry
+        // within the same round repeats this message verbatim and is deduped,
+        // while a genuinely new round (new push or new reviewer submission)
+        // changes the sha or the timestamp and logs.
+        logSteadyState(
+            channel: Self.autoReReviewLogChannel,
+            prURL: pr.url,
+            message: "auto-re-request: dispatched #\(pr.number) → \(logins.joined(separator: ", ")) "
+                + "(sha=\(pr.headRefOid.prefix(8)), lastCR=\(Self.iso(pr.lastChangesRequestedAt)), "
+                + "lastCommit=\(Self.iso(pr.lastSubstantiveCommitAt)))",
+            now: Date())
         do {
             try await backend.requestReviewers(prURL: pr.url, logins: logins)
             autoReReviewFailureCounts.removeValue(forKey: roundKey)
