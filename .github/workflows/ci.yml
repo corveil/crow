@@ -59,28 +59,45 @@ jobs:
                           CrowAntigravity CrowGit CrowOpenCode CrowGrok CrowPersistence CrowProvider CrowCLI)
           for pkg in "${LINUX_PACKAGES[@]}"; do
             echo "==> Building & testing $pkg on Linux..."
-            swift build --package-path "Packages/$pkg"
+            # --enable-code-coverage on BOTH invocations, deliberately: toggling
+            # the flag invalidates SwiftPM's build plan, so an uninstrumented
+            # build here would be thrown away and recompiled from scratch by the
+            # instrumented `swift test` below. That is a full second compile of
+            # all 12 packages on a lane that keeps no compiled products between
+            # runs (ADR 0007) — sharing the flag makes the build reusable.
+            swift build --enable-code-coverage --package-path "Packages/$pkg"
             # --no-parallel: the CrowIPC socket tests spin up real servers with
             # blocking I/O; running them in parallel starves each other on the
             # constrained CI runner and intermittently hits the read timeout.
-            # --enable-code-coverage leaves an llvm-cov export under
-            # Packages/$pkg/.build/<triple>/debug/codecov/ for the step below.
+            # The export lands at Packages/$pkg/.build/<triple>/debug/codecov/.
             swift test --no-parallel --enable-code-coverage --package-path "Packages/$pkg"
           done
 
       # Measurement only — no gate, no ratchet, no third-party upload (CROW-928).
-      # This lane can only ever see the 12 packages above: the 5 Darwin-only ones
-      # (CrowEngine, CrowDaemon, CrowTerminal, CrowTelemetry, CrowAutostart) are
-      # ~64% of the tree and refresh at release tags, per ADR 0007. The full
-      # picture lives in release.yml's macOS test job.
+      # This lane measures only what LINUX_PACKAGES lists; the rest of the tree is
+      # ~64% of the lines and refreshes at release tags, per ADR 0007.
+      #
+      # "Not in the allow-list" is not the same as "cannot build here":
+      # CrowAutostart is #if canImport-guarded and CrowCLI links it, so it does
+      # compile on Linux and shows up in the report as a "—" row (linked, never
+      # tested in this lane) rather than as a measured number. Adding it to
+      # LINUX_PACKAGES would turn that into a real figure — deliberately left as
+      # a follow-up, since ADR 0007 wants allow-list changes made consciously.
       - name: Summarize coverage
-        run: bash scripts/coverage-summary.sh
+        if: always()
+        run: bash scripts/coverage-summary.sh --allow-empty
 
+      # always(): a red suite is exactly when the covered/uncovered split is worth
+      # having. The summary describes only the exports that exist, so a lane that
+      # died partway yields a smaller table, never a wrong one.
       - name: Upload coverage summary
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: coverage-summary-linux
           path: coverage/
+          if-no-files-found: ignore
+          retention-days: 30
 
   # Source-level drift gates: cheap text checks that need no Swift build, so they
   # cover packages the Linux lane above cannot compile. `check-cli-parity.sh` is

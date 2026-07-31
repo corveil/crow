@@ -106,12 +106,17 @@ test:
 # byte-comparable over the same package set. This is a full sweep — budget ~30
 # minutes. All 17 packages build here; the Linux PR lane sees only 12, so its
 # artifact reports a different (smaller) tree. See docs/adr/0007-linux-ci-swift.md.
+#
+# `|| exit 1` matters: a shell for-loop does not abort on a failing iteration and
+# a recipe's status is the last iteration's, so without it a suite failing at
+# package 4 of 17 would still print an authoritative-looking table — built partly
+# from the *previous* run's export for the package that just failed — and exit 0.
 coverage:
 	@bash scripts/generate-build-info.sh
 	@for pkg in Packages/*/; do \
 		if [ -d "$$pkg/Tests" ]; then \
 			echo "==> Testing $$(basename $$pkg) with coverage..."; \
-			swift test --enable-code-coverage --package-path "$$pkg"; \
+			swift test --enable-code-coverage --package-path "$$pkg" || exit 1; \
 		fi; \
 	done
 	@bash scripts/coverage-summary.sh

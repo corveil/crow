@@ -42,15 +42,15 @@ swift test        # Also works (runs root package tests)
 make coverage     # Full sweep with instrumentation (~30 min) → coverage/coverage-summary.{json,md}
 ```
 
-Tests use the Swift Testing framework (`@Test` macros). Currently, tests exist
-in `CrowCore`. When adding new functionality to any package, include a test
+Tests use the Swift Testing framework (`@Test` macros) and live under
+`Packages/*/Tests/`. When adding new functionality to any package, include a test
 target in that package's `Package.swift` and add tests.
 
-`make coverage` produces the same two files CI attaches to every run as the
-`coverage-summary-*` artifact (`gh run download -n coverage-summary-linux`).
-Nothing gates on the numbers — they are there so a change can be seen, not
-enforced. Note that the PR artifact only covers the 12 Linux-buildable
-packages; all 17 are measured only at release tags
+`make coverage` produces the same two files CI attaches as the `coverage-summary-*`
+artifact (`gh run download -n coverage-summary-linux`). Nothing gates on the
+numbers — they are there so a change can be seen, not enforced. Note that the
+per-PR artifact only covers the 12 Linux-buildable packages; every package with a
+test target is measured only on release tags
 (see [ADR 0007](docs/adr/0007-linux-ci-swift.md)).
 
 ## Code Style

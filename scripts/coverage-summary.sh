@@ -13,13 +13,32 @@
 # is the only place all 17 are measured — see docs/adr/0007-linux-ci-swift.md.
 # It does not run the tests itself; `make coverage` is the local front door.
 #
-#   bash scripts/coverage-summary.sh [OUT_DIR]     # default: coverage/
+#   bash scripts/coverage-summary.sh [--allow-empty] [OUT_DIR]   # default: coverage/
+#
+# --allow-empty downgrades "no exports on disk" from an error to a notice. CI
+# passes it because the summarize step runs with if: always(), and a lane that
+# died before any suite finished should not add a second, misleading red step on
+# top of the real failure. `make coverage` does not pass it, so a developer who
+# runs this against an uninstrumented tree still gets told plainly.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-OUT_DIR="${1:-coverage}"
+ALLOW_EMPTY=0
+OUT_DIR="coverage"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --allow-empty) ALLOW_EMPTY=1 ;;
+    -*)
+      echo "ERROR: unknown option: $1" >&2
+      echo "usage: coverage-summary.sh [--allow-empty] [OUT_DIR]" >&2
+      exit 2
+      ;;
+    *) OUT_DIR="$1" ;;
+  esac
+  shift
+done
 
 # Pin the depth so this can only match Packages/<Pkg>/.build/<triple>/debug/
 # codecov/<file>.json. `find` does not follow the .build/debug symlink, so each
@@ -32,6 +51,10 @@ done < <(find Packages -mindepth 6 -maxdepth 6 -type f \
               -path 'Packages/*/.build/*/debug/codecov/*.json' | LC_ALL=C sort)
 
 if [ ${#REPORTS[@]} -eq 0 ]; then
+  if [ "$ALLOW_EMPTY" -eq 1 ]; then
+    echo "==> No coverage exports on disk; nothing to summarize."
+    exit 0
+  fi
   echo "ERROR: no coverage exports found under Packages/*/.build/*/debug/codecov/." >&2
   echo "       Run the suites with coverage instrumentation first, e.g. 'make coverage'" >&2
   echo "       or 'swift test --enable-code-coverage --package-path Packages/<Pkg>'." >&2

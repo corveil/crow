@@ -28,17 +28,21 @@ jobs:
             fi
           done
 
-      # The only lane that measures all 17 packages — the PR lane is Linux and
-      # cannot compile the 5 Darwin-only ones, which are ~64% of the tree and
-      # include the two worst-covered (ADR 0007, CROW-928).
+      # The only lane that measures every package with a test target — the PR
+      # lane runs an explicit 12-package allow-list (ADR 0007), which leaves out
+      # ~64% of the lines, including the two worst-covered packages (CROW-928).
       - name: Summarize coverage
-        run: bash scripts/coverage-summary.sh
+        if: always()
+        run: bash scripts/coverage-summary.sh --allow-empty
 
       - name: Upload coverage summary
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: coverage-summary-macos
           path: coverage/
+          if-no-files-found: ignore
+          retention-days: 30
 
   shellcheck:
     name: Shell Lint

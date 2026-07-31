@@ -184,15 +184,23 @@ let reports = Array(argv.dropFirst(3))
 
 /// llvm-cov records absolute source paths. Re-root them so the report is
 /// portable — and so a file seen through two different exports collapses to one
-/// key. The `/Packages/` fallback covers the case where the compiler recorded a
-/// resolved path (`/private/var/…`) that no longer shares a prefix with the
-/// root we were handed.
+/// key.
+///
+/// The `/Packages/` fallback covers the case where the compiler recorded a
+/// resolved path (`/private/var/…`) that no longer shares a prefix with the root
+/// we were handed. It is confirmed against the filesystem before being trusted:
+/// a dependency checked out at some path that merely *contains*
+/// `/Packages/<Name>/Sources/` would otherwise be re-rooted and attributed to a
+/// package that does not exist in this repo.
 func repoRelative(_ absolute: String) -> String? {
     if absolute.hasPrefix(repoRoot + "/") {
         return String(absolute.dropFirst(repoRoot.count + 1))
     }
     if let hit = absolute.range(of: "/Packages/") {
-        return String(absolute[absolute.index(after: hit.lowerBound)...])
+        let candidate = String(absolute[absolute.index(after: hit.lowerBound)...])
+        if FileManager.default.fileExists(atPath: repoRoot + "/" + candidate) {
+            return candidate
+        }
     }
     return nil
 }
@@ -342,19 +350,40 @@ var json = "{\n"
 json += "  \"schemaVersion\": 1,\n"
 json += "  \"packageCount\": \(ranked.count),\n"
 json += "  \"measuredPackageCount\": \(measuredCount),\n"
+// Provenance: exactly which exports were folded in. Stale leftovers from a
+// deleted package or a removed test target keep contributing to local runs
+// otherwise, with nothing in the output to show for it. Repo-relative and
+// already sorted by the caller, so this stays deterministic.
+json += "  \"exports\": [\n"
+for (index, report) in reports.enumerated() {
+    let relative = repoRelative(report) ?? report
+    json += "    \(jsonString(relative))\(index == reports.count - 1 ? "" : ",")\n"
+}
+json += "  ],\n"
 json += "  \"totals\": \(coverageJSON(total, indent: "  ")),\n"
 json += "  \"packages\": [\n"
 for (index, pkg) in ranked.enumerated() {
     json += "    {\n"
     json += "      \"name\": \(jsonString(pkg.name)),\n"
     json += "      \"ownSuiteMeasured\": \(pkg.ownSuiteMeasured),\n"
-    json += "      \"ownSuite\": \(coverageJSON(pkg.ownSuite, indent: "      ")),\n"
+    // null, not a zeroed object: a consumer that ignores ownSuiteMeasured would
+    // otherwise read "0% covered" where the truth is "this lane never ran that
+    // suite". null cannot be mistaken for a measurement.
+    if pkg.ownSuiteMeasured {
+        json += "      \"ownSuite\": \(coverageJSON(pkg.ownSuite, indent: "      ")),\n"
+    } else {
+        json += "      \"ownSuite\": null,\n"
+    }
     json += "      \"anySuite\": \(coverageJSON(pkg.anySuite, indent: "      ")),\n"
     json += "      \"files\": [\n"
     for (fileIndex, entry) in pkg.files.enumerated() {
         json += "        {\n"
         json += "          \"path\": \(jsonString(entry.path)),\n"
-        json += "          \"ownSuite\": \(coverageJSON(entry.coverage.ownSuite, indent: "          ")),\n"
+        if pkg.ownSuiteMeasured {
+            json += "          \"ownSuite\": \(coverageJSON(entry.coverage.ownSuite, indent: "          ")),\n"
+        } else {
+            json += "          \"ownSuite\": null,\n"
+        }
         json += "          \"anySuite\": \(coverageJSON(entry.coverage.anySuite, indent: "          "))\n"
         json += "        }\(fileIndex == pkg.files.count - 1 ? "" : ",")\n"
     }
@@ -365,13 +394,20 @@ json += "  ]\n"
 json += "}\n"
 
 var markdown = "# Swift test coverage\n\n"
-markdown += "**Whole repo: \(fixed(total.lines.percent, 1))% line / "
+// Deliberately not "Whole repo". This file gets downloaded and quoted out of
+// context, and on the pull-request lane the total is computed over roughly a
+// third of the tree — the one line most likely to be repeated is the one that
+// most needs the qualifier attached to it.
+markdown += "**Measured packages: \(fixed(total.lines.percent, 1))% line / "
 markdown += "\(fixed(total.regions.percent, 1))% region** — "
 markdown += "\(grouped(total.lines.count)) executable lines, \(grouped(total.lines.missed)) missed.\n\n"
+markdown += "That total covers the \(ranked.count) package\(ranked.count == 1 ? "" : "s") in *this* run, "
+markdown += "not necessarily the whole repository — CI's Linux\npull-request lane builds an explicit "
+markdown += "subset of the tree (see `docs/adr/0007-linux-ci-swift.md`).\n\n"
 markdown += "\(measuredCount) package\(measuredCount == 1 ? "" : "s") measured, worst first. "
 markdown += "**Line %**, **Region %** and **Missed** are what each package's *own* test suite\n"
 markdown += "reaches — the number to act on. **Any suite %** additionally credits a file that some\n"
-markdown += "other package's tests exercised through a dependency, which is what the repo total\n"
+markdown += "other package's tests exercised through a dependency, which is what the total\n"
 markdown += "above is computed from; that is why the total beats the Missed column's sum.\n\n"
 markdown += "| Package | Line % | Region % | Lines | Missed | Any suite % |\n"
 markdown += "|---|---:|---:|---:|---:|---:|\n"
