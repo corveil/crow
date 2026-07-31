@@ -339,10 +339,17 @@ public final class IssueTracker {
     ///
     /// Belt-and-braces rather than the primary guard — the watcher is
     /// self-limiting, because a successful request flips
-    /// `hasPendingReviewRequest` and the PR moves to `.awaitingReviewer` on
-    /// the next poll. This covers the window before that snapshot arrives.
+    /// `changesRequestedReviewerIsPending` and the PR moves to
+    /// `.awaitingReviewer` on the next poll. This covers the window before
+    /// that snapshot arrives.
     /// Internal for the same reason as `autoReRequestInFlight`.
     var autoReRequestAttempted: Set<String> = []
+
+    /// Consecutive failed re-request attempts per round key. Bounds the retry
+    /// loop: the inputs to a re-request are fixed for the life of a round, so
+    /// a non-transient failure would otherwise re-dispatch every poll forever.
+    /// Cleared on success and pruned with `autoReRequestAttempted`.
+    var autoReReviewFailureCounts: [String: Int] = [:]
 
     /// Hourly clock for the auto-re-request "enabled, nothing to do" line, so
     /// a healthy steady state doesn't fill `crowd-automation.log`.
@@ -1208,6 +1215,7 @@ public final class IssueTracker {
             lastChangesRequestedAt: pr.lastChangesRequestedAt,
             lastSubstantiveCommitAt: pr.lastSubstantiveCommitAt,
             changesRequestedReviewerLogins: pr.changesRequestedReviewerLogins,
+            pendingReviewerLogins: pr.pendingReviewerLogins,
             hasPendingReviewRequest: pr.hasPendingReviewRequest,
             updatedAt: pr.updatedAt,
             mergeCommitOid: pr.mergeCommitOid,
@@ -2146,7 +2154,7 @@ public final class IssueTracker {
                 + "state=\(PRStatus.changesRequestedState(status: status).rawValue), "
                 + "lastCR=\(Self.iso(status.lastChangesRequestedAt)), "
                 + "lastCommit=\(Self.iso(status.lastSubstantiveCommitAt)), "
-                + "pendingRequest=\(status.hasPendingReviewRequest ? "yes" : "no"), "
+                + "reviewerReRequested=\(status.changesRequestedReviewerIsPending ? "yes" : "no"), "
                 + "idle=\(terminalIdle ? "yes" : "no"), "
                 + "cooldown=\(cooldownElapsed ? "ok" : "waiting"))",
             now: now)
@@ -3624,6 +3632,7 @@ public final class IssueTracker {
             Self.autoReReviewRoundKey(url: $0.url, headRefOid: $0.headRefOid, lastChangesRequestedAt: $0.lastChangesRequestedAt)
         })
         autoReRequestAttempted.formIntersection(liveRoundKeys)
+        autoReReviewFailureCounts = autoReReviewFailureCounts.filter { liveRoundKeys.contains($0.key) }
 
         let now = Date()
         var dispatched = 0
@@ -3663,14 +3672,22 @@ public final class IssueTracker {
             autoReRequestInFlight.insert(prLink.url)
             dispatched += 1
             let logins = pr.changesRequestedReviewerLogins
-            CrowLog.automation(
-                "auto-re-request: dispatched #\(pr.number) → \(logins.joined(separator: ", ")) "
-                + "(lastCR=\(Self.iso(pr.lastChangesRequestedAt)), lastCommit=\(Self.iso(pr.lastSubstantiveCommitAt)))")
+            // Through the shared limiter, and stamped with the head: a retry
+            // within the same round repeats this message verbatim and is
+            // deduped, while a genuinely new round (new push or new reviewer
+            // submission) changes the sha or the timestamp and logs.
+            logSteadyState(
+                channel: Self.autoReReviewLogChannel,
+                prURL: prLink.url,
+                message: "auto-re-request: dispatched #\(pr.number) → \(logins.joined(separator: ", ")) "
+                    + "(sha=\(pr.headRefOid.prefix(8)), lastCR=\(Self.iso(pr.lastChangesRequestedAt)), "
+                    + "lastCommit=\(Self.iso(pr.lastSubstantiveCommitAt)))",
+                now: now)
             let capturedSession = session
             Task { await self.attemptReRequestReview(session: capturedSession, pr: pr, roundKey: roundKey) }
         }
         if dispatched == 0 {
-            if lastAutoReReviewIdleLogAt.map({ now.timeIntervalSince($0) >= 3600 }) ?? true {
+            if lastAutoReReviewIdleLogAt.map({ now.timeIntervalSince($0) >= Self.steadyStateLogHeartbeat }) ?? true {
                 lastAutoReReviewIdleLogAt = now
                 CrowLog.automation("auto-re-request: enabled, no candidates this poll")
             }
@@ -3688,37 +3705,70 @@ public final class IssueTracker {
         "\(url)\n\(headRefOid)\n\(iso(lastChangesRequestedAt))"
     }
 
+    /// Give up on a round after this many failed attempts. The inputs to a
+    /// re-request are fixed for the life of a round — same PR, same logins —
+    /// so a failure that isn't transient will never stop being a failure.
+    /// Retrying forever would re-dispatch every 60s poll for the life of the
+    /// PR (review of #930).
+    nonisolated static let maxAutoReReviewFailureRetries = 3
+
     /// Perform the re-request. Capability-gated like every other PR write, so
     /// a provider without `.requestReviewers` degrades to a logged skip.
+    ///
+    /// Failure handling mirrors `attemptRebase`'s bounded-retry shape rather
+    /// than `attemptDirectMerge`'s latch-everything one: a re-request is
+    /// idempotent, so retrying a transient network failure is free, while
+    /// retrying forever is not. Both terminal conditions below leave the round
+    /// key latched, so they log once per round rather than once per poll.
     private func attemptReRequestReview(session: Session, pr: ViewerPR, roundKey: String) async {
         defer { autoReRequestInFlight.remove(pr.url) }
         guard let backend = codeBackend(for: session) else {
-            CrowLog.automation("auto-re-request: #\(pr.number) failed:no-code-backend")
-            autoReRequestAttempted.remove(roundKey)
+            // Terminal for this session, not transient: the provider is a
+            // property of the session and can't change under a live round.
+            // Latch, like the capability gate below.
+            logSteadyState(
+                channel: Self.autoReReviewLogChannel,
+                prURL: pr.url,
+                message: "auto-re-request: #\(pr.number) skipped:no-code-backend",
+                now: Date())
             return
         }
         guard backend.capabilities.contains(.requestReviewers) else {
-            // Not a retryable condition — leave the round key latched so this
-            // doesn't re-log every poll for the life of the PR.
-            CrowLog.automation(
-                "auto-re-request: #\(pr.number) skipped:provider-unsupported (\(backend.provider.rawValue))")
+            logSteadyState(
+                channel: Self.autoReReviewLogChannel,
+                prURL: pr.url,
+                message: "auto-re-request: #\(pr.number) skipped:provider-unsupported "
+                    + "(\(backend.provider.rawValue))",
+                now: Date())
             return
         }
         let logins = pr.changesRequestedReviewerLogins
         do {
             try await backend.requestReviewers(prURL: pr.url, logins: logins)
+            autoReReviewFailureCounts.removeValue(forKey: roundKey)
             CrowLog.automation(
                 "auto-re-request: #\(pr.number) re-requested \(logins.joined(separator: ", ")) "
                 + "— session=\(session.id.uuidString)")
         } catch {
-            // Clear the round key so the next poll retries. The PR is still
-            // in `.awaitingReRequest` (nothing changed host-side), so this is
-            // a genuine retry rather than a duplicate request — and if the
-            // call actually landed despite the error, re-adding a pending
-            // reviewer is a no-op.
-            autoReRequestAttempted.remove(roundKey)
-            CrowLog.automation(
-                "auto-re-request: #\(pr.number) failed:\(error.localizedDescription.prefix(200))")
+            let failures = (autoReReviewFailureCounts[roundKey] ?? 0) + 1
+            autoReReviewFailureCounts[roundKey] = failures
+            let giveUp = failures >= Self.maxAutoReReviewFailureRetries
+            if !giveUp {
+                // Clear the round key so the next poll retries. The PR is
+                // still in `.awaitingReRequest` (nothing changed host-side),
+                // so this is a genuine retry rather than a duplicate request —
+                // and if the call actually landed despite the error, re-adding
+                // a pending reviewer is a no-op.
+                autoReRequestAttempted.remove(roundKey)
+            }
+            logSteadyState(
+                channel: Self.autoReReviewLogChannel,
+                prURL: pr.url,
+                message: "auto-re-request: #\(pr.number) failed "
+                    + "(attempt \(failures)/\(Self.maxAutoReReviewFailureRetries)"
+                    + "\(giveUp ? ", giving up until the next round" : "")): "
+                    + "\(error.localizedDescription.prefix(200))",
+                now: Date())
         }
     }
 
@@ -3780,7 +3830,14 @@ public final class IssueTracker {
             isOpen: pr.state == "OPEN",
             lastChangesRequestedAt: pr.lastChangesRequestedAt,
             lastSubstantiveCommitAt: pr.lastSubstantiveCommitAt,
-            hasPendingReviewRequest: pr.hasPendingReviewRequest,
+            // Reviewer-scoped, not PR-wide: an unrelated reviewer who is still
+            // pending from the original request must not read as "the ball is
+            // with the reviewer" (review of #930).
+            changesRequestedReviewerIsPending: PRStatus.changesRequestedReviewerIsPending(
+                changesRequestedReviewers: pr.changesRequestedReviewerLogins,
+                pendingReviewers: pr.pendingReviewerLogins,
+                anyPendingRequest: pr.hasPendingReviewRequest
+            ),
             // Same case-insensitive match `shouldAttemptAutoMerge` gates on —
             // surfaced for the UI so the sidebar can show "labeled for merge"
             // separately from "auto-merge already enabled" (CROW-773).

@@ -31,13 +31,21 @@ public struct PRStatus: Codable, Sendable, Equatable {
     /// pushed a fix". See `GitHubCodeBackend.parsePRNode` for the full note
     /// including the amend/cherry-pick gap this deliberately accepts.
     public var lastSubstantiveCommitAt: Date?
-    /// Whether the PR currently has at least one *pending* review request.
-    /// The host clears the request when a reviewer submits, so on a
-    /// CHANGES_REQUESTED PR this is the difference between "the ball is in
-    /// the author's court" (`false`) and "somebody has already been asked to
-    /// look again" (`true`) — the third state the CROW-921 loop was missing.
-    /// `false` when the provider doesn't surface it (GitLab today).
-    public var hasPendingReviewRequest: Bool
+    /// Whether one of the reviewers who requested changes has since been
+    /// **re-requested** — i.e. the ball is back with the reviewer rather than
+    /// the author. The third state the CROW-921 loop was missing.
+    ///
+    /// Deliberately *not* "the PR has a pending review request". Requests are
+    /// per-reviewer and the host clears only the submitting reviewer's, so a
+    /// PR routinely carries A's CHANGES_REQUESTED verdict alongside B's
+    /// still-pending original request. Keying on "anything pending" would read
+    /// that as "the ball is with the reviewer" and silence both halves of the
+    /// loop for a PR whose findings nobody has addressed — the same dead-end
+    /// CROW-921 exists to close, and a regression against CROW-508 (review of
+    /// #930). Derive it with `changesRequestedReviewerIsPending(…)`.
+    ///
+    /// `false` when the provider doesn't surface review requests (GitLab).
+    public var changesRequestedReviewerIsPending: Bool
     /// Whether the PR currently carries the `crow:merge` auto-merge label
     /// (`IssueTracker.autoMergeLabel`). Distinct from
     /// `Session.autoMergeEnabledAt`, which records that Crow has already
@@ -54,7 +62,7 @@ public struct PRStatus: Codable, Sendable, Equatable {
         isOpen: Bool = true,
         lastChangesRequestedAt: Date? = nil,
         lastSubstantiveCommitAt: Date? = nil,
-        hasPendingReviewRequest: Bool = false,
+        changesRequestedReviewerIsPending: Bool = false,
         hasMergeLabel: Bool = false
     ) {
         self.checksPass = checksPass
@@ -65,7 +73,7 @@ public struct PRStatus: Codable, Sendable, Equatable {
         self.isOpen = isOpen
         self.lastChangesRequestedAt = lastChangesRequestedAt
         self.lastSubstantiveCommitAt = lastSubstantiveCommitAt
-        self.hasPendingReviewRequest = hasPendingReviewRequest
+        self.changesRequestedReviewerIsPending = changesRequestedReviewerIsPending
         self.hasMergeLabel = hasMergeLabel
     }
 
@@ -79,13 +87,13 @@ public struct PRStatus: Codable, Sendable, Equatable {
         isOpen = try c.decodeIfPresent(Bool.self, forKey: .isOpen) ?? true
         lastChangesRequestedAt = try c.decodeIfPresent(Date.self, forKey: .lastChangesRequestedAt)
         lastSubstantiveCommitAt = try c.decodeIfPresent(Date.self, forKey: .lastSubstantiveCommitAt)
-        hasPendingReviewRequest = try c.decodeIfPresent(Bool.self, forKey: .hasPendingReviewRequest) ?? false
+        changesRequestedReviewerIsPending = try c.decodeIfPresent(Bool.self, forKey: .changesRequestedReviewerIsPending) ?? false
         hasMergeLabel = try c.decodeIfPresent(Bool.self, forKey: .hasMergeLabel) ?? false
     }
 
     private enum CodingKeys: String, CodingKey {
         case checksPass, reviewStatus, mergeable, failedCheckNames, headSha, isOpen
-        case lastChangesRequestedAt, lastSubstantiveCommitAt, hasPendingReviewRequest, hasMergeLabel
+        case lastChangesRequestedAt, lastSubstantiveCommitAt, changesRequestedReviewerIsPending, hasMergeLabel
     }
 
     public enum CheckStatus: String, Codable, Sendable {
@@ -136,6 +144,40 @@ public struct PRStatus: Codable, Sendable, Equatable {
         !isMerged && (checksPass == .failing || reviewStatus == .changesRequested || mergeable == .conflicting)
     }
 
+    /// Whether one of the reviewers blocking this PR has been re-requested,
+    /// from the two lists the host gives us (CROW-921, review of #930).
+    ///
+    /// Two shapes mean "the ball is with the reviewer", and both must be
+    /// caught because GitHub's `latestReviews` hides a review as soon as its
+    /// author is re-requested:
+    ///
+    /// 1. **A blocking reviewer is explicitly pending.** The intersection is
+    ///    non-empty. Rare on GitHub for the reason above, but the honest
+    ///    reading of the data and true on hosts that don't hide the review.
+    /// 2. **Something is pending and no blocking reviewer is visible.** The
+    ///    host hid the CHANGES_REQUESTED review because it re-requested its
+    ///    author — verified live: a PR reading `reviewDecision:
+    ///    CHANGES_REQUESTED` with `latestReviews: []` and a pending request.
+    ///
+    /// What it must *not* catch is the case that broke #930's first cut: A
+    /// requested changes and is visible, while unrelated reviewer B is still
+    /// pending from the original request. Clause 1 is false (B isn't a
+    /// blocker) and clause 2 is false (A is visible), so the PR correctly
+    /// stays in `.needsRefine` / `.awaitingReRequest` and the loop keeps
+    /// working.
+    ///
+    /// `anyPendingRequest` rather than `!pendingReviewers.isEmpty` in clause 2
+    /// because a Team review request has no login — `totalCount` is the only
+    /// evidence it exists.
+    public static func changesRequestedReviewerIsPending(
+        changesRequestedReviewers: [String],
+        pendingReviewers: [String],
+        anyPendingRequest: Bool
+    ) -> Bool {
+        if !Set(pendingReviewers).intersection(changesRequestedReviewers).isEmpty { return true }
+        return anyPendingRequest && changesRequestedReviewers.isEmpty
+    }
+
     /// Where a CHANGES_REQUESTED PR sits in the review round-trip (CROW-921).
     ///
     /// The loop originally had two states and dead-ended between them: the
@@ -169,12 +211,16 @@ public struct PRStatus: Codable, Sendable, Equatable {
     /// contradictory conditions — every CHANGES_REQUESTED PR is in exactly one
     /// state, and the two actions are mutually exclusive by construction.
     ///
-    /// Order matters. The pending-request check sits *above* the
+    /// Order matters. The re-requested check sits *above* the
     /// `lastChangesRequestedAt` guard on purpose: GitHub drops a review from
     /// `latestReviews` as soon as its author is re-requested, which nils the
     /// timestamp. Checked in the other order, a PR genuinely awaiting its
     /// reviewer would report `.notApplicable` and the gated-evaluation log
     /// would say "no CR timestamp" instead of naming the real state.
+    ///
+    /// It is `changesRequestedReviewerIsPending`, not "any pending request" —
+    /// see that field for why a PR-wide reading silently dead-ends
+    /// multi-reviewer PRs.
     ///
     /// Nil tolerance is inherited from CROW-508:
     /// - `lastChangesRequestedAt == nil`: the host said CHANGES_REQUESTED but
@@ -185,7 +231,7 @@ public struct PRStatus: Codable, Sendable, Equatable {
     ///   agent still owes a response.
     public static func changesRequestedState(status: PRStatus) -> ChangesRequestedState {
         guard status.reviewStatus == .changesRequested, status.isOpen else { return .notApplicable }
-        if status.hasPendingReviewRequest { return .awaitingReviewer }
+        if status.changesRequestedReviewerIsPending { return .awaitingReviewer }
         guard let lastReview = status.lastChangesRequestedAt else { return .notApplicable }
         guard let lastCommit = status.lastSubstantiveCommitAt else { return .needsRefine }
         return lastCommit < lastReview ? .needsRefine : .awaitingReRequest

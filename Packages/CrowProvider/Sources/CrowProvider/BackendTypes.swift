@@ -85,10 +85,23 @@ public struct PRRecord: Sendable {
     /// its author is re-requested — so this is naturally empty in exactly the
     /// state where re-requesting would be wrong.
     public let changesRequestedReviewerLogins: [String]
-    /// Whether the PR currently has at least one *pending* review request
-    /// (GraphQL `reviewRequests.totalCount > 0`). GitHub clears the request
-    /// when a reviewer submits, so `false` on a CHANGES_REQUESTED PR means
-    /// nobody has been asked to look again.
+    /// Logins of the reviewers with a *pending* review request (GraphQL
+    /// `reviewRequests`). Users only — a Team request carries no login and is
+    /// visible instead through `hasPendingReviewRequest`.
+    ///
+    /// Requests are per-reviewer: the host clears only the *submitting*
+    /// reviewer's request, so this list and `changesRequestedReviewerLogins`
+    /// routinely hold different people (A reviewed and blocked; B was asked at
+    /// the same time and hasn't looked). Deciding anything from "is something
+    /// pending" alone therefore silences the loop for a PR whose findings
+    /// nobody has addressed. Consult
+    /// `PRStatus.changesRequestedReviewerIsPending`, never this field or
+    /// `hasPendingReviewRequest` directly.
+    public let pendingReviewerLogins: [String]
+    /// Whether the PR has *any* pending review request, Users and Teams alike
+    /// (`reviewRequests.totalCount > 0`). Strictly weaker than
+    /// `pendingReviewerLogins`: use it only for the "is anyone at all waiting"
+    /// question, which is the one thing a Team request can answer.
     ///
     /// `false` also means "not fetched" — the field is absent from the
     /// stale-PR follow-up query and from GitLab. That direction is deliberate:
@@ -132,6 +145,7 @@ public struct PRRecord: Sendable {
         lastChangesRequestedAt: Date? = nil,
         lastSubstantiveCommitAt: Date? = nil,
         changesRequestedReviewerLogins: [String] = [],
+        pendingReviewerLogins: [String] = [],
         hasPendingReviewRequest: Bool = false,
         updatedAt: Date? = nil,
         mergeCommitOid: String? = nil,
@@ -156,6 +170,7 @@ public struct PRRecord: Sendable {
         self.lastChangesRequestedAt = lastChangesRequestedAt
         self.lastSubstantiveCommitAt = lastSubstantiveCommitAt
         self.changesRequestedReviewerLogins = changesRequestedReviewerLogins
+        self.pendingReviewerLogins = pendingReviewerLogins
         self.hasPendingReviewRequest = hasPendingReviewRequest
         self.updatedAt = updatedAt
         self.mergeCommitOid = mergeCommitOid

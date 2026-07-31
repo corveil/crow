@@ -1644,7 +1644,7 @@ final class BackendsTests: XCTestCase {
                       {"author": null, "state": "CHANGES_REQUESTED",
                        "submittedAt": "2026-06-07T12:00:00Z"}
                     ]},
-                    "reviewRequests": {"totalCount": 0},
+                    "reviewRequests": {"totalCount": 0, "nodes": []},
                     "commits": {"nodes": []}
                   },
                   {
@@ -1654,7 +1654,9 @@ final class BackendsTests: XCTestCase {
                     "reviewDecision": "CHANGES_REQUESTED",
                     "headRefOid": "def",
                     "latestReviews": {"nodes": []},
-                    "reviewRequests": {"totalCount": 1},
+                    "reviewRequests": {"totalCount": 1, "nodes": [
+                      {"requestedReviewer": {"__typename": "User", "login": "dgershman"}}
+                    ]},
                     "commits": {"nodes": []}
                   },
                   {
@@ -1662,6 +1664,23 @@ final class BackendsTests: XCTestCase {
                     "url": "https://github.com/a/b/pull/13",
                     "state": "OPEN",
                     "headRefOid": "ghi",
+                    "commits": {"nodes": []}
+                  },
+                  {
+                    "number": 14,
+                    "url": "https://github.com/a/b/pull/14",
+                    "state": "OPEN",
+                    "reviewDecision": "CHANGES_REQUESTED",
+                    "headRefOid": "jkl",
+                    "latestReviews": {"nodes": [
+                      {"author": {"login": "a"}, "state": "CHANGES_REQUESTED",
+                       "submittedAt": "2026-06-07T10:00:00Z"}
+                    ]},
+                    "reviewRequests": {"totalCount": 2, "nodes": [
+                      null,
+                      {"requestedReviewer": {"__typename": "User", "login": "b"}},
+                      {"requestedReviewer": {"__typename": "Team", "slug": "reviewers"}}
+                    ]},
                     "commits": {"nodes": []}
                   }
                 ]
@@ -1673,19 +1692,30 @@ final class BackendsTests: XCTestCase {
         }
         """
         let listing = try GitHubCodeBackend.parseMonitoredPRsResponse(json)
-        XCTAssertEqual(listing.viewerPRs.count, 3)
+        XCTAssertEqual(listing.viewerPRs.count, 4)
         // Only the CHANGES_REQUESTED author; the approver and the null-author
         // node are dropped rather than producing an empty-string reviewer.
         XCTAssertEqual(listing.viewerPRs[0].changesRequestedReviewerLogins, ["dgershman"])
         XCTAssertFalse(listing.viewerPRs[0].hasPendingReviewRequest)
+        XCTAssertEqual(listing.viewerPRs[0].pendingReviewerLogins, [])
         // The live GitHub shape for "awaiting reviewer": the re-request
         // emptied `latestReviews` while reviewDecision still says
         // CHANGES_REQUESTED.
         XCTAssertTrue(listing.viewerPRs[1].hasPendingReviewRequest)
+        XCTAssertEqual(listing.viewerPRs[1].pendingReviewerLogins, ["dgershman"])
         XCTAssertEqual(listing.viewerPRs[1].changesRequestedReviewerLogins, [])
         // Field absent entirely (stale-PR follow-up query shape) reads as
         // "no pending request", never as a crash or a nil-vs-false confusion.
         XCTAssertFalse(listing.viewerPRs[2].hasPendingReviewRequest)
+        XCTAssertEqual(listing.viewerPRs[2].pendingReviewerLogins, [])
+        // The multi-reviewer shape (review of #930): A blocks and is visible,
+        // B is still pending from the original request, and a Team request is
+        // visible only through `totalCount` — a Team carries no login, and
+        // folding a slug into the login list would risk colliding with a real
+        // user. Nulls survive via LenientJSON, as everywhere else.
+        XCTAssertEqual(listing.viewerPRs[3].changesRequestedReviewerLogins, ["a"])
+        XCTAssertEqual(listing.viewerPRs[3].pendingReviewerLogins, ["b"])
+        XCTAssertTrue(listing.viewerPRs[3].hasPendingReviewRequest)
     }
 
     /// A login that could be read as a `gh` flag must never reach argv.

@@ -45,7 +45,7 @@ struct IssueTrackerAutoReReviewTests {
         lastChangesRequestedAt: Date? = nil,
         lastSubstantiveCommitAt: Date? = nil,
         reviewers: [String] = ["dgershman"],
-        hasPendingReviewRequest: Bool = false
+        changesRequestedReviewerIsPending: Bool = false
     ) -> PRRecord {
         PRRecord(
             number: 1898,
@@ -67,7 +67,12 @@ struct IssueTrackerAutoReReviewTests {
             lastChangesRequestedAt: lastChangesRequestedAt,
             lastSubstantiveCommitAt: lastSubstantiveCommitAt,
             changesRequestedReviewerLogins: reviewers,
-            hasPendingReviewRequest: hasPendingReviewRequest
+            // "The blocking reviewer has been re-requested" as the host would
+            // actually present it: the same people appear in the pending list.
+            // Fixtures that need the *unrelated* pending reviewer shape build
+            // a `PRRecord` directly — see the multi-reviewer tests below.
+            pendingReviewerLogins: changesRequestedReviewerIsPending ? reviewers : [],
+            hasPendingReviewRequest: changesRequestedReviewerIsPending
         )
     }
 
@@ -123,7 +128,7 @@ struct IssueTrackerAutoReReviewTests {
         let pr = makePR(
             lastChangesRequestedAt: reviewAt,
             lastSubstantiveCommitAt: afterReview,
-            hasPendingReviewRequest: true
+            changesRequestedReviewerIsPending: true
         )
         #expect(skipReason(pr: pr) == .notAwaitingReRequest)
     }
@@ -362,6 +367,176 @@ struct IssueTrackerAutoReReviewTests {
         tracker.applyPRStatuses(viewerPRs: [fixedButUnrequestedPR()])
         #expect(tracker.steadyStateLogDedupe.isEmpty)
     }
+
+    @Test
+    func failureCountsArePrunedWithTheRoundKeys() {
+        // Same boundedness requirement as the round-key set they shadow.
+        let (tracker, _, _) = makeTracker()
+        let staleKey = IssueTracker.autoReReviewRoundKey(
+            url: "https://github.com/foo/bar/pull/1", headRefOid: shaA, lastChangesRequestedAt: reviewAt)
+        tracker.autoReReviewFailureCounts[staleKey] = 2
+        tracker.applyPRStatuses(viewerPRs: [fixedButUnrequestedPR()])
+        #expect(tracker.autoReReviewFailureCounts[staleKey] == nil)
+    }
+
+    // MARK: - Failure path
+
+    @Test
+    func aPermanentlyUnservableSessionIsNotRetriedEveryPoll() async {
+        // The session's provider (`.corveil`) has no `CodeBackend`, which is a
+        // property of the session and cannot change under a live round. The
+        // first cut cleared the round key here, so the watcher re-dispatched
+        // every 60s poll for the life of the PR and emitted two un-deduped log
+        // lines each time (review of #930). It must latch instead.
+        let (tracker, _, _) = makeTracker()
+        let pr = fixedButUnrequestedPR()
+        tracker.applyPRStatuses(viewerPRs: [pr])
+        let roundKey = IssueTracker.autoReReviewRoundKey(
+            url: prURL, headRefOid: pr.headRefOid, lastChangesRequestedAt: pr.lastChangesRequestedAt)
+        #expect(tracker.autoReRequestAttempted.contains(roundKey))
+
+        // Let the dispatched attempt run to completion.
+        await Task.yield()
+        try? await Task.sleep(nanoseconds: 50_000_000)
+
+        // In-flight released so a real retry could happen, but the round key
+        // stays latched so no further poll re-dispatches.
+        #expect(!tracker.autoReRequestInFlight.contains(prURL))
+        #expect(tracker.autoReRequestAttempted.contains(roundKey))
+
+        tracker.applyPRStatuses(viewerPRs: [pr])
+        #expect(!tracker.autoReRequestInFlight.contains(prURL))
+    }
+
+    @Test
+    func theRetryBudgetIsBounded() {
+        // The inputs to a re-request are fixed for the life of a round — same
+        // PR, same logins — so a failure that isn't transient never stops
+        // being one. Three attempts, then the round is latched until a new
+        // push or a new reviewer submission re-arms it.
+        #expect(IssueTracker.maxAutoReReviewFailureRetries == 3)
+    }
+
+    // MARK: - The invariant the design rests on
+
+    @Test
+    func theTwoActionsNeverBothFireForTheSamePR() {
+        // Prompting the agent and pinging the reviewer are mutually exclusive
+        // responses to the same PR, and nothing in the type system enforces
+        // it — the guarantee comes from both gates deriving from one
+        // classifier. Sweep the cross-product of every input either gate
+        // reads and assert they never both return "go".
+        //
+        // (Asserting this in CrowCore is impossible: only the classifier's
+        // single enum value is in scope there, so any such check is a
+        // tautology. Both gate functions are visible here.)
+        let dates: [Date?] = [nil, beforeReview, reviewAt, afterReview]
+        var bothQuiet = 0, refineFired = 0, reRequestFired = 0
+        for reviewDecision in ["CHANGES_REQUESTED", "APPROVED", "REVIEW_REQUIRED", ""] {
+            for prState in ["OPEN", "MERGED"] {
+                for isDraft in [true, false] {
+                    for cr in dates {
+                        for commit in dates {
+                            for reviewerPending in [true, false] {
+                                for reviewers in [["dgershman"], []] {
+                                    for settled in [true, false] {
+                                        let pr = makePR(
+                                            reviewDecision: reviewDecision,
+                                            state: prState,
+                                            isDraft: isDraft,
+                                            lastChangesRequestedAt: cr,
+                                            lastSubstantiveCommitAt: commit,
+                                            reviewers: reviewers,
+                                            changesRequestedReviewerIsPending: reviewerPending)
+                                        let status = IssueTracker.buildPRStatus(from: pr)
+                                        let refineGoes = IssueTracker.needsRefineGate(
+                                            status: status,
+                                            toggleOn: true,
+                                            isReviewSession: false,
+                                            firstObservation: false,
+                                            terminalIdle: settled,
+                                            cooldownElapsed: true) == nil
+                                        let reRequestGoes = IssueTracker.autoReReviewSkipReason(
+                                            pr: pr,
+                                            status: status,
+                                            isReviewSession: false,
+                                            agentSettled: settled) == nil
+                                        #expect(!(refineGoes && reRequestGoes))
+                                        if refineGoes { refineFired += 1 }
+                                        else if reRequestGoes { reRequestFired += 1 }
+                                        else { bothQuiet += 1 }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // A sweep where neither gate ever opens would satisfy the invariant
+        // vacuously; assert both arms are genuinely exercised.
+        #expect(refineFired > 0)
+        #expect(reRequestFired > 0)
+        #expect(bothQuiet > 0)
+    }
+
+    // MARK: - CROW-921 review of #930 — the multi-reviewer regression
+
+    @Test
+    func anUnrelatedPendingReviewerDoesNotSilenceTheLoop() {
+        // A requested changes and is still blocking; B was asked at the same
+        // time and never looked, so B's request is still pending. Keying the
+        // state on "does the PR have any pending request" read that as "the
+        // ball is with the reviewer" and went quiet on both halves — the same
+        // permanent dead-end CROW-921 exists to close, and a regression
+        // against shipped CROW-508 behaviour.
+        //
+        // Driven from the raw provider fields through `buildPRStatus` so the
+        // derivation is exercised end to end, not just the classifier.
+        let pr = PRRecord(
+            number: 1898,
+            url: prURL,
+            state: "OPEN",
+            reviewDecision: "CHANGES_REQUESTED",
+            headRefOid: shaA,
+            latestReviewStates: ["CHANGES_REQUESTED"],
+            lastChangesRequestedAt: reviewAt,
+            lastSubstantiveCommitAt: beforeReview,   // A's findings unaddressed
+            changesRequestedReviewerLogins: ["a"],   // A blocks and is visible
+            pendingReviewerLogins: ["b"],            // B was never cleared
+            hasPendingReviewRequest: true
+        )
+        let status = IssueTracker.buildPRStatus(from: pr)
+
+        #expect(!status.changesRequestedReviewerIsPending)
+        #expect(PRStatus.changesRequestedState(status: status) == .needsRefine)
+        #expect(PRStatus.needsRefine(status: status, terminalIdle: true))
+    }
+
+    @Test
+    func aReRequestedBlockerStillReadsAsAwaitingReviewer() {
+        // The other side of the same fix: once A is re-requested the host
+        // hides A's review, so the blocker list empties while the request
+        // appears. That must still be `.awaitingReviewer` — otherwise the
+        // watcher would re-request a reviewer who is already looking.
+        let pr = PRRecord(
+            number: 1898,
+            url: prURL,
+            state: "OPEN",
+            reviewDecision: "CHANGES_REQUESTED",
+            headRefOid: shaA,
+            lastChangesRequestedAt: nil,             // anchor gone with the review
+            lastSubstantiveCommitAt: afterReview,
+            changesRequestedReviewerLogins: [],
+            pendingReviewerLogins: ["a"],
+            hasPendingReviewRequest: true
+        )
+        let status = IssueTracker.buildPRStatus(from: pr)
+
+        #expect(status.changesRequestedReviewerIsPending)
+        #expect(PRStatus.changesRequestedState(status: status) == .awaitingReviewer)
+        #expect(!PRStatus.needsRefine(status: status, terminalIdle: true))
+    }
 }
 
 /// CROW-921 — the gated-evaluation log. `applyPRStatuses` used to log only
@@ -378,14 +553,14 @@ struct NeedsRefineGateTests {
         review: PRStatus.ReviewStatus = .changesRequested,
         lastChangesRequestedAt: Date? = nil,
         lastSubstantiveCommitAt: Date? = nil,
-        hasPendingReviewRequest: Bool = false
+        changesRequestedReviewerIsPending: Bool = false
     ) -> PRStatus {
         PRStatus(
             reviewStatus: review,
             isOpen: true,
             lastChangesRequestedAt: lastChangesRequestedAt,
             lastSubstantiveCommitAt: lastSubstantiveCommitAt,
-            hasPendingReviewRequest: hasPendingReviewRequest
+            changesRequestedReviewerIsPending: changesRequestedReviewerIsPending
         )
     }
 
@@ -436,7 +611,7 @@ struct NeedsRefineGateTests {
         #expect(gate(status(
             lastChangesRequestedAt: reviewAt,
             lastSubstantiveCommitAt: afterReview,
-            hasPendingReviewRequest: true)) == .awaitingReviewer)
+            changesRequestedReviewerIsPending: true)) == .awaitingReviewer)
     }
 
     @Test

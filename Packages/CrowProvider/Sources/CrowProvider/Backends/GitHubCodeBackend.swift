@@ -439,7 +439,10 @@ public struct GitHubCodeBackend: CodeBackend {
               }
             }
             latestReviews(first: 20) { nodes { author { login } state submittedAt } }
-            reviewRequests(first: 1) { totalCount }
+            reviewRequests(first: 20) {
+              totalCount
+              nodes { requestedReviewer { __typename ... on User { login } } }
+            }
             commits(last: 30) {
               nodes {
                 commit {
@@ -638,14 +641,27 @@ public struct GitHubCodeBackend: CodeBackend {
             .filter { ($0["state"] as? String) == "CHANGES_REQUESTED" }
             .compactMap { ($0["author"] as? [String: Any])?["login"] as? String }
             .filter { !$0.isEmpty && seenLogins.insert($0).inserted }
-        // Whether anyone has already been asked to look again. GitHub clears
-        // the request when a reviewer submits, so on a CHANGES_REQUESTED PR
-        // `false` means the ball is in the author's court and `true` means
-        // it's back with the reviewer. Absent field (stale-PR follow-up query)
-        // reads as `false`; see the `PRRecord` doc comment for why that
-        // direction can't provoke a spurious re-request.
-        let hasPendingReviewRequest =
-            ((node["reviewRequests"] as? [String: Any])?["totalCount"] as? Int ?? 0) > 0
+        // Whether anyone has already been asked to look again, and who.
+        //
+        // Review requests are **per reviewer**: when A submits a review the
+        // host clears only A's request, so a PR can carry a CHANGES_REQUESTED
+        // verdict from A while B's original request is still pending. A
+        // PR-wide "is anything pending" boolean therefore cannot decide
+        // anything — an unrelated pending reviewer would read as "the ball is
+        // with the reviewer" and silence both halves of the loop for a PR
+        // whose findings nobody has addressed (review of #930).
+        //
+        // So carry both: the User logins (Teams have no login and are
+        // deliberately not folded in — a team slug could collide with a user
+        // login, and the intersection below is against review *authors*, who
+        // are always Users), plus `totalCount` for the "anything at all"
+        // question, which is the only thing a Team request can answer.
+        // `PRStatus.changesRequestedReviewerIsPending` combines them.
+        let reviewRequestsObj = node["reviewRequests"] as? [String: Any]
+        let pendingReviewerLogins = LenientJSON.nodes(node, "reviewRequests")
+            .compactMap { ($0["requestedReviewer"] as? [String: Any])?["login"] as? String }
+            .filter { !$0.isEmpty }
+        let hasPendingReviewRequest = ((reviewRequestsObj?["totalCount"] as? Int) ?? 0) > 0
         return PRRecord(
             number: number,
             url: url,
@@ -666,6 +682,7 @@ public struct GitHubCodeBackend: CodeBackend {
             lastChangesRequestedAt: lastChangesRequestedAt,
             lastSubstantiveCommitAt: lastSubstantiveCommitAt,
             changesRequestedReviewerLogins: changesRequestedReviewerLogins,
+            pendingReviewerLogins: pendingReviewerLogins,
             hasPendingReviewRequest: hasPendingReviewRequest,
             mergeCommitOid: mergeCommitOid,
             repoAutoMergeAllowed: repoAutoMergeAllowed
