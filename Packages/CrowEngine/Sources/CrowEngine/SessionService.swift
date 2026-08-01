@@ -2110,8 +2110,7 @@ public final class SessionService {
     /// Never mutates config.
     ///
     /// The single choke point both `create-manager` surfaces funnel through —
-    /// the web RPC (forwarded to `onCreateManager` → `createManagerSession`) and
-    /// the daemon RPC (`createManagerSession` directly). Routing the registry
+    /// the web RPC and the daemon RPC (`createManagerSession` directly). Routing the registry
     /// gate here (CROW-593; #834, via `AgentRegistry.registeredKind`) keeps the
     /// two symmetric — neither can persist a Manager with an unregistered kind
     /// that `managerCommand` would then silently launch as the default.

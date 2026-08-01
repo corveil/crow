@@ -225,12 +225,6 @@ public final class AppState {
     public var allowEntries: [AllowEntry] = []
     public var isLoadingAllowList: Bool = false
 
-    /// Called to scan and aggregate allow-list entries.
-    public var onLoadAllowList: (() -> Void)?
-
-    /// Called to promote selected patterns to the global settings.
-    public var onPromoteToGlobal: ((Set<String>) -> Void)?
-
     /// Lists the repos available to a workspace, as `owner/repo` slugs, by
     /// expanding its `alwaysInclude` specs against the provider — along with any
     /// specs that couldn't be resolved. Wired in AppDelegate; used by the Jobs
@@ -240,11 +234,6 @@ public final class AppState {
     /// Called when the user clicks the gear icon in the sidebar toolbar.
     /// AppDelegate wires this to its `showSettings()` method.
     public var onShowSettings: (() -> Void)?
-
-    /// Called when the user requests a manual refresh (toolbar button or ⌘R).
-    /// AppDelegate wires this to `IssueTracker.refresh()`, which re-fetches
-    /// issues, review requests, PR status, and runs auto-create/auto-complete.
-    public var onManualRefresh: (() -> Void)?
 
     // MARK: - PR & Tool Status
 
@@ -379,19 +368,8 @@ public final class AppState {
         hookState(for: sessionID).apply(snapshot)
     }
 
-    /// Called when the user clicks the sidebar "+" to spawn a new Manager session.
-    /// The optional `AgentKind` is a one-shot, per-session agent override chosen
-    /// from the picker menu; `nil` means "use the configured default" (#582).
-    public var onCreateManager: ((AgentKind?) -> Void)?
-
-    /// Called when user clicks "Work on" for an assigned issue.
-    public var onWorkOnIssue: ((String) -> Void)?  // receives issue URL
-
     /// Called when user clicks "Start Working" for multiple selected issues (batch mode).
     public var onBatchWorkOnIssues: (([String]) -> Void)?  // receives array of issue URLs
-
-    /// Called when user clicks "Start Review" for a PR review request.
-    public var onStartReview: ((String) -> Void)?  // receives PR URL
 
     /// Called when user clicks "Start Review" for multiple selected PR review requests (batch mode).
     public var onBatchStartReview: (([String]) -> Void)?  // receives array of PR URLs
@@ -438,22 +416,8 @@ public final class AppState {
     /// Called to mark a session as completed.
     public var onCompleteSession: ((UUID) -> Void)?
 
-    /// Called to mark a session's ticket as "In Review" on the GitHub Project board.
-    public var onMarkInReview: ((UUID) -> Void)?
-
-    /// Called to move a session's linked issue to its done/closed state on the
-    /// provider (GitHub close, GitLab close, Jira/Corveil transition to the
-    /// mapped completed status). On success also flips the session to `.completed`.
-    public var onMarkIssueDone: ((UUID) -> Void)?
-
-    /// Called to add the `crow:merge` auto-merge label to a session's PR.
-    public var onAddMergeLabel: ((UUID) -> Void)?
-
     /// Called to update session status to .inReview (persists to store).
     public var onSetSessionInReview: ((UUID) -> Void)?
-
-    /// Called to update session status back to .active (persists to store).
-    public var onSetSessionActive: ((UUID) -> Void)?
 
     /// Called to lock/unlock a session, exempting it from the retention cleanup
     /// reaper. Receives (sessionID, locked). Persists to store (CROW-573).
@@ -486,17 +450,8 @@ public final class AppState {
     /// Called to open a terminal at a session's primary worktree path.
     public var onOpenTerminal: ((UUID) -> Void)?
 
-    /// Called when the user clicks a quick action button on a session card
-    /// (e.g. "Merge PR", "Rebase & Fix Conflicts"). Receives the session ID
-    /// and the action chosen; the wired handler injects the corresponding
-    /// prompt into the session's managed Claude Code terminal.
-    public var onQuickAction: ((UUID, QuickAction) -> Void)?
-
     /// Called when the sound mute toggle is changed.
     public var onSoundMutedChanged: ((Bool) -> Void)?
-
-    /// Fire a job immediately, ignoring its enabled flag and schedule (job ID).
-    public var onRunJob: ((UUID) -> Void)?
 
     // MARK: - Computed Properties
 
@@ -595,7 +550,7 @@ public final class AppState {
     /// `.projectBoardStatus` capability. Wired by `AppDelegate` using
     /// `ProviderManager.taskBackend(for:)`. CrowCore does not depend on
     /// CrowProvider, so the capability lookup is injected as a closure
-    /// (same pattern as `onMarkInReview`, `onListWorkspaceRepos`).
+    /// (same pattern as `onListWorkspaceRepos`).
     /// Defaults to `nil` so unwired contexts (tests, previews) treat the
     /// capability as absent. See ADR 0005.
     public var canSetProjectStatusResolver: ((Session) -> Bool)?

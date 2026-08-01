@@ -134,9 +134,19 @@ private struct StubShellRunner: ShellRunner {
 /// #816 added the CLI verbs on top of these, plus the preconditions the web UI
 /// enforces by hiding menu items — a `crow` caller has no such affordance, so
 /// the guards have to live server-side.
+///
+/// #876 moved `mark-in-review` into the provider-side group: it now transitions
+/// the board *before* writing the session status, so its guards come from
+/// `IssueTracker` as `SessionActionError` and it needs a tracker to run at all.
+/// The other two verbs remain pure local writes.
 @Suite struct LocalStatusTests {
     /// `ticketURL` is nil unless asked for: `mark-in-review` requires one, the
     /// other two transitions don't.
+    ///
+    /// The tracker runs over a `StubShellRunner`, so `mark-in-review`'s provider
+    /// call completes against empty `gh` output — no board, no network — rather
+    /// than being skipped. `provider` is set for the same reason: without it the
+    /// tracker throws `.noProvider` before reaching the transition.
     @MainActor
     private func seededRouter(ticketURL: String? = nil, isManager: Bool = false)
         -> (CommandRouter, AppState, Session) {
@@ -148,11 +158,16 @@ private struct StubShellRunner: ShellRunner {
             kind: isManager ? .manager : .work,
             agentKind: .claudeCode)
         session.ticketURL = ticketURL
+        session.provider = .github
         appState.sessions = [session]
         store.mutate { $0.sessions = [session] }
+        let tracker = IssueTracker(
+            appState: appState,
+            providerManager: ProviderManager(shellRunner: StubShellRunner()),
+            store: store)
         let router = makeCommandRouter(
             appState: appState, store: store, git: GitManager(),
-            devRoot: NSTemporaryDirectory(), cockpit: nil)
+            devRoot: NSTemporaryDirectory(), cockpit: nil, tracker: tracker)
         return (router, appState, session)
     }
 
@@ -177,8 +192,33 @@ private struct StubShellRunner: ShellRunner {
 
     @Test @MainActor func statusTransitionRejectsMissingSessionID() async {
         let (router, _, _) = seededRouter()
-        let resp = await router.handle(request: JSONRPCRequest(id: 1, method: "mark-in-review"))
-        #expect(resp.error?.code == RPCErrorCode.invalidParams)
+        for method in ["mark-in-review", "complete-session", "set-session-active"] {
+            let resp = await router.handle(request: JSONRPCRequest(id: 1, method: method))
+            #expect(resp.error?.code == RPCErrorCode.invalidParams, "\(method) with no session_id")
+        }
+    }
+
+    /// The tracker guard precedes param validation, matching `mark-issue-done`
+    /// (`LocalLiveActionTests` pins the same ordering there): a daemon with no
+    /// provider reports the missing capability rather than degrading to the
+    /// status-only write #876 removed.
+    @Test @MainActor func markInReviewRequiresATracker() async {
+        let appState = AppState()
+        let store = JSONStore(directory: URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("crowd-status-\(UUID().uuidString)"))
+        var session = Session(name: "s", kind: .work, agentKind: .claudeCode)
+        session.ticketURL = "https://github.com/corveil/crow/issues/876"
+        session.provider = .github
+        appState.sessions = [session]
+        store.mutate { $0.sessions = [session] }
+        let router = makeCommandRouter(
+            appState: appState, store: store, git: GitManager(),
+            devRoot: NSTemporaryDirectory(), cockpit: nil)
+
+        let resp = await router.handle(request: JSONRPCRequest(
+            id: 1, method: "mark-in-review", params: ["session_id": .string(session.id.uuidString)]))
+        #expect(resp.error?.code == RPCErrorCode.applicationError)
+        #expect(appState.sessions.first?.status != .inReview, "status must not move without a board move")
     }
 
     @Test @MainActor func statusTransitionRejectsUnknownSession() async {

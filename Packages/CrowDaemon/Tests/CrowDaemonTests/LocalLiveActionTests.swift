@@ -116,10 +116,10 @@ import CrowPersistence
             jobScheduler: jobScheduler)
     }
 
-    // MARK: mark-issue-done / add-merge-label
+    // MARK: mark-in-review / mark-issue-done / add-merge-label
 
     @Test @MainActor func ticketActionsErrorWithoutTracker() async {
-        for method in ["mark-issue-done", "add-merge-label"] {
+        for method in ["mark-in-review", "mark-issue-done", "add-merge-label"] {
             let resp = await router().handle(request: JSONRPCRequest(
                 id: 1, method: method, params: ["session_id": .string(UUID().uuidString)]))
             #expect(resp.error?.code == RPCErrorCode.applicationError, "\(method) needs a tracker when app down")
@@ -131,7 +131,7 @@ import CrowPersistence
         // then a param error (proves we didn't stop at the tracker guard).
         let appState = AppState()
         let tracker = IssueTracker(appState: appState, providerManager: ProviderManager(), store: .temporary())
-        for method in ["mark-issue-done", "add-merge-label"] {
+        for method in ["mark-in-review", "mark-issue-done", "add-merge-label"] {
             let resp = await router(appState: appState, tracker: tracker)
                 .handle(request: JSONRPCRequest(id: 1, method: method))
             #expect(resp.error?.code == RPCErrorCode.invalidParams, "\(method) should validate params locally")
@@ -140,15 +140,16 @@ import CrowPersistence
 
     /// #816: `IssueTracker.markIssueDone` / `addMergeLabel` throw
     /// `SessionActionError` on an unmet precondition or a failed provider call,
-    /// and the handler maps that to `applicationError`. The web UI enforces the
-    /// same rules by hiding the menu items; `crow` can't, so the CLI would
-    /// otherwise print `{"ok":true}` for a call that did nothing. These pin the
-    /// mapping at the router boundary; the per-case guards are covered by
-    /// CrowEngine's `SessionActionReportingTests`.
+    /// and the handler maps that to `applicationError`. #876 moved
+    /// `markInReview` into the same contract. The web UI enforces the same rules
+    /// by hiding the menu items; `crow` can't, so the CLI would otherwise print
+    /// `{"ok":true}` for a call that did nothing. These pin the mapping at the
+    /// router boundary; the per-case guards are covered by CrowEngine's
+    /// `SessionActionReportingTests`.
     @Test @MainActor func ticketActionsRejectUnknownSession() async {
         let appState = AppState()
         let tracker = IssueTracker(appState: appState, providerManager: ProviderManager(), store: .temporary())
-        for method in ["mark-issue-done", "add-merge-label"] {
+        for method in ["mark-in-review", "mark-issue-done", "add-merge-label"] {
             let resp = await router(appState: appState, tracker: tracker).handle(request: JSONRPCRequest(
                 id: 1, method: method, params: ["session_id": .string(UUID().uuidString)]))
             #expect(resp.error?.code == RPCErrorCode.applicationError, "\(method) on an unknown session")

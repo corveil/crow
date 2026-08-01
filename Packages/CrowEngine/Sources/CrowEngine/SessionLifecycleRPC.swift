@@ -10,16 +10,17 @@ import Foundation
 /// without a socket (same pattern as `JobRPC`). Callers pass already-extracted
 /// values rather than an `AppState`, so nothing here needs main-actor isolation.
 ///
-/// `requireTicketURL` mirrors the web UI's menu gating in `web/app.js`: the
-/// browser hides "Mark In Review" when the session has no ticket, so it never
-/// reaches a handler that would half-do the action. The CLI has no such
-/// affordance, so the check lives server-side.
+/// The provider-side verbs (`mark-in-review`, `mark-issue-done`,
+/// `add-merge-label`) do **not** guard here — their preconditions and failures
+/// are reported by `IssueTracker` as `SessionActionError`, which covers the
+/// cases a handler can't see (missing provider, absent capability, unparseable
+/// repo slug, and every failed provider call). One source of truth, not two.
 ///
-/// The provider-side verbs (`mark-issue-done`, `add-merge-label`) do **not**
-/// guard here — their preconditions and failures are reported by
-/// `IssueTracker` as `SessionActionError`, which covers the cases a handler
-/// can't see (missing provider, absent capability, unparseable repo slug, and
-/// every failed provider call). One source of truth, not two.
+/// `mark-in-review` joined that group in #876, when it stopped being a
+/// status-only write and started moving the provider's board. That retired the
+/// `requireTicketURL` helper this enum used to carry for it — the ticket check
+/// now lives in `IssueTracker.markInReview` alongside the provider, Manager and
+/// session-existence checks, as `SessionActionError.noTicketURL`.
 public enum SessionLifecycleRPC {
     /// Decode the `session_id` param every lifecycle verb takes.
     ///
@@ -31,20 +32,26 @@ public enum SessionLifecycleRPC {
         return id
     }
 
-    /// Require a session to carry a linked ticket URL.
-    ///
-    /// - Throws: `RPCError.applicationError` when absent or blank.
-    public static func requireTicketURL(_ url: String?, verb: String) throws -> String {
-        guard let url = url?.trimmingCharacters(in: .whitespacesAndNewlines), !url.isEmpty else {
-            throw RPCError.applicationError(
-                "\(verb) needs a linked ticket — attach one with `crow set-ticket --url …`")
-        }
-        return url
-    }
-
     /// Response body for the three status-transition verbs, matching `set-status`.
-    public static func statusResult(id: UUID, status: SessionStatus) -> [String: JSONValue] {
-        ["session_id": .string(id.uuidString), "status": .string(status.rawValue)]
+    ///
+    /// `warning` carries the same contract as ``okResult(id:warning:)``'s: the
+    /// transition named in `status` really happened, so there is no error — but
+    /// something the verb also implies did not. `mark-in-review` moves the
+    /// session *and* the provider's board; when the provider has no In Review
+    /// status to move the ticket to, only half of that is possible, and saying
+    /// so beats a silent half-action (#876, the shape #888 established).
+    /// Omitted entirely when there is nothing to say, so `jq -e .warning` stays
+    /// a clean test and `complete-session` / `set-session-active` responses are
+    /// byte-identical to before.
+    public static func statusResult(
+        id: UUID, status: SessionStatus, warning: String? = nil
+    ) -> [String: JSONValue] {
+        var body: [String: JSONValue] = [
+            "session_id": .string(id.uuidString),
+            "status": .string(status.rawValue),
+        ]
+        if let warning, !warning.isEmpty { body["warning"] = .string(warning) }
+        return body
     }
 
     /// Response body for the two provider-side verbs. `ok` is what the web UI

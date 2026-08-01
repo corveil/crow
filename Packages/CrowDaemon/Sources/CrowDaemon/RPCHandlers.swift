@@ -1315,26 +1315,48 @@ func makeCommandRouter(
             }
         },
         // Session-lifecycle verbs, shared by the web session menu and the `crow`
-        // CLI (CROW-816). The `require*` guards mirror the browser's menu gating
-        // in `web/app.js` — the CLI has no such affordance, so without them a
-        // ticket-less or PR-less session gets a success receipt for a no-op.
+        // CLI (CROW-816).
         //
         // Deliberately NOT gated on the session's *current* status: the UI's
         // active/inReview/completed conditions decide which menu items to draw,
         // not what's legal. Enforcing them would break idempotent scripting
         // (running `crow complete-session` twice must not fail).
+        //
+        // Moves the provider's board to In Review *and* flips the Crow session
+        // (#876). Board first: a failed board move must not leave a success
+        // receipt behind, exactly as `mark-issue-done` orders it. Runs on the
+        // daemon's own IssueTracker — a pure provider CLI call, fully headless.
         "mark-in-review": { params in
+            // Tracker guard first, matching `mark-issue-done`: a provider-less
+            // daemon reports the missing capability rather than quietly
+            // degrading to a status-only write — which is the exact half-action
+            // this verb spent the post-ADR-0010 window performing.
+            guard let tracker else {
+                throw DaemonRPCError.applicationError(
+                    "Marking a session in review requires a provider-configured daemon")
+            }
             return try await mapRPCError {
                 let id = try SessionLifecycleRPC.sessionID(from: params)
-                return try await MainActor.run {
-                    guard let session = appState.sessions.first(where: { $0.id == id }) else {
-                        throw DaemonRPCError.applicationError("Session not found")
-                    }
-                    _ = try SessionLifecycleRPC.requireTicketURL(session.ticketURL, verb: "mark-in-review")
-                    return try applySessionStatus(
+                // Preconditions (session, Manager, ticket, provider) and every
+                // provider failure surface as typed `SessionActionError`s — the
+                // tracker is the single source of truth for them, so there is
+                // nothing to re-check here. A non-nil return is additive: the
+                // board could not move, but the session transition below can.
+                let warning = try await tracker.markInReview(sessionID: id)
+                // The tracker moves the session via `onSetSessionInReview`,
+                // which is only wired when the daemon has a SessionService
+                // (`wireTerminalAutomations`) — on a no-tmux host it is nil, so
+                // a transitioned board would leave the session active while we
+                // returned a success receipt. Apply the transition here too:
+                // idempotent when the callback already fired, and it reuses the
+                // same SessionService-or-direct-write fallback as
+                // `complete-session`.
+                _ = try await MainActor.run {
+                    try applySessionStatus(
                         id: id, to: .inReview,
                         appState: appState, store: store, sessionService: sessionService)
                 }
+                return SessionLifecycleRPC.statusResult(id: id, status: .inReview, warning: warning)
             }
         },
         // Provider ticket transition (close / project-board move) run on the

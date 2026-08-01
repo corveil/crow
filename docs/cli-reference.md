@@ -148,13 +148,13 @@ Preconditions are enforced server-side, because the browser enforces them by hid
 
 | Command | Effect | Requires |
 | ------- | ------ | -------- |
-| `crow mark-in-review`     | Session status → `inReview`  | A linked ticket |
+| `crow mark-in-review`     | Moves the linked ticket to In Review on the provider's board, then session status → `inReview` | A linked ticket + a resolvable provider |
 | `crow complete-session`   | Session status → `completed` | — |
 | `crow set-session-active` | Session status → `active`    | — |
 | `crow mark-issue-done`    | Closes the linked issue on the provider, then completes the session | A linked ticket + a resolvable provider |
 | `crow add-merge-label`    | Adds the `crow:merge` label to the session's PR (warns when the watcher can't act on it) | A linked PR + a backend supporting auto-merge labels |
 
-The two provider-side verbs report real outcomes: an unmet precondition (no ticket, no PR, no provider, provider lacks the capability, unparseable repo slug) **and** a failed provider call both exit non-zero with the reason. They never print a success receipt for an action that didn't happen — and when an action *did* happen but can't have its intended effect, the receipt carries a `warning` rather than a bare all-clear.
+The three provider-side verbs report real outcomes: an unmet precondition (no ticket, no PR, no provider, provider lacks the capability, unparseable repo slug) **and** a failed provider call both exit non-zero with the reason. They never print a success receipt for an action that didn't happen — and when an action *did* happen but can't have its intended effect, the receipt carries a `warning` rather than a bare all-clear.
 
 ```bash
 crow mark-in-review --session <uuid>
@@ -170,6 +170,16 @@ crow add-merge-label --session <uuid>
 
 The three status verbs return `{"session_id": "…", "status": "…"}`; `mark-issue-done` and `add-merge-label` return `{"ok": true, "session_id": "…"}`.
 
+`mark-in-review` transitions the board **before** it writes the session status, so a failed transition exits non-zero and leaves the session where it was — there is no half-done state to reconcile. When the provider has no In Review status to move *to*, that is not a failure: nothing was ever going to move, so the session transition still happens and the receipt carries a `warning`. That covers GitLab (no project-board status at all) and any GitHub board whose column isn't named "In Review" or "Review".
+
+```json
+{
+  "session_id": "3f2a…",
+  "status": "inReview",
+  "warning": "Session moved to In Review, but the ticket did not: no In Review status is available for https://gitlab.com/acme/api/-/issues/7."
+}
+```
+
 `add-merge-label` additionally returns a `warning` string when the label landed but auto-merge won't follow — the watcher is off, or Crow has already given up on that PR (e.g. the repo has GitHub's **Allow auto-merge** setting disabled). `ok` stays `true`, because the label really is on the PR; the key is omitted entirely when there's nothing to warn about, so `jq -e .warning` is a reliable test (#888).
 
 ```json
@@ -182,7 +192,7 @@ The three status verbs return `{"session_id": "…", "status": "…"}`; `mark-is
 
 Manager sessions are rejected by all five — they stay always-active and never move through the review/complete lifecycle, matching the web UI, which never offers these actions for a Manager.
 
-**These write Crow's own session status.** To move the *provider's* board (a Jira workflow transition, a GitHub Projects status), use [`crow transition-ticket`](#crow-transition-ticket) — `crow mark-in-review` does not currently perform the provider-side transition.
+**`complete-session` and `set-session-active` write Crow's own session status.** To move the *provider's* board for those, use [`crow transition-ticket`](#crow-transition-ticket). `mark-in-review` and `mark-issue-done` move the board themselves.
 
 ### `crow handoff-agent`
 
@@ -311,7 +321,7 @@ Provide at least one selector (`--id` / `--url`) and at least one field to chang
 
 ### `crow transition-ticket`
 
-Move the session's linked ticket to a pipeline status on the *provider's* board. This is the provider-side counterpart to the [session lifecycle verbs](#session-lifecycle-verbs), which only write Crow's own status — moving a Jira issue or a GitHub Projects card needs this.
+Move the session's linked ticket to a pipeline status on the *provider's* board, without touching Crow's own session status. Use it to move a board independently of the [session lifecycle verbs](#session-lifecycle-verbs) — for the In Progress transition at session start (what `setup.sh` calls), or to correct a board out of band. Unlike `mark-in-review`, it is best-effort: failures are logged, not reported.
 
 ```bash
 crow transition-ticket --session <uuid> --to inProgress
