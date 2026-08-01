@@ -16,6 +16,14 @@ import HummingbirdWebSocket
 /// A single writer task owns `outbound`: both RPC responses and `EventHub`
 /// broadcast notifications flow through one per-connection `AsyncStream`, so
 /// they never interleave frames on the socket (CROW-581, M-D).
+///
+/// The reader does **not** run handlers itself. It hands each request to a
+/// per-connection ``RPCDispatcher`` and immediately reads the next frame, so a
+/// slow method can no longer hold the socket's read loop and time out every
+/// request queued behind it (#931). Responses may therefore arrive out of
+/// order — safe by construction, since the client correlates by JSON-RPC id —
+/// while ``RPCLanePolicy`` keeps writes to the same session (or the same config
+/// file, Manager, or job) in strict arrival order.
 enum RPCWebSocketHandler {
     static func mount(
         on router: Router<CrowWSContext>,
@@ -51,23 +59,33 @@ enum RPCWebSocketHandler {
                 remoteAddress: wsContext.requestContext.remoteAddress,
                 forwardedFor: wsContext.request.headers[HTTPField.Name("x-forwarded-for")!])
             // One outbound channel per connection: RPC responses (from the
-            // reader task) and hub notifications (fanned in via `subscribe`)
-            // both feed the single writer below.
+            // dispatched operations) and hub notifications (fanned in via
+            // `subscribe`) both feed the single writer below.
             let (outStream, outCont) = AsyncStream.makeStream(of: String.self)
             let subscription = await eventHub.subscribe(outCont)
+            // Handlers no longer run on the read loop (#931).
+            let dispatcher = RPCDispatcher()
 
             try await withThrowingTaskGroup(of: Void.self) { group in
-                // Writer — the sole owner of `outbound`.
+                // Writer — the sole owner of `outbound`. Unchanged: responses
+                // may now arrive out of order, but they still cross the socket
+                // one frame at a time from one task, and the client correlates
+                // by JSON-RPC id.
                 group.addTask {
                     for await text in outStream {
                         try await outbound.write(.text(text))
                     }
                 }
-                // Reader — decode requests, dispatch, enqueue responses.
+                // Reader — decode, hand off, read the next frame.
                 group.addTask {
+                    // Single-threaded on this task, so it stays hoisted. The
+                    // encoder does NOT: `JSONEncoder` isn't `Sendable`, and the
+                    // dispatched operations encode concurrently (see `emit`).
                     let decoder = JSONDecoder()
-                    let encoder = JSONEncoder()
-                    encoder.outputFormatting = [.sortedKeys]
+                    // The writer's stream must end however this task exits, or
+                    // the group never unwinds. `finish()` is idempotent.
+                    defer { outCont.finish() }
+
                     for try await message in inbound.messages(maxSize: 1 << 20) {
                         let payload: Data?
                         switch message {
@@ -78,30 +96,74 @@ enum RPCWebSocketHandler {
                               let request = try? decoder.decode(JSONRPCRequest.self, from: data) else {
                             continue
                         }
-                        let response: JSONRPCResponse
+
+                        // The local-only gate stays on the sequential path. It
+                        // is the security boundary, and for `set-config` it
+                        // reads config.json from disk — a decision that must not
+                        // be taken against a config another dispatch is mid-write
+                        // on.
                         if !localDirect, let deny = Self.localOnlyDenial(for: request, devRoot: devRoot) {
-                            response = .error(
-                                id: request.id,
-                                code: RPCErrorCode.invalidParams,
-                                message: deny)
-                        } else {
-                            response = await commandRouter.handle(request: request)
+                            Self.emit(
+                                .error(id: request.id, code: RPCErrorCode.invalidParams, message: deny),
+                                to: outCont)
+                            continue
                         }
-                        if let out = try? encoder.encode(response), let text = String(data: out, encoding: .utf8) {
-                            outCont.yield(text)
+
+                        let lane = RPCLanePolicy.lane(for: request)
+                        let accepted = await dispatcher.dispatch(lane: lane) {
+                            let response = await commandRouter.handle(request: request)
+                            Self.emit(response, to: outCont)
+                        }
+                        // Answer rather than drop: a refused request that got no
+                        // reply would sit until the client's deadline, which is
+                        // the symptom this whole change exists to remove.
+                        if !accepted {
+                            Self.emit(
+                                .error(
+                                    id: request.id,
+                                    code: RPCErrorCode.applicationError,
+                                    message: "Too many requests in flight on this connection"),
+                                to: outCont)
                         }
                     }
-                    // Inbound closed → end the writer so the group can unwind.
-                    outCont.finish()
+
+                    // Inbound closed cleanly → let everything already accepted
+                    // reach the writer before `defer` ends its stream. Released
+                    // early by `shutdown()` below when the *writer* is what died.
+                    await dispatcher.drain()
                 }
 
                 // When either side finishes (socket closed), tear the other down.
                 _ = try? await group.next()
+                // Before `cancelAll`: this releases the reader if it is parked in
+                // `drain()`, and unparks anything queued on a lane or a permit.
+                // Cancelling the group first would leave those waiters suspended
+                // — `Task<Void, Never>.value` and `withCheckedContinuation` do
+                // not resume on cancellation — and the group would never unwind.
+                await dispatcher.shutdown()
                 group.cancelAll()
+                outCont.finish()
             }
 
             await eventHub.unsubscribe(subscription)
         }
+    }
+
+    /// Encode and enqueue one response for the connection's single writer.
+    ///
+    /// The encoder is built per call rather than hoisted per connection as it
+    /// once was: `JSONEncoder` is not `Sendable`, and dispatched operations now
+    /// encode concurrently (#931). Allocation is cheap next to the handler that
+    /// produced the response.
+    private static func emit(
+        _ response: JSONRPCResponse,
+        to continuation: AsyncStream<String>.Continuation
+    ) {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let out = try? encoder.encode(response),
+              let text = String(data: out, encoding: .utf8) else { return }
+        continuation.yield(text)
     }
 
     /// Methods / fields that must stay local-direct (loopback, no XFF), matching

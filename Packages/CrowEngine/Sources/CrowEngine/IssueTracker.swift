@@ -201,6 +201,34 @@ public final class IssueTracker {
     /// In-memory only; a restart re-evaluates, which is harmless.
     private var autoUpdateBranchAttempted: Set<String> = []
 
+    /// Repos whose `crow:merge` label we have already created — or confirmed
+    /// present — this process lifetime. Keyed `"<provider>\n<owner/repo>"`,
+    /// provider-qualified because an `owner/repo` slug is not unique across
+    /// hosts.
+    ///
+    /// `ensureMergeLabel` is a `gh label create` shell-out that succeeds by
+    /// swallowing "already exists", so after the first call it is pure latency:
+    /// the watcher pays it once per dispatched PR per poll and `addMergeLabel`
+    /// pays it on every click (#931). `GitHubCodeBackend` is a `struct` rebuilt
+    /// by every `ProviderManager.codeBackend(for:)` call, so the memo cannot
+    /// live there without static mutable state; `IssueTracker` is the one
+    /// long-lived `@MainActor` object both callers already route through.
+    ///
+    /// Populated ONLY on success — a throw leaves the key absent so the next
+    /// call retries. Latching a repo the token couldn't reach would be exactly
+    /// the "reported success for work it never did" failure CROW-816 removed.
+    /// Never invalidated: a label deleted out from under a running daemon is
+    /// re-created after the next restart, and in between `addMergeLabel` still
+    /// *throws* on the real `gh pr edit --add-label` failure.
+    private var ensuredMergeLabelRepos: Set<String> = []
+
+    /// In-flight `ensureMergeLabel` calls, same key as
+    /// ``ensuredMergeLabelRepos``. Without this, the first poll that dispatches
+    /// N PRs in one repo fires N concurrent identical shell-outs before any of
+    /// them can populate the memo — which would only take effect from the
+    /// *second* poll onward.
+    private var ensureMergeLabelTasks: [String: Task<Void, Error>] = [:]
+
     /// PR URLs with an auto-rebase attempt currently in flight. Cleared when
     /// the attempt finishes so the next poll can re-evaluate.
     private var autoRebaseInFlight: Set<String> = []
@@ -1241,6 +1269,40 @@ public final class IssueTracker {
             changesRequestedReviewerLogins: pr.changesRequestedReviewerLogins,
             pendingReviewerLogins: pr.pendingReviewerLogins,
             hasPendingReviewRequest: pr.hasPendingReviewRequest,
+            updatedAt: pr.updatedAt,
+            mergeCommitOid: pr.mergeCommitOid,
+            repoAutoMergeAllowed: pr.repoAutoMergeAllowed
+        )
+    }
+
+    /// Copy `pr` with `labels` replaced. Companion to ``withURL(_:url:)``, and
+    /// unlike it this preserves **every** field — `repoAutoMergeAllowed` in
+    /// particular decides a branch in ``evaluateAutoMerge(session:byURL:)``, so
+    /// dropping it here would silently change the verdict.
+    ///
+    /// Used by ``reevaluateAutoMergeAfterLabel(session:prURL:)`` to union in a
+    /// label we just provably added but the provider's read side may not report
+    /// yet (#931).
+    nonisolated static func withLabels(_ pr: ViewerPR, labels: [LabelInfo]) -> ViewerPR {
+        PRRecord(
+            number: pr.number,
+            url: pr.url,
+            state: pr.state,
+            mergeable: pr.mergeable,
+            mergeStateStatus: pr.mergeStateStatus,
+            reviewDecision: pr.reviewDecision,
+            isDraft: pr.isDraft,
+            headRefName: pr.headRefName,
+            headRefOid: pr.headRefOid,
+            baseRefName: pr.baseRefName,
+            repoNameWithOwner: pr.repoNameWithOwner,
+            labels: labels,
+            linkedIssueReferences: pr.linkedIssueReferences,
+            checksState: pr.checksState,
+            failedCheckNames: pr.failedCheckNames,
+            latestReviewStates: pr.latestReviewStates,
+            lastChangesRequestedAt: pr.lastChangesRequestedAt,
+            lastSubstantiveCommitAt: pr.lastSubstantiveCommitAt,
             updatedAt: pr.updatedAt,
             mergeCommitOid: pr.mergeCommitOid,
             repoAutoMergeAllowed: pr.repoAutoMergeAllowed
@@ -2956,12 +3018,29 @@ public final class IssueTracker {
         syncPRAttributionMirror()
     }
 
+    /// What one session's auto-merge evaluation did. Returned by
+    /// ``evaluateAutoMerge(session:byURL:)`` so the per-poll caller can keep its
+    /// aggregate summary line without the loop body reaching into the caller's
+    /// counters — the single-session caller has no counters at all.
+    struct AutoMergeOutcome {
+        enum Dispatch: String { case none, enable, updateBranch, directMerge }
+        var dispatch: Dispatch = .none
+        /// Pre-formatted `<key>:<reason>` token for the per-poll summary line.
+        /// `nil` when the session was never a candidate (no `.pr` link) — that
+        /// is not a skip, it's a session the watcher doesn't speak about.
+        var skip: String?
+    }
+
     /// Per-refresh entry point. Picks candidate (session, PR) pairs and
     /// kicks off the async enable flow once each. Publishes a per-session
     /// verdict to `appState.autoMergeState` on the way through, so the reason a
     /// PR didn't merge reaches the UI and not just the automation log (#888).
     /// No-op (beyond publishing an `off` verdict) when the global
     /// `autoMergeWatcherEnabled` setting is off.
+    ///
+    /// A thin aggregator over ``evaluateAutoMerge(session:byURL:)`` since #931:
+    /// `addMergeLabel` re-evaluates a single session through the same function
+    /// rather than paying for a whole board poll.
     private func applyAutoMerge(viewerPRs: [ViewerPR]) {
         let byURL = Dictionary(viewerPRs.map { ($0.url, $0) }, uniquingKeysWith: Self.mergePRRecords)
 
@@ -2974,13 +3053,7 @@ public final class IssueTracker {
             // applied `crow:merge` needs to see *on that session* that nothing
             // is listening — that specific confusion is the whole of #888.
             for session in appState.sessions where !session.isManager {
-                guard let prLink = appState.links(for: session.id).first(where: { $0.linkType == .pr }),
-                      let pr = byURL[prLink.url],
-                      Self.hasAutoMergeLabel(pr: pr) else {
-                    appState.autoMergeState.removeValue(forKey: session.id)
-                    continue
-                }
-                publishAutoMergeVerdict(.watcherOff, session: session, pr: pr)
+                publishWatcherOffVerdict(session: session, byURL: byURL)
             }
             return
         }
@@ -2995,88 +3068,13 @@ public final class IssueTracker {
         var skips: [String] = []
 
         for session in appState.sessions where !session.isManager {
-            guard let prLink = appState.links(for: session.id).first(where: { $0.linkType == .pr }) else {
-                appState.autoMergeState.removeValue(forKey: session.id)
-                continue
-            }
-            guard !autoMergeInFlight.contains(prLink.url) else {
-                // A permanent outcome keeps its marker set on purpose — report
-                // the reason it stopped, not the bare marker (review #787).
-                let latched = autoMergePermanentSkips[prLink.url]
-                    .flatMap(AutoMergeSkipReason.init(rawValue:)) ?? .inFlight
-                skips.append("\(prLink.url):\(latched.rawValue)")
-                // The async attempt publishes its own verdict; don't overwrite a
-                // richer one with the bare in-flight marker.
-                if appState.autoMergeState[session.id] == nil {
-                    publishAutoMergeVerdict(latched, session: session, pr: byURL[prLink.url])
-                }
-                continue
-            }
-            guard let pr = byURL[prLink.url] else {
-                // The PR is linked to a live session but absent from the
-                // viewer-PR fetch — a fetch/scope problem, not an eligibility
-                // one, and invisible before CROW-782. The log line is
-                // unconditional (it's fetch health, not an auto-merge verdict);
-                // the *chip* is not.
-                skips.append("\(prLink.url):\(AutoMergeSkipReason.notInViewerPRs.rawValue)")
-                // Only speak auto-merge vocabulary about a PR that actually
-                // asked for auto-merge. `pr` is nil here, so the label can't be
-                // read off the record — fall back to what we already know:
-                // the last fetch that *did* see it, or the fact that Crow has
-                // already armed it. Without that, an ordinary feature PR aging
-                // out of the 50-most-recently-updated window would grow an
-                // "Auto-merge waiting" chip it never earned — the exact class
-                // of misleading signal #888 exists to remove (review #899).
-                let everArmed = appState.prStatus[session.id]?.hasMergeLabel == true
-                    || session.autoMergeEnabledAt != nil
-                if everArmed {
-                    publishAutoMergeVerdict(.notInViewerPRs, session: session, pr: nil)
-                } else {
-                    appState.autoMergeState.removeValue(forKey: session.id)
-                }
-                continue
-            }
-            if let reason = Self.autoMergeSkipReason(pr: pr, session: session) {
-                skips.append("#\(pr.number):\(reason.rawValue)")
-                publishAutoMergeVerdict(reason, session: session, pr: pr)
-                continue
-            }
-
-            let capturedSession = session
-            if Self.shouldDirectMerge(pr: pr, session: session) {
-                // The repo forbids GitHub's auto-merge queue, so `--auto` can
-                // never succeed here — but the PR is green and approved, which
-                // is exactly the case that used to sit labeled forever (#888).
-                autoMergeInFlight.insert(prLink.url)
-                directMergeCount += 1
-                Task { await self.attemptDirectMerge(session: capturedSession, pr: pr) }
-            } else if Self.shouldUpdateBranchBeforeMerge(pr: pr, session: session) {
-                // Behind base: bring the branch up to date this turn instead
-                // of merging. One attempt per head commit (loop safety); the
-                // next poll re-evaluates once GitHub recomputes mergeability.
-                let key = "\(prLink.url)\n\(pr.headRefOid)"
-                guard !autoUpdateBranchAttempted.contains(key) else {
-                    skips.append("#\(pr.number):\(AutoMergeSkipReason.updateBranchAlreadyAttempted.rawValue)")
-                    publishAutoMergeVerdict(.updateBranchAlreadyAttempted, session: session, pr: pr)
-                    continue
-                }
-                autoUpdateBranchAttempted.insert(key)
-                autoMergeInFlight.insert(prLink.url)
-                updateBranchCount += 1
-                Task { await self.attemptUpdateBranch(session: capturedSession, pr: pr) }
-            } else if pr.repoAutoMergeAllowed == false {
-                // Repo forbids auto-merge, so `enableAutoMerge` can never
-                // succeed — but the PR isn't green enough for a direct merge
-                // *yet*. Deliberately NOT latched: labels are usually applied
-                // while CI is still running, so latching here would freeze the
-                // PR before it ever had a chance to qualify for the fallback,
-                // which is the case #888 exists to fix. Re-evaluated every poll.
-                skips.append("#\(pr.number):\(AutoMergeSkipReason.repoDisallowsAutoMergePending.rawValue)")
-                publishAutoMergeVerdict(.repoDisallowsAutoMergePending, session: session, pr: pr)
-            } else {
-                autoMergeInFlight.insert(prLink.url)
-                enabledCount += 1
-                Task { await self.attemptEnableAutoMerge(session: capturedSession, pr: pr) }
+            let outcome = evaluateAutoMerge(session: session, byURL: byURL)
+            if let skip = outcome.skip { skips.append(skip) }
+            switch outcome.dispatch {
+            case .enable: enabledCount += 1
+            case .updateBranch: updateBranchCount += 1
+            case .directMerge: directMergeCount += 1
+            case .none: break
             }
         }
 
@@ -3086,6 +3084,189 @@ public final class IssueTracker {
         CrowLog.automation(
             "auto-merge: dispatched=\(enabledCount) updateBranch=\(updateBranchCount) "
             + "directMerge=\(directMergeCount) skipped=\(skips.count)\(skipDetail)")
+    }
+
+    /// The watcher-off verdict for one session. Split out of ``applyAutoMerge``'s
+    /// early return so ``reevaluateAutoMergeAfterLabel(session:prURL:)`` publishes
+    /// the *same* verdict from the same code rather than a second hand-rolled
+    /// copy that drifts — the class of bug #888 was.
+    ///
+    /// Only speaks about a PR that actually asked for auto-merge: an unlabeled
+    /// PR has no 🏷 and must not grow auto-merge vocabulary it never earned.
+    ///
+    /// Internal (not private) so `@testable` tests can drive one session's
+    /// verdict without standing up a fake provider backend, matching
+    /// ``pendingMergeLabelSessions``.
+    func publishWatcherOffVerdict(session: Session, byURL: [String: ViewerPR]) {
+        guard let prLink = appState.links(for: session.id).first(where: { $0.linkType == .pr }),
+              let pr = byURL[prLink.url],
+              Self.hasAutoMergeLabel(pr: pr) else {
+            appState.autoMergeState.removeValue(forKey: session.id)
+            return
+        }
+        publishAutoMergeVerdict(.watcherOff, session: session, pr: pr)
+    }
+
+    /// Evaluate one session against a PR snapshot: publish its verdict and, if
+    /// it is a candidate, dispatch exactly one of the three attempts.
+    ///
+    /// This is the *whole* of ``applyAutoMerge``'s per-session decision, lifted
+    /// so the poll path and the post-`add-merge-label` targeted path share one
+    /// implementation (#931). Callers must have already checked the watcher
+    /// toggle (see ``publishWatcherOffVerdict(session:byURL:)``) — that toggle is
+    /// global and its verdict a different shape, so folding it in here would
+    /// mean every caller paying for a guard it already made.
+    ///
+    /// `byURL` is the caller's snapshot keyed by PR URL. The poll path passes
+    /// every PR in the fetch; the targeted path passes a single-entry map. The
+    /// `.notInViewerPRs` branch reads "this PR wasn't in the snapshot", which is
+    /// the honest answer for both.
+    ///
+    /// Internal (not private) so `@testable` tests can assert that the targeted
+    /// path publishes the same verdict as the poll path without standing up a
+    /// fake provider backend, matching ``pendingMergeLabelSessions``.
+    @discardableResult
+    func evaluateAutoMerge(session: Session, byURL: [String: ViewerPR]) -> AutoMergeOutcome {
+        guard let prLink = appState.links(for: session.id).first(where: { $0.linkType == .pr }) else {
+            appState.autoMergeState.removeValue(forKey: session.id)
+            return AutoMergeOutcome()
+        }
+        guard !autoMergeInFlight.contains(prLink.url) else {
+            // A permanent outcome keeps its marker set on purpose — report
+            // the reason it stopped, not the bare marker (review #787).
+            let latched = autoMergePermanentSkips[prLink.url]
+                .flatMap(AutoMergeSkipReason.init(rawValue:)) ?? .inFlight
+            // The async attempt publishes its own verdict; don't overwrite a
+            // richer one with the bare in-flight marker.
+            if appState.autoMergeState[session.id] == nil {
+                publishAutoMergeVerdict(latched, session: session, pr: byURL[prLink.url])
+            }
+            return AutoMergeOutcome(skip: "\(prLink.url):\(latched.rawValue)")
+        }
+        guard let pr = byURL[prLink.url] else {
+            // The PR is linked to a live session but absent from the
+            // viewer-PR fetch — a fetch/scope problem, not an eligibility
+            // one, and invisible before CROW-782. The log line is
+            // unconditional (it's fetch health, not an auto-merge verdict);
+            // the *chip* is not.
+            //
+            // Only speak auto-merge vocabulary about a PR that actually
+            // asked for auto-merge. `pr` is nil here, so the label can't be
+            // read off the record — fall back to what we already know:
+            // the last fetch that *did* see it, or the fact that Crow has
+            // already armed it. Without that, an ordinary feature PR aging
+            // out of the 50-most-recently-updated window would grow an
+            // "Auto-merge waiting" chip it never earned — the exact class
+            // of misleading signal #888 exists to remove (review #899).
+            let everArmed = appState.prStatus[session.id]?.hasMergeLabel == true
+                || session.autoMergeEnabledAt != nil
+            if everArmed {
+                publishAutoMergeVerdict(.notInViewerPRs, session: session, pr: nil)
+            } else {
+                appState.autoMergeState.removeValue(forKey: session.id)
+            }
+            return AutoMergeOutcome(skip: "\(prLink.url):\(AutoMergeSkipReason.notInViewerPRs.rawValue)")
+        }
+        if let reason = Self.autoMergeSkipReason(pr: pr, session: session) {
+            publishAutoMergeVerdict(reason, session: session, pr: pr)
+            return AutoMergeOutcome(skip: "#\(pr.number):\(reason.rawValue)")
+        }
+
+        if Self.shouldDirectMerge(pr: pr, session: session) {
+            // The repo forbids GitHub's auto-merge queue, so `--auto` can
+            // never succeed here — but the PR is green and approved, which
+            // is exactly the case that used to sit labeled forever (#888).
+            autoMergeInFlight.insert(prLink.url)
+            Task { await self.attemptDirectMerge(session: session, pr: pr) }
+            return AutoMergeOutcome(dispatch: .directMerge)
+        }
+        if Self.shouldUpdateBranchBeforeMerge(pr: pr, session: session) {
+            // Behind base: bring the branch up to date this turn instead
+            // of merging. One attempt per head commit (loop safety); the
+            // next poll re-evaluates once GitHub recomputes mergeability.
+            let key = "\(prLink.url)\n\(pr.headRefOid)"
+            guard !autoUpdateBranchAttempted.contains(key) else {
+                publishAutoMergeVerdict(.updateBranchAlreadyAttempted, session: session, pr: pr)
+                return AutoMergeOutcome(
+                    skip: "#\(pr.number):\(AutoMergeSkipReason.updateBranchAlreadyAttempted.rawValue)")
+            }
+            autoUpdateBranchAttempted.insert(key)
+            autoMergeInFlight.insert(prLink.url)
+            Task { await self.attemptUpdateBranch(session: session, pr: pr) }
+            return AutoMergeOutcome(dispatch: .updateBranch)
+        }
+        if pr.repoAutoMergeAllowed == false {
+            // Repo forbids auto-merge, so `enableAutoMerge` can never
+            // succeed — but the PR isn't green enough for a direct merge
+            // *yet*. Deliberately NOT latched: labels are usually applied
+            // while CI is still running, so latching here would freeze the
+            // PR before it ever had a chance to qualify for the fallback,
+            // which is the case #888 exists to fix. Re-evaluated every poll.
+            publishAutoMergeVerdict(.repoDisallowsAutoMergePending, session: session, pr: pr)
+            return AutoMergeOutcome(
+                skip: "#\(pr.number):\(AutoMergeSkipReason.repoDisallowsAutoMergePending.rawValue)")
+        }
+        autoMergeInFlight.insert(prLink.url)
+        Task { await self.attemptEnableAutoMerge(session: session, pr: pr) }
+        return AutoMergeOutcome(dispatch: .enable)
+    }
+
+    /// Re-evaluate auto-merge for exactly one session, right after its
+    /// `crow:merge` label landed, using a targeted per-PR fetch instead of a
+    /// full board poll.
+    ///
+    /// Replaces `await refresh()` in ``addMergeLabel(sessionID:)`` (#931). Two
+    /// problems with that call, one of them a live correctness bug:
+    ///
+    /// - **Cost.** `refresh()` re-queries every configured GitHub / GitLab /
+    ///   Jira / Corveil surface — 4-5s measured — to learn one PR's label state,
+    ///   and the RPC (so the CLI, and the web client's whole `/rpc` socket)
+    ///   blocked on all of it.
+    /// - **Correctness.** `refresh()` opens with `guard !isRefreshing else
+    ///   { return }` and `guard shouldPoll()`. A scheduled poll already in
+    ///   flight, or a rate-limit suspension, makes it a silent no-op — and the
+    ///   `autoMergeWarning` read below it then reports the *previous* poll's
+    ///   verdict, or nothing at all on a freshly linked PR, while claiming to
+    ///   have re-read. This path has no such guard: it always fetches.
+    ///
+    /// Deliberately does NOT touch `appState.prStatus` beyond the optimistic
+    /// write the caller already made. `fetchStalePRStates` returns partial
+    /// records (no reviews, no commits), so running them through
+    /// `applyPRStatuses` would overwrite `previousPRStatus` with a snapshot
+    /// missing the very fields the checks-failing and needs-refine edges are
+    /// computed from — turning a targeted read into a source of phantom
+    /// transitions. `pendingMergeLabelSessions` stays set for the same reason:
+    /// it exists to survive an in-flight poll that started *before* the add
+    /// (#838), and clearing it here would hand that clobber back its opening.
+    private func reevaluateAutoMergeAfterLabel(session: Session, prURL: String) async {
+        let result = await fetchStalePRStates(urls: [prURL])
+        var byURL = Dictionary(result.prs.map { ($0.url, $0) }, uniquingKeysWith: Self.mergePRRecords)
+
+        // Read-your-write: `backend.addMergeLabel` threw on failure, so the
+        // label provably IS on the PR — but the provider's read side can lag a
+        // fetch issued milliseconds later. Without this union the evaluation
+        // below reads "no merge label", publishes nothing, dispatches nothing,
+        // and the user gets a bare success for a label the watcher won't look
+        // at until the next poll: #888's exact shape. This is the watcher-side
+        // analogue of the `pendingMergeLabelSessions` marker on the icon side
+        // (#838).
+        if let fetched = byURL[prURL], !Self.hasAutoMergeLabel(pr: fetched) {
+            byURL[prURL] = Self.withLabels(
+                fetched, labels: fetched.labels + [LabelInfo(name: Self.autoMergeLabel)])
+        }
+
+        guard autoMergeWatcherEnabledProvider() else {
+            logAutoMergeDisabledIfDue()
+            publishWatcherOffVerdict(session: session, byURL: byURL)
+            return
+        }
+        let outcome = evaluateAutoMerge(session: session, byURL: byURL)
+        // Same grep-stable vocabulary as the per-poll summary, tagged so the
+        // automation log distinguishes a click-driven pass from a timed one.
+        CrowLog.automation(
+            "auto-merge: targeted re-evaluation after add-merge-label — "
+            + "pr=\(prURL) fetched=\(result.prs.count) complete=\(result.complete) "
+            + "dispatch=\(outcome.dispatch.rawValue) skip=\(outcome.skip ?? "-")")
     }
 
     /// Record a verdict for the session's PR pill, and push a notification the
@@ -3358,14 +3539,47 @@ public final class IssueTracker {
         return Self.crowAuthored(commitMessages: commits.map(\.message), knownSessionIDs: knownIDs)
     }
 
-    /// Best-effort: ensure the `crow:merge` label exists in the repo so
-    /// repo owners don't need to pre-create it. The backend swallows the
-    /// "already exists" failure.
-    private func ensureMergeLabel(repo: String, backend: CodeBackend) async {
+    /// Memo key for ``ensuredMergeLabelRepos`` / ``ensureMergeLabelTasks``.
+    private static func mergeLabelMemoKey(provider: Provider, repo: String) -> String {
+        "\(provider.rawValue)\n\(repo)"
+    }
+
+    /// Ensure the `crow:merge` label exists in `repo`, at most once per
+    /// (provider, repo) per process (#931).
+    ///
+    /// **Throws exactly what the backend throws.** The memo is a latency
+    /// optimization, not a policy change: `addMergeLabel` calls this directly
+    /// and must keep reporting a real label-creation failure (CROW-816), so the
+    /// throwing form is the primitive and the watcher's best-effort behaviour
+    /// is a `do`/`catch` on top of it — not the other way round.
+    private func ensureMergeLabelOnce(repo: String, backend: CodeBackend) async throws {
         guard !repo.isEmpty else { return }
         guard backend.capabilities.contains(.autoMergeLabel) else { return }
+        let key = Self.mergeLabelMemoKey(provider: backend.provider, repo: repo)
+        if ensuredMergeLabelRepos.contains(key) { return }
+        if let inFlight = ensureMergeLabelTasks[key] {
+            // Join the existing call rather than issuing a duplicate. Awaiting
+            // `.value` rethrows its error, so a joiner sees the same outcome an
+            // originator would; the originator owns the map cleanup.
+            try await inFlight.value
+            return
+        }
+        let task = Task { @MainActor in try await backend.ensureMergeLabel(repo: repo) }
+        ensureMergeLabelTasks[key] = task
+        defer { ensureMergeLabelTasks[key] = nil }
+        try await task.value
+        // Reached only on success — see `ensuredMergeLabelRepos`.
+        ensuredMergeLabelRepos.insert(key)
+    }
+
+    /// Best-effort: ensure the `crow:merge` label exists in the repo so
+    /// repo owners don't need to pre-create it. The backend swallows the
+    /// "already exists" failure; this swallows the rest, because the auto-merge
+    /// watcher's next step (`enableAutoMerge`) reports its own failures and a
+    /// missing label is not on its own a reason to abandon the attempt.
+    private func ensureMergeLabel(repo: String, backend: CodeBackend) async {
         do {
-            try await backend.ensureMergeLabel(repo: repo)
+            try await ensureMergeLabelOnce(repo: repo, backend: backend)
         } catch {
             // Best-effort — swallow.
         }
@@ -4648,7 +4862,7 @@ public final class IssueTracker {
             throw SessionActionError.unparseableRepo(prLink.url)
         }
         do {
-            try await backend.ensureMergeLabel(repo: repo)
+            try await ensureMergeLabelOnce(repo: repo, backend: backend)
             try await backend.addMergeLabel(prURL: prLink.url)
             CrowLog.info("[Crow] Added crow:merge to \(prLink.url)")
             // Optimistically flip the merge icon so the user sees the label
@@ -4659,12 +4873,15 @@ public final class IssueTracker {
             // fetch confirms the label; `applyPRStatuses` clears it then.
             pendingMergeLabelSessions.insert(sessionID)
             appState.prStatus[sessionID]?.hasMergeLabel = true
-            // Targeted re-fetch so the auto-merge watcher re-evaluates promptly
-            // with the label present instead of on the next scheduled poll.
-            await refresh()
-            // Read the verdict *after* the refresh: that pass is what populates
-            // `autoMergeState`, so asking before it would report the previous
-            // poll's answer — or nothing at all on a freshly linked PR (#888).
+            // Targeted re-evaluation so the auto-merge watcher acts on this PR
+            // now, with the label present, instead of on the next scheduled
+            // poll — without paying for (or being silently skipped by) a full
+            // multi-provider board refresh (#931, #888).
+            await reevaluateAutoMergeAfterLabel(session: session, prURL: prLink.url)
+            // Read the verdict *after* the re-evaluation: that pass is what
+            // populates `autoMergeState`, so asking before it would report the
+            // previous poll's answer — or nothing at all on a freshly linked
+            // PR (#888).
             return autoMergeWarning(sessionID: sessionID)
         } catch {
             let detail = String(error.localizedDescription.prefix(200))

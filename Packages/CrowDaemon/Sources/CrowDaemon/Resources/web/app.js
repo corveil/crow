@@ -7,6 +7,67 @@
 // ---------------------------------------------------------------------------
 const rpcState = { nextId: 1, pending: new Map(), ready: null };
 
+// Per-method RPC deadlines, mirroring the CLI's table so the two clients agree
+// on how long a verb is allowed to take (`CrowCLILib/Helpers.swift` default 30s,
+// plus each command's explicit `timeoutSeconds:`). The flat 10s this replaced
+// was shorter than the work for most write verbs — `add-merge-label` alone did a
+// label create, a label add, and a full multi-provider board poll — so the modal
+// that popped said "failed" about an action that was running fine and usually
+// went on to succeed (#931).
+//
+// KEYS ARE WIRE METHOD NAMES, NOT CLI VERBS. `crow job run` sends `job-run`;
+// Settings' "Run now" button sends `run-job` (a distinct handler). Both do the
+// same work, so both are listed — keying off the CLI verb alone would leave the
+// web button on the default.
+const RPC_DEFAULT_TIMEOUT_MS = 30000;
+const RPC_TIMEOUTS_MS = {
+  // Rebuilds the whole scorecard from the event log.
+  'rebuild-scorecard': 180000,
+  // Shell out to gh/glab/Jira across every configured repo; clone a repo and
+  // spawn tmux; run a job's full command.
+  'refresh-tickets': 120000,
+  'start-review': 120000,
+  'batch-start-review': 120000, // no CLI twin; at least as slow as start-review
+  'job-run': 120000,
+  'run-job': 120000,
+  // Board reads and Manager-keystroke writes (the CLI's `boardTimeout`).
+  'work-on-issue': 60000,
+  'batch-work-on-issues': 60000,
+  'create-manager': 60000,
+  'quick-action': 60000,
+  'list-tickets': 60000,
+  'list-reviews': 60000,
+  'get-state': 60000,
+  'promote-allowlist': 60000,
+  'refresh-allowlist': 60000,
+  'mark-issue-done': 60000,
+  'add-merge-label': 60000,
+};
+function rpcTimeoutFor(method) {
+  const ms = RPC_TIMEOUTS_MS[method];
+  return typeof ms === 'number' ? ms : RPC_DEFAULT_TIMEOUT_MS;
+}
+
+// A timed-out request keeps its `pending` entry, flagged `settled`, so the
+// eventual reply can reach `onLate` instead of being dropped by `onmessage`'s
+// `!waiter` guard. That means the map no longer empties itself: sweep on every
+// new call. Ten minutes is far past any method's deadline, and the cap bounds a
+// pathological run of timeouts.
+const RPC_LATE_WINDOW_MS = 600000;
+const RPC_MAX_SETTLED = 64;
+function gcSettledRPCs() {
+  const now = Date.now();
+  const settled = [];
+  rpcState.pending.forEach((w, id) => {
+    if (!w.settled) return;
+    if (now - w.settledAt > RPC_LATE_WINDOW_MS) rpcState.pending.delete(id);
+    else settled.push(id);
+  });
+  // Map iteration is insertion order and ids are monotonic, so `settled` is
+  // oldest-first — trim from the head, the least likely to still answer.
+  for (let i = 0; i < settled.length - RPC_MAX_SETTLED; i++) rpcState.pending.delete(settled[i]);
+}
+
 function wsURL(path) {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   return proto + '://' + location.host + path;
@@ -43,7 +104,20 @@ function rpcConnect() {
       const waiter = rpcState.pending.get(msg.id);
       if (!waiter) return;
       rpcState.pending.delete(msg.id);
-      if (msg.error) waiter.reject(new Error(msg.error.message || 'rpc error'));
+      if (waiter.timer) clearTimeout(waiter.timer);
+      const rpcErr = msg.error ? new Error(msg.error.message || 'rpc error') : null;
+      // Late: this call's promise already rejected on its timeout, so settling
+      // it again is a no-op and the answer would be lost. Hand it to `onLate`
+      // instead — that is what lets a caller retract a "still running" advisory
+      // once the daemon does answer (#931).
+      if (waiter.settled) {
+        if (waiter.onLate) {
+          try { waiter.onLate(rpcErr ? null : (msg.result || {}), rpcErr); }
+          catch (_) { /* a caller's late-handler must not kill the socket pump */ }
+        }
+        return;
+      }
+      if (rpcErr) waiter.reject(rpcErr);
       else waiter.resolve(msg.result || {});
     };
     ws.onclose = () => {
@@ -51,8 +125,16 @@ function rpcConnect() {
       // Fail fast: a socket that closed before opening must reject so `await
       // rpcState.ready` can't hang when the daemon is down (review #8).
       if (!opened) reject(new Error('rpc: socket closed before open'));
-      // Reject in-flight rpcs instead of leaving them stuck until the 10s timeout.
-      rpcState.pending.forEach((w) => w.reject(new Error('rpc: connection closed')));
+      // Reject in-flight rpcs instead of leaving them stuck until their
+      // deadline. Entries already settled by a timeout are dropped WITHOUT
+      // firing `onLate`: the socket died before the daemon answered, so we
+      // genuinely don't know the outcome, and "connection closed" is not an
+      // honest replacement for a "still running" advisory the user can already
+      // dismiss. Dropping them also keeps the map empty across a reconnect.
+      rpcState.pending.forEach((w) => {
+        if (w.timer) clearTimeout(w.timer);
+        if (!w.settled) w.reject(new Error('rpc: connection closed'));
+      });
       rpcState.pending.clear();
       // Daemon's gone, so its in-flight refresh flag will never be cleared for
       // us. Drop it here rather than waiting for a board poll that may not run
@@ -74,17 +156,44 @@ function rpcConnect() {
   return p;
 }
 
-async function rpc(method, params) {
+// `opts.timeoutMs` overrides the per-method table; `opts.onLate(result, error)`
+// fires if the response arrives *after* this call already rejected on timeout —
+// exactly once, with one of the two arguments non-null.
+async function rpc(method, params, opts) {
   // Session is dead (cookie invalid): don't spin up doomed reconnects — fail fast so
   // background pollers stop churning and the "Log in" affordance stands (CROW-593).
   if (sessionDead) throw new Error('session expired — log in');
   if (!rpcState.ready) rpcState.ready = rpcConnect();
   const ws = await rpcState.ready;
   const id = rpcState.nextId++;
+  const o = opts || {};
+  const ms = typeof o.timeoutMs === 'number' ? o.timeoutMs : rpcTimeoutFor(method);
+  gcSettledRPCs();
   return new Promise((resolve, reject) => {
-    rpcState.pending.set(id, { resolve, reject });
+    const waiter = {
+      method, resolve, reject,
+      settled: false, settledAt: 0,
+      onLate: typeof o.onLate === 'function' ? o.onLate : null,
+      timer: 0,
+    };
+    rpcState.pending.set(id, waiter);
     ws.send(JSON.stringify({ jsonrpc: '2.0', id, method, params: params || {} }));
-    setTimeout(() => { if (rpcState.pending.delete(id)) reject(new Error('rpc timeout: ' + method)); }, 10000);
+    waiter.timer = setTimeout(() => {
+      const w = rpcState.pending.get(id);
+      if (!w || w.settled) return;
+      // Keep the entry, flagged — deleting it (as this used to) makes a late
+      // reply hit `onmessage`'s `!waiter` guard and vanish, which is why the
+      // failure modal could never be taken back down (#931).
+      w.settled = true;
+      w.settledAt = Date.now();
+      const err = new Error(
+        'rpc timeout: ' + method + ' (no response in ' + Math.round(ms / 1000) + 's)');
+      // Tagged so a caller can tell "we stopped waiting" from "the daemon said
+      // no" — the two deserve different words on screen.
+      err.rpcTimeout = true;
+      err.rpcMethod = method;
+      w.reject(err);
+    }, ms);
   });
 }
 
@@ -2023,10 +2132,49 @@ async function openHandoffAgentMenu(session, anchorEl) {
 // SELECTED session's surface while this runs from any row's context menu, so a
 // terminal write would land in an unrelated session's scrollback.
 async function sessionAction(method, id, extra) {
+  // Identity for the advisory this call may raise. A fresh object per call, so a
+  // late reply can only ever retract the modal *it* put up.
+  const token = {};
+  let advisoryUp = false;
   try {
-    const res = await rpc(method, Object.assign({ session_id: id }, extra || {}));
+    const res = await rpc(method, Object.assign({ session_id: id }, extra || {}), {
+      // Fires only when the response beat us back after the deadline. The
+      // advisory below promised this window would update; this is that update.
+      onLate: (result, error) => {
+        if (!advisoryUp) return;
+        advisoryUp = false;
+        if (error) {
+          // We said "still running"; the daemon has now said it failed. The
+          // truth changed — replace the advisory rather than stacking on it.
+          dismissModalDialog(token);
+          alertModal(method + ' failed: ' + (error.message || error));
+          return;
+        }
+        const dismissed = dismissModalDialog(token);
+        // An additive `warning` is information the user still needs even if they
+        // already closed the advisory (that omission is #888), so it is shown
+        // either way. A clean late success just takes the advisory down.
+        const warning = result && typeof result.warning === 'string' ? result.warning : '';
+        if (warning) alertModal(warning);
+        else if (!dismissed) { /* user moved on and it worked — stay quiet */ }
+      },
+    });
     if (res && typeof res.warning === 'string' && res.warning) alertModal(res.warning);
-  } catch (e) { alertModal(method + ' failed: ' + (e.message || e)); }
+  } catch (e) {
+    if (e && e.rpcTimeout) {
+      // NOT "failed": we stopped waiting, the daemon did not stop working.
+      // Saying otherwise invites the user to retry an action that is already in
+      // flight — which for `add-merge-label` or `complete-session` is a
+      // duplicate write, and for all of them is a lie (#931).
+      advisoryUp = true;
+      alertModal(
+        method + ' is taking longer than expected. It is still running on the daemon — '
+        + 'this message will update when it finishes.',
+        { title: 'Still running', token });
+    } else {
+      alertModal(method + ' failed: ' + (e.message || e));
+    }
+  }
 }
 
 // "In Review" with an in-flight spinner — mirrors native's ProgressView swap
@@ -2411,7 +2559,7 @@ async function quickAction(id, action, label) {
 // In-page confirm/alert modal → Promise<boolean> (true = OK/confirm). Replaces
 // window.confirm/alert, which render as native chrome (and are jarring inside the
 // desktop wrapper). cancelLabel:null makes it an alert (single OK). (CROW-593)
-function modalDialog({ title, body, okLabel = 'OK', cancelLabel = 'Cancel', danger = false } = {}) {
+function modalDialog({ title, body, okLabel = 'OK', cancelLabel = 'Cancel', danger = false, token = null } = {}) {
   return new Promise((resolve) => {
     let done = false;
     const backdrop = el('div', 'text-prompt-backdrop modal-dialog-backdrop');
@@ -2428,6 +2576,9 @@ function modalDialog({ title, body, okLabel = 'OK', cancelLabel = 'Cancel', dang
       resolve(v);
     }
     backdrop.__finish = finish;
+    // Identity for `dismissModalDialog` — lets an async caller retract *its own*
+    // dialog and only its own, never one the user opened afterwards (#931).
+    backdrop.__token = token;
     function onKey(e) {
       if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(false); }
       else if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); finish(true); }
@@ -2461,8 +2612,21 @@ function modalDialog({ title, body, okLabel = 'OK', cancelLabel = 'Cancel', dang
 function confirmModal(body, { title = 'Confirm', okLabel = 'OK', danger = false } = {}) {
   return modalDialog({ title, body, okLabel, cancelLabel: 'Cancel', danger });
 }
-function alertModal(body, { title = 'Crow' } = {}) {
-  return modalDialog({ title, body, okLabel: 'OK', cancelLabel: null });
+function alertModal(body, { title = 'Crow', token = null } = {}) {
+  return modalDialog({ title, body, okLabel: 'OK', cancelLabel: null, token });
+}
+
+// Take down the on-screen modalDialog iff it is the one created with `token`.
+// Returns whether it dismissed anything. A no-op when the dialog was already
+// dismissed by the user, or superseded by a later one — an async retraction must
+// never yank a modal someone is mid-read of. Only ever one modalDialog is
+// mounted (modalDialog supersedes its predecessors), so one query suffices.
+function dismissModalDialog(token) {
+  if (!token) return false;
+  const backdrop = document.querySelector('.modal-dialog-backdrop');
+  if (!backdrop || backdrop.__token !== token) return false;
+  if (backdrop.__finish) backdrop.__finish(false); else backdrop.remove();
+  return true;
 }
 
 function textPrompt(title, current, { placeholder = '', okLabel = 'Save' } = {}) {
@@ -3595,7 +3759,7 @@ async function startWorkingSelected(btn) {
 // Two sources, OR'd together:
 //   • `boardData.tickets.loading` — the daemon's own `isLoadingIssues`, already
 //     shipped by `list-tickets`. Covers the *automatic* board poll (and any
-//     manual refresh outliving the client's 10s rpc timeout), which is what the
+//     manual refresh outliving the client's rpc deadline), which is what the
 //     native every-minute spinner showed.
 //   • `ticketRefreshPending` — local, optimistic. Covers the gap between the
 //     click and the first board re-read so the button reacts instantly.
@@ -3632,8 +3796,9 @@ async function refreshTickets() {
   ticketRefreshPending = true;
   paintRefreshState();
   try {
-    try { await rpc('refresh-tickets'); } catch (_) { /* app down, or >10s — the
-      daemon's own `loading` flag covers the rest; never leave the spinner on */ }
+    try { await rpc('refresh-tickets'); } catch (_) { /* app down, or past the
+      120s deadline — the daemon's own `loading` flag covers the rest; never
+      leave the spinner on */ }
     // `refresh-tickets` returns before the fetch lands, so keep the settle
     // delay rather than re-reading an unchanged board.
     await new Promise((r) => setTimeout(r, 1200));
@@ -3729,7 +3894,7 @@ function toggleReviewSelect(url) {
 
 // Batch "Start Review (N)": ONE batch-start-review call with every selected PR.
 // The daemon queues the kickoffs on its review serializer and acks immediately
-// — each one clones a PR and spawns tmux, well past our 10s rpc timeout — so
+// — each one clones a PR and spawns tmux, well past our rpc deadline — so
 // the new sessions surface via the sidebar poll rather than this response
 // (CROW-865). Then clear selection and exit selection mode.
 async function startReviewSelected(btn) {
