@@ -4,21 +4,20 @@ const { JSDOM } = require('jsdom');
 
 // CROW-934: the shell-scrollback re-sync. tmux collapses pane redraws for a slow
 // client (the browser), so the local xterm buffer holds far fewer lines than the
-// pane's own history — measured 337/20000 for a browser-paced reader. Reaching
-// the top of the local buffer re-requests crowd's authoritative replay
+// pane's own history — measured 337/20000 for a browser-paced reader. Arriving
+// at the top of the local buffer re-requests crowd's authoritative replay
 // (`select-window` → `capture-pane -pe -S -50000`).
 //
-// Timers are a FAKE QUEUE rather than the no-op stub the other scroll suites
-// use, because the whole settle cycle — the restore, the latch, the dirty/settle
-// branch in onmessage — only exists across a timer boundary. The #935 review
-// found a re-capture loop that lived exactly there: `onScroll` is not a
-// user-scroll event (xterm's BufferService.scroll ends in an unconditional
-// `_onScroll.fire`), so a viewport parked at the top re-armed the capture on
-// every output line. A stubbed timer cannot see that; the loop case below is the
-// regression pin.
+// The harness fakes BOTH timers and the clock, and drives the real
+// `noteTerminalFrame` rather than a stand-in, because every bug found in review
+// so far has lived across a timer boundary on the frame path:
+//   - a stubbed no-op setTimeout hid a re-capture loop (#935 round 1);
+//   - modelling a live frame as `scrollbackDirty = true` took the `else` branch
+//     and hid a settle that live output could extend forever (round 2).
 const epilogue = `
 ;globalThis.__t = {
   maybeHydrateScrollback(){ return maybeHydrateScrollback(); },
+  noteTerminalFrame(){ return noteTerminalFrame(); },
   resetScrollbackSync(){ return resetScrollbackSync(); },
   sendToPTY(s){ return sendToPTY(s); },
   set term(v){ term = v; },
@@ -28,7 +27,7 @@ const epilogue = `
   get scrollbackDirty(){ return scrollbackDirty; },
   get hydratingScrollback(){ return hydratingScrollback; },
   get scrollbackFullySynced(){ return scrollbackFullySynced; },
-  set hydrateSawReplay(v){ hydrateSawReplay = v; },
+  set lastViewportY(v){ lastViewportY = v; },
   set lastHydrateAt(v){ lastHydrateAt = v; },
 };
 `;
@@ -49,16 +48,19 @@ window.TextEncoder = TextEncoder;
 window.setInterval = () => 0;
 window.requestAnimationFrame = () => 0;
 
-// Fake timers: collect pending callbacks so a test can run them on demand.
+// Fake clock + timers. Timers carry their due time so `advance` can fire only
+// what has actually come due — the deadline cases depend on that ordering.
+let fakeNow = 1e6;
+window.Date.now = () => fakeNow;
 let timerSeq = 1;
 const timers = new Map();
-window.setTimeout = (fn, ms) => { const id = timerSeq++; timers.set(id, { fn, ms }); return id; };
+window.setTimeout = (fn, ms) => { const id = timerSeq++; timers.set(id, { fn, due: fakeNow + (ms || 0) }); return id; };
 window.clearTimeout = (id) => { timers.delete(id); };
-// Run every pending timer once (the settle is the only one these tests arm).
-function runTimers() {
-  const due = [...timers.entries()];
-  timers.clear();
-  for (const [, t] of due) t.fn();
+function advance(ms) {
+  fakeNow += ms;
+  for (const [id, t] of [...timers.entries()]) {
+    if (t.due <= fakeNow) { timers.delete(id); t.fn(); }
+  }
 }
 
 const realGet = window.document.getElementById.bind(window.document);
@@ -77,22 +79,25 @@ const check = (name, cond) => { if (cond) { pass++; console.log('  ✓ ' + name)
 
 // `baseY` is how many lines have scrolled off the top (whether scrollback exists
 // at all); `viewportY` is where the user is looking, 0 == the very top.
+// `scrollToTop` records that the restore was INVOKED — deliberately not that the
+// viewport visibly moved, which this fake has no `ydisp` semantics to model.
 let sends, fake;
-function setup({ agentSurface = false, baseY = 500, viewportY = 0,
+function setup({ agentSurface = false, baseY = 500, viewportY = 0, from = 400,
                  readyState = 1, window: win = 7, dirty = true } = {}) {
   sends = [];
   timers.clear();
   fake = {
     buffer: { active: { baseY, viewportY } },
-    scrolledToTop: 0,
-    scrollToTop() { this.scrolledToTop++; this.buffer.active.viewportY = 0; },
+    restoreCalls: 0,
+    scrollToTop() { this.restoreCalls++; },
   };
   T.term = fake;
   T.termWs = { readyState, send(s) { sends.push(JSON.parse(s)); } };
   T.activeTerminal = win === null ? null : { id: 't1', window: win, agent_surface: agentSurface };
   T.resetScrollbackSync();
   T.scrollbackDirty = dirty;
-  T.lastHydrateAt = 0; // no cooldown carried in from a previous case
+  T.lastViewportY = from; // where the user scrolled FROM (0 == already parked)
+  T.lastHydrateAt = 0;
   return sends;
 }
 const selects = () => sends.filter((m) => m.type === 'select-window');
@@ -104,7 +109,7 @@ console.log('scrollback hydrate (CROW-934)');
 {
   setup({ baseY: 297, viewportY: 0 });
   T.maybeHydrateScrollback();
-  check('shell at top of a thinned buffer re-requests the replay',
+  check('arriving at the top of a thinned buffer re-requests the replay',
     selects().length === 1 && selects()[0].window === 7);
   check('  ... and marks the sync in flight', T.hydratingScrollback === true);
   check('  ... and clears the dirty flag', T.scrollbackDirty === false);
@@ -132,7 +137,7 @@ console.log('scrollback hydrate (CROW-934)');
 {
   setup();
   T.maybeHydrateScrollback(); T.maybeHydrateScrollback(); T.maybeHydrateScrollback();
-  check('repeated scrolls within one in-flight sync issue exactly one capture', selects().length === 1);
+  check('repeated calls within one in-flight sync issue exactly one capture', selects().length === 1);
 }
 {
   setup({ readyState: 3 /* CLOSED */ });
@@ -145,92 +150,121 @@ console.log('scrollback hydrate (CROW-934)');
   check('no active terminal does not re-sync', selects().length === 0);
 }
 
-// ---- The #935 review's Red finding: no unbounded re-capture loop -----------
+// ---- Arrival, not position (round 1 Red + round 2 Green 1) -----------------
 
-console.log('\n  streaming output while parked at the top');
+console.log('\n  parked at the top while output streams');
 {
-  // The exact repro: read early output while a build keeps printing. Every
-  // output line marks the buffer dirty and fires onScroll with the viewport
-  // still pinned at 0. Before the fix this re-armed a full 50k capture per line.
-  setup({ baseY: 400, viewportY: 0 });
-  T.maybeHydrateScrollback();          // first capture
-  fake.buffer.active.baseY = 19949;    // replay brought real history back
-  runTimers();                         // settle
-  let capturesAfterFirst = 0;
+  // xterm fires onScroll for every line pushed at the bottom and pins a
+  // top-parked viewport at ydisp 0, so "still at the top" fires forever. Only
+  // ARRIVING there should capture.
+  setup({ baseY: 400, viewportY: 0, from: 0 });
+  T.maybeHydrateScrollback();
+  check('already parked at the top does not capture', selects().length === 0);
+
+  setup({ baseY: 400, viewportY: 0, from: 400 });
+  T.maybeHydrateScrollback();      // arrival → one capture
+  fake.buffer.active.baseY = 19949;
+  advance(3000);                   // settle
   for (let line = 0; line < 500; line++) {
-    T.scrollbackDirty = true;          // a live frame landed
-    fake.buffer.active.viewportY = 0;  // xterm pins a top-parked viewport
-    T.maybeHydrateScrollback();        // its onScroll
-    runTimers();
+    T.scrollbackDirty = true;      // a live frame's bookkeeping
+    T.maybeHydrateScrollback();    // its onScroll, viewport still pinned at 0
+    advance(20);
   }
-  capturesAfterFirst = selects().length - 1;
-  check('500 output lines at the top do not each trigger a capture', capturesAfterFirst === 0);
-  check('  ... the cooldown/latch holds it to the single initial capture', selects().length === 1);
-  // The capture DID come back deeper here, so the latch is off — this case is
-  // pinning the cooldown specifically, not passing by way of the latch.
-  check('  ... and it is the cooldown doing it (latch is off)', T.scrollbackFullySynced === false);
+  check('500 output lines at the top do not each trigger a capture', selects().length === 1);
+  check('  ... and the surface is not stuck mid-flight', T.hydratingScrollback === false);
 }
 {
   // Latch: a capture that comes back no deeper means the buffer already matches
   // the pane, so stop asking until the viewport leaves the top.
   setup({ baseY: 19949, viewportY: 0 });
   T.maybeHydrateScrollback();
-  runTimers(); // baseY unchanged → nothing new came back
+  T.noteTerminalFrame();       // the replay lands
+  advance(3000);               // settle; baseY unchanged → nothing new came back
   check('a capture that returns nothing new latches off', T.scrollbackFullySynced === true);
-  T.lastHydrateAt = 0; // prove the latch alone holds, independent of the cooldown
+  T.lastHydrateAt = 0;         // prove the latch holds independent of the cooldown
   T.scrollbackDirty = true;
+  T.lastViewportY = 400;       // and independent of the arrival gate
   T.maybeHydrateScrollback();
-  check('  ... and a further scroll at the top does not re-capture', selects().length === 1);
-  fake.buffer.active.viewportY = 900;  // user scrolls away
+  check('  ... and a further arrival at the top does not re-capture', selects().length === 1);
+  fake.buffer.active.viewportY = 900; // user scrolls away
   T.maybeHydrateScrollback();
   check('  ... leaving the top re-arms it', T.scrollbackFullySynced === false);
 }
-
-// ---- The #935 review's Yellow 1: the restore must not yank the viewport ----
-
-console.log('\n  viewport restore');
 {
   setup({ baseY: 400, viewportY: 0 });
   T.maybeHydrateScrollback();
+  advance(3000); // no frame ever landed
+  check('an empty flight does not latch (it proves nothing)', T.scrollbackFullySynced === false);
+}
+
+// ---- The settle cannot be extended forever (round 2 Yellow 1) --------------
+
+console.log('\n  busy shell during a flight');
+{
+  // Frames are not batched — one WS frame per PTY read chunk — so a build
+  // printing faster than the quiet window used to hold the settle open forever,
+  // latching hydratingScrollback true and silently disabling the feature.
+  setup({ baseY: 400, viewportY: 0 });
+  T.maybeHydrateScrollback();
+  check('a sync is in flight', T.hydratingScrollback === true);
+  for (let i = 0; i < 200; i++) { T.noteTerminalFrame(); advance(100); } // 20 s of chatter
+  check('the absolute deadline ends the flight anyway', T.hydratingScrollback === false);
+  check('  ... so the surface can re-sync again later', T.scrollbackDirty === true || T.scrollbackFullySynced === false);
+}
+
+// ---- Restore decision (round 1 Yellow 1) -----------------------------------
+
+console.log('\n  restore decision');
+{
+  setup({ baseY: 400, viewportY: 0 });
+  T.maybeHydrateScrollback();
+  T.noteTerminalFrame();
   fake.buffer.active.baseY = 19949;
-  fake.buffer.active.viewportY = 19949; // rebuild parked at the bottom
-  T.hydrateSawReplay = true;            // what onmessage sets when a frame lands
-  runTimers();
-  check('a landed replay restores the user to the oldest lines', fake.scrolledToTop === 1);
+  advance(3000);
+  check('a landed replay invokes the restore', fake.restoreCalls === 1);
 }
 {
-  // Yellow 1: scrollOnUserInput deliberately takes a typing user to the bottom.
   setup({ baseY: 400, viewportY: 0 });
   T.maybeHydrateScrollback();
+  T.noteTerminalFrame();
   fake.buffer.active.baseY = 19949;
-  fake.buffer.active.viewportY = 19949;
-  T.hydrateSawReplay = true;
-  T.sendToPTY('l');                     // user starts typing mid-flight
-  runTimers();
-  check('typing mid-flight suppresses the restore', fake.scrolledToTop === 0);
+  T.sendToPTY('l'); // user starts typing mid-flight
+  advance(3000);
+  check('typing mid-flight suppresses the restore', fake.restoreCalls === 0);
 }
 {
   setup({ baseY: 400, viewportY: 0 });
   T.maybeHydrateScrollback();
-  runTimers();
-  check('no restore when no replay ever landed (the 2000 ms self-heal path)',
-    fake.scrolledToTop === 0);
+  advance(3000); // no replay ever landed
+  check('no restore when no replay landed (the self-heal path)', fake.restoreCalls === 0);
   check('  ... and the flight is still cleared', T.hydratingScrollback === false);
 }
 
-// ---- Teardown parity (review Yellow 2) -------------------------------------
+// ---- Teardown parity (round 1 Yellow 2, round 2 Green 2) -------------------
 
 console.log('\n  teardown');
 {
   setup({ baseY: 400, viewportY: 0 });
   T.maybeHydrateScrollback();
   check('a sync is in flight', T.hydratingScrollback === true);
-  T.resetScrollbackSync(); // what both reloadTerminal and onclose now call
+  T.resetScrollbackSync(); // what both reloadTerminal and onclose call
   check('reset clears the in-flight sync', T.hydratingScrollback === false);
   check('  ... re-arms the dirty flag', T.scrollbackDirty === true);
   check('  ... and clears the latch', T.scrollbackFullySynced === false);
-  runTimers();
-  check('  ... and the dropped settle cannot move the viewport', fake.scrolledToTop === 0);
+  advance(3000);
+  check('  ... and the dropped settle cannot invoke the restore', fake.restoreCalls === 0);
+}
+{
+  // Green 2: a new surface gets its own cooldown budget, not the old one's.
+  setup({ baseY: 400, viewportY: 0 });
+  T.maybeHydrateScrollback();     // consumes the budget
+  advance(3000);
+  T.resetScrollbackSync();        // tab switch
+  T.lastViewportY = 400;
+  fake.buffer.active.viewportY = 0;
+  T.maybeHydrateScrollback();
+  check('reset clears the cooldown so a new surface can sync immediately',
+    selects().length === 2);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

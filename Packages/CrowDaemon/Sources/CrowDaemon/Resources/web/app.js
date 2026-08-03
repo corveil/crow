@@ -4696,13 +4696,7 @@ function connectTerminalWs() {
   termWs.onmessage = (event) => {
     if (event.data instanceof ArrayBuffer) {
       term.write(new Uint8Array(event.data));
-      // CROW-934: while a re-sync is in flight these bytes are (or accompany)
-      // the replay — record that one actually landed and keep pushing the settle
-      // out so the restore runs once the rebuild is quiet. Otherwise they're
-      // live output, which tmux may again have thinned, so the next visit to the
-      // top should re-sync.
-      if (hydratingScrollback) { hydrateSawReplay = true; scheduleHydrateSettle(150); }
-      else scrollbackDirty = true;
+      noteTerminalFrame(); // CROW-934 scrollback re-sync bookkeeping
       // Fade the skeleton out once the first real content has landed — rAF so
       // the hide follows the paint, not precedes it.
       if (!painted) { painted = true; requestAnimationFrame(hideTerminalSkeleton); }
@@ -4825,46 +4819,72 @@ function selectWindow(win) {
 // re-armed the next one — two tmux spawns and the whole 50k history per round
 // trip, indefinitely (#935 review).
 //
-//   * `lastHydrateAt` bounds the cost while output is still streaming.
+//   * Arriving at the top is a TRANSITION, not a position. xterm pins a
+//     top-parked viewport at `ydisp === 0` while output streams, so "still at
+//     the top" fires forever; "just got here" fires once per visit and covers
+//     the wheel, touch, the scrollbar and Shift+PageUp alike.
+//   * `lastHydrateAt` is the backstop if that ever fires more than expected.
 //   * `scrollbackFullySynced` latches off entirely once a capture comes back
 //     with nothing new, until the viewport leaves the top. That is also what
 //     keeps the one speculative capture per tab (the connect replay already left
 //     the buffer authoritative, but we can't tell that without asking) from
 //     repeating.
 const HYDRATE_MIN_INTERVAL_MS = 5000;
+// A flight ends this long after the last frame, but never later than
+// HYDRATE_MAX_FLIGHT_MS after it armed. The cap is load-bearing: frames are not
+// batched (one WS binary frame per PTY read chunk), so on a shell printing more
+// often than the quiet window, an extend-only settle would never fire and
+// `hydratingScrollback` would latch true for the life of the socket — silently
+// disabling the feature on exactly the workload it exists for (#935 review).
+const HYDRATE_QUIET_MS = 150;
+const HYDRATE_MAX_FLIGHT_MS = 3000;
 let scrollbackDirty = true; // live output may have dropped lines since the last sync
 let hydratingScrollback = false;
 let hydrateSettleTimer = null;
+let hydrateArmedAt = 0; // start of the current flight, for the absolute deadline
 let hydrateBaseY = 0; // scrollback depth when the capture was armed
 let hydrateSawReplay = false; // did any bytes actually land during the flight?
 let hydrateInputSeq = 0; // userInputSeq when the capture was armed
 let scrollbackFullySynced = false; // last capture returned nothing new
 let lastHydrateAt = 0;
+let lastViewportY = 0; // previous scroll position, to detect arrival at the top
 
-// The replay rebuilds from the top (`ESC[H ESC[2J ESC[3J`), which parks the
-// viewport at the BOTTOM — so once the bytes stop landing, put the user back on
-// the oldest lines they scrolled up to ask for. Debounced rather than done in
-// term.write's callback because live output can interleave with the replay;
-// `ms` is long on arm (the capture is a round-trip through tmux) and short
-// between frames. Self-healing: if no replay ever arrives the timer still
-// clears the flag, so a failed sync can't wedge the surface.
+// The replay rebuilds from the top (`ESC[H ESC[2J ESC[3J`). Once the bytes stop
+// landing, put the user back on the oldest lines they scrolled up to ask for.
+// Debounced rather than done in term.write's callback because live output can
+// interleave with the replay — but clamped to the arm-time deadline so a busy
+// shell cannot extend it indefinitely. Self-healing in both directions: no
+// replay at all still clears the flag, and neither does a replay that never
+// stops.
 function scheduleHydrateSettle(ms) {
   clearTimeout(hydrateSettleTimer);
+  const remaining = hydrateArmedAt + HYDRATE_MAX_FLIGHT_MS - Date.now();
   hydrateSettleTimer = setTimeout(() => {
     hydratingScrollback = false;
     const buf = term && term.buffer && term.buffer.active;
     // Nothing deeper came back → the local buffer already matches the pane, so
-    // stop asking until the viewport moves off the top.
-    if (buf && buf.baseY <= hydrateBaseY) scrollbackFullySynced = true;
-    // Only move the viewport if a replay actually landed AND the user hasn't
-    // typed since we armed. Both matter: the 2000 ms "no replay ever arrived"
-    // path would otherwise jump them to the top of an unchanged buffer, and
-    // `scrollOnUserInput` deliberately takes a typing user to the bottom —
-    // yanking them back mid-keystroke is worse than not restoring at all.
+    // stop asking until the viewport moves off the top. Only trust that when a
+    // replay actually landed; an empty flight proves nothing.
+    if (hydrateSawReplay && buf && buf.baseY <= hydrateBaseY) scrollbackFullySynced = true;
+    // Only move the viewport if a replay landed AND the user hasn't typed since
+    // we armed — `scrollOnUserInput` deliberately takes a typing user to the
+    // bottom, and yanking them back mid-keystroke is worse than not restoring.
     if (hydrateSawReplay && userInputSeq === hydrateInputSeq) {
       try { term.scrollToTop(); } catch (_) {}
     }
-  }, ms);
+  }, Math.max(0, Math.min(ms, remaining)));
+}
+
+// The socket's per-frame bookkeeping, named so the tests can drive the real
+// thing rather than a stand-in (the extend-forever bug above lived here and the
+// suite modelled only the `else` branch, so it couldn't see it).
+function noteTerminalFrame() {
+  // While a re-sync is in flight these bytes are (or accompany) the replay —
+  // record that one landed and hold the settle open until the rebuild is quiet.
+  // Otherwise they're live output, which tmux may again have thinned, so the
+  // next arrival at the top should re-sync.
+  if (hydratingScrollback) { hydrateSawReplay = true; scheduleHydrateSettle(HYDRATE_QUIET_MS); }
+  else scrollbackDirty = true;
 }
 
 // Shared by reloadTerminal and the onclose auto-reconnect: both tear the socket
@@ -4877,17 +4897,23 @@ function resetScrollbackSync() {
   hydrateSawReplay = false;
   scrollbackFullySynced = false;
   scrollbackDirty = true;
+  lastHydrateAt = 0; // the new surface gets its own budget, not the old one's
 }
 
 function maybeHydrateScrollback() {
-  if (!term || hydratingScrollback) return;
+  if (!term) return;
   const buf = term.buffer.active;
+  const arrivedAtTop = buf.viewportY === 0 && lastViewportY !== 0;
+  lastViewportY = buf.viewportY;
+  if (hydratingScrollback) return;
   // Leaving the top re-arms the latch — there is new ground to cover next time.
   if (buf.viewportY !== 0) { scrollbackFullySynced = false; return; }
+  // Parked at the top rather than newly arrived: xterm fires onScroll for every
+  // line pushed at the bottom, and pins ydisp at 0 while the user sits there.
+  if (!arrivedAtTop) return;
   if (scrollbackFullySynced || !scrollbackDirty) return;
   // `baseY > 0` is load-bearing: on a tab that has printed less than one screen
-  // viewportY is permanently 0, so testing the top alone would fire a capture on
-  // every output burst for the whole life of the tab.
+  // viewportY is permanently 0, so there is no scrollback to go fetch.
   if (buf.baseY === 0) return;
   if (!activeTerminal || activeTerminal.agent_surface) return;
   if (activeTerminal.window == null) return;
@@ -4897,6 +4923,7 @@ function maybeHydrateScrollback() {
   lastHydrateAt = now;
   hydratingScrollback = true;
   scrollbackDirty = false;
+  hydrateArmedAt = now;
   hydrateBaseY = buf.baseY;
   hydrateSawReplay = false;
   hydrateInputSeq = userInputSeq;
