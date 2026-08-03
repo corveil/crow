@@ -4255,7 +4255,10 @@ function ensureTerminal() {
   const imageAddon = new ImageAddon.ImageAddon({ sixelSupport: true, iipSupport: true, kittySupport: true });
   searchAddon = new SearchAddon.SearchAddon();
   const webLinksAddon = new WebLinksAddon.WebLinksAddon();
-  // Config block mirrors CrowTerminal/Resources/xterm/terminal.html.
+  // Config block mirrors web/terminal.html (the standalone debug page). It also
+  // named CrowTerminal/Resources/xterm/terminal.html, but that page lost its
+  // last consumer when ADR-0010 retired the macOS app — its crowWrite/crowInput
+  // bridge has no caller — so it is no longer a front-end to stay in sync with.
   term = new Terminal({
     cursorBlink: true,
     fontSize: 14,
@@ -4295,6 +4298,9 @@ function ensureTerminal() {
     term.loadAddon(webglAddon);
   } catch (_) { /* WebGL unavailable → canvas/DOM renderer */ }
   term.onData(sendToPTY);
+  // CROW-934: hydrate the shell scrollback from tmux when the user reaches the
+  // top of what the live stream actually delivered.
+  term.onScroll(maybeHydrateScrollback);
   term.attachCustomKeyEventHandler(handleTerminalKey);
   enableTouchScroll(document.getElementById('terminal'));
   enableWheelScroll(document.getElementById('terminal'));
@@ -4684,6 +4690,12 @@ function connectTerminalWs() {
   termWs.onmessage = (event) => {
     if (event.data instanceof ArrayBuffer) {
       term.write(new Uint8Array(event.data));
+      // CROW-934: while a re-sync is in flight these bytes are (or accompany)
+      // the replay — keep pushing the settle out so scrollToTop runs once the
+      // rebuild is quiet. Otherwise they're live output, which tmux may again
+      // have thinned, so the next visit to the top should re-sync.
+      if (hydratingScrollback) scheduleHydrateSettle(150);
+      else scrollbackDirty = true;
       // Fade the skeleton out once the first real content has landed — rAF so
       // the hide follows the paint, not precedes it.
       if (!painted) { painted = true; requestAnimationFrame(hideTerminalSkeleton); }
@@ -4772,6 +4784,62 @@ function selectWindow(win) {
   }
 }
 
+// CROW-934: re-sync a plain-shell surface's scrollback from tmux's history.
+//
+// tmux collapses pane redraws when the attached client can't drain them fast
+// enough, and the browser IS that slow client. Measured against the bundled
+// config: `seq 1 20000` leaves all 19 989 lines in the pane's own history, but
+// a browser-paced reader receives only ~337 of them (a raw reader gets 19 768).
+// So the local xterm buffer is NOT a faithful copy of the pane — scroll-up hits
+// its top after a few screens while tmux still holds the rest.
+//
+// crowd's `select-window` reply carries the authoritative copy
+// (`capture-pane -pe -S -50000`, CROW-606) and REBUILDS the buffer in place, so
+// re-requesting it is idempotent. It already ran on connect and on a tab CHANGE
+// (attachWindow → reloadTerminal), which is why switching away and back
+// "fixed" the history — but the tab you sit on never re-synced.
+//
+// Trigger on reaching the top of the local buffer: that is exactly when the
+// user is asking for older lines, and it costs one capture per output burst
+// rather than polling. Shell surfaces only — an agent keeps its transcript in
+// the scrollback-less alt buffer and repaints it itself (ADR-0013), so a
+// capture there returns just the viewport and would buy nothing.
+let scrollbackDirty = true; // live output may have dropped lines since the last sync
+let hydratingScrollback = false;
+let hydrateSettleTimer = null;
+
+// The replay rebuilds from the top (`ESC[H ESC[2J ESC[3J`), which parks the
+// viewport at the BOTTOM — so once the bytes stop landing, put the user back on
+// the oldest lines they scrolled up to ask for. Debounced rather than done in
+// term.write's callback because live output can interleave with the replay;
+// `ms` is long on arm (the capture is a round-trip through tmux) and short
+// between frames. Self-healing: if no replay ever arrives the timer still
+// clears the flag, so a failed sync can't wedge the surface.
+function scheduleHydrateSettle(ms) {
+  clearTimeout(hydrateSettleTimer);
+  hydrateSettleTimer = setTimeout(() => {
+    hydratingScrollback = false;
+    try { term.scrollToTop(); } catch (_) {}
+  }, ms);
+}
+
+function maybeHydrateScrollback() {
+  if (!term || hydratingScrollback || !scrollbackDirty) return;
+  if (!activeTerminal || activeTerminal.agent_surface) return;
+  if (activeTerminal.window == null) return;
+  if (!termWs || termWs.readyState !== WebSocket.OPEN) return;
+  // At the top of a buffer that HAS scrollback. `baseY > 0` is load-bearing: on
+  // a short buffer (a tab that has printed less than one screen) viewportY is
+  // permanently 0, so testing the top alone would fire a capture on every
+  // output burst for the whole life of the tab.
+  const buf = term.buffer.active;
+  if (buf.baseY === 0 || buf.viewportY !== 0) return;
+  hydratingScrollback = true;
+  scrollbackDirty = false;
+  scheduleHydrateSettle(2000);
+  selectWindow(activeTerminal.window);
+}
+
 // #673: which tmux window this shared surface shows changes on both a terminal-tab
 // switch (switchTerminal) and a session switch (refreshTerminals). A plain
 // selectWindow on the live socket replays the pane but leaves the grid mismatched
@@ -4801,6 +4869,12 @@ function reloadTerminal() {
   try { term.reset(); } catch (_) {}
   lastTermCols = 0;
   lastTermRows = 0;
+  // CROW-934: the reconnect re-selects the window, so crowd replays the pane
+  // anyway — drop any in-flight re-sync (its scrollToTop would fight the fresh
+  // attach) and treat the rebuilt buffer as needing one again.
+  clearTimeout(hydrateSettleTimer);
+  hydratingScrollback = false;
+  scrollbackDirty = true;
   if (termWs) {
     const old = termWs;
     old.onopen = old.onmessage = old.onclose = old.onerror = null;
