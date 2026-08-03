@@ -19,7 +19,6 @@ const epilogue = `
   maybeHydrateScrollback(){ return maybeHydrateScrollback(); },
   noteTerminalFrame(){ return noteTerminalFrame(); },
   resetScrollbackSync(){ return resetScrollbackSync(); },
-  sendToPTY(s){ return sendToPTY(s); },
   set term(v){ term = v; },
   set termWs(v){ termWs = v; },
   set activeTerminal(v){ activeTerminal = v; },
@@ -78,9 +77,8 @@ const check = (name, cond) => { if (cond) { pass++; console.log('  ✓ ' + name)
 // ---- Fakes -----------------------------------------------------------------
 
 // `baseY` is how many lines have scrolled off the top (whether scrollback exists
-// at all); `viewportY` is where the user is looking, 0 == the very top.
-// `scrollToTop` records that the restore was INVOKED — deliberately not that the
-// viewport visibly moved, which this fake has no `ydisp` semantics to model.
+// at all); `viewportY` is where the user is looking, 0 == the very top. The fake
+// records any attempt to move the viewport: the settle must never make one.
 let sends, fake;
 function setup({ agentSurface = false, baseY = 500, viewportY = 0, from = 400,
                  readyState = 1, window: win = 7, dirty = true } = {}) {
@@ -88,8 +86,10 @@ function setup({ agentSurface = false, baseY = 500, viewportY = 0, from = 400,
   timers.clear();
   fake = {
     buffer: { active: { baseY, viewportY } },
-    restoreCalls: 0,
-    scrollToTop() { this.restoreCalls++; },
+    moves: 0,
+    scrollToTop() { this.moves++; this.buffer.active.viewportY = 0; },
+    scrollToBottom() { this.moves++; this.buffer.active.viewportY = this.buffer.active.baseY; },
+    scrollLines(n) { this.moves++; },
   };
   T.term = fake;
   T.termWs = { readyState, send(s) { sends.push(JSON.parse(s)); } };
@@ -195,6 +195,13 @@ console.log('\n  parked at the top while output streams');
   T.maybeHydrateScrollback();
   advance(3000); // no frame ever landed
   check('an empty flight does not latch (it proves nothing)', T.scrollbackFullySynced === false);
+  // ...and it must not leave `scrollbackDirty` false either, or the retry the
+  // missing latch is meant to allow would be blocked anyway.
+  check('  ... and restores the dirty flag so a retry is possible', T.scrollbackDirty === true);
+  T.lastHydrateAt = 0;
+  T.lastViewportY = 400;
+  T.maybeHydrateScrollback();
+  check('  ... so arriving at the top again does re-capture', selects().length === 2);
 }
 
 // ---- The settle cannot be extended forever (round 2 Yellow 1) --------------
@@ -209,35 +216,41 @@ console.log('\n  busy shell during a flight');
   check('a sync is in flight', T.hydratingScrollback === true);
   for (let i = 0; i < 200; i++) { T.noteTerminalFrame(); advance(100); } // 20 s of chatter
   check('the absolute deadline ends the flight anyway', T.hydratingScrollback === false);
-  check('  ... so the surface can re-sync again later', T.scrollbackDirty === true || T.scrollbackFullySynced === false);
+  // Split rather than `A || B`: as a disjunct either half alone passed it, so it
+  // could not fail for the reason it was named.
+  check('  ... the latch did not trip (the replay did land)', T.scrollbackFullySynced === true);
+  check('  ... and later live output can mark it dirty again', (() => {
+    T.noteTerminalFrame(); return T.scrollbackDirty === true;
+  })());
 }
 
-// ---- Restore decision (round 1 Yellow 1) -----------------------------------
+// ---- The settle never moves the viewport (round 3 Yellow) ------------------
 
-console.log('\n  restore decision');
+console.log('\n  the settle leaves the viewport alone');
 {
+  // The replay rebuilds with isUserScrolling true, so ydisp stays pinned at 0
+  // and the user is already on the oldest lines. A restore here would be a
+  // no-op on that path — and a real, harmful scroll on the one path where the
+  // user has left the top mid-flight.
   setup({ baseY: 400, viewportY: 0 });
   T.maybeHydrateScrollback();
   T.noteTerminalFrame();
   fake.buffer.active.baseY = 19949;
   advance(3000);
-  check('a landed replay invokes the restore', fake.restoreCalls === 1);
+  check('a landed replay does not move the viewport', fake.moves === 0);
 }
 {
+  // The #668 jump-to-bottom pill mid-flight: scrollToBottom() clears
+  // isUserScrolling, so ydisp tracks the bottom. The settle must not drag the
+  // user off the live prompt back to line 1.
   setup({ baseY: 400, viewportY: 0 });
   T.maybeHydrateScrollback();
   T.noteTerminalFrame();
   fake.buffer.active.baseY = 19949;
-  T.sendToPTY('l'); // user starts typing mid-flight
+  fake.buffer.active.viewportY = 19949; // user hit the pill
   advance(3000);
-  check('typing mid-flight suppresses the restore', fake.restoreCalls === 0);
-}
-{
-  setup({ baseY: 400, viewportY: 0 });
-  T.maybeHydrateScrollback();
-  advance(3000); // no replay ever landed
-  check('no restore when no replay landed (the self-heal path)', fake.restoreCalls === 0);
-  check('  ... and the flight is still cleared', T.hydratingScrollback === false);
+  check('the jump-to-bottom pill mid-flight is not overridden', fake.moves === 0);
+  check('  ... and the viewport is still at the bottom', fake.buffer.active.viewportY === 19949);
 }
 
 // ---- Teardown parity (round 1 Yellow 2, round 2 Green 2) -------------------
@@ -252,7 +265,7 @@ console.log('\n  teardown');
   check('  ... re-arms the dirty flag', T.scrollbackDirty === true);
   check('  ... and clears the latch', T.scrollbackFullySynced === false);
   advance(3000);
-  check('  ... and the dropped settle cannot invoke the restore', fake.restoreCalls === 0);
+  check('  ... and the dropped settle does nothing', fake.moves === 0 && T.scrollbackDirty === true);
 }
 {
   // Green 2: a new surface gets its own cooldown budget, not the old one's.

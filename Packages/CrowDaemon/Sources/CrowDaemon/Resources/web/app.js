@@ -4328,14 +4328,8 @@ function ensureTerminal() {
 
 // The one guarded writer to the PTY socket, shared by term.onData and the touch
 // scroll shim below (mirrors terminal.html's sendToPTY of the same name).
-// CROW-934: bumped on every keystroke so a hydrate settling in the background
-// can tell whether the user has typed since it armed — `scrollOnUserInput`
-// deliberately takes a typing user to the bottom, and a restore that yanks them
-// back to the top mid-keystroke is worse than no restore.
-let userInputSeq = 0;
 function sendToPTY(text) {
   if (!text) return;
-  userInputSeq++;
   if (termWs && termWs.readyState === WebSocket.OPEN) termWs.send(new TextEncoder().encode(text));
 }
 
@@ -4844,33 +4838,38 @@ let hydrateSettleTimer = null;
 let hydrateArmedAt = 0; // start of the current flight, for the absolute deadline
 let hydrateBaseY = 0; // scrollback depth when the capture was armed
 let hydrateSawReplay = false; // did any bytes actually land during the flight?
-let hydrateInputSeq = 0; // userInputSeq when the capture was armed
 let scrollbackFullySynced = false; // last capture returned nothing new
 let lastHydrateAt = 0;
 let lastViewportY = 0; // previous scroll position, to detect arrival at the top
 
-// The replay rebuilds from the top (`ESC[H ESC[2J ESC[3J`). Once the bytes stop
-// landing, put the user back on the oldest lines they scrolled up to ask for.
-// Debounced rather than done in term.write's callback because live output can
-// interleave with the replay — but clamped to the arm-time deadline so a busy
-// shell cannot extend it indefinitely. Self-healing in both directions: no
-// replay at all still clears the flag, and neither does a replay that never
-// stops.
+// The flight ends this long after the last frame, but never later than the
+// arm-time deadline. There is deliberately NO viewport restore here: the replay
+// rebuilds the buffer while `isUserScrolling` is true (which the trigger's
+// `viewportY === 0 && baseY > 0` guards imply), and every write then takes
+// `isUserScrolling || i.ydisp++` / `isUserScrolling && (ydisp = max(ydisp-1,0))`,
+// so `ydisp` stays pinned at 0 — the rebuild leaves the user on the oldest lines
+// by itself. A `scrollToTop()` here would be `Viewport.scrollLines(-0)`, the same
+// scrollTop, hence a no-op on that path; the ONLY way to reach it non-inert is
+// the user leaving the top mid-flight (the #668 pill calls `scrollToBottom()`,
+// clearing `isUserScrolling` so `ydisp` tracks the bottom), where it would yank
+// them off the live prompt to line 1 of a 20k buffer. It never helps and acts
+// only when acting is wrong, so it is gone (#935 review round 3).
 function scheduleHydrateSettle(ms) {
   clearTimeout(hydrateSettleTimer);
   const remaining = hydrateArmedAt + HYDRATE_MAX_FLIGHT_MS - Date.now();
   hydrateSettleTimer = setTimeout(() => {
     hydratingScrollback = false;
     const buf = term && term.buffer && term.buffer.active;
-    // Nothing deeper came back → the local buffer already matches the pane, so
-    // stop asking until the viewport moves off the top. Only trust that when a
-    // replay actually landed; an empty flight proves nothing.
-    if (hydrateSawReplay && buf && buf.baseY <= hydrateBaseY) scrollbackFullySynced = true;
-    // Only move the viewport if a replay landed AND the user hasn't typed since
-    // we armed — `scrollOnUserInput` deliberately takes a typing user to the
-    // bottom, and yanking them back mid-keystroke is worse than not restoring.
-    if (hydrateSawReplay && userInputSeq === hydrateInputSeq) {
-      try { term.scrollToTop(); } catch (_) {}
+    if (hydrateSawReplay) {
+      // Nothing deeper came back → the local buffer already matches the pane, so
+      // stop asking until the viewport moves off the top.
+      if (buf && buf.baseY <= hydrateBaseY) scrollbackFullySynced = true;
+    } else {
+      // An empty flight proves nothing — neither that we synced (so no latch)
+      // nor that the buffer is clean. Arming cleared `scrollbackDirty` on the
+      // premise of a sync that never happened; put it back so a retry is
+      // possible without waiting for live output.
+      scrollbackDirty = true;
     }
   }, Math.max(0, Math.min(ms, remaining)));
 }
@@ -4889,7 +4888,7 @@ function noteTerminalFrame() {
 
 // Shared by reloadTerminal and the onclose auto-reconnect: both tear the socket
 // down, and a sync left in flight across one would have the fresh attach's own
-// replay consumed as its replay, with a pending scrollToTop fighting it.
+// replay consumed as its replay.
 function resetScrollbackSync() {
   clearTimeout(hydrateSettleTimer);
   hydrateSettleTimer = null;
@@ -4898,6 +4897,7 @@ function resetScrollbackSync() {
   scrollbackFullySynced = false;
   scrollbackDirty = true;
   lastHydrateAt = 0; // the new surface gets its own budget, not the old one's
+  lastViewportY = 0; // ...and its own scroll history, not the old one's position
 }
 
 function maybeHydrateScrollback() {
@@ -4926,7 +4926,6 @@ function maybeHydrateScrollback() {
   hydrateArmedAt = now;
   hydrateBaseY = buf.baseY;
   hydrateSawReplay = false;
-  hydrateInputSeq = userInputSeq;
   scheduleHydrateSettle(2000);
   selectWindow(activeTerminal.window);
 }
