@@ -4328,8 +4328,14 @@ function ensureTerminal() {
 
 // The one guarded writer to the PTY socket, shared by term.onData and the touch
 // scroll shim below (mirrors terminal.html's sendToPTY of the same name).
+// CROW-934: bumped on every keystroke so a hydrate settling in the background
+// can tell whether the user has typed since it armed — `scrollOnUserInput`
+// deliberately takes a typing user to the bottom, and a restore that yanks them
+// back to the top mid-keystroke is worse than no restore.
+let userInputSeq = 0;
 function sendToPTY(text) {
   if (!text) return;
+  userInputSeq++;
   if (termWs && termWs.readyState === WebSocket.OPEN) termWs.send(new TextEncoder().encode(text));
 }
 
@@ -4691,10 +4697,11 @@ function connectTerminalWs() {
     if (event.data instanceof ArrayBuffer) {
       term.write(new Uint8Array(event.data));
       // CROW-934: while a re-sync is in flight these bytes are (or accompany)
-      // the replay — keep pushing the settle out so scrollToTop runs once the
-      // rebuild is quiet. Otherwise they're live output, which tmux may again
-      // have thinned, so the next visit to the top should re-sync.
-      if (hydratingScrollback) scheduleHydrateSettle(150);
+      // the replay — record that one actually landed and keep pushing the settle
+      // out so the restore runs once the rebuild is quiet. Otherwise they're
+      // live output, which tmux may again have thinned, so the next visit to the
+      // top should re-sync.
+      if (hydratingScrollback) { hydrateSawReplay = true; scheduleHydrateSettle(150); }
       else scrollbackDirty = true;
       // Fade the skeleton out once the first real content has landed — rAF so
       // the hide follows the paint, not precedes it.
@@ -4711,6 +4718,10 @@ function connectTerminalWs() {
     // #679 expired scrim.
     clearTimeout(termSkelTimer);
     termSkelTimer = null;
+    // CROW-934: this path reconnects WITHOUT going through reloadTerminal, so it
+    // needs the same teardown — a sync left in flight across the drop would have
+    // the fresh attach's own replay consumed as its replay (#935 review).
+    resetScrollbackSync();
     if (sessionDead) { hideTerminalSkeleton(); return; }
     setTerminalReconnecting(true);
     showTerminalSkeleton();
@@ -4800,13 +4811,35 @@ function selectWindow(win) {
 // "fixed" the history — but the tab you sit on never re-synced.
 //
 // Trigger on reaching the top of the local buffer: that is exactly when the
-// user is asking for older lines, and it costs one capture per output burst
-// rather than polling. Shell surfaces only — an agent keeps its transcript in
-// the scrollback-less alt buffer and repaints it itself (ADR-0013), so a
-// capture there returns just the viewport and would buy nothing.
+// user is asking for older lines. Shell surfaces only — an agent keeps its
+// transcript in the scrollback-less alt buffer and repaints it itself
+// (ADR-0013), so a capture there returns just the viewport and would buy
+// nothing.
+//
+// Two independent brakes, because `onScroll` is NOT a user-scroll event: xterm's
+// BufferService.scroll ends in an unconditional `this._onScroll.fire(ydisp)`, so
+// it fires for every line pushed at the bottom, and a viewport the user parked
+// at the top stays pinned at `ydisp === 0` (`Math.max(ydisp - 1, 0)` once the
+// buffer is full). Reading early output while a build keeps printing therefore
+// satisfies every guard on every output line. Without a brake each capture
+// re-armed the next one — two tmux spawns and the whole 50k history per round
+// trip, indefinitely (#935 review).
+//
+//   * `lastHydrateAt` bounds the cost while output is still streaming.
+//   * `scrollbackFullySynced` latches off entirely once a capture comes back
+//     with nothing new, until the viewport leaves the top. That is also what
+//     keeps the one speculative capture per tab (the connect replay already left
+//     the buffer authoritative, but we can't tell that without asking) from
+//     repeating.
+const HYDRATE_MIN_INTERVAL_MS = 5000;
 let scrollbackDirty = true; // live output may have dropped lines since the last sync
 let hydratingScrollback = false;
 let hydrateSettleTimer = null;
+let hydrateBaseY = 0; // scrollback depth when the capture was armed
+let hydrateSawReplay = false; // did any bytes actually land during the flight?
+let hydrateInputSeq = 0; // userInputSeq when the capture was armed
+let scrollbackFullySynced = false; // last capture returned nothing new
+let lastHydrateAt = 0;
 
 // The replay rebuilds from the top (`ESC[H ESC[2J ESC[3J`), which parks the
 // viewport at the BOTTOM — so once the bytes stop landing, put the user back on
@@ -4819,23 +4852,54 @@ function scheduleHydrateSettle(ms) {
   clearTimeout(hydrateSettleTimer);
   hydrateSettleTimer = setTimeout(() => {
     hydratingScrollback = false;
-    try { term.scrollToTop(); } catch (_) {}
+    const buf = term && term.buffer && term.buffer.active;
+    // Nothing deeper came back → the local buffer already matches the pane, so
+    // stop asking until the viewport moves off the top.
+    if (buf && buf.baseY <= hydrateBaseY) scrollbackFullySynced = true;
+    // Only move the viewport if a replay actually landed AND the user hasn't
+    // typed since we armed. Both matter: the 2000 ms "no replay ever arrived"
+    // path would otherwise jump them to the top of an unchanged buffer, and
+    // `scrollOnUserInput` deliberately takes a typing user to the bottom —
+    // yanking them back mid-keystroke is worse than not restoring at all.
+    if (hydrateSawReplay && userInputSeq === hydrateInputSeq) {
+      try { term.scrollToTop(); } catch (_) {}
+    }
   }, ms);
 }
 
+// Shared by reloadTerminal and the onclose auto-reconnect: both tear the socket
+// down, and a sync left in flight across one would have the fresh attach's own
+// replay consumed as its replay, with a pending scrollToTop fighting it.
+function resetScrollbackSync() {
+  clearTimeout(hydrateSettleTimer);
+  hydrateSettleTimer = null;
+  hydratingScrollback = false;
+  hydrateSawReplay = false;
+  scrollbackFullySynced = false;
+  scrollbackDirty = true;
+}
+
 function maybeHydrateScrollback() {
-  if (!term || hydratingScrollback || !scrollbackDirty) return;
+  if (!term || hydratingScrollback) return;
+  const buf = term.buffer.active;
+  // Leaving the top re-arms the latch — there is new ground to cover next time.
+  if (buf.viewportY !== 0) { scrollbackFullySynced = false; return; }
+  if (scrollbackFullySynced || !scrollbackDirty) return;
+  // `baseY > 0` is load-bearing: on a tab that has printed less than one screen
+  // viewportY is permanently 0, so testing the top alone would fire a capture on
+  // every output burst for the whole life of the tab.
+  if (buf.baseY === 0) return;
   if (!activeTerminal || activeTerminal.agent_surface) return;
   if (activeTerminal.window == null) return;
   if (!termWs || termWs.readyState !== WebSocket.OPEN) return;
-  // At the top of a buffer that HAS scrollback. `baseY > 0` is load-bearing: on
-  // a short buffer (a tab that has printed less than one screen) viewportY is
-  // permanently 0, so testing the top alone would fire a capture on every
-  // output burst for the whole life of the tab.
-  const buf = term.buffer.active;
-  if (buf.baseY === 0 || buf.viewportY !== 0) return;
+  const now = Date.now();
+  if (now - lastHydrateAt < HYDRATE_MIN_INTERVAL_MS) return;
+  lastHydrateAt = now;
   hydratingScrollback = true;
   scrollbackDirty = false;
+  hydrateBaseY = buf.baseY;
+  hydrateSawReplay = false;
+  hydrateInputSeq = userInputSeq;
   scheduleHydrateSettle(2000);
   selectWindow(activeTerminal.window);
 }
@@ -4870,11 +4934,9 @@ function reloadTerminal() {
   lastTermCols = 0;
   lastTermRows = 0;
   // CROW-934: the reconnect re-selects the window, so crowd replays the pane
-  // anyway — drop any in-flight re-sync (its scrollToTop would fight the fresh
+  // anyway — drop any in-flight re-sync (its restore would fight the fresh
   // attach) and treat the rebuilt buffer as needing one again.
-  clearTimeout(hydrateSettleTimer);
-  hydratingScrollback = false;
-  scrollbackDirty = true;
+  resetScrollbackSync();
   if (termWs) {
     const old = termWs;
     old.onopen = old.onmessage = old.onclose = old.onerror = null;
