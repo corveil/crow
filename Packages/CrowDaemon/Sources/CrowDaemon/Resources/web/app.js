@@ -1052,6 +1052,20 @@ async function refreshSessions() {
     sessionsLoaded = true;
     if (changed) persistSidebarCache();
     detectSessionSounds();
+    // A deep link held back until the id could actually be judged (CROW-936).
+    if (pendingRoute) {
+      const route = pendingRoute;
+      pendingRoute = null;
+      applyRoute(route);
+      return; // applyRoute re-renders via selectSession / showSessionNotFound
+    }
+    // The retention reaper deletes completed sessions out from under us. Without
+    // this the open session just goes blank: renderHeader(undefined) returns
+    // early, leaving an empty header, an orphan "+" tab and a frozen terminal.
+    if (selectedId && !sessions.some((s) => s.id === selectedId)) {
+      showSessionNotFound(selectedId);
+      return; // showEmptyDetail renders the sidebar itself
+    }
     renderSidebar();
   } catch (_) { /* transient — next poll retries */ }
 }
@@ -1225,11 +1239,8 @@ async function bulkDeleteSelected() {
     } catch (_) { failed++; }
   }
   if (selectedId && !sessions.some((x) => x.id === selectedId)) {
-    selectedId = null;
-    const app = document.getElementById('app');
-    app.classList.remove('has-selection', 'mobile-show-sidebar');
-    document.getElementById('detail-header').innerHTML = '';
-    document.getElementById('tabbar').innerHTML = '';
+    navigate({ view: 'home' });
+    showHome();
   }
   selectionMode = false;
   renderSidebar();
@@ -1349,7 +1360,9 @@ function renderStatusBar() {
     const login = el('button', 'sb-login', 'Log in');
     login.type = 'button';
     login.title = 'Your web session expired — log in again';
-    login.onclick = () => { location.href = '/login'; };
+    // Carry the current view across the login hop (CROW-936) — login.html
+    // hands the fragment back once the password is accepted.
+    login.onclick = () => { location.href = '/login' + (location.hash || ''); };
     actions.appendChild(login);
     return;
   }
@@ -2204,12 +2217,79 @@ async function markInReviewAction(btn, id) {
 // ---------------------------------------------------------------------------
 // Detail + terminal tabs
 // ---------------------------------------------------------------------------
+
+// Drop any session/board selection and show #detail-empty carrying `msg`.
+// One implementation behind three callers that used to open-code it: the
+// router's home and not-found states, and the post-delete cleanup that
+// deleteSession and bulkDeleteSelected each had their own near-identical copy of.
+//
+// Removing `has-selection` is what reveals #detail-empty and hides the terminal
+// (`#app:not(.has-selection) #terminal-wrap { visibility: hidden }`, app.css) —
+// no separate hiding logic needed.
+function showEmptyDetail(msg, opts) {
+  const o = opts || {};
+  selectedId = null;
+  selectedBoard = null;
+  terminals = [];
+  activeTerminal = null;
+  const app = document.getElementById('app');
+  app.classList.remove('has-selection', 'board-active', 'mobile-show-sidebar');
+  // On narrow screens `#app:not(.has-selection) #detail` is display:none, which
+  // would hide the not-found message entirely — this class re-shows it.
+  app.classList.toggle('route-missing', !!o.missing);
+  document.getElementById('detail-header').innerHTML = '';
+  document.getElementById('tabbar').innerHTML = '';
+  document.getElementById('board').innerHTML = '';
+
+  const empty = document.getElementById('detail-empty');
+  if (empty) {
+    const label = empty.querySelector('.empty-msg');
+    if (label) label.textContent = msg || 'Select a session';
+    let sub = empty.querySelector('.empty-sub');
+    if (o.detail) {
+      if (!sub) { sub = el('div', 'empty-sub'); empty.appendChild(sub); }
+      sub.textContent = o.detail;
+    } else if (sub) { sub.remove(); }
+    let back = empty.querySelector('.empty-back');
+    if (o.missing) {
+      if (!back) {
+        back = el('button', 'empty-back', 'Back to sessions');
+        back.type = 'button';
+        // navigate() suppresses the hashchange for its own write, so drive the
+        // view directly rather than waiting for a round-trip that won't come.
+        back.onclick = () => { navigate({ view: 'home' }); showHome(); };
+        empty.appendChild(back);
+      }
+    } else if (back) { back.remove(); }
+  }
+  renderSidebar();
+}
+
+function showHome() { showEmptyDetail('Select a session'); }
+
+// A URL naming a session that isn't there. Crow's retention reaper deletes
+// completed sessions (worktree and branch included), so a dead link is the
+// normal case for any URL that's been sitting in a chat log — it gets a real
+// message rather than the blank pane an unguarded selectedId used to leave.
+function showSessionNotFound(id) {
+  showEmptyDetail('Session not found', {
+    missing: true,
+    detail: 'It may have been deleted — Crow removes completed sessions automatically.'
+      + (id ? ' (' + id + ')' : ''),
+  });
+}
+
 async function selectSession(id) {
+  // Synchronous, before the first await: applyRoute relies on the hash being
+  // settled by the time anything else can observe it. Carrying a pending
+  // terminal keeps a cold #/sessions/<id>/t/<tid> load from rewriting itself to
+  // the bare session and losing the tab it was asked for.
+  navigate({ view: 'session', sessionId: id, terminalId: pendingTerminalId || null });
   selectedId = id;
   selectedBoard = null;
   const app = document.getElementById('app');
   app.classList.add('has-selection');
-  app.classList.remove('board-active', 'mobile-show-sidebar'); // leave board, reveal terminal on mobile
+  app.classList.remove('board-active', 'mobile-show-sidebar', 'route-missing'); // leave board, reveal terminal on mobile
   document.getElementById('board').innerHTML = '';
   renderSidebar();
   renderHeader(sessions.find((x) => x.id === id));
@@ -2289,7 +2369,7 @@ function openLightbox(url, alt) {
 // Session-expired scrim Log in (#679): reuses the statusbar login handler (~:820).
 (function wireSessionScrim() {
   const btn = document.getElementById('scrim-login');
-  if (btn) btn.onclick = () => { location.href = '/login'; };
+  if (btn) btn.onclick = () => { location.href = '/login' + (location.hash || ''); };
 })();
 
 function shorten(path) {
@@ -2719,14 +2799,7 @@ async function deleteSession(id, name) {
   try {
     await rpc('delete-session', { session_id: id });
     sessions = sessions.filter((x) => x.id !== id);
-    if (selectedId === id) {
-      selectedId = null;
-      const app = document.getElementById('app');
-      app.classList.remove('has-selection');
-      app.classList.remove('mobile-show-sidebar');
-      document.getElementById('detail-header').innerHTML = '';
-      document.getElementById('tabbar').innerHTML = '';
-    }
+    if (selectedId === id) { navigate({ view: 'home' }); showHome(); }
     renderSidebar();
   } catch (e) {
     alertModal('Delete failed: ' + (e.message || e));
@@ -2747,8 +2820,21 @@ async function refreshTerminals() {
   // pre-binding fallback and becomes authoritative once the tmux window exists
   // or an adopt re-applies the option. Keeping the stale object left routing on
   // the old value until the user happened to switch tabs.
-  activeTerminal = terminals.find((t) => t.id === (activeTerminal && activeTerminal.id))
+  //
+  // A terminal id from the URL (CROW-936) wins for exactly one pass, so a cold
+  // #/sessions/<id>/t/<tid> load restores that tab instead of terminals[0].
+  activeTerminal = (pendingTerminalId && terminals.find((t) => t.id === pendingTerminalId))
+    || terminals.find((t) => t.id === (activeTerminal && activeTerminal.id))
     || terminals[0] || null;
+  if (pendingTerminalId) {
+    const restored = activeTerminal && activeTerminal.id === pendingTerminalId;
+    pendingTerminalId = null;
+    // Terminal is gone (closed, or from another machine) — we fell back to the
+    // first tab, so drop the dead /t/… rather than leave the URL lying.
+    if (!restored) {
+      navigate({ view: 'session', sessionId: selectedId }, { replace: true });
+    }
+  }
   renderTabs();
   // #673: session switches funnel through here too (selectSession → refreshTerminals),
   // changing which window this shared socket shows — same corruption as a terminal-tab
@@ -2812,6 +2898,11 @@ function renderTabs() {
 }
 
 function switchTerminal(t) {
+  // The terminal segment is written here and nowhere else: opening a session
+  // leaves the URL at #/sessions/<id>, which reloads onto terminals[0] — the
+  // same tab — so nothing is lost and clicking a session doesn't bury the
+  // history under an id the user never chose.
+  navigate({ view: 'session', sessionId: selectedId, terminalId: t.id });
   activeTerminal = t;
   renderTabs();
   // #673: the in-place resize+replay from #672 didn't recover a mismatched grid —
@@ -2881,6 +2972,7 @@ async function recreateTerminal(t) {
 // Boards (Ticket Board / Reviews / Allowlist)
 // ---------------------------------------------------------------------------
 function selectBoard(key) {
+  navigate({ view: 'board', board: key });
   selectedBoard = key;
   selectedId = null;
   // Leaving a board (or re-entering) drops any stale selection on it.
@@ -2890,7 +2982,7 @@ function selectBoard(key) {
   selectedReviewURLs.clear();
   const app = document.getElementById('app');
   app.classList.add('has-selection', 'board-active');
-  app.classList.remove('mobile-show-sidebar');
+  app.classList.remove('mobile-show-sidebar', 'route-missing');
   document.getElementById('detail-header').innerHTML = '';
   document.getElementById('tabbar').innerHTML = '';
   renderSidebar();
@@ -5240,6 +5332,134 @@ function showWizard(defaultDevRoot) {
 }
 
 // ---------------------------------------------------------------------------
+// URL routing (CROW-936)
+//
+// Hash-based, deliberately. `crowd` registers only exact literal paths
+// (StaticAssets.swift) with no catch-all, so an *authenticated* cold load of a
+// History-API path like /sessions/<id> would 404 in Hummingbird before ever
+// reaching this file — while an unauthenticated one renders the login page (the
+// auth middleware short-circuits with a 200), which is the confusing inverse of
+// what you want. A fragment never leaves the browser, so `/` always resolves and
+// the daemon needs no change at all. See docs/adr/0018-web-client-hash-routing.md.
+//
+//   #/                                   home / empty state
+//   #/sessions/:sessionId
+//   #/sessions/:sessionId/t/:terminalId
+//   #/tickets  #/reviews  #/allowlist  #/scorecard
+//   #/settings/:tab
+//
+// Only the addressable view lives in the URL — scroll position, open menus,
+// selection mode and board filters stay out of it on purpose.
+// ---------------------------------------------------------------------------
+const ROUTE_BOARDS = ['tickets', 'reviews', 'allowlist', 'scorecard'];
+// Mirrors TABS in settings.js. An unknown tab degrades to 'general' rather than
+// 404ing, so a link from an older/newer build still opens Settings.
+const ROUTE_SETTINGS_TABS = [
+  'general', 'automation', 'workspaces', 'jobs', 'notifications', 'webaccess', 'about',
+];
+
+// The exact hash we last wrote ourselves. `location.hash = …` fires hashchange
+// asynchronously; re-applying the route we just applied would re-run
+// selectSession → refreshTerminals → attachWindow and tear down a live terminal
+// socket for nothing. Matching on the value (not a bare boolean) means a hash
+// someone else changed in the same tick is still honoured.
+let selfWroteHash = null;
+// A session route that arrived before the first list-sessions landed. `sessions`
+// can be pre-filled from the localStorage sidebar cache, so membership alone
+// cannot tell "deleted" from "not loaded yet" — only `sessionsLoaded` can.
+let pendingRoute = null;
+// Terminal id from the URL, consumed once by the next refreshTerminals.
+let pendingTerminalId = null;
+
+// Hash → route object, or null when it matches nothing (caller normalizes to
+// home). Segments are decoded, so an id containing %2F survives the round-trip.
+function parseRoute(hash) {
+  const parts = String(hash || '').replace(/^#\/?/, '').split('/').filter(Boolean);
+  let seg;
+  try { seg = parts.map(decodeURIComponent); } catch (_) { return null; } // malformed %-escape
+  if (!seg.length) return { view: 'home' };
+  if (seg[0] === 'sessions' && seg[1]) {
+    if (seg.length === 2) return { view: 'session', sessionId: seg[1] };
+    if (seg.length === 4 && seg[2] === 't') {
+      return { view: 'session', sessionId: seg[1], terminalId: seg[3] };
+    }
+    return null;
+  }
+  if (seg.length === 1 && ROUTE_BOARDS.indexOf(seg[0]) !== -1) {
+    return { view: 'board', board: seg[0] };
+  }
+  if (seg[0] === 'settings' && seg.length <= 2) {
+    return { view: 'settings', tab: ROUTE_SETTINGS_TABS.indexOf(seg[1]) !== -1 ? seg[1] : 'general' };
+  }
+  return null;
+}
+
+function routeToHash(route) {
+  if (!route) return '#/';
+  if (route.view === 'session' && route.sessionId) {
+    return '#/sessions/' + encodeURIComponent(route.sessionId)
+      + (route.terminalId ? '/t/' + encodeURIComponent(route.terminalId) : '');
+  }
+  if (route.view === 'board' && route.board) return '#/' + route.board;
+  if (route.view === 'settings') return '#/settings/' + (route.tab || 'general');
+  return '#/';
+}
+
+function currentRoute() { return parseRoute(location.hash); }
+
+// Write `route` to the address bar. A no-op when the hash already matches —
+// which is what lets the selection functions below call this unconditionally:
+// when a route is being *applied* (Back/Forward, cold load) the hash is already
+// correct, so the write falls out instead of pushing a duplicate history entry.
+function navigate(route, opts) {
+  const next = routeToHash(route);
+  if (next === (location.hash || '#/')) return;
+  if (opts && opts.replace) { history.replaceState(null, '', next); return; } // fires no event
+  selfWroteHash = next;
+  location.hash = next; // pushes a history entry — this is what makes Back work
+}
+
+// Drive the app to `route`, always through the existing selection entry points
+// (selectSession / selectBoard / openSettings) so routed and clicked navigation
+// can never disagree.
+async function applyRoute(route) {
+  if (!route) {
+    navigate({ view: 'home' }, { replace: true });
+    route = { view: 'home' };
+  }
+  if (route.view === 'settings') {
+    if (window.openSettings) await window.openSettings(route.tab);
+    return;
+  }
+  // Leaving #/settings/* (Back, or a deep link elsewhere) closes the modal.
+  // force=true: a route change is not the moment to prompt about unsaved edits.
+  if (window.settingsIsOpen && window.settingsIsOpen() && window.closeSettings) {
+    window.closeSettings(true);
+  }
+  if (route.view === 'board') { selectBoard(route.board); return; }
+  if (route.view === 'session') {
+    // Cold load: hold the route until the first list-sessions decides whether
+    // this id exists, so a deep link never flashes "not found" on a slow start.
+    if (!sessionsLoaded) { pendingRoute = route; return; }
+    if (!sessions.some((s) => s.id === route.sessionId)) {
+      showSessionNotFound(route.sessionId);
+      return;
+    }
+    pendingTerminalId = route.terminalId || null;
+    await selectSession(route.sessionId);
+    return;
+  }
+  showHome();
+}
+
+function onHashChange() {
+  const cur = location.hash || '#/';
+  if (selfWroteHash === cur) { selfWroteHash = null; return; } // our own write
+  selfWroteHash = null;
+  applyRoute(currentRoute());
+}
+
+// ---------------------------------------------------------------------------
 // Boot
 // ---------------------------------------------------------------------------
 document.getElementById('back-to-sidebar').onclick = () => {
@@ -5266,6 +5486,30 @@ try {
   try { renderSidebar(); } catch (_) { /* keep going — RPC refresh will paint */ }
 }
 renderStatusBar();
+
+// URL routing (CROW-936). An unrecognized hash is normalized to #/ up front so
+// the address bar never keeps a shape the app can't reproduce on reload.
+window.addEventListener('hashchange', onHashChange);
+const bootRoute = currentRoute();
+if (!bootRoute) navigate({ view: 'home' }, { replace: true });
+
+function applyBootRoute() {
+  const route = bootRoute || { view: 'home' };
+  // Boards and Settings need no session data, so they paint without waiting on
+  // the first RPC. A session route is applied by refreshSessions once
+  // `sessionsLoaded` can tell "deleted" from "not loaded yet".
+  if (route.view === 'session') pendingRoute = route;
+  else if (route.view !== 'home') applyRoute(route);
+}
+// settings.js defines window.openSettings and loads *after* this file, so a
+// #/settings/* deep link has to wait for it — at DOMContentLoaded both script
+// tags have run. (readyState is already past 'loading' under the jsdom harness,
+// which evaluates app.js against a fully parsed document.)
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', applyBootRoute, { once: true });
+} else {
+  applyBootRoute();
+}
 
 refreshSessions();
 refreshLive();

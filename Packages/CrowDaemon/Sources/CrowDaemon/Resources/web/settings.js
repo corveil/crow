@@ -23,6 +23,9 @@
   // browser (loopback, no proxy), false for a proxied/remote session — which
   // sees those settings read-only (CROW-593).
   let isLocal = false;
+  // Route to restore when the modal closes (CROW-936) — the view the user was
+  // on before Settings opened over it.
+  let routeBeforeSettings = null;
   // Login-item state from GET /autostart (CROW-769). Not part of config.json —
   // it's a host-machine registration, so the toggle acts immediately instead of
   // riding the Save button. null when the read failed.
@@ -133,7 +136,14 @@
 
   // ---- open / close -------------------------------------------------------
 
-  async function openSettings() {
+  async function openSettings(tab) {
+    // Where to go when Settings closes. Captured before the hash becomes
+    // #/settings/* so Close/Esc returns to the session or board underneath
+    // rather than dumping the user at home (CROW-936).
+    if (!backdrop && typeof currentRoute === 'function') {
+      const before = currentRoute();
+      routeBeforeSettings = before && before.view !== 'settings' ? before : { view: 'home' };
+    }
     let res;
     try { res = await rpc('get-config'); }
     catch (err) { alertModal('Could not load settings: ' + (err.message || err)); return; }
@@ -152,7 +162,8 @@
     catch (_) { autostart = null; }
     dirty = false;
     subForm = null;
-    activeTab = 'general';
+    activeTab = TABS.some(([k]) => k === tab) ? tab : 'general';
+    if (typeof navigate === 'function') navigate({ view: 'settings', tab: activeTab });
     render();
   }
 
@@ -161,6 +172,14 @@
     if (escHandler) { document.removeEventListener('keydown', escHandler); escHandler = null; }
     if (backdrop) { backdrop.remove(); backdrop = null; }
     subForm = null;
+    // Return the URL to whatever was open behind the modal. Skipped when the
+    // route already moved on — that's applyRoute closing us on the way past,
+    // and overwriting its destination would fight it (CROW-936).
+    if (typeof navigate === 'function' && typeof currentRoute === 'function') {
+      const now = currentRoute();
+      if (!now || now.view === 'settings') navigate(routeBeforeSettings || { view: 'home' });
+    }
+    routeBeforeSettings = null;
   }
 
   function markDirty() {
@@ -219,7 +238,13 @@
     const tabs = el('div', 'settings-tabs');
     for (const [key, label] of TABS) {
       const t = el('button', 'settings-tab' + (key === activeTab ? ' active' : ''), label);
-      t.onclick = () => { activeTab = key; render(); };
+      t.onclick = () => {
+        activeTab = key;
+        render();
+        // Each tab is addressable (CROW-936). navigate() lives in app.js's
+        // top-level scope, the same way this file already reads rpc/el/alertModal.
+        if (typeof navigate === 'function') navigate({ view: 'settings', tab: key });
+      };
       tabs.appendChild(t);
     }
     modal.appendChild(tabs);
@@ -1320,4 +1345,7 @@
   }
 
   window.openSettings = openSettings;
+  // The router needs to close the modal when Back leaves #/settings/* (CROW-936).
+  window.settingsIsOpen = () => !!backdrop;
+  window.closeSettings = closeSettings;
 })();
