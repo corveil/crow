@@ -146,7 +146,21 @@
     }
     let res;
     try { res = await rpc('get-config'); }
-    catch (err) { alertModal('Could not load settings: ' + (err.message || err)); return; }
+    catch (err) {
+      alertModal('Could not load settings: ' + (err.message || err));
+      // The hash may already read #/settings/* — a deep link or Back put it
+      // there and this open is what was meant to honour it. Failing without
+      // rewinding leaves the user on the previous view under a Settings URL
+      // (review). `replace`: an open that never happened isn't a history entry.
+      if (typeof navigate === 'function' && typeof currentRoute === 'function') {
+        const now = currentRoute();
+        if (now && now.view === 'settings') {
+          navigate(routeBeforeSettings || { view: 'home' }, { replace: true });
+        }
+      }
+      routeBeforeSettings = null;
+      return;
+    }
     try { cfg = JSON.parse(res.config || '{}'); } catch (_) { cfg = {}; }
     devRoot = res.dev_root || '';
     // Local list of available agents for the Default-agent picker (#3 /

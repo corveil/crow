@@ -72,9 +72,20 @@ so Back could never move past it.
 Only the addressable view is encoded. Scroll position, open menus, selection mode, and board filters
 stay out of the URL.
 
+What pushes a history entry and what replaces one is a deliberate split, not an accident of where the
+code happened to land. **Pushes:** opening and closing Settings, switching terminal tabs, selecting a
+session or board — each is a view the user chose and should be able to Back out of. **Replaces:**
+Settings sub-tab switches inside an already-open modal, and every URL *correction* the app makes on
+the user's behalf — normalizing an unroutable hash, dropping a terminal id the session no longer has,
+and landing home after deleting the session you were viewing. The test is whether Back returning
+there would be useful: a sub-tab is UI noise, and a corrected or dead-end URL is somewhere the user
+can never meaningfully return to.
+
 An unknown or stale id resolves to an explicit not-found state rather than a blank pane; Crow's
 retention reaper deletes completed sessions, so a dead link is the *expected* fate of a shared URL,
-not an edge case.
+not an edge case. That card echoes the offending id back only when it matches the UUID shape a
+session id actually has — it is the surface a shared, stale link lands on, so unbounded
+attacker-chosen text there would render as Crow's own explanation.
 
 **`crowd` is unchanged.** No Swift file is touched by this decision.
 

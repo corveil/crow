@@ -2275,11 +2275,23 @@ function showHome() { showEmptyDetail('Select a session'); }
 // completed sessions (worktree and branch included), so a dead link is the
 // normal case for any URL that's been sitting in a chat log — it gets a real
 // message rather than the blank pane an unguarded selectedId used to leave.
+//
+// The id is echoed back only when it actually looks like one. It reaches here
+// straight from the fragment, and this card is precisely what a *shared, stale*
+// link lands on — the one place a reader is primed to believe an explanation. An
+// unbounded echo let a crafted link render arbitrary prose inside Crow's own
+// chrome (content spoofing, CWE-451) and, since `.empty-sub` caps width but not
+// height, push the "Back to sessions" button — the card's only recovery
+// affordance — off screen. Sessions are UUIDs, so requiring that shape costs
+// nothing; anything else is simply not repeated, and is still visible in the
+// address bar for diagnosis (review).
+const SESSION_ID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 function showSessionNotFound(id) {
   showEmptyDetail('Session not found', {
     missing: true,
     detail: 'It may have been deleted — Crow removes completed sessions automatically.'
-      + (id ? ' (' + id + ')' : ''),
+      + (SESSION_ID_SHAPE.test(String(id || '')) ? ' (' + id + ')' : ''),
   });
 }
 
@@ -5443,13 +5455,15 @@ function currentRoute() { return parseRoute(location.hash); }
 // correct, so the write falls out instead of pushing a duplicate history entry.
 function navigate(route, opts) {
   const next = routeToHash(route);
-  if (next === (location.hash || '#/')) return;
-  // An actual navigation supersedes a deep link still waiting on the first
-  // list-sessions. The sidebar is painted early from the localStorage cache
-  // (CROW-613), so its rows and board pills are clickable during exactly that
-  // window — without this, the deferred route later yanked the user off the
-  // board they'd just chosen (review).
+  // Above the no-op return on purpose: a navigation supersedes a deep link still
+  // waiting on the first list-sessions even when it lands on the same hash —
+  // clicking the very row the pending route names is the one case that reaches
+  // here with nothing to write, and leaving it set re-applied the route later
+  // (harmless, but not what the invalidation says it does). The sidebar is
+  // painted early from the localStorage cache (CROW-613), so its rows and board
+  // pills are clickable during exactly that window.
   pendingRoute = null;
+  if (next === (location.hash || '#/')) return;
   if (opts && opts.replace) { history.replaceState(null, '', next); return; } // fires no event
   selfWroteHash = next;
   location.hash = next; // pushes a history entry — this is what makes Back work

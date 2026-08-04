@@ -136,5 +136,9 @@ render, which is a change to `row`, not to the harness. Until someone makes that
 call, gating CI on the whole suite would land every PR red — so CI runs the nine
 green files and this note exists so the exclusion can't quietly become permanent.
 
+Note the exclusion drops the file **wholesale**, so its 43 *passing* assertions
+stop gating too. Whoever repairs the 10 should re-add `row` to `test:ci` in the
+same change — the win is restoring 43, not just fixing 10.
+
 > This is a Node-based harness kept separate from the Swift `swift test` suite;
 > `node_modules/` here is git-ignored and not part of the app bundle.

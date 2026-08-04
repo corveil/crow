@@ -722,6 +722,77 @@ const SESSION = { id: 'sess-1', name: 'crow-936', status: 'active', kind: 'work'
     check('by replacing, not pushing', T2.window.history.length === before2);
   }
 
+  // -------------------------------------------------------------------------
+  console.log('\nThe not-found card does not repeat attacker prose:');
+  {
+    const T = load();
+    const sub = () => {
+      const n = T.window.document.querySelector('#detail-empty .empty-sub');
+      return n ? n.textContent : '';
+    };
+    // A real id is echoed — it's the diagnostic the card is for.
+    const real = '6f2a1b3c-4d5e-4f60-8a71-9b2c3d4e5f60';
+    T.showSessionNotFound(real);
+    check('a UUID is echoed', sub().indexOf(real) !== -1);
+
+    // Anything else is not. Not XSS (textContent holds either way) — this is
+    // arbitrary prose rendered as Crow's own explanation on the surface a
+    // shared, stale link lands on, and long enough input pushed the recovery
+    // button off screen (CWE-451).
+    const hostile = 'Your Crow session expired. Re-enter your password at '
+      + 'http://evil.example/ to continue. ' + 'x'.repeat(400);
+    T.showSessionNotFound(hostile);
+    check('a sentence is not', sub().indexOf('evil.example') === -1);
+    check('and nothing of it leaks', sub().indexOf('xxxx') === -1);
+    check('the explanation still shows', /deleted/i.test(sub()));
+    check('bounded length', sub().length < 200);
+    check('recovery affordance still rendered',
+      !!T.window.document.querySelector('#detail-empty .empty-back'));
+    // The guard is shape, not escaping — confirm the payload never became markup.
+    // (#detail-empty legitimately contains the brand <img>, so look for the
+    // payload's own attribute rather than for any tag.)
+    T.showSessionNotFound('<img src=x onerror=alert(1)>');
+    const empty = T.window.document.getElementById('detail-empty');
+    check('no markup injected', empty.innerHTML.indexOf('onerror') === -1);
+    check('and no stray element appeared', empty.querySelectorAll('img').length === 1);
+  }
+
+  // -------------------------------------------------------------------------
+  console.log('\nClicking the row a pending deep link names invalidates it:');
+  {
+    // The one case the invalidation used to miss: the computed hash equals the
+    // current one, so navigate() returned before clearing pendingRoute and the
+    // route re-applied later.
+    const T = load('http://localhost/#/sessions/sess-1');
+    await tick();
+    check('deep link deferred', !!T.pendingRoute);
+    const picked = [];
+    T.spySelectSession(picked);
+    T.sessions = [SESSION];
+    // The user clicks that very row while the sidebar is cache-painted.
+    T.navigate({ view: 'session', sessionId: 'sess-1' }); // no-op write, same hash
+    check('pending route cleared anyway', T.pendingRoute === null);
+
+    T.setRpc(async () => ({ sessions: [SESSION] }));
+    T.sessionsLoaded = false;
+    await T.refreshSessions();
+    await tick();
+    eq('so list-sessions does not re-apply it', picked, []);
+  }
+
+  // -------------------------------------------------------------------------
+  console.log('\nA failed Settings open rewinds the URL:');
+  {
+    const T = loadWithSettings('http://localhost/#/settings/jobs');
+    vm.runInContext(`
+      rpc = async function (m) { if (m === 'get-config') throw new Error('daemon down'); return {}; };
+      alertModal = async function () {};
+    `, T.ctx);
+    await T.window.openSettings('jobs');
+    check('modal did not open', T.window.settingsIsOpen() === false);
+    eq('and the URL no longer claims one', T.window.location.hash, '#/');
+  }
+
   console.log('\n' + pass + ' passed, ' + fail + ' failed');
   process.exit(fail ? 1 : 0);
 })();
