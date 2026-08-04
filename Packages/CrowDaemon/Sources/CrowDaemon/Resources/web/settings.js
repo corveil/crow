@@ -180,8 +180,11 @@
     return true;
   }
 
+  // Returns false when the user cancelled the discard prompt and the modal is
+  // therefore still open — the router needs to know so it can put the URL back
+  // rather than navigate away from edits it just failed to discard.
   async function closeSettings(force) {
-    if (!force && dirty && !(await confirmModal('Discard unsaved changes?', { title: 'Discard changes', okLabel: 'Discard', danger: true }))) return;
+    if (!force && dirty && !(await confirmModal('Discard unsaved changes?', { title: 'Discard changes', okLabel: 'Discard', danger: true }))) return false;
     if (escHandler) { document.removeEventListener('keydown', escHandler); escHandler = null; }
     if (backdrop) { backdrop.remove(); backdrop = null; }
     subForm = null;
@@ -193,6 +196,7 @@
       if (!now || now.view === 'settings') navigate(routeBeforeSettings || { view: 'home' });
     }
     routeBeforeSettings = null;
+    return true;
   }
 
   function markDirty() {
@@ -1366,6 +1370,7 @@
   // The router needs to close the modal when Back leaves #/settings/* (CROW-936),
   // and to move between tabs without the destructive re-entry openSettings does.
   window.settingsIsOpen = () => !!backdrop;
+  window.settingsActiveTab = () => activeTab;
   window.closeSettings = closeSettings;
   window.setSettingsTab = setSettingsTab;
 })();

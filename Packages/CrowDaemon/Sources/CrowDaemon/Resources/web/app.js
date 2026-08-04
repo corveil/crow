@@ -1056,7 +1056,10 @@ async function refreshSessions() {
     if (pendingRoute) {
       const route = pendingRoute;
       pendingRoute = null;
-      applyRoute(route);
+      // Detached from the enclosing try: we're past its catch by now, so a
+      // rejection here would surface as an unhandled one rather than being
+      // swallowed the way the "transient — next poll retries" intent expects.
+      applyRoute(route).catch(() => {});
       return; // applyRoute re-renders via selectSession / showSessionNotFound
     }
     // The retention reaper deletes completed sessions out from under us. Without
@@ -2283,8 +2286,12 @@ async function selectSession(id) {
   // Synchronous, before the first await: applyRoute relies on the hash being
   // settled by the time anything else can observe it. Carrying a pending
   // terminal keeps a cold #/sessions/<id>/t/<tid> load from rewriting itself to
-  // the bare session and losing the tab it was asked for.
-  navigate({ view: 'session', sessionId: id, terminalId: pendingTerminalId || null });
+  // the bare session and losing the tab it was asked for; carrying the *active*
+  // one keeps re-selecting the session you're already on (a second click on the
+  // row, or the Manager pill) from dropping /t/<id> while that tab stays open.
+  const routedTerminal = pendingTerminalId
+    || (id === selectedId && activeTerminal ? activeTerminal.id : null);
+  navigate({ view: 'session', sessionId: id, terminalId: routedTerminal });
   selectedId = id;
   selectedBoard = null;
   const app = document.getElementById('app');
@@ -2826,14 +2833,19 @@ async function refreshTerminals() {
   activeTerminal = (pendingTerminalId && terminals.find((t) => t.id === pendingTerminalId))
     || terminals.find((t) => t.id === (activeTerminal && activeTerminal.id))
     || terminals[0] || null;
-  if (pendingTerminalId) {
-    const restored = activeTerminal && activeTerminal.id === pendingTerminalId;
-    pendingTerminalId = null;
-    // Terminal is gone (closed, or from another machine) — we fell back to the
-    // first tab, so drop the dead /t/… rather than leave the URL lying.
-    if (!restored) {
-      navigate({ view: 'session', sessionId: selectedId }, { replace: true });
-    }
+  pendingTerminalId = null;
+  // Whenever the URL names a terminal this session no longer has — a dead id
+  // from the link, or the tab you were on closed from another client — point it
+  // at whatever we actually landed on. Doing this on every pass rather than only
+  // the routed one is what covers the mid-session case (review).
+  const shown = currentRoute();
+  if (selectedId && shown && shown.view === 'session' && shown.sessionId === selectedId
+    && shown.terminalId && !terminals.some((t) => t.id === shown.terminalId)) {
+    navigate({
+      view: 'session',
+      sessionId: selectedId,
+      terminalId: activeTerminal ? activeTerminal.id : null,
+    }, { replace: true });
   }
   renderTabs();
   // #673: session switches funnel through here too (selectSession → refreshTerminals),
@@ -2901,8 +2913,10 @@ function switchTerminal(t) {
   // The terminal segment is written here and nowhere else: opening a session
   // leaves the URL at #/sessions/<id>, which reloads onto terminals[0] — the
   // same tab — so nothing is lost and clicking a session doesn't bury the
-  // history under an id the user never chose.
-  navigate({ view: 'session', sessionId: selectedId, terminalId: t.id });
+  // history under an id the user never chose. Guarded on selectedId because
+  // routeToHash falls through to '#/' without one, which would navigate a tab
+  // switch to home.
+  if (selectedId) navigate({ view: 'session', sessionId: selectedId, terminalId: t.id });
   activeTerminal = t;
   renderTabs();
   // #673: the in-place resize+replay from #672 didn't recover a mismatched grid —
@@ -5414,6 +5428,12 @@ function currentRoute() { return parseRoute(location.hash); }
 function navigate(route, opts) {
   const next = routeToHash(route);
   if (next === (location.hash || '#/')) return;
+  // An actual navigation supersedes a deep link still waiting on the first
+  // list-sessions. The sidebar is painted early from the localStorage cache
+  // (CROW-613), so its rows and board pills are clickable during exactly that
+  // window — without this, the deferred route later yanked the user off the
+  // board they'd just chosen (review).
+  pendingRoute = null;
   if (opts && opts.replace) { history.replaceState(null, '', next); return; } // fires no event
   selfWroteHash = next;
   location.hash = next; // pushes a history entry — this is what makes Back work
@@ -5436,10 +5456,19 @@ async function applyRoute(route) {
     if (window.openSettings) await window.openSettings(route.tab);
     return;
   }
-  // Leaving #/settings/* (Back, or a deep link elsewhere) closes the modal.
-  // force=true: a route change is not the moment to prompt about unsaved edits.
+  // Leaving #/settings/* (Back, or a deep link elsewhere) closes the modal —
+  // *unforced*, so it prompts about unsaved edits exactly like ✕ / Esc /
+  // backdrop-click do. Routing made Back a cheap in-app gesture, so letting it
+  // be the one exit that discards silently would recreate the asymmetry this
+  // PR already fixed for tab switches. A refused close keeps the modal up, so
+  // put the URL back and abandon the route.
   if (window.settingsIsOpen && window.settingsIsOpen() && window.closeSettings) {
-    window.closeSettings(true);
+    const closed = await window.closeSettings();
+    if (closed === false) {
+      const tab = window.settingsActiveTab ? window.settingsActiveTab() : 'general';
+      navigate({ view: 'settings', tab: tab }, { replace: true });
+      return;
+    }
   }
   if (route.view === 'board') { selectBoard(route.board); return; }
   if (route.view === 'session') {
@@ -5461,7 +5490,7 @@ function onHashChange() {
   const cur = location.hash || '#/';
   if (selfWroteHash === cur) { selfWroteHash = null; return; } // our own write
   selfWroteHash = null;
-  applyRoute(currentRoute());
+  applyRoute(currentRoute()).catch(() => {});
 }
 
 // ---------------------------------------------------------------------------
@@ -5507,7 +5536,7 @@ function applyBootRoute() {
   // that decision with staler information — if list-sessions resolved before
   // the parser reached settings.js, the route sat in pendingRoute after
   // sessionsLoaded was already true and waited for the 10s poll (review).
-  if (route.view !== 'home') applyRoute(route);
+  if (route.view !== 'home') applyRoute(route).catch(() => {});
 }
 // settings.js defines window.openSettings and loads *after* this file, so a
 // #/settings/* deep link has to wait for it — at DOMContentLoaded both script

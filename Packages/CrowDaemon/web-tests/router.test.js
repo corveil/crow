@@ -27,6 +27,7 @@ const epilogue = `
   refreshTerminals: () => refreshTerminals(),
   refreshSessions: () => refreshSessions(),
   selectBoard: (k) => selectBoard(k),
+  selectSessionReal: (id) => selectSession(id),
   ROUTE_BOARDS: () => ROUTE_BOARDS,
   ROUTE_SETTINGS_TABS: () => ROUTE_SETTINGS_TABS,
   get selectedId() { return selectedId; }, set selectedId(v) { selectedId = v; },
@@ -338,7 +339,57 @@ const SESSION = { id: 'sess-1', name: 'crow-936', status: 'active', kind: 'work'
     T.pendingTerminalId = 'dead';
     await T.refreshTerminals();
     eq('fell back to the first tab', T.activeTerminal && T.activeTerminal.id, 'term-1');
-    eq('dead /t/… dropped from the URL', T.window.location.hash, '#/sessions/sess-1');
+    // Points at the tab actually shown rather than dropping the segment, so a
+    // URL copied at that moment still names what's on screen.
+    eq('URL re-pointed at the live tab', T.window.location.hash,
+      '#/sessions/sess-1/t/term-1');
+  }
+
+  // -------------------------------------------------------------------------
+  console.log('\nA tab closed from another client stops the URL lying:');
+  {
+    // The correction used to sit inside the routed-pass branch, so this case —
+    // no pendingTerminalId, the tab simply vanished — left the dead id in the
+    // URL until something else rewrote it (review).
+    const T = load('http://localhost/#/sessions/sess-1/t/term-2');
+    T.selectedId = 'sess-1';
+    T.activeTerminal = { id: 'term-2', name: 'b', window: 2 };
+    T.setRpc(async () => ({ terminals: [{ id: 'term-1', name: 'a', window: 1 }] }));
+    await T.refreshTerminals(); // background poll, nothing routed
+    eq('rebound to a live tab', T.activeTerminal && T.activeTerminal.id, 'term-1');
+    eq('URL followed', T.window.location.hash, '#/sessions/sess-1/t/term-1');
+  }
+
+  // -------------------------------------------------------------------------
+  console.log('\nRe-selecting the session you are on keeps its terminal:');
+  {
+    // selectSession navigated with `pendingTerminalId || null`, so a second
+    // click on the active row rewrote #/sessions/A/t/t2 → #/sessions/A *and*
+    // pushed an entry, while t2 stayed the visible tab (review).
+    const T = load();
+    T.sessions = [SESSION];
+    T.sessionsLoaded = true;
+    T.selectedId = 'sess-1';
+    T.activeTerminal = { id: 'term-2', name: 'b', window: 2 };
+    T.window.location.hash = '#/sessions/sess-1/t/term-2';
+    T.setRpc(async () => ({ terminals: [
+      { id: 'term-1', name: 'a', window: 1 }, { id: 'term-2', name: 'b', window: 2 },
+    ] }));
+    const before = T.window.history.length;
+    await T.selectSessionReal('sess-1');
+    eq('URL still names the open tab', T.window.location.hash, '#/sessions/sess-1/t/term-2');
+    check('and pushed no history entry', T.window.history.length === before);
+  }
+
+  // -------------------------------------------------------------------------
+  console.log('\nswitchTerminal with no selection does not route home:');
+  {
+    const T = load();
+    T.selectedId = null;
+    T.window.location.hash = '#/tickets';
+    T.switchTerminal({ id: 'term-1', name: 'a', window: 1 });
+    eq('hash untouched', T.window.location.hash, '#/tickets');
+    eq('tab still switched', T.activeTerminal && T.activeTerminal.id, 'term-1');
   }
 
   // -------------------------------------------------------------------------
@@ -511,6 +562,55 @@ const SESSION = { id: 'sess-1', name: 'crow-936', status: 'active', kind: 'work'
     await T2.applyRoute({ view: 'session', sessionId: 'sess-1' });
     eq('applies immediately when sessions are already in', picked, ['sess-1']);
     check('and nothing was left pending', T2.pendingRoute === null);
+  }
+
+  // -------------------------------------------------------------------------
+  console.log('\nA click during cold load beats the deferred deep link:');
+  {
+    // The sidebar paints early from the localStorage cache (CROW-613), so it's
+    // clickable while a deep link is still deferred. Nothing invalidated
+    // pendingRoute, so the link later yanked the user off what they'd picked.
+    const T = load('http://localhost/#/sessions/sess-1');
+    await tick();
+    check('deep link deferred', !!T.pendingRoute);
+    T.selectBoard('tickets'); // user gets bored and clicks a board
+    check('the click superseded the pending route', T.pendingRoute === null);
+
+    const picked = [];
+    T.spySelectSession(picked);
+    T.setRpc(async () => ({ sessions: [SESSION] }));
+    await T.refreshSessions();
+    await tick();
+    eq('list-sessions did not steal the board back', picked, []);
+    eq('still on what the user chose', T.selectedBoard, 'tickets');
+    eq('and the URL agrees', T.window.location.hash, '#/tickets');
+  }
+
+  // -------------------------------------------------------------------------
+  console.log('\nRouting away from dirty Settings prompts, like ✕ does:');
+  {
+    const T = loadWithSettings();
+    await T.window.openSettings('automation');
+    T.ctx.__confirm = false; // user cancels the discard prompt
+    vm.runInContext('confirmModal = async function () { return globalThis.__confirm; };', T.ctx);
+    // Dirty the form the way a user does — flip a real toggle and fire its own
+    // handler, rather than reaching into settings.js's closure for `dirty`.
+    const box = T.window.document.querySelector('.settings-body input[type=checkbox]');
+    check('found a toggle to dirty the form with', !!box);
+    box.checked = !box.checked;
+    box.onchange();
+
+    await T.applyRoute({ view: 'board', board: 'tickets' });
+    check('refused close left the modal open', T.window.settingsIsOpen() === true);
+    eq('and the URL was put back', T.window.location.hash, '#/settings/automation');
+    check('the route was abandoned', T.selectedBoard !== 'tickets');
+
+    T.ctx.__confirm = true; // this time the user accepts
+    T.sessions = [SESSION];
+    T.sessionsLoaded = true;
+    await T.applyRoute({ view: 'board', board: 'tickets' });
+    check('accepted close dismissed the modal', T.window.settingsIsOpen() === false);
+    eq('and the route applied', T.selectedBoard, 'tickets');
   }
 
   console.log('\n' + pass + ' passed, ' + fail + ' failed');
