@@ -488,6 +488,13 @@ html, body {
   #app.route-missing #detail { display: flex; }
   #app.route-missing #sidebar { display: none; }
   #app.route-missing #back-to-sidebar { display: flex; }
+  /* …and that hamburger has to actually work. The rule that un-hides the
+     sidebar is scoped to .has-selection, which showEmptyDetail removes, so
+     without these the button revealed nothing (review). Mirrors the
+     has-selection block above. */
+  #app.route-missing.mobile-show-sidebar #sidebar { display: block; }
+  #app.route-missing.mobile-show-sidebar #detail { display: none; }
+  #app.route-missing.mobile-show-sidebar #back-to-sidebar { display: none; }
 
   #app.has-selection #sidebar { display: none; }
   #app.has-selection #back-to-sidebar { display: flex; }

@@ -5428,6 +5428,11 @@ async function applyRoute(route) {
     route = { view: 'home' };
   }
   if (route.view === 'settings') {
+    // Already open: move the tab in place. Re-entering openSettings would
+    // re-fetch the config and reset `dirty`, so arriving at a tab via Back
+    // would silently discard edits that clicking the same tab preserves.
+    if (window.settingsIsOpen && window.settingsIsOpen()
+      && window.setSettingsTab && window.setSettingsTab(route.tab)) return;
     if (window.openSettings) await window.openSettings(route.tab);
     return;
   }
@@ -5495,11 +5500,14 @@ if (!bootRoute) navigate({ view: 'home' }, { replace: true });
 
 function applyBootRoute() {
   const route = bootRoute || { view: 'home' };
-  // Boards and Settings need no session data, so they paint without waiting on
-  // the first RPC. A session route is applied by refreshSessions once
-  // `sessionsLoaded` can tell "deleted" from "not loaded yet".
-  if (route.view === 'session') pendingRoute = route;
-  else if (route.view !== 'home') applyRoute(route);
+  // Home is already the painted state, so there's nothing to apply. Everything
+  // else goes through applyRoute, including session routes: it defers on
+  // !sessionsLoaded itself, so it stays correct whichever of this and the boot
+  // refreshSessions() wins the race. Setting pendingRoute here instead re-made
+  // that decision with staler information — if list-sessions resolved before
+  // the parser reached settings.js, the route sat in pendingRoute after
+  // sessionsLoaded was already true and waited for the 10s poll (review).
+  if (route.view !== 'home') applyRoute(route);
 }
 // settings.js defines window.openSettings and loads *after* this file, so a
 // #/settings/* deep link has to wait for it — at DOMContentLoaded both script

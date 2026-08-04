@@ -95,17 +95,25 @@ once and URL-correcting a dead one; and Back applying a route without pushing a
 duplicate entry.
 
 Loads the real `app.js` at a deep-link `url:` to exercise the cold-load path —
-jsdom's `url` option is what makes `location.hash` real at boot.
+jsdom's `url` option is what makes `location.hash` real at boot. The Settings
+assertions additionally load the real `settings.js` into the same context, the
+way `index.html` does, so `openSettings` / `setSettingsTab` are the shipped
+implementations rather than stubs — the tab-routing bug they guard (a re-entry
+that silently reset `dirty`) is invisible to a stub.
 
 ## Run
 
 ```sh
 cd Packages/CrowDaemon/web-tests
-npm install     # once — pulls jsdom (dev-only, not shipped in the app)
+npm ci          # once — installs jsdom at the locked version (dev-only, not shipped)
 npm test
 ```
 
 Exit code is non-zero if any assertion fails.
+
+`package-lock.json` **is** committed (and `npm ci` used in CI) because this suite
+now gates every PR — with it ignored, a `jsdom` patch release could turn an
+unrelated PR red.
 
 ### `npm test` vs `npm run test:ci`
 

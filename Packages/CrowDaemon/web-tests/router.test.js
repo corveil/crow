@@ -107,6 +107,32 @@ function load(url, seed) {
   if (!T) { console.log('FATAL: epilogue did not run (app.js threw before it)'); process.exit(2); }
   T.stub();
   T.window = window;
+  T.ctx = ctx;
+  return T;
+}
+
+// Load app.js *and* the real settings.js into one context, the way index.html
+// does. Needed for the Settings-routing assertions: window.openSettings and
+// window.setSettingsTab are settings.js's, and stubbing them would assert
+// nothing about the behaviour that actually regressed.
+function loadWithSettings(url) {
+  const T = load(url);
+  const settingsSrc = fs.readFileSync(
+    __dirname + '/../Sources/CrowDaemon/Resources/web/settings.js', 'utf8');
+  try { vm.runInContext(settingsSrc, T.ctx, { filename: 'settings.js' }); }
+  catch (e) { console.log('[settings load warn]', e.message); }
+  // Offline stand-ins for the four network reads openSettings makes.
+  T.getConfigCalls = () => T.ctx.__rpcCalls.filter((m) => m === 'get-config').length;
+  vm.runInContext(`
+    globalThis.__rpcCalls = [];
+    rpc = async function (m) {
+      globalThis.__rpcCalls.push(m);
+      if (m === 'get-config') return { config: '{}', dev_root: '/tmp' };
+      if (m === 'list-agents') return { agents: [] };
+      return {};
+    };
+    fetch = async function () { return { ok: false }; };
+  `, T.ctx);
   return T;
 }
 
@@ -421,6 +447,70 @@ const SESSION = { id: 'sess-1', name: 'crow-936', status: 'active', kind: 'work'
       : [];
     check('found the selectedBoard union', boards.length > 0);
     eq('ROUTE_BOARDS matches it', T.ROUTE_BOARDS(), boards);
+  }
+
+  // -------------------------------------------------------------------------
+  console.log('\nSettings routing against the real settings.js:');
+  {
+    const T = loadWithSettings();
+    await T.window.openSettings('workspaces');
+    const active = () => {
+      const t = T.window.document.querySelector('.settings-tab.active');
+      return t && t.textContent;
+    };
+    eq('opened on the routed tab', active(), 'Workspaces');
+    eq('URL follows', T.window.location.hash, '#/settings/workspaces');
+    eq('one config read so far', T.getConfigCalls(), 1);
+
+    // The Yellow this replaces: routing to another tab used to go through
+    // openSettings, which re-runs get-config, replaces `cfg` and resets
+    // `dirty` — so arriving at a tab via Back silently discarded edits that
+    // clicking the same tab preserved.
+    await T.applyRoute({ view: 'settings', tab: 'automation' });
+    eq('moved tab in place', active(), 'Automation');
+    eq('no second config read — the working copy survived', T.getConfigCalls(), 1);
+    check('modal still open', T.window.settingsIsOpen() === true);
+
+    // Tab clicks stay addressable but must not pile up history entries.
+    const before = T.window.history.length;
+    const tabs = [...T.window.document.querySelectorAll('.settings-tab')];
+    const jobs = tabs.find((t) => t.textContent === 'Jobs');
+    jobs.onclick();
+    eq('click switched tab', active(), 'Jobs');
+    eq('and is addressable', T.window.location.hash, '#/settings/jobs');
+    check('but pushed no history entry', T.window.history.length === before);
+
+    // Routing away closes the modal.
+    T.sessions = [SESSION];
+    T.sessionsLoaded = true;
+    await T.applyRoute({ view: 'board', board: 'tickets' });
+    check('leaving #/settings/* closed the modal', T.window.settingsIsOpen() === false);
+    eq('and applied the destination', T.selectedBoard, 'tickets');
+  }
+
+  // -------------------------------------------------------------------------
+  console.log('\nBoot defers a session route through applyRoute, not around it:');
+  {
+    // applyRoute owns the !sessionsLoaded decision; boot must not re-make it
+    // with staler information, or a list-sessions that resolves before
+    // DOMContentLoaded leaves the route stranded until the 10s poll.
+    const T = load('http://localhost/#/sessions/sess-1');
+    await tick();
+    eq('deferred while sessions were unknown', T.pendingRoute,
+      { view: 'session', sessionId: 'sess-1' });
+
+    // The property applyBootRoute now leans on instead of re-deciding: given
+    // sessions are already in, applyRoute resolves rather than stranding the
+    // route in pendingRoute. Loaded at "/" so boot doesn't drive it too.
+    const T2 = load('http://localhost/');
+    await tick();
+    const picked = [];
+    T2.spySelectSession(picked);
+    T2.sessions = [SESSION];
+    T2.sessionsLoaded = true; // the race the review flagged: already loaded
+    await T2.applyRoute({ view: 'session', sessionId: 'sess-1' });
+    eq('applies immediately when sessions are already in', picked, ['sess-1']);
+    check('and nothing was left pending', T2.pendingRoute === null);
   }
 
   console.log('\n' + pass + ' passed, ' + fail + ' failed');

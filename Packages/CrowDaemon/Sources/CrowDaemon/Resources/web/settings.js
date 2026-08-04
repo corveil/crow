@@ -167,6 +167,19 @@
     render();
   }
 
+  // Move to a tab in an *already open* modal, without re-entering openSettings.
+  // Re-entry re-runs get-config, replaces `cfg` and resets `dirty`, so routing
+  // Back between tabs through it silently threw away unsaved edits while
+  // clicking the same tabs preserved them — same intent, two outcomes, and the
+  // destructive one was the one with no prompt (review, CROW-936).
+  function setSettingsTab(tab) {
+    if (!backdrop) return false;
+    activeTab = TABS.some(([k]) => k === tab) ? tab : 'general';
+    subForm = null;
+    render();
+    return true;
+  }
+
   async function closeSettings(force) {
     if (!force && dirty && !(await confirmModal('Discard unsaved changes?', { title: 'Discard changes', okLabel: 'Discard', danger: true }))) return;
     if (escHandler) { document.removeEventListener('keydown', escHandler); escHandler = null; }
@@ -241,9 +254,14 @@
       t.onclick = () => {
         activeTab = key;
         render();
-        // Each tab is addressable (CROW-936). navigate() lives in app.js's
-        // top-level scope, the same way this file already reads rpc/el/alertModal.
-        if (typeof navigate === 'function') navigate({ view: 'settings', tab: key });
+        // Each tab is addressable (CROW-936), but `replace` — a tab switch
+        // inside an already-open modal is the "UI noise" ADR 0018 says not to
+        // turn Back into an undo stack for. Browsing six tabs should not cost
+        // six presses to leave. navigate() lives in app.js's top-level scope,
+        // the same way this file already reads rpc/el/alertModal.
+        if (typeof navigate === 'function') {
+          navigate({ view: 'settings', tab: key }, { replace: true });
+        }
       };
       tabs.appendChild(t);
     }
@@ -1345,7 +1363,9 @@
   }
 
   window.openSettings = openSettings;
-  // The router needs to close the modal when Back leaves #/settings/* (CROW-936).
+  // The router needs to close the modal when Back leaves #/settings/* (CROW-936),
+  // and to move between tabs without the destructive re-entry openSettings does.
   window.settingsIsOpen = () => !!backdrop;
   window.closeSettings = closeSettings;
+  window.setSettingsTab = setSettingsTab;
 })();
