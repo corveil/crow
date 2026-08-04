@@ -421,6 +421,31 @@ html, body {
 }
 .empty-brand { width: 96px; height: 96px; opacity: 0.85; }
 .empty-msg { color: var(--text-muted); }
+/* Not-found deep link (CROW-936): a stale #/sessions/<id> — the reaper deletes
+   completed sessions, so this is the normal fate of any shared URL. The parent
+   is pointer-events:none, so the one interactive child opts back in. */
+.empty-sub {
+  color: var(--text-muted);
+  opacity: 0.75;
+  font-size: 12px;
+  max-width: 380px;
+  text-align: center;
+  line-height: 1.5;
+  margin-top: -8px;
+}
+.empty-back {
+  pointer-events: auto;
+  cursor: pointer;
+  font: inherit;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  color: var(--text-primary);
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 6px 14px;
+}
+.empty-back:hover { border-color: var(--border-strong); }
 #app.has-selection #detail-empty { display: none; }
 #app:not(.has-selection) #terminal-wrap { visibility: hidden; }
 
@@ -457,6 +482,19 @@ html, body {
   #sidebar, #detail { grid-column: 1; grid-row: 1; }
 
   #app:not(.has-selection) #detail { display: none; }
+  /* …except a not-found deep link (CROW-936), which has no selection but still
+     has something to say. Without this the message would be invisible on
+     mobile — the exact case where a shared link is most likely to be opened. */
+  #app.route-missing #detail { display: flex; }
+  #app.route-missing #sidebar { display: none; }
+  #app.route-missing #back-to-sidebar { display: flex; }
+  /* …and that hamburger has to actually work. The rule that un-hides the
+     sidebar is scoped to .has-selection, which showEmptyDetail removes, so
+     without these the button revealed nothing (review). Mirrors the
+     has-selection block above. */
+  #app.route-missing.mobile-show-sidebar #sidebar { display: block; }
+  #app.route-missing.mobile-show-sidebar #detail { display: none; }
+  #app.route-missing.mobile-show-sidebar #back-to-sidebar { display: none; }
 
   #app.has-selection #sidebar { display: none; }
   #app.has-selection #back-to-sidebar { display: flex; }

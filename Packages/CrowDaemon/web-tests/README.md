@@ -79,15 +79,66 @@ Unlike the other files, this one's fake `WebSocket` actually fires `onopen` (so
 queue rather than no-ops — deadlines have to fire on demand, and firing them *by
 delay* is what proves each method was armed from the table.
 
+## `router.test.js` — hash URL routing (CROW-936)
+
+Drives `parseRoute` / `routeToHash` / `navigate` / `applyRoute` / `onHashChange`
+against mocks, plus the selection functions the router goes through. Coverage:
+every published route shape (home, session, session+terminal, all four boards,
+settings tabs) and the malformed ones that must degrade rather than throw;
+`routeToHash` round-trips including percent-encoded ids; `navigate` pushing a
+history entry, no-oping on an identical route, `replace` not pushing, and
+invalidating a still-deferred deep link so a click during cold load wins; a cold
+deep link deferring until `sessionsLoaded` can tell "deleted" from "not loaded
+yet"; the not-found state for a reaped session (both on cold load and live,
+mid-session); `showHome` restoring the default empty state; the terminal segment
+written by `switchTerminal` (and not written without a selection); the URL being
+re-pointed whenever it names a terminal the session no longer has — a dead id
+from the link *or* a tab closed from another client; re-selecting the open
+session keeping its `/t/<id>`; Back applying a route without pushing a duplicate
+entry; **Back escaping a session after a tab switch** — the one sequence every
+session visit produces, driven through a small history model since jsdom doesn't
+model Back against a vm context; dead-end destinations (an unknown settings tab,
+the session you just deleted) replacing rather than pushing; and routing away
+from a dirty Settings modal prompting exactly like ✕ does, restoring the URL
+when the user cancels.
+
+Loads the real `app.js` at a deep-link `url:` to exercise the cold-load path —
+jsdom's `url` option is what makes `location.hash` real at boot. The Settings
+assertions additionally load the real `settings.js` into the same context, the
+way `index.html` does, so `openSettings` / `setSettingsTab` are the shipped
+implementations rather than stubs — the tab-routing bug they guard (a re-entry
+that silently reset `dirty`) is invisible to a stub.
+
 ## Run
 
 ```sh
 cd Packages/CrowDaemon/web-tests
-npm install     # once — pulls jsdom (dev-only, not shipped in the app)
+npm ci          # once — installs jsdom at the locked version (dev-only, not shipped)
 npm test
 ```
 
 Exit code is non-zero if any assertion fails.
+
+`package-lock.json` **is** committed (and `npm ci` used in CI) because this suite
+now gates every PR — with it ignored, a `jsdom` patch release could turn an
+unrelated PR red.
+
+### `npm test` vs `npm run test:ci`
+
+`test` runs everything. `test:ci` is the same list **minus `row.test.js`**, and is
+what `.github/workflows/ci.yml` runs.
+
+`row.test.js` has 10 pre-existing failures on `main` — its own comment (above
+`pillIcons`) names the cause: CROW-802 moved PR status parts to SVG `.ico` spans,
+but the `r.glyphs` assertions still read text-only `.pr-ico`, so they assert on
+glyphs that are no longer text. Fixing them means deciding what the icons *should*
+render, which is a change to `row`, not to the harness. Until someone makes that
+call, gating CI on the whole suite would land every PR red — so CI runs the nine
+green files and this note exists so the exclusion can't quietly become permanent.
+
+Note the exclusion drops the file **wholesale**, so its 43 *passing* assertions
+stop gating too. Whoever repairs the 10 should re-add `row` to `test:ci` in the
+same change — the win is restoring 43, not just fixing 10.
 
 > This is a Node-based harness kept separate from the Swift `swift test` suite;
 > `node_modules/` here is git-ignored and not part of the app bundle.

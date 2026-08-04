@@ -50,7 +50,16 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ password: pw.value }),
         });
-        if (r.ok) { location.href = '/'; return; }
+        if (r.ok) {
+          // Keep the deep link (CROW-936). The auth middleware serves this page
+          // *at the requested URL* — no redirect — so a #/sessions/<id> fragment
+          // is still in the address bar and must survive the hop to the app.
+          // At "/" the target is the current URL, and assigning it would not
+          // reload, so reload() is the one that works there.
+          if (location.pathname === '/') location.reload();
+          else location.replace('/' + (location.hash || ''));
+          return;
+        }
         err.textContent = r.status === 429
           ? 'Too many attempts — wait a minute and try again.'
           : 'Incorrect password.';

@@ -129,6 +129,33 @@ jobs:
       - name: NSLog ban (CROW-874)
         run: bash scripts/check-no-nslog.sh
 
+      # The jsdom web-UI harness ran nowhere in CI until CROW-936 — it was a
+      # local-only suite, so a web regression could only be caught by whoever
+      # remembered to run it. This job already needs node (see above), so it is
+      # the cheapest place to gate it.
+      #
+      # `test:ci` deliberately omits row.test.js, which has 10 failures already
+      # on main (CROW-802 drift — its own comment explains it: PR status parts
+      # became SVG `.ico` spans, the `r.glyphs` assertions still read text-only
+      # `.pr-ico`). Running the full suite here would fail every PR. See
+      # Packages/CrowDaemon/web-tests/README.md.
+      # Pinned rather than whatever ubuntu-latest ships this month — the
+      # lockfile pins the deps, this pins the runtime they run on. Placed
+      # immediately before the step that needs it so the shell gates above keep
+      # the environment they've always had.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # `npm ci` (not `install`) against the committed lockfile: this step gates
+      # every PR now, so an unpinned jsdom patch release must not be able to
+      # turn an unrelated PR red.
+      - name: Web UI tests (jsdom)
+        working-directory: Packages/CrowDaemon/web-tests
+        run: |
+          npm ci --no-audit --no-fund
+          npm run test:ci
+
   desktop:
     name: Desktop (Tauri) Build
     runs-on: macos-15

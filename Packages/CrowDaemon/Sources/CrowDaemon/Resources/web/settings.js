@@ -23,6 +23,9 @@
   // browser (loopback, no proxy), false for a proxied/remote session — which
   // sees those settings read-only (CROW-593).
   let isLocal = false;
+  // Route to restore when the modal closes (CROW-936) — the view the user was
+  // on before Settings opened over it.
+  let routeBeforeSettings = null;
   // Login-item state from GET /autostart (CROW-769). Not part of config.json —
   // it's a host-machine registration, so the toggle acts immediately instead of
   // riding the Save button. null when the read failed.
@@ -133,10 +136,31 @@
 
   // ---- open / close -------------------------------------------------------
 
-  async function openSettings() {
+  async function openSettings(tab) {
+    // Where to go when Settings closes. Captured before the hash becomes
+    // #/settings/* so Close/Esc returns to the session or board underneath
+    // rather than dumping the user at home (CROW-936).
+    if (!backdrop && typeof currentRoute === 'function') {
+      const before = currentRoute();
+      routeBeforeSettings = before && before.view !== 'settings' ? before : { view: 'home' };
+    }
     let res;
     try { res = await rpc('get-config'); }
-    catch (err) { alertModal('Could not load settings: ' + (err.message || err)); return; }
+    catch (err) {
+      alertModal('Could not load settings: ' + (err.message || err));
+      // The hash may already read #/settings/* — a deep link or Back put it
+      // there and this open is what was meant to honour it. Failing without
+      // rewinding leaves the user on the previous view under a Settings URL
+      // (review). `replace`: an open that never happened isn't a history entry.
+      if (typeof navigate === 'function' && typeof currentRoute === 'function') {
+        const now = currentRoute();
+        if (now && now.view === 'settings') {
+          navigate(routeBeforeSettings || { view: 'home' }, { replace: true });
+        }
+      }
+      routeBeforeSettings = null;
+      return;
+    }
     try { cfg = JSON.parse(res.config || '{}'); } catch (_) { cfg = {}; }
     devRoot = res.dev_root || '';
     // Local list of available agents for the Default-agent picker (#3 /
@@ -152,15 +176,41 @@
     catch (_) { autostart = null; }
     dirty = false;
     subForm = null;
-    activeTab = 'general';
+    activeTab = TABS.some(([k]) => k === tab) ? tab : 'general';
+    if (typeof navigate === 'function') navigate({ view: 'settings', tab: activeTab });
     render();
   }
 
+  // Move to a tab in an *already open* modal, without re-entering openSettings.
+  // Re-entry re-runs get-config, replaces `cfg` and resets `dirty`, so routing
+  // Back between tabs through it silently threw away unsaved edits while
+  // clicking the same tabs preserved them — same intent, two outcomes, and the
+  // destructive one was the one with no prompt (review, CROW-936).
+  function setSettingsTab(tab) {
+    if (!backdrop) return false;
+    activeTab = TABS.some(([k]) => k === tab) ? tab : 'general';
+    subForm = null;
+    render();
+    return true;
+  }
+
+  // Returns false when the user cancelled the discard prompt and the modal is
+  // therefore still open — the router needs to know so it can put the URL back
+  // rather than navigate away from edits it just failed to discard.
   async function closeSettings(force) {
-    if (!force && dirty && !(await confirmModal('Discard unsaved changes?', { title: 'Discard changes', okLabel: 'Discard', danger: true }))) return;
+    if (!force && dirty && !(await confirmModal('Discard unsaved changes?', { title: 'Discard changes', okLabel: 'Discard', danger: true }))) return false;
     if (escHandler) { document.removeEventListener('keydown', escHandler); escHandler = null; }
     if (backdrop) { backdrop.remove(); backdrop = null; }
     subForm = null;
+    // Return the URL to whatever was open behind the modal. Skipped when the
+    // route already moved on — that's applyRoute closing us on the way past,
+    // and overwriting its destination would fight it (CROW-936).
+    if (typeof navigate === 'function' && typeof currentRoute === 'function') {
+      const now = currentRoute();
+      if (!now || now.view === 'settings') navigate(routeBeforeSettings || { view: 'home' });
+    }
+    routeBeforeSettings = null;
+    return true;
   }
 
   function markDirty() {
@@ -219,7 +269,18 @@
     const tabs = el('div', 'settings-tabs');
     for (const [key, label] of TABS) {
       const t = el('button', 'settings-tab' + (key === activeTab ? ' active' : ''), label);
-      t.onclick = () => { activeTab = key; render(); };
+      t.onclick = () => {
+        activeTab = key;
+        render();
+        // Each tab is addressable (CROW-936), but `replace` — a tab switch
+        // inside an already-open modal is the "UI noise" ADR 0018 says not to
+        // turn Back into an undo stack for. Browsing six tabs should not cost
+        // six presses to leave. navigate() lives in app.js's top-level scope,
+        // the same way this file already reads rpc/el/alertModal.
+        if (typeof navigate === 'function') {
+          navigate({ view: 'settings', tab: key }, { replace: true });
+        }
+      };
       tabs.appendChild(t);
     }
     modal.appendChild(tabs);
@@ -1320,4 +1381,10 @@
   }
 
   window.openSettings = openSettings;
+  // The router needs to close the modal when Back leaves #/settings/* (CROW-936),
+  // and to move between tabs without the destructive re-entry openSettings does.
+  window.settingsIsOpen = () => !!backdrop;
+  window.settingsActiveTab = () => activeTab;
+  window.closeSettings = closeSettings;
+  window.setSettingsTab = setSettingsTab;
 })();
