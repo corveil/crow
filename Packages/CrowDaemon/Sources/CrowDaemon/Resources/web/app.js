@@ -1242,7 +1242,8 @@ async function bulkDeleteSelected() {
     } catch (_) { failed++; }
   }
   if (selectedId && !sessions.some((x) => x.id === selectedId)) {
-    navigate({ view: 'home' });
+    // `replace` for the same reason as deleteSession — nothing to go back to.
+    navigate({ view: 'home' }, { replace: true });
     showHome();
   }
   selectionMode = false;
@@ -2282,16 +2283,27 @@ function showSessionNotFound(id) {
   });
 }
 
-async function selectSession(id) {
+// `opts.fromRoute` marks a call that is *applying* a URL rather than initiating
+// one. The distinction is load-bearing: when applying, the URL is authoritative,
+// and synthesizing a terminal it didn't ask for turns navigate() into a push —
+// breaking the invariant ADR 0018 rests on. Concretely it walled Back inside a
+// session: every visit leaves #/sessions/A then #/sessions/A/t/T in history, and
+// applying the bare entry re-pushed /t/T, truncating the forward entry so Back
+// could never move past it (review).
+async function selectSession(id, opts) {
+  const fromRoute = !!(opts && opts.fromRoute);
   // Synchronous, before the first await: applyRoute relies on the hash being
-  // settled by the time anything else can observe it. Carrying a pending
-  // terminal keeps a cold #/sessions/<id>/t/<tid> load from rewriting itself to
-  // the bare session and losing the tab it was asked for; carrying the *active*
-  // one keeps re-selecting the session you're already on (a second click on the
-  // row, or the Manager pill) from dropping /t/<id> while that tab stays open.
+  // settled by the time anything else can observe it. A pending terminal is
+  // carried either way (it came *from* the URL). The active one is carried only
+  // for a click, so re-selecting the row you're on keeps its /t/<id> instead of
+  // dropping it while that tab stays open.
   const routedTerminal = pendingTerminalId
-    || (id === selectedId && activeTerminal ? activeTerminal.id : null);
+    || (fromRoute ? null : (id === selectedId && activeTerminal ? activeTerminal.id : null));
   navigate({ view: 'session', sessionId: id, terminalId: routedTerminal });
+  // A bare #/sessions/<id> asked for no particular tab, so snap to terminals[0]
+  // rather than leaving the previous one on screen — otherwise Back leaves the
+  // URL bare while T2 is shown, and reloading that same URL would land on T1.
+  if (fromRoute && !pendingTerminalId) activeTerminal = null;
   selectedId = id;
   selectedBoard = null;
   const app = document.getElementById('app');
@@ -2806,7 +2818,9 @@ async function deleteSession(id, name) {
   try {
     await rpc('delete-session', { session_id: id });
     sessions = sessions.filter((x) => x.id !== id);
-    if (selectedId === id) { navigate({ view: 'home' }); showHome(); }
+    // `replace`: the session is gone, so Back must not offer to return to its
+    // not-found card (review).
+    if (selectedId === id) { navigate({ view: 'home' }, { replace: true }); showHome(); }
     renderSidebar();
   } catch (e) {
     alertModal('Delete failed: ' + (e.message || e));
@@ -2835,9 +2849,11 @@ async function refreshTerminals() {
     || terminals[0] || null;
   pendingTerminalId = null;
   // Whenever the URL names a terminal this session no longer has — a dead id
-  // from the link, or the tab you were on closed from another client — point it
-  // at whatever we actually landed on. Doing this on every pass rather than only
-  // the routed one is what covers the mid-session case (review).
+  // from the link, or a tab that has since been closed — point it at whatever
+  // we actually landed on. Running on every pass rather than only the routed one
+  // is what covers the second case; note refreshTerminals is not polled, so a
+  // tab closed from *another* client is corrected on this client's next action
+  // rather than live (review).
   const shown = currentRoute();
   if (selectedId && shown && shown.view === 'session' && shown.sessionId === selectedId
     && shown.terminalId && !terminals.some((t) => t.id === shown.terminalId)) {
@@ -5448,6 +5464,10 @@ async function applyRoute(route) {
     route = { view: 'home' };
   }
   if (route.view === 'settings') {
+    // parseRoute degrades an unknown tab to 'general'. Rewrite the bogus hash
+    // *in place* first, so the address bar can't sit on a shape the app
+    // silently reinterprets and Back can't return to one (review).
+    if (routeToHash(route) !== (location.hash || '#/')) navigate(route, { replace: true });
     // Already open: move the tab in place. Re-entering openSettings would
     // re-fetch the config and reset `dirty`, so arriving at a tab via Back
     // would silently discard edits that clicking the same tab preserves.
@@ -5465,6 +5485,13 @@ async function applyRoute(route) {
   if (window.settingsIsOpen && window.settingsIsOpen() && window.closeSettings) {
     const closed = await window.closeSettings();
     if (closed === false) {
+      // The browser has already moved the history index, so this replaceState
+      // overwrites the *destination* entry rather than restoring the one we came
+      // from — cancelling a discard costs that entry. Taken knowingly:
+      // history.forward() would preserve it but is a no-op when there's nothing
+      // forward (a hand-edited URL), leaving the address bar wrong while the
+      // modal is still up, which is the worse failure. closeSettings' own
+      // routeBeforeSettings gets the user back on eventual close (review).
       const tab = window.settingsActiveTab ? window.settingsActiveTab() : 'general';
       navigate({ view: 'settings', tab: tab }, { replace: true });
       return;
@@ -5480,7 +5507,7 @@ async function applyRoute(route) {
       return;
     }
     pendingTerminalId = route.terminalId || null;
-    await selectSession(route.sessionId);
+    await selectSession(route.sessionId, { fromRoute: true });
     return;
   }
   showHome();

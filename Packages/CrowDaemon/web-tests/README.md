@@ -95,8 +95,12 @@ written by `switchTerminal` (and not written without a selection); the URL being
 re-pointed whenever it names a terminal the session no longer has — a dead id
 from the link *or* a tab closed from another client; re-selecting the open
 session keeping its `/t/<id>`; Back applying a route without pushing a duplicate
-entry; and routing away from a dirty Settings modal prompting exactly like ✕
-does, restoring the URL when the user cancels.
+entry; **Back escaping a session after a tab switch** — the one sequence every
+session visit produces, driven through a small history model since jsdom doesn't
+model Back against a vm context; dead-end destinations (an unknown settings tab,
+the session you just deleted) replacing rather than pushing; and routing away
+from a dirty Settings modal prompting exactly like ✕ does, restoring the URL
+when the user cancels.
 
 Loads the real `app.js` at a deep-link `url:` to exercise the cold-load path —
 jsdom's `url` option is what makes `location.hash` real at boot. The Settings

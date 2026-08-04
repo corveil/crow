@@ -61,6 +61,14 @@ Routed navigation goes **through the existing selection functions** (`selectSess
 `navigate()` is a no-op when the computed hash already matches, which is what keeps applying a route
 from pushing a second history entry.
 
+That invariant only holds if applying a route and initiating one stay distinguishable. A click may
+enrich the URL from current state — re-selecting the session you're on keeps its `/t/<id>` — but a
+call that is *applying* a URL must treat that URL as authoritative and synthesize nothing, or the
+`navigate()` no-op becomes a push. `selectSession(id, { fromRoute: true })` marks the difference.
+Getting this wrong walled Back inside a session: every visit leaves `#/sessions/A` followed by
+`#/sessions/A/t/T`, and re-pushing `/t/T` while applying the bare entry truncated the forward entry
+so Back could never move past it.
+
 Only the addressable view is encoded. Scroll position, open menus, selection mode, and board filters
 stay out of the URL.
 

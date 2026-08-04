@@ -27,7 +27,8 @@ const epilogue = `
   refreshTerminals: () => refreshTerminals(),
   refreshSessions: () => refreshSessions(),
   selectBoard: (k) => selectBoard(k),
-  selectSessionReal: (id) => selectSession(id),
+  selectSessionReal: (id, o) => selectSession(id, o),
+  deleteSessionReal: (id) => deleteSession(id, 'x'),
   ROUTE_BOARDS: () => ROUTE_BOARDS,
   ROUTE_SETTINGS_TABS: () => ROUTE_SETTINGS_TABS,
   get selectedId() { return selectedId; }, set selectedId(v) { selectedId = v; },
@@ -135,6 +136,34 @@ function loadWithSettings(url) {
     fetch = async function () { return { ok: false }; };
   `, T.ctx);
   return T;
+}
+
+// A faithful-enough history model: a push truncates any forward entries and
+// appends; a replaceState overwrites the current one; Back moves the index left
+// and fires hashchange. jsdom's own history doesn't model Back against a vm
+// context, and the trap this guards only shows up across several entries.
+function historyModel(T) {
+  const H = { entries: [T.window.location.hash || '#/'], idx: 0, replaced: false };
+  const origReplace = T.window.history.replaceState.bind(T.window.history);
+  T.window.history.replaceState = (a, b, url) => { H.replaced = true; origReplace(a, b, url); };
+
+  H.sync = () => {
+    const h = T.window.location.hash || '#/';
+    if (h === H.entries[H.idx]) { H.replaced = false; return; }
+    if (H.replaced) { H.entries[H.idx] = h; }
+    else { H.entries.splice(H.idx + 1); H.entries.push(h); H.idx = H.entries.length - 1; }
+    H.replaced = false;
+  };
+  H.back = async () => {
+    if (H.idx === 0) return false;
+    H.idx -= 1;
+    T.window.location.hash = H.entries[H.idx];
+    await T.onHashChange();
+    H.sync(); // capture anything the app pushed while applying
+    return true;
+  };
+  H.here = () => T.window.location.hash || '#/';
+  return H;
 }
 
 let pass = 0, fail = 0;
@@ -611,6 +640,86 @@ const SESSION = { id: 'sess-1', name: 'crow-936', status: 'active', kind: 'work'
     await T.applyRoute({ view: 'board', board: 'tickets' });
     check('accepted close dismissed the modal', T.window.settingsIsOpen() === false);
     eq('and the route applied', T.selectedBoard, 'tickets');
+  }
+
+  // -------------------------------------------------------------------------
+  console.log('\nBack escapes a session after a tab switch (the CROW-936 trap):');
+  {
+    // Every session visit produces this exact sequence — bare #/sessions/A
+    // followed by #/sessions/A/t/T. Applying the bare entry must NOT synthesize
+    // the active terminal back into the URL: that turns navigate() into a push,
+    // truncates the forward entry, and walls Back inside the session forever.
+    const T = load();
+    T.sessions = [SESSION];
+    T.sessionsLoaded = true;
+    T.setRpc(async (m) => {
+      if (m === 'list-terminals') {
+        return { terminals: [
+          { id: 'term-1', name: 'a', window: 1 }, { id: 'term-2', name: 'b', window: 2 },
+        ] };
+      }
+      return {};
+    });
+
+    const H = historyModel(T);
+    T.selectBoard('tickets'); H.sync();
+    await T.selectSessionReal('sess-1'); H.sync();
+    T.switchTerminal({ id: 'term-2', name: 'b', window: 2 }); H.sync();
+    eq('history built as expected', H.entries,
+      ['#/', '#/tickets', '#/sessions/sess-1', '#/sessions/sess-1/t/term-2']);
+
+    await H.back();
+    eq('Back #1 lands on the bare session', H.here(), '#/sessions/sess-1');
+    await H.back();
+    eq('Back #2 escapes to the board', H.here(), '#/tickets');
+    check('and the session was actually left', T.selectedBoard === 'tickets');
+
+    // Applying a bare session route means "no particular tab" — the view must
+    // agree, or reloading that same URL would show a different tab than Back did.
+    const T2 = load();
+    T2.sessions = [SESSION];
+    T2.sessionsLoaded = true;
+    T2.setRpc(async () => ({ terminals: [
+      { id: 'term-1', name: 'a', window: 1 }, { id: 'term-2', name: 'b', window: 2 },
+    ] }));
+    T2.selectedId = 'sess-1';
+    T2.activeTerminal = { id: 'term-2', name: 'b', window: 2 };
+    T2.window.location.hash = '#/sessions/sess-1';
+    await T2.applyRoute({ view: 'session', sessionId: 'sess-1' });
+    eq('bare route snaps the view to the first tab',
+      T2.activeTerminal && T2.activeTerminal.id, 'term-1');
+    eq('and leaves the URL bare', T2.window.location.hash, '#/sessions/sess-1');
+  }
+
+  // -------------------------------------------------------------------------
+  console.log('\nDead-end destinations replace rather than push:');
+  {
+    // An unknown settings tab parses down to 'general'; the bogus hash must be
+    // rewritten in place so Back can't return to a shape the app reinterprets.
+    const T = load();
+    const opened = [];
+    T.window.openSettings = async (tab) => { opened.push(tab); };
+    T.window.location.hash = '#/settings/nope';
+    const before = T.window.history.length;
+    await T.applyRoute(T.currentRoute());
+    eq('normalized to the real tab', T.window.location.hash, '#/settings/general');
+    check('without pushing an entry', T.window.history.length === before);
+    eq('and opened it', opened, ['general']);
+
+    // Deleting the session you're viewing: Back must not return to its
+    // not-found card.
+    const T2 = load();
+    T2.sessions = [SESSION];
+    T2.sessionsLoaded = true;
+    T2.selectedId = 'sess-1';
+    T2.window.location.hash = '#/sessions/sess-1';
+    T2.setRpc(async () => ({}));
+    // deleteSession waits on a real confirm dialog; auto-accept it.
+    vm.runInContext('confirmModal = async function () { return true; };', T2.ctx);
+    const before2 = T2.window.history.length;
+    await T2.deleteSessionReal('sess-1');
+    eq('landed home', T2.window.location.hash, '#/');
+    check('by replacing, not pushing', T2.window.history.length === before2);
   }
 
   console.log('\n' + pass + ' passed, ' + fail + ' failed');
