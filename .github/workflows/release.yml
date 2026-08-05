@@ -74,8 +74,9 @@ jobs:
         run: |
           CROW_VERSION="${GITHUB_REF_NAME#v}"
           FILE_VERSION="$(tr -d '[:space:]' < VERSION)"
-          if [ "$CROW_VERSION" != "$FILE_VERSION" ]; then
-            echo "ERROR: tag version ($CROW_VERSION) does not match VERSION file ($FILE_VERSION)" >&2
+          RELEASE_VERSION="${CROW_VERSION%%-*}"
+          if [ "$RELEASE_VERSION" != "$FILE_VERSION" ]; then
+            echo "ERROR: tag version ($RELEASE_VERSION) does not match VERSION file ($FILE_VERSION)" >&2
             exit 1
           fi
           echo "CROW_VERSION=$CROW_VERSION" >> "$GITHUB_ENV"

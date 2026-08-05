@@ -74,7 +74,7 @@ notification — once per PR, not once per 60s poll.
 
 ## Unsigned Builds
 
-Crow builds two command-line binaries — `crow` and `crowd`. Building from source needs no signing certificate: `make build` produces unsigned but fully functional binaries that you run directly from `.build/` (or via the `make install` symlinks). There is no `.app` bundle to notarize or de-quarantine.
+Crow builds two command-line binaries — `crow` and `crowd`. Building from source needs no signing certificate: `make daemon` produces unsigned but fully functional binaries that you run directly from `.build/` (or via the `make install` symlinks). There is no `.app` bundle to notarize or de-quarantine.
 
 GitHub release tarballs are unsigned for the same reason. Verify the published `.sha256` checksum before extracting (`shasum -a 256 -c crow-<version>-macos-universal.tar.gz.sha256`). Extract the versioned directory and symlink `crow`/`crowd` into your `PATH` while keeping the `.bundle` resources alongside the binaries (see the release install instructions). A browser download applies Gatekeeper quarantine (`com.apple.quarantine`); the first run may be blocked until you clear it:
 

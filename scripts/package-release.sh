@@ -23,10 +23,15 @@ cd "$ROOT_DIR"
 PACKAGE_DIR="crow-${CROW_VERSION}"
 STAGING_ROOT="$ROOT_DIR/release-staging"
 STAGING_DIR="$STAGING_ROOT/$PACKAGE_DIR"
-cleanup() {
-  rm -rf "$STAGING_ROOT"
+cleanup_staging() {
+  local rc=$?
+  if [ "$rc" -eq 0 ]; then
+    rm -rf "$STAGING_ROOT"
+  else
+    echo "Keeping $STAGING_ROOT for inspection after failure (exit $rc)" >&2
+  fi
 }
-trap cleanup EXIT
+trap cleanup_staging EXIT
 
 bash scripts/generate-build-info.sh
 
@@ -65,27 +70,55 @@ for bundle in "${bundles[@]}"; do
   echo "Bundled resource: $(basename "$bundle")"
 done
 
-# Smoke-test the staged artifact outside the build tree.
-SMOKE_SOCKET="$(mktemp -u "${TMPDIR:-/tmp}/crow-release-smoke.XXXXXX.sock")"
+SMOKE_SOCKET="${TMPDIR:-/tmp}/crow-release-smoke-$$.sock"
 SMOKE_PORT=$((18000 + RANDOM % 1000))
+
+# Smoke-test the staged artifact outside the build tree. `crow --version` always
+# runs; the `crowd` half runs only in CI — App Support paths are not relocatable
+# on macOS via HOME, so a local crowd smoke test would touch the developer's
+# live store even with --dev-root pointed at scratch.
 (
   cd "$STAGING_DIR"
   ./crow --version >/dev/null
 
-  ./crowd --socket-path "$SMOKE_SOCKET" --host 127.0.0.1 --http-port "$SMOKE_PORT" &
-  crowd_pid=$!
-  trap 'kill "$crowd_pid" 2>/dev/null; wait "$crowd_pid" 2>/dev/null; rm -f "$SMOKE_SOCKET"' EXIT
+  if [ -z "${GITHUB_ACTIONS:-}" ]; then
+    echo "Skipping crowd smoke test outside CI (App Support is not relocatable on macOS)" >&2
+    exit 0
+  fi
 
+  SMOKE_HOME="$(mktemp -d "${TMPDIR:-/tmp}/crow-release-smoke-home.XXXXXX")"
+  crowd_pid=""
+  trap 'if [ -n "$crowd_pid" ]; then kill "$crowd_pid" 2>/dev/null; wait "$crowd_pid" 2>/dev/null; fi; rm -rf "$SMOKE_HOME" "$SMOKE_SOCKET"' EXIT
+
+  HOME="$SMOKE_HOME" ./crowd \
+    --dev-root "$SMOKE_HOME/devroot" \
+    --socket-path "$SMOKE_SOCKET" \
+    --host 127.0.0.1 \
+    --http-port "$SMOKE_PORT" &
+  crowd_pid=$!
+
+  ready=0
   for _ in $(seq 1 60); do
-    if curl -sf "http://127.0.0.1:${SMOKE_PORT}/version.json" >/dev/null; then
-      curl -sf "http://127.0.0.1:${SMOKE_PORT}/version.json"
-      curl -sf -o /dev/null "http://127.0.0.1:${SMOKE_PORT}/"
-      exit 0
+    if curl -sf -o /dev/null "http://127.0.0.1:${SMOKE_PORT}/auth/check"; then
+      ready=1
+      break
     fi
     sleep 0.5
   done
-  echo "ERROR: crowd smoke test timed out waiting for http://127.0.0.1:${SMOKE_PORT}" >&2
-  exit 1
+  if [ "$ready" -ne 1 ]; then
+    echo "ERROR: crowd did not become ready on http://127.0.0.1:${SMOKE_PORT} (/auth/check)" >&2
+    exit 1
+  fi
+
+  if ! curl -sf "http://127.0.0.1:${SMOKE_PORT}/version.json" | grep -q '"version"'; then
+    echo "ERROR: bundle-backed /version.json missing or invalid (CrowDaemon resource bundle?)" >&2
+    exit 1
+  fi
+
+  if ! curl -sf -o /dev/null "http://127.0.0.1:${SMOKE_PORT}/"; then
+    echo "ERROR: bundle-backed / (index.html) missing (CrowDaemon resource bundle?)" >&2
+    exit 1
+  fi
 )
 
 ARCHIVE="crow-${CROW_VERSION}-macos-universal.tar.gz"
