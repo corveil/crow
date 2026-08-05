@@ -246,14 +246,16 @@ function renderVersionUpdateBanner(status) {
   if (!text || !dismiss) return;
 
   let dismissRemoteSha = '';
-  let dismissWithoutSha = false;
+  let dismissArmed = false;
   dismiss.onclick = () => {
-    if (dismissRemoteSha) {
-      localStorage.setItem(VERSION_BANNER_DISMISS_KEY, dismissRemoteSha);
-    } else if (dismissWithoutSha) {
-      versionBannerDismissedWithoutSha = true;
-    }
     hideVersionUpdateBanner(banner, text);
+    try {
+      if (dismissRemoteSha) {
+        localStorage.setItem(VERSION_BANNER_DISMISS_KEY, dismissRemoteSha);
+      } else if (dismissArmed) {
+        versionBannerDismissedWithoutSha = true;
+      }
+    } catch (_) { /* session-only when storage is unavailable */ }
   };
 
   if (!status || status.state !== 'behind') {
@@ -271,12 +273,12 @@ function renderVersionUpdateBanner(status) {
     return;
   }
   const n = status.behind_by || 0;
+  dismissRemoteSha = remoteSha;
+  dismissArmed = !remoteSha;
+  banner.hidden = false;
   text.textContent = 'A newer Crow build is available — '
     + n + ' commit' + (n === 1 ? '' : 's') + ' behind origin/main.'
     + (status.update_command ? (' Update: ' + status.update_command) : '');
-  dismissRemoteSha = remoteSha;
-  dismissWithoutSha = !remoteSha;
-  banner.hidden = false;
   syncUpdateBannerLayout(banner);
 }
 
