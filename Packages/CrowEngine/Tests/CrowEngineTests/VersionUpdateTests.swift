@@ -5,9 +5,9 @@ import CrowCore
 
 @Suite struct VersionUpdateClientTests {
     private func compareFixture(
-        status: String = "behind",
-        behindBy: Int = 2,
-        aheadBy: Int = 0
+        status: String = "ahead",
+        behindBy: Int = 0,
+        aheadBy: Int = 2
     ) -> Data {
         let payload: [String: Any] = [
             "status": status,
@@ -48,6 +48,27 @@ import CrowCore
         #expect(result.reason?.contains("not a known git commit") == true)
     }
 
+    @Test func staleBuildReportsBehind() async {
+        // Captured from `gh api repos/corveil/crow/compare/5075fba...main`.
+        let compare = try! JSONSerialization.data(withJSONObject: [
+            "status": "ahead",
+            "ahead_by": 2,
+            "behind_by": 0,
+            "commits": [],
+        ])
+        let head = headFixture(
+            sha: "f56939ddeadbeefdeadbeefdeadbeefdeadbeef", date: "2026-08-05T12:00:00Z")
+        let result = await VersionUpdateClient.check(
+            build: build,
+            updateCommand: "git -C /tmp/crow pull && make install",
+            transport: transport(compare: compare, head: head)
+        )
+        #expect(result.state == .behind)
+        #expect(result.behindBy == 2)
+        #expect(result.remoteSha == "f56939d")
+        #expect(result.updateCommand == "git -C /tmp/crow pull && make install")
+    }
+
     @Test func behindByReportsUpdateCommand() async {
         let head = headFixture(
             sha: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", date: "2026-08-05T12:00:00Z")
@@ -69,9 +90,9 @@ import CrowCore
             "commit": ["committer": ["date": "2020-01-01T00:00:00Z"]],
         ]
         let compare = try! JSONSerialization.data(withJSONObject: [
-            "status": "behind",
-            "behind_by": 300,
-            "ahead_by": 0,
+            "status": "ahead",
+            "ahead_by": 300,
+            "behind_by": 0,
             "commits": [staleCommit],
         ])
         let head = headFixture(
@@ -86,19 +107,28 @@ import CrowCore
         #expect(result.remoteDate == "2026-08-05")
     }
 
-    @Test func identicalIsUpToDate() async {
+    @Test func identicalIsUpToDateAndSkipsBranchHeadFetch() async {
+        let compare = compareFixture(status: "identical", behindBy: 0, aheadBy: 0)
         let result = await VersionUpdateClient.check(
             build: build,
-            transport: transport(compare: compareFixture(status: "identical", behindBy: 0, aheadBy: 0))
+            transport: { request in
+                let url = request.url?.absoluteString ?? ""
+                if url.contains("/commits/main") {
+                    throw URLError(.cannotConnectToHost)
+                }
+                return (compare, HTTPURLResponse(
+                    url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            }
         )
         #expect(result.state == .upToDate)
         #expect(result.behindBy == 0)
+        #expect(result.remoteSha == build.gitSha)
     }
 
-    @Test func aheadOnlyIsUnknown() async {
+    @Test func localAheadOfMainIsUnknown() async {
         let result = await VersionUpdateClient.check(
             build: build,
-            transport: transport(compare: compareFixture(status: "ahead", behindBy: 0, aheadBy: 3))
+            transport: transport(compare: compareFixture(status: "behind", behindBy: 3, aheadBy: 0))
         )
         #expect(result.state == .unknown)
         #expect(result.reason?.contains("not on upstream") == true)

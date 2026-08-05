@@ -219,6 +219,7 @@ function onServerChanged() {
 }
 
 const VERSION_BANNER_DISMISS_KEY = 'crow.updateBannerDismissedSha';
+let versionBannerDismissedWithoutSha = false;
 
 function renderVersionUpdateBanner(status) {
   const banner = document.getElementById('update-banner');
@@ -232,7 +233,12 @@ function renderVersionUpdateBanner(status) {
     return;
   }
   const remoteSha = status.remote_sha || '';
+  if (remoteSha) versionBannerDismissedWithoutSha = false;
   if (remoteSha && localStorage.getItem(VERSION_BANNER_DISMISS_KEY) === remoteSha) {
+    banner.hidden = true;
+    return;
+  }
+  if (!remoteSha && versionBannerDismissedWithoutSha) {
     banner.hidden = true;
     return;
   }
@@ -242,7 +248,11 @@ function renderVersionUpdateBanner(status) {
     + (status.update_command ? (' Update: ' + status.update_command) : '');
   banner.hidden = false;
   dismiss.onclick = () => {
-    if (remoteSha) localStorage.setItem(VERSION_BANNER_DISMISS_KEY, remoteSha);
+    if (remoteSha) {
+      localStorage.setItem(VERSION_BANNER_DISMISS_KEY, remoteSha);
+    } else {
+      versionBannerDismissedWithoutSha = true;
+    }
     banner.hidden = true;
   };
 }

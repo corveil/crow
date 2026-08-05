@@ -33,7 +33,7 @@ enum BuildInfoLoader {
 final class VersionUpdateService {
     /// Minimum spacing between user-initiated forced checks ("Check now", CLI
     /// `--check`) so a remote `/rpc` peer can't burn the GitHub budget.
-    static let minimumForcedSpacing: TimeInterval = 60
+    static let minimumForcedSpacing: TimeInterval = 120
 
     private let shell: ShellRunner
     private let updateCommand: String

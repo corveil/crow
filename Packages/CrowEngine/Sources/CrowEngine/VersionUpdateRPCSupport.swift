@@ -91,12 +91,21 @@ public enum VersionUpdateClient {
         let aheadBy = json["ahead_by"] as? Int ?? 0
         let status = json["status"] as? String ?? ""
 
-        let remoteCommit = await fetchBranchHead(
-            build: build, authToken: authToken, transport: transport)
+        // For `compare/{local}...{main}`, GitHub's `ahead_by` is how many commits
+        // on `main` the local build lacks (i.e. how far behind we are); `behind_by`
+        // is commits the local build has that `main` lacks (feature branch / fork).
+        let remoteCommit: RemoteCommit?
+        if status == "identical" {
+            // `main`'s head is the local SHA — skip the second API call.
+            remoteCommit = RemoteCommit(sha: build.gitSha, date: build.buildDate)
+        } else {
+            remoteCommit = await fetchBranchHead(
+                build: build, authToken: authToken, transport: transport)
+        }
         let remoteSha = remoteCommit?.sha
         let remoteDate = remoteCommit?.date
 
-        if aheadBy > 0 && behindBy == 0 {
+        if behindBy > 0 || status == "behind" || status == "diverged" {
             return VersionUpdateStatus(
                 state: .unknown,
                 localVersion: build.version,
@@ -104,13 +113,14 @@ public enum VersionUpdateClient {
                 buildDate: build.buildDate,
                 remoteSha: remoteSha,
                 remoteDate: remoteDate,
+                behindBy: behindBy,
                 aheadBy: aheadBy,
                 reason: "Local build is not on upstream main",
                 checkedAtMs: base.checkedAtMs
             )
         }
 
-        if behindBy > 0 || status == "behind" {
+        if aheadBy > 0 || status == "ahead" {
             return VersionUpdateStatus(
                 state: .behind,
                 localVersion: build.version,
@@ -118,8 +128,8 @@ public enum VersionUpdateClient {
                 buildDate: build.buildDate,
                 remoteSha: remoteSha,
                 remoteDate: remoteDate,
-                behindBy: behindBy,
-                aheadBy: aheadBy,
+                behindBy: aheadBy,
+                aheadBy: behindBy,
                 updateCommand: updateCommand,
                 checkedAtMs: base.checkedAtMs
             )
@@ -133,7 +143,7 @@ public enum VersionUpdateClient {
             remoteSha: remoteSha,
             remoteDate: remoteDate,
             behindBy: 0,
-            aheadBy: aheadBy,
+            aheadBy: 0,
             checkedAtMs: base.checkedAtMs
         )
     }
