@@ -47,7 +47,7 @@ enum VersionCheck {
     static func run() throws {
         let result = try rpc("version-update-check", params: ["force": .bool(true)])
         guard let status = result["status"], status != .null else {
-            fputs("Could not check for updates — is crowd running?\n", stderr)
+            warn("Could not check for updates — is crowd running?")
             throw ExitCode(2)
         }
         printHuman(status)
