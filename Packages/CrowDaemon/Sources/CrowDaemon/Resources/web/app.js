@@ -222,11 +222,13 @@ const VERSION_BANNER_DISMISS_KEY = 'crow.updateBannerDismissedSha';
 let versionBannerDismissedWithoutSha = false;
 let versionBannerDismissedSha = '';
 
-function readDismissedSha() {
+function isDismissedSha(sha) {
+  if (!sha) return false;
+  if (versionBannerDismissedSha === sha) return true;
   try {
-    return localStorage.getItem(VERSION_BANNER_DISMISS_KEY) || versionBannerDismissedSha;
+    return localStorage.getItem(VERSION_BANNER_DISMISS_KEY) === sha;
   } catch (_) {
-    return versionBannerDismissedSha;
+    return false;
   }
 }
 
@@ -275,7 +277,7 @@ function renderVersionUpdateBanner(status) {
   }
   const remoteSha = status.remote_sha || '';
   if (remoteSha) versionBannerDismissedWithoutSha = false;
-  if (remoteSha && readDismissedSha() === remoteSha) {
+  if (remoteSha && isDismissedSha(remoteSha)) {
     hideVersionUpdateBanner(banner, text);
     return;
   }
