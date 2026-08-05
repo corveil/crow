@@ -49,6 +49,7 @@ body {
   color: var(--gold);
   font-size: 13px;
 }
+.update-banner[hidden] { display: none; }
 .update-banner-text { flex: 1 1 auto; }
 .update-banner-dismiss {
   flex: 0 0 auto;

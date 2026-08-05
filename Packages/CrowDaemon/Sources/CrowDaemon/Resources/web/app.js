@@ -232,6 +232,12 @@ function syncUpdateBannerLayout(banner) {
     '--update-banner-height', banner.offsetHeight + 'px');
 }
 
+function hideVersionUpdateBanner(banner, text) {
+  if (text) text.textContent = '';
+  banner.hidden = true;
+  syncUpdateBannerLayout(banner);
+}
+
 function renderVersionUpdateBanner(status) {
   const banner = document.getElementById('update-banner');
   if (!banner) return;
@@ -239,38 +245,39 @@ function renderVersionUpdateBanner(status) {
   const dismiss = banner.querySelector('.update-banner-dismiss');
   if (!text || !dismiss) return;
 
+  let dismissRemoteSha = '';
+  let dismissWithoutSha = false;
+  dismiss.onclick = () => {
+    if (dismissRemoteSha) {
+      localStorage.setItem(VERSION_BANNER_DISMISS_KEY, dismissRemoteSha);
+    } else if (dismissWithoutSha) {
+      versionBannerDismissedWithoutSha = true;
+    }
+    hideVersionUpdateBanner(banner, text);
+  };
+
   if (!status || status.state !== 'behind') {
-    banner.hidden = true;
-    syncUpdateBannerLayout(banner);
+    hideVersionUpdateBanner(banner, text);
     return;
   }
   const remoteSha = status.remote_sha || '';
   if (remoteSha) versionBannerDismissedWithoutSha = false;
   if (remoteSha && localStorage.getItem(VERSION_BANNER_DISMISS_KEY) === remoteSha) {
-    banner.hidden = true;
-    syncUpdateBannerLayout(banner);
+    hideVersionUpdateBanner(banner, text);
     return;
   }
   if (!remoteSha && versionBannerDismissedWithoutSha) {
-    banner.hidden = true;
-    syncUpdateBannerLayout(banner);
+    hideVersionUpdateBanner(banner, text);
     return;
   }
   const n = status.behind_by || 0;
   text.textContent = 'A newer Crow build is available — '
     + n + ' commit' + (n === 1 ? '' : 's') + ' behind origin/main.'
     + (status.update_command ? (' Update: ' + status.update_command) : '');
+  dismissRemoteSha = remoteSha;
+  dismissWithoutSha = !remoteSha;
   banner.hidden = false;
   syncUpdateBannerLayout(banner);
-  dismiss.onclick = () => {
-    if (remoteSha) {
-      localStorage.setItem(VERSION_BANNER_DISMISS_KEY, remoteSha);
-    } else {
-      versionBannerDismissedWithoutSha = true;
-    }
-    banner.hidden = true;
-    syncUpdateBannerLayout(banner);
-  };
 }
 
 async function refreshVersionUpdateBanner(cachedStatus) {
@@ -283,7 +290,9 @@ async function refreshVersionUpdateBanner(cachedStatus) {
     renderVersionUpdateBanner(res && res.status);
   } catch (_) {
     const banner = document.getElementById('update-banner');
-    if (banner) banner.hidden = true;
+    if (banner) {
+      hideVersionUpdateBanner(banner, banner.querySelector('.update-banner-text'));
+    }
   }
 }
 window.refreshVersionUpdateBanner = refreshVersionUpdateBanner;
