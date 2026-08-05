@@ -54,7 +54,7 @@ jobs:
         run: shellcheck scripts/*.sh
 
   release:
-    name: Build, Sign & Release
+    name: Build & Release
     needs: [test, shellcheck]
     runs-on: macos-15
     timeout-minutes: 60
@@ -73,72 +73,31 @@ jobs:
       - name: Extract version from tag
         run: echo "CROW_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
 
-      - name: Import signing certificate
-        env:
-          CERTIFICATE_BASE64: ${{ secrets.DEVELOPER_CERTIFICATE_BASE64 }}
-          CERTIFICATE_PASSWORD: ${{ secrets.DEVELOPER_CERTIFICATE_PASSWORD }}
-        run: |
-          CERTIFICATE_PATH="$RUNNER_TEMP/certificate.p12"
-          KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
-          KEYCHAIN_PASSWORD="$(openssl rand -hex 16)"
-
-          echo "$CERTIFICATE_BASE64" | base64 --decode > "$CERTIFICATE_PATH"
-
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-
-          security import "$CERTIFICATE_PATH" \
-            -P "$CERTIFICATE_PASSWORD" \
-            -A \
-            -t cert \
-            -f pkcs12 \
-            -k "$KEYCHAIN_PATH"
-
-          security set-key-partition-list \
-            -S apple-tool:,apple: \
-            -k "$KEYCHAIN_PASSWORD" \
-            "$KEYCHAIN_PATH"
-
-          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
-
-          rm -f "$CERTIFICATE_PATH"
-
-      - name: Bundle Crow.app
+      - name: Build release binaries
         env:
           CROW_VERSION: ${{ env.CROW_VERSION }}
-        run: |
-          bash scripts/generate-build-info.sh
-          bash scripts/bundle.sh
-
-      - name: Sign, create DMG, and notarize
-        env:
-          DEVELOPER_ID_APPLICATION: ${{ secrets.DEVELOPER_ID_APPLICATION }}
-          CROW_VERSION: ${{ env.CROW_VERSION }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: bash scripts/sign-and-notarize.sh
-
-      - name: Build CLI
-        run: |
-          swift build -c release --arch arm64 --arch x86_64 --product crow
-          if [ -f .build/apple/Products/Release/crow ]; then
-            cp .build/apple/Products/Release/crow crow-cli-macos-universal
-          else
-            cp .build/release/crow crow-cli-macos-universal
-          fi
-          lipo -info crow-cli-macos-universal
-
-      - name: Cleanup keychain
-        if: always()
-        run: security delete-keychain "$RUNNER_TEMP/app-signing.keychain-db" 2>/dev/null || true
+        run: bash scripts/package-release.sh
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            Crow-${{ env.CROW_VERSION }}.dmg
-            crow-cli-macos-universal
+          files: crow-${{ env.CROW_VERSION }}-macos-universal.tar.gz
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-') }}
+          body: |
+            ## Install
+
+            Download `crow-${{ env.CROW_VERSION }}-macos-universal.tar.gz`, extract it, and put `crow` and `crowd` somewhere on your `PATH` (for example `~/.local/bin`).
+
+            ```bash
+            tar -xzf crow-${{ env.CROW_VERSION }}-macos-universal.tar.gz
+            install -m 755 crow crowd ~/.local/bin/
+            ```
+
+            Release binaries are **unsigned** (see [docs/troubleshooting.md#unsigned-builds](https://github.com/${{ github.repository }}/blob/main/docs/troubleshooting.md#unsigned-builds)). Browsers mark downloaded executables with Gatekeeper quarantine; on first run you may need to clear it:
+
+            ```bash
+            xattr -d com.apple.quarantine ~/.local/bin/crow ~/.local/bin/crowd
+            ```
+
+            Or build from source with `make build CONFIG=release && make install CONFIG=release`.
