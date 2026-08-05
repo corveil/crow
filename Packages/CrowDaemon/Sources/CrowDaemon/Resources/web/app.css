@@ -32,11 +32,41 @@ html, body {
   overflow: hidden;
 }
 
+body {
+  height: 100dvh; /* exclude mobile browser chrome so the last row is reachable */
+  display: flex;
+  flex-direction: column;
+}
+
+.update-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 14px;
+  background: rgba(221, 196, 130, 0.12);
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--gold);
+  font-size: 13px;
+}
+.update-banner-text { flex: 1 1 auto; }
+.update-banner-dismiss {
+  flex: 0 0 auto;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+.update-banner-dismiss:hover { color: var(--text-primary); }
+
 #app {
   display: grid;
   grid-template-columns: 350px 1fr;
-  height: 100vh;
-  height: 100dvh; /* exclude mobile browser chrome so the last row is reachable */
+  flex: 1;
+  min-height: 0;
 }
 
 /* ---- Sidebar ---- */
@@ -472,6 +502,9 @@ html, body {
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.45);
 }
 #back-to-sidebar:active { transform: translateY(1px); }
+body.update-banner-visible #back-to-sidebar {
+  top: calc(12px + env(safe-area-inset-top) + var(--update-banner-height, 0px));
+}
 
 /* ---- Mobile: one pane at a time ----
    Sidebar shows until a session is selected, then the detail pane takes over

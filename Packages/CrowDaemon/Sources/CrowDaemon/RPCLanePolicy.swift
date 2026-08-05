@@ -131,6 +131,10 @@ enum RPCLanePolicy {
         "job-disable": .fixed(.config),
         "job-delete": .fixed(.config),
         "job-duplicate": .fixed(.config),
+        "version-update-set": .fixed(.config),
+        // Already single-flight: a second caller awaits the in-flight compare
+        // instead of spawning another `gh auth token` subprocess + GitHub call.
+        "version-update-check": .concurrent,
 
         // MARK: Job runs
         // Not `.config`: these await a full worktree + tmux spawn, and parking

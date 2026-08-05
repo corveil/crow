@@ -110,6 +110,10 @@ Every subcommand and flag the `crow` binary accepts, generated from the commands
 | [`crow ui`](#crow-ui) | View or change UI display preferences |
 | [`crow ui get`](#crow-ui-get) | Show the current UI display preferences |
 | [`crow ui set`](#crow-ui-set) | Change UI display preferences |
+| [`crow version`](#crow-version) | Show the local build and check for upstream updates |
+| [`crow version check`](#crow-version-check) | Compare this build against corveil/crow main |
+| [`crow version get`](#crow-version-get) | Show version-update settings and the cached check result |
+| [`crow version set`](#crow-version-set) | Change version-update settings |
 | [`crow web-password`](#crow-web-password) | Manage the web-access password (local-only) |
 | [`crow web-password clear`](#crow-web-password-clear) | Remove the web-access password |
 | [`crow web-password set`](#crow-web-password-set) | Set or change the web-access password |
@@ -1614,6 +1618,61 @@ Only the flags you pass change; at least one is required. Connected browsers pic
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |
 | `--hide-session-details` | `<hide-session-details>` | no | Hide ticket title and repo/branch lines in sidebar rows (true or false) |
+
+---
+
+## `crow version`
+
+Show the local build and check for upstream updates.
+
+```
+crow version <check|get|set> [--check]
+```
+
+Bare `crow version` prints the stamped build version. Pass `--check` or run `crow version check` to compare against corveil/crow main via the daemon.
+
+Subcommands: [`check`](#crow-version-check), [`get`](#crow-version-get), [`set`](#crow-version-set).
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--check` | — | no | Compare this build against corveil/crow main |
+
+---
+
+## `crow version check`
+
+Compare this build against corveil/crow main.
+
+```
+crow version check
+```
+
+---
+
+## `crow version get`
+
+Show version-update settings and the cached check result.
+
+```
+crow version get
+```
+
+---
+
+## `crow version set`
+
+Change version-update settings.
+
+```
+crow version set [--enabled <enabled>] [--interval-hours <interval-hours>]
+```
+
+Only the flags you pass change; at least one is required. --interval-hours is floored at 6 so unauthenticated GitHub checks cannot exhaust the 60 req/hr limit.
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--enabled` | `<enabled>` | no | Enable periodic upstream checks (true or false) |
+| `--interval-hours` | `<interval-hours>` | no | Hours between automatic checks (minimum 6, default 6) |
 
 ---
 

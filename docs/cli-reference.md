@@ -484,6 +484,29 @@ crow ui set --hide-session-details true
 
 Settings are grouped by the config block they belong to, so `get` returns `{"ui": {"sidebar": {...}}}` and gains further blocks as more view options become configurable. Connected browsers pick the change up within a couple of seconds — no reload.
 
+### `crow version` / `crow version check` / `crow version get | set`
+
+Compare the running build against `corveil/crow` `main` (CROW-938). The daemon owns the GitHub compare call and caches the result; the CLI and Settings → About read it back.
+
+```bash
+crow version
+crow version --check
+crow version check
+crow version get
+crow version set --enabled false
+crow version set --interval-hours 12
+```
+
+| Flag / subcommand | Description |
+| ----------------- | ----------- |
+| `--check`         | Force a fresh compare and print a human summary (exit `0` up to date, `1` behind, `2` could not check) |
+| `check`           | Same as `--check` |
+| `get`             | JSON: `version_update` settings plus the cached `status` |
+| `set --enabled`   | Opt out of periodic checks (`true` or `false`) |
+| `set --interval-hours` | Hours between automatic checks (minimum 6, default 6) |
+
+`get` returns `{"version_update":{"enabled":…,"interval_hours":…},"status":{…}}` where `status.state` is `up_to_date`, `behind`, or `unknown`. A `dev` build SHA or an unrecognized commit reports `unknown` — never a false up-to-date.
+
 ### `crow defaults get | set`
 
 Workspace and automation defaults — the `defaults` block of `config.json`, behind Settings → Workspaces (provider, branch prefix), → Automation (the board filter lists) and → General (the corveil binary path).

@@ -50,6 +50,9 @@ public struct AppConfig: Codable, Sendable, Equatable {
     /// can still pick up previously-labeled issues.
     public var autoCreateWatcherEnabled: Bool
     public var cleanup: CleanupConfig
+    /// Periodic check against `corveil/crow` `main` to surface when this build
+    /// is behind upstream (CROW-938). Off-able; interval floored at 6h.
+    public var versionUpdate: VersionUpdateConfig
     /// Scheduled jobs: named sets of prompts that fire automatically on a
     /// schedule, scoped to a repo. Driven by `JobScheduler` (CROW-317).
     public var jobs: [JobConfig]
@@ -144,6 +147,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         autoMergeWatcherEnabled: Bool = false,
         autoCreateWatcherEnabled: Bool = false,
         cleanup: CleanupConfig = CleanupConfig(),
+        versionUpdate: VersionUpdateConfig = VersionUpdateConfig(),
         jobs: [JobConfig] = [],
         defaultAgentKind: AgentKind = .claudeCode,
         agentsByKind: [String: AgentKind] = [:],
@@ -167,6 +171,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         self.autoMergeWatcherEnabled = autoMergeWatcherEnabled
         self.autoCreateWatcherEnabled = autoCreateWatcherEnabled
         self.cleanup = cleanup
+        self.versionUpdate = versionUpdate
         self.jobs = jobs
         self.defaultAgentKind = defaultAgentKind
         self.agentsByKind = agentsByKind
@@ -202,6 +207,8 @@ public struct AppConfig: Codable, Sendable, Equatable {
             autoRespond.autoRebaseAndResolveConflicts = true
         }
         cleanup = try container.decodeIfPresent(CleanupConfig.self, forKey: .cleanup) ?? CleanupConfig()
+        versionUpdate = try container.decodeIfPresent(VersionUpdateConfig.self, forKey: .versionUpdate)
+            ?? VersionUpdateConfig()
         jobs = try container.decodeIfPresent([JobConfig].self, forKey: .jobs) ?? []
         defaultAgentKind = try container.decodeIfPresent(AgentKind.self, forKey: .defaultAgentKind) ?? .claudeCode
         agentsByKind = try container.decodeIfPresent([String: AgentKind].self, forKey: .agentsByKind) ?? [:]
@@ -245,7 +252,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case workspaces, defaults, notifications, sidebar, remoteControlEnabled, managerAutoPermissionMode, jobsAutoPermissionMode, reviewAutoPermissionMode, coderViewAutoPermissionMode, telemetry, terminal, autoRespond, attributionTrailers, autoMergeWatcherEnabled, autoCreateWatcherEnabled, cleanup, jobs, defaultAgentKind, agentsByKind, managerGateway, jiraCredential, webAuth
+        case workspaces, defaults, notifications, sidebar, remoteControlEnabled, managerAutoPermissionMode, jobsAutoPermissionMode, reviewAutoPermissionMode, coderViewAutoPermissionMode, telemetry, terminal, autoRespond, attributionTrailers, autoMergeWatcherEnabled, autoCreateWatcherEnabled, cleanup, versionUpdate, jobs, defaultAgentKind, agentsByKind, managerGateway, jiraCredential, webAuth
     }
 
     /// Resolve the agent that should drive a newly-created session of the

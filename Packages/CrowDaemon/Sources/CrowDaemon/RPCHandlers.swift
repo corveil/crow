@@ -162,6 +162,7 @@ func makeCommandRouter(
     // SessionService and the telemetry receiver are in scope; nil when telemetry
     // is off (there'd be no DB to rebuild from).
     rebuildScorecard: (@MainActor @Sendable () async -> Void)? = nil,
+    versionUpdateService: VersionUpdateService? = nil,
     fallback: CommandRouter? = nil
 ) -> CommandRouter {
     // Serializes review kickoffs (see start-review) — one per router instance.
@@ -1680,6 +1681,55 @@ func makeCommandRouter(
                     "restart_required": .bool(false),
                 ]
             }
+        },
+
+        // Version update check (CROW-938) — `crow version get|set|--check`.
+        "version-update-get": { _ in
+            let config = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
+            let status = await versionUpdateService?.cachedStatus
+            return [
+                "version_update": VersionUpdateRPC.configJSON(config.versionUpdate),
+                "status": VersionUpdateRPC.statusJSON(status),
+            ]
+        },
+        "version-update-set": { params in
+            try await mapRPCError {
+                let enabled = try SettingsRPC.patchBool(params, "enabled")
+                let intervalHours = try VersionUpdateRPC.patchIntervalHours(params)
+                guard enabled != nil || intervalHours != nil else {
+                    throw RPCError.invalidParams(
+                        "Nothing to set — provide at least one of enabled, interval_hours.")
+                }
+                let versionUpdate = try mutateConfig(devRoot: devRoot) { config -> VersionUpdateConfig in
+                    if let enabled { config.versionUpdate.enabled = enabled }
+                    if let intervalHours {
+                        config.versionUpdate.intervalHours = max(
+                            VersionUpdateConfig.minimumIntervalHours, intervalHours)
+                    }
+                    return config.versionUpdate
+                }
+                return [
+                    "version_update": VersionUpdateRPC.configJSON(versionUpdate),
+                    "saved": .bool(true),
+                ]
+            }
+        },
+        "version-update-check": { params in
+            let force = params["force"]?.boolValue ?? false
+            guard let versionUpdateService else {
+                return ["status": VersionUpdateRPC.statusJSON(nil)]
+            }
+            let config = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
+            let status: VersionUpdateStatus?
+            if force {
+                status = await versionUpdateService.runCheck()
+            } else {
+                status = await versionUpdateService.checkIfDue(
+                    enabled: config.versionUpdate.enabled,
+                    intervalHours: config.versionUpdate.intervalHours,
+                    force: false)
+            }
+            return ["status": VersionUpdateRPC.statusJSON(status)]
         },
 
         // Settings → Automation for `crow automation` (CROW-812). Same shape and

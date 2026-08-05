@@ -22,9 +22,11 @@ fi
 
 # Capture git info (fallback to "dev" if not in a git repo)
 if git -C "$ROOT_DIR" rev-parse HEAD >/dev/null 2>&1; then
+    GIT_FULL_SHA=$(git -C "$ROOT_DIR" rev-parse HEAD)
     GIT_SHORT_SHA=$(git -C "$ROOT_DIR" rev-parse --short HEAD)
     BUILD_NUMBER=$(git -C "$ROOT_DIR" rev-list --count HEAD)
 else
+    GIT_FULL_SHA="dev"
     GIT_SHORT_SHA="dev"
     BUILD_NUMBER="1"
 fi
@@ -45,6 +47,6 @@ echo "Generated CLI version info (version: $VERSION, build: $BUILD_NUMBER, SHA: 
 WEB_DIR="$ROOT_DIR/Packages/CrowDaemon/Sources/CrowDaemon/Resources/web"
 if [ -d "$WEB_DIR" ]; then
     cat > "$WEB_DIR/version.json" << EOF
-{"version": "$VERSION", "gitSha": "$GIT_SHORT_SHA", "buildDate": "$BUILD_DATE"}
+{"version": "$VERSION", "gitSha": "$GIT_SHORT_SHA", "gitShaFull": "$GIT_FULL_SHA", "buildDate": "$BUILD_DATE"}
 EOF
 fi

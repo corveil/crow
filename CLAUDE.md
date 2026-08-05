@@ -85,6 +85,11 @@ crow cleanup get                                                        → {"cl
 crow cleanup set [--enabled true|false] [--retention-hours N]           → patch; live within ~1 board poll. Deletes completed/archived sessions incl. worktree + branch
 crow ui get                                                             → {"ui":{"sidebar":{"hide_session_details":…}}}
 crow ui set --hide-session-details true|false                           → patch; connected browsers repaint within ~2s
+crow version                                                            → prints the stamped build version
+crow version --check                                                    → compare against corveil/crow main; human summary, exit 0/1/2
+crow version check                                                      → same as --check
+crow version get                                                        → {"version_update":{…},"status":{…}}
+crow version set [--enabled true|false] [--interval-hours N]            → patch; interval floored at 6h
 ```
 
 ### Defaults
