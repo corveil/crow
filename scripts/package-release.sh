@@ -4,6 +4,10 @@
 # Requires CROW_VERSION (from the git tag). Writes:
 #   crow-${CROW_VERSION}-macos-universal.tar.gz
 #   crow-${CROW_VERSION}-macos-universal.tar.gz.sha256
+#
+# The archive contains a versioned directory with the binaries and the SwiftPM
+# resource bundles crowd needs at runtime (CrowDaemon web assets, CrowTerminal
+# tmux/xterm resources).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -16,9 +20,11 @@ fi
 
 cd "$ROOT_DIR"
 
-STAGING_DIR="$ROOT_DIR/release-staging"
+PACKAGE_DIR="crow-${CROW_VERSION}"
+STAGING_ROOT="$ROOT_DIR/release-staging"
+STAGING_DIR="$STAGING_ROOT/$PACKAGE_DIR"
 cleanup() {
-  rm -rf "$STAGING_DIR"
+  rm -rf "$STAGING_ROOT"
 }
 trap cleanup EXIT
 
@@ -33,7 +39,7 @@ else
   BUILD_DIR=".build/release"
 fi
 
-rm -rf "$STAGING_DIR"
+rm -rf "$STAGING_ROOT"
 mkdir -p "$STAGING_DIR"
 
 for binary in crow crowd; do
@@ -48,8 +54,42 @@ for binary in crow crowd; do
   echo "$binary: $archs"
 done
 
+shopt -s nullglob
+bundles=("$BUILD_DIR"/*.bundle)
+if ((${#bundles[@]} == 0)); then
+  echo "ERROR: no resource bundles found in $BUILD_DIR" >&2
+  exit 1
+fi
+cp -R "${bundles[@]}" "$STAGING_DIR"/
+for bundle in "${bundles[@]}"; do
+  echo "Bundled resource: $(basename "$bundle")"
+done
+
+# Smoke-test the staged artifact outside the build tree.
+SMOKE_SOCKET="$(mktemp -u "${TMPDIR:-/tmp}/crow-release-smoke.XXXXXX.sock")"
+SMOKE_PORT=$((18000 + RANDOM % 1000))
+(
+  cd "$STAGING_DIR"
+  ./crow --version >/dev/null
+
+  ./crowd --socket-path "$SMOKE_SOCKET" --host 127.0.0.1 --http-port "$SMOKE_PORT" &
+  crowd_pid=$!
+  trap 'kill "$crowd_pid" 2>/dev/null; wait "$crowd_pid" 2>/dev/null; rm -f "$SMOKE_SOCKET"' EXIT
+
+  for _ in $(seq 1 60); do
+    if curl -sf "http://127.0.0.1:${SMOKE_PORT}/version.json" >/dev/null; then
+      curl -sf "http://127.0.0.1:${SMOKE_PORT}/version.json"
+      curl -sf -o /dev/null "http://127.0.0.1:${SMOKE_PORT}/"
+      exit 0
+    fi
+    sleep 0.5
+  done
+  echo "ERROR: crowd smoke test timed out waiting for http://127.0.0.1:${SMOKE_PORT}" >&2
+  exit 1
+)
+
 ARCHIVE="crow-${CROW_VERSION}-macos-universal.tar.gz"
-tar -czf "$ARCHIVE" -C "$STAGING_DIR" crow crowd
+COPYFILE_DISABLE=1 tar -czf "$ARCHIVE" -C "$STAGING_ROOT" "$PACKAGE_DIR"
 shasum -a 256 "$ARCHIVE" > "$ARCHIVE.sha256"
 
 echo "Created $ARCHIVE and $ARCHIVE.sha256"

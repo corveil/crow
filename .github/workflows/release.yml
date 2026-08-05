@@ -71,7 +71,14 @@ jobs:
           xcode-version: '16'
 
       - name: Extract version from tag
-        run: echo "CROW_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+        run: |
+          CROW_VERSION="${GITHUB_REF_NAME#v}"
+          FILE_VERSION="$(tr -d '[:space:]' < VERSION)"
+          if [ "$CROW_VERSION" != "$FILE_VERSION" ]; then
+            echo "ERROR: tag version ($CROW_VERSION) does not match VERSION file ($FILE_VERSION)" >&2
+            exit 1
+          fi
+          echo "CROW_VERSION=$CROW_VERSION" >> "$GITHUB_ENV"
 
       - name: Build release binaries
         env:
@@ -89,19 +96,20 @@ jobs:
           body: |
             ## Install
 
-            Download `crow-${{ env.CROW_VERSION }}-macos-universal.tar.gz` and its checksum file, verify the archive, extract it, and put `crow` and `crowd` somewhere on your `PATH` (for example `~/.local/bin`).
+            Download `crow-${{ env.CROW_VERSION }}-macos-universal.tar.gz` and its checksum file, verify the archive, extract it, and symlink the binaries into your `PATH`. Keep the extracted directory intact — `crowd` needs the `.bundle` resources next to the binaries.
 
             ```bash
             shasum -a 256 -c crow-${{ env.CROW_VERSION }}-macos-universal.tar.gz.sha256
-            tar -xzf crow-${{ env.CROW_VERSION }}-macos-universal.tar.gz
-            mkdir -p ~/.local/bin
-            install -m 755 crow crowd ~/.local/bin/
+            mkdir -p ~/.local/lib ~/.local/bin
+            tar -xzf crow-${{ env.CROW_VERSION }}-macos-universal.tar.gz -C ~/.local/lib
+            ln -sf ~/.local/lib/crow-${{ env.CROW_VERSION }}/crow ~/.local/bin/crow
+            ln -sf ~/.local/lib/crow-${{ env.CROW_VERSION }}/crowd ~/.local/bin/crowd
             ```
 
             Release binaries are **unsigned** (see [docs/troubleshooting.md#unsigned-builds](https://github.com/${{ github.repository }}/blob/main/docs/troubleshooting.md#unsigned-builds)). Browsers mark downloaded executables with Gatekeeper quarantine; on first run you may need to clear it:
 
             ```bash
-            xattr -d com.apple.quarantine ~/.local/bin/crow ~/.local/bin/crowd
+            xattr -d com.apple.quarantine ~/.local/bin/crow ~/.local/bin/crowd 2>/dev/null || true
             ```
 
-            Or build from source with `make build CONFIG=release && make install CONFIG=release`.
+            Or build from source with `make daemon CONFIG=release && make install CONFIG=release`.
