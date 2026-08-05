@@ -224,7 +224,7 @@ let versionBannerDismissedSha = '';
 
 function readDismissedSha() {
   try {
-    return localStorage.getItem(VERSION_BANNER_DISMISS_KEY) || '';
+    return localStorage.getItem(VERSION_BANNER_DISMISS_KEY) || versionBannerDismissedSha;
   } catch (_) {
     return versionBannerDismissedSha;
   }
@@ -242,6 +242,7 @@ function syncUpdateBannerLayout(banner) {
 }
 
 function hideVersionUpdateBanner(banner, text) {
+  if (!banner) return;
   if (text) text.textContent = '';
   banner.hidden = true;
   syncUpdateBannerLayout(banner);
@@ -255,22 +256,16 @@ function renderVersionUpdateBanner(status) {
   if (!text || !dismiss) return;
 
   let dismissRemoteSha = '';
-  let dismissArmed = false;
+  let dismissArmedWithoutSha = false;
   dismiss.onclick = () => {
     hideVersionUpdateBanner(banner, text);
-    try {
-      if (dismissRemoteSha) {
+    if (dismissRemoteSha) {
+      versionBannerDismissedSha = dismissRemoteSha;
+      try {
         localStorage.setItem(VERSION_BANNER_DISMISS_KEY, dismissRemoteSha);
-        versionBannerDismissedSha = dismissRemoteSha;
-      } else if (dismissArmed) {
-        versionBannerDismissedWithoutSha = true;
-      }
-    } catch (_) {
-      if (dismissRemoteSha) {
-        versionBannerDismissedSha = dismissRemoteSha;
-      } else if (dismissArmed) {
-        versionBannerDismissedWithoutSha = true;
-      }
+      } catch (_) {}
+    } else if (dismissArmedWithoutSha) {
+      versionBannerDismissedWithoutSha = true;
     }
   };
 
@@ -290,7 +285,7 @@ function renderVersionUpdateBanner(status) {
   }
   const n = status.behind_by || 0;
   dismissRemoteSha = remoteSha;
-  dismissArmed = !remoteSha;
+  dismissArmedWithoutSha = !remoteSha;
   banner.hidden = false;
   const msg = 'A newer Crow build is available — '
     + n + ' commit' + (n === 1 ? '' : 's') + ' behind origin/main.'
