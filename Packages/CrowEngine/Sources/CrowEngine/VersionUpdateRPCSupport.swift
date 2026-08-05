@@ -97,7 +97,7 @@ public enum VersionUpdateClient {
         let remoteCommit: RemoteCommit?
         if status == "identical" {
             // `main`'s head is the local SHA — skip the second API call.
-            remoteCommit = RemoteCommit(sha: build.gitSha, date: build.buildDate)
+            remoteCommit = RemoteCommit(sha: build.gitSha, date: nil)
         } else {
             remoteCommit = await fetchBranchHead(
                 build: build, authToken: authToken, transport: transport)

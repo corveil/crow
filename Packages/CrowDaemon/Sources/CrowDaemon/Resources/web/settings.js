@@ -886,6 +886,7 @@
     function renderUpdateStatus(status) {
       updateStatus.textContent = '';
       updateStatus.className = 'st-about-update';
+      updateStatus.title = '';
       if (!status || !status.state) return;
       if (status.state === 'up_to_date') {
         updateStatus.textContent = 'Up to date with origin/main.';

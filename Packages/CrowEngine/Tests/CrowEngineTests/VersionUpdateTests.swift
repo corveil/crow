@@ -123,6 +123,7 @@ import CrowCore
         #expect(result.state == .upToDate)
         #expect(result.behindBy == 0)
         #expect(result.remoteSha == build.gitSha)
+        #expect(result.remoteDate == nil)
     }
 
     @Test func localAheadOfMainIsUnknown() async {

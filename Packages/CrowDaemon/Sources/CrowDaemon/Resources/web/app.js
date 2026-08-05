@@ -221,6 +221,17 @@ function onServerChanged() {
 const VERSION_BANNER_DISMISS_KEY = 'crow.updateBannerDismissedSha';
 let versionBannerDismissedWithoutSha = false;
 
+function syncUpdateBannerLayout(banner) {
+  if (!banner || banner.hidden) {
+    document.body.classList.remove('update-banner-visible');
+    document.documentElement.style.removeProperty('--update-banner-height');
+    return;
+  }
+  document.body.classList.add('update-banner-visible');
+  document.documentElement.style.setProperty(
+    '--update-banner-height', banner.offsetHeight + 'px');
+}
+
 function renderVersionUpdateBanner(status) {
   const banner = document.getElementById('update-banner');
   if (!banner) return;
@@ -230,16 +241,19 @@ function renderVersionUpdateBanner(status) {
 
   if (!status || status.state !== 'behind') {
     banner.hidden = true;
+    syncUpdateBannerLayout(banner);
     return;
   }
   const remoteSha = status.remote_sha || '';
   if (remoteSha) versionBannerDismissedWithoutSha = false;
   if (remoteSha && localStorage.getItem(VERSION_BANNER_DISMISS_KEY) === remoteSha) {
     banner.hidden = true;
+    syncUpdateBannerLayout(banner);
     return;
   }
   if (!remoteSha && versionBannerDismissedWithoutSha) {
     banner.hidden = true;
+    syncUpdateBannerLayout(banner);
     return;
   }
   const n = status.behind_by || 0;
@@ -247,6 +261,7 @@ function renderVersionUpdateBanner(status) {
     + n + ' commit' + (n === 1 ? '' : 's') + ' behind origin/main.'
     + (status.update_command ? (' Update: ' + status.update_command) : '');
   banner.hidden = false;
+  syncUpdateBannerLayout(banner);
   dismiss.onclick = () => {
     if (remoteSha) {
       localStorage.setItem(VERSION_BANNER_DISMISS_KEY, remoteSha);
@@ -254,6 +269,7 @@ function renderVersionUpdateBanner(status) {
       versionBannerDismissedWithoutSha = true;
     }
     banner.hidden = true;
+    syncUpdateBannerLayout(banner);
   };
 }
 
