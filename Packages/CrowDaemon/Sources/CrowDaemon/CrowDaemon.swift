@@ -392,7 +392,7 @@ public enum CrowDaemon {
         let buildInfo = BuildInfoLoader.load(webDir: options.webDir)
             ?? BuildInfo(version: "?", gitSha: "dev", buildDate: "")
         let versionUpdateService = await MainActor.run {
-            VersionUpdateService(buildInfo: buildInfo, devRoot: options.devRoot)
+            VersionUpdateService(buildInfo: buildInfo)
         }
         startVersionUpdatePoll(
             service: versionUpdateService, devRoot: options.devRoot, eventHub: eventHub)

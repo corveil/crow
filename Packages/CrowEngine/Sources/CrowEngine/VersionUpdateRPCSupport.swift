@@ -8,8 +8,9 @@ import FoundationNetworking
 /// GitHub compare call backing the version-update check (CROW-938).
 ///
 /// Compares the stamped build SHA against `corveil/crow` `main` via
-/// `GET /repos/corveil/crow/compare/{local}...main`. Injectable transport keeps
-/// the parser unit-testable without network I/O.
+/// `GET /repos/corveil/crow/compare/{local}...main`, then fetches the branch
+/// head separately so `remote_sha` stays correct when `behind_by` exceeds the
+/// compare payload's 250-commit cap.
 public enum VersionUpdateClient {
     public static let repository = "corveil/crow"
     public static let defaultBranch = "main"
@@ -51,22 +52,18 @@ public enum VersionUpdateClient {
         }
 
         let localSha = build.compareSha
-        guard let url = URL(string:
-            "https://api.github.com/repos/\(repository)/compare/\(localSha)...\(defaultBranch)"
-        ) else {
+        guard let encodedSha = localSha.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+              let compareURL = URL(string:
+                "https://api.github.com/repos/\(repository)/compare/\(encodedSha)...\(defaultBranch)"
+              ) else {
             return unknown(base, reason: "Invalid compare URL")
         }
 
-        var request = URLRequest(url: url)
-        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        request.setValue("Crow/\(build.version)", forHTTPHeaderField: "User-Agent")
-        if let authToken, !authToken.isEmpty {
-            request.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
-        }
+        let compareRequest = authorizedRequest(url: compareURL, build: build, authToken: authToken)
 
         let data: Data
         do {
-            let (payload, response) = try await transport(request)
+            let (payload, response) = try await transport(compareRequest)
             guard let http = response as? HTTPURLResponse else {
                 return unknown(base, reason: "No HTTP response from GitHub")
             }
@@ -94,7 +91,8 @@ public enum VersionUpdateClient {
         let aheadBy = json["ahead_by"] as? Int ?? 0
         let status = json["status"] as? String ?? ""
 
-        let remoteCommit = remoteHeadCommit(in: json)
+        let remoteCommit = await fetchBranchHead(
+            build: build, authToken: authToken, transport: transport)
         let remoteSha = remoteCommit?.sha
         let remoteDate = remoteCommit?.date
 
@@ -140,6 +138,18 @@ public enum VersionUpdateClient {
         )
     }
 
+    private static func authorizedRequest(
+        url: URL, build: BuildInfo, authToken: String?
+    ) -> URLRequest {
+        var request = URLRequest(url: url)
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.setValue("Crow/\(build.version)", forHTTPHeaderField: "User-Agent")
+        if let authToken, !authToken.isEmpty {
+            request.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
+        }
+        return request
+    }
+
     private static func unknown(_ base: VersionUpdateStatus, reason: String) -> VersionUpdateStatus {
         VersionUpdateStatus(
             state: .unknown,
@@ -160,15 +170,25 @@ public enum VersionUpdateClient {
         var date: String?
     }
 
-    /// Best-effort parse of the upstream head from a compare payload.
-    private static func remoteHeadCommit(in json: [String: Any]) -> RemoteCommit? {
-        if let commits = json["commits"] as? [[String: Any]], let last = commits.last {
-            if let parsed = parseCommitNode(last) { return parsed }
+    /// Fetch `main`'s tip — not inferred from the compare payload, which caps at
+    /// 250 commits and would give the wrong sha/date (and banner-dismiss key)
+    /// when further behind.
+    private static func fetchBranchHead(
+        build: BuildInfo,
+        authToken: String?,
+        transport: @escaping @Sendable (URLRequest) async throws -> (Data, URLResponse)
+    ) async -> RemoteCommit? {
+        guard let url = URL(string:
+            "https://api.github.com/repos/\(repository)/commits/\(defaultBranch)"
+        ) else { return nil }
+        let request = authorizedRequest(url: url, build: build, authToken: authToken)
+        guard let (data, response) = try? await transport(request),
+              let http = response as? HTTPURLResponse,
+              (200...299).contains(http.statusCode),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
         }
-        if let head = json["base_commit"] as? [String: Any], let parsed = parseCommitNode(head) {
-            return parsed
-        }
-        return nil
+        return parseCommitNode(json)
     }
 
     private static func parseCommitNode(_ node: [String: Any]) -> RemoteCommit? {
@@ -201,7 +221,7 @@ public enum VersionUpdateRPC {
 
     public static func statusJSON(_ status: VersionUpdateStatus?) -> JSONValue {
         guard let status else { return .null }
-        var object: [String: JSONValue] = [
+        return .object([
             "state": .string(status.state.rawValue),
             "local_version": .string(status.localVersion),
             "local_sha": .string(status.localSha),
@@ -213,8 +233,7 @@ public enum VersionUpdateRPC {
             "update_command": status.updateCommand.map { .string($0) } ?? .null,
             "reason": status.reason.map { .string($0) } ?? .null,
             "checked_at_ms": status.checkedAtMs.map { .int(Int($0)) } ?? .null,
-        ]
-        return .object(object)
+        ])
     }
 
     public static func patchIntervalHours(

@@ -4,23 +4,42 @@ import CrowCore
 @testable import CrowEngine
 
 @Suite struct VersionUpdateClientTests {
-    private func fixture(
+    private func compareFixture(
         status: String = "behind",
         behindBy: Int = 2,
-        aheadBy: Int = 0,
-        commits: [[String: Any]] = []
+        aheadBy: Int = 0
     ) -> Data {
         let payload: [String: Any] = [
             "status": status,
             "behind_by": behindBy,
             "ahead_by": aheadBy,
-            "commits": commits,
+            "commits": [],
+        ]
+        return try! JSONSerialization.data(withJSONObject: payload)
+    }
+
+    private func headFixture(sha: String, date: String) -> Data {
+        let payload: [String: Any] = [
+            "sha": sha,
+            "commit": ["committer": ["date": date]],
         ]
         return try! JSONSerialization.data(withJSONObject: payload)
     }
 
     private let build = BuildInfo(
         version: "0.1.0", gitSha: "abc1234", gitShaFull: "abc1234567890", buildDate: "2026-08-05")
+
+    private func transport(
+        compare: Data,
+        head: Data = Data()
+    ) -> @Sendable (URLRequest) async throws -> (Data, URLResponse) {
+        { request in
+            let url = request.url?.absoluteString ?? ""
+            let body = url.contains("/commits/main") ? head : compare
+            return (body, HTTPURLResponse(
+                url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }
+    }
 
     @Test func devShaIsIndeterminate() async {
         let devBuild = BuildInfo(version: "0.1.0", gitSha: "dev", buildDate: "2026-08-05")
@@ -30,17 +49,12 @@ import CrowCore
     }
 
     @Test func behindByReportsUpdateCommand() async {
-        let commit: [String: Any] = [
-            "sha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
-            "commit": ["committer": ["date": "2026-08-05T12:00:00Z"]],
-        ]
-        let data = fixture(commits: [commit])
+        let head = headFixture(
+            sha: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", date: "2026-08-05T12:00:00Z")
         let result = await VersionUpdateClient.check(
             build: build,
             updateCommand: "git -C /tmp/crow pull && make install",
-            transport: { _ in (data, HTTPURLResponse(
-                url: URL(string: "https://api.github.com")!,
-                statusCode: 200, httpVersion: nil, headerFields: nil)!) }
+            transport: transport(compare: compareFixture(), head: head)
         )
         #expect(result.state == .behind)
         #expect(result.behindBy == 2)
@@ -49,25 +63,42 @@ import CrowCore
         #expect(result.updateCommand == "git -C /tmp/crow pull && make install")
     }
 
-    @Test func identicalIsUpToDate() async {
-        let data = fixture(status: "identical", behindBy: 0, aheadBy: 0)
+    @Test func branchHeadComesFromCommitsEndpointNotComparePayload() async {
+        let staleCommit: [String: Any] = [
+            "sha": "0000000000000000000000000000000000000001",
+            "commit": ["committer": ["date": "2020-01-01T00:00:00Z"]],
+        ]
+        let compare = try! JSONSerialization.data(withJSONObject: [
+            "status": "behind",
+            "behind_by": 300,
+            "ahead_by": 0,
+            "commits": [staleCommit],
+        ])
+        let head = headFixture(
+            sha: "cafebabecafebabecafebabecafebabecafebabe", date: "2026-08-05T15:00:00Z")
         let result = await VersionUpdateClient.check(
             build: build,
-            transport: { _ in (data, HTTPURLResponse(
-                url: URL(string: "https://api.github.com")!,
-                statusCode: 200, httpVersion: nil, headerFields: nil)!) }
+            transport: transport(compare: compare, head: head)
+        )
+        #expect(result.state == .behind)
+        #expect(result.behindBy == 300)
+        #expect(result.remoteSha == "cafebab")
+        #expect(result.remoteDate == "2026-08-05")
+    }
+
+    @Test func identicalIsUpToDate() async {
+        let result = await VersionUpdateClient.check(
+            build: build,
+            transport: transport(compare: compareFixture(status: "identical", behindBy: 0, aheadBy: 0))
         )
         #expect(result.state == .upToDate)
         #expect(result.behindBy == 0)
     }
 
     @Test func aheadOnlyIsUnknown() async {
-        let data = fixture(status: "ahead", behindBy: 0, aheadBy: 3)
         let result = await VersionUpdateClient.check(
             build: build,
-            transport: { _ in (data, HTTPURLResponse(
-                url: URL(string: "https://api.github.com")!,
-                statusCode: 200, httpVersion: nil, headerFields: nil)!) }
+            transport: transport(compare: compareFixture(status: "ahead", behindBy: 0, aheadBy: 3))
         )
         #expect(result.state == .unknown)
         #expect(result.reason?.contains("not on upstream") == true)

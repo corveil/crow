@@ -1715,7 +1715,7 @@ func makeCommandRouter(
             }
         },
         "version-update-check": { params in
-            let force = params["force"]?.boolValue ?? true
+            let force = params["force"]?.boolValue ?? false
             guard let versionUpdateService else {
                 return ["status": VersionUpdateRPC.statusJSON(nil)]
             }
