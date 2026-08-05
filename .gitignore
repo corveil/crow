@@ -17,6 +17,9 @@ Sources/CrowCLI/Generated/
 *.app
 *.dmg
 *.p12
+release-staging/
+crow-*.tar.gz
+crow-*.tar.gz.sha256
 
 # IDE
 .swiftpm/

@@ -81,16 +81,20 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: crow-${{ env.CROW_VERSION }}-macos-universal.tar.gz
+          files: |
+            crow-${{ env.CROW_VERSION }}-macos-universal.tar.gz
+            crow-${{ env.CROW_VERSION }}-macos-universal.tar.gz.sha256
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-') }}
           body: |
             ## Install
 
-            Download `crow-${{ env.CROW_VERSION }}-macos-universal.tar.gz`, extract it, and put `crow` and `crowd` somewhere on your `PATH` (for example `~/.local/bin`).
+            Download `crow-${{ env.CROW_VERSION }}-macos-universal.tar.gz` and its checksum file, verify the archive, extract it, and put `crow` and `crowd` somewhere on your `PATH` (for example `~/.local/bin`).
 
             ```bash
+            shasum -a 256 -c crow-${{ env.CROW_VERSION }}-macos-universal.tar.gz.sha256
             tar -xzf crow-${{ env.CROW_VERSION }}-macos-universal.tar.gz
+            mkdir -p ~/.local/bin
             install -m 755 crow crowd ~/.local/bin/
             ```
 
