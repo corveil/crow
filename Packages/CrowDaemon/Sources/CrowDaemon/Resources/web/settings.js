@@ -873,11 +873,44 @@
     const htext = el('div');
     htext.appendChild(el('div', 'st-about-name', 'Crow'));
     const ver = el('div', 'st-about-ver', 'Loading version…');
+    const updateStatus = el('div', 'st-about-update', '');
     htext.appendChild(ver);
+    htext.appendChild(updateStatus);
     head.append(logo, htext);
     body.appendChild(head);
     body.appendChild(el('div', 'st-help',
       'AI-powered development session manager. crowd is the sole authority; every UI is a client.'));
+
+    cfg.versionUpdate = cfg.versionUpdate || { enabled: true, intervalHours: 6 };
+
+    function renderUpdateStatus(status) {
+      updateStatus.textContent = '';
+      updateStatus.className = 'st-about-update';
+      if (!status || !status.state) return;
+      if (status.state === 'up_to_date') {
+        updateStatus.textContent = 'Up to date with origin/main.';
+        updateStatus.classList.add('st-update-ok');
+      } else if (status.state === 'behind') {
+        const n = status.behind_by || 0;
+        updateStatus.textContent = n + ' commit' + (n === 1 ? '' : 's') + ' behind origin/main.';
+        updateStatus.classList.add('st-update-behind');
+        if (status.update_command) {
+          updateStatus.title = 'Update: ' + status.update_command;
+        }
+      } else {
+        updateStatus.textContent = status.reason || 'Could not check for updates.';
+        updateStatus.classList.add('st-update-unknown');
+      }
+    }
+
+    function loadUpdateStatus() {
+      rpc('version-update-get').then((res) => {
+        if (res && res.status) renderUpdateStatus(res.status);
+      }).catch(() => {
+        updateStatus.textContent = 'Update check unavailable.';
+        updateStatus.classList.add('st-update-unknown');
+      });
+    }
 
     fetch('/version.json').then((r) => (r.ok ? r.json() : null)).then((v) => {
       if (!v) { ver.textContent = 'Version unavailable'; return; }
@@ -886,6 +919,36 @@
       if (v.buildDate) parts.push(v.buildDate);
       ver.textContent = parts.join(' · ');
     }).catch(() => { ver.textContent = 'Version unavailable'; });
+
+    loadUpdateStatus();
+
+    body.appendChild(group('Updates'));
+    body.appendChild(toggleField('Check for upstream updates', cfg.versionUpdate, 'enabled',
+      'Compare this build against corveil/crow main on a schedule (at least every 6 hours).'));
+    body.appendChild(selectField('Check interval', cfg.versionUpdate, 'intervalHours', [
+      [6, '6 hours'], [12, '12 hours'], [24, '1 day'], [168, '1 week'],
+    ], { number: true, help: 'Minimum 6 hours to stay within GitHub unauthenticated rate limits.' }));
+
+    const checkRow = el('div', 'st-field');
+    const checkBtn = el('button', 'action-btn', 'Check now');
+    checkBtn.type = 'button';
+    checkBtn.onclick = async () => {
+      checkBtn.disabled = true;
+      updateStatus.textContent = 'Checking…';
+      try {
+        const res = await rpc('version-update-check', { force: true });
+        renderUpdateStatus(res && res.status);
+        if (window.refreshVersionUpdateBanner) window.refreshVersionUpdateBanner(res && res.status);
+      } catch (e) {
+        updateStatus.textContent = 'Check failed: ' + (e.message || e);
+        updateStatus.className = 'st-about-update st-update-unknown';
+      } finally {
+        checkBtn.disabled = false;
+      }
+    };
+    checkRow.appendChild(el('div', 'st-label', 'Upstream status'));
+    checkRow.appendChild(checkBtn);
+    body.appendChild(checkRow);
 
     // Maintenance actions — the desktop app's old Restart/Reload menu items,
     // now reachable from any browser (CROW-593).

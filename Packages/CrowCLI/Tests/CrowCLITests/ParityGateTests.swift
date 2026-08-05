@@ -174,6 +174,7 @@ struct ParityGateTests {
             terminal: TerminalSettings(),
             autoRespond: AutoRespondSettings(),
             cleanup: CleanupConfig(),
+            versionUpdate: VersionUpdateConfig(),
             jobs: [
                 JobConfig(
                     name: "probe",

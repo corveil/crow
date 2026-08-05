@@ -386,6 +386,17 @@ public enum CrowDaemon {
         }
         if let jobScheduler { startJobPoll(scheduler: jobScheduler) }
 
+        // Upstream version check (CROW-938): compare the stamped build SHA against
+        // corveil/crow main. Runs on a long interval and caches the result in
+        // memory — failures are silent and never block startup.
+        let buildInfo = BuildInfoLoader.load(webDir: options.webDir)
+            ?? BuildInfo(version: "?", gitSha: "dev", buildDate: "")
+        let versionUpdateService = await MainActor.run {
+            VersionUpdateService(buildInfo: buildInfo, devRoot: options.devRoot)
+        }
+        startVersionUpdatePoll(
+            service: versionUpdateService, devRoot: options.devRoot, eventHub: eventHub)
+
         // Delegate any method the daemon's curated router doesn't explicitly own
         // to the app's FULL engine router (hook-event, send, link/ticket ops,
         // resync-jira, get-session, list-worktrees, …). This makes a "missing
@@ -416,7 +427,8 @@ public enum CrowDaemon {
             appState: appState, store: store, git: git, devRoot: options.devRoot,
             cockpit: cockpit, tracker: tracker, allowList: allowList,
             sessionService: sessionService, autoRespond: autoRespond, jobScheduler: jobScheduler,
-            rebuildScorecard: rebuildScorecard, fallback: engineFallback)
+            rebuildScorecard: rebuildScorecard, versionUpdateService: versionUpdateService,
+            fallback: engineFallback)
 
         // Unix socket — lets the existing `crow` CLI talk to the daemon. By
         // default this IS the app's well-known `crow.sock` (the daemon owns it in

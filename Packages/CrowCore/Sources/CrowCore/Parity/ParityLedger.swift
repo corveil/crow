@@ -216,6 +216,9 @@ public enum ParityLedger {
         .write("cleanup-set", cli: "cleanup set"),
         .read("ui-get", cli: "ui get"),
         .write("ui-set", cli: "ui set"),
+        .read("version-update-get", cli: "version get"),
+        .write("version-update-set", cli: "version set"),
+        .write("version-update-check", cli: "version check"),
         .read("notifications-get", cli: "notifications get"),
         .write("notifications-set", cli: "notifications set"),
         .read(
@@ -332,6 +335,9 @@ public enum ParityLedger {
 
         .field("cleanup.enabled", read: "cleanup get", write: "cleanup set"),
         .field("cleanup.retentionHours", read: "cleanup get", write: "cleanup set"),
+
+        .field("versionUpdate.enabled", read: "version get", write: "version set"),
+        .field("versionUpdate.intervalHours", read: "version get", write: "version set"),
 
         .field("sidebar.hideSessionDetails", read: "ui get", write: "ui set"),
 

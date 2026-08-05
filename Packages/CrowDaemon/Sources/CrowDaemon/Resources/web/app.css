@@ -32,6 +32,30 @@ html, body {
   overflow: hidden;
 }
 
+.update-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 14px;
+  background: rgba(221, 196, 130, 0.12);
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--gold);
+  font-size: 13px;
+}
+.update-banner-text { flex: 1 1 auto; }
+.update-banner-dismiss {
+  flex: 0 0 auto;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+.update-banner-dismiss:hover { color: var(--text-primary); }
+
 #app {
   display: grid;
   grid-template-columns: 350px 1fr;

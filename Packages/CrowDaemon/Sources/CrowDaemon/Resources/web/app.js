@@ -214,8 +214,53 @@ function onServerChanged() {
     refreshBoard('tickets');
     refreshBoard('reviews');
     if (selectedId) refreshArtifacts(selectedId);
+    refreshVersionUpdateBanner();
   }, 50);
 }
+
+const VERSION_BANNER_DISMISS_KEY = 'crow.updateBannerDismissedSha';
+
+function renderVersionUpdateBanner(status) {
+  const banner = document.getElementById('update-banner');
+  if (!banner) return;
+  const text = banner.querySelector('.update-banner-text');
+  const dismiss = banner.querySelector('.update-banner-dismiss');
+  if (!text || !dismiss) return;
+
+  if (!status || status.state !== 'behind') {
+    banner.hidden = true;
+    return;
+  }
+  const remoteSha = status.remote_sha || '';
+  if (remoteSha && localStorage.getItem(VERSION_BANNER_DISMISS_KEY) === remoteSha) {
+    banner.hidden = true;
+    return;
+  }
+  const n = status.behind_by || 0;
+  text.textContent = 'A newer Crow build is available — '
+    + n + ' commit' + (n === 1 ? '' : 's') + ' behind origin/main.'
+    + (status.update_command ? (' Update: ' + status.update_command) : '');
+  banner.hidden = false;
+  dismiss.onclick = () => {
+    if (remoteSha) localStorage.setItem(VERSION_BANNER_DISMISS_KEY, remoteSha);
+    banner.hidden = true;
+  };
+}
+
+async function refreshVersionUpdateBanner(cachedStatus) {
+  try {
+    if (cachedStatus) {
+      renderVersionUpdateBanner(cachedStatus);
+      return;
+    }
+    const res = await rpc('version-update-get');
+    renderVersionUpdateBanner(res && res.status);
+  } catch (_) {
+    const banner = document.getElementById('update-banner');
+    if (banner) banner.hidden = true;
+  }
+}
+window.refreshVersionUpdateBanner = refreshVersionUpdateBanner;
 
 // Sidebar-affecting slice of AppConfig (CROW-581). `set-config` doesn't push a
 // `changed`, so we load this on boot and re-load it when the Settings modal
@@ -5592,6 +5637,7 @@ if (document.readyState === 'loading') {
 refreshSessions();
 refreshLive();
 loadUIConfig();
+refreshVersionUpdateBanner();
 // Fallback polls — the `changed` push (onServerChanged) drives the common case,
 // so these are relaxed. refreshLive stays brisk: runtime PR/RC state isn't
 // store-backed and so isn't covered by a nudge (CROW-581, M-D).
