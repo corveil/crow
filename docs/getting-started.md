@@ -161,7 +161,7 @@ export PATH="$HOME/.local/bin:$PATH"
 | `BINDIR`  | `~/.local/bin`   | `make install BINDIR=/usr/local/bin`     |
 | `CONFIG`  | `debug`          | `make install CONFIG=release`            |
 
-`CONFIG` selects which build directory the symlinks point at — `.build/debug/` (from `make build`) or `.build/release/` (from `make build CONFIG=release`). If the chosen binaries don't exist yet, `make install` errors and tells you to build first.
+`CONFIG` selects which build directory the symlinks point at — `.build/debug/` (from `make daemon`) or `.build/release/` (from `make daemon CONFIG=release`). If the chosen binaries don't exist yet, `make install` errors and tells you to build first.
 
 ### Rebuilds and re-pointing
 
@@ -169,7 +169,7 @@ Because `install` creates **symlinks** (not copies), `swift build` overwrites th
 
 Re-run `make install` only when:
 
-- You switch debug ↔ release: `make build CONFIG=release && make install CONFIG=release`.
+- You switch debug ↔ release: `make daemon CONFIG=release && make install CONFIG=release`.
 - You ran `make clean`, which deletes `.build/` and leaves the symlinks dangling until the next build.
 
 Remove the symlinks at any time:
