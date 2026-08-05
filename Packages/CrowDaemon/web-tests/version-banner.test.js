@@ -9,6 +9,8 @@ const VERSION_BANNER_DISMISS_KEY = 'crow.updateBannerDismissedSha';
 const epilogue = `
 ;globalThis.__t = {
   render(status) { renderVersionUpdateBanner(status); },
+  refresh() { return refreshVersionUpdateBanner(); },
+  setRpc(fn) { rpc = fn; },
   visible() {
     const b = document.getElementById('update-banner');
     return b && window.getComputedStyle(b).display !== 'none';
@@ -20,9 +22,13 @@ const epilogue = `
 function makeStorage(initial = {}) {
   const data = { ...initial };
   let setItemThrows = false;
+  let getItemThrows = false;
   return {
     storage: {
-      getItem(k) { return Object.prototype.hasOwnProperty.call(data, k) ? data[k] : null; },
+      getItem(k) {
+        if (getItemThrows) throw new DOMException('SecurityError');
+        return Object.prototype.hasOwnProperty.call(data, k) ? data[k] : null;
+      },
       setItem(k, v) {
         if (setItemThrows) throw new DOMException('QuotaExceededError');
         data[k] = String(v);
@@ -33,6 +39,7 @@ function makeStorage(initial = {}) {
       key() { return null; },
     },
     setSetItemThrows(v) { setItemThrows = v; },
+    setGetItemThrows(v) { getItemThrows = v; },
     get(k) { return data[k]; },
   };
 }
@@ -81,55 +88,100 @@ const check = (name, cond) => {
   else { fail++; console.log('  ✗ ' + name); }
 };
 
-console.log('[hidden] hides via computed style on first paint:');
-{
-  const { T } = load(makeStorage());
-  check('banner starts hidden', !T.visible());
-}
+(async () => {
+  console.log('[hidden] hides via computed style on first paint:');
+  {
+    const { T } = load(makeStorage());
+    check('banner starts hidden', !T.visible());
+  }
 
-console.log('\nbehind → shown, up_to_date → hidden:');
-{
-  const { T } = load(makeStorage());
-  T.render({ state: 'behind', behind_by: 3, remote_sha: 'aaa' });
-  check('shown when behind', T.visible());
-  T.render({ state: 'up_to_date' });
-  check('hidden again', !T.visible());
-}
+  console.log('\nbehind → shown, up_to_date → hidden:');
+  {
+    const { T } = load(makeStorage());
+    T.render({ state: 'behind', behind_by: 3, remote_sha: 'aaa' });
+    check('shown when behind', T.visible());
+    T.render({ state: 'up_to_date' });
+    check('hidden again', !T.visible());
+  }
 
-console.log('\ndismiss survives a re-render for the same sha:');
-{
-  const { T } = load(makeStorage());
-  T.render({ state: 'behind', behind_by: 1, remote_sha: 'aaa' });
-  check('shown for aaa', T.visible());
-  T.dismiss();
-  check('dismiss hid it', !T.visible());
-  T.render({ state: 'behind', behind_by: 1, remote_sha: 'aaa' });
-  check('stays hidden on re-render', !T.visible());
-}
+  console.log('\ndismiss survives a re-render for the same sha:');
+  {
+    const { T } = load(makeStorage());
+    T.render({ state: 'behind', behind_by: 1, remote_sha: 'aaa' });
+    check('shown for aaa', T.visible());
+    T.dismiss();
+    check('dismiss hid it', !T.visible());
+    T.render({ state: 'behind', behind_by: 1, remote_sha: 'aaa' });
+    check('stays hidden on re-render', !T.visible());
+  }
 
-console.log('\na new sha re-shows after dismiss:');
-{
-  const { T } = load(makeStorage());
-  T.render({ state: 'behind', behind_by: 1, remote_sha: 'aaa' });
-  T.dismiss();
-  T.render({ state: 'behind', behind_by: 2, remote_sha: 'bbb' });
-  check('bbb shown after aaa dismissed', T.visible());
-}
+  console.log('\na new sha re-shows after dismiss:');
+  {
+    const { T } = load(makeStorage());
+    T.render({ state: 'behind', behind_by: 1, remote_sha: 'aaa' });
+    T.dismiss();
+    T.render({ state: 'behind', behind_by: 2, remote_sha: 'bbb' });
+    check('bbb shown after aaa dismissed', T.visible());
+  }
 
-console.log('\nsetItem throws but in-memory dismiss sticks across poll:');
-{
-  const storage = makeStorage({ [VERSION_BANNER_DISMISS_KEY]: 'aaa' });
-  const { T } = load(storage);
-  check('stale aaa persisted', storage.get(VERSION_BANNER_DISMISS_KEY) === 'aaa');
-  T.render({ state: 'behind', behind_by: 1, remote_sha: 'bbb' });
-  check('banner shown for bbb', T.visible());
-  storage.setSetItemThrows(true);
-  T.dismiss();
-  check('dismiss hid it', !T.visible());
-  check('storage still holds stale aaa', storage.get(VERSION_BANNER_DISMISS_KEY) === 'aaa');
-  T.render({ state: 'behind', behind_by: 1, remote_sha: 'bbb' });
-  check('stays hidden on re-render', !T.visible());
-}
+  console.log('\nsetItem throws but in-memory dismiss sticks across poll:');
+  {
+    const storage = makeStorage({ [VERSION_BANNER_DISMISS_KEY]: 'aaa' });
+    const { T } = load(storage);
+    check('stale aaa persisted', storage.get(VERSION_BANNER_DISMISS_KEY) === 'aaa');
+    T.render({ state: 'behind', behind_by: 1, remote_sha: 'bbb' });
+    check('banner shown for bbb', T.visible());
+    storage.setSetItemThrows(true);
+    T.dismiss();
+    check('dismiss hid it', !T.visible());
+    check('storage still holds stale aaa', storage.get(VERSION_BANNER_DISMISS_KEY) === 'aaa');
+    T.render({ state: 'behind', behind_by: 1, remote_sha: 'bbb' });
+    check('stays hidden on re-render', !T.visible());
+  }
 
-console.log(`\n${pass} passed, ${fail} failed`);
-process.exit(fail ? 1 : 0);
+  console.log('\nno-sha dismiss is session-only until a sha arrives:');
+  {
+    const { T } = load(makeStorage());
+    T.render({ state: 'behind', behind_by: 2 });
+    check('shown without remote_sha', T.visible());
+    T.dismiss();
+    check('dismiss hid it', !T.visible());
+    T.render({ state: 'behind', behind_by: 2 });
+    check('stays hidden on re-render', !T.visible());
+    T.render({ state: 'behind', behind_by: 2, remote_sha: 'aaa' });
+    check('reshown when remote_sha arrives', T.visible());
+  }
+
+  console.log('\ngetItem throws but banner still renders when behind:');
+  {
+    const storage = makeStorage();
+    const { T } = load(storage);
+    storage.setGetItemThrows(true);
+    T.render({ state: 'behind', behind_by: 1, remote_sha: 'aaa' });
+    check('shown when getItem throws', T.visible());
+  }
+
+  console.log('\ngetItem throws but in-memory dismiss still sticks:');
+  {
+    const storage = makeStorage();
+    const { T } = load(storage);
+    T.render({ state: 'behind', behind_by: 1, remote_sha: 'aaa' });
+    T.dismiss();
+    storage.setGetItemThrows(true);
+    T.render({ state: 'behind', behind_by: 1, remote_sha: 'aaa' });
+    check('stays hidden on re-render', !T.visible());
+  }
+
+  console.log('\nrefreshVersionUpdateBanner hides banner on RPC failure:');
+  {
+    const { T } = load(makeStorage());
+    T.render({ state: 'behind', behind_by: 1, remote_sha: 'aaa' });
+    check('shown before RPC failure', T.visible());
+    T.setRpc(() => Promise.reject(new Error('rpc failed')));
+    await T.refresh();
+    check('hidden after RPC failure', !T.visible());
+  }
+
+  console.log(`\n${pass} passed, ${fail} failed`);
+  process.exit(fail ? 1 : 0);
+})().catch((e) => { console.error(e); process.exit(2); });
