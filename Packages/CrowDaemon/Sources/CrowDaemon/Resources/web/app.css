@@ -33,6 +33,7 @@ html, body {
 }
 
 body {
+  height: 100dvh; /* exclude mobile browser chrome so the last row is reachable */
   display: flex;
   flex-direction: column;
 }

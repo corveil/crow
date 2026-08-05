@@ -45,7 +45,13 @@ public struct VersionCheckCmd: ParsableCommand {
 /// Shared implementation for `crow version --check` and `crow version check`.
 enum VersionCheck {
     static func run() throws {
-        let result = try rpc("version-update-check", params: ["force": .bool(true)])
+        let result: [String: JSONValue]
+        do {
+            result = try rpc("version-update-check", params: ["force": .bool(true)])
+        } catch {
+            warn("Could not check for updates — is crowd running?")
+            throw ExitCode(2)
+        }
         guard let status = result["status"], status != .null else {
             warn("Could not check for updates — is crowd running?")
             throw ExitCode(2)

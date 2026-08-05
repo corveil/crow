@@ -2,6 +2,9 @@ import CrowCore
 import CrowEngine
 import CrowPersistence
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// Loads `version.json` from the daemon bundle or a live `--web-dir`.
 enum BuildInfoLoader {
@@ -37,6 +40,7 @@ final class VersionUpdateService {
 
     private let shell: ShellRunner
     private let updateCommand: String
+    private let transport: (@Sendable (URLRequest) async throws -> (Data, URLResponse))?
     private var buildInfo: BuildInfo
     private var lastCheckAt: Date?
     private var lastForcedCheckAt: Date?
@@ -44,9 +48,14 @@ final class VersionUpdateService {
 
     var cachedStatus: VersionUpdateStatus?
 
-    init(buildInfo: BuildInfo, shell: ShellRunner = ProcessShellRunner()) {
+    init(
+        buildInfo: BuildInfo,
+        shell: ShellRunner = ProcessShellRunner(),
+        transport: (@Sendable (URLRequest) async throws -> (Data, URLResponse))? = nil
+    ) {
         self.buildInfo = buildInfo
         self.shell = shell
+        self.transport = transport
         self.updateCommand = "git -C <clone> pull && make install"
     }
 
@@ -85,7 +94,8 @@ final class VersionUpdateService {
             let status = await VersionUpdateClient.check(
                 build: buildInfo,
                 updateCommand: updateCommand,
-                authToken: token
+                authToken: token,
+                transport: transport ?? { try await URLSession.shared.data(for: $0) }
             )
             cachedStatus = status
             lastCheckAt = Date()
