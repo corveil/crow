@@ -109,6 +109,16 @@ way `index.html` does, so `openSettings` / `setSettingsTab` are the shipped
 implementations rather than stubs — the tab-routing bug they guard (a re-entry
 that silently reset `dirty`) is invisible to a stub.
 
+## `version-banner.test.js` — version-update banner (#942)
+
+Drives `renderVersionUpdateBanner` / `refreshVersionUpdateBanner` against
+mock `localStorage` and `rpc`, with the real `app.css` injected so assertions
+use computed style (not just the `hidden` property). Coverage: `[hidden]`
+genuinely hides the flex banner, behind/up-to-date toggling, SHA dismiss
+surviving a poll, a new SHA re-showing, the `setItem`-throws path with stale
+storage, no-SHA session dismiss resetting when a SHA arrives, `getItem` throws
+not blocking render or in-memory dismiss, and RPC failure hiding the banner.
+
 ## Run
 
 ```sh

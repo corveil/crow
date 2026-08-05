@@ -220,6 +220,17 @@ function onServerChanged() {
 
 const VERSION_BANNER_DISMISS_KEY = 'crow.updateBannerDismissedSha';
 let versionBannerDismissedWithoutSha = false;
+let versionBannerDismissedSha = '';
+
+function isDismissedSha(sha) {
+  if (!sha) return false;
+  if (versionBannerDismissedSha === sha) return true;
+  try {
+    return localStorage.getItem(VERSION_BANNER_DISMISS_KEY) === sha;
+  } catch (_) {
+    return false;
+  }
+}
 
 function syncUpdateBannerLayout(banner) {
   if (!banner || banner.hidden) {
@@ -232,6 +243,13 @@ function syncUpdateBannerLayout(banner) {
     '--update-banner-height', banner.offsetHeight + 'px');
 }
 
+function hideVersionUpdateBanner(banner, text) {
+  if (!banner) return;
+  if (text) text.textContent = '';
+  banner.hidden = true;
+  syncUpdateBannerLayout(banner);
+}
+
 function renderVersionUpdateBanner(status) {
   const banner = document.getElementById('update-banner');
   if (!banner) return;
@@ -239,38 +257,43 @@ function renderVersionUpdateBanner(status) {
   const dismiss = banner.querySelector('.update-banner-dismiss');
   if (!text || !dismiss) return;
 
+  let dismissRemoteSha = '';
+  let dismissArmedWithoutSha = false;
+  dismiss.onclick = () => {
+    hideVersionUpdateBanner(banner, text);
+    if (dismissRemoteSha) {
+      versionBannerDismissedSha = dismissRemoteSha;
+      try {
+        localStorage.setItem(VERSION_BANNER_DISMISS_KEY, dismissRemoteSha);
+      } catch (_) {}
+    } else if (dismissArmedWithoutSha) {
+      versionBannerDismissedWithoutSha = true;
+    }
+  };
+
   if (!status || status.state !== 'behind') {
-    banner.hidden = true;
-    syncUpdateBannerLayout(banner);
+    hideVersionUpdateBanner(banner, text);
     return;
   }
   const remoteSha = status.remote_sha || '';
   if (remoteSha) versionBannerDismissedWithoutSha = false;
-  if (remoteSha && localStorage.getItem(VERSION_BANNER_DISMISS_KEY) === remoteSha) {
-    banner.hidden = true;
-    syncUpdateBannerLayout(banner);
+  if (remoteSha && isDismissedSha(remoteSha)) {
+    hideVersionUpdateBanner(banner, text);
     return;
   }
   if (!remoteSha && versionBannerDismissedWithoutSha) {
-    banner.hidden = true;
-    syncUpdateBannerLayout(banner);
+    hideVersionUpdateBanner(banner, text);
     return;
   }
   const n = status.behind_by || 0;
-  text.textContent = 'A newer Crow build is available — '
+  dismissRemoteSha = remoteSha;
+  dismissArmedWithoutSha = !remoteSha;
+  banner.hidden = false;
+  const msg = 'A newer Crow build is available — '
     + n + ' commit' + (n === 1 ? '' : 's') + ' behind origin/main.'
     + (status.update_command ? (' Update: ' + status.update_command) : '');
-  banner.hidden = false;
+  if (text.textContent !== msg) text.textContent = msg;
   syncUpdateBannerLayout(banner);
-  dismiss.onclick = () => {
-    if (remoteSha) {
-      localStorage.setItem(VERSION_BANNER_DISMISS_KEY, remoteSha);
-    } else {
-      versionBannerDismissedWithoutSha = true;
-    }
-    banner.hidden = true;
-    syncUpdateBannerLayout(banner);
-  };
 }
 
 async function refreshVersionUpdateBanner(cachedStatus) {
@@ -283,7 +306,9 @@ async function refreshVersionUpdateBanner(cachedStatus) {
     renderVersionUpdateBanner(res && res.status);
   } catch (_) {
     const banner = document.getElementById('update-banner');
-    if (banner) banner.hidden = true;
+    if (banner) {
+      hideVersionUpdateBanner(banner, banner.querySelector('.update-banner-text'));
+    }
   }
 }
 window.refreshVersionUpdateBanner = refreshVersionUpdateBanner;
