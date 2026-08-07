@@ -14,7 +14,9 @@ enum PTYProcessError: Error {
 /// Minimal pseudo-terminal wrapper for running a shell command and streaming I/O.
 public final class PTYProcess: @unchecked Sendable {
     #if canImport(Glibc)
-    /// `POSIX_SPAWN_SETSID` from glibc `<spawn.h>` — not surfaced by Swift's Glibc module.
+    /// `POSIX_SPAWN_SETSID` from glibc `<spawn.h>` (0x80). Swift 6.1's Glibc
+    /// module does not import this macro — using `POSIX_SPAWN_SETSID` by name
+    /// fails to compile on the Linux CI image (verified CROW-645).
     static let linuxPosixSpawnSetsid: Int16 = 0x80
     #endif
 
@@ -117,11 +119,16 @@ public final class PTYProcess: @unchecked Sendable {
         #if canImport(Darwin)
         posix_spawnattr_setflags(&attrs, Int16(POSIX_SPAWN_SETSID | POSIX_SPAWN_CLOEXEC_DEFAULT))
         #elseif canImport(Glibc)
-        // POSIX_SPAWN_SETSID — see glibc <spawn.h> (0x80). Linux has no
+        // POSIX_SPAWN_SETSID — see linuxPosixSpawnSetsid. Linux has no
         // CLOEXEC_DEFAULT; Foundation opens its own pipes O_CLOEXEC, but a
         // long-lived cockpit-attach child can still inherit unrelated descriptors
         // (CROW-874) — a narrower gap than Darwin, not none.
-        posix_spawnattr_setflags(&attrs, Int16(PTYProcess.linuxPosixSpawnSetsid))
+        guard posix_spawnattr_setflags(&attrs, Int16(PTYProcess.linuxPosixSpawnSetsid)) == 0 else {
+            close(master)
+            close(slave)
+            masterFD = -1
+            throw PTYProcessError.spawnFailed(errno)
+        }
         #endif
 
         var envStrings = ProcessInfo.processInfo.environment.map { "\($0.key)=\($0.value)" }

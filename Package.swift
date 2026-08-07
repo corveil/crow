@@ -5,6 +5,7 @@ import PackageDescription
 // in libswiftCore without exporting it at link time. The symbol resolves at runtime;
 // --allow-shlib-undefined is the gold-compatible spelling. Scoped to the root
 // executables only so path-dependent packages and their test bundles are unaffected.
+// TODO(CROW-645): remove when a Swift Linux toolchain exports the symbol (try 6.2+).
 let linuxObservationLinkerSettings: [LinkerSetting] = [
     .unsafeFlags(["-Xlinker", "--allow-shlib-undefined"], .when(platforms: [.linux])),
 ]

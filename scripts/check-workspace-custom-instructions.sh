@@ -75,15 +75,14 @@ done
 # Claude Code 2.1.x registers slash commands only when SKILL.md has YAML
 # frontmatter (name + description). Release scaffolds from Resources/*.template,
 # so both halves must carry the block or installed skills silently regress.
-for pair in \
-    "crow-workspace:crow-workspace" \
-    "crow-batch-workspace:crow-batch-workspace" \
-    "crow-review-pr:crow-review-pr" \
-    "crow-create-ticket:crow-create-ticket"; do
-    skill="${pair%%:*}"
-    name="${pair##*:}"
-    require_frontmatter "skills/${skill}/SKILL.md" "$name"
-    require_frontmatter "Resources/${skill}-SKILL.md.template" "$name"
+for skill in \
+    crow-workspace \
+    crow-batch-workspace \
+    crow-review-pr \
+    crow-create-ticket \
+    crow-show-image; do
+    require_frontmatter "skills/${skill}/SKILL.md" "$skill"
+    require_frontmatter "Resources/${skill}-SKILL.md.template" "$skill"
 done
 
 if [ "$fail" -ne 0 ]; then
