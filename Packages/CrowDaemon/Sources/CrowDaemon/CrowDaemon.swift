@@ -1161,7 +1161,7 @@ public enum CrowDaemon {
     /// (nothing listening) returns false, so normal startup still replaces it.
     private static func socketInUse(_ path: String) -> Bool {
         guard FileManager.default.fileExists(atPath: path) else { return false }
-        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        let fd = socket(AF_UNIX, crowSockStream, 0)
         guard fd >= 0 else { return false }
         defer { close(fd) }
         var addr = sockaddr_un()
