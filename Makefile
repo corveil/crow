@@ -7,10 +7,9 @@ BINDIR    ?= $(PREFIX)/bin
 CONFIG    ?= debug
 BUILD_OUT := .build/$(CONFIG)
 
-# Where `daemon-run` binds. Override on the command line, e.g.
-# `make daemon-run CROW_PORT=9000`.
-CROW_HOST   ?= 127.0.0.1
-CROW_PORT   ?= 8787
+# `daemon-run.sh` reads CROW_HTTP_PORT (default 8787) and CROW_SOCKET. The bind
+# address stays loopback-only — HOST is hardcoded in the script by design.
+CROW_HTTP_PORT ?= 8787
 CROW_SOCKET ?= $(HOME)/.local/share/crow/crow.sock
 
 # Platform switch. The native "Crow" desktop window (Tauri) builds on macOS
@@ -111,7 +110,7 @@ setup:
 # run`). Add --watch to also rebuild + restart on Swift or web-asset changes:
 # `bash scripts/daemon-run.sh --watch`. See scripts/daemon-run.sh.
 daemon-run:
-	bash scripts/daemon-run.sh
+	CROW_HTTP_PORT=$(CROW_HTTP_PORT) CROW_SOCKET=$(CROW_SOCKET) bash scripts/daemon-run.sh
 
 install:
 	@test -x "$(CURDIR)/$(BUILD_OUT)/crow" && test -x "$(CURDIR)/$(BUILD_OUT)/crowd" || \

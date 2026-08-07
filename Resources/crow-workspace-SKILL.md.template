@@ -1,3 +1,13 @@
+---
+name: crow-workspace
+description: >-
+  Orchestrate a Crow work session — set up a git worktree, create a crow
+  session with auto-launched Claude Code, and capture ticket metadata. Supports
+  multiple organizations/workspaces with different Git providers. Use when the
+  user invokes /crow-workspace or asks to "set up a crow workspace" or "start
+  working on" a feature in Crow.
+---
+
 # Crow Workspace Setup Skill
 
 ## Purpose

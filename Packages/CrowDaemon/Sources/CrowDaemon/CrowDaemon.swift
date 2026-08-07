@@ -158,10 +158,20 @@ public enum CrowDaemon {
 
         // Telemetry (#772). The OTLP receiver uses Network.framework and is
         // macOS-only; on Linux crowd runs without per-session analytics.
+        // Built BEFORE SessionService because the service captures
+        // `telemetryPort` (the `OTEL_*` env prefix Claude Code needs) and the
+        // analytics providers at init. Enable/port are read once here — changing
+        // them needs a daemon restart.
         #if canImport(Network)
         let telemetryConfig = ConfigStore.loadConfig(devRoot: options.devRoot)?.telemetry
             ?? TelemetryConfig()
+        // The `onDataReceived` callback resolves through a holder the init fills
+        // in afterwards (the app used `self.telemetryService` for the same reason).
         let telemetryHolder = TelemetryHolder()
+        // Create AND start before deriving `telemetryPort`: `start()` is where the
+        // database opens and the listener comes up. Starting later would leave a
+        // window where the port is already baked into every agent launch (exporting
+        // at a dead endpoint) and the holder answers queries against an unopened DB.
         var startedTelemetry: TelemetryService?
         if telemetryConfig.enabled {
             do {
@@ -177,6 +187,8 @@ public enum CrowDaemon {
                                 lastReceivedAt: Date())
                         }
                     })
+                // Publish before `start()` so the first datapoint can't arrive to an
+                // empty holder; cleared again below if the start throws.
                 await MainActor.run { telemetryHolder.service = service }
                 try await service.start()
                 startedTelemetry = service
@@ -187,6 +199,8 @@ public enum CrowDaemon {
             }
         }
         let telemetry = startedTelemetry
+        // nil when telemetry is off OR the receiver never came up: without a live
+        // receiver the `OTEL_*` exporter vars would point at a closed port.
         let telemetryPort: UInt16? = telemetry.map(\.port)
         #else
         let telemetryPort: UInt16? = nil
@@ -217,32 +231,35 @@ public enum CrowDaemon {
             // capturing `telemetry` directly, so they stay correct (and nil-safe)
             // whether or not the receiver was created (#772).
             #if canImport(Network)
-            let service = SessionService(
-                store: store, appState: appState,
-                telemetryPort: telemetryPort,
-                providerManager: providerManager,
-                analyticsProvider: { id in
-                    await MainActor.run { telemetryHolder.service }?.analytics(for: id)
-                },
-                telemetrySessionIDsProvider: {
-                    await MainActor.run { telemetryHolder.service }?.sessionIDs() ?? []
-                },
-                managerUsageProvider: { start, end in
-                    await MainActor.run { telemetryHolder.service }?
-                        .analytics(for: AppState.managerSessionID, receivedBetween: start, end: end)
-                        ?? SessionAnalytics()
-                },
-                telemetryDeleteProvider: { id in
-                    await MainActor.run { telemetryHolder.service }?.deleteSessionData(for: id)
-                },
-                hostBridge: NoopHostBridge())
+            let analyticsProvider: @Sendable (UUID) async -> SessionAnalytics? = { id in
+                await MainActor.run { telemetryHolder.service }?.analytics(for: id)
+            }
+            let telemetrySessionIDsProvider: @Sendable () async -> [UUID] = {
+                await MainActor.run { telemetryHolder.service }?.sessionIDs() ?? []
+            }
+            let managerUsageProvider: @Sendable (Date, Date) async -> SessionAnalytics = { start, end in
+                await MainActor.run { telemetryHolder.service }?
+                    .analytics(for: AppState.managerSessionID, receivedBetween: start, end: end)
+                    ?? SessionAnalytics()
+            }
+            let telemetryDeleteProvider: @Sendable (UUID) async -> Void = { id in
+                await MainActor.run { telemetryHolder.service }?.deleteSessionData(for: id)
+            }
             #else
+            let analyticsProvider: (@Sendable (UUID) async -> SessionAnalytics?)? = nil
+            let telemetrySessionIDsProvider: (@Sendable () async -> [UUID])? = nil
+            let managerUsageProvider: (@Sendable (Date, Date) async -> SessionAnalytics)? = nil
+            let telemetryDeleteProvider: (@Sendable (UUID) async -> Void)? = nil
+            #endif
             let service = SessionService(
                 store: store, appState: appState,
                 telemetryPort: telemetryPort,
                 providerManager: providerManager,
+                analyticsProvider: analyticsProvider,
+                telemetrySessionIDsProvider: telemetrySessionIDsProvider,
+                managerUsageProvider: managerUsageProvider,
+                telemetryDeleteProvider: telemetryDeleteProvider,
                 hostBridge: NoopHostBridge())
-            #endif
             service.wireTerminalReadiness()
             let coordinator = AutoRespondCoordinator(
                 appState: appState, providerManager: providerManager,

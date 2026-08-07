@@ -43,6 +43,42 @@ struct SmartDetectTests {
         #expect(SmartDetect.detectURL(in: "just text", allowedSchemes: schemes) == nil)
     }
 
+    // MARK: - detectURLFallback (Linux path; exercised on all platforms)
+
+    @Test func fallbackPreservesBalancedParensInPath() {
+        let url = SmartDetect.detectURLFallback(
+            in: "https://en.wikipedia.org/wiki/Crow_(disambiguation)",
+            allowedSchemes: schemes)
+        #expect(url?.absoluteString == "https://en.wikipedia.org/wiki/Crow_(disambiguation)")
+    }
+
+    @Test func fallbackPreservesQueryParens() {
+        let url = SmartDetect.detectURLFallback(
+            in: "https://example.com/a?b=1&c=(2)",
+            allowedSchemes: schemes)
+        #expect(url?.absoluteString == "https://example.com/a?b=1&c=(2)")
+    }
+
+    @Test func fallbackDetectsMailto() {
+        let url = SmartDetect.detectURLFallback(
+            in: "mailto:dev@example.com",
+            allowedSchemes: schemes)
+        #expect(url?.absoluteString == "mailto:dev@example.com")
+    }
+
+    @Test func fallbackStripsWrappingParen() {
+        let url = SmartDetect.detectURLFallback(
+            in: "(https://example.com)",
+            allowedSchemes: schemes)
+        #expect(url?.host == "example.com")
+    }
+
+    @Test func fallbackDoesNotMatchBareHost() {
+        #expect(SmartDetect.detectURLFallback(
+            in: "visit github.com/corveil/crow",
+            allowedSchemes: schemes) == nil)
+    }
+
     // MARK: - detectFileLine
 
     @Test func detectsBasicPathLine() throws {

@@ -8,10 +8,10 @@ import Foundation
 /// window server.
 public enum SmartDetect {
     /// Returns the first URL in `text` whose scheme is in `allowedSchemes`.
-    /// Uses `NSDataDetector` so it accepts the same bare-URL shapes the
-    /// system's data detectors do (paren-balanced, trailing-punctuation
-    /// stripped, etc.). `text` is trimmed before scanning so a
-    /// single-line selection with leading/trailing whitespace still hits.
+    /// On Darwin, uses `NSDataDetector` (paren-balanced, trailing punctuation
+    /// stripped, scheme-less hosts like `github.com/x`). On Linux, uses
+    /// `detectURLFallback`, which matches explicit `scheme://` and `mailto:`
+    /// URLs only. `text` is trimmed before scanning.
     public static func detectURL(
         in text: String,
         allowedSchemes: Set<String>
@@ -22,7 +22,7 @@ public enum SmartDetect {
         let detector = try? NSDataDetector(
             types: NSTextCheckingResult.CheckingType.link.rawValue
         )
-        guard let detector else { return nil }
+        guard let detector else { return detectURLFallback(in: trimmed, allowedSchemes: allowedSchemes) }
         let range = NSRange(trimmed.startIndex..<trimmed.endIndex, in: trimmed)
         for match in detector.matches(in: trimmed, range: range) {
             guard let url = match.url,
@@ -32,24 +32,64 @@ public enum SmartDetect {
         }
         return nil
         #else
-        // Linux: swift-corelibs-Foundation ships no NSDataDetector, so fall back
-        // to a scheme-anchored scan. Match `scheme://…` up to whitespace, then
-        // strip the trailing punctuation the system detector also drops so a URL
-        // at the end of a sentence still parses.
-        let pattern = #"[A-Za-z][A-Za-z0-9+.\-]*://[^\s]+"#
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
-        let nsrange = NSRange(trimmed.startIndex..<trimmed.endIndex, in: trimmed)
-        for match in regex.matches(in: trimmed, range: nsrange) {
-            guard let urlRange = Range(match.range, in: trimmed) else { continue }
-            var raw = String(trimmed[urlRange])
-            while let last = raw.last, ",.;:!?)\"']".contains(last) { raw.removeLast() }
+        return detectURLFallback(in: trimmed, allowedSchemes: allowedSchemes)
+        #endif
+    }
+
+    /// Regex fallback for platforms without `NSDataDetector`. Exercised on every
+    /// platform via `SmartDetectTests` so Linux behavior is gated in CI.
+    static func detectURLFallback(in text: String, allowedSchemes: Set<String>) -> URL? {
+        guard !text.isEmpty else { return nil }
+        let nsrange = NSRange(text.startIndex..<text.endIndex, in: text)
+
+        if allowedSchemes.contains("mailto"),
+           let regex = try? NSRegularExpression(pattern: #"mailto:[^\s<>"']+"#) {
+            for match in regex.matches(in: text, range: nsrange) {
+                guard let urlRange = Range(match.range, in: text) else { continue }
+                let raw = trimTrailingURLPunctuation(String(text[urlRange]))
+                if let url = URL(string: raw), url.scheme?.lowercased() == "mailto" {
+                    return url
+                }
+            }
+        }
+
+        let schemePattern = allowedSchemes
+            .subtracting(["mailto"])
+            .sorted()
+            .joined(separator: "|")
+        guard !schemePattern.isEmpty,
+              let regex = try? NSRegularExpression(pattern: #"(?:\#(schemePattern))://[^\s<>"']+"#)
+        else { return nil }
+
+        for match in regex.matches(in: text, range: nsrange) {
+            guard let urlRange = Range(match.range, in: text) else { continue }
+            let raw = trimTrailingURLPunctuation(String(text[urlRange]))
             guard let url = URL(string: raw),
                   let scheme = url.scheme?.lowercased(),
                   allowedSchemes.contains(scheme) else { continue }
             return url
         }
         return nil
-        #endif
+    }
+
+    /// Strip trailing sentence punctuation from a URL candidate. A trailing `)`
+    /// is removed only when it closes punctuation *around* the URL, not when it
+    /// is part of a balanced pair inside the path (e.g. Wikipedia disambiguation).
+    static func trimTrailingURLPunctuation(_ raw: String) -> String {
+        var s = raw
+        while let last = s.last {
+            switch last {
+            case ".", ",", ";", ":", "!", "?", "\"", "'", "]":
+                s.removeLast()
+            case ")":
+                let opens = s.filter { $0 == "(" }.count
+                let closes = s.filter { $0 == ")" }.count
+                if closes > opens { s.removeLast() } else { return s }
+            default:
+                return s
+            }
+        }
+        return s
     }
 
     /// Match `path/to/file.ext:LINE` (optional `:COLUMN`) in a trimmed

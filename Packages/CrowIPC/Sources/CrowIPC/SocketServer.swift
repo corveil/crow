@@ -169,10 +169,10 @@ public final class SocketServer: @unchecked Sendable {
         let capturedRouter = router
         let capturedRequest = request
 
-        // Detached so the handler runs on the cooperative pool without inheriting
-        // this GCD thread's executor. A plain `Task {}` + `semaphore.wait()` on
-        // Linux can deadlock: the blocked GCD thread starves the pool thread the
-        // child task needs (CROW-645).
+        // Task.detached enqueues the handler on the cooperative pool at
+        // .userInitiated without inheriting the accept thread's task-local state.
+        // On Linux, scheduling from a GCD thread blocked on semaphore.wait() via a
+        // plain `Task {}` can stall when the pool is contended (CROW-645).
         Task.detached(priority: .userInitiated) {
             box.value = await capturedRouter.handle(request: capturedRequest)
             semaphore.signal()

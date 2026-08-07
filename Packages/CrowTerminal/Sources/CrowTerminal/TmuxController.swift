@@ -113,9 +113,11 @@ public struct TmuxController: Sendable {
         return outString
     }
 
-    /// Like `run`, but discards stdout/stderr. Used for `new-session -d` when
-    /// tmux may daemonize a new server: on Linux the daemon inherits our pipe
-    /// fds and `readDataToEndOfFile()` never sees EOF (CROW-645).
+    /// Discards stdout; captures stderr in a temp file so `cliFailed` still
+    /// carries tmux's message. Used for `new-session -d` when a pipe reader
+    /// would stay blocked for the tmux server's lifetime (CROW-645) — a file
+    /// fd does not wait on EOF. Thrown errors have empty `stdout`; `stderr` is
+    /// populated from the temp capture on non-zero exit.
     private func runDiscardingOutput(
         _ args: [String],
         timeout: TimeInterval = TmuxController.defaultTimeout
@@ -127,17 +129,26 @@ public struct TmuxController: Sendable {
             throw TmuxError.cliFailed(args: args, status: -1, stdout: "", stderr: "cannot open /dev/null")
         }
         p.standardOutput = nullOut
-        p.standardError = nullOut
+        let errURL = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("crow-tmux-\(UUID().uuidString).err")
+        FileManager.default.createFile(atPath: errURL.path, contents: nil)
+        guard let errFH = FileHandle(forWritingAtPath: errURL.path) else {
+            throw TmuxError.cliFailed(args: args, status: -1, stdout: "", stderr: "cannot create stderr capture file")
+        }
+        p.standardError = errFH
+        defer { try? FileManager.default.removeItem(at: errURL) }
         let done = makeTerminationSignal(for: p)
         try p.run()
         let watchdog = ProcessWatchdog(p, timeout: timeout)
         done.wait()
         watchdog.cancel()
+        try? errFH.close()
+        let errString = (try? String(contentsOf: errURL, encoding: .utf8)) ?? ""
         if watchdog.didFire {
             throw TmuxError.timedOut(args: args, after: timeout)
         }
         guard p.terminationStatus == 0 else {
-            throw TmuxError.cliFailed(args: args, status: p.terminationStatus, stdout: "", stderr: "")
+            throw TmuxError.cliFailed(args: args, status: p.terminationStatus, stdout: "", stderr: errString)
         }
     }
 

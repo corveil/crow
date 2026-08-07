@@ -13,6 +13,11 @@ enum PTYProcessError: Error {
 
 /// Minimal pseudo-terminal wrapper for running a shell command and streaming I/O.
 public final class PTYProcess: @unchecked Sendable {
+    #if canImport(Glibc)
+    /// `POSIX_SPAWN_SETSID` from glibc `<spawn.h>` — not surfaced by Swift's Glibc module.
+    static let linuxPosixSpawnSetsid: Int16 = 0x80
+    #endif
+
     private var masterFD: Int32 = -1
     private var childPID: pid_t = -1
     private var readSource: DispatchSourceRead?
@@ -112,9 +117,11 @@ public final class PTYProcess: @unchecked Sendable {
         #if canImport(Darwin)
         posix_spawnattr_setflags(&attrs, Int16(POSIX_SPAWN_SETSID | POSIX_SPAWN_CLOEXEC_DEFAULT))
         #elseif canImport(Glibc)
-        // POSIX_SPAWN_SETSID is a GNU extension the Swift Glibc module doesn't
-        // surface, so spell its value (0x80) out on Linux.
-        posix_spawnattr_setflags(&attrs, Int16(0x80))
+        // POSIX_SPAWN_SETSID — see glibc <spawn.h> (0x80). Linux has no
+        // CLOEXEC_DEFAULT; Foundation opens its own pipes O_CLOEXEC, but a
+        // long-lived cockpit-attach child can still inherit unrelated descriptors
+        // (CROW-874) — a narrower gap than Darwin, not none.
+        posix_spawnattr_setflags(&attrs, Int16(PTYProcess.linuxPosixSpawnSetsid))
         #endif
 
         var envStrings = ProcessInfo.processInfo.environment.map { "\($0.key)=\($0.value)" }

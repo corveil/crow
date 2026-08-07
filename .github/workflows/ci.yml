@@ -52,7 +52,7 @@ jobs:
 
       # Explicit allow-list of packages that compile on Linux. A new package
       # must be added here consciously; do NOT loop over Packages/*/ — that
-      # would pull in the macOS-only CrowTerminal / CrowTelemetry.
+      # would pull in CrowTelemetry (Network.framework) or the root AppKit GUI.
       - name: Build & test Linux packages
         run: |
           LINUX_PACKAGES=(CrowCore CrowIPC CrowClaude CrowCodex CrowCursor \
@@ -73,12 +73,13 @@ jobs:
             swift test --no-parallel --enable-code-coverage --package-path "Packages/$pkg"
           done
 
-      # CrowTerminal + the root `crowd`/`crow` binaries (CROW-645). Build-only —
-      # CrowTerminal's tmux integration tests need a real tmux server and run on
-      # macOS in release.yml; here we just gate that the Linux port compiles.
+      # CrowTerminal + the root `crowd`/`crow` binaries (CROW-645). Tmux
+      # integration tests need a real server and run on macOS in release.yml;
+      # SmartDetect is pure and runs here on Linux.
       - name: Build crowd daemon + CLI on Linux (CROW-645)
         run: |
           swift build --package-path Packages/CrowTerminal
+          swift test --no-parallel --package-path Packages/CrowTerminal --filter SmartDetect
           swift build --product crowd
           swift build --product crow
 
