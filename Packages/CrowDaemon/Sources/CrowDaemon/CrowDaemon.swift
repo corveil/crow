@@ -17,7 +17,9 @@ import CrowGit
 import CrowTerminal
 import CrowIPC
 import CrowPersistence
+#if canImport(Network)
 import CrowTelemetry
+#endif
 import Foundation
 import Hummingbird
 import HummingbirdWebSocket
@@ -27,11 +29,13 @@ import NIOCore
 /// callback and `SessionService`'s analytics providers — all built before (or
 /// alongside) the service itself — can reach it once it exists. MainActor-isolated
 /// because that is where every reader already runs, which also makes it `Sendable`
-/// without a lock (#772).
+/// without a lock (#772). macOS-only — CrowTelemetry uses Network.framework.
+#if canImport(Network)
 @MainActor
 final class TelemetryHolder {
     var service: TelemetryService?
 }
+#endif
 
 /// The headless `crowd` daemon: serves Crow's JSON-RPC domain logic and the
 /// browser terminal over HTTP + WebSocket, reusing `CrowCore`/`CrowIPC`/
@@ -152,48 +156,27 @@ public enum CrowDaemon {
             log("WARNING: tmux not found; /terminal + terminal RPC disabled (set CROW_TMUX to override)")
         }
 
-        // Telemetry (#772). The OTLP receiver that used to run inside the retired
-        // macOS app never moved to the daemon, so `hookState.analytics` was always
-        // empty and the web's per-session analytics strip — which treats absence as
-        // its empty state — never rendered. Built BEFORE SessionService because the
-        // service captures `telemetryPort` (the `OTEL_*` env prefix Claude Code
-        // needs to emit anything at all) and the analytics providers at init.
-        // Enable/port are read once here: changing them needs a daemon restart,
-        // exactly as it did natively.
+        // Telemetry (#772). The OTLP receiver uses Network.framework and is
+        // macOS-only; on Linux crowd runs without per-session analytics.
+        #if canImport(Network)
         let telemetryConfig = ConfigStore.loadConfig(devRoot: options.devRoot)?.telemetry
             ?? TelemetryConfig()
-        // The `onDataReceived` callback has to reach the service it is being passed
-        // to, so it resolves through a holder the init fills in afterwards (the app
-        // used `self.telemetryService` for the same reason).
         let telemetryHolder = TelemetryHolder()
-        // Create AND start before deriving `telemetryPort`: `start()` is where the
-        // database opens and the listener comes up, so a service that merely
-        // constructed is not yet usable. Starting later would leave a window where
-        // the port is already baked into every agent launch (exporting at a dead
-        // endpoint) and the holder already answers queries (against an unopened DB)
-        // (review). `start()` needs nothing from SessionService — only the backfill
-        // below does — so it belongs here.
         var startedTelemetry: TelemetryService?
         if telemetryConfig.enabled {
             do {
                 let service = try TelemetryService(
                     port: telemetryConfig.port,
                     onDataReceived: { sessionID in
-                        // Already @MainActor — the analytics write is serialized
-                        // with every other AppState mutation.
                         Task { @MainActor in
                             guard let service = telemetryHolder.service else { return }
                             let analytics = await service.analytics(for: sessionID)
                             appState.hookState(for: sessionID).analytics = analytics
-                            // Keep the capture-status line live without re-querying
-                            // the DB; the exact session count refreshes at startup.
                             appState.telemetryCaptureStatus = TelemetryCaptureStatus(
                                 sessionCount: max(appState.telemetryCaptureStatus?.sessionCount ?? 0, 1),
                                 lastReceivedAt: Date())
                         }
                     })
-                // Publish before `start()` so the first datapoint can't arrive to an
-                // empty holder; cleared again below if the start throws.
                 await MainActor.run { telemetryHolder.service = service }
                 try await service.start()
                 startedTelemetry = service
@@ -204,9 +187,10 @@ public enum CrowDaemon {
             }
         }
         let telemetry = startedTelemetry
-        // nil when telemetry is off OR the receiver never came up: without a live
-        // receiver the `OTEL_*` exporter vars would point at a closed port.
         let telemetryPort: UInt16? = telemetry.map(\.port)
+        #else
+        let telemetryPort: UInt16? = nil
+        #endif
 
         // Host the real SessionService so the daemon can spawn Manager (and
         // later review/job) workspaces headlessly with the app down (ADR 0007;
@@ -232,6 +216,7 @@ public enum CrowDaemon {
             // The four telemetry closures resolve through the holder rather than
             // capturing `telemetry` directly, so they stay correct (and nil-safe)
             // whether or not the receiver was created (#772).
+            #if canImport(Network)
             let service = SessionService(
                 store: store, appState: appState,
                 telemetryPort: telemetryPort,
@@ -251,6 +236,13 @@ public enum CrowDaemon {
                     await MainActor.run { telemetryHolder.service }?.deleteSessionData(for: id)
                 },
                 hostBridge: NoopHostBridge())
+            #else
+            let service = SessionService(
+                store: store, appState: appState,
+                telemetryPort: telemetryPort,
+                providerManager: providerManager,
+                hostBridge: NoopHostBridge())
+            #endif
             service.wireTerminalReadiness()
             let coordinator = AutoRespondCoordinator(
                 appState: appState, providerManager: providerManager,
@@ -269,6 +261,7 @@ public enum CrowDaemon {
         // work, and `isRebuildingScorecard` can't clear mid-run — #781). Nil when
         // telemetry is off.
         let rebuildScorecard: (@MainActor @Sendable () async -> Void)?
+        #if canImport(Network)
         if let telemetry, let sessionService {
             let rebuilder = await MainActor.run {
                 ScorecardRebuilder {
@@ -298,6 +291,9 @@ public enum CrowDaemon {
             }
             startScorecardPoll(rebuild: rebuildScorecard)
         }
+        #else
+        rebuildScorecard = nil
+        #endif
 
         // Write-actions that mutate session state run locally on the daemon's
         // own SessionService / store — the sole authority (ADR 0007).
@@ -492,9 +488,11 @@ public enum CrowDaemon {
 
         log("HTTP/WS listening on http://\(options.host):\(options.httpPort) (terminal at /)")
         try await app.runService()
+        #if canImport(Network)
         // Close the OTLP listener and the SQLite handle before we exit or re-exec —
         // the re-exec'd image binds the same port and opens the same db file (#772).
         if let telemetry { await telemetry.stop() }
+        #endif
         // First-run setup (`run-setup`) asks us to re-exec so the freshly-written
         // devroot pointer is adopted by every subsystem that captured it at
         // startup (CROW-605). Hummingbird's runService() returns cleanly on

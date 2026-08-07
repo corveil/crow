@@ -56,7 +56,9 @@ let package = Package(
                 .product(name: "CrowOpenCode", package: "CrowOpenCode"),
                 .product(name: "CrowAntigravity", package: "CrowAntigravity"),
                 .product(name: "CrowGrok", package: "CrowGrok"),
-                .product(name: "CrowTelemetry", package: "CrowTelemetry"),
+                // OTLP receiver (Network.framework) — macOS-only; Linux crowd runs
+                // without per-session analytics collection (CROW-645).
+                .product(name: "CrowTelemetry", package: "CrowTelemetry", condition: .when(platforms: [.macOS])),
                 .product(name: "Hummingbird", package: "hummingbird"),
                 .product(name: "HummingbirdWebSocket", package: "hummingbird-websocket"),
                 .product(name: "Crypto", package: "swift-crypto"),

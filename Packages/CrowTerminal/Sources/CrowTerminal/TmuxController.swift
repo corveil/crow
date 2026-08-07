@@ -113,6 +113,34 @@ public struct TmuxController: Sendable {
         return outString
     }
 
+    /// Like `run`, but discards stdout/stderr. Used for `new-session -d` when
+    /// tmux may daemonize a new server: on Linux the daemon inherits our pipe
+    /// fds and `readDataToEndOfFile()` never sees EOF (CROW-645).
+    private func runDiscardingOutput(
+        _ args: [String],
+        timeout: TimeInterval = TmuxController.defaultTimeout
+    ) throws {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: tmuxBinary)
+        p.arguments = ["-S", socketPath] + args
+        guard let nullOut = FileHandle(forWritingAtPath: "/dev/null") else {
+            throw TmuxError.cliFailed(args: args, status: -1, stdout: "", stderr: "cannot open /dev/null")
+        }
+        p.standardOutput = nullOut
+        p.standardError = nullOut
+        let done = makeTerminationSignal(for: p)
+        try p.run()
+        let watchdog = ProcessWatchdog(p, timeout: timeout)
+        done.wait()
+        watchdog.cancel()
+        if watchdog.didFire {
+            throw TmuxError.timedOut(args: args, after: timeout)
+        }
+        guard p.terminationStatus == 0 else {
+            throw TmuxError.cliFailed(args: args, status: p.terminationStatus, stdout: "", stderr: "")
+        }
+    }
+
     // MARK: - Server / session lifecycle
 
     public func killServer() {
@@ -135,7 +163,7 @@ public struct TmuxController: Sendable {
         args.append(contentsOf: ["new-session", "-d", "-s", sessionName])
         for (k, v) in env { args.append(contentsOf: ["-e", "\(k)=\(v)"]) }
         if let command { args.append(contentsOf: ["--", command]) }
-        try run(args)
+        try runDiscardingOutput(args)
     }
 
     public func hasSession() -> Bool {

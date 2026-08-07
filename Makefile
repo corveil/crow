@@ -7,6 +7,30 @@ BINDIR    ?= $(PREFIX)/bin
 CONFIG    ?= debug
 BUILD_OUT := .build/$(CONFIG)
 
+# Where `daemon-run` binds. Override on the command line, e.g.
+# `make daemon-run CROW_PORT=9000`.
+CROW_HOST   ?= 127.0.0.1
+CROW_PORT   ?= 8787
+CROW_SOCKET ?= $(HOME)/.local/share/crow/crow.sock
+
+# Platform switch. The native "Crow" desktop window (Tauri) builds on macOS
+# only; on Linux the app IS the `crowd` daemon + its web UI (served on :8787),
+# so `build`/`run` skip the desktop shell there rather than pulling in the whole
+# GTK/WebKit dev stack a Tauri build needs.
+UNAME_S := $(shell uname -s)
+
+# On Linux, Swift is commonly installed via swiftly, whose bin dir is added to
+# PATH from ~/.profile — i.e. login shells only. A non-login `make` invocation
+# (a plain terminal sources ~/.bashrc, not ~/.profile) then can't find `swift`.
+# If it isn't already on PATH but the swiftly proxy is present, prepend it so
+# `make build`/`daemon`/`test`/`daemon-run` work from any shell. No-op on macOS,
+# where `swift` comes from the Xcode toolchain already on PATH.
+ifeq (,$(shell command -v swift 2>/dev/null))
+ifneq (,$(wildcard $(HOME)/.local/share/swiftly/bin/swift))
+export PATH := $(HOME)/.local/share/swiftly/bin:$(PATH)
+endif
+endif
+
 # Crow desktop app (the native "Crow" window over crowd, built with Tauri).
 DESKTOP_DIR := crow-desktop/src-tauri
 DESKTOP_BIN := $(DESKTOP_DIR)/target/$(CONFIG)/Crow
@@ -15,9 +39,14 @@ DESKTOP_BIN := $(DESKTOP_DIR)/target/$(CONFIG)/Crow
 # rustup arm64 paths ahead of $PATH (matches crow-desktop/README.md).
 CARGO_ENV := PATH="/opt/homebrew/bin:$(HOME)/.cargo/bin:$$PATH"
 
-# Default target: build everything — the Swift binaries (crow CLI + crowd
-# daemon) and the Crow desktop app.
+# Default target. macOS: build everything — the Swift binaries (crow CLI + crowd
+# daemon) plus the native Crow desktop app. Linux: just the Swift binaries — the
+# desktop shell is macOS-only, so serve the UI with `make run` + a browser.
+ifeq ($(UNAME_S),Darwin)
 build: daemon app
+else
+build: daemon
+endif
 
 # Swift only: crow (CLI) + crowd (daemon) → $(BUILD_OUT)/. The fast inner loop
 # when you're not touching the desktop shell.
@@ -33,22 +62,29 @@ app:
 		echo "       To build only the daemon, run: make daemon"; exit 1; }
 	$(CARGO_ENV) cargo build --manifest-path $(DESKTOP_DIR)/Cargo.toml $(if $(filter release,$(CONFIG)),--release,)
 
-# Build everything, then open the Crow desktop window without installing a
-# bundle. The window reuses a crowd already listening on :8787 (e.g. one from
+# macOS: build everything, then open the Crow desktop window without installing
+# a bundle. The window reuses a crowd already listening on :8787 (e.g. one from
 # `make daemon-run`) and leaves it running on quit; if none is up it spawns its
 # own $(BUILD_OUT)/crowd and stops that on quit. This is the modern equivalent
 # of the old `make && ./.build/debug/CrowApp`.
+# Linux: no native window — build the daemon, then serve the web UI live from
+# source (http://127.0.0.1:8787; Ctrl-C to stop). Same as `make daemon-run`.
+ifeq ($(UNAME_S),Darwin)
 run: build
 	$(DESKTOP_BIN)
+else
+run: daemon
+	bash scripts/daemon-run.sh
+endif
 
 help:
 	@echo "Usage: make [target]"
 	@echo ""
 	@echo "Targets:"
-	@echo "  build      Build everything: crow CLI + crowd daemon + Crow desktop app — default"
+	@echo "  build      Default. macOS: crow CLI + crowd daemon + Crow desktop app. Linux: Swift binaries only"
 	@echo "  daemon     Build just the Swift binaries (crow CLI + crowd daemon)"
-	@echo "  app        Build just the Crow desktop app (Tauri) → $(DESKTOP_BIN)"
-	@echo "  run        Build, then open the Crow desktop window over a running (or fresh) crowd"
+	@echo "  app        Build just the Crow desktop app (Tauri, macOS only) → $(DESKTOP_BIN)"
+	@echo "  run        macOS: open the desktop window over crowd. Linux: serve the web UI on :8787"
 	@echo "  daemon-run Run crowd serving the frozen bundle-baked web UI (add --watch to rebuild on Swift/web change)"
 	@echo "  setup      Check build prerequisites"
 	@echo "  check      Verify all build and runtime prerequisites"
@@ -60,7 +96,7 @@ help:
 	@echo "  uninstall  Remove installed crow + crowd symlinks"
 	@echo "  clean      Remove .build/ and the desktop app's target/"
 	@echo ""
-	@echo "Prerequisites: Xcode Command Line Tools (Swift); Rust arm64 toolchain (desktop app)"
+	@echo "Prerequisites: Swift (macOS: Xcode CLT; Linux: swiftly). Desktop app (macOS): Rust arm64 toolchain"
 
 setup:
 	@if [ "$$(uname)" = "Darwin" ]; then \
