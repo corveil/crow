@@ -63,7 +63,13 @@ public final class PTYProcess: @unchecked Sendable {
         }
         masterFD = master
 
+        // Glibc types these as concrete structs (zero-initialized here); Darwin
+        // as opaque optional pointers that `_init` allocates.
+        #if canImport(Glibc)
+        var actions = posix_spawn_file_actions_t()
+        #else
         var actions: posix_spawn_file_actions_t?
+        #endif
         guard posix_spawn_file_actions_init(&actions) == 0 else {
             close(master)
             close(slave)
@@ -83,7 +89,11 @@ public final class PTYProcess: @unchecked Sendable {
             _ = wd.withCString { posix_spawn_file_actions_addchdir_np(&actions, $0) }
         }
 
+        #if canImport(Glibc)
+        var attrs = posix_spawnattr_t()
+        #else
         var attrs: posix_spawnattr_t?
+        #endif
         guard posix_spawnattr_init(&attrs) == 0 else {
             close(master)
             close(slave)
@@ -101,10 +111,10 @@ public final class PTYProcess: @unchecked Sendable {
         // above are exempt from the flag, so the PTY wiring is unaffected.
         #if canImport(Darwin)
         posix_spawnattr_setflags(&attrs, Int16(POSIX_SPAWN_SETSID | POSIX_SPAWN_CLOEXEC_DEFAULT))
-        #else
-        // Linux has no CLOEXEC_DEFAULT. The daemon's own pipes are opened
-        // O_CLOEXEC by Foundation there, so this is a narrower gap, not none.
-        posix_spawnattr_setflags(&attrs, Int16(POSIX_SPAWN_SETSID))
+        #elseif canImport(Glibc)
+        // POSIX_SPAWN_SETSID is a GNU extension the Swift Glibc module doesn't
+        // surface, so spell its value (0x80) out on Linux.
+        posix_spawnattr_setflags(&attrs, Int16(0x80))
         #endif
 
         var envStrings = ProcessInfo.processInfo.environment.map { "\($0.key)=\($0.value)" }
@@ -126,7 +136,10 @@ public final class PTYProcess: @unchecked Sendable {
         var pid: pid_t = 0
         let spawnResult = argv.withUnsafeMutablePointers { argvPtr in
             envStrings.withUnsafeMutablePointers { envPtr in
-                posix_spawn(&pid, "/bin/bash", &actions, &attrs, argvPtr, envPtr)
+                // baseAddress is non-nil (both arrays carry a nil terminator);
+                // Darwin's argv/envp params are IUO, Linux's non-optional, so
+                // force-unwrap to satisfy both.
+                posix_spawn(&pid, "/bin/bash", &actions, &attrs, argvPtr!, envPtr!)
             }
         }
 
