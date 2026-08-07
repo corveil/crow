@@ -54,8 +54,8 @@ private func startServer(
 }
 
 @Test func roundTripWithMainActorHop() throws {
-    // Pins Task.detached scheduling: handlers that hop to MainActor must still
-    // complete while the accept thread blocks on semaphore.wait() (CROW-645).
+    // Exercises handlers that hop to MainActor while the accept thread blocks on
+    // semaphore.wait() — the IPC path crowd CLI uses on Linux (CROW-645).
     let path = tempSocketPath()
     let server = try startServer(path: path, handlers: [
         "hop": { @Sendable _ in

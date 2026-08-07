@@ -116,8 +116,10 @@ public struct TmuxController: Sendable {
     /// Discards stdout; captures stderr in a temp file so `cliFailed` still
     /// carries tmux's message. Used for `new-session -d` when a pipe reader
     /// would stay blocked for the tmux server's lifetime (CROW-645) — a file
-    /// fd does not wait on EOF. Thrown errors have empty `stdout`; `stderr` is
-    /// populated from the temp capture on non-zero exit.
+    /// fd does not wait on EOF. The capture file is unlinked after exit while
+    /// tmux may still hold the fd; the inode stays writable until the server
+    /// closes it. Thrown errors have empty `stdout`; `stderr` is populated from
+    /// the temp capture on non-zero exit.
     private func runDiscardingOutput(
         _ args: [String],
         timeout: TimeInterval = TmuxController.defaultTimeout
@@ -131,12 +133,16 @@ public struct TmuxController: Sendable {
         p.standardOutput = nullOut
         let errURL = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("crow-tmux-\(UUID().uuidString).err")
-        FileManager.default.createFile(atPath: errURL.path, contents: nil)
+        defer { try? FileManager.default.removeItem(at: errURL) }
+        FileManager.default.createFile(
+            atPath: errURL.path,
+            contents: nil,
+            attributes: [.posixPermissions: 0o600]
+        )
         guard let errFH = FileHandle(forWritingAtPath: errURL.path) else {
             throw TmuxError.cliFailed(args: args, status: -1, stdout: "", stderr: "cannot create stderr capture file")
         }
         p.standardError = errFH
-        defer { try? FileManager.default.removeItem(at: errURL) }
         let done = makeTerminationSignal(for: p)
         try p.run()
         let watchdog = ProcessWatchdog(p, timeout: timeout)

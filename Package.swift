@@ -2,8 +2,9 @@
 import PackageDescription
 
 // Swift 6.1 Linux + ld.gold: libswiftObservation.so references swift::threading::fatal
-// in libswiftCore without exporting it (swiftlang/swift#75670). The symbol resolves at
-// runtime; --allow-shlib-undefined is the gold-compatible spelling (not -z …).
+// in libswiftCore without exporting it at link time. The symbol resolves at runtime;
+// --allow-shlib-undefined is the gold-compatible spelling. Scoped to the root
+// executables only so path-dependent packages and their test bundles are unaffected.
 let linuxObservationLinkerSettings: [LinkerSetting] = [
     .unsafeFlags(["-Xlinker", "--allow-shlib-undefined"], .when(platforms: [.linux])),
 ]

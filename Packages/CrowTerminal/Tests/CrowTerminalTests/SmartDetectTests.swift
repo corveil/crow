@@ -79,6 +79,21 @@ struct SmartDetectTests {
             allowedSchemes: schemes) == nil)
     }
 
+    @Test func fallbackPicksFirstURLBeforeMailto() {
+        let url = SmartDetect.detectURLFallback(
+            in: "See https://example.com/first then mailto:dev@example.com",
+            allowedSchemes: schemes)
+        #expect(url?.host == "example.com")
+        #expect(url?.path == "/first")
+    }
+
+    @Test func fallbackPreservesIPv6Literal() {
+        let url = SmartDetect.detectURLFallback(
+            in: "http://[::1]",
+            allowedSchemes: schemes)
+        #expect(url?.absoluteString == "http://[::1]")
+    }
+
     // MARK: - detectFileLine
 
     @Test func detectsBasicPathLine() throws {

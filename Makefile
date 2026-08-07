@@ -73,7 +73,7 @@ run: build
 	$(DESKTOP_BIN)
 else
 run: daemon
-	bash scripts/daemon-run.sh
+	CROW_HTTP_PORT=$(CROW_HTTP_PORT) CROW_SOCKET=$(CROW_SOCKET) bash scripts/daemon-run.sh
 endif
 
 help:

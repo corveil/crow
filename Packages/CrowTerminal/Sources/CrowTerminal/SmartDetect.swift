@@ -42,23 +42,20 @@ public enum SmartDetect {
         guard !text.isEmpty else { return nil }
         let nsrange = NSRange(text.startIndex..<text.endIndex, in: text)
 
-        if allowedSchemes.contains("mailto"),
-           let regex = try? NSRegularExpression(pattern: #"mailto:[^\s<>"']+"#) {
-            for match in regex.matches(in: text, range: nsrange) {
-                guard let urlRange = Range(match.range, in: text) else { continue }
-                let raw = trimTrailingURLPunctuation(String(text[urlRange]))
-                if let url = URL(string: raw), url.scheme?.lowercased() == "mailto" {
-                    return url
-                }
-            }
+        var branches: [String] = []
+        if allowedSchemes.contains("mailto") {
+            branches.append(#"mailto:[^\s<>"']+"#)
         }
-
         let schemePattern = allowedSchemes
             .subtracting(["mailto"])
             .sorted()
+            .map { NSRegularExpression.escapedPattern(for: $0) }
             .joined(separator: "|")
-        guard !schemePattern.isEmpty,
-              let regex = try? NSRegularExpression(pattern: #"(?:\#(schemePattern))://[^\s<>"']+"#)
+        if !schemePattern.isEmpty {
+            branches.append(#"(?:\#(schemePattern))://[^\s<>"']+"#)
+        }
+        guard !branches.isEmpty,
+              let regex = try? NSRegularExpression(pattern: branches.joined(separator: "|"))
         else { return nil }
 
         for match in regex.matches(in: text, range: nsrange) {
@@ -73,17 +70,22 @@ public enum SmartDetect {
     }
 
     /// Strip trailing sentence punctuation from a URL candidate. A trailing `)`
-    /// is removed only when it closes punctuation *around* the URL, not when it
-    /// is part of a balanced pair inside the path (e.g. Wikipedia disambiguation).
+    /// or `]` is removed only when it closes punctuation *around* the URL, not
+    /// when it is part of a balanced pair inside the path (e.g. Wikipedia
+    /// disambiguation or IPv6 literals).
     static func trimTrailingURLPunctuation(_ raw: String) -> String {
         var s = raw
         while let last = s.last {
             switch last {
-            case ".", ",", ";", ":", "!", "?", "\"", "'", "]":
+            case ".", ",", ";", ":", "!", "?", "\"", "'":
                 s.removeLast()
             case ")":
                 let opens = s.filter { $0 == "(" }.count
                 let closes = s.filter { $0 == ")" }.count
+                if closes > opens { s.removeLast() } else { return s }
+            case "]":
+                let opens = s.filter { $0 == "[" }.count
+                let closes = s.filter { $0 == "]" }.count
                 if closes > opens { s.removeLast() } else { return s }
             default:
                 return s
