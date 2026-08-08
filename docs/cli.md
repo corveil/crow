@@ -1102,7 +1102,7 @@ Lists the global toggles, every event's effective settings, and the built-in sou
 
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |
-| `--event` | `<event>` | no | Restrict the event list to one event. Values: `taskComplete`, `agentWaiting`, `reviewRequested`, `changesRequested`, `checksFailing`, `autoWorkspaceCreated`, `autoMergeEnabled`, `autoMergeBlocked`, `autoRebasePushed`, `autoRebaseConflicts`, `configReloaded`. |
+| `--event` | `<event>` | no | Restrict the event list to one event. Values: `taskComplete`, `agentWaiting`, `reviewRequested`, `changesRequested`, `checksFailing`, `autoWorkspaceCreated`, `autoMergeEnabled`, `autoMergeBlocked`, `autoRebasePushed`, `autoRebaseConflicts`, `autoRebaseStuck`, `configReloaded`. |
 
 ---
 
@@ -1121,7 +1121,7 @@ Only the provided flags change; everything else keeps its value. Each toggle tak
 | `--global-mute`, `--no-global-mute` | — | no | Master mute — suppresses every sound and system notification |
 | `--sound-enabled`, `--no-sound-enabled` | — | no | Global sound-playback toggle |
 | `--system-notifications-enabled`, `--no-system-notifications-enabled` | — | no | Global system-notification toggle |
-| `--event` | `<event>` | no | Event to change (required by every --event-* flag). Values: `taskComplete`, `agentWaiting`, `reviewRequested`, `changesRequested`, `checksFailing`, `autoWorkspaceCreated`, `autoMergeEnabled`, `autoMergeBlocked`, `autoRebasePushed`, `autoRebaseConflicts`, `configReloaded`. |
+| `--event` | `<event>` | no | Event to change (required by every --event-* flag). Values: `taskComplete`, `agentWaiting`, `reviewRequested`, `changesRequested`, `checksFailing`, `autoWorkspaceCreated`, `autoMergeEnabled`, `autoMergeBlocked`, `autoRebasePushed`, `autoRebaseConflicts`, `autoRebaseStuck`, `configReloaded`. |
 | `--event-enabled`, `--no-event-enabled` | — | no | Whether this event notifies at all |
 | `--event-sound-enabled`, `--no-event-sound-enabled` | — | no | Whether this event plays a sound |
 | `--event-system-notification-enabled`, `--no-event-system-notification-enabled` | — | no | Whether this event posts a system notification |

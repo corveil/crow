@@ -690,6 +690,18 @@ public enum CrowDaemon {
                    title: "Rebase conflicts — \(sessionName(sessionID))",
                    body: body)
         }
+        // The third auto-rebase outcome, and the one with no automated next
+        // step: a dirty worktree, or a branch holding commits `origin` doesn't.
+        // Deliberately no `dispatchManual` — there are no conflicts to resolve,
+        // and an agent told to "fix" a diverged branch reaches for a reset that
+        // would destroy the very commits blocking the rebase (#944).
+        // `state.message` is the daemon's own sentence, rendered verbatim —
+        // same contract as `onAutoMergeBlocked` below.
+        tracker.onAutoRebaseStuck = { sessionID, _, number, state in
+            notify(.autoRebaseStuck, key: sessionID.uuidString,
+                   title: "Rebase stuck — \(sessionName(sessionID))",
+                   body: "PR #\(number): \(state.message)")
+        }
 
         // Auto-merge (enable GitHub native auto-merge on eligible Crow PRs). The
         // audit line goes to the automation log at the tracker's call site

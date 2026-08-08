@@ -97,6 +97,43 @@ public actor GitManager {
 
     // MARK: - Rebase
 
+    /// How far `origin/<branch>` trails `origin/<baseBranch>` — the question
+    /// GitHub's `mergeStateStatus == "BEHIND"` is *trying* to answer, asked of
+    /// git instead (#944).
+    ///
+    /// Deliberately compares the two **remote** refs, not `HEAD`. Behind-ness is
+    /// a property of the PR head, not of whatever the local worktree happens to
+    /// be on, and every worktree-shaped answer (dirty, ahead, diverged) belongs
+    /// to `rebaseOntoBase`, which reports each one properly. A `HEAD`-based
+    /// probe would read a locally-rebased-but-unpushed branch as up to date and
+    /// silently swallow the `.outOfSyncWithRemote(.ahead)` deferral.
+    ///
+    /// Cheap by design: one fetch and one `rev-list --count`, so a caller can
+    /// run it before spending a provider API call on a PR that needs nothing.
+    public func behindBase(
+        worktreePath: String,
+        branch: String,
+        baseBranch: String
+    ) async -> BaseBehindState {
+        do {
+            _ = try await run(["git", "-C", worktreePath, "fetch", "origin", baseBranch, branch])
+            let out = try await run([
+                "git", "-C", worktreePath, "rev-list", "--count",
+                "origin/\(branch)..origin/\(baseBranch)",
+            ])
+            // `run` returns stdout untrimmed, and `Int("7\n")` is nil — so the
+            // trim is load-bearing, and a parse failure must not read as zero.
+            guard let count = Int(out.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+                return .unknown("unparseable rev-list output: \(out.prefix(100))")
+            }
+            return count == 0 ? .upToDate : .behind(count)
+        } catch let error as GitError {
+            return .unknown(error.errorDescription ?? "git error")
+        } catch {
+            return .unknown(error.localizedDescription)
+        }
+    }
+
     /// Rebase the worktree's current branch onto `origin/<baseBranch>` and
     /// force-push it with `--force-with-lease`.
     ///
@@ -116,6 +153,9 @@ public actor GitManager {
     ///   or revert remote commits.
     /// - **Aborts on conflict** to restore a clean checkout, then reports
     ///   `.conflicts` so the caller can hand resolution to a Claude session.
+    /// - **Reports `.alreadyUpToDate` rather than pushing** when the branch
+    ///   already contains the base, so a caller that can't tell in advance
+    ///   (#944) gets a cheap, honest no-op instead of a phantom rebase.
     /// - **`--force-with-lease`** (against the remote head of `branch` fetched
     ///   at the start) so a concurrent push to the PR branch fails the lease
     ///   rather than being overwritten.
@@ -187,6 +227,29 @@ public actor GitManager {
                     }
                     return .failed("fast-forward to origin/\(branch) failed")
                 }
+            }
+
+            // Nothing to replay: HEAD already contains every commit on the
+            // base. Checked *here* — after the fetch and after the
+            // fast-forward above — so the comparison is against the real PR
+            // head rather than a stale worktree.
+            //
+            // Without this, a caller that widened its candidate set (#944)
+            // would run `git rebase` (reports "up to date", exits 0), then
+            // `push --force-with-lease` (reports "Everything up-to-date",
+            // exits 0), and get `.rebasedAndPushed` back — a "branch rebased"
+            // notification for work that never happened.
+            //
+            // `merge-base --is-ancestor` rather than a `rev-list` count: no
+            // caller needs a magnitude here, it short-circuits, and its `try?`
+            // collapse of exit 1 with exit 128 (see the note above) fails in
+            // the *safe* direction — a broken ref reads as "not up to date",
+            // falls through to the rebase, and surfaces a real `.failed`.
+            if (try? await run([
+                "git", "-C", worktreePath, "merge-base", "--is-ancestor",
+                "origin/\(baseBranch)", "HEAD",
+            ])) != nil {
+                return .alreadyUpToDate
             }
 
             // Attempt the rebase. A failure here is almost always conflicts.
@@ -304,6 +367,10 @@ public actor GitManager {
 public enum RebaseOutcome: Sendable, Equatable {
     /// Rebase applied cleanly and the branch was force-pushed.
     case rebasedAndPushed
+    /// The branch already contained every commit on `origin/<base>`: nothing was
+    /// rewritten and nothing was pushed. Distinct from `.rebasedAndPushed` so a
+    /// caller doesn't announce a rebase that didn't happen (#944).
+    case alreadyUpToDate
     /// Rebase hit conflicts; the rebase was aborted (tree is clean again) and
     /// resolution should be delegated to a Claude session.
     case conflicts
@@ -329,6 +396,23 @@ public enum RemoteDivergence: String, Sendable, Equatable {
     /// Both sides have commits the other doesn't — force-pushing would revert
     /// the remote's.
     case diverged
+}
+
+/// Result of `GitManager.behindBase` — how far the PR head trails its base.
+public enum BaseBehindState: Sendable, Equatable {
+    /// `origin/<branch>` already contains every commit on `origin/<base>`. A
+    /// rebase would be a provable no-op.
+    case upToDate
+    /// The PR head is missing this many (>0) commits that are on the base.
+    case behind(Int)
+    /// The probe couldn't be completed — fetch failed, a ref is missing (a fork
+    /// head has no `origin/<branch>`), output unparseable.
+    ///
+    /// Callers **must** fall through to a full `rebaseOntoBase` rather than
+    /// treating this as `.upToDate`: silently skipping is the one way this
+    /// optimization can drop real work, and `rebaseOntoBase` re-runs the same
+    /// commands and reports a proper `.failed` with git's own message.
+    case unknown(String)
 }
 
 public struct RepoInfo: Sendable {

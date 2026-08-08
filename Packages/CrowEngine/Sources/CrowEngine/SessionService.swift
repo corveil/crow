@@ -2213,6 +2213,7 @@ public final class SessionService {
         appState.removeHookState(for: id)
         appState.prStatus.removeValue(forKey: id)
         appState.autoMergeState.removeValue(forKey: id)
+        appState.autoRebaseState.removeValue(forKey: id)
         appState.isMarkingInReview.removeValue(forKey: id)
         appState.isMarkingIssueDone.removeValue(forKey: id)
         appState.isAddingMergeLabel.removeValue(forKey: id)

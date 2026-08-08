@@ -269,4 +269,148 @@ struct RebaseTests {
             return
         }
     }
+
+    // MARK: - Already up to date (#944)
+
+    /// The shape the widened candidate filter creates: a PR that is a candidate
+    /// (`mergeStateStatus != "CLEAN"` for some *other* reason — BLOCKED, DRAFT,
+    /// UNSTABLE) but is not actually behind its base. Must be a no-op, not a
+    /// force-push, or every such PR gets a phantom "Branch rebased"
+    /// notification and a pointless CI re-run.
+    @Test func upToDateBranchIsANoOpNotAPush() async throws {
+        try #require(gitAvailable())
+        guard let (root, work) = makeRepo() else { Issue.record("setup failed"); return }
+        defer { cleanup(root) }
+
+        // `feature` branched from the tip of `main` and main has not moved, so
+        // origin/main is already an ancestor of HEAD.
+        let before = git(["rev-parse", "HEAD"], in: work).out
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let outcome = await GitManager().rebaseOntoBase(
+            worktreePath: work, branch: "feature", baseBranch: "main"
+        )
+        #expect(outcome == .alreadyUpToDate)
+        // Nothing was rewritten...
+        let after = git(["rev-parse", "HEAD"], in: work).out
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        #expect(after == before)
+        // ...and nothing was pushed: the remote still points at the same commit.
+        let pushed = git(["rev-parse", "origin/feature"], in: work).out
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        #expect(pushed == before)
+    }
+
+    /// `.alreadyUpToDate` is decided *after* the fast-forward reconcile, so a
+    /// worktree that is stale relative to its own remote head still gets the
+    /// right answer rather than rebasing from a commit the PR isn't about.
+    @Test func upToDateIsJudgedAfterFastForwardingToTheRemoteHead() async throws {
+        try #require(gitAvailable())
+        guard let (root, work) = makeRepo() else { Issue.record("setup failed"); return }
+        defer { cleanup(root) }
+
+        // Advance main, then from a second clone bring `feature` up to date by
+        // MERGING main into it (a merge commit, so origin/feature stays a
+        // strict descendant of `work`'s HEAD — the "behind, not diverged"
+        // shape; a rebase + force-push would rewrite history and diverge).
+        // `work` is now behind origin/feature, and its own HEAD does NOT yet
+        // contain main's commit — so a HEAD-first check would say "behind".
+        let remote = (root as NSString).appendingPathComponent("origin.git")
+        let other = (root as NSString).appendingPathComponent("other-clone")
+        #expect(git(["clone", remote, other]).code == 0)
+        write((other as NSString).appendingPathComponent("other.txt"), "other\n")
+        git(["add", "."], in: other)
+        git(["commit", "-m", "main moves on"], in: other)
+        #expect(git(["push", "origin", "main"], in: other).code == 0)
+        git(["switch", "feature"], in: other)
+        #expect(git(["merge", "--no-edit", "origin/main"], in: other).code == 0)
+        #expect(git(["push", "origin", "feature"], in: other).code == 0)
+
+        let outcome = await GitManager().rebaseOntoBase(
+            worktreePath: work, branch: "feature", baseBranch: "main"
+        )
+        #expect(outcome == .alreadyUpToDate)
+        // The fast-forward still happened — the worktree is on the PR head.
+        let local = git(["rev-parse", "HEAD"], in: work).out
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let pushed = git(["rev-parse", "origin/feature"], in: work).out
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        #expect(local == pushed)
+    }
+
+    // MARK: - behindBase probe (#944)
+
+    @Test func behindBaseReportsZeroWhenTheHeadContainsTheBase() async throws {
+        try #require(gitAvailable())
+        guard let (root, work) = makeRepo() else { Issue.record("setup failed"); return }
+        defer { cleanup(root) }
+
+        let state = await GitManager().behindBase(
+            worktreePath: work, branch: "feature", baseBranch: "main"
+        )
+        #expect(state == .upToDate)
+    }
+
+    @Test func behindBaseCountsTheCommitsTheHeadIsMissing() async throws {
+        try #require(gitAvailable())
+        guard let (root, work) = makeRepo() else { Issue.record("setup failed"); return }
+        defer { cleanup(root) }
+
+        // Two commits on main that `feature` doesn't have.
+        git(["switch", "main"], in: work)
+        for name in ["one", "two"] {
+            write((work as NSString).appendingPathComponent("\(name).txt"), "\(name)\n")
+            git(["add", "."], in: work)
+            git(["commit", "-m", "main: \(name)"], in: work)
+        }
+        #expect(git(["push", "origin", "main"], in: work).code == 0)
+        git(["switch", "feature"], in: work)
+
+        let state = await GitManager().behindBase(
+            worktreePath: work, branch: "feature", baseBranch: "main"
+        )
+        #expect(state == .behind(2))
+    }
+
+    /// The probe measures `origin/<branch>`, not `HEAD`. A local rebase that
+    /// hasn't been pushed must NOT read as up to date — the PR head is still
+    /// behind, and reporting otherwise would swallow the `.outOfSyncWithRemote`
+    /// deferral that tells the user to push.
+    @Test func behindBaseMeasuresTheRemoteHeadNotTheWorktree() async throws {
+        try #require(gitAvailable())
+        guard let (root, work) = makeRepo() else { Issue.record("setup failed"); return }
+        defer { cleanup(root) }
+
+        git(["switch", "main"], in: work)
+        write((work as NSString).appendingPathComponent("other.txt"), "other\n")
+        git(["add", "."], in: work)
+        git(["commit", "-m", "main moves on"], in: work)
+        #expect(git(["push", "origin", "main"], in: work).code == 0)
+
+        // Rebase locally but deliberately do not push.
+        git(["switch", "feature"], in: work)
+        #expect(git(["rebase", "origin/main"], in: work).code == 0)
+
+        let state = await GitManager().behindBase(
+            worktreePath: work, branch: "feature", baseBranch: "main"
+        )
+        #expect(state == .behind(1))
+    }
+
+    /// A missing ref (the fork-head shape) must be `.unknown`, never
+    /// `.upToDate` — the caller falls through to a full attempt on `.unknown`,
+    /// and silently skipping is the one way this optimization drops real work.
+    @Test func behindBaseReportsUnknownRatherThanUpToDateOnFailure() async throws {
+        try #require(gitAvailable())
+        guard let (root, work) = makeRepo() else { Issue.record("setup failed"); return }
+        defer { cleanup(root) }
+
+        let state = await GitManager().behindBase(
+            worktreePath: work, branch: "feature", baseBranch: "no-such-base"
+        )
+        guard case .unknown = state else {
+            Issue.record("expected .unknown, got \(state)")
+            return
+        }
+    }
 }
