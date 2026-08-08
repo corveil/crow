@@ -17,6 +17,8 @@ const epilogue = `
   set reviewSearch(v){reviewSearch=v;},
   set reviewSelectionMode(v){reviewSelectionMode=v;},
   get selectedReviewURLs(){return selectedReviewURLs;},
+  get rpc(){return rpc;},
+  set rpc(v){rpc = v;},
   renderBoard(){ return renderBoard(); },
   ticketsCard(){ return ticketsCard(); },
   ticketsRefreshing(){ return ticketsRefreshing(); },
@@ -197,10 +199,14 @@ check('Reviews idle: no spinner, button enabled',
 // Restores the retired ReviewBoardView's batch kickoff on the web board, using
 // the ticket board's selection model. r3 already has a review session, so it is
 // the non-selectable/dimmed case.
-const review = (id, n, title, repo, author, url, hours, sessionID) => ({
+const review = (id, n, title, repo, author, url, hours, sessionID, kickoffAction) => ({
   id, pr_number: n, title, url, repo, author, head_branch: 'feat/' + id, base_branch: 'main',
   is_draft: false, requested_at: iso(hours), labels: [], provider: 'github',
   review_session_id: sessionID || null,
+  // Omitted on purpose in the fixtures below: an older daemon doesn't send it,
+  // and the client must fall back to the `review_session_id` predicate. The
+  // CROW-945 block at the end covers the field being present.
+  ...(kickoffAction ? { kickoff_action: kickoffAction } : {}),
 });
 const reviewsPayload = { unseen: 0, reviews: [
   review('r1', 900, 'Add batch review', 'corveil/crow', 'dhilgaertner', 'https://github.com/corveil/crow/pull/900', 1),
@@ -264,6 +270,53 @@ T.boardData.reviews = { unseen: 0,
 T.renderBoard();
 check('no Select button when nothing is startable', !btn('Select'));
 check('all 3 rows offer Go to Session', countBtn('Go to Session') === 3);
+
+// -- The board offers the next round (CROW-945) --
+// Before this, the card was gated purely on "does a non-completed session link
+// to this PR", which is a much weaker question than "has this review round been
+// answered". A re-requested PR therefore rendered only "Go to Session" pointing
+// at the dead round-1 session, and the sole way forward was deleting it by hand.
+// The server now sends the verdict from the same decision function
+// `createReviewSession` runs, and the card renders it.
+console.log('\nReviews board — kickoff_action drives the button (CROW-945):');
+T.reviewSelectionMode = false; T.selectedReviewURLs.clear();
+T.boardData.reviews = { unseen: 0, reviews: [
+  review('k1', 1, 'Fresh request', 'corveil/crow', 'sam', 'https://github.com/corveil/crow/pull/1', 1, null, 'create'),
+  review('k2', 2, 'Round 1 answered, author pushed', 'corveil/crow', 'sam', 'https://github.com/corveil/crow/pull/2', 2, 'sess-k2', 're_review'),
+  review('k3', 3, 'Covered at this head', 'corveil/crow', 'sam', 'https://github.com/corveil/crow/pull/3', 3, 'sess-k3', 'skip'),
+]};
+T.renderBoard();
+check('create → Start Review', countBtn('Start Review') === 1);
+check('re_review → Re-review', !!btn('Re-review'));
+check('skip → no kickoff button', countBtn('Start Review') === 1 && countBtn('Re-review') === 1);
+// The stale round is still reachable — "Re-review" retires it, so the user
+// should be able to read it first.
+check('both linked rows keep Go to Session', countBtn('Go to Session') === 2);
+check('a re-reviewable row is selectable for batch', (() => {
+  T.reviewSelectionMode = true; T.renderBoard();
+  const n = q('.row-check').length;
+  T.reviewSelectionMode = false; T.renderBoard();
+  return n === 2;   // k1 (create) + k2 (re_review); k3 (skip) is not
+})());
+check('skip row is the only dimmed one in select mode', (() => {
+  T.reviewSelectionMode = true; T.renderBoard();
+  const dim = [...q('.board-card.not-selectable')];
+  const ok = dim.length === 1 && /Covered at this head/.test(dim[0].textContent);
+  T.reviewSelectionMode = false; T.renderBoard();
+  return ok;
+})());
+// Re-review goes through `start-review` like everything else: one verb, and the
+// server owns the decision (the board's action is computed from a poll-stale
+// head, so it picks the label and must never suppress the call).
+check('Re-review dispatches start-review', (() => {
+  let sent = null;
+  const prevRpc = T.rpc;
+  T.rpc = async (method, params) => { sent = { method, params }; return {}; };
+  btn('Re-review').onclick();
+  T.rpc = prevRpc;
+  return sent && sent.method === 'start-review' && sent.params.url === 'https://github.com/corveil/crow/pull/2';
+})());
+T.boardData.reviews = reviewsPayload; T.renderBoard();
 
 // The daemon half of the flag has no `finally` to fall back on — it clears only
 // when a later `list-tickets` says so. These cover the paths where that never

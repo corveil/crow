@@ -16,7 +16,7 @@ private struct FakeCodeBackend: CodeBackend {
     func listMonitoredPRs() async throws -> MonitoredPRListing {
         MonitoredPRListing(viewerPRs: [], reviewRequests: [], viewerLogin: "")
     }
-    func prStates(refs: [PRRef]) async throws -> [PRRef: PRRecord] { [:] }
+    func prStates(refs: [PRRef], viewerLogin: String?) async throws -> [PRRef: PRRecord] { [:] }
     func fetchCrowAuthoredCommits(prURL: String, repoSlug: String, prNumber: Int) async throws -> [CommitInfo] { [] }
     func findRecentPRsForBranches(_ candidates: [BranchCandidate]) async throws -> [BranchPRMatch] { [] }
     func enableAutoMerge(prURL: String) async throws {}

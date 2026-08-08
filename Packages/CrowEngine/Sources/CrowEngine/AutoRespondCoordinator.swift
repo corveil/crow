@@ -107,15 +107,30 @@ public final class AutoRespondCoordinator {
         }
 
         let prNumber = QuickActionPrompts.parsePRNumber(from: prLink.url)
+        // Diff anchor, not round boundary (CROW-945): prefer the head the last
+        // in-place re-review was scoped from, so repeat passes review only what
+        // is new rather than replaying the delta from round 1 every time. Falls
+        // back to the session's creation head on the first re-review.
+        let diffAnchorSha = session?.lastReRequestedHeadSha ?? session?.lastReviewedHeadSha
         let prompt = QuickActionPrompts.build(
             action: action,
             codeBackend: resolveCodeBackend(forSessionID: sessionID),
             prURL: prLink.url,
             prNumber: prNumber,
-            lastReviewedHeadSha: session?.lastReviewedHeadSha
+            lastReviewedHeadSha: diffAnchorSha
         )
         CrowLog.info("[QuickAction] Sending \(action.rawValue) prompt to terminal \(terminal.id.uuidString) (\(prompt.count) chars)")
         TerminalRouter.send(terminal, text: prompt)
+        // Advance the anchor only once the prompt is actually out, and only for
+        // the in-place re-review — `lastReviewedHeadSha` stays where it is on
+        // purpose so the kickoff guard's head-advance fallback stays armed for
+        // this head if the agent stalls without posting a verdict.
+        if action == .reReview,
+           let headSha = appState.prStatus[sessionID]?.headSha,
+           !headSha.isEmpty,
+           let idx = appState.sessions.firstIndex(where: { $0.id == sessionID }) {
+            appState.sessions[idx].lastReRequestedHeadSha = headSha
+        }
         return .sent
     }
 

@@ -100,8 +100,40 @@ public struct GitHubCodeBackend: CodeBackend {
     /// by a few requests of granularity. Re-add the block and a return-shape
     /// tuple if that granularity ever starts mattering.
 
-    public func prStates(refs: [PRRef]) async throws -> [PRRef: PRRecord] {
+    public func prStates(refs: [PRRef], viewerLogin: String?) async throws -> [PRRef: PRRecord] {
         guard !refs.isEmpty else { return [:] }
+        // The viewer's own latest *verdict* on each PR (CROW-945). This is the
+        // signal that closes a review round, and it has to come from the PR
+        // itself: the `review-requested:@me` search that used to be its only
+        // source drops the PR the instant the viewer submits a review, i.e.
+        // exactly when the round should close. A review session's PR is
+        // authored by someone else, so it is never in `viewerPRs` and always
+        // lands here — this query already runs every poll, so the signal costs
+        // no extra API call.
+        //
+        // `states:` is load-bearing, not decoration. GraphQL's
+        // `viewerLatestReview` takes no arguments and returns the latest review
+        // of ANY state, so a follow-up `--comment` review (COMMENTED) or an
+        // unsubmitted draft (PENDING, null `submittedAt`) would mask a real
+        // CHANGES_REQUESTED verdict and reproduce CROW-945 through a new field.
+        // Filtering server-side also beats scanning `reviews(last: 20)`: one
+        // node per alias instead of twenty, and immune to the >20-review
+        // truncation that the search path's unfiltered scan still has.
+        //
+        // Omitted entirely when the login is unknown (a failed
+        // `listMonitoredPRs` earlier in the cycle), leaving the field nil —
+        // "not fetched", never "no review". See `PRRecord`.
+        let viewer = viewerLogin?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        // Sorted so the query text is stable across runs (a Set's iteration
+        // order is not) — an unstable query string would defeat any response
+        // caching and make diffing two `gh` invocations pointless.
+        let states = Self.roundClosingReviewStates.sorted().joined(separator: ", ")
+        let reviewsSelection = viewer.isEmpty ? "" : """
+
+                  reviews(last: 1, author: $viewer, states: [\(states)]) {
+                    nodes { state submittedAt }
+                  }
+            """
         var queryParts: [String] = []
         var args: [String] = ["gh", "api", "graphql"]
         for (i, ref) in refs.enumerated() {
@@ -122,7 +154,7 @@ public struct GitHubCodeBackend: CodeBackend {
                         ... on StatusContext { context state }
                       }
                     }
-                  }
+                  }\(reviewsSelection)
                 }
               }
             """)
@@ -133,6 +165,12 @@ public struct GitHubCodeBackend: CodeBackend {
         var varDecls: [String] = []
         for i in 0..<refs.count {
             varDecls.append("$owner\(i): String!, $repo\(i): String!, $num\(i): Int!")
+        }
+        if !viewer.isEmpty {
+            varDecls.append("$viewer: String!")
+            // `-f`, not `-F`: `-F` type-infers, so an all-digit login would be
+            // sent as an Int and fail the `String!` variable.
+            args.append(contentsOf: ["-f", "viewer=\(viewer)"])
         }
         let query = """
         query(\(varDecls.joined(separator: ", "))) {
@@ -293,8 +331,6 @@ public struct GitHubCodeBackend: CodeBackend {
     static func parseKeyPRMatches(_ output: String, candidate: KeyCandidate) -> [KeyPRMatch] {
         guard let data = output.data(using: .utf8),
               let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
-        let dateFmt = ISO8601DateFormatter()
-        dateFmt.formatOptions = [.withInternetDateTime]
         let needle = candidate.key.lowercased()
         var matches: [KeyPRMatch] = []
         for node in arr {
@@ -304,7 +340,7 @@ public struct GitHubCodeBackend: CodeBackend {
             let title = (node["title"] as? String ?? "").lowercased()
             let head = (node["headRefName"] as? String ?? "").lowercased()
             guard title.contains(needle) || head.contains(needle) else { continue }
-            let updatedAt = (node["updatedAt"] as? String).flatMap { dateFmt.date(from: $0) }
+            let updatedAt = IssueDate.parse(node["updatedAt"] as? String)
             matches.append(KeyPRMatch(
                 candidate: candidate, number: number, url: url, state: state, updatedAt: updatedAt
             ))
@@ -479,13 +515,10 @@ public struct GitHubCodeBackend: CodeBackend {
               let dataObj = json["data"] as? [String: Any] else {
             throw ProviderError.commandFailed("listMonitoredPRs: failed to parse GraphQL response")
         }
-        let dateFmt = ISO8601DateFormatter()
-        dateFmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         let viewerLogin = (dataObj["viewer"] as? [String: Any])?["login"] as? String ?? ""
         let viewerPRs = parseViewerPRs(dataObj["viewerPRs"] as? [String: Any])
         let reviewRequests = parseReviewRequests(
             dataObj["reviewPRs"] as? [String: Any],
-            dateFormatter: dateFmt,
             viewerLogin: viewerLogin.isEmpty ? nil : viewerLogin
         )
         let rate = GitHubTaskBackend.parseRateLimit(dataObj["rateLimit"] as? [String: Any])
@@ -506,13 +539,10 @@ public struct GitHubCodeBackend: CodeBackend {
         guard let dataObj = GitHubTaskBackend.decodeGraphQLData(blob) else {
             return MonitoredPRListing(viewerPRs: [], reviewRequests: [], viewerLogin: "", samlRestricted: true)
         }
-        let dateFmt = ISO8601DateFormatter()
-        dateFmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         let viewerLogin = (dataObj["viewer"] as? [String: Any])?["login"] as? String ?? ""
         let viewerPRs = parseViewerPRs(dataObj["viewerPRs"] as? [String: Any])
         let reviewRequests = parseReviewRequests(
             dataObj["reviewPRs"] as? [String: Any],
-            dateFormatter: dateFmt,
             viewerLogin: viewerLogin.isEmpty ? nil : viewerLogin
         )
         let rate = GitHubTaskBackend.parseRateLimit(dataObj["rateLimit"] as? [String: Any])
@@ -584,14 +614,14 @@ public struct GitHubCodeBackend: CodeBackend {
         // — GitHub orders that connection by reviewer, not by recency, so a
         // narrow window could omit the CR we need.
         //
-        // Parse with `parseGitHubDateTime` (tolerant of both fractional and
+        // Parse with `IssueDate.parse` (tolerant of both fractional and
         // non-fractional). GitHub's GraphQL `DateTime` scalar emits
         // non-fractional ISO-8601 (`2026-06-15T01:28:17Z`), and an
         // `ISO8601DateFormatter` configured with `.withFractionalSeconds`
         // returns nil for that shape — silently disabling the rule.
         let lastChangesRequestedAt = latestReviewNodes
             .filter { ($0["state"] as? String) == "CHANGES_REQUESTED" }
-            .compactMap { ($0["submittedAt"] as? String).flatMap(Self.parseGitHubDateTime) }
+            .compactMap { IssueDate.parse($0["submittedAt"] as? String) }
             .max()
         // Stateless "needs refine" rule (CROW-508): the latest non-merge,
         // non-rebase commit timestamp anchors "has the agent substantively
@@ -628,7 +658,7 @@ public struct GitHubCodeBackend: CodeBackend {
                 if parents >= 2 { return nil }
                 let message = (commit["messageHeadline"] as? String) ?? ""
                 if Self.isMergeCommitMessage(message) { return nil }
-                return (commit["authoredDate"] as? String).flatMap(Self.parseGitHubDateTime)
+                return IssueDate.parse(commit["authoredDate"] as? String)
             }
             .max()
         // Who is blocking the PR right now, for the CROW-921 re-request
@@ -662,6 +692,19 @@ public struct GitHubCodeBackend: CodeBackend {
             .compactMap { ($0["requestedReviewer"] as? [String: Any])?["login"] as? String }
             .filter { !$0.isEmpty }
         let hasPendingReviewRequest = ((reviewRequestsObj?["totalCount"] as? Int) ?? 0) > 0
+        // The viewer's own latest verdict, from the `reviews(author:, states:)`
+        // selection the stale-PR query adds (CROW-945). Absent on every other
+        // path, which leaves this nil — "not fetched", never "no review".
+        //
+        // The state filter is redundant against today's query (which already
+        // filters server-side) and kept anyway: it is the assertion that only a
+        // verdict closes a round, so a future selection-set edit that widened
+        // or dropped `states:` would degrade to "no timestamp" rather than
+        // silently start closing rounds on a COMMENTED review.
+        let viewerLastReviewedAt = LenientJSON.nodes(node, "reviews")
+            .filter { Self.roundClosingReviewStates.contains(($0["state"] as? String) ?? "") }
+            .compactMap { IssueDate.parse($0["submittedAt"] as? String) }
+            .max()
         return PRRecord(
             number: number,
             url: url,
@@ -684,6 +727,7 @@ public struct GitHubCodeBackend: CodeBackend {
             changesRequestedReviewerLogins: changesRequestedReviewerLogins,
             pendingReviewerLogins: pendingReviewerLogins,
             hasPendingReviewRequest: hasPendingReviewRequest,
+            viewerLastReviewedAt: viewerLastReviewedAt,
             mergeCommitOid: mergeCommitOid,
             repoAutoMergeAllowed: repoAutoMergeAllowed
         )
@@ -701,37 +745,24 @@ public struct GitHubCodeBackend: CodeBackend {
             || trimmed.hasPrefix("Merge pull request ")
     }
 
-    /// Parse a GitHub `DateTime` scalar tolerantly. GitHub's GraphQL emits
-    /// the non-fractional ISO-8601 form (`2026-06-15T01:28:17Z`), but
-    /// `ISO8601DateFormatter` configured with `.withFractionalSeconds`
-    /// returns nil for that shape, and the inverse configuration rejects
-    /// any timestamp that DOES carry a fraction. Production code must
-    /// tolerate both — a strict formatter silently disables features that
-    /// depend on parsed timestamps (CROW-508 needsRefine was inert this
-    /// way; see PR #509 review). We try the non-fractional form first
-    /// (matches what GitHub actually emits today), then fall back to
-    /// fractional for resilience against future API drift.
+    /// Review states that constitute a *verdict* and therefore close a review
+    /// round. COMMENTED and PENDING are excluded on purpose: `crow-review-pr`
+    /// mandates `--request-changes`/`--approve` and forbids `--comment`, so a
+    /// comment is notes without a decision and the round stays open. PENDING is
+    /// an unsubmitted draft and carries no `submittedAt` at all.
     ///
-    /// Other call sites in this file still use the brittle pattern (see
-    /// `parseReviewRequests`, `parseStaleMRResponse`, parseStaleStateResponse).
-    /// They're out of scope for this PR but should migrate to this helper
-    /// in a follow-up — same trap, different fields.
-    nonisolated static func parseGitHubDateTime(_ raw: String) -> Date? {
-        let plain = ISO8601DateFormatter()
-        plain.formatOptions = [.withInternetDateTime]
-        if let d = plain.date(from: raw) { return d }
-        let withFraction = ISO8601DateFormatter()
-        withFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return withFraction.date(from: raw)
-    }
+    /// Shared by the two paths that answer "has the viewer reviewed this?" —
+    /// `parseReviewRequests` (the `review-requested:@me` search) and
+    /// `parsePRNode` (the stale-PR query, which also passes these to GraphQL as
+    /// `states:`). One definition so the two can't drift into disagreeing about
+    /// what closes a round.
+    static let roundClosingReviewStates: Set<String> = ["APPROVED", "CHANGES_REQUESTED", "DISMISSED"]
 
     static func parseReviewRequests(
         _ searchObj: [String: Any]?,
-        dateFormatter: ISO8601DateFormatter,
         viewerLogin: String?
     ) -> [ReviewRequest] {
         let nodes = LenientJSON.nodes(searchObj)
-        let satisfyingStates: Set<String> = ["APPROVED", "CHANGES_REQUESTED", "DISMISSED"]
         var requests: [ReviewRequest] = []
         for node in nodes {
             guard let number = node["number"] as? Int,
@@ -743,7 +774,7 @@ public struct GitHubCodeBackend: CodeBackend {
             let headBranch = (node["headRefName"] as? String) ?? ""
             let headRefOid = node["headRefOid"] as? String
             let baseBranch = (node["baseRefName"] as? String) ?? ""
-            let updatedAt = (node["updatedAt"] as? String).flatMap { dateFormatter.date(from: $0) }
+            let updatedAt = IssueDate.parse(node["updatedAt"] as? String)
             let labels = LenientJSON.nodes(node, "labels")
                 .compactMap { labelNode -> LabelInfo? in
                     guard let name = labelNode["name"] as? String else { return nil }
@@ -755,9 +786,8 @@ public struct GitHubCodeBackend: CodeBackend {
                     guard let author = (review["author"] as? [String: Any])?["login"] as? String,
                           author == viewerLogin,
                           let state = review["state"] as? String,
-                          satisfyingStates.contains(state),
-                          let submittedAtStr = review["submittedAt"] as? String,
-                          let submittedAt = dateFormatter.date(from: submittedAtStr) else { continue }
+                          Self.roundClosingReviewStates.contains(state),
+                          let submittedAt = IssueDate.parse(review["submittedAt"] as? String) else { continue }
                     if viewerLastReviewedAt == nil || submittedAt > viewerLastReviewedAt! {
                         viewerLastReviewedAt = submittedAt
                     }
@@ -832,8 +862,6 @@ public struct GitHubCodeBackend: CodeBackend {
         guard let data = output.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let dataObj = json["data"] as? [String: Any] else { return [] }
-        let dateFmt = ISO8601DateFormatter()
-        dateFmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         var matches: [BranchPRMatch] = []
         for p in parsed {
             let repoObj = dataObj["pr\(p.idx)"] as? [String: Any]
@@ -841,7 +869,7 @@ public struct GitHubCodeBackend: CodeBackend {
                 guard let number = node["number"] as? Int,
                       let url = node["url"] as? String,
                       let state = node["state"] as? String else { continue }
-                let updatedAt = (node["updatedAt"] as? String).flatMap { dateFmt.date(from: $0) }
+                let updatedAt = IssueDate.parse(node["updatedAt"] as? String)
                 matches.append(BranchPRMatch(
                     candidate: p.cand,
                     number: number,

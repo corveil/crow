@@ -58,7 +58,8 @@ struct IssueTrackerCompletionTests {
     private func makeViewerPR(
         url: String,
         state: String,
-        number: Int = 1
+        number: Int = 1,
+        viewerLastReviewedAt: Date? = nil
     ) -> IssueTracker.ViewerPR {
         IssueTracker.ViewerPR(
             number: number,
@@ -76,7 +77,8 @@ struct IssueTrackerCompletionTests {
             linkedIssueReferences: [],
             checksState: "",
             failedCheckNames: [],
-            latestReviewStates: []
+            latestReviewStates: [],
+            viewerLastReviewedAt: viewerLastReviewedAt
         )
     }
 
@@ -419,6 +421,122 @@ struct IssueTrackerCompletionTests {
         #expect(decisions == [
             IssueTracker.CompletionDecision(sessionID: reviewSession.id, reason: "viewer submitted review")
         ])
+    }
+
+    // MARK: - Round closes from the PR, not the request search (CROW-945)
+
+    @Test
+    func viewerReviewFromPRCompletesWithoutAnyReviewRequest() {
+        // THE regression test for CROW-945. GitHub clears the pending review
+        // request the instant the viewer submits a review, so the PR leaves the
+        // `review-requested:@me` search at exactly the moment the round should
+        // close — `reviewRequestsByPRURL` is empty here for that reason, which
+        // is the normal steady state, not an edge case. The verdict read off
+        // the PR itself must still close the round; when it didn't, the session
+        // stayed active forever and the board offered only "Go to Session".
+        let reviewSession = makeSession(kind: .review, createdAt: Date().addingTimeInterval(-3600))
+        let prURL = "https://github.com/foo/bar/pull/9"
+        let pr = makeViewerPR(url: prURL, state: "OPEN", viewerLastReviewedAt: Date())
+        let decisions = IssueTracker.decideReviewCompletions(
+            reviewSessions: [reviewSession],
+            linksBySessionID: [reviewSession.id: [prLink(sessionID: reviewSession.id, url: prURL)]],
+            openReviewPRURLs: [],
+            prsByURL: [prURL: pr],
+            reviewRequestsByPRURL: [:],
+            prDataComplete: true
+        )
+        #expect(decisions == [
+            IssueTracker.CompletionDecision(sessionID: reviewSession.id, reason: "viewer submitted review")
+        ])
+    }
+
+    @Test
+    func viewerReviewFromPRIsNotGatedOnPRDataComplete() {
+        // The PR-sourced branch is presence-based, so a degraded cycle can only
+        // ever make it silent (no entry -> nil -> no decision) — it can never
+        // make it wrong. Gating it on `prDataComplete` would therefore buy no
+        // safety and would make rounds stay open whenever an unrelated provider
+        // errored, which is the over-conservatism CROW-945 was about.
+        let reviewSession = makeSession(kind: .review, createdAt: Date().addingTimeInterval(-3600))
+        let prURL = "https://github.com/foo/bar/pull/9"
+        let pr = makeViewerPR(url: prURL, state: "OPEN", viewerLastReviewedAt: Date())
+        let decisions = IssueTracker.decideReviewCompletions(
+            reviewSessions: [reviewSession],
+            linksBySessionID: [reviewSession.id: [prLink(sessionID: reviewSession.id, url: prURL)]],
+            openReviewPRURLs: [],
+            prsByURL: [prURL: pr],
+            reviewRequestsByPRURL: [:],
+            prDataComplete: false
+        )
+        #expect(decisions.count == 1)
+    }
+
+    @Test
+    func prPresentWithNoViewerVerdictDoesNotComplete() {
+        // The counterpart to `reviewMissingFromPayloadDoesNotComplete`, which
+        // covers *absence*. Now that the PR is a source for rule 1, its
+        // *presence* with a nil timestamp must stay a non-decision: nil means
+        // "not fetched" (GitLab, or a cycle where the viewer login was
+        // unknown), never "the viewer declined to review".
+        let reviewSession = makeSession(kind: .review, createdAt: Date().addingTimeInterval(-3600))
+        let prURL = "https://github.com/foo/bar/pull/9"
+        let pr = makeViewerPR(url: prURL, state: "OPEN", viewerLastReviewedAt: nil)
+        let decisions = IssueTracker.decideReviewCompletions(
+            reviewSessions: [reviewSession],
+            linksBySessionID: [reviewSession.id: [prLink(sessionID: reviewSession.id, url: prURL)]],
+            openReviewPRURLs: [prURL],
+            prsByURL: [prURL: pr],
+            reviewRequestsByPRURL: [:],
+            prDataComplete: true
+        )
+        #expect(decisions.isEmpty)
+    }
+
+    @Test
+    func prReviewPredatingSessionDoesNotCompleteTheNewRound() {
+        // Round 2's session must not be closed by round 1's verdict. This is
+        // the failure mode the PR-sourced branch could introduce that the
+        // search-sourced one could not: the search dropped the PR after a
+        // review, whereas the PR keeps reporting that old verdict on every
+        // poll, forever. Only the `> session.createdAt` compare stops a fresh
+        // round being completed the moment it starts.
+        let round1ReviewedAt = Date().addingTimeInterval(-7200)
+        let round2 = makeSession(kind: .review, createdAt: Date().addingTimeInterval(-3600))
+        let prURL = "https://github.com/foo/bar/pull/9"
+        let pr = makeViewerPR(url: prURL, state: "OPEN", viewerLastReviewedAt: round1ReviewedAt)
+        let decisions = IssueTracker.decideReviewCompletions(
+            reviewSessions: [round2],
+            linksBySessionID: [round2.id: [prLink(sessionID: round2.id, url: prURL)]],
+            openReviewPRURLs: [prURL],
+            prsByURL: [prURL: pr],
+            reviewRequestsByPRURL: [:],
+            prDataComplete: true
+        )
+        #expect(decisions.isEmpty)
+    }
+
+    @Test
+    func laterOfTheTwoViewerReviewSourcesWins() {
+        // Both sources can be populated in the same cycle (the author
+        // re-requested, so the PR is back in the search while the PR itself
+        // still reports the verdict). Take the later timestamp rather than
+        // preferring one source: a stale search row must not veto a fresh
+        // verdict, nor the reverse.
+        let sessionStart = Date().addingTimeInterval(-3600)
+        let reviewSession = makeSession(kind: .review, createdAt: sessionStart)
+        let prURL = "https://github.com/foo/bar/pull/9"
+        // Search row predates the session (round 1); the PR carries round 2's.
+        let request = makeReviewRequest(url: prURL, viewerLastReviewedAt: sessionStart.addingTimeInterval(-3600))
+        let pr = makeViewerPR(url: prURL, state: "OPEN", viewerLastReviewedAt: Date())
+        let decisions = IssueTracker.decideReviewCompletions(
+            reviewSessions: [reviewSession],
+            linksBySessionID: [reviewSession.id: [prLink(sessionID: reviewSession.id, url: prURL)]],
+            openReviewPRURLs: [prURL],
+            prsByURL: [prURL: pr],
+            reviewRequestsByPRURL: [prURL: request],
+            prDataComplete: true
+        )
+        #expect(decisions.count == 1)
     }
 
     // MARK: - Auto-Cleanup

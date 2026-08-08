@@ -44,7 +44,15 @@ public protocol CodeBackend: Sendable {
     /// issue one call; others fall back to per-PR. Returned keyed by `PRRef`
     /// (not URL) so callers don't have to round-trip through the API's
     /// canonical URL form to look up their result.
-    func prStates(refs: [PRRef]) async throws -> [PRRef: PRRecord]
+    ///
+    /// - Parameter viewerLogin: the authenticated user's login, when known.
+    ///   Lets a backend ask the host for *the viewer's own* latest verdict on
+    ///   each PR, which populates `PRRecord.viewerLastReviewedAt` (CROW-945).
+    ///   Pass nil when it isn't known — the backend then omits that selection
+    ///   and leaves the field nil, which every consumer reads as "not
+    ///   fetched" rather than "no review", per the convention documented on
+    ///   `PRRecord`.
+    func prStates(refs: [PRRef], viewerLogin: String?) async throws -> [PRRef: PRRecord]
 
     /// Fetch every commit on the PR identified by `prURL` and `repoSlug`.
     /// Returns the full commit list; the caller filters for the

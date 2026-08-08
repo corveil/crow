@@ -68,7 +68,10 @@ public struct GitLabCodeBackend: CodeBackend {
         return MonitoredPRListing(viewerPRs: [], reviewRequests: reviewRequests, viewerLogin: "")
     }
 
-    public func prStates(refs: [PRRef]) async throws -> [PRRef: PRRecord] {
+    /// `viewerLogin` is accepted for protocol conformance and ignored: GitLab's
+    /// MR endpoint carries no per-reviewer verdict timestamp, so
+    /// `viewerLastReviewedAt` stays nil here — "not fetched", per `PRRecord`.
+    public func prStates(refs: [PRRef], viewerLogin: String?) async throws -> [PRRef: PRRecord] {
         // GitLab REST has no batching; one call per MR.
         var out: [PRRef: PRRecord] = [:]
         for ref in refs {
@@ -205,8 +208,6 @@ public struct GitLabCodeBackend: CodeBackend {
     }
 
     public func findRecentPRsForBranches(_ candidates: [BranchCandidate]) async throws -> [BranchPRMatch] {
-        let dateFormatter = ISO8601DateFormatter()
-        dateFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         var matches: [BranchPRMatch] = []
         for candidate in candidates {
             let encodedSlug = candidate.repoSlug.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? candidate.repoSlug
@@ -231,7 +232,7 @@ public struct GitLabCodeBackend: CodeBackend {
                       let url = item["web_url"] as? String else { continue }
                 let rawState = (item["state"] as? String) ?? ""
                 let normalized = Self.normalizeState(rawState)
-                let updatedAt = (item["updated_at"] as? String).flatMap { dateFormatter.date(from: $0) }
+                let updatedAt = IssueDate.parse(item["updated_at"] as? String)
                 matches.append(BranchPRMatch(
                     candidate: candidate,
                     number: number,
@@ -300,8 +301,6 @@ public struct GitLabCodeBackend: CodeBackend {
               let items = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
             return []
         }
-        let dateFmt = ISO8601DateFormatter()
-        dateFmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return items.compactMap { item -> ReviewRequest? in
             guard let number = item["iid"] as? Int,
                   let title = item["title"] as? String,
@@ -313,7 +312,7 @@ public struct GitLabCodeBackend: CodeBackend {
             let baseBranch = (item["target_branch"] as? String) ?? ""
             let draft = (item["draft"] as? Bool) ?? (item["work_in_progress"] as? Bool) ?? false
             let labels = (item["labels"] as? [String] ?? []).map { LabelInfo(name: $0) }
-            let updatedAt = (item["updated_at"] as? String).flatMap { dateFmt.date(from: $0) }
+            let updatedAt = IssueDate.parse(item["updated_at"] as? String)
             let headRefOid = item["sha"] as? String
             return ReviewRequest(
                 id: "gitlab:\(host):\(fullRef)",

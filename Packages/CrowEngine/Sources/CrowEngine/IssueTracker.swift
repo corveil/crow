@@ -714,7 +714,7 @@ public final class IssueTracker {
             // can flip even if the other provider failed.
             let staleFetch = staleCandidateURLs.isEmpty
                 ? StalePRFetchResult(prs: [], complete: true)
-                : await fetchStalePRStates(urls: staleCandidateURLs)
+                : await fetchStalePRStates(urls: staleCandidateURLs, viewerLogin: ghResult.viewerLogin)
             let stalePRs = staleFetch.prs
             let prDataComplete = staleFetch.complete
             let allKnownPRs = Self.dedupedByURL(ghResult.viewerPRs + stalePRs)
@@ -918,6 +918,10 @@ public final class IssueTracker {
         let closedTotalCount: Int
         let viewerPRs: [ViewerPR]
         let reviewRequests: [ReviewRequest]
+        /// The authenticated user's login, carried so the stale-PR follow-up in
+        /// the *same* cycle can ask GitHub for the viewer's own latest verdict
+        /// (CROW-945). Empty when `listMonitoredPRs` failed or degraded.
+        let viewerLogin: String
         let rateLimit: GitHubRateLimit?
     }
 
@@ -995,6 +999,18 @@ public final class IssueTracker {
             // that doesn't select `reviewRequests` (the stale query, GitLab),
             // so a `true` from either record is the only informative value.
             hasPendingReviewRequest: winner.hasPendingReviewRequest || loser.hasPendingReviewRequest,
+            // Latest wins, nil-tolerantly — same "nil means not fetched" rule
+            // as the fields above (CROW-945). The viewer-PR query never selects
+            // this, so picking a side would drop the stale-PR query's answer
+            // (the only one there is) whenever the viewer record won the rank.
+            // Dropping it re-opens CROW-945: the round would stop closing.
+            viewerLastReviewedAt: [winner.viewerLastReviewedAt, loser.viewerLastReviewedAt]
+                .compactMap { $0 }.max(),
+            // `updatedAt` was silently dropped here until CROW-945 — the exact
+            // failure this banner warns about, in the function the banner is
+            // attached to. It tie-breaks reconcile when several non-OPEN PRs
+            // share a branch, so losing it made that choice arbitrary.
+            updatedAt: [winner.updatedAt, loser.updatedAt].compactMap { $0 }.max(),
             mergeCommitOid: winner.mergeCommitOid ?? loser.mergeCommitOid,
             // Prefer whichever record actually knows the repo's auto-merge
             // policy — the stale-PR query and the viewer fetch don't always
@@ -1089,6 +1105,7 @@ public final class IssueTracker {
             closedTotalCount: assigned.closedTotalCount,
             viewerPRs: monitored.viewerPRs,
             reviewRequests: monitored.reviewRequests,
+            viewerLogin: monitored.viewerLogin,
             rateLimit: assigned.rateLimit ?? monitored.rateLimit
         )
     }
@@ -1163,7 +1180,7 @@ public final class IssueTracker {
     /// `viewer.pullRequests(first: 50)`, or one in a SAML-restricted org (a
     /// permanent hole in that connection), reaches the UI only through here, so
     /// without `statusCheckRollup` it could never show CI state at all.
-    private func fetchStalePRStates(urls: [String]) async -> StalePRFetchResult {
+    private func fetchStalePRStates(urls: [String], viewerLogin: String) async -> StalePRFetchResult {
         // Bucket URLs by (provider, host). GitLab self-hosted needs the host so the
         // backend pins the right GITLAB_HOST env var.
         var githubRefs: [PRRef] = []
@@ -1198,7 +1215,7 @@ public final class IssueTracker {
         if !githubRefs.isEmpty {
             let backend = providerManager.codeBackend(for: .github)!
             do {
-                let states = try await backend.prStates(refs: githubRefs)
+                let states = try await backend.prStates(refs: githubRefs, viewerLogin: viewerLogin)
                 // Keying by PRRef means we don't lose records when the API
                 // returns a canonical URL different from the stored one.
                 // Fall back to the stored URL when the API didn't provide
@@ -1219,7 +1236,7 @@ public final class IssueTracker {
         for (host, refs) in gitlabByHost {
             let backend = providerManager.codeBackend(for: .gitlab, host: host)!
             do {
-                let states = try await backend.prStates(refs: refs)
+                let states = try await backend.prStates(refs: refs, viewerLogin: nil)
                 for ref in refs {
                     guard var rec = states[ref] else { continue }
                     if rec.url.isEmpty, let stored = gitlabURLByRef[ref] {
@@ -1269,6 +1286,7 @@ public final class IssueTracker {
             changesRequestedReviewerLogins: pr.changesRequestedReviewerLogins,
             pendingReviewerLogins: pr.pendingReviewerLogins,
             hasPendingReviewRequest: pr.hasPendingReviewRequest,
+            viewerLastReviewedAt: pr.viewerLastReviewedAt,
             updatedAt: pr.updatedAt,
             mergeCommitOid: pr.mergeCommitOid,
             repoAutoMergeAllowed: pr.repoAutoMergeAllowed
@@ -1303,6 +1321,15 @@ public final class IssueTracker {
             latestReviewStates: pr.latestReviewStates,
             lastChangesRequestedAt: pr.lastChangesRequestedAt,
             lastSubstantiveCommitAt: pr.lastSubstantiveCommitAt,
+            // These three were dropped here until CROW-945, contradicting the
+            // "preserves **every** field" claim above. `evaluateAutoMerge` is
+            // reached through this helper and reads them, and an empty
+            // `changesRequestedReviewerLogins` reads as `.noReviewers` — the
+            // same shape of silent blinding as #838.
+            changesRequestedReviewerLogins: pr.changesRequestedReviewerLogins,
+            pendingReviewerLogins: pr.pendingReviewerLogins,
+            hasPendingReviewRequest: pr.hasPendingReviewRequest,
+            viewerLastReviewedAt: pr.viewerLastReviewedAt,
             updatedAt: pr.updatedAt,
             mergeCommitOid: pr.mergeCommitOid,
             repoAutoMergeAllowed: pr.repoAutoMergeAllowed
@@ -3239,7 +3266,12 @@ public final class IssueTracker {
     /// it exists to survive an in-flight poll that started *before* the add
     /// (#838), and clearing it here would hand that clobber back its opening.
     private func reevaluateAutoMergeAfterLabel(session: Session, prURL: String) async {
-        let result = await fetchStalePRStates(urls: [prURL])
+        // Empty `viewerLogin` (i.e. "don't select it") — this re-reads the
+        // viewer's *own* PR to decide auto-merge, and nobody reviews their own
+        // PR, so asking for `viewerLastReviewedAt` here would spend query
+        // budget on a field that is structurally always nil. Only the
+        // review-session path needs it.
+        let result = await fetchStalePRStates(urls: [prURL], viewerLogin: "")
         var byURL = Dictionary(result.prs.map { ($0.url, $0) }, uniquingKeysWith: Self.mergePRRecords)
 
         // Read-your-write: `backend.addMergeLabel` threw on failure, so the
@@ -4245,8 +4277,24 @@ public final class IssueTracker {
     /// Rules 2 + 3 require the PR to be present in `prsByURL` with the
     /// matching state and `prDataComplete == true` so the old "missing
     /// from open review queue == done" rule isn't reintroduced under
-    /// partial fetches. Rule 1 only needs the `ReviewRequest` payload (the
-    /// PR is still open at this point so it's always present in `reviewRequestsByPRURL`).
+    /// partial fetches.
+    ///
+    /// Rule 1 reads **two** sources and fires on the later of them (CROW-945).
+    /// `reviewRequestsByPRURL` alone could not work: it is built from the
+    /// `review-requested:@me` search, and GitHub clears the pending request the
+    /// instant the viewer submits a review, so the PR leaves that search at
+    /// exactly the moment the round should close. A rule sourced only from it
+    /// could fire only by winning a race against GitHub's search index — which
+    /// is why, in practice, review rounds never closed at all. `prsByURL`
+    /// carries the same verdict read off the PR itself, which survives the
+    /// request being consumed.
+    ///
+    /// Rule 1 is deliberately **not** gated on `prDataComplete`, including its
+    /// new `prsByURL` branch. That flag exists to stop *absence* being read as
+    /// evidence; rule 1 is *presence*-based — a degraded fetch yields no entry,
+    /// hence a nil timestamp, hence no decision. Gating it would make the fix
+    /// silently miss on any cycle where an unrelated provider errored, which is
+    /// the same over-conservatism that leaves rounds open.
     nonisolated static func decideReviewCompletions(
         reviewSessions: [Session],
         linksBySessionID: [UUID: [SessionLink]],
@@ -4261,9 +4309,11 @@ public final class IssueTracker {
             guard let prLink = sessionLinks.first(where: { $0.linkType == .pr }) else { continue }
 
             // Rule 1: viewer-submitted review after the session was created.
-            if let request = reviewRequestsByPRURL[prLink.url],
-               let reviewedAt = request.viewerLastReviewedAt,
-               reviewedAt > session.createdAt {
+            let reviewedAt = [
+                reviewRequestsByPRURL[prLink.url]?.viewerLastReviewedAt,
+                prsByURL[prLink.url]?.viewerLastReviewedAt,
+            ].compactMap { $0 }.max()
+            if let reviewedAt, reviewedAt > session.createdAt {
                 decisions.append(CompletionDecision(sessionID: session.id, reason: "viewer submitted review"))
                 continue
             }
@@ -4330,13 +4380,25 @@ public final class IssueTracker {
 
     /// Auto-complete review sessions whose PR has been merged or closed.
     /// Delegates to `decideReviewCompletions` for testability.
+    ///
+    /// The candidate filter matches `AppState.reviewSessions` (which excludes
+    /// only `.completed`/`.archived`), `collectStalePRURLs`, and
+    /// `autoCompleteFinishedSessions` — deliberately, because those are the
+    /// statuses that keep a session shadowing its PR. Filtering to `.active`
+    /// alone (as this did before CROW-945) left a `.paused` or `.inReview`
+    /// review session visible to `existingReviewSession(forPRURL:)` forever
+    /// with no rule anywhere able to complete it, so the PR could never start
+    /// another round.
     private func autoCompleteFinishedReviews(
         openReviewPRURLs: Set<String>,
         prsByURL: [String: ViewerPR],
         reviewRequestsByPRURL: [String: ReviewRequest],
         prDataComplete: Bool
     ) {
-        let activeReviews = appState.sessions.filter { $0.kind == .review && $0.status == .active }
+        let activeReviews = appState.sessions.filter {
+            $0.kind == .review
+                && ($0.status == .active || $0.status == .paused || $0.status == .inReview)
+        }
         var linksBySessionID: [UUID: [SessionLink]] = [:]
         for session in activeReviews {
             linksBySessionID[session.id] = appState.links(for: session.id)

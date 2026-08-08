@@ -28,7 +28,9 @@ struct IssueTrackerDedupTests {
         lastSubstantiveCommitAt: Date? = nil,
         changesRequestedReviewerLogins: [String] = [],
         pendingReviewerLogins: [String] = [],
-        hasPendingReviewRequest: Bool = false
+        hasPendingReviewRequest: Bool = false,
+        viewerLastReviewedAt: Date? = nil,
+        updatedAt: Date? = nil
     ) -> IssueTracker.ViewerPR {
         IssueTracker.ViewerPR(
             number: number,
@@ -51,7 +53,9 @@ struct IssueTrackerDedupTests {
             lastSubstantiveCommitAt: lastSubstantiveCommitAt,
             changesRequestedReviewerLogins: changesRequestedReviewerLogins,
             pendingReviewerLogins: pendingReviewerLogins,
-            hasPendingReviewRequest: hasPendingReviewRequest
+            hasPendingReviewRequest: hasPendingReviewRequest,
+            viewerLastReviewedAt: viewerLastReviewedAt,
+            updatedAt: updatedAt
         )
     }
 
@@ -245,12 +249,16 @@ struct IssueTrackerDedupTests {
         // this when `PRRecord` grows — the initializer defaults mean an
         // omission in `mergePRRecords` compiles silently.
         let url = "https://github.com/corveil/crow/pull/836"
+        let stamp = Date(timeIntervalSince1970: 1780740000)
         let viewer = makeViewerPR(
             url: url, state: "OPEN", labels: [Self.crowMerge],
             changesRequestedReviewerLogins: ["dgershman"],
             pendingReviewerLogins: ["someoneelse"],
-            hasPendingReviewRequest: true)
-        let stale = makeViewerPR(url: url, state: "MERGED", labels: [])
+            hasPendingReviewRequest: true,
+            updatedAt: stamp)
+        let stale = makeViewerPR(
+            url: url, state: "MERGED", labels: [],
+            viewerLastReviewedAt: stamp)
         let deduped = IssueTracker.dedupedByURL([viewer, stale])
         #expect(deduped.count == 1)
         #expect(hasCrowMerge(deduped[0]))
@@ -259,6 +267,14 @@ struct IssueTrackerDedupTests {
         #expect(deduped[0].changesRequestedReviewerLogins == ["dgershman"])
         #expect(deduped[0].pendingReviewerLogins == ["someoneelse"])
         #expect(deduped[0].hasPendingReviewRequest)
+        // CROW-945. `viewerLastReviewedAt` arrives ONLY from the stale record
+        // (the viewer-PR query never selects it) and the stale record wins the
+        // state rank here, so both merge directions have to carry it — dropping
+        // it stops review rounds closing, which is the whole bug.
+        #expect(deduped[0].viewerLastReviewedAt == stamp)
+        // `updatedAt` arrives only from the viewer record, i.e. the loser.
+        // It was silently dropped before CROW-945.
+        #expect(deduped[0].updatedAt == stamp)
     }
 
     @Test func mergePRRecordsCarriesReviewerFieldsFromEitherSide() {
