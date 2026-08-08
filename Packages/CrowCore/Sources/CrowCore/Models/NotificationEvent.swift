@@ -27,6 +27,13 @@ public enum NotificationEvent: String, Codable, Sendable, CaseIterable, Identifi
     case autoMergeBlocked
     case autoRebasePushed
     case autoRebaseConflicts
+    /// The third auto-rebase outcome, and the one with no automated next step
+    /// (#944). A conflict hands off to the agent; a *stuck* rebase can't —
+    /// the worktree is dirty, or the branch holds commits `origin` doesn't and
+    /// any force-push would destroy them. Crow keeps retrying at the backoff
+    /// cap, so without a notification this state repeats in the log forever and
+    /// surfaces nowhere. Fires at most once per (PR, reason).
+    case autoRebaseStuck
     case configReloaded
 
     public var id: String { rawValue }
@@ -43,6 +50,7 @@ public enum NotificationEvent: String, Codable, Sendable, CaseIterable, Identifi
         case .autoMergeBlocked: "Auto-Merge Blocked"
         case .autoRebasePushed: "Branch Rebased"
         case .autoRebaseConflicts: "Rebase Conflicts"
+        case .autoRebaseStuck: "Rebase Stuck"
         case .configReloaded: "Config Reloaded"
         }
     }
@@ -59,6 +67,7 @@ public enum NotificationEvent: String, Codable, Sendable, CaseIterable, Identifi
         case .autoMergeBlocked: "Crow can't auto-merge a crow:merge PR and has stopped trying"
         case .autoRebasePushed: "Crow rebased a PR branch onto its base and pushed"
         case .autoRebaseConflicts: "An auto-rebase hit conflicts that need attention"
+        case .autoRebaseStuck: "An auto-rebase can't proceed and needs you"
         case .configReloaded: "Crow reloaded its configuration"
         }
     }
@@ -77,7 +86,9 @@ public enum NotificationEvent: String, Codable, Sendable, CaseIterable, Identifi
         // success events it sits next to (CROW-768). `autoMergeBlocked` joins
         // it for the same reason: it is the one auto-merge event that means
         // "Crow stopped and needs you", not "Crow handled it" (#888).
-        case .autoRebaseConflicts, .autoMergeBlocked: "Basso"
+        // `autoRebaseStuck` is that same family — Crow is still retrying, but
+        // only a human changes the outcome (#944).
+        case .autoRebaseConflicts, .autoMergeBlocked, .autoRebaseStuck: "Basso"
         case .configReloaded: "Tink"
         }
     }
@@ -88,7 +99,7 @@ public enum NotificationEvent: String, Codable, Sendable, CaseIterable, Identifi
     public var isAutomationEvent: Bool {
         switch self {
         case .autoWorkspaceCreated, .autoMergeEnabled, .autoMergeBlocked, .autoRebasePushed,
-             .autoRebaseConflicts, .configReloaded:
+             .autoRebaseConflicts, .autoRebaseStuck, .configReloaded:
             true
         case .taskComplete, .agentWaiting, .reviewRequested, .changesRequested, .checksFailing:
             false

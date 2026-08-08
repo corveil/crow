@@ -250,6 +250,13 @@ public final class AppState {
     /// is deleted (see `SessionService.deleteSession`).
     public var autoMergeState: [UUID: AutoMergeState] = [:]
 
+    /// What the auto-rebase watcher concluded about each session's branch on
+    /// its last attempt (#944). Same lifetime rules as `autoMergeState` above:
+    /// in-memory only, deliberately absent from `DaemonStateSnapshot` because
+    /// it is re-derived every poll, and cleared alongside `prStatus` when a
+    /// session is deleted (see `SessionService.deleteSession`).
+    public var autoRebaseState: [UUID: AutoRebaseState] = [:]
+
     // MARK: - Review Requests
 
     /// PRs where the current user has been requested as a reviewer.

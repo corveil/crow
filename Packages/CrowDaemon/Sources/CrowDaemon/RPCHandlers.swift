@@ -968,6 +968,20 @@ func makeCommandRouter(
                             "permanent": .bool(autoMerge.permanent),
                         ])
                     }
+                    // What the auto-rebase watcher decided about this branch
+                    // (#944). Same sibling-of-`pr` contract as `auto_merge_state`
+                    // above, and for a sharper reason: `prStatusJSON` never ships
+                    // `mergeStateStatus`, so a PR that is BEHIND its base is
+                    // invisible in `pr` entirely — a wedged branch renders as a
+                    // fully green pill. Absent key means "nothing to report".
+                    if let autoRebase = appState.autoRebaseState[id] {
+                        entry["auto_rebase_state"] = .object([
+                            "phase": .string(autoRebase.phase.rawValue),
+                            "reason": .string(autoRebase.reason),
+                            "message": .string(autoRebase.message),
+                            "permanent": .bool(autoRebase.permanent),
+                        ])
+                    }
                     // Per-session analytics strip (CROW-722). Prefer the live
                     // in-memory hook aggregate (open sessions); fall back to the
                     // durable end-of-session snapshot (terminal sessions). Mirrors

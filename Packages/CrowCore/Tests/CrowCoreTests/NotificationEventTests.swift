@@ -3,9 +3,9 @@ import Testing
 @testable import CrowCore
 
 @Test func notificationEventAllCasesCount() {
-    // 5 agent/PR events + 6 automation events (CROW-768, plus autoMergeBlocked
-    // in #888).
-    #expect(NotificationEvent.allCases.count == 11)
+    // 5 agent/PR events + 7 automation events (CROW-768, plus autoMergeBlocked
+    // in #888 and autoRebaseStuck in #944).
+    #expect(NotificationEvent.allCases.count == 12)
 }
 
 @Test func autoMergeBlockedIsAnAutomationEvent() {
@@ -92,7 +92,7 @@ import Testing
 @Test func automationEventsArePresentAndClassified() {
     let automation: [NotificationEvent] = [
         .autoWorkspaceCreated, .autoMergeEnabled, .autoMergeBlocked, .autoRebasePushed,
-        .autoRebaseConflicts, .configReloaded,
+        .autoRebaseConflicts, .autoRebaseStuck, .configReloaded,
     ]
     for event in automation {
         #expect(NotificationEvent.allCases.contains(event))
@@ -116,5 +116,9 @@ import Testing
     // Acceptance criterion: an attention event must be audibly distinguishable
     // from the success event beside it.
     #expect(NotificationEvent.autoRebaseConflicts.defaultSound
+            != NotificationEvent.autoRebasePushed.defaultSound)
+    // Same rule for the third auto-rebase outcome (#944): "stuck" is the one
+    // that needs a human, so it must not sound like "rebased".
+    #expect(NotificationEvent.autoRebaseStuck.defaultSound
             != NotificationEvent.autoRebasePushed.defaultSound)
 }

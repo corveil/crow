@@ -126,6 +126,17 @@ public final class IssueTracker {
     /// terminal (the `fixConflicts` quick action) and notify.
     public var onAutoRebaseConflicts: ((UUID, String, Int) -> Void)?
 
+    /// Fires when an auto-rebase has deferred often enough that only a human
+    /// can unwedge it (#944) — a dirty worktree, or a branch holding commits
+    /// `origin` doesn't. The twin of `onAutoMergeBlocked`, and it takes the
+    /// state for the same reason: the daemon renders `state.message` verbatim
+    /// rather than re-deriving a sentence from the reason token.
+    ///
+    /// Unlike `onAutoRebaseConflicts` this must **not** hand off to the agent.
+    /// There are no conflicts to resolve, and a diverged branch by definition
+    /// holds work a `git reset --hard` would destroy.
+    public var onAutoRebaseStuck: ((UUID, String, Int, AutoRebaseState) -> Void)?
+
     /// Runs `git rebase` / force-push for the auto-rebase watcher. Owns its
     /// own instance (no `WorkspaceConfig` needed for path-scoped operations).
     private let gitManager = GitManager()
@@ -161,7 +172,13 @@ public final class IssueTracker {
     /// returns "not Crow-authored" rather than distinguishing fetch failure.
     /// Effectively frozen on success once `Session.autoMergeEnabledAt` is
     /// persisted, which the gating guard checks first.
-    private var autoMergeInFlight: Set<String> = []
+    ///
+    /// `attemptUpdateBranch` is the exception: it clears the marker on *every*
+    /// path (#944), because `autoUpdateBranchAttempted` already suppresses
+    /// re-checks per head and leaving it set instead made the UI claim, for the
+    /// process lifetime, that Crow was mid-attempt on a PR it had abandoned.
+    /// Internal (not private) so `@testable` tests can assert that.
+    var autoMergeInFlight: Set<String> = []
 
     /// Last time we logged "auto-merge watcher disabled" to the automation log.
     /// Rate-limits that line to hourly so a deliberately-off watcher doesn't
@@ -199,7 +216,28 @@ public final class IssueTracker {
     /// commit (new `headRefOid` → new key), so a base that keeps moving can
     /// still re-update, while a stuck/no-op head isn't hammered every poll.
     /// In-memory only; a restart re-evaluates, which is harmless.
-    private var autoUpdateBranchAttempted: Set<String> = []
+    /// Internal (not private) so `@testable` tests can read the dispatch
+    /// decision without a live backend, matching ``autoReRequestAttempted``.
+    var autoUpdateBranchAttempted: Set<String> = []
+
+    /// Consecutive failed `updateBranch` calls per `autoUpdateBranchAttempted`
+    /// key. The per-head guard alone deadlocks on failure — it says "retry once
+    /// the head commit changes", and a failed update is exactly what did not
+    /// change the head commit, so one rate limit or 502 parked a `BEHIND` merge
+    /// candidate until a human pushed something (#944). Mirrors
+    /// ``autoRebaseFailureCounts``. Cleared on success; pruned alongside
+    /// `autoUpdateBranchAttempted`. In-memory only.
+    var autoUpdateBranchFailureCounts: [String: Int] = [:]
+
+    /// Max consecutive failed `gh pr update-branch` calls per head state before
+    /// the watcher gives up until the head commit changes.
+    nonisolated static let maxAutoUpdateBranchFailureRetries = 3
+
+    /// Whether a failed `updateBranch` should be retried on the next poll.
+    /// Pure so the policy is unit-testable, matching `shouldRetryFailedRebase`.
+    nonisolated static func shouldRetryFailedUpdateBranch(failureCount: Int) -> Bool {
+        failureCount < maxAutoUpdateBranchFailureRetries
+    }
 
     /// Repos whose `crow:merge` label we have already created — or confirmed
     /// present — this process lifetime. Keyed `"<provider>\n<owner/repo>"`,
@@ -231,7 +269,9 @@ public final class IssueTracker {
 
     /// PR URLs with an auto-rebase attempt currently in flight. Cleared when
     /// the attempt finishes so the next poll can re-evaluate.
-    private var autoRebaseInFlight: Set<String> = []
+    /// Internal (not private) for `@testable` tests, matching
+    /// ``autoReRequestInFlight``.
+    var autoRebaseInFlight: Set<String> = []
 
     /// Per-head-commit guard for auto-rebase, keyed `"<url>\n<headRefOid>"`.
     /// One rebase attempt per head state — a successful rebase rewrites the
@@ -240,11 +280,27 @@ public final class IssueTracker {
     /// `.outOfSyncWithRemote`, and bounded `.failed` retries) un-set the key so
     /// a later poll retries; for the two deferrals, `autoRebaseDeferrals` then
     /// paces how much later. In-memory only.
-    private var autoRebaseAttempted: Set<String> = []
+    /// Internal (not private) so `@testable` tests can read the dispatch
+    /// decision without a live backend, matching ``autoReRequestAttempted``.
+    var autoRebaseAttempted: Set<String> = []
+
+    /// Heads the git pre-check found already on base, mapped to the
+    /// `mergeStateStatus` GitHub reported at the time (#944).
+    ///
+    /// Exists because widening the candidate filter made the per-head latch
+    /// dangerous: a PR probed while merely `BLOCKED`-and-not-yet-behind would
+    /// burn its one attempt, and the base moving afterwards is *invisible* in
+    /// `headRefOid` — so the watcher would never look again, which is worse
+    /// than the bug #944 set out to fix. `applyAutoRebase` re-arms the latch
+    /// when GitHub's view of this same head *changes*, and only then, so a
+    /// persistent git/GitHub disagreement can't hot-loop. In-memory only.
+    var autoRebaseUpToDateHeads: [String: String] = [:]
 
     /// A deferred auto-rebase attempt: why it deferred, how many consecutive
     /// times this head state has deferred, and when it may be retried.
-    private struct AutoRebaseDeferral {
+    /// Internal (not private) so `@testable` tests can assert the escalation
+    /// count and the reason-change reset.
+    struct AutoRebaseDeferral {
         let reason: AutoRebaseDeferReason
         let count: Int
         let retryAt: Date
@@ -255,8 +311,8 @@ public final class IssueTracker {
     /// this the retry cadence is "every poll, forever" — a clean-but-stale
     /// worktree re-fetched and re-logged a bare `dispatched` line every 60s
     /// with no outcome ever recorded (#889). Cleared on any non-deferral
-    /// outcome. In-memory only.
-    private var autoRebaseDeferrals: [String: AutoRebaseDeferral] = [:]
+    /// outcome. In-memory only. Internal for `@testable` tests.
+    var autoRebaseDeferrals: [String: AutoRebaseDeferral] = [:]
 
     /// Why an auto-rebase attempt deferred rather than rebasing. Raw values are
     /// grep-stable — they are written verbatim to the automation log, like
@@ -267,12 +323,90 @@ public final class IssueTracker {
         case outOfSyncDiverged = "out-of-sync-diverged"
     }
 
+    /// One publishable auto-rebase outcome (#944). Carries the payload a
+    /// message needs — deferral count, attempt count, git's own error — which
+    /// is why this is an enum with associated values rather than
+    /// `AutoMergeSkipReason`'s plain `String` raw values. Reason tokens are
+    /// shared with `AutoRebaseDeferReason` so the chip and the log agree.
+    enum AutoRebaseVerdict {
+        case deferred(AutoRebaseDeferReason, count: Int)
+        case gaveUp(attempts: Int, error: String)
+
+        /// Token identical to the one in `crowd-automation.log`. Only
+        /// `.gaveUp` needs a new one.
+        var reason: String {
+            switch self {
+            case .deferred(let reason, _): reason.rawValue
+            case .gaveUp: "rebase-failed"
+            }
+        }
+
+        var state: AutoRebaseState {
+            switch self {
+            case .deferred(let reason, let count):
+                let stuck = IssueTracker.shouldEscalateDeferral(deferralCount: count)
+                return AutoRebaseState(
+                    phase: stuck ? .blocked : .stalled,
+                    reason: reason.rawValue,
+                    message: Self.message(for: reason, count: count, stuck: stuck),
+                    permanent: stuck)
+            case .gaveUp(let attempts, let error):
+                // Git's stderr reaches the DOM only via `chip.title` and
+                // `textContent`, so there's no injection vector — but an
+                // unbounded one blows out both the tooltip and the
+                // notification body.
+                let detail = error.trimmingCharacters(in: .whitespacesAndNewlines).prefix(200)
+                return AutoRebaseState(
+                    phase: .blocked, reason: reason,
+                    message: "Crow's rebase failed \(attempts) times in a row and has stopped "
+                        + "trying until the branch moves. Last error: \(detail)",
+                    permanent: true)
+            }
+        }
+
+        private static func message(
+            for reason: AutoRebaseDeferReason, count: Int, stuck: Bool
+        ) -> String {
+            switch (reason, stuck) {
+            case (.dirtyWorktree, false):
+                "Crow can't rebase this branch onto its base: the worktree has uncommitted "
+                    + "changes. It will retry once the tree is clean."
+            case (.dirtyWorktree, true):
+                "Crow has tried to rebase this branch \(count) times and the worktree still "
+                    + "has uncommitted changes. Commit or stash them — retrying won't clear it."
+            case (.outOfSyncAhead, false):
+                "Crow can't rebase this branch onto its base: it has local commits the remote "
+                    + "doesn't, and a force-push would publish them. Push or drop them and "
+                    + "Crow will retry."
+            case (.outOfSyncAhead, true):
+                "Crow has tried to rebase this branch \(count) times; it still has local "
+                    + "commits the remote doesn't, so a force-push would publish unpushed "
+                    + "work. Push or drop them yourself."
+            case (.outOfSyncDiverged, false):
+                "Crow can't rebase this branch onto its base: it and the remote have both "
+                    + "moved, so a force-push would revert remote commits. Reconcile them and "
+                    + "Crow will retry."
+            case (.outOfSyncDiverged, true):
+                "Crow has tried to rebase this branch \(count) times; it and the remote have "
+                    + "both moved, so any force-push would revert remote commits. Reconcile "
+                    + "them by hand — Crow will not."
+            }
+        }
+    }
+
+    /// PRs already announced as stuck, keyed `"<url>\n<reason>"`. A wedged
+    /// deferral re-publishes its verdict on every poll forever, so without this
+    /// the escalation is a chime every 15 minutes. Mirrors
+    /// ``autoMergeBlockNotified``, including keying on the reason so a branch
+    /// that moves from `ahead` to `diverged` announces itself again.
+    private var autoRebaseStuckNotified: Set<String> = []
+
     /// Consecutive `.failed` rebase attempts per head-key, so a transient git
     /// failure (fetch flake, rejected lease, unreachable base) is retried a
     /// bounded number of times rather than either stalling forever or
     /// hot-looping on a genuinely-broken config. Cleared on any non-failure
-    /// outcome. In-memory only.
-    private var autoRebaseFailureCounts: [String: Int] = [:]
+    /// outcome. In-memory only. Internal for `@testable` tests.
+    var autoRebaseFailureCounts: [String: Int] = [:]
 
     /// Max consecutive `.failed` auto-rebase attempts per head state before
     /// the watcher gives up until the head commit changes.
@@ -283,6 +417,18 @@ public final class IssueTracker {
     /// permanently stuck branch to ~4 attempts an hour.
     nonisolated static let autoRebaseDeferralBaseDelay: TimeInterval = 60
     nonisolated static let autoRebaseDeferralMaxDelay: TimeInterval = 900
+
+    /// Consecutive deferrals of the same reason before the watcher stops
+    /// backing off quietly and tells a human (#944).
+    ///
+    /// 5 is not arbitrary: it is the first count at which
+    /// `autoRebaseDeferralBackoff` saturates at `autoRebaseDeferralMaxDelay`
+    /// (60 · 2⁴ = 960, capped to 900) — roughly 30 minutes and four failed
+    /// retries in. Below it Crow is genuinely "waiting a bit longer"; from here
+    /// on it asks the same question every 15 minutes and gets the same answer,
+    /// which is exactly the state nobody found out about. A test pins it to the
+    /// backoff curve so the two can't drift apart.
+    nonisolated static let autoRebaseStuckDeferralThreshold = 5
 
     /// Last observed `PRStatus` per session. Ephemeral (not persisted across
     /// Crow restarts post-CROW-508): only used for in-process `.checksFailing`
@@ -3062,6 +3208,19 @@ public final class IssueTracker {
             return
         }
 
+        // Drop per-head bookkeeping for heads no longer in the poll, so these
+        // maps don't grow for the daemon's lifetime (#944 — `autoUpdateBranch-
+        // Attempted` was never pruned at all). Guarded by the non-empty check
+        // above so a failed poll can't wipe live state, and done *here* rather
+        // than in `evaluateAutoMerge`: that is also called from
+        // `reevaluateAutoMergeAfterLabel` with a single-entry map, where this
+        // would wipe every other PR's key.
+        let liveHeadKeys = Set(viewerPRs.map { "\($0.url)\n\($0.headRefOid)" })
+        autoUpdateBranchAttempted.formIntersection(liveHeadKeys)
+        autoUpdateBranchFailureCounts = autoUpdateBranchFailureCounts.filter {
+            liveHeadKeys.contains($0.key)
+        }
+
         var enabledCount = 0
         var updateBranchCount = 0
         var directMergeCount = 0
@@ -3186,13 +3345,17 @@ public final class IssueTracker {
             // next poll re-evaluates once GitHub recomputes mergeability.
             let key = "\(prLink.url)\n\(pr.headRefOid)"
             guard !autoUpdateBranchAttempted.contains(key) else {
-                publishAutoMergeVerdict(.updateBranchAlreadyAttempted, session: session, pr: pr)
-                return AutoMergeOutcome(
-                    skip: "#\(pr.number):\(AutoMergeSkipReason.updateBranchAlreadyAttempted.rawValue)")
+                // Prefer a recorded permanent reason over the vaguer
+                // "already attempted for this head" (#944) — same idiom as the
+                // in-flight guard above.
+                let latched = autoMergePermanentSkips[prLink.url]
+                    .flatMap(AutoMergeSkipReason.init(rawValue:)) ?? .updateBranchAlreadyAttempted
+                publishAutoMergeVerdict(latched, session: session, pr: pr)
+                return AutoMergeOutcome(skip: "#\(pr.number):\(latched.rawValue)")
             }
             autoUpdateBranchAttempted.insert(key)
             autoMergeInFlight.insert(prLink.url)
-            Task { await self.attemptUpdateBranch(session: session, pr: pr) }
+            Task { await self.attemptUpdateBranch(session: session, pr: pr, headKey: key) }
             return AutoMergeOutcome(dispatch: .updateBranch)
         }
         if pr.repoAutoMergeAllowed == false {
@@ -3495,28 +3658,63 @@ public final class IssueTracker {
     /// recomputed mergeability and checks have re-run. Deliberately does NOT
     /// persist `Session.autoMergeEnabledAt`: an update must not burn the
     /// one-shot merge guard. The same Crow-authorship check as the merge path
-    /// applies. The per-head `autoUpdateBranchAttempted` key (set by the
-    /// caller) is left in place so a failed/no-op update isn't retried until
-    /// the head commit changes.
-    private func attemptUpdateBranch(session: Session, pr: ViewerPR) async {
-        guard let backend = codeBackend(for: session) else { return }
+    /// applies.
+    ///
+    /// Every return path clears `autoMergeInFlight` (#944). Two of them used to
+    /// sit *above* the `defer`, so a PR with no code backend or no Crow trailer
+    /// was latched for the lifetime of the process — and because nothing
+    /// recorded a reason, `evaluateAutoMerge`'s in-flight guard reported the
+    /// bare `.inFlight` verdict, i.e. the UI claimed Crow was working on the PR
+    /// right then. Forever. Suppression is `autoUpdateBranchAttempted`'s job,
+    /// not the in-flight marker's: it returns before any dispatch, so clearing
+    /// here costs no extra backend calls.
+    /// Internal (not private) so `@testable` tests can drive the two early
+    /// returns directly and assert they don't latch.
+    func attemptUpdateBranch(session: Session, pr: ViewerPR, headKey: String) async {
+        defer { autoMergeInFlight.remove(pr.url) }
+
+        guard let backend = codeBackend(for: session) else {
+            // Was a bare `return` — invisible in the log as well as latched.
+            CrowLog.automation("auto-merge: #\(pr.number) update-branch skipped:no-code-backend")
+            return
+        }
         guard await prHasCrowAuthoredCommit(pr: pr, backend: backend) else {
+            // Authorship can't change without a new commit, and a new commit
+            // means a new head key — so record the reason rather than letting
+            // the per-head guard report the vaguer
+            // `update-branch-already-attempted`.
+            autoMergePermanentSkips[pr.url] = AutoMergeSkipReason.noCrowSessionTrailer.rawValue
+            publishAutoMergeVerdict(.noCrowSessionTrailer, session: session, pr: pr)
             CrowLog.automation(
                 "auto-merge: #\(pr.number) update-branch skipped — no Crow-Session trailer matching a known session")
             return
         }
-
-        defer { autoMergeInFlight.remove(pr.url) }
         guard backend.capabilities.contains(.updateBranch) else {
+            // Capability sets are static, so this is permanent for the backend.
+            autoMergePermanentSkips[pr.url] = AutoMergeSkipReason.backendLacksAutoMerge.rawValue
+            publishAutoMergeVerdict(.backendLacksAutoMerge, session: session, pr: pr)
             CrowLog.automation("auto-merge: #\(pr.number) update-branch skipped — backend lacks the updateBranch capability")
             return
         }
         do {
             try await backend.updateBranch(prURL: pr.url)
+            autoUpdateBranchFailureCounts[headKey] = nil
             CrowLog.automation(
                 "auto-merge: #\(pr.number) branch updated from base (session \(session.id.uuidString), was BEHIND)")
         } catch {
-            CrowLog.automation("auto-merge: #\(pr.number) updateBranch failed: \(error.localizedDescription)")
+            // A *failed* update leaves `headRefOid` unchanged, so the per-head
+            // guard's "retry once the branch moves" is a deadlock: the branch
+            // is precisely what didn't move. Retry a bounded number of times
+            // instead, mirroring `attemptRebase`'s `.failed` branch.
+            let failures = (autoUpdateBranchFailureCounts[headKey] ?? 0) + 1
+            autoUpdateBranchFailureCounts[headKey] = failures
+            let willRetry = Self.shouldRetryFailedUpdateBranch(failureCount: failures)
+            if willRetry { autoUpdateBranchAttempted.remove(headKey) }
+            CrowLog.automation(
+                "auto-merge: #\(pr.number) updateBranch failed (attempt \(failures)/"
+                + "\(Self.maxAutoUpdateBranchFailureRetries), "
+                + "\(willRetry ? "will retry" : "giving up until head changes")): "
+                + "\(error.localizedDescription.prefix(200))")
         }
     }
 
@@ -3587,18 +3785,46 @@ public final class IssueTracker {
 
     // MARK: - Auto-Rebase Watcher (CROW-318)
 
-    /// Decide whether `pr` is a candidate for auto-rebase. Pure so unit tests
-    /// can exercise it without an `IssueTracker`. Unlike `shouldAttemptAutoMerge`
-    /// there is **no label requirement**, and review state and draft-ness are
-    /// irrelevant — a rebase doesn't need approval, and the operation is a
-    /// rebase-onto-base + `--force-with-lease` on the session's own branch,
-    /// never a merge (drafts stay excluded from auto-merge by
-    /// `shouldAttemptAutoMerge`'s own guard). Returns true when the PR is OPEN
-    /// and either BEHIND its base or CONFLICTING. Crow-authorship and per-head
-    /// loop-safety are enforced by the caller.
+    /// Decide whether `pr` is worth *looking at* — a candidate filter, not an
+    /// answer. Pure so unit tests can exercise it without an `IssueTracker`.
+    ///
+    /// This deliberately does **not** try to decide whether the branch is
+    /// behind. `mergeStateStatus` is GitHub's single-valued summary of why the
+    /// merge button isn't green, not a set of flags: it reports the
+    /// highest-priority reason, so a PR that is behind base *and* anything else
+    /// reports the other value. `BLOCKED` (required review pending) masks
+    /// `BEHIND`, and so do `DIRTY`, `DRAFT` and `UNKNOWN` — which meant the
+    /// watcher never saw the single most common shape, a PR drifting behind its
+    /// base while it waits for a reviewer (#944). Git is the only thing that
+    /// actually knows, so `attemptRebase` asks it (`GitManager.behindBase`) and
+    /// a PR that needs nothing costs one `fetch` per head state.
+    ///
+    /// Unlike `shouldAttemptAutoMerge` there is **no label requirement**, and
+    /// review state and draft-ness are irrelevant — a rebase doesn't need
+    /// approval, and the operation is a rebase-onto-base + `--force-with-lease`
+    /// on the session's own branch, never a merge. Three consequences worth
+    /// naming, because they are decisions and not accidents:
+    ///
+    /// - **Drafts stay eligible**, as they have been since CROW-318. A draft's
+    ///   `mergeStateStatus` is *always* `DRAFT`, so behind-ness was masked
+    ///   permanently — drafts are exactly where long-lived Crow branches rot.
+    ///   They remain excluded from auto-*merge* by `shouldAttemptAutoMerge`'s
+    ///   own draft guard, so nothing here can merge one.
+    /// - **Every open GitLab MR becomes a candidate.** `PRRecord`'s
+    ///   `mergeStateStatus` defaults to `"UNKNOWN"` and `GitLabCodeBackend`
+    ///   never populates it. MRs do fall behind and nothing else handles them,
+    ///   so this is wanted — and it is bounded to one probe per head.
+    /// - **`UNKNOWN` costs one probe per push** while GitHub recomputes
+    ///   mergeability. That is the price of no longer being permanently blind
+    ///   to a mid-recompute PR.
+    ///
+    /// Crow-authorship and per-head loop-safety are enforced by the caller.
     nonisolated static func shouldAttemptAutoRebase(pr: ViewerPR) -> Bool {
         guard pr.state == "OPEN" else { return false }
-        return pr.mergeStateStatus == "BEHIND" || pr.mergeable == "CONFLICTING"
+        // The `CONFLICTING` disjunct is subsumed by `!= CLEAN` (a PR cannot be
+        // both), but kept: it costs nothing and survives a provider that
+        // populates one field and not the other.
+        return pr.mergeStateStatus != "CLEAN" || pr.mergeable == "CONFLICTING"
     }
 
     /// Whether a session may be considered by the auto-rebase watcher at all.
@@ -3615,7 +3841,14 @@ public final class IssueTracker {
     /// (session, PR) pairs and kicks off one rebase attempt per head commit.
     /// No-op when `autoRespond.autoRebaseAndResolveConflicts` is off.
     private func applyAutoRebase(viewerPRs: [ViewerPR]) {
-        guard autoRebaseAndResolveConflictsProvider() else { return }
+        guard autoRebaseAndResolveConflictsProvider() else {
+            // Turning the watcher off must not leave verdicts behind — but do
+            // this before the non-empty guard below, so a *failed poll* can't
+            // masquerade as a toggle-off and wipe live chips.
+            appState.autoRebaseState.removeAll()
+            autoRebaseStuckNotified.removeAll()
+            return
+        }
         guard !viewerPRs.isEmpty else { return }
         let byURL = Dictionary(viewerPRs.map { ($0.url, $0) }, uniquingKeysWith: Self.mergePRRecords)
 
@@ -3627,6 +3860,7 @@ public final class IssueTracker {
         autoRebaseAttempted.formIntersection(liveHeadKeys)
         autoRebaseFailureCounts = autoRebaseFailureCounts.filter { liveHeadKeys.contains($0.key) }
         autoRebaseDeferrals = autoRebaseDeferrals.filter { liveHeadKeys.contains($0.key) }
+        autoRebaseUpToDateHeads = autoRebaseUpToDateHeads.filter { liveHeadKeys.contains($0.key) }
 
         let now = Date()
         var dispatched = 0
@@ -3634,19 +3868,52 @@ public final class IssueTracker {
             guard let prLink = appState.links(for: session.id).first(where: { $0.linkType == .pr }) else { continue }
             guard !autoRebaseInFlight.contains(prLink.url) else { continue }
             guard let pr = byURL[prLink.url] else { continue }
-            guard Self.shouldAttemptAutoRebase(pr: pr) else { continue }
-
-            // Precedence: when auto-merge is also enabled and this PR is a
-            // crow:merge BEHIND candidate, let auto-merge's `gh pr update-branch`
-            // own bringing it up to date so the two watchers don't fight over
-            // the same branch. Auto-rebase still owns every CONFLICTING PR and
-            // every BEHIND PR that isn't a crow:merge merge candidate.
-            if autoMergeWatcherEnabledProvider(),
-               Self.shouldUpdateBranchBeforeMerge(pr: pr, session: session) {
+            guard Self.shouldAttemptAutoRebase(pr: pr) else {
+                // The PR stopped being a candidate — hand-rebased, merged, or
+                // closed. This is the *only* recovery path (`attemptRebase`
+                // never runs again for a non-candidate), so without the clear a
+                // `blocked` chip would outlive its cause forever.
+                publishAutoRebaseVerdict(nil, session: session, pr: pr)
                 continue
             }
 
             let key = "\(prLink.url)\n\(pr.headRefOid)"
+
+            // Precedence: when auto-merge is also enabled and this PR is a
+            // crow:merge BEHIND candidate, let auto-merge's `gh pr update-branch`
+            // own bringing it up to date so the two watchers don't fight over
+            // the same branch.
+            //
+            // Yield only while auto-merge *can still act* — actively trying
+            // (`autoMergeInFlight`) or not yet out of attempts. Before #944
+            // this yielded unconditionally, so once auto-merge burned its
+            // one-shot `autoUpdateBranchAttempted` key and gave up, nobody
+            // fixed the branch at all. The in-flight disjunct is load-bearing:
+            // `autoUpdateBranchAttempted.insert` happens *before* the async
+            // attempt and `applyAutoMerge` runs immediately before this in the
+            // same poll, so `!contains` alone is already false in the very poll
+            // auto-merge dispatched.
+            if autoMergeWatcherEnabledProvider(),
+               Self.shouldUpdateBranchBeforeMerge(pr: pr, session: session),
+               autoMergeInFlight.contains(prLink.url) || !autoUpdateBranchAttempted.contains(key) {
+                // One piece of work, one chip: auto-merge owns this branch's
+                // verdict while it's the one acting on it.
+                publishAutoRebaseVerdict(nil, session: session, pr: pr)
+                continue
+            }
+
+            // A head we latched as "already on base" is re-checked once
+            // whenever GitHub's view of it changes. The base moving is
+            // invisible in `headRefOid`, so without this the widened candidate
+            // filter (#944) would let the watcher spend its one attempt while
+            // the PR was merely BLOCKED and never look again once the base
+            // actually moved. Requiring a *change* is what keeps this from
+            // hot-looping on a persistent git/GitHub disagreement.
+            if let seen = autoRebaseUpToDateHeads[key], seen != pr.mergeStateStatus {
+                autoRebaseUpToDateHeads[key] = pr.mergeStateStatus
+                autoRebaseAttempted.remove(key)
+            }
+
             // A deferral re-arms `autoRebaseAttempted`, so the backoff window is
             // what actually paces retries for a head that keeps deferring.
             if let deferral = autoRebaseDeferrals[key], now < deferral.retryAt { continue }
@@ -3677,6 +3944,20 @@ public final class IssueTracker {
     /// retry policy is unit-testable without an `IssueTracker`.
     nonisolated static func shouldRetryFailedRebase(failureCount: Int) -> Bool {
         failureCount < maxAutoRebaseFailureRetries
+    }
+
+    /// Whether a deferral that has recurred this many times should escalate
+    /// from `.stalled` to `.blocked` and notify. Pure so the policy is
+    /// unit-testable without an `IssueTracker`, matching
+    /// `shouldRetryFailedRebase`.
+    ///
+    /// Escalating is **not** giving up: past the threshold the deferral keeps
+    /// retrying at the backoff cap, so whatever a human does to unwedge the
+    /// branch is picked up on the next cycle with nothing to re-arm. Do not
+    /// "fix" this into a give-up — the whole point is that #944's dead-end was
+    /// silent, not that it was persistent.
+    nonisolated static func shouldEscalateDeferral(deferralCount: Int) -> Bool {
+        deferralCount >= autoRebaseStuckDeferralThreshold
     }
 
     /// How long to wait before re-attempting a deferred auto-rebase, given how
@@ -3720,6 +4001,33 @@ public final class IssueTracker {
             return
         }
 
+        // Ask git whether there is anything to do, before spending a provider
+        // API call finding out who authored the PR. `shouldAttemptAutoRebase`
+        // is only a candidate filter now (#944) — GitHub's `mergeStateStatus`
+        // masks behind-ness behind BLOCKED/DIRTY/DRAFT/UNKNOWN — so this probe
+        // is what keeps the widened candidate set from multiplying backend
+        // calls. It is the same "cheap local checks first" rule as above.
+        switch await gitManager.behindBase(
+            worktreePath: primary.worktreePath,
+            branch: primary.branch,
+            baseBranch: pr.baseRefName
+        ) {
+        case .upToDate:
+            recordRebaseNoOp(headKey: headKey, session: session, pr: pr, source: "pre-check")
+            return
+        case .unknown(let msg):
+            // Fall through on purpose: `rebaseOntoBase` re-runs the same
+            // commands and will report a real `.failed`, which feeds the
+            // bounded-retry counter. Incrementing it here too would count one
+            // underlying failure twice per attempt.
+            CrowLog.automation(
+                "auto-rebase: #\(pr.number) behind-check inconclusive, attempting anyway: \(msg)")
+        case .behind(let count):
+            CrowLog.automation(
+                "auto-rebase: #\(pr.number) behind base by \(count) "
+                + "(github: \(pr.mergeStateStatus)/\(pr.mergeable))")
+        }
+
         guard let backend = codeBackend(for: session) else {
             CrowLog.automation("auto-rebase: #\(pr.number) skipped:no-backend")
             return
@@ -3738,20 +4046,31 @@ public final class IssueTracker {
         case .rebasedAndPushed:
             autoRebaseFailureCounts[headKey] = nil
             autoRebaseDeferrals[headKey] = nil
+            publishAutoRebaseVerdict(nil, session: session, pr: pr)
             let priorState = pr.mergeable == "CONFLICTING" ? "CONFLICTING" : "BEHIND"
             CrowLog.automation(
                 "auto-rebase: #\(pr.number) rebased & force-pushed (was \(priorState), session \(session.id))")
             onAutoRebasePushed?(session.id, pr.url, pr.number)
+        case .alreadyUpToDate:
+            // The base moved, or somebody pushed a rebase, between the
+            // pre-check above and `rebaseOntoBase`'s own fetch. Same answer,
+            // same bookkeeping — and crucially not `.rebasedAndPushed`, which
+            // would announce a rebase that never happened.
+            recordRebaseNoOp(headKey: headKey, session: session, pr: pr, source: "post-fetch")
         case .conflicts:
             autoRebaseFailureCounts[headKey] = nil
             autoRebaseDeferrals[headKey] = nil
+            // No chip: the conflict is already on screen three ways (the PR
+            // pill's conflict glyph, the activity badge once the agent picks
+            // it up, and the Rebase & Fix Conflicts button).
+            publishAutoRebaseVerdict(nil, session: session, pr: pr)
             CrowLog.automation(
                 "auto-rebase: #\(pr.number) conflicts — delegating to agent (session \(session.id))")
             onAutoRebaseConflicts?(session.id, pr.url, pr.number)
         case .dirtyWorktree:
             // Transient (a Claude session is mid-edit). Re-arm so a later poll
             // retries once the tree is clean.
-            deferRebase(headKey: headKey, reason: .dirtyWorktree, prNumber: pr.number)
+            deferRebase(headKey: headKey, reason: .dirtyWorktree, session: session, pr: pr)
         case .outOfSyncWithRemote(let divergence):
             // Transient: local has unpushed commits, or local and origin have
             // both moved. Either way a force-push would destroy work, so wait
@@ -3761,7 +4080,8 @@ public final class IssueTracker {
             deferRebase(
                 headKey: headKey,
                 reason: divergence == .ahead ? .outOfSyncAhead : .outOfSyncDiverged,
-                prNumber: pr.number)
+                session: session,
+                pr: pr)
         case .failed(let msg):
             // Transient git failures (fetch flake, rejected lease, unreachable
             // base) shouldn't silently stall the watcher until the head commit
@@ -3772,11 +4092,43 @@ public final class IssueTracker {
             autoRebaseFailureCounts[headKey] = failures
             let willRetry = Self.shouldRetryFailedRebase(failureCount: failures)
             if willRetry { autoRebaseAttempted.remove(headKey) }
+            // Stay quiet while retries remain — one flaky fetch is not news.
+            publishAutoRebaseVerdict(
+                willRetry ? nil : .gaveUp(attempts: failures, error: msg),
+                session: session, pr: pr)
             CrowLog.automation(
                 "auto-rebase: #\(pr.number) failed (attempt \(failures)/"
                 + "\(Self.maxAutoRebaseFailureRetries), "
                 + "\(willRetry ? "will retry" : "giving up until head changes")): \(msg)")
         }
+    }
+
+    /// A rebase attempt that provably had nothing to do. Never fires
+    /// `onAutoRebasePushed` — announcing a rebase that didn't happen is exactly
+    /// what `RebaseOutcome.alreadyUpToDate` exists to prevent (#944).
+    ///
+    /// The per-head `autoRebaseAttempted` key deliberately stays **set**: one
+    /// check per head state is the whole point of the pre-check, and it is what
+    /// bounds the widened candidate filter to one `git fetch` per head rather
+    /// than one per poll. `autoRebaseUpToDateHeads` then lets `applyAutoRebase`
+    /// re-arm it if GitHub's view of that same head later changes.
+    private func recordRebaseNoOp(
+        headKey: String, session: Session, pr: ViewerPR, source: String
+    ) {
+        autoRebaseFailureCounts[headKey] = nil
+        autoRebaseDeferrals[headKey] = nil
+        autoRebaseUpToDateHeads[headKey] = pr.mergeStateStatus
+        publishAutoRebaseVerdict(nil, session: session, pr: pr)
+        // A CONFLICTING PR with a zero behind-count is definitionally stale
+        // data — you cannot conflict with an ancestor. Say so, rather than
+        // logging a bare no-op: this is the line someone greps when a PR shows
+        // a conflict chip that no rebase will ever clear.
+        let note = pr.mergeable == "CONFLICTING"
+            ? " — github reports mergeable=CONFLICTING, which is stale"
+            : ""
+        CrowLog.automation(
+            "auto-rebase: #\(pr.number) no-op:already-on-base (\(source), "
+            + "github: \(pr.mergeStateStatus)/\(pr.mergeable))\(note)")
     }
 
     /// Record a deferred auto-rebase attempt: re-arm the per-head key so it can
@@ -3785,16 +4137,64 @@ public final class IssueTracker {
     /// reason than last time restarts the backoff — the branch moved to a new
     /// situation, which deserves a prompt retry rather than the previous
     /// reason's accumulated delay.
-    private func deferRebase(headKey: String, reason: AutoRebaseDeferReason, prNumber: Int) {
+    ///
+    /// Past `autoRebaseStuckDeferralThreshold` the verdict escalates from
+    /// `.stalled` to `.blocked` and fires `onAutoRebaseStuck`. That is a
+    /// notification, **not** a give-up: the deferral keeps retrying at the
+    /// backoff cap, so a human fix is picked up on the next cycle with nothing
+    /// to re-arm. Before #944 this state simply backed off forever in silence.
+    private func deferRebase(
+        headKey: String, reason: AutoRebaseDeferReason, session: Session, pr: ViewerPR
+    ) {
         autoRebaseFailureCounts[headKey] = nil
         autoRebaseAttempted.remove(headKey)
         let count = autoRebaseDeferrals[headKey].map { $0.reason == reason ? $0.count + 1 : 1 } ?? 1
         let delay = Self.autoRebaseDeferralBackoff(deferralCount: count)
         autoRebaseDeferrals[headKey] = AutoRebaseDeferral(
             reason: reason, count: count, retryAt: Date().addingTimeInterval(delay))
+        publishAutoRebaseVerdict(.deferred(reason, count: count), session: session, pr: pr)
         CrowLog.automation(
-            "auto-rebase: #\(prNumber) deferred:\(reason.rawValue) "
-            + "(deferral \(count), retry in \(Int(delay))s)")
+            "auto-rebase: #\(pr.number) deferred:\(reason.rawValue) "
+            + "(deferral \(count), retry in \(Int(delay))s"
+            + "\(Self.shouldEscalateDeferral(deferralCount: count) ? ", escalated" : "")")
+    }
+
+    /// Publish what the auto-rebase watcher concluded about this session's
+    /// branch, and notify the first time a permanent verdict appears. `nil`
+    /// clears. The auto-rebase twin of `publishAutoMergeVerdict`, and it
+    /// co-locates publish / clear / notify-once for the same reason: no call
+    /// site can then do three of the four.
+    ///
+    /// Unlike auto-merge, silence really is the default — nothing opts a PR
+    /// into auto-rebase, so a published state only ever means "Crow tried and
+    /// couldn't".
+    private func publishAutoRebaseVerdict(
+        _ verdict: AutoRebaseVerdict?, session: Session, pr: ViewerPR?
+    ) {
+        guard let verdict else {
+            appState.autoRebaseState.removeValue(forKey: session.id)
+            clearAutoRebaseStuckNotifications(prURL: pr?.url)
+            return
+        }
+        let state = verdict.state
+        appState.autoRebaseState[session.id] = state
+        guard state.phase == .blocked, let pr else {
+            if state.phase != .blocked { clearAutoRebaseStuckNotifications(prURL: pr?.url) }
+            return
+        }
+        // Keyed with the reason, like `autoMergeBlockNotified`: a branch that
+        // moves from `ahead` to `diverged` is a genuinely new situation for a
+        // human to look at, and deserves to be announced again.
+        let key = "\(pr.url)\n\(state.reason)"
+        guard autoRebaseStuckNotified.insert(key).inserted else { return }
+        onAutoRebaseStuck?(session.id, pr.url, pr.number, state)
+    }
+
+    /// Drop the notify-once latch for every reason on `prURL`, so a branch that
+    /// un-wedges and later re-wedges announces itself again.
+    private func clearAutoRebaseStuckNotifications(prURL: String?) {
+        guard let prURL else { return }
+        autoRebaseStuckNotified = autoRebaseStuckNotified.filter { !$0.hasPrefix("\(prURL)\n") }
     }
 
     // MARK: - Auto Re-Request Review Watcher (CROW-921)

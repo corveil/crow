@@ -81,6 +81,45 @@ struct IssueTrackerAutoRebaseTests {
         #expect(IssueTracker.shouldAttemptAutoRebase(pr: pr))
     }
 
+    // MARK: - The masked-behind shapes (#944)
+    //
+    // `mergeStateStatus` is GitHub's SINGLE-VALUED summary of why the merge
+    // button isn't green — the highest-priority reason, not a set of flags. A
+    // PR that is behind base *and* anything else reports the other value, so
+    // keying on `== "BEHIND"` was blind to every row below. These are now
+    // candidates, and git decides whether they actually need a rebase.
+
+    /// The expensive one, and the reason #944 exists: BLOCKED is the *normal*
+    /// state of a PR waiting on its reviewer, which is exactly the window in
+    /// which a busy base drifts ahead.
+    @Test func acceptsBlockedWhichMasksBehind() {
+        let pr = makePR(mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED")
+        #expect(IssueTracker.shouldAttemptAutoRebase(pr: pr))
+    }
+
+    /// A draft's `mergeStateStatus` is *always* DRAFT, so behind-ness was
+    /// masked permanently — drafts are where long-lived Crow branches rot.
+    /// They stay eligible: see `draftEligibleForRebaseIsStillExcludedFromMergePath`
+    /// for the guarantee that this can never merge one.
+    @Test func acceptsDraftStateWhichMasksBehind() {
+        let pr = makePR(mergeable: "MERGEABLE", mergeStateStatus: "DRAFT", isDraft: true)
+        #expect(IssueTracker.shouldAttemptAutoRebase(pr: pr))
+    }
+
+    @Test func acceptsDirtyEvenWithoutTheConflictingFlag() {
+        // DIRTY without `mergeable == "CONFLICTING"` used to fall through the
+        // old predicate entirely — it matched neither disjunct.
+        let pr = makePR(mergeable: "UNKNOWN", mergeStateStatus: "DIRTY")
+        #expect(IssueTracker.shouldAttemptAutoRebase(pr: pr))
+    }
+
+    @Test func acceptsUnstableAndHasHooks() {
+        // Not usually behind, but cheap to check and correct to consider —
+        // the git probe makes each one a single fetch per head state.
+        #expect(IssueTracker.shouldAttemptAutoRebase(pr: makePR(mergeStateStatus: "UNSTABLE")))
+        #expect(IssueTracker.shouldAttemptAutoRebase(pr: makePR(mergeStateStatus: "HAS_HOOKS")))
+    }
+
     // MARK: - Rejects
 
     @Test func rejectsCleanMergeablePR() {
@@ -88,9 +127,26 @@ struct IssueTrackerAutoRebaseTests {
         #expect(!IssueTracker.shouldAttemptAutoRebase(pr: pr))
     }
 
-    @Test func rejectsUnknownState() {
+    /// CLEAN is now the *only* thing that disqualifies an open PR. Pinned
+    /// separately so a future narrowing of the filter has to argue with a test.
+    @Test func cleanIsTheOnlyDisqualifyingStateForAnOpenPR() {
+        let states = ["BEHIND", "BLOCKED", "DIRTY", "DRAFT", "UNKNOWN", "UNSTABLE", "HAS_HOOKS"]
+        for state in states {
+            #expect(IssueTracker.shouldAttemptAutoRebase(pr: makePR(mergeStateStatus: state)),
+                    "\(state) should be a candidate")
+        }
+        #expect(!IssueTracker.shouldAttemptAutoRebase(pr: makePR(mergeStateStatus: "CLEAN")))
+    }
+
+    /// INVERTED by #944. This used to assert that UNKNOWN was rejected, which
+    /// was the bug: GitHub reports UNKNOWN for a few seconds after every push
+    /// while it recomputes mergeability, and a base that moved during that
+    /// window left the PR permanently skipped for that head. Kept rather than
+    /// deleted because it encodes a decision someone will otherwise
+    /// re-litigate — the cost is one `git fetch` per push per PR.
+    @Test func acceptsUnknownStateSoAMidRecomputePRIsNotSkipped() {
         let pr = makePR(mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN")
-        #expect(!IssueTracker.shouldAttemptAutoRebase(pr: pr))
+        #expect(IssueTracker.shouldAttemptAutoRebase(pr: pr))
     }
 
     /// Regression (CROW-577): a draft that qualifies for auto-rebase must
@@ -197,5 +253,91 @@ struct IssueTrackerAutoRebaseTests {
         #expect(IssueTracker.AutoRebaseDeferReason.dirtyWorktree.rawValue == "dirty-worktree")
         #expect(IssueTracker.AutoRebaseDeferReason.outOfSyncAhead.rawValue == "out-of-sync-ahead")
         #expect(IssueTracker.AutoRebaseDeferReason.outOfSyncDiverged.rawValue == "out-of-sync-diverged")
+        // The one new token (#944) — a give-up isn't a deferral, so it lives on
+        // the verdict rather than in `AutoRebaseDeferReason`.
+        #expect(IssueTracker.AutoRebaseVerdict.gaveUp(attempts: 3, error: "x").reason
+                == "rebase-failed")
+    }
+
+    // MARK: - Deferral escalation (#944)
+
+    /// The threshold is not a free parameter: it is the first count whose
+    /// backoff has SATURATED. Below it Crow is genuinely "waiting a bit
+    /// longer"; from here on it asks the same question every 15 minutes and
+    /// gets the same answer, which is the state that used to be invisible.
+    /// This pins the two together so moving one without the other fails.
+    @Test func escalationThresholdIsWhereTheBackoffSaturates() {
+        let threshold = IssueTracker.autoRebaseStuckDeferralThreshold
+        #expect(IssueTracker.autoRebaseDeferralBackoff(deferralCount: threshold)
+                == IssueTracker.autoRebaseDeferralMaxDelay)
+        // ...and it is the FIRST such count, not merely one of them.
+        #expect(IssueTracker.autoRebaseDeferralBackoff(deferralCount: threshold - 1)
+                < IssueTracker.autoRebaseDeferralMaxDelay)
+    }
+
+    @Test func escalatesOnlyAtOrPastTheThreshold() {
+        let threshold = IssueTracker.autoRebaseStuckDeferralThreshold
+        for count in 1..<threshold {
+            #expect(!IssueTracker.shouldEscalateDeferral(deferralCount: count))
+        }
+        #expect(IssueTracker.shouldEscalateDeferral(deferralCount: threshold))
+        // Escalation is a notification, not a give-up — it stays true forever
+        // so the `.blocked` chip persists while Crow keeps retrying.
+        #expect(IssueTracker.shouldEscalateDeferral(deferralCount: threshold + 100))
+    }
+
+    // MARK: - Published verdicts (#944)
+
+    /// The invariant the whole publish path leans on: `blocked` ⟺ `permanent`
+    /// ⟺ "fires `onAutoRebaseStuck`". `publishAutoRebaseVerdict` notifies on
+    /// `phase == .blocked`, so a verdict that disagreed with itself would
+    /// either chime for a transient wait or stay silent on a real wedge.
+    @Test func permanentAgreesWithBlockedForEveryVerdict() {
+        var verdicts: [IssueTracker.AutoRebaseVerdict] = [.gaveUp(attempts: 3, error: "boom")]
+        for reason in [IssueTracker.AutoRebaseDeferReason.dirtyWorktree,
+                       .outOfSyncAhead, .outOfSyncDiverged] {
+            verdicts.append(.deferred(reason, count: 1))
+            verdicts.append(.deferred(reason, count: IssueTracker.autoRebaseStuckDeferralThreshold))
+        }
+        for verdict in verdicts {
+            let state = verdict.state
+            #expect(state.permanent == (state.phase == .blocked))
+            // Every verdict carries a renderable sentence and the log's token.
+            #expect(!state.message.isEmpty)
+            #expect(state.reason == verdict.reason)
+        }
+    }
+
+    @Test func deferredVerdictEscalatesFromStalledToBlocked() {
+        let reason = IssueTracker.AutoRebaseDeferReason.outOfSyncDiverged
+        #expect(IssueTracker.AutoRebaseVerdict.deferred(reason, count: 1).state.phase == .stalled)
+        let stuck = IssueTracker.AutoRebaseVerdict.deferred(
+            reason, count: IssueTracker.autoRebaseStuckDeferralThreshold).state
+        #expect(stuck.phase == .blocked)
+        // The blocked sentence must tell a human what to do, not just that
+        // Crow is unhappy — this is the only surface the state has.
+        #expect(stuck.message.contains("Reconcile"))
+    }
+
+    /// Git's stderr goes into the chip tooltip and the notification body, so an
+    /// unbounded one blows out both.
+    @Test func gaveUpVerdictTruncatesGitError() {
+        let long = String(repeating: "x", count: 5_000)
+        let state = IssueTracker.AutoRebaseVerdict.gaveUp(attempts: 3, error: long).state
+        #expect(state.message.count < 400)
+        #expect(state.phase == .blocked)
+    }
+
+    // MARK: - update-branch retry policy (#944)
+
+    /// A failed `gh pr update-branch` leaves `headRefOid` unchanged, so the
+    /// per-head guard's "retry once the branch moves" was a deadlock: the
+    /// branch is precisely what didn't move.
+    @Test func failedUpdateBranchRetriesUpToTheCap() {
+        #expect(IssueTracker.maxAutoUpdateBranchFailureRetries == 3)
+        #expect(IssueTracker.shouldRetryFailedUpdateBranch(failureCount: 1))
+        #expect(IssueTracker.shouldRetryFailedUpdateBranch(failureCount: 2))
+        #expect(!IssueTracker.shouldRetryFailedUpdateBranch(failureCount: 3))
+        #expect(!IssueTracker.shouldRetryFailedUpdateBranch(failureCount: 99))
     }
 }
