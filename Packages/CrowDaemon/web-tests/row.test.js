@@ -9,7 +9,7 @@ const { JSDOM } = require('jsdom');
 const epilogue = `
 ;globalThis.__t = {
   sessionRow(s){ return sessionRow(s); },
-  prStatusInline(pr, am, enabled){ return prStatusInline(pr, am, enabled); },
+  prStatusInline(pr, am, enabled, ar){ return prStatusInline(pr, am, enabled, ar); },
   set live(v){ liveById = v; },
   set hideDetails(v){ uiConfig.hideSessionDetails = v; },
 };
@@ -50,10 +50,12 @@ const SESSION = {
 };
 
 // Render a row with the given live `pr` entry, returning { row, glyphs }.
-// `autoMergeState` populates the live `auto_merge_state` sibling of `pr` (#888).
-function render(pr, overrides, autoMergeState) {
+// `autoMergeState` populates the live `auto_merge_state` sibling of `pr` (#888);
+// `autoRebaseState` does the same for `auto_rebase_state` (#944).
+function render(pr, overrides, autoMergeState, autoRebaseState) {
   const live = pr === undefined ? {} : { 'sess-1': { pr } };
   if (autoMergeState && live['sess-1']) live['sess-1'].auto_merge_state = autoMergeState;
+  if (autoRebaseState && live['sess-1']) live['sess-1'].auto_rebase_state = autoRebaseState;
   T.live = live;
   const row = T.sessionRow({ ...SESSION, ...(overrides || {}) });
   return { row, glyphs: [...row.querySelectorAll('.pr-badge .pr-ico')].map((n) => n.textContent) };
@@ -75,6 +77,16 @@ const GREEN_PR = { has_pr: true, checks: 'passing', review: 'approved', merge: '
   is_merged: false, has_blockers: false, ready_to_merge: true, failed_checks: [], has_merge_label: true };
 const GREEN_PR_ICONS = 3;
 const hasAutoChip = (row) => pillIcons(row).length === GREEN_PR_ICONS + 1;
+// The auto-rebase chip is inserted BEFORE the auto-merge one (#944), so when
+// both are present it is the second-to-last icon and `autoIco` keeps meaning
+// "the auto-merge chip" for every pre-existing assertion above.
+const hasRebaseChip = (row, withAutoMerge) =>
+  pillIcons(row).length === GREEN_PR_ICONS + (withAutoMerge ? 2 : 1);
+const rebaseIco = (row, withAutoMerge) => {
+  const icons = pillIcons(row);
+  const i = icons.length - (withAutoMerge ? 2 : 1);
+  return i >= 0 ? icons[i] : null;
+};
 
 console.log('Failing checks + changes requested:');
 let r = render({ has_pr: true, checks: 'failing', review: 'changesRequested', merge: 'MERGEABLE',
@@ -189,6 +201,58 @@ const blockedLabels = blockedChips.map((n) => n.querySelector('.pr-stat-label').
 check('detail chip labels the blocked state', blockedLabels.includes('Auto-merge blocked'));
 check('detail chip carries the sentence as a title',
   blockedChips.some((c) => c.title === BLOCKED.message));
+
+// #944 — the auto-rebase verdict. Distinct from auto-merge by ICON (⟲ vs ⛙),
+// sharing the severity TINT scale. It exists because `prStatusJSON` never ships
+// `mergeStateStatus`: a PR that is BEHIND its base renders as a fully green
+// pill, so a worktree wedged in `out-of-sync-diverged` had no surface at all.
+console.log('\nAuto-rebase verdict (#944):');
+const STUCK = { phase: 'blocked', reason: 'out-of-sync-diverged', permanent: true,
+  message: 'Crow has tried to rebase this branch 5 times; reconcile it by hand.' };
+r = render(GREEN_PR, {}, undefined, STUCK);
+check('stuck verdict adds a ⟲ to the pill', hasRebaseChip(r.row, false));
+check('stuck ⟲ is red', rebaseIco(r.row, false).style.color === 'var(--red)');
+check('the human sentence rides the pill tooltip', badge(r.row).title.includes(STUCK.message));
+check('the human sentence is not sighted-only',
+  badge(r.row).getAttribute('aria-label').includes(STUCK.message));
+check('aria names the stuck state itself',
+  /Auto-rebase stuck/.test(badge(r.row).getAttribute('aria-label')));
+
+r = render(GREEN_PR, {}, undefined,
+  { phase: 'stalled', reason: 'dirty-worktree', permanent: false, message: 'Uncommitted changes.' });
+check('stalled verdict is orange, not red',
+  rebaseIco(r.row, false).style.color === 'var(--orange)');
+check('aria distinguishes waiting from stuck',
+  /Auto-rebase waiting/.test(badge(r.row).getAttribute('aria-label')));
+
+// Both watchers can speak at once. Order is chronological — get the branch
+// current, THEN merge it — which is also what keeps `autoIco` (last icon)
+// meaning "auto-merge" for every assertion above.
+r = render(GREEN_PR, {}, BLOCKED, STUCK);
+check('both chips render together', hasRebaseChip(r.row, true));
+check('rebase chip precedes the merge chip',
+  rebaseIco(r.row, true).style.color === 'var(--red)'
+  && autoIco(r.row).style.color === 'var(--red)'
+  && rebaseIco(r.row, true) !== autoIco(r.row));
+check('aria names both verdicts', (() => {
+  const a = badge(r.row).getAttribute('aria-label');
+  return /Auto-rebase stuck/.test(a) && /Auto-merge blocked/.test(a);
+})());
+
+r = render({ ...GREEN_PR, is_merged: true }, {}, undefined, STUCK);
+check('merged PR drops the auto-rebase chip',
+  pillIcons(r.row).length === 1 && !/Auto-rebase/.test(badge(r.row).getAttribute('aria-label')));
+
+// Silence is the default: nothing opts a PR into auto-rebase, so an absent key
+// (every pre-#944 daemon, and every healthy PR) must render nothing at all.
+r = render(GREEN_PR, {});
+check('no ⟲ when the daemon sends no verdict', !/Auto-rebase/.test(badge(r.row).getAttribute('aria-label')));
+
+const stuckChips = [...T.prStatusInline(GREEN_PR, undefined, false, STUCK).querySelectorAll('.pr-stat')];
+check('detail chip labels the stuck state',
+  stuckChips.map((n) => n.querySelector('.pr-stat-label').textContent).includes('Rebase stuck'));
+check('detail chip carries the rebase sentence as a title',
+  stuckChips.some((c) => c.title === STUCK.message));
 
 console.log('\nGraceful degradation (older daemon payload / no PR status):');
 r = render(undefined);

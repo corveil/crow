@@ -227,7 +227,7 @@ crow notifications set --event <name> [--event-enabled|--no-event-enabled]
                        [--event-sound-name <Sound>]     → {"notifications":{...},"saved":true}
 ```
 
-Events: `taskComplete`, `agentWaiting`, `reviewRequested`, `changesRequested`, `checksFailing`, `autoWorkspaceCreated`, `autoMergeEnabled`, `autoMergeBlocked`, `autoRebasePushed`, `autoRebaseConflicts`, `configReloaded`. Sounds: the 14 built-ins listed under `available_sounds` (case-insensitive).
+Events: `taskComplete`, `agentWaiting`, `reviewRequested`, `changesRequested`, `checksFailing`, `autoWorkspaceCreated`, `autoMergeEnabled`, `autoMergeBlocked`, `autoRebasePushed`, `autoRebaseConflicts`, `autoRebaseStuck`, `configReloaded`. Sounds: the 14 built-ins listed under `available_sounds` (case-insensitive).
 
 Notifications cascade — one fires only if `globalMute` is off, the global category toggle is on, **and** the per-event toggle is on. Omitted flags leave their stored value alone; every `--event-*` flag requires `--event`.
 

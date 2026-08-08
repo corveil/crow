@@ -376,7 +376,8 @@ const DEFAULT_EVENT_SOUND = {
   // audibly distinct from the success events beside it.
   autoWorkspaceCreated: 'Hero', autoMergeEnabled: 'Glass',
   autoMergeBlocked: 'Basso',
-  autoRebasePushed: 'Bottle', autoRebaseConflicts: 'Basso', configReloaded: 'Tink',
+  autoRebasePushed: 'Bottle', autoRebaseConflicts: 'Basso', autoRebaseStuck: 'Basso',
+  configReloaded: 'Tink',
 };
 
 // NotificationEvent.displayName / .description (CrowCore) — reused for the
@@ -388,6 +389,7 @@ const EVENT_LABEL = {
   autoWorkspaceCreated: 'Auto-Workspace Created', autoMergeEnabled: 'Auto-Merge Enabled',
   autoMergeBlocked: 'Auto-Merge Blocked',
   autoRebasePushed: 'Branch Rebased', autoRebaseConflicts: 'Rebase Conflicts',
+  autoRebaseStuck: 'Rebase Stuck',
   configReloaded: 'Config Reloaded',
 };
 const EVENT_DESC = {
@@ -401,6 +403,7 @@ const EVENT_DESC = {
   autoMergeBlocked: "Crow can't auto-merge a crow:merge PR and has stopped trying",
   autoRebasePushed: 'Crow rebased a PR branch onto its base and pushed',
   autoRebaseConflicts: 'An auto-rebase hit conflicts that need attention',
+  autoRebaseStuck: "An auto-rebase can't proceed and needs you",
   configReloaded: 'Crow reloaded its configuration',
 };
 
@@ -408,7 +411,7 @@ const EVENT_DESC = {
 // rather than the client deriving them from polled state (CROW-768).
 const AUTOMATION_EVENTS = [
   'autoWorkspaceCreated', 'autoMergeEnabled', 'autoMergeBlocked', 'autoRebasePushed',
-  'autoRebaseConflicts', 'configReloaded',
+  'autoRebaseConflicts', 'autoRebaseStuck', 'configReloaded',
 ];
 // Every event the notification layer knows about, in the Settings tab's order.
 const ALL_EVENTS = [
@@ -1861,7 +1864,8 @@ function sessionRow(s) {
     const prb = el('span', 'pr-badge', prLink.label || 'PR');
     prb.style.color = color;
     prb.style.borderColor = color;
-    const parts = prBadgeParts(pr, liveFor(s.id).auto_merge_state, s.auto_merge);
+    const parts = prBadgeParts(pr, liveFor(s.id).auto_merge_state, s.auto_merge,
+                               liveFor(s.id).auto_rebase_state);
     for (const part of parts) {
       const ico = part.icon ? icon(part.icon, 10) : el('span', 'pr-ico', part.glyph);
       ico.style.color = part.color;
@@ -1975,6 +1979,32 @@ function prAutoMergeGlyph(am, enabled) {
   return enabled ? PR_AUTOMERGE_GLYPH.enabled : null;
 }
 
+// Auto-rebase lifecycle (#944) — the ⟲ U-turn mark, two colors. Distinct from
+// the ⛙ auto-merge family by ICON, not tint: color is the severity scale and
+// both watchers share it, while the mark says which one is speaking.
+//
+// The reason this exists at all: `prStatusJSON` never ships `mergeStateStatus`,
+// so a PR that is BEHIND its base renders as a fully green pill. Before #944 a
+// worktree wedged in `out-of-sync-diverged` backed off forever with no surface
+// but crowd-automation.log.
+//
+// No `enabled`/`off` phase on purpose — no PR opts into auto-rebase the way
+// `crow:merge` opts into auto-merge, so silence is the default and a chip only
+// ever means "Crow tried and couldn't".
+const PR_AUTOREBASE_GLYPH = {
+  stalled: { glyph: '⟲', icon: 'uturn', color: 'var(--orange)', label: 'Rebase waiting', a11yLabel: 'Auto-rebase waiting to retry' },
+  blocked: { glyph: '⟲', icon: 'uturn', color: 'var(--red)', label: 'Rebase stuck', a11yLabel: 'Auto-rebase stuck — needs you' },
+};
+
+// The auto-rebase part for one row, or null when there's nothing to say. No
+// persisted-bool fallback twin of `prAutoMergeGlyph`'s `session.auto_merge`:
+// there is no per-PR auto-rebase opt-in, and an older daemon simply sends no key.
+function prAutoRebaseGlyph(ar) {
+  const base = ar && ar.phase && PR_AUTOREBASE_GLYPH[ar.phase];
+  if (!base) return null;
+  return ar.message ? Object.assign({}, base, { detail: ar.message }) : base;
+}
+
 function prChecksGlyph(pr) {
   const base = PR_CHECKS_GLYPH[pr.checks] || PR_CHECKS_GLYPH.unknown;
   // Failing checks carry their count when the daemon sent the names.
@@ -1991,15 +2021,19 @@ function prReviewGlyph(pr) {
 // The ordered glyphs for a session-row PR pill, mirroring native `PRBadge`:
 // merged collapses to a single check, otherwise checks + review, plus the
 // conflict and crow:merge-label markers the native pill folded into its tint,
-// then what Crow's watcher did about it. The auto-merge part goes LAST so the
-// pill reads left-to-right as "state of the PR, then what Crow did about it";
-// a merged PR short-circuits, because its auto-merge state is history.
-function prBadgeParts(pr, am, autoMergeEnabled) {
+// then what Crow's watchers did about it. The two watcher parts go LAST so the
+// pill reads left-to-right as "state of the PR, then what Crow did about it",
+// with auto-rebase before auto-merge because that is the order the work
+// happens in — a branch gets current, then it merges. A merged PR
+// short-circuits both, because their state is history.
+function prBadgeParts(pr, am, autoMergeEnabled, ar) {
   if (!pr || !pr.has_pr) return [];
   if (pr.is_merged) return [PR_MERGED_GLYPH];
   const parts = [prChecksGlyph(pr), prReviewGlyph(pr)];
   if (pr.merge === 'conflicting') parts.push(PR_CONFLICT_GLYPH);
   if (pr.has_merge_label) parts.push(PR_MERGE_LABEL_GLYPH);
+  const rebase = prAutoRebaseGlyph(ar);
+  if (rebase) parts.push(rebase);
   const auto = prAutoMergeGlyph(am, autoMergeEnabled);
   if (auto) parts.push(auto);
   return parts;
@@ -2596,7 +2630,8 @@ function renderHeader(s) {
     headerRow.appendChild(chip);
   }
   if (pr && pr.has_pr) {
-    headerRow.appendChild(prStatusInline(pr, liveFor(s.id).auto_merge_state, s.auto_merge));
+    headerRow.appendChild(prStatusInline(pr, liveFor(s.id).auto_merge_state, s.auto_merge,
+                                         liveFor(s.id).auto_rebase_state));
   }
 
   // Right-aligned action cluster: PR quick-actions, then status transitions + delete.
@@ -2684,7 +2719,7 @@ function renderSessionAnalyticsStrip(s, root) {
 // Inline PR status, mirroring the desktop PRStatusDetail. Same glyph/color
 // vocabulary as the sidebar row pill (`prBadgeParts`) — spelled out with labels
 // here, glyph-only there (CROW-773).
-function prStatusInline(pr, am, autoMergeEnabled) {
+function prStatusInline(pr, am, autoMergeEnabled, ar) {
   const wrap = el('div', 'pr-status-inline');
   if (pr.is_merged) {
     wrap.appendChild(prStatusPart(PR_MERGED_GLYPH));
@@ -2699,6 +2734,9 @@ function prStatusInline(pr, am, autoMergeEnabled) {
   if (pr.has_merge_label) {
     wrap.appendChild(prStatusPart(PR_MERGE_LABEL_GLYPH));
   }
+  // Rebase before merge — same ordering rationale as `prBadgeParts`.
+  const rebase = prAutoRebaseGlyph(ar);
+  if (rebase) wrap.appendChild(prStatusPart(rebase));
   const auto = prAutoMergeGlyph(am, autoMergeEnabled);
   if (auto) wrap.appendChild(prStatusPart(auto));
   return wrap;

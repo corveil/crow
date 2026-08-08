@@ -107,6 +107,64 @@ Two supporting details:
 - **The commit anchor is the author date, not the committer date.** A rebase replays the feature commits with their committer date rewritten to ~now, which used to read as "the agent pushed a fix". Author dates survive a rebase, so a rebase-only advance no longer fires a no-op review round — or suppresses a genuine needs-refine. (`git commit --amend` and `cherry-pick` also preserve author dates, so an amend-delivered fix is indistinguishable from a rebase by dates alone; both failure directions are the safe one — Crow nudges the agent rather than pinging a reviewer.)
 - **Every suppressed needs-refine evaluation is logged.** `crowd-automation.log` gets a `needs-refine: #N gated (reason=…, state=…, lastCR=…, lastCommit=…, reviewerReRequested=…, idle=…, cooldown=…)` line naming which gate held, emitted when the reason changes and at most hourly otherwise. Previously only *firing* was logged, so a stuck PR left no trace at all. The auto-re-request watcher's own skip and failure lines share that limiter, and its retries are capped — the inputs to a re-request are fixed for the life of a round, so a failure that isn't transient never becomes one.
 
+#### Behind-ness is measured, not inferred (#944)
+
+**Rebase and resolve conflicts** used to decide "is this branch behind its base?" from one
+GitHub field, `mergeStateStatus == "BEHIND"`. That field is *single-valued* — it reports the
+highest-priority reason the merge button isn't green, not a set of flags — so a PR that is
+behind base **and** anything else reports the other value. `BLOCKED` (a required review not
+yet in) masks it, and so do `DIRTY`, `DRAFT`, and `UNKNOWN`.
+
+`BLOCKED` is the expensive one, because it is the *normal* state of a PR waiting on its
+reviewer — exactly the window in which a busy base drifts ahead. On a repo with GitHub's
+"require branches to be up to date before merging" rule, the PR then stalled short of merge
+until a human pressed **Update branch**. The rebase Crow could have done for free during
+review was instead serialized behind approval.
+
+Crow now treats `mergeStateStatus` as a *candidate filter* only — anything open and not
+`CLEAN` is worth a look — and asks git the actual question
+(`git rev-list --count origin/<branch>..origin/<base>`) before spending a provider API call.
+Consequences worth knowing:
+
+- **A PR that needs nothing is a cheap no-op**, logged once per head state as
+  `no-op:already-on-base`, with no force-push and no "Branch rebased" notification. Such a
+  head is re-probed when GitHub's view of it changes *or* every 15 minutes, whichever comes
+  first. The clock is the load-bearing half: `mergeStateStatus` is single-valued, so
+  `BLOCKED` outranks `BEHIND` and simply *stays* `BLOCKED` when the base drifts under a
+  review-pending PR — and `headRefOid` doesn't move either. Without the interval, a PR first
+  seen up-to-date would sit untouched until approval landed, which is the very
+  serialization this change removes.
+- **Drafts are still eligible**, as they have been since CROW-318 — a rebase only rewrites
+  the session's own branch and can never merge. Drafts are where behind-ness was masked
+  *permanently*, so this is where the change bites most.
+- **Every open GitLab MR is now a candidate**, because the GitLab backend never populates
+  `mergeStateStatus`. MRs do fall behind and nothing else handled them; the cost is one
+  `git fetch` per head state.
+- **The `crow:merge` hand-off is narrower.** Auto-rebase yields to auto-merge's
+  `gh pr update-branch` only while auto-merge can still act. Before, the yield was
+  unconditional, so once auto-merge burned its one-shot per-head attempt and gave up,
+  *nobody* brought the branch up to date.
+
+#### A wedged branch now says so
+
+`rebaseOntoBase` refuses to force-push a worktree that is ahead of, or diverged from,
+`origin/<branch>` — a force-push there would publish unpushed work or revert remote commits.
+That refusal used to back off on an exponential delay capped at 15 minutes and then repeat
+forever, in silence: the only trace was `deferred:out-of-sync-diverged` in
+`crowd-automation.log`, and the PR pill rendered as fully green because `mergeStateStatus`
+never reaches the web at all.
+
+After five consecutive deferrals of the same reason — the point at which the backoff has
+saturated, so ~30 minutes and four failed retries in — the session card grows a **⟲** chip
+(orange while waiting, red once stuck) carrying a sentence that names the fix, and a
+**Rebase Stuck** notification fires once per PR and reason.
+
+Escalating is *not* giving up: Crow keeps retrying at the cap, so whatever you do to
+reconcile the branch is picked up on the next cycle. Crow deliberately does **not** try to
+self-heal a diverged worktree — by definition it holds commits `origin` doesn't, and any
+automated reset would destroy them — and, unlike the conflict path, it does not hand off to
+the agent, for the same reason.
+
 ### Auto-launch workspaces
 
 PR #312 gated the existing `crow:auto` label automation behind a single opt-in toggle. Off by default — typing `/crow-workspace` into the Manager terminal without an explicit opt-in is intrusive, and matches the precedent set by `crow:merge` auto-merge (#299).
@@ -134,7 +192,7 @@ Backed by `AppConfig.autoMergeWatcherEnabled`. Hand-written PRs without the Crow
 
 Every automation above acts without you asking, so each one announces itself. Alongside the
 five agent/PR events (Task Complete, Agent Waiting, Review Requested, Changes Requested, CI
-Failing), the daemon pushes six **automation** events to connected clients at the moment a
+Failing), the daemon pushes seven **automation** events to connected clients at the moment a
 watcher acts:
 
 | Event                    | Fires when                                                              |
@@ -144,6 +202,7 @@ watcher acts:
 | Auto-Merge Blocked       | Crow gave up on a `crow:merge` PR (needs attention — a permanent skip latches, so nothing re-announces it) |
 | Branch Rebased           | An auto-rebase succeeded and force-pushed                               |
 | Rebase Conflicts         | An auto-rebase hit conflicts (needs attention — deliberately harsher tone) |
+| Rebase Stuck             | An auto-rebase can't proceed — a dirty worktree, or local commits a force-push would destroy (needs attention; fires once per PR + reason) |
 | Config Reloaded          | `{devRoot}/.claude/config.json` changed and was picked up               |
 
 Each has its own **Enabled / Play sound / System notification / Sound** row under

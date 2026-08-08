@@ -48,6 +48,7 @@
     autoWorkspaceCreated: 'Auto-Workspace Created', autoMergeEnabled: 'Auto-Merge Enabled',
     autoMergeBlocked: 'Auto-Merge Blocked',
     autoRebasePushed: 'Branch Rebased', autoRebaseConflicts: 'Rebase Conflicts',
+    autoRebaseStuck: 'Rebase Stuck',
     configReloaded: 'Config Reloaded',
   };
   // One-line "what fires this" hint per event, so the automation entries aren't
@@ -63,22 +64,24 @@
     autoMergeBlocked: "Crow gave up auto-merging a crow:merge PR — e.g. the repo has GitHub's \"Allow auto-merge\" off.",
     autoRebasePushed: 'Crow rebased a PR branch onto its base and force-pushed.',
     autoRebaseConflicts: 'An auto-rebase hit conflicts that need attention.',
+    autoRebaseStuck: "An auto-rebase can't proceed — a dirty worktree, or local commits a force-push would destroy.",
     configReloaded: 'Crow picked up a change to config.json.',
   };
   // Canonical NotificationEvent set + defaults (CrowCore NotificationEvent) —
   // the config only stores events the user has touched, so we render all of them
   // and materialize any missing ones with their default sound (CROW-593). The
-  // trailing six are Crow's own automation events (CROW-768, #888).
+  // trailing seven are Crow's own automation events (CROW-768, #888, #944).
   const EVENT_ORDER = [
     'taskComplete', 'agentWaiting', 'reviewRequested', 'changesRequested', 'checksFailing',
     'autoWorkspaceCreated', 'autoMergeEnabled', 'autoMergeBlocked', 'autoRebasePushed',
-    'autoRebaseConflicts', 'configReloaded',
+    'autoRebaseConflicts', 'autoRebaseStuck', 'configReloaded',
   ];
   const EVENT_DEFAULT_SOUND = {
     taskComplete: 'Glass', agentWaiting: 'Funk', reviewRequested: 'Glass',
     changesRequested: 'Funk', checksFailing: 'Sosumi',
     autoWorkspaceCreated: 'Hero', autoMergeEnabled: 'Glass', autoMergeBlocked: 'Basso',
-    autoRebasePushed: 'Bottle', autoRebaseConflicts: 'Basso', configReloaded: 'Tink',
+    autoRebasePushed: 'Bottle', autoRebaseConflicts: 'Basso', autoRebaseStuck: 'Basso',
+    configReloaded: 'Tink',
   };
   const BUILT_IN_SOUNDS = [
     'Basso', 'Blow', 'Bottle', 'Frog', 'Funk', 'Glass', 'Hero', 'Morse',
