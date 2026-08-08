@@ -5,14 +5,13 @@ public struct VersionUpdateConfig: Codable, Sendable, Equatable {
     /// When false, `crowd` does not phone GitHub on a schedule. Defaults to
     /// true — the check is on unless the user opts out.
     public var enabled: Bool
-    /// Minimum hours between automatic checks. Floored at 6 so an
-    /// unauthenticated GitHub client (60 req/hr/IP) cannot be exhausted by a
-    /// misconfigured interval.
+    /// Minimum hours between automatic checks. Floored at 1 — hourly checks are
+    /// ~48 GitHub API calls/day, well within unauthenticated limits (60 req/hr/IP).
     public var intervalHours: Int
 
-    public static let minimumIntervalHours = 6
+    public static let minimumIntervalHours = 1
 
-    public init(enabled: Bool = true, intervalHours: Int = 6) {
+    public init(enabled: Bool = true, intervalHours: Int = 1) {
         self.enabled = enabled
         self.intervalHours = max(Self.minimumIntervalHours, intervalHours)
     }

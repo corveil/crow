@@ -45,7 +45,7 @@ import FoundationNetworking
             shell: StubShell())
         let resp = await call("version-update-get", devRoot: devRoot, service: service)
         #expect(resp.result?["version_update"] == .object([
-            "enabled": .bool(true), "interval_hours": .int(6),
+            "enabled": .bool(true), "interval_hours": .int(1),
         ]))
         #expect(resp.result?["status"] == .null)
     }

@@ -503,7 +503,7 @@ crow version set --interval-hours 12
 | `check`           | Same as `--check` |
 | `get`             | JSON: `version_update` settings plus the cached `status` |
 | `set --enabled`   | Opt out of periodic checks (`true` or `false`) |
-| `set --interval-hours` | Hours between automatic checks (minimum 6, default 6) |
+| `set --interval-hours` | Hours between automatic checks (minimum 1, default 1) |
 
 `get` returns `{"version_update":{"enabled":…,"interval_hours":…},"status":{…}}` where `status.state` is `up_to_date`, `behind`, or `unknown`. A `dev` build SHA or an unrecognized commit reports `unknown` — never a false up-to-date.
 

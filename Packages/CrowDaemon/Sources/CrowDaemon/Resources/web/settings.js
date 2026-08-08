@@ -884,7 +884,7 @@
     body.appendChild(el('div', 'st-help',
       'AI-powered development session manager. crowd is the sole authority; every UI is a client.'));
 
-    cfg.versionUpdate = cfg.versionUpdate || { enabled: true, intervalHours: 6 };
+    cfg.versionUpdate = cfg.versionUpdate || { enabled: true, intervalHours: 1 };
 
     function renderUpdateStatus(status) {
       updateStatus.textContent = '';
@@ -928,10 +928,10 @@
 
     body.appendChild(group('Updates'));
     body.appendChild(toggleField('Check for upstream updates', cfg.versionUpdate, 'enabled',
-      'Compare this build against corveil/crow main on a schedule (at least every 6 hours).'));
+      'Compare this build against corveil/crow main on a schedule (at least every hour).'));
     body.appendChild(selectField('Check interval', cfg.versionUpdate, 'intervalHours', [
-      [6, '6 hours'], [12, '12 hours'], [24, '1 day'], [168, '1 week'],
-    ], { number: true, help: 'Minimum 6 hours to stay within GitHub unauthenticated rate limits.' }));
+      [1, '1 hour'], [6, '6 hours'], [12, '12 hours'], [24, '1 day'], [168, '1 week'],
+    ], { number: true, help: 'Minimum 1 hour; hourly checks stay within GitHub unauthenticated rate limits.' }));
 
     const checkRow = el('div', 'st-field');
     const checkBtn = el('button', 'action-btn', 'Check now');

@@ -1,4 +1,5 @@
 import ArgumentParser
+import CrowCore
 import CrowIPC
 import Foundation
 
@@ -126,8 +127,8 @@ public struct VersionSet: ParsableCommand {
         abstract: "Change version-update settings",
         discussion: """
         Only the flags you pass change; at least one is required. \
-        --interval-hours is floored at 6 so unauthenticated GitHub checks cannot \
-        exhaust the 60 req/hr limit.
+        --interval-hours is floored at 1 (hourly checks stay within GitHub's \
+        unauthenticated 60 req/hr limit).
         """
     )
 
@@ -136,7 +137,7 @@ public struct VersionSet: ParsableCommand {
 
     @Option(
         name: .customLong("interval-hours"),
-        help: "Hours between automatic checks (minimum 6, default 6)")
+        help: "Hours between automatic checks (minimum 1, default 1)")
     var intervalHours: Int?
 
     public init() {}
@@ -146,8 +147,9 @@ public struct VersionSet: ParsableCommand {
             throw ValidationError(
                 "Nothing to set — provide at least one of --enabled, --interval-hours.")
         }
-        if let intervalHours, intervalHours < 6 {
-            throw ValidationError("--interval-hours must be at least 6.")
+        if let intervalHours, intervalHours < VersionUpdateConfig.minimumIntervalHours {
+            throw ValidationError(
+                "--interval-hours must be at least \(VersionUpdateConfig.minimumIntervalHours).")
         }
     }
 
