@@ -169,7 +169,11 @@ public final class SocketServer: @unchecked Sendable {
         let capturedRouter = router
         let capturedRequest = request
 
-        Task {
+        // Task.detached schedules the handler on the cooperative pool at
+        // .userInitiated without inheriting the accept thread's task-local state.
+        // Defensive: the accept loop blocks a GCD thread on semaphore.wait() while
+        // the handler may hop to MainActor or other executors (CROW-645).
+        Task.detached(priority: .userInitiated) {
             box.value = await capturedRouter.handle(request: capturedRequest)
             semaphore.signal()
         }

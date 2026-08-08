@@ -113,6 +113,51 @@ public struct TmuxController: Sendable {
         return outString
     }
 
+    /// Discards stdout; captures stderr in a temp file so `cliFailed` still
+    /// carries tmux's message. Used for `new-session -d` when a pipe reader
+    /// would stay blocked for the tmux server's lifetime (CROW-645) — a file
+    /// fd does not wait on EOF. The capture file is unlinked after exit while
+    /// tmux may still hold the fd; the inode stays writable until the server
+    /// closes it. Thrown errors have empty `stdout`; `stderr` is populated from
+    /// the temp capture on non-zero exit.
+    private func runDiscardingOutput(
+        _ args: [String],
+        timeout: TimeInterval = TmuxController.defaultTimeout
+    ) throws {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: tmuxBinary)
+        p.arguments = ["-S", socketPath] + args
+        guard let nullOut = FileHandle(forWritingAtPath: "/dev/null") else {
+            throw TmuxError.cliFailed(args: args, status: -1, stdout: "", stderr: "cannot open /dev/null")
+        }
+        p.standardOutput = nullOut
+        let errURL = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("crow-tmux-\(UUID().uuidString).err")
+        defer { try? FileManager.default.removeItem(at: errURL) }
+        FileManager.default.createFile(
+            atPath: errURL.path,
+            contents: nil,
+            attributes: [.posixPermissions: 0o600]
+        )
+        guard let errFH = FileHandle(forWritingAtPath: errURL.path) else {
+            throw TmuxError.cliFailed(args: args, status: -1, stdout: "", stderr: "cannot create stderr capture file")
+        }
+        p.standardError = errFH
+        let done = makeTerminationSignal(for: p)
+        try p.run()
+        let watchdog = ProcessWatchdog(p, timeout: timeout)
+        done.wait()
+        watchdog.cancel()
+        try? errFH.close()
+        let errString = (try? String(contentsOf: errURL, encoding: .utf8)) ?? ""
+        if watchdog.didFire {
+            throw TmuxError.timedOut(args: args, after: timeout)
+        }
+        guard p.terminationStatus == 0 else {
+            throw TmuxError.cliFailed(args: args, status: p.terminationStatus, stdout: "", stderr: errString)
+        }
+    }
+
     // MARK: - Server / session lifecycle
 
     public func killServer() {
@@ -135,7 +180,7 @@ public struct TmuxController: Sendable {
         args.append(contentsOf: ["new-session", "-d", "-s", sessionName])
         for (k, v) in env { args.append(contentsOf: ["-e", "\(k)=\(v)"]) }
         if let command { args.append(contentsOf: ["--", command]) }
-        try run(args)
+        try runDiscardingOutput(args)
     }
 
     public func hasSession() -> Bool {

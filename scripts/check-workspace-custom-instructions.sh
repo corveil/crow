@@ -17,6 +17,23 @@ cd "$ROOT_DIR"
 
 fail=0
 
+require_frontmatter() {
+    # require_frontmatter <file> <expected-name>
+    local file="$1"
+    local expected_name="$2"
+    if [ ! -f "$file" ]; then
+        echo "MISSING FILE: $file" >&2
+        fail=1
+        return
+    fi
+    if [ "$(head -n 1 "$file")" != "---" ]; then
+        echo "DRIFT: $file is missing YAML frontmatter (Claude Code 2.1.x needs name + description)" >&2
+        fail=1
+        return
+    fi
+    require "$file" "name: ${expected_name}" "description:"
+}
+
 require() {
     # require <file> <substring>...
     local file="$1"; shift
@@ -53,6 +70,19 @@ for f in skills/crow-batch-workspace/SKILL.md Resources/crow-batch-workspace-SKI
         'workspaces["{workspace}"].customInstructions' \
         "## Custom Instructions" \
         'not `defaults`'
+done
+
+# Claude Code 2.1.x registers slash commands only when SKILL.md has YAML
+# frontmatter (name + description). Release scaffolds from Resources/*.template,
+# so both halves must carry the block or installed skills silently regress.
+for skill in \
+    crow-workspace \
+    crow-batch-workspace \
+    crow-review-pr \
+    crow-create-ticket \
+    crow-show-image; do
+    require_frontmatter "skills/${skill}/SKILL.md" "$skill"
+    require_frontmatter "Resources/${skill}-SKILL.md.template" "$skill"
 done
 
 if [ "$fail" -ne 0 ]; then

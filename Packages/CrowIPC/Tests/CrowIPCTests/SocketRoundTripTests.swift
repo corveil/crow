@@ -53,6 +53,24 @@ private func startServer(
     #expect(response.error == nil)
 }
 
+@Test func roundTripWithMainActorHop() throws {
+    // Exercises handlers that hop to MainActor while the accept thread blocks on
+    // semaphore.wait() — the IPC path crowd CLI uses on Linux (CROW-645).
+    let path = tempSocketPath()
+    let server = try startServer(path: path, handlers: [
+        "hop": { @Sendable _ in
+            await MainActor.run { }
+            return ["ok": .bool(true)]
+        },
+    ])
+    defer { server.stop(); unlink(path) }
+
+    let client = SocketClient(socketPath: path)
+    let response = try client.send(method: "hop")
+    #expect(response.result?["ok"] == .bool(true))
+    #expect(response.error == nil)
+}
+
 @Test func largeResponseSucceeds() throws {
     let path = tempSocketPath()
     // Generate a string just under 1MB (leave room for JSON framing)

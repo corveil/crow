@@ -11,9 +11,9 @@ import Glibc
 // On Linux, Glibc types `SOCK_STREAM` as `__socket_type` rather than `Int32`,
 // so `socket(_:_:_:)` needs the raw value. On Darwin it is already `Int32`.
 #if canImport(Glibc)
-let crowSockStream = Int32(SOCK_STREAM.rawValue)
+public let crowSockStream = Int32(SOCK_STREAM.rawValue)
 #else
-let crowSockStream = SOCK_STREAM
+public let crowSockStream = SOCK_STREAM
 #endif
 
 // MARK: - JSON-RPC 2.0 Protocol Types

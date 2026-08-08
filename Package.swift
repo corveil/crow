@@ -1,6 +1,15 @@
 // swift-tools-version: 6.0
 import PackageDescription
 
+// Swift 6.1 Linux + ld.gold: libswiftObservation.so references swift::threading::fatal
+// in libswiftCore without exporting it at link time. The symbol resolves at runtime;
+// --allow-shlib-undefined is the gold-compatible spelling. Scoped to the root
+// executables only so path-dependent packages and their test bundles are unaffected.
+// TODO(CROW-645): remove when a Swift Linux toolchain exports the symbol (try 6.2+).
+let linuxObservationLinkerSettings: [LinkerSetting] = [
+    .unsafeFlags(["-Xlinker", "--allow-shlib-undefined"], .when(platforms: [.linux])),
+]
+
 let package = Package(
     name: "Crow",
     platforms: [.macOS(.v14)],
@@ -22,14 +31,16 @@ let package = Package(
             dependencies: [
                 .product(name: "CrowCLILib", package: "CrowCLI"),
             ],
-            path: "Sources/CrowCLI"
+            path: "Sources/CrowCLI",
+            linkerSettings: linuxObservationLinkerSettings
         ),
         .executableTarget(
             name: "crowd",
             dependencies: [
                 .product(name: "CrowDaemon", package: "CrowDaemon"),
             ],
-            path: "Sources/crowd"
+            path: "Sources/crowd",
+            linkerSettings: linuxObservationLinkerSettings
         ),
     ]
 )

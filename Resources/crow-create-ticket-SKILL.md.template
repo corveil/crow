@@ -1,3 +1,11 @@
+---
+name: crow-create-ticket
+description: >-
+  Create a new ticket — a GitHub issue via gh, a GitLab issue via glab, or a
+  Jira work item — from a title and description. Use when the user invokes
+  /crow-create-ticket or asks to create a ticket/issue through Crow.
+---
+
 # Crow Create Ticket
 
 Create a new ticket (GitHub issue via `gh`, GitLab issue via `glab`, or Jira work item

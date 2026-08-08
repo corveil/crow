@@ -27,10 +27,8 @@ let package = Package(
         .package(path: "../CrowOpenCode"),
         .package(path: "../CrowAntigravity"),
         .package(path: "../CrowGrok"),
-        // OTLP receiver + telemetry.db, so the daemon produces the per-session
-        // analytics the web strip and the scorecard read (#772). Darwin-only
-        // (Network.framework) — CrowDaemon already is, via CrowTerminal, and
-        // ci.yml's Linux allow-list excludes both.
+        // OTLP receiver + telemetry.db (#772). Darwin-only (Network.framework).
+        // CrowTerminal now builds on Linux (CROW-645); telemetry stays macOS-only.
         .package(path: "../CrowTelemetry"),
         .package(url: "https://github.com/hummingbird-project/hummingbird.git", from: "2.0.0"),
         .package(url: "https://github.com/hummingbird-project/hummingbird-websocket.git", from: "2.0.0"),
@@ -56,7 +54,9 @@ let package = Package(
                 .product(name: "CrowOpenCode", package: "CrowOpenCode"),
                 .product(name: "CrowAntigravity", package: "CrowAntigravity"),
                 .product(name: "CrowGrok", package: "CrowGrok"),
-                .product(name: "CrowTelemetry", package: "CrowTelemetry"),
+                // OTLP receiver (Network.framework) — macOS-only; Linux crowd runs
+                // without per-session analytics collection (CROW-645).
+                .product(name: "CrowTelemetry", package: "CrowTelemetry", condition: .when(platforms: [.macOS])),
                 .product(name: "Hummingbird", package: "hummingbird"),
                 .product(name: "HummingbirdWebSocket", package: "hummingbird-websocket"),
                 .product(name: "Crypto", package: "swift-crypto"),

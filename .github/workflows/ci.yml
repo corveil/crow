@@ -11,11 +11,11 @@ concurrency:
 
 jobs:
   # PR Swift build/test runs on Linux to avoid burning macOS Actions minutes.
-  # Swift is provided by the official swift:6 container (no Xcode). We build and
+  # Swift is provided by the official swift:6.1 container (no Xcode). We build and
   # test the Foundation-only packages that compile on Linux — the macOS-only
-  # GUI (root Crow target + CrowTerminal, all AppKit/SwiftUI) and
-  # CrowTelemetry (Apple Network.framework) are compiled only by release.yml.
-  # See docs/adr/0007-linux-ci-swift.md.
+  # GUI (root Crow target) and CrowTelemetry (Apple Network.framework) are
+  # compiled only by release.yml. CrowTerminal + CrowDaemon + `crowd` now build
+  # here too (CROW-645); see docs/adr/0007-linux-ci-swift.md.
   test:
     name: Build & Test
     runs-on: ubuntu-latest
@@ -52,7 +52,7 @@ jobs:
 
       # Explicit allow-list of packages that compile on Linux. A new package
       # must be added here consciously; do NOT loop over Packages/*/ — that
-      # would pull in the macOS-only CrowTerminal / CrowTelemetry.
+      # would pull in CrowTelemetry (Network.framework) or the root AppKit GUI.
       - name: Build & test Linux packages
         run: |
           LINUX_PACKAGES=(CrowCore CrowIPC CrowClaude CrowCodex CrowCursor \
@@ -72,6 +72,16 @@ jobs:
             # The export lands at Packages/$pkg/.build/<triple>/debug/codecov/.
             swift test --no-parallel --enable-code-coverage --package-path "Packages/$pkg"
           done
+
+      # CrowTerminal + the root `crowd`/`crow` binaries (CROW-645). Tmux
+      # integration tests need a real server and run on macOS in release.yml;
+      # SmartDetect is pure and runs here on Linux.
+      - name: Build crowd daemon + CLI on Linux (CROW-645)
+        run: |
+          swift build --package-path Packages/CrowTerminal
+          swift test --no-parallel --package-path Packages/CrowTerminal --filter SmartDetect
+          swift build --product crowd
+          swift build --product crow
 
       # Measurement only — no gate, no ratchet, no third-party upload (CROW-928).
       # This lane measures only what LINUX_PACKAGES lists; the rest of the tree is
