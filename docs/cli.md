@@ -1667,12 +1667,12 @@ Change version-update settings.
 crow version set [--enabled <enabled>] [--interval-hours <interval-hours>]
 ```
 
-Only the flags you pass change; at least one is required. --interval-hours is floored at 6 so unauthenticated GitHub checks cannot exhaust the 60 req/hr limit.
+Only the flags you pass change; at least one is required. --interval-hours is floored at 1 (hourly checks stay within GitHub's unauthenticated 60 req/hr limit).
 
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |
 | `--enabled` | `<enabled>` | no | Enable periodic upstream checks (true or false) |
-| `--interval-hours` | `<interval-hours>` | no | Hours between automatic checks (minimum 6, default 6) |
+| `--interval-hours` | `<interval-hours>` | no | Hours between automatic checks (minimum 1, default 1) |
 
 ---
 

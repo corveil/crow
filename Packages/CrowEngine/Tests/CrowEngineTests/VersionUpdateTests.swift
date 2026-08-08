@@ -163,7 +163,7 @@ import CrowCore
 
     @Test func patchIntervalRejectsBelowMinimum() {
         #expect(throws: RPCError.self) {
-            _ = try VersionUpdateRPC.patchIntervalHours(["interval_hours": .int(1)])
+            _ = try VersionUpdateRPC.patchIntervalHours(["interval_hours": .int(0)])
         }
     }
 }

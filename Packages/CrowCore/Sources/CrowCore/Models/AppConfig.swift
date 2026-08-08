@@ -51,7 +51,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
     public var autoCreateWatcherEnabled: Bool
     public var cleanup: CleanupConfig
     /// Periodic check against `corveil/crow` `main` to surface when this build
-    /// is behind upstream (CROW-938). Off-able; interval floored at 6h.
+    /// is behind upstream (CROW-938). Off-able; interval floored at 1h.
     public var versionUpdate: VersionUpdateConfig
     /// Scheduled jobs: named sets of prompts that fire automatically on a
     /// schedule, scoped to a repo. Driven by `JobScheduler` (CROW-317).
