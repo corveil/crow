@@ -703,31 +703,7 @@ func makeCommandRouter(
         },
         "list-reviews": { _ in
             if tracker != nil {
-                return await MainActor.run {
-                    let fmt = ISO8601DateFormatter()
-                    let reviews: [JSONValue] = appState.filteredReviewRequests.map { r in
-                        .object([
-                            "id": .string(r.id),
-                            "pr_number": .int(r.prNumber),
-                            "title": .string(r.title),
-                            "url": .string(r.url),
-                            "repo": .string(r.repo),
-                            "author": .string(r.author),
-                            "head_branch": .string(r.headBranch),
-                            "base_branch": .string(r.baseBranch),
-                            "is_draft": .bool(r.isDraft),
-                            "requested_at": r.requestedAt.map { .string(fmt.string(from: $0)) } ?? .null,
-                            "labels": .array(r.labels.map { .object(["name": .string($0.name), "color": $0.color.map { .string($0) } ?? .null]) }),
-                            "provider": .string(r.provider.rawValue),
-                            "review_session_id": r.reviewSessionID.map { .string($0.uuidString) } ?? .null,
-                        ])
-                    }
-                    return [
-                        "reviews": .array(reviews),
-                        "loading": .bool(appState.isLoadingReviews),
-                        "unseen": .int(appState.unseenReviewCount),
-                    ]
-                }
+                return await MainActor.run { ReviewsPayload.build(appState: appState) }
             }
             let empty: [String: JSONValue] = ["reviews": .array([]), "loading": .bool(false), "unseen": .int(0)]
             return empty

@@ -22,13 +22,29 @@ public struct Session: Identifiable, Codable, Sendable {
     // prompt dispatched. Gates the launchClaude prompt-vs-`--continue`
     // branch so completed reviews don't restart on app relaunch.
     public var reviewPromptDispatched: Bool
-    // Head SHA of the PR at the time the review session was created or
-    // last re-launched. Used by the kickoff guard as a fallback re-kick
-    // signal when a PR's head advances without an explicit re-request
-    // (e.g. force-push) or before the viewer-submitted-review signal is
-    // observed. Nil for non-review sessions and for legacy persisted
-    // sessions predating this field (CROW-290).
+    // Head SHA of the PR at the time the review session was created. Used by
+    // the kickoff guard as a fallback re-kick signal when a PR's head advances
+    // without an explicit re-request (e.g. force-push) or before the
+    // viewer-submitted-review signal is observed. Nil for non-review sessions
+    // and for legacy persisted sessions predating this field (CROW-290).
+    //
+    // Deliberately NOT updated when a round is re-reviewed in place. This is a
+    // *round boundary*, and the kickoff guard's whole job is to notice "the
+    // head moved and nobody opened a new round". Advancing it on re-review
+    // would disarm that fallback for the new head, so an agent that then
+    // stalled without posting a verdict would leave the PR with nothing to
+    // re-fire. For the *diff anchor* — "what should `git diff …HEAD` cover on
+    // the next pass" — use `lastReRequestedHeadSha`, which is what the two
+    // readers actually needed separately (CROW-945).
     public var lastReviewedHeadSha: String?
+    // Head SHA the last in-place re-review was scoped from (CROW-945). Written
+    // by the `reReview` quick action, which re-prompts the *existing* session
+    // rather than starting a new round, so without it every repeat pass hands
+    // the agent an ever-widening diff from round 1's head — more tokens, and
+    // findings the agent already reported. Read only for prompt scoping, never
+    // by the kickoff guard; see `lastReviewedHeadSha`. Nil until the first
+    // in-place re-review, and for every session predating this field.
+    public var lastReRequestedHeadSha: String?
     // Timestamp at which Crow enabled GitHub native auto-merge on the
     // linked PR (CROW-299). Non-nil means the one-shot enable has already
     // run; the auto-merge watcher skips this session on subsequent polls.
@@ -143,6 +159,7 @@ public struct Session: Identifiable, Codable, Sendable {
         updatedAt: Date = Date(),
         reviewPromptDispatched: Bool = false,
         lastReviewedHeadSha: String? = nil,
+        lastReRequestedHeadSha: String? = nil,
         autoMergeEnabledAt: Date? = nil,
         locked: Bool = false,
         agentSessionStartedAt: Date? = nil,
@@ -165,6 +182,7 @@ public struct Session: Identifiable, Codable, Sendable {
         self.updatedAt = updatedAt
         self.reviewPromptDispatched = reviewPromptDispatched
         self.lastReviewedHeadSha = lastReviewedHeadSha
+        self.lastReRequestedHeadSha = lastReRequestedHeadSha
         self.autoMergeEnabledAt = autoMergeEnabledAt
         self.locked = locked
         self.agentSessionStartedAt = agentSessionStartedAt
@@ -207,6 +225,7 @@ public struct Session: Identifiable, Codable, Sendable {
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)
         reviewPromptDispatched = try container.decodeIfPresent(Bool.self, forKey: .reviewPromptDispatched) ?? true
         lastReviewedHeadSha = try container.decodeIfPresent(String.self, forKey: .lastReviewedHeadSha)
+        lastReRequestedHeadSha = try container.decodeIfPresent(String.self, forKey: .lastReRequestedHeadSha)
         autoMergeEnabledAt = try container.decodeIfPresent(Date.self, forKey: .autoMergeEnabledAt)
         agentSessionStartedAt = try container.decodeIfPresent(Date.self, forKey: .agentSessionStartedAt)
         agentSessionEndedAt = try container.decodeIfPresent(Date.self, forKey: .agentSessionEndedAt)

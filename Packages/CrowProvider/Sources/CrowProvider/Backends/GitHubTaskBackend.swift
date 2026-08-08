@@ -595,8 +595,8 @@ public struct GitHubTaskBackend: TaskBackend {
             // Tolerant parse (#751): GitHub GraphQL emits non-fractional
             // DateTime, which a `.withFractionalSeconds` formatter rejects —
             // that silently disabled updated/created sort + "opened … ago".
-            let updatedAt = GitHubCodeBackend.parseGitHubDateTime((node["updatedAt"] as? String) ?? "")
-            let createdAt = GitHubCodeBackend.parseGitHubDateTime((node["createdAt"] as? String) ?? "")
+            let updatedAt = IssueDate.parse(node["updatedAt"] as? String)
+            let createdAt = IssueDate.parse(node["createdAt"] as? String)
             let author = (node["author"] as? [String: Any])?["login"] as? String
             let commentsCount = (node["comments"] as? [String: Any])?["totalCount"] as? Int
             let body = (node["bodyText"] as? String).flatMap(IssueBody.cap)

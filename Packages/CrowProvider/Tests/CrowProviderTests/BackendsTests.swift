@@ -438,6 +438,12 @@ final class BackendsTests: XCTestCase {
     /// The `reviewPRs: search(…)` connection nullifies elements the same way
     /// (#894). Covers the top-level `nodes` array and a null inside a PR's own
     /// `reviews.nodes`, which feeds `viewerLastReviewedAt`.
+    ///
+    /// Timestamps are GitHub's **actual** non-fractional shape (CROW-945). The
+    /// original fixture used `.000Z`, which no GitHub GraphQL response has ever
+    /// carried — so this test passed while the strict `.withFractionalSeconds`
+    /// formatter left both date fields permanently nil in production, and with
+    /// them `decideReviewCompletions` rule 1. See the fractional twin below.
     func testParseReviewRequestsSkipsNullNodes() throws {
         let json = """
         {"data":{
@@ -445,13 +451,13 @@ final class BackendsTests: XCTestCase {
           "reviewPRs":{"nodes":[
             null,
             {"number":21,"title":"Review me","url":"https://github.com/a/b/pull/21",
-             "state":"OPEN","isDraft":false,"updatedAt":"2026-06-07T10:00:00.000Z",
+             "state":"OPEN","isDraft":false,"updatedAt":"2026-06-07T10:00:00Z",
              "headRefName":"feat","baseRefName":"main",
              "author":{"login":"someone"},"repository":{"nameWithOwner":"a/b"},
              "labels":{"nodes":[null,{"name":"needs-review","color":"blue"}]},
              "reviews":{"nodes":[
                null,
-               {"author":{"login":"me"},"state":"APPROVED","submittedAt":"2026-06-06T10:00:00.000Z"},
+               {"author":{"login":"me"},"state":"APPROVED","submittedAt":"2026-06-06T10:00:00Z"},
                null
              ]}},
             null
@@ -464,8 +470,151 @@ final class BackendsTests: XCTestCase {
         let req = try XCTUnwrap(listing.reviewRequests.first)
         XCTAssertEqual(req.prNumber, 21)
         XCTAssertEqual(req.labels.map(\.name), ["needs-review"])
-        // The viewer's own review survived the null siblings.
-        XCTAssertNotNil(req.viewerLastReviewedAt)
+        // The viewer's own review survived the null siblings. Asserted against
+        // an absolute instant, not just non-nil: a formatter that parsed but
+        // mis-scaled would still satisfy XCTAssertNotNil.
+        XCTAssertEqual(req.viewerLastReviewedAt, Date(timeIntervalSince1970: 1780740000))
+        // `requestedAt` comes off the same formatter and was nil for the same
+        // reason — it drives the board's relative-time chip and its sort.
+        XCTAssertEqual(req.requestedAt, Date(timeIntervalSince1970: 1780826400))
+    }
+
+    /// Fractional twin of the above. GitHub emits the plain form today, but the
+    /// parser must tolerate both — otherwise fixing CROW-945 would just swap
+    /// which shape is untested, exactly how the bug survived three years.
+    func testParseReviewRequestsParsesFractionalTimestampsToo() throws {
+        let json = """
+        {"data":{
+          "viewerPRs":{"pullRequests":{"nodes":[]}},
+          "reviewPRs":{"nodes":[
+            {"number":21,"title":"Review me","url":"https://github.com/a/b/pull/21",
+             "state":"OPEN","isDraft":false,"updatedAt":"2026-06-07T10:00:00.000Z",
+             "headRefName":"feat","baseRefName":"main",
+             "author":{"login":"someone"},"repository":{"nameWithOwner":"a/b"},
+             "labels":{"nodes":[]},
+             "reviews":{"nodes":[
+               {"author":{"login":"me"},"state":"CHANGES_REQUESTED","submittedAt":"2026-06-06T10:00:00.500Z"}
+             ]}}
+          ]},
+          "viewer":{"login":"me"}
+        }}
+        """
+        let listing = try GitHubCodeBackend.parseMonitoredPRsResponse(json)
+        let req = try XCTUnwrap(listing.reviewRequests.first)
+        XCTAssertEqual(req.requestedAt, Date(timeIntervalSince1970: 1780826400))
+        XCTAssertEqual(req.viewerLastReviewedAt?.timeIntervalSince1970 ?? 0, 1780740000.5, accuracy: 0.01)
+    }
+
+    /// A COMMENTED review carries no verdict, so it must not close a round.
+    /// `crow-review-pr` mandates `--request-changes`/`--approve` and forbids
+    /// `--comment`; this is also why CROW-945 could not use GraphQL's
+    /// `viewerLatestReview` (no `states:` arg — a later COMMENTED review would
+    /// mask the real verdict and reintroduce the bug through a new field).
+    func testParseReviewRequestsIgnoresNonVerdictReviewStates() throws {
+        let json = """
+        {"data":{
+          "viewerPRs":{"pullRequests":{"nodes":[]}},
+          "reviewPRs":{"nodes":[
+            {"number":21,"title":"Review me","url":"https://github.com/a/b/pull/21",
+             "state":"OPEN","isDraft":false,"updatedAt":"2026-06-07T10:00:00Z",
+             "headRefName":"feat","baseRefName":"main",
+             "author":{"login":"someone"},"repository":{"nameWithOwner":"a/b"},
+             "labels":{"nodes":[]},
+             "reviews":{"nodes":[
+               {"author":{"login":"me"},"state":"COMMENTED","submittedAt":"2026-06-06T10:00:00Z"},
+               {"author":{"login":"other"},"state":"APPROVED","submittedAt":"2026-06-06T11:00:00Z"}
+             ]}}
+          ]},
+          "viewer":{"login":"me"}
+        }}
+        """
+        let listing = try GitHubCodeBackend.parseMonitoredPRsResponse(json)
+        let req = try XCTUnwrap(listing.reviewRequests.first)
+        // Viewer only commented; someone else's approval is not the viewer's.
+        XCTAssertNil(req.viewerLastReviewedAt)
+        // The non-verdict path must not take `requestedAt` down with it.
+        XCTAssertNotNil(req.requestedAt)
+    }
+
+    // MARK: - prStates carries the viewer's verdict (CROW-945)
+
+    /// The stale-PR query is the only source of `viewerLastReviewedAt` that
+    /// survives GitHub clearing the review request, so it has to actually ask
+    /// for it — and ask with `author:`/`states:` rather than scanning.
+    func testPRStatesQueryAsksForTheViewersOwnVerdict() async throws {
+        let fake = FakeShellRunner()
+        fake.responses = [.success("{\"data\":{}}")]
+        let backend = GitHubCodeBackend(shellRunner: fake)
+        _ = try await backend.prStates(
+            refs: [PRRef(owner: "a", repo: "b", number: 7)],
+            viewerLogin: "me"
+        )
+        let call = try XCTUnwrap(fake.calls.first)
+        let query = try XCTUnwrap(call.args.first(where: { $0.hasPrefix("query=") }))
+        XCTAssertTrue(query.contains("reviews(last: 1, author: $viewer"), query)
+        // Server-side state filter — the whole reason this beats
+        // `viewerLatestReview`, which cannot express it.
+        XCTAssertTrue(query.contains("APPROVED, CHANGES_REQUESTED, DISMISSED"), query)
+        XCTAssertTrue(query.contains("$viewer: String!"), query)
+        // `-f`, not `-F`: `-F` type-infers, so an all-digit login would be sent
+        // as an Int and fail the `String!` variable.
+        let viewerIdx = try XCTUnwrap(call.args.firstIndex(of: "viewer=me"))
+        XCTAssertEqual(call.args[viewerIdx - 1], "-f")
+    }
+
+    /// With no known viewer login the selection is omitted rather than sent
+    /// with an empty string — an empty `author:` would match nothing and the
+    /// nil result would be indistinguishable from "the viewer hasn't reviewed",
+    /// which is precisely the ambiguity `nil == not fetched` exists to avoid.
+    func testPRStatesOmitsViewerReviewSelectionWhenLoginUnknown() async throws {
+        for login in [nil, "", "   "] as [String?] {
+            let fake = FakeShellRunner()
+            fake.responses = [.success("{\"data\":{}}")]
+            let backend = GitHubCodeBackend(shellRunner: fake)
+            _ = try await backend.prStates(
+                refs: [PRRef(owner: "a", repo: "b", number: 7)],
+                viewerLogin: login
+            )
+            let call = try XCTUnwrap(fake.calls.first)
+            let query = try XCTUnwrap(call.args.first(where: { $0.hasPrefix("query=") }))
+            XCTAssertFalse(query.contains("reviews("), "login=\(login ?? "nil"): \(query)")
+            XCTAssertFalse(query.contains("$viewer"), "login=\(login ?? "nil"): \(query)")
+        }
+    }
+
+    /// The parse half: GitHub's real non-fractional timestamp, off the
+    /// `prStates` response shape, reaches `PRRecord.viewerLastReviewedAt`.
+    func testParseStalePRResponseCarriesViewerLastReviewedAt() throws {
+        let ref = PRRef(owner: "a", repo: "b", number: 7)
+        let json = """
+        {"data":{"pr0":{"pullRequest":{
+          "number":7,"url":"https://github.com/a/b/pull/7","state":"OPEN",
+          "mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"CHANGES_REQUESTED",
+          "isDraft":false,"headRefName":"feat","headRefOid":"abc123","baseRefName":"main",
+          "repository":{"nameWithOwner":"a/b"},
+          "reviews":{"nodes":[{"state":"CHANGES_REQUESTED","submittedAt":"2026-06-06T10:00:00Z"}]}
+        }}}}
+        """
+        let out = GitHubCodeBackend.parseStalePRResponse(json, refs: [ref])
+        let rec = try XCTUnwrap(out[ref])
+        XCTAssertEqual(rec.viewerLastReviewedAt, Date(timeIntervalSince1970: 1780740000))
+    }
+
+    /// A response with no `reviews` block (every path except the stale-PR
+    /// query) leaves the field nil — "not fetched", not "no review".
+    func testParseStalePRResponseLeavesViewerReviewNilWhenAbsent() throws {
+        let ref = PRRef(owner: "a", repo: "b", number: 7)
+        let json = """
+        {"data":{"pr0":{"pullRequest":{
+          "number":7,"url":"https://github.com/a/b/pull/7","state":"OPEN",
+          "mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"",
+          "isDraft":false,"headRefName":"feat","headRefOid":"abc123","baseRefName":"main",
+          "repository":{"nameWithOwner":"a/b"}
+        }}}}
+        """
+        let out = GitHubCodeBackend.parseStalePRResponse(json, refs: [ref])
+        let rec = try XCTUnwrap(out[ref])
+        XCTAssertNil(rec.viewerLastReviewedAt)
     }
 
     /// #894 issue-side counterpart: one SAML-nulled assigned issue dropped the
@@ -609,7 +758,7 @@ final class BackendsTests: XCTestCase {
         fake.responses = [.success(json)]
         let backend = GitHubCodeBackend(shellRunner: fake)
         let ref = PRRef(owner: "a", repo: "b", number: 885)
-        let states = try await backend.prStates(refs: [ref])
+        let states = try await backend.prStates(refs: [ref], viewerLogin: nil)
         XCTAssertEqual(states[ref]?.checksState, "FAILURE")
         XCTAssertEqual(states[ref]?.failedCheckNames, ["Build & Test"])
         XCTAssertEqual(states[ref]?.labels.map(\.name), ["crow:merge"])
@@ -643,7 +792,7 @@ final class BackendsTests: XCTestCase {
         let blocked = PRRef(owner: "blocked", repo: "repo", number: 2)
         let alsoOK = PRRef(owner: "ok", repo: "repo", number: 3)
         // Pre-#894 this threw and the caller lost all three.
-        let states = try await backend.prStates(refs: [ok, blocked, alsoOK])
+        let states = try await backend.prStates(refs: [ok, blocked, alsoOK], viewerLogin: nil)
         XCTAssertEqual(states.count, 2)
         XCTAssertEqual(states[ok]?.state, "MERGED")
         XCTAssertEqual(states[ok]?.mergeCommitOid, "0123456789abcdef")
@@ -662,7 +811,7 @@ final class BackendsTests: XCTestCase {
         ))]
         let backend = GitHubCodeBackend(shellRunner: fake)
         do {
-            _ = try await backend.prStates(refs: [PRRef(owner: "a", repo: "b", number: 1)])
+            _ = try await backend.prStates(refs: [PRRef(owner: "a", repo: "b", number: 1)], viewerLogin: nil)
             XCTFail("expected throw")
         } catch let error as ProviderError {
             if case .samlRestricted = error {
@@ -989,7 +1138,7 @@ final class BackendsTests: XCTestCase {
         fake.responses = [.success(json)]
         let backend = GitHubCodeBackend(shellRunner: fake)
         let ref = PRRef(owner: "a", repo: "b", number: 1)
-        let states = try await backend.prStates(refs: [ref])
+        let states = try await backend.prStates(refs: [ref], viewerLogin: nil)
         XCTAssertEqual(states.count, 1)
         XCTAssertEqual(states[ref]?.state, "MERGED")
         // One batched call, not per-ref.
@@ -1037,7 +1186,7 @@ final class BackendsTests: XCTestCase {
         let backend = GitHubCodeBackend(shellRunner: fake)
         let merged = PRRef(owner: "a", repo: "b", number: 1)
         let open = PRRef(owner: "a", repo: "b", number: 2)
-        let states = try await backend.prStates(refs: [merged, open])
+        let states = try await backend.prStates(refs: [merged, open], viewerLogin: nil)
         XCTAssertEqual(states[merged]?.mergeCommitOid, "0123456789abcdef")
         XCTAssertNil(states[open]?.mergeCommitOid)
         // The query now requests the merge commit.
@@ -1359,7 +1508,7 @@ final class BackendsTests: XCTestCase {
         fake.responses = [.success(json)]
         let backend = GitLabCodeBackend(shellRunner: fake, host: "gitlab.example.com")
         let ref = PRRef(owner: "g", repo: "p", number: 3)
-        let states = try await backend.prStates(refs: [ref])
+        let states = try await backend.prStates(refs: [ref], viewerLogin: nil)
         XCTAssertEqual(states.count, 1)
         XCTAssertEqual(states[ref]?.state, "MERGED")
         XCTAssertEqual(fake.calls.count, 1)
@@ -1483,9 +1632,14 @@ final class BackendsTests: XCTestCase {
     /// and rejects this format — feature was silently inert in production.
     /// PR #509 review caught it. This test will fail loudly if a future
     /// regression re-introduces the strict formatter.
+    ///
+    /// CROW-945 collapsed `GitHubCodeBackend.parseGitHubDateTime` into
+    /// `IssueDate.parse`, which was already its byte-identical twin — two
+    /// copies of the fix meant a third call site could (and did) still get it
+    /// wrong. These tests now cover the single sanctioned entry point.
     func testParseGitHubDateTimeHandlesNonFractionalISO8601() {
         // GitHub's actual format — no fraction.
-        let nonFractional = GitHubCodeBackend.parseGitHubDateTime("2026-06-15T01:28:17Z")
+        let nonFractional = IssueDate.parse("2026-06-15T01:28:17Z")
         XCTAssertNotNil(nonFractional)
         XCTAssertEqual(nonFractional, Date(timeIntervalSince1970: 1781486897))
     }
@@ -1494,14 +1648,15 @@ final class BackendsTests: XCTestCase {
     /// fractional component must also parse. Both shapes flow through the
     /// same helper.
     func testParseGitHubDateTimeAlsoHandlesFractionalISO8601() {
-        let withFraction = GitHubCodeBackend.parseGitHubDateTime("2026-06-15T01:28:17.123Z")
+        let withFraction = IssueDate.parse("2026-06-15T01:28:17.123Z")
         XCTAssertNotNil(withFraction)
     }
 
     /// Garbage input returns nil, doesn't crash.
     func testParseGitHubDateTimeReturnsNilForGarbage() {
-        XCTAssertNil(GitHubCodeBackend.parseGitHubDateTime("not a date"))
-        XCTAssertNil(GitHubCodeBackend.parseGitHubDateTime(""))
+        XCTAssertNil(IssueDate.parse("not a date"))
+        XCTAssertNil(IssueDate.parse(""))
+        XCTAssertNil(IssueDate.parse(nil))
     }
 
     /// Merge commits (parents.totalCount >= 2) and rebase-style commits

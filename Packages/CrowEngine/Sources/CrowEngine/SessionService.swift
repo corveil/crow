@@ -2844,17 +2844,8 @@ public final class SessionService {
     /// what produced the SwiftUI reentrant-layout crash in #266.
     @discardableResult
     public func createReviewSession(prURL: String, selectAfterCreate: Bool = false) async -> UUID? {
-        // Universal backstop against duplicate sessions for the same PR. The
-        // serial kickoff queue in AppDelegate guarantees that by the time a
-        // second `createReviewSession` runs, the first has already appended
-        // its row to `appState.sessions` — so this check is authoritative,
-        // not racy. Belt-and-suspenders for the auto-review watcher race
-        // (CROW-406) and any future caller that re-enters during a kickoff.
-        if let existing = appState.existingReviewSession(forPRURL: prURL) {
-            CrowLog.info("[SessionService] Skipping duplicate review session for \(prURL); reusing \(existing.id)")
-            if selectAfterCreate { appState.selectedSessionID = existing.id }
-            return existing.id
-        }
+        // The duplicate/round guard lives *below*, after `fetchPRMetadata`,
+        // because deciding it needs the PR's real head — see the note there.
 
         // Parse org/repo and PR number from URL like "https://github.com/org/repo/pull/123"
         guard let parsed = Session.parseReviewPR(url: prURL) else {
@@ -2899,6 +2890,54 @@ public final class SessionService {
         } catch {
             CrowLog.info("[SessionService] Failed to fetch PR metadata for \(prURL): \(error.localizedDescription)")
             return nil
+        }
+
+        // Duplicate/round guard — the *one* kickoff decision, run through the
+        // same pure function the daemon's auto-review hook uses so the
+        // manual/board path and the `autoReviewRepos` path can't disagree about
+        // whether a round is still open (CROW-945; before this there were two
+        // divergent dedup rules and only the auto path could ever re-review).
+        //
+        // Deliberately placed here, after the metadata fetch, for two reasons.
+        // It needs the PR's *real* head to tell "already covered" from "the
+        // author pushed and this is a new round" — `appState.reviewRequests` is
+        // up to a poll stale and is simply absent for a PR hidden by the board
+        // filters or for a voluntary `crow start-review` on a PR nobody asked
+        // you to review, which would pin the decision to `.skip` forever with
+        // no way out. And reading `existingReviewSession` *after* the awaits
+        // keeps the CROW-406 property the old top-of-function check had: a
+        // session that landed while we were fetching is still seen. (Callers
+        // are serialized on the review kickoff queue, so this is belt and
+        // braces.) The fetch is not extra work — the clone below needs it
+        // regardless.
+        if let existing = appState.existingReviewSession(forPRURL: prURL) {
+            let action = IssueTracker.reviewKickoffAction(
+                reviewSessionID: existing.id,
+                headRefOid: prMetadata.headRefOid,
+                linkedSession: existing,
+                existingByPRSessionID: existing.id
+            )
+            switch action {
+            case .skip, .create:
+                // `.create` is unreachable here (it requires no existing
+                // session) — treat it as `.skip` rather than racing the live
+                // session with a second one for the same PR.
+                CrowLog.info("[SessionService] Skipping duplicate review session for \(prURL); reusing \(existing.id)")
+                if selectAfterCreate { appState.selectedSessionID = existing.id }
+                return existing.id
+            case .reReview(let staleID):
+                // Retire the stale round before creating the new one. Called
+                // directly rather than through `appState.onCompleteSession`:
+                // that callback is optional and only CrowDaemon wires it, so a
+                // nil one would complete nothing and then leave two live
+                // sessions on one PR — the CROW-406 double-session this guard
+                // exists to prevent. Completing (not deleting) also writes the
+                // round's end-of-run analytics snapshot, and makes it invisible
+                // to `existingReviewSession`, which is what lets the create
+                // below proceed.
+                CrowLog.info("[SessionService] PR head advanced past review session \(staleID); completing it and starting a new round for \(prURL)")
+                completeSession(id: staleID)
+            }
         }
 
         let prep: ReviewClonePrep

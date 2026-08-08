@@ -799,46 +799,28 @@ public enum CrowDaemon {
         // (force-push, or round-2 commits landing before Signal A —
         // `decideReviewCompletions` rule 1 — completed round 1). The SHA-keyed
         // fingerprint makes each head its own round so B isn't blocked by A.
+        //
+        // Both decisions now live in `SessionService.createReviewSession`, which
+        // runs the same `IssueTracker.reviewKickoffAction` against the head it
+        // fetches itself (CROW-945). This hook deliberately does NOT pre-decide:
+        // it would have to use `request.headRefOid` — a board snapshot up to a
+        // poll old — and two callers deciding from two different heads is
+        // exactly the divergence that let a round go on shadowing its PR. So
+        // this stays a filter + a rate guard, and the service owns the verdict.
         var autoReviewed: Set<String> = []
         tracker.onReviewRequestsRefreshed = { requests in
             let patterns = (config()?.workspaces ?? []).flatMap { $0.autoReviewRepos }
             guard !patterns.isEmpty else { return }
             for request in requests {
                 guard repoMatchesPatterns(request.repo, patterns: patterns) else { continue }
-                let linkedSession = request.reviewSessionID.flatMap { id in
-                    appState.sessions.first(where: { $0.id == id })
-                }
-                let action = IssueTracker.reviewKickoffAction(
-                    reviewSessionID: request.reviewSessionID,
-                    headRefOid: request.headRefOid,
-                    linkedSession: linkedSession,
-                    existingByPRSessionID: appState.existingReviewSession(forPRURL: request.url)?.id
-                )
-                guard action != .skip else { continue }
                 // SHA-keyed dedup: a new head is a fresh round; an unchanged head
                 // never re-kicks (also guards the in-flight clone window before
-                // the session's link/reviewSessionID land).
+                // the session's link/reviewSessionID land). In-memory only, so a
+                // daemon restart can re-ask — `createReviewSession` still refuses
+                // to duplicate a live round, so the worst case is one redundant
+                // metadata fetch, not a duplicate session.
                 let fingerprint = "\(request.id)\n\(request.headRefOid ?? "")"
                 guard autoReviewed.insert(fingerprint).inserted else { continue }
-                // B-fallback: retire the stale round's review session before
-                // enqueuing so `reviewSessions` doesn't double up for this PR.
-                // Complete it (not delete): completing writes its end-of-round
-                // `SessionAnalyticsSnapshot` and keeps its telemetry, whereas
-                // `deleteSession` transitions no status — so no snapshot is
-                // written — and then drops the raw rows, silently erasing round
-                // 1's tokens/cost from the scorecard on Crow's own auto-review
-                // flow (CROW-877 review). Completing also makes it invisible to
-                // `existingReviewSession(forPRURL:)` (that dedup guard excludes
-                // completed/archived), so the create below starts the new round
-                // instead of reusing the stale session. The identical completed
-                // `review-<repo>-<pr>` rows that used to pile up in Completed are
-                // now folded into one by the sidebar's within-section collapse
-                // (`groupSessions` in app.js), which also cleans up pre-existing
-                // pile-ups — so the visible-duplicate half no longer needs a
-                // destructive teardown here.
-                if case let .reReview(staleID) = action {
-                    appState.onCompleteSession?(staleID)
-                }
                 let url = request.url
                 Task { _ = await reviewSerializer.enqueue { await sessionService.createReviewSession(prURL: url, selectAfterCreate: false) } }
             }

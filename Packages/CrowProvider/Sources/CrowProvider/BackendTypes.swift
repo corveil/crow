@@ -109,6 +109,22 @@ public struct PRRecord: Sendable {
     /// non-empty `changesRequestedReviewerLogins`, neither of which those paths
     /// populate either, so an unknown here can't provoke a spurious re-request.
     public let hasPendingReviewRequest: Bool
+    /// When the *viewer* last submitted a formal verdict (APPROVED /
+    /// CHANGES_REQUESTED / DISMISSED) on this PR. `nil` means "not fetched",
+    /// never "no review" — the viewer-PR query and GitLab don't select it.
+    ///
+    /// This is what closes a review round (CROW-945). It has to be read off
+    /// the PR rather than off the `review-requested:@me` search, because
+    /// GitHub clears the pending request the instant the viewer submits a
+    /// review — so the search stops carrying the PR at exactly the moment the
+    /// round should close, and a rule sourced from it could only ever fire by
+    /// winning a race against GitHub's search index.
+    ///
+    /// COMMENTED and PENDING reviews are deliberately excluded upstream (the
+    /// GraphQL `states:` filter): `crow-review-pr` mandates
+    /// `--request-changes`/`--approve` and forbids `--comment`, so a comment
+    /// carries notes, not a verdict, and must leave the round open.
+    public let viewerLastReviewedAt: Date?
     /// Used by reconcile tie-breaking when multiple non-OPEN PRs exist on the same branch.
     public let updatedAt: Date?
     /// SHA of the merge/squash commit on the base branch. Populated only by
@@ -147,6 +163,7 @@ public struct PRRecord: Sendable {
         changesRequestedReviewerLogins: [String] = [],
         pendingReviewerLogins: [String] = [],
         hasPendingReviewRequest: Bool = false,
+        viewerLastReviewedAt: Date? = nil,
         updatedAt: Date? = nil,
         mergeCommitOid: String? = nil,
         repoAutoMergeAllowed: Bool? = nil
@@ -172,6 +189,7 @@ public struct PRRecord: Sendable {
         self.changesRequestedReviewerLogins = changesRequestedReviewerLogins
         self.pendingReviewerLogins = pendingReviewerLogins
         self.hasPendingReviewRequest = hasPendingReviewRequest
+        self.viewerLastReviewedAt = viewerLastReviewedAt
         self.updatedAt = updatedAt
         self.mergeCommitOid = mergeCommitOid
         self.repoAutoMergeAllowed = repoAutoMergeAllowed
@@ -200,9 +218,20 @@ public enum IssueBody {
 /// Tolerant ISO-8601 parsing shared across backends (#751). Providers are
 /// inconsistent about fractional seconds — GitHub GraphQL emits the plain form
 /// (`2026-06-15T01:28:17Z`) while GitLab/others may include `.SSS`. A formatter
-/// pinned to one shape silently returns nil for the other (the CROW-508 trap;
-/// see `GitHubCodeBackend.parseGitHubDateTime`), which quietly disables any
-/// feature that depends on the parsed date. Try plain first, then fractional.
+/// pinned to one shape silently returns nil for the other, which quietly
+/// disables any feature that depends on the parsed date. Try plain first
+/// (matches what GitHub actually emits today), then fractional for resilience
+/// against future API drift.
+///
+/// **This is the only sanctioned way to parse a provider timestamp.** Do not
+/// hand-roll an `ISO8601DateFormatter` in a backend — the trap has now bitten
+/// three times, always the same way and always silently: CROW-508 left
+/// `needsRefine` inert (PR #509 review), and CROW-945 left
+/// `ReviewRequest.viewerLastReviewedAt` and `requestedAt` permanently nil,
+/// which meant a review round could never close and the Reviews board's
+/// "requested" chip never rendered. Nothing fails loudly when a formatter
+/// mismatches — the feature just stops existing — so the fix is to have one
+/// implementation rather than to be careful at each call site.
 public enum IssueDate {
     public static func parse(_ raw: String?) -> Date? {
         guard let raw else { return nil }

@@ -4065,10 +4065,10 @@ function renderReviewBoard(root) {
     .sort((a, b) => (b.requested_at || '').localeCompare(a.requested_at || ''));
   const q = reviewSearch.trim().toLowerCase();
   if (q) reviews = reviews.filter((r) => reviewHaystack(r).includes(q));
-  // Only reviews without a linked session can be started, so only those are
-  // selectable. Prune stale selections against the *visible* set (a refresh or
-  // the search may have removed/hidden/linked a review).
-  const selectableUrls = new Set(reviews.filter((r) => !r.review_session_id).map((r) => r.url));
+  // Only reviews the server would actually act on can be started, so only
+  // those are selectable. Prune stale selections against the *visible* set (a
+  // refresh or the search may have removed/hidden/linked a review).
+  const selectableUrls = new Set(reviews.filter(reviewIsActionable).map((r) => r.url));
   for (const url of [...selectedReviewURLs]) if (!selectableUrls.has(url)) selectedReviewURLs.delete(url);
 
   const head = el('div', 'board-head');
@@ -4129,7 +4129,7 @@ function toggleReviewSelect(url) {
 // (CROW-865). Then clear selection and exit selection mode.
 async function startReviewSelected(btn) {
   const urls = ((boardData.reviews && boardData.reviews.reviews) || [])
-    .filter((r) => !r.review_session_id && selectedReviewURLs.has(r.url))
+    .filter((r) => reviewIsActionable(r) && selectedReviewURLs.has(r.url))
     .map((r) => r.url);
   if (!urls.length) return;
   btn.disabled = true;
@@ -4154,11 +4154,27 @@ function reviewHaystack(r) {
   return [r.title, r.repo, '@' + r.author, '#' + r.pr_number].join(' ').toLowerCase();
 }
 
+// Whether pressing Start Review / Re-review on this card would actually do
+// something (CROW-945). The server computes `kickoff_action` from the same
+// decision function `createReviewSession` runs, so the button reflects the
+// real verdict rather than the much weaker "does *a* session link to this PR"
+// question — which is what left a re-requested PR showing only "Go to Session"
+// pointing at a dead round.
+//
+// The action is an estimate: it's computed from the board's head SHA, up to a
+// poll stale, while the server decides against a head it fetches itself. So it
+// picks the *label* and never suppresses the RPC — the server is the decider.
+// Falls back to the old predicate when the field is absent (older daemon).
+function reviewIsActionable(r) {
+  if (!r.kickoff_action) return !r.review_session_id;
+  return r.kickoff_action === 'create' || r.kickoff_action === 're_review';
+}
+
 function reviewCard(r) {
-  // A review that already has a session can't be started again, so it isn't
-  // selectable — it renders dimmed and checkbox-less while selecting, as the
-  // retired ReviewBoardView did, but keeps its Go to Session button.
-  const selectable = !r.review_session_id;
+  // A review the server would decline to act on can't be started again, so it
+  // isn't selectable — it renders dimmed and checkbox-less while selecting, as
+  // the retired ReviewBoardView did, but keeps its Go to Session button.
+  const selectable = reviewIsActionable(r);
   const selecting = reviewSelectionMode && selectable;
   const isSel = selectedReviewURLs.has(r.url);
   const card = el('div', 'board-card'
@@ -4194,15 +4210,23 @@ function reviewCard(r) {
   card.appendChild(sub);
   if (r.labels && r.labels.length) card.appendChild(labelPills(r.labels));
   const foot = el('div', 'card-foot');
+  // A linked session is still reachable even when a new round is offered —
+  // "Re-review" retires that round, so the user should be able to look at it
+  // first. Order: the kickoff button leads, Go to Session follows.
+  if (!selecting && reviewIsActionable(r)) {
+    // Suppressed while selecting — the batch bar owns the kickoff there.
+    const reReview = r.kickoff_action === 're_review';
+    // Both go through `start-review`: the server runs the kickoff decision and
+    // completes the stale round itself, so there is one verb and one rule.
+    const label = reReview ? 'Re-review' : 'Start Review';
+    const rev = el('button', 'action-btn action-primary', label);
+    rev.onclick = () => spawnAction(rev, 'start-review', { url: r.url }, label);
+    foot.appendChild(rev);
+  }
   if (r.review_session_id) {
     const go = el('button', 'action-btn', 'Go to Session');
     go.onclick = () => selectSession(r.review_session_id);
     foot.appendChild(go);
-  } else if (!selecting) {
-    // Suppressed while selecting — the batch bar owns the kickoff there.
-    const rev = el('button', 'action-btn action-primary', 'Start Review');
-    rev.onclick = () => spawnAction(rev, 'start-review', { url: r.url }, 'Start Review');
-    foot.appendChild(rev);
   }
   // `.card-foot` carries a top margin, so a selectable card in select mode —
   // which has no button at all — would otherwise end in 8px of dead space.
