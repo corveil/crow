@@ -284,17 +284,50 @@ public final class IssueTracker {
     /// decision without a live backend, matching ``autoReRequestAttempted``.
     var autoRebaseAttempted: Set<String> = []
 
-    /// Heads the git pre-check found already on base, mapped to the
-    /// `mergeStateStatus` GitHub reported at the time (#944).
+    /// Heads the git pre-check found already on base (#944).
     ///
     /// Exists because widening the candidate filter made the per-head latch
     /// dangerous: a PR probed while merely `BLOCKED`-and-not-yet-behind would
     /// burn its one attempt, and the base moving afterwards is *invisible* in
     /// `headRefOid` — so the watcher would never look again, which is worse
     /// than the bug #944 set out to fix. `applyAutoRebase` re-arms the latch
-    /// when GitHub's view of this same head *changes*, and only then, so a
-    /// persistent git/GitHub disagreement can't hot-loop. In-memory only.
-    var autoRebaseUpToDateHeads: [String: String] = [:]
+    /// from this record; see ``shouldRecheckUpToDateHead`` for when.
+    /// In-memory only.
+    var autoRebaseUpToDateHeads: [String: AutoRebaseUpToDateHead] = [:]
+
+    /// A head the git pre-check cleared: what GitHub said about it at the time,
+    /// and when it is due for another look.
+    struct AutoRebaseUpToDateHead {
+        let mergeStateStatus: String
+        let recheckAt: Date
+    }
+
+    /// How long a head that the git pre-check found already on base stays
+    /// latched before it is probed again.
+    ///
+    /// A time-based re-check is not belt-and-braces for the status-change one —
+    /// it is the load-bearing half. `mergeStateStatus` is single-valued, so
+    /// `BLOCKED` (a required review pending) *outranks* `BEHIND` and simply
+    /// stays `BLOCKED` when the base drifts underneath. That is the whole
+    /// premise of #944, which means a status-change re-arm can only fire when
+    /// BLOCKED finally clears — i.e. once the PR is approved, which is exactly
+    /// the serialization this ticket exists to remove. Only the clock notices
+    /// pure base drift.
+    ///
+    /// 900s matches `autoRebaseDeferralMaxDelay` and bounds the steady-state
+    /// cost to four `git fetch`es an hour per open PR with a worktree — the
+    /// same local probe the pre-check already runs, and well under how long CI
+    /// takes, so the detection lag never becomes the critical path.
+    nonisolated static let autoRebaseUpToDateRecheckInterval: TimeInterval = 900
+
+    /// Whether a latched up-to-date head is due for another git probe: either
+    /// GitHub's view of it changed, or the re-check interval has elapsed. Pure
+    /// so the policy is unit-testable without an `IssueTracker` or a clock.
+    nonisolated static func shouldRecheckUpToDateHead(
+        _ seen: AutoRebaseUpToDateHead, currentStatus: String, now: Date
+    ) -> Bool {
+        seen.mergeStateStatus != currentStatus || now >= seen.recheckAt
+    }
 
     /// A deferred auto-rebase attempt: why it deferred, how many consecutive
     /// times this head state has deferred, and when it may be retried.
@@ -3902,15 +3935,20 @@ public final class IssueTracker {
                 continue
             }
 
-            // A head we latched as "already on base" is re-checked once
-            // whenever GitHub's view of it changes. The base moving is
-            // invisible in `headRefOid`, so without this the widened candidate
-            // filter (#944) would let the watcher spend its one attempt while
-            // the PR was merely BLOCKED and never look again once the base
-            // actually moved. Requiring a *change* is what keeps this from
-            // hot-looping on a persistent git/GitHub disagreement.
-            if let seen = autoRebaseUpToDateHeads[key], seen != pr.mergeStateStatus {
-                autoRebaseUpToDateHeads[key] = pr.mergeStateStatus
+            // A head we latched as "already on base" is probed again once
+            // GitHub's view of it changes OR the re-check interval elapses.
+            // The clock is the important one: the base moving is invisible in
+            // both `headRefOid` and `mergeStateStatus` (BLOCKED outranks
+            // BEHIND and stays BLOCKED), so without it a PR first seen
+            // up-to-date-but-BLOCKED would wait for approval before anyone
+            // looked again — the exact serialization #944 removes. Both gates
+            // keep the cost bounded, so a persistent git/GitHub disagreement
+            // re-probes on the interval rather than every poll.
+            if let seen = autoRebaseUpToDateHeads[key],
+               Self.shouldRecheckUpToDateHead(seen, currentStatus: pr.mergeStateStatus, now: now) {
+                autoRebaseUpToDateHeads[key] = AutoRebaseUpToDateHead(
+                    mergeStateStatus: pr.mergeStateStatus,
+                    recheckAt: now.addingTimeInterval(Self.autoRebaseUpToDateRecheckInterval))
                 autoRebaseAttempted.remove(key)
             }
 
@@ -4117,7 +4155,9 @@ public final class IssueTracker {
     ) {
         autoRebaseFailureCounts[headKey] = nil
         autoRebaseDeferrals[headKey] = nil
-        autoRebaseUpToDateHeads[headKey] = pr.mergeStateStatus
+        autoRebaseUpToDateHeads[headKey] = AutoRebaseUpToDateHead(
+            mergeStateStatus: pr.mergeStateStatus,
+            recheckAt: Date().addingTimeInterval(Self.autoRebaseUpToDateRecheckInterval))
         publishAutoRebaseVerdict(nil, session: session, pr: pr)
         // A CONFLICTING PR with a zero behind-count is definitionally stale
         // data — you cannot conflict with an ancestor. Say so, rather than

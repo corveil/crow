@@ -127,7 +127,13 @@ Crow now treats `mergeStateStatus` as a *candidate filter* only — anything ope
 Consequences worth knowing:
 
 - **A PR that needs nothing is a cheap no-op**, logged once per head state as
-  `no-op:already-on-base`, with no force-push and no "Branch rebased" notification.
+  `no-op:already-on-base`, with no force-push and no "Branch rebased" notification. Such a
+  head is re-probed when GitHub's view of it changes *or* every 15 minutes, whichever comes
+  first. The clock is the load-bearing half: `mergeStateStatus` is single-valued, so
+  `BLOCKED` outranks `BEHIND` and simply *stays* `BLOCKED` when the base drifts under a
+  review-pending PR — and `headRefOid` doesn't move either. Without the interval, a PR first
+  seen up-to-date would sit untouched until approval landed, which is the very
+  serialization this change removes.
 - **Drafts are still eligible**, as they have been since CROW-318 — a rebase only rewrites
   the session's own branch and can never merge. Drafts are where behind-ness was masked
   *permanently*, so this is where the change bites most.

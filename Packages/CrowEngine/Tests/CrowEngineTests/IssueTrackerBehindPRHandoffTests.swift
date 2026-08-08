@@ -199,24 +199,76 @@ struct IssueTrackerBehindPRHandoffTests {
 
     /// The trap widening created: a PR probed while merely BLOCKED-and-not-yet-
     /// behind latches, and the base moving afterwards is invisible in
-    /// `headRefOid`. A *change* in GitHub's view of the same head re-arms it —
-    /// and only a change, so a persistent disagreement can't hot-loop.
+    /// `headRefOid`. A *change* in GitHub's view of the same head re-arms it.
     @Test func aLatchedUpToDateHeadIsRecheckedWhenGitHubsViewChanges() {
         let (tracker, _, _) = makeTracker()
 
-        // Pretend the probe already concluded "already on base" while BLOCKED.
+        // Pretend the probe already concluded "already on base" while BLOCKED,
+        // with the interval re-check still far in the future so the status
+        // change is unambiguously what re-arms.
         tracker.autoRebaseAttempted.insert(Self.headKey)
-        tracker.autoRebaseUpToDateHeads[Self.headKey] = "BLOCKED"
+        tracker.autoRebaseUpToDateHeads[Self.headKey] = .init(
+            mergeStateStatus: "BLOCKED", recheckAt: Date().addingTimeInterval(3_600))
 
-        // Same status → no re-check.
+        // Same status, interval not elapsed → no re-check.
         tracker.applyPRStatuses(viewerPRs: [unlabeledPR(mergeStateStatus: "BLOCKED")])
-        #expect(tracker.autoRebaseUpToDateHeads[Self.headKey] == "BLOCKED")
+        #expect(tracker.autoRebaseAttempted.contains(Self.headKey))
 
-        // GitHub flips to BEHIND → re-armed, and the new status is recorded so
-        // the next identical poll is a no-op.
+        // GitHub flips to BEHIND → re-armed, and the new status is recorded.
         tracker.autoRebaseInFlight.removeAll()
         tracker.applyPRStatuses(viewerPRs: [unlabeledPR(mergeStateStatus: "BEHIND")])
-        #expect(tracker.autoRebaseUpToDateHeads[Self.headKey] == "BEHIND")
+        #expect(tracker.autoRebaseUpToDateHeads[Self.headKey]?.mergeStateStatus == "BEHIND")
+    }
+
+    /// Review #950: the status-change re-arm above is not enough on its own,
+    /// and this is the case that proves it. `mergeStateStatus` is
+    /// single-valued, so BLOCKED *outranks* BEHIND and stays BLOCKED when the
+    /// base drifts underneath a review-pending PR — the very premise of #944.
+    /// `headRefOid` doesn't move either. With only the status gate, such a PR
+    /// would sit latched until approval landed, which is precisely the
+    /// serialization this ticket exists to remove. Only the clock notices.
+    @Test func aStableBlockedHeadIsRecheckedOnTheIntervalSoBaseDriftIsCaught() {
+        let (tracker, _, _) = makeTracker()
+
+        tracker.autoRebaseAttempted.insert(Self.headKey)
+        // Probed a while ago; the re-check interval has elapsed. Nothing about
+        // GitHub's view of the PR has changed, and nothing ever will until a
+        // reviewer acts.
+        tracker.autoRebaseUpToDateHeads[Self.headKey] = .init(
+            mergeStateStatus: "BLOCKED", recheckAt: Date().addingTimeInterval(-1))
+
+        tracker.applyPRStatuses(viewerPRs: [unlabeledPR(mergeStateStatus: "BLOCKED")])
+
+        // Re-armed and dispatched despite an identical status...
+        #expect(tracker.autoRebaseInFlight.contains(Self.prURL))
+        // ...and the deadline was pushed out, so the next poll is not a
+        // free-running re-probe.
+        let recheckAt = tracker.autoRebaseUpToDateHeads[Self.headKey]?.recheckAt
+        #expect(recheckAt.map { $0 > Date() } == true)
+    }
+
+    /// The bound on the above: a head that keeps coming back up-to-date must
+    /// re-probe on the interval, never every poll.
+    @Test func recheckPolicyIsGatedByBothStatusAndClock() {
+        let future = Date().addingTimeInterval(3_600)
+        let past = Date().addingTimeInterval(-1)
+        let now = Date()
+
+        // Unchanged status, interval not elapsed → leave it alone.
+        #expect(!IssueTracker.shouldRecheckUpToDateHead(
+            .init(mergeStateStatus: "BLOCKED", recheckAt: future),
+            currentStatus: "BLOCKED", now: now))
+        // Either gate on its own is enough.
+        #expect(IssueTracker.shouldRecheckUpToDateHead(
+            .init(mergeStateStatus: "BLOCKED", recheckAt: future),
+            currentStatus: "BEHIND", now: now))
+        #expect(IssueTracker.shouldRecheckUpToDateHead(
+            .init(mergeStateStatus: "BLOCKED", recheckAt: past),
+            currentStatus: "BLOCKED", now: now))
+        // The interval is bounded and matches the deferral cap, so a
+        // steady-state PR costs four local fetches an hour, not one per poll.
+        #expect(IssueTracker.autoRebaseUpToDateRecheckInterval
+                == IssueTracker.autoRebaseDeferralMaxDelay)
     }
 
     // MARK: - Published verdicts
