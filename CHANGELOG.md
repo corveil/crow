@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- CROW-938 — Detect when a newer Crow build is available by comparing the stamped `gitSha` against `corveil/crow` `main` (no release tags required). `crowd` owns the GitHub compare call, caches the result, and checks at most once per daemon start plus every ≥6 hours (configurable, opt-out via `versionUpdate.enabled`). Surfaces: `crow version --check` / `crow version check` (human summary with exit codes), `crow version get|set`, Settings → About (status + Check now), and a dismissible web banner when behind. Offline, rate-limited, `dev`, or unknown SHAs report `unknown` — never a false up-to-date.
+- CROW-938 — Detect when a newer Crow build is available by comparing the stamped `gitSha` against `corveil/crow` `main` (no release tags required). `crowd` owns the GitHub compare call, caches the result, and checks at most once per daemon start plus every ≥1 hour (configurable, opt-out via `versionUpdate.enabled`). Surfaces: `crow version --check` / `crow version check` (human summary with exit codes), `crow version get|set`, Settings → About (status + Check now), and a dismissible web banner when behind. Offline, rate-limited, `dev`, or unknown SHAs report `unknown` — never a false up-to-date.
 
 ## [0.2.0] - 2026-08-05
 
