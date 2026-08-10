@@ -65,6 +65,14 @@ enum RPCWebSocketHandler {
             let subscription = await eventHub.subscribe(outCont)
             // Handlers no longer run on the read loop (#931).
             let dispatcher = RPCDispatcher()
+            // Carries an abnormal read failure past the task group so it can be
+            // rethrown once teardown is done. A child task's error is otherwise
+            // discarded when the group's scope exits, which is why an over-limit
+            // message used to close as if the client had simply gone away —
+            // `WSCore` maps `InternalError.close(_:)` to a close code only if the
+            // error reaches it, so the client had no way to tell "too big" from
+            // "daemon died" (CROW-956).
+            let readFailure = ErrorBox()
 
             try await withThrowingTaskGroup(of: Void.self) { group in
                 // Writer — the sole owner of `outbound`. Unchanged: responses
@@ -86,54 +94,89 @@ enum RPCWebSocketHandler {
                     // the group never unwinds. `finish()` is idempotent.
                     defer { outCont.finish() }
 
-                    for try await message in inbound.messages(maxSize: 1 << 20) {
-                        let payload: Data?
-                        switch message {
-                        case .text(let text): payload = text.data(using: .utf8)
-                        case .binary(let buffer): payload = Data(buffer.readableBytesView)
-                        }
-                        guard let data = payload,
-                              let request = try? decoder.decode(JSONRPCRequest.self, from: data) else {
-                            continue
+                    do {
+                        for try await message in inbound.messages(maxSize: CrowDaemon.maxWebSocketFrameSize) {
+                            let payload: Data?
+                            switch message {
+                            case .text(let text): payload = text.data(using: .utf8)
+                            case .binary(let buffer): payload = Data(buffer.readableBytesView)
+                            }
+                            guard let data = payload,
+                                  let request = try? decoder.decode(JSONRPCRequest.self, from: data) else {
+                                continue
+                            }
+
+                            // The local-only gate stays on the sequential path. It
+                            // is the security boundary, and for `set-config` it
+                            // reads config.json from disk — a decision that must not
+                            // be taken against a config another dispatch is mid-write
+                            // on.
+                            if !localDirect, let deny = Self.localOnlyDenial(for: request, devRoot: devRoot) {
+                                Self.emit(
+                                    .error(id: request.id, code: RPCErrorCode.invalidParams, message: deny),
+                                    to: outCont)
+                                continue
+                            }
+
+                            let lane = RPCLanePolicy.lane(for: request)
+                            let accepted = await dispatcher.dispatch(lane: lane) {
+                                let response = await commandRouter.handle(request: request)
+                                Self.emit(response, to: outCont)
+                            }
+                            // Answer rather than drop: a refused request that got no
+                            // reply would sit until the client's deadline, which is
+                            // the symptom this whole change exists to remove.
+                            if !accepted {
+                                Self.emit(
+                                    .error(
+                                        id: request.id,
+                                        code: RPCErrorCode.applicationError,
+                                        message: "Too many requests in flight on this connection"),
+                                    to: outCont)
+                            }
                         }
 
-                        // The local-only gate stays on the sequential path. It
-                        // is the security boundary, and for `set-config` it
-                        // reads config.json from disk — a decision that must not
-                        // be taken against a config another dispatch is mid-write
-                        // on.
-                        if !localDirect, let deny = Self.localOnlyDenial(for: request, devRoot: devRoot) {
-                            Self.emit(
-                                .error(id: request.id, code: RPCErrorCode.invalidParams, message: deny),
-                                to: outCont)
-                            continue
-                        }
-
-                        let lane = RPCLanePolicy.lane(for: request)
-                        let accepted = await dispatcher.dispatch(lane: lane) {
-                            let response = await commandRouter.handle(request: request)
-                            Self.emit(response, to: outCont)
-                        }
-                        // Answer rather than drop: a refused request that got no
-                        // reply would sit until the client's deadline, which is
-                        // the symptom this whole change exists to remove.
-                        if !accepted {
-                            Self.emit(
-                                .error(
-                                    id: request.id,
-                                    code: RPCErrorCode.applicationError,
-                                    message: "Too many requests in flight on this connection"),
-                                to: outCont)
+                        // Inbound closed cleanly → let everything already accepted
+                        // reach the writer before `defer` ends its stream. Released
+                        // early by `shutdown()` below when the *writer* is what died.
+                        await dispatcher.drain()
+                    } catch {
+                        // CROW-956: the line whose absence made an over-limit message
+                        // indistinguishable from a dead daemon. Fires at most once per
+                        // connection and only on an ABNORMAL end — a client that closes
+                        // normally ends `messages(...)` without throwing and takes the
+                        // `drain()` path above, so a browser tab closing stays silent.
+                        // Cancellation is our own teardown (the writer died and the
+                        // group is unwinding), so it stays silent too.
+                        //
+                        // Scope, measured rather than assumed: this catches a
+                        // *fragmented* message over `maxSize`, which `WSCore` throws
+                        // from `nextMessage`. It does NOT catch a single FRAME over
+                        // `maxFrameSize` — NIO's decoder answers that one with a 1009
+                        // close of its own, below this handler, and the inbound stream
+                        // then simply ends, so that path takes the clean branch above
+                        // and is diagnosable only from the client's close code. Do not
+                        // "fix" that by widening the catch; there is nothing to catch.
+                        //
+                        // The cause is not matchable by type from here either: `WSCore`'s
+                        // `InternalError` is package-private and `NIOWebSocket` is not a
+                        // declared dependency. So interpolate it — `messageTooLarge`
+                        // names itself. Do NOT branch on that string.
+                        if !(error is CancellationError) {
+                            CrowDaemon.log(
+                                "WARNING: /rpc read ended abnormally (per-message limit "
+                                + "\(CrowDaemon.maxWebSocketFrameSize) bytes) — socket closed, "
+                                + "in-flight requests dropped: \(error)")
+                            readFailure.set(error)
                         }
                     }
-
-                    // Inbound closed cleanly → let everything already accepted
-                    // reach the writer before `defer` ends its stream. Released
-                    // early by `shutdown()` below when the *writer* is what died.
-                    await dispatcher.drain()
                 }
 
                 // When either side finishes (socket closed), tear the other down.
+                // Still `try?`: this returns whichever task finished FIRST, so the
+                // reader's error may not be the result observed here — it is caught
+                // where it is produced, above. Turning this into a `do/catch` would
+                // also risk skipping the `shutdown()` whose ordering is load-bearing.
                 _ = try? await group.next()
                 // Before `cancelAll`: this releases the reader if it is parked in
                 // `drain()`, and unparks anything queued on a lane or a permit.
@@ -146,7 +189,21 @@ enum RPCWebSocketHandler {
             }
 
             await eventHub.unsubscribe(subscription)
+            // After teardown, never before: `WSCore` turns this into the close
+            // code the client sees (1009 for an over-limit message), so it has
+            // to escape `onUpgrade` rather than die with its child task.
+            if let error = readFailure.take() { throw error }
         }
+    }
+
+    /// One-slot, thread-safe error handoff from a connection's reader task to
+    /// the `onUpgrade` closure that rethrows it. A plain `var` capture would be
+    /// a data race across the task group.
+    private final class ErrorBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var error: Error?
+        func set(_ error: Error) { lock.lock(); defer { lock.unlock() }; self.error = error }
+        func take() -> Error? { lock.lock(); defer { lock.unlock() }; return error }
     }
 
     /// Encode and enqueue one response for the connection's single writer.
