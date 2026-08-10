@@ -120,8 +120,15 @@ function rpcConnect() {
       if (rpcErr) waiter.reject(rpcErr);
       else waiter.resolve(msg.result || {});
     };
-    ws.onclose = () => {
+    ws.onclose = (event) => {
       setWsConnected(false);
+      // CROW-956: 1009 is `messageTooLarge` — crowd's per-message ceiling, not a
+      // dead daemon. Both used to arrive here as a bare close, so a `set-config`
+      // whose JSON outgrew the frame limit reported the same "connection closed"
+      // as a crashed crowd, and the reconnect a second later made the UI look
+      // healthy while the save simply never stuck. An absent or unknown code
+      // still reads exactly as it did.
+      const tooLarge = !!event && event.code === 1009;
       // Fail fast: a socket that closed before opening must reject so `await
       // rpcState.ready` can't hang when the daemon is down (review #8).
       if (!opened) reject(new Error('rpc: socket closed before open'));
@@ -133,7 +140,16 @@ function rpcConnect() {
       // dismiss. Dropping them also keeps the map empty across a reconnect.
       rpcState.pending.forEach((w) => {
         if (w.timer) clearTimeout(w.timer);
-        if (!w.settled) w.reject(new Error('rpc: connection closed'));
+        if (w.settled) return;
+        if (!tooLarge) { w.reject(new Error('rpc: connection closed')); return; }
+        const err = new Error(
+          'rpc: ' + w.method
+          + ' was too large for the daemon, which closed the connection (1009)');
+        // Tagged like the timeout rejection below, so a caller can tell "too
+        // big" from "daemon went away" without matching on the message text.
+        err.rpcTooLarge = true;
+        err.rpcMethod = w.method;
+        w.reject(err);
       });
       rpcState.pending.clear();
       // Daemon's gone, so its in-flight refresh flag will never be cleared for
@@ -146,6 +162,10 @@ function rpcConnect() {
       // Reconnect once — and only if this connection is still the active one, so
       // an rpc() opened during the window can't leave a duplicate socket that
       // double-fires `changed` refreshes (review #9). Skipped once the session is dead.
+      // Deliberately NOT skipped after a 1009: that code is per-MESSAGE, not
+      // per-connection — the socket is fine for every other request, and staying
+      // offline over one oversized payload would take the whole UI down. Nothing
+      // re-sends the offending message, so there is no retry loop.
       if (rpcState.ready === p) {
         rpcState.ready = null;
         setTimeout(() => { if (!rpcState.ready && !sessionDead) rpcState.ready = rpcConnect(); }, 1000);
@@ -4988,7 +5008,7 @@ function connectTerminalWs() {
       if (!painted) { painted = true; requestAnimationFrame(hideTerminalSkeleton); }
     }
   };
-  termWs.onclose = () => {
+  termWs.onclose = (event) => {
     // #687: a sustained disconnect must show ONE steady overlay, not strobe. So
     // don't hide here — keep the overlay up (idempotent showTerminalSkeleton is
     // a no-op if already loading) and switch it to the calm "Reconnecting…"
@@ -4998,6 +5018,16 @@ function connectTerminalWs() {
     // #679 expired scrim.
     clearTimeout(termSkelTimer);
     termSkelTimer = null;
+    // CROW-956: 1009 is crowd's per-message ceiling. The only thing big enough
+    // to hit it on this socket is a paste — sendToPTY ships the whole clipboard
+    // in one frame — and the reconnect below is otherwise indistinguishable
+    // from a daemon restart, so the paste just silently vanished. A modal
+    // rather than a term.write: the skeleton overlay goes up on this same path
+    // and would hide an in-buffer notice, which the reconnect's scrollback
+    // replay would then overwrite anyway.
+    if (event && event.code === 1009) {
+      alertModal('That paste was too large for the terminal — send it in smaller pieces.');
+    }
     // CROW-934: this path reconnects WITHOUT going through reloadTerminal, so it
     // needs the same teardown — a sync left in flight across the drop would have
     // the fresh attach's own replay consumed as its replay (#935 review).

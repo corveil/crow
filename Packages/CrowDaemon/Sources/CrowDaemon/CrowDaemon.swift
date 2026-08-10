@@ -42,6 +42,26 @@ final class TelemetryHolder {
 /// `CrowGit`/`CrowPersistence`/`CrowTerminal` verbatim. Also binds the existing
 /// Unix socket so the current `crow` CLI can drive it (CROW-581, M0 + M1).
 public enum CrowDaemon {
+    /// Largest WebSocket payload `/rpc` and `/terminal` accept, in bytes.
+    ///
+    /// Two ceilings, deliberately the same number: the NIO frame decoder's
+    /// `maxFrameSize` on the shared upgrade channel (see `run` below), which caps
+    /// a single unfragmented frame, and `inbound.messages(maxSize:)` in both
+    /// handlers, which caps a message reassembled across continuation frames.
+    ///
+    /// The frame ceiling is the one that actually bites: `WSCore` size-checks
+    /// `maxSize` only while appending *continuation* frames, so a single frame is
+    /// never measured against it — and a browser sends one unfragmented frame per
+    /// `ws.send()`. With no configuration passed, `maxFrameSize` defaulted to
+    /// `1 << 14` and NIO answered anything larger with close 1009 before either
+    /// handler saw a byte, no matter what the message ceiling said: every Settings
+    /// save failed once `config.json` outgrew ~8 KB, and a >16 KB paste into the
+    /// web terminal dropped the socket (CROW-956).
+    ///
+    /// Matches `SocketServer.maxMessageSize`, so a request's fate does not depend
+    /// on whether it arrived over the Unix socket or over `/rpc`.
+    static let maxWebSocketFrameSize = 1 << 20
+
     public static func run(arguments: [String] = CommandLine.arguments) async throws {
         let options = DaemonOptions.parse(arguments)
 
@@ -498,7 +518,14 @@ public enum CrowDaemon {
 
         let app = Application(
             router: httpRouter,
-            server: .http1WebSocketUpgrade(webSocketRouter: wsRouter),
+            server: .http1WebSocketUpgrade(
+                webSocketRouter: wsRouter,
+                // `HTTP1WebSocketUpgradeChannel.Configuration`, not a bare
+                // `WebSocketServerConfiguration` — the latter binds to a
+                // deprecated overload. Leaving `http1:` at its defaults
+                // reproduces exactly what the no-configuration form built, so
+                // `maxFrameSize` is the only thing that moves (CROW-956).
+                configuration: .init(ws: .init(maxFrameSize: maxWebSocketFrameSize))),
             configuration: .init(
                 address: .hostname(options.host, port: options.httpPort),
                 serverName: "crowd"))

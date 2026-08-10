@@ -53,6 +53,16 @@ jobs:
       # Explicit allow-list of packages that compile on Linux. A new package
       # must be added here consciously; do NOT loop over Packages/*/ — that
       # would pull in CrowTelemetry (Network.framework) or the root AppKit GUI.
+      #
+      # CrowDaemon is absent for a second reason worth recording, found while
+      # trying to add its WebSocket frame-size suite here (CROW-956): its test
+      # target *compiles* on Linux, but cannot LINK. The swift:6.1 image ships a
+      # libswiftObservation.so with an undefined reference to
+      # `swift::threading::fatal`, a symbol no library in /usr/lib/swift/linux
+      # defines — on amd64 and arm64 alike. Any test target whose graph reaches
+      # Observation dies at link time, so a `--filter`-scoped step would not help.
+      # `swift build --product crowd` below is unaffected: the failure is in the
+      # test executable, not the library.
       - name: Build & test Linux packages
         run: |
           LINUX_PACKAGES=(CrowCore CrowIPC CrowClaude CrowCodex CrowCursor \

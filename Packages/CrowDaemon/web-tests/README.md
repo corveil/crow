@@ -79,6 +79,29 @@ Unlike the other files, this one's fake `WebSocket` actually fires `onopen` (so
 queue rather than no-ops — deadlines have to fire on demand, and firing them *by
 delay* is what proves each method was armed from the table.
 
+## `rpc-close-code.test.js` — JSON-RPC close codes (CROW-956)
+
+`crowd` caps an inbound WebSocket message and can only refuse an over-limit one
+by *closing* with code 1009: no request id was ever decoded, so there is nothing
+to correlate a JSON-RPC error reply to. That close used to be indistinguishable
+from a crashed daemon — both rejected in-flight calls with "rpc: connection
+closed" and reconnected a second later — which is what made an unsavable
+Settings tab so hard to diagnose.
+
+Coverage: a 1009 close rejecting in-flight calls with a message naming the
+method, "too large", and the code, tagged `err.rpcTooLarge` / `err.rpcMethod`
+like the timeout rejection; **every other close still reading exactly as it did**
+(no code and 1006 both keep the verbatim `rpc: connection closed`, untagged);
+settled entries still dropped without firing `onLate`; and the reconnect still
+being armed afterwards — 1009 is per-*message*, not per-connection, so refusing
+to reconnect would take the whole UI offline over one oversized payload.
+
+Same harness as `rpc-timeout.test.js`, with one deviation: this file's fake
+`close(code)` delivers a CloseEvent-shaped `{code, reason, wasClean}` argument,
+which is the subject under test. The other suites' fakes call `onclose` with no
+argument at all, which is exactly why `app.js` guards on `!!event` before reading
+`event.code`.
+
 ## `router.test.js` — hash URL routing (CROW-936)
 
 Drives `parseRoute` / `routeToHash` / `navigate` / `applyRoute` / `onHashChange`

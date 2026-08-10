@@ -75,39 +75,63 @@ enum TerminalWebSocket {
             }
 
             // Inbound: binary = keystrokes → PTY; text = JSON control frame.
-            for try await message in inbound.messages(maxSize: 1 << 20) {
-                switch message {
-                case .binary(let buffer):
-                    pty.write(Data(buffer.readableBytesView))
-                case .text(let text):
-                    guard let data = text.data(using: .utf8),
-                          let control = try? JSONDecoder().decode(TerminalControl.self, from: data) else { continue }
-                    switch control.type {
-                    case "resize":
-                        // Floor at 1×1 so a zero/negative request can't drive a
-                        // degenerate tmux resize (CROW-581 review).
-                        pty.resize(
-                            rows: UInt16(clamping: max(1, control.rows ?? 24)),
-                            cols: UInt16(clamping: max(1, control.cols ?? 80)))
-                    case "select-window":
-                        // Switch this browser's grouped view to the window; other
-                        // clients (incl. the desktop app) keep their own view.
-                        if let window = control.window {
-                            cockpit.selectWindow(group: group, index: window)
-                            // Replay the pane's tmux scrollback into the xterm buffer
-                            // so history survives a crowd restart / browser reload —
-                            // the client re-selects its window on every reconnect and
-                            // tab switch (CROW-606). Yield through the same stream the
-                            // PTY writes to, so this serializes with live output on the
-                            // single `outputTask` (no concurrent `outbound` writes).
-                            if let replay = cockpit.replayData(group: group, index: window) {
-                                continuation.yield(replay)
+            do {
+                for try await message in inbound.messages(maxSize: CrowDaemon.maxWebSocketFrameSize) {
+                    switch message {
+                    case .binary(let buffer):
+                        pty.write(Data(buffer.readableBytesView))
+                    case .text(let text):
+                        guard let data = text.data(using: .utf8),
+                              let control = try? JSONDecoder().decode(TerminalControl.self, from: data) else { continue }
+                        switch control.type {
+                        case "resize":
+                            // Floor at 1×1 so a zero/negative request can't drive a
+                            // degenerate tmux resize (CROW-581 review).
+                            pty.resize(
+                                rows: UInt16(clamping: max(1, control.rows ?? 24)),
+                                cols: UInt16(clamping: max(1, control.cols ?? 80)))
+                        case "select-window":
+                            // Switch this browser's grouped view to the window; other
+                            // clients (incl. the desktop app) keep their own view.
+                            if let window = control.window {
+                                cockpit.selectWindow(group: group, index: window)
+                                // Replay the pane's tmux scrollback into the xterm buffer
+                                // so history survives a crowd restart / browser reload —
+                                // the client re-selects its window on every reconnect and
+                                // tab switch (CROW-606). Yield through the same stream the
+                                // PTY writes to, so this serializes with live output on the
+                                // single `outputTask` (no concurrent `outbound` writes).
+                                if let replay = cockpit.replayData(group: group, index: window) {
+                                    continuation.yield(replay)
+                                }
                             }
+                        default:
+                            break
                         }
-                    default:
-                        break
                     }
                 }
+            } catch {
+                // CROW-956, same rule and same measured scope as `/rpc`: a normal
+                // disconnect ends the sequence without throwing, so this stays
+                // quiet for an ordinary browser close, and cancellation is our own
+                // teardown. It catches a *fragmented* message over the ceiling,
+                // not a single oversized FRAME — NIO closes that one below this
+                // handler, leaving the client's close code as its only signal.
+                //
+                // The only client message big enough to reach either path here is
+                // a paste: `sendToPTY` ships the whole clipboard in one frame,
+                // which at the old 16 KiB default made a large paste vanish in
+                // silence — the socket died with 1009 and the client reconnected
+                // as if nothing had happened.
+                if !(error is CancellationError) {
+                    CrowDaemon.log(
+                        "WARNING: /terminal read ended abnormally (per-message limit "
+                        + "\(CrowDaemon.maxWebSocketFrameSize) bytes) — PTY detached: \(error)")
+                }
+                // Rethrow: this is purely an observation point. `WSCore` turns
+                // the error into the close code the client sees, and swallowing
+                // it here would silently downgrade a 1009 to a normal close.
+                throw error
             }
         }
     }

@@ -72,6 +72,11 @@ let package = Package(
                 .product(name: "CrowCore", package: "CrowCore"),
                 .product(name: "CrowAutostart", package: "CrowAutostart"),
                 .product(name: "HummingbirdTesting", package: "hummingbird"),
+                // Live-server WebSocket client for the /rpc frame-size tests
+                // (CROW-956). Requires `.test(.live)`; HummingbirdWSClient is
+                // what re-exports WSClient/WSCore's configuration + close types.
+                .product(name: "HummingbirdWSTesting", package: "hummingbird-websocket"),
+                .product(name: "HummingbirdWSClient", package: "hummingbird-websocket"),
                 .product(name: "CrowClaude", package: "CrowClaude"),
                 .product(name: "CrowCodex", package: "CrowCodex"),
                 .product(name: "CrowEngine", package: "CrowEngine"),
