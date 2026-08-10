@@ -1304,6 +1304,68 @@
     body.appendChild(listField('Auto-review repos', d, 'autoReviewRepos', 'One per line — review requests auto-create a review session.'));
     body.appendChild(listField('Exclude from reviews', d, 'excludeReviewRepos', 'One per line — hidden from the review board.'));
 
+    // Review verdict policy (CROW-963). Bound to d.reviewBlockingSeverities:
+    // undefined = Crow's default (red + yellow), an array = this workspace's own
+    // set. "Use default" DELETES the key rather than storing null or [] — all
+    // three round-trip differently. Absent is the default; null would make the
+    // whole config undecodable; [] would mean nothing blocks, which the server
+    // rejects because it approves every review.
+    body.appendChild(group('Review verdict'));
+    const SEVERITIES = [
+      ['red', 'Red', 'must fix'],
+      ['yellow', 'Yellow', 'should fix'],
+      ['green', 'Green', 'consider'],
+    ];
+    const isCustomPolicy = Array.isArray(d.reviewBlockingSeverities);
+    const policySel = el('select', 'st-select');
+    const policyDefault = el('option', null, 'Use default (Red, Yellow)');
+    policyDefault.value = '';
+    const policyCustom = el('option', null, 'Custom');
+    policyCustom.value = 'custom';
+    policySel.appendChild(policyDefault);
+    policySel.appendChild(policyCustom);
+    policySel.value = isCustomPolicy ? 'custom' : '';
+    policySel.onchange = () => {
+      if (policySel.value === '') delete d.reviewBlockingSeverities;
+      else d.reviewBlockingSeverities = ['red'];
+      markDirty();
+      render();
+    };
+    body.appendChild(field('Blocking severities', policySel,
+      'Which review findings force Request Changes. Non-blocking findings are still reported in the review body — only the verdict changes. Advisory: the agent posts its own verdict and Crow cannot check it against this setting.'));
+
+    if (isCustomPolicy) {
+      const policyHint = el('div', 'st-help', '');
+      for (const [key, label, meaning] of SEVERITIES) {
+        const row = el('label', 'st-switch-row');
+        const cb = el('input', 'st-switch');
+        cb.type = 'checkbox';
+        cb.checked = d.reviewBlockingSeverities.indexOf(key) !== -1;
+        cb.onchange = () => {
+          // Rebuilt by walking SEVERITIES so the stored order is always
+          // canonical (red, yellow, green), matching the CLI and the renderer.
+          const next = SEVERITIES
+            .map((s) => s[0])
+            .filter((k) => (k === key ? cb.checked : d.reviewBlockingSeverities.indexOf(k) !== -1));
+          if (!next.length) {
+            // At least one severity must block. The server rejects an empty set
+            // too; refusing here stops the form from building a payload that can
+            // only fail, and points at the affordance that does what they meant.
+            cb.checked = true;
+            policyHint.textContent = 'At least one severity must block. Choose "Use default" to go back to Red + Yellow.';
+            return;
+          }
+          d.reviewBlockingSeverities = next;
+          policyHint.textContent = '';
+          markDirty();
+        };
+        row.appendChild(cb);
+        row.appendChild(el('span', 'st-switch-label', label + ' — ' + meaning));
+        body.appendChild(field(null, row));
+      }
+      body.appendChild(policyHint);
+    }
+
     body.appendChild(group('Instructions'));
     const ta = el('textarea', 'st-textarea');
     ta.value = d.customInstructions || '';

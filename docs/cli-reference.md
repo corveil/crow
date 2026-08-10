@@ -1282,6 +1282,8 @@ Returns:
     "auto_review_repos": ["acme/web"],
     "exclude_review_repos": [],
     "custom_instructions": "Always run make test before pushing.",
+    "review_blocking_severities": ["red"],
+    "review_blocking_severities_explicit": true,
     "session_env": { "AWS_PROFILE": "dev" },
     "gateway_set": true,
     "gateway_base_url": "https://gw.acme.io"
@@ -1395,11 +1397,16 @@ Notes:
 | `--clear-exclude-review-repos` | Empty the exclude-from-reviews list                                       |
 | `--session-env`              | `KEY=VALUE` exported into agents in this workspace (repeatable)             |
 | `--clear-session-env`        | Drop every session env var                                                  |
+| `--review-blocking-severity` | Review finding severity that forces `--request-changes`: `red`, `yellow`, or `green` (repeatable) |
+| `--clear-review-blocking-severities` | Restore the default review blocking set (`red` + `yellow`)          |
 
 Notes:
 
 - **Clearing.** An optional scalar clears with an empty string — `--host ""` — matching the Settings form, where blanking a text input stores nothing. Lists and maps can't say "empty" that way, so they take an explicit `--clear-*` flag. `--jira-status-ready ""` clears just that one mapping.
-- **Repeatable flags replace, they don't append.** Every `--always-include` on one invocation is the complete new list, matching `crow job edit --prompt`. Same for `--auto-review-repo`, `--exclude-review-repo`, and `--session-env`.
+- **Repeatable flags replace, they don't append.** Every `--always-include` on one invocation is the complete new list, matching `crow job edit --prompt`. Same for `--auto-review-repo`, `--exclude-review-repo`, `--review-blocking-severity`, and `--session-env`.
+- **`--review-blocking-severity` decides which review findings block.** Unset means Crow's default, `red` + `yellow` — the rule every install had before this flag existed — so a workspace that never sets it is unchanged. `--clear-review-blocking-severities` returns to that default by **removing** the key, never writing a null or an empty list. **At least one severity must block**: a workspace where nothing gates the verdict approves every review, and with `autoMergeWatcherEnabled` on merges it too, so an empty set is rejected rather than stored. Non-blocking findings are still reported in the review body — only the verdict changes. `crow workspace get` echoes the *effective* list plus `review_blocking_severities_explicit`, which separates "inheriting the default" from "pinned to red + yellow".
+
+  This is **advisory**. Crow renders the policy into the `crow-review-pr` skill on every launch path — the copied `SKILL.md` that Claude reads, and the inlined prompt body that Cursor, Codex, OpenCode, Grok and Antigravity read — but the review agent invokes `gh pr review` itself. Crow never sees that call and cannot check the posted verdict against the policy it handed over. The flag configures a prompt, not a gate.
 - **`--jira-status-*` patches per key.** Setting one leaves the other four alone — unlike the list flags.
 - **Fields are checked against the resulting workspace.** `--host` on a GitHub workspace, or any `--jira-*` flag on a workspace whose task provider isn't Jira, is an error rather than a value that would be stored and never read. Set the provider in the same invocation and both apply. Clearing a stranded field is always allowed.
 - **`--session-env` is one variable per entry.** The `/crow-workspace` setup script reads the map as one `KEY=VALUE` per line and splits each at the first `=`, so both delimiters are reserved: a newline in a key or value is rejected (it would smuggle in a second variable), and so is a `=` in a *key* (it would come back as a different variable). A `=` in a value is fine — the split takes only the first one. Keys additionally may not contain whitespace or control characters, since no shell could reference them. All enforced server-side, not just by the CLI.

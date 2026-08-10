@@ -31,6 +31,22 @@ struct SessionServiceReviewPromptTests {
     [🐦‍⬛ Reviewed by Crow via ${CROW_AGENT_DISPLAY_NAME:-Claude Code}](https://github.com/corveil/crow)
     """
 
+    /// SKILL-shaped fixture carrying the CROW-963 verdict placeholders, in the
+    /// same shape the real skill has them. Kept separate from `fixtureSkillBody`
+    /// so the pre-existing substitution tests stay a minimal input.
+    private static let policyFixtureSkillBody = """
+    # Crow Review PR
+    Review PR $ARGUMENTS.
+
+    \(ReviewVerdictPolicy.rulePlaceholder)
+
+    | Color  | Meaning      | Verdict effect            |
+    |--------|--------------|---------------------------|
+    \(ReviewVerdictPolicy.tablePlaceholder)
+
+    \(ReviewVerdictPolicy.notesPlaceholder)
+    """
+
     @Test func cursorPromptSubstitutesPRURLForArguments() {
         let prompt = SessionService.cursorReviewPrompt(
             skillBody: Self.fixtureSkillBody,
@@ -147,6 +163,73 @@ struct SessionServiceReviewPromptTests {
             skillBody: Scaffolder.bundledReviewSkill(),
             prURL: Self.prURL,
             agentKind: .antigravity))
+    }
+
+    // MARK: - Per-workspace verdict policy (CROW-963)
+
+    /// The acceptance criterion a file-copy-only implementation fails.
+    ///
+    /// Claude reads the copied `.claude/skills/crow-review-pr/SKILL.md`, but
+    /// Cursor/OpenCode/Codex/Grok/Antigravity read the **inlined** prompt body —
+    /// and `agentsByKind.review` is commonly Cursor, so the inlined path is the
+    /// normal case, not an edge one. `prepareReviewClone` renders the workspace's
+    /// policy once and passes the result in via `skillBody:`; if that parameter
+    /// stops being threaded, the inlining agents silently revert to the default
+    /// rule while the copied file is correct.
+    @Test func buildReviewPromptInlineBranchesCarryTheWorkspacePolicy() {
+        let redOnlyBody = ReviewVerdictPolicy.expand(
+            Self.policyFixtureSkillBody, blocking: [.red])
+
+        for agentKind: AgentKind in [.cursor, .openCode, .codex, .grok, .antigravity] {
+            let prompt = SessionService.buildReviewPrompt(
+                prURL: Self.prURL,
+                prTitle: Self.prTitle,
+                repoSlug: Self.repoSlug,
+                prNumber: Self.prNumber,
+                agentKind: agentKind,
+                skillBody: redOnlyBody
+            )
+
+            #expect(prompt.contains("any Red finding"), "\(agentKind.rawValue) lost the policy")
+            #expect(!prompt.contains("any Red **or** any Yellow finding"))
+            #expect(prompt.contains("| Yellow | Should fix   | Approve allowed           |"))
+            // Q4: relaxing Yellow must not stop it being reported.
+            #expect(prompt.contains("Report every one of them in the review body"))
+            // The policy must not cost us the existing substitutions.
+            #expect(prompt.contains(Self.prURL))
+            #expect(!prompt.contains("$ARGUMENTS"))
+            #expect(!prompt.contains("{{CROW_REVIEW_VERDICT_"))
+        }
+    }
+
+    /// Omitting `skillBody:` must keep the pre-CROW-963 behaviour exactly, so
+    /// every existing caller and test is unaffected by the new parameter.
+    @Test func buildReviewPromptWithoutASkillBodyFallsBackToTheBundledSkill() {
+        let prompt = SessionService.buildReviewPrompt(
+            prURL: Self.prURL,
+            prTitle: Self.prTitle,
+            repoSlug: Self.repoSlug,
+            prNumber: Self.prNumber,
+            agentKind: .cursor
+        )
+
+        #expect(prompt == SessionService.cursorReviewPrompt(
+            skillBody: Scaffolder.bundledReviewSkill(),
+            prURL: Self.prURL,
+            agentKind: .cursor))
+    }
+
+    /// A policy-expanded body passed through `cursorReviewPrompt` — which calls
+    /// `CrowAttribution.expandSkillBody`, which expands the policy AGAIN with the
+    /// default set — must keep the workspace's policy, not have it overwritten.
+    @Test func cursorPromptDoesNotLetTheSecondExpansionOverwriteThePolicy() {
+        let redOnlyBody = ReviewVerdictPolicy.expand(
+            Self.policyFixtureSkillBody, blocking: [.red])
+        let prompt = SessionService.cursorReviewPrompt(
+            skillBody: redOnlyBody, prURL: Self.prURL, agentKind: .cursor)
+
+        #expect(prompt.contains("any Red finding"))
+        #expect(!prompt.contains("any Red **or** any Yellow finding"))
     }
 
     @Test func buildReviewPromptClaudeBranchIsTerseSlashCommand() {

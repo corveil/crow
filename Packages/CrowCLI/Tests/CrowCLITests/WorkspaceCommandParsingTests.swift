@@ -118,6 +118,61 @@ import Testing
     let params = try cmd.fields.paramsJSON()
     #expect(params["clear_always_include"] == nil)
     #expect(params["clear_session_env"] == nil)
+    #expect(params["clear_review_blocking_severities"] == nil)
+    #expect(params["review_blocking_severities"] == nil)
+}
+
+// MARK: - review blocking severities (CROW-963)
+
+@Test func workspaceReviewBlockingSeverityFlagIsRepeatableAndCanonicalized() throws {
+    // Repeatable, and stored severest-first regardless of the order given, so two
+    // equivalent invocations don't produce two different config values.
+    let cmd = try WorkspaceEdit.parse([
+        "--workspace", "Acme",
+        "--review-blocking-severity", "yellow",
+        "--review-blocking-severity", "red",
+    ])
+    let params = try cmd.fields.paramsJSON()
+    #expect(params["review_blocking_severities"] == .array([.string("red"), .string("yellow")]))
+}
+
+@Test func workspaceReviewBlockingSeverityAcceptsASingleSeverity() throws {
+    let cmd = try WorkspaceEdit.parse([
+        "--workspace", "Acme", "--review-blocking-severity", "red",
+    ])
+    let params = try cmd.fields.paramsJSON()
+    #expect(params["review_blocking_severities"] == .array([.string("red")]))
+}
+
+/// The clear flag restores the default (red + yellow) by removing the key — it
+/// is the only way to say "no custom policy", since an empty repeated flag is
+/// indistinguishable from an omitted one.
+@Test func workspaceClearReviewBlockingSeveritiesSendsItsClearKey() throws {
+    let cmd = try WorkspaceEdit.parse([
+        "--workspace", "Acme", "--clear-review-blocking-severities",
+    ])
+    let params = try cmd.fields.paramsJSON()
+    #expect(params["clear_review_blocking_severities"] == .bool(true))
+    #expect(params["review_blocking_severities"] == nil)
+    // The clear flag alone is a real edit, so `edit` must not reject it.
+    #expect(cmd.fields.hasAnyField)
+}
+
+/// A typo is a parse error, not a value that silently stops blocking — that is
+/// the whole reason the flag parses into the model enum rather than `[String]`.
+@Test func workspaceReviewBlockingSeverityRejectsAnUnknownSeverity() {
+    #expect(throws: (any Error).self) {
+        try WorkspaceEdit.parse([
+            "--workspace", "Acme", "--review-blocking-severity", "chartreuse",
+        ])
+    }
+}
+
+@Test func workspaceReviewBlockingSeverityCountsAsAField() throws {
+    let cmd = try WorkspaceEdit.parse([
+        "--workspace", "Acme", "--review-blocking-severity", "red",
+    ])
+    #expect(cmd.fields.hasAnyField)
 }
 
 // MARK: - jira status map

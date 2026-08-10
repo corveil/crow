@@ -44,8 +44,9 @@ public enum WorkspaceRPC {
         "jira_site", "jira_project_key", "jira_jql", "jira_status_map",
         "corveil_host", "custom_instructions", "session_env",
         "always_include", "auto_review_repos", "exclude_review_repos",
+        "review_blocking_severities",
         "clear_always_include", "clear_auto_review_repos", "clear_exclude_review_repos",
-        "clear_jira_status_map", "clear_session_env",
+        "clear_jira_status_map", "clear_session_env", "clear_review_blocking_severities",
     ]
 
     /// Whether the params name at least one field to write. A `clear_*` sent as
@@ -156,6 +157,44 @@ public enum WorkspaceRPC {
                 "jira_status_map key \"\(key)\" is not a pipeline status. Expected one of: \(jiraStatusKeys.joined(separator: ", "))")
         }
         return map
+    }
+
+    /// Validate a `review_blocking_severities` write (CROW-963).
+    ///
+    /// Two rejections, both deliberate:
+    ///
+    /// - **Unknown severity.** The taxonomy is a closed set of three. Storing an
+    ///   unrecognized value would decode back to nothing, silently relaxing the
+    ///   policy — the failure mode a free-text list has and this doesn't.
+    /// - **Empty list.** `[]` would mean nothing gates the verdict, so every
+    ///   review approves — and with `autoMergeWatcherEnabled` on, auto-merges.
+    ///   That posture is not offered; `clear_review_blocking_severities` (which
+    ///   removes the key and restores red + yellow) is what "I don't want a custom
+    ///   policy" means.
+    ///
+    /// Note this guards the *write* path only. `WorkspaceInfo.init(from:)`
+    /// deliberately stays lenient, because a throwing decode there would make the
+    /// whole `config.json` unreadable and get it overwritten with defaults.
+    public static func decodeReviewBlockingSeverities(_ raw: [String]) throws -> [ReviewSeverity] {
+        let severities = try raw.map { value -> ReviewSeverity in
+            guard let severity = ReviewSeverity(
+                rawValue: value.trimmingCharacters(in: .whitespaces).lowercased())
+            else {
+                throw RPCError.invalidParams(
+                    "review_blocking_severities must contain only: "
+                        + "\(ReviewSeverity.allCases.map(\.rawValue).joined(separator: ", ")) "
+                        + "(got \"\(value)\")")
+            }
+            return severity
+        }
+        guard !severities.isEmpty else {
+            throw RPCError.invalidParams(
+                "review_blocking_severities must name at least one severity — a workspace where "
+                    + "nothing blocks would approve every review. Use "
+                    + "clear_review_blocking_severities to restore the default "
+                    + "(\(ReviewSeverity.defaultBlocking.map(\.rawValue).joined(separator: " + ")))")
+        }
+        return ReviewSeverity.canonicalize(severities)
     }
 
     /// Validate a `session_env` map against the round-trip its consumer performs.
@@ -349,6 +388,17 @@ public enum WorkspaceRPC {
             workspace.sessionEnv = env.isEmpty ? nil : env
         }
 
+        // Clearing REMOVES the key (nil), it does not store `[]` — those mean
+        // different things: absent is Crow's default (red + yellow), while `[]`
+        // would be "nothing blocks", i.e. approve every review (CROW-963). The
+        // same reason `crow agents set --clear` removes rather than nulls.
+        if try flag(params, "clear_review_blocking_severities") {
+            workspace.reviewBlockingSeverities = nil
+        }
+        if let raw = try patchStringList(params, "review_blocking_severities") {
+            workspace.reviewBlockingSeverities = try decodeReviewBlockingSeverities(raw)
+        }
+
         try validateCoherence(workspace, params: params)
         return workspace != before
     }
@@ -449,6 +499,13 @@ public enum WorkspaceRPC {
         object["session_env"] = workspace.sessionEnv
             .map { JSONValue.object($0.mapValues { .string($0) }) } ?? .null
         object["gateway_base_url"] = workspace.gateway.map { .string($0.baseURL) } ?? .null
+        // Effective list (never null) plus an explicit flag, the same shape as
+        // `task_provider` above: unset and "explicitly red + yellow" behave
+        // identically but round-trip differently, and only the flag distinguishes
+        // "inheriting Crow's default" from "this workspace pinned it" (CROW-963).
+        object["review_blocking_severities"] = .array(
+            workspace.effectiveReviewBlockingSeverities.map { .string($0.rawValue) })
+        object["review_blocking_severities_explicit"] = .bool(workspace.reviewBlockingSeverities != nil)
         return .object(object)
     }
 }

@@ -239,6 +239,82 @@ struct WorkspaceRPCSupportTests {
         #expect(target.jiraStatusMap == nil)
     }
 
+    // MARK: - Review blocking severities (CROW-963)
+
+    @Test func applyPatchReplacesReviewBlockingSeverities() throws {
+        var target = WorkspaceInfo(name: "Acme")
+        #expect(target.reviewBlockingSeverities == nil)
+        #expect(target.effectiveReviewBlockingSeverities == [.red, .yellow])
+
+        try WorkspaceRPC.applyPatch(
+            ["review_blocking_severities": .array([.string("red")])], to: &target)
+        #expect(target.reviewBlockingSeverities == [.red])
+        #expect(target.effectiveReviewBlockingSeverities == [.red])
+
+        // Canonicalized, so an input order can't produce a second stored form.
+        try WorkspaceRPC.applyPatch(
+            ["review_blocking_severities": .array([.string("yellow"), .string("red")])], to: &target)
+        #expect(target.reviewBlockingSeverities == [.red, .yellow])
+    }
+
+    /// Clearing REMOVES the key rather than storing `[]`. The two are different
+    /// policies — absent is Crow's default, `[]` would be "approve everything" —
+    /// and the same nil-vs-absent discipline `crow agents set --clear` follows.
+    @Test func applyPatchClearReviewBlockingSeveritiesRestoresTheDefault() throws {
+        var target = WorkspaceInfo(name: "Acme", reviewBlockingSeverities: [.red])
+        try WorkspaceRPC.applyPatch(
+            ["clear_review_blocking_severities": .bool(true)], to: &target)
+        #expect(target.reviewBlockingSeverities == nil)
+        #expect(target.effectiveReviewBlockingSeverities == [.red, .yellow])
+    }
+
+    /// An empty blocking set means nothing gates the verdict, so every review
+    /// approves — and with the auto-merge watcher on, merges. That posture is not
+    /// offered; the error names the flag that does what the caller meant.
+    @Test func applyPatchRejectsAnEmptyReviewBlockingSet() {
+        for empty in [JSONValue.array([]), .array([.string("  ")])] {
+            var target = WorkspaceInfo(name: "Acme", reviewBlockingSeverities: [.red])
+            #expect(throws: RPCError.self) {
+                _ = try WorkspaceRPC.applyPatch(["review_blocking_severities": empty], to: &target)
+            }
+            #expect(target.reviewBlockingSeverities == [.red], "a rejected patch must store nothing")
+        }
+    }
+
+    /// Unknown severities are rejected on the write path even though the decoder
+    /// drops them — a stored typo would silently relax the policy.
+    @Test func applyPatchRejectsAnUnknownReviewSeverity() {
+        var target = WorkspaceInfo(name: "Acme")
+        #expect(throws: RPCError.self) {
+            _ = try WorkspaceRPC.applyPatch(
+                ["review_blocking_severities": .array([.string("red"), .string("chartreuse")])],
+                to: &target)
+        }
+        #expect(target.reviewBlockingSeverities == nil)
+    }
+
+    /// Both keys are field keys, so `workspace edit` carrying only one of them is
+    /// a real edit rather than "Nothing to edit".
+    @Test func reviewBlockingSeverityKeysCountAsFields() {
+        #expect(WorkspaceRPC.hasAnyField(
+            ["review_blocking_severities": .array([.string("red")])]))
+        #expect(WorkspaceRPC.hasAnyField(["clear_review_blocking_severities": .bool(true)]))
+        #expect(WorkspaceRPC.hasAnyField(["clear_review_blocking_severities": .bool(false)]) == false)
+    }
+
+    /// `workspace get` echoes the effective list plus an explicit flag, so a
+    /// caller can tell "inheriting the default" from "pinned to red + yellow".
+    @Test func workspaceJSONEchoesTheEffectiveSeveritiesAndWhetherTheyArePinned() {
+        let unset = WorkspaceRPC.workspaceJSON(WorkspaceInfo(name: "Acme")).objectValue
+        #expect(unset?["review_blocking_severities"] == .array([.string("red"), .string("yellow")]))
+        #expect(unset?["review_blocking_severities_explicit"] == .bool(false))
+
+        let pinned = WorkspaceRPC.workspaceJSON(
+            WorkspaceInfo(name: "Acme", reviewBlockingSeverities: [.red, .yellow])).objectValue
+        #expect(pinned?["review_blocking_severities"] == .array([.string("red"), .string("yellow")]))
+        #expect(pinned?["review_blocking_severities_explicit"] == .bool(true))
+    }
+
     /// Session env replaces wholesale, unlike the status map — every
     /// `--session-env` on one invocation is the complete set.
     @Test func applyPatchReplacesSessionEnv() throws {

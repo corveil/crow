@@ -1767,7 +1767,7 @@ Subcommands: [`list`](#crow-workspace-list), [`get`](#crow-workspace-get), [`add
 Create a workspace.
 
 ```
-crow workspace add --name <name> [--provider <provider>] [--host <host>] [--task-provider <task-provider>] [--jira-site <jira-site>] [--jira-project-key <jira-project-key>] [--jira-jql <jira-jql>] [--jira-status-backlog <jira-status-backlog>] [--jira-status-ready <jira-status-ready>] [--jira-status-in-progress <jira-status-in-progress>] [--jira-status-in-review <jira-status-in-review>] [--jira-status-done <jira-status-done>] [--clear-jira-status-map] [--corveil-host <corveil-host>] [--custom-instructions <custom-instructions>] [--custom-instructions-file <custom-instructions-file>] [--always-include <always-include> ...] [--clear-always-include] [--auto-review-repo <auto-review-repo> ...] [--clear-auto-review-repos] [--exclude-review-repo <exclude-review-repo> ...] [--clear-exclude-review-repos] [--session-env <session-env> ...] [--clear-session-env]
+crow workspace add --name <name> [--provider <provider>] [--host <host>] [--task-provider <task-provider>] [--jira-site <jira-site>] [--jira-project-key <jira-project-key>] [--jira-jql <jira-jql>] [--jira-status-backlog <jira-status-backlog>] [--jira-status-ready <jira-status-ready>] [--jira-status-in-progress <jira-status-in-progress>] [--jira-status-in-review <jira-status-in-review>] [--jira-status-done <jira-status-done>] [--clear-jira-status-map] [--corveil-host <corveil-host>] [--custom-instructions <custom-instructions>] [--custom-instructions-file <custom-instructions-file>] [--always-include <always-include> ...] [--clear-always-include] [--auto-review-repo <auto-review-repo> ...] [--clear-auto-review-repos] [--exclude-review-repo <exclude-review-repo> ...] [--clear-exclude-review-repos] [--session-env <session-env> ...] [--clear-session-env] [--review-blocking-severity <review-blocking-severity> ...] [--clear-review-blocking-severities]
 ```
 
 Only --name is required; every other field takes its documented default and can be set later with `crow workspace edit`. The name becomes a directory under the dev root, so it cannot contain / or :, cannot be "." or "..", and must not collide with an existing workspace (case-insensitively).
@@ -1800,6 +1800,8 @@ Creating a workspace does not create its directory — the daemon scaffolds it o
 | `--clear-exclude-review-repos` | — | no | Empty the exclude-from-reviews list |
 | `--session-env` | `<session-env>` _(repeatable)_ | no | KEY=VALUE exported into agents in this workspace (repeatable; replaces the whole map) |
 | `--clear-session-env` | — | no | Drop every session env var |
+| `--review-blocking-severity` | `<review-blocking-severity>` _(repeatable)_ | no | Review finding severity that forces --request-changes (repeatable; replaces the whole list; default red + yellow). Values: `red`, `yellow`, `green`. |
+| `--clear-review-blocking-severities` | — | no | Restore the default review blocking set (red + yellow) |
 
 ---
 
@@ -1808,7 +1810,7 @@ Creating a workspace does not create its directory — the daemon scaffolds it o
 Change fields on an existing workspace.
 
 ```
-crow workspace edit --workspace <workspace> [--name <name>] [--provider <provider>] [--host <host>] [--task-provider <task-provider>] [--jira-site <jira-site>] [--jira-project-key <jira-project-key>] [--jira-jql <jira-jql>] [--jira-status-backlog <jira-status-backlog>] [--jira-status-ready <jira-status-ready>] [--jira-status-in-progress <jira-status-in-progress>] [--jira-status-in-review <jira-status-in-review>] [--jira-status-done <jira-status-done>] [--clear-jira-status-map] [--corveil-host <corveil-host>] [--custom-instructions <custom-instructions>] [--custom-instructions-file <custom-instructions-file>] [--always-include <always-include> ...] [--clear-always-include] [--auto-review-repo <auto-review-repo> ...] [--clear-auto-review-repos] [--exclude-review-repo <exclude-review-repo> ...] [--clear-exclude-review-repos] [--session-env <session-env> ...] [--clear-session-env] [--force]
+crow workspace edit --workspace <workspace> [--name <name>] [--provider <provider>] [--host <host>] [--task-provider <task-provider>] [--jira-site <jira-site>] [--jira-project-key <jira-project-key>] [--jira-jql <jira-jql>] [--jira-status-backlog <jira-status-backlog>] [--jira-status-ready <jira-status-ready>] [--jira-status-in-progress <jira-status-in-progress>] [--jira-status-in-review <jira-status-in-review>] [--jira-status-done <jira-status-done>] [--clear-jira-status-map] [--corveil-host <corveil-host>] [--custom-instructions <custom-instructions>] [--custom-instructions-file <custom-instructions-file>] [--always-include <always-include> ...] [--clear-always-include] [--auto-review-repo <auto-review-repo> ...] [--clear-auto-review-repos] [--exclude-review-repo <exclude-review-repo> ...] [--clear-exclude-review-repos] [--session-env <session-env> ...] [--clear-session-env] [--review-blocking-severity <review-blocking-severity> ...] [--clear-review-blocking-severities] [--force]
 ```
 
 Only the provided flags change. A repeatable list flag replaces the whole list rather than appending, matching `crow job edit`; use the matching --clear-* flag to empty one. The --jira-status-* flags patch individually — each sets one mapping and leaves the other four alone.
@@ -1844,6 +1846,8 @@ An edit whose values already hold is reported as "saved": false and skips the wr
 | `--clear-exclude-review-repos` | — | no | Empty the exclude-from-reviews list |
 | `--session-env` | `<session-env>` _(repeatable)_ | no | KEY=VALUE exported into agents in this workspace (repeatable; replaces the whole map) |
 | `--clear-session-env` | — | no | Drop every session env var |
+| `--review-blocking-severity` | `<review-blocking-severity>` _(repeatable)_ | no | Review finding severity that forces --request-changes (repeatable; replaces the whole list; default red + yellow). Values: `red`, `yellow`, `green`. |
+| `--clear-review-blocking-severities` | — | no | Restore the default review blocking set (red + yellow) |
 | `--force` | — | no | Rename even when sessions or jobs reference this workspace |
 
 ---
