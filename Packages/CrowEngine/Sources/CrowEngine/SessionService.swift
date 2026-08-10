@@ -841,7 +841,11 @@ public final class SessionService {
     /// arm a committed `.codex`/`.grok` hook on launch. Review falls back to the
     /// agent's own trust prompt (the human-gated path), and `prepareReviewClone`
     /// strips committed agent config as defense-in-depth. Cursor/OpenCode/
-    /// Antigravity have no folder-trust store, so they never seed.
+    /// Antigravity have no folder-trust store *this seeder can write*, so they
+    /// never seed here — note that does **not** mean Cursor launches untrusted: it
+    /// trusts per-launch via the `--trust` flag (`CursorLaunchArgs.trustSuffix`),
+    /// on every kind including `.review` (CROW-954), which is why its review clones
+    /// are stripped on every launch path rather than gated by a dialog.
     nonisolated static func shouldSeedFolderTrust(
         agentKind: AgentKind, sessionKind: SessionKind) -> Bool {
         switch agentKind {
@@ -936,9 +940,13 @@ public final class SessionService {
     ///     approval gate and Antigravity seeds no trust, so the strip is the *only*
     ///     defense — it MUST re-run here, not just at creation, because the review
     ///     skill's `gh pr checkout` (or a head-advancing re-review) restores the
-    ///     attacker's hooks from the PR head.
-    ///  2. **Seed** the agent's folder trust (Claude/Codex/Grok, never `.review`),
-    ///     gated via `shouldSeedFolderTrust`.
+    ///     attacker's hooks from the PR head. Same again for a Cursor `.review`
+    ///     clone's `.cursor/` (`shouldStripCursorReviewClone`, CROW-954): now that
+    ///     Cursor seeds `--trust` on review, no folder-trust dialog stands behind
+    ///     the strip either, so it joins the every-launch set for the same reason.
+    ///  2. **Seed** the agent's folder trust (Claude and — via the per-launch
+    ///     `--trust` flag, not this step — Cursor on every kind; Codex/Grok on
+    ///     everything but `.review`), gated via `shouldSeedFolderTrust`.
     ///  3. **Reconcile the main clone's** hook block (#915). A linked worktree
     ///     loads the main clone's `.claude/settings.local.json` in addition to
     ///     its own, so a stale block there breaks hooks and telemetry for every
@@ -950,8 +958,8 @@ public final class SessionService {
     ///
     /// All are no-ops for the agents/kinds/layouts that don't need them, so this
     /// is safe to call from every launch path unconditionally. **The call sites of
-    /// this symbol ARE the answer to "how many Grok/Antigravity launch paths open a
-    /// review clone"** — `rg prepareWorktreeForAgentLaunch`, never a hand-maintained
+    /// this symbol ARE the answer to "how many Grok/Antigravity/Cursor launch paths
+    /// open a review clone"** — `rg prepareWorktreeForAgentLaunch`, never a hand-maintained
     /// count (which went stale four rounds running). Today: `pasteDeferredLaunch`,
     /// `launchAgent`, `handoffAgent`, `createManagerTerminal` (seed only — Manager
     /// is never `.review`), and the `send` RPC (`EngineRouter`). `prepareReviewClone`
@@ -969,6 +977,9 @@ public final class SessionService {
         }
         if shouldStripAntigravityReviewClone(agentKind: agentKind, sessionKind: sessionKind) {
             stripAntigravityConfigFromReviewClone(clonePath: worktreePath)
+        }
+        if shouldStripCursorReviewClone(agentKind: agentKind, sessionKind: sessionKind) {
+            stripCursorConfigFromReviewClone(clonePath: worktreePath)
         }
         seedTrustIfNeeded(
             agentKind: agentKind, sessionKind: sessionKind, worktreePath: worktreePath)
@@ -3053,6 +3064,27 @@ public final class SessionService {
     nonisolated static func shouldStripCursorReviewCloneOnHandoff(
         targetKind: AgentKind, sessionKind: SessionKind) -> Bool {
         targetKind == .cursor && sessionKind == .review
+    }
+
+    /// Whether Cursor is about to open a `.review` clone and must therefore strip
+    /// its committed `.cursor/` first — the launch-path gate, as opposed to the
+    /// creation-time (`prepareReviewClone`) and handoff
+    /// (`shouldStripCursorReviewCloneOnHandoff`) arms.
+    ///
+    /// Added with CROW-954, which made Cursor seed `--trust` on `.review`. Before
+    /// that, a review clone launched untrusted and Cursor's folder-trust dialog
+    /// stood between a restored `.cursor/hooks.json` and execution, so stripping at
+    /// creation was enough. Now the clone launches pre-trusted, so the strip is the
+    /// **only** thing between a hostile committed hook and the reviewer's machine —
+    /// exactly the position Antigravity is in (`shouldStripAntigravityReviewClone`,
+    /// #902 review Red), and for the same reason it must re-fire on every launch,
+    /// not just at creation: the review skill's `gh pr checkout` (or a
+    /// head-advancing re-review) restores the attacker's `.cursor/` from the PR
+    /// head, and a warm `crowd` restart or `crow send` reopens the clone through
+    /// neither the creation nor the handoff arm.
+    nonisolated static func shouldStripCursorReviewClone(
+        agentKind: AgentKind, sessionKind: SessionKind) -> Bool {
+        agentKind == .cursor && sessionKind == .review
     }
 
     /// Gate for refusing a review-session handoff (and `crow agents set

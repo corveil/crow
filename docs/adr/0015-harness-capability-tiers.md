@@ -47,12 +47,54 @@ deliberate, documented gaps (full grid in the
 > folder-trust dialog rather than launching pre-trusted, though whether `--force`
 > (review's default auto-permission) still surfaces that dialog is unverified;
 > withholding `--trust` is never worse than emitting it (CROW-890 review, Red 1).
-> Requires **Cursor CLI ≥
+> **[Superseded by the 2026-08-10 amendment below — the `.review` carve-out is
+> removed.]** Requires **Cursor CLI ≥
 > 2026.07.20**; the seed is emitted on every non-`.review` path, so an older
 > binary is out of support. Probed 2026.07.23 that the arg parser silently
 > ignores a mode-gated flag used outside its mode (`agent --output-format json
 > --version` exits 0, no error), so a pre-floor build recognizing `--trust`
 > would no-op it and degrade to the old prompt rather than reject the launch.
+
+> **Amendment (2026-08-10, CROW-954):** the `.review` carve-out in the #890
+> amendment above is **removed** — Cursor now seeds `--trust` on every session
+> kind, review included. The carve-out rested on one load-bearing claim, that a
+> review clone would "fall back to Cursor's folder-trust dialog" as a *human gate*.
+> Both halves of that failed in practice:
+>
+> 1. **The dialog gated nothing.** Review launches already carry `--force
+>    --approve-mcps` (`reviewAutoPermissionMode` ships on), so the reviewer's only
+>    meaningful choice at the prompt is to trust — after which every tool call runs
+>    unapproved. It was a keypress, not a decision.
+> 2. **`--force` does not suppress it** — the exact question the #890 amendment
+>    left "unverified". Observed on `agent 2026.08.04`: a Crow review session
+>    launched with `--force --approve-mcps` stops on "Workspace Trust Required" and
+>    waits. So the carve-out's cost was not theoretical — it broke the unattended
+>    dispatch that makes review sessions useful, which is precisely the failure the
+>    trust seed exists to prevent.
+>
+> The security property the carve-out was reaching for is preserved, and moved to
+> where it actually holds: `SessionService.stripCursorConfigFromReviewClone` removes
+> the clone's committed `.cursor/` (`hooks.json`, `mcp.json`) and is now promoted
+> from a creation-time + handoff strip to run on **every** launch path via
+> `prepareWorktreeForAgentLaunch` (`shouldStripCursorReviewClone`). That promotion
+> is load-bearing, not cosmetic: with no dialog behind it, the strip must re-fire
+> after the review skill's `gh pr checkout` (or a head-advancing re-review) restores
+> the attacker's config, and a warm `crowd` restart or `crow send` reopens the clone
+> through neither the creation nor the handoff arm. This is the same
+> **strip-not-trust** posture Grok (#861) and Antigravity (#902) reviews already
+> rely on, and it re-converges Cursor with `ClaudeTrustSeeder`, which has always
+> trusted `.review` (`shouldSeedFolderTrust` returns `true` for Claude on every
+> kind) — so the #890 "divergence from Claude, follow the Codex precedent" framing
+> is retired for Cursor. **Codex and Grok keep their `!= .review` guards**: they
+> write durable global trust records (`~/.codex/config.toml`,
+> `~/.grok/trusted_folders.toml`) that outlive the session, a materially larger
+> blast radius than Cursor's per-workspace marker under `~/.cursor/projects/`, and
+> nothing about this change argues for touching them.
+>
+> Verified interactively (not just from `--help`) on `agent 2026.08.04`: running
+> `agent --trust` under a pty in a fresh repo, with no `--print`, writes
+> `~/.cursor/projects/<slug>/.workspace-trusted` containing `"trustMethod":
+> "cli-flag"` — the same saved decision the dialog records on accept.
 
 > **Amendment (2026-07-28, #902):** Antigravity's **review** gap — recorded as a
 > Tier-2 deferral (its `autoLaunchCommand(.review)` returned `nil`, so a review

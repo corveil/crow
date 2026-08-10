@@ -132,13 +132,19 @@ public protocol CodingAgent: Sendable {
         prompt: String
     ) async throws -> String
 
-    /// Kind-aware variant of `launchCommand`. Agents whose launch depends on the
-    /// session kind override this — e.g. Cursor withholds its workspace-trust
-    /// seed (`--trust`) from attacker-controlled `.review` handoff clones,
-    /// mirroring the `session.kind != .review` guard on `CodexTrustSeeder`. The
-    /// protocol-extension default ignores `sessionKind` and delegates to the
-    /// three-argument `launchCommand`, so agents with no kind-dependent launch
-    /// (Claude, Codex, OpenCode, Antigravity) need not implement it.
+    /// Kind-aware variant of `launchCommand`, for agents whose handoff launch
+    /// depends on the session kind. The protocol-extension default ignores
+    /// `sessionKind` and delegates to the three-argument `launchCommand`, so an
+    /// agent with no kind-dependent launch need not implement it.
+    ///
+    /// **No agent overrides this today.** Cursor was the only one — it withheld
+    /// its `--trust` workspace-trust seed from `.review` handoff clones — and
+    /// CROW-954 dropped that carve-out (review clones now launch pre-trusted,
+    /// defended by the launch-path `.cursor/` strip instead of a folder-trust
+    /// dialog). The requirement is kept because it is the seam a future harness
+    /// needs to treat a hostile review checkout differently from a `.work`
+    /// worktree; `SessionService.handoffAgent` already calls through it with the
+    /// live `session.kind`, so adding one is a single override.
     func launchCommand(
         sessionID: UUID,
         worktreePath: String,
