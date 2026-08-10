@@ -53,7 +53,11 @@ Exactly six methods are viewer-reachable, all pinned to the grant's session:
 | `list-artifacts` | `session_id` |
 | `get-pr-status` | `session_id` |
 
-Everything else — all 91 remaining methods — is denied. Note in particular that 23 of the 29 `ParityLedger` `.read(…)` methods must be denied, including `get-state`, `list-sessions`, `list-sessions-live`, `get-config`, and `defaults-get`. **Do not derive the allowlist from `isWrite`.**
+Everything else — all 91 remaining methods — is denied. **Do not derive the allowlist from `isWrite`:** 23 of the 29 `ParityLedger` `.read(…)` methods must be denied. In full, so nothing is inferred:
+
+`list-sessions` · `list-sessions-live` · `list-tickets` · `list-reviews` · `list-agents` · `list-allowlist` · `get-scorecard` · `get-state` · `get-config` · `defaults-get` · `agents-get` · `automation-get` · `workspace-list` · `workspace-get` · `telemetry-get` · `cleanup-get` · `ui-get` · `version-update-get` · `notifications-get` · `gateway-get` · `web-password-get` · `job-list` · `job-get`
+
+`get-state` alone returns the whole store plus `AppConfig`; `defaults-get` returns absolute local binary paths. (`gateway-get` / `web-password-get` are already local-socket-only — denied here too, because a default-deny gate must not depend on a second gate holding.)
 
 Allowlisting a method name is insufficient: all six handlers take `session_id` as a parameter and trust it (`EngineRouter.swift:280`, `:695`, `:854`, `:1079`, `:321`; `RPCHandlers.swift:617`). The gate must reject a request whose `session_id` is not the granted one.
 
@@ -67,7 +71,7 @@ Additionally strip `path` and `dir` from `list-artifacts` responses to viewers �
 
 Use a distinct cookie name **and** a distinct path — e.g. `crow_view` at `Path=/view` — not a second `crow_session` at `Path=/`. Same name + path means an owner who opens a link they minted overwrites their own session, and re-logging-in revokes the viewer's. A distinct path also means the browser never attaches the viewer cookie to `/rpc` at all.
 
-Keep the existing flags: `HttpOnly; Secure; SameSite=Lax`.
+Keep `HttpOnly; Secure; SameSite=Lax`. Set `Max-Age` from the **grant's** TTL rather than inheriting the owner's default — `SessionStore`'s is 7 days (`WebAuth.swift:95`), which would outlive a 24 h grant and leave a live cookie pointing at a dead grant.
 
 ### R4 — Redemption happens at a real endpoint
 
@@ -91,7 +95,7 @@ Reject grant creation for: the Manager session, any session with no worktree, an
 
 ## Build gates (these fail CI, not review)
 
-- **`ParityLedger.rpcMethods`** — every new `share-*` RPC needs a row, or `RPCLedgerParityTests` fails. Add a `viewerReachable` classification column in the same change so the six-method allowlist is enumerated where the parity test gates it; a future RPC then cannot become viewer-reachable without an explicit decision.
+- **`ParityLedger.rpcMethods`** — every new `share-*` RPC needs a row, or `RPCLedgerParityTests` fails. Add a `viewerReachable` classification column in the same change so the six-method allowlist is enumerated where the parity test can see it. Be clear on what that buys: the parity test asserts **names only**, so the column guarantees a new method cannot skip classification — it does *not* catch a method classified wrongly. The exhaustive per-method assertion under Acceptance is what closes that.
 - **`RPCLanePolicy.rules`** — every new method needs an entry or `RPCLanePolicyTests` fails.
 - **ADR 0016** (`docs/adr/0016-cli-control-plane-parity.md`) — every user-mutable capability needs a CLI path, enforced by `scripts/check-cli-parity.sh` on the Linux lane. This is why `crow share …` is in scope rather than deferred with the UI.
 - **ADR 0019** (to be written) — the client-authority-tiers ADR should land **before or with** this ticket. The spike's §6 explains why: ADR 0009 states "no client is privileged", and this introduces the first mintable, delegable credential class. Do not merge this without that record.

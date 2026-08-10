@@ -37,13 +37,19 @@ The *polarity* is inverted, and that is where this gets dangerous. `localOnlyDen
 | **Session-scoped reads** | **6** | `get-session`, `list-links`, `list-worktrees`, `list-terminals`, `list-artifacts`, `get-pr-status` |
 | Reads that must still be **denied** | **23** | fleet-wide or config-wide |
 
-Those 23 include `get-state` (the entire `DaemonStateSnapshot` — every session, every worktree path, plus `AppConfig`), `list-sessions` / `list-sessions-live` (the whole sidebar the ticket explicitly wants hidden), `get-config`, `list-tickets`, `list-reviews`, `get-scorecard`, `list-allowlist`, `job-list` / `job-get`, all nine `*-get` settings reads, `workspace-list` / `workspace-get`, and `defaults-get` — which returns `defaults.binaries`, absolute local binary paths, deliberately un-stripped (`RPCWebSocketHandler.swift:274-283`).
+All 23 denied reads, enumerated — an implementer building a default-deny gate needs the list, not a description of it:
+
+`list-sessions` · `list-sessions-live` · `list-tickets` · `list-reviews` · `list-agents` · `list-allowlist` · `get-scorecard` · `get-state` · `get-config` · `defaults-get` · `agents-get` · `automation-get` · `workspace-list` · `workspace-get` · `telemetry-get` · `cleanup-get` · `ui-get` · `version-update-get` · `notifications-get` · `gateway-get` · `web-password-get` · `job-list` · `job-get`
+
+The ones that matter most: `get-state` returns the entire `DaemonStateSnapshot` — every session, every worktree path, plus `AppConfig`; `list-sessions` / `list-sessions-live` are the whole sidebar the ticket explicitly wants hidden; `defaults-get` returns `defaults.binaries`, absolute local binary paths, deliberately un-stripped (`RPCWebSocketHandler.swift:275-283`). (`gateway-get` and `web-password-get` are already local-socket-only and unreachable by a remote viewer regardless — listed for completeness, since a default-deny gate should not depend on a second gate holding.)
 
 A viewer gate built on `isWrite` would hand a share-link holder `get-state`. That is the single most consequential correction to the ticket's Option A.
 
 **Allowlisting the method is not enough.** All six safe reads take `session_id` as a *parameter* and trust it — verified at `EngineRouter.swift:280` (`get-session`), `:695` (`list-worktrees`), `:854` (`list-terminals`), `:1079` (`list-links`), `:321` (`get-pr-status`), and `RPCHandlers.swift:617` (`list-artifacts`). None checks ownership, because until now every `/rpc` caller was the owner. So the gate must **pin the param to the grant**, not merely permit the method — six param checks, not six name checks.
 
-**Cost, concretely.** Plumbing: `RPCWebSocketHandler.swift` (capture a role, one new branch), `WebAuth.swift` (`Decision` grows a role; a grant store), `ParityLedger.swift` (a third classification column so the allowlist is enumerated where the parity test can gate it). Three files, maybe 120 lines. The ticket calls Option A's downside "role plumbing end-to-end"; measured, the plumbing is the cheap part. **The audit is the work** — and `ParityLedger` has already done 80% of it by forcing every method to be enumerated in one reviewable place. Extending that ledger with a `viewerReachable` column means a future method cannot silently become viewer-reachable: the build fails until someone classifies it. That is worth more than the gate itself.
+**Cost, concretely.** Plumbing: `RPCWebSocketHandler.swift` (capture a role, one new branch), `WebAuth.swift` (`Decision` grows a role; a grant store), `ParityLedger.swift` (a third classification column so the allowlist is enumerated where the parity test can gate it). Three files, maybe 120 lines. The ticket calls Option A's downside "role plumbing end-to-end"; measured, the plumbing is the cheap part. **The audit is the work** — and `ParityLedger` has already done 80% of it by forcing every method to be enumerated in one reviewable place.
+
+Extending that ledger with a `viewerReachable` column means a future method cannot silently *skip* classification: `RPCLedgerParityTests.ledgerMatchesRegisteredMethods` asserts name-set parity in both directions against the live router, so an unledgered method fails the build. Be precise about what that buys, though — the parity test checks **names only**. The existing `isWrite` classification is validated against the method *name* in `CrowCLITests/ParityGateTests.swift`, never against runtime behaviour, so a row can be classified *wrongly* and CI stays green. The column gates **enumeration, not correctness**. What closes that gap is the exhaustive per-method assertion in the implementation ticket's acceptance criteria, not the ledger itself.
 
 ### 1.2 EventHub
 
@@ -72,11 +78,13 @@ And the window index space is global. The cockpit holds one tmux window per `Ses
 
 That is precisely the ticket's **"Never shareable"** list, violated by the option the ticket recommends.
 
-Fixing it means the daemon must derive, per frame, the window indices belonging to the granted session and reject the rest. Those indices are **mutable** — `new-terminal` allocates, `close-terminal` frees, `recreate-terminal` kills and rebuilds a window (`EngineRouter.swift:947-966`) — so the check must be live, not captured at connect. That is real, ongoing work the ticket does not account for.
+**And `select-window` does not merely switch the view — it replays history.** `TerminalWebSocket.swift:98-106` follows every successful selection with `cockpit.replayData(group:index:)` and yields the result. So the escape above is not only "watch the Manager live": walking `N = 0…` hands the viewer up to 50 000 lines of replayed scrollback *per window*. §5.1 and §5.3 compose into something worse than either states alone, and it is the strongest single argument for never accepting a window selection from the client at all.
+
+Fixing this means the daemon must derive, per frame, the window indices belonging to the granted session and reject the rest. Those indices are **mutable** — `new-terminal` allocates, `close-terminal` frees, `recreate-terminal` kills and rebuilds a window (`EngineRouter.swift:947-966`) — so the check must be live, not captured at connect. That is real, ongoing work the ticket does not account for.
 
 Two more unguarded inputs on the same socket:
 
-- **`resize`** (`TerminalWebSocket.swift:87-92`) is floored at 1×1 and otherwise trusted. `crow-tmux.conf` uses `window-size latest`, so a viewer reshapes the owner's pane while they are working in it.
+- **`resize`** (`TerminalWebSocket.swift:87-92`) is floored at 1×1 and otherwise trusted. See §5.2 — the blast radius is narrower than it first appears, but not zero.
 - **`pty.write`** (`:81-82`) is the keystroke path `-r` does close. It is the *only* one of the three that `-r` closes.
 
 **Net: Option B is cheap to make read-only and expensive to make per-session.** That inversion is the thing needed to choose between B and C.
@@ -85,9 +93,9 @@ Two more unguarded inputs on the same socket:
 
 `WebAuth.swift` is the whole auth model in 236 lines, and three properties matter here.
 
-**Cookie collision.** The owner's cookie is `crow_session=…; HttpOnly; Secure; SameSite=Lax; Path=/` (`:230-232`). A viewer cookie must not reuse that name — an owner who opens a link they minted, to check what the viewer sees, would overwrite their own session, and logging back in would revoke the viewer's. Use a distinct name *and* a distinct `Path` (e.g. `crow_view` at `Path=/view`), so the browser never attaches the viewer cookie to `/rpc` at all. Defence in depth for free: the viewer credential is not merely rejected at `/rpc`, it is not sent.
+**Cookie collision.** The owner's cookie is `crow_session=…; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=<ttl>` (`:230-232`, `ttl` defaulting to 7 days from `SessionStore.init`, `:95`). A viewer cookie must not reuse that name — an owner who opens a link they minted, to check what the viewer sees, would overwrite their own session, and logging back in would revoke the viewer's. Use a distinct name *and* a distinct `Path` (e.g. `crow_view` at `Path=/view`), so the browser never attaches the viewer cookie to `/rpc` at all. Defence in depth for free: the viewer credential is not merely rejected at `/rpc`, it is not sent. And note `Max-Age` is a real field to decide rather than copy — a viewer cookie inheriting the owner's 7-day default would outlive a 24-hour grant, leaving the cookie valid and the grant dead.
 
-**Grants need their own store.** `SessionStore` (`:90-123`) is `[String: Date]` — token to expiry, no metadata field of any kind. A grant needs a session ID, capabilities, and a revoked flag, so this is a new type rather than an extra key. It is also **in-memory and wiped on daemon restart** (`:88-89`). Reusing it means every `crowd` restart silently kills every share link — see [§5.4](#54-grants-and-daemon-restart).
+**Grants need their own store.** `SessionStore` (`:90-123`) is `[String: Date]` — token to expiry, no metadata field of any kind. A grant needs a session ID, capabilities, and a revoked flag, so this is a new type rather than an extra key. It is also **in-memory and wiped on daemon restart** (`:88-89`). Reusing it means every `crowd` restart silently kills every share link — see [§5.4](#54-grants-and-daemon-restart--design-gap-not-a-vulnerability).
 
 **The local-direct fast path is the sharp edge.** `authorize` returns `Decision(isAuthorized: true, reason: "local")` for a loopback peer with no `X-Forwarded-For` **before it ever loads config** (`:174-176`), and `RPCWebSocketHandler` skips `localOnlyDenial` entirely when `localDirect` is true (`:114`). A viewer role must therefore be evaluated *independently of and after* that fast path. If a viewer connection ever presents as local-direct — during local testing, or through the raw-TCP-forwarder case the file itself documents at `:18-20` ("a raw TCP forwarder that omits it would look local") — it is not a viewer, it is a full owner. `Decision` growing a role field, rather than callers making a second call, is what keeps that from being possible to forget.
 
@@ -186,11 +194,20 @@ The ticket invites this explicitly. Six items, roughly in severity order.
 
 ### 5.1 `select-window` escapes the shared session — *high*
 
-Fully described in §1.3. A read-only tmux attach still lets a viewer enumerate every window in the cockpit, including the Manager. This is the gap between what Option B appears to provide and what it provides. Mitigation: live per-frame session→window-index validation, or (better) never accept a window selection from the client at all — Option C.
+Fully described in §1.3. A read-only tmux attach still lets a viewer enumerate every window in the cockpit, including the Manager — and each selection **also replays up to 50 000 lines of that window's scrollback** (`TerminalWebSocket.swift:98-106`), so this row composes with §5.3 rather than sitting beside it. This is the gap between what Option B appears to provide and what it provides. Mitigation: live per-frame session→window-index validation, or (better) never accept a window selection from the client at all — Option C.
 
-### 5.2 `resize` reshapes the owner's pane — *medium*
+### 5.2 `resize` can reshape the owner's pane — *medium, and already partly mitigated*
 
-`TerminalWebSocket.swift:87-92` trusts `rows`/`cols`; `crow-tmux.conf` sets `window-size latest`. A viewer can shrink the window the owner is actively working in. Not data disclosure, but a read-only viewer that can perturb the owner's environment is not read-only. Mitigation: ignore `resize` from viewers and pin their PTY to a fixed geometry.
+`TerminalWebSocket.swift:87-92` floors `rows`/`cols` at 1×1 and otherwise trusts them.
+
+Correcting a plausible misreading first: **`window-size latest` is tmux's default, not something `crow-tmux.conf` sets.** The conf names it only to explain what it is working around (`crow-tmux.conf:196`), and it sets `aggressive-resize on` (`:206`, added for #667) precisely to narrow it — "Size each window from only the clients for which it is the CURRENT window."
+
+So a mitigation already exists and deserves credit: a viewer parked on a **different** window does not drag the owner's geometry. The residual exposure is a viewer on the **same** window — which is reachable by composing §5.1, since `select-window` lets a viewer choose which window that is. Two further qualifications, both from the conf's own comment (`:202-204`):
+
+- The narrowing is **partial under `latest`**: `aggressive-resize` is fully honored under `smallest`/`largest`, and under `latest` it "still narrows which clients a window tracks" rather than eliminating the interaction.
+- The conf pairs it with "app.js's focus-gated resize (only the focused surface sends a resize frame)". **That half is client-side and therefore worth nothing against a viewer**, who controls their own client. Any argument that resize is handled must rest on `aggressive-resize` alone.
+
+Still worth fixing: a read-only viewer that can perturb the owner's environment is not read-only. Mitigation: ignore `resize` frames from viewers entirely and pin their PTY to a fixed geometry — which, like §5.1, Option C gets by construction rather than by gate.
 
 ### 5.3 Scrollback replay versus the daemon's own stripping — *high*
 
