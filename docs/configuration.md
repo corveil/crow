@@ -36,6 +36,7 @@ All persistent state lives under `~/Library/Application Support/crow/` (see `Pac
       "cli": "gh",
       "host": null,
       "customInstructions": "Always run npm test before committing",
+      "reviewBlockingSeverities": ["red"],
       "sessionEnv": {
         "AWS_PROFILE": "dev"
       },
@@ -73,6 +74,7 @@ All persistent state lives under `~/Library/Application Support/crow/` (see `Pac
 - **`excludeReviewRepos`** — repos to hide from the review board (e.g., `["zarf-dev/zarf"]`). Supports `*` wildcards (e.g., `"zarf-dev/*"`). Matching reviews are filtered out from the board, sidebar badge count, and notifications. Editable in Settings → Automation → Reviews.
 - **`excludeTicketRepos`** — repos to hide from the ticket board (e.g., `["zarf-dev/zarf"]`). Supports `*` wildcards (e.g., `"zarf-dev/*"`). Matching issues are filtered out from the board, pipeline counts, and auto-create candidates. Editable in Settings → Automation → Tickets.
 - **`customInstructions`** — optional free-text instructions appended to the session prompt as a `## Custom Instructions` section. Use this for workspace-specific conventions, e.g., "Always run `npm test` before committing" or "Use the auth middleware in `src/middleware/auth.ts` as a pattern."
+- **`reviewBlockingSeverities`** — which `crow-review-pr` finding severities force `gh pr review --request-changes` for this workspace. Any subset of `["red", "yellow", "green"]`; **absent means Crow's default, `["red", "yellow"]`**, not "nothing blocks". At least one severity is required — a workspace where nothing gates the verdict would approve every review, and with the auto-merge watcher on, merge it — so `crow workspace edit` and the Settings form both reject an empty set; `--clear-review-blocking-severities` removes the key to restore the default. Non-blocking findings are still written into the review body; only the verdict changes. Crow renders the policy into the review skill on every launch path (the copied `SKILL.md` for Claude, the inlined prompt for Cursor/Codex/OpenCode/Grok/Antigravity), but this is **advisory**: the agent invokes `gh pr review` itself, so Crow cannot validate that the posted verdict matches. Editable in Settings → Workspaces → Review verdict.
 - **`sessionEnv`** — optional `KEY: VALUE` map exported into every agent launched in this workspace. Read by the `/crow-workspace` skill's setup script as one `KEY=VALUE` per line, split at the first `=` — so neither a key nor a value may contain a newline, a key may not contain `=` (a value may), and a key may not contain whitespace or control characters. `crow workspace` rejects all of these on write; existing config is never re-validated on read. Unlike `gateway`, these values are **not** treated as credentials: they are stored in plain `config.json` and are not stripped from the web Settings payload, so put tokens in a gateway header instead.
 - **`gateway`** — optional AI gateway for this workspace's `claude` launches. See [AI Gateway](#ai-gateway) below.
 - **`ignoreReviewLabels`** — PR labels that hide a review from the board. Exact match, case-insensitive, no wildcards. Editable in Settings → Automation → Reviews.

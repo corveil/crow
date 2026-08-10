@@ -565,6 +565,7 @@ import Testing
         name: "Org", provider: "gitlab", cli: "glab", host: "gitlab.acme.io",
         alwaysInclude: ["acme/api"], autoReviewRepos: ["acme/web"],
         excludeReviewRepos: ["acme/legacy"], customInstructions: "Run make test.",
+        reviewBlockingSeverities: [.red],
         taskProvider: "jira", jiraProjectKey: "PROPS", jiraJQL: "assignee = currentUser()",
         jiraSite: "acme.atlassian.net", jiraStatusMap: ["In Progress": "In Dev"],
         corveilHost: "corveil.acme.io", sessionEnv: ["AWS_PROFILE": "dev"],
@@ -572,6 +573,70 @@ import Testing
     let data = try JSONEncoder().encode(AppConfig(workspaces: [workspace]))
     let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
     #expect(decoded.workspaces[0] == workspace)
+}
+
+// MARK: - Review blocking severities (CROW-963)
+
+@Test func workspaceReviewBlockingSeveritiesRoundTrip() throws {
+    let config = AppConfig(workspaces: [
+        WorkspaceInfo(name: "Org", reviewBlockingSeverities: [.red])
+    ])
+    let data = try JSONEncoder().encode(config)
+    let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+    #expect(decoded.workspaces[0].reviewBlockingSeverities == [.red])
+    #expect(decoded.workspaces[0].effectiveReviewBlockingSeverities == [.red])
+}
+
+@Test func workspaceReviewBlockingSeveritiesDefaultsNilWhenKeyMissing() throws {
+    // The whole safety property of CROW-963: a config written before the setting
+    // existed must resolve to today's behaviour (red + yellow), NOT to an empty
+    // blocking set, which would approve every review.
+    let json = """
+    {"workspaces": [{"id": "11111111-2222-3333-4444-555555555555", "name": "Org", "provider": "github", "cli": "gh"}]}
+    """.data(using: .utf8)!
+    let config = try JSONDecoder().decode(AppConfig.self, from: json)
+    #expect(config.workspaces[0].reviewBlockingSeverities == nil)
+    #expect(config.workspaces[0].effectiveReviewBlockingSeverities == [.red, .yellow])
+}
+
+@Test func workspaceReviewBlockingSeveritiesUnsetKeyIsOmittedOnSave() throws {
+    // `--clear-review-blocking-severities` stores nil, and nil must encode as an
+    // ABSENT key rather than `null`: a null would have to decode back to
+    // something, and "explicitly nothing" is exactly the state that means approve
+    // every review. Same reason `crow agents set --clear` removes its key.
+    let data = try JSONEncoder().encode(AppConfig(workspaces: [WorkspaceInfo(name: "Org")]))
+    let text = String(data: data, encoding: .utf8) ?? ""
+    #expect(!text.contains("reviewBlockingSeverities"))
+}
+
+@Test func workspaceReviewBlockingSeveritiesDecodeIsLenient() throws {
+    // A hand-edited config must still LOAD. A throwing decode here would make
+    // ConfigStore.loadConfig return nil, at which point every writer's
+    // `?? AppConfig()` fallback rewrites config.json with defaults and takes
+    // every workspace, job and gateway with it. Unknown values are dropped and an
+    // empty result falls back to the default; rejecting bad input is the write
+    // path's job, not the decoder's.
+    func decodeSeverities(_ literal: String) throws -> WorkspaceInfo {
+        let json = """
+        {"workspaces": [{"id": "11111111-2222-3333-4444-555555555555", "name": "Org",
+          "provider": "github", "cli": "gh", "reviewBlockingSeverities": \(literal)}]}
+        """.data(using: .utf8)!
+        return try JSONDecoder().decode(AppConfig.self, from: json).workspaces[0]
+    }
+
+    // Unknown severity dropped, known one kept.
+    #expect(try decodeSeverities(#"["red", "chartreuse"]"#).reviewBlockingSeverities == [.red])
+    // Case and padding tolerated — the web and CLI both normalize, but a
+    // hand-edited file might not.
+    #expect(try decodeSeverities(#"[" RED ", "Yellow"]"#).reviewBlockingSeverities == [.red, .yellow])
+    // Order canonicalized so `[yellow, red]` compares equal to the default.
+    #expect(try decodeSeverities(#"["yellow", "red"]"#).reviewBlockingSeverities == [.red, .yellow])
+    // An empty list, or one that becomes empty, means "unset" — never "nothing
+    // blocks".
+    #expect(try decodeSeverities("[]").reviewBlockingSeverities == nil)
+    #expect(try decodeSeverities("[]").effectiveReviewBlockingSeverities == [.red, .yellow])
+    #expect(try decodeSeverities(#"["mauve"]"#).reviewBlockingSeverities == nil)
+    #expect(try decodeSeverities(#"["mauve"]"#).effectiveReviewBlockingSeverities == [.red, .yellow])
 }
 
 // MARK: - Provider domains (CROW-809)

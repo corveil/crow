@@ -473,6 +473,7 @@ public enum ParityLedger {
         .field("workspaces[].autoReviewRepos", read: "workspace get", write: "workspace edit"),
         .field("workspaces[].excludeReviewRepos", read: "workspace get", write: "workspace edit"),
         .field("workspaces[].customInstructions", read: "workspace get", write: "workspace edit"),
+        .field("workspaces[].reviewBlockingSeverities", read: "workspace get", write: "workspace edit"),
         .field("workspaces[].taskProvider", read: "workspace get", write: "workspace edit"),
         .field("workspaces[].jiraProjectKey", read: "workspace get", write: "workspace edit"),
         .field("workspaces[].jiraJQL", read: "workspace get", write: "workspace edit"),

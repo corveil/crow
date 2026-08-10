@@ -3,6 +3,14 @@ import CrowCore
 import CrowIPC
 import Foundation
 
+/// Lets `--review-blocking-severity` parse straight into the model enum
+/// (CROW-963), the same way `AgentCommands` does for `SessionKind`:
+/// ArgumentParser derives `init?(argument:)` from the `String` raw value and —
+/// because `ReviewSeverity` is `CaseIterable` — `allValueStrings`, so `red`,
+/// `yellow`, `green` appear in `--help` and in the rejection message. A typo is a
+/// parse error rather than a value that silently stops blocking.
+extension ReviewSeverity: @retroactive ExpressibleByArgument {}
+
 /// The `WorkspaceInfo` field flags shared by `crow workspace add` and
 /// `crow workspace edit` (CROW-809).
 ///
@@ -86,6 +94,13 @@ struct WorkspaceFieldArgs: ParsableArguments {
     @Flag(name: .customLong("clear-session-env"), help: "Drop every session env var")
     var clearSessionEnv: Bool = false
 
+    @Option(name: .customLong("review-blocking-severity"), parsing: .singleValue,
+            help: "Review finding severity that forces --request-changes (repeatable; replaces the whole list; default red + yellow)")
+    var reviewBlockingSeverities: [ReviewSeverity] = []
+    @Flag(name: .customLong("clear-review-blocking-severities"),
+          help: "Restore the default review blocking set (red + yellow)")
+    var clearReviewBlockingSeverities: Bool = false
+
     /// The `--jira-status-*` flags paired with the `TicketStatus` raw value each
     /// one writes, so the mapping is stated once.
     private var jiraStatusFlags: [(status: TicketStatus, value: String?)] {
@@ -105,10 +120,10 @@ struct WorkspaceFieldArgs: ParsableArguments {
             || jiraSite != nil || jiraProjectKey != nil || jiraJQL != nil
             || corveilHost != nil || customInstructions != nil || customInstructionsFile != nil
             || !alwaysInclude.isEmpty || !autoReviewRepos.isEmpty || !excludeReviewRepos.isEmpty
-            || !sessionEnv.isEmpty
+            || !sessionEnv.isEmpty || !reviewBlockingSeverities.isEmpty
             || jiraStatusFlags.contains { $0.value != nil }
             || clearAlwaysInclude || clearAutoReviewRepos || clearExcludeReviewRepos
-            || clearJiraStatusMap || clearSessionEnv
+            || clearJiraStatusMap || clearSessionEnv || clearReviewBlockingSeverities
     }
 
     func validate() throws {
@@ -160,6 +175,17 @@ struct WorkspaceFieldArgs: ParsableArguments {
             params["session_env"] = .object(WorkspaceFieldArgs.parseSessionEnv(sessionEnv))
         }
         if clearSessionEnv { params["clear_session_env"] = .bool(true) }
+
+        // Deduped and canonicalized here so `--review-blocking-severity yellow
+        // --review-blocking-severity red` and the reverse produce one stored
+        // order, and a repeated flag isn't stored twice (CROW-963).
+        if !reviewBlockingSeverities.isEmpty {
+            params["review_blocking_severities"] = .array(
+                ReviewSeverity.canonicalize(reviewBlockingSeverities).map { .string($0.rawValue) })
+        }
+        if clearReviewBlockingSeverities {
+            params["clear_review_blocking_severities"] = .bool(true)
+        }
         return params
     }
 

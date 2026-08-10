@@ -153,6 +153,7 @@ struct ParityGateTests {
                     autoReviewRepos: ["owner/repo"],
                     excludeReviewRepos: ["owner/repo"],
                     customInstructions: "probe",
+                    reviewBlockingSeverities: [.red],
                     taskProvider: "jira",
                     jiraProjectKey: "PROBE",
                     jiraJQL: "project = PROBE",

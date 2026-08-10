@@ -85,6 +85,38 @@ for skill in \
     require_frontmatter "Resources/${skill}-SKILL.md.template" "$skill"
 done
 
+# The review skill's two halves must stay byte-identical: dev builds read
+# `skills/crow-review-pr/SKILL.md`, release builds scaffold from
+# `Resources/crow-review-pr-SKILL.md.template`, and `Scaffolder.bundledReviewSkill()`
+# falls through from the first to the second. An edit landed in only one half
+# ships a different skill to installed builds with nothing to catch it — which is
+# how the CROW-963 verdict-policy placeholders could have gone live for dev
+# builds only.
+#
+# Scoped to crow-review-pr deliberately. The other four skills have the same
+# two-halves structure and deserve the same gate, but crow-batch-workspace is
+# currently drifted (`settings.json` vs `settings.local.json`) and fixing that is
+# a separate change, not this ticket's.
+review_left="skills/crow-review-pr/SKILL.md"
+review_right="Resources/crow-review-pr-SKILL.md.template"
+if [ -f "$review_left" ] && [ -f "$review_right" ] && ! diff -q "$review_left" "$review_right" >/dev/null; then
+    echo "DRIFT: $review_left and $review_right differ — an edit must land in both halves" >&2
+    diff -u "$review_right" "$review_left" | head -40 >&2
+    fail=1
+fi
+
+# The review skill's verdict policy is rendered at launch by
+# `ReviewVerdictPolicy.expand` (CROW-963). If a placeholder is dropped or
+# renamed, the corresponding block silently reverts to whatever static text
+# replaced it — and the per-workspace setting stops reaching the agent.
+for placeholder in \
+    "{{CROW_REVIEW_VERDICT_RULE}}" \
+    "{{CROW_REVIEW_VERDICT_TABLE}}" \
+    "{{CROW_REVIEW_VERDICT_NOTES}}"; do
+    require "skills/crow-review-pr/SKILL.md" "$placeholder"
+    require "Resources/crow-review-pr-SKILL.md.template" "$placeholder"
+done
+
 if [ "$fail" -ne 0 ]; then
     echo "check-workspace-custom-instructions: FAILED (see #683)" >&2
     exit 1

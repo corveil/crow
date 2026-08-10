@@ -87,10 +87,24 @@ public enum CrowAttribution {
     /// Default ticket footer (Claude Code) — backward-compatible alias.
     public static var ticketMarkdownLink: String { ticketMarkdownLink() }
 
-    /// Substitute shell env expressions, legacy `{{…}}` placeholder, and `via Claude Code` segments.
-    public static func expandSkillBody(_ skillBody: String, agentKind: AgentKind) -> String {
+    /// Substitute shell env expressions, legacy `{{…}}` placeholder, `via Claude
+    /// Code` segments, and the review-verdict policy blocks.
+    ///
+    /// `reviewBlocking` defaults to ``ReviewSeverity/defaultBlocking`` so every
+    /// existing call site keeps rendering today's verdict rule, and — more
+    /// importantly — so no `{{CROW_REVIEW_VERDICT_*}}` placeholder can reach disk
+    /// through a path that forgot to pass a policy (CROW-963). The review path
+    /// pre-expands with the workspace's own set before its Claude/inlined branches
+    /// diverge; `ReviewVerdictPolicy.expand` is idempotent, so this second pass is
+    /// a no-op there rather than a conflicting re-render.
+    public static func expandSkillBody(
+        _ skillBody: String,
+        agentKind: AgentKind,
+        reviewBlocking: [ReviewSeverity] = ReviewSeverity.defaultBlocking
+    ) -> String {
         let name = agentDisplayName(for: agentKind)
-        return skillBody
+        let policyExpanded = ReviewVerdictPolicy.expand(skillBody, blocking: reviewBlocking)
+        return policyExpanded
             .replacingOccurrences(of: shellAgentDisplayNameExpression, with: name)
             .replacingOccurrences(of: "$\(agentDisplayNameEnvironmentKey)", with: name)
             .replacingOccurrences(of: skillAgentPlaceholder, with: name)

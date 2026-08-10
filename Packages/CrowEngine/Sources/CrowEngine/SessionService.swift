@@ -2881,6 +2881,18 @@ public final class SessionService {
         // — Claude reads a `/crow-review-pr` slash command; Cursor reads the
         // expanded SKILL.md body (#431).
         let reviewAgentKind = appState.agentKind(for: .review)
+        // Which severities gate this review's verdict (CROW-963). Resolved by repo
+        // slug, NOT by worktree path: a review clone lives at
+        // `{devRoot}/crow-reviews/…`, whose first path component matches no
+        // workspace — the same trap that silently unset the gateway for every
+        // review in CROW-891. Sampled here, on the main actor and before the
+        // `await`s, for the same reason `reviewAgentKind` is: a config save
+        // landing mid-clone would otherwise render a policy the session was never
+        // launched under. Nil (no workspace claims the repo, or it never set the
+        // field) means Crow's default, not "nothing blocks".
+        let reviewBlocking = ConfigStore.loadConfig(devRoot: devRoot)?
+            .workspace(forRepoSlug: repoSlug)?
+            .effectiveReviewBlockingSeverities ?? ReviewSeverity.defaultBlocking
         let env = ShellEnvironment.shared.env
 
         // Fetch PR metadata via the GitHub CodeBackend (ADR 0005) before
@@ -2959,6 +2971,7 @@ public final class SessionService {
                     devRoot: devRoot,
                     env: env,
                     reviewAgentKind: reviewAgentKind,
+                    reviewBlocking: reviewBlocking,
                     prMetadata: prMetadata
                 )
             }.value
@@ -3353,6 +3366,7 @@ public final class SessionService {
         devRoot: String,
         env: [String: String],
         reviewAgentKind: AgentKind,
+        reviewBlocking: [ReviewSeverity] = ReviewSeverity.defaultBlocking,
         prMetadata: PRMetadata
     ) async throws -> ReviewClonePrep {
         let prTitle = prMetadata.title
@@ -3532,12 +3546,24 @@ public final class SessionService {
             Self.stripCursorConfigFromReviewClone(clonePath: clonePath)
         }
 
+        // Render the workspace's verdict policy into the SKILL body ONCE, here,
+        // before the two launch paths diverge (CROW-963). Both consumers below
+        // take `policySkillBody`: the inlined prompt (Cursor/OpenCode/Codex/Grok/
+        // Antigravity, via `buildReviewPrompt`) and the copied `.claude/skills/…/
+        // SKILL.md` (Claude). Hooking only the file copy would leave every
+        // inlining agent on the default rule — and `agentsByKind.review` is
+        // commonly Cursor, so that failure mode is the normal case, not an edge
+        // one. `expandSkillBody` runs the same expansion again downstream with the
+        // default set; it is idempotent, so that pass finds no placeholders left.
+        let policySkillBody = ReviewVerdictPolicy.expand(
+            Scaffolder.bundledReviewSkill(), blocking: reviewBlocking)
+
         // Write review prompt file into the clone directory. Write failures
         // MUST surface (CROW-439): the launcher's prompt-file shell substitution
         // substitution will yield an empty string and the agent will idle if
         // the file isn't there.
         let promptPath = (clonePath as NSString).appendingPathComponent(".crow-review-prompt.md")
-        let reviewPrompt = Self.buildReviewPrompt(prURL: prURL, prTitle: prTitle, repoSlug: repoSlug, prNumber: prNumber, agentKind: reviewAgentKind)
+        let reviewPrompt = Self.buildReviewPrompt(prURL: prURL, prTitle: prTitle, repoSlug: repoSlug, prNumber: prNumber, agentKind: reviewAgentKind, skillBody: policySkillBody)
         try reviewPrompt.write(toFile: promptPath, atomically: true, encoding: .utf8)
         guard fm.fileExists(atPath: promptPath) else {
             throw NSError(
@@ -3550,11 +3576,11 @@ public final class SessionService {
         // Copy the crow-review-pr skill into the clone's .claude/skills/ so Claude Code can find it.
         // Substitute `{{CROW_AGENT_DISPLAY_NAME}}` before writing so the attribution footer is a
         // literal string regardless of how the agent quotes the body (issue #447 — single-quoted
-        // heredocs in gh/glab calls don't expand shell variables).
+        // heredocs in gh/glab calls don't expand shell variables). The verdict policy is already
+        // rendered into `policySkillBody` above (CROW-963).
         let cloneSkillsDir = (clonePath as NSString).appendingPathComponent(".claude/skills/crow-review-pr")
         try? fm.createDirectory(atPath: cloneSkillsDir, withIntermediateDirectories: true)
-        let skillContent = Scaffolder.bundledReviewSkill()
-        let resolvedSkillContent = CrowAttribution.expandSkillBody(skillContent, agentKind: reviewAgentKind)
+        let resolvedSkillContent = CrowAttribution.expandSkillBody(policySkillBody, agentKind: reviewAgentKind)
         try? resolvedSkillContent.write(
             toFile: (cloneSkillsDir as NSString).appendingPathComponent("SKILL.md"),
             atomically: true, encoding: .utf8
@@ -3831,7 +3857,20 @@ public final class SessionService {
     /// `Scaffolder.bundledReviewSkill()` (which falls back to a trivial stub
     /// in test environments where the repo path can't be resolved from
     /// `ProcessInfo.processInfo.arguments[0]`).
-    nonisolated static func buildReviewPrompt(prURL: String, prTitle: String, repoSlug: String, prNumber: Int, agentKind: AgentKind) -> String {
+    ///
+    /// `skillBody` is a parameter rather than a fresh `bundledReviewSkill()` read
+    /// so the caller can hand in a body whose verdict policy is already rendered
+    /// for the session's workspace (CROW-963). It defaults to the bundled body
+    /// (which renders the default policy downstream), keeping existing callers
+    /// and tests unchanged.
+    nonisolated static func buildReviewPrompt(
+        prURL: String,
+        prTitle: String,
+        repoSlug: String,
+        prNumber: Int,
+        agentKind: AgentKind,
+        skillBody: String? = nil
+    ) -> String {
         switch agentKind {
         case .cursor, .openCode, .codex, .grok, .antigravity:
             // Cursor, OpenCode, Codex, Grok, and Antigravity all lack a Crow
@@ -3843,8 +3882,12 @@ public final class SessionService {
             // review round 2 for Codex; #861 review round 5 for Grok; Antigravity
             // wired the same way, #902). `agentKind` is threaded through so the
             // posted review footer names the right agent.
+            //
+            // This is the branch that carries the per-workspace verdict policy for
+            // most installs (CROW-963) — the copied SKILL.md below it is read only
+            // by Claude.
             return cursorReviewPrompt(
-                skillBody: Scaffolder.bundledReviewSkill(),
+                skillBody: skillBody ?? Scaffolder.bundledReviewSkill(),
                 prURL: prURL,
                 agentKind: agentKind
             )

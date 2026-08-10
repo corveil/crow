@@ -495,6 +495,21 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
     public var autoReviewRepos: [String] // repos where review requests auto-create a review session
     public var excludeReviewRepos: [String] // repos whose review requests are hidden from the review board
     public var customInstructions: String? // free-text instructions appended to session prompts
+    /// Which `crow-review-pr` finding severities force `gh pr review
+    /// --request-changes` for this workspace (CROW-963).
+    ///
+    /// `nil` — the unset state — means Crow's default, ``ReviewSeverity/defaultBlocking``
+    /// (`red` + `yellow`), **not** "nothing blocks". An install that never touches
+    /// this setting must see exactly today's behaviour, so `--clear-…` removes the
+    /// key rather than storing an empty list. An explicitly empty list is rejected
+    /// at every write boundary (CLI, RPC, web): a workspace where nothing gates the
+    /// verdict approves every review, and with `autoMergeWatcherEnabled` on, merges
+    /// it too. Decoding stays lenient — see `init(from:)`.
+    ///
+    /// **Advisory only.** The review agent runs `gh pr review` itself; Crow never
+    /// sees the call and cannot validate the posted verdict against this policy.
+    /// The field configures a prompt, not a gate.
+    public var reviewBlockingSeverities: [ReviewSeverity]?
     /// Optional AI gateway. When set, `claude` launches into this workspace
     /// inherit `ANTHROPIC_BASE_URL`/`ANTHROPIC_CUSTOM_HEADERS` derived from it;
     /// when nil, those env vars are explicitly unset so a global `~/.zshrc`
@@ -556,6 +571,12 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
         taskProvider ?? provider
     }
 
+    /// The severities that gate this workspace's review verdicts, resolving the
+    /// unset state to Crow's default rather than to "nothing blocks" (CROW-963).
+    public var effectiveReviewBlockingSeverities: [ReviewSeverity] {
+        reviewBlockingSeverities ?? ReviewSeverity.defaultBlocking
+    }
+
     public init(
         id: UUID = UUID(),
         name: String,
@@ -566,6 +587,7 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
         autoReviewRepos: [String] = [],
         excludeReviewRepos: [String] = [],
         customInstructions: String? = nil,
+        reviewBlockingSeverities: [ReviewSeverity]? = nil,
         taskProvider: String? = nil,
         jiraProjectKey: String? = nil,
         jiraJQL: String? = nil,
@@ -584,6 +606,7 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
         self.autoReviewRepos = autoReviewRepos
         self.excludeReviewRepos = excludeReviewRepos
         self.customInstructions = customInstructions
+        self.reviewBlockingSeverities = reviewBlockingSeverities.map(ReviewSeverity.canonicalize)
         self.taskProvider = taskProvider
         self.jiraProjectKey = jiraProjectKey
         self.jiraJQL = jiraJQL
@@ -605,6 +628,22 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
         autoReviewRepos = try container.decodeIfPresent([String].self, forKey: .autoReviewRepos) ?? []
         excludeReviewRepos = try container.decodeIfPresent([String].self, forKey: .excludeReviewRepos) ?? []
         customInstructions = try container.decodeIfPresent(String.self, forKey: .customInstructions)
+        // Decoded as `[String]`, never as `[ReviewSeverity]` (CROW-963). A direct
+        // enum decode throws on an unrecognized value, and a throwing
+        // `WorkspaceInfo` decode makes `ConfigStore.loadConfig` return nil — at
+        // which point every writer's `?? AppConfig()` fallback rewrites
+        // config.json with defaults, taking every workspace, job and gateway with
+        // it. So: drop unknown values, canonicalize, and treat an empty result as
+        // unset (the default set). Rejecting an empty list is the *write* path's
+        // job — a hand-edited config must still load.
+        reviewBlockingSeverities = try container
+            .decodeIfPresent([String].self, forKey: .reviewBlockingSeverities)
+            .map { raw in
+                ReviewSeverity.canonicalize(raw.compactMap {
+                    ReviewSeverity(rawValue: $0.trimmingCharacters(in: .whitespaces).lowercased())
+                })
+            }
+            .flatMap { $0.isEmpty ? nil : $0 }
         taskProvider = try container.decodeIfPresent(String.self, forKey: .taskProvider)
         jiraProjectKey = try container.decodeIfPresent(String.self, forKey: .jiraProjectKey)
         jiraJQL = try container.decodeIfPresent(String.self, forKey: .jiraJQL)
@@ -620,6 +659,7 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
     // ignores. That is how `sessionEnv` was being dropped (CROW-809).
     private enum CodingKeys: String, CodingKey {
         case id, name, provider, cli, host, alwaysInclude, autoReviewRepos, excludeReviewRepos, customInstructions
+        case reviewBlockingSeverities
         case taskProvider, jiraProjectKey, jiraJQL, jiraSite, jiraStatusMap, corveilHost, sessionEnv, gateway
     }
 

@@ -93,12 +93,7 @@ ruff check . 2>&1 | head -50
 
 Every Crow review must end with a verdict — **exactly one** of the two actions below. Comment-only reviews (`--comment` / `event: COMMENT`) are **not permitted**: they are ambiguous, don't move the PR forward, and effectively no-op the review.
 
-Verdict rule — **only a review whose findings are entirely Green (or empty) may approve**. Any Yellow or Red finding forces `--request-changes`.
-
-- **Approve** (`--approve`): no Red, no Yellow, only Green or no findings.
-- **Request Changes** (`--request-changes`): any Red **or** any Yellow finding.
-
-Yellow findings are "should fix" — the implementing agent will address them as soon as it sees the request-changes verdict, so rejecting on Yellow lands them in the same round trip instead of a follow-up. Comment-only reviews remain forbidden; if uncertain, request changes.
+{{CROW_REVIEW_VERDICT_RULE}}
 
 Post the review using exactly one of these two flags:
 
@@ -131,9 +126,7 @@ Use this format for the review:
 ### Summary Table
 | Color  | Meaning      | Verdict effect            |
 |--------|--------------|---------------------------|
-| Red    | Must fix     | Request changes           |
-| Yellow | Should fix   | Request changes           |
-| Green  | Consider     | Approve allowed           |
+{{CROW_REVIEW_VERDICT_TABLE}}
 
 **Recommendation:** [Approve | Request Changes] — driven by [N Red, M Yellow, K Green] findings.
 
@@ -163,7 +156,6 @@ See `.claude/skills/crow-attribution/FOOTER.md` for the full rules. The review b
 - Include file:line references for specific issues
 - Don't include sensitive information in the review
 - If tests fail, note which ones and why
-- Use `--approve` only when findings are entirely Green or empty (no Red, no Yellow).
-- Use `--request-changes` when there is any Red or Yellow finding.
+{{CROW_REVIEW_VERDICT_NOTES}}
 - **Never** use `--comment` — a Crow review must always be a verdict. If you would have commented, request changes instead.
 - All `gh` and `git` commands require `dangerouslyDisableSandbox: true`
