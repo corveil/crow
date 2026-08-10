@@ -67,6 +67,8 @@ import CrowCore
         #expect(result.behindBy == 2)
         #expect(result.remoteSha == "f56939d")
         #expect(result.updateCommand == "git -C /tmp/crow pull && make install")
+        #expect(result.compareUrl ==
+            "https://github.com/corveil/crow/compare/abc1234567890...f56939ddeadbeefdeadbeefdeadbeefdeadbeef")
     }
 
     @Test func behindByReportsUpdateCommand() async {
@@ -153,6 +155,26 @@ import CrowCore
     @Test func shortDateTrimsTime() {
         #expect(VersionUpdateClient.shortDate("2026-08-05T12:34:56Z") == "2026-08-05")
     }
+
+    @Test func githubCompareURLBuildsLink() {
+        let url = VersionUpdateClient.githubCompareURL(
+            localSha: "abc1234567890",
+            remoteSha: "f56939ddeadbeefdeadbeefdeadbeefdeadbeef",
+            behindBy: 2)
+        #expect(url == "https://github.com/corveil/crow/compare/abc1234567890...f56939ddeadbeefdeadbeefdeadbeefdeadbeef")
+    }
+
+    @Test func githubCompareURLNilWhenNotBehind() {
+        #expect(VersionUpdateClient.githubCompareURL(
+            localSha: "abc1234", remoteSha: "def5678", behindBy: 0) == nil)
+    }
+
+    @Test func githubCompareURLNilForInvalidSha() {
+        #expect(VersionUpdateClient.githubCompareURL(
+            localSha: "dev", remoteSha: "abc1234", behindBy: 1) == nil)
+        #expect(VersionUpdateClient.githubCompareURL(
+            localSha: "abc1234", remoteSha: nil, behindBy: 1) == nil)
+    }
 }
 
 @Suite struct VersionUpdateRPCTests {
@@ -165,5 +187,19 @@ import CrowCore
         #expect(throws: RPCError.self) {
             _ = try VersionUpdateRPC.patchIntervalHours(["interval_hours": .int(0)])
         }
+    }
+
+    @Test func statusJSONIncludesCompareURL() {
+        let status = VersionUpdateStatus(
+            state: .behind,
+            localVersion: "0.1.0",
+            localSha: "abc1234",
+            buildDate: "2026-08-05",
+            remoteSha: "def5678",
+            behindBy: 2,
+            compareUrl: "https://github.com/corveil/crow/compare/abc...def")
+        let json = VersionUpdateRPC.statusJSON(status)
+        #expect(json.objectValue?["compare_url"]?.stringValue ==
+            "https://github.com/corveil/crow/compare/abc...def")
     }
 }

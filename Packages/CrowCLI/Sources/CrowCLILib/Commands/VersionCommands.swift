@@ -98,6 +98,9 @@ enum VersionCheck {
             if let behind = obj["behind_by"]?.intValue {
                 print("→ \(behind) commit\(behind == 1 ? "" : "s") behind")
             }
+            if let compareUrl = obj["compare_url"]?.stringValue {
+                print("See changes:  \(compareUrl)")
+            }
             if let cmd = obj["update_command"]?.stringValue {
                 print("")
                 print("Update:  \(cmd)")

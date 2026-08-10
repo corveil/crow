@@ -80,6 +80,8 @@ public struct VersionUpdateStatus: Codable, Sendable, Equatable {
     public var behindBy: Int?
     public var aheadBy: Int?
     public var updateCommand: String?
+    /// GitHub compare URL between the installed build and upstream `main`.
+    public var compareUrl: String?
     /// Human-readable reason when `state == .unknown`.
     public var reason: String?
     /// Epoch milliseconds when this result was produced.
@@ -95,6 +97,7 @@ public struct VersionUpdateStatus: Codable, Sendable, Equatable {
         behindBy: Int? = nil,
         aheadBy: Int? = nil,
         updateCommand: String? = nil,
+        compareUrl: String? = nil,
         reason: String? = nil,
         checkedAtMs: Int64? = nil
     ) {
@@ -107,6 +110,7 @@ public struct VersionUpdateStatus: Codable, Sendable, Equatable {
         self.behindBy = behindBy
         self.aheadBy = aheadBy
         self.updateCommand = updateCommand
+        self.compareUrl = compareUrl
         self.reason = reason
         self.checkedAtMs = checkedAtMs
     }

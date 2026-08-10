@@ -102,7 +102,7 @@ public enum VersionUpdateClient {
             remoteCommit = await fetchBranchHead(
                 build: build, authToken: authToken, transport: transport)
         }
-        let remoteSha = remoteCommit?.sha
+        let remoteSha = remoteCommit.map { displaySha($0.sha) }
         let remoteDate = remoteCommit?.date
 
         if behindBy > 0 || status == "behind" || status == "diverged" {
@@ -131,6 +131,8 @@ public enum VersionUpdateClient {
                 behindBy: aheadBy,
                 aheadBy: behindBy,
                 updateCommand: updateCommand,
+                compareUrl: githubCompareURL(
+                    localSha: localSha, remoteSha: remoteCommit?.sha, behindBy: aheadBy),
                 checkedAtMs: base.checkedAtMs
             )
         }
@@ -160,6 +162,20 @@ public enum VersionUpdateClient {
         return request
     }
 
+    /// `https://github.com/corveil/crow/compare/{local}...{remote}` when both SHAs
+    /// are known and the build is behind upstream.
+    static func githubCompareURL(localSha: String, remoteSha: String?, behindBy: Int) -> String? {
+        guard behindBy > 0 else { return nil }
+        let local = localSha.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard let remoteRaw = remoteSha else { return nil }
+        let remote = remoteRaw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !local.isEmpty, local != "dev", !remote.isEmpty else { return nil }
+        let hex = #"^[0-9a-f]{7,40}$"#
+        guard local.range(of: hex, options: .regularExpression) != nil,
+              remote.range(of: hex, options: .regularExpression) != nil else { return nil }
+        return "https://github.com/\(repository)/compare/\(local)...\(remote)"
+    }
+
     private static func unknown(_ base: VersionUpdateStatus, reason: String) -> VersionUpdateStatus {
         VersionUpdateStatus(
             state: .unknown,
@@ -173,6 +189,10 @@ public enum VersionUpdateClient {
 
     private static func currentTimeMs() -> Int64 {
         Int64(Date().timeIntervalSince1970 * 1000)
+    }
+
+    private static func displaySha(_ fullSha: String) -> String {
+        String(fullSha.prefix(7))
     }
 
     private struct RemoteCommit {
@@ -208,7 +228,7 @@ public enum VersionUpdateClient {
         let author = commit?["author"] as? [String: Any]
         let rawDate = (committer?["date"] as? String) ?? (author?["date"] as? String)
         let date = rawDate.map(shortDate)
-        return RemoteCommit(sha: String(sha.prefix(7)), date: date)
+        return RemoteCommit(sha: sha, date: date)
     }
 
     /// `2026-08-05T12:34:56Z` → `2026-08-05`.
@@ -241,6 +261,7 @@ public enum VersionUpdateRPC {
             "behind_by": status.behindBy.map { .int($0) } ?? .null,
             "ahead_by": status.aheadBy.map { .int($0) } ?? .null,
             "update_command": status.updateCommand.map { .string($0) } ?? .null,
+            "compare_url": status.compareUrl.map { .string($0) } ?? .null,
             "reason": status.reason.map { .string($0) } ?? .null,
             "checked_at_ms": status.checkedAtMs.map { .int(Int($0)) } ?? .null,
         ])

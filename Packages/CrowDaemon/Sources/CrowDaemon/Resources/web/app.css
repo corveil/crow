@@ -51,6 +51,14 @@ body {
 }
 .update-banner[hidden] { display: none; }
 .update-banner-text { flex: 1 1 auto; }
+.update-banner-compare-link {
+  flex: 0 0 auto;
+  color: var(--gold);
+  text-decoration: underline;
+  font-size: 13px;
+  white-space: nowrap;
+}
+.update-banner-compare-link[hidden] { display: none; }
 .update-banner-dismiss {
   flex: 0 0 auto;
   border: none;
