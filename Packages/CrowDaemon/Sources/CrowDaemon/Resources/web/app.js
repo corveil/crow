@@ -266,6 +266,11 @@ function syncUpdateBannerLayout(banner) {
 function hideVersionUpdateBanner(banner, text) {
   if (!banner) return;
   if (text) text.textContent = '';
+  const compareLink = banner.querySelector('.update-banner-compare-link');
+  if (compareLink) {
+    compareLink.hidden = true;
+    compareLink.removeAttribute('href');
+  }
   banner.hidden = true;
   syncUpdateBannerLayout(banner);
 }
@@ -274,6 +279,7 @@ function renderVersionUpdateBanner(status) {
   const banner = document.getElementById('update-banner');
   if (!banner) return;
   const text = banner.querySelector('.update-banner-text');
+  const compareLink = banner.querySelector('.update-banner-compare-link');
   const dismiss = banner.querySelector('.update-banner-dismiss');
   if (!text || !dismiss) return;
 
@@ -313,6 +319,15 @@ function renderVersionUpdateBanner(status) {
     + n + ' commit' + (n === 1 ? '' : 's') + ' behind origin/main.'
     + (status.update_command ? (' Update: ' + status.update_command) : '');
   if (text.textContent !== msg) text.textContent = msg;
+  if (compareLink) {
+    if (status.compare_url && n > 0) {
+      compareLink.href = status.compare_url;
+      compareLink.hidden = false;
+    } else {
+      compareLink.hidden = true;
+      compareLink.removeAttribute('href');
+    }
+  }
   syncUpdateBannerLayout(banner);
 }
 

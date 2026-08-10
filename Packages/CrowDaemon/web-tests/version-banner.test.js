@@ -16,6 +16,7 @@ const epilogue = `
     return b && window.getComputedStyle(b).display !== 'none';
   },
   dismiss() { document.querySelector('.update-banner-dismiss').click(); },
+  compareLink() { return document.querySelector('.update-banner-compare-link'); },
 };
 `;
 
@@ -51,6 +52,7 @@ function load(storageWrap) {
      </head><body>
        <div id="update-banner" class="update-banner" hidden role="status">
          <span class="update-banner-text"></span>
+         <a class="update-banner-compare-link" hidden href="#" target="_blank" rel="noopener noreferrer">See changes</a>
          <button type="button" class="update-banner-dismiss" aria-label="Dismiss update notice">×</button>
        </div>
      </body></html>`,
@@ -180,6 +182,18 @@ const check = (name, cond) => {
     T.setRpc(() => Promise.reject(new Error('rpc failed')));
     await T.refresh();
     check('hidden after RPC failure', !T.visible());
+  }
+
+  console.log('\ncompare link shown when compare_url present:');
+  {
+    const { T } = load(makeStorage());
+    const url = 'https://github.com/corveil/crow/compare/abc...def';
+    T.render({ state: 'behind', behind_by: 2, remote_sha: 'def5678', compare_url: url });
+    const link = T.compareLink();
+    check('compare link visible', link && !link.hidden);
+    check('compare link href', link && link.getAttribute('href') === url);
+    T.render({ state: 'behind', behind_by: 2, remote_sha: 'def5678' });
+    check('compare link hidden without url', link && link.hidden);
   }
 
   console.log(`\n${pass} passed, ${fail} failed`);
