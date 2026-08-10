@@ -177,20 +177,19 @@ struct OpenAICodexAgentTests {
     }
 
     @Test func autoLaunchCommandQuotesPromptPathWithSpaces() {
-        // #843 review round 7: a worktree/devRoot with a space must not split
-        // `$(cat …)` into multiple args (→ empty prompt, idle session). The path
-        // inside the substitution is single-quoted.
+        // #843 review round 7 / #957: a worktree/devRoot with a space must not
+        // split the prompt read. The path inside the substitution is single-quoted.
         let job = Session(name: "job", kind: .job, agentKind: .codex)
         let jobCmd = agent.autoLaunchCommand(
             session: job, worktreePath: "/tmp/my worktree",
             remoteControlEnabled: false, autoPermissionMode: false, telemetryPort: nil)
-        #expect(jobCmd?.contains("$(cat '/tmp/my worktree/.crow-job-prompt.md')") == true)
+        #expect(jobCmd?.contains("_CROW_P=$(< '/tmp/my worktree/.crow-job-prompt.md')") == true)
 
         let review = Session(name: "review", kind: .review, agentKind: .codex)
         let reviewCmd = agent.autoLaunchCommand(
             session: review, worktreePath: "/tmp/my worktree",
             remoteControlEnabled: false, autoPermissionMode: false, telemetryPort: nil)
-        #expect(reviewCmd?.contains("$(cat '/tmp/my worktree/.crow-review-prompt.md')") == true)
+        #expect(reviewCmd?.contains("_CROW_P=$(< '/tmp/my worktree/.crow-review-prompt.md')") == true)
     }
 
     @Test func findBinaryReturnsNilWhenAbsent() {

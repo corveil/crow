@@ -29,18 +29,20 @@ struct ClaudeCodeAgentLaunchTests {
             for dispatched in [false, true] {
                 let cmd = try #require(command(kind: kind, dispatched: dispatched))
                 #expect(cmd.hasSuffix(" --continue\n"))
-                #expect(!cmd.contains("$(cat"))
+                #expect(!cmd.contains("$(<"))
             }
         }
     }
 
     @Test func reviewAndJobReadPromptFileOnFirstLaunchOnly() throws {
         let review = try #require(command(kind: .review, dispatched: false))
-        #expect(review.contains("\"$(cat /tmp/wt/.crow-review-prompt.md)\""))
+        #expect(review.contains("_CROW_P=$(< '/tmp/wt/.crow-review-prompt.md')"))
+        #expect(review.contains("eval \""))
+        #expect(review.contains("claude $(printf '%q'"))
         #expect(!review.contains("--continue"))
 
         let job = try #require(command(kind: .job, dispatched: false))
-        #expect(job.contains("\"$(cat /tmp/wt/.crow-job-prompt.md)\""))
+        #expect(job.contains("_CROW_P=$(< '/tmp/wt/.crow-job-prompt.md')"))
         #expect(!job.contains("--continue"))
     }
 
@@ -48,7 +50,7 @@ struct ClaudeCodeAgentLaunchTests {
         for kind in [SessionKind.review, .job] {
             let cmd = try #require(command(kind: kind, dispatched: true))
             #expect(cmd.hasSuffix(" --continue\n"))
-            #expect(!cmd.contains("$(cat"))
+            #expect(!cmd.contains("$(<"))
         }
     }
 

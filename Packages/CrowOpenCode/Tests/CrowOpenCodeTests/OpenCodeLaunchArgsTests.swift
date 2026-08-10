@@ -58,7 +58,7 @@ struct OpenCodeLaunchArgsTests {
             tuiSupportsAuto: true,
             runHelpText: runHelpWithDangerously
         )
-        #expect(cmd == "/opt/homebrew/bin/opencode run \"$(cat '/tmp/wt/.crow-job-prompt.md')\""
+        #expect(cmd == "_CROW_P=$(< '/tmp/wt/.crow-job-prompt.md'); eval \"/opt/homebrew/bin/opencode run $(printf '%q' \"$_CROW_P\")\""
             + "; /opt/homebrew/bin/opencode --continue\n")
         #expect(cmd.contains(" | ") == false)
     }
@@ -71,7 +71,8 @@ struct OpenCodeLaunchArgsTests {
             tuiSupportsAuto: true,
             runHelpText: runHelpWithAuto
         )
-        #expect(cmd.contains(" run \"$(cat '/tmp/p.md')\" --auto"))
+        #expect(cmd.contains(" eval \"opencode run --auto $(printf '%q'"))
+        #expect(cmd.contains("_CROW_P=$(< '/tmp/p.md');"))
         #expect(cmd.contains("; opencode --continue --auto\n"))
     }
 
@@ -83,7 +84,7 @@ struct OpenCodeLaunchArgsTests {
             tuiSupportsAuto: false,
             runHelpText: tuiHelpWithoutAuto
         )
-        #expect(cmd == "opencode run \"$(cat '/tmp/p.md')\"; opencode --continue\n")
+        #expect(cmd == "_CROW_P=$(< '/tmp/p.md'); eval \"opencode run $(printf '%q' \"$_CROW_P\")\"; opencode --continue\n")
     }
 
     @Test func firstLaunchChainedCommandShellQuotesPromptPath() {
@@ -94,7 +95,7 @@ struct OpenCodeLaunchArgsTests {
             tuiSupportsAuto: false,
             runHelpText: ""
         )
-        #expect(cmd.contains("$(cat '/tmp/my worktree/.crow-job-prompt.md')"))
+        #expect(cmd.contains("_CROW_P=$(< '/tmp/my worktree/.crow-job-prompt.md')"))
     }
 
     @Test func resumeTUICommandCarriesAutoForResumedJobs() {

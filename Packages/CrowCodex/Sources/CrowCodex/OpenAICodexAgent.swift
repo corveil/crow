@@ -91,7 +91,6 @@ public struct OpenAICodexAgent: CodingAgent {
                 // sandbox flags to the same interactive launch.
                 let promptPath = (worktreePath as NSString)
                     .appendingPathComponent(".crow-job-prompt.md")
-                let promptArg = "\"$(cat \(Self.shellEscape(promptPath)))\""
                 if autoPermissionMode {
                     // Approval off, workspace-write sandbox still ON — the
                     // bounded analogue of Claude's `--permission-mode auto`
@@ -100,11 +99,15 @@ public struct OpenAICodexAgent: CodingAgent {
                     // `-s danger-full-access` (those disable the sandbox; only
                     // for externally-sandboxed runners). Options precede the
                     // positional prompt.
-                    return "\(codexPath) -a never -s workspace-write \(promptArg)\n"
+                    return ShellLaunchArgs.evalPromptLaunch(
+                        prefix: "\(codexPath) -a never -s workspace-write",
+                        promptPath: promptPath)
                 }
                 // Auto-permission off: interactive TUI with the initial prompt,
                 // default approval policy so the user approves each step.
-                return "\(codexPath) \(promptArg)\n"
+                return ShellLaunchArgs.evalPromptLaunch(
+                    prefix: codexPath,
+                    promptPath: promptPath)
             }
             // Subsequent restarts resume the prior thread — interactive, so
             // plain `--last` (cwd-scoped) selects it. Carry the same bounded
@@ -138,7 +141,9 @@ public struct OpenAICodexAgent: CodingAgent {
             if !session.reviewPromptDispatched {
                 let promptPath = (worktreePath as NSString)
                     .appendingPathComponent(".crow-review-prompt.md")
-                return "\(codexPath) \"$(cat \(Self.shellEscape(promptPath)))\"\n"
+                return ShellLaunchArgs.evalPromptLaunch(
+                    prefix: codexPath,
+                    promptPath: promptPath)
             }
             return "\(codexPath) resume --last\n"
         case .manager:
@@ -192,14 +197,5 @@ public struct OpenAICodexAgent: CodingAgent {
     /// Codex TUI exposes `/rename` for the current thread (CROW-629).
     public func sessionRenameSlashCommand(newName: String) -> String? {
         "/rename \(newName)\n"
-    }
-
-    /// Single-quote a path for safe interpolation inside `$(cat …)`. Without
-    /// this, a worktree/devRoot containing a space (`/Users/j/Dev Projects/…`)
-    /// splits into multiple `cat` args → `cat` fails → the substitution yields
-    /// `""` and Codex launches with an empty prompt and idles (#843 review
-    /// round 7). Mirrors `CodexLauncher.shellEscape` / `OpenCodeLaunchArgs`.
-    static func shellEscape(_ path: String) -> String {
-        "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 }

@@ -90,6 +90,9 @@ public actor AntigravityLauncher {
         try prompt.write(to: promptPath, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes(
             [.posixPermissions: 0o600], ofItemAtPath: promptPath.path)
-        return "cd \(AntigravityLaunchArgs.shellQuote(worktreePath)) && \(AntigravityLaunchArgs.shellQuote(binary)) -p \"$(cat \(AntigravityLaunchArgs.shellQuote(promptPath.path)))\"\n"
+        return "cd \(AntigravityLaunchArgs.shellQuote(worktreePath)) && "
+            + ShellLaunchArgs.evalPromptLaunch(
+                prefix: "\(AntigravityLaunchArgs.shellQuote(binary)) -p",
+                promptPath: promptPath.path).trimmingCharacters(in: .newlines) + "\n"
     }
 }

@@ -104,6 +104,15 @@ posix_quote() {
   printf "'%s'" "$s"
 }
 
+# Bash prefix that reads a prompt file into `_CROW_P`, then evals a command
+# prefix with the prompt as the final argv — safe for quotes, $, and newlines.
+# Avoid "$(cat path)" inside double quotes (#957).
+# Mirrors Swift ShellLaunchArgs.evalPromptLaunch.
+eval_prompt_launch() {
+  printf '_CROW_P=$(< %s); eval "%s $(printf '"'"'%%q'"'"' \"$_CROW_P\")"' \
+    "$(posix_quote "$2")" "$1"
+}
+
 # Read the global remoteControlEnabled flag from {devRoot}/.claude/config.json.
 # Returns 0 if true, 1 otherwise. Missing file / malformed JSON / missing
 # key all default to 1 (off), matching AppConfig's decodeIfPresent behavior.
@@ -1305,9 +1314,9 @@ launch_claude_code() {
   # intermittently dropped the launch into a not-yet-ready shell, leaving a
   # bare zsh with no agent (#408).
   #
-  # The prompt stays in its file — `"$(cat $prompt_path)"` is expanded by the
+  # The prompt stays in its file — `eval_prompt_launch` is expanded by the
   # TARGET shell at paste time, so the command sent over the socket is small
-  # (no ARG_MAX / payload concern).
+  # (no ARG_MAX / payload concern) and survives arbitrary prompt content (#957).
   local rc_args=""
   if is_remote_control_enabled; then
     # Keep building --rc here: crow's resolveClaudeInCommand only injects
@@ -1334,7 +1343,7 @@ launch_claude_code() {
     perm_mode="auto"
     log "coderViewAutoPermissionMode enabled — launching with --permission-mode auto"
   fi
-  local launch_cmd="cd $WORKTREE_PATH && ${gw_prefix}$bin --permission-mode $perm_mode$rc_args \"\$(cat $prompt_path)\""
+  local launch_cmd="cd $WORKTREE_PATH && $(eval_prompt_launch "${gw_prefix}$bin --permission-mode $perm_mode$rc_args" "$prompt_path")"
   create_agent_terminal "Claude Code" "$launch_cmd"
 }
 
@@ -1359,7 +1368,7 @@ launch_cursor() {
   # form (NOT the .work bare-`agent` form) so the unattended skill flow
   # feeds the prompt at launch — same divergence-from-Swift-.work
   # rationale that launch_claude_code uses for its prompt-argv form.
-  local launch_cmd="cd $WORKTREE_PATH && $bin \"\$(cat $prompt_path)\""
+  local launch_cmd="cd $WORKTREE_PATH && $(eval_prompt_launch "$bin" "$prompt_path")"
   create_agent_terminal "Cursor" "$launch_cmd"
 }
 
@@ -1381,7 +1390,7 @@ launch_codex() {
   # pre-fills the TUI composer — same mechanism Cursor's `agent` uses.
   # The prompt-argv form was deferred in MVP because older Codex CLIs
   # ignored extra argv; unblocked here (#492).
-  local launch_cmd="cd $WORKTREE_PATH && $bin \"\$(cat $prompt_path)\""
+  local launch_cmd="cd $WORKTREE_PATH && $(eval_prompt_launch "$bin" "$prompt_path")"
   create_agent_terminal "OpenAI Codex" "$launch_cmd"
 }
 
@@ -1403,7 +1412,7 @@ launch_opencode() {
   # OpenCode: headless `run` consumes the prompt, then `; --continue` opens
   # the interactive TUI with a fresh terminal stdin (#547). Brace group keeps
   # both commands gated on a successful `cd`.
-  local launch_cmd="cd $WORKTREE_PATH && { $bin run \"\$(cat $prompt_path)\"; $bin --continue; }"
+  local launch_cmd="cd $WORKTREE_PATH && { $(eval_prompt_launch "$bin run" "$prompt_path"); $bin --continue; }"
   create_agent_terminal "OpenCode" "$launch_cmd"
 }
 

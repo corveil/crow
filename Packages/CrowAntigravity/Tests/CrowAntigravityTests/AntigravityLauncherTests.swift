@@ -55,9 +55,9 @@ struct AntigravityLauncherTests {
         let cmd = try await launcher.launchCommand(
             sessionID: sid, worktreePath: "/wt/crow", prompt: "hello world", binary: "/bin/agy")
 
-        // Shape: cd '<wt>' && '<binary>' -p "$(cat '<tmp>')" — all paths quoted.
-        #expect(cmd.hasPrefix("cd '/wt/crow' && '/bin/agy' -p \"$(cat '"))
-        #expect(cmd.hasSuffix("')\"\n"))
+        // Shape: cd '<wt>' && _CROW_P=…; eval '<binary> -p …'
+        #expect(cmd.hasPrefix("cd '/wt/crow' && _CROW_P=$(< '"))
+        #expect(cmd.contains("eval \"'/bin/agy' -p $(printf '%q'"))
 
         // The temp prompt file exists, holds the prompt, and is owner-only 0600.
         let tmp = FileManager.default.temporaryDirectory

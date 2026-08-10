@@ -1,4 +1,5 @@
 import Foundation
+import CrowCore
 
 /// Helpers for building OpenCode launch commands. Centralized so
 /// `OpenCodeAgent`, `OpenCodeLauncher`, and tests share one implementation
@@ -187,7 +188,6 @@ public enum OpenCodeLaunchArgs {
         tuiSupportsAuto: Bool,
         runHelpText: String
     ) -> String {
-        let quotedPath = shellQuote(promptPath)
         let runFlags = runAutoApproveSuffix(
             autoPermissionMode: autoPermissionMode,
             runHelpText: runHelpText
@@ -196,7 +196,9 @@ public enum OpenCodeLaunchArgs {
             autoPermissionMode: autoPermissionMode,
             tuiSupportsAuto: tuiSupportsAuto
         )
-        return "\(binary) run \"$(cat \(quotedPath))\"\(runFlags)"
+        return ShellLaunchArgs.evalPromptLaunch(
+            prefix: "\(binary) run\(runFlags)",
+            promptPath: promptPath).trimmingCharacters(in: .newlines)
             + "; \(binary) --continue\(continueFlags)\n"
     }
 
