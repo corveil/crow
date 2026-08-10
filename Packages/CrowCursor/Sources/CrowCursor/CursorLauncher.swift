@@ -101,6 +101,9 @@ public actor CursorLauncher {
         try FileManager.default.setAttributes(
             [.posixPermissions: 0o600], ofItemAtPath: promptPath.path)
         let trust = seedTrust ? CursorLaunchArgs.trustSuffix : ""
-        return "cd \(CursorLaunchArgs.shellQuote(worktreePath)) && \(CursorLaunchArgs.shellQuote(binary))\(trust) \"$(cat \(CursorLaunchArgs.shellQuote(promptPath.path)))\"\n"
+        return "cd \(CursorLaunchArgs.shellQuote(worktreePath)) && "
+            + ShellLaunchArgs.evalPromptLaunch(
+                prefix: "\(CursorLaunchArgs.shellQuote(binary))\(trust)",
+                promptPath: promptPath.path).trimmingCharacters(in: .newlines) + "\n"
     }
 }

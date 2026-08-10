@@ -76,7 +76,10 @@ public actor CodexLauncher {
         try prompt.write(to: promptPath, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes(
             [.posixPermissions: 0o600], ofItemAtPath: promptPath.path)
-        return "cd \(Self.shellEscape(worktreePath)) && codex \"$(cat \(Self.shellEscape(promptPath.path)))\"\n"
+        return "cd \(Self.shellEscape(worktreePath)) && "
+            + ShellLaunchArgs.evalPromptLaunch(
+                prefix: "codex",
+                promptPath: promptPath.path).trimmingCharacters(in: .newlines) + "\n"
     }
 
     private static func shellEscape(_ str: String) -> String {

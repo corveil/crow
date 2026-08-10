@@ -81,7 +81,9 @@ public struct ClaudeCodeAgent: CodingAgent {
         if let initialPromptFile, !session.reviewPromptDispatched {
             let promptPath = (worktreePath as NSString)
                 .appendingPathComponent(initialPromptFile)
-            return "\(envPrefix)\(claudePath)\(rcArgs) \"$(cat \(promptPath))\"\n"
+            return envPrefix + ShellLaunchArgs.evalPromptLaunch(
+                prefix: claudePath + rcArgs,
+                promptPath: promptPath)
         }
         return "\(envPrefix)\(claudePath)\(rcArgs) --continue\n"
     }

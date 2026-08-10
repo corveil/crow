@@ -146,7 +146,10 @@ public actor ClaudeLauncher {
         // Restrict prompt file to owner-only access
         try FileManager.default.setAttributes(
             [.posixPermissions: 0o600], ofItemAtPath: promptPath.path)
-        return "cd \(Self.shellEscape(worktreePath)) && claude \"$(cat \(Self.shellEscape(promptPath.path)))\"\n"
+        return "cd \(Self.shellEscape(worktreePath)) && "
+            + ShellLaunchArgs.evalPromptLaunch(
+                prefix: "claude",
+                promptPath: promptPath.path).trimmingCharacters(in: .newlines) + "\n"
     }
 
     /// Escape a string for safe inclusion in a shell command by wrapping in single quotes.

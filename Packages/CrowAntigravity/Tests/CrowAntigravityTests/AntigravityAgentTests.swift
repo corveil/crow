@@ -50,19 +50,23 @@ struct AntigravityAgentTests {
             session: session, worktreePath: "/tmp/wt",
             remoteControlEnabled: false, autoPermissionMode: false, telemetryPort: nil)
         #expect(cmd != nil)
-        #expect(cmd?.contains(" -p \"$(cat ") == true)
+        #expect(cmd?.contains("_CROW_P=$(<") == true)
+        #expect(cmd?.contains("eval \"") == true)
+        #expect(cmd?.contains(" -p $(printf '%q'") == true)
         #expect(cmd?.contains(".crow-job-prompt.md") == true)
         #expect(cmd?.hasSuffix("\n") == true)
     }
 
     @Test func jobFirstLaunchQuotesPromptPathWithSpaces() {
-        // A worktree under `/Users/x/My Projects/…` must not split `cat`'s argv:
-        // the prompt path is single-quoted inside the `$(cat …)` substitution.
+        // A worktree under `/Users/x/My Projects/…` must not split the prompt read:
+        // the prompt path is single-quoted inside the `$(< …)` substitution.
         let session = Session(name: "job", kind: .job, agentKind: .antigravity)
         let cmd = agent.autoLaunchCommand(
             session: session, worktreePath: "/Users/x/My Projects/wt",
             remoteControlEnabled: false, autoPermissionMode: false, telemetryPort: nil)
-        #expect(cmd?.contains("-p \"$(cat '/Users/x/My Projects/wt/.crow-job-prompt.md')\"") == true)
+        #expect(cmd?.contains("_CROW_P=$(< '/Users/x/My Projects/wt/.crow-job-prompt.md');") == true)
+        #expect(cmd?.contains("eval \"") == true)
+        #expect(cmd?.contains(" -p $(printf '%q'") == true)
     }
 
     @Test func jobSubsequentLaunchResumesWithDashC() {
@@ -76,14 +80,15 @@ struct AntigravityAgentTests {
     }
 
     @Test func reviewFirstLaunchInjectsPromptViaDashP() {
-        // #902: review now dispatches the inlined SKILL body via
-        // `-p "$(cat '…/.crow-review-prompt.md')"`, same shape as `.job`.
+        // #902: review dispatches the inlined SKILL body via `-p "$_CROW_P"`.
         let session = Session(name: "review", kind: .review, agentKind: .antigravity)
         let cmd = agent.autoLaunchCommand(
             session: session, worktreePath: "/tmp/wt",
             remoteControlEnabled: false, autoPermissionMode: false, telemetryPort: nil)
         #expect(cmd != nil)
-        #expect(cmd?.contains(" -p \"$(cat ") == true)
+        #expect(cmd?.contains("_CROW_P=$(<") == true)
+        #expect(cmd?.contains("eval \"") == true)
+        #expect(cmd?.contains(" -p $(printf '%q'") == true)
         #expect(cmd?.contains(".crow-review-prompt.md") == true)
         // NOT the job prompt file — review reads its own.
         #expect(cmd?.contains(".crow-job-prompt.md") == false)
@@ -91,13 +96,15 @@ struct AntigravityAgentTests {
     }
 
     @Test func reviewFirstLaunchQuotesPromptPathWithSpaces() {
-        // A worktree under `/Users/x/My Projects/…` must not split `cat`'s argv:
-        // the prompt path is single-quoted inside the `$(cat …)` substitution.
+        // A worktree under `/Users/x/My Projects/…` must not split the prompt read:
+        // the prompt path is single-quoted inside the `$(< …)` substitution.
         let session = Session(name: "review", kind: .review, agentKind: .antigravity)
         let cmd = agent.autoLaunchCommand(
             session: session, worktreePath: "/Users/x/My Projects/wt",
             remoteControlEnabled: false, autoPermissionMode: false, telemetryPort: nil)
-        #expect(cmd?.contains("-p \"$(cat '/Users/x/My Projects/wt/.crow-review-prompt.md')\"") == true)
+        #expect(cmd?.contains("_CROW_P=$(< '/Users/x/My Projects/wt/.crow-review-prompt.md');") == true)
+        #expect(cmd?.contains("eval \"") == true)
+        #expect(cmd?.contains(" -p $(printf '%q'") == true)
     }
 
     @Test func reviewSubsequentLaunchResumesWithDashC() {

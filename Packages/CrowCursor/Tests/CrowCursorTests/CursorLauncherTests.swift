@@ -41,7 +41,8 @@ struct CursorLauncherTests {
         // to approval).
         let cmd = try await CursorLauncher().launchCommand(
             sessionID: UUID(), worktreePath: "/w", prompt: "p", seedTrust: true)
-        #expect(cmd.contains("'agent' --trust \"$(cat "))  // seed, before the prompt
+        #expect(cmd.contains("_CROW_P=$(< "))
+        #expect(cmd.contains("eval \"'agent' --trust $(printf '%q'"))
         #expect(cmd.contains("--force") == false)          // no auto-permission
     }
 
@@ -52,6 +53,6 @@ struct CursorLauncherTests {
         let cmd = try await CursorLauncher().launchCommand(
             sessionID: UUID(), worktreePath: "/w", prompt: "p", seedTrust: false)
         #expect(cmd.contains("--trust") == false)
-        #expect(cmd.contains("'agent' \"$(cat "))
+        #expect(cmd.contains("eval \"'agent' $(printf '%q'"))
     }
 }

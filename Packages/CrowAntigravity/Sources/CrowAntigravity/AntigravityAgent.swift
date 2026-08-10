@@ -129,9 +129,9 @@ public struct AntigravityAgent: CodingAgent {
                     : ".crow-job-prompt.md"
                 let promptPath = (worktreePath as NSString)
                     .appendingPathComponent(promptFile)
-                // Quote the path so a devRoot containing spaces doesn't split
-                // `cat`'s argv and resolve the prompt to empty.
-                return "\(agentPath)\(autoArgs) -p \"$(cat \(AntigravityLaunchArgs.shellQuote(promptPath)))\"\n"
+                return ShellLaunchArgs.evalPromptLaunch(
+                    prefix: "\(agentPath)\(autoArgs) -p",
+                    promptPath: promptPath)
             }
             return "\(agentPath)\(autoArgs) -c\n"
         case .manager:

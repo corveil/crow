@@ -86,6 +86,8 @@ struct CursorAgentTests {
         #expect(cmd != nil)
         #expect(cmd?.contains(".crow-review-prompt.md") == true)
         #expect(cmd?.contains(".crow-job-prompt.md") == false)
+        #expect(cmd?.contains("eval \"") == true)
+        #expect(cmd?.contains("$(cat") == false)
         #expect(cmd?.hasSuffix("\n") == true)
         // CROW-890 review (Red 1): a `.review` clone is attacker-controlled, so
         // it must NOT be auto-trusted — the `--trust` seed is withheld, leaving

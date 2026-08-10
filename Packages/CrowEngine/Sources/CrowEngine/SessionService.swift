@@ -1277,7 +1277,8 @@ public final class SessionService {
             return
         }
         // Preflight (CROW-439): review/job sessions inline their initial prompt
-        // via `$(cat .crow-*-prompt.md)`. If that file isn't on disk when the
+        // via `ShellLaunchArgs.evalPromptLaunch`. If that file isn't on disk when the
+        // read). If that file isn't on disk when the shell runs the substitution,
         // shell substitution runs, the agent launches with an empty string and
         // silently idles. Refuse to dispatch and surface the missing path
         // instead so the user sees why nothing happened.
@@ -3506,7 +3507,7 @@ public final class SessionService {
         }
 
         // Write review prompt file into the clone directory. Write failures
-        // MUST surface (CROW-439): the launcher's `$(cat ...)` shell
+        // MUST surface (CROW-439): the launcher's prompt-file shell substitution
         // substitution will yield an empty string and the agent will idle if
         // the file isn't there.
         let promptPath = (clonePath as NSString).appendingPathComponent(".crow-review-prompt.md")
@@ -3636,7 +3637,7 @@ public final class SessionService {
 
         // Write the first prompt to the file launchClaude reads on first launch.
         // Write failures MUST surface (CROW-439): if the file isn't there, the
-        // launcher's `$(cat .crow-job-prompt.md)` shell substitution yields an
+        // launcher's prompt-file shell substitution yields an
         // empty string and the agent silently idles.
         let promptPath = (worktreePath as NSString).appendingPathComponent(".crow-job-prompt.md")
         do {
