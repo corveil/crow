@@ -198,13 +198,4 @@ public struct OpenAICodexAgent: CodingAgent {
     public func sessionRenameSlashCommand(newName: String) -> String? {
         "/rename \(newName)\n"
     }
-
-    /// Single-quote a path for safe interpolation inside `$(cat …)`. Without
-    /// this, a worktree/devRoot containing a space (`/Users/j/Dev Projects/…`)
-    /// splits into multiple `cat` args → `cat` fails → the substitution yields
-    /// `""` and Codex launches with an empty prompt and idles (#843 review
-    /// round 7). Mirrors `CodexLauncher.shellEscape` / `OpenCodeLaunchArgs`.
-    static func shellEscape(_ path: String) -> String {
-        "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
-    }
 }

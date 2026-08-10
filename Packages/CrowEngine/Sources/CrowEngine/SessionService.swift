@@ -1278,7 +1278,6 @@ public final class SessionService {
         }
         // Preflight (CROW-439): review/job sessions inline their initial prompt
         // via `ShellLaunchArgs.evalPromptLaunch`. If that file isn't on disk when the
-        // read). If that file isn't on disk when the shell runs the substitution,
         // shell substitution runs, the agent launches with an empty string and
         // silently idles. Refuse to dispatch and surface the missing path
         // instead so the user sees why nothing happened.
