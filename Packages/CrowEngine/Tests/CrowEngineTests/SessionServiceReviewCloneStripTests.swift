@@ -80,33 +80,17 @@ struct SessionServiceReviewCloneStripTests {
     }
 
     // MARK: - Handoff gate (the dimension both round-10 and round-11 blockers lived in)
-
-    /// Only a `.review` handoff *to Cursor* strips: the exact gate that, when
-    /// missing (round 10) or divergent (round 11), left Cursor running in an
-    /// unstripped hostile clone.
-    @Test func handoffGateFiresOnlyForCursorReview() {
-        #expect(SessionService.shouldStripCursorReviewCloneOnHandoff(
-            targetKind: .cursor, sessionKind: .review))
-    }
-
-    /// A `.work`/`.job` handoff to Cursor is a normal working clone, not an
-    /// attacker-controlled review head — no strip.
-    @Test func handoffGateSkipsNonReviewCursor() {
-        #expect(!SessionService.shouldStripCursorReviewCloneOnHandoff(
-            targetKind: .cursor, sessionKind: .work))
-        #expect(!SessionService.shouldStripCursorReviewCloneOnHandoff(
-            targetKind: .cursor, sessionKind: .job))
-    }
-
-    /// A `.review` handoff to any *other* agent must not strip `.cursor/` —
-    /// stripping a surface the reviewing agent doesn't load would just hide the
-    /// files a hostile PR ships (same reasoning as the `.codex/` gate).
-    @Test func handoffGateSkipsReviewForNonCursorAgents() {
-        for k: AgentKind in [.claudeCode, .codex, .openCode, .grok] {
-            #expect(!SessionService.shouldStripCursorReviewCloneOnHandoff(
-                targetKind: k, sessionKind: .review))
-        }
-    }
+    //
+    // The dedicated `shouldStripCursorReviewCloneOnHandoff` tests that lived here
+    // were retired with the predicate itself (CROW-954 review, Green 1).
+    // `handoffAgent` strips via the shared `prepareWorktreeForAgentLaunch` gate,
+    // called with the *target* kind, so the round-10 hazard (a review created under
+    // another agent flipped onto Cursor in a never-stripped clone) is now covered by
+    // the launch-gate tests below — `cursorStripGateFiresOnlyForReview`,
+    // `cursorStripGateSkipsNonReview`, `cursorStripGateSkipsReviewForOtherAgents`
+    // assert the same agent × session-kind matrix, and
+    // `prepareStripsCursorConfigWhenGateFires` pins the wiring. Duplicating them
+    // against a second predicate is what let round 11's divergence happen.
 
     // MARK: - Antigravity review support (#902 — was #862 refusal, now wired)
 
@@ -266,5 +250,72 @@ struct SessionServiceReviewCloneStripTests {
             agentKind: .antigravity, sessionKind: .work, worktreePath: clone, ownership: .empty)
 
         #expect(FileManager.default.fileExists(atPath: agentsDir))
+    }
+
+    // MARK: - Cursor launch-path strip (CROW-954 — the dialog is gone, so this is the gate)
+
+    /// Only a `.review` clone *on Cursor* strips on the launch path. Before
+    /// CROW-954 the creation-time strip was backstopped by Cursor's folder-trust
+    /// dialog; now that review launches carry `--trust`, this gate is the only
+    /// thing between a committed `.cursor/hooks.json` restored by the review
+    /// skill's `gh pr checkout` and unsandboxed execution.
+    @Test func cursorStripGateFiresOnlyForReview() {
+        #expect(SessionService.shouldStripCursorReviewClone(
+            agentKind: .cursor, sessionKind: .review))
+    }
+
+    /// A `.work`/`.job` Cursor session branches off a trusted base — no strip.
+    @Test func cursorStripGateSkipsNonReview() {
+        #expect(!SessionService.shouldStripCursorReviewClone(
+            agentKind: .cursor, sessionKind: .work))
+        #expect(!SessionService.shouldStripCursorReviewClone(
+            agentKind: .cursor, sessionKind: .job))
+    }
+
+    /// A `.review` on any *other* agent must not strip `.cursor/` — stripping a
+    /// surface the reviewing agent doesn't load would just hide the files a hostile
+    /// PR ships (same reasoning as the `.codex/`/`.agents/` gates). Grok is the
+    /// deliberate exception and strips `.cursor/` through its own broader helper.
+    @Test func cursorStripGateSkipsReviewForOtherAgents() {
+        for k: AgentKind in [.claudeCode, .codex, .openCode, .antigravity] {
+            #expect(!SessionService.shouldStripCursorReviewClone(
+                agentKind: k, sessionKind: .review))
+        }
+    }
+
+    /// The launch-gate wiring, not just the predicate: delete the
+    /// `shouldStripCursorReviewClone` arm of `prepareWorktreeForAgentLaunch` and
+    /// only this test fails. `.cursor` seeds no folder trust through
+    /// `seedTrustIfNeeded` (it trusts per-launch via the `--trust` flag instead),
+    /// so this call touches zero global trust state.
+    @Test func prepareStripsCursorConfigWhenGateFires() {
+        let clone = Self.makeTempDir(name: "prep-cursor-review")
+        defer { try? FileManager.default.removeItem(atPath: clone) }
+        let cursorDir = (clone as NSString).appendingPathComponent(".cursor")
+        try? FileManager.default.createDirectory(
+            atPath: cursorDir, withIntermediateDirectories: true)
+        try? "{\"hooks\":\"EVIL\"}".write(
+            toFile: (cursorDir as NSString).appendingPathComponent("hooks.json"),
+            atomically: true, encoding: .utf8)
+
+        SessionService.prepareWorktreeForAgentLaunch(
+            agentKind: .cursor, sessionKind: .review, worktreePath: clone, ownership: .empty)
+
+        #expect(!FileManager.default.fileExists(atPath: cursorDir))
+    }
+
+    /// The gate is scoped: a `.work` Cursor session is a normal working clone, so
+    /// `prepareWorktreeForAgentLaunch` leaves the user's own `.cursor/` alone.
+    @Test func prepareLeavesCursorConfigForNonReview() {
+        let clone = Self.makeTempDir(name: "prep-cursor-work")
+        defer { try? FileManager.default.removeItem(atPath: clone) }
+        let cursorDir = (clone as NSString).appendingPathComponent(".cursor")
+        try? FileManager.default.createDirectory(
+            atPath: cursorDir, withIntermediateDirectories: true)
+
+        SessionService.prepareWorktreeForAgentLaunch(
+            agentKind: .cursor, sessionKind: .work, worktreePath: clone, ownership: .empty)
+
+        #expect(FileManager.default.fileExists(atPath: cursorDir))
     }
 }

@@ -10,8 +10,8 @@ public enum CursorLaunchArgs {
         "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
-    /// Workspace-trust seed appended to every Crow-launched Cursor command
-    /// **except `.review`** (auto-launch, Manager, and the handoff one-shot). A
+    /// Workspace-trust seed appended to **every** Crow-launched Cursor command
+    /// (auto-launch, Manager, and the handoff one-shot) — `.review` included. A
     /// leading-space suffix so callers concatenate it onto the shell-quoted
     /// binary path.
     ///
@@ -27,29 +27,53 @@ public enum CursorLaunchArgs {
     /// session on the folder-trust prompt (CROW-890 — closes the residual gap
     /// #829 deliberately left open).
     ///
-    /// **Withheld from `.review` sessions** (see `launchSuffix`), mirroring the
-    /// `session.kind != .review` guard on `CodexTrustSeeder`: a review working
-    /// tree is an attacker-controlled `gh` clone, so it is never auto-trusted.
+    /// **Emitted on `.review` too, as of CROW-954.** The original CROW-890 carve-out
+    /// withheld it — a review tree is a `gh` clone at the PR author's head — on the
+    /// theory that Cursor's folder-trust dialog would serve as the human gate. In
+    /// practice that theory failed on both ends:
+    ///
+    ///  - The dialog is **not** a meaningful gate. Review launches already carry
+    ///    `--force --approve-mcps` (`reviewAutoPermissionMode` defaults on), so the
+    ///    only thing a reviewer can do at the prompt is press `a` — after which
+    ///    every tool call runs unapproved anyway. It gated nothing and blocked the
+    ///    unattended dispatch that makes review sessions useful.
+    ///  - `--force` does **not** suppress it (the CROW-890 note left this
+    ///    "unverified"): observed on `agent 2026.08.04`, a Crow review session
+    ///    launched with `--force --approve-mcps` still stops on "Workspace Trust
+    ///    Required" and waits for a keypress.
+    ///
+    /// The real defense was never the dialog — it's
+    /// `SessionService.stripCursorConfigFromReviewClone`, which removes the clone's
+    /// `.cursor/` (committed `hooks.json` / `mcp.json`) before Cursor opens it. That
+    /// strip now runs on **every** launch path via `prepareWorktreeForAgentLaunch`,
+    /// not just at clone creation, so a hostile layer restored by the review skill's
+    /// `gh pr checkout` is re-stripped before the trusted launch. This is the same
+    /// **strip-not-trust** posture Grok and Antigravity reviews already rely on
+    /// (`shouldStripGrokReviewClone`, `shouldStripAntigravityReviewClone`), and it
+    /// matches Claude, whose `shouldSeedFolderTrust` has always returned `true` for
+    /// `.review`. Codex/Grok keep their `!= .review` trust guards — their trust
+    /// stores are global TOML, a different blast radius from a per-workspace marker.
     ///
     /// **Interactive as of Cursor CLI 2026.07.20**
     /// ([changelog](https://cursor.com/docs/cli/changelog): "`--trust` works in
-    /// interactive sessions"), verified empirically against `agent 2026.07.23`
-    /// whose `--help` lists `--trust` as a general flag with **no "(headless mode
+    /// interactive sessions"), verified empirically against `agent 2026.08.04`:
+    /// running `agent --trust` under a pty in a fresh repo — no `--print` — writes
+    /// `~/.cursor/projects/<slug>/.workspace-trusted` with
+    /// `"trustMethod": "cli-flag"`, the same marker the dialog writes on accept. Its
+    /// `--help` also lists `--trust` as a general flag with **no "(headless mode
     /// only)" qualifier** and **no `--print` gating** (unlike `--output-format`).
     /// The [parameter reference](https://cursor.com/docs/cli/reference/parameters)
-    /// still says headless-only, but the installed binary's own help is
-    /// authoritative and disagrees — which is why the earlier audit's
-    /// headless-only omission is now reversed.
+    /// still says headless-only; the installed binary and the observed marker
+    /// disagree, and they win.
     ///
     /// **Bounded to workspace trust — NOT `--yolo`/full-bypass.** It only
     /// suppresses the folder-trust dialog; per-tool approval still applies unless
     /// `autoPermissionSuffix` adds `--force`. Trust and auto-permission are
-    /// orthogonal, so this seed is unconditional (outside `.review`) while
-    /// `--force --approve-mcps` stays gated on the caller's opt-in (see
-    /// `launchSuffix`).
+    /// orthogonal, so this seed is unconditional while `--force --approve-mcps`
+    /// stays gated on the caller's opt-in (see `launchSuffix`).
     ///
     /// **Minimum Cursor CLI: ≥ 2026.07.20** — the build that made `--trust`
-    /// interactive. Emitted on every non-`.review` launch path, so on an older
+    /// interactive. Emitted on every launch path, so on an older
     /// binary the effect depends on that binary's handling. `--trust` has been a
     /// *recognized* flag since before 07.20 (the param reference lists it,
     /// headless-only), so an older `agent` parses it rather than erroring on an
@@ -102,17 +126,14 @@ public enum CursorLaunchArgs {
     /// the caller opted into auto-permission. Callers append it to the
     /// shell-quoted binary path.
     ///
-    /// `seedTrust` is `session.kind != .review` at the call sites. A `.review`
-    /// working tree is a `gh` clone checked out at the PR author's head
-    /// (attacker-controlled), so — mirroring the `session.kind != .review` guard
-    /// on `CodexTrustSeeder` in `SessionService` — Crow **never** auto-trusts it
-    /// (CROW-890 review, Red 1). The intent is that review falls back to Cursor's
-    /// folder-trust dialog as its human gate; note that review's default
-    /// auto-permission adds `--force`, and whether `--force` alone still surfaces
-    /// that dialog is **unverified** — but withholding `--trust` is never worse
-    /// than emitting it, so the guard holds regardless. Auto-permission is
-    /// orthogonal and unchanged on `.review`. `.work`/`.job` worktrees branch off
-    /// a trusted base and the Manager runs in the devRoot, so those seed normally.
+    /// `seedTrust` is `true` at every production call site as of CROW-954 —
+    /// including `.review`, whose clone is protected by the launch-path
+    /// `.cursor/` strip rather than by the folder-trust dialog (see
+    /// `trustSuffix` for why the dialog was never the real gate). The parameter
+    /// is kept rather than inlined so the withholding behavior stays expressible
+    /// and unit-testable: if a future harness change makes an un-stripped Cursor
+    /// worktree reachable, flipping one call site back to `false` restores the
+    /// old posture without re-deriving the flag plumbing.
     public static func launchSuffix(seedTrust: Bool, autoPermissionMode: Bool) -> String {
         (seedTrust ? trustSuffix : "") + autoPermissionSuffix(autoPermissionMode)
     }

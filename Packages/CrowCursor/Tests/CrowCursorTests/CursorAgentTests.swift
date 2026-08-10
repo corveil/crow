@@ -89,10 +89,11 @@ struct CursorAgentTests {
         #expect(cmd?.contains("eval \"") == true)
         #expect(cmd?.contains("$(cat") == false)
         #expect(cmd?.hasSuffix("\n") == true)
-        // CROW-890 review (Red 1): a `.review` clone is attacker-controlled, so
-        // it must NOT be auto-trusted — the `--trust` seed is withheld, leaving
-        // Cursor's folder-trust dialog as the human gate.
-        #expect(cmd?.contains("--trust") == false)
+        // CROW-954 reverses the CROW-890 carve-out: a `.review` clone launches
+        // pre-trusted so unattended dispatch isn't stranded on "Workspace Trust
+        // Required". Its defense is the launch-path `.cursor/` strip
+        // (`SessionService.shouldStripCursorReviewClone`), not the dialog.
+        #expect(cmd?.contains("--trust") == true)
     }
 
     @Test func autoLaunchCommandReviewSessionSubsequentLaunch() {
@@ -111,62 +112,61 @@ struct CursorAgentTests {
         #expect(cmd != nil)
         #expect(cmd?.contains(".crow-review-prompt.md") == false)
         #expect(cmd?.hasSuffix("--continue\n") == true)
-        // Resume of a `.review` session stays untrusted too (Red 1).
-        #expect(cmd?.contains("--trust") == false)
+        // The seed rides `--continue` resume too — harmless, since the first
+        // launch already recorded the saved trust decision (CROW-954).
+        #expect(cmd?.contains("--trust") == true)
     }
 
-    @Test func autoLaunchCommandReviewOmitsTrustSeedEvenWithAutoPermission() {
-        // CROW-890 review, Red 1 — the exact shipped-default exploit config
-        // (`reviewAutoPermissionMode == true`). A `.review` clone is
-        // attacker-controlled, so it must NEVER be auto-trusted even with review
-        // auto-permission on. Auto-permission (`--force --approve-mcps`) is
-        // unchanged; only the `--trust` seed is withheld, leaving Cursor's
-        // folder-trust dialog as the human gate — mirrors the Codex
-        // `session.kind != .review` guard.
+    @Test func autoLaunchCommandReviewSeedsTrustAndRunEverything() {
+        // CROW-954, the shipped-default review config
+        // (`reviewAutoPermissionMode == true`): a review session must come up both
+        // already-trusted (`--trust`) AND in Run Everything mode (`--force`, which
+        // `agent --help` documents `--yolo` as an alias of). Regression pin for the
+        // reported symptom — the session stopping on Cursor's "Workspace Trust
+        // Required" prompt despite carrying `--force --approve-mcps`, which does
+        // NOT suppress that dialog (observed on `agent 2026.08.04`).
         let session = Session(name: "review", kind: .review, agentKind: .cursor)
         let cmd = agent.autoLaunchCommand(
             session: session, worktreePath: "/tmp/wt",
             remoteControlEnabled: false, autoPermissionMode: true, telemetryPort: nil)
+        #expect(cmd?.contains("--trust") == true)
         #expect(cmd?.contains("--force --approve-mcps") == true)
-        #expect(cmd?.contains("--trust") == false)
+        // Trust leads, so it is in effect before the prompt argument is parsed.
+        #expect(cmd?.contains("--trust --force --approve-mcps") == true)
     }
 
-    @Test func launchCommandHandoffWithholdsTrustForReview() async throws {
-        // The kind-aware handoff launch (`SessionService.handoffAgent` passes the
-        // live `session.kind`): a `.review` handoff to Cursor omits the trust
-        // seed (attacker-controlled clone), a `.work` handoff keeps it (Red 1).
-        let review = try await agent.launchCommand(
-            sessionID: UUID(), worktreePath: "/w", prompt: "p", sessionKind: .review)
-        #expect(review.contains("--trust") == false)
-        let work = try await agent.launchCommand(
-            sessionID: UUID(), worktreePath: "/w", prompt: "p", sessionKind: .work)
-        #expect(work.contains("--trust") == true)
+    @Test func launchCommandHandoffSeedsTrustForEveryKind() async throws {
+        // `SessionService.handoffAgent` passes the live `session.kind` through the
+        // `CodingAgent` protocol default. Post-CROW-954 Cursor has no kind-dependent
+        // launch, so every kind — `.review` included — carries the trust seed.
+        for kind in [SessionKind.review, .work, .job] {
+            let cmd = try await agent.launchCommand(
+                sessionID: UUID(), worktreePath: "/w", prompt: "p", sessionKind: kind)
+            #expect(cmd.contains("--trust") == true, "\(kind) handoff should seed trust")
+        }
     }
 
-    @Test func existentialDispatchReachesCursorOverride() async throws {
-        // CROW-890 review, Yellow 1: `SessionService.handoffAgent` holds the
-        // agent as `any CodingAgent` and calls the `sessionKind:` overload
-        // through the existential. Pin that dynamic dispatch reaches CursorAgent's
-        // override — if the protocol *requirement* were dropped (leaving only the
-        // extension default), a `.review` handoff would silently start emitting
-        // `--trust` again with an otherwise-green suite (verified counterfactual).
+    @Test func existentialDispatchSeedsTrustForReviewHandoff() async throws {
+        // `handoffAgent` holds the agent as `any CodingAgent`. Pin that the
+        // existential path — protocol default → Cursor's three-arg `launchCommand`
+        // — still seeds trust for a `.review` handoff. Cursor dropped its
+        // `sessionKind:` override in CROW-954; if someone reintroduces one that
+        // forgets to seed, a Cursor review handoff would silently start blocking on
+        // the trust dialog again with an otherwise-green suite.
         let erased: any CodingAgent = CursorAgent()
         let review = try await erased.launchCommand(
             sessionID: UUID(), worktreePath: "/w", prompt: "p", sessionKind: .review)
-        #expect(review.contains("--trust") == false)
-        let work = try await erased.launchCommand(
-            sessionID: UUID(), worktreePath: "/w", prompt: "p", sessionKind: .work)
-        #expect(work.contains("--trust") == true)
+        #expect(review.contains("--trust") == true)
     }
 
-    @Test func launchCommandThreeArgFailsClosed() async throws {
-        // CROW-890 review, Yellow 2: the kindless three-argument requirement
-        // (no production caller) must NEVER seed trust — fail closed, so a future
-        // caller of the bare form can't reopen the review-clone hole. The
-        // kind-aware overload above is the only seeding path.
+    @Test func launchCommandThreeArgSeedsTrust() async throws {
+        // The kindless three-argument requirement is what the protocol default
+        // lands on, so it must seed too. The CROW-890 "fail closed, never seed"
+        // default is moot now that every kind is trusted (CROW-954) — leaving it
+        // would strand exactly the handoff path that default serves.
         let cmd = try await agent.launchCommand(
             sessionID: UUID(), worktreePath: "/w", prompt: "p")
-        #expect(cmd.contains("--trust") == false)
+        #expect(cmd.contains("--trust") == true)
     }
 
     @Test func autoLaunchCommandManagerSessionUnsupported() {

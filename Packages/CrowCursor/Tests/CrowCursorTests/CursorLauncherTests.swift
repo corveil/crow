@@ -46,10 +46,12 @@ struct CursorLauncherTests {
         #expect(cmd.contains("--force") == false)          // no auto-permission
     }
 
-    @Test func launchCommandWithholdsTrustSeedForReviewClone() async throws {
-        // CROW-890 review (Red 1): `seedTrust: false` (the `.review` handoff
-        // case) drops `--trust` — the binary is followed directly by the prompt,
-        // so an attacker-controlled review clone keeps the folder-trust gate.
+    @Test func launchCommandWithholdsTrustSeedWhenSeedTrustOff() async throws {
+        // The `seedTrust: false` arm has no production caller as of CROW-954 (every
+        // Cursor launch now seeds, `.review` included), but the parameter is kept
+        // so the withholding posture stays one flag flip away — see
+        // `CursorLaunchArgs.launchSuffix`. Pin the arm so it can't silently rot
+        // into a no-op that would make restoring it a lie.
         let cmd = try await CursorLauncher().launchCommand(
             sessionID: UUID(), worktreePath: "/w", prompt: "p", seedTrust: false)
         #expect(cmd.contains("--trust") == false)
