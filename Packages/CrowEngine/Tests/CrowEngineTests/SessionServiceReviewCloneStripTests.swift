@@ -80,33 +80,17 @@ struct SessionServiceReviewCloneStripTests {
     }
 
     // MARK: - Handoff gate (the dimension both round-10 and round-11 blockers lived in)
-
-    /// Only a `.review` handoff *to Cursor* strips: the exact gate that, when
-    /// missing (round 10) or divergent (round 11), left Cursor running in an
-    /// unstripped hostile clone.
-    @Test func handoffGateFiresOnlyForCursorReview() {
-        #expect(SessionService.shouldStripCursorReviewCloneOnHandoff(
-            targetKind: .cursor, sessionKind: .review))
-    }
-
-    /// A `.work`/`.job` handoff to Cursor is a normal working clone, not an
-    /// attacker-controlled review head — no strip.
-    @Test func handoffGateSkipsNonReviewCursor() {
-        #expect(!SessionService.shouldStripCursorReviewCloneOnHandoff(
-            targetKind: .cursor, sessionKind: .work))
-        #expect(!SessionService.shouldStripCursorReviewCloneOnHandoff(
-            targetKind: .cursor, sessionKind: .job))
-    }
-
-    /// A `.review` handoff to any *other* agent must not strip `.cursor/` —
-    /// stripping a surface the reviewing agent doesn't load would just hide the
-    /// files a hostile PR ships (same reasoning as the `.codex/` gate).
-    @Test func handoffGateSkipsReviewForNonCursorAgents() {
-        for k: AgentKind in [.claudeCode, .codex, .openCode, .grok] {
-            #expect(!SessionService.shouldStripCursorReviewCloneOnHandoff(
-                targetKind: k, sessionKind: .review))
-        }
-    }
+    //
+    // The dedicated `shouldStripCursorReviewCloneOnHandoff` tests that lived here
+    // were retired with the predicate itself (CROW-954 review, Green 1).
+    // `handoffAgent` strips via the shared `prepareWorktreeForAgentLaunch` gate,
+    // called with the *target* kind, so the round-10 hazard (a review created under
+    // another agent flipped onto Cursor in a never-stripped clone) is now covered by
+    // the launch-gate tests below — `cursorStripGateFiresOnlyForReview`,
+    // `cursorStripGateSkipsNonReview`, `cursorStripGateSkipsReviewForOtherAgents`
+    // assert the same agent × session-kind matrix, and
+    // `prepareStripsCursorConfigWhenGateFires` pins the wiring. Duplicating them
+    // against a second predicate is what let round 11's divergence happen.
 
     // MARK: - Antigravity review support (#902 — was #862 refusal, now wired)
 
