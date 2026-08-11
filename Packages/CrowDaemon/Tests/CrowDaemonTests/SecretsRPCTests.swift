@@ -332,6 +332,32 @@ import Testing
         #expect(stored?.managerGateway?.customHeaders["X-Api-Key"] == "sk-test-1")
         #expect(stored?.webAuth != nil)
     }
+
+    /// The RPC path is gated by `SecretRoutes.buildGateway`, which the handler
+    /// funnels every decoded header into (CROW-969). Asserting the *stored* config
+    /// is untouched is the part that matters: a rejection that still wrote would
+    /// be worse than no rejection.
+    @Test @MainActor func gatewaySetRejectsQuoteWrappedHeaderEndToEnd() async throws {
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        let router = router(devRoot: devRoot)
+
+        _ = await call(router, "gateway-set", [
+            "target": .string("manager"),
+            "base_url": .string("https://gw.example.com"),
+            "header_lines": .array([.string("X-Api-Key: sk-good")]),
+        ])
+
+        let response = await call(router, "gateway-set", [
+            "target": .string("manager"),
+            "base_url": .string("https://gw.example.com"),
+            "header_lines": .array([.string("X-Api-Key: \"sk-quoted\"")]),
+        ])
+        #expect(response.error?.code == RPCErrorCode.invalidParams)
+        // The good value survives the rejected write.
+        #expect(ConfigStore.loadConfig(devRoot: devRoot)?
+            .managerGateway?.customHeaders["X-Api-Key"] == "sk-good")
+    }
 }
 
 /// Unit coverage for the param decode/encode helpers behind those handlers.
@@ -360,6 +386,19 @@ import Testing
             .string("Authorization: Bearer a:b:c"),
         ]))
         #expect(headers == ["X-Api-Key": "sk-test-1", "Authorization": "Bearer a:b:c"])
+    }
+
+    /// Not "quoted values are fine" — ownership of that rule lives in
+    /// `SecretRoutes.buildGateway`, which every entry decoded here flows into
+    /// (CROW-969). Duplicating it here would shadow that message, so the CLI and
+    /// the browser would report different text for the same mistake. The
+    /// newline/colon checks stay because they are *line-shape* rules that must
+    /// run before `parseHeaderLines` collapses lines into a map.
+    @Test func decodeHeaderLinesLeavesQuoteRuleToBuildGateway() throws {
+        let headers = try SecretsRPC.decodeHeaderLines(.array([
+            .string("X-Api-Key: \"sk-quoted\""),
+        ]))
+        #expect(headers == ["X-Api-Key": "\"sk-quoted\""])
     }
 
     @Test func decodeHeaderLinesKeepsBlankValues() throws {

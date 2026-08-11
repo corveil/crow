@@ -407,3 +407,55 @@ import CrowCore
     // Surrounding space is a typo, not a bad name — `parseSessionEnv` trims it.
     #expect(throws: Never.self) { try validateSessionEnvEntry("  AWS_PROFILE  =dev") }
 }
+
+// MARK: - Gateway header lines (CROW-969)
+
+@Test func headerLineAcceptsWellFormedValues() throws {
+    try validateHeaderLine("X-Api-Key: sk-1")
+    // Blank value = "keep the secret already stored for this header", which is
+    // how a base URL is changed without restating the key.
+    try validateHeaderLine("X-Api-Key:")
+    try validateHeaderLine("X-Api-Key: op://Vault/Item/field")
+    // Quotes are only a problem when they wrap the whole value.
+    try validateHeaderLine("X-Json: {\"a\":1}")
+    try validateHeaderLine("X-Api-Key: Bearer \"quoted\"-inside")
+}
+
+/// A value the shell left literally quoted reaches the gateway with its quotes
+/// intact and is rejected — surfacing as a bare "API error" that names nothing.
+@Test func headerLineRejectsQuoteWrappedValues() {
+    for bad in [
+        "X-Api-Key: \"sk-1\"",
+        "X-Api-Key: 'sk-1'",
+        // Worst case: the quotes defeat `hasPrefix("op://")`, so the reference is
+        // never resolved and the literal string is sent instead.
+        "X-Api-Key: \"op://Vault/Item/field\"",
+    ] {
+        #expect(throws: (any Error).self, "expected '\(bad)' to be rejected") {
+            try validateHeaderLine(bad)
+        }
+    }
+}
+
+/// Quoting the whole pair splits into a name and value where *neither half* is
+/// individually wrapped — so only the header-name rule catches this one.
+@Test func headerLineRejectsWholeLineQuoted() {
+    for bad in ["\"X-Api-Key: sk-1\"", "'X-Api-Key: sk-1'"] {
+        #expect(throws: (any Error).self, "expected '\(bad)' to be rejected") {
+            try validateHeaderLine(bad)
+        }
+    }
+}
+
+/// A header value is a credential and an ArgumentParser error prints to the
+/// terminal, so the new messages name the header and never quote its value.
+@Test func headerLineErrorNamesTheHeaderNotTheSecret() {
+    do {
+        try validateHeaderLine("X-Api-Key: \"sk-SECRET\"")
+        Issue.record("expected a throw")
+    } catch {
+        let message = String(describing: error)
+        #expect(message.contains("X-Api-Key"))
+        #expect(!message.contains("sk-SECRET"))
+    }
+}

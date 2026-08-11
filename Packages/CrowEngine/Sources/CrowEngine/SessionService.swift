@@ -1909,30 +1909,128 @@ public final class SessionService {
         return GatewayResolver.resolve(gateway)
     }
 
+    /// The Manager's gateway as a ``GatewayMatch``, for read paths that report a
+    /// session's gateway uniformly (CROW-969).
+    ///
+    /// A Manager session has no worktree and no PR links, so `gatewayMatch` can
+    /// never claim one — without this arm, `crow get-session` would report
+    /// "no gateway" for a Manager that has one, recreating the exact blind spot
+    /// this ticket exists to close. Cheap for the same reason as
+    /// ``workspaceGatewayMatch(for:)``: config read only, no `op read`.
+    public func managerGatewayMatch() -> GatewayMatch? {
+        guard let devRoot = ConfigStore.loadDevRoot(),
+              let config = ConfigStore.loadConfig(devRoot: devRoot)
+        else { return nil }
+        return GatewayMatch(managerGateway: config.managerGateway)
+    }
+
     /// Resolve the AI gateway for a non-Manager session (CROW-402, CROW-891).
     ///
-    /// Two lookups, in order:
+    /// Delegates the "which workspace claims this session" question to
+    /// ``workspaceGatewayMatch(for:)`` — see there for the two-lookup rule — then
+    /// resolves that workspace's gateway and logs the decision.
+    ///
+    /// Returns nil when nothing claims the session, or when the workspace that
+    /// does has no gateway. Deliberate and logged, not an oversight: the callers
+    /// then **unset** `ANTHROPIC_*` so a global `~/.zshrc` export (or a sibling
+    /// workspace's gateway) can't bleed into a session Crow has no gateway for.
+    /// There is no `managerGateway` fallback — the Manager's gateway is the
+    /// Manager's alone.
+    ///
+    /// ⚠️ Calls ``GatewayResolver/resolve(_:resolveSecret:)``, which shells out to
+    /// `op read` with a **15-second timeout per header**. This is a launch-path
+    /// method only. A read RPC wanting the same information must call
+    /// ``workspaceGatewayMatch(for:)`` instead, which touches no subprocess.
+    private func workspaceGatewayResolved(for sessionID: UUID) -> GatewayResolver.Resolved? {
+        let match = workspaceGatewayMatch(for: sessionID)
+        logGatewayLaunchDecision(sessionID: sessionID, match: match)
+        guard let gateway = match?.gateway, !gateway.isEmpty else { return nil }
+        return GatewayResolver.resolve(gateway)
+    }
+
+    /// One line per Claude launch/handoff naming where the session's gateway came
+    /// from, so a rejection at the gateway can be traced to a workspace instead of
+    /// guessed at (CROW-969). Before this, a bad gateway surfaced only as a bare
+    /// "API error" with nothing pointing at the gateway, the workspace, or the
+    /// header.
+    ///
+    /// Header **names** only — a value is a credential, and this line goes to
+    /// stderr and the unified log. Headers whose `op://` reference fails to
+    /// resolve are not re-reported here; `GatewayResolver` already names each one
+    /// it drops. Clean division: this line says *which gateway*, that one says
+    /// *which header failed*.
+    private func logGatewayLaunchDecision(sessionID: UUID, match: GatewayMatch?) {
+        let prefix = "[SessionService] Gateway for session \(sessionID)"
+        guard let match else {
+            // Also covers an unreadable devRoot/config. Two distinct lines, because
+            // "no workspace claims this repo" and "this session has no PR link to
+            // claim by" need different fixes.
+            if let slug = Self.repoSlug(fromPRLinks: appState.links(for: sessionID)) {
+                CrowLog.info(
+                    "\(prefix): No workspace claims repo \(slug); ANTHROPIC_* will be unset")
+            } else {
+                CrowLog.info(
+                    "\(prefix): no workspace claims this session; ANTHROPIC_* will be unset")
+            }
+            return
+        }
+        let via = "workspace '\(match.workspaceName ?? "—")' (matched by \(match.source.rawValue))"
+        guard let gateway = match.gateway, !gateway.isEmpty else {
+            CrowLog.info("\(prefix): \(via) has no gateway; ANTHROPIC_* will be unset")
+            return
+        }
+        let names = gateway.customHeaders.keys.sorted().joined(separator: ", ")
+        CrowLog.info("\(prefix): \(via) -> \(gateway.baseURL), headers: \(names)")
+    }
+
+    /// Which workspace claims a session, against live config — the cheap half of
+    /// ``workspaceGatewayResolved(for:)``.
+    ///
+    /// Cheap by construction: two small file reads plus a JSON decode, then pure
+    /// string work. **No subprocess**, unlike `workspaceGatewayResolved`, so this
+    /// is the one safe to call from a read RPC on the MainActor.
+    public func workspaceGatewayMatch(for sessionID: UUID) -> GatewayMatch? {
+        guard let devRoot = ConfigStore.loadDevRoot(),
+              let config = ConfigStore.loadConfig(devRoot: devRoot)
+        else { return nil }
+        return Self.gatewayMatch(
+            worktreePath: appState.primaryWorktree(for: sessionID)?.worktreePath,
+            prLinks: appState.links(for: sessionID),
+            devRoot: devRoot,
+            config: config)
+    }
+
+    /// Decide which workspace claims a session, from inputs the caller has already
+    /// gathered. Two lookups, in order:
     ///
     /// 1. **Path** — `.work`/`.job` worktrees live at `{devRoot}/{workspace}/…`,
     ///    so the first component under devRoot names the workspace. Fast, and the
     ///    only lookup that can tell apart two workspaces sharing a repo.
     /// 2. **Repo slug** — a `.review` clone lives at `{devRoot}/crow-reviews/…`,
     ///    so path math yields the literal `"crow-reviews"` and matches nothing.
-    ///    That silently unset the gateway for *every* review (CROW-891). Fall
-    ///    back to the PR link's `owner/repo` and ask which workspace claims it.
+    ///    That silently unset the gateway for *every* review (CROW-891). Fall back
+    ///    to the PR link's `owner/repo` and ask which workspace claims it.
     ///
-    /// Returns nil when nothing claims the session — deliberate and logged, not
-    /// an oversight: the callers then **unset** `ANTHROPIC_*` so a global
-    /// `~/.zshrc` export (or a sibling workspace's gateway) can't bleed into a
-    /// session Crow has no gateway for. There is no `managerGateway` fallback —
-    /// the Manager's gateway is the Manager's alone.
-    private func workspaceGatewayResolved(for sessionID: UUID) -> GatewayResolver.Resolved? {
-        guard let devRoot = ConfigStore.loadDevRoot(),
-              let config = ConfigStore.loadConfig(devRoot: devRoot)
-        else { return nil }
-
-        var matched: WorkspaceInfo?
-
+    /// Because the two lookups can land on *different* workspaces for the same
+    /// repo, a work session and a review of that repo's PR may resolve to
+    /// different gateways — which is exactly the divergence CROW-969 found, and
+    /// why ``GatewayMatch/source`` is reported rather than discarded.
+    ///
+    /// The match carries its workspace's `gateway` even when that is nil, so
+    /// callers can tell "no workspace claimed this session" from "a workspace
+    /// claimed it and has no gateway" — two states with identical behavior but
+    /// different fixes.
+    ///
+    /// Pure — no `ConfigStore`, no actor state — so the whole rule is directly
+    /// unit-testable, which the resolver it was extracted from never was
+    /// (ADR 0012). Logs nothing: `get-session` calls this on every read, and a
+    /// resolution decision is a *launch*-time event.
+    public nonisolated static func gatewayMatch(
+        worktreePath: String?,
+        prLinks: [SessionLink],
+        devRoot: String,
+        config: AppConfig
+    ) -> GatewayMatch? {
         // 1. Path fast path. Case-insensitive: APFS is case-preserving but
         // case-insensitive, so an on-disk folder can differ in case from the
         // configured workspace name and still be the same directory.
@@ -1943,11 +2041,11 @@ public final class SessionService {
         // itself, shadowing the slug fallback below. `validateName` now rejects
         // the name, but a config written before that still has to resolve
         // correctly.
-        if let worktree = appState.primaryWorktree(for: sessionID),
-           let wsName = Self.workspaceName(
-               forWorktreePath: worktree.worktreePath, devRoot: devRoot),
-           !DevRootLayout.isReservedWorkspaceName(wsName) {
-            matched = config.workspaces.first { $0.name.lowercased() == wsName.lowercased() }
+        if let worktreePath,
+           let wsName = workspaceName(forWorktreePath: worktreePath, devRoot: devRoot),
+           !DevRootLayout.isReservedWorkspaceName(wsName),
+           let workspace = config.workspaces.first(where: { $0.name.lowercased() == wsName.lowercased() }) {
+            return GatewayMatch(workspace: workspace, source: .worktreePath)
         }
 
         // 2. Repo-slug fallback — reviews, and any session whose worktree isn't
@@ -1955,19 +2053,12 @@ public final class SessionService {
         // than `session.kind == .review` because work sessions also carry `.pr`
         // links once their PR opens, and one whose path lookup failed should
         // inherit its repo's workspace gateway too.
-        if matched == nil, let slug = Self.repoSlug(fromPRLinks: appState.links(for: sessionID)) {
-            matched = config.workspace(forRepoSlug: slug)
-            if matched == nil {
-                CrowLog.info(
-                    "[SessionService] No workspace claims repo \(slug) (session \(sessionID)); "
-                        + "ANTHROPIC_* will be unset for this session")
-            }
+        if let slug = repoSlug(fromPRLinks: prLinks),
+           let workspace = config.workspace(forRepoSlug: slug) {
+            return GatewayMatch(workspace: workspace, source: .repoSlug)
         }
 
-        guard let workspace = matched,
-              let gateway = workspace.gateway, !gateway.isEmpty
-        else { return nil }
-        return GatewayResolver.resolve(gateway)
+        return nil
     }
 
     /// First parseable `owner/repo` slug among a session's PR links, or nil.
@@ -4307,5 +4398,56 @@ public final class SessionService {
             CrowLog.info("[SessionService] tmux registerTerminal failed (\(error)); terminal \(t.id) will not render")
         }
         return t
+    }
+}
+
+// MARK: - Gateway resolution reporting (CROW-969)
+
+extension SessionService {
+    /// Which lookup claimed a session's gateway.
+    ///
+    /// Raw values are the strings `crow get-session` reports as
+    /// `workspace_match`, so they are API — renaming one breaks scripts.
+    public enum GatewayMatchSource: String, Sendable {
+        /// `{devRoot}/{workspace}/…` path math — work and job sessions.
+        case worktreePath = "worktree_path"
+        /// The PR link's `owner/repo`, matched against a workspace's
+        /// `alwaysInclude`/`autoReviewRepos` — the CROW-891 review-clone path.
+        case repoSlug = "repo_slug"
+        /// The Manager's own gateway, which belongs to no workspace. Produced
+        /// only by ``SessionService/managerGatewayMatch()``, never by the pure
+        /// ``SessionService/gatewayMatch(worktreePath:prLinks:devRoot:config:)``,
+        /// so it can't leak into the workspace launch log.
+        case manager
+    }
+
+    /// Which workspace claims a session, and how.
+    ///
+    /// Carries the claimed workspace's `gateway` — **possibly nil** — so callers
+    /// can tell "no workspace claimed this session" from "a workspace claimed it
+    /// and has no gateway". Those two states produce identical behavior
+    /// (`ANTHROPIC_*` unset) but need different fixes, and collapsing them is part
+    /// of why CROW-969 took so long to diagnose.
+    public struct GatewayMatch: Sendable {
+        /// Nil for ``GatewayMatchSource/manager`` — the Manager gateway is not a
+        /// workspace's.
+        public var workspaceID: UUID?
+        public var workspaceName: String?
+        public var source: GatewayMatchSource
+        public var gateway: WorkspaceGateway?
+
+        init(workspace: WorkspaceInfo, source: GatewayMatchSource) {
+            self.workspaceID = workspace.id
+            self.workspaceName = workspace.name
+            self.source = source
+            self.gateway = workspace.gateway
+        }
+
+        init(managerGateway: WorkspaceGateway?) {
+            self.workspaceID = nil
+            self.workspaceName = nil
+            self.source = .manager
+            self.gateway = managerGateway
+        }
     }
 }

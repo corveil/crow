@@ -106,7 +106,21 @@ crow list-sessions
 crow get-session --session <uuid>
 ```
 
-Returns full session details: id, name, status, ticket metadata, worktrees, terminals, and links.
+Returns full session details: id, name, status, agent, ticket metadata, timestamps, lock state, and org-goal/alignment fields. (Worktrees, terminals and links have their own verbs — `crow list-worktrees`, `crow list-terminals`, `crow list-links`.)
+
+It also reports which gateway the session launches with, so a rejected credential can be traced without starting a session:
+
+| Field              | Meaning                                                                       |
+| ------------------ | ----------------------------------------------------------------------------- |
+| `workspace_id`     | The workspace claiming this session, or `null`                                 |
+| `workspace_name`   | Its name, or `null`                                                            |
+| `workspace_match`  | How it was claimed: `worktree_path`, `repo_slug`, or `manager`                 |
+| `gateway_set`      | Whether that workspace has a gateway configured                                |
+| `gateway_base_url` | The gateway's base URL, or `null`                                              |
+
+These are the **redacted** subset — a set flag and the non-secret base URL, never header names or values, because `get-session` is readable by a remote `/rpc` client. Headers live in `crow gateway get`, which is local-only.
+
+`workspace_match` distinguishes the two lookups: work and job sessions match by worktree path, while review clones (which live under `crow-reviews/`) match by the PR's `owner/repo`. Those can land on **different workspaces for the same repo**, so a work session and a review of that repo's PR may use different gateways — see [configuration.md](configuration.md#which-gateway-applies). A `null` `workspace_name` with `gateway_set: false` means nothing claimed the session at all; a non-null name with `gateway_set: false` means the workspace claimed it and has no gateway.
 
 ### `crow set-status`
 
@@ -1583,6 +1597,24 @@ crow gateway set --workspace Corveil \
   --header "X-Api-Key: op://Prod/Gateway/api_key" \
   --header "X-Tenant: acme"
 ```
+
+A header value must not carry **literal surrounding quotes**. They are stored and transmitted verbatim, so the gateway sees them as part of the credential and rejects the request — which surfaces in the agent as a bare "API error" naming nothing. Quote the whole `Name: Value` pair in your shell, never inside it:
+
+```bash
+# ✅ the quotes are the shell's, and do not reach the header value
+crow gateway set --workspace Corveil --base-url https://gw.example.com \
+  --header "X-Api-Key: Bearer sk-…"
+
+# ❌ rejected — the value would be stored as "Bearer sk-…" with the quotes
+crow gateway set --workspace Corveil --base-url https://gw.example.com \
+  --header 'X-Api-Key: "Bearer sk-…"'
+
+# ❌ rejected — quoting the whole pair leaves a quote on the header name
+crow gateway set --workspace Corveil --base-url https://gw.example.com \
+  --header '"X-Api-Key: Bearer sk-…"'
+```
+
+Both write paths enforce this (the CLI and the Settings gateway editor). A value already stored this way still launches, but logs a redacted warning — see [configuration.md](configuration.md#secret-storage).
 
 | Flag          | Required | Description                                          |
 | ------------- | -------- | ---------------------------------------------------- |

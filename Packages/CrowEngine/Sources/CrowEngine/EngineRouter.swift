@@ -285,6 +285,20 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                         throw RPCError.applicationError("Session not found")
                     }
                     let fmt = ISO8601DateFormatter()
+                    // CROW-969: which gateway this session launches with, and where
+                    // it came from — so a rejected credential can be traced to a
+                    // workspace without launching a session to find out. A Manager
+                    // has no worktree and no PR links, so it reports its own
+                    // gateway rather than a workspace's.
+                    //
+                    // ⚠️ `workspaceGatewayMatch`, NOT `workspaceGatewayResolved`:
+                    // the latter shells out to `op read` with a 15s timeout PER
+                    // HEADER, and this closure runs on the MainActor — a gateway
+                    // whose `op` is blocked on a biometric prompt would wedge the
+                    // whole daemon. The match path is config-read only.
+                    let match = s.kind == .manager
+                        ? capturedService.managerGatewayMatch()
+                        : capturedService.workspaceGatewayMatch(for: id)
                     return [
                         "id": .string(s.id.uuidString),
                         "name": .string(s.name),
@@ -312,6 +326,19 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                         "org_goal": s.orgGoal.map { .string($0) } ?? .null,
                         "ticket_priority": s.ticketPriority.map { .string($0.rawValue) } ?? .null,
                         "alignment_weight": .double(s.alignmentWeight),
+                        // ⚠️ REDACTION. `get-session` is NOT in
+                        // `RPCWebSocketHandler.localOnlyDenial`, so a remote /rpc
+                        // peer reads this. These fields therefore match
+                        // `WorkspaceRPC.workspaceJSON` exactly: a `gateway_set`
+                        // flag and the non-secret base URL, and nothing else.
+                        // Header names and values stay with `crow gateway get`,
+                        // which IS local-gated. Adding `headers` here would
+                        // silently un-gate a credential.
+                        "workspace_id": match?.workspaceID.map { .string($0.uuidString) } ?? .null,
+                        "workspace_name": match?.workspaceName.map { .string($0) } ?? .null,
+                        "workspace_match": match.map { .string($0.source.rawValue) } ?? .null,
+                        "gateway_set": .bool(!(match?.gateway?.isEmpty ?? true)),
+                        "gateway_base_url": match?.gateway.map { .string($0.baseURL) } ?? .null,
                     ]
                 }
             },

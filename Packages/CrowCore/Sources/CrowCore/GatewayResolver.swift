@@ -51,6 +51,24 @@ public enum GatewayResolver {
 
         var resolvedHeaders: [String: String] = [:]
         for (name, value) in gateway.customHeaders {
+            // CROW-969: a value stored with literal surrounding quotes is a
+            // shell-quoting slip that nothing downstream notices — `serializeHeaders`
+            // interpolates it verbatim, `ClaudeLaunchArgs.gatewayEnvPrefix` shell-quotes
+            // the whole line, and the gateway rejects the request as a bare "API error".
+            //
+            // Writes are now rejected (`WorkspaceGateway.isQuoteWrapped`), but a config
+            // written before that check still has to launch — so warn and pass the value
+            // through UNCHANGED. Stripping would mean guessing the quotes aren't part of
+            // the secret; a loud rejection at the gateway beats authenticating with a
+            // credential the user never verified.
+            //
+            // Checked on the STORED value, before the `op://` branch below: a quoted
+            // reference fails `hasPrefix` and silently falls into the plaintext arm, which
+            // is the most confusing case of all. Redacted exactly like the
+            // reference-failure warning — the header NAME only, never the value.
+            if WorkspaceGateway.isQuoteWrapped(value) {
+                CrowLog.info("[GatewayResolver] Header '\(name)' has a value wrapped in quote characters; it is sent verbatim and the gateway will very likely reject it — re-set it without the quotes (`crow gateway set …`)")
+            }
             if value.hasPrefix("op://") {
                 if let secret = resolveSecret(value) {
                     resolvedHeaders[name] = secret

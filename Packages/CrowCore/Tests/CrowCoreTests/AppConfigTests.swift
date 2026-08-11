@@ -929,6 +929,75 @@ import Testing
     #expect(parsed.count == 2)                    // ": missing-name" has empty name → ignored
 }
 
+// MARK: - Gateway header quoting rules (CROW-969)
+//
+// A value stored with literal surrounding quotes reaches the gateway with them
+// intact and is rejected, surfacing as a bare "API error". These predicates are
+// the single rule that `validateHeaderLine` (CLI) and `SecretRoutes.buildGateway`
+// (RPC + web) both delegate to.
+
+@Test func gatewayIsQuoteWrappedCatchesShellQuotingSlip() throws {
+    #expect(WorkspaceGateway.isQuoteWrapped("\"Bearer sk-1\""))
+    #expect(WorkspaceGateway.isQuoteWrapped("'Bearer sk-1'"))
+    // Worst case: the quotes defeat `hasPrefix("op://")` in GatewayResolver, so
+    // the reference is never resolved and is sent literally instead.
+    #expect(WorkspaceGateway.isQuoteWrapped("\"op://Vault/Item/field\""))
+}
+
+@Test func gatewayIsQuoteWrappedRejectsEmptyQuotedString() throws {
+    // Two quote characters, matching — a shell-quoted *empty* value. This would
+    // store a literal 2-character credential, which is not the same thing as the
+    // genuinely blank "keep the stored secret" signal below.
+    #expect(WorkspaceGateway.isQuoteWrapped("\"\""))
+    #expect(WorkspaceGateway.isQuoteWrapped("''"))
+}
+
+@Test func gatewayIsQuoteWrappedPassesEverythingElse() throws {
+    let fine = [
+        "",                          // blank = "keep the stored secret"
+        "   ",                       // trims to blank, same signal
+        "\"",                        // lone quote: must not match itself
+        "'",
+        "{\"a\":1}",                 // JSON — first `{`, last `}`
+        "Bearer sk-\"abc\"-def",     // interior quotes only
+        "\"abc'",                    // mismatched delimiters: not a recognizable slip
+        "'abc\"",
+        "abc\"",                     // one-sided
+        "\"abc",
+        "op://Vault/Item/field",
+        "Bearer sk-plain",
+    ]
+    for value in fine {
+        #expect(!WorkspaceGateway.isQuoteWrapped(value), "expected '\(value)' to be accepted")
+    }
+}
+
+@Test func gatewayIsQuoteWrappedTrimsBeforeChecking() throws {
+    // Reachable via a hand-crafted POST to /config/workspace-gateway, which
+    // trims header *keys* but never values.
+    #expect(WorkspaceGateway.isQuoteWrapped("  \"Bearer sk-1\"  "))
+}
+
+@Test func gatewayHeaderNameRejectsDoubleQuoteAnywhere() throws {
+    // RFC 9110 field-name is a `token`, and `tchar` excludes `"` entirely — so a
+    // name carrying one can never be a valid header, wherever the quote sits.
+    // The leading case is the whole-line-quoted slip: `--header '"X-Api-Key: sk"'`
+    // splits on the first colon, leaving neither half individually wrapped.
+    #expect(WorkspaceGateway.headerNameHasStrayQuote("\"X-Api-Key"))
+    #expect(WorkspaceGateway.headerNameHasStrayQuote("X-\"Api\"-Key"))
+    #expect(WorkspaceGateway.headerNameHasStrayQuote("X-Api-Key\""))
+}
+
+@Test func gatewayHeaderNameRejectsOnlyLeadingSingleQuote() throws {
+    #expect(WorkspaceGateway.headerNameHasStrayQuote("'X-Api-Key"))
+    // Asymmetric on purpose: `'` IS a legal `tchar`, so it is rejected only where
+    // no real header name has ever put one. A trailing apostrophe is legal and
+    // not a recognizable quoting artifact, so it passes.
+    #expect(!WorkspaceGateway.headerNameHasStrayQuote("X-Api-Key'"))
+    #expect(!WorkspaceGateway.headerNameHasStrayQuote("X-Api-Key"))
+    #expect(!WorkspaceGateway.headerNameHasStrayQuote(""))
+}
+
 // MARK: - Agent selection (CROW-811)
 //
 // `defaultAgentKind` + `agentsByKind` back `crow agents list|set` and the web

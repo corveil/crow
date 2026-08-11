@@ -158,6 +158,12 @@ enum SecretRoutes {
     /// keys with empty values. Callers must run the result through
     /// ``mergingPreservedHeaders(incoming:stored:)`` under the config lock so a
     /// blank value keeps the currently-stored secret (review Yellow #1 / CROW-593).
+    ///
+    /// This is also where the quote rules live for **both** writers (CROW-969):
+    /// the web POSTs above and the `gateway-set` RPC, which funnels
+    /// `SecretsRPC.decodeHeaderLines` straight into here. Enforcing them at this
+    /// one chokepoint is what keeps the CLI's and the browser's error text
+    /// identical for the same mistake.
     static func buildGateway(_ body: GatewayBody?) -> Result<WorkspaceGateway?, GatewayValidationError> {
         guard let body, body.clear != true else { return .success(nil) }
         let url = (body.baseURL ?? "").trimmingCharacters(in: .whitespaces)
@@ -167,6 +173,26 @@ enum SecretRoutes {
         if url.isEmpty && headers.isEmpty { return .success(nil) }
         if url.isEmpty != headers.isEmpty {
             return .failure(GatewayValidationError(message: "a gateway needs both a base URL and at least one header, or neither"))
+        }
+        // CROW-969: reject what a shell left literally quoted. Runs after the
+        // both-or-neither check so the structural error still wins, and iterates
+        // sorted so the header named in the error is deterministic when several
+        // are wrong.
+        //
+        // Blank values are exempt by construction — `isQuoteWrapped` passes them —
+        // because a blank value is the "keep the stored secret" signal that
+        // `mergingPreservedHeaders` resolves below. The messages name the header
+        // and never its value: this string becomes an HTTP 400 body and an RPC
+        // error, both of which land in logs.
+        for (name, value) in headers.sorted(by: { $0.key < $1.key }) {
+            if WorkspaceGateway.headerNameHasStrayQuote(name) {
+                return .failure(GatewayValidationError(
+                    message: "header name '\(name)' carries a quote character — quote the whole 'Name: Value' pair in your shell, not inside it"))
+            }
+            if WorkspaceGateway.isQuoteWrapped(value) {
+                return .failure(GatewayValidationError(
+                    message: "the value for header '\(name)' is wrapped in quote characters, which would be sent as part of the credential — remove them"))
+            }
         }
         return .success(WorkspaceGateway(baseURL: url, customHeaders: headers))
     }
@@ -180,6 +206,16 @@ enum SecretRoutes {
     /// encodes fine but `WorkspaceGateway` refuses to decode it, which would make
     /// the next `loadConfig` return `nil` and wipe the whole config on the next
     /// write (review Red on #623).
+    ///
+    /// ⚠️ The CROW-969 quote rules deliberately do **not** run here. This function
+    /// substitutes a *stored* value for each blank one, and a stored value is
+    /// exactly what may be quote-wrapped — a config written before `buildGateway`
+    /// started rejecting them. Checking here would make `--header "X-Api-Key:"`
+    /// (the documented way to change a base URL without restating the key) fail on
+    /// any pre-existing bad secret, and would permanently break the web gateway
+    /// editor for that workspace, since it always sends blank values for stored
+    /// keys — locking the user out of fixing the very config the rule is about.
+    /// Already-stored values are warned about at launch by `GatewayResolver`.
     static func mergingPreservedHeaders(
         incoming: WorkspaceGateway?,
         stored: WorkspaceGateway?

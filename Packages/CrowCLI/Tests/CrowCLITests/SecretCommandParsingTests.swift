@@ -119,6 +119,34 @@ private let validUUID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
     }
 }
 
+/// Proves the CROW-969 rules are reached through `GatewaySet.validate()`, not
+/// only by calling the free function directly.
+@Test func gatewaySetRejectsQuoteWrappedHeaderValues() {
+    for header in [
+        "X-Api-Key: \"sk-1\"",
+        "X-Api-Key: 'sk-1'",
+        "\"X-Api-Key: sk-1\"",   // whole pair quoted — caught by the name rule
+    ] {
+        #expect(throws: (any Error).self, "expected '\(header)' to be rejected") {
+            _ = try GatewaySet.parse([
+                "--manager", "--base-url", "https://gw.example.com", "--header", header,
+            ])
+        }
+    }
+}
+
+/// Regression floor for the two shapes the quote rules must never catch.
+@Test func gatewaySetAcceptsBlankAndOpReferenceValues() throws {
+    // Blank = "keep the stored secret" (how a base URL changes alone).
+    _ = try GatewaySet.parse([
+        "--manager", "--base-url", "https://gw.example.com", "--header", "X-Api-Key:",
+    ])
+    _ = try GatewaySet.parse([
+        "--manager", "--base-url", "https://gw.example.com",
+        "--header", "X-Api-Key: op://Vault/Item/field",
+    ])
+}
+
 // MARK: - web-password
 
 @Test func webPasswordSetParsesStdinFlag() throws {

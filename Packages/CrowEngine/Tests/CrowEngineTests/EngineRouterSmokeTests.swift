@@ -242,4 +242,61 @@ struct EngineRouterSmokeTests {
         #expect(cursor.error == nil)
         #expect(cursor.result?["agent_kind"]?.stringValue == AgentKind.cursor.rawValue)
     }
+
+    /// CROW-969: `get-session` reports which workspace a session's gateway
+    /// resolves to, so a rejected credential can be traced without launching.
+    ///
+    /// `get-session` is NOT in `RPCWebSocketHandler.localOnlyDenial`, so a remote
+    /// `/rpc` peer reads this payload — the load-bearing assertion here is the
+    /// *negative* one: no header names, no header values, no `headers` key. Those
+    /// stay with `crow gateway get`, which is local-gated.
+    ///
+    /// The match itself resolves to nil in this environment: `workspaceGatewayMatch`
+    /// reads the live devroot pointer via `ConfigStore`, which ADR 0012 forbids a
+    /// test from touching. Positive resolution is covered by the pure
+    /// `gatewayMatch` suite in `SessionServiceGatewayResolutionTests`.
+    @Test("get-session reports gateway fields and never leaks header names")
+    func getSessionReportsGatewayFieldsAndNeverHeaderNames() async throws {
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("crow-engine-smoke-\(UUID().uuidString)")
+        let appState = AppState()
+        let store = JSONStore(directory: tmp)
+        let service = SessionService(store: store, appState: appState, hostBridge: NoopHostBridge())
+
+        let session = Session(name: "gateway-fields")
+        appState.sessions.append(session)
+
+        let ctx = EngineContext(
+            appState: appState,
+            store: store,
+            sessionService: service,
+            issueTracker: nil,
+            telemetryPort: nil,
+            devRoot: tmp.path,
+            hostBridge: NoopHostBridge(),
+            loadConfig: { nil },
+            applyConfig: { _ in nil }
+        )
+        let router = makeEngineRouter(ctx)
+
+        let response = await router.handle(request: JSONRPCRequest(
+            id: 1, method: "get-session",
+            params: ["session_id": .string(session.id.uuidString)]))
+        let result = try #require(response.result)
+
+        // All five keys are present regardless of whether anything matched, so
+        // scripts see a stable shape.
+        for key in ["workspace_id", "workspace_name", "workspace_match",
+                    "gateway_set", "gateway_base_url"] {
+            #expect(result[key] != nil, "expected '\(key)' in the get-session payload")
+        }
+        #expect(result["workspace_name"] == .null)
+        #expect(result["workspace_match"] == .null)
+        #expect(result["gateway_base_url"] == .null)
+        #expect(result["gateway_set"] == .bool(false))
+
+        // Redaction: nothing in the payload may carry header material.
+        #expect(result["headers"] == nil)
+        #expect(result["customHeaders"] == nil)
+    }
 }
