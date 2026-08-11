@@ -2500,8 +2500,10 @@ const switcherState = {
   open: false,
   originId: null,
   index: 0,
+  highlightedId: null,
   chord: null,
   modifiersHeld: null,
+  previousFocus: null,
 };
 
 function switcherBindingModifierFromEvent(e) {
@@ -2638,10 +2640,31 @@ function switcherCategoryLabel(s) {
   return 'Work';
 }
 
+function switcherClampIndex(entries) {
+  if (!entries.length) return 0;
+  const cur = entries[switcherState.index];
+  if (cur && switcherState.highlightedId && cur.id === switcherState.highlightedId) {
+    return switcherState.index;
+  }
+  if (switcherState.highlightedId) {
+    const hi = entries.findIndex((s) => s.id === switcherState.highlightedId);
+    if (hi >= 0) {
+      switcherState.index = hi;
+      return hi;
+    }
+  }
+  if (switcherState.index >= entries.length) {
+    switcherState.index = entries.length - 1;
+  }
+  if (switcherState.index < 0) switcherState.index = 0;
+  return switcherState.index;
+}
+
 function switcherAdvance(delta) {
   const entries = buildSwitcherEntries();
   if (!entries.length) return;
   switcherState.index = (switcherState.index + delta + entries.length) % entries.length;
+  switcherState.highlightedId = entries[switcherState.index]?.id ?? null;
   renderSwitcherOverlay();
   scheduleSwitcherPreview();
 }
@@ -2651,12 +2674,18 @@ function closeSwitcherOverlay() {
   switcherState.originId = null;
   switcherState.chord = null;
   switcherState.modifiersHeld = null;
+  switcherState.highlightedId = null;
   if (switcherPreviewTimer) { clearTimeout(switcherPreviewTimer); switcherPreviewTimer = null; }
   const root = document.getElementById('session-switcher');
   if (root) {
     root.hidden = true;
     root.setAttribute('aria-hidden', 'true');
     root.innerHTML = '';
+  }
+  const prev = switcherState.previousFocus;
+  switcherState.previousFocus = null;
+  if (prev && typeof prev.focus === 'function') {
+    try { prev.focus(); } catch (_) { /* detached node */ }
   }
 }
 
@@ -2684,9 +2713,11 @@ function switcherOnBinding(e) {
   if (!switcherState.open) {
     switcherState.open = true;
     switcherState.originId = selectedId;
+    switcherState.previousFocus = document.activeElement;
     captureSwitcherModifiers(e);
     const cur = entries.findIndex((s) => s.id === selectedId);
     switcherState.index = cur >= 0 ? (cur + 1) % entries.length : 0;
+    switcherState.highlightedId = entries[switcherState.index]?.id ?? null;
     if (isTerminalFocused()) document.activeElement.blur();
     renderSwitcherOverlay();
     scheduleSwitcherPreview();
@@ -2699,9 +2730,13 @@ function switcherOnBinding(e) {
 
 function renderSwitcherCard(s, highlighted) {
   const card = el('div', 'switcher-card' + (highlighted ? ' highlighted' : ''));
+  card.setAttribute('role', 'option');
+  card.setAttribute('aria-selected', highlighted ? 'true' : 'false');
+  if (highlighted) card.tabIndex = 0;
   card.onclick = (ev) => {
     ev.stopPropagation();
     switcherState.index = buildSwitcherEntries().findIndex((x) => x.id === s.id);
+    switcherState.highlightedId = s.id;
     switcherCommit();
   };
   const top = el('div', 'switcher-card-top');
@@ -2754,21 +2789,29 @@ function renderSwitcherOverlay() {
     closeSwitcherOverlay();
     return;
   }
+  switcherClampIndex(entries);
+  switcherState.highlightedId = entries[switcherState.index]?.id ?? null;
   root.hidden = false;
   root.setAttribute('aria-hidden', 'false');
   root.innerHTML = '';
   const panel = el('div', 'switcher-panel');
   const strip = el('div', 'switcher-strip');
+  strip.setAttribute('role', 'listbox');
+  strip.setAttribute('aria-label', 'Sessions');
+  const hi = switcherState.index;
   entries.forEach((s, i) => {
-    strip.appendChild(renderSwitcherCard(s, i === switcherState.index));
+    strip.appendChild(renderSwitcherCard(s, i === hi));
   });
   panel.appendChild(strip);
   const hint = el('div', 'switcher-hint', switcherCommitHint());
   panel.appendChild(hint);
   root.appendChild(panel);
   requestAnimationFrame(() => {
-    const hi = strip.querySelector('.switcher-card.highlighted');
-    if (hi) hi.scrollIntoView({ inline: 'center', block: 'nearest' });
+    const card = strip.querySelector('.switcher-card.highlighted');
+    if (card) {
+      card.scrollIntoView({ inline: 'center', block: 'nearest' });
+      card.focus();
+    }
   });
   fillSwitcherPreview();
 }

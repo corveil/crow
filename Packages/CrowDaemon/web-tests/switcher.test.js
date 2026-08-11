@@ -17,6 +17,10 @@ const epilogue = `
   setModifiersHeld(v){ switcherState.modifiersHeld = v; },
   setChord(v){ switcherState.chord = v; },
   touchSessionMRU(id){ return touchSessionMRU(id); },
+  switcherClampIndex(entries){ return switcherClampIndex(entries); },
+  setIndex(i){ switcherState.index = i; },
+  setHighlightedId(id){ switcherState.highlightedId = id; },
+  getIndex(){ return switcherState.index; },
   set uiConfig(v){ Object.assign(uiConfig, v); },
 };
 `;
@@ -93,6 +97,26 @@ console.log('CROW-976 session switcher helpers:');
   check('ctrl binding active while ctrl held', T.switcherBindingModifiersActive());
   T.setModifiersHeld({ shift: false, ctrl: false, alt: false, meta: false });
   check('ctrl binding inactive after release', !T.switcherBindingModifiersActive());
+}
+
+{
+  const entries = [
+    { id: 'a', kind: 'work', status: 'active' },
+    { id: 'b', kind: 'work', status: 'active' },
+    { id: 'd', kind: 'work', status: 'active' },
+  ];
+  T.setIndex(4);
+  T.setHighlightedId('d');
+  T.switcherClampIndex(entries);
+  check('index clamps when list shrinks', T.getIndex() === 2);
+  T.setIndex(1);
+  T.setHighlightedId('a');
+  T.switcherClampIndex([{ id: 'b', kind: 'work', status: 'active' }]);
+  check('index falls back when highlighted session filtered out', T.getIndex() === 0);
+  T.setIndex(3);
+  T.setHighlightedId('d');
+  T.switcherClampIndex(entries);
+  check('index tracks highlighted session after shrink', T.getIndex() === 2);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
