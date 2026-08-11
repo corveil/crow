@@ -117,6 +117,18 @@ for placeholder in \
     require "Resources/crow-review-pr-SKILL.md.template" "$placeholder"
 done
 
+# CROW-974: pre-submit guardrails must be present in both halves so every
+# harness (Claude slash-command, Cursor/Codex/OpenCode/Grok/Antigravity inline)
+# refuses mis-targeted or verdict-inconsistent reviews before `gh pr review`.
+for f in skills/crow-review-pr/SKILL.md Resources/crow-review-pr-SKILL.md.template; do
+    require "$f" \
+        "### Step 5a: Pre-submit Guardrails (REQUIRED)" \
+        "#### Target check" \
+        "#### Verdict consistency check" \
+        "Zero overlap" \
+        "do not post"
+done
+
 if [ "$fail" -ne 0 ]; then
     echo "check-workspace-custom-instructions: FAILED (see #683)" >&2
     exit 1
