@@ -47,6 +47,21 @@ struct SessionServiceReviewPromptTests {
     \(ReviewVerdictPolicy.notesPlaceholder)
     """
 
+    /// `fixtureSkillBody` with the real skill's YAML frontmatter prepended — the
+    /// shape `Scaffolder.bundledReviewSkill()` actually returns in production, and
+    /// the one that killed every Cursor review (CROW-968).
+    private static let frontmatterSkillBody = """
+    ---
+    name: crow-review-pr
+    description: >-
+      Perform a comprehensive code and security review on a GitHub pull request,
+      then post the findings as a PR review. Use when the user invokes
+      /crow-review-pr or asks to review a pull request through Crow.
+    ---
+
+    \(fixtureSkillBody)
+    """
+
     @Test func cursorPromptSubstitutesPRURLForArguments() {
         let prompt = SessionService.cursorReviewPrompt(
             skillBody: Self.fixtureSkillBody,
@@ -163,6 +178,69 @@ struct SessionServiceReviewPromptTests {
             skillBody: Scaffolder.bundledReviewSkill(),
             prURL: Self.prURL,
             agentKind: .antigravity))
+    }
+
+    // MARK: - Frontmatter strip (CROW-968)
+
+    /// The inlined prompt is handed to the agent CLI as a bare positional
+    /// argument. With the SKILL's `---` frontmatter still attached, its first byte
+    /// was `-`, so Cursor's commander-based `agent` parsed it as a flag and exited
+    /// with `error: unknown option '---` before the review ever began. Shell
+    /// quoting does not cover this — `printf %q` protects the string from the
+    /// shell, but a leading hyphen is not shell-special and survives into argv.
+    @Test func cursorPromptStripsTheSkillFrontmatter() {
+        let prompt = SessionService.cursorReviewPrompt(
+            skillBody: Self.frontmatterSkillBody,
+            prURL: Self.prURL
+        )
+
+        // The defect, stated directly.
+        #expect(!prompt.hasPrefix("-"))
+        #expect(!prompt.hasPrefix("---"))
+        // Skill-engine metadata has no reader in an inlined brief and costs
+        // tokens on every review — including the folded-scalar continuation lines.
+        #expect(!prompt.contains("name: crow-review-pr"))
+        #expect(!prompt.contains("description:"))
+        #expect(!prompt.contains("Use when the user invokes"))
+        // The strip must not cost us the body or the other substitutions.
+        #expect(prompt.contains("Review PR \(Self.prURL)"))
+        #expect(prompt.contains("gh pr checkout \(Self.prURL)"))
+        #expect(prompt.contains("via Cursor"))
+    }
+
+    /// Stripping runs on every inlined body, and most of them have no frontmatter
+    /// — `Scaffolder.bundledReviewSkill()`'s built-in fallback (returned whenever
+    /// the repo root can't be resolved, i.e. in every test process) and the
+    /// fixtures here. Those must pass through untouched, or the fix would trade
+    /// one dead-review mode for another.
+    @Test func cursorPromptIsUnchangedForABodyWithoutFrontmatter() {
+        let withFrontmatter = SessionService.cursorReviewPrompt(
+            skillBody: Self.frontmatterSkillBody, prURL: Self.prURL)
+        let without = SessionService.cursorReviewPrompt(
+            skillBody: Self.fixtureSkillBody, prURL: Self.prURL)
+
+        // Same body in, same prompt out — the frontmatter is the only difference
+        // between the two fixtures, so stripping must collapse them exactly.
+        #expect(withFrontmatter == without)
+    }
+
+    /// Every inlining harness reaches the agent CLI's argument parser the same
+    /// way, so none of them may emit a leading `-`. Mirrors the agent loop in
+    /// `buildReviewPromptInlineBranchesCarryTheWorkspacePolicy`.
+    @Test func noInlineBranchEmitsALeadingHyphen() {
+        for agentKind: AgentKind in [.cursor, .openCode, .codex, .grok, .antigravity] {
+            let prompt = SessionService.buildReviewPrompt(
+                prURL: Self.prURL,
+                prTitle: Self.prTitle,
+                repoSlug: Self.repoSlug,
+                prNumber: Self.prNumber,
+                agentKind: agentKind,
+                skillBody: Self.frontmatterSkillBody
+            )
+
+            #expect(!prompt.hasPrefix("-"), "\(agentKind.rawValue) would be parsed as a flag")
+            #expect(!prompt.contains("name: crow-review-pr"), "\(agentKind.rawValue) kept its frontmatter")
+        }
     }
 
     // MARK: - Per-workspace verdict policy (CROW-963)

@@ -121,6 +121,16 @@ public struct CursorAgent: CodingAgent {
             // inlines the crow-review-pr SKILL body for Cursor so the `agent`
             // CLI gets a self-contained brief — no slash-command engine
             // needed (#431). `reviewPromptDispatched` gates both kinds.
+            //
+            // `endOfOptions: true` puts a literal `--` before the prompt (CROW-968).
+            // `agent` is commander-based (`Usage: agent [options] [command]
+            // [prompt...]`) and claims any argv element starting with `-` as an
+            // option, so a prompt whose first character is a hyphen kills the
+            // launch — which is exactly what the review SKILL's `---` frontmatter
+            // did. Stripping that frontmatter is the fix; this is the belt to its
+            // braces, and covers a user's job prompt that happens to start with
+            // `-`. Verified against the installed binary: `agent --list-models
+            // --bogus` errors, `agent --list-models -- --bogus` parses clean.
             if !session.reviewPromptDispatched {
                 let promptFile = session.kind == .review
                     ? ".crow-review-prompt.md"
@@ -129,7 +139,8 @@ public struct CursorAgent: CodingAgent {
                     .appendingPathComponent(promptFile)
                 return ShellLaunchArgs.evalPromptLaunch(
                     prefix: "\(agentPath)\(launchArgs)",
-                    promptPath: promptPath)
+                    promptPath: promptPath,
+                    endOfOptions: true)
             }
             return "\(agentPath)\(launchArgs) --continue\n"
         case .manager:

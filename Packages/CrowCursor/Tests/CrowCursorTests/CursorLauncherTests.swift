@@ -42,7 +42,7 @@ struct CursorLauncherTests {
         let cmd = try await CursorLauncher().launchCommand(
             sessionID: UUID(), worktreePath: "/w", prompt: "p", seedTrust: true)
         #expect(cmd.contains("_CROW_P=$(< "))
-        #expect(cmd.contains("eval \"'agent' --trust $(printf '%q'"))
+        #expect(cmd.contains("eval \"'agent' --trust -- $(printf '%q'"))
         #expect(cmd.contains("--force") == false)          // no auto-permission
     }
 
@@ -55,6 +55,20 @@ struct CursorLauncherTests {
         let cmd = try await CursorLauncher().launchCommand(
             sessionID: UUID(), worktreePath: "/w", prompt: "p", seedTrust: false)
         #expect(cmd.contains("--trust") == false)
-        #expect(cmd.contains("eval \"'agent' $(printf '%q'"))
+        #expect(cmd.contains("eval \"'agent' -- $(printf '%q'"))
+    }
+
+    /// CROW-968: the handoff prompt runs through the same commander parser as
+    /// `CursorAgent.autoLaunchCommand`, so it needs the same `--` guard — a note
+    /// or brief beginning with `-` would otherwise be read as an option and abort
+    /// the handoff before the agent starts.
+    @Test func launchCommandSeparatesOptionsFromTheHandoffPrompt() async throws {
+        let cmd = try await CursorLauncher().launchCommand(
+            sessionID: UUID(),
+            worktreePath: "/w",
+            prompt: "--- not a flag",
+            seedTrust: true)
+
+        #expect(cmd.contains(" -- $(printf '%q'"))
     }
 }

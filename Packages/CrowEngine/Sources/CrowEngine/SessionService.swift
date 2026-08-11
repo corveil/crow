@@ -3578,6 +3578,11 @@ public final class SessionService {
         // literal string regardless of how the agent quotes the body (issue #447 — single-quoted
         // heredocs in gh/glab calls don't expand shell variables). The verdict policy is already
         // rendered into `policySkillBody` above (CROW-963).
+        //
+        // This copy keeps its YAML frontmatter — Claude Code's skill engine needs the
+        // `name`/`description` block to load it at all. Only the *inlined* prompt written
+        // above is frontmatter-stripped (`cursorReviewPrompt`, CROW-968); don't be tempted
+        // to hoist that strip up to `policySkillBody`, which would break this file.
         let cloneSkillsDir = (clonePath as NSString).appendingPathComponent(".claude/skills/crow-review-pr")
         try? fm.createDirectory(atPath: cloneSkillsDir, withIntermediateDirectories: true)
         let resolvedSkillContent = CrowAttribution.expandSkillBody(policySkillBody, agentKind: reviewAgentKind)
@@ -3902,9 +3907,27 @@ public final class SessionService {
 
     /// Apply the inlined-SKILL substitutions to a raw `crow-review-pr` SKILL
     /// body for agents without a slash-command engine (Cursor, OpenCode):
-    /// replace `$ARGUMENTS` with the PR URL, and expand
-    /// `${CROW_AGENT_DISPLAY_NAME:-…}` / legacy "via Claude Code" wording so the
-    /// posted GitHub review identifies the reviewing agent correctly.
+    /// strip the YAML frontmatter, replace `$ARGUMENTS` with the PR URL, and
+    /// expand `${CROW_AGENT_DISPLAY_NAME:-…}` / legacy "via Claude Code" wording
+    /// so the posted GitHub review identifies the reviewing agent correctly.
+    ///
+    /// The frontmatter strip (CROW-968) is what makes the inlined body safe to
+    /// pass as a positional argument. The SKILL file opens with a `---` block
+    /// because Claude Code's skill engine requires `name`/`description`; inlined,
+    /// that block made the prompt's first byte a `-`, which Cursor's commander-
+    /// based `agent` parsed as a flag — `error: unknown option '---` — killing the
+    /// session before it started. Shell quoting never covered this: `printf %q`
+    /// protects the string from the shell, but a leading hyphen is not
+    /// shell-special and survives into argv. Stripping is right on its own merits
+    /// too — the metadata has no reader in an inlined brief and costs tokens on
+    /// every review.
+    ///
+    /// It belongs **here**, not upstream, and not in
+    /// `CrowAttribution.expandSkillBody`: `prepareReviewClone` renders the
+    /// workspace policy into one `policySkillBody` and forks it two ways, and the
+    /// other consumer — the `.claude/skills/crow-review-pr/SKILL.md` copy written
+    /// into the review clone — **must keep** its frontmatter or Claude Code won't
+    /// load the skill. Only the inlined side is stripped.
     ///
     /// `agentKind` defaults to `.cursor` for backward compatibility with the
     /// original single-agent call site (and its unit test); pass the actual
@@ -3915,7 +3938,8 @@ public final class SessionService {
     /// scaffolder's file-resolution fallback.
     nonisolated static func cursorReviewPrompt(skillBody: String, prURL: String, agentKind: AgentKind = .cursor) -> String {
         CrowAttribution.expandSkillBody(
-            skillBody.replacingOccurrences(of: "$ARGUMENTS", with: prURL),
+            MarkdownFrontmatter.stripped(skillBody)
+                .replacingOccurrences(of: "$ARGUMENTS", with: prURL),
             agentKind: agentKind
         )
     }

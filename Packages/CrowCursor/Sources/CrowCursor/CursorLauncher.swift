@@ -101,9 +101,13 @@ public actor CursorLauncher {
         try FileManager.default.setAttributes(
             [.posixPermissions: 0o600], ofItemAtPath: promptPath.path)
         let trust = seedTrust ? CursorLaunchArgs.trustSuffix : ""
+        // `endOfOptions: true` — same commander parser as `CursorAgent`, so a
+        // handoff note beginning with `-` would be read as a flag and abort the
+        // launch (CROW-968). See `ShellLaunchArgs.evalPromptLaunch`.
         return "cd \(CursorLaunchArgs.shellQuote(worktreePath)) && "
             + ShellLaunchArgs.evalPromptLaunch(
                 prefix: "\(CursorLaunchArgs.shellQuote(binary))\(trust)",
-                promptPath: promptPath.path).trimmingCharacters(in: .newlines) + "\n"
+                promptPath: promptPath.path,
+                endOfOptions: true).trimmingCharacters(in: .newlines) + "\n"
     }
 }
