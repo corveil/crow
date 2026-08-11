@@ -124,4 +124,27 @@ import CrowPersistence
         ]
         #expect(state.terminalPreviewWindowIndex(for: sid) == 2)
     }
+
+    @Test @MainActor func fallsBackWhenActiveTerminalHasNoBinding() async {
+        let sid = UUID()
+        let shell = UUID()
+        let agent = UUID()
+        var state = AppState()
+        state.terminals[sid] = [
+            SessionTerminal(id: shell, sessionID: sid, name: "Shell", cwd: "/tmp"),
+            SessionTerminal(
+                id: agent, sessionID: sid, name: "Agent", cwd: "/repo",
+                tmuxBinding: TmuxBinding(socketPath: "/tmp/sock", sessionName: "crow-cockpit", windowIndex: 5)),
+        ]
+        state.activeTerminalID[sid] = shell
+        #expect(state.terminalPreviewWindowIndex(for: sid) == 5)
+
+        let cockpit = TerminalCockpit { idx in
+            #expect(idx == 5)
+            return "agent pane"
+        }
+        let resp = await preview(
+            ["session_id": .string(sid.uuidString)], appState: state, cockpit: cockpit)
+        #expect(resp.result?["preview"] == .string("agent pane"))
+    }
 }

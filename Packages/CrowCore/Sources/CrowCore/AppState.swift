@@ -550,14 +550,12 @@ public final class AppState {
     /// otherwise the first terminal with a binding.
     public func terminalPreviewWindowIndex(for sessionID: UUID) -> Int? {
         let terms = terminals(for: sessionID)
-        let preferred: SessionTerminal?
-        if let activeID = activeTerminalID[sessionID] {
-            preferred = terms.first { $0.id == activeID }
-        } else {
-            preferred = nil
+        if let activeID = activeTerminalID[sessionID],
+           let active = terms.first(where: { $0.id == activeID }),
+           let binding = active.tmuxBinding {
+            return binding.windowIndex
         }
-        let terminal = preferred ?? terms.first(where: { $0.tmuxBinding != nil })
-        return terminal?.tmuxBinding?.windowIndex
+        return terms.first(where: { $0.tmuxBinding != nil })?.tmuxBinding?.windowIndex
     }
 
     /// Whether a session has a managed Claude Code terminal that quick
