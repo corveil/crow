@@ -657,15 +657,7 @@ func makeCommandRouter(
                 return ["preview": .null]
             }
             let windowIndex: Int? = await MainActor.run {
-                let terms = appState.terminals(for: sid)
-                let preferred: SessionTerminal?
-                if let activeID = appState.activeTerminalID[sid] {
-                    preferred = terms.first { $0.id == activeID }
-                } else {
-                    preferred = nil
-                }
-                let terminal = preferred ?? terms.first(where: { $0.tmuxBinding != nil })
-                return terminal?.tmuxBinding?.windowIndex
+                appState.terminalPreviewWindowIndex(for: sid)
             }
             guard let index = windowIndex,
                   let preview = cockpit.previewText(windowIndex: index) else {

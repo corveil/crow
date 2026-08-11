@@ -2525,6 +2525,13 @@ function switcherBindingModifiersActive() {
   return false;
 }
 
+function switcherCycleKeyLabel() {
+  const b = parseSwitcherBinding(uiConfig.switcherBinding);
+  if (b.key === 'Tab') return 'Tab';
+  if (b.key === ' ') return 'Space';
+  return b.key;
+}
+
 function switcherCommitHint() {
   const b = parseSwitcherBinding(uiConfig.switcherBinding);
   const mods = [];
@@ -2533,7 +2540,7 @@ function switcherCommitHint() {
   if (b.alt) mods.push('Alt');
   if (b.meta) mods.push('Cmd');
   const modHint = mods.length ? 'release ' + mods.join('+') : 'click a card';
-  return 'Tab / ←→ to cycle · ' + modHint + ' to switch · Esc to cancel';
+  return switcherCycleKeyLabel() + ' / ←→ to cycle · ' + modHint + ' to switch · Esc to cancel';
 }
 
 function captureSwitcherModifiers(e) {
@@ -2680,6 +2687,7 @@ function switcherOnBinding(e) {
     captureSwitcherModifiers(e);
     const cur = entries.findIndex((s) => s.id === selectedId);
     switcherState.index = cur >= 0 ? (cur + 1) % entries.length : 0;
+    if (isTerminalFocused()) document.activeElement.blur();
     renderSwitcherOverlay();
     scheduleSwitcherPreview();
   } else {
@@ -2826,13 +2834,15 @@ function onSwitcherKeyDown(e) {
       switcherAdvance(-1);
       return;
     }
-    if (e.key === 'Tab' && switcherState.chord && switcherState.chord.shift
-        && switcherState.modifiersHeld && switcherState.modifiersHeld.shift) {
+    if (eventMatchesSwitcherBinding(e, uiConfig.switcherBinding)) {
       e.preventDefault();
       e.stopPropagation();
       switcherAdvance(1);
       return;
     }
+    // Swallow everything else so keystrokes don't reach the focused xterm.
+    e.preventDefault();
+    e.stopPropagation();
     return;
   }
   if (e.type !== 'keydown') return;

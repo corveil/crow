@@ -545,6 +545,21 @@ public final class AppState {
         terminals[sessionID] ?? []
     }
 
+    /// tmux window index for the session-switcher preview card (CROW-976).
+    /// Prefers the session's active terminal when it has a tmux binding,
+    /// otherwise the first terminal with a binding.
+    public func terminalPreviewWindowIndex(for sessionID: UUID) -> Int? {
+        let terms = terminals(for: sessionID)
+        let preferred: SessionTerminal?
+        if let activeID = activeTerminalID[sessionID] {
+            preferred = terms.first { $0.id == activeID }
+        } else {
+            preferred = nil
+        }
+        let terminal = preferred ?? terms.first(where: { $0.tmuxBinding != nil })
+        return terminal?.tmuxBinding?.windowIndex
+    }
+
     /// Whether a session has a managed Claude Code terminal that quick
     /// actions can be dispatched into. The dispatcher in AppDelegate
     /// re-checks the surface state before sending; this is the lighter

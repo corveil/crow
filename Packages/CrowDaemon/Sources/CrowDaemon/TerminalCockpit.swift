@@ -15,6 +15,8 @@ import Foundation
 struct TerminalCockpit: Sendable {
     static let sessionName = "crow-cockpit"
     let controller: TmuxController
+    /// When set, `previewText` delegates here instead of calling tmux (unit tests).
+    private let previewCapture: (@Sendable (Int) -> String?)?
 
     init?(devRoot: String) {
         guard let tmux = Self.resolveTmuxBinary() else { return nil }
@@ -22,7 +24,15 @@ struct TerminalCockpit: Sendable {
         // and its live session windows rather than spinning up an isolated one.
         let socketPath = Self.appTmuxSocketPath()
         controller = TmuxController(tmuxBinary: tmux, socketPath: socketPath, sessionName: Self.sessionName)
+        previewCapture = nil
         ensureSession()
+    }
+
+    /// Stub cockpit for handler tests — no tmux server required.
+    init(previewCapture: @escaping @Sendable (Int) -> String?) {
+        controller = TmuxController(
+            tmuxBinary: "/bin/false", socketPath: "/dev/null", sessionName: Self.sessionName)
+        self.previewCapture = previewCapture
     }
 
     /// Adopt the app's cockpit if it's already running; otherwise create a bare
@@ -131,6 +141,7 @@ struct TerminalCockpit: Sendable {
     /// Capture the last `previewLines` rows of a cockpit window as plain text for
     /// the session-switcher card. Best-effort — returns nil when capture fails.
     func previewText(windowIndex: Int) -> String? {
+        if let previewCapture { return previewCapture(windowIndex) }
         guard let raw = try? controller.capturePane(
             target: "\(Self.sessionName):\(windowIndex)",
             linesBack: Self.previewLines,
