@@ -2856,6 +2856,8 @@ function onSwitcherKeyUp(e) {
   if (!switcherState.open || !switcherState.chord || !switcherState.modifiersHeld) return;
   const mod = switcherBindingModifierFromEvent(e);
   if (!mod || !switcherState.chord[mod]) return;
+  e.preventDefault();
+  e.stopPropagation();
   switcherState.modifiersHeld[mod] = false;
   if (!switcherBindingModifiersActive()) switcherCommit();
 }
