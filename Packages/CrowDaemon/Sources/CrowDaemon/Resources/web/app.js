@@ -2427,6 +2427,11 @@ function showEmptyDetail(msg, opts) {
   selectedBoard = null;
   terminals = [];
   activeTerminal = null;
+  // CROW-979: the ↻ that was spinning belonged to the session we just dropped, and
+  // its `onopen` may never come (the socket is being torn down with it). Clearing
+  // after `selectedId` is already null makes the repaint a no-op — the header is
+  // emptied below regardless — but leaves no stale flag for the next selection.
+  clearTerminalReloadPending();
   const app = document.getElementById('app');
   app.classList.remove('has-selection', 'board-active', 'mobile-show-sidebar');
   // On narrow screens `#app:not(.has-selection) #detail` is display:none, which
@@ -3159,8 +3164,30 @@ function renderHeader(s) {
                                          liveFor(s.id).auto_rebase_state));
   }
 
-  // Right-aligned action cluster: PR quick-actions, then status transitions + delete.
+  // Right-aligned action cluster: terminal reload, PR quick-actions, then status
+  // transitions + delete.
   const actions = el('div', 'actions-cluster');
+  // Terminal reload (CROW-979). `reloadTerminal()` was reachable only from the
+  // terminal's right-click menu, which a touch device has no way to open — so on a
+  // phone the cheap recovery for a corrupted surface didn't exist and the only way
+  // out was leaving the session and coming back. Deliberately OUTSIDE the
+  // `kind !== 'manager'` guard below: that guard is why a Manager session shows no
+  // buttons at all, and the Manager window is the common CROW-804 stuck-surface
+  // case (it has no tabs to hang a control off either, #680).
+  const reloadBusy = terminalReloadPending;
+  const reload = el('button', 'action-btn action-btn-reload', '');
+  // Swap the ↻ glyph for the shared spinner ring rather than spinning the button,
+  // so the chrome stays put while it turns (the CROW-797 tickets-refresh fix).
+  reload.appendChild(reloadBusy ? el('span', 'action-spinner') : el('span', 'reload-glyph', '↻'));
+  reload.appendChild(el('span', null, 'Reload'));
+  reload.disabled = reloadBusy || !activeTerminal;
+  reload.title = reloadBusy
+    ? 'Reloading terminal…'
+    : (activeTerminal
+        ? 'Reload the terminal — reset the view and reconnect'
+        : 'No terminal attached');
+  reload.onclick = () => reloadTerminalAction();
+  actions.appendChild(reload);
   if (pr && pr.has_pr && !pr.is_merged) {
     // Quick-actions dispatch a prompt into the session's managed Claude Code
     // terminal — disable them when there is none (native `canDispatchQuickAction`;
@@ -3535,6 +3562,11 @@ async function refreshTerminals() {
     }, { replace: true });
   }
   renderTabs();
+  // CROW-979: this call is what binds `activeTerminal`, and the header's ↻ Reload
+  // is disabled until there is one. selectSession renders the header *before*
+  // awaiting this, so without a nudge the button would sit disabled until the next
+  // 4s refreshLive tick.
+  syncTerminalReloadEnabled();
   // #673: session switches funnel through here too (selectSession → refreshTerminals),
   // changing which window this shared socket shows — same corruption as a terminal-tab
   // switch. attachWindow reloads only when the window actually changes, so a same-session
@@ -4932,6 +4964,63 @@ let termWs = null;
 let termSkelTimer = null; // #677: safety timeout that clears the skeleton overlay
 let termReconnectDelay = 1000; // #687: backoff between reconnect attempts (ms), reset on open
 
+// In-flight state for the header's ↻ Reload button (CROW-979). Module state, not
+// DOM state: `refreshLive` repaints the whole detail header every 4s, so a busy
+// flag parked on the button node would be wiped mid-reload — the same reason
+// `ticketRefreshPending` lives out here rather than on `.tickets-refresh`.
+let terminalReloadPending = false;
+let terminalReloadSettleTimer = null;
+// A reattach is sub-second; this only has to be long enough not to cut a slow one
+// short. It exists for the case where `onopen` never comes at all (see below).
+const TERMINAL_RELOAD_SETTLE_MS = 10000;
+
+function paintTerminalReloadState() {
+  if (!selectedId) return;
+  const s = sessions.find((x) => x.id === selectedId);
+  if (s) renderHeader(s);
+}
+
+// Repaint only when the button is actually out of date. `refreshTerminals` runs on
+// paths where nothing about the button changed (add/close terminal, a background
+// "terminals changed" push), and an unconditional renderHeader there would also
+// throw away an in-flight `markInReviewAction`, which parks its spinner on the
+// button node rather than in module state.
+function syncTerminalReloadEnabled() {
+  const btn = document.querySelector('#detail-header .action-btn-reload');
+  if (!btn) return;
+  if (btn.disabled !== (terminalReloadPending || !activeTerminal)) paintTerminalReloadState();
+}
+
+// Header ↻ Reload. `reloadTerminal()` is synchronous and returns before the new
+// socket is up, so "done" is the socket opening — cleared from connectTerminalWs's
+// `onopen`, which fires for this reload and for the auto-reconnect that follows a
+// failed one. `onclose` retries forever with backoff, though, so a daemon that
+// never comes back would leave this spinning: the settle timer is the floor under
+// that. Deliberately NOT routed through attachWindow(), whose
+// `win === attachedWindow` guard would make an explicit reload a no-op.
+function reloadTerminalAction() {
+  if (terminalReloadPending) return; // coalesce a double-tap
+  // Read `activeTerminal` here rather than at render time: renderHeader runs in
+  // selectSession *before* the awaited refreshTerminals that rebinds it, so the
+  // value captured during a paint can be the previous session's row.
+  if (!term || !activeTerminal) return; // nothing attached — the button is disabled anyway
+  terminalReloadPending = true;
+  clearTimeout(terminalReloadSettleTimer);
+  terminalReloadSettleTimer = setTimeout(clearTerminalReloadPending, TERMINAL_RELOAD_SETTLE_MS);
+  paintTerminalReloadState();
+  reloadTerminal();
+}
+
+// Idempotent: `onopen` also fires for reconnects nobody asked for, and repainting
+// the header on each of those would be needless churn.
+function clearTerminalReloadPending() {
+  if (!terminalReloadPending) return;
+  clearTimeout(terminalReloadSettleTimer);
+  terminalReloadSettleTimer = null;
+  terminalReloadPending = false;
+  paintTerminalReloadState();
+}
+
 // Skeleton loading overlay (#677): mask the artifact-prone xterm (re)attach
 // window (blank/garbled grid, reflow flash, mid-paint scrollback replay) with
 // the CROW-613 shimmer. Toggled via a `.loading` class on #terminal-wrap.
@@ -5496,6 +5585,7 @@ function connectTerminalWs() {
     // sends no immediate output. #687: this timer must NOT live in
     // showTerminalSkeleton, or it re-fires during the disconnect loop → strobe.
     setTerminalReconnecting(false);
+    clearTerminalReloadPending(); // CROW-979: the header ↻ settles when we're attached again
     termReconnectDelay = 1000;
     clearTimeout(termSkelTimer);
     termSkelTimer = setTimeout(hideTerminalSkeleton, 1500);

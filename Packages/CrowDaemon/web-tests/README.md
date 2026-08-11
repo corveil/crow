@@ -49,6 +49,25 @@ the selection and cancelling the browser default, while Ctrl+C with no
 selection still falls through as SIGINT; Cmd+F cancelling the browser find bar
 and opening ours; and non-keydown / unmodified keys passing through untouched.
 
+## `terminal-reload.test.js` — header ↻ Reload button (CROW-979)
+
+Drives `renderHeader` and `reloadTerminalAction` against a fake xterm + a fake
+`/terminal` socket whose `onopen` fires on demand. Coverage: the button renders
+for work / review / job **and manager** sessions (managers previously got no
+action cluster at all, since every other button sits inside the
+`kind !== 'manager'` guard, and they have no tabs to hang a control off either);
+disabled with nothing attached and enabled once `activeTerminal` binds; a click
+resetting the xterm buffer, detaching the old socket's handlers *before* closing
+it, and opening a fresh one; the `↻`-swapped-for-`.action-spinner` in-flight
+treatment, both nodes boxed to the same 12×12 so the swap can't shift the button
+(the CROW-797 tickets-refresh fix); the spinner settling when the socket opens,
+and — because `onclose` retries with backoff forever — also settling via the
+`TERMINAL_RELOAD_SETTLE_MS` timer when the socket never opens at all; the timer
+being disarmed when `onopen` wins the race; double-tap coalescing; clicking with
+no terminal (or no xterm) being a no-op rather than a throw; `showEmptyDetail`
+dropping a pending reload with the session; and the pre-existing right-click
+"Reload terminal" menu item still being present.
+
 ## `row.test.js` — sidebar session rows (CROW-773)
 
 Drives `sessionRow`. Coverage: the PR pill's status glyphs for every

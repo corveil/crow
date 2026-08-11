@@ -1443,6 +1443,19 @@ body.update-banner-visible #back-to-sidebar {
   animation: wizard-spin 0.7s linear infinite;
 }
 
+/* The ↻ on the header's Reload button (CROW-979). Boxed to the same 12×12 as
+   `.action-spinner` so swapping one for the other while reloading doesn't shift
+   the button's width. */
+.reload-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  height: 12px;
+  font-size: 12px;
+  line-height: 1;
+}
+
 /* ---- Scorecard (ADR 0008 web parity, #721) ---- */
 .score-weeklabel { color: var(--text-secondary); font-size: 12px; }
 .score-banner {
