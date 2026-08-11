@@ -35,7 +35,7 @@ capabilities, update this table in the same PR.
 | Hook async delivery | ✅ `PostToolUse*` async | ⚠️ declared, timing unverified | ❌ sync-only (v0.141.0) | ⚠️ names verified, timing unverified | ❌ sync-only (async support unverified) | ❌ no `async` in Antigravity's schema — all sync |
 | MCP (e.g. Jira) | ✅ `jira` MCP server via `~/.claude.json` | ✅ `jira` bridged into `~/.cursor/mcp.json` (#829) | ✅ mirrored from `~/.claude.json` into `config.toml` | ❌ falls back to `acli` | ❌ falls back to `acli` (Jira MCP bridge deferred; Grok *does* read Claude/Cursor MCP configs) | ❌ falls back to `acli` (file bridge deferred) |
 | Review (`/crow-review-pr`) | ✅ slash-command | ✅ inlined skill body | ✅ inlined skill body | ✅ inlined skill body | ✅ inlined skill body (human-gated) | ✅ inlined skill body (#902) |
-| Initial-prompt injection | ✅ `$(cat …-prompt.md)` + deferred paste | ✅ `$(cat …)` job/review; handoff launcher auto-wired (#829); `.work` bare | ✅ `.job` + `.review` (`$(cat …-prompt.md)`) | ✅ run-then-`--continue` | ✅ run-then-`-c` (`.job`/`.review`); `.work` bare | ✅ `-p "$(cat …-{job,review}-prompt.md)"` (`.job`/`.review`, #902); `.work` bare |
+| Initial-prompt injection | ✅ prompt-file contents as argv + deferred paste | ✅ job/review, `--`-separated (CROW-968); handoff launcher auto-wired (#829); `.work` bare | ✅ `.job` + `.review` (prompt-file contents as argv) | ✅ run-then-`--continue` | ✅ run-then-`-c` (`.job`/`.review`); `.work` bare | ✅ `-p "$prompt"` (`.job`/`.review`, #902); `.work` bare |
 | Gateway env / trust seed / telemetry | ✅ Claude special-case | ⚠️ trust seed only (`--trust`, per-launch, every kind) | ⚠️ trust seed only (`[projects."…"]` in `config.toml`) | ❌ | ⚠️ trust seed only (`[folders."…"]` in `~/.grok/trusted_folders.toml`) | ❌ |
 | Rename passthrough (`/rename`) | ✅ | ✅ | ✅ | ✅ | ✅ (alias `/title`) | ❌ unverified on v1.1.7 (opt-out `nil`) |
 | Self-host / local models | provider-dependent | provider-dependent | provider-dependent | provider-dependent | ✅ `config.toml` `[model.*]` → any OpenAI/Anthropic-compatible or local (Ollama) endpoint | ❌ **permanent** — closed-source, Google-Sign-In/GCP-locked (Gemini 3 Pro / Claude Sonnet 4.5 only) |
@@ -203,7 +203,7 @@ harness's sessions
   below. It went interactive in Cursor CLI 2026.07.20, reversing the earlier
   headless-only omission, #890, and covers `.review` too as of CROW-954.)
 - **Codex:** honored for `.job` sessions on the **interactive** launch —
-  `codex -a never -s workspace-write "$(cat …-prompt.md)"` (approval off, sandbox
+  `codex -a never -s workspace-write "$prompt"` (approval off, sandbox
   still bounded; the analogue of Claude's `--permission-mode auto`, **not** the
   full-bypass `--dangerously-bypass-approvals-and-sandbox` / `-s danger-full-access`,
   #830). It is deliberately **not** headless `codex exec`: `exec` is one-shot, so
@@ -430,6 +430,17 @@ share the host's global config and are disambiguated by `cwd`. See
   → never post `gh pr review` → never satisfy `decideReviewCompletions`
   (`buildReviewPromptGrokBranchInlinesSkillBody` guards the regression).
 
+The inlined body is **frontmatter-stripped** (`MarkdownFrontmatter.stripped`,
+CROW-968). The SKILL file opens with a `---` YAML block because Claude Code's
+skill engine requires `name`/`description`; inlined, that made the prompt's first
+byte a `-`, which Cursor's commander-based `agent` parsed as a flag —
+`error: unknown option '---` — killing every review before it started. The strip
+applies **only** to the inlined prompt: the `.claude/skills/crow-review-pr/SKILL.md`
+copy written into the review clone keeps its frontmatter, or Claude wouldn't load
+the skill at all. `prepareReviewClone` renders the workspace verdict policy into
+one body and forks it two ways, so the strip has to sit on the inlined side of
+that fork (in `cursorReviewPrompt`), not upstream of it.
+
 ### Initial-prompt injection
 
 Review/job sessions get a pre-written prompt file (`.crow-review-prompt.md` /
@@ -437,24 +448,36 @@ Review/job sessions get a pre-written prompt file (`.crow-review-prompt.md` /
 in `launchAgent` refuses to dispatch if that file is missing, for **every**
 harness (CROW-439) — it's gated on the prompt-file convention, not on agent kind.
 
-- **Claude:** `$(cat …-prompt.md)`, dispatched through the deferred `#408`
-  paste path (stash in `pendingLaunchCommands`, paste on `.shellReady`).
-- **Cursor:** `agent "$(cat …)"` for job/review (path shell-quoted). The
+- **Claude:** the prompt file's contents as the final argv, dispatched through the
+  deferred `#408` paste path (stash in `pendingLaunchCommands`, paste on
+  `.shellReady`).
+- **Cursor:** `agent … -- "$prompt"` for job/review (path shell-quoted). The
   interactive TUI takes the positional prompt directly, so no headless `-p` leg
   is needed; `CursorLauncher.launchCommand` feeds the prompt on agent handoff
   (#829). `.work` launches `agent` bare (the user types into the TUI).
 - **Codex:** job only; review returns `nil`.
-- **OpenCode:** **run-then-`--continue`** — headless `opencode run "$(cat …)"`
+- **OpenCode:** **run-then-`--continue`** — headless `opencode run "$prompt"`
   consumes the prompt reliably, then `; opencode --continue` opens the TUI with a
   fresh stdin so `crow send` keeps working (#547).
 - **Grok:** **run-then-`-c`** — headless `grok --prompt-file <path>` consumes the
   prompt (any prompt arg forces headless), then `; grok -c` resumes the same
-  session in the TUI with a fresh stdin. Uses `--prompt-file` (not `-p "$(cat …)"`)
+  session in the TUI with a fresh stdin. Uses `--prompt-file` (not `-p "$prompt"`)
   so a large inlined review-skill body never becomes a giant argv or rides a
   subshell (#861). `.job`/`.review` only; `.work` launches `grok` bare.
-- **Antigravity:** `agy -p "$(cat …)"` for job/review (path shell-quoted); the
+- **Antigravity:** `agy -p "$prompt"` for job/review (path shell-quoted); the
   tmux PTY means the non-TTY `-p` stdout-drop doesn't bite. Restart resumes with
   `-c`. `.work` launches `agy` bare (#902).
+
+`ShellLaunchArgs.evalPromptLaunch` builds every one of these except Grok's, whose
+prompt is read from a path and so never becomes argv. Its `endOfOptions` flag adds
+a literal `--` before the prompt so a body starting with `-` arrives as an operand
+instead of an option (CROW-968). It is **opt-in per harness, deliberately not a
+global default** — `--` is a convention, not a guarantee, and a parser that treated
+a bare `--` as a prompt word would corrupt every launch on that harness. Enabled
+today for **Cursor only** (both `CursorAgent.autoLaunchCommand` and
+`CursorLauncher.launchCommand`), verified against the installed binary:
+`agent --list-models --bogus` errors, `agent --list-models -- --bogus` parses
+clean. Check the CLI before enabling it anywhere else.
 
 ### Gateway env / trust seed / telemetry
 

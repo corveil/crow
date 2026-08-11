@@ -89,6 +89,10 @@ struct CursorAgentTests {
         #expect(cmd?.contains("eval \"") == true)
         #expect(cmd?.contains("$(cat") == false)
         #expect(cmd?.hasSuffix("\n") == true)
+        // CROW-968: the inlined review brief must reach `agent` as an operand.
+        // Without the `--`, a prompt starting with `-` (the SKILL's `---`
+        // frontmatter) is claimed by commander as an option and the launch dies.
+        #expect(cmd?.contains(" -- $(printf") == true)
         // CROW-954 reverses the CROW-890 carve-out: a `.review` clone launches
         // pre-trusted so unattended dispatch isn't stranded on "Workspace Trust
         // Required". Its defense is the launch-path `.cursor/` strip
@@ -200,6 +204,33 @@ struct CursorAgentTests {
         #expect(cmd != nil)
         #expect(cmd?.contains(".crow-job-prompt.md") == true)
         #expect(cmd?.hasSuffix("\n") == true)
+        // CROW-968: job prompts are user-authored, so one can legitimately begin
+        // with `-`. The separator covers that as well as the review path.
+        #expect(cmd?.contains(" -- $(printf") == true)
+    }
+
+    /// CROW-968: the `--` belongs to the prompt-dispatch path only. A resume or a
+    /// bare `.work` TUI passes no positional prompt, so an end-of-options marker
+    /// there would be a stray argv element with nothing to protect.
+    @Test func endOfOptionsSeparatorOnlyRidesThePromptDispatch() {
+        var resumed = Session(name: "review", kind: .review, agentKind: .cursor)
+        resumed.reviewPromptDispatched = true
+
+        for session in [
+            Session(name: "work", kind: .work, agentKind: .cursor),
+            resumed,
+        ] {
+            let cmd = agent.autoLaunchCommand(
+                session: session,
+                worktreePath: "/tmp/wt",
+                remoteControlEnabled: false,
+                autoPermissionMode: true,
+                telemetryPort: nil
+            )
+            // ` -- ` specifically: `--trust`/`--force`/`--continue` all contain
+            // a double hyphen, so a bare `contains("--")` would pass vacuously.
+            #expect(cmd?.contains(" -- ") == false, "\(session.kind) carried a stray separator")
+        }
     }
 
     @Test func autoLaunchCommandJobSessionSubsequentLaunch() {
