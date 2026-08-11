@@ -190,6 +190,13 @@ public enum ParityLedger {
         .write("rebuild-scorecard", cli: "rebuild-scorecard"),
         .read("get-state", cli: "get-state"),
         .read("list-artifacts", cli: "list-artifacts"),
+        .read(
+            "get-session-terminal-preview",
+            noCLI: """
+                Web session-switcher preview: best-effort tmux pane tail for the \
+                highlighted card (CROW-976). No CLI verb — the switcher is \
+                browser-only and fetches on demand.
+                """),
 
         // Settings
         // `defaults-get` is deliberately un-gated on `/rpc`; `defaults-set` is
@@ -340,6 +347,20 @@ public enum ParityLedger {
         .field("versionUpdate.intervalHours", read: "version get", write: "version set"),
 
         .field("sidebar.hideSessionDetails", read: "ui get", write: "ui set"),
+
+        .field("switcher.enabled", read: "ui get", write: "ui set"),
+        .field("switcher.binding", read: "ui get", write: "ui set"),
+        .field("switcher.captureInTerminal", read: "ui get", write: "ui set"),
+        .field("switcher.order", read: "ui get", write: "ui set"),
+        .field("switcher.preview", read: "ui get", write: "ui set"),
+        .field("switcher.include.managers", read: "ui get", write: "ui set"),
+        .field("switcher.include.jobs", read: "ui get", write: "ui set"),
+        .field("switcher.include.reviews", read: "ui get", write: "ui set"),
+        .field("switcher.include.active", read: "ui get", write: "ui set"),
+        .field("switcher.include.paused", read: "ui get", write: "ui set"),
+        .field("switcher.include.inReview", read: "ui get", write: "ui set"),
+        .field("switcher.include.completed", read: "ui get", write: "ui set"),
+        .field("switcher.include.archived", read: "ui get", write: "ui set"),
 
         .field("notifications.globalMute", read: "notifications get", write: "notifications set"),
         .field("notifications.soundEnabled", read: "notifications get", write: "notifications set"),

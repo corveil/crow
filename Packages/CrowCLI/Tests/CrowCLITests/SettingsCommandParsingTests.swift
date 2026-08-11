@@ -112,6 +112,24 @@ import ArgumentParser
     #expect(try UISet.parse(["--hide-session-details", "true"]).hideSessionDetails == true)
 }
 
+@Test func uiSetParsesSwitcherFlags() throws {
+    let cmd = try UISet.parse([
+        "--switcher-enabled", "false",
+        "--switcher-binding", "ctrl+`",
+        "--switcher-capture-in-terminal", "false",
+        "--switcher-order", "sidebar",
+        "--switcher-preview", "false",
+        "--switcher-include", "managers=true",
+        "--switcher-include", "completed=true",
+    ])
+    #expect(cmd.switcherEnabled == false)
+    #expect(cmd.switcherBinding == "ctrl+`")
+    #expect(cmd.switcherCaptureInTerminal == false)
+    #expect(cmd.switcherOrder == "sidebar")
+    #expect(cmd.switcherPreview == false)
+    #expect(cmd.switcherIncludes == ["managers=true", "completed=true"])
+}
+
 @Test func uiSetParsesExplicitFalse() throws {
     #expect(try UISet.parse(["--hide-session-details", "false"]).hideSessionDetails == false)
 }

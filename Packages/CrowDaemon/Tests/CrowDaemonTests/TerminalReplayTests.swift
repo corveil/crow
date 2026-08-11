@@ -42,4 +42,9 @@ import Testing
         let data = TerminalCockpit.replayFrame(from: "")
         #expect(String(decoding: data, as: UTF8.self) == Self.clearPrefix)
     }
+
+    @Test func plainPreviewTextStripsAnsiAndTrailingNewlines() {
+        let text = TerminalCockpit.plainPreviewText(from: "line1\n\u{1b}[31mred\u{1b}[0m\n\n")
+        #expect(text == "line1\nred")
+    }
 }

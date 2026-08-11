@@ -209,11 +209,59 @@ public struct UISet: ParsableCommand {
         help: "Hide ticket title and repo/branch lines in sidebar rows (true or false)")
     var hideSessionDetails: Bool?
 
+    @Option(
+        name: .customLong("switcher-enabled"),
+        help: "Enable the session switcher overlay (true or false)")
+    var switcherEnabled: Bool?
+
+    @Option(
+        name: .customLong("switcher-binding"),
+        help: "Session switcher key chord (default: shift+tab)")
+    var switcherBinding: String?
+
+    @Option(
+        name: .customLong("switcher-capture-in-terminal"),
+        help: "Capture the switcher binding inside focused terminals (true or false)")
+    var switcherCaptureInTerminal: Bool?
+
+    @Option(
+        name: .customLong("switcher-order"),
+        help: "Session switcher ordering: mru or sidebar")
+    var switcherOrder: String?
+
+    @Option(
+        name: .customLong("switcher-preview"),
+        help: "Fetch a tmux pane preview for the highlighted switcher card (true or false)")
+    var switcherPreview: Bool?
+
+    @Option(
+        name: .customLong("switcher-include"),
+        parsing: .upToNextOption,
+        help: "Include filter as key=value (managers, jobs, reviews, active, paused, in_review, completed, archived)")
+    var switcherIncludes: [String] = []
+
     public init() {}
 
     public func validate() throws {
-        guard hideSessionDetails != nil else {
-            throw ValidationError("Nothing to set — provide --hide-session-details.")
+        guard hideSessionDetails != nil || switcherEnabled != nil || switcherBinding != nil
+            || switcherCaptureInTerminal != nil || switcherOrder != nil || switcherPreview != nil
+            || !switcherIncludes.isEmpty else {
+            throw ValidationError(
+                "Nothing to set — provide at least one UI preference flag.")
+        }
+        if let switcherOrder, !["mru", "sidebar"].contains(switcherOrder) {
+            throw ValidationError("--switcher-order must be mru or sidebar.")
+        }
+        for item in switcherIncludes {
+            let parts = item.split(separator: "=", maxSplits: 1).map(String.init)
+            guard parts.count == 2,
+                  ["managers", "jobs", "reviews", "active", "paused", "in_review", "completed", "archived"]
+                    .contains(parts[0]),
+                  ["true", "false"].contains(parts[1].lowercased()) else {
+                throw ValidationError(
+                    "--switcher-include must be key=true|false where key is one of: "
+                    + "managers, jobs, reviews, active, paused, in_review, completed, archived")
+            }
         }
     }
 
@@ -221,6 +269,27 @@ public struct UISet: ParsableCommand {
         var params: [String: JSONValue] = [:]
         if let hideSessionDetails {
             params["hide_session_details"] = .bool(hideSessionDetails)
+        }
+        if let switcherEnabled {
+            params["switcher_enabled"] = .bool(switcherEnabled)
+        }
+        if let switcherBinding {
+            params["switcher_binding"] = .string(switcherBinding)
+        }
+        if let switcherCaptureInTerminal {
+            params["switcher_capture_in_terminal"] = .bool(switcherCaptureInTerminal)
+        }
+        if let switcherOrder {
+            params["switcher_order"] = .string(switcherOrder)
+        }
+        if let switcherPreview {
+            params["switcher_preview"] = .bool(switcherPreview)
+        }
+        for item in switcherIncludes {
+            let parts = item.split(separator: "=", maxSplits: 1).map(String.init)
+            let key = parts[0]
+            let flag = parts[1].lowercased() == "true"
+            params["switcher_include_\(key)"] = .bool(flag)
         }
         let result = try rpc("ui-set", params: params)
         printJSON(result)

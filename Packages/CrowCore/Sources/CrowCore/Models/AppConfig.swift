@@ -10,6 +10,8 @@ public struct AppConfig: Codable, Sendable, Equatable {
     public var defaults: ConfigDefaults
     public var notifications: NotificationSettings
     public var sidebar: SidebarSettings
+    /// Shift+Tab (or configured binding) session switcher overlay (CROW-976).
+    public var switcher: SwitcherSettings
     public var remoteControlEnabled: Bool
     public var managerAutoPermissionMode: Bool
     /// When true, sessions launched by the Jobs scheduler start with
@@ -135,6 +137,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         defaults: ConfigDefaults = ConfigDefaults(),
         notifications: NotificationSettings = NotificationSettings(),
         sidebar: SidebarSettings = SidebarSettings(),
+        switcher: SwitcherSettings = SwitcherSettings(),
         remoteControlEnabled: Bool = false,
         managerAutoPermissionMode: Bool = true,
         jobsAutoPermissionMode: Bool = true,
@@ -159,6 +162,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         self.defaults = defaults
         self.notifications = notifications
         self.sidebar = sidebar
+        self.switcher = switcher
         self.remoteControlEnabled = remoteControlEnabled
         self.managerAutoPermissionMode = managerAutoPermissionMode
         self.jobsAutoPermissionMode = jobsAutoPermissionMode
@@ -186,6 +190,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         defaults = try container.decodeIfPresent(ConfigDefaults.self, forKey: .defaults) ?? ConfigDefaults()
         notifications = try container.decodeIfPresent(NotificationSettings.self, forKey: .notifications) ?? NotificationSettings()
         sidebar = try container.decodeIfPresent(SidebarSettings.self, forKey: .sidebar) ?? SidebarSettings()
+        switcher = try container.decodeIfPresent(SwitcherSettings.self, forKey: .switcher) ?? SwitcherSettings()
         remoteControlEnabled = try container.decodeIfPresent(Bool.self, forKey: .remoteControlEnabled) ?? false
         managerAutoPermissionMode = try container.decodeIfPresent(Bool.self, forKey: .managerAutoPermissionMode) ?? true
         jobsAutoPermissionMode = try container.decodeIfPresent(Bool.self, forKey: .jobsAutoPermissionMode) ?? true
@@ -252,7 +257,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case workspaces, defaults, notifications, sidebar, remoteControlEnabled, managerAutoPermissionMode, jobsAutoPermissionMode, reviewAutoPermissionMode, coderViewAutoPermissionMode, telemetry, terminal, autoRespond, attributionTrailers, autoMergeWatcherEnabled, autoCreateWatcherEnabled, cleanup, versionUpdate, jobs, defaultAgentKind, agentsByKind, managerGateway, jiraCredential, webAuth
+        case workspaces, defaults, notifications, sidebar, switcher, remoteControlEnabled, managerAutoPermissionMode, jobsAutoPermissionMode, reviewAutoPermissionMode, coderViewAutoPermissionMode, telemetry, terminal, autoRespond, attributionTrailers, autoMergeWatcherEnabled, autoCreateWatcherEnabled, cleanup, versionUpdate, jobs, defaultAgentKind, agentsByKind, managerGateway, jiraCredential, webAuth
     }
 
     /// Resolve the agent that should drive a newly-created session of the
@@ -914,6 +919,104 @@ public struct SidebarSettings: Codable, Sendable, Equatable {
     }
 
     enum CodingKeys: String, CodingKey { case hideSessionDetails }
+}
+
+/// Session-switcher ordering mode (CROW-976).
+public enum SwitcherOrder: String, Codable, Sendable, Equatable {
+    case mru
+    case sidebar
+}
+
+/// Per-category / per-status filters for the session switcher overlay.
+public struct SwitcherIncludeSettings: Codable, Sendable, Equatable {
+    public var managers: Bool
+    public var jobs: Bool
+    public var reviews: Bool
+    public var active: Bool
+    public var paused: Bool
+    public var inReview: Bool
+    public var completed: Bool
+    public var archived: Bool
+
+    public init(
+        managers: Bool = false,
+        jobs: Bool = false,
+        reviews: Bool = true,
+        active: Bool = true,
+        paused: Bool = true,
+        inReview: Bool = true,
+        completed: Bool = false,
+        archived: Bool = false
+    ) {
+        self.managers = managers
+        self.jobs = jobs
+        self.reviews = reviews
+        self.active = active
+        self.paused = paused
+        self.inReview = inReview
+        self.completed = completed
+        self.archived = archived
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        managers = try c.decodeIfPresent(Bool.self, forKey: .managers) ?? false
+        jobs = try c.decodeIfPresent(Bool.self, forKey: .jobs) ?? false
+        reviews = try c.decodeIfPresent(Bool.self, forKey: .reviews) ?? true
+        active = try c.decodeIfPresent(Bool.self, forKey: .active) ?? true
+        paused = try c.decodeIfPresent(Bool.self, forKey: .paused) ?? true
+        inReview = try c.decodeIfPresent(Bool.self, forKey: .inReview) ?? true
+        completed = try c.decodeIfPresent(Bool.self, forKey: .completed) ?? false
+        archived = try c.decodeIfPresent(Bool.self, forKey: .archived) ?? false
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case managers, jobs, reviews, active, paused, inReview, completed, archived
+    }
+}
+
+/// Session switcher overlay preferences (CROW-976).
+public struct SwitcherSettings: Codable, Sendable, Equatable {
+    public var enabled: Bool
+    /// Chord string, e.g. `shift+tab`. Parsed client-side.
+    public var binding: String
+    /// When true, the binding is captured even inside a focused terminal.
+    public var captureInTerminal: Bool
+    public var order: SwitcherOrder
+    /// Fetch a cheap tmux pane preview for the highlighted card.
+    public var preview: Bool
+    public var include: SwitcherIncludeSettings
+
+    public init(
+        enabled: Bool = true,
+        binding: String = "shift+tab",
+        captureInTerminal: Bool = true,
+        order: SwitcherOrder = .mru,
+        preview: Bool = true,
+        include: SwitcherIncludeSettings = SwitcherIncludeSettings()
+    ) {
+        self.enabled = enabled
+        self.binding = binding
+        self.captureInTerminal = captureInTerminal
+        self.order = order
+        self.preview = preview
+        self.include = include
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+        binding = try c.decodeIfPresent(String.self, forKey: .binding) ?? "shift+tab"
+        captureInTerminal = try c.decodeIfPresent(Bool.self, forKey: .captureInTerminal) ?? true
+        order = try c.decodeIfPresent(SwitcherOrder.self, forKey: .order) ?? .mru
+        preview = try c.decodeIfPresent(Bool.self, forKey: .preview) ?? true
+        include = try c.decodeIfPresent(SwitcherIncludeSettings.self, forKey: .include)
+            ?? SwitcherIncludeSettings()
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case enabled, binding, captureInTerminal, order, preview, include
+    }
 }
 
 /// Telemetry collection settings for Claude Code OTLP metrics.

@@ -352,6 +352,16 @@ window.refreshVersionUpdateBanner = refreshVersionUpdateBanner;
 // saves (via `window.reloadUIConfig`). Mirrors the desktop's
 // `appState.hideSessionDetails`.
 const uiConfig = { hideSessionDetails: false, notifications: null, webPasswordSet: false, vsCodeAvailable: false, isLocal: false,
+  // Session switcher overlay (CROW-976) — defaults mirror AppConfig.SwitcherSettings.
+  switcherEnabled: true,
+  switcherBinding: 'shift+tab',
+  switcherCaptureInTerminal: true,
+  switcherOrder: 'mru',
+  switcherPreview: true,
+  switcherInclude: {
+    managers: false, jobs: false, reviews: true,
+    active: true, paused: true, in_review: true, completed: false, archived: false,
+  },
   // Terminal wheel-scroll sensitivity (CROW-835), consumed by enableWheelScroll.
   // Defaults mirror AppConfig.TerminalSettings: 3 local lines/notch on plain
   // shells, 1 forwarded notch/notch on agent surfaces.
@@ -361,6 +371,23 @@ async function loadUIConfig() {
     const res = await rpc('get-config');
     const cfg = JSON.parse((res && res.config) || '{}');
     uiConfig.hideSessionDetails = !!(cfg.sidebar && cfg.sidebar.hideSessionDetails);
+    const sw = cfg.switcher || {};
+    uiConfig.switcherEnabled = sw.enabled !== false;
+    uiConfig.switcherBinding = (sw.binding && String(sw.binding)) || 'shift+tab';
+    uiConfig.switcherCaptureInTerminal = sw.captureInTerminal !== false;
+    uiConfig.switcherOrder = (sw.order === 'sidebar') ? 'sidebar' : 'mru';
+    uiConfig.switcherPreview = sw.preview !== false;
+    const inc = sw.include || {};
+    uiConfig.switcherInclude = {
+      managers: !!inc.managers,
+      jobs: !!inc.jobs,
+      reviews: inc.reviews !== false,
+      active: inc.active !== false,
+      paused: inc.paused !== false,
+      in_review: inc.inReview !== false,
+      completed: !!inc.completed,
+      archived: !!inc.archived,
+    };
     // Wheel-scroll sensitivity (CROW-835). Fall back to the defaults for a config
     // that predates the `terminal` block or omits a knob; clamp to a sane floor of
     // 1 so a stray 0 can't wedge the wheel (Math.trunc would never emit a notch).
@@ -2459,6 +2486,469 @@ function showSessionNotFound(id) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Session switcher overlay — macOS-style MRU cycling (CROW-976)
+// ---------------------------------------------------------------------------
+
+const sessionMRU = [];
+const SWITCHER_PREVIEW_CACHE_MS = 4000;
+const SWITCHER_PREVIEW_DEBOUNCE_MS = 150;
+const switcherPreviewCache = new Map();
+let switcherPreviewTimer = null;
+let switcherPreviewSeq = 0;
+const switcherState = {
+  open: false,
+  originId: null,
+  index: 0,
+  highlightedId: null,
+  chord: null,
+  modifiersHeld: null,
+  previousFocus: null,
+};
+
+function switcherBindingModifierFromEvent(e) {
+  switch (e.key) {
+    case 'Shift': return 'shift';
+    case 'Control': return 'ctrl';
+    case 'Alt': return 'alt';
+    case 'Meta': return 'meta';
+    default: return null;
+  }
+}
+
+function switcherBindingModifiersActive() {
+  const c = switcherState.chord;
+  const h = switcherState.modifiersHeld;
+  if (!c || !h) return false;
+  if (c.shift && h.shift) return true;
+  if (c.ctrl && h.ctrl) return true;
+  if (c.alt && h.alt) return true;
+  if (c.meta && h.meta) return true;
+  return false;
+}
+
+function switcherBindingHasModifiers(b) {
+  return b.shift || b.ctrl || b.alt || b.meta;
+}
+
+function switcherBindingKeysForPart(keyPart) {
+  const lower = keyPart.toLowerCase();
+  const aliases = {
+    tab: ['Tab'],
+    enter: ['Enter'],
+    escape: ['Escape'],
+    esc: ['Escape'],
+    space: [' ', 'Space'],
+    '`': ['`', 'Backquote'],
+    backquote: ['`', 'Backquote'],
+    '-': ['-', 'Minus'],
+    minus: ['-', 'Minus'],
+    '=': ['=', 'Equal'],
+    equal: ['=', 'Equal'],
+    left: ['ArrowLeft'],
+    right: ['ArrowRight'],
+    up: ['ArrowUp'],
+    down: ['ArrowDown'],
+  };
+  if (aliases[lower]) return aliases[lower];
+  if (keyPart.length === 1) return [keyPart, keyPart.toUpperCase()];
+  return [keyPart.charAt(0).toUpperCase() + keyPart.slice(1)];
+}
+
+function switcherCycleKeyLabel() {
+  const b = parseSwitcherBinding(uiConfig.switcherBinding);
+  if (b.keys.includes('Tab')) return 'Tab';
+  if (b.keys.includes(' ') || b.keys.includes('Space')) return 'Space';
+  if (b.keys.includes('Backquote') || b.keys.includes('`')) return '`';
+  return b.key;
+}
+
+function switcherCommitHint() {
+  const b = parseSwitcherBinding(uiConfig.switcherBinding);
+  const mods = [];
+  if (b.shift) mods.push('Shift');
+  if (b.ctrl) mods.push('Ctrl');
+  if (b.alt) mods.push('Alt');
+  if (b.meta) mods.push('Cmd');
+  const cycle = switcherCycleKeyLabel();
+  const commitHint = switcherBindingHasModifiers(b)
+    ? 'release ' + mods.join('+')
+    : 'release ' + cycle;
+  return cycle + ' / ←→ to cycle · ' + commitHint + ' to switch · Esc to cancel';
+}
+
+function captureSwitcherModifiers(e) {
+  const b = parseSwitcherBinding(uiConfig.switcherBinding);
+  switcherState.chord = b;
+  switcherState.modifiersHeld = {
+    shift: b.shift && e.shiftKey,
+    ctrl: b.ctrl && e.ctrlKey,
+    alt: b.alt && e.altKey,
+    meta: b.meta && e.metaKey,
+  };
+}
+
+function touchSessionMRU(id) {
+  if (!id) return;
+  const i = sessionMRU.indexOf(id);
+  if (i >= 0) sessionMRU.splice(i, 1);
+  sessionMRU.unshift(id);
+  if (sessionMRU.length > 200) sessionMRU.length = 200;
+}
+
+function parseSwitcherBinding(binding) {
+  const parts = String(binding || 'shift+tab').toLowerCase().split('+').map((p) => p.trim()).filter(Boolean);
+  const keyPart = parts[parts.length - 1] || 'tab';
+  const keys = switcherBindingKeysForPart(keyPart);
+  return {
+    key: keys[0],
+    keys,
+    shift: parts.includes('shift'),
+    ctrl: parts.includes('ctrl'),
+    alt: parts.includes('alt'),
+    meta: parts.includes('meta') || parts.includes('cmd') || parts.includes('command'),
+  };
+}
+
+function eventMatchesSwitcherBinding(e, binding) {
+  const b = parseSwitcherBinding(binding);
+  if (!!e.shiftKey !== b.shift) return false;
+  if (!!e.ctrlKey !== b.ctrl) return false;
+  if (!!e.altKey !== b.alt) return false;
+  if (!!e.metaKey !== b.meta) return false;
+  if (b.keys.includes(e.key)) return true;
+  return b.keys.some((k) => k.length === 1 && e.key.length === 1
+    && e.key.toLowerCase() === k.toLowerCase());
+}
+
+function switcherIncludesSession(s, include) {
+  if (s.kind === 'manager' && !include.managers) return false;
+  if (s.kind === 'job' && !include.jobs) return false;
+  if (s.kind === 'review' && !include.reviews) return false;
+  switch (s.status) {
+    case 'active': return include.active;
+    case 'paused': return include.paused;
+    case 'inReview': return include.in_review;
+    case 'completed': return include.completed;
+    case 'archived': return include.archived;
+    default: return true;
+  }
+}
+
+function switcherSidebarOrdered(list, include) {
+  const eligible = list.filter((s) => switcherIncludesSession(s, include));
+  const out = [];
+  for (const m of eligible.filter((s) => s.kind === 'manager')) out.push(m);
+  for (const g of groupSessions(eligible)) {
+    for (const row of g.rows) out.push(row);
+  }
+  return out;
+}
+
+function switcherMruOrdered(list, include) {
+  const eligible = list.filter((s) => switcherIncludesSession(s, include));
+  const byId = new Map(eligible.map((s) => [s.id, s]));
+  const out = [];
+  for (const id of sessionMRU) {
+    const s = byId.get(id);
+    if (s) { out.push(s); byId.delete(id); }
+  }
+  for (const s of eligible) {
+    if (byId.has(s.id)) out.push(s);
+  }
+  return out;
+}
+
+function buildSwitcherEntries() {
+  const include = uiConfig.switcherInclude;
+  return uiConfig.switcherOrder === 'sidebar'
+    ? switcherSidebarOrdered(sessions, include)
+    : switcherMruOrdered(sessions, include);
+}
+
+function switcherCategoryLabel(s) {
+  if (s.kind === 'manager') return 'Manager';
+  if (s.kind === 'job') return 'Job';
+  if (s.kind === 'review') return 'Review';
+  return 'Work';
+}
+
+function switcherClampIndex(entries) {
+  if (!entries.length) return 0;
+  const cur = entries[switcherState.index];
+  if (cur && switcherState.highlightedId && cur.id === switcherState.highlightedId) {
+    return switcherState.index;
+  }
+  if (switcherState.highlightedId) {
+    const hi = entries.findIndex((s) => s.id === switcherState.highlightedId);
+    if (hi >= 0) {
+      switcherState.index = hi;
+      return hi;
+    }
+  }
+  if (switcherState.index >= entries.length) {
+    switcherState.index = entries.length - 1;
+  }
+  if (switcherState.index < 0) switcherState.index = 0;
+  return switcherState.index;
+}
+
+function switcherAdvance(delta) {
+  const entries = buildSwitcherEntries();
+  if (!entries.length) return;
+  switcherState.index = (switcherState.index + delta + entries.length) % entries.length;
+  switcherState.highlightedId = entries[switcherState.index]?.id ?? null;
+  renderSwitcherOverlay();
+  scheduleSwitcherPreview();
+}
+
+function closeSwitcherOverlay() {
+  switcherState.open = false;
+  switcherState.originId = null;
+  switcherState.chord = null;
+  switcherState.modifiersHeld = null;
+  switcherState.highlightedId = null;
+  if (switcherPreviewTimer) { clearTimeout(switcherPreviewTimer); switcherPreviewTimer = null; }
+  const root = document.getElementById('session-switcher');
+  if (root) {
+    root.hidden = true;
+    root.setAttribute('aria-hidden', 'true');
+    root.innerHTML = '';
+  }
+  const prev = switcherState.previousFocus;
+  switcherState.previousFocus = null;
+  if (prev && typeof prev.focus === 'function') {
+    try { prev.focus(); } catch (_) { /* detached node */ }
+  }
+}
+
+function switcherCommit() {
+  if (!switcherState.open) return;
+  const entries = buildSwitcherEntries();
+  const target = entries[switcherState.index];
+  closeSwitcherOverlay();
+  if (target && target.id !== selectedId) selectSession(target.id);
+}
+
+function switcherCancel() {
+  if (!switcherState.open) return;
+  const origin = switcherState.originId;
+  closeSwitcherOverlay();
+  if (origin && origin !== selectedId && sessions.some((s) => s.id === origin)) {
+    selectSession(origin);
+  }
+}
+
+function switcherOnBinding(e) {
+  if (!uiConfig.switcherEnabled) return;
+  const entries = buildSwitcherEntries();
+  if (entries.length <= 1) return;
+  if (!switcherState.open) {
+    switcherState.open = true;
+    switcherState.originId = selectedId;
+    switcherState.previousFocus = document.activeElement;
+    captureSwitcherModifiers(e);
+    const cur = entries.findIndex((s) => s.id === selectedId);
+    switcherState.index = cur >= 0 ? (cur + 1) % entries.length : 0;
+    switcherState.highlightedId = entries[switcherState.index]?.id ?? null;
+    if (isTerminalFocused()) document.activeElement.blur();
+    renderSwitcherOverlay();
+    scheduleSwitcherPreview();
+  } else {
+    switcherAdvance(1);
+  }
+  e.preventDefault();
+  e.stopPropagation();
+}
+
+function renderSwitcherCard(s, highlighted) {
+  const card = el('div', 'switcher-card' + (highlighted ? ' highlighted' : ''));
+  card.setAttribute('role', 'option');
+  card.setAttribute('aria-selected', highlighted ? 'true' : 'false');
+  if (highlighted) card.tabIndex = 0;
+  card.onclick = (ev) => {
+    ev.stopPropagation();
+    switcherState.index = buildSwitcherEntries().findIndex((x) => x.id === s.id);
+    switcherState.highlightedId = s.id;
+    switcherCommit();
+  };
+  const top = el('div', 'switcher-card-top');
+  const cat = el('span', 'switcher-cat', switcherCategoryLabel(s));
+  top.appendChild(cat);
+  const badge = el('span', 'status-badge', s.status);
+  badge.style.color = STATUS_COLOR[s.status] || 'var(--text-muted)';
+  top.appendChild(badge);
+  if (liveFor(s.id).remote_control_active) top.appendChild(rcGlyph());
+  card.appendChild(top);
+
+  const title = el('div', 'switcher-name');
+  title.appendChild(el('span', 'agent', AGENT_GLYPH[s.agent_kind] || '•'));
+  title.appendChild(el('span', '', s.name));
+  card.appendChild(title);
+
+  const ind = activityIndicator(s);
+  if (ind.label) {
+    const act = el('span', 'switcher-activity', ind.label);
+    act.style.color = ind.color;
+    card.appendChild(act);
+  }
+
+  if (s.ticket_title) card.appendChild(el('div', 'switcher-subtle', s.ticket_title));
+  const rev = reviewForSession(s.id);
+  if (rev && rev.author) {
+    card.appendChild(el('div', 'switcher-subtle', 'PR by @' + rev.author));
+  } else if (s.review_author) {
+    card.appendChild(el('div', 'switcher-subtle', 'PR by @' + s.review_author));
+  }
+  if (s.repo) {
+    card.appendChild(el('div', 'switcher-meta', s.repo + (s.branch ? ' · ' + s.branch : '')));
+  }
+  const prLink = (s.links || []).find((l) => l.type === 'pr') || liveFor(s.id).pr_link;
+  if (prLink) card.appendChild(el('div', 'switcher-meta', prLink.label || prLink.url));
+
+  if (highlighted) {
+    const prev = el('pre', 'switcher-preview');
+    prev.textContent = '';
+    card.appendChild(prev);
+  }
+  return card;
+}
+
+function renderSwitcherOverlay() {
+  const root = document.getElementById('session-switcher');
+  if (!root) return;
+  const entries = buildSwitcherEntries();
+  if (!switcherState.open || entries.length <= 1) {
+    closeSwitcherOverlay();
+    return;
+  }
+  switcherClampIndex(entries);
+  switcherState.highlightedId = entries[switcherState.index]?.id ?? null;
+  root.hidden = false;
+  root.setAttribute('aria-hidden', 'false');
+  root.innerHTML = '';
+  const panel = el('div', 'switcher-panel');
+  const strip = el('div', 'switcher-strip');
+  strip.setAttribute('role', 'listbox');
+  strip.setAttribute('aria-label', 'Sessions');
+  const hi = switcherState.index;
+  entries.forEach((s, i) => {
+    strip.appendChild(renderSwitcherCard(s, i === hi));
+  });
+  panel.appendChild(strip);
+  const hint = el('div', 'switcher-hint', switcherCommitHint());
+  panel.appendChild(hint);
+  root.appendChild(panel);
+  requestAnimationFrame(() => {
+    const card = strip.querySelector('.switcher-card.highlighted');
+    if (card) {
+      card.scrollIntoView({ inline: 'center', block: 'nearest' });
+      card.focus();
+    }
+  });
+  fillSwitcherPreview();
+}
+
+function scheduleSwitcherPreview() {
+  if (!uiConfig.switcherPreview) return;
+  if (switcherPreviewTimer) clearTimeout(switcherPreviewTimer);
+  switcherPreviewTimer = setTimeout(() => {
+    switcherPreviewTimer = null;
+    fillSwitcherPreview();
+  }, SWITCHER_PREVIEW_DEBOUNCE_MS);
+}
+
+async function fillSwitcherPreview() {
+  if (!uiConfig.switcherPreview || !switcherState.open) return;
+  const entries = buildSwitcherEntries();
+  const s = entries[switcherState.index];
+  if (!s) return;
+  const cached = switcherPreviewCache.get(s.id);
+  const now = Date.now();
+  if (cached && (now - cached.at) < SWITCHER_PREVIEW_CACHE_MS) {
+    setSwitcherPreviewText(cached.text);
+    return;
+  }
+  const seq = ++switcherPreviewSeq;
+  try {
+    const res = await rpc('get-session-terminal-preview', { session_id: s.id });
+    if (seq !== switcherPreviewSeq || !switcherState.open) return;
+    const text = (res && res.preview) ? String(res.preview) : '';
+    switcherPreviewCache.set(s.id, { text, at: Date.now() });
+    setSwitcherPreviewText(text);
+  } catch (_) { /* best-effort */ }
+}
+
+function setSwitcherPreviewText(text) {
+  const pre = document.querySelector('#session-switcher .switcher-card.highlighted .switcher-preview');
+  if (pre) pre.textContent = text || '';
+}
+
+function isTerminalFocused() {
+  const node = document.getElementById('terminal');
+  return !!(node && document.activeElement && node.contains(document.activeElement));
+}
+
+function onSwitcherKeyDown(e) {
+  if (!uiConfig.switcherEnabled) return;
+  if (switcherState.open) {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      switcherCancel();
+      return;
+    }
+    if (e.key === 'ArrowRight') {
+      e.preventDefault();
+      e.stopPropagation();
+      switcherAdvance(1);
+      return;
+    }
+    if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      e.stopPropagation();
+      switcherAdvance(-1);
+      return;
+    }
+    if (eventMatchesSwitcherBinding(e, uiConfig.switcherBinding)) {
+      e.preventDefault();
+      e.stopPropagation();
+      switcherAdvance(1);
+      return;
+    }
+    // Swallow everything else so keystrokes don't reach the focused xterm.
+    e.preventDefault();
+    e.stopPropagation();
+    return;
+  }
+  if (e.type !== 'keydown') return;
+  if (!eventMatchesSwitcherBinding(e, uiConfig.switcherBinding)) return;
+  if (isTerminalFocused() && !uiConfig.switcherCaptureInTerminal) return;
+  if (document.querySelector('.text-prompt-backdrop, .modal-dialog-backdrop, .settings-overlay')) return;
+  switcherOnBinding(e);
+}
+
+function onSwitcherKeyUp(e) {
+  if (!switcherState.open || !switcherState.chord || !switcherState.modifiersHeld) return;
+  const mod = switcherBindingModifierFromEvent(e);
+  if (mod && switcherState.chord[mod]) {
+    e.preventDefault();
+    e.stopPropagation();
+    switcherState.modifiersHeld[mod] = false;
+    if (!switcherBindingModifiersActive()) switcherCommit();
+    return;
+  }
+  if (!switcherBindingHasModifiers(switcherState.chord)
+      && eventMatchesSwitcherBinding(e, uiConfig.switcherBinding)) {
+    e.preventDefault();
+    e.stopPropagation();
+    switcherCommit();
+  }
+}
+
+document.addEventListener('keydown', onSwitcherKeyDown, true);
+document.addEventListener('keyup', onSwitcherKeyUp, true);
+
 // `opts.fromRoute` marks a call that is *applying* a URL rather than initiating
 // one. The distinction is load-bearing: when applying, the URL is authoritative,
 // and synthesizing a terminal it didn't ask for turns navigate() into a push —
@@ -2468,6 +2958,7 @@ function showSessionNotFound(id) {
 // could never move past it (review).
 async function selectSession(id, opts) {
   const fromRoute = !!(opts && opts.fromRoute);
+  touchSessionMRU(id);
   // Synchronous, before the first await: applyRoute relies on the hash being
   // settled by the time anything else can observe it. A pending terminal is
   // carried either way (it came *from* the URL). The active one is carried only
@@ -4926,6 +5417,14 @@ function handleTerminalKey(e) {
       if (q && searchAddon) { try { searchAddon.findNext(q); } catch (_) {} }
     });
     return false;
+  }
+  if (eventMatchesSwitcherBinding(e, uiConfig.switcherBinding)) {
+    if (uiConfig.switcherEnabled && uiConfig.switcherCaptureInTerminal) {
+      switcherOnBinding(e);
+      e.preventDefault();
+      e.stopPropagation();
+      return false;
+    }
   }
   return true;
 }
