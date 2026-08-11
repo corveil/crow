@@ -1610,7 +1610,7 @@ crow ui get
 Change UI display preferences.
 
 ```
-crow ui set [--hide-session-details <hide-session-details>]
+crow ui set [--hide-session-details <hide-session-details>] [--switcher-enabled <switcher-enabled>] [--switcher-binding <switcher-binding>] [--switcher-capture-in-terminal <switcher-capture-in-terminal>] [--switcher-order <switcher-order>] [--switcher-preview <switcher-preview>] [--switcher-include <switcher-include> ...]
 ```
 
 Only the flags you pass change; at least one is required. Connected browsers pick the change up within a couple of seconds — no reload.
@@ -1618,6 +1618,12 @@ Only the flags you pass change; at least one is required. Connected browsers pic
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |
 | `--hide-session-details` | `<hide-session-details>` | no | Hide ticket title and repo/branch lines in sidebar rows (true or false) |
+| `--switcher-enabled` | `<switcher-enabled>` | no | Enable the session switcher overlay (true or false) |
+| `--switcher-binding` | `<switcher-binding>` | no | Session switcher key chord (default: shift+tab) |
+| `--switcher-capture-in-terminal` | `<switcher-capture-in-terminal>` | no | Capture the switcher binding inside focused terminals (true or false) |
+| `--switcher-order` | `<switcher-order>` | no | Session switcher ordering: mru or sidebar |
+| `--switcher-preview` | `<switcher-preview>` | no | Fetch a tmux pane preview for the highlighted switcher card (true or false) |
+| `--switcher-include` | `<switcher-include>` _(repeatable)_ | no | Include filter as key=value (managers, jobs, reviews, active, paused, in_review, completed, archived) |
 
 ---
 
