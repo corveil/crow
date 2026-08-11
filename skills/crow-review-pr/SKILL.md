@@ -95,17 +95,7 @@ Every Crow review must end with a verdict — **exactly one** of the two actions
 
 {{CROW_REVIEW_VERDICT_RULE}}
 
-Post the review using exactly one of these two flags:
-
-```bash
-# If approving:
-gh pr review $ARGUMENTS --approve --body "YOUR_REVIEW_HERE"
-
-# If requesting changes (also the default when uncertain):
-gh pr review $ARGUMENTS --request-changes --body "YOUR_REVIEW_HERE"
-```
-
-Use this format for the review:
+Draft the review using this format:
 
 ```markdown
 ## Code & Security Review
@@ -133,6 +123,46 @@ Use this format for the review:
 ---
 
 [🐦‍⬛ Reviewed by Crow via {{CROW_AGENT_DISPLAY_NAME}}](https://github.com/corveil/crow)
+```
+
+### Step 5a: Pre-submit Guardrails (REQUIRED)
+
+Before running `gh pr review`, you **must** pass both checks below on your draft body. If either fails, **do not post** — stop and report what failed (which paths or verdict mismatched) so a human can intervene.
+
+#### Target check
+
+Re-fetch the PR's changed-file paths (same data as Step 2):
+
+```bash
+gh pr view $ARGUMENTS --json files --jq '.files[].path'
+```
+
+Collect every repo-relative path cited in your review body — `` `path/to/file:42` ``, `` `path/to/file` ``, bullet references, etc. Strip line/column suffixes (`:42`, `:42-46`) so you compare paths only.
+
+- If the body cites **one or more** specific file paths, at least one cited path must appear in the PR's changed-files list.
+- **Zero overlap** ⇒ do not post. Report that the review body appears to be about a different PR (list the orphan paths and the PR's actual changed files).
+
+If the review cites no specific file paths (only general observations), this check passes.
+
+#### Verdict consistency check
+
+The `**Recommendation:**` line in your draft body must agree with the `gh pr review` flag you will pass:
+
+| Body recommendation | Required flag |
+|---------------------|---------------|
+| `Approve` | `--approve` |
+| `Request Changes` | `--request-changes` |
+
+A body that says **Approve** with `--request-changes` (or the reverse) ⇒ **do not post**. Report the mismatch.
+
+Only after **both** checks pass, post the review using exactly one of these two flags:
+
+```bash
+# If approving:
+gh pr review $ARGUMENTS --approve --body "YOUR_REVIEW_HERE"
+
+# If requesting changes (also the default when uncertain):
+gh pr review $ARGUMENTS --request-changes --body "YOUR_REVIEW_HERE"
 ```
 
 ### Step 5b: Attribution (REQUIRED)
