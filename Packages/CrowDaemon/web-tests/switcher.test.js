@@ -8,6 +8,14 @@ const epilogue = `
   switcherMruOrdered(list, include){ return switcherMruOrdered(list, include); },
   switcherSidebarOrdered(list, include){ return switcherSidebarOrdered(list, include); },
   eventMatchesSwitcherBinding(e, binding){ return eventMatchesSwitcherBinding(e, binding); },
+  parseSwitcherBinding(binding){ return parseSwitcherBinding(binding); },
+  captureSwitcherModifiers(e){
+    captureSwitcherModifiers(e);
+    return { chord: switcherState.chord, modifiersHeld: switcherState.modifiersHeld };
+  },
+  switcherBindingModifiersActive(){ return switcherBindingModifiersActive(); },
+  setModifiersHeld(v){ switcherState.modifiersHeld = v; },
+  setChord(v){ switcherState.chord = v; },
   touchSessionMRU(id){ return touchSessionMRU(id); },
   set uiConfig(v){ Object.assign(uiConfig, v); },
 };
@@ -73,6 +81,18 @@ console.log('CROW-976 session switcher helpers:');
   const e = { key: 'Tab', shiftKey: true, ctrlKey: false, altKey: false, metaKey: false };
   check('default binding matches Shift+Tab', T.eventMatchesSwitcherBinding(e, 'shift+tab'));
   check('binding is case-insensitive', T.eventMatchesSwitcherBinding(e, 'Shift+Tab'));
+}
+
+{
+  const cap = T.captureSwitcherModifiers({
+    key: 'Tab', shiftKey: true, ctrlKey: false, altKey: false, metaKey: false,
+  });
+  check('capture records shift from binding', cap.chord.shift && cap.modifiersHeld.shift);
+  T.setChord(T.parseSwitcherBinding('ctrl+`'));
+  T.setModifiersHeld({ shift: false, ctrl: true, alt: false, meta: false });
+  check('ctrl binding active while ctrl held', T.switcherBindingModifiersActive());
+  T.setModifiersHeld({ shift: false, ctrl: false, alt: false, meta: false });
+  check('ctrl binding inactive after release', !T.switcherBindingModifiersActive());
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

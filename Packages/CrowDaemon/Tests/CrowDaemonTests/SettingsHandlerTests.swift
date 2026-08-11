@@ -121,6 +121,54 @@ import CrowEngine
         #expect(onDisk.jiraCredential?.tokenRef == "op://vault/jira/token")
     }
 
+    @Test @MainActor func uiSetPatchesSwitcherFields() async throws {
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+
+        let resp = await call("ui-set", [
+            "switcher_enabled": .bool(false),
+            "switcher_binding": .string("ctrl+`"),
+            "switcher_capture_in_terminal": .bool(false),
+            "switcher_order": .string("sidebar"),
+            "switcher_preview": .bool(false),
+            "switcher_include_managers": .bool(true),
+            "switcher_include_completed": .bool(true),
+        ], devRoot: devRoot)
+
+        #expect(resp.result?["ui"] == .object([
+            "sidebar": .object(["hide_session_details": .bool(false)]),
+            "switcher": .object([
+                "enabled": .bool(false),
+                "binding": .string("ctrl+`"),
+                "capture_in_terminal": .bool(false),
+                "order": .string("sidebar"),
+                "preview": .bool(false),
+                "include": .object([
+                    "managers": .bool(true),
+                    "jobs": .bool(false),
+                    "reviews": .bool(true),
+                    "active": .bool(true),
+                    "paused": .bool(true),
+                    "in_review": .bool(true),
+                    "completed": .bool(true),
+                    "archived": .bool(false),
+                ]),
+            ]),
+        ]))
+
+        let onDisk = try #require(ConfigStore.loadConfig(devRoot: devRoot))
+        #expect(onDisk.switcher.enabled == false)
+        #expect(onDisk.switcher.binding == "ctrl+`")
+        #expect(onDisk.switcher.captureInTerminal == false)
+        #expect(onDisk.switcher.order == .sidebar)
+        #expect(onDisk.switcher.preview == false)
+        #expect(onDisk.switcher.include.managers == true)
+        #expect(onDisk.switcher.include.completed == true)
+        // Unpatched include keys keep their defaults.
+        #expect(onDisk.switcher.include.reviews == true)
+        #expect(onDisk.switcher.include.jobs == false)
+    }
+
     // MARK: - restart_required
 
     @Test @MainActor func telemetryReportsRestartOnlyForEnabledOrPort() async throws {

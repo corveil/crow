@@ -2500,8 +2500,52 @@ const switcherState = {
   open: false,
   originId: null,
   index: 0,
-  shiftHeld: false,
+  chord: null,
+  modifiersHeld: null,
 };
+
+function switcherBindingModifierFromEvent(e) {
+  switch (e.key) {
+    case 'Shift': return 'shift';
+    case 'Control': return 'ctrl';
+    case 'Alt': return 'alt';
+    case 'Meta': return 'meta';
+    default: return null;
+  }
+}
+
+function switcherBindingModifiersActive() {
+  const c = switcherState.chord;
+  const h = switcherState.modifiersHeld;
+  if (!c || !h) return false;
+  if (c.shift && h.shift) return true;
+  if (c.ctrl && h.ctrl) return true;
+  if (c.alt && h.alt) return true;
+  if (c.meta && h.meta) return true;
+  return false;
+}
+
+function switcherCommitHint() {
+  const b = parseSwitcherBinding(uiConfig.switcherBinding);
+  const mods = [];
+  if (b.shift) mods.push('Shift');
+  if (b.ctrl) mods.push('Ctrl');
+  if (b.alt) mods.push('Alt');
+  if (b.meta) mods.push('Cmd');
+  const modHint = mods.length ? 'release ' + mods.join('+') : 'click a card';
+  return 'Tab / ←→ to cycle · ' + modHint + ' to switch · Esc to cancel';
+}
+
+function captureSwitcherModifiers(e) {
+  const b = parseSwitcherBinding(uiConfig.switcherBinding);
+  switcherState.chord = b;
+  switcherState.modifiersHeld = {
+    shift: b.shift && e.shiftKey,
+    ctrl: b.ctrl && e.ctrlKey,
+    alt: b.alt && e.altKey,
+    meta: b.meta && e.metaKey,
+  };
+}
 
 function touchSessionMRU(id) {
   if (!id) return;
@@ -2598,7 +2642,8 @@ function switcherAdvance(delta) {
 function closeSwitcherOverlay() {
   switcherState.open = false;
   switcherState.originId = null;
-  switcherState.shiftHeld = false;
+  switcherState.chord = null;
+  switcherState.modifiersHeld = null;
   if (switcherPreviewTimer) { clearTimeout(switcherPreviewTimer); switcherPreviewTimer = null; }
   const root = document.getElementById('session-switcher');
   if (root) {
@@ -2632,7 +2677,7 @@ function switcherOnBinding(e) {
   if (!switcherState.open) {
     switcherState.open = true;
     switcherState.originId = selectedId;
-    switcherState.shiftHeld = true;
+    captureSwitcherModifiers(e);
     const cur = entries.findIndex((s) => s.id === selectedId);
     switcherState.index = cur >= 0 ? (cur + 1) % entries.length : 0;
     renderSwitcherOverlay();
@@ -2710,7 +2755,7 @@ function renderSwitcherOverlay() {
     strip.appendChild(renderSwitcherCard(s, i === switcherState.index));
   });
   panel.appendChild(strip);
-  const hint = el('div', 'switcher-hint', 'Tab / ←→ to cycle · release Shift to switch · Esc to cancel');
+  const hint = el('div', 'switcher-hint', switcherCommitHint());
   panel.appendChild(hint);
   root.appendChild(panel);
   requestAnimationFrame(() => {
@@ -2781,7 +2826,8 @@ function onSwitcherKeyDown(e) {
       switcherAdvance(-1);
       return;
     }
-    if (e.key === 'Tab' && switcherState.shiftHeld) {
+    if (e.key === 'Tab' && switcherState.chord && switcherState.chord.shift
+        && switcherState.modifiersHeld && switcherState.modifiersHeld.shift) {
       e.preventDefault();
       e.stopPropagation();
       switcherAdvance(1);
@@ -2797,11 +2843,11 @@ function onSwitcherKeyDown(e) {
 }
 
 function onSwitcherKeyUp(e) {
-  if (!switcherState.open) return;
-  if (e.key === 'Shift') {
-    switcherState.shiftHeld = false;
-    switcherCommit();
-  }
+  if (!switcherState.open || !switcherState.chord || !switcherState.modifiersHeld) return;
+  const mod = switcherBindingModifierFromEvent(e);
+  if (!mod || !switcherState.chord[mod]) return;
+  switcherState.modifiersHeld[mod] = false;
+  if (!switcherBindingModifiersActive()) switcherCommit();
 }
 
 document.addEventListener('keydown', onSwitcherKeyDown, true);
