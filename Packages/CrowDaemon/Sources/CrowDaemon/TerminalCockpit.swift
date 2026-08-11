@@ -114,6 +114,9 @@ struct TerminalCockpit: Sendable {
     /// drift from the policy floor (CROW-804 review).
     static let replayLines = TmuxBackend.scrollbackHistoryLimit
 
+    /// Lines captured for the session-switcher preview card (CROW-976).
+    static let previewLines = 15
+
     /// Capture window `index`'s pane scrollback (history + current screen) and
     /// package it as bytes ready to write into a reconnecting xterm.js buffer.
     /// Returns `nil` when the capture fails (best-effort — a live-only pane is
@@ -123,6 +126,29 @@ struct TerminalCockpit: Sendable {
             target: "\(group):\(index)", linesBack: Self.replayLines, escapes: true)
         else { return nil }
         return Self.replayFrame(from: raw)
+    }
+
+    /// Capture the last `previewLines` rows of a cockpit window as plain text for
+    /// the session-switcher card. Best-effort — returns nil when capture fails.
+    func previewText(windowIndex: Int) -> String? {
+        guard let raw = try? controller.capturePane(
+            target: "\(Self.sessionName):\(windowIndex)",
+            linesBack: Self.previewLines,
+            escapes: true)
+        else { return nil }
+        return Self.plainPreviewText(from: raw)
+    }
+
+    /// Strip trailing padding and ANSI escapes for a monospace preview block.
+    static func plainPreviewText(from raw: String) -> String {
+        let trimmed = raw.replacingOccurrences(of: "[\r\n]+$", with: "", options: .regularExpression)
+        let esc = "\u{1B}"
+        let noAnsi = trimmed.replacingOccurrences(
+            of: esc + "(?:[@-Z\\-_]|\\[[0-?]*[ -/]*[@-~])",
+            with: "",
+            options: .regularExpression)
+        return noAnsi.replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
     }
 
     /// Transform a `capture-pane -pe` blob into a self-contained replay frame for

@@ -1069,6 +1069,103 @@ body.update-banner-visible #back-to-sidebar {
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
 }
 
+/* Session switcher overlay (CROW-976) — macOS-style task switcher */
+.session-switcher {
+  position: fixed;
+  inset: 0;
+  z-index: 1900;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 24px;
+  background: rgba(0, 0, 0, 0.72);
+  backdrop-filter: blur(10px);
+}
+.session-switcher[hidden] { display: none; }
+.switcher-panel {
+  width: min(1100px, 96vw);
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.switcher-strip {
+  display: flex;
+  gap: 14px;
+  overflow-x: auto;
+  padding: 8px 4px 12px;
+  scroll-snap-type: x mandatory;
+}
+.switcher-card {
+  flex: 0 0 min(320px, 82vw);
+  scroll-snap-align: center;
+  background: var(--bg-surface);
+  border: 2px solid var(--border-subtle);
+  border-radius: 12px;
+  padding: 14px 16px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease, transform 0.12s ease;
+}
+.switcher-card:hover { border-color: var(--border-strong); }
+.switcher-card.highlighted {
+  border-color: var(--gold);
+  box-shadow: 0 0 0 1px var(--gold), 0 12px 32px rgba(0, 0, 0, 0.35);
+  transform: scale(1.02);
+}
+.switcher-card-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.switcher-cat {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  background: var(--bg-elevated);
+  border-radius: 4px;
+  padding: 2px 6px;
+}
+.switcher-name {
+  font-weight: 600;
+  font-size: 15px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.switcher-subtle, .switcher-meta {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.35;
+}
+.switcher-meta { font-family: var(--font-mono, ui-monospace, monospace); }
+.switcher-activity { font-size: 11px; font-weight: 600; }
+.switcher-preview {
+  margin-top: 6px;
+  padding: 8px 10px;
+  background: #0d0d0d;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10px;
+  line-height: 1.35;
+  color: #c8c8c8;
+  max-height: 11em;
+  overflow: hidden;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.switcher-hint {
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
 /* Single-line text prompt modal (rename, etc.) — replaces window.prompt(), which
    silently returns null over the web in several browsers (CROW-593). Sits above
    the settings modal (z 2000) so it can layer over anything. */

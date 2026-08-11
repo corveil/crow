@@ -341,6 +341,20 @@ public enum ParityLedger {
 
         .field("sidebar.hideSessionDetails", read: "ui get", write: "ui set"),
 
+        .field("switcher.enabled", read: "ui get", write: "ui set"),
+        .field("switcher.binding", read: "ui get", write: "ui set"),
+        .field("switcher.captureInTerminal", read: "ui get", write: "ui set"),
+        .field("switcher.order", read: "ui get", write: "ui set"),
+        .field("switcher.preview", read: "ui get", write: "ui set"),
+        .field("switcher.include.managers", read: "ui get", write: "ui set"),
+        .field("switcher.include.jobs", read: "ui get", write: "ui set"),
+        .field("switcher.include.reviews", read: "ui get", write: "ui set"),
+        .field("switcher.include.active", read: "ui get", write: "ui set"),
+        .field("switcher.include.paused", read: "ui get", write: "ui set"),
+        .field("switcher.include.inReview", read: "ui get", write: "ui set"),
+        .field("switcher.include.completed", read: "ui get", write: "ui set"),
+        .field("switcher.include.archived", read: "ui get", write: "ui set"),
+
         .field("notifications.globalMute", read: "notifications get", write: "notifications set"),
         .field("notifications.soundEnabled", read: "notifications get", write: "notifications set"),
         .field(

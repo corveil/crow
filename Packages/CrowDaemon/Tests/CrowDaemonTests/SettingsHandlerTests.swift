@@ -4,6 +4,7 @@ import CrowCore
 import CrowGit
 import CrowIPC
 import CrowPersistence
+import CrowEngine
 @testable import CrowDaemon
 
 /// End-to-end coverage of the `telemetry-*` / `cleanup-*` / `ui-*` handlers
@@ -55,6 +56,7 @@ import CrowPersistence
         let ui = await call("ui-get", devRoot: devRoot)
         #expect(ui.result?["ui"] == .object([
             "sidebar": .object(["hide_session_details": .bool(false)]),
+            "switcher": SettingsRPC.switcherJSON(SwitcherSettings()),
         ]))
     }
 

@@ -166,16 +166,86 @@ public enum SettingsRPC {
     }
 
     /// The `ui` group is a *view* namespace, not a single `AppConfig` block:
-    /// today only `sidebar`, later `terminal` and anything else purely
+    /// today `sidebar` and `switcher`, later `terminal` and anything else purely
     /// presentational. Nesting by config-block name mirrors `config.json` and
     /// keeps a future `sidebar.width` from colliding with `terminal.width`;
     /// growing the group stays purely additive.
-    public static func uiJSON(_ sidebar: SidebarSettings) -> JSONValue {
+    public static func uiJSON(sidebar: SidebarSettings, switcher: SwitcherSettings) -> JSONValue {
         .object([
             "sidebar": .object([
                 "hide_session_details": .bool(sidebar.hideSessionDetails),
             ]),
+            "switcher": switcherJSON(switcher),
         ])
+    }
+
+    public static func switcherJSON(_ switcher: SwitcherSettings) -> JSONValue {
+        .object([
+            "enabled": .bool(switcher.enabled),
+            "binding": .string(switcher.binding),
+            "capture_in_terminal": .bool(switcher.captureInTerminal),
+            "order": .string(switcher.order.rawValue),
+            "preview": .bool(switcher.preview),
+            "include": .object([
+                "managers": .bool(switcher.include.managers),
+                "jobs": .bool(switcher.include.jobs),
+                "reviews": .bool(switcher.include.reviews),
+                "active": .bool(switcher.include.active),
+                "paused": .bool(switcher.include.paused),
+                "in_review": .bool(switcher.include.inReview),
+                "completed": .bool(switcher.include.completed),
+                "archived": .bool(switcher.include.archived),
+            ]),
+        ])
+    }
+
+    /// Patch one `switcher.include` key. `key` is snake_case on the wire
+    /// (`in_review` → `inReview`).
+    public static func patchSwitcherIncludeKey(
+        _ params: [String: JSONValue], prefix: String = "switcher_include_"
+    ) throws -> [(WritableKeyPath<SwitcherIncludeSettings, Bool>, Bool)] {
+        let keys: [(String, WritableKeyPath<SwitcherIncludeSettings, Bool>)] = [
+            ("managers", \.managers),
+            ("jobs", \.jobs),
+            ("reviews", \.reviews),
+            ("active", \.active),
+            ("paused", \.paused),
+            ("in_review", \.inReview),
+            ("completed", \.completed),
+            ("archived", \.archived),
+        ]
+        var patches: [(WritableKeyPath<SwitcherIncludeSettings, Bool>, Bool)] = []
+        for (wire, path) in keys {
+            guard let value = params[prefix + wire], value != .null else { continue }
+            guard let flag = value.boolValue else {
+                throw RPCError.invalidParams("\(prefix)\(wire) must be a boolean (true or false)")
+            }
+            patches.append((path, flag))
+        }
+        return patches
+    }
+
+    public static func patchSwitcherOrder(
+        _ params: [String: JSONValue], _ key: String = "switcher_order"
+    ) throws -> SwitcherOrder? {
+        guard let value = params[key], value != .null else { return nil }
+        guard let raw = value.stringValue else {
+            throw RPCError.invalidParams("\(key) must be \"mru\" or \"sidebar\"")
+        }
+        guard let order = SwitcherOrder(rawValue: raw) else {
+            throw RPCError.invalidParams("\(key) must be \"mru\" or \"sidebar\"")
+        }
+        return order
+    }
+
+    public static func patchNonEmptyString(
+        _ params: [String: JSONValue], _ key: String
+    ) throws -> String? {
+        guard let value = params[key], value != .null else { return nil }
+        guard let text = value.stringValue, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw RPCError.invalidParams("\(key) must be a non-empty string")
+        }
+        return text
     }
 
     /// Whether a telemetry change needs a daemon restart to take effect.

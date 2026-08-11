@@ -646,6 +646,27 @@ func makeCommandRouter(
             if let dir { result["dir"] = .string(dir.path) }
             return result
         },
+        // Best-effort tmux pane tail for the session-switcher preview card
+        // (CROW-976). Returns plain text or null — never errors on a missing pane.
+        "session-terminal-preview": { params in
+            guard let sidStr = params["session_id"]?.stringValue,
+                  let sid = UUID(uuidString: sidStr) else {
+                throw DaemonRPCError.invalidParams("session_id required")
+            }
+            guard let cockpit else {
+                return ["preview": .null]
+            }
+            let windowIndex: Int? = await MainActor.run {
+                appState.terminals(for: sid)
+                    .compactMap(\.tmuxBinding?.windowIndex)
+                    .first
+            }
+            guard let index = windowIndex,
+                  let preview = cockpit.previewText(windowIndex: index) else {
+                return ["preview": .null]
+            }
+            return ["preview": .string(preview)]
+        },
         // Board reads. When the daemon owns the tracker/allowList (CROW-581 M-C)
         // they answer locally off `appState` — populated by the daemon's own
         // IssueTracker/AllowListService — so the boards work with the app down.
@@ -1650,24 +1671,45 @@ func makeCommandRouter(
         },
         "ui-get": { _ in
             let config = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
-            return ["ui": SettingsRPC.uiJSON(config.sidebar)]
+            return ["ui": SettingsRPC.uiJSON(sidebar: config.sidebar, switcher: config.switcher)]
         },
         "ui-set": { params in
             try await mapRPCError {
-                guard let hideSessionDetails =
-                        try SettingsRPC.patchBool(params, "hide_session_details") else {
+                let hideSessionDetails = try SettingsRPC.patchBool(params, "hide_session_details")
+                let switcherEnabled = try SettingsRPC.patchBool(params, "switcher_enabled")
+                let switcherBinding = try SettingsRPC.patchNonEmptyString(params, "switcher_binding")
+                let switcherCapture = try SettingsRPC.patchBool(params, "switcher_capture_in_terminal")
+                let switcherOrder = try SettingsRPC.patchSwitcherOrder(params)
+                let switcherPreview = try SettingsRPC.patchBool(params, "switcher_preview")
+                let includePatches = try SettingsRPC.patchSwitcherIncludeKey(params)
+                guard hideSessionDetails != nil || switcherEnabled != nil || switcherBinding != nil
+                    || switcherCapture != nil || switcherOrder != nil || switcherPreview != nil
+                    || !includePatches.isEmpty else {
                     throw RPCError.invalidParams(
-                        "Nothing to set — provide at least one of hide_session_details.")
+                        "Nothing to set — provide at least one UI preference flag.")
                 }
-                let sidebar = try mutateConfig(devRoot: devRoot) { config -> SidebarSettings in
-                    config.sidebar.hideSessionDetails = hideSessionDetails
-                    return config.sidebar
+                let (sidebar, switcher) = try mutateConfig(devRoot: devRoot) {
+                    config -> (SidebarSettings, SwitcherSettings) in
+                    if let hideSessionDetails {
+                        config.sidebar.hideSessionDetails = hideSessionDetails
+                    }
+                    if let switcherEnabled { config.switcher.enabled = switcherEnabled }
+                    if let switcherBinding { config.switcher.binding = switcherBinding }
+                    if let switcherCapture {
+                        config.switcher.captureInTerminal = switcherCapture
+                    }
+                    if let switcherOrder { config.switcher.order = switcherOrder }
+                    if let switcherPreview { config.switcher.preview = switcherPreview }
+                    for (path, value) in includePatches {
+                        config.switcher.include[keyPath: path] = value
+                    }
+                    return (config.sidebar, config.switcher)
                 }
                 // Connected browsers re-read the view-affecting config slice off
                 // the `configReloaded` push that `startStoreReloadPoll` fires when
                 // config.json's mtime moves — no restart, no reload.
                 return [
-                    "ui": SettingsRPC.uiJSON(sidebar),
+                    "ui": SettingsRPC.uiJSON(sidebar: sidebar, switcher: switcher),
                     "restart_required": .bool(false),
                 ]
             }

@@ -111,9 +111,12 @@ struct SettingsRPCSupportTests {
     /// Locks the nesting by config block, so flattening it later is a conscious
     /// break rather than an accident — `ui` grows to hold more blocks.
     @Test func uiJSONNestsUnderSidebar() throws {
-        let json = SettingsRPC.uiJSON(SidebarSettings(hideSessionDetails: true))
+        let json = SettingsRPC.uiJSON(
+            sidebar: SidebarSettings(hideSessionDetails: true),
+            switcher: SwitcherSettings())
         #expect(json == .object([
             "sidebar": .object(["hide_session_details": .bool(true)]),
+            "switcher": SettingsRPC.switcherJSON(SwitcherSettings()),
         ]))
     }
 
@@ -134,7 +137,7 @@ struct SettingsRPCSupportTests {
         let responses = [
             SettingsRPC.telemetryJSON(TelemetryConfig()),
             SettingsRPC.cleanupJSON(CleanupConfig()),
-            SettingsRPC.uiJSON(SidebarSettings()),
+            SettingsRPC.uiJSON(sidebar: SidebarSettings(), switcher: SwitcherSettings()),
             SettingsRPC.automationJSON(AppConfig()),
             SettingsRPC.automationJSON(loaded),
         ]

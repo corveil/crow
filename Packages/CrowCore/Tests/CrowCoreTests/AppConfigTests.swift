@@ -354,6 +354,29 @@ import Testing
     #expect(config.sidebar.hideSessionDetails == false)
 }
 
+@Test func switcherSettingsDecodeDefaultsWhenAbsent() throws {
+    let json = "{}".data(using: .utf8)!
+    let config = try JSONDecoder().decode(AppConfig.self, from: json)
+
+    #expect(config.switcher.enabled == true)
+    #expect(config.switcher.binding == "shift+tab")
+    #expect(config.switcher.captureInTerminal == true)
+    #expect(config.switcher.order == .mru)
+    #expect(config.switcher.preview == true)
+    #expect(config.switcher.include.reviews == true)
+    #expect(config.switcher.include.managers == false)
+    #expect(config.switcher.include.completed == false)
+}
+
+@Test func switcherSettingsDecodesEmptyObject() throws {
+    let json = #"{"switcher": {}}"#.data(using: .utf8)!
+    let config = try JSONDecoder().decode(AppConfig.self, from: json)
+
+    #expect(config.switcher.enabled == true)
+    #expect(config.switcher.binding == "shift+tab")
+    #expect(config.switcher.include.archived == false)
+}
+
 @Test func telemetryCleanupSidebarSurviveFullRoundTrip() throws {
     let config = AppConfig(
         sidebar: SidebarSettings(hideSessionDetails: true),

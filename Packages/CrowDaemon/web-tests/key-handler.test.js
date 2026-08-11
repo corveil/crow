@@ -23,6 +23,7 @@ const epilogue = `
   set term(v){ term = v; },
   set searchAddon(v){ searchAddon = v; },
   set termWs(v){ termWs = v; },
+  set uiConfig(v){ Object.assign(uiConfig, v); },
 };
 `;
 const APP_JS = __dirname + '/../Sources/CrowDaemon/Resources/web/app.js';
@@ -331,6 +332,28 @@ async function main() {
     const e = key('v');
     check('an unmodified keystroke passes through',
       T.handleTerminalKey(e) === true && e.prevented === 0);
+  }
+
+  // ---- Session switcher (CROW-976) -----------------------------------------
+
+  console.log('\nSession switcher binding in the terminal:');
+  {
+    withClipboard();
+    setup();
+    T.uiConfig = { switcherEnabled: true, switcherBinding: 'shift+tab', switcherCaptureInTerminal: true };
+    const e = key('Tab', { shift: true });
+    const result = T.handleTerminalKey(e);
+    check('Shift+Tab is captured when captureInTerminal is true',
+      result === false && e.prevented === 1 && sent.length === 0);
+  }
+  {
+    withClipboard();
+    setup();
+    T.uiConfig = { switcherEnabled: true, switcherBinding: 'shift+tab', switcherCaptureInTerminal: false };
+    const e = key('Tab', { shift: true });
+    const result = T.handleTerminalKey(e);
+    check('Shift+Tab passes through when captureInTerminal is false',
+      result === true && e.prevented === 0);
   }
 
   console.log(`\n${pass} passed, ${fail} failed`);
