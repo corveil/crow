@@ -171,12 +171,31 @@ Notes on the repo lookup:
 
 Both membership lists are editable from **Settings → Workspaces** or with `crow workspace edit --workspace NAME --always-include acme/widget --auto-review-repo 'acme/*'` (note those flags replace the whole list rather than appending — see [cli-reference.md](cli-reference.md#workspace-commands)). So a review that resolved to no gateway is usually fixed by adding its repo to the owning workspace.
 
+Because the two lookups are independent, a repo cloned under one workspace's folder but claimed by *another* workspace's membership list resolves **differently depending on session kind** — a work session by path, a review of that repo's PR by slug. That is intended (the slug fallback exists precisely because review clones have no workspace folder), but it means "reviews fail and work sessions don't" can be a workspace-binding symptom rather than an agent one. To see which applied, either read the launch line in the daemon log:
+
+```
+[SessionService] Gateway for session <uuid>: workspace 'Corveil' (matched by repo_slug)
+    -> https://gw.example.com, headers: x-citadel-api-key
+```
+
+or ask before launching, with `crow get-session --session <uuid>` — its `workspace_name` / `workspace_match` fields report the same decision (see [cli-reference.md](cli-reference.md#crow-get-session)). Header **names** appear in the log line; values never do.
+
 ### Secret storage
 
 A header value can be either:
 
 - **An `op://` reference** (recommended) — resolved at session launch via the 1Password CLI (`op read`). The secret is **never written to `config.json`**. Requires `op` installed and signed in; a failed lookup drops that header and logs a redacted warning (the gateway then rejects the request rather than silently falling back to the vanilla API).
 - **A plaintext value** — stored as-is in `config.json` (mode `0600`). Convenient for local dev, but **anyone with read access to the file can see the key**. The Settings UI shows a warning. Prefer an `op://` reference for production keys.
+
+Either way, the value must not carry **literal surrounding quotes** — a `"` or `'` at both ends. Values are stored and transmitted verbatim, so the quotes become part of the credential and the gateway rejects the request, which the agent reports only as "API error". Worse, quotes around an `op://` reference stop it from being recognized as one, so it is never resolved and the literal string is sent instead. Every write path now rejects this shape.
+
+A value stored *before* that check still launches — Crow warns rather than editing a credential it can't verify. Look for:
+
+```
+[GatewayResolver] Header 'x-citadel-api-key' has a value wrapped in quote characters; …
+```
+
+Re-set it with `crow gateway set` (no inner quotes) to clear the warning.
 
 `op://` keeps secrets out of `config.json` — but note it does **not** mean "no secret on disk." The *resolved* value is written into the worktree's `.claude/settings.local.json` `env` block (so manual re-runs inherit it) and cached there for the worktree's lifetime. That file is gitignored and written `0600` (owner-only), the same protection `config.json` gets. Resolved secret values are never logged.
 

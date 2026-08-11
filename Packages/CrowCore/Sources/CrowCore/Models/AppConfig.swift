@@ -370,6 +370,62 @@ extension WorkspaceGateway {
             .map { "\($0.key): \($0.value)" }
             .joined(separator: "\n")
     }
+
+    /// Whether a header *value* was stored with literal surrounding quote
+    /// characters — a shell-quoting slip (`--header 'X-Api-Key: "Bearer sk-…"'`)
+    /// that nothing downstream notices (CROW-969). ``GatewayResolver/serializeHeaders(_:)``
+    /// interpolates the value verbatim and `ClaudeLaunchArgs.gatewayEnvPrefix`
+    /// shell-quotes the whole header line, so the stray quotes reach the gateway
+    /// inside `ANTHROPIC_CUSTOM_HEADERS` and it rejects the request — surfacing to
+    /// the user as a bare "API error" that names nothing actionable.
+    ///
+    /// Trimmed first, because the web path stores whatever the browser sent
+    /// (`SecretRoutes.buildGateway` filters on trimmed *keys* only, never values).
+    ///
+    /// A blank or whitespace-only value is **not** wrapped. Blank is the "keep the
+    /// secret already stored" signal that `SecretRoutes.mergingPreservedHeaders`
+    /// resolves, so treating it as malformed would break every base-URL-only edit.
+    ///
+    /// Two characters are required so a lone `"` is not read as matching itself,
+    /// and both ends must carry the *same* delimiter so `"abc'` — no recognizable
+    /// shell slip — passes rather than inventing a rule we can't defend.
+    ///
+    /// Deliberately **not** enforced in ``init(from:)``: a config already on disk
+    /// carrying this mistake must still decode. A decode failure makes
+    /// `ConfigStore.loadConfig` return nil, and the next write then replaces every
+    /// workspace, job and credential with defaults (the review-Red on #623, noted
+    /// at `SecretRoutes.mergingPreservedHeaders`). Writes are guarded instead, and
+    /// values already stored are warned about at launch by `GatewayResolver`.
+    public static func isQuoteWrapped(_ value: String) -> Bool {
+        let trimmed = value.trimmingCharacters(in: .whitespaces)
+        guard trimmed.count >= 2, let first = trimmed.first, let last = trimmed.last
+        else { return false }
+        return (first == "\"" || first == "'") && first == last
+    }
+
+    /// Whether a header *name* carries a quote character a shell left behind.
+    ///
+    /// Catches the slip ``isQuoteWrapped(_:)`` structurally cannot see: quoting the
+    /// whole pair (`--header '"X-Api-Key: sk-…"'`) puts one quote on the name and
+    /// the other on the value, so neither half is individually wrapped.
+    ///
+    /// `"` is rejected anywhere in the name — RFC 9110's `field-name` is a `token`
+    /// and `tchar` excludes `"` entirely, so a name containing one can never be a
+    /// valid HTTP header whatever the author intended. `'` **is** a legal `tchar`,
+    /// so it is rejected only in leading position, where no real header name has
+    /// ever put one.
+    ///
+    /// Deliberately not caught: a *trailing* `'` (legal, and not a recognizable
+    /// quoting artifact), and full RFC 9110 token validation — spaces, control
+    /// characters and the like. Validation guards new writes only and a stored
+    /// config is never re-validated, so broadening the grammar would reject
+    /// someone re-saving an untouched, working header for a reason unrelated to
+    /// the quoting slip this rule exists for.
+    public static func headerNameHasStrayQuote(_ name: String) -> Bool {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        if trimmed.contains("\"") { return true }
+        return trimmed.first == "'"
+    }
 }
 
 /// Jira REST credential used only by the in-app status fetch (CROW-528). The

@@ -300,8 +300,22 @@ func parseBinaryOverrides(_ raw: [String]) throws -> [String: String] {
 /// newlines, so an embedded `\n` would smuggle in a second header. Reject it
 /// here so the typo fails loudly at the flag rather than silently expanding.
 ///
-/// - Throws: `ValidationError` when the line has no colon, an empty name, or an
-///   embedded newline.
+/// A value wrapped in literal quote characters is rejected too (CROW-969).
+/// Nothing downstream notices one: `GatewayResolver.serializeHeaders`
+/// interpolates the value verbatim and `ClaudeLaunchArgs.gatewayEnvPrefix`
+/// shell-quotes the whole header line, so `"Bearer sk-…"` reaches the gateway
+/// with its quotes intact and is rejected as a bare "API error" that names
+/// nothing actionable. The header *name* is checked for a stray quote as well —
+/// that is the only thing that catches quoting the whole pair
+/// (`--header '"X-Api-Key: sk-…"'`), where the colon split leaves one quote on
+/// the name and the other on the value and neither half is individually wrapped.
+///
+/// Mirrors `SecretRoutes.buildGateway`, which enforces the same two rules for
+/// the web and RPC writers this function never sees. Both delegate to the shared
+/// `WorkspaceGateway` predicates, so the two can't drift.
+///
+/// - Throws: `ValidationError` when the line has no colon, an empty name, an
+///   embedded newline, a quote-wrapped value, or a name carrying a quote.
 func validateHeaderLine(_ value: String) throws {
     // CharacterSet, not `contains("\n")`: Swift treats CRLF as a single Character,
     // so a grapheme comparison misses "\r\n" entirely.
@@ -314,6 +328,22 @@ func validateHeaderLine(_ value: String) throws {
           !String(trimmed[..<colon]).trimmingCharacters(in: .whitespaces).isEmpty else {
         throw ValidationError(
             "'\(value)' is not a valid header. Expected 'Name: Value' (e.g. \"X-Api-Key: sk-…\").")
+    }
+    // Below this point the messages quote the header NAME and never the value —
+    // a header value is a credential, and an ArgumentParser error goes to the
+    // terminal. (The two messages above predate this and do print the raw line:
+    // the no-colon case has no name to print instead, and the newline case needs
+    // the raw line to be diagnosable at all.)
+    let name = String(trimmed[..<colon]).trimmingCharacters(in: .whitespaces)
+    let headerValue = String(trimmed[trimmed.index(after: colon)...])
+        .trimmingCharacters(in: .whitespaces)
+    guard !WorkspaceGateway.headerNameHasStrayQuote(name) else {
+        throw ValidationError(
+            "'\(name)' is not a valid header name — it carries a quote character. Quote the whole 'Name: Value' pair in your shell, not inside it: --header \"X-Api-Key: sk-…\"")
+    }
+    guard !WorkspaceGateway.isQuoteWrapped(headerValue) else {
+        throw ValidationError(
+            "The value for header '\(name)' is wrapped in quote characters. They would be sent as part of the credential and the gateway would reject the request — pass --header \"\(name): sk-…\" without the inner quotes.")
     }
 }
 

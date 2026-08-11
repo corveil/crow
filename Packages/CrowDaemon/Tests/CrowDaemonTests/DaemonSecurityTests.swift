@@ -579,6 +579,83 @@ import CrowPersistence
         }
     }
 
+    // MARK: - Quote rules (CROW-969)
+    //
+    // `buildGateway` is the one server-side chokepoint that sees the final header
+    // map from BOTH the `gateway-set` RPC (via `SecretsRPC.decodeHeaderLines`) and
+    // the web's `/config/*-gateway` POSTs, so the rules live here rather than in
+    // either caller.
+
+    @Test func quoteWrappedHeaderValueIsRejected() {
+        for value in ["\"sk-1\"", "'sk-1'", "\"op://Vault/Item/field\""] {
+            if case .success = SecretRoutes.buildGateway(body("https://gw", ["X-Api-Key": value])) {
+                Issue.record("expected '\(value)' to be rejected")
+            }
+        }
+    }
+
+    @Test func quotedHeaderNameIsRejected() {
+        // The whole-pair slip: neither half is individually quote-wrapped.
+        for name in ["\"X-Api-Key", "'X-Api-Key", "X-Api-Key\""] {
+            if case .success = SecretRoutes.buildGateway(body("https://gw", [name: "sk-1"])) {
+                Issue.record("expected header name '\(name)' to be rejected")
+            }
+        }
+    }
+
+    @Test func blankHeaderValueStillPassesBuildGateway() throws {
+        // Guards the "keep the stored secret" contract against the new rules: a
+        // blank value is the documented way to change a base URL alone, and the
+        // web editor always sends blanks for stored keys.
+        let g = try SecretRoutes.buildGateway(
+            body("https://gw", ["X-Api-Key": "", "X-Other": "real"])).get()
+        #expect(g?.customHeaders["X-Api-Key"] == "")
+    }
+
+    @Test func interiorQuotesAndJSONValuesPass() throws {
+        let g = try SecretRoutes.buildGateway(body("https://gw", [
+            "X-Json": "{\"a\":1}",
+            "X-Api-Key": "Bearer sk-\"abc\"-def",
+        ])).get()
+        #expect(g?.customHeaders.count == 2)
+    }
+
+    @Test func rejectionMessageNamesTheHeaderNotTheValue() {
+        // This string becomes an HTTP 400 body and an RPC error — both land in logs.
+        guard case .failure(let error) = SecretRoutes.buildGateway(
+            body("https://gw", ["X-Api-Key": "\"sk-SECRET\""]))
+        else {
+            Issue.record("expected a rejection")
+            return
+        }
+        #expect(error.message.contains("X-Api-Key"))
+        #expect(!error.message.contains("sk-SECRET"))
+    }
+
+    @Test func firstQuotedHeaderReportedIsDeterministic() {
+        // Pins the `.sorted()`: with several bad headers the message must not
+        // vary run to run with dictionary ordering.
+        guard case .failure(let error) = SecretRoutes.buildGateway(
+            body("https://gw", ["Z-Api-Key": "\"sk-z\"", "A-Api-Key": "\"sk-a\""]))
+        else {
+            Issue.record("expected a rejection")
+            return
+        }
+        #expect(error.message.contains("A-Api-Key"))
+    }
+
+    @Test func bothOrNeitherStillWinsOverQuoteCheck() {
+        // The structural error is the more actionable one, so it must be reported
+        // first when a body is both half-filled and quoted.
+        guard case .failure(let error) = SecretRoutes.buildGateway(
+            body("", ["X-Api-Key": "\"sk-1\""]))
+        else {
+            Issue.record("expected a rejection")
+            return
+        }
+        #expect(error.message.contains("both a base URL"))
+    }
+
     @Test func blankHeaderValuesKeepStoredSecrets() throws {
         // Local editor prefills stripped keys with empty values; updating only
         // the base URL must not wipe the stored auth header (review Yellow #1).

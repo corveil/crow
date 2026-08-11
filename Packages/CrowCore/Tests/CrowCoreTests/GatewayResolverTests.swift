@@ -58,3 +58,34 @@ import Testing
     #expect(resolved?.baseURL == "https://corveil.io")
     #expect(resolved?.customHeaders == "x-plain: kept")
 }
+
+// MARK: - Quote-wrapped values (CROW-969)
+
+@Test func gatewayResolverPassesQuoteWrappedValueThroughUnchanged() throws {
+    let gateway = WorkspaceGateway(
+        baseURL: "https://corveil.io",
+        customHeaders: ["x-citadel-api-key": "\"Bearer sk-1\""]
+    )
+    // Warn, don't strip. Writes are rejected now, but a config written before
+    // that check still has to launch — and stripping would mean guessing the
+    // quotes aren't part of the secret. A loud rejection at the gateway beats
+    // authenticating with a credential the user never verified. This pins the
+    // contract so a future "helpful" strip fails here.
+    let resolved = GatewayResolver.resolve(gateway) { _ in nil }
+    #expect(resolved?.customHeaders == "x-citadel-api-key: \"Bearer sk-1\"")
+}
+
+@Test func gatewayResolverDoesNotResolveQuoteWrappedOpReference() throws {
+    let gateway = WorkspaceGateway(
+        baseURL: "https://corveil.io",
+        customHeaders: ["x-citadel-api-key": "\"op://Vault/Item/field\""]
+    )
+    // Documents *why* the resolve-time warning is needed: the quotes defeat
+    // `hasPrefix("op://")`, so the reference silently falls into the plaintext
+    // arm and is never resolved at all.
+    let resolved = GatewayResolver.resolve(gateway) { _ in
+        Issue.record("op read must not be called for a quote-wrapped reference")
+        return "Bearer sk-resolved"
+    }
+    #expect(resolved?.customHeaders == "x-citadel-api-key: \"op://Vault/Item/field\"")
+}

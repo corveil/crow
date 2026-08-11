@@ -79,6 +79,15 @@ enum SecretsRPC {
             return text
         }
         for text in texts {
+            // Quote-wrapped values and quote-carrying names are NOT checked here —
+            // `SecretRoutes.buildGateway` owns those rules for both this path and
+            // the web's, and every entry decoded here flows into it (see the
+            // "gateway-set" handler in RPCHandlers). Adding them here would shadow
+            // that message, so the CLI and the browser would report different text
+            // for the same mistake (CROW-969). The checks below stay because they
+            // are *line-shape* rules: they must run before `parseHeaderLines`
+            // collapses these lines into a map.
+            //
             // CharacterSet, not `contains("\n")`: Swift treats CRLF as a single
             // Character, so a grapheme comparison misses "\r\n" entirely.
             guard text.rangeOfCharacter(from: .newlines) == nil else {
