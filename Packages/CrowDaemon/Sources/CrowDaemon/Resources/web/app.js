@@ -2527,10 +2527,39 @@ function switcherBindingModifiersActive() {
   return false;
 }
 
+function switcherBindingHasModifiers(b) {
+  return b.shift || b.ctrl || b.alt || b.meta;
+}
+
+function switcherBindingKeysForPart(keyPart) {
+  const lower = keyPart.toLowerCase();
+  const aliases = {
+    tab: ['Tab'],
+    enter: ['Enter'],
+    escape: ['Escape'],
+    esc: ['Escape'],
+    space: [' ', 'Space'],
+    '`': ['`', 'Backquote'],
+    backquote: ['`', 'Backquote'],
+    '-': ['-', 'Minus'],
+    minus: ['-', 'Minus'],
+    '=': ['=', 'Equal'],
+    equal: ['=', 'Equal'],
+    left: ['ArrowLeft'],
+    right: ['ArrowRight'],
+    up: ['ArrowUp'],
+    down: ['ArrowDown'],
+  };
+  if (aliases[lower]) return aliases[lower];
+  if (keyPart.length === 1) return [keyPart, keyPart.toUpperCase()];
+  return [keyPart.charAt(0).toUpperCase() + keyPart.slice(1)];
+}
+
 function switcherCycleKeyLabel() {
   const b = parseSwitcherBinding(uiConfig.switcherBinding);
-  if (b.key === 'Tab') return 'Tab';
-  if (b.key === ' ') return 'Space';
+  if (b.keys.includes('Tab')) return 'Tab';
+  if (b.keys.includes(' ') || b.keys.includes('Space')) return 'Space';
+  if (b.keys.includes('Backquote') || b.keys.includes('`')) return '`';
   return b.key;
 }
 
@@ -2541,8 +2570,11 @@ function switcherCommitHint() {
   if (b.ctrl) mods.push('Ctrl');
   if (b.alt) mods.push('Alt');
   if (b.meta) mods.push('Cmd');
-  const modHint = mods.length ? 'release ' + mods.join('+') : 'click a card';
-  return switcherCycleKeyLabel() + ' / ←→ to cycle · ' + modHint + ' to switch · Esc to cancel';
+  const cycle = switcherCycleKeyLabel();
+  const commitHint = switcherBindingHasModifiers(b)
+    ? 'release ' + mods.join('+')
+    : 'release ' + cycle;
+  return cycle + ' / ←→ to cycle · ' + commitHint + ' to switch · Esc to cancel';
 }
 
 function captureSwitcherModifiers(e) {
@@ -2567,9 +2599,10 @@ function touchSessionMRU(id) {
 function parseSwitcherBinding(binding) {
   const parts = String(binding || 'shift+tab').toLowerCase().split('+').map((p) => p.trim()).filter(Boolean);
   const keyPart = parts[parts.length - 1] || 'tab';
-  const named = { tab: 'Tab', enter: 'Enter', escape: 'Escape', space: ' ' };
+  const keys = switcherBindingKeysForPart(keyPart);
   return {
-    key: named[keyPart] || (keyPart.length === 1 ? keyPart.toUpperCase() : keyPart),
+    key: keys[0],
+    keys,
     shift: parts.includes('shift'),
     ctrl: parts.includes('ctrl'),
     alt: parts.includes('alt'),
@@ -2583,9 +2616,9 @@ function eventMatchesSwitcherBinding(e, binding) {
   if (!!e.ctrlKey !== b.ctrl) return false;
   if (!!e.altKey !== b.alt) return false;
   if (!!e.metaKey !== b.meta) return false;
-  if (e.key === b.key) return true;
-  if (b.key.length === 1 && e.key.toLowerCase() === b.key.toLowerCase()) return true;
-  return false;
+  if (b.keys.includes(e.key)) return true;
+  return b.keys.some((k) => k.length === 1 && e.key.length === 1
+    && e.key.toLowerCase() === k.toLowerCase());
 }
 
 function switcherIncludesSession(s, include) {
@@ -2898,11 +2931,19 @@ function onSwitcherKeyDown(e) {
 function onSwitcherKeyUp(e) {
   if (!switcherState.open || !switcherState.chord || !switcherState.modifiersHeld) return;
   const mod = switcherBindingModifierFromEvent(e);
-  if (!mod || !switcherState.chord[mod]) return;
-  e.preventDefault();
-  e.stopPropagation();
-  switcherState.modifiersHeld[mod] = false;
-  if (!switcherBindingModifiersActive()) switcherCommit();
+  if (mod && switcherState.chord[mod]) {
+    e.preventDefault();
+    e.stopPropagation();
+    switcherState.modifiersHeld[mod] = false;
+    if (!switcherBindingModifiersActive()) switcherCommit();
+    return;
+  }
+  if (!switcherBindingHasModifiers(switcherState.chord)
+      && eventMatchesSwitcherBinding(e, uiConfig.switcherBinding)) {
+    e.preventDefault();
+    e.stopPropagation();
+    switcherCommit();
+  }
 }
 
 document.addEventListener('keydown', onSwitcherKeyDown, true);

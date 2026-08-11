@@ -14,8 +14,16 @@ const epilogue = `
     return { chord: switcherState.chord, modifiersHeld: switcherState.modifiersHeld };
   },
   switcherBindingModifiersActive(){ return switcherBindingModifiersActive(); },
+  switcherBindingHasModifiers(b){ return switcherBindingHasModifiers(b); },
+  onSwitcherKeyUp(e){ return onSwitcherKeyUp(e); },
   setModifiersHeld(v){ switcherState.modifiersHeld = v; },
   setChord(v){ switcherState.chord = v; },
+  setSwitcherOpen(v){
+    switcherState.open = v;
+    switcherState.chord = parseSwitcherBinding('tab');
+    switcherState.modifiersHeld = { shift: false, ctrl: false, alt: false, meta: false };
+  },
+  getSwitcherOpen(){ return switcherState.open; },
   touchSessionMRU(id){ return touchSessionMRU(id); },
   switcherClampIndex(entries){ return switcherClampIndex(entries); },
   setIndex(i){ switcherState.index = i; },
@@ -97,6 +105,26 @@ console.log('CROW-976 session switcher helpers:');
   check('ctrl binding active while ctrl held', T.switcherBindingModifiersActive());
   T.setModifiersHeld({ shift: false, ctrl: false, alt: false, meta: false });
   check('ctrl binding inactive after release', !T.switcherBindingModifiersActive());
+}
+
+{
+  const backquote = { key: 'Backquote', shiftKey: false, ctrlKey: true, altKey: false, metaKey: false };
+  check('ctrl+` matches Backquote key event', T.eventMatchesSwitcherBinding(backquote, 'ctrl+`'));
+  const grave = { key: '`', shiftKey: false, ctrlKey: true, altKey: false, metaKey: false };
+  check('ctrl+` matches grave accent key event', T.eventMatchesSwitcherBinding(grave, 'ctrl+`'));
+  const parsed = T.parseSwitcherBinding('ctrl+`');
+  check('ctrl+` parses Backquote aliases', parsed.keys.includes('Backquote') && parsed.keys.includes('`'));
+}
+
+{
+  T.uiConfig = { switcherBinding: 'tab' };
+  T.setSwitcherOpen(true);
+  const noop = () => {};
+  T.onSwitcherKeyUp({
+    key: 'Tab', shiftKey: false, ctrlKey: false, altKey: false, metaKey: false,
+    preventDefault: noop, stopPropagation: noop,
+  });
+  check('modifier-less binding commits on key release', !T.getSwitcherOpen());
 }
 
 {
