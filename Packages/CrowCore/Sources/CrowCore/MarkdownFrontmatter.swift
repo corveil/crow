@@ -23,8 +23,6 @@ import Foundation
 /// checked-in `skills/crow-review-pr/SKILL.md` and its bundled `.template`
 /// (`scripts/check-workspace-custom-instructions.sh` enforces that).
 public enum MarkdownFrontmatter {
-    private static let delimiter = "---"
-
     /// Drop a leading YAML frontmatter block, returning the body that follows.
     ///
     /// Deliberately conservative — the inputs include bodies that legitimately
@@ -43,25 +41,70 @@ public enum MarkdownFrontmatter {
     /// document that opens with a markdown horizontal rule and contains a second
     /// one — indistinguishable from frontmatter by any line-based parser, and not
     /// a shape a SKILL body takes.
+    ///
+    /// Scans the UTF-8 view rather than `components(separatedBy: "\n")`. Swift
+    /// treats `"\r\n"` as a **single** grapheme cluster, and Foundation's
+    /// grapheme-aware search differs by platform: Darwin splits a CRLF document
+    /// on the embedded `\n`, swift-corelibs-foundation does not, so on Linux the
+    /// whole file came back as one "line" and nothing was ever stripped. Bytes
+    /// behave identically everywhere.
     public static func stripped(_ body: String) -> String {
-        let lines = body.components(separatedBy: "\n")
-        guard let first = lines.first, isDelimiter(first) else { return body }
+        let bytes = Array(body.utf8)
+
+        guard let opening = line(in: bytes, at: 0), isDelimiter(bytes, opening.content) else {
+            return body
+        }
+
         // Search from line 2: the opening delimiter must not close itself.
-        // `dropFirst()` yields a slice sharing `lines`' indices, so the returned
-        // index addresses `lines` directly.
-        guard let closing = lines.dropFirst().firstIndex(where: isDelimiter) else { return body }
+        var cursor = opening.next
+        while let current = line(in: bytes, at: cursor) {
+            guard isDelimiter(bytes, current.content) else {
+                cursor = current.next
+                continue
+            }
+            // Skip blank lines after the closing delimiter so the result starts
+            // at the body's first real character.
+            var start = current.next
+            while let following = line(in: bytes, at: start), isBlank(bytes, following.content) {
+                start = following.next
+            }
+            // `start` is always a line boundary, so the slice is valid UTF-8.
+            return String(decoding: bytes[start...], as: UTF8.self)
+        }
 
-        return lines[lines.index(after: closing)...]
-            // `.whitespacesAndNewlines`, not `.whitespaces`: splitting a CRLF
-            // document on `\n` makes a blank line the single character `\r`,
-            // which `.whitespaces` (space + tab) does not match.
-            .drop { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-            .joined(separator: "\n")
+        return body
     }
 
-    /// A line that is exactly `---`, tolerating a CRLF carriage return. Splitting
-    /// on `\n` leaves the `\r` attached to every line of a CRLF document.
-    private static func isDelimiter(_ line: String) -> Bool {
-        (line.hasSuffix("\r") ? String(line.dropLast()) : line) == delimiter
+    /// The line beginning at `offset`: its content without the line terminator,
+    /// and the offset the next line starts at. `nil` once `offset` is past the end.
+    private static func line(
+        in bytes: [UInt8], at offset: Int
+    ) -> (content: Range<Int>, next: Int)? {
+        guard offset < bytes.count else { return nil }
+
+        var end = offset
+        while end < bytes.count, bytes[end] != Self.lineFeed { end += 1 }
+
+        // Drop a CRLF's carriage return from the content, not from the offsets.
+        var contentEnd = end
+        if contentEnd > offset, bytes[contentEnd - 1] == Self.carriageReturn { contentEnd -= 1 }
+
+        return (offset..<contentEnd, end < bytes.count ? end + 1 : bytes.count)
     }
+
+    /// A line whose content is exactly `---`.
+    private static func isDelimiter(_ bytes: [UInt8], _ content: Range<Int>) -> Bool {
+        content.count == 3 && bytes[content].allSatisfy { $0 == Self.hyphen }
+    }
+
+    /// A line with nothing but horizontal whitespace on it.
+    private static func isBlank(_ bytes: [UInt8], _ content: Range<Int>) -> Bool {
+        bytes[content].allSatisfy { $0 == Self.space || $0 == Self.tab }
+    }
+
+    private static let lineFeed: UInt8 = 0x0A
+    private static let carriageReturn: UInt8 = 0x0D
+    private static let hyphen: UInt8 = 0x2D
+    private static let space: UInt8 = 0x20
+    private static let tab: UInt8 = 0x09
 }

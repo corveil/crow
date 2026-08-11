@@ -96,9 +96,12 @@ struct MarkdownFrontmatterTests {
         #expect(MarkdownFrontmatter.stripped("") == "")
     }
 
-    /// Splitting on `\n` leaves `\r` attached to every line of a CRLF document, so
-    /// the delimiter check has to tolerate it — otherwise a CRLF SKILL body would
-    /// silently keep its frontmatter and reintroduce CROW-968.
+    /// Splitting a CRLF document is where this first broke: Swift treats `"\r\n"`
+    /// as a **single** grapheme cluster, and Foundation's grapheme-aware
+    /// `components(separatedBy: "\n")` differs by platform — Darwin splits on the
+    /// embedded `\n`, swift-corelibs-foundation does not. The first implementation
+    /// passed on macOS and stripped nothing on Linux. The scan runs over UTF-8
+    /// bytes now, so this must hold identically on both.
     @Test func handlesCRLFLineEndings() {
         let body = "---\r\nname: crow-review-pr\r\n---\r\n\r\n# Crow Review PR\r\nBody."
 
@@ -108,6 +111,30 @@ struct MarkdownFrontmatterTests {
         #expect(!stripped.contains("name: crow-review-pr"))
         // The body's own CRLF endings survive — only the frontmatter is removed.
         #expect(stripped == "# Crow Review PR\r\nBody.")
+    }
+
+    /// The same document in both line-ending conventions must strip to the same
+    /// body modulo its terminators. Guards the whole class of "works on one
+    /// platform / one file's line endings" bugs, not just the one that shipped.
+    @Test func crlfAndLFStripEquivalently() {
+        let lf = "---\nname: x\ndescription: y\n---\n\n# Body\n\nMore."
+        let crlf = lf.replacingOccurrences(of: "\n", with: "\r\n")
+
+        let strippedLF = MarkdownFrontmatter.stripped(lf)
+        let strippedCRLF = MarkdownFrontmatter.stripped(crlf)
+
+        #expect(strippedLF == "# Body\n\nMore.")
+        #expect(strippedCRLF.replacingOccurrences(of: "\r\n", with: "\n") == strippedLF)
+    }
+
+    /// A trailing-whitespace `---` is not a delimiter. Being strict here is what
+    /// keeps the scan from mistaking loosely-formatted body content for a block.
+    @Test func requiresAnExactDelimiter() {
+        let padded = "--- \nname: x\n---\nbody"
+        #expect(MarkdownFrontmatter.stripped(padded) == padded)
+
+        let tooLong = "----\nname: x\n----\nbody"
+        #expect(MarkdownFrontmatter.stripped(tooLong) == tooLong)
     }
 
     /// An empty frontmatter block still strips, and must not leave the result
