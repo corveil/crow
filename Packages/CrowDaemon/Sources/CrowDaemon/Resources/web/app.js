@@ -316,8 +316,7 @@ function renderVersionUpdateBanner(status) {
   dismissArmedWithoutSha = !remoteSha;
   banner.hidden = false;
   const msg = 'A newer Crow build is available — '
-    + n + ' commit' + (n === 1 ? '' : 's') + ' behind origin/main.'
-    + (status.update_command ? (' Update: ' + status.update_command) : '');
+    + n + ' commit' + (n === 1 ? '' : 's') + ' behind origin/main.';
   if (text.textContent !== msg) text.textContent = msg;
   if (compareLink) {
     if (status.compare_url && n > 0) {

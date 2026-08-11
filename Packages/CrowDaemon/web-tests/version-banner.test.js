@@ -17,6 +17,7 @@ const epilogue = `
   },
   dismiss() { document.querySelector('.update-banner-dismiss').click(); },
   compareLink() { return document.querySelector('.update-banner-compare-link'); },
+  bannerText() { return document.querySelector('.update-banner-text').textContent; },
 };
 `;
 
@@ -104,6 +105,21 @@ const check = (name, cond) => {
     check('shown when behind', T.visible());
     T.render({ state: 'up_to_date' });
     check('hidden again', !T.visible());
+  }
+
+  console.log('\nbanner text omits update command:');
+  {
+    const { T } = load(makeStorage());
+    T.render({
+      state: 'behind',
+      behind_by: 7,
+      remote_sha: 'aaa',
+      update_command: 'git -C <clone> pull && make install',
+    });
+    check(
+      'message is behind count only',
+      T.bannerText() === 'A newer Crow build is available — 7 commits behind origin/main.'
+    );
   }
 
   console.log('\ndismiss survives a re-render for the same sha:');
