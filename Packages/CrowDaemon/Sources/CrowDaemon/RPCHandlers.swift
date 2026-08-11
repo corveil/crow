@@ -648,7 +648,7 @@ func makeCommandRouter(
         },
         // Best-effort tmux pane tail for the session-switcher preview card
         // (CROW-976). Returns plain text or null — never errors on a missing pane.
-        "session-terminal-preview": { params in
+        "get-session-terminal-preview": { params in
             guard let sidStr = params["session_id"]?.stringValue,
                   let sid = UUID(uuidString: sidStr) else {
                 throw DaemonRPCError.invalidParams("session_id required")

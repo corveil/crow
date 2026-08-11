@@ -2742,7 +2742,7 @@ async function fillSwitcherPreview() {
   }
   const seq = ++switcherPreviewSeq;
   try {
-    const res = await rpc('session-terminal-preview', { session_id: s.id });
+    const res = await rpc('get-session-terminal-preview', { session_id: s.id });
     if (seq !== switcherPreviewSeq || !switcherState.open) return;
     const text = (res && res.preview) ? String(res.preview) : '';
     switcherPreviewCache.set(s.id, { text, at: Date.now() });

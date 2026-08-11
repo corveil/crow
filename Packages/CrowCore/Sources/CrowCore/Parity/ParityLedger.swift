@@ -190,6 +190,13 @@ public enum ParityLedger {
         .write("rebuild-scorecard", cli: "rebuild-scorecard"),
         .read("get-state", cli: "get-state"),
         .read("list-artifacts", cli: "list-artifacts"),
+        .read(
+            "get-session-terminal-preview",
+            noCLI: """
+                Web session-switcher preview: best-effort tmux pane tail for the \
+                highlighted card (CROW-976). No CLI verb — the switcher is \
+                browser-only and fetches on demand.
+                """),
 
         // Settings
         // `defaults-get` is deliberately un-gated on `/rpc`; `defaults-set` is
