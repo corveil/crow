@@ -1686,6 +1686,16 @@ func makeCommandRouter(
                 let switcherOrder = try SettingsRPC.patchSwitcherOrder(params)
                 let switcherPreview = try SettingsRPC.patchBool(params, "switcher_preview")
                 let includePatches = try SettingsRPC.patchSwitcherIncludeKey(params)
+                // Reject the chord agents reserve rather than storing it and
+                // rewriting it on the next decode — a silent revert leaves the
+                // user with no idea why their setting didn't stick (CROW-1002).
+                if let switcherBinding, SwitcherSettings.isReservedBinding(switcherBinding) {
+                    throw RPCError.invalidParams(
+                        "Switcher binding '\(switcherBinding)' is reserved: coding agents cycle "
+                        + "permission modes with Shift+Tab, and the switcher would swallow it in "
+                        + "every focused terminal. Pick another chord (default: "
+                        + "\(SwitcherSettings.defaultBinding)).")
+                }
                 guard hideSessionDetails != nil || switcherEnabled != nil || switcherBinding != nil
                     || switcherCapture != nil || switcherOrder != nil || switcherPreview != nil
                     || !includePatches.isEmpty else {

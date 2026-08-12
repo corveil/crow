@@ -354,7 +354,7 @@ window.refreshVersionUpdateBanner = refreshVersionUpdateBanner;
 const uiConfig = { hideSessionDetails: false, notifications: null, webPasswordSet: false, vsCodeAvailable: false, isLocal: false,
   // Session switcher overlay (CROW-976) — defaults mirror AppConfig.SwitcherSettings.
   switcherEnabled: true,
-  switcherBinding: 'esc+tab',
+  switcherBinding: 'cmd+/',
   switcherCaptureInTerminal: true,
   switcherOrder: 'mru',
   switcherPreview: true,
@@ -373,7 +373,7 @@ async function loadUIConfig() {
     uiConfig.hideSessionDetails = !!(cfg.sidebar && cfg.sidebar.hideSessionDetails);
     const sw = cfg.switcher || {};
     uiConfig.switcherEnabled = sw.enabled !== false;
-    uiConfig.switcherBinding = (sw.binding && String(sw.binding)) || 'esc+tab';
+    uiConfig.switcherBinding = (sw.binding && String(sw.binding)) || 'cmd+/';
     uiConfig.switcherCaptureInTerminal = sw.captureInTerminal !== false;
     uiConfig.switcherOrder = (sw.order === 'sidebar') ? 'sidebar' : 'mru';
     uiConfig.switcherPreview = sw.preview !== false;
@@ -2568,6 +2568,11 @@ function switcherBindingKeysForPart(keyPart) {
     minus: ['-', 'Minus'],
     '=': ['=', 'Equal'],
     equal: ['=', 'Equal'],
+    // The default's key half. Spelled out so it yields one entry rather than
+    // the length-1 branch's ['/', '/'] — `switcherCycleKeyLabel` prints keys[0]
+    // and a duplicate would read as a typo in the hint line.
+    '/': ['/'],
+    slash: ['/'],
     left: ['ArrowLeft'],
     right: ['ArrowRight'],
     up: ['ArrowUp'],
@@ -2599,7 +2604,9 @@ function switcherCommitHint() {
   const commitHint = switcherBindingHasModifiers(b)
     ? 'release ' + mods.join('+')
     : (b.prefix ? 'Enter' : 'release ' + cycle);
-  return cycle + ' / ←→ to cycle · ' + commitHint + ' to switch · Esc to cancel';
+  // `or` rather than a slash separator: the default's cycle key IS `/`, and
+  // "/ / ←→" reads as a typo.
+  return cycle + ' or ←→ to cycle · ' + commitHint + ' to switch · Esc to cancel';
 }
 
 function captureSwitcherModifiers(e) {
@@ -2621,9 +2628,38 @@ function touchSessionMRU(id) {
   if (sessionMRU.length > 200) sessionMRU.length = 200;
 }
 
+// Chords a coding agent owns inside its own TUI, which the switcher must never
+// take from a focused terminal no matter what `captureInTerminal` says
+// (CROW-1002). Shift+Tab cycles permission modes in Claude Code, Cursor and
+// Codex alike — swallowing it there costs the user a control with no
+// alternative binding, to save one keystroke of a control that has three other
+// ways in (the sidebar, a click, the configured chord outside the terminal).
+//
+// crowd rewrites a stored `shift+tab` to the default and refuses to set it, so
+// this is the belt to that pair of braces: it holds for a hand-edited
+// config.json, and for a browser still holding the pre-migration config it was
+// handed before the daemon restarted.
+const SWITCHER_TERMINAL_RESERVED = ['shift+tab'];
+
+function switcherBindingIsTerminalReserved(binding) {
+  const b = parseSwitcherBinding(binding);
+  return SWITCHER_TERMINAL_RESERVED.some((r) => {
+    const res = parseSwitcherBinding(r);
+    return res.key === b.key && res.shift === b.shift && res.ctrl === b.ctrl
+      && res.alt === b.alt && res.meta === b.meta && res.prefix === b.prefix;
+  });
+}
+
+// Does the configured binding get captured inside a focused terminal? The user
+// preference, minus the chords above.
+function switcherCapturesInTerminal() {
+  if (!uiConfig.switcherCaptureInTerminal) return false;
+  return !switcherBindingIsTerminalReserved(uiConfig.switcherBinding);
+}
+
 function parseSwitcherBinding(binding) {
-  const parts = String(binding || 'esc+tab').toLowerCase().split('+').map((p) => p.trim()).filter(Boolean);
-  const keyPart = parts[parts.length - 1] || 'tab';
+  const parts = String(binding || 'cmd+/').toLowerCase().split('+').map((p) => p.trim()).filter(Boolean);
+  const keyPart = parts[parts.length - 1] || '/';
   const lead = parts.slice(0, -1);
   const keys = switcherBindingKeysForPart(keyPart);
   return {
@@ -3001,7 +3037,7 @@ function onSwitcherKeyDown(e) {
   } else if (!eventMatchesSwitcherBinding(e, uiConfig.switcherBinding)) {
     return;
   }
-  if (isTerminalFocused() && !uiConfig.switcherCaptureInTerminal) return;
+  if (isTerminalFocused() && !switcherCapturesInTerminal()) return;
   if (document.querySelector('.text-prompt-backdrop, .modal-dialog-backdrop, .settings-overlay')) return;
   switcherOnBinding(e);
 }
@@ -5744,7 +5780,7 @@ function handleTerminalKey(e) {
     return false;
   }
   if (switcherBindingOpens(e, uiConfig.switcherBinding)) {
-    if (uiConfig.switcherEnabled && uiConfig.switcherCaptureInTerminal) {
+    if (uiConfig.switcherEnabled && switcherCapturesInTerminal()) {
       switcherOnBinding(e);
       e.preventDefault();
       e.stopPropagation();

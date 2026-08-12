@@ -20,6 +20,8 @@ const epilogue = `
   },
   switcherBindingModifiersActive(){ return switcherBindingModifiersActive(); },
   switcherBindingHasModifiers(b){ return switcherBindingHasModifiers(b); },
+  switcherBindingIsTerminalReserved(b){ return switcherBindingIsTerminalReserved(b); },
+  switcherCapturesInTerminal(){ return switcherCapturesInTerminal(); },
   onSwitcherKeyUp(e){ return onSwitcherKeyUp(e); },
   setModifiersHeld(v){ switcherState.modifiersHeld = v; },
   setChord(v){ switcherState.chord = v; },
@@ -196,7 +198,56 @@ const keyEvent = (key) => ({
   check('modifier hint still asks for a release', T.switcherCommitHint().includes('release Shift'));
 }
 
+// CROW-1002: the default moved to cmd+/ and Shift+Tab became a chord the
+// switcher never takes from a focused terminal.
+console.log('\nCROW-1002 cmd+/ default and the reserved chord:');
 {
+  const b = T.parseSwitcherBinding('cmd+/');
+  check('cmd+/ parses meta', b.meta && !b.shift && !b.ctrl && !b.alt);
+  check('cmd+/ has no prefix', b.prefix === null);
+  check('cmd+/ keys on the slash', b.key === '/' && b.keys.length === 1);
+  check('command+/ is the same binding', T.parseSwitcherBinding('command+/').meta);
+  check('meta+/ is the same binding', T.parseSwitcherBinding('meta+/').meta);
+
+  const hit = { key: '/', shiftKey: false, ctrlKey: false, altKey: false, metaKey: true };
+  check('cmd+/ matches a Cmd+/ event', T.eventMatchesSwitcherBinding(hit, 'cmd+/'));
+  const bare = { key: '/', shiftKey: false, ctrlKey: false, altKey: false, metaKey: false };
+  check('a bare / is not the binding', !T.eventMatchesSwitcherBinding(bare, 'cmd+/'));
+  // Cmd is held, so this commits on release like a macOS app switcher — no
+  // prefix to arm and no Enter needed.
+  check('cmd+/ commits on release', T.switcherBindingHasModifiers(b));
+
+  T.uiConfig = { switcherBinding: 'cmd+/' };
+  check('cmd+/ hint asks for a Cmd release', T.switcherCommitHint().includes('release Cmd'));
+  check('cmd+/ hint names the slash once',
+    T.switcherCommitHint().startsWith('/ or ←→ to cycle'));
+}
+
+{
+  check('shift+tab is reserved for the terminal',
+    T.switcherBindingIsTerminalReserved('shift+tab'));
+  check('reservation is case-insensitive',
+    T.switcherBindingIsTerminalReserved('Shift+Tab'));
+  check('the default is not reserved', !T.switcherBindingIsTerminalReserved('cmd+/'));
+  check('esc+tab is not reserved', !T.switcherBindingIsTerminalReserved('esc+tab'));
+  // A bare `tab` is a different chord — reserving it would be wrong, and the
+  // prefix/modifier fields are what keep the three apart.
+  check('a bare tab is not reserved', !T.switcherBindingIsTerminalReserved('tab'));
+
+  T.uiConfig = { switcherBinding: 'shift+tab', switcherCaptureInTerminal: true };
+  check('a reserved chord is never captured in the terminal',
+    !T.switcherCapturesInTerminal());
+  T.uiConfig = { switcherBinding: 'cmd+/', switcherCaptureInTerminal: true };
+  check('the default is captured in the terminal', T.switcherCapturesInTerminal());
+  T.uiConfig = { switcherBinding: 'cmd+/', switcherCaptureInTerminal: false };
+  check('the preference still turns capture off', !T.switcherCapturesInTerminal());
+  T.uiConfig = { switcherCaptureInTerminal: true };
+}
+
+{
+  // Set the binding explicitly rather than inheriting whatever the block above
+  // left behind — captureSwitcherModifiers reads it off uiConfig.
+  T.uiConfig = { switcherBinding: 'shift+tab' };
   const cap = T.captureSwitcherModifiers({
     key: 'Tab', shiftKey: true, ctrlKey: false, altKey: false, metaKey: false,
   });

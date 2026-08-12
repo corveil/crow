@@ -359,7 +359,7 @@ import Testing
     let config = try JSONDecoder().decode(AppConfig.self, from: json)
 
     #expect(config.switcher.enabled == true)
-    #expect(config.switcher.binding == "esc+tab")
+    #expect(config.switcher.binding == "cmd+/")
     #expect(config.switcher.captureInTerminal == true)
     #expect(config.switcher.order == .mru)
     #expect(config.switcher.preview == true)
@@ -373,17 +373,59 @@ import Testing
     let config = try JSONDecoder().decode(AppConfig.self, from: json)
 
     #expect(config.switcher.enabled == true)
-    #expect(config.switcher.binding == "esc+tab")
+    #expect(config.switcher.binding == "cmd+/")
     #expect(config.switcher.include.archived == false)
 }
 
-/// The CROW-980 default only reaches installs that never picked a binding —
-/// a stored one is theirs and survives the change.
+/// CROW-1002: a stored binding is normally the user's and survives a default
+/// change — which is exactly why CROW-980's new default never reached the
+/// installs that were eating Shift+Tab. The reserved chord is the one exception.
 @Test func switcherSettingsKeepsStoredBindingOverDefault() throws {
-    let json = #"{"switcher": {"binding": "shift+tab"}}"#.data(using: .utf8)!
+    let json = #"{"switcher": {"binding": "ctrl+space"}}"#.data(using: .utf8)!
     let config = try JSONDecoder().decode(AppConfig.self, from: json)
 
-    #expect(config.switcher.binding == "shift+tab")
+    #expect(config.switcher.binding == "ctrl+space")
+}
+
+/// The CROW-980 default stopped being the default but stays a legal choice —
+/// it takes nothing from the terminal, so there is no cause to reset it.
+@Test func switcherSettingsKeepsStoredEscTabBinding() throws {
+    let json = #"{"switcher": {"binding": "esc+tab"}}"#.data(using: .utf8)!
+    let config = try JSONDecoder().decode(AppConfig.self, from: json)
+
+    #expect(config.switcher.binding == "esc+tab")
+}
+
+/// CROW-1002: the pre-CROW-980 default swallows the agents' permission-mode
+/// cycle in every focused terminal, so it is rewritten rather than honored.
+@Test func switcherSettingsMigratesReservedShiftTabBinding() throws {
+    let json = #"{"switcher": {"binding": "shift+tab", "captureInTerminal": true}}"#
+        .data(using: .utf8)!
+    let config = try JSONDecoder().decode(AppConfig.self, from: json)
+
+    #expect(config.switcher.binding == "cmd+/")
+    // Only the binding is rewritten — the rest of the user's switcher settings
+    // are untouched.
+    #expect(config.switcher.captureInTerminal == true)
+}
+
+/// The setter stores the string verbatim and the client parses it
+/// case-insensitively, so casing and stray whitespace must not smuggle the
+/// reserved chord past the migration.
+@Test func switcherSettingsMigratesReservedBindingRegardlessOfCasing() throws {
+    for stored in ["Shift+Tab", "SHIFT+TAB", " shift+tab "] {
+        #expect(SwitcherSettings.isReservedBinding(stored))
+        #expect(SwitcherSettings.migratedBinding(stored) == "cmd+/")
+    }
+    #expect(!SwitcherSettings.isReservedBinding("cmd+/"))
+    #expect(!SwitcherSettings.isReservedBinding("esc+tab"))
+}
+
+/// A blank binding is "never chose one", not a chord that matches nothing.
+@Test func switcherSettingsTreatsBlankBindingAsUnset() throws {
+    #expect(SwitcherSettings.migratedBinding(nil) == "cmd+/")
+    #expect(SwitcherSettings.migratedBinding("") == "cmd+/")
+    #expect(SwitcherSettings.migratedBinding("   ") == "cmd+/")
 }
 
 @Test func telemetryCleanupSidebarSurviveFullRoundTrip() throws {

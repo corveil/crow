@@ -339,14 +339,17 @@ async function main() {
   // ---- Session switcher (CROW-976) -----------------------------------------
 
   console.log('\nSession switcher binding in the terminal:');
+  // CROW-1002: Shift+Tab is the agents' permission-mode cycle, so the switcher
+  // must hand it to the terminal even when the user asked for capture — this is
+  // the handler that was still eating it after the default moved away.
   {
     withClipboard();
     setup();
     T.uiConfig = { switcherEnabled: true, switcherBinding: 'shift+tab', switcherCaptureInTerminal: true };
     const e = key('Tab', { shift: true });
     const result = T.handleTerminalKey(e);
-    check('Shift+Tab is captured when captureInTerminal is true',
-      result === false && e.prevented === 1 && sent.length === 0);
+    check('Shift+Tab reaches the terminal even with captureInTerminal true',
+      result === true && e.prevented === 0);
   }
   {
     withClipboard();
@@ -355,6 +358,36 @@ async function main() {
     const e = key('Tab', { shift: true });
     const result = T.handleTerminalKey(e);
     check('Shift+Tab passes through when captureInTerminal is false',
+      result === true && e.prevented === 0);
+  }
+  // The gate is chord-scoped, not a blanket opt-out: a non-reserved binding is
+  // still captured on the same path.
+  {
+    withClipboard();
+    setup();
+    T.uiConfig = { switcherEnabled: true, switcherBinding: 'cmd+/', switcherCaptureInTerminal: true };
+    const e = key('/', { meta: true });
+    const result = T.handleTerminalKey(e);
+    check('the cmd+/ default is captured in the terminal',
+      result === false && e.prevented === 1 && sent.length === 0);
+  }
+  {
+    withClipboard();
+    setup();
+    T.uiConfig = { switcherEnabled: true, switcherBinding: 'cmd+/', switcherCaptureInTerminal: false };
+    const e = key('/', { meta: true });
+    const result = T.handleTerminalKey(e);
+    check('cmd+/ passes through when captureInTerminal is false',
+      result === true && e.prevented === 0);
+  }
+  // A bare slash is ordinary typing and must never be swallowed.
+  {
+    withClipboard();
+    setup();
+    T.uiConfig = { switcherEnabled: true, switcherBinding: 'cmd+/', switcherCaptureInTerminal: true };
+    const e = key('/');
+    const result = T.handleTerminalKey(e);
+    check('a bare / reaches the terminal under cmd+/',
       result === true && e.prevented === 0);
   }
 

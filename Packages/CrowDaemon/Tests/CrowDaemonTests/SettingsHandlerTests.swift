@@ -169,6 +169,39 @@ import CrowEngine
         #expect(onDisk.switcher.include.jobs == false)
     }
 
+    /// CROW-1002: the chord agents cycle permission modes with is refused at the
+    /// setter rather than stored and rewritten on the next decode — a silent
+    /// revert would leave the user with nothing to explain why it didn't stick.
+    @Test @MainActor func uiSetRejectsReservedSwitcherBinding() async throws {
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+
+        for attempt in ["shift+tab", "Shift+Tab", " shift+tab "] {
+            let resp = await call("ui-set", [
+                "switcher_binding": .string(attempt),
+                "switcher_preview": .bool(false),
+            ], devRoot: devRoot)
+
+            #expect(resp.result == nil)
+            #expect(resp.error?.message.contains("reserved") == true)
+            // The whole patch is refused, not just the offending field — a
+            // partial write would leave the config in a state nobody asked for.
+            #expect(ConfigStore.loadConfig(devRoot: devRoot)?.switcher.preview != false)
+        }
+    }
+
+    /// Rejection is scoped to that one chord: the CROW-980 default still sets.
+    @Test @MainActor func uiSetAcceptsEscTabSwitcherBinding() async throws {
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+
+        let resp = await call("ui-set", ["switcher_binding": .string("esc+tab")], devRoot: devRoot)
+
+        #expect(resp.error == nil)
+        let onDisk = try #require(ConfigStore.loadConfig(devRoot: devRoot))
+        #expect(onDisk.switcher.binding == "esc+tab")
+    }
+
     // MARK: - restart_required
 
     @Test @MainActor func telemetryReportsRestartOnlyForEnabledOrPort() async throws {
