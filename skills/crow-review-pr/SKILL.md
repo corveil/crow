@@ -95,6 +95,8 @@ Every Crow review must end with a verdict — **exactly one** of the two actions
 
 {{CROW_REVIEW_VERDICT_RULE}}
 
+{{CROW_REVIEW_GRADING_GUIDANCE}}
+
 Draft the review using this format:
 
 ```markdown
