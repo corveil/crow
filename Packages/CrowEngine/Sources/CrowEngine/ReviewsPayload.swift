@@ -30,6 +30,14 @@ public enum ReviewsPayload {
     /// snapshot) whereas `SessionService.createReviewSession` decides against a
     /// head it fetches itself. The client must therefore treat this as a label
     /// and never suppress the RPC on it — the server is the decider.
+    ///
+    /// Read it as *what this row offers*, which is the session decision plus the
+    /// group-level suppressions in `kickoffAction(for:group:linked:existing:)` —
+    /// not as a prediction of what `start-review` would do if called anyway. The
+    /// two differ on purpose: `createReviewSession` guards only against
+    /// double-covering a PR, so it will happily open a round on a merged PR or a
+    /// quiet Waiting-on-author one. That is the escape hatch — `crow start-review
+    /// --url` still works on anything — while the board declines to *suggest* it.
     @MainActor
     public static func build(appState: AppState, now: Date = Date()) -> [String: JSONValue] {
         let fmt = ISO8601DateFormatter()
@@ -64,18 +72,10 @@ public enum ReviewsPayload {
                 isRequestedOfViewer: isRequestedOfViewer,
                 now: now
             ) else { return nil }
-            // A merged or closed PR cannot be reviewed again, so the kickoff
-            // decision is short-circuited rather than run: `reviewKickoffAction`
-            // reasons about head SHAs and sessions, neither of which knows the
-            // PR is over, and it would happily offer "Start Review" on something
-            // that shipped yesterday. `.skip` also makes the row unselectable in
-            // the board's batch-start mode, which is the same guarantee.
-            let action = r.isCompleted ? IssueTracker.ReviewKickoffAction.skip : IssueTracker.reviewKickoffAction(
-                reviewSessionID: r.reviewSessionID ?? existing?.id,
-                headRefOid: r.headRefOid,
-                linkedSession: linked,
-                existingByPRSessionID: existing?.id
-            )
+            // Takes the group, not just the session state: two of the four mean
+            // "there is nothing here to review" for reasons the session logic
+            // cannot see. See `kickoffAction`.
+            let action = kickoffAction(for: r, group: group, linked: linked, existing: existing)
             counts[group, default: 0] += 1
             // Built by assignment after a small literal rather than as one
             // ~20-key dictionary literal: the single literal blew Swift's
@@ -99,6 +99,7 @@ public enum ReviewsPayload {
             })
             fields["review_session_id"] = r.reviewSessionID.map { .string($0.uuidString) } ?? .null
             fields["head_ref_oid"] = r.headRefOid.map { .string($0) } ?? .null
+            fields["viewer_last_reviewed_head_sha"] = r.viewerLastReviewedHeadSha.map { .string($0) } ?? .null
             fields["kickoff_action"] = .string(actionName(action))
             fields["viewer_last_reviewed_at"] = r.viewerLastReviewedAt.map { .string(fmt.string(from: $0)) } ?? .null
             fields["viewer_last_review_state"] = r.viewerLastReviewState.map { .string($0.rawValue) } ?? .null
@@ -144,6 +145,54 @@ public enum ReviewsPayload {
             )),
             "hidden_by_filters": .int(appState.hiddenReviewCount),
         ]
+    }
+
+    /// Which kickoff a row offers — the **one** rule `crow list-reviews` and the
+    /// web board both read (the browser only re-labels `kickoff_action`, it never
+    /// re-derives it).
+    ///
+    /// Two groups get the decision short-circuited rather than run, because
+    /// `IssueTracker.reviewKickoffAction` reasons purely about sessions and head
+    /// SHAs and cannot see *why* a row is on the board:
+    ///
+    ///  - **Completed.** A merged or closed PR cannot be reviewed again, and the
+    ///    session logic would happily offer "Start Review" on something that
+    ///    shipped yesterday.
+    ///  - **Waiting on author** (CROW-997). The ball is with the author, so there
+    ///    is nothing new to look at until they push. The session logic can't tell:
+    ///    the round auto-completed the instant the verdict landed
+    ///    (`decideReviewCompletions` rule 1), so there is no `linkedSession` to
+    ///    compare heads against, `shaAdvanced` is false for want of a left-hand
+    ///    side, and every such row fell through to `.create`. That rendered Start
+    ///    Review as the card's primary action and made it tickable in the board's
+    ///    batch mode — eight redundant rounds one click away.
+    ///
+    /// The waiting-on-author suppression is conditional, not blanket, because the
+    /// author *can* push without re-requesting: the PR stays out of
+    /// `review-requested:@me`, stays under this heading, and genuinely does have
+    /// something new in it. `viewerReviewCoversCurrentHead` is what tells the two
+    /// apart, and it answers `false` unless it can prove the heads match — so an
+    /// unfetched SHA keeps the button rather than stranding the row. (With
+    /// `--auto-re-request-review` on, CROW-921 re-adds the reviewer and the PR
+    /// leaves this group on its own; the board must not *depend* on that watcher,
+    /// which is optional.)
+    ///
+    /// `.skip` is what makes a row unselectable in batch mode too, so suppressing
+    /// the button and suppressing the checkbox are one decision, not two.
+    static func kickoffAction(
+        for r: ReviewRequest,
+        group: ReviewGroup,
+        linked: Session?,
+        existing: Session?
+    ) -> IssueTracker.ReviewKickoffAction {
+        if r.isCompleted { return .skip }
+        if group == .waitingOnAuthor && r.viewerReviewCoversCurrentHead { return .skip }
+        return IssueTracker.reviewKickoffAction(
+            reviewSessionID: r.reviewSessionID ?? existing?.id,
+            headRefOid: r.headRefOid,
+            linkedSession: linked,
+            existingByPRSessionID: existing?.id
+        )
     }
 
     /// Wire names for `IssueTracker.ReviewKickoffAction`. Kept as a total switch

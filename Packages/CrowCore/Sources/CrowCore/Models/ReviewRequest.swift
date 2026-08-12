@@ -63,6 +63,17 @@ public struct ReviewRequest: Identifiable, Codable, Sendable {
     /// board's whole grouping turns on exactly this distinction (CROW-982,
     /// CROW-990). `nil` means not fetched; see `ReviewVerdict`.
     public var viewerLastReviewState: ReviewVerdict?
+    /// The PR head the viewer's last review was submitted against — GitHub's
+    /// `PullRequestReview.commit.oid`, parsed from the same review node as the
+    /// timestamp and the verdict (CROW-997).
+    ///
+    /// Compared against `headRefOid` this answers "has the author pushed since I
+    /// last looked?" for a PR with **no live session** — which is every row under
+    /// **Waiting on author**, because `decideReviewCompletions` rule 1 retires the
+    /// round the moment the verdict lands. `Session.lastReviewedHeadSha` records
+    /// the same fact but needs a session to hang off, so it goes blind on exactly
+    /// these rows; this field lives on the request instead and survives the round.
+    public var viewerLastReviewedHeadSha: String?
     /// GitHub's `PullRequestState` — `"OPEN"`, `"MERGED"`, or `"CLOSED"`.
     ///
     /// `nil` means **not fetched**, and `isCompleted` reads that as open. Every
@@ -85,6 +96,22 @@ public struct ReviewRequest: Identifiable, Codable, Sendable {
         state == "MERGED" || state == "CLOSED"
     }
 
+    /// Whether the viewer's last review **provably** covered the PR's current
+    /// head — i.e. the author has pushed nothing since it was submitted.
+    ///
+    /// Deliberately `false` when either SHA is missing, and the asymmetry is the
+    /// whole point. This gates the board's suppression of Start Review under
+    /// **Waiting on author** (CROW-997), so a `true` claims "there is nothing new
+    /// to look at" and takes the row's only way forward off the card. A partial
+    /// fetch must not make that claim: unknown means the row keeps its button,
+    /// which is at worst a redundant round and at best the author-pushed-without-
+    /// re-requesting PR the group would otherwise strand. Same "absence is not
+    /// evidence" rule as `state` and `viewerLastReviewState` above.
+    public var viewerReviewCoversCurrentHead: Bool {
+        guard let reviewed = viewerLastReviewedHeadSha, let head = headRefOid else { return false }
+        return reviewed == head
+    }
+
     public init(
         id: String,
         prNumber: Int,
@@ -102,6 +129,7 @@ public struct ReviewRequest: Identifiable, Codable, Sendable {
         headRefOid: String? = nil,
         viewerLastReviewedAt: Date? = nil,
         viewerLastReviewState: ReviewVerdict? = nil,
+        viewerLastReviewedHeadSha: String? = nil,
         state: String? = nil,
         completedAt: Date? = nil
     ) {
@@ -121,6 +149,7 @@ public struct ReviewRequest: Identifiable, Codable, Sendable {
         self.headRefOid = headRefOid
         self.viewerLastReviewedAt = viewerLastReviewedAt
         self.viewerLastReviewState = viewerLastReviewState
+        self.viewerLastReviewedHeadSha = viewerLastReviewedHeadSha
         self.state = state
         self.completedAt = completedAt
     }

@@ -539,7 +539,7 @@ public struct GitHubCodeBackend: CodeBackend {
             author { login }
             repository { nameWithOwner }
             labels(first: 20) { nodes { name color } }
-            reviews(last: 20) { nodes { author { login } submittedAt state } }
+            reviews(last: 20) { nodes { author { login } submittedAt state commit { oid } } }
           }
         }
       }
@@ -551,7 +551,7 @@ public struct GitHubCodeBackend: CodeBackend {
             author { login }
             repository { nameWithOwner }
             labels(first: 20) { nodes { name color } }
-            reviews(last: 20) { nodes { author { login } submittedAt state } }
+            reviews(last: 20) { nodes { author { login } submittedAt state commit { oid } } }
           }
         }
       }
@@ -563,7 +563,7 @@ public struct GitHubCodeBackend: CodeBackend {
             author { login }
             repository { nameWithOwner }
             labels(first: 20) { nodes { name color } }
-            reviews(last: 20) { nodes { author { login } submittedAt state } }
+            reviews(last: 20) { nodes { author { login } submittedAt state commit { oid } } }
           }
         }
       }
@@ -880,6 +880,7 @@ public struct GitHubCodeBackend: CodeBackend {
                 }
             var viewerLastReviewedAt: Date?
             var viewerLastReviewState: ReviewVerdict?
+            var viewerLastReviewedHeadSha: String?
             if let viewerLogin {
                 for review in LenientJSON.nodes(node, "reviews") {
                     guard let author = (review["author"] as? [String: Any])?["login"] as? String,
@@ -898,6 +899,13 @@ public struct GitHubCodeBackend: CodeBackend {
                         // board would misclassify.
                         viewerLastReviewState = ReviewVerdict(rawValue: state)
                         if viewerLastReviewState == nil { viewerLastReviewedAt = nil }
+                        // The head this review was submitted against (CROW-997).
+                        // Assigned unconditionally inside the winner branch — an
+                        // absent `commit` must *clear* a previous round's SHA,
+                        // not leave it behind, or the board would compare the
+                        // current head against a review two rounds old and read
+                        // "author pushed" as "nothing new".
+                        viewerLastReviewedHeadSha = (review["commit"] as? [String: Any])?["oid"] as? String
                     }
                 }
             }
@@ -917,6 +925,7 @@ public struct GitHubCodeBackend: CodeBackend {
                 headRefOid: headRefOid,
                 viewerLastReviewedAt: viewerLastReviewedAt,
                 viewerLastReviewState: viewerLastReviewState,
+                viewerLastReviewedHeadSha: viewerLastReviewedHeadSha,
                 state: prState,
                 completedAt: completedAt
             ))
