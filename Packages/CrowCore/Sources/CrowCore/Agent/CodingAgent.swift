@@ -23,6 +23,33 @@ public struct ResolvedBinary: Sendable, Equatable {
     }
 }
 
+/// The PATH leg of `CodingAgent.resolveBinary()`, factored out of the protocol
+/// extension so the ordering guarantee is unit-testable — `ShellEnvironment` is
+/// a singleton that snapshots the real PATH at init, so the walk can't otherwise
+/// be exercised against a synthetic one.
+public enum BinaryTokenResolver {
+    /// Return the first `lookup` hit, trying `tokens` in order.
+    ///
+    /// **Token-major, not directory-major** — and that's the whole point. A
+    /// directory-major walk (each PATH entry checked for every token) would let
+    /// PATH *order* decide between an agent's preferred binary name and its
+    /// ambiguous alias, which is exactly how a foreign `~/.grok/bin/agent` early
+    /// in PATH beat Cursor's own CLI (CROW-989). Trying every PATH entry for
+    /// `cursor-agent` before any is tried for `agent` makes the choice depend on
+    /// the *name*, not on install order.
+    ///
+    /// Single-token agents are unaffected: one pass, identical to the old walk.
+    public static func firstOnPath(
+        tokens: [String],
+        lookup: (String) -> String?
+    ) -> String? {
+        for token in tokens {
+            if let found = lookup(token) { return found }
+        }
+        return nil
+    }
+}
+
 /// A coding agent that Crow can launch in a terminal and observe via hook
 /// events. Phase A wraps the existing Claude Code integration; later phases
 /// introduce additional conformers.
@@ -49,7 +76,29 @@ public protocol CodingAgent: Sendable {
     /// Used by the `send` RPC handler to decide whether a managed-terminal
     /// command needs hook-config + env-var prep before being forwarded.
     /// Examples: `"claude"`, `"codex"`.
+    ///
+    /// Also the **preferred** binary name for the PATH walk in
+    /// `resolveBinary()`. When a harness ships more than one name for the same
+    /// executable, this is the unambiguous one; see
+    /// `alternateLaunchCommandTokens` for the legacy/ambiguous aliases.
     var launchCommandToken: String { get }
+
+    /// Additional binary names this agent may be installed under, in descending
+    /// preference order after `launchCommandToken`.
+    ///
+    /// Two uses, deliberately one list (search order *is* preference order):
+    ///  - `resolveBinary()` walks PATH for `launchCommandToken` first, then each
+    ///    of these — so an unambiguous name always wins over an ambiguous alias
+    ///    regardless of PATH ordering.
+    ///  - `AgentLaunch.commandLaunchesAgent` matches a command against **any** of
+    ///    them, so a legacy install invoked under its old name still gets
+    ///    hook-config + env prep.
+    ///
+    /// Empty for every agent whose CLI ships a single name. Cursor is the one
+    /// conformer today: it prefers `cursor-agent` and keeps the generic `agent`
+    /// as an alias, because xAI's grok-build installs its own `~/.grok/bin/agent`
+    /// and won the PATH walk (CROW-989).
+    var alternateLaunchCommandTokens: [String] { get }
 
     /// Writer for the per-worktree hook configuration file.
     var hookConfigWriter: any HookConfigWriter { get }
@@ -89,9 +138,11 @@ public protocol CodingAgent: Sendable {
     /// The default returns `true`: an unambiguous launch token is trusted on a
     /// bare match, preserving today's behavior for every agent. Only agents
     /// whose token is known to collide override this to run a cheap
-    /// `--version` / `--help` identity probe — today just Grok Build (`grok`
-    /// collides with the community `superagent-ai/grok-cli`); Cursor's generic
-    /// `agent` token has the same shape and can adopt this seam later.
+    /// `--version` / `--help` identity probe — Grok Build (`grok` collides with
+    /// the community `superagent-ai/grok-cli`) and Cursor (whose legacy `agent`
+    /// alias collides with xAI's `~/.grok/bin/agent`, CROW-989). Both share
+    /// `BinaryIdentityProbe` rather than reimplementing the bounded subprocess
+    /// race.
     func verifyBinaryIdentity(atPath path: String) async -> Bool
 
     /// Build the full shell command (ending with `\n`) that auto-launches
@@ -184,6 +235,14 @@ public extension CodingAgent {
     /// override this.
     var fallbackCandidates: [String] { [] }
 
+    /// Default: no aliases — the agent's CLI ships exactly one binary name.
+    var alternateLaunchCommandTokens: [String] { [] }
+
+    /// Every binary name this agent answers to, most-preferred first. The single
+    /// ordering used by both the PATH walk and command-token matching, so those
+    /// two can't disagree about which names count as "this agent".
+    var binaryTokens: [String] { [launchCommandToken] + alternateLaunchCommandTokens }
+
     /// Default kind-aware launch: ignore `sessionKind` and delegate to the
     /// three-argument `launchCommand`. Overridden only by agents whose launch
     /// varies by kind (today just Cursor's trust seed). A protocol *requirement*
@@ -200,12 +259,19 @@ public extension CodingAgent {
     }
 
     /// Default binary discovery with provenance: explicit `BinaryOverrides`
-    /// (`.override`) → PATH walk on `launchCommandToken` (`.path`) → hardcoded
+    /// (`.override`) → PATH walk over `binaryTokens` (`.path`) → hardcoded
     /// `fallbackCandidates` (`.fallback`). Returns the first resolved absolute
     /// path + how it was found, or `nil` if nothing matches.
     ///
     /// This replaces the per-agent hardcoded-list-only impl that left
     /// nvm/Volta/pnpm/asdf installs invisible to Crow (CROW-484).
+    ///
+    /// The PATH walk is **token-major, not directory-major**: every PATH entry is
+    /// searched for the preferred token before any is searched for an alias. That
+    /// ordering is the point — it makes resolution independent of PATH order, so
+    /// an unambiguous `cursor-agent` late in PATH still beats a foreign `agent`
+    /// early in it (CROW-989). Agents with no aliases are unaffected: one token,
+    /// one walk, byte-identical behavior.
     func resolveBinary() -> ResolvedBinary? {
         let fm = FileManager.default
         // 1. Explicit user override from `defaults.binaries.<kind>`. Verify
@@ -215,8 +281,12 @@ public extension CodingAgent {
            fm.isExecutableFile(atPath: configured) {
             return ResolvedBinary(path: configured, source: .override)
         }
-        // 2. Walk the user's resolved PATH the same way `command -v` does.
-        if let found = ShellEnvironment.shared.findExecutable(launchCommandToken) {
+        // 2. Walk the user's resolved PATH the same way `command -v` does, once
+        //    per token in preference order.
+        if let found = BinaryTokenResolver.firstOnPath(
+            tokens: binaryTokens,
+            lookup: { ShellEnvironment.shared.findExecutable($0) }
+        ) {
             return ResolvedBinary(path: found, source: .path)
         }
         // 3. Hardcoded last-resort fallback covers the exotic-PATH case.
@@ -231,8 +301,8 @@ public extension CodingAgent {
 
     /// Default identity check: trust a bare match. Agents with an unambiguous
     /// launch token don't need to probe — overridden only by collision-prone
-    /// tokens (Grok Build today) so a foreign same-named binary is shown
-    /// disabled instead of falsely active (CROW-911).
+    /// tokens (Grok Build, Cursor) so a foreign same-named binary is shown
+    /// disabled instead of falsely active (CROW-911, CROW-989).
     func verifyBinaryIdentity(atPath path: String) async -> Bool { true }
 
     /// Default Manager launch command: invoke the agent's CLI binary by

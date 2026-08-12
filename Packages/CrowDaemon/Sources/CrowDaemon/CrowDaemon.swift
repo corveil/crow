@@ -995,10 +995,12 @@ public enum CrowDaemon {
         //
         // A resolved binary is identity-probed for collision-prone launch tokens
         // so a foreign same-named binary is shown disabled rather than falsely
-        // active — today only Grok Build, whose `grok` token collides with
-        // `superagent-ai/grok-cli` (CROW-911). The probe is skipped for an
-        // explicit `defaults.binaries.<kind>` pin (`.available(viaOverride:)`):
-        // the user has named the exact binary, so it's authoritative.
+        // active: Grok Build, whose `grok` token collides with
+        // `superagent-ai/grok-cli` (CROW-911), and Cursor, whose legacy `agent`
+        // alias collides with grok-build's own `~/.grok/bin/agent` (CROW-989).
+        // The probe is skipped for an explicit `defaults.binaries.<kind>` pin
+        // (`.available(viaOverride:)`): the user has named the exact binary, so
+        // it's authoritative.
         func registerDiscovered(_ agent: any CodingAgent) async {
             switch await AgentDiscovery.evaluate(agent) {
             case .unavailableNotFound:

@@ -22,7 +22,7 @@ struct AgentsRPCSupportTests {
     private let withUnavailable: [AgentsRPC.KnownAgent] = [
         .init(kind: .claudeCode, name: "Claude Code", binary: "claude", available: true),
         .init(kind: .codex, name: "OpenAI Codex", binary: "codex", available: true),
-        .init(kind: .cursor, name: "Cursor", binary: "agent", available: false),
+        .init(kind: .cursor, name: "Cursor", binary: "cursor-agent", available: false),
     ]
 
     // MARK: - decodeAgentKind (the registry gate)
@@ -350,7 +350,7 @@ struct AgentsRPCSupportTests {
         #expect(entries.count == 3)
         let cursor = entries.first { $0.objectValue?["kind"] == .string("cursor") }
         #expect(cursor?.objectValue?["available"] == .bool(false))
-        #expect(cursor?.objectValue?["binary"] == .string("agent"))
+        #expect(cursor?.objectValue?["binary"] == .string("cursor-agent"))
     }
 
     /// …and listing it must not make it selectable — the launch gate is the
@@ -377,7 +377,7 @@ struct AgentsRPCSupportTests {
         } catch {
             let message = String(describing: error)
             #expect(message.contains("known but not installed"))
-            #expect(message.contains("agent"))  // the PATH token
+            #expect(message.contains("cursor-agent"))  // the PATH token
             #expect(!message.contains("Expected one of"))
         }
     }

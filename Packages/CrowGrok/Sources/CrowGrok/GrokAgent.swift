@@ -214,73 +214,10 @@ public struct GrokAgent: CodingAgent {
         // foreign binary that prints its banner there instead. An empty result
         // (a binary that prints nothing, or a probe timeout) simply matches no
         // marker and returns false — no separate empty-string branch needed.
-        for arg in ["--help", "--version"] {
-            let out = await Self.probeArg(path, arg, runner: probeRunner).lowercased()
-            if Self.identityMarkers.contains(where: { out.contains($0) }) { return true }
-        }
-        return false
-    }
-
-    /// Per-leg cap for the `--help` / `--version` probe. Injectable via
-    /// `probeArg` so tests exercise the timeout without a real 3s wait.
-    static let probeTimeoutNanos: UInt64 = 3 * 1_000_000_000
-
-    /// Run `<binary> <arg>` and return its merged stdout+stderr, or `""` on spawn
-    /// failure **or timeout**. The cap is a *hard* bound on the awaiting task: it
-    /// races the run against a sleep behind a resume-once guard and returns
-    /// whichever finishes first — so even a runner that never completes and
-    /// ignores cancellation (a `grok` that reads stdin, or forks a child holding
-    /// the stdout pipe so `readDataToEndOfFile()` never sees EOF) **cannot stall
-    /// `registerAgents` at boot** (CROW-911 review — the earlier `withTaskGroup`
-    /// form awaited the losing child and so bounded nothing).
-    ///
-    /// On timeout the run `Task` is cancelled: with the cancellation-aware
-    /// `ProcessShellRunner` that `terminate()`s the child so it doesn't leak; a
-    /// genuinely uncancellable runner leaks one blocked reader but boot proceeds.
-    static func probeArg(
-        _ binary: String,
-        _ arg: String,
-        runner: any ShellRunner,
-        timeoutNanos: UInt64 = probeTimeoutNanos
-    ) async -> String {
-        let gate = ResumeOnceGate()
-        return await withCheckedContinuation { (cont: CheckedContinuation<String, Never>) in
-            @Sendable func finish(_ result: String) {
-                if gate.claim() { cont.resume(returning: result) }
-            }
-            let work = Task {
-                let out: String
-                do {
-                    out = try await runner.run(args: [binary, arg], env: [:], cwd: nil)
-                } catch let ShellRunnerError.nonZeroExit(_, output) {
-                    out = output
-                } catch {
-                    out = ""
-                }
-                finish(out)
-            }
-            Task {
-                try? await Task.sleep(nanoseconds: timeoutNanos)
-                work.cancel()
-                finish("")
-            }
-        }
-    }
-}
-
-/// A cross-platform (no Darwin `os`) resume-once guard for `probeArg`'s
-/// race: `claim()` returns `true` exactly once — for the first of the run and
-/// timeout tasks to finish — so the continuation is resumed a single time. An
-/// `NSLock`-backed `Bool` rather than `OSAllocatedUnfairLock`, which is
-/// Apple-platforms-only and breaks the Linux CI build (#912).
-private final class ResumeOnceGate: @unchecked Sendable {
-    private let lock = NSLock()
-    private var resumed = false
-
-    func claim() -> Bool {
-        lock.lock(); defer { lock.unlock() }
-        if resumed { return false }
-        resumed = true
-        return true
+        await BinaryIdentityProbe.matches(
+            path: path,
+            args: ["--help", "--version"],
+            markers: Self.identityMarkers,
+            runner: probeRunner)
     }
 }

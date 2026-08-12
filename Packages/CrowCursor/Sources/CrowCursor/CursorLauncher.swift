@@ -77,7 +77,7 @@ public actor CursorLauncher {
     /// agent-handoff path (`crow handoff-agent --agent cursor`) to start
     /// `agent` on that prompt instead of a bare TUI (#829).
     ///
-    /// `binary` is the resolved `agent` path (`CursorAgent.findBinary()`), so a
+    /// `binary` is the resolved Cursor CLI path (`CursorAgent.findBinary()`), so a
     /// `defaults.binaries.cursor` override is honored and a narrow PATH still
     /// launches — `agent` is a collision-prone token, so we don't hardcode it.
     ///
@@ -94,7 +94,7 @@ public actor CursorLauncher {
     /// is the one place this guard could silently regress, so every call site
     /// must state its intent. `CursorAgent` passes `sessionKind != .review`
     /// (attacker-controlled review clones are never auto-trusted, Red 1).
-    public func launchCommand(sessionID: UUID, worktreePath: String, prompt: String, binary: String = "agent", seedTrust: Bool) throws -> String {
+    public func launchCommand(sessionID: UUID, worktreePath: String, prompt: String, binary: String = "cursor-agent", seedTrust: Bool) throws -> String {
         let tmpDir = FileManager.default.temporaryDirectory
         let promptPath = tmpDir.appendingPathComponent("crow-cursor-\(sessionID.uuidString)-prompt.md")
         try prompt.write(to: promptPath, atomically: true, encoding: .utf8)

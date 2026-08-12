@@ -95,8 +95,11 @@ struct ManagerMigrationTests {
 
         // Claude path keeps producing a `claude` invocation.
         #expect(claudeCmd.contains("claude"))
-        // Cursor path emits the `agent` binary (Cursor's CLI name), not claude.
-        #expect(cursorCmd.contains("agent"))
+        // Cursor path emits Cursor's own CLI, not claude. Asserted on the
+        // unambiguous `cursor-agent` name rather than a bare `agent` substring —
+        // that substring also matches grok-build's `agent`, which is the exact
+        // mix-up CROW-989 fixed, so a loose assertion here would pass on it.
+        #expect(cursorCmd.contains("cursor-agent"))
         #expect(!cursorCmd.contains("claude"))
     }
 
@@ -183,6 +186,14 @@ struct ManagerMigrationTests {
 
         let appState = AppState()
         appState.remoteControlEnabled = true  // so the rebuilt command carries --rc/--name
+        // The command rebuild resolves the Manager's agent through the
+        // process-wide `AgentRegistry.shared`, which is NOT scoped per test (see
+        // the note in `managerCommandIsIdempotent`). Register Claude Code here
+        // rather than relying on a sibling test having done so first — under
+        // `--parallel` the ordering isn't guaranteed, and without it the rebuild
+        // falls back to a command carrying neither `--name` nor remote control.
+        // Registration is idempotent, so this is safe to repeat.
+        AgentRegistry.shared.register(ClaudeCodeAgent())
         let service = SessionService(store: store, appState: appState)
         service.hydrateState()
 

@@ -262,11 +262,13 @@ struct GrokAgentTests {
     }
 
     /// The Red from #912 review: a `grok` that never exits and ignores
-    /// cancellation must not stall boot. `probeArg`'s timeout is a *hard* bound
-    /// on the awaiting task — it returns `""` at the cap even against a runner
-    /// that never completes. Uses a tiny injected timeout so the test is instant.
-    @Test func probeArgHardBoundsAgainstNeverCompletingRunner() async {
-        let out = await GrokAgent.probeArg(
+    /// cancellation must not stall boot. The shared probe's timeout is a *hard*
+    /// bound on the awaiting task — it returns `""` at the cap even against a
+    /// runner that never completes. Uses a tiny injected timeout so the test is
+    /// instant. (Lives here as well as in `CrowCore` because Grok's
+    /// `verifyBinaryIdentity` is the original caller this bound was written for.)
+    @Test func probeHardBoundsAgainstNeverCompletingRunner() async {
+        let out = await BinaryIdentityProbe.run(
             "/opt/homebrew/bin/grok",
             "--help",
             runner: NeverRunner(),
@@ -296,7 +298,7 @@ private struct FakeProbeRunner: ShellRunner {
 }
 
 /// A `ShellRunner` that never completes and ignores cancellation — the exact
-/// shape from the #912 review repro. Proves `probeArg`'s timeout bounds the
+/// shape from the #912 review repro. Proves the shared probe's timeout bounds the
 /// awaiting task rather than relying on the runner cooperating. Uses an *unsafe*
 /// continuation deliberately: the leak (never resumed) is the intended scenario,
 /// so a checked continuation would only emit a spurious misuse diagnostic.

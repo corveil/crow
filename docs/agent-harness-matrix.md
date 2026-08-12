@@ -25,7 +25,7 @@ capabilities, update this table in the same PR.
 
 | Dimension | Claude Code | Cursor | Codex | OpenCode | Grok Build | Antigravity (Tier-2) |
 |---|---|---|---|---|---|---|
-| Binary token (`launchCommandToken`) | `claude` | `agent` ⚠️ collision risk | `codex` | `opencode` | `grok` ⚠️ collision (`grok-cli`) — identity-probed | `agy` ✅ low collision |
+| Binary token (`launchCommandToken`) | `claude` | `cursor-agent` ✅ (alias `agent` ⚠️ collides with grok-build) — identity-probed | `codex` | `opencode` | `grok` ⚠️ collision (`grok-cli`) — identity-probed | `agy` ✅ low collision |
 | Registered at boot | **always** (default out of the box) | only if binary found | only if binary found | only if binary found | only if binary found | only if binary found |
 | Resume / continue | ✅ `--continue` | ✅ `--continue` (job/review restart, #829) | ✅ `resume --last` | ⚠️ `--continue` re-enters TUI, no history | ✅ `-c`/`-r` (run-then-`-c`; job/review restart) | ⚠️ `-c` (machine-global most-recent; no per-run id, FR #7) |
 | Remote control | ✅ native `--rc --name` | ⚠️ faked via `crow send` stdin | ❌ `supportsRemoteControl=false` (experimental `--remote` unwired) | ⚠️ faked via `crow send` stdin | ⚠️ faked via `crow send` stdin (native ACP `grok agent serve` deferred) | ⚠️ faked via `crow send` stdin (no native RC) |
@@ -92,36 +92,55 @@ Each harness declares a `launchCommandToken` — the binary name Crow resolves o
 `PATH` and the token the `send` RPC watches for to decide whether a
 managed-terminal command needs hook/env prep.
 
-- Tokens: `claude`, `agent`, `codex`, `opencode`, `grok`, `agy`
+- Tokens: `claude`, `cursor-agent`, `codex`, `opencode`, `grok`, `agy`
   (`ClaudeCodeAgent`, `CursorAgent`, `OpenAICodexAgent`, `OpenCodeAgent`,
   `GrokAgent`, `AntigravityAgent`).
-- **Cursor's token is `agent`, a generic name.** CI runners (Azure DevOps,
-  TeamCity) also ship a binary called `agent` — and, confirmed in the field,
-  **xAI's grok-build installer symlinks `agent → grok`** (`~/.grok/bin/agent`,
-  mirrored into `~/.local/bin/agent`), so on a box with grok-build ahead of
-  Cursor on PATH the `agent` token resolves to grok-build, not Cursor. Crow
-  still only accepts the false-positive risk here and lets users pin the real
-  path via `defaults.binaries.cursor` (`CursorAgent.swift` launch-token comment,
-  CROW-484). The durable fix is to adopt the CROW-911 identity-probe seam for
-  Cursor — with a PATH-walk-that-verifies (take the first `agent` on PATH that
-  passes the probe, since the wrong one can be first) — tracked as a follow-up.
+- **Cursor ships two names for one executable**, and Crow prefers the
+  unambiguous `cursor-agent`; the generic `agent` is kept as an
+  `alternateLaunchCommandTokens` alias for older installs. The generic name
+  genuinely collides: CI runners (Azure DevOps, TeamCity) ship an `agent`, and —
+  observed in the field — **xAI's grok-build installs `~/.grok/bin/agent`**
+  (mirrored into `~/.local/bin/agent`). On a box with grok-build ahead of Cursor
+  on PATH, `agent` resolved to grok-build, so Crow built a Cursor command and ran
+  Grok's binary, which died on the first flag it lacks
+  (`error: unexpected argument '--force' found`) — CROW-989, the risk CROW-484
+  accepted actually firing. Two defenses now:
+  - **Preferred-name-first PATH walk.** `resolveBinary()` is *token-major*: every
+    PATH entry is searched for `cursor-agent` before any is searched for `agent`
+    (`BinaryTokenResolver.firstOnPath`), so resolution depends on the name rather
+    than on install order. Reordering PATH cannot change the selection.
+  - **Identity probe** on a bare `agent` match, the CROW-911 seam Grok already
+    used. `cursor-agent --help` is matched against `CursorAgent.identityMarkers`
+    (`--approve-mcps`, `--trust`, `CURSOR_API_KEY`, `CURSOR_API_ENDPOINT` — the
+    flags this adapter actually passes, so the probe answers exactly the question
+    the launch depends on). A grok-build `agent` carries none of them and is
+    reported unavailable, naming the resolved path, instead of launching and
+    failing on flag parsing. `defaults.binaries.cursor` still pins and bypasses
+    the probe.
+  - ⚠️ **Residual gap:** a machine with *only* the legacy `agent` name (no
+    `cursor-agent`) **and** grok-build earlier on PATH reports Cursor
+    unavailable — the walk stops at the first `agent` it finds rather than
+    continuing to a later, genuine one. A multi-candidate walk (probe each `agent`
+    on PATH until one verifies) would close it, but needs the verified path cached
+    for launch, since `findBinary()` re-resolves per launch. Workaround is the
+    `defaults.binaries.cursor` pin.
 - **Grok's token is `grok`, which collides** with the community
-  `superagent-ai/grok-cli` (also installs `grok`). Unlike Cursor, Crow does
-  **not** just accept the false positive: registration **identity-probes** a
-  bare PATH/fallback match — `grok --help` (then `--version`), matched against
+  `superagent-ai/grok-cli` (also installs `grok`). Registration **identity-probes**
+  a bare PATH/fallback match — `grok --help` (then `--version`), matched against
   grok-build-specific flag markers in `GrokAgent.identityMarkers` — and shows
   Grok Build **disabled** when the resolved binary is the foreign `grok-cli`
   (`GrokAgent.verifyBinaryIdentity`, CROW-911). The decision is the pure
   `AgentDiscovery.evaluate` (resolve → probe a non-override match), which
   `CrowDaemon.registerAgents` wraps with registry writes + logging. An explicit
   `defaults.binaries.grok` pin is authoritative and **skips the probe**;
-  `BinaryOverrides` keys on `AgentKind.rawValue` = `"grok"`. The probe is a
-  reusable `CodingAgent` seam Cursor's `agent` token can adopt (see above).
-  ⚠️ **Trust-boundary delta:** `crowd` now *executes* the PATH-resolved `grok`
-  (an unvetted third-party binary) at boot to probe it — inherent to identity
+  `BinaryOverrides` keys on `AgentKind.rawValue` = `"grok"`. Cursor and Grok share
+  one implementation of the bounded subprocess race (`BinaryIdentityProbe`,
+  CROW-989) rather than each carrying a copy.
+  ⚠️ **Trust-boundary delta:** `crowd` now *executes* the PATH-resolved binary
+  (an unvetted third-party one) at boot to probe it — inherent to identity
   probing, on the user's own PATH, output only substring-matched (never logged
   or evaluated); the probe is hard-bounded so a hanging binary can't stall boot
-  (`GrokAgent.probeArg`).
+  (`BinaryIdentityProbe.run`).
 - **Registration order = default.** `AgentRegistry.register` sets the default to
   the *first* kind registered
   ([`AgentRegistry.swift`](../Packages/CrowCore/Sources/CrowCore/Agent/AgentRegistry.swift)).
@@ -399,7 +418,8 @@ share the host's global config and are disambiguated by `cwd`. See
   handoff, and the brand-new-terminal deferred paste / `crow send` via
   `AgentLaunch`), not at boot — so it fires for Cursor selected via config *or*
   per-session (`handoff-agent`, the Manager picker), and never copies the token
-  onto a box that merely has a binary named `agent`.
+  onto a box that merely has a binary named `agent` — doubly so since CROW-989,
+  where such a binary must also pass the identity probe to register as Cursor.
   The bridged entry is Crow-marked (a top-level `x-crow-managed` list, so the
   server def stays byte-identical to Claude's): a user's own `jira` is never
   clobbered, and the copy is withdrawn only when `~/.claude.json` parses cleanly
@@ -679,6 +699,7 @@ against current upstream CLIs.
 | Antigravity hook re-read timing: does `agy` read `.agents/hooks.json` **once at process start**, or per-event? | `agy` **v1.1.7** — unverified; assumed start-only | `prepareWorktreeForAgentLaunch` (launch-time strip) | 2026-07-28 (#902) — the launch-time strip mitigates a hook restored *between* launches. If `agy` re-reads per-event, a mid-session restore (SKILL's `gh pr checkout` fast-forwards → silently restores `.agents/`) would fire unmitigated, since no strip re-runs mid-session and there is no trust gate behind it. Confirm on the manual pass before promoting out of Tier-2 |
 | **Entire Grok flag set** — hooks event names, `-p`/`--single`, `-c`/`-r`, `--allow`/`--deny`, `--permission-mode`, `--trust`, `/rename` | `xai-org/grok-build` **@ 2026-07-25** (periodic mirror of xAI's monorepo, **PRs closed** → churn likely) | `GrokAgent` / `GrokLaunchArgs` / `GrokHookConfigWriter` / `GrokSignalSource` | 2026-07-26 — verified against repo source (`crates/codegen/xai-grok-*`), not blog posts |
 | Grok `grok` binary collides with community `superagent-ai/grok-cli` | **Identity probe** at registration (`grok --help`/`--version` vs grok-build flag markers) greys out the foreign `grok`; explicit `defaults.binaries.grok` pin bypasses it. Decision is pure `AgentDiscovery.evaluate`; probe markers (`--prompt-file`, `--prompt-json`, `--permission-mode`, `--always-approve`) are the same upstream flag set as the row above — re-verify together | `GrokAgent.identityMarkers` / `verifyBinaryIdentity` · `AgentDiscovery.evaluate` | 2026-07-26 (CROW-911) |
+| Cursor's legacy `agent` alias collides with grok-build's `~/.grok/bin/agent` (fired in the field) | Prefer the unambiguous **`cursor-agent`** via a token-major PATH walk (order-independent), plus the same **identity probe** on a bare `agent` match. Markers (`--approve-mcps`, `--trust`, `CURSOR_API_KEY`, `CURSOR_API_ENDPOINT`) are the flags this adapter passes — re-verify with `CursorLaunchArgs` on each Cursor CLI baseline bump. ⚠️ Residual: legacy-only install + grok-build earlier on PATH ⇒ reported unavailable; pin `defaults.binaries.cursor` | `CursorAgent.identityMarkers` / `verifyBinaryIdentity` · `BinaryTokenResolver` · `BinaryIdentityProbe` | 2026-08-11 (CROW-989) — Cursor CLI baseline `2026.08.04-aaa8809` |
 | Grok **`--permission-mode auto` now exists** — the ticket's pinned probe (#859) reported it absent; current docs show `grok --permission-mode auto`. Bounded `.job` posture stays `--permission-mode auto` + a minimal `--deny` backstop (never `--yolo`) regardless | Grok mirror **@ 2026-07-25** | `GrokLaunchArgs.autoPermissionSuffix` | 2026-07-26 |
 | Grok `Stop` / `Notification` fire on the transitions Crow's state machine needs — **confirm empirically** | — (empirical, #859) | `GrokSignalSource` | 2026-07-26 |
 | Grok double-fire: only the **global** `~/.claude`/`~/.cursor` hook configs Grok also discovers (its compat scanning) firing alongside `.grok/hooks/crow.json` — dedup deferred (genuinely user-controlled config, no Crow session UUID, not RCE; cf. Codex §3b). *Project* compat sources are handled: stripped on `.review` clones (`stripGrokConfigFromReviewClone`, RCE) and neutralized on `.work`/`.job` handoff + warm-adopt (`stripPriorCompatHooksForGrokHandoff` + session-own adopt write, #861 r9-r10). The Grok-**Manager** devRoot case stays a documented limitation (`writeManagerHookConfig`). | — (empirical, #859) | `GrokHookConfigWriter` / `SessionService` | 2026-07-27 |

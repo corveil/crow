@@ -19,30 +19,47 @@ public struct CursorAgent: CodingAgent {
     /// `"terminal.fill"`. Easy to swap once branding firms up.
     public let iconSystemName: String = "cursorarrow.rays"
     public let supportsRemoteControl: Bool = true
-    /// Cursor's CLI binary is named `agent`, not `cursor`.
+    /// Cursor's CLI installs under **two** names for the same executable —
+    /// `cursor-agent` and the generic `agent` — both symlinked into PATH from
+    /// `~/.local/share/cursor-agent/versions/<v>/cursor-agent`. Crow prefers
+    /// `cursor-agent`, which has no known collision.
     ///
-    /// `agent` is a generic name — CI runner installs (Azure DevOps, TeamCity)
-    /// also ship a binary called `agent`, so the PATH-walk discovery in
-    /// `CodingAgent.findBinary()` can in principle resolve a non-Cursor
-    /// executable on a build machine. If that happens, set
-    /// `defaults.binaries.cursor` to the absolute path of Cursor's CLI in
-    /// `{devRoot}/.claude/config.json` — the explicit override is consulted
-    /// before the PATH walk and pins the resolution. We accept the false-
-    /// positive risk here (CROW-484) because real workstations don't usually
-    /// have a competing `agent` on PATH, and the override knob exists for
-    /// the exotic case.
-    public let launchCommandToken: String = "agent"
+    /// `agent` demonstrably does collide: **xAI's grok-build installs its own
+    /// `~/.grok/bin/agent`**, and on a box with both, that one won the PATH walk.
+    /// Crow then built a Cursor command and ran Grok's binary, which died on the
+    /// first flag it doesn't have (`error: unexpected argument '--force' found`)
+    /// — CROW-989, the collision CROW-484 accepted as a theoretical risk actually
+    /// firing. CI runners (Azure DevOps, TeamCity) ship an `agent` too.
+    ///
+    /// Preferring the unambiguous name makes resolution independent of PATH
+    /// order (`resolveBinary` is token-major: every PATH entry is searched for
+    /// `cursor-agent` before any is searched for `agent`). The legacy name stays
+    /// as an alias so an older install still resolves — and, if *that* is what
+    /// resolves, `verifyBinaryIdentity` confirms it's really Cursor before
+    /// registration marks the agent available. An explicit
+    /// `defaults.binaries.cursor` pin still overrides everything and skips the
+    /// probe.
+    public let launchCommandToken: String = "cursor-agent"
+    public let alternateLaunchCommandTokens: [String] = ["agent"]
     public let hookConfigWriter: any HookConfigWriter
     public let stateSignalSource: any StateSignalSource
 
     private let launcher: CursorLauncher
 
-    /// Last-resort search paths for the `agent` binary (Cursor's CLI), used
-    /// only when the configured `BinaryOverrides` and a PATH walk both miss.
-    /// The Cursor app bundle's embedded CLI is usually symlinked into PATH or
-    /// installed via the Cursor app's "Install 'cursor' command" action; this
-    /// list is the historical hardcoded set we used to check first (CROW-484).
+    /// Runs the `--help` identity probe. Injectable so tests can stub the
+    /// binary's output without spawning a real subprocess; production uses
+    /// `ProcessShellRunner` (the same runner provider backends use).
+    private let probeRunner: any ShellRunner
+
+    /// Last-resort search paths for Cursor's CLI, used only when the configured
+    /// `BinaryOverrides` and a PATH walk both miss. `cursor-agent` entries come
+    /// first for the same reason the token does — a hardcoded `…/bin/agent` is
+    /// just as capable of being grok-build's as a PATH one, and the identity
+    /// probe covers a `.fallback` match exactly like a `.path` one.
     public let fallbackCandidates: [String] = [
+        "/opt/homebrew/bin/cursor-agent",
+        "/usr/local/bin/cursor-agent",
+        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/bin/cursor-agent").path,
         "/opt/homebrew/bin/agent",
         "/usr/local/bin/agent",
         FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/bin/agent").path,
@@ -50,10 +67,12 @@ public struct CursorAgent: CodingAgent {
 
     public init(
         hookConfigWriter: any HookConfigWriter = CursorHookConfigWriter(),
-        stateSignalSource: any StateSignalSource = CursorSignalSource()
+        stateSignalSource: any StateSignalSource = CursorSignalSource(),
+        probeRunner: any ShellRunner = ProcessShellRunner()
     ) {
         self.hookConfigWriter = hookConfigWriter
         self.stateSignalSource = stateSignalSource
+        self.probeRunner = probeRunner
         self.launcher = CursorLauncher()
     }
 
@@ -64,15 +83,16 @@ public struct CursorAgent: CodingAgent {
         autoPermissionMode: Bool,
         telemetryPort: UInt16?
     ) -> String? {
-        let agentPath = CursorLaunchArgs.shellQuote(findBinary() ?? "agent")
+        let agentPath = CursorLaunchArgs.shellQuote(findBinary() ?? launchCommandToken)
         // NB: `findBinary()` resolves to an absolute path here — Cursor is
         // registered as *known* regardless of PATH (#879), but only enters the
-        // launchable `agents` map when it resolves, and `autoLaunchCommand` only
-        // runs for a launchable agent. So the quoted form is `'/…/agent'` and
+        // launchable `agents` map when it resolves **and passes the identity
+        // probe** (CROW-989), and `autoLaunchCommand` only runs for a launchable
+        // agent. So the quoted form is `'/…/cursor-agent'` and
         // `AgentLaunch.commandLaunchesToken` still matches it via its `/` prefix
-        // alternative. A bare `'agent'` (findBinary→nil) would NOT match that
-        // regex — but that path is unreachable while the launch gate excludes
-        // unavailable kinds.
+        // alternative. A bare `'cursor-agent'` (findBinary→nil) would NOT match
+        // that regex — but that path is unreachable while the launch gate
+        // excludes unavailable kinds.
         // The `--trust` workspace-trust seed (skips the folder-trust dialog on a
         // fresh worktree — the per-launch analogue of `ClaudeTrustSeeder`,
         // CROW-890) rides EVERY launch path, `.review` included as of CROW-954.
@@ -181,7 +201,7 @@ public struct CursorAgent: CodingAgent {
             sessionID: sessionID,
             worktreePath: worktreePath,
             prompt: prompt,
-            binary: findBinary() ?? "agent",
+            binary: findBinary() ?? launchCommandToken,
             seedTrust: true
         )
     }
@@ -204,7 +224,7 @@ public struct CursorAgent: CodingAgent {
         // network/filesystem-blocked — see `CursorLaunchArgs`). Terminal backend
         // appends the submitting Enter, so we return the command without a
         // trailing newline to match the cross-agent convention.
-        let agentPath = CursorLaunchArgs.shellQuote(findBinary() ?? "agent")
+        let agentPath = CursorLaunchArgs.shellQuote(findBinary() ?? launchCommandToken)
         return agentPath + CursorLaunchArgs.launchSuffix(
             seedTrust: true, autoPermissionMode: autoPermissionMode)
     }
@@ -212,5 +232,50 @@ public struct CursorAgent: CodingAgent {
     /// Cursor CLI exposes `/rename` for naming sessions (CROW-629).
     public func sessionRenameSlashCommand(newName: String) -> String? {
         "/rename \(newName)\n"
+    }
+
+    /// Substrings that identify a resolved binary as Cursor's CLI rather than
+    /// another tool installed under the same name. Matched case-insensitively
+    /// against `--help` output; **any** one match confirms identity (OR, not
+    /// AND), so a single upstream flag rename can't grey out a genuine install.
+    ///
+    /// These are the flags this adapter actually hands the binary
+    /// (`CursorLaunchArgs`: `--trust`, `--force --approve-mcps`) plus Cursor's
+    /// two env-var names. That choice is deliberate: the probe then answers the
+    /// question the launch actually depends on — *does this binary understand the
+    /// flags we're about to pass it?* — which is precisely what CROW-989 got
+    /// wrong. `--force` alone is excluded as too generic to discriminate.
+    ///
+    /// Deliberately **not** the `Usage:` line: `cursor-agent --help` prints
+    /// `Usage: agent [options] …` (the binary reports its generic argv[0] name),
+    /// so matching on "cursor-agent" there would reject every genuine install.
+    ///
+    /// Verified against the installed `cursor-agent 2026.08.04-aaa8809`, and
+    /// checked negative against `grok 1.0.0` (grok-build's `agent`), whose help
+    /// carries none of them — it offers `--always-approve` / `--allow` / `--deny`
+    /// instead. ⚠️ Re-verify on each Cursor CLI baseline bump, alongside the
+    /// launch flags in `CursorLaunchArgs` (they're the same upstream surface).
+    /// If a rewrite ever drops all of them, the user's escape hatch is an
+    /// explicit `defaults.binaries.cursor` pin, which bypasses this probe.
+    static let identityMarkers = [
+        "--approve-mcps", "--trust", "cursor_api_key", "cursor_api_endpoint",
+    ]
+
+    /// Identity-probe the resolved binary before registration marks Cursor
+    /// available (CROW-989). Only reached for a PATH/`fallbackCandidates` match:
+    /// an explicit `defaults.binaries.cursor` pin is trusted without probing
+    /// (`AgentDiscovery.evaluate`).
+    ///
+    /// `--help` only — every marker is a `--help` string, and Cursor's
+    /// `--version` prints a bare build stamp (`2026.08.04-aaa8809`) with no
+    /// vendor text, so a second spawn could never match and would only slow boot.
+    /// An empty result (a binary that prints nothing, or a probe timeout) matches
+    /// no marker and returns false.
+    public func verifyBinaryIdentity(atPath path: String) async -> Bool {
+        await BinaryIdentityProbe.matches(
+            path: path,
+            args: ["--help"],
+            markers: Self.identityMarkers,
+            runner: probeRunner)
     }
 }

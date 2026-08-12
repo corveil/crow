@@ -21,7 +21,7 @@ public enum AgentLaunch {
         crowPath: String?,
         telemetryPort: UInt16?
     ) -> (text: String, didLaunch: Bool) {
-        guard commandLaunchesToken(command, token: agent.launchCommandToken) else { return (command, false) }
+        guard commandLaunchesAgent(command, agent: agent) else { return (command, false) }
         if let worktreePath, let crowPath {
             do {
                 try agent.hookConfigWriter.writeHookConfig(
@@ -57,11 +57,26 @@ public enum AgentLaunch {
         return ("export \(vars) && \(command)", true)
     }
 
+    /// Whether `command` launches `agent` under **any** of its binary names.
+    ///
+    /// The alias-aware form of `commandLaunchesToken`, and the one every caller
+    /// should use: an agent that ships more than one name for the same executable
+    /// can be invoked under either, and both must get hook-config + env prep.
+    /// Cursor is the case in point — Crow now prefers `cursor-agent`, but a
+    /// legacy install (or an operator recovering a pane by hand) still says
+    /// `agent` (CROW-989).
+    public static func commandLaunchesAgent(_ command: String, agent: any CodingAgent) -> Bool {
+        agent.binaryTokens.contains { commandLaunchesToken(command, token: $0) }
+    }
+
     /// Whether `command` invokes `token` as a shell command rather than an
     /// incidental substring. Anchored at start-of-string, after a shell command
     /// separator (`;`, `&&`, `||`, `|`), or at a path separator (`/`). Prevents
     /// flipping readiness on prose that merely contains an agent token like
     /// Cursor's `"agent"`.
+    ///
+    /// Single-token; prefer `commandLaunchesAgent` when you have the agent, so
+    /// aliases aren't silently missed.
     public static func commandLaunchesToken(_ command: String, token: String) -> Bool {
         let escaped = NSRegularExpression.escapedPattern(for: token)
         let pattern = "(?:^|[;&|]\\s*|/)\(escaped)(?=\\s|$|[\"'])"
