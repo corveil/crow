@@ -809,11 +809,17 @@ public final class SessionHookState {
 
     public init() {}
 
+    /// The hook event that marks a *completed* compaction. `PreCompact` (and
+    /// any failed/aborted compaction, which never emits `PostCompact`) is not
+    /// graded waste. Named so the `hook-event` handler and this counter agree
+    /// on one spelling.
+    public static let compactionEventName = "PostCompact"
+
     /// ADR 0008: count completed compactions only. `PreCompact` (and any
     /// failed/aborted compaction, which never emits `PostCompact`) is not
     /// graded waste.
     public func noteCompactionEvent(_ eventName: String) {
-        if eventName == "PostCompact" { compactionCount += 1 }
+        if eventName == Self.compactionEventName { compactionCount += 1 }
     }
 }
 

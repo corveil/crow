@@ -1387,6 +1387,23 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                     state.hookEvents.append(event)
                     if state.hookEvents.count > 50 { state.hookEvents.removeFirst(state.hookEvents.count - 50) }
 
+                    // Count completed compactions (ADR 0008 follow-up 3).
+                    // `noteCompactionEvent` and the persist path shipped with
+                    // #704, but nothing ever called this — `PostCompact` fell
+                    // through to the signal source's `default`, so the grade's
+                    // heaviest penalty was inert on real data. Wired in
+                    // CROW-983.
+                    if eventName == SessionHookState.compactionEventName {
+                        state.noteCompactionEvent(eventName)
+                        // A Manager never reaches a terminal status, so it has
+                        // no snapshot to persist the running total into.
+                        // Attribute its compactions to the current ISO week as
+                        // they happen.
+                        if capturedAppState.isManagerSession(sessionID) {
+                            capturedService.noteManagerCompaction(sessionID: sessionID)
+                        }
+                    }
+
                     // Ask the agent for the state transition and apply it.
                     // The signal source is pure — all side effects (persistence,
                     // notifications, etc.) stay here in the handler.

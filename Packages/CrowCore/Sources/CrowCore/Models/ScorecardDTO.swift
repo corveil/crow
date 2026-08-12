@@ -30,12 +30,16 @@ public struct ScorecardDTO: Codable, Sendable, Equatable {
     public let baseline: BaselineDTO
     /// Current week's per-session drill-down rows, newest first.
     public let sessions: [SessionRowDTO]
-    /// Ungraded Manager-session weekly usage, newest first (#745, #767).
-    /// Deliberately NOT derived from `ScorecardModel` — the Manager session
-    /// never reaches a terminal status, so it has no snapshot to grade. These
-    /// rows are a straight projection of the persisted `managerUsageWeekly`
-    /// mirror, which is what keeps them structurally out of the grade, the
-    /// shipped count, the combined score, and the baseline.
+    /// Manager-session weekly usage, newest first (#745, #767, CROW-983).
+    /// Deliberately NOT derived from `ScorecardModel` — a Manager never
+    /// reaches a terminal status, so it has no snapshot. These rows are a
+    /// projection of the persisted `managerUsageWeekly` mirror, and that
+    /// separation is what structurally keeps Managers out of the shipped
+    /// count, cost-per-shipped, the combined score, and the baseline.
+    ///
+    /// They DO carry an efficiency grade (CROW-983): that half of ADR 0008's
+    /// grade needs no outcome, so withholding it was hiding a signal the data
+    /// already supported. The outcome surfaces above stay absent.
     public let managerWeeks: [ManagerUsageWeekDTO]
 
     // Live telemetry capture health (#745), for the header status line and the
@@ -56,13 +60,12 @@ public struct ScorecardDTO: Codable, Sendable, Equatable {
         telemetryEnabled: Bool,
         snapshotCount: Int,
         managerUsage: [ManagerWeeklyUsage] = [],
+        managerNames: [UUID: String] = [:],
         captureStatus: TelemetryCaptureStatus? = nil
     ) {
         self.telemetryEnabled = telemetryEnabled
         self.snapshotCount = snapshotCount
-        self.managerWeeks = managerUsage
-            .sorted { $0.weekStart > $1.weekStart }
-            .map(ManagerUsageWeekDTO.init)
+        self.managerWeeks = Self.projectManagerWeeks(managerUsage, names: managerNames)
         self.telemetryCapturing = captureStatus != nil
         self.telemetrySessionCount = captureStatus?.sessionCount ?? 0
         self.telemetryLastReceivedAtMillis = captureStatus?.lastReceivedAt?.millis
@@ -73,6 +76,58 @@ public struct ScorecardDTO: Codable, Sendable, Equatable {
         self.minimumBaselineWeeks = EfficiencyGrading.Tuning.minimumBaselineWeeks
         self.baselineWeekCount = EfficiencyGrading.Tuning.baselineWeekCount
         self.minimumGradablePromptCount = EfficiencyGrading.Tuning.minimumGradablePromptCount
+    }
+
+    /// Newest-first, and bounded **per Manager** to the window
+    /// `SessionService.refreshManagerUsage` actually recomputes (the current
+    /// week plus the trailing baseline window).
+    ///
+    /// The bound matters: `managerUsageWeekly` is merge-only and never pruned,
+    /// so without it the card grows by a row a week forever — ~52 rows after a
+    /// year, each now carrying a full chip set. Capping per Manager rather than
+    /// globally keeps a second Manager from evicting the first one's history.
+    ///
+    /// Two compatibility rules, both driven by pre-CROW-983 rollups that
+    /// carry no `sessionID`:
+    /// - A `nil` `sessionID` resolves to the **primary** Manager. #745 only
+    ///   ever queried that one session, so a legacy row cannot be anyone else.
+    /// - When a legacy bare-keyed week and a new composite-keyed week describe
+    ///   the same (week, Manager), the one with an explicit `sessionID` wins.
+    ///   Both persist — the first refresh after upgrade writes the composite
+    ///   key while the legacy key remains — and rendering both would duplicate
+    ///   the row. Legacy rows are still kept when nothing superseded them:
+    ///   a week aged out of telemetry retention never gets recomputed, and
+    ///   dropping it would lose history the merge-only store exists to protect.
+    static func projectManagerWeeks(
+        _ usage: [ManagerWeeklyUsage], names: [UUID: String]
+    ) -> [ManagerUsageWeekDTO] {
+        let weekCap = EfficiencyGrading.Tuning.baselineWeekCount + 1
+        var seen: Set<[String]> = []
+        var keptPerManager: [UUID: Int] = [:]
+
+        return usage
+            // Sort before deduping and capping so both "supersedes" and
+            // "newest N" are well defined. Explicit-sessionID rows sort ahead
+            // of legacy ones for the same week so the dedupe keeps the newer
+            // shape; the id tiebreak keeps output stable across the unordered
+            // dictionary this is built from.
+            .sorted { lhs, rhs in
+                if lhs.weekStart != rhs.weekStart { return lhs.weekStart > rhs.weekStart }
+                let lhsExplicit = lhs.sessionID != nil
+                let rhsExplicit = rhs.sessionID != nil
+                if lhsExplicit != rhsExplicit { return lhsExplicit }
+                return (lhs.sessionID?.uuidString ?? "") < (rhs.sessionID?.uuidString ?? "")
+            }
+            .compactMap { week -> ManagerUsageWeekDTO? in
+                let resolvedID = week.sessionID ?? AppState.managerSessionID
+                let identity = [String(week.weekStart.timeIntervalSince1970), resolvedID.uuidString]
+                guard seen.insert(identity).inserted else { return nil }
+                let kept = keptPerManager[resolvedID, default: 0]
+                guard kept < weekCap else { return nil }
+                keptPerManager[resolvedID] = kept + 1
+                return ManagerUsageWeekDTO(
+                    week, sessionID: resolvedID, sessionName: names[resolvedID])
+            }
     }
 }
 
@@ -257,20 +312,60 @@ public struct SessionRowDTO: Codable, Sendable, Equatable {
     }
 }
 
-/// One ungraded Manager-usage week (#745, #767) — the three figures the
-/// scorecard's Manager row renders, plus its week key. No
-/// grade, by design: the always-on Manager session is visibility only.
+/// One Manager-usage week (#745, #767, CROW-983) — the same figures a work
+/// week renders, plus the Manager's identity and its outcome-independent
+/// efficiency grade.
+///
+/// `grade` is the EFFICIENCY half of ADR 0008's grade only
+/// (`EfficiencyGrading.efficiencyInput(for:)` leaves `costContext` nil, so
+/// cost-per-shipped never applies). There is deliberately no `sessionsShipped`,
+/// `costPerShipped`, or `combined` field here: a Manager never reaches
+/// `.completed`, so every outcome surface would be a fabrication. The web must
+/// keep labelling this row as efficiency-only.
 public struct ManagerUsageWeekDTO: Codable, Sendable, Equatable {
     public let weekStartMillis: Double
+
+    /// Which Manager (CROW-983). Always resolved — a rollup persisted before
+    /// per-Manager attribution existed reports the primary Manager, the only
+    /// session that could have produced it.
+    public let sessionID: String
+    /// Display name resolved at projection time; `nil` when the session row is
+    /// gone (a deleted non-primary Manager keeps its persisted weeks).
+    public let sessionName: String?
+
+    /// Outcome-independent efficiency grade over this week's raws.
+    public let grade: GradeDTO
+
     public let promptCount: Int
     public let totalTokens: Int
     public let totalCost: Double
+    public let activeTimeSeconds: Double
+    public let commitCount: Int
+    public let toolCallCount: Int
 
-    init(_ week: ManagerWeeklyUsage) {
+    // Derived rates, read off the same `GradeInput` that produced `grade` so a
+    // chip can never disagree with the deduction that cites it.
+    public let compactionsPerActiveHour: Double
+    public let inputTokensPerPrompt: Double
+    public let cacheHitRatio: Double
+    public let apiErrorRate: Double
+
+    init(_ week: ManagerWeeklyUsage, sessionID: UUID, sessionName: String? = nil) {
+        let input = EfficiencyGrading.efficiencyInput(for: week)
         self.weekStartMillis = week.weekStart.millis
+        self.sessionID = sessionID.uuidString
+        self.sessionName = sessionName
+        self.grade = GradeDTO(EfficiencyGrading.grade(input))
         self.promptCount = week.analytics.promptCount
         self.totalTokens = week.analytics.totalTokens
         self.totalCost = week.analytics.totalCost
+        self.activeTimeSeconds = week.analytics.activeTimeSeconds
+        self.commitCount = week.analytics.commitCount
+        self.toolCallCount = week.analytics.toolCallCount
+        self.compactionsPerActiveHour = input.compactionsPerActiveHour
+        self.inputTokensPerPrompt = input.inputTokensPerPrompt
+        self.cacheHitRatio = input.cacheHitRatio
+        self.apiErrorRate = input.apiErrorRate
     }
 }
 

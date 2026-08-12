@@ -222,6 +222,35 @@ public enum EfficiencyGrading {
         )
     }
 
+    /// Outcome-independent input for a **permanent** session that can never
+    /// reach a terminal status — today, a Manager (CROW-983).
+    ///
+    /// `costContext` stays nil on purpose, and that single nil is the whole
+    /// "efficiency graded, outcomes not" split: `costPerShippedDeduction` is
+    /// the only outcome-touching deduction and it returns nil without a cost
+    /// context, so the remaining four metrics (compactions, context pressure,
+    /// cache hit ratio, API error rate) are exactly the outcome-independent
+    /// half of ADR 0008's grade. Nothing else needs to know the difference —
+    /// `grade(_:)` is still the one grading function.
+    ///
+    /// A Manager is deliberately absent from the throughput count,
+    /// cost-per-shipped, the combined score, and the baseline: it *spawns*
+    /// the sessions that ship, so charging its cost against their outcomes
+    /// would bill work it enabled but did not perform.
+    public static func efficiencyInput(for week: ManagerWeeklyUsage) -> GradeInput {
+        let analytics = week.analytics
+        return GradeInput(
+            compactionCount: week.compactionCount ?? 0,
+            activeTimeSeconds: analytics.activeTimeSeconds,
+            inputTokens: analytics.inputTokens,
+            promptCount: analytics.promptCount,
+            cacheReadTokens: analytics.cacheReadTokens,
+            cacheCreationTokens: analytics.cacheCreationTokens,
+            apiErrorCount: analytics.apiErrorCount,
+            apiRequestCount: analytics.apiRequestCount
+        )
+    }
+
     /// Weekly-grain input: re-aggregates raw numerators and denominators
     /// across the week's snapshots (Σ compactions / Σ active hours, Σ input
     /// tokens / Σ prompts, …) — never an average of per-session grades.

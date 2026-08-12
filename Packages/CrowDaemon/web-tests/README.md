@@ -14,6 +14,21 @@ toggle), View Issue / View PR buttons (hrefs + `target=_blank`), inline PR
 state + CI badges (incl. failing-check tooltip), and graceful degradation of an
 older payload with the new fields absent.
 
+## `scorecard.test.js` — Manager metering on the scorecard (CROW-983)
+
+Drives the real `renderScorecard` against a synthetic `ScorecardDTO` and
+asserts the Manager card's DOM. Coverage: the widened chip set (active time,
+cache hit ratio, tokens/prompt, API error rate, compactions/active hour, tool
+calls, commits) and its formatting, the efficiency grade badge + deduction
+line, the ungraded/below-floor degradation, per-Manager grouping (and the
+absence of a heading for a single Manager), the `groupManagerWeeks` helper
+including the fallback name for a deleted Manager, and graceful degradation
+when a pre-#767 daemon sends no `managerWeeks` field at all.
+
+Also pins the framing that keeps a Manager legible as *outside* the graded
+aggregate: the "efficiency only" pill, the explainer naming the excluded
+outcome surfaces, and the absence of any shipped count on a Manager row.
+
 ## `touch-scroll.test.js` — mobile terminal scroll (#777)
 
 Drives `enableTouchScroll` against a fake xterm + PTY socket. Coverage: the

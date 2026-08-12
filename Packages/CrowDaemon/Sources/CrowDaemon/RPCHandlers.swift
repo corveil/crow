@@ -1052,9 +1052,15 @@ func makeCommandRouter(
                     model,
                     telemetryEnabled: telemetryEnabled,
                     snapshotCount: appState.analyticsSnapshots.count,
-                    // Ungraded Manager rollups ride alongside the model rather
-                    // than through it (#767) — see `ScorecardDTO.managerWeeks`.
+                    // Manager rollups ride alongside the model rather than
+                    // through it (#767) — see `ScorecardDTO.managerWeeks`.
                     managerUsage: Array(appState.managerUsageWeekly.values),
+                    // Names for the per-Manager breakdown (CROW-983). Only
+                    // live sessions resolve; a deleted Manager's persisted
+                    // weeks still render, just without a name.
+                    managerNames: Dictionary(
+                        appState.managerSessions.map { ($0.id, $0.name) },
+                        uniquingKeysWith: { first, _ in first }),
                     captureStatus: appState.telemetryCaptureStatus
                 )
             }
