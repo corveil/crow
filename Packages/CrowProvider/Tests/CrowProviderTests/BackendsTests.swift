@@ -2003,8 +2003,150 @@ final class BackendsTests: XCTestCase {
         XCTAssertNil(listing.reviewRequests.first?.viewerLastReviewedAt)
     }
 
-    /// THE CROW-990 GAP 2 REGRESSION GUARD. Merged and closed PRs come from
-    /// their own search because the other two are `state:open` — with the
+    /// The head the viewer's verdict was submitted against (CROW-997), which is
+    /// what tells "the author has pushed since I looked" from "nothing has moved"
+    /// on a PR with no live review session. `Session.lastReviewedHeadSha` cannot
+    /// answer it: the round is completed the moment the verdict lands, so there
+    /// is no session left to ask.
+    func testReviewedTailCarriesTheHeadTheVerdictWasSubmittedAgainst() throws {
+        let json = """
+        {
+          "data": {
+            "viewerPRs": {"pullRequests": {"nodes": []}},
+            "reviewPRs": {"nodes": []},
+            "reviewedPRs": {
+              "nodes": [
+                {
+                  "number": 9, "title": "Author pushed", "url": "https://github.com/a/b/pull/9",
+                  "isDraft": false, "updatedAt": "2026-06-07T13:00:00Z",
+                  "headRefName": "f9", "headRefOid": "sha-new", "baseRefName": "main", "state": "OPEN",
+                  "author": {"login": "alice"}, "repository": {"nameWithOwner": "a/b"},
+                  "labels": {"nodes": []},
+                  "reviews": {"nodes": [
+                    {"author": {"login": "me"}, "state": "CHANGES_REQUESTED",
+                     "submittedAt": "2026-06-06T10:00:00Z", "commit": {"oid": "sha-old"}}
+                  ]}
+                },
+                {
+                  "number": 10, "title": "Author idle", "url": "https://github.com/a/b/pull/10",
+                  "isDraft": false, "updatedAt": "2026-06-07T13:00:00Z",
+                  "headRefName": "f10", "headRefOid": "sha-same", "baseRefName": "main", "state": "OPEN",
+                  "author": {"login": "alice"}, "repository": {"nameWithOwner": "a/b"},
+                  "labels": {"nodes": []},
+                  "reviews": {"nodes": [
+                    {"author": {"login": "me"}, "state": "CHANGES_REQUESTED",
+                     "submittedAt": "2026-06-06T10:00:00Z", "commit": {"oid": "sha-same"}}
+                  ]}
+                }
+              ]
+            },
+            "completedPRs": {"nodes": []},
+            "viewer": {"login": "me"},
+            "rateLimit": {"remaining": 5000, "limit": 5000, "resetAt": "2026-06-08T17:00:00Z", "cost": 1}
+          }
+        }
+        """
+        let listing = try GitHubCodeBackend.parseMonitoredPRsResponse(json)
+        let pushed = try XCTUnwrap(listing.reviewedPRs.first { $0.prNumber == 9 })
+        XCTAssertEqual(pushed.viewerLastReviewedHeadSha, "sha-old")
+        XCTAssertFalse(pushed.viewerReviewCoversCurrentHead)
+        let idle = try XCTUnwrap(listing.reviewedPRs.first { $0.prNumber == 10 })
+        XCTAssertEqual(idle.viewerLastReviewedHeadSha, "sha-same")
+        XCTAssertTrue(idle.viewerReviewCoversCurrentHead)
+    }
+
+    /// A review node without a `commit` must leave the SHA nil, and the derived
+    /// "nothing has moved" claim must stay `false` — the board reads a `true`
+    /// there as licence to take the row's only button away, so an unfetched
+    /// field must never produce one.
+    func testMissingReviewCommitLeavesTheReviewedHeadUnknown() throws {
+        let json = """
+        {
+          "data": {
+            "viewerPRs": {"pullRequests": {"nodes": []}},
+            "reviewPRs": {"nodes": []},
+            "reviewedPRs": {
+              "nodes": [
+                {
+                  "number": 11, "title": "No commit on the review",
+                  "url": "https://github.com/a/b/pull/11",
+                  "isDraft": false, "updatedAt": "2026-06-07T13:00:00Z",
+                  "headRefName": "f11", "headRefOid": "sha-x", "baseRefName": "main", "state": "OPEN",
+                  "author": {"login": "alice"}, "repository": {"nameWithOwner": "a/b"},
+                  "labels": {"nodes": []},
+                  "reviews": {"nodes": [
+                    {"author": {"login": "me"}, "state": "CHANGES_REQUESTED",
+                     "submittedAt": "2026-06-06T10:00:00Z", "commit": null}
+                  ]}
+                }
+              ]
+            },
+            "completedPRs": {"nodes": []},
+            "viewer": {"login": "me"},
+            "rateLimit": {"remaining": 5000, "limit": 5000, "resetAt": "2026-06-08T17:00:00Z", "cost": 1}
+          }
+        }
+        """
+        let listing = try GitHubCodeBackend.parseMonitoredPRsResponse(json)
+        let row = try XCTUnwrap(listing.reviewedPRs.first)
+        XCTAssertNil(row.viewerLastReviewedHeadSha)
+        XCTAssertFalse(row.viewerReviewCoversCurrentHead)
+        // The rest of the record must survive a missing commit intact.
+        XCTAssertEqual(row.viewerLastReviewState, .changesRequested)
+    }
+
+    /// A later verdict's missing commit must *clear* the earlier round's SHA
+    /// rather than leave it standing — otherwise the board would compare today's
+    /// head against a review two rounds old and read a real push as "nothing new".
+    func testLaterVerdictWithoutACommitClearsTheEarlierHead() throws {
+        let json = """
+        {
+          "data": {
+            "viewerPRs": {"pullRequests": {"nodes": []}},
+            "reviewPRs": {"nodes": []},
+            "reviewedPRs": {
+              "nodes": [
+                {
+                  "number": 12, "title": "Two rounds", "url": "https://github.com/a/b/pull/12",
+                  "isDraft": false, "updatedAt": "2026-06-07T13:00:00Z",
+                  "headRefName": "f12", "headRefOid": "sha-new", "baseRefName": "main", "state": "OPEN",
+                  "author": {"login": "alice"}, "repository": {"nameWithOwner": "a/b"},
+                  "labels": {"nodes": []},
+                  "reviews": {"nodes": [
+                    {"author": {"login": "me"}, "state": "CHANGES_REQUESTED",
+                     "submittedAt": "2026-06-05T10:00:00Z", "commit": {"oid": "sha-old"}},
+                    {"author": {"login": "me"}, "state": "COMMENTED",
+                     "submittedAt": "2026-06-06T10:00:00Z"}
+                  ]}
+                }
+              ]
+            },
+            "completedPRs": {"nodes": []},
+            "viewer": {"login": "me"},
+            "rateLimit": {"remaining": 5000, "limit": 5000, "resetAt": "2026-06-08T17:00:00Z", "cost": 1}
+          }
+        }
+        """
+        let listing = try GitHubCodeBackend.parseMonitoredPRsResponse(json)
+        let row = try XCTUnwrap(listing.reviewedPRs.first)
+        XCTAssertEqual(row.viewerLastReviewState, .commented)
+        XCTAssertNil(row.viewerLastReviewedHeadSha)
+    }
+
+    /// The query has to actually select the field. All three searches share one
+    /// parser, so they share one selection — a copy that drifts would silently
+    /// blind the board for whichever group it feeds.
+    func testMonitoredPRsQueryAsksForEachReviewsCommit() {
+        let selections = GitHubCodeBackend.monitoredPRsQuery
+            .components(separatedBy: "reviews(last: 20)").count - 1
+        XCTAssertEqual(selections, 3, GitHubCodeBackend.monitoredPRsQuery)
+        let withCommit = GitHubCodeBackend.monitoredPRsQuery
+            .components(separatedBy: "reviews(last: 20) { nodes { author { login } submittedAt state commit { oid } } }")
+            .count - 1
+        XCTAssertEqual(withCommit, 3, GitHubCodeBackend.monitoredPRsQuery)
+    }
+
+    /// THE CROW-990 GAP 2 REGRESSION GUARD. Merged and closed PRs come from    /// their own search because the other two are `state:open` — with the
     /// auto-merge watcher on, an approved PR is gone from `state:open` within
     /// minutes, which is why the group meant to hold that history read zero.
     func testCompletedSearchCarriesMergeAndCloseTimestamps() throws {

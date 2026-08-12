@@ -432,6 +432,50 @@ check('a finished PR offers no Start Review button',
   ![...cardsUnder('Recently completed')[0].querySelectorAll('button')]
     .some((b) => /Review/.test(b.textContent)));
 
+// CROW-997. The heading means the ball is with the author, so there is nothing
+// new to look at until they push — but the row is *open*, so the server's
+// kickoff decision used to fall through to `create` and render Start Review as
+// the card's primary action. The board reads one field for both halves of that:
+// suppressing the button and suppressing the batch checkbox are the same
+// `skip`, not two rules that could drift apart.
+check('a waiting-on-author PR offers no Start Review button',
+  ![...cardsUnder('Waiting on author')[0].querySelectorAll('button')]
+    .some((b) => /Review/.test(b.textContent)));
+check('a waiting-on-author row is not batch-selectable', (() => {
+  T.reviewSelectionMode = true; T.renderBoard();
+  const card = cardsUnder('Waiting on author')[0];
+  const ok = !card.querySelector('.row-check') && /not-selectable/.test(card.className);
+  T.reviewSelectionMode = false; T.renderBoard();
+  return ok;
+})());
+
+// The case a blanket suppression would break: the author pushed *without*
+// re-requesting, so GitHub never put the PR back in the queue and it stays under
+// this heading — with something genuinely new in it. The server flips the action
+// to `create` on the head comparison, and the row must be reachable again.
+console.log('\nWaiting on author, but the author pushed (CROW-997):');
+T.boardData.reviews = {
+  unseen: 0,
+  group_order: ORDER,
+  group_counts: Object.assign({}, ZERO, { waiting_on_author: 1 }),
+  hidden_by_filters: 0,
+  reviews: [grouped('g6', 106, 'waiting_on_author', {
+    kickoff_action: 'create', state: 'OPEN',
+    head_ref_oid: 'sha-new', viewer_last_reviewed_head_sha: 'sha-old',
+    viewer_last_review_state: 'CHANGES_REQUESTED', viewer_last_reviewed_at: iso(30),
+  })],
+};
+T.renderBoard();
+check('a pushed-since-review PR is still reachable from the board',
+  [...cardsUnder('Waiting on author')[0].querySelectorAll('button')]
+    .some((b) => b.textContent === 'Start Review'));
+check('and it is batch-selectable again', (() => {
+  T.reviewSelectionMode = true; T.renderBoard();
+  const n = q('.row-check').length;
+  T.reviewSelectionMode = false; T.renderBoard();
+  return n === 1;
+})());
+
 console.log('\nAn approved-but-unmerged PR still reads as completed, dated by the approval:');
 T.boardData.reviews = {
   unseen: 0,

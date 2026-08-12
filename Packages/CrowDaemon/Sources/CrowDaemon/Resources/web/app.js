@@ -4948,6 +4948,11 @@ function reviewHaystack(r) {
 // question — which is what left a re-requested PR showing only "Go to Session"
 // pointing at a dead round.
 //
+// It also carries the server's group-level suppressions: a merged PR and a quiet
+// Waiting-on-author one both come back `skip` (CROW-997), so the button and the
+// batch checkbox disappear together off one field rather than off a second rule
+// here that could drift from the payload's grouping.
+//
 // The action is an estimate: it's computed from the board's head SHA, up to a
 // poll stale, while the server decides against a head it fetches itself. So it
 // picks the *label* and never suppresses the RPC — the server is the decider.
@@ -4982,9 +4987,10 @@ function reviewCardTime(r) {
 }
 
 function reviewCard(r) {
-  // A review the server would decline to act on can't be started again, so it
-  // isn't selectable — it renders dimmed and checkbox-less while selecting, as
-  // the retired ReviewBoardView did, but keeps its Go to Session button.
+  // A review the board doesn't offer a kickoff for isn't selectable either — it
+  // renders dimmed and checkbox-less while selecting, as the retired
+  // ReviewBoardView did, but keeps its Go to Session button. One field decides
+  // both, so a row can never be un-clickable yet batch-startable.
   const selectable = reviewIsActionable(r);
   const selecting = reviewSelectionMode && selectable;
   const isSel = selectedReviewURLs.has(r.url);

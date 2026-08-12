@@ -26,6 +26,7 @@ struct ReviewsPayloadTests {
         reviewSessionID: UUID? = nil,
         viewerLastReviewedAt: Date? = nil,
         viewerLastReviewState: ReviewVerdict? = nil,
+        viewerLastReviewedHeadSha: String? = nil,
         state: String? = nil,
         completedAt: Date? = nil
     ) -> ReviewRequest {
@@ -42,6 +43,7 @@ struct ReviewsPayloadTests {
             headRefOid: headRefOid,
             viewerLastReviewedAt: viewerLastReviewedAt,
             viewerLastReviewState: viewerLastReviewState,
+            viewerLastReviewedHeadSha: viewerLastReviewedHeadSha,
             state: state,
             completedAt: completedAt
         )
@@ -397,9 +399,114 @@ struct ReviewsPayloadTests {
         #expect(reviews(ReviewsPayload.build(appState: state)).isEmpty)
     }
 
-    // MARK: - CROW-990: Recently completed
+    // MARK: - CROW-997: Waiting on author is not a kickoff queue
 
-    /// THE CROW-990 GAP 2 SYMPTOM. With the auto-merge watcher on, an approved
+    /// THE CROW-997 SYMPTOM. The ball is with the author, so the card must not
+    /// lead with Start Review — and because `.skip` is also what the board reads
+    /// to decide selectability, the row drops out of batch "Start Review (N)" by
+    /// the same token. Before this, every such row fell through to `.create`:
+    /// the round auto-completed when the verdict landed, so there was no
+    /// `linkedSession` for `shaAdvanced` to compare against and nothing to stop
+    /// the create branch.
+    @Test
+    func waitingOnAuthorAtTheReviewedHeadSkips() throws {
+        let state = AppState()
+        state.reviewedPRs = [makeRequest(
+            url: "https://github.com/foo/bar/pull/2141",
+            headRefOid: "sha-a",
+            viewerLastReviewedAt: Date().addingTimeInterval(-3600),
+            viewerLastReviewState: .changesRequested,
+            viewerLastReviewedHeadSha: "sha-a",
+            state: "OPEN"
+        )]
+        let payload = ReviewsPayload.build(appState: state)
+        let review = try firstReview(payload)
+        #expect(group(review) == "waiting_on_author")
+        #expect(action(review) == "skip")
+    }
+
+    /// The case a blanket suppression would break, and the reason the rule is
+    /// conditional. The author pushed **without** re-requesting: GitHub never
+    /// puts the PR back in `review-requested:@me`, so it stays under this
+    /// heading — but there genuinely is something new to look at, and the board
+    /// is the only way to reach it for anyone running with CROW-921's
+    /// auto-re-request watcher off.
+    @Test
+    func waitingOnAuthorOffersCreateOnceTheHeadMoves() throws {
+        let state = AppState()
+        state.reviewedPRs = [makeRequest(
+            url: "https://github.com/foo/bar/pull/2141",
+            headRefOid: "sha-b",
+            viewerLastReviewedAt: Date().addingTimeInterval(-3600),
+            viewerLastReviewState: .changesRequested,
+            viewerLastReviewedHeadSha: "sha-a",
+            state: "OPEN"
+        )]
+        let review = try firstReview(ReviewsPayload.build(appState: state))
+        #expect(group(review) == "waiting_on_author")
+        // `.create`, not `.reReview`: the previous round was completed the moment
+        // the verdict landed, so there is no stale session to retire.
+        #expect(action(review) == "create")
+    }
+
+    /// An unfetched SHA on either side must keep the button. Suppressing claims
+    /// "there is nothing new here" and takes the row's only way forward off the
+    /// card, so a partial fetch must not be allowed to make that claim — the same
+    /// "absence is not evidence" rule the verdict and state fields follow.
+    @Test(arguments: [("sha-a", nil), (nil, "sha-a"), (nil, nil)] as [(String?, String?)])
+    func waitingOnAuthorWithAnUnknownHeadKeepsItsButton(head: String?, reviewed: String?) throws {
+        let state = AppState()
+        state.reviewedPRs = [makeRequest(
+            url: "https://github.com/foo/bar/pull/2141",
+            headRefOid: head,
+            viewerLastReviewedAt: Date().addingTimeInterval(-3600),
+            viewerLastReviewState: .changesRequested,
+            viewerLastReviewedHeadSha: reviewed,
+            state: "OPEN"
+        )]
+        let review = try firstReview(ReviewsPayload.build(appState: state))
+        #expect(group(review) == "waiting_on_author")
+        #expect(action(review) == "create")
+    }
+
+    /// The suppression is scoped to the one group that means it. A PR still in
+    /// the requested queue is asking you for something no matter what you said
+    /// last round, so matching heads must not silence it — that would hide
+    /// exactly the row GitHub is chasing you about.
+    @Test
+    func matchingHeadsDoNotSuppressAQueuedReview() throws {
+        let request = makeRequest(
+            url: "https://github.com/foo/bar/pull/9",
+            headRefOid: "sha-a",
+            viewerLastReviewedAt: Date().addingTimeInterval(-3600),
+            viewerLastReviewState: .changesRequested,
+            viewerLastReviewedHeadSha: "sha-a"
+        )
+        let review = try firstReview(ReviewsPayload.build(appState: makeState(request: request)))
+        #expect(group(review) == "not_approved_yet")
+        #expect(action(review) == "create")
+    }
+
+    /// The head the verdict was submitted against rides the payload beside the
+    /// PR's current head, so `crow list-reviews` shows the comparison the
+    /// suppression turns on rather than an unexplained `skip`.
+    @Test
+    func reviewedHeadIsSerialized() throws {
+        let state = AppState()
+        state.reviewedPRs = [makeRequest(
+            url: "https://github.com/foo/bar/pull/2141",
+            headRefOid: "sha-b",
+            viewerLastReviewedAt: Date().addingTimeInterval(-3600),
+            viewerLastReviewState: .changesRequested,
+            viewerLastReviewedHeadSha: "sha-a",
+            state: "OPEN"
+        )]
+        let review = try firstReview(ReviewsPayload.build(appState: state))
+        #expect(review["viewer_last_reviewed_head_sha"] == .string("sha-a"))
+        #expect(review["head_ref_oid"] == .string("sha-b"))
+    }
+
+    // MARK: - CROW-990: Recently completed    /// THE CROW-990 GAP 2 SYMPTOM. With the auto-merge watcher on, an approved
     /// PR merges within minutes — and a merged PR is not `state:open`, so the
     /// group built to answer "did I already do that one?" read zero while 22
     /// PRs reviewed that day had merged.
