@@ -45,7 +45,7 @@ public enum ReviewsPayload {
         }
 
         var counts: [ReviewGroup: Int] = [:]
-        func serialize(_ r: ReviewRequest) -> JSONValue {
+        func serialize(_ r: ReviewRequest, isRequestedOfViewer: Bool) -> JSONValue {
             let existing = appState.existingReviewSession(forPRURL: r.url)
             let linked = r.reviewSessionID.flatMap { id in
                 appState.sessions.first(where: { $0.id == id })
@@ -67,6 +67,7 @@ public enum ReviewsPayload {
                 viewerLastReviewState: r.viewerLastReviewState,
                 viewerLastReviewedAt: r.viewerLastReviewedAt,
                 hasActiveReviewSession: hasActiveSession,
+                isRequestedOfViewer: isRequestedOfViewer,
                 now: now
             )
             counts[group, default: 0] += 1
@@ -94,10 +95,16 @@ public enum ReviewsPayload {
             ])
         }
 
-        // The approved tail is classified with `hasActiveReviewSession` still
-        // honored, so precedence holds: a PR you approved a minute ago but that
-        // has a live session stays under In review.
-        let reviews: [JSONValue] = requested.map { serialize($0) } + approvedTail.map { serialize($0) }
+        // Which list a review came from is itself a signal, so it is passed to
+        // `classify` rather than re-derived: `requested` is exactly the set
+        // GitHub is still asking the viewer about. A PR that appears in both
+        // searches (approved, then re-requested) is deduped into `requested` by
+        // `IssueTracker`, so it is classified as the queue member it is.
+        //
+        // Precedence still holds within each list: a PR you approved a minute
+        // ago that has a live session stays under In review.
+        let reviews: [JSONValue] = requested.map { serialize($0, isRequestedOfViewer: true) }
+            + approvedTail.map { serialize($0, isRequestedOfViewer: false) }
 
         // Emitted for every group, including empty ones — the board renders a
         // zero count rather than dropping the section, so an empty board still

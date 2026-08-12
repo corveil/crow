@@ -340,6 +340,55 @@ struct ReviewsPayloadTests {
         #expect(stamp.hasPrefix("2026-06-06T10:00:00"))
     }
 
+    /// THE PR #984 REVIEW FINDING. Approving doesn't end the story: the author
+    /// can push and re-request, and GitHub returns the PR to
+    /// `review-requested:@me` with the viewer's verdict still reading APPROVED.
+    /// Classifying on the verdict alone filed that under "Approved recently" —
+    /// work waiting on you, hidden under the heading that means done.
+    @Test
+    func reRequestedAfterApprovalIsNotApprovedYet() throws {
+        let request = makeRequest(
+            url: "https://github.com/foo/bar/pull/9",
+            headRefOid: "sha-b",
+            viewerLastReviewedAt: Date().addingTimeInterval(-3600),
+            viewerLastReviewState: .approved
+        )
+        let payload = ReviewsPayload.build(appState: makeState(request: request))
+        #expect(group(try firstReview(payload)) == "not_approved_yet")
+        #expect(groupCount(payload, "approved_recently") == 0)
+    }
+
+    /// …and the same PR must not change groups purely because the clock moved
+    /// past 24 h. Before the fix it read `approved_recently` at hour 1 and
+    /// `not_approved_yet` at hour 25 — one PR, two groups, same facts.
+    @Test
+    func reRequestedAfterApprovalIsStableAcrossTheWindowBoundary() throws {
+        let approvedAt = Date(timeIntervalSince1970: 1_780_000_000)
+        let request = makeRequest(
+            url: "https://github.com/foo/bar/pull/9",
+            viewerLastReviewedAt: approvedAt,
+            viewerLastReviewState: .approved
+        )
+        let state = makeState(request: request)
+        let inside = ReviewsPayload.build(appState: state, now: approvedAt.addingTimeInterval(3600))
+        let outside = ReviewsPayload.build(appState: state, now: approvedAt.addingTimeInterval(25 * 3600))
+        #expect(group(try firstReview(inside)) == "not_approved_yet")
+        #expect(group(try firstReview(outside)) == "not_approved_yet")
+    }
+
+    /// The approved tail keeps its group — the fix must gate on queue
+    /// membership, not simply stop honoring approvals.
+    @Test
+    func approvedTailStillGroupsAsApprovedRecently() throws {
+        let state = AppState()
+        state.recentlyApprovedReviews = [makeRequest(
+            url: "https://github.com/foo/bar/pull/9",
+            viewerLastReviewedAt: Date().addingTimeInterval(-3600),
+            viewerLastReviewState: .approved
+        )]
+        #expect(group(try firstReview(ReviewsPayload.build(appState: state))) == "approved_recently")
+    }
+
     /// #953 direction C: filters that hide live requests must say so, or an
     /// empty board reads as "GitHub is asking nothing of me".
     @Test

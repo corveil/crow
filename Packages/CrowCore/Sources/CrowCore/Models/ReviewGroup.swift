@@ -14,11 +14,13 @@ import Foundation
 /// | Group | Rule |
 /// |---|---|
 /// | `inReview` | an active review session covers the PR |
-/// | `approvedRecently` | viewer's last verdict is `.approved`, within 24 h |
-/// | `notApprovedYet` | anything else still requested of the viewer |
+/// | `notApprovedYet` | still in `review-requested:@me` — GitHub is asking you for something |
+/// | `approvedRecently` | left the queue on your approval, within 24 h |
 ///
 /// Precedence runs top to bottom, so a PR you approved a minute ago but which
-/// has a live review session stays under **In review**.
+/// has a live review session stays under **In review** — and one the author
+/// re-requested after your approval reads as **Not approved yet**, because the
+/// queue, not the last verdict, says whether the ball is in your court.
 public enum ReviewGroup: String, Codable, Sendable, CaseIterable {
     case inReview = "in_review"
     case approvedRecently = "approved_recently"
@@ -56,23 +58,35 @@ extension ReviewGroup {
     /// evaluated on each render rather than frozen at poll time — otherwise an
     /// approval could linger up to a poll past its window.
     ///
-    /// Note the fallback: anything still in the requested queue that qualifies
-    /// for neither of the first two groups lands in `notApprovedYet`. That
-    /// includes the odd case of an approval older than 24 h whose author then
-    /// re-requested you — the ball is genuinely back in your court, and the one
-    /// thing this board must never do again is let a requested PR vanish.
+    /// `isRequestedOfViewer` — whether the PR is still in `review-requested:@me`
+    /// — is what keeps actionable work out of the approved tail. Approving does
+    /// not end the story: the author can push and re-request you, and GitHub
+    /// puts the PR *back* in the queue with your verdict still reading
+    /// `.approved`. Classifying on the verdict alone filed that under "Approved
+    /// recently" for 24 h — work waiting on you, hidden under the heading that
+    /// means "done" — and then flipped it to "Not approved yet" at hour 25,
+    /// which is the same PR in two different groups depending only on the
+    /// clock. Membership in the queue is the real signal, so it is checked
+    /// first: anything GitHub is still asking you for is Not approved yet,
+    /// whatever you decided last round.
     public static func classify(
         viewerLastReviewState: ReviewVerdict?,
         viewerLastReviewedAt: Date?,
         hasActiveReviewSession: Bool,
+        isRequestedOfViewer: Bool,
         now: Date = Date()
     ) -> ReviewGroup {
         if hasActiveReviewSession { return .inReview }
+        if isRequestedOfViewer { return .notApprovedYet }
         if viewerLastReviewState == .approved,
            let at = viewerLastReviewedAt,
            now.timeIntervalSince(at) < recentApprovalWindow {
             return .approvedRecently
         }
+        // Unreachable from `ReviewsPayload` — the approved tail is pre-filtered
+        // by `isRecentApproval`, so a non-requested PR reaching here is already
+        // inside the window. Kept as the fallback anyway because it errs toward
+        // *showing* the PR, and a review this board drops is the whole bug.
         return .notApprovedYet
     }
 
