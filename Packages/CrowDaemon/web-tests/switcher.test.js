@@ -8,6 +8,11 @@ const epilogue = `
   switcherMruOrdered(list, include){ return switcherMruOrdered(list, include); },
   switcherSidebarOrdered(list, include){ return switcherSidebarOrdered(list, include); },
   eventMatchesSwitcherBinding(e, binding){ return eventMatchesSwitcherBinding(e, binding); },
+  switcherBindingOpens(e, binding){ return switcherBindingOpens(e, binding); },
+  onSwitcherKeyDown(e){ return onSwitcherKeyDown(e); },
+  switcherPrefixArmed(){ return switcherPrefixArmed(); },
+  disarmSwitcherPrefix(){ return disarmSwitcherPrefix(); },
+  switcherCommitHint(){ return switcherCommitHint(); },
   parseSwitcherBinding(binding){ return parseSwitcherBinding(binding); },
   captureSwitcherModifiers(e){
     captureSwitcherModifiers(e);
@@ -29,6 +34,14 @@ const epilogue = `
   setIndex(i){ switcherState.index = i; },
   setHighlightedId(id){ switcherState.highlightedId = id; },
   getIndex(){ return switcherState.index; },
+  setSessions(v){ sessions = v; },
+  // Commit calls selectSession(), which drags in routing, the WebSocket and the
+  // DOM. Swap it for a recorder so these tests stay about the key handling.
+  stubSelectSession(){
+    globalThis.__selected = [];
+    selectSession = async (id) => { globalThis.__selected.push(id); };
+  },
+  getSelected(){ return globalThis.__selected || []; },
   set uiConfig(v){ Object.assign(uiConfig, v); },
 };
 `;
@@ -91,8 +104,96 @@ console.log('CROW-976 session switcher helpers:');
 
 {
   const e = { key: 'Tab', shiftKey: true, ctrlKey: false, altKey: false, metaKey: false };
-  check('default binding matches Shift+Tab', T.eventMatchesSwitcherBinding(e, 'shift+tab'));
+  check('shift+tab binding matches Shift+Tab', T.eventMatchesSwitcherBinding(e, 'shift+tab'));
   check('binding is case-insensitive', T.eventMatchesSwitcherBinding(e, 'Shift+Tab'));
+}
+
+// CROW-980: the default is a *sequence*, not a chord — Esc is a prefix key, so
+// it can't be read off the Tab event the way Shift can.
+console.log('\nCROW-980 esc+tab prefix binding:');
+const keyEvent = (key) => ({
+  key, type: 'keydown', shiftKey: false, ctrlKey: false, altKey: false, metaKey: false,
+  prevented: 0, preventDefault(){ this.prevented++; }, stopPropagation(){},
+});
+{
+  const b = T.parseSwitcherBinding('esc+tab');
+  check('esc+tab parses esc as a prefix', b.prefix === 'Escape');
+  check('esc+tab carries no modifiers', !T.switcherBindingHasModifiers(b));
+  check('esc+tab still keys on Tab', b.keys.includes('Tab'));
+  check('escape+tab is the same binding', T.parseSwitcherBinding('escape+tab').prefix === 'Escape');
+  check('a modifier chord has no prefix', T.parseSwitcherBinding('shift+tab').prefix === null);
+}
+
+{
+  T.uiConfig = { switcherEnabled: true, switcherBinding: 'esc+tab', switcherCaptureInTerminal: true };
+  T.setSwitcherOpen(false);
+  T.setSessions([
+    { id: 'a', kind: 'work', status: 'active' },
+    { id: 'b', kind: 'work', status: 'active' },
+  ]);
+  T.stubSelectSession();
+  T.disarmSwitcherPrefix();
+
+  const bareTab = keyEvent('Tab');
+  check('bare Tab does not open the switcher', !T.switcherBindingOpens(bareTab, 'esc+tab'));
+  T.onSwitcherKeyDown(bareTab);
+  check('bare Tab is left alone for the page', !T.getSwitcherOpen() && bareTab.prevented === 0);
+
+  const esc = keyEvent('Escape');
+  T.onSwitcherKeyDown(esc);
+  check('Esc arms the prefix', T.switcherPrefixArmed());
+  check('Esc is never swallowed', esc.prevented === 0 && !T.getSwitcherOpen());
+
+  check('Tab opens once the prefix is armed', T.switcherBindingOpens(keyEvent('Tab'), 'esc+tab'));
+  T.onSwitcherKeyDown(keyEvent('Tab'));
+  check('Esc then Tab opens the switcher', T.getSwitcherOpen());
+  check('opening consumes the prefix', !T.switcherPrefixArmed());
+
+  // Esc cancels while open (the ticket's reason for picking this chord), and
+  // the release of Tab must NOT commit — nothing is being held down.
+  T.onSwitcherKeyUp({
+    key: 'Tab', shiftKey: false, ctrlKey: false, altKey: false, metaKey: false,
+    preventDefault(){}, stopPropagation(){},
+  });
+  check('prefix binding stays open when Tab is released', T.getSwitcherOpen());
+  T.onSwitcherKeyDown(keyEvent('Escape'));
+  check('Esc cancels the open overlay', !T.getSwitcherOpen());
+}
+
+{
+  T.uiConfig = { switcherEnabled: true, switcherBinding: 'esc+tab' };
+  T.setSwitcherOpen(false);
+  T.onSwitcherKeyDown(keyEvent('Escape'));
+  T.onSwitcherKeyDown(keyEvent('l'));
+  check('an intervening keystroke disarms the prefix', !T.switcherPrefixArmed());
+  T.onSwitcherKeyDown(keyEvent('Escape'));
+  T.onSwitcherKeyDown(keyEvent('Shift'));
+  check('a bare modifier keeps the prefix armed', T.switcherPrefixArmed());
+  T.disarmSwitcherPrefix();
+}
+
+{
+  T.uiConfig = { switcherEnabled: true, switcherBinding: 'esc+tab', switcherCaptureInTerminal: true };
+  T.setSwitcherOpen(false);
+  T.setSessions([
+    { id: 'a', kind: 'work', status: 'active' },
+    { id: 'b', kind: 'work', status: 'active' },
+  ]);
+  T.stubSelectSession();
+  T.onSwitcherKeyDown(keyEvent('Escape'));
+  T.onSwitcherKeyDown(keyEvent('Tab'));
+  check('overlay is open before the commit', T.getSwitcherOpen());
+  T.onSwitcherKeyDown(keyEvent('Enter'));
+  check('Enter commits a prefix binding', !T.getSwitcherOpen());
+  check('Enter selects the highlighted session', T.getSelected().length === 1);
+  T.disarmSwitcherPrefix();
+}
+
+{
+  T.uiConfig = { switcherBinding: 'esc+tab' };
+  check('prefix hint asks for Enter', T.switcherCommitHint().includes('Enter to switch'));
+  T.uiConfig = { switcherBinding: 'shift+tab' };
+  check('modifier hint still asks for a release', T.switcherCommitHint().includes('release Shift'));
 }
 
 {

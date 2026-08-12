@@ -10,7 +10,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
     public var defaults: ConfigDefaults
     public var notifications: NotificationSettings
     public var sidebar: SidebarSettings
-    /// Shift+Tab (or configured binding) session switcher overlay (CROW-976).
+    /// Esc+Tab (or configured binding) session switcher overlay (CROW-976).
     public var switcher: SwitcherSettings
     public var remoteControlEnabled: Bool
     public var managerAutoPermissionMode: Bool
@@ -978,7 +978,14 @@ public struct SwitcherIncludeSettings: Codable, Sendable, Equatable {
 /// Session switcher overlay preferences (CROW-976).
 public struct SwitcherSettings: Codable, Sendable, Equatable {
     public var enabled: Bool
-    /// Chord string, e.g. `shift+tab`. Parsed client-side.
+    /// Chord string, e.g. `esc+tab` or `ctrl+\``. Parsed client-side.
+    ///
+    /// The default leads with `esc` because Shift+Tab is already spoken for —
+    /// Claude Code cycles permission modes with it, and `captureInTerminal`
+    /// defaults to true, so the switcher would eat that keystroke (CROW-980).
+    /// `esc` is a *prefix*, not a modifier: tap Esc, then Tab. Esc is never
+    /// swallowed (it must stay instant for interrupting an agent), so it still
+    /// reaches the terminal on its way through.
     public var binding: String
     /// When true, the binding is captured even inside a focused terminal.
     public var captureInTerminal: Bool
@@ -989,7 +996,7 @@ public struct SwitcherSettings: Codable, Sendable, Equatable {
 
     public init(
         enabled: Bool = true,
-        binding: String = "shift+tab",
+        binding: String = "esc+tab",
         captureInTerminal: Bool = true,
         order: SwitcherOrder = .mru,
         preview: Bool = true,
@@ -1006,7 +1013,7 @@ public struct SwitcherSettings: Codable, Sendable, Equatable {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
-        binding = try c.decodeIfPresent(String.self, forKey: .binding) ?? "shift+tab"
+        binding = try c.decodeIfPresent(String.self, forKey: .binding) ?? "esc+tab"
         captureInTerminal = try c.decodeIfPresent(Bool.self, forKey: .captureInTerminal) ?? true
         order = try c.decodeIfPresent(SwitcherOrder.self, forKey: .order) ?? .mru
         preview = try c.decodeIfPresent(Bool.self, forKey: .preview) ?? true

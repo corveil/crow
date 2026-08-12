@@ -359,7 +359,7 @@ import Testing
     let config = try JSONDecoder().decode(AppConfig.self, from: json)
 
     #expect(config.switcher.enabled == true)
-    #expect(config.switcher.binding == "shift+tab")
+    #expect(config.switcher.binding == "esc+tab")
     #expect(config.switcher.captureInTerminal == true)
     #expect(config.switcher.order == .mru)
     #expect(config.switcher.preview == true)
@@ -373,8 +373,17 @@ import Testing
     let config = try JSONDecoder().decode(AppConfig.self, from: json)
 
     #expect(config.switcher.enabled == true)
-    #expect(config.switcher.binding == "shift+tab")
+    #expect(config.switcher.binding == "esc+tab")
     #expect(config.switcher.include.archived == false)
+}
+
+/// The CROW-980 default only reaches installs that never picked a binding —
+/// a stored one is theirs and survives the change.
+@Test func switcherSettingsKeepsStoredBindingOverDefault() throws {
+    let json = #"{"switcher": {"binding": "shift+tab"}}"#.data(using: .utf8)!
+    let config = try JSONDecoder().decode(AppConfig.self, from: json)
+
+    #expect(config.switcher.binding == "shift+tab")
 }
 
 @Test func telemetryCleanupSidebarSurviveFullRoundTrip() throws {
