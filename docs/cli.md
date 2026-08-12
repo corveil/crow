@@ -1615,13 +1615,15 @@ crow ui set [--hide-session-details <hide-session-details>] [--switcher-enabled 
 
 Only the flags you pass change; at least one is required. Connected browsers pick the change up within a couple of seconds — no reload.
 
---switcher-binding takes a modifier chord like `shift+tab` or `ctrl+space`, plus one sequence form: a leading `esc` is a prefix, not a modifier, so the default `esc+tab` means tap Esc, then Tab. A prefix chord keeps the overlay open (nothing is being held down) — Tab or ←→ cycle, Enter switches, Esc cancels. Esc itself is never swallowed and still reaches the terminal.
+--switcher-binding takes a modifier chord like `cmd+/` (the default) or `ctrl+space`, plus one sequence form: a leading `esc` is a prefix, not a modifier, so `esc+tab` means tap Esc, then Tab. A modifier chord commits on release of the modifier; a prefix chord holds nothing down, so the overlay stays open — the key or ←→ cycle, Enter switches, Esc cancels. Esc itself is never swallowed and still reaches the terminal.
+
+`shift+tab` is rejected: coding agents cycle permission modes with it, and the switcher would swallow that keystroke in every focused terminal. A config still carrying it from an older Crow is migrated to the default on load. On a keyboard with no Cmd, use `ctrl+/`.
 
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |
 | `--hide-session-details` | `<hide-session-details>` | no | Hide ticket title and repo/branch lines in sidebar rows (true or false) |
 | `--switcher-enabled` | `<switcher-enabled>` | no | Enable the session switcher overlay (true or false) |
-| `--switcher-binding` | `<switcher-binding>` | no | Session switcher key chord (default: esc+tab — tap Esc, then Tab) |
+| `--switcher-binding` | `<switcher-binding>` | no | Session switcher key chord (default: cmd+/; shift+tab is reserved by agents) |
 | `--switcher-capture-in-terminal` | `<switcher-capture-in-terminal>` | no | Capture the switcher binding inside focused terminals (true or false) |
 | `--switcher-order` | `<switcher-order>` | no | Session switcher ordering: mru or sidebar |
 | `--switcher-preview` | `<switcher-preview>` | no | Fetch a tmux pane preview for the highlighted switcher card (true or false) |
