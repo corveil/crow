@@ -2,7 +2,12 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <!-- CROW-988: `interactive-widget=resizes-content` makes Chrome/Android shrink
+       the LAYOUT viewport for the software keyboard, so `100dvh` below and the
+       existing window-`resize` fit path self-correct there. iOS ignores it and
+       only shrinks the visual viewport, which is what xterm-addon-crow-viewport
+       handles. -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
   <title>Crow</title>
   <link rel="icon" type="image/svg+xml" href="/brand.svg">
   <link rel="stylesheet" href="/xterm/xterm.css">
@@ -76,6 +81,7 @@
   <script src="/xterm/xterm-addon-web-links.js"></script>
   <script src="/xterm/xterm-addon-webgl.js"></script>
   <script src="/xterm/xterm-addon-crow-jumpbottom.js"></script>
+  <script src="/xterm/xterm-addon-crow-viewport.js"></script>
   <script src="/app.js"></script>
   <script src="/settings.js"></script>
 </body>

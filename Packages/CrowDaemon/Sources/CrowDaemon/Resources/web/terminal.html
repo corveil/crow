@@ -2,7 +2,12 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- CROW-988: parity with index.html. `viewport-fit=cover` lets the #1e1e1e
+       background go full-bleed (the safe-area inset on body below keeps the last
+       row off the home indicator), and `interactive-widget=resizes-content`
+       makes Chrome/Android shrink the layout viewport for the software keyboard
+       so the plain `resize` fit below self-corrects there. -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
   <title>Crow Terminal</title>
   <link rel="stylesheet" href="/xterm/xterm.css">
   <style>
@@ -13,6 +18,13 @@
       height: 100%;
       overflow: hidden;
       background: #1e1e1e;
+    }
+    /* Under viewport-fit=cover the page runs under the home indicator, so inset
+       the grid — otherwise the prompt line sits behind it once the keyboard
+       closes (CROW-988). border-box keeps the page exactly one viewport tall. */
+    body {
+      box-sizing: border-box;
+      padding-bottom: env(safe-area-inset-bottom);
     }
     #terminal {
       width: 100%;
@@ -40,6 +52,7 @@
   <script src="/xterm/xterm-addon-fit.js"></script>
   <script src="/xterm/xterm-addon-image.js"></script>
   <script src="/xterm/xterm-addon-crow-jumpbottom.js"></script>
+  <script src="/xterm/xterm-addon-crow-viewport.js"></script>
   <script>
     // WebSocket transport variant of CrowTerminal's terminal.html. The xterm.js
     // config block is copied verbatim so font/scrollback/inline-image behavior
@@ -103,6 +116,15 @@
       // Jump-to-bottom pill (#668) — load after open() so it can anchor its
       // button to the terminal container.
       term.loadAddon(new CrowJumpBottomAddon.CrowJumpBottomAddon());
+      // CROW-988: keep the grid inside the visual viewport so a phone's software
+      // keyboard can't cover the prompt line. Inert without visualViewport and
+      // until something keyboard-sized occludes the page. `sendResize` is a
+      // hoisted function declaration, so passing it before its definition below
+      // is fine.
+      if (typeof CrowViewportAddon === 'object' && CrowViewportAddon
+          && typeof CrowViewportAddon.CrowViewportAddon === 'function') {
+        term.loadAddon(new CrowViewportAddon.CrowViewportAddon({ onResize: sendResize }));
+      }
 
       const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
       const ws = new WebSocket(proto + '://' + window.location.host + '/terminal');

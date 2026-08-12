@@ -5416,6 +5416,16 @@ function ensureTerminal() {
   // Jump-to-bottom pill (#668), shared with the desktop surface. Must load after
   // open() so the addon can anchor its button to the terminal's container.
   term.loadAddon(new CrowJumpBottomAddon.CrowJumpBottomAddon());
+  // CROW-988: keep the grid inside the *visual* viewport so a phone's software
+  // keyboard can't sit on top of the prompt line. Inert without
+  // window.visualViewport and while nothing keyboard-sized occludes the page, so
+  // desktop is untouched. Feeds the same coalesced fitTerminal every other
+  // resize route uses. Guarded like the WebGL load below — a failed asset fetch
+  // must not take ensureTerminal (and with it the whole terminal) down.
+  if (typeof CrowViewportAddon === 'object' && CrowViewportAddon
+      && typeof CrowViewportAddon.CrowViewportAddon === 'function') {
+    term.loadAddon(new CrowViewportAddon.CrowViewportAddon({ onResize: fitTerminal }));
+  }
   // WebGL renderer for throughput; must load after open(). Falls back to the
   // default renderer if the GL context is unavailable or gets lost.
   try {
