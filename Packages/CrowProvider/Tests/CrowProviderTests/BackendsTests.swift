@@ -1898,13 +1898,15 @@ final class BackendsTests: XCTestCase {
         XCTAssertFalse(GitHubCodeBackend.isMergeCommitMessage("Fix authentication bug"))
     }
 
-    // MARK: - Approved tail + viewer verdict (CROW-982)
+    // MARK: - Reviewed-by tail + viewer verdict (CROW-982, CROW-990)
 
-    /// Two searches in one document. The approved tail comes from `approvedPRs`
-    /// (`reviewed-by:@me`) and is **narrowed to approvals**: `reviewed-by:`
-    /// matches any submitted review, so a PR the viewer requested changes on
-    /// would otherwise be duplicated into the approved group.
-    func testParseMonitoredPRsSplitsApprovedTailFromRequestedQueue() throws {
+    /// Three searches in one document. The post-request half comes from
+    /// `reviewedPRs` + `completedPRs` (`reviewed-by:@me`) and is **not**
+    /// narrowed to approvals: CROW-982 filtered it that way on the reasoning
+    /// that a changes-requested PR would still be in the requested queue, but
+    /// GitHub clears the pending request on submit — so the filter didn't dedupe
+    /// those rows, it deleted them.
+    func testParseMonitoredPRsSplitsReviewedTailFromRequestedQueue() throws {
         let json = """
         {
           "data": {
@@ -1920,7 +1922,7 @@ final class BackendsTests: XCTestCase {
                 }
               ]
             },
-            "approvedPRs": {
+            "reviewedPRs": {
               "nodes": [
                 {
                   "number": 2, "title": "I approved this", "url": "https://github.com/a/b/pull/2",
@@ -1944,6 +1946,7 @@ final class BackendsTests: XCTestCase {
                 }
               ]
             },
+            "completedPRs": {"nodes": []},
             "viewer": {"login": "me"},
             "rateLimit": {"remaining": 5000, "limit": 5000, "resetAt": "2026-06-08T17:00:00Z", "cost": 1}
           }
@@ -1951,12 +1954,190 @@ final class BackendsTests: XCTestCase {
         """
         let listing = try GitHubCodeBackend.parseMonitoredPRsResponse(json)
         XCTAssertEqual(listing.reviewRequests.map(\.prNumber), [1])
-        XCTAssertEqual(listing.recentlyApprovedPRs.map(\.prNumber), [2])
-        XCTAssertEqual(listing.recentlyApprovedPRs.first?.viewerLastReviewState, .approved)
+        // THE CROW-990 GAP 1 REGRESSION GUARD: #3 used to be dropped here.
+        XCTAssertEqual(listing.reviewedPRs.map(\.prNumber).sorted(), [2, 3])
+        let approved = listing.reviewedPRs.first { $0.prNumber == 2 }
+        XCTAssertEqual(approved?.viewerLastReviewState, .approved)
         // 2026-06-07T11:00:00Z. Built from epoch, not from the parser's own
         // formatter, so a nil-returning formatter can't co-fail both sides.
-        XCTAssertEqual(listing.recentlyApprovedPRs.first?.viewerLastReviewedAt,
-                       Date(timeIntervalSince1970: 1780830000))
+        XCTAssertEqual(approved?.viewerLastReviewedAt, Date(timeIntervalSince1970: 1780830000))
+        let blocked = listing.reviewedPRs.first { $0.prNumber == 3 }
+        XCTAssertEqual(blocked?.viewerLastReviewState, .changesRequested)
+        XCTAssertFalse(blocked?.isCompleted ?? true)
+    }
+
+    /// A `--comment` review is the viewer's last word for **board** purposes
+    /// (three of the eight PRs CROW-990 found lost were exactly this), while
+    /// still not closing a review round on the requested-queue path — the two
+    /// accepted-state sets are deliberately different.
+    func testCommentedCountsOnTheReviewedTailButNotTheRequestedQueue() throws {
+        let commentNode = """
+        {
+          "number": 6, "title": "Left notes", "url": "https://github.com/a/b/pull/6",
+          "isDraft": false, "updatedAt": "2026-06-07T10:00:00Z",
+          "headRefName": "f6", "headRefOid": "sha6", "baseRefName": "main", "state": "OPEN",
+          "author": {"login": "alice"}, "repository": {"nameWithOwner": "a/b"},
+          "labels": {"nodes": []},
+          "reviews": {"nodes": [
+            {"author": {"login": "me"}, "state": "COMMENTED", "submittedAt": "2026-06-07T10:00:00Z"}
+          ]}
+        }
+        """
+        let json = """
+        {
+          "data": {
+            "viewerPRs": {"pullRequests": {"nodes": []}},
+            "reviewPRs": {"nodes": [\(commentNode)]},
+            "reviewedPRs": {"nodes": [\(commentNode)]},
+            "completedPRs": {"nodes": []},
+            "viewer": {"login": "me"},
+            "rateLimit": {"remaining": 5000, "limit": 5000, "resetAt": "2026-06-08T17:00:00Z", "cost": 1}
+          }
+        }
+        """
+        let listing = try GitHubCodeBackend.parseMonitoredPRsResponse(json)
+        XCTAssertEqual(listing.reviewedPRs.first?.viewerLastReviewState, .commented)
+        // The requested-queue verdict feeds `decideReviewCompletions`, and
+        // CROW-945 forbids a comment auto-completing a live review session.
+        XCTAssertNil(listing.reviewRequests.first?.viewerLastReviewState)
+        XCTAssertNil(listing.reviewRequests.first?.viewerLastReviewedAt)
+    }
+
+    /// THE CROW-990 GAP 2 REGRESSION GUARD. Merged and closed PRs come from
+    /// their own search because the other two are `state:open` — with the
+    /// auto-merge watcher on, an approved PR is gone from `state:open` within
+    /// minutes, which is why the group meant to hold that history read zero.
+    func testCompletedSearchCarriesMergeAndCloseTimestamps() throws {
+        let json = """
+        {
+          "data": {
+            "viewerPRs": {"pullRequests": {"nodes": []}},
+            "reviewPRs": {"nodes": []},
+            "reviewedPRs": {"nodes": []},
+            "completedPRs": {
+              "nodes": [
+                {
+                  "number": 7, "title": "Shipped", "url": "https://github.com/a/b/pull/7",
+                  "isDraft": false, "updatedAt": "2026-06-07T13:00:00Z",
+                  "headRefName": "f7", "headRefOid": "sha7", "baseRefName": "main", "state": "MERGED",
+                  "mergedAt": "2026-06-07T11:00:00Z", "closedAt": "2026-06-07T11:00:00Z",
+                  "author": {"login": "alice"}, "repository": {"nameWithOwner": "a/b"},
+                  "labels": {"nodes": []},
+                  "reviews": {"nodes": [
+                    {"author": {"login": "me"}, "state": "CHANGES_REQUESTED", "submittedAt": "2026-06-06T10:00:00Z"}
+                  ]}
+                },
+                {
+                  "number": 8, "title": "Abandoned", "url": "https://github.com/a/b/pull/8",
+                  "isDraft": false, "updatedAt": "2026-06-07T14:00:00Z",
+                  "headRefName": "f8", "headRefOid": "sha8", "baseRefName": "main", "state": "CLOSED",
+                  "mergedAt": null, "closedAt": "2026-06-07T11:00:00Z",
+                  "author": {"login": "alice"}, "repository": {"nameWithOwner": "a/b"},
+                  "labels": {"nodes": []},
+                  "reviews": {"nodes": [
+                    {"author": {"login": "me"}, "state": "APPROVED", "submittedAt": "2026-06-06T10:00:00Z"}
+                  ]}
+                }
+              ]
+            },
+            "viewer": {"login": "me"},
+            "rateLimit": {"remaining": 5000, "limit": 5000, "resetAt": "2026-06-08T17:00:00Z", "cost": 1}
+          }
+        }
+        """
+        let listing = try GitHubCodeBackend.parseMonitoredPRsResponse(json)
+        XCTAssertEqual(listing.reviewedPRs.map(\.prNumber).sorted(), [7, 8])
+        let merged = listing.reviewedPRs.first { $0.prNumber == 7 }
+        XCTAssertEqual(merged?.state, "MERGED")
+        XCTAssertTrue(merged?.isCompleted ?? false)
+        // 2026-06-07T11:00:00Z — the merge, not the later `updatedAt` bump.
+        XCTAssertEqual(merged?.completedAt, Date(timeIntervalSince1970: 1780830000))
+        let closed = listing.reviewedPRs.first { $0.prNumber == 8 }
+        XCTAssertTrue(closed?.isCompleted ?? false)
+        XCTAssertEqual(closed?.completedAt, Date(timeIntervalSince1970: 1780830000))
+    }
+
+    /// An open PR carries no lifecycle timestamps, and `isCompleted` must read
+    /// that as open — treating an unknown PR as merged would file live work
+    /// under a heading that means done.
+    func testOpenPRHasNoCompletionTimestamp() throws {
+        let json = """
+        {
+          "data": {
+            "viewerPRs": {"pullRequests": {"nodes": []}},
+            "reviewPRs": {"nodes": []},
+            "reviewedPRs": {
+              "nodes": [
+                {
+                  "number": 9, "title": "Still open", "url": "https://github.com/a/b/pull/9",
+                  "isDraft": false, "updatedAt": "2026-06-07T10:00:00Z",
+                  "headRefName": "f9", "headRefOid": "sha9", "baseRefName": "main", "state": "OPEN",
+                  "mergedAt": null, "closedAt": null,
+                  "author": {"login": "alice"}, "repository": {"nameWithOwner": "a/b"},
+                  "labels": {"nodes": []},
+                  "reviews": {"nodes": [
+                    {"author": {"login": "me"}, "state": "CHANGES_REQUESTED", "submittedAt": "2026-06-06T10:00:00Z"}
+                  ]}
+                }
+              ]
+            },
+            "completedPRs": {"nodes": []},
+            "viewer": {"login": "me"},
+            "rateLimit": {"remaining": 5000, "limit": 5000, "resetAt": "2026-06-08T17:00:00Z", "cost": 1}
+          }
+        }
+        """
+        let listing = try GitHubCodeBackend.parseMonitoredPRsResponse(json)
+        XCTAssertNil(listing.reviewedPRs.first?.completedAt)
+        XCTAssertFalse(listing.reviewedPRs.first?.isCompleted ?? true)
+    }
+
+    /// `state:open` and `is:closed` are mutually exclusive within one index
+    /// snapshot, so an overlap should be impossible — but a PR rendering twice
+    /// is a visible bug, and the completed row is the truthful one.
+    func testAPRInBothReviewedSearchesResolvesToTheCompletedRow() throws {
+        let json = """
+        {
+          "data": {
+            "viewerPRs": {"pullRequests": {"nodes": []}},
+            "reviewPRs": {"nodes": []},
+            "reviewedPRs": {
+              "nodes": [
+                {
+                  "number": 10, "title": "Raced", "url": "https://github.com/a/b/pull/10",
+                  "isDraft": false, "updatedAt": "2026-06-07T10:00:00Z",
+                  "headRefName": "fa", "headRefOid": "shaa", "baseRefName": "main", "state": "OPEN",
+                  "author": {"login": "alice"}, "repository": {"nameWithOwner": "a/b"},
+                  "labels": {"nodes": []},
+                  "reviews": {"nodes": [
+                    {"author": {"login": "me"}, "state": "APPROVED", "submittedAt": "2026-06-06T10:00:00Z"}
+                  ]}
+                }
+              ]
+            },
+            "completedPRs": {
+              "nodes": [
+                {
+                  "number": 10, "title": "Raced", "url": "https://github.com/a/b/pull/10",
+                  "isDraft": false, "updatedAt": "2026-06-07T11:00:00Z",
+                  "headRefName": "fa", "headRefOid": "shaa", "baseRefName": "main", "state": "MERGED",
+                  "mergedAt": "2026-06-07T11:00:00Z",
+                  "author": {"login": "alice"}, "repository": {"nameWithOwner": "a/b"},
+                  "labels": {"nodes": []},
+                  "reviews": {"nodes": [
+                    {"author": {"login": "me"}, "state": "APPROVED", "submittedAt": "2026-06-06T10:00:00Z"}
+                  ]}
+                }
+              ]
+            },
+            "viewer": {"login": "me"},
+            "rateLimit": {"remaining": 5000, "limit": 5000, "resetAt": "2026-06-08T17:00:00Z", "cost": 1}
+          }
+        }
+        """
+        let listing = try GitHubCodeBackend.parseMonitoredPRsResponse(json)
+        XCTAssertEqual(listing.reviewedPRs.count, 1)
+        XCTAssertEqual(listing.reviewedPRs.first?.state, "MERGED")
     }
 
     /// The verdict must reach `ReviewRequest` on the requested-queue path too —
@@ -1984,7 +2165,8 @@ final class BackendsTests: XCTestCase {
                 }
               ]
             },
-            "approvedPRs": {"nodes": []},
+            "reviewedPRs": {"nodes": []},
+            "completedPRs": {"nodes": []},
             "viewer": {"login": "me"},
             "rateLimit": {"remaining": 5000, "limit": 5000, "resetAt": "2026-06-08T17:00:00Z", "cost": 1}
           }
@@ -1993,7 +2175,8 @@ final class BackendsTests: XCTestCase {
         let listing = try GitHubCodeBackend.parseMonitoredPRsResponse(json)
         XCTAssertEqual(listing.reviewRequests.count, 1)
         // Bob's later approval is somebody else's verdict; the viewer's later
-        // COMMENTED is notes without a decision. The last *verdict* stands.
+        // COMMENTED is notes without a decision. The last *round-closing*
+        // verdict stands — this path feeds `decideReviewCompletions`.
         XCTAssertEqual(listing.reviewRequests[0].viewerLastReviewState, .changesRequested)
         // 2026-06-05T10:00:00Z, from epoch rather than the parser's formatter.
         XCTAssertEqual(listing.reviewRequests[0].viewerLastReviewedAt,
@@ -2002,13 +2185,13 @@ final class BackendsTests: XCTestCase {
 
     /// An unknown viewer login (a degraded or SAML-partial response) leaves the
     /// tail empty rather than guessing. `nil` verdict means "not fetched".
-    func testApprovedTailIsEmptyWithoutViewerLogin() throws {
+    func testReviewedTailIsEmptyWithoutViewerLogin() throws {
         let json = """
         {
           "data": {
             "viewerPRs": {"pullRequests": {"nodes": []}},
             "reviewPRs": {"nodes": []},
-            "approvedPRs": {
+            "reviewedPRs": {
               "nodes": [
                 {
                   "number": 5, "title": "Approved by someone", "url": "https://github.com/a/b/pull/5",
@@ -2022,19 +2205,20 @@ final class BackendsTests: XCTestCase {
                 }
               ]
             },
+            "completedPRs": {"nodes": []},
             "viewer": {},
             "rateLimit": {"remaining": 5000, "limit": 5000, "resetAt": "2026-06-08T17:00:00Z", "cost": 1}
           }
         }
         """
         let listing = try GitHubCodeBackend.parseMonitoredPRsResponse(json)
-        XCTAssertTrue(listing.recentlyApprovedPRs.isEmpty)
+        XCTAssertTrue(listing.reviewedPRs.isEmpty)
     }
 
-    /// A response predating the `approvedPRs` alias (or one where GitHub
-    /// nullified it) must degrade to an empty tail, never to a parse failure —
-    /// the requested queue is the load-bearing half.
-    func testMissingApprovedAliasDegradesToEmptyTail() throws {
+    /// A response predating the `reviewedPRs`/`completedPRs` aliases (or one
+    /// where GitHub nullified them) must degrade to an empty tail, never to a
+    /// parse failure — the requested queue is the load-bearing half.
+    func testMissingReviewedAliasesDegradeToEmptyTail() throws {
         let json = """
         {
           "data": {
@@ -2046,18 +2230,36 @@ final class BackendsTests: XCTestCase {
         }
         """
         let listing = try GitHubCodeBackend.parseMonitoredPRsResponse(json)
-        XCTAssertTrue(listing.recentlyApprovedPRs.isEmpty)
+        XCTAssertTrue(listing.reviewedPRs.isEmpty)
         XCTAssertEqual(listing.viewerLogin, "me")
     }
 
-    /// The query declares both search variables, and `listMonitoredPRs` passes
-    /// both. A mismatch is a runtime GraphQL error, not a compile error, so pin
-    /// the contract here.
-    func testMonitoredPRsQueryDeclaresBothSearchVariables() {
+    /// The query declares all three search variables, and `listMonitoredPRs`
+    /// passes all three. A mismatch is a runtime GraphQL error, not a compile
+    /// error, so pin the contract here — including that the third search rides
+    /// in the *same* document, which is what keeps this one HTTP round trip.
+    func testMonitoredPRsQueryDeclaresAllSearchVariables() {
         let q = GitHubCodeBackend.monitoredPRsQuery
         XCTAssertTrue(q.contains("$reviewQuery: String!"))
-        XCTAssertTrue(q.contains("$approvedQuery: String!"))
-        XCTAssertTrue(q.contains("approvedPRs: search(type: ISSUE, query: $approvedQuery"))
+        XCTAssertTrue(q.contains("$reviewedQuery: String!"))
+        XCTAssertTrue(q.contains("$completedQuery: String!"))
+        XCTAssertTrue(q.contains("reviewedPRs: search(type: ISSUE, query: $reviewedQuery"))
+        XCTAssertTrue(q.contains("completedPRs: search(type: ISSUE, query: $completedQuery"))
+        // The lifecycle fields the completed group classifies on.
+        XCTAssertTrue(q.contains("mergedAt closedAt"))
+    }
+
+    /// The completed search's window is a full instant, not a `YYYY-MM-DD` date:
+    /// a date bound returns up to 48 h of history depending on the hour, which
+    /// the serialization-time cutoff would then have to throw away.
+    func testCompletedReviewsQueryBoundsOnAnInstant() {
+        let now = Date(timeIntervalSince1970: 1780830000)   // 2026-06-07T11:00:00Z
+        let q = GitHubCodeBackend.completedReviewsQuery(now: now)
+        XCTAssertTrue(q.contains("reviewed-by:@me"))
+        // `is:closed` covers merged PRs too — GitHub models a merge as a close.
+        XCTAssertTrue(q.contains("is:closed"))
+        XCTAssertTrue(q.contains("closed:>=2026-06-06T11:00:00Z"))
+        XCTAssertFalse(q.contains("state:open"))
     }
 }
 

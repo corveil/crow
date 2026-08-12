@@ -69,24 +69,29 @@ public struct GitHubCodeBackend: CodeBackend {
 
     public func listMonitoredPRs() async throws -> MonitoredPRListing {
         let reviewQuery = "review-requested:@me state:open type:pr"
-        // The board's "Approved recently" group (CROW-982). This has to be its
-        // own search: submitting a review clears the pending request, so an
-        // approved PR leaves `review-requested:@me` outright and no filtering of
-        // that result set could ever recover it.
+        // The board's post-request half (CROW-982, widened by CROW-990). This
+        // has to be its own search: submitting a review clears the pending
+        // request, so a reviewed PR leaves `review-requested:@me` outright and
+        // no filtering of that result set could ever recover it.
         //
-        // It rides in the *same* GraphQL document as the query above, so it is
-        // one more search node on an existing request rather than an extra HTTP
-        // round trip. `sort:updated-desc` matters at `first: 50`: an approval
-        // bumps the PR's `updatedAt`, so the rows this group actually wants sort
-        // to the front instead of relying on GitHub's relevance ordering.
-        let approvedQuery = "reviewed-by:@me state:open type:pr sort:updated-desc"
+        // Two searches, because "still open" and "already finished" are disjoint
+        // GitHub states that no single query expresses: `state:open` for PRs
+        // parked with their author, and a closed-since window for PRs that
+        // merged or closed. Both ride in the *same* GraphQL document as the
+        // query above, so they are two more search nodes on an existing request
+        // rather than extra HTTP round trips. `sort:updated-desc` matters at
+        // `first: 50`: a review bumps the PR's `updatedAt`, so the rows these
+        // groups want sort to the front instead of relying on relevance order.
+        let reviewedQuery = "reviewed-by:@me state:open type:pr sort:updated-desc"
+        let completedQuery = Self.completedReviewsQuery(now: Date())
         let output: String
         do {
             output = try await shellRunner.run(
                 "gh", "api", "graphql",
                 "-f", "query=\(Self.monitoredPRsQuery)",
                 "-F", "reviewQuery=\(reviewQuery)",
-                "-F", "approvedQuery=\(approvedQuery)"
+                "-F", "reviewedQuery=\(reviewedQuery)",
+                "-F", "completedQuery=\(completedQuery)"
             )
         } catch ShellRunnerError.nonZeroExit(_, let stderr) {
             let err = GitHubTaskBackend.classifyGraphQLError(stderr)
@@ -99,6 +104,27 @@ public struct GitHubCodeBackend: CodeBackend {
             throw err
         }
         return try Self.parseMonitoredPRsResponse(output)
+    }
+
+    /// The **Recently completed** search (CROW-990) — PRs the viewer reviewed
+    /// that merged or closed inside the window.
+    ///
+    /// `is:closed` covers merged PRs too (GitHub models a merge as a close), so
+    /// one qualifier reaches both halves of the group — including the case the
+    /// ticket calls out, where you requested changes, the author fixed it, and
+    /// *someone else* approved and merged.
+    ///
+    /// The `closed:` bound is a full ISO-8601 instant, not a `YYYY-MM-DD` date:
+    /// a date bound would return up to 48 h of history depending on the hour,
+    /// which the serialization-time cutoff would then have to throw away. It is
+    /// intentionally still only a *coarse* bound — the authoritative 24 h edge
+    /// is `ReviewGroup.classify`, evaluated on each render, so the tail expires
+    /// on the clock rather than on the next poll.
+    static func completedReviewsQuery(now: Date) -> String {
+        let fmt = ISO8601DateFormatter()
+        fmt.formatOptions = [.withInternetDateTime]
+        let since = fmt.string(from: now.addingTimeInterval(-ReviewGroup.recentlyCompletedWindow))
+        return "reviewed-by:@me is:closed type:pr closed:>=\(since) sort:updated-desc"
     }
 
     // MARK: - prStates
@@ -468,7 +494,7 @@ public struct GitHubCodeBackend: CodeBackend {
     // MARK: - Queries + parsers
 
     static let monitoredPRsQuery = """
-    query($reviewQuery: String!, $approvedQuery: String!) {
+    query($reviewQuery: String!, $reviewedQuery: String!, $completedQuery: String!) {
       viewerPRs: viewer {
         pullRequests(first: 50, states: [OPEN], orderBy: {field: UPDATED_AT, direction: DESC}) {
           nodes {
@@ -509,6 +535,7 @@ public struct GitHubCodeBackend: CodeBackend {
         nodes {
           ... on PullRequest {
             number title url isDraft updatedAt headRefName headRefOid baseRefName state
+            mergedAt closedAt
             author { login }
             repository { nameWithOwner }
             labels(first: 20) { nodes { name color } }
@@ -516,10 +543,23 @@ public struct GitHubCodeBackend: CodeBackend {
           }
         }
       }
-      approvedPRs: search(type: ISSUE, query: $approvedQuery, first: 50) {
+      reviewedPRs: search(type: ISSUE, query: $reviewedQuery, first: 50) {
         nodes {
           ... on PullRequest {
             number title url isDraft updatedAt headRefName headRefOid baseRefName state
+            mergedAt closedAt
+            author { login }
+            repository { nameWithOwner }
+            labels(first: 20) { nodes { name color } }
+            reviews(last: 20) { nodes { author { login } submittedAt state } }
+          }
+        }
+      }
+      completedPRs: search(type: ISSUE, query: $completedQuery, first: 50) {
+        nodes {
+          ... on PullRequest {
+            number title url isDraft updatedAt headRefName headRefOid baseRefName state
+            mergedAt closedAt
             author { login }
             repository { nameWithOwner }
             labels(first: 20) { nodes { name color } }
@@ -544,15 +584,16 @@ public struct GitHubCodeBackend: CodeBackend {
             dataObj["reviewPRs"] as? [String: Any],
             viewerLogin: viewerLogin.isEmpty ? nil : viewerLogin
         )
-        let approved = parseApprovedPRs(
-            dataObj["approvedPRs"] as? [String: Any],
+        let reviewed = parseReviewedPRs(
+            open: dataObj["reviewedPRs"] as? [String: Any],
+            completed: dataObj["completedPRs"] as? [String: Any],
             viewerLogin: viewerLogin.isEmpty ? nil : viewerLogin
         )
         let rate = GitHubTaskBackend.parseRateLimit(dataObj["rateLimit"] as? [String: Any])
         return MonitoredPRListing(
             viewerPRs: viewerPRs,
             reviewRequests: reviewRequests,
-            recentlyApprovedPRs: approved,
+            reviewedPRs: reviewed,
             viewerLogin: viewerLogin,
             rateLimit: rate
         )
@@ -573,15 +614,16 @@ public struct GitHubCodeBackend: CodeBackend {
             dataObj["reviewPRs"] as? [String: Any],
             viewerLogin: viewerLogin.isEmpty ? nil : viewerLogin
         )
-        let approved = parseApprovedPRs(
-            dataObj["approvedPRs"] as? [String: Any],
+        let reviewed = parseReviewedPRs(
+            open: dataObj["reviewedPRs"] as? [String: Any],
+            completed: dataObj["completedPRs"] as? [String: Any],
             viewerLogin: viewerLogin.isEmpty ? nil : viewerLogin
         )
         let rate = GitHubTaskBackend.parseRateLimit(dataObj["rateLimit"] as? [String: Any])
         return MonitoredPRListing(
             viewerPRs: viewerPRs,
             reviewRequests: reviewRequests,
-            recentlyApprovedPRs: approved,
+            reviewedPRs: reviewed,
             viewerLogin: viewerLogin,
             rateLimit: rate,
             samlRestricted: true
@@ -784,16 +826,34 @@ public struct GitHubCodeBackend: CodeBackend {
     /// comment is notes without a decision and the round stays open. PENDING is
     /// an unsubmitted draft and carries no `submittedAt` at all.
     ///
-    /// Shared by the two paths that answer "has the viewer reviewed this?" —
+    /// Shared by the two paths that answer "has the viewer closed this round?" —
     /// `parseReviewRequests` (the `review-requested:@me` search) and
     /// `parsePRNode` (the stale-PR query, which also passes these to GraphQL as
     /// `states:`). One definition so the two can't drift into disagreeing about
-    /// what closes a round.
+    /// what closes a round. Both feed `decideReviewCompletions`, which
+    /// auto-completes a review session — hence the narrowness.
     static let roundClosingReviewStates: Set<String> = ["APPROVED", "CHANGES_REQUESTED", "DISMISSED"]
 
+    /// Every review state the **board** routes on — a strict superset that adds
+    /// COMMENTED (CROW-990).
+    ///
+    /// The two sets answer different questions and must stay separate. "Is my
+    /// review round over?" excludes a comment; "who owes the next move?" does
+    /// not — a PR you left comments on is parked with its author, and narrowing
+    /// this to `roundClosingReviewStates` is precisely what left three such PRs
+    /// in no group at all. Widening `roundClosingReviewStates` instead would
+    /// make a `--comment` review auto-complete a live review session, which
+    /// CROW-945 deliberately forbids.
+    static let boardVerdictReviewStates: Set<String> = roundClosingReviewStates.union(["COMMENTED"])
+
+    /// - Parameter acceptedStates: which review states count as the viewer's
+    ///   last word. Defaults to the round-closing set because the requested
+    ///   queue's `viewerLastReviewedAt` feeds `decideReviewCompletions`; the
+    ///   board-only `reviewed-by:@me` paths widen it.
     static func parseReviewRequests(
         _ searchObj: [String: Any]?,
-        viewerLogin: String?
+        viewerLogin: String?,
+        acceptedStates: Set<String> = roundClosingReviewStates
     ) -> [ReviewRequest] {
         let nodes = LenientJSON.nodes(searchObj)
         var requests: [ReviewRequest] = []
@@ -808,6 +868,11 @@ public struct GitHubCodeBackend: CodeBackend {
             let headRefOid = node["headRefOid"] as? String
             let baseBranch = (node["baseRefName"] as? String) ?? ""
             let updatedAt = IssueDate.parse(node["updatedAt"] as? String)
+            let prState = node["state"] as? String
+            // `mergedAt` first: a merged PR carries both, and the merge is the
+            // event the Recently completed window measures from.
+            let completedAt = IssueDate.parse(node["mergedAt"] as? String)
+                ?? IssueDate.parse(node["closedAt"] as? String)
             let labels = LenientJSON.nodes(node, "labels")
                 .compactMap { labelNode -> LabelInfo? in
                     guard let name = labelNode["name"] as? String else { return nil }
@@ -820,17 +885,17 @@ public struct GitHubCodeBackend: CodeBackend {
                     guard let author = (review["author"] as? [String: Any])?["login"] as? String,
                           author == viewerLogin,
                           let state = review["state"] as? String,
-                          Self.roundClosingReviewStates.contains(state),
+                          acceptedStates.contains(state),
                           let submittedAt = IssueDate.parse(review["submittedAt"] as? String) else { continue }
                     if viewerLastReviewedAt == nil || submittedAt > viewerLastReviewedAt! {
                         viewerLastReviewedAt = submittedAt
                         // Decoded from the same node as the timestamp, so the
-                        // pair can never disagree about which review won.
-                        // `roundClosingReviewStates` and `ReviewVerdict` list
-                        // the same three states, so this never fails — but a
-                        // `nil` here would leave a timestamp with no verdict,
-                        // so drop the timestamp too rather than emit a half
-                        // record the board would misclassify.
+                        // pair can never disagree about which review won. Both
+                        // accepted-state sets are subsets of `ReviewVerdict`'s
+                        // raw values, so this never fails — but a `nil` here
+                        // would leave a timestamp with no verdict, so drop the
+                        // timestamp too rather than emit a half record the
+                        // board would misclassify.
                         viewerLastReviewState = ReviewVerdict(rawValue: state)
                         if viewerLastReviewState == nil { viewerLastReviewedAt = nil }
                     }
@@ -851,35 +916,54 @@ public struct GitHubCodeBackend: CodeBackend {
                 provider: .github,
                 headRefOid: headRefOid,
                 viewerLastReviewedAt: viewerLastReviewedAt,
-                viewerLastReviewState: viewerLastReviewState
+                viewerLastReviewState: viewerLastReviewState,
+                state: prState,
+                completedAt: completedAt
             ))
         }
         return requests.sorted { ($0.requestedAt ?? .distantPast) > ($1.requestedAt ?? .distantPast) }
     }
 
-    /// The `reviewed-by:@me` half of the board (CROW-982), narrowed to PRs whose
-    /// viewer verdict is an **approval**.
+    /// The `reviewed-by:@me` half of the board — PRs that have already **left**
+    /// the requested queue (CROW-982, widened by CROW-990).
     ///
-    /// `reviewed-by:` matches any submitted review, so the raw result also holds
-    /// PRs the viewer requested changes on — those are already in the requested
-    /// queue and must not be duplicated into the approved tail. Filtering on the
-    /// parsed verdict rather than on the search string keeps one definition of
-    /// "approved" (`ReviewVerdict`) instead of trusting GitHub's query syntax to
-    /// mean what the board means.
+    /// Two searches in, one list out. `open` is `state:open` (PRs parked with
+    /// their author, or approved and not yet merged); `completed` is the
+    /// closed-since window (merged or closed). They are merged here rather than
+    /// carried separately because every consumer downstream wants the same
+    /// thing — "PRs I reviewed that nothing is asking me about" — and
+    /// `ReviewGroup.classify` already reads the lifecycle state off each row to
+    /// decide which heading it belongs under.
+    ///
+    /// **No verdict filter.** CROW-982 kept only approvals here, on the
+    /// reasoning that a changes-requested PR would already be in the requested
+    /// queue. It isn't: GitHub clears the pending request on submit, so that
+    /// filter didn't dedupe those rows, it deleted them — eight live PRs
+    /// visible nowhere in Crow. Routing is `classify`'s job now, and it is the
+    /// only place that decides.
     ///
     /// The 24 h cutoff is deliberately *not* applied here: it belongs at
     /// serialization time so the window tracks the clock rather than the poll.
-    static func parseApprovedPRs(
-        _ searchObj: [String: Any]?,
+    static func parseReviewedPRs(
+        open: [String: Any]?,
+        completed: [String: Any]?,
         viewerLogin: String?
     ) -> [ReviewRequest] {
         // No login means the `viewer { login }` selection failed (a degraded or
-        // SAML-partial response). Every verdict would parse as nil, so the
-        // filter below would drop everything anyway — return early and make the
-        // "not fetched" case explicit rather than incidental.
+        // SAML-partial response). Every verdict would parse as nil, so every row
+        // would classify into no group anyway — return early and make the "not
+        // fetched" case explicit rather than incidental.
         guard let viewerLogin, !viewerLogin.isEmpty else { return [] }
-        return parseReviewRequests(searchObj, viewerLogin: viewerLogin)
-            .filter { $0.viewerLastReviewState == .approved }
+        let openRows = parseReviewRequests(open, viewerLogin: viewerLogin, acceptedStates: boardVerdictReviewStates)
+        let completedRows = parseReviewRequests(completed, viewerLogin: viewerLogin, acceptedStates: boardVerdictReviewStates)
+        // `state:open` and `is:closed` are mutually exclusive within one index
+        // snapshot, so an overlap should be impossible — but a PR rendering
+        // twice is a visible bug and this costs one dictionary, so the completed
+        // row wins by construction rather than by trusting GitHub's indexer.
+        var byURL: [String: ReviewRequest] = [:]
+        for row in openRows { byURL[row.url] = row }
+        for row in completedRows { byURL[row.url] = row }
+        return byURL.values.sorted { ($0.requestedAt ?? .distantPast) > ($1.requestedAt ?? .distantPast) }
     }
 
     static func parseStalePRResponse(_ output: String, refs: [PRRef]) -> [PRRef: PRRecord] {

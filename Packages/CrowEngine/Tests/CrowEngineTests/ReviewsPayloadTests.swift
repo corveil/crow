@@ -25,7 +25,9 @@ struct ReviewsPayloadTests {
         headRefOid: String? = nil,
         reviewSessionID: UUID? = nil,
         viewerLastReviewedAt: Date? = nil,
-        viewerLastReviewState: ReviewVerdict? = nil
+        viewerLastReviewState: ReviewVerdict? = nil,
+        state: String? = nil,
+        completedAt: Date? = nil
     ) -> ReviewRequest {
         ReviewRequest(
             id: "github:foo/bar#9",
@@ -39,7 +41,9 @@ struct ReviewsPayloadTests {
             reviewSessionID: reviewSessionID,
             headRefOid: headRefOid,
             viewerLastReviewedAt: viewerLastReviewedAt,
-            viewerLastReviewState: viewerLastReviewState
+            viewerLastReviewState: viewerLastReviewState,
+            state: state,
+            completedAt: completedAt
         )
     }
 
@@ -263,18 +267,18 @@ struct ReviewsPayloadTests {
 
     /// THE CROW-982 symptom. Approving clears GitHub's pending request, so the
     /// PR leaves `review-requested:@me` entirely — it survives only in
-    /// `recentlyApprovedReviews`, and without this group it vanished outright.
+    /// `reviewedPRs`, and without this group it vanished outright.
     @Test
     func recentApprovalSurvivesInItsOwnGroup() throws {
         let state = AppState()
-        state.recentlyApprovedReviews = [makeRequest(
+        state.reviewedPRs = [makeRequest(
             url: "https://github.com/foo/bar/pull/9",
             viewerLastReviewedAt: Date().addingTimeInterval(-3600),
             viewerLastReviewState: .approved
         )]
         let payload = ReviewsPayload.build(appState: state)
-        #expect(group(try firstReview(payload)) == "approved_recently")
-        #expect(groupCount(payload, "approved_recently") == 1)
+        #expect(group(try firstReview(payload)) == "recently_completed")
+        #expect(groupCount(payload, "recently_completed") == 1)
     }
 
     /// …and drops off the far side of the window. In *no* group, not demoted to
@@ -282,14 +286,14 @@ struct ReviewsPayloadTests {
     @Test
     func approvalOlderThan24hIsInNoGroup() {
         let state = AppState()
-        state.recentlyApprovedReviews = [makeRequest(
+        state.reviewedPRs = [makeRequest(
             url: "https://github.com/foo/bar/pull/9",
             viewerLastReviewedAt: Date().addingTimeInterval(-25 * 3600),
             viewerLastReviewState: .approved
         )]
         let payload = ReviewsPayload.build(appState: state)
         #expect(reviews(payload).isEmpty)
-        #expect(groupCount(payload, "approved_recently") == 0)
+        #expect(groupCount(payload, "recently_completed") == 0)
     }
 
     /// The boundary is evaluated against an injected `now`, so the tail expires
@@ -298,7 +302,7 @@ struct ReviewsPayloadTests {
     func windowBoundaryIsEvaluatedAtSerializationTime() {
         let approvedAt = Date(timeIntervalSince1970: 1_780_000_000)
         let state = AppState()
-        state.recentlyApprovedReviews = [makeRequest(
+        state.reviewedPRs = [makeRequest(
             url: "https://github.com/foo/bar/pull/9",
             viewerLastReviewedAt: approvedAt,
             viewerLastReviewState: .approved
@@ -307,6 +311,249 @@ struct ReviewsPayloadTests {
         let justOutside = ReviewsPayload.build(appState: state, now: approvedAt.addingTimeInterval(24 * 3600 + 1))
         #expect(reviews(justInside).count == 1)
         #expect(reviews(justOutside).isEmpty)
+    }
+
+    // MARK: - CROW-990: Waiting on author
+
+    /// THE CROW-990 GAP 1 SYMPTOM, and the exact shape of corveil/corveil#2141:
+    /// open, changes requested on 08-10, `reviewRequests: []`. It matched
+    /// nothing — GitHub had cleared the pending request on submit, and the
+    /// `reviewed-by:@me` tail was narrowed to approvals. Eight such PRs were
+    /// live on one queue and none of them appeared anywhere in Crow.
+    @Test
+    func changesRequestedOnAnOpenPRWaitsOnTheAuthor() throws {
+        let state = AppState()
+        state.reviewedPRs = [makeRequest(
+            url: "https://github.com/foo/bar/pull/2141",
+            viewerLastReviewedAt: Date().addingTimeInterval(-3600),
+            viewerLastReviewState: .changesRequested,
+            state: "OPEN"
+        )]
+        let payload = ReviewsPayload.build(appState: state)
+        #expect(group(try firstReview(payload)) == "waiting_on_author")
+        #expect(groupCount(payload, "waiting_on_author") == 1)
+    }
+
+    /// A `--comment` review counts too. It closes no review round (CROW-945
+    /// still excludes COMMENTED from `roundClosingReviewStates`) but it is
+    /// unambiguously "I have said my piece" — three of the eight lost PRs were
+    /// exactly this.
+    @Test
+    func commentedOnAnOpenPRWaitsOnTheAuthor() throws {
+        let state = AppState()
+        state.reviewedPRs = [makeRequest(
+            url: "https://github.com/foo/bar/pull/2136",
+            viewerLastReviewedAt: Date().addingTimeInterval(-3600),
+            viewerLastReviewState: .commented,
+            state: "OPEN"
+        )]
+        #expect(group(try firstReview(ReviewsPayload.build(appState: state))) == "waiting_on_author")
+    }
+
+    /// Waiting on author has **no** 24 h window — the oldest row in the queue
+    /// that motivated the ticket was three weeks old, and a tail cut here would
+    /// re-hide precisely what the group exists to surface.
+    @Test
+    func waitingOnAuthorDoesNotExpire() throws {
+        let state = AppState()
+        state.reviewedPRs = [makeRequest(
+            url: "https://github.com/foo/bar/pull/1748",
+            viewerLastReviewedAt: Date().addingTimeInterval(-26 * 24 * 3600),
+            viewerLastReviewState: .changesRequested,
+            state: "OPEN"
+        )]
+        #expect(group(try firstReview(ReviewsPayload.build(appState: state))) == "waiting_on_author")
+    }
+
+    /// Re-requesting flips it back: the queue, not the last verdict, says whose
+    /// court the ball is in. Same rule that keeps a re-requested approval out of
+    /// the completed tail.
+    @Test
+    func reRequestAfterChangesRequestedReturnsToTheQueue() throws {
+        let request = makeRequest(
+            url: "https://github.com/foo/bar/pull/9",
+            viewerLastReviewedAt: Date().addingTimeInterval(-3600),
+            viewerLastReviewState: .changesRequested,
+            state: "OPEN"
+        )
+        let payload = ReviewsPayload.build(appState: makeState(request: request))
+        #expect(group(try firstReview(payload)) == "not_approved_yet")
+        #expect(groupCount(payload, "waiting_on_author") == 0)
+    }
+
+    /// A dismissed verdict leaves nothing owed in either direction — it is not
+    /// the author's move, and GitHub re-requests the reviewer when it wants
+    /// another look. Shown in no group rather than parked under a heading that
+    /// claims someone is being waited on.
+    @Test
+    func dismissedVerdictIsInNoGroup() {
+        let state = AppState()
+        state.reviewedPRs = [makeRequest(
+            url: "https://github.com/foo/bar/pull/9",
+            viewerLastReviewedAt: Date().addingTimeInterval(-3600),
+            viewerLastReviewState: .dismissed,
+            state: "OPEN"
+        )]
+        #expect(reviews(ReviewsPayload.build(appState: state)).isEmpty)
+    }
+
+    // MARK: - CROW-990: Recently completed
+
+    /// THE CROW-990 GAP 2 SYMPTOM. With the auto-merge watcher on, an approved
+    /// PR merges within minutes — and a merged PR is not `state:open`, so the
+    /// group built to answer "did I already do that one?" read zero while 22
+    /// PRs reviewed that day had merged.
+    @Test
+    func mergedPRAppearsUnderRecentlyCompleted() throws {
+        let state = AppState()
+        state.reviewedPRs = [makeRequest(
+            url: "https://github.com/foo/bar/pull/9",
+            viewerLastReviewedAt: Date().addingTimeInterval(-4 * 3600),
+            viewerLastReviewState: .approved,
+            state: "MERGED",
+            completedAt: Date().addingTimeInterval(-3 * 3600)
+        )]
+        let payload = ReviewsPayload.build(appState: state)
+        #expect(group(try firstReview(payload)) == "recently_completed")
+    }
+
+    /// The case the ticket calls out by name: you requested changes, the author
+    /// fixed it, and **someone else** approved and merged. Your verdict is still
+    /// CHANGES_REQUESTED, but the PR is over — it belongs under completed, not
+    /// under a heading that says an author owes you something.
+    @Test
+    func mergedByAnotherReviewerStillCountsAsCompleted() throws {
+        let state = AppState()
+        state.reviewedPRs = [makeRequest(
+            url: "https://github.com/foo/bar/pull/9",
+            viewerLastReviewedAt: Date().addingTimeInterval(-6 * 3600),
+            viewerLastReviewState: .changesRequested,
+            state: "MERGED",
+            completedAt: Date().addingTimeInterval(-1 * 3600)
+        )]
+        let payload = ReviewsPayload.build(appState: state)
+        #expect(group(try firstReview(payload)) == "recently_completed")
+        #expect(groupCount(payload, "waiting_on_author") == 0)
+    }
+
+    /// A PR closed without merging is equally over.
+    @Test
+    func closedUnmergedPRAlsoCountsAsCompleted() throws {
+        let state = AppState()
+        state.reviewedPRs = [makeRequest(
+            url: "https://github.com/foo/bar/pull/9",
+            viewerLastReviewedAt: Date().addingTimeInterval(-6 * 3600),
+            viewerLastReviewState: .changesRequested,
+            state: "CLOSED",
+            completedAt: Date().addingTimeInterval(-2 * 3600)
+        )]
+        #expect(group(try firstReview(ReviewsPayload.build(appState: state))) == "recently_completed")
+    }
+
+    /// The completed window measures from the merge, not from the review. A PR
+    /// you reviewed a week ago and that merged an hour ago is *recent*.
+    @Test
+    func completedWindowMeasuresFromTheMergeNotTheReview() throws {
+        let state = AppState()
+        state.reviewedPRs = [makeRequest(
+            url: "https://github.com/foo/bar/pull/9",
+            viewerLastReviewedAt: Date().addingTimeInterval(-7 * 24 * 3600),
+            viewerLastReviewState: .approved,
+            state: "MERGED",
+            completedAt: Date().addingTimeInterval(-3600)
+        )]
+        #expect(group(try firstReview(ReviewsPayload.build(appState: state))) == "recently_completed")
+    }
+
+    /// …and it does expire, unlike Waiting on author.
+    @Test
+    func mergeOlderThan24hIsInNoGroup() {
+        let state = AppState()
+        state.reviewedPRs = [makeRequest(
+            url: "https://github.com/foo/bar/pull/9",
+            viewerLastReviewState: .approved,
+            state: "MERGED",
+            completedAt: Date().addingTimeInterval(-25 * 3600)
+        )]
+        #expect(reviews(ReviewsPayload.build(appState: state)).isEmpty)
+    }
+
+    /// Precedence: In review > Recently completed > the open-PR groups. A live
+    /// session survives the PR merging under it — the session is what the user
+    /// is looking at, and `autoCompleteFinishedReviews` closes it on its own
+    /// schedule.
+    @Test
+    func activeSessionWinsOverAMergedPR() throws {
+        let session = Session(name: "review", kind: .review, lastReviewedHeadSha: "sha-a")
+        let state = AppState()
+        var request = makeRequest(
+            url: "https://github.com/foo/bar/pull/9",
+            headRefOid: "sha-a",
+            reviewSessionID: session.id,
+            viewerLastReviewState: .approved,
+            state: "MERGED",
+            completedAt: Date()
+        )
+        request.reviewSessionID = session.id
+        state.reviewedPRs = [request]
+        state.sessions = [session]
+        state.links[session.id] = [
+            SessionLink(sessionID: session.id, label: "PR", url: request.url, linkType: .pr)
+        ]
+        #expect(group(try firstReview(ReviewsPayload.build(appState: state))) == "in_review")
+    }
+
+    /// A shipped PR cannot be reviewed again, so the board must not offer to.
+    /// `reviewKickoffAction` reasons about heads and sessions and knows nothing
+    /// about the PR being over — it would happily return `create` here, which
+    /// also makes the row selectable in batch-start mode.
+    @Test
+    func completedPRIsNotOfferedForReview() throws {
+        let state = AppState()
+        state.reviewedPRs = [makeRequest(
+            url: "https://github.com/foo/bar/pull/9",
+            headRefOid: "sha-a",
+            viewerLastReviewState: .approved,
+            state: "MERGED",
+            completedAt: Date().addingTimeInterval(-3600)
+        )]
+        #expect(action(try firstReview(ReviewsPayload.build(appState: state))) == "skip")
+    }
+
+    /// The lifecycle fields have to reach the wire — the card labels its
+    /// timestamp "merged"/"closed"/"approved" off exactly these.
+    @Test
+    func lifecycleFieldsAreSerialized() throws {
+        let state = AppState()
+        state.reviewedPRs = [makeRequest(
+            url: "https://github.com/foo/bar/pull/9",
+            viewerLastReviewState: .approved,
+            state: "MERGED",
+            completedAt: Date(timeIntervalSince1970: 1780740000)
+        )]
+        let review = try firstReview(ReviewsPayload.build(
+            appState: state, now: Date(timeIntervalSince1970: 1780740000)
+        ))
+        #expect(review["state"] == .string("MERGED"))
+        guard case let .string(stamp)? = review["completed_at"] else {
+            Issue.record("completed_at missing"); return
+        }
+        #expect(stamp.hasPrefix("2026-06-06T10:00:00"))
+    }
+
+    /// Which groups may chime is published rather than re-derived on the client
+    /// — naming the excluded group inline is what would let a newly added group
+    /// opt itself into `reviewRequested` by default.
+    @Test
+    func chimeEligibilityIsPublishedPerGroup() {
+        let payload = ReviewsPayload.build(appState: AppState())
+        guard case let .object(map)? = payload["group_announces_new_request"] else {
+            Issue.record("group_announces_new_request missing"); return
+        }
+        #expect(map["not_approved_yet"] == .bool(true))
+        #expect(map["in_review"] == .bool(true))
+        #expect(map["waiting_on_author"] == .bool(false))
+        #expect(map["recently_completed"] == .bool(false))
     }
 
     /// Every group is counted even at zero, so the board can render a section
@@ -355,7 +602,7 @@ struct ReviewsPayloadTests {
         )
         let payload = ReviewsPayload.build(appState: makeState(request: request))
         #expect(group(try firstReview(payload)) == "not_approved_yet")
-        #expect(groupCount(payload, "approved_recently") == 0)
+        #expect(groupCount(payload, "recently_completed") == 0)
     }
 
     /// …and the same PR must not change groups purely because the clock moved
@@ -376,17 +623,17 @@ struct ReviewsPayloadTests {
         #expect(group(try firstReview(outside)) == "not_approved_yet")
     }
 
-    /// The approved tail keeps its group — the fix must gate on queue
+    /// The completed tail keeps its group — the fix must gate on queue
     /// membership, not simply stop honoring approvals.
     @Test
-    func approvedTailStillGroupsAsApprovedRecently() throws {
+    func approvedTailStillGroupsAsRecentlyCompleted() throws {
         let state = AppState()
-        state.recentlyApprovedReviews = [makeRequest(
+        state.reviewedPRs = [makeRequest(
             url: "https://github.com/foo/bar/pull/9",
             viewerLastReviewedAt: Date().addingTimeInterval(-3600),
             viewerLastReviewState: .approved
         )]
-        #expect(group(try firstReview(ReviewsPayload.build(appState: state))) == "approved_recently")
+        #expect(group(try firstReview(ReviewsPayload.build(appState: state))) == "recently_completed")
     }
 
     /// #953 direction C: filters that hide live requests must say so, or an
@@ -399,13 +646,13 @@ struct ReviewsPayloadTests {
         #expect(payload["hidden_by_filters"] == .int(12))
     }
 
-    /// The approved tail obeys the same repo/label filters as the queue — a repo
-    /// you excluded shouldn't reappear once you approve something in it.
+    /// The reviewed-by lists obey the same repo/label filters as the queue — a
+    /// repo you excluded shouldn't reappear once you review something in it.
     @Test
-    func approvedTailRespectsRepoFilters() {
+    func reviewedTailRespectsRepoFilters() {
         let state = AppState()
         state.excludeReviewRepos = ["foo/*"]
-        state.recentlyApprovedReviews = [makeRequest(
+        state.reviewedPRs = [makeRequest(
             url: "https://github.com/foo/bar/pull/9",
             viewerLastReviewedAt: Date(),
             viewerLastReviewState: .approved

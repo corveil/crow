@@ -357,9 +357,9 @@ T.restoreSidebarCache();
 check('legacy cache with loading:true is scrubbed on restore', T.ticketsRefreshing() === false);
 
 // ---------------------------------------------------------------------------
-// Reviews board — three groups (CROW-982)
+// Reviews board — four groups (CROW-982, CROW-990)
 //
-// The board used to be one flat list, so approving a PR made it vanish outright
+// The board used to be one flat list, so reviewing a PR made it vanish outright
 // (GitHub clears the review request on submit). The server now assigns each
 // review a `group` and publishes the order + counts; the board must render
 // every group — including empty ones, so a quiet board still says *what* is
@@ -368,6 +368,9 @@ check('legacy cache with loading:true is scrubbed on restore', T.ticketsRefreshi
 const grouped = (id, n, group, extra) => Object.assign(
   review(id, n, 'PR ' + n, 'corveil/crow', 'sam', 'https://github.com/corveil/crow/pull/' + n, 2),
   { group }, extra || {});
+
+const ORDER = ['in_review', 'not_approved_yet', 'waiting_on_author', 'recently_completed'];
+const ZERO = { in_review: 0, not_approved_yet: 0, waiting_on_author: 0, recently_completed: 0 };
 
 const groupTitles = () => [...q('.group-title')].map((e) => e.textContent);
 const groupCounts = () => [...q('.group-count')].map((e) => e.textContent);
@@ -383,53 +386,85 @@ const cardsUnder = (title) => {
   return n ? [...n.querySelectorAll('.board-card')] : [];
 };
 
-console.log('\nReviews board — three groups (CROW-982):');
+console.log('\nReviews board — four groups (CROW-982, CROW-990):');
 T.reviewSearch = ''; T.reviewSelectionMode = false; T.selectedReviewURLs.clear();
 T.boardData.reviews = {
   unseen: 0,
-  group_order: ['in_review', 'not_approved_yet', 'approved_recently'],
-  group_counts: { in_review: 1, not_approved_yet: 1, approved_recently: 1 },
+  group_order: ORDER,
+  group_counts: { in_review: 1, not_approved_yet: 1, waiting_on_author: 1, recently_completed: 1 },
   hidden_by_filters: 0,
   reviews: [
     grouped('g1', 101, 'in_review', { review_session_id: 'sess-1', kickoff_action: 'skip' }),
     grouped('g2', 102, 'not_approved_yet', { kickoff_action: 'create' }),
-    grouped('g3', 103, 'approved_recently', {
-      kickoff_action: 'create',
+    grouped('g4', 104, 'waiting_on_author', {
+      kickoff_action: 'skip',
+      viewer_last_review_state: 'CHANGES_REQUESTED',
+      viewer_last_reviewed_at: iso(30),
+    }),
+    grouped('g3', 103, 'recently_completed', {
+      kickoff_action: 'skip',
+      state: 'MERGED',
+      completed_at: iso(2),
       viewer_last_review_state: 'APPROVED',
-      viewer_last_reviewed_at: iso(2),
+      viewer_last_reviewed_at: iso(3),
     }),
   ],
 };
 T.selectedBoard = 'reviews'; T.renderBoard();
-check('all three groups render, in server order',
-  JSON.stringify(groupTitles()) === JSON.stringify(['In review', 'Not approved yet', 'Approved recently · 24h']));
+check('all four groups render, in server order',
+  JSON.stringify(groupTitles()) === JSON.stringify(
+    ['In review', 'Not approved yet', 'Waiting on author', 'Recently completed · 24h']));
 check('counts come from the server payload',
-  JSON.stringify(groupCounts()) === JSON.stringify(['1', '1', '1']));
-check('each PR lands in exactly one group', q('.board-card').length === 3);
+  JSON.stringify(groupCounts()) === JSON.stringify(['1', '1', '1', '1']));
+check('each PR lands in exactly one group', q('.board-card').length === 4);
 check('in-review card is under In review', /PR 101/.test((cardsUnder('In review')[0] || {}).textContent || ''));
-check('approved card is under Approved recently',
-  /PR 103/.test((cardsUnder('Approved recently')[0] || {}).textContent || ''));
-check('approved card shows when it was approved, not the PR bump',
-  /approved /.test(cardsUnder('Approved recently')[0].textContent));
+check('completed card is under Recently completed',
+  /PR 103/.test((cardsUnder('Recently completed')[0] || {}).textContent || ''));
+check('a merged PR says when it merged, not when the thread was bumped',
+  /merged /.test(cardsUnder('Recently completed')[0].textContent));
+// THE CROW-990 GAP 1 ROW. corveil/corveil#2141 — reviewed, request cleared,
+// still open. It matched no group at all before this heading existed.
+check('changes-requested card is under Waiting on author',
+  /PR 104/.test((cardsUnder('Waiting on author')[0] || {}).textContent || ''));
+check('it says when you last reviewed it, so the wait is legible',
+  /reviewed /.test(cardsUnder('Waiting on author')[0].textContent));
+check('a finished PR offers no Start Review button',
+  ![...cardsUnder('Recently completed')[0].querySelectorAll('button')]
+    .some((b) => /Review/.test(b.textContent)));
+
+console.log('\nAn approved-but-unmerged PR still reads as completed, dated by the approval:');
+T.boardData.reviews = {
+  unseen: 0,
+  group_order: ORDER,
+  group_counts: Object.assign({}, ZERO, { recently_completed: 1 }),
+  hidden_by_filters: 0,
+  reviews: [grouped('g5', 105, 'recently_completed', {
+    kickoff_action: 'skip', state: 'OPEN',
+    viewer_last_review_state: 'APPROVED', viewer_last_reviewed_at: iso(2),
+  })],
+};
+T.renderBoard();
+check('with no completed_at it falls back to the approval timestamp',
+  /approved /.test(cardsUnder('Recently completed')[0].textContent));
 
 console.log('\nEmpty groups render with a zero count instead of disappearing:');
 T.boardData.reviews = {
   unseen: 0,
-  group_order: ['in_review', 'not_approved_yet', 'approved_recently'],
-  group_counts: { in_review: 0, not_approved_yet: 0, approved_recently: 0 },
+  group_order: ORDER,
+  group_counts: ZERO,
   hidden_by_filters: 0,
   reviews: [],
 };
 T.renderBoard();
-check('three headers still present with nothing to show', q('.group-head').length === 3);
-check('every count reads 0', JSON.stringify(groupCounts()) === JSON.stringify(['0', '0', '0']));
-check('each empty group says what is empty', q('.group-empty').length === 3);
+check('four headers still present with nothing to show', q('.group-head').length === 4);
+check('every count reads 0', JSON.stringify(groupCounts()) === JSON.stringify(['0', '0', '0', '0']));
+check('each empty group says what is empty', q('.group-empty').length === 4);
 
 console.log('\nHidden-by-filters is surfaced (#953 direction C):');
 T.boardData.reviews = {
   unseen: 0,
-  group_order: ['in_review', 'not_approved_yet', 'approved_recently'],
-  group_counts: { in_review: 0, not_approved_yet: 0, approved_recently: 0 },
+  group_order: ORDER,
+  group_counts: ZERO,
   hidden_by_filters: 12,
   reviews: [],
 };
@@ -442,13 +477,13 @@ check('no note when nothing is hidden', q('.board-note').length === 0);
 console.log('\nSearching scopes to matching groups and counts the visible rows:');
 T.boardData.reviews = {
   unseen: 0,
-  group_order: ['in_review', 'not_approved_yet', 'approved_recently'],
-  group_counts: { in_review: 1, not_approved_yet: 1, approved_recently: 1 },
+  group_order: ORDER,
+  group_counts: { in_review: 1, not_approved_yet: 1, waiting_on_author: 0, recently_completed: 1 },
   hidden_by_filters: 0,
   reviews: [
     grouped('g1', 101, 'in_review', { review_session_id: 'sess-1', kickoff_action: 'skip' }),
     grouped('g2', 102, 'not_approved_yet', { kickoff_action: 'create' }),
-    grouped('g3', 103, 'approved_recently', { kickoff_action: 'create' }),
+    grouped('g3', 103, 'recently_completed', { kickoff_action: 'skip' }),
   ],
 };
 T.reviewSearch = '102';
@@ -467,26 +502,35 @@ check('ungrouped reviews default into Not approved yet', cardsUnder('Not approve
 check('count falls back to the rendered rows rather than claiming zero',
   groupCounts()[groupTitles().indexOf('Not approved yet')] === '3');
 
-console.log('\nApproving something never chimes "review requested":');
+console.log('\nWork LEAVING the queue never chimes "review requested":');
 T.soundArmed = true;
-T.boardData.reviews = {
+const chimeBase = {
   unseen: 0,
-  reviews: [grouped('g2', 102, 'not_approved_yet', { kickoff_action: 'create' })],
+  group_announces_new_request: {
+    in_review: true, not_approved_yet: true, waiting_on_author: false, recently_completed: false,
+  },
 };
+T.boardData.reviews = Object.assign({}, chimeBase, {
+  reviews: [grouped('g2', 102, 'not_approved_yet', { kickoff_action: 'create' })],
+});
 T.detectReviewSounds();                       // arm the baseline
 const emitted = [];
 T.setEmitEventSpy((name, key) => emitted.push([name, key]));
-T.boardData.reviews = {
-  unseen: 0,
+T.boardData.reviews = Object.assign({}, chimeBase, {
   reviews: [
     grouped('g2', 102, 'not_approved_yet', { kickoff_action: 'create' }),
-    grouped('g3', 103, 'approved_recently', { kickoff_action: 'create' }),
+    grouped('g3', 103, 'recently_completed', { kickoff_action: 'skip' }),
+    grouped('g5', 105, 'waiting_on_author', { kickoff_action: 'skip' }),
     grouped('g4', 104, 'not_approved_yet', { kickoff_action: 'create' }),
   ],
-};
+});
 T.detectReviewSounds();
 check('a genuinely new request chimes', emitted.some(([n, k]) => n === 'reviewRequested' && k === 'g4'));
-check('the approved tail does not', !emitted.some(([, k]) => k === 'g3'));
+check('the completed tail does not', !emitted.some(([, k]) => k === 'g3'));
+// A waiting-on-author row is populated by your OWN verdict landing. Naming the
+// excluded group inline is what would have opted this one in by default.
+check('nor does a PR your own review just parked with its author',
+  !emitted.some(([, k]) => k === 'g5'));
 T.setEmitEventSpy(null);
 
 console.log(`\n${pass} passed, ${fail} failed`);
