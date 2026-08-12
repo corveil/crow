@@ -74,7 +74,14 @@ enum RPCWebSocketHandler {
             // "daemon died" (CROW-956).
             let readFailure = ErrorBox()
 
-            try await withThrowingTaskGroup(of: Void.self) { group in
+            // No `try`: `withThrowingTaskGroup` is `rethrows`, and this body
+            // throws nothing — the one call that could, `group.next()`, is
+            // deliberately `try?`'d below so `shutdown()` always runs. It stays a
+            // *throwing* group because the child tasks throw; their errors are
+            // simply discarded at scope exit, which is the whole reason
+            // `readFailure` exists. Re-adding `try` only restores the warning
+            // (CROW-993).
+            await withThrowingTaskGroup(of: Void.self) { group in
                 // Writer — the sole owner of `outbound`. Unchanged: responses
                 // may now arrive out of order, but they still cross the socket
                 // one frame at a time from one task, and the client correlates
