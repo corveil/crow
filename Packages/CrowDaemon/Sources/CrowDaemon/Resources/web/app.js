@@ -354,7 +354,7 @@ window.refreshVersionUpdateBanner = refreshVersionUpdateBanner;
 const uiConfig = { hideSessionDetails: false, notifications: null, webPasswordSet: false, vsCodeAvailable: false, isLocal: false,
   // Session switcher overlay (CROW-976) — defaults mirror AppConfig.SwitcherSettings.
   switcherEnabled: true,
-  switcherBinding: 'shift+tab',
+  switcherBinding: 'esc+tab',
   switcherCaptureInTerminal: true,
   switcherOrder: 'mru',
   switcherPreview: true,
@@ -373,7 +373,7 @@ async function loadUIConfig() {
     uiConfig.hideSessionDetails = !!(cfg.sidebar && cfg.sidebar.hideSessionDetails);
     const sw = cfg.switcher || {};
     uiConfig.switcherEnabled = sw.enabled !== false;
-    uiConfig.switcherBinding = (sw.binding && String(sw.binding)) || 'shift+tab';
+    uiConfig.switcherBinding = (sw.binding && String(sw.binding)) || 'esc+tab';
     uiConfig.switcherCaptureInTerminal = sw.captureInTerminal !== false;
     uiConfig.switcherOrder = (sw.order === 'sidebar') ? 'sidebar' : 'mru';
     uiConfig.switcherPreview = sw.preview !== false;
@@ -2503,6 +2503,10 @@ function showSessionNotFound(id) {
 const sessionMRU = [];
 const SWITCHER_PREVIEW_CACHE_MS = 4000;
 const SWITCHER_PREVIEW_DEBOUNCE_MS = 150;
+// How long a tapped prefix key (the `esc` in `esc+tab`) stays armed. Long
+// enough to be typed on a phone keyboard, short enough that a stray Esc can't
+// turn a much later Tab into a switcher open.
+const SWITCHER_PREFIX_WINDOW_MS = 1500;
 const switcherPreviewCache = new Map();
 let switcherPreviewTimer = null;
 let switcherPreviewSeq = 0;
@@ -2514,6 +2518,8 @@ const switcherState = {
   chord: null,
   modifiersHeld: null,
   previousFocus: null,
+  // Epoch ms of the last prefix keypress; 0 when nothing is armed.
+  prefixArmedAt: 0,
 };
 
 function switcherBindingModifierFromEvent(e) {
@@ -2581,9 +2587,11 @@ function switcherCommitHint() {
   if (b.alt) mods.push('Alt');
   if (b.meta) mods.push('Cmd');
   const cycle = switcherCycleKeyLabel();
+  // Three commit gestures, one per chord shape: release the held modifier, hit
+  // Enter (a prefix chord holds nothing down), or release the key itself.
   const commitHint = switcherBindingHasModifiers(b)
     ? 'release ' + mods.join('+')
-    : 'release ' + cycle;
+    : (b.prefix ? 'Enter' : 'release ' + cycle);
   return cycle + ' / ←→ to cycle · ' + commitHint + ' to switch · Esc to cancel';
 }
 
@@ -2607,17 +2615,40 @@ function touchSessionMRU(id) {
 }
 
 function parseSwitcherBinding(binding) {
-  const parts = String(binding || 'shift+tab').toLowerCase().split('+').map((p) => p.trim()).filter(Boolean);
+  const parts = String(binding || 'esc+tab').toLowerCase().split('+').map((p) => p.trim()).filter(Boolean);
   const keyPart = parts[parts.length - 1] || 'tab';
+  const lead = parts.slice(0, -1);
   const keys = switcherBindingKeysForPart(keyPart);
   return {
     key: keys[0],
     keys,
-    shift: parts.includes('shift'),
-    ctrl: parts.includes('ctrl'),
-    alt: parts.includes('alt'),
-    meta: parts.includes('meta') || parts.includes('cmd') || parts.includes('command'),
+    shift: lead.includes('shift'),
+    ctrl: lead.includes('ctrl'),
+    alt: lead.includes('alt'),
+    meta: lead.includes('meta') || lead.includes('cmd') || lead.includes('command'),
+    // Esc is not a modifier the keyboard reports on a later event, so a leading
+    // `esc` is a *prefix*: tap it, then press the key. Everything downstream
+    // branches on this instead of trying to read an `escKey` that can't exist.
+    prefix: (lead.includes('esc') || lead.includes('escape')) ? 'Escape' : null,
   };
+}
+
+// True while a prefix key pressed within the window is still waiting for its
+// second keystroke.
+function switcherPrefixArmed() {
+  if (!switcherState.prefixArmedAt) return false;
+  return (Date.now() - switcherState.prefixArmedAt) <= SWITCHER_PREFIX_WINDOW_MS;
+}
+
+function armSwitcherPrefix() { switcherState.prefixArmedAt = Date.now(); }
+function disarmSwitcherPrefix() { switcherState.prefixArmedAt = 0; }
+
+// Would this keydown *open* the switcher? Same as matching the chord, except a
+// prefix binding also needs its prefix armed — otherwise `esc+tab` would fire on
+// every bare Tab, which is exactly the collision CROW-980 moved away from.
+function switcherBindingOpens(e, binding) {
+  if (!eventMatchesSwitcherBinding(e, binding)) return false;
+  return parseSwitcherBinding(binding).prefix ? switcherPrefixArmed() : true;
 }
 
 function eventMatchesSwitcherBinding(e, binding) {
@@ -2718,6 +2749,7 @@ function closeSwitcherOverlay() {
   switcherState.chord = null;
   switcherState.modifiersHeld = null;
   switcherState.highlightedId = null;
+  switcherState.prefixArmedAt = 0;
   if (switcherPreviewTimer) { clearTimeout(switcherPreviewTimer); switcherPreviewTimer = null; }
   const root = document.getElementById('session-switcher');
   if (root) {
@@ -2753,6 +2785,7 @@ function switcherOnBinding(e) {
   if (!uiConfig.switcherEnabled) return;
   const entries = buildSwitcherEntries();
   if (entries.length <= 1) return;
+  disarmSwitcherPrefix();
   if (!switcherState.open) {
     switcherState.open = true;
     switcherState.originId = selectedId;
@@ -2908,6 +2941,14 @@ function onSwitcherKeyDown(e) {
       switcherCancel();
       return;
     }
+    if (e.key === 'Enter') {
+      // The commit gesture for a chord that holds nothing down (`esc+tab`).
+      // Harmless for the others — they commit on release before Enter matters.
+      e.preventDefault();
+      e.stopPropagation();
+      switcherCommit();
+      return;
+    }
     if (e.key === 'ArrowRight') {
       e.preventDefault();
       e.stopPropagation();
@@ -2920,6 +2961,8 @@ function onSwitcherKeyDown(e) {
       switcherAdvance(-1);
       return;
     }
+    // Cycling once open needs the key alone — re-tapping the prefix for every
+    // step would be unusable, so this deliberately skips the armed check.
     if (eventMatchesSwitcherBinding(e, uiConfig.switcherBinding)) {
       e.preventDefault();
       e.stopPropagation();
@@ -2932,7 +2975,25 @@ function onSwitcherKeyDown(e) {
     return;
   }
   if (e.type !== 'keydown') return;
-  if (!eventMatchesSwitcherBinding(e, uiConfig.switcherBinding)) return;
+  const chord = parseSwitcherBinding(uiConfig.switcherBinding);
+  if (chord.prefix) {
+    if (e.key === chord.prefix) {
+      // Arm and get out of the way: Esc is never consumed here. It has to stay
+      // instant for interrupting an agent, and holding it back on the chance a
+      // Tab follows would add latency to every single press.
+      armSwitcherPrefix();
+      return;
+    }
+    // Any other key breaks the sequence — except a bare modifier, which a user
+    // may well be resting on. Without this, Esc → "ls" → Tab would still open.
+    if (!eventMatchesSwitcherBinding(e, uiConfig.switcherBinding)) {
+      if (!switcherBindingModifierFromEvent(e)) disarmSwitcherPrefix();
+      return;
+    }
+    if (!switcherPrefixArmed()) return;
+  } else if (!eventMatchesSwitcherBinding(e, uiConfig.switcherBinding)) {
+    return;
+  }
   if (isTerminalFocused() && !uiConfig.switcherCaptureInTerminal) return;
   if (document.querySelector('.text-prompt-backdrop, .modal-dialog-backdrop, .settings-overlay')) return;
   switcherOnBinding(e);
@@ -2948,7 +3009,11 @@ function onSwitcherKeyUp(e) {
     if (!switcherBindingModifiersActive()) switcherCommit();
     return;
   }
+  // A prefix chord releases the prefix long before the overlay opens, so
+  // committing on release would close it on the very keystroke that opened it.
+  // It stays open and waits for Enter (or a click) instead.
   if (!switcherBindingHasModifiers(switcherState.chord)
+      && !switcherState.chord.prefix
       && eventMatchesSwitcherBinding(e, uiConfig.switcherBinding)) {
     e.preventDefault();
     e.stopPropagation();
@@ -5577,7 +5642,7 @@ function handleTerminalKey(e) {
     });
     return false;
   }
-  if (eventMatchesSwitcherBinding(e, uiConfig.switcherBinding)) {
+  if (switcherBindingOpens(e, uiConfig.switcherBinding)) {
     if (uiConfig.switcherEnabled && uiConfig.switcherCaptureInTerminal) {
       switcherOnBinding(e);
       e.preventDefault();

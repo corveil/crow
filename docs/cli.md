@@ -1615,11 +1615,13 @@ crow ui set [--hide-session-details <hide-session-details>] [--switcher-enabled 
 
 Only the flags you pass change; at least one is required. Connected browsers pick the change up within a couple of seconds — no reload.
 
+--switcher-binding takes a modifier chord like `shift+tab` or `ctrl+space`, plus one sequence form: a leading `esc` is a prefix, not a modifier, so the default `esc+tab` means tap Esc, then Tab. A prefix chord keeps the overlay open (nothing is being held down) — Tab or ←→ cycle, Enter switches, Esc cancels. Esc itself is never swallowed and still reaches the terminal.
+
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |
 | `--hide-session-details` | `<hide-session-details>` | no | Hide ticket title and repo/branch lines in sidebar rows (true or false) |
 | `--switcher-enabled` | `<switcher-enabled>` | no | Enable the session switcher overlay (true or false) |
-| `--switcher-binding` | `<switcher-binding>` | no | Session switcher key chord (default: shift+tab) |
+| `--switcher-binding` | `<switcher-binding>` | no | Session switcher key chord (default: esc+tab — tap Esc, then Tab) |
 | `--switcher-capture-in-terminal` | `<switcher-capture-in-terminal>` | no | Capture the switcher binding inside focused terminals (true or false) |
 | `--switcher-order` | `<switcher-order>` | no | Session switcher ordering: mru or sidebar |
 | `--switcher-preview` | `<switcher-preview>` | no | Fetch a tmux pane preview for the highlighted switcher card (true or false) |

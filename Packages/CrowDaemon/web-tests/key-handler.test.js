@@ -24,6 +24,8 @@ const epilogue = `
   set searchAddon(v){ searchAddon = v; },
   set termWs(v){ termWs = v; },
   set uiConfig(v){ Object.assign(uiConfig, v); },
+  armSwitcherPrefix(){ return armSwitcherPrefix(); },
+  disarmSwitcherPrefix(){ return disarmSwitcherPrefix(); },
 };
 `;
 const APP_JS = __dirname + '/../Sources/CrowDaemon/Resources/web/app.js';
@@ -354,6 +356,30 @@ async function main() {
     const result = T.handleTerminalKey(e);
     check('Shift+Tab passes through when captureInTerminal is false',
       result === true && e.prevented === 0);
+  }
+
+  // CROW-980: the default binding leads with a prefix key, so a bare Tab in the
+  // terminal must stay a Tab — completion would be dead otherwise.
+  {
+    withClipboard();
+    setup();
+    T.uiConfig = { switcherEnabled: true, switcherBinding: 'esc+tab', switcherCaptureInTerminal: true };
+    T.disarmSwitcherPrefix();
+    const e = key('Tab');
+    const result = T.handleTerminalKey(e);
+    check('a bare Tab reaches the terminal under esc+tab',
+      result === true && e.prevented === 0);
+  }
+  {
+    withClipboard();
+    setup();
+    T.uiConfig = { switcherEnabled: true, switcherBinding: 'esc+tab', switcherCaptureInTerminal: true };
+    T.armSwitcherPrefix();
+    const e = key('Tab');
+    const result = T.handleTerminalKey(e);
+    check('Tab is captured once Esc armed the prefix',
+      result === false && e.prevented === 1 && sent.length === 0);
+    T.disarmSwitcherPrefix();
   }
 
   console.log(`\n${pass} passed, ${fail} failed`);
