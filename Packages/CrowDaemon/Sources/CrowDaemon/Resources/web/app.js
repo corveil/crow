@@ -3907,7 +3907,7 @@ function renderScorecard(root) {
   const refresh = el('button', 'action-btn', 'Refresh');
   refresh.onclick = () => refreshBoard('scorecard');
   head.appendChild(refresh);
-  // Rebuild backfills snapshots from telemetry.db and recomputes the ungraded
+  // Rebuild backfills snapshots from telemetry.db and recomputes the Manager
   // Manager rollups (#745) — only offered when telemetry is actually capturing,
   // since with it off there is no database to rebuild from.
   if (data && data.telemetryCapturing) {
@@ -3985,7 +3985,7 @@ function scorecardEmpty(data) {
   const msg = el('div', 'score-empty-msg', (data.telemetryEnabled
     ? 'The scorecard is computed from analytics snapshots written when sessions complete or archive. Telemetry is on — finish a session and it will appear here.'
     : 'The scorecard is computed from analytics snapshots written when sessions complete or archive. Snapshots require Claude Code telemetry, which is off by default.') +
-    ' The Manager session is never graded — its usage appears in its own ungraded section once captured.');
+    ' A Manager session never completes, so it is metered in its own section instead — graded on efficiency, but never on outcomes.');
   box.appendChild(msg);
   if (!data.telemetryEnabled) {
     const btn = el('button', 'action-btn action-primary', 'Open Settings');

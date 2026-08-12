@@ -169,6 +169,19 @@ check('weeks land in their own group', grouped[0].weeks.length === 2 && grouped[
 const unnamed = T.groupManagerWeeks([managerWeek({ sessionName: null })]);
 check('a deleted Manager falls back to a generic name', unnamed[0].name === 'Manager');
 
+console.log('\nEmpty state:');
+// No snapshots AND no Manager weeks is the only path to the empty state. Its
+// copy describes the Manager's posture, so it drifts the moment that posture
+// changes — CROW-983's review caught it still saying "never graded". Pinned
+// here so the next posture change has to update it too.
+render([]);
+const emptyMsg = Array.from(q('.score-empty-msg')).map((n) => n.textContent).join(' ');
+check('empty state rendered', q('.score-empty-msg').length === 1);
+check('empty state does not claim the Manager is never graded', !/never graded/.test(emptyMsg));
+check('empty state does not call the section ungraded', !/ungraded/.test(emptyMsg));
+check('empty state states the efficiency/outcomes split',
+  /efficiency/.test(emptyMsg) && /outcome/.test(emptyMsg));
+
 console.log('\nBack-compat with a pre-CROW-983 daemon:');
 // managerWeeks absent entirely (pre-#767 daemon) must not throw.
 const legacy = payload([]);

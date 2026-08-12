@@ -117,7 +117,7 @@ public final class SessionService {
         // Same for PR attributions: the v2 combined score's hygiene factor
         // (#699) reads this mirror; IssueTracker resyncs it after writes.
         appState.prAttributions = data.prAttributions ?? [:]
-        // And the Manager weekly usage rollups (#745) for the ungraded bucket.
+        // And the Manager weekly usage rollups (#745, CROW-983).
         appState.managerUsageWeekly = data.managerUsageWeekly ?? [:]
 
         // Migrate a legacy primary Manager (persisted as `.work` before
