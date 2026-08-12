@@ -257,9 +257,11 @@ public enum CrowDaemon {
             let telemetrySessionIDsProvider: @Sendable () async -> [UUID] = {
                 await MainActor.run { telemetryHolder.service }?.sessionIDs() ?? []
             }
-            let managerUsageProvider: @Sendable (Date, Date) async -> SessionAnalytics = { start, end in
+            // Per-Manager since CROW-983: the id is a parameter, so every
+            // Manager is metered rather than only the well-known primary.
+            let managerUsageProvider: @Sendable (UUID, Date, Date) async -> SessionAnalytics = { id, start, end in
                 await MainActor.run { telemetryHolder.service }?
-                    .analytics(for: AppState.managerSessionID, receivedBetween: start, end: end)
+                    .analytics(for: id, receivedBetween: start, end: end)
                     ?? SessionAnalytics()
             }
             let telemetryDeleteProvider: @Sendable (UUID) async -> Void = { id in
@@ -268,7 +270,7 @@ public enum CrowDaemon {
             #else
             let analyticsProvider: (@Sendable (UUID) async -> SessionAnalytics?)? = nil
             let telemetrySessionIDsProvider: (@Sendable () async -> [UUID])? = nil
-            let managerUsageProvider: (@Sendable (Date, Date) async -> SessionAnalytics)? = nil
+            let managerUsageProvider: (@Sendable (UUID, Date, Date) async -> SessionAnalytics)? = nil
             let telemetryDeleteProvider: (@Sendable (UUID) async -> Void)? = nil
             #endif
             let service = SessionService(

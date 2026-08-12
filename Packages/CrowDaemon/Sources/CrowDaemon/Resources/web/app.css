@@ -1559,14 +1559,25 @@ body.update-banner-visible #back-to-sidebar {
 .score-prior-combined { color: var(--text-muted); font-variant-numeric: tabular-nums; min-width: 30px; text-align: right; }
 .score-prior-cost { color: var(--text-muted); font-variant-numeric: tabular-nums; min-width: 56px; text-align: right; }
 
-/* Manager usage (#767) — the ungraded bucket. Same row rhythm as .score-prior
-   so it belongs to the card system, but muted throughout and badge-free: it
-   must never read as a graded surface. */
-.score-manager { display: flex; flex-direction: column; gap: 6px; }
+/* Manager usage (#767, CROW-983). Same row rhythm and chip vocabulary as the
+   graded weeks so a Manager week reads like a work week — it now carries an
+   efficiency badge, because that half of the grade needs no outcome. The
+   "efficiency only" pill (.score-ungraded) is what keeps it from reading as
+   part of the graded aggregate; it must stay. */
+.score-manager { display: flex; flex-direction: column; gap: 12px; }
+.score-manager-week-block { display: flex; flex-direction: column; gap: 6px; }
 .score-manager-row { display: flex; align-items: center; gap: 10px; font-size: 12px; }
 .score-manager-week { color: var(--text-secondary); }
 .score-manager-prompts { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--text-secondary); }
 .score-manager-stat { color: var(--text-muted); font-variant-numeric: tabular-nums; min-width: 72px; text-align: right; }
+/* Only rendered when more than one Manager exists. */
+.score-manager-group {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
 .score-ungraded {
   margin-left: 6px;
   padding: 1px 6px;

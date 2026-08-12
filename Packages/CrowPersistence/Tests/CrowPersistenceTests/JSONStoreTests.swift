@@ -373,3 +373,58 @@ import Testing
     #expect(reloaded.data.analyticsSnapshots?[sessionID.uuidString] == snapshot)
     #expect(reloaded.data.sessions.count == 1)
 }
+
+// MARK: - Manager rollup back-compat (CROW-983)
+
+/// A `store.json` written before CROW-983 must keep decoding. `StoreData`
+/// decoding is all-or-nothing — `JSONStore.init` catches any throw by copying
+/// the file to `store.json.bak` and resetting to an empty store — so a
+/// non-optional field added to `ManagerWeeklyUsage` would not lose the
+/// scorecard, it would lose the user's **sessions**. This pins that the new
+/// `sessionID`/`compactionCount` fields stayed optional.
+@Test func preCROW983ManagerRollupStillDecodes() throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+
+    // Verbatim pre-CROW-983 shape: bare "yyyy-MM-dd" key, a rollup with only
+    // weekStart + analytics, and a session that must survive alongside it.
+    let legacy = """
+    {
+      "sessions": [
+        {"id": "11111111-1111-1111-1111-111111111111", "name": "keep-me",
+         "status": "active", "kind": "work",
+         "createdAt": "2026-07-13T00:00:00Z", "updatedAt": "2026-07-13T00:00:00Z"}
+      ],
+      "worktrees": [], "links": [], "terminals": [],
+      "managerUsageWeekly": {
+        "2026-07-13": {
+          "weekStart": "2026-07-13T00:00:00Z",
+          "analytics": {
+            "totalCost": 4.25, "inputTokens": 900, "outputTokens": 0,
+            "cacheReadTokens": 0, "cacheCreationTokens": 0,
+            "activeTimeSeconds": 1800, "linesAdded": 0, "linesRemoved": 0,
+            "commitCount": 0, "promptCount": 7, "toolCallCount": 0,
+            "apiRequestCount": 0, "apiErrorCount": 0
+          }
+        }
+      }
+    }
+    """
+    try Data(legacy.utf8).write(to: dir.appendingPathComponent("store.json"))
+
+    let store = JSONStore(directory: dir)
+
+    // The decode succeeded rather than falling back to an empty store.
+    #expect(store.data.sessions.count == 1)
+    #expect(store.data.sessions.first?.name == "keep-me")
+    #expect(!FileManager.default.fileExists(atPath: dir.appendingPathComponent("store.json.bak").path))
+
+    let rollup = try #require(store.data.managerUsageWeekly?["2026-07-13"])
+    #expect(rollup.analytics.promptCount == 7)
+    #expect(rollup.analytics.totalCost == 4.25)
+    // Absent in the old shape ⇒ nil, which the DTO resolves to the primary
+    // Manager and reads as "never counted" respectively.
+    #expect(rollup.sessionID == nil)
+    #expect(rollup.compactionCount == nil)
+}

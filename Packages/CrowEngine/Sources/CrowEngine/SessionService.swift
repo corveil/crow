@@ -26,9 +26,10 @@ public final class SessionService {
     /// snapshot backfill (#745). Optional so unit tests and telemetry-off
     /// launches make the backfill a no-op.
     private let telemetrySessionIDsProvider: (@Sendable () async -> [UUID])?
-    /// Windowed Manager-session aggregate from telemetry.db for the ungraded
-    /// weekly usage bucket (#745). Optional for the same reason.
-    private let managerUsageProvider: (@Sendable (Date, Date) async -> SessionAnalytics)?
+    /// Windowed per-Manager aggregate from telemetry.db for the weekly usage
+    /// bucket (#745; the session id became a parameter in CROW-983, when the
+    /// rollup stopped assuming a single Manager). Optional for the same reason.
+    private let managerUsageProvider: (@Sendable (UUID, Date, Date) async -> SessionAnalytics)?
     /// Drops a session's rows from telemetry.db as part of `deleteSession`
     /// (#772). Injected here rather than at each call site so all three delete
     /// paths — the daemon's `delete-session` handler, the engine-router
@@ -47,7 +48,7 @@ public final class SessionService {
         providerManager: ProviderManager? = nil,
         analyticsProvider: (@Sendable (UUID) async -> SessionAnalytics?)? = nil,
         telemetrySessionIDsProvider: (@Sendable () async -> [UUID])? = nil,
-        managerUsageProvider: (@Sendable (Date, Date) async -> SessionAnalytics)? = nil,
+        managerUsageProvider: (@Sendable (UUID, Date, Date) async -> SessionAnalytics)? = nil,
         telemetryDeleteProvider: (@Sendable (UUID) async -> Void)? = nil,
         hostBridge: HostBridge = NoopHostBridge()
     ) {
@@ -116,7 +117,7 @@ public final class SessionService {
         // Same for PR attributions: the v2 combined score's hygiene factor
         // (#699) reads this mirror; IssueTracker resyncs it after writes.
         appState.prAttributions = data.prAttributions ?? [:]
-        // And the Manager weekly usage rollups (#745) for the ungraded bucket.
+        // And the Manager weekly usage rollups (#745, CROW-983).
         appState.managerUsageWeekly = data.managerUsageWeekly ?? [:]
 
         // Migrate a legacy primary Manager (persisted as `.work` before
@@ -4173,49 +4174,108 @@ public final class SessionService {
         return written
     }
 
-    /// Week-start key for the persisted Manager rollups ("yyyy-MM-dd").
-    private static let weekKeyFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = .current
-        formatter.dateFormat = "yyyy-MM-dd"
-        return formatter
-    }()
+    /// Composite key for a persisted Manager rollup: `"yyyy-MM-dd|<uuid>"`
+    /// (CROW-983). Pre-CROW-983 rows use a bare `"yyyy-MM-dd"`, which still
+    /// decodes and is read as the primary Manager — the only session #745
+    /// ever queried. Legacy keys are deliberately NOT rewritten: a rename
+    /// would have to be transactional against a store that other writers
+    /// share, and reading them is enough.
+    ///
+    /// The week component is formatted with the caller's calendar rather than
+    /// a `static` `DateFormatter`. The old static captured `.timeZone =
+    /// .current` at first access while `refreshManagerUsage` re-reads
+    /// `.current` on every call, so a mid-process timezone change could key a
+    /// week under a date its own bucket boundaries disagreed with.
+    static func managerWeekKey(weekStart: Date, sessionID: UUID, calendar: Calendar) -> String {
+        let parts = calendar.dateComponents([.year, .month, .day], from: weekStart)
+        let day = String(
+            format: "%04d-%02d-%02d", parts.year ?? 0, parts.month ?? 0, parts.day ?? 0)
+        return "\(day)|\(sessionID.uuidString)"
+    }
 
-    /// Recompute the Manager session's ungraded weekly usage rollups from
-    /// telemetry.db (#745) — the Manager session never reaches a terminal
-    /// status, so it can't produce a `SessionAnalyticsSnapshot`. Covers the
-    /// current week plus the trailing baseline window. Merge-only: weeks with
-    /// no telemetry rows are skipped rather than zeroed (absence usually
-    /// means the rows aged out of retention), so persisted rollups survive
-    /// pruning. Known bounded edge: the oldest still-covered week can be
-    /// partially pruned mid-week, briefly dipping its recomputed total; it
-    /// self-corrects once the week ages out entirely.
-    public func refreshManagerUsage(now: Date = Date()) async {
-        guard let managerUsageProvider else { return }
-        // ISO-8601 weeks in the current timezone — the same bucketing
-        // ScorecardModel.build uses, so the Manager card's weeks line up
-        // with the graded weeks.
+    /// ISO-8601 calendar in the current timezone — the same bucketing
+    /// `ScorecardModel.build` uses, so Manager weeks line up with graded weeks.
+    private static func managerWeekCalendar() -> Calendar {
         var calendar = Calendar(identifier: .iso8601)
         calendar.timeZone = .current
+        return calendar
+    }
+
+    /// Attribute one completed compaction to the week it happened in
+    /// (CROW-983). Called from the `hook-event` handler on `PostCompact` for
+    /// Manager sessions.
+    ///
+    /// Accumulated at event time because it cannot be recomputed: telemetry.db
+    /// has no compaction rows, and `SessionHookState.compactionCount` is a
+    /// per-app-run running total for the session's whole life — for a session
+    /// that spans months, there is no way to slice out "this week's" share
+    /// after the fact. Work sessions dodge this by snapshotting once at a
+    /// terminal status, which a Manager never reaches.
+    public func noteManagerCompaction(sessionID: UUID, now: Date = Date()) {
+        let calendar = Self.managerWeekCalendar()
+        guard let week = calendar.dateInterval(of: .weekOfYear, for: now) else { return }
+        let key = Self.managerWeekKey(
+            weekStart: week.start, sessionID: sessionID, calendar: calendar)
+
+        store.mutate { data in
+            var rollups = data.managerUsageWeekly ?? [:]
+            // A compaction can land before the week's first telemetry refresh,
+            // so seed an otherwise-empty rollup rather than dropping the count.
+            var rollup = rollups[key] ?? ManagerWeeklyUsage(
+                weekStart: week.start, analytics: SessionAnalytics(), sessionID: sessionID)
+            rollup.compactionCount = (rollup.compactionCount ?? 0) + 1
+            rollups[key] = rollup
+            data.managerUsageWeekly = rollups
+        }
+        appState.managerUsageWeekly = store.data.managerUsageWeekly ?? [:]
+    }
+
+    /// Recompute every Manager session's weekly usage rollups from telemetry.db
+    /// (#745; per-Manager since CROW-983) — a Manager never reaches a terminal
+    /// status, so it can't produce a `SessionAnalyticsSnapshot`. Covers the
+    /// current week plus the trailing baseline window, for each Manager.
+    ///
+    /// Merge-only: weeks with no telemetry rows are skipped rather than zeroed
+    /// (absence usually means the rows aged out of retention), so persisted
+    /// rollups survive pruning. Known bounded edge: the oldest still-covered
+    /// week can be partially pruned mid-week, briefly dipping its recomputed
+    /// total; it self-corrects once the week ages out entirely.
+    public func refreshManagerUsage(now: Date = Date()) async {
+        guard let managerUsageProvider else { return }
+        let calendar = Self.managerWeekCalendar()
         guard let currentWeek = calendar.dateInterval(of: .weekOfYear, for: now) else { return }
 
+        let managerIDs = appState.managerSessions.map(\.id)
         var updates: [String: ManagerWeeklyUsage] = [:]
-        for offset in 0...EfficiencyGrading.Tuning.baselineWeekCount {
-            guard let weekDate = calendar.date(
-                      byAdding: .weekOfYear, value: -offset, to: currentWeek.start),
-                  let interval = calendar.dateInterval(of: .weekOfYear, for: weekDate)
-            else { continue }
-            let analytics = await managerUsageProvider(interval.start, interval.end)
-            guard !analytics.isEmpty else { continue }
-            updates[Self.weekKeyFormatter.string(from: interval.start)] =
-                ManagerWeeklyUsage(weekStart: interval.start, analytics: analytics)
+        for managerID in managerIDs {
+            for offset in 0...EfficiencyGrading.Tuning.baselineWeekCount {
+                guard let weekDate = calendar.date(
+                          byAdding: .weekOfYear, value: -offset, to: currentWeek.start),
+                      let interval = calendar.dateInterval(of: .weekOfYear, for: weekDate)
+                else { continue }
+                let analytics = await managerUsageProvider(managerID, interval.start, interval.end)
+                guard !analytics.isEmpty else { continue }
+                let key = Self.managerWeekKey(
+                    weekStart: interval.start, sessionID: managerID, calendar: calendar)
+                updates[key] = ManagerWeeklyUsage(
+                    weekStart: interval.start, analytics: analytics, sessionID: managerID)
+            }
         }
 
         guard !updates.isEmpty else { return }
         store.mutate { data in
             var rollups = data.managerUsageWeekly ?? [:]
-            for (key, value) in updates { rollups[key] = value }
+            for (key, value) in updates {
+                var merged = value
+                // Compactions are carried forward, never recomputed —
+                // telemetry.db has no compaction rows. Read inside the mutate,
+                // not while building `updates`: this method suspends at every
+                // provider `await`, and `noteManagerCompaction` runs on the
+                // same actor, so a value captured before the loop finished
+                // would silently drop any compaction that landed during it.
+                merged.compactionCount = rollups[key]?.compactionCount
+                rollups[key] = merged
+            }
             data.managerUsageWeekly = rollups
         }
         appState.managerUsageWeekly = store.data.managerUsageWeekly ?? [:]

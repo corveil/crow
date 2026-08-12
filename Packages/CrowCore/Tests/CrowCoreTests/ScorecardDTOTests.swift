@@ -251,3 +251,190 @@ private func managerWeek(
     #expect(!dark.telemetryCapturing)
     #expect(dark.telemetryLastReceivedAtMillis == nil)
 }
+
+// MARK: - Widened Manager metering + efficiency grade (CROW-983)
+
+private let managerA = UUID(uuidString: "AAAAAAAA-0000-0000-0000-000000000001")!
+private let managerB = UUID(uuidString: "BBBBBBBB-0000-0000-0000-000000000002")!
+
+/// A Manager week with enough traffic to clear the grading prompt floor and
+/// exercise every widened figure.
+private func richManagerWeek(
+    _ weekStart: Date,
+    sessionID: UUID? = nil,
+    compactions: Int? = nil,
+    cost: Double = 12.5
+) -> ManagerWeeklyUsage {
+    ManagerWeeklyUsage(
+        weekStart: weekStart,
+        analytics: SessionAnalytics(
+            totalCost: cost,
+            inputTokens: 600_000,
+            outputTokens: 40_000,
+            cacheReadTokens: 1_800_000,
+            cacheCreationTokens: 120_000,
+            activeTimeSeconds: 7200,
+            linesAdded: 400,
+            linesRemoved: 120,
+            commitCount: 9,
+            promptCount: 40,
+            toolCallCount: 310,
+            apiRequestCount: 500,
+            apiErrorCount: 15
+        ),
+        sessionID: sessionID,
+        compactionCount: compactions)
+}
+
+@Test func managerWeekProjectsTheWidenedFigures() throws {
+    let model = ScorecardModel.build(snapshots: [], now: now, calendar: utc)
+    let week = richManagerWeek(date(2026, 7, 13), sessionID: managerA, compactions: 3)
+    let dto = ScorecardDTO(
+        model, telemetryEnabled: true, snapshotCount: 0, managerUsage: [week])
+
+    let row = try #require(dto.managerWeeks.first)
+    // The three original figures still project.
+    #expect(row.promptCount == 40)
+    #expect(row.totalCost == 12.5)
+    #expect(row.totalTokens == week.analytics.totalTokens)
+    // Everything CROW-983 stopped dropping at the DTO boundary.
+    #expect(row.activeTimeSeconds == 7200)
+    #expect(row.commitCount == 9)
+    #expect(row.toolCallCount == 310)
+    #expect(row.inputTokensPerPrompt == 15_000)
+    #expect(row.cacheHitRatio == 1_800_000.0 / 720_000.0)
+    #expect(row.apiErrorRate == 0.03)
+    #expect(row.compactionsPerActiveHour == 1.5)
+}
+
+@Test func managerEfficiencyGradeMatchesHandComputedGrading() throws {
+    // The grade on the wire must be exactly `grade()` over the same raws —
+    // no second formula, no rounding drift between the badge and the chips.
+    let week = richManagerWeek(date(2026, 7, 13), sessionID: managerA, compactions: 3)
+    let expected = EfficiencyGrading.grade(EfficiencyGrading.efficiencyInput(for: week))
+    guard case .graded(let score, let letter, let deductions) = expected else {
+        Issue.record("fixture should grade; got \(expected)")
+        return
+    }
+
+    let model = ScorecardModel.build(snapshots: [], now: now, calendar: utc)
+    let dto = ScorecardDTO(
+        model, telemetryEnabled: true, snapshotCount: 0, managerUsage: [week])
+    let row = try #require(dto.managerWeeks.first)
+
+    #expect(row.grade.graded)
+    #expect(row.grade.score == score)
+    #expect(row.grade.letter == letter.rawValue)
+    #expect(row.grade.deductions.map(\.metric) == deductions.map(\.metric.rawValue))
+    #expect(row.grade.deductions.map(\.points) == deductions.map(\.points))
+}
+
+@Test func managerGradeIsOutcomeIndependent() throws {
+    // The efficiency half only: cost-per-shipped is the one outcome-touching
+    // deduction, and a Manager has no outcomes to divide by. An absurdly
+    // expensive week must still never produce that deduction.
+    let week = richManagerWeek(date(2026, 7, 13), sessionID: managerA, cost: 5_000)
+    let model = ScorecardModel.build(snapshots: [], now: now, calendar: utc)
+    let dto = ScorecardDTO(
+        model, telemetryEnabled: true, snapshotCount: 0, managerUsage: [week])
+    let row = try #require(dto.managerWeeks.first)
+
+    #expect(!row.grade.deductions.contains {
+        $0.metric == EfficiencyGrading.Metric.costPerShipped.rawValue
+    })
+    // ...and the input that produced it genuinely carries no cost context.
+    #expect(EfficiencyGrading.efficiencyInput(for: week).costContext == nil)
+}
+
+@Test func managerWeekBelowThePromptFloorIsInsufficientData() throws {
+    let model = ScorecardModel.build(snapshots: [], now: now, calendar: utc)
+    let dto = ScorecardDTO(
+        model, telemetryEnabled: true, snapshotCount: 0,
+        managerUsage: [managerWeek(date(2026, 7, 13), prompts: 2)])
+    let row = try #require(dto.managerWeeks.first)
+
+    #expect(!row.grade.graded)
+    #expect(row.grade.promptCount == 2)
+}
+
+@Test func eachManagerIsAttributedSeparately() {
+    // CROW-983's second gap: `crow create-manager` can make N Managers, and
+    // before this they were not merged into one bucket — they were invisible.
+    let model = ScorecardModel.build(snapshots: [], now: now, calendar: utc)
+    let dto = ScorecardDTO(
+        model, telemetryEnabled: true, snapshotCount: 0,
+        managerUsage: [
+            richManagerWeek(date(2026, 7, 13), sessionID: managerA, cost: 10),
+            richManagerWeek(date(2026, 7, 13), sessionID: managerB, cost: 20),
+        ],
+        managerNames: [managerA: "Manager", managerB: "Manager 2"])
+
+    #expect(dto.managerWeeks.count == 2)
+    let byID = Dictionary(uniqueKeysWithValues: dto.managerWeeks.map { ($0.sessionID, $0) })
+    #expect(byID[managerA.uuidString]?.totalCost == 10)
+    #expect(byID[managerA.uuidString]?.sessionName == "Manager")
+    #expect(byID[managerB.uuidString]?.totalCost == 20)
+    #expect(byID[managerB.uuidString]?.sessionName == "Manager 2")
+}
+
+@Test func legacyManagerWeekResolvesToThePrimaryManager() throws {
+    // Pre-CROW-983 rollups carry no session id. #745 only ever queried the
+    // primary, so that is the only session they can belong to.
+    let model = ScorecardModel.build(snapshots: [], now: now, calendar: utc)
+    let dto = ScorecardDTO(
+        model, telemetryEnabled: true, snapshotCount: 0,
+        managerUsage: [managerWeek(date(2026, 7, 13))],
+        managerNames: [AppState.managerSessionID: "Manager"])
+    let row = try #require(dto.managerWeeks.first)
+
+    #expect(row.sessionID == AppState.managerSessionID.uuidString)
+    #expect(row.sessionName == "Manager")
+}
+
+@Test func recomputedManagerWeekSupersedesTheLegacyRow() {
+    // After the upgrade the first refresh writes a composite-keyed row while
+    // the bare-keyed one remains, so both describe the same week. Rendering
+    // both would duplicate it; the recomputed one wins.
+    let model = ScorecardModel.build(snapshots: [], now: now, calendar: utc)
+    let dto = ScorecardDTO(
+        model, telemetryEnabled: true, snapshotCount: 0,
+        managerUsage: [
+            managerWeek(date(2026, 7, 13), cost: 1),                                  // legacy
+            richManagerWeek(date(2026, 7, 13),
+                            sessionID: AppState.managerSessionID, cost: 99),          // recomputed
+        ])
+
+    #expect(dto.managerWeeks.count == 1)
+    #expect(dto.managerWeeks[0].totalCost == 99)
+
+    // A legacy week nothing superseded still renders — a week aged out of
+    // telemetry retention is never recomputed, and the merge-only store
+    // exists precisely to keep it.
+    let orphan = ScorecardDTO(
+        model, telemetryEnabled: true, snapshotCount: 0,
+        managerUsage: [managerWeek(date(2026, 6, 22), cost: 7)])
+    #expect(orphan.managerWeeks.count == 1)
+    #expect(orphan.managerWeeks[0].totalCost == 7)
+}
+
+@Test func managerWeeksAreCappedPerManager() {
+    // `managerUsageWeekly` is merge-only and never pruned, so the projection
+    // bounds each Manager to the window the refresh recomputes. Capping per
+    // Manager keeps a second one from evicting the first one's history.
+    let model = ScorecardModel.build(snapshots: [], now: now, calendar: utc)
+    let cap = EfficiencyGrading.Tuning.baselineWeekCount + 1
+    var usage: [ManagerWeeklyUsage] = []
+    for offset in 0..<(cap + 4) {
+        let weekStart = date(2026, 7, 13).addingTimeInterval(Double(-offset) * 7 * 86_400)
+        usage.append(richManagerWeek(weekStart, sessionID: managerA))
+        usage.append(richManagerWeek(weekStart, sessionID: managerB))
+    }
+    let dto = ScorecardDTO(
+        model, telemetryEnabled: true, snapshotCount: 0, managerUsage: usage)
+
+    #expect(dto.managerWeeks.count == cap * 2)
+    #expect(dto.managerWeeks.filter { $0.sessionID == managerA.uuidString }.count == cap)
+    #expect(dto.managerWeeks.filter { $0.sessionID == managerB.uuidString }.count == cap)
+    // Newest kept, oldest dropped.
+    #expect(dto.managerWeeks[0].weekStartMillis == date(2026, 7, 13).timeIntervalSince1970 * 1000)
+}

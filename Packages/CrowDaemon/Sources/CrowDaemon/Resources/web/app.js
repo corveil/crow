@@ -3907,7 +3907,7 @@ function renderScorecard(root) {
   const refresh = el('button', 'action-btn', 'Refresh');
   refresh.onclick = () => refreshBoard('scorecard');
   head.appendChild(refresh);
-  // Rebuild backfills snapshots from telemetry.db and recomputes the ungraded
+  // Rebuild backfills snapshots from telemetry.db and recomputes the Manager
   // Manager rollups (#745) — only offered when telemetry is actually capturing,
   // since with it off there is no database to rebuild from.
   if (data && data.telemetryCapturing) {
@@ -3985,7 +3985,7 @@ function scorecardEmpty(data) {
   const msg = el('div', 'score-empty-msg', (data.telemetryEnabled
     ? 'The scorecard is computed from analytics snapshots written when sessions complete or archive. Telemetry is on — finish a session and it will appear here.'
     : 'The scorecard is computed from analytics snapshots written when sessions complete or archive. Snapshots require Claude Code telemetry, which is off by default.') +
-    ' The Manager session is never graded — its usage appears in its own ungraded section once captured.');
+    ' A Manager session never completes, so it is metered in its own section instead — graded on efficiency, but never on outcomes.');
   box.appendChild(msg);
   if (!data.telemetryEnabled) {
     const btn = el('button', 'action-btn action-primary', 'Open Settings');
@@ -4133,32 +4133,85 @@ function statChipEl(label, value) {
   return chip;
 }
 
-// Manager usage — the ungraded bucket (#745, #767). The always-on Manager
-// session never reaches a terminal status, so it produces no snapshot and no
-// grade; these rows come straight off the persisted weekly rollups and are
-// deliberately absent from the grade, the shipped count, the combined score,
-// and the baseline. Visually a sibling of "Previous Weeks", minus every graded
-// affordance — no badge, no score, muted throughout.
+// Manager usage (#745, #767, CROW-983). A Manager never reaches a terminal
+// status, so it produces no snapshot and no OUTCOME surface — no shipped
+// count, no cost-per-shipped, no combined score, and it never enters the
+// baseline. It does carry an EFFICIENCY grade: that half of the rubric needs
+// no outcome, so it is computed from the same raws a work week uses.
+//
+// Rendered with the same chip vocabulary as the graded weeks so a Manager week
+// reads like a work week rather than a footnote — but the card keeps an
+// explicit "efficiency only" pill so it can never be mistaken for part of the
+// graded aggregate. Grouped per Manager once more than one exists.
 function managerUsageEl(weeks) {
   const label = el('div', 'score-card-label');
   label.appendChild(el('span', null, 'Manager Usage'));
-  label.appendChild(el('span', 'score-ungraded', 'ungraded'));
+  label.appendChild(el('span', 'score-ungraded', 'efficiency only'));
   const body = [label];
-  const list = el('div', 'score-manager');
-  for (const w of weeks) {
-    const row = el('div', 'score-manager-row');
-    row.appendChild(el('span', 'score-manager-week', scoreWeekLabel(w.weekStartMillis)));
-    row.appendChild(el('span', 'score-manager-prompts',
-      w.promptCount + ' prompt' + (w.promptCount === 1 ? '' : 's')));
-    row.appendChild(el('span', 'score-manager-stat', fmtCount(w.totalTokens) + ' tokens'));
-    row.appendChild(el('span', 'score-manager-stat', fmtCost(w.totalCost)));
-    list.appendChild(row);
+
+  const groups = groupManagerWeeks(weeks);
+  for (const group of groups) {
+    if (groups.length > 1) {
+      body.push(el('div', 'score-manager-group', group.name));
+    }
+    const list = el('div', 'score-manager');
+    for (const w of group.weeks) list.appendChild(managerWeekRowEl(w));
+    body.push(list);
   }
-  body.push(list);
+
   body.push(el('div', 'score-muted',
-    'The always-on Manager session never completes, so its usage is tracked here directly from ' +
-    'telemetry — visibility only, never graded.'));
+    'A Manager session never completes, so it is metered here rather than graded on ' +
+    'outcomes: its efficiency is scored, but it never enters the shipped count, ' +
+    'cost-per-shipped, the combined score, or the baseline.'));
   return scoreCard(body);
+}
+
+// Stable grouping by Manager, preserving the DTO's newest-first week order.
+// The DTO always resolves sessionID (legacy rollups report the primary), so
+// grouping is total; sessionName is absent for a deleted Manager.
+function groupManagerWeeks(weeks) {
+  const order = [];
+  const bySession = new Map();
+  for (const w of weeks) {
+    const key = w.sessionID || 'manager';
+    if (!bySession.has(key)) {
+      bySession.set(key, { name: w.sessionName || 'Manager', weeks: [] });
+      order.push(key);
+    }
+    bySession.get(key).weeks.push(w);
+  }
+  return order.map((k) => bySession.get(k));
+}
+
+function managerWeekRowEl(w) {
+  const row = el('div', 'score-manager-week-block');
+
+  const head = el('div', 'score-manager-row');
+  head.appendChild(el('span', 'score-manager-week', scoreWeekLabel(w.weekStartMillis)));
+  head.appendChild(gradeBadgeEl(w.grade));
+  head.appendChild(el('span', 'score-manager-prompts',
+    w.promptCount + ' prompt' + (w.promptCount === 1 ? '' : 's')));
+  head.appendChild(el('span', 'score-manager-stat', fmtCost(w.totalCost)));
+  row.appendChild(head);
+
+  // Same chips as a graded week, plus the efficiency raws the grade cites.
+  // `.score-chips` wraps, which is what keeps this readable on a narrow phone.
+  const chips = el('div', 'score-chips');
+  chips.appendChild(statChipEl('Active', fmtTime(w.activeTimeSeconds)));
+  chips.appendChild(statChipEl('Tokens', fmtCount(w.totalTokens)));
+  chips.appendChild(statChipEl('Tok/Prompt', fmtCount(w.inputTokensPerPrompt)));
+  chips.appendChild(statChipEl('Cache', fmtPct(w.cacheHitRatio)));
+  chips.appendChild(statChipEl('API Errors', fmtPct(w.apiErrorRate)));
+  chips.appendChild(statChipEl('Compact/hr', Number(w.compactionsPerActiveHour).toFixed(1)));
+  chips.appendChild(statChipEl('Tools', String(w.toolCallCount)));
+  chips.appendChild(statChipEl('Commits', String(w.commitCount)));
+  row.appendChild(chips);
+
+  if (w.grade.graded && w.grade.deductions.length) {
+    row.appendChild(el('div', 'score-session-deductions',
+      w.grade.deductions.map((d) => d.label + ' −' + d.points).join('  ·  ')));
+  }
+  return row;
 }
 
 function priorWeeksEl(weeks) {
