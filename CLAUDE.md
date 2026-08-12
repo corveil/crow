@@ -196,7 +196,7 @@ The CLI half of the web Ticket Board / Reviews board buttons — drive the board
 
 ```
 crow list-tickets                               → {issues:[...], counts:{...}, done_last_24h:N, loading:bool}
-crow list-reviews                               → {reviews:[...], loading:bool, unseen:N}
+crow list-reviews                               → {reviews:[...], loading:bool, unseen:N, group_counts:{...}, group_order:[...], hidden_by_filters:N}
 crow refresh-tickets                            → {"ok":true}   (awaits the poll; see note below)
 crow work-on-issue --url "..."                  → {"ok":true}   (types /crow-workspace <url> into the Manager)
 crow batch-work-on-issues --url "..." [--url "..."] [--urls-file FILE|-]  → {"ok":true,"sent":N,"rejected":[...]}
@@ -207,6 +207,7 @@ crow quick-action --session <uuid> --action fixConflicts|addressChanges|fixCheck
 ```
 
 - `list-tickets` / `list-reviews` print the board payload verbatim — filter with `jq`. A ticket with `linked_session_id: null` (or a review with `review_session_id: null`) is one nothing is working yet.
+- Each review carries a `group` — `in_review`, `not_approved_yet`, or `approved_recently` — matching the web board's three sections exactly (one payload, one rule). `group_order` is the display order and `group_counts` counts **every** group including empty ones. `approved_recently` is a 24-hour tail of PRs *you* approved: they leave `review-requested:@me` the instant you submit, so without it an approval vanishes from the board. `hidden_by_filters` counts requested reviews that `ignoreReviewLabels`/`excludeReviewRepos` hid — a non-zero value with an empty board means the filters, not GitHub.
 - `work-on-issue` URLs become terminal keystrokes, so they must be `http(s)` with no whitespace or control characters. `start-review` URLs go to `git clone` and are not checked that way.
 - `batch-work-on-issues` sends `--url` values first, then the lines of `--urls-file`. Bad URLs come back in `rejected` instead of failing the batch.
 - `quick-action` returns `dispatched:false` + `reason` with a **zero** exit code when the session has no agent terminal or no linked PR — branch on `dispatched`, not the exit code.

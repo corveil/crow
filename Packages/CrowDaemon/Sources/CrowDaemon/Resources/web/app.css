@@ -718,6 +718,26 @@ body.update-banner-visible #back-to-sidebar {
 
 .board-empty { color: var(--text-muted); text-align: center; padding: 48px 12px; }
 
+/* ---- Reviews board: three groups (CROW-982) ---- */
+.group-head {
+  display: flex; align-items: center; gap: 8px;
+  margin: 18px 0 8px; padding-bottom: 6px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.group-head:first-of-type { margin-top: 4px; }
+.group-title {
+  color: var(--text-muted); font-size: 11px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.06em;
+}
+.group-count {
+  color: var(--gold); background: rgba(221, 196, 130, 0.14);
+  padding: 1px 7px; border-radius: 9px; font-size: 11px; font-weight: 600;
+}
+/* An empty group states what is empty rather than collapsing — the board
+   vanishing without explanation is the bug this replaced. */
+.group-empty { color: var(--text-muted); font-size: 12px; padding: 6px 2px 4px; }
+.board-note { color: var(--text-muted); font-size: 12px; padding: 14px 2px 4px; }
+
 /* ---- Sidebar: brandmark, Tickets card, nav pills ---- */
 #brand-img { display: block; width: 120px; height: 120px; object-fit: contain; margin: 6px auto 12px; opacity: 0.7; }
 

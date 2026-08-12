@@ -23,7 +23,9 @@ struct ReviewsPayloadTests {
     private func makeRequest(
         url: String,
         headRefOid: String? = nil,
-        reviewSessionID: UUID? = nil
+        reviewSessionID: UUID? = nil,
+        viewerLastReviewedAt: Date? = nil,
+        viewerLastReviewState: ReviewVerdict? = nil
     ) -> ReviewRequest {
         ReviewRequest(
             id: "github:foo/bar#9",
@@ -35,7 +37,9 @@ struct ReviewsPayloadTests {
             headBranch: "feature",
             baseBranch: "main",
             reviewSessionID: reviewSessionID,
-            headRefOid: headRefOid
+            headRefOid: headRefOid,
+            viewerLastReviewedAt: viewerLastReviewedAt,
+            viewerLastReviewState: viewerLastReviewState
         )
     }
 
@@ -198,5 +202,165 @@ struct ReviewsPayloadTests {
         #expect(ReviewsPayload.actionName(.create) == "create")
         #expect(ReviewsPayload.actionName(.skip) == "skip")
         #expect(ReviewsPayload.actionName(.reReview(staleSessionID: UUID())) == "re_review")
+    }
+
+    // MARK: - Grouping (CROW-982)
+
+    private func group(_ review: [String: JSONValue]) -> String? {
+        guard case let .string(s)? = review["group"] else { return nil }
+        return s
+    }
+
+    private func reviews(_ payload: [String: JSONValue]) -> [[String: JSONValue]] {
+        guard case let .array(items)? = payload["reviews"] else { return [] }
+        return items.compactMap { if case let .object(o) = $0 { return o } else { return nil } }
+    }
+
+    private func groupCount(_ payload: [String: JSONValue], _ name: String) -> Int? {
+        guard case let .object(counts)? = payload["group_counts"],
+              case let .int(n)? = counts[name] else { return nil }
+        return n
+    }
+
+    /// The baseline: requested of me, nothing submitted yet.
+    @Test
+    func neverReviewedIsNotApprovedYet() throws {
+        let request = makeRequest(url: "https://github.com/foo/bar/pull/9", headRefOid: "sha-a")
+        let payload = ReviewsPayload.build(appState: makeState(request: request))
+        #expect(group(try firstReview(payload)) == "not_approved_yet")
+    }
+
+    /// Requesting changes must not move the PR anywhere — the ball is still in
+    /// the reviewer's court, and the timestamp alone (which is all the model
+    /// carried before CROW-982) cannot tell this from an approval.
+    @Test
+    func changesRequestedStaysNotApprovedYet() throws {
+        let request = makeRequest(
+            url: "https://github.com/foo/bar/pull/9",
+            headRefOid: "sha-a",
+            viewerLastReviewedAt: Date(),
+            viewerLastReviewState: .changesRequested
+        )
+        let payload = ReviewsPayload.build(appState: makeState(request: request))
+        #expect(group(try firstReview(payload)) == "not_approved_yet")
+    }
+
+    /// An active review session wins over everything else — including a fresh
+    /// approval, which is the one case where two groups could both claim the PR.
+    @Test
+    func activeSessionWinsOverFreshApproval() throws {
+        let session = Session(name: "review", kind: .review, lastReviewedHeadSha: "sha-a")
+        let request = makeRequest(
+            url: "https://github.com/foo/bar/pull/9",
+            headRefOid: "sha-a",
+            reviewSessionID: session.id,
+            viewerLastReviewedAt: Date(),
+            viewerLastReviewState: .approved
+        )
+        let payload = ReviewsPayload.build(appState: makeState(request: request, session: session))
+        #expect(group(try firstReview(payload)) == "in_review")
+    }
+
+    /// THE CROW-982 symptom. Approving clears GitHub's pending request, so the
+    /// PR leaves `review-requested:@me` entirely — it survives only in
+    /// `recentlyApprovedReviews`, and without this group it vanished outright.
+    @Test
+    func recentApprovalSurvivesInItsOwnGroup() throws {
+        let state = AppState()
+        state.recentlyApprovedReviews = [makeRequest(
+            url: "https://github.com/foo/bar/pull/9",
+            viewerLastReviewedAt: Date().addingTimeInterval(-3600),
+            viewerLastReviewState: .approved
+        )]
+        let payload = ReviewsPayload.build(appState: state)
+        #expect(group(try firstReview(payload)) == "approved_recently")
+        #expect(groupCount(payload, "approved_recently") == 1)
+    }
+
+    /// …and drops off the far side of the window. In *no* group, not demoted to
+    /// "not approved yet": nothing is asking the viewer for anything.
+    @Test
+    func approvalOlderThan24hIsInNoGroup() {
+        let state = AppState()
+        state.recentlyApprovedReviews = [makeRequest(
+            url: "https://github.com/foo/bar/pull/9",
+            viewerLastReviewedAt: Date().addingTimeInterval(-25 * 3600),
+            viewerLastReviewState: .approved
+        )]
+        let payload = ReviewsPayload.build(appState: state)
+        #expect(reviews(payload).isEmpty)
+        #expect(groupCount(payload, "approved_recently") == 0)
+    }
+
+    /// The boundary is evaluated against an injected `now`, so the tail expires
+    /// on the clock rather than on the next poll.
+    @Test
+    func windowBoundaryIsEvaluatedAtSerializationTime() {
+        let approvedAt = Date(timeIntervalSince1970: 1_780_000_000)
+        let state = AppState()
+        state.recentlyApprovedReviews = [makeRequest(
+            url: "https://github.com/foo/bar/pull/9",
+            viewerLastReviewedAt: approvedAt,
+            viewerLastReviewState: .approved
+        )]
+        let justInside = ReviewsPayload.build(appState: state, now: approvedAt.addingTimeInterval(23 * 3600))
+        let justOutside = ReviewsPayload.build(appState: state, now: approvedAt.addingTimeInterval(24 * 3600 + 1))
+        #expect(reviews(justInside).count == 1)
+        #expect(reviews(justOutside).isEmpty)
+    }
+
+    /// Every group is counted even at zero, so the board can render a section
+    /// that says *what* is empty instead of dropping it (#953).
+    @Test
+    func emptyGroupsStillCarryAZeroCount() {
+        let payload = ReviewsPayload.build(appState: AppState())
+        for g in ReviewGroup.displayOrder {
+            #expect(groupCount(payload, g.rawValue) == 0)
+        }
+        guard case let .array(order)? = payload["group_order"] else {
+            Issue.record("group_order missing"); return
+        }
+        #expect(order == ReviewGroup.displayOrder.map { .string($0.rawValue) })
+    }
+
+    /// The verdict has to reach the wire — without it the board cannot tell
+    /// "not approved yet" from "I approved this", which is the whole split.
+    @Test
+    func verdictAndTimestampAreSerialized() throws {
+        let request = makeRequest(
+            url: "https://github.com/foo/bar/pull/9",
+            viewerLastReviewedAt: Date(timeIntervalSince1970: 1780740000),
+            viewerLastReviewState: .changesRequested
+        )
+        let review = try firstReview(ReviewsPayload.build(appState: makeState(request: request)))
+        #expect(review["viewer_last_review_state"] == .string("CHANGES_REQUESTED"))
+        guard case let .string(stamp)? = review["viewer_last_reviewed_at"] else {
+            Issue.record("viewer_last_reviewed_at missing"); return
+        }
+        #expect(stamp.hasPrefix("2026-06-06T10:00:00"))
+    }
+
+    /// #953 direction C: filters that hide live requests must say so, or an
+    /// empty board reads as "GitHub is asking nothing of me".
+    @Test
+    func hiddenByFiltersIsReported() {
+        let state = AppState()
+        state.hiddenReviewCount = 12
+        let payload = ReviewsPayload.build(appState: state)
+        #expect(payload["hidden_by_filters"] == .int(12))
+    }
+
+    /// The approved tail obeys the same repo/label filters as the queue — a repo
+    /// you excluded shouldn't reappear once you approve something in it.
+    @Test
+    func approvedTailRespectsRepoFilters() {
+        let state = AppState()
+        state.excludeReviewRepos = ["foo/*"]
+        state.recentlyApprovedReviews = [makeRequest(
+            url: "https://github.com/foo/bar/pull/9",
+            viewerLastReviewedAt: Date(),
+            viewerLastReviewState: .approved
+        )]
+        #expect(reviews(ReviewsPayload.build(appState: state)).isEmpty)
     }
 }

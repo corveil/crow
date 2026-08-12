@@ -69,12 +69,24 @@ public struct GitHubCodeBackend: CodeBackend {
 
     public func listMonitoredPRs() async throws -> MonitoredPRListing {
         let reviewQuery = "review-requested:@me state:open type:pr"
+        // The board's "Approved recently" group (CROW-982). This has to be its
+        // own search: submitting a review clears the pending request, so an
+        // approved PR leaves `review-requested:@me` outright and no filtering of
+        // that result set could ever recover it.
+        //
+        // It rides in the *same* GraphQL document as the query above, so it is
+        // one more search node on an existing request rather than an extra HTTP
+        // round trip. `sort:updated-desc` matters at `first: 50`: an approval
+        // bumps the PR's `updatedAt`, so the rows this group actually wants sort
+        // to the front instead of relying on GitHub's relevance ordering.
+        let approvedQuery = "reviewed-by:@me state:open type:pr sort:updated-desc"
         let output: String
         do {
             output = try await shellRunner.run(
                 "gh", "api", "graphql",
                 "-f", "query=\(Self.monitoredPRsQuery)",
-                "-F", "reviewQuery=\(reviewQuery)"
+                "-F", "reviewQuery=\(reviewQuery)",
+                "-F", "approvedQuery=\(approvedQuery)"
             )
         } catch ShellRunnerError.nonZeroExit(_, let stderr) {
             let err = GitHubTaskBackend.classifyGraphQLError(stderr)
@@ -456,7 +468,7 @@ public struct GitHubCodeBackend: CodeBackend {
     // MARK: - Queries + parsers
 
     static let monitoredPRsQuery = """
-    query($reviewQuery: String!) {
+    query($reviewQuery: String!, $approvedQuery: String!) {
       viewerPRs: viewer {
         pullRequests(first: 50, states: [OPEN], orderBy: {field: UPDATED_AT, direction: DESC}) {
           nodes {
@@ -504,6 +516,17 @@ public struct GitHubCodeBackend: CodeBackend {
           }
         }
       }
+      approvedPRs: search(type: ISSUE, query: $approvedQuery, first: 50) {
+        nodes {
+          ... on PullRequest {
+            number title url isDraft updatedAt headRefName headRefOid baseRefName state
+            author { login }
+            repository { nameWithOwner }
+            labels(first: 20) { nodes { name color } }
+            reviews(last: 20) { nodes { author { login } submittedAt state } }
+          }
+        }
+      }
       viewer { login }
       rateLimit { remaining limit resetAt cost }
     }
@@ -521,10 +544,15 @@ public struct GitHubCodeBackend: CodeBackend {
             dataObj["reviewPRs"] as? [String: Any],
             viewerLogin: viewerLogin.isEmpty ? nil : viewerLogin
         )
+        let approved = parseApprovedPRs(
+            dataObj["approvedPRs"] as? [String: Any],
+            viewerLogin: viewerLogin.isEmpty ? nil : viewerLogin
+        )
         let rate = GitHubTaskBackend.parseRateLimit(dataObj["rateLimit"] as? [String: Any])
         return MonitoredPRListing(
             viewerPRs: viewerPRs,
             reviewRequests: reviewRequests,
+            recentlyApprovedPRs: approved,
             viewerLogin: viewerLogin,
             rateLimit: rate
         )
@@ -545,10 +573,15 @@ public struct GitHubCodeBackend: CodeBackend {
             dataObj["reviewPRs"] as? [String: Any],
             viewerLogin: viewerLogin.isEmpty ? nil : viewerLogin
         )
+        let approved = parseApprovedPRs(
+            dataObj["approvedPRs"] as? [String: Any],
+            viewerLogin: viewerLogin.isEmpty ? nil : viewerLogin
+        )
         let rate = GitHubTaskBackend.parseRateLimit(dataObj["rateLimit"] as? [String: Any])
         return MonitoredPRListing(
             viewerPRs: viewerPRs,
             reviewRequests: reviewRequests,
+            recentlyApprovedPRs: approved,
             viewerLogin: viewerLogin,
             rateLimit: rate,
             samlRestricted: true
@@ -781,6 +814,7 @@ public struct GitHubCodeBackend: CodeBackend {
                     return LabelInfo(name: name, color: labelNode["color"] as? String)
                 }
             var viewerLastReviewedAt: Date?
+            var viewerLastReviewState: ReviewVerdict?
             if let viewerLogin {
                 for review in LenientJSON.nodes(node, "reviews") {
                     guard let author = (review["author"] as? [String: Any])?["login"] as? String,
@@ -790,6 +824,15 @@ public struct GitHubCodeBackend: CodeBackend {
                           let submittedAt = IssueDate.parse(review["submittedAt"] as? String) else { continue }
                     if viewerLastReviewedAt == nil || submittedAt > viewerLastReviewedAt! {
                         viewerLastReviewedAt = submittedAt
+                        // Decoded from the same node as the timestamp, so the
+                        // pair can never disagree about which review won.
+                        // `roundClosingReviewStates` and `ReviewVerdict` list
+                        // the same three states, so this never fails — but a
+                        // `nil` here would leave a timestamp with no verdict,
+                        // so drop the timestamp too rather than emit a half
+                        // record the board would misclassify.
+                        viewerLastReviewState = ReviewVerdict(rawValue: state)
+                        if viewerLastReviewState == nil { viewerLastReviewedAt = nil }
                     }
                 }
             }
@@ -807,10 +850,36 @@ public struct GitHubCodeBackend: CodeBackend {
                 labels: labels,
                 provider: .github,
                 headRefOid: headRefOid,
-                viewerLastReviewedAt: viewerLastReviewedAt
+                viewerLastReviewedAt: viewerLastReviewedAt,
+                viewerLastReviewState: viewerLastReviewState
             ))
         }
         return requests.sorted { ($0.requestedAt ?? .distantPast) > ($1.requestedAt ?? .distantPast) }
+    }
+
+    /// The `reviewed-by:@me` half of the board (CROW-982), narrowed to PRs whose
+    /// viewer verdict is an **approval**.
+    ///
+    /// `reviewed-by:` matches any submitted review, so the raw result also holds
+    /// PRs the viewer requested changes on — those are already in the requested
+    /// queue and must not be duplicated into the approved tail. Filtering on the
+    /// parsed verdict rather than on the search string keeps one definition of
+    /// "approved" (`ReviewVerdict`) instead of trusting GitHub's query syntax to
+    /// mean what the board means.
+    ///
+    /// The 24 h cutoff is deliberately *not* applied here: it belongs at
+    /// serialization time so the window tracks the clock rather than the poll.
+    static func parseApprovedPRs(
+        _ searchObj: [String: Any]?,
+        viewerLogin: String?
+    ) -> [ReviewRequest] {
+        // No login means the `viewer { login }` selection failed (a degraded or
+        // SAML-partial response). Every verdict would parse as nil, so the
+        // filter below would drop everything anyway — return early and make the
+        // "not fetched" case explicit rather than incidental.
+        guard let viewerLogin, !viewerLogin.isEmpty else { return [] }
+        return parseReviewRequests(searchObj, viewerLogin: viewerLogin)
+            .filter { $0.viewerLastReviewState == .approved }
     }
 
     static func parseStalePRResponse(_ output: String, refs: [PRRef]) -> [PRRef: PRRecord] {

@@ -399,6 +399,18 @@ public struct AssignedListing: Sendable {
 public struct MonitoredPRListing: Sendable {
     public let viewerPRs: [PRRecord]
     public let reviewRequests: [ReviewRequest]
+    /// Open PRs the viewer has already **approved** (CROW-982).
+    ///
+    /// A separate search from `reviewRequests`, and necessarily so: GitHub
+    /// clears the pending review request the moment a review is submitted, so
+    /// an approved PR is not merely un-flagged in `review-requested:@me` — it
+    /// is absent from it. Without this second search the board could not show
+    /// an approval at all, let alone keep it visible for 24 h.
+    ///
+    /// Empty on providers that expose no per-reviewer verdict (GitLab), which
+    /// simply leaves the board's "Approved recently" group empty rather than
+    /// wrong.
+    public let recentlyApprovedPRs: [ReviewRequest]
     public let viewerLogin: String
     public let rateLimit: GitHubRateLimit?
     /// True when the response was degraded because an org's SAML enforcement
@@ -406,9 +418,17 @@ public struct MonitoredPRListing: Sendable {
     /// returned are present; callers should surface a one-time UI warning.
     public let samlRestricted: Bool
 
-    public init(viewerPRs: [PRRecord], reviewRequests: [ReviewRequest], viewerLogin: String, rateLimit: GitHubRateLimit? = nil, samlRestricted: Bool = false) {
+    public init(
+        viewerPRs: [PRRecord],
+        reviewRequests: [ReviewRequest],
+        recentlyApprovedPRs: [ReviewRequest] = [],
+        viewerLogin: String,
+        rateLimit: GitHubRateLimit? = nil,
+        samlRestricted: Bool = false
+    ) {
         self.viewerPRs = viewerPRs
         self.reviewRequests = reviewRequests
+        self.recentlyApprovedPRs = recentlyApprovedPRs
         self.viewerLogin = viewerLogin
         self.rateLimit = rateLimit
         self.samlRestricted = samlRestricted

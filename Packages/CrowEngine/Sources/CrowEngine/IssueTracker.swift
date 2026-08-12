@@ -939,6 +939,37 @@ public final class IssueTracker {
             }
             isFirstFetch = false
             appState.reviewRequests = reviews
+            // How many requested reviews the filters swallowed (CROW-982). The
+            // board shows this so "No review requests" can't be mistaken for
+            // "GitHub is asking nothing of me" — the #953 failure mode, where
+            // `ignoreReviewLabels` hid live requests and the board looked empty.
+            appState.hiddenReviewCount = max(0, allCurrentIDs.count - reviews.count)
+
+            // The approved tail (CROW-982). Cross-referenced against review
+            // sessions on the same rule as the requested queue, so a PR you
+            // approved that still has a live session renders under In review
+            // rather than jumping straight to the tail. Repo/label filters are
+            // applied at serialization time via `filteredRecentlyApprovedReviews`
+            // — the same place the requested queue is filtered — so the two
+            // lists can't drift apart on which repos are visible.
+            //
+            // Deliberately outside the notification path: an approval is work
+            // finished, not work arriving, and chiming `reviewRequested` for it
+            // would be a lie.
+            var approved = ghResult.recentlyApprovedPRs
+            for i in approved.indices {
+                if let session = appState.reviewSessions.first(where: {
+                    appState.links(for: $0.id).contains(where: { $0.linkType == .pr && $0.url == approved[i].url })
+                }) {
+                    approved[i].reviewSessionID = session.id
+                }
+            }
+            // A PR can legitimately be in both searches (you approved it, then
+            // the author pushed and re-requested). The requested queue owns it
+            // in that case — it is asking for something — so drop the duplicate
+            // here rather than letting it render in two groups at once.
+            let requestedURLs = Set(reviews.map(\.url))
+            appState.recentlyApprovedReviews = approved.filter { !requestedURLs.contains($0.url) }
             appState.isLoadingReviews = false
 
             onReviewRequestsRefreshed?(reviews)
@@ -1097,6 +1128,12 @@ public final class IssueTracker {
         let closedTotalCount: Int
         let viewerPRs: [ViewerPR]
         let reviewRequests: [ReviewRequest]
+        /// Open PRs the viewer has approved, from the `reviewed-by:@me` search
+        /// (CROW-982). Kept separate from `reviewRequests` all the way to the
+        /// board: these are precisely the PRs that have *left* the requested
+        /// queue, so merging them earlier would corrupt every count and
+        /// notification derived from "reviews requested of me".
+        let recentlyApprovedPRs: [ReviewRequest]
         /// The authenticated user's login, carried so the stale-PR follow-up in
         /// the *same* cycle can ask GitHub for the viewer's own latest verdict
         /// (CROW-945). Empty when `listMonitoredPRs` failed or degraded.
@@ -1284,6 +1321,7 @@ public final class IssueTracker {
             closedTotalCount: assigned.closedTotalCount,
             viewerPRs: monitored.viewerPRs,
             reviewRequests: monitored.reviewRequests,
+            recentlyApprovedPRs: monitored.recentlyApprovedPRs,
             viewerLogin: monitored.viewerLogin,
             rateLimit: assigned.rateLimit ?? monitored.rateLimit
         )
