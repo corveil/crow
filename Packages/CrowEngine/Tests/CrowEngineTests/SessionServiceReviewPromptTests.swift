@@ -40,6 +40,8 @@ struct SessionServiceReviewPromptTests {
 
     \(ReviewVerdictPolicy.rulePlaceholder)
 
+    \(ReviewVerdictPolicy.gradingGuidancePlaceholder)
+
     | Color  | Meaning      | Verdict effect            |
     |--------|--------------|---------------------------|
     \(ReviewVerdictPolicy.tablePlaceholder)
@@ -277,6 +279,36 @@ struct SessionServiceReviewPromptTests {
             #expect(prompt.contains(Self.prURL))
             #expect(!prompt.contains("$ARGUMENTS"))
             #expect(!prompt.contains("{{CROW_REVIEW_VERDICT_"))
+        }
+    }
+
+    /// CROW-986: the grading-guidance rules bound the *grade*, not the *gate*, so
+    /// they must reach the agent through every inline branch and read identically
+    /// under any workspace policy. Assert the built prompt carries all three rules
+    /// for both the default (Red+Yellow) and a relaxed (Red-only) workspace.
+    @Test func buildReviewPromptCarriesTheGradingGuidanceForEveryPolicy() {
+        for blocking in [ReviewSeverity.defaultBlocking, [.red]] {
+            let body = ReviewVerdictPolicy.expand(Self.policyFixtureSkillBody, blocking: blocking)
+
+            for agentKind: AgentKind in [.cursor, .openCode, .codex, .grok, .antigravity] {
+                let prompt = SessionService.buildReviewPrompt(
+                    prURL: Self.prURL,
+                    prTitle: Self.prTitle,
+                    repoSlug: Self.repoSlug,
+                    prNumber: Self.prNumber,
+                    agentKind: agentKind,
+                    skillBody: body
+                )
+
+                #expect(prompt.contains("An accepted risk is not a blocker."),
+                        "\(agentKind.rawValue)/\(blocking) lost the accepted-risk rule")
+                #expect(prompt.contains("Do not re-block a declined finding."),
+                        "\(agentKind.rawValue)/\(blocking) lost the declined-finding rule")
+                #expect(prompt.contains("Grade against the diff, not the roadmap."),
+                        "\(agentKind.rawValue)/\(blocking) lost the grade-against-the-diff rule")
+                // No verdict-family placeholder may survive expansion.
+                #expect(!prompt.contains("{{CROW_REVIEW_"))
+            }
         }
     }
 

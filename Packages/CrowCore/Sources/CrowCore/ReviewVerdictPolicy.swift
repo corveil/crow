@@ -43,9 +43,10 @@ public enum ReviewSeverity: String, Codable, Sendable, CaseIterable {
 /// Renders a workspace's review-verdict policy into the bundled `crow-review-pr`
 /// SKILL body (CROW-963).
 ///
-/// The skill carries three placeholders — the Step 5 verdict rule, the summary
+/// The skill carries four placeholders — the Step 5 verdict rule, the grading
+/// guidance that bounds the severity a finding may be assigned, the summary
 /// table's data rows, and the two reinforcing bullets under Important Notes. All
-/// three must agree, or the agent is handed a brief that contradicts itself.
+/// must agree, or the agent is handed a brief that contradicts itself.
 ///
 /// **Advisory, not enforcement.** The review agent invokes `gh pr review` itself;
 /// Crow never sees the call and cannot check the posted verdict against the
@@ -59,22 +60,26 @@ public enum ReviewVerdictPolicy {
     // MARK: - Placeholders
 
     public static let rulePlaceholder = "{{CROW_REVIEW_VERDICT_RULE}}"
+    public static let gradingGuidancePlaceholder = "{{CROW_REVIEW_GRADING_GUIDANCE}}"
     public static let tablePlaceholder = "{{CROW_REVIEW_VERDICT_TABLE}}"
     public static let notesPlaceholder = "{{CROW_REVIEW_VERDICT_NOTES}}"
 
     // MARK: - Expansion
 
-    /// Substitute the three verdict placeholders for `blocking`.
+    /// Substitute the four verdict placeholders for `blocking`.
     ///
     /// Idempotent: a body with no placeholders left (already expanded, or the
     /// test-environment stub from `Scaffolder.bundledReviewSkill()`) passes
     /// through unchanged. That is what lets the review path pre-expand once
     /// before its launch paths diverge and still route through
     /// `CrowAttribution.expandSkillBody`, which expands again with the default.
+    /// The grading-guidance block is policy-independent, so its second pass is a
+    /// no-op regardless of which set the re-expansion uses.
     public static func expand(_ body: String, blocking: [ReviewSeverity]) -> String {
         let canonical = ReviewSeverity.canonicalize(blocking)
         return body
             .replacingOccurrences(of: rulePlaceholder, with: ruleBlock(blocking: canonical))
+            .replacingOccurrences(of: gradingGuidancePlaceholder, with: gradingGuidanceBlock)
             .replacingOccurrences(of: tablePlaceholder, with: tableRows(blocking: canonical))
             .replacingOccurrences(of: notesPlaceholder, with: notesBullets(blocking: canonical))
     }
@@ -162,6 +167,24 @@ public enum ReviewVerdictPolicy {
     - **Request Changes** (`--request-changes`): any Red **or** any Yellow finding.
 
     Yellow findings are "should fix" — the implementing agent will address them as soon as it sees the request-changes verdict, so rejecting on Yellow lands them in the same round trip instead of a follow-up. Comment-only reviews remain forbidden; if uncertain, request changes.
+    """
+
+    /// Grading discipline (CROW-986). Bounds the *severity a finding may be
+    /// assigned* — a separate axis from which severities gate the verdict, so this
+    /// text is constant and renders identically for every workspace policy.
+    ///
+    /// Without it, the verdict gate has no terminating condition when a Yellow
+    /// finding is a risk the author has consciously accepted: one judgment call is
+    /// enough to reject, and a competent review of a non-trivial diff almost always
+    /// surfaces one. These three rules give the reviewer a way to say "your call,
+    /// approved" by capping such findings at Green, which the default and red-only
+    /// policies treat as non-blocking.
+    public static let gradingGuidanceBlock = """
+    Grading discipline — the rules below bound the **severity you may assign** to a finding. They hold no matter which severities gate the verdict above, because they are about how to grade, not about what blocks:
+
+    - **An accepted risk is not a blocker.** A hazard the PR explicitly documents and consciously accepts is at most **Green**. When the diff is correct and the only disagreement is whether to accept a risk the author has already called out, that acceptance is the author's decision to make — state your view in the body and let the verdict follow the grade, rather than blocking on it.
+    - **Do not re-block a declined finding.** A finding you raised in an earlier round that the author has answered with a rationale — rather than a code change — may be restated at most as **Green**. Re-raising the same point at a blocking severity round after round is not permitted; if you remain unconvinced, leave it Green and, if it is worth tracking, file a follow-up issue instead of holding up the PR.
+    - **Grade against the diff, not the roadmap.** Severity measures a defect in what is written. "The code is correct, but a hazard it identifies is left unenforced" is **Green** — not Yellow or Red. A future improvement you would like to see is not a defect in this change.
     """
 
     // MARK: - Helpers

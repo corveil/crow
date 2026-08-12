@@ -118,12 +118,13 @@ struct ReviewVerdictPolicyTests {
     @Test func expandLeavesNoPlaceholderBehindForAnyPolicy() {
         let body = [
             ReviewVerdictPolicy.rulePlaceholder,
+            ReviewVerdictPolicy.gradingGuidancePlaceholder,
             ReviewVerdictPolicy.tablePlaceholder,
             ReviewVerdictPolicy.notesPlaceholder,
         ].joined(separator: "\n\n")
         for blocking in [[ReviewSeverity.red], ReviewSeverity.defaultBlocking, ReviewSeverity.allCases] {
             let expanded = ReviewVerdictPolicy.expand(body, blocking: blocking)
-            #expect(!expanded.contains("{{CROW_REVIEW_VERDICT_"))
+            #expect(!expanded.contains("{{CROW_REVIEW_"))
         }
     }
 
@@ -182,6 +183,7 @@ struct ReviewVerdictPolicyTests {
         #expect(skill == template, "the two halves of crow-review-pr must stay byte-identical")
         for placeholder in [
             ReviewVerdictPolicy.rulePlaceholder,
+            ReviewVerdictPolicy.gradingGuidancePlaceholder,
             ReviewVerdictPolicy.tablePlaceholder,
             ReviewVerdictPolicy.notesPlaceholder,
         ] {
@@ -208,6 +210,8 @@ struct ReviewVerdictPolicyTests {
         #expect(asDefault.contains(Self.goldenRule))
         #expect(asDefault.contains(Self.goldenTable))
         #expect(asDefault.contains(Self.goldenNotes))
+        // CROW-986: the real skill carries the grading placeholder and expands it.
+        #expect(asDefault.contains("An accepted risk is not a blocker."))
 
         let asRedOnly = ReviewVerdictPolicy.expand(skill, blocking: [.red])
         #expect(!asRedOnly.contains(Self.goldenRule))
@@ -224,5 +228,32 @@ struct ReviewVerdictPolicyTests {
 
     @Test func defaultBlockingIsRedAndYellow() {
         #expect(ReviewSeverity.defaultBlocking == [.red, .yellow])
+    }
+
+    // MARK: - Grading guidance (CROW-986)
+
+    /// The grading block carries all three loop-breaking rules that let a review
+    /// of a documented, accepted risk terminate in an approval.
+    @Test func gradingGuidanceCarriesTheThreeLoopBreakingRules() {
+        let guidance = ReviewVerdictPolicy.gradingGuidanceBlock
+        #expect(guidance.contains("An accepted risk is not a blocker."))
+        #expect(guidance.contains("Do not re-block a declined finding."))
+        #expect(guidance.contains("Grade against the diff, not the roadmap."))
+        // Each rule caps the finding at Green rather than dropping it.
+        #expect(guidance.contains("at most **Green**"))
+    }
+
+    /// The guidance bounds the *grade*, not the *gate*: it must render identically
+    /// no matter which severities a workspace blocks on. Expanding a body that
+    /// carries only the grading placeholder proves the substituted text does not
+    /// vary with `blocking`.
+    @Test func gradingGuidanceIsIndependentOfTheBlockingPolicy() {
+        let body = ReviewVerdictPolicy.gradingGuidancePlaceholder
+        let redOnly = ReviewVerdictPolicy.expand(body, blocking: [.red])
+        let byDefault = ReviewVerdictPolicy.expand(body, blocking: ReviewSeverity.defaultBlocking)
+        let everything = ReviewVerdictPolicy.expand(body, blocking: ReviewSeverity.allCases)
+        #expect(redOnly == byDefault)
+        #expect(byDefault == everything)
+        #expect(redOnly == ReviewVerdictPolicy.gradingGuidanceBlock)
     }
 }

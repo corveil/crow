@@ -111,6 +111,7 @@ fi
 # replaced it — and the per-workspace setting stops reaching the agent.
 for placeholder in \
     "{{CROW_REVIEW_VERDICT_RULE}}" \
+    "{{CROW_REVIEW_GRADING_GUIDANCE}}" \
     "{{CROW_REVIEW_VERDICT_TABLE}}" \
     "{{CROW_REVIEW_VERDICT_NOTES}}"; do
     require "skills/crow-review-pr/SKILL.md" "$placeholder"
