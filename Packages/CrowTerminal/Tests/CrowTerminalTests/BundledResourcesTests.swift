@@ -92,6 +92,27 @@ struct BundledResourcesTests {
         #expect(body.contains("CrowJumpBottomAddon"))
     }
 
+    @Test func viewportAddonIsBundled() throws {
+        // CROW-988: the software-keyboard fit lives in this shared addon, and the
+        // daemon serves this exact file to the web UI at /xterm/…. It only ships
+        // because `Resources/xterm` is `.copy`d wholesale, so pin its presence —
+        // a missing file is a silent 404 and a keyboard-blind terminal, not a
+        // build error. Also pin the load-bearing API surface.
+        let dir = try #require(BundledResources.xtermDirectoryURL)
+        let url = dir.appendingPathComponent("xterm-addon-crow-viewport.js")
+        #expect(FileManager.default.fileExists(atPath: url.path))
+        let body = try String(contentsOf: url, encoding: .utf8)
+        // The signal the whole fix hangs on — nothing else in the web resources
+        // subscribes to it.
+        #expect(body.contains("visualViewport"))
+        #expect(body.contains("addEventListener('resize'"))
+        #expect(body.contains("addEventListener('scroll'"))
+        // The prompt has to be pinned after the refit, or revealing it is moot.
+        #expect(body.contains("scrollToBottom"))
+        // Namespaced UMD global matching the vendored addons.
+        #expect(body.contains("CrowViewportAddon"))
+    }
+
     @Test func tmuxConfHasNoBarePrefixUnbind() throws {
         // #473: a bare `unbind-key -a` (no `-T`) defaults to the prefix
         // table, which is empty/non-existent after the first clear on

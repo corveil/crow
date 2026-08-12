@@ -284,6 +284,62 @@ import Testing
             "\(asset)'s Shift+Enter branch must cancel the event — returning false leaves xterm's own cancel unreached, so the keypress phase writes a second \\r (#875)")
     }
 
+    /// CROW-988: a software keyboard shrinks only the VISUAL viewport on iOS, so
+    /// the grid must be refit against `visualViewport` or the prompt line ends up
+    /// under the keyboard with no way to scroll it back. The logic lives in the
+    /// shared `xterm-addon-crow-viewport.js` (pinned separately by
+    /// `BundledResourcesTests.viewportAddonIsBundled`) — but an addon nobody
+    /// loads fixes nothing, and the two live pages wire their xterm setups
+    /// independently, which is exactly how the mouse-mode swallow (#776) shipped
+    /// on one surface and not the other. Pin the script tag AND the load on both.
+    ///
+    /// Also pin that the addon is handed a refit callback: the addon
+    /// deliberately doesn't call `fitAddon.fit()` itself (each page wraps the fit
+    /// in its own dedup/ownership rules), so an omitted `onResize` resizes the
+    /// host element and leaves the xterm grid at its old row count — the
+    /// clipped-rows half of the bug, silently.
+    @Test(arguments: ["app.js", "terminal.html"])
+    func terminalSurfacesRefitAgainstTheVisualViewport(asset: String) throws {
+        let code = Self.stripComments(try Self.webAsset(asset))
+        #expect(
+            code.contains("CrowViewportAddon.CrowViewportAddon("),
+            "\(asset) must construct the visual-viewport addon (CROW-988)")
+        #expect(
+            code.contains("onResize:"),
+            "\(asset) must hand the addon its own refit — the addon never calls fit() itself")
+    }
+
+    /// The `<script src>` half of the above, on the pages that own the tag.
+    /// `app.js` is loaded by `index.html`, so that's where its tag lives.
+    @Test(arguments: ["index.html", "terminal.html"])
+    func terminalPagesShipTheViewportAddon(page: String) throws {
+        let source = try Self.webAsset(page)
+        #expect(
+            source.contains("xterm-addon-crow-viewport.js"),
+            "\(page) must load the visual-viewport addon (CROW-988)")
+    }
+
+    /// `interactive-widget=resizes-content` makes Chrome/Android shrink the
+    /// LAYOUT viewport for the keyboard, which puts that platform back on the
+    /// ordinary `100dvh` + window-`resize` path the pages already handle; without
+    /// it Android overlays the keyboard and depends entirely on the addon.
+    /// `viewport-fit=cover` is what lets the terminal background go full-bleed —
+    /// `terminal.html` was the one page missing it (CROW-988).
+    @Test(arguments: ["index.html", "terminal.html"])
+    func viewportMetaHandlesTheSoftwareKeyboard(page: String) throws {
+        let source = try Self.webAsset(page)
+        let meta = try #require(
+            source.split(separator: "\n", omittingEmptySubsequences: false)
+                .first { $0.contains("name=\"viewport\"") },
+            "\(page) must declare a viewport meta")
+        #expect(
+            meta.contains("interactive-widget=resizes-content"),
+            "\(page)'s viewport meta must let Android resize the layout viewport (CROW-988)")
+        #expect(
+            meta.contains("viewport-fit=cover"),
+            "\(page)'s viewport meta must opt into the full-bleed safe-area layout")
+    }
+
     /// Cancelling a gesture and being able to perform it are one decision: a
     /// surface may only `preventDefault()` the copy chord if its copy always
     /// delivers. `navigator.clipboard` is absent over plain http (a
