@@ -974,12 +974,19 @@ function detectSessionSounds() {
 
 let _prevReviewIDs = null;
 function detectReviewSounds() {
-  // Only reviews still *requested* of the viewer can be a new request. Since
-  // CROW-982 the payload also carries the "Approved recently" tail, which enters
-  // the list precisely when you finish a review — chiming `reviewRequested` for
-  // your own approval would announce work arriving when work just left.
+  // Only reviews someone is actually *asking you for* can be a new request.
+  // Since CROW-982 the payload also carries groups a review enters when work
+  // **leaves** your queue — your own verdict landing (Waiting on author), or the
+  // PR finishing (Recently completed) — and chiming `reviewRequested` for those
+  // would announce work arriving at the moment it departed.
+  //
+  // Which groups qualify comes from the server (`group_announces_new_request`)
+  // rather than a group id spelled out here: naming the excluded group inline
+  // meant CROW-990's fourth group opted itself into the chime by default. An
+  // older daemon sends no map, so fall back to the one exclusion it knew about.
+  const announces = (boardData.reviews && boardData.reviews.group_announces_new_request) || null;
   const rs = ((boardData.reviews && boardData.reviews.reviews) || [])
-    .filter((r) => r.group !== 'approved_recently');
+    .filter((r) => (announces ? announces[r.group] !== false : r.group !== 'approved_recently'));
   const ids = new Set(rs.map((r) => r.id).filter(Boolean));
   const prev = _prevReviewIDs;
   _prevReviewIDs = ids;
@@ -4828,15 +4835,16 @@ function renderReviewBoard(root) {
   // #714: search bar; clearing restores the full list.
   root.appendChild(boardFilterInput('review-filter', reviewSearch, 'Filter reviews…', (v) => { reviewSearch = v; }));
 
-  // Three groups, not one flat list (CROW-982). The server assigns every review
-  // a `group` and publishes the display order, so the board and
+  // Four groups, not one flat list (CROW-982, CROW-990). The server assigns
+  // every review a `group` and publishes the display order, so the board and
   // `crow list-reviews` can't disagree about which bucket a PR is in — and a
-  // future fourth group needs no change here.
+  // future fifth group needs no change here.
   //
-  // Empty groups render with a zero count instead of disappearing: an approved
+  // Empty groups render with a zero count instead of disappearing: a reviewed
   // PR used to vanish outright, and a board that shows nothing at all can't
   // tell you *what* is empty. That silence was half the shock in #953.
-  const order = (d && d.group_order) || ['in_review', 'not_approved_yet', 'approved_recently'];
+  const order = (d && d.group_order)
+    || ['in_review', 'not_approved_yet', 'waiting_on_author', 'recently_completed'];
   const counts = (d && d.group_counts) || null;
   const searching = !!q;
   let rendered = 0;
@@ -4881,7 +4889,8 @@ function reviewGroupTitle(g) {
   return ({
     in_review: 'In review',
     not_approved_yet: 'Not approved yet',
-    approved_recently: 'Approved recently · 24h',
+    waiting_on_author: 'Waiting on author',
+    recently_completed: 'Recently completed · 24h',
   })[g] || g;
 }
 
@@ -4889,7 +4898,8 @@ function reviewGroupEmptyText(g) {
   return ({
     in_review: 'No reviews in progress',
     not_approved_yet: 'Nothing waiting on you',
-    approved_recently: 'No approvals in the last 24h',
+    waiting_on_author: 'Nothing waiting on an author',
+    recently_completed: 'Nothing finished in the last 24h',
   })[g] || 'Empty';
 }
 
@@ -4947,6 +4957,30 @@ function reviewIsActionable(r) {
   return r.kickoff_action === 'create' || r.kickoff_action === 're_review';
 }
 
+// The relative-time chip on a review card, labelled with the event it measures.
+//
+// Each group is answering a different question, and an unlabelled "2h" under
+// three of them would be three different facts wearing one hat:
+//   Recently completed  → when it merged/closed, or when you approved it
+//   Waiting on author   → when you last reviewed it (how long the author has sat on it)
+//   otherwise           → when the request last moved
+// Falls through to `requested_at` whenever the specific timestamp is missing, so
+// a partial payload loses the label rather than the chip.
+function reviewCardTime(r) {
+  if (r.group === 'recently_completed') {
+    // A merged/closed PR carries `completed_at`; an approved-but-still-open one
+    // doesn't, and there the approval is what put it here.
+    const done = relTime(r.completed_at);
+    if (done) return (r.state === 'MERGED' ? 'merged ' : 'closed ') + done;
+    const approved = relTime(r.viewer_last_reviewed_at);
+    if (approved) return 'approved ' + approved;
+  } else if (r.group === 'waiting_on_author') {
+    const reviewed = relTime(r.viewer_last_reviewed_at);
+    if (reviewed) return 'reviewed ' + reviewed;
+  }
+  return relTime(r.requested_at);
+}
+
 function reviewCard(r) {
   // A review the server would decline to act on can't be started again, so it
   // isn't selectable — it renders dimmed and checkbox-less while selecting, as
@@ -4977,14 +5011,12 @@ function reviewCard(r) {
   if (selecting) chip.onclick = (e) => e.stopPropagation();
   meta.appendChild(chip);
   if (r.is_draft) meta.appendChild(el('span', 'draft-badge', 'Draft'));
-  // On the approved tail, "when did I approve this" is the question the group
-  // exists to answer — `requested_at` (the PR's updatedAt) doesn't answer it.
-  const approvedAgo = r.group === 'approved_recently' && relTime(r.viewer_last_reviewed_at);
-  if (approvedAgo) meta.appendChild(el('span', 'card-time', 'approved ' + approvedAgo));
-  else {
-    const t = relTime(r.requested_at);
-    if (t) meta.appendChild(el('span', 'card-time', t));
-  }
+  // Outside the requested queue, `requested_at` (the PR's `updatedAt`) answers
+  // the wrong question: under these headings you want to know when the PR
+  // finished, or when you last said something about it — not when the thread
+  // was last bumped.
+  const stamp = reviewCardTime(r);
+  if (stamp) meta.appendChild(el('span', 'card-time', stamp));
   card.appendChild(meta);
   card.appendChild(el('div', 'card-title', r.title));
   const sub = el('div', 'card-sub');

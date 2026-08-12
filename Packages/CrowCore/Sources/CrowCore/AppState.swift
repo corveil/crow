@@ -263,17 +263,22 @@ public final class AppState {
     public var reviewRequests: [ReviewRequest] = []
     public var isLoadingReviews: Bool = false
 
-    /// Open PRs the viewer has **approved**, from the separate `reviewed-by:@me`
-    /// search (CROW-982). Disjoint from `reviewRequests` in the normal case:
-    /// submitting a review clears the pending request, so an approved PR drops
-    /// out of `review-requested:@me` entirely and this is the only place it
-    /// survives. Feeds the board's "Approved recently" group.
+    /// PRs the viewer has reviewed that are **no longer** in the requested
+    /// queue, from the separate `reviewed-by:@me` searches (CROW-982, widened by
+    /// CROW-990). Disjoint from `reviewRequests`: submitting a review clears the
+    /// pending request, so a reviewed PR drops out of `review-requested:@me`
+    /// entirely and this is the only place it survives.
     ///
-    /// Stored unbounded-by-time and trimmed to the 24 h window at serialization
-    /// time (`ReviewsPayload`), so the cutoff tracks the clock rather than the
-    /// poll. The provider caps the underlying search at 50 rows, so this stays
+    /// Feeds two of the board's groups, and `ReviewGroup.classify` decides which
+    /// per row: still open with a changes-requested/commented verdict →
+    /// **Waiting on author**; merged, closed, or approved inside the window →
+    /// **Recently completed**.
+    ///
+    /// Stored unbounded-by-time and trimmed at serialization time
+    /// (`ReviewsPayload`), so the cutoff tracks the clock rather than the poll.
+    /// The provider caps the underlying searches at 50 rows each, so this stays
     /// small without further pruning.
-    public var recentlyApprovedReviews: [ReviewRequest] = []
+    public var reviewedPRs: [ReviewRequest] = []
 
     /// How many `review-requested:@me` PRs the repo/label filters hid this poll.
     ///
@@ -291,10 +296,10 @@ public final class AppState {
         applyReviewFilters(reviewRequests)
     }
 
-    /// `recentlyApprovedReviews` under the same repo/label filters. A repo you
-    /// excluded from the board shouldn't reappear in the approved tail.
-    public var filteredRecentlyApprovedReviews: [ReviewRequest] {
-        applyReviewFilters(recentlyApprovedReviews)
+    /// `reviewedPRs` under the same repo/label filters. A repo you excluded from
+    /// the board shouldn't reappear once you review something in it.
+    public var filteredReviewedPRs: [ReviewRequest] {
+        applyReviewFilters(reviewedPRs)
     }
 
     private func applyReviewFilters(_ requests: [ReviewRequest]) -> [ReviewRequest] {

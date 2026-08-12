@@ -1,13 +1,20 @@
 import Foundation
 
-/// The viewer's most recent *verdict* on a PR.
+/// The viewer's most recent submitted review state on a PR.
 ///
-/// Only the three round-closing states are modelled. COMMENTED and PENDING are
-/// deliberately absent: `crow-review-pr` mandates `--approve`/`--request-changes`
-/// and forbids `--comment`, so a comment is notes without a decision, and
-/// PENDING is an unsubmitted draft carrying no `submittedAt` at all. The raw
-/// values are GitHub's own so the provider can decode them without a mapping
-/// table (CROW-982).
+/// PENDING is deliberately absent — an unsubmitted draft carries no
+/// `submittedAt` at all. The raw values are GitHub's own so the provider can
+/// decode them without a mapping table (CROW-982).
+///
+/// **`commented` is not a round-closing verdict.** `crow-review-pr` mandates
+/// `--approve`/`--request-changes` and forbids `--comment`, so a comment is
+/// notes without a decision and a review round stays open on it — see
+/// `GitHubCodeBackend.roundClosingReviewStates`, which is the set that drives
+/// `decideReviewCompletions` and still excludes it. It is modelled here because
+/// the *board* has a second question to answer (CROW-990): a PR you left
+/// comments on is a PR whose ball is with its author, and before this case
+/// existed such a PR was in no group at all — invisible, which is the #953
+/// complaint. Read this enum as "what did I last say", not "is the round over".
 ///
 /// `nil` on a `ReviewRequest` means **not fetched** — never "no review". GitLab
 /// exposes no per-reviewer verdict, and the SAML/partial paths can drop the
@@ -17,6 +24,18 @@ public enum ReviewVerdict: String, Codable, Sendable, CaseIterable {
     case approved = "APPROVED"
     case changesRequested = "CHANGES_REQUESTED"
     case dismissed = "DISMISSED"
+    case commented = "COMMENTED"
+
+    /// Verdicts that mean "I have said my piece and the author owes the next
+    /// move". Drives the board's **Waiting on author** group (CROW-990).
+    ///
+    /// `dismissed` is excluded on purpose: a dismissed review is one whose
+    /// verdict was *thrown away*, so it leaves nothing owed in either
+    /// direction — GitHub re-requests the reviewer when it wants another look,
+    /// and that lands the PR back in the requested queue where it belongs.
+    public var isWaitingOnAuthor: Bool {
+        self == .changesRequested || self == .commented
+    }
 }
 
 /// A pull request where the current user has been requested as a reviewer.
@@ -35,15 +54,36 @@ public struct ReviewRequest: Identifiable, Codable, Sendable {
     public var provider: Provider
     public var reviewSessionID: UUID?  // set if a review session already exists
     public var headRefOid: String?     // PR head commit SHA — used to detect new pushes
-    /// Timestamp of the viewer's most recent round-closing review. Which of the
-    /// three verdicts it was lives in `viewerLastReviewState` — the two are
-    /// parsed from the same review node and are set or nil together.
+    /// Timestamp of the viewer's most recent submitted review. Which state it
+    /// was lives in `viewerLastReviewState` — the two are parsed from the same
+    /// review node and are set or nil together.
     public var viewerLastReviewedAt: Date?
-    /// The verdict at `viewerLastReviewedAt`. Needed to tell "I approved this"
+    /// The state at `viewerLastReviewedAt`. Needed to tell "I approved this"
     /// from "I requested changes", which the timestamp alone collapses — the
-    /// board's Not-approved-yet / Approved-recently split turns on exactly this
-    /// distinction (CROW-982). `nil` means not fetched; see `ReviewVerdict`.
+    /// board's whole grouping turns on exactly this distinction (CROW-982,
+    /// CROW-990). `nil` means not fetched; see `ReviewVerdict`.
     public var viewerLastReviewState: ReviewVerdict?
+    /// GitHub's `PullRequestState` — `"OPEN"`, `"MERGED"`, or `"CLOSED"`.
+    ///
+    /// `nil` means **not fetched**, and `isCompleted` reads that as open. Every
+    /// row on this board used to come from a `state:open` search, so open was
+    /// the only possibility and the field went unparsed; since CROW-990 the
+    /// board also carries PRs that merged or closed in the last 24 h, and it
+    /// needs to tell those from the ones still waiting on someone.
+    public var state: String?
+    /// When the PR left everyone's queue for good — `mergedAt ?? closedAt`.
+    ///
+    /// Separate from `requestedAt` (the PR's `updatedAt`, which any later
+    /// comment bumps) because the **Recently completed** window has to measure
+    /// from the merge, not from the last thing that touched the thread.
+    public var completedAt: Date?
+
+    /// Whether the PR is no longer open. A nil `state` reads as open — see
+    /// `state`, where nil is "not fetched", and treating an unknown PR as
+    /// merged would silently file live work under a heading that means done.
+    public var isCompleted: Bool {
+        state == "MERGED" || state == "CLOSED"
+    }
 
     public init(
         id: String,
@@ -61,7 +101,9 @@ public struct ReviewRequest: Identifiable, Codable, Sendable {
         reviewSessionID: UUID? = nil,
         headRefOid: String? = nil,
         viewerLastReviewedAt: Date? = nil,
-        viewerLastReviewState: ReviewVerdict? = nil
+        viewerLastReviewState: ReviewVerdict? = nil,
+        state: String? = nil,
+        completedAt: Date? = nil
     ) {
         self.id = id
         self.prNumber = prNumber
@@ -79,5 +121,7 @@ public struct ReviewRequest: Identifiable, Codable, Sendable {
         self.headRefOid = headRefOid
         self.viewerLastReviewedAt = viewerLastReviewedAt
         self.viewerLastReviewState = viewerLastReviewState
+        self.state = state
+        self.completedAt = completedAt
     }
 }

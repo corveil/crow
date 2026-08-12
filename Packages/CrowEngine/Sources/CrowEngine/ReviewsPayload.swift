@@ -11,10 +11,10 @@ import CrowIPC
 /// is precisely the drift you don't want under a field that decides which
 /// button a card renders.
 ///
-/// Since CROW-982 it also carries the board's three-way grouping — `group` per
-/// review plus `group_counts`/`group_order` — so `crow list-reviews` and the web
-/// board are grouped identically by construction rather than by two clients
-/// agreeing on a rule.
+/// Since CROW-982 it also carries the board's grouping — `group` per review plus
+/// `group_counts`/`group_order` — so `crow list-reviews` and the web board are
+/// grouped identically by construction rather than by two clients agreeing on a
+/// rule. CROW-990 took that split from three groups to four.
 public enum ReviewsPayload {
 
     /// Build the payload from live state.
@@ -34,28 +34,23 @@ public enum ReviewsPayload {
     public static func build(appState: AppState, now: Date = Date()) -> [String: JSONValue] {
         let fmt = ISO8601DateFormatter()
 
-        // Groups 1+2 come from the requested queue; group 3 from the separate
-        // `reviewed-by:@me` search, trimmed to the 24 h window *here* rather
-        // than at poll time so the tail expires on the clock instead of on the
-        // next poll (CROW-982). `recentlyApprovedReviews` is already deduped
-        // against the requested queue by `IssueTracker`.
+        // The requested queue feeds the groups GitHub is asking about; the
+        // `reviewed-by:@me` list feeds the two that describe work already done
+        // (CROW-982, CROW-990). Both go through the same `classify`, which also
+        // decides visibility — a reviewed PR outside the 24 h tail comes back
+        // nil and is dropped. That trimming happens *here* rather than at poll
+        // time so the window expires on the clock instead of on the next poll.
+        // `reviewedPRs` is already deduped against the requested queue by
+        // `IssueTracker`.
         let requested = appState.filteredReviewRequests
-        let approvedTail = appState.filteredRecentlyApprovedReviews.filter {
-            ReviewGroup.isRecentApproval(state: $0.viewerLastReviewState, at: $0.viewerLastReviewedAt, now: now)
-        }
+        let reviewed = appState.filteredReviewedPRs
 
         var counts: [ReviewGroup: Int] = [:]
-        func serialize(_ r: ReviewRequest, isRequestedOfViewer: Bool) -> JSONValue {
+        func serialize(_ r: ReviewRequest, isRequestedOfViewer: Bool) -> JSONValue? {
             let existing = appState.existingReviewSession(forPRURL: r.url)
             let linked = r.reviewSessionID.flatMap { id in
                 appState.sessions.first(where: { $0.id == id })
             } ?? existing
-            let action = IssueTracker.reviewKickoffAction(
-                reviewSessionID: r.reviewSessionID ?? existing?.id,
-                headRefOid: r.headRefOid,
-                linkedSession: linked,
-                existingByPRSessionID: existing?.id
-            )
             // "A review is open/in progress on it" — an *active* session, since
             // both `reviewSessionID` (cross-referenced from `reviewSessions`)
             // and `existingReviewSession` exclude completed/archived rounds.
@@ -63,15 +58,30 @@ public enum ReviewsPayload {
             // cross-reference lands, so a just-started round doesn't flicker
             // through "Not approved yet".
             let hasActiveSession = r.reviewSessionID != nil || existing != nil
-            let group = ReviewGroup.classify(
-                viewerLastReviewState: r.viewerLastReviewState,
-                viewerLastReviewedAt: r.viewerLastReviewedAt,
+            guard let group = ReviewGroup.classify(
+                r,
                 hasActiveReviewSession: hasActiveSession,
                 isRequestedOfViewer: isRequestedOfViewer,
                 now: now
+            ) else { return nil }
+            // A merged or closed PR cannot be reviewed again, so the kickoff
+            // decision is short-circuited rather than run: `reviewKickoffAction`
+            // reasons about head SHAs and sessions, neither of which knows the
+            // PR is over, and it would happily offer "Start Review" on something
+            // that shipped yesterday. `.skip` also makes the row unselectable in
+            // the board's batch-start mode, which is the same guarantee.
+            let action = r.isCompleted ? IssueTracker.ReviewKickoffAction.skip : IssueTracker.reviewKickoffAction(
+                reviewSessionID: r.reviewSessionID ?? existing?.id,
+                headRefOid: r.headRefOid,
+                linkedSession: linked,
+                existingByPRSessionID: existing?.id
             )
             counts[group, default: 0] += 1
-            return .object([
+            // Built by assignment after a small literal rather than as one
+            // ~20-key dictionary literal: the single literal blew Swift's
+            // type-checker budget outright ("unable to type-check this
+            // expression in reasonable time") once the last two keys landed.
+            var fields: [String: JSONValue] = [
                 "id": .string(r.id),
                 "pr_number": .int(r.prNumber),
                 "title": .string(r.title),
@@ -81,30 +91,33 @@ public enum ReviewsPayload {
                 "head_branch": .string(r.headBranch),
                 "base_branch": .string(r.baseBranch),
                 "is_draft": .bool(r.isDraft),
-                "requested_at": r.requestedAt.map { .string(fmt.string(from: $0)) } ?? .null,
-                "labels": .array(r.labels.map {
-                    .object(["name": .string($0.name), "color": $0.color.map { .string($0) } ?? .null])
-                }),
                 "provider": .string(r.provider.rawValue),
-                "review_session_id": r.reviewSessionID.map { .string($0.uuidString) } ?? .null,
-                "head_ref_oid": r.headRefOid.map { .string($0) } ?? .null,
-                "kickoff_action": .string(actionName(action)),
-                "viewer_last_reviewed_at": r.viewerLastReviewedAt.map { .string(fmt.string(from: $0)) } ?? .null,
-                "viewer_last_review_state": r.viewerLastReviewState.map { .string($0.rawValue) } ?? .null,
-                "group": .string(group.rawValue),
-            ])
+            ]
+            fields["requested_at"] = r.requestedAt.map { .string(fmt.string(from: $0)) } ?? .null
+            fields["labels"] = .array(r.labels.map {
+                .object(["name": .string($0.name), "color": $0.color.map { .string($0) } ?? .null])
+            })
+            fields["review_session_id"] = r.reviewSessionID.map { .string($0.uuidString) } ?? .null
+            fields["head_ref_oid"] = r.headRefOid.map { .string($0) } ?? .null
+            fields["kickoff_action"] = .string(actionName(action))
+            fields["viewer_last_reviewed_at"] = r.viewerLastReviewedAt.map { .string(fmt.string(from: $0)) } ?? .null
+            fields["viewer_last_review_state"] = r.viewerLastReviewState.map { .string($0.rawValue) } ?? .null
+            fields["state"] = r.state.map { .string($0) } ?? .null
+            fields["completed_at"] = r.completedAt.map { .string(fmt.string(from: $0)) } ?? .null
+            fields["group"] = .string(group.rawValue)
+            return .object(fields)
         }
 
         // Which list a review came from is itself a signal, so it is passed to
         // `classify` rather than re-derived: `requested` is exactly the set
         // GitHub is still asking the viewer about. A PR that appears in both
-        // searches (approved, then re-requested) is deduped into `requested` by
+        // searches (reviewed, then re-requested) is deduped into `requested` by
         // `IssueTracker`, so it is classified as the queue member it is.
         //
         // Precedence still holds within each list: a PR you approved a minute
         // ago that has a live session stays under In review.
-        let reviews: [JSONValue] = requested.map { serialize($0, isRequestedOfViewer: true) }
-            + approvedTail.map { serialize($0, isRequestedOfViewer: false) }
+        let reviews: [JSONValue] = requested.compactMap { serialize($0, isRequestedOfViewer: true) }
+            + reviewed.compactMap { serialize($0, isRequestedOfViewer: false) }
 
         // Emitted for every group, including empty ones — the board renders a
         // zero count rather than dropping the section, so an empty board still
@@ -118,6 +131,17 @@ public enum ReviewsPayload {
             "unseen": .int(appState.unseenReviewCount),
             "group_counts": .object(groupCounts),
             "group_order": .array(ReviewGroup.displayOrder.map { .string($0.rawValue) }),
+            // Which groups a *new* row in may chime `reviewRequested` for. The
+            // web board used to name the excluded group inline, which meant
+            // adding a fourth group silently opted it into the chime — a
+            // `waiting_on_author` row is populated by your own verdict landing,
+            // so announcing it as work arriving is backwards. Publishing the
+            // rule keeps it beside the grouping it belongs to.
+            "group_announces_new_request": .object(Dictionary(
+                uniqueKeysWithValues: ReviewGroup.displayOrder.map {
+                    ($0.rawValue, JSONValue.bool($0.announcesAsNewRequest))
+                }
+            )),
             "hidden_by_filters": .int(appState.hiddenReviewCount),
         ]
     }

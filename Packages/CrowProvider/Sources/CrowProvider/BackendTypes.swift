@@ -399,18 +399,19 @@ public struct AssignedListing: Sendable {
 public struct MonitoredPRListing: Sendable {
     public let viewerPRs: [PRRecord]
     public let reviewRequests: [ReviewRequest]
-    /// Open PRs the viewer has already **approved** (CROW-982).
+    /// PRs the viewer has already reviewed and that have **left** the requested
+    /// queue (CROW-982, widened by CROW-990) — some still open and parked with
+    /// their author, some merged or closed inside the last 24 h.
     ///
-    /// A separate search from `reviewRequests`, and necessarily so: GitHub
-    /// clears the pending review request the moment a review is submitted, so
-    /// an approved PR is not merely un-flagged in `review-requested:@me` — it
-    /// is absent from it. Without this second search the board could not show
-    /// an approval at all, let alone keep it visible for 24 h.
+    /// Separate from `reviewRequests`, and necessarily so: GitHub clears the
+    /// pending review request the moment a review is submitted, so a reviewed PR
+    /// is not merely un-flagged in `review-requested:@me` — it is absent from
+    /// it. Without this the board could not show a submitted review at all, let
+    /// alone tell "waiting on the author" from "finished".
     ///
     /// Empty on providers that expose no per-reviewer verdict (GitLab), which
-    /// simply leaves the board's "Approved recently" group empty rather than
-    /// wrong.
-    public let recentlyApprovedPRs: [ReviewRequest]
+    /// simply leaves those groups empty rather than wrong.
+    public let reviewedPRs: [ReviewRequest]
     public let viewerLogin: String
     public let rateLimit: GitHubRateLimit?
     /// True when the response was degraded because an org's SAML enforcement
@@ -421,14 +422,14 @@ public struct MonitoredPRListing: Sendable {
     public init(
         viewerPRs: [PRRecord],
         reviewRequests: [ReviewRequest],
-        recentlyApprovedPRs: [ReviewRequest] = [],
+        reviewedPRs: [ReviewRequest] = [],
         viewerLogin: String,
         rateLimit: GitHubRateLimit? = nil,
         samlRestricted: Bool = false
     ) {
         self.viewerPRs = viewerPRs
         self.reviewRequests = reviewRequests
-        self.recentlyApprovedPRs = recentlyApprovedPRs
+        self.reviewedPRs = reviewedPRs
         self.viewerLogin = viewerLogin
         self.rateLimit = rateLimit
         self.samlRestricted = samlRestricted
