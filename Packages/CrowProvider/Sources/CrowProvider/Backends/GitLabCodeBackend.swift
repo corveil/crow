@@ -65,6 +65,11 @@ public struct GitLabCodeBackend: CodeBackend {
             return MonitoredPRListing(viewerPRs: [], reviewRequests: [], viewerLogin: "")
         }
         let reviewRequests = Self.parseReviewMRs(output, host: host ?? "")
+        // `recentlyApprovedPRs` is left empty (CROW-982): the MR list endpoint
+        // carries no per-reviewer verdict, so there is nothing to distinguish an
+        // MR the viewer approved from one they merely looked at. The board's
+        // "Approved recently" group therefore stays empty on GitLab rather than
+        // guessing — same reasoning as `viewerLastReviewedAt` below.
         return MonitoredPRListing(viewerPRs: [], reviewRequests: reviewRequests, viewerLogin: "")
     }
 

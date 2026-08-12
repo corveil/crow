@@ -26,7 +26,17 @@ const epilogue = `
   clearDaemonRefreshFlag(){ return clearDaemonRefreshFlag(); },
   persistSidebarCache(){ return persistSidebarCache(); },
   restoreSidebarCache(){ return restoreSidebarCache(); },
+  // CROW-982: the reviews board must not chime for the viewer's own approvals.
+  // _soundArmed is normally set by a 2.5s timer the harness stubs out, so the
+  // test arms it directly; emitEvent is a function *declaration*, whose binding
+  // is mutable, so it can be swapped for a spy and restored.
+  detectReviewSounds(){ return detectReviewSounds(); },
+  set soundArmed(v){ _soundArmed = v; },
 };
+globalThis.__t.setEmitEventSpy = (function(){
+  const real = emitEvent;
+  return function(fn){ emitEvent = fn || real; };
+})();
 `;
 const APP_JS = __dirname + '/../Sources/CrowDaemon/Resources/web/app.js';
 const appjs = fs.readFileSync(APP_JS, 'utf8') + epilogue;
@@ -345,6 +355,139 @@ window.localStorage.setItem(T.sidebarCacheKey, JSON.stringify({
 }));
 T.restoreSidebarCache();
 check('legacy cache with loading:true is scrubbed on restore', T.ticketsRefreshing() === false);
+
+// ---------------------------------------------------------------------------
+// Reviews board — three groups (CROW-982)
+//
+// The board used to be one flat list, so approving a PR made it vanish outright
+// (GitHub clears the review request on submit). The server now assigns each
+// review a `group` and publishes the order + counts; the board must render
+// every group — including empty ones, so a quiet board still says *what* is
+// quiet, which was half the shock in #953.
+// ---------------------------------------------------------------------------
+const grouped = (id, n, group, extra) => Object.assign(
+  review(id, n, 'PR ' + n, 'corveil/crow', 'sam', 'https://github.com/corveil/crow/pull/' + n, 2),
+  { group }, extra || {});
+
+const groupTitles = () => [...q('.group-title')].map((e) => e.textContent);
+const groupCounts = () => [...q('.group-count')].map((e) => e.textContent);
+const cardsUnder = (title) => {
+  // Walk forward from the header to the next .card-list sibling.
+  const head = [...q('.group-head')].find((h) => h.textContent.includes(title));
+  if (!head) return [];
+  let n = head.nextSibling;
+  while (n && !(n.className || '').includes('card-list')) {
+    if ((n.className || '').includes('group-head')) return [];
+    n = n.nextSibling;
+  }
+  return n ? [...n.querySelectorAll('.board-card')] : [];
+};
+
+console.log('\nReviews board — three groups (CROW-982):');
+T.reviewSearch = ''; T.reviewSelectionMode = false; T.selectedReviewURLs.clear();
+T.boardData.reviews = {
+  unseen: 0,
+  group_order: ['in_review', 'not_approved_yet', 'approved_recently'],
+  group_counts: { in_review: 1, not_approved_yet: 1, approved_recently: 1 },
+  hidden_by_filters: 0,
+  reviews: [
+    grouped('g1', 101, 'in_review', { review_session_id: 'sess-1', kickoff_action: 'skip' }),
+    grouped('g2', 102, 'not_approved_yet', { kickoff_action: 'create' }),
+    grouped('g3', 103, 'approved_recently', {
+      kickoff_action: 'create',
+      viewer_last_review_state: 'APPROVED',
+      viewer_last_reviewed_at: iso(2),
+    }),
+  ],
+};
+T.selectedBoard = 'reviews'; T.renderBoard();
+check('all three groups render, in server order',
+  JSON.stringify(groupTitles()) === JSON.stringify(['In review', 'Not approved yet', 'Approved recently · 24h']));
+check('counts come from the server payload',
+  JSON.stringify(groupCounts()) === JSON.stringify(['1', '1', '1']));
+check('each PR lands in exactly one group', q('.board-card').length === 3);
+check('in-review card is under In review', /PR 101/.test((cardsUnder('In review')[0] || {}).textContent || ''));
+check('approved card is under Approved recently',
+  /PR 103/.test((cardsUnder('Approved recently')[0] || {}).textContent || ''));
+check('approved card shows when it was approved, not the PR bump',
+  /approved /.test(cardsUnder('Approved recently')[0].textContent));
+
+console.log('\nEmpty groups render with a zero count instead of disappearing:');
+T.boardData.reviews = {
+  unseen: 0,
+  group_order: ['in_review', 'not_approved_yet', 'approved_recently'],
+  group_counts: { in_review: 0, not_approved_yet: 0, approved_recently: 0 },
+  hidden_by_filters: 0,
+  reviews: [],
+};
+T.renderBoard();
+check('three headers still present with nothing to show', q('.group-head').length === 3);
+check('every count reads 0', JSON.stringify(groupCounts()) === JSON.stringify(['0', '0', '0']));
+check('each empty group says what is empty', q('.group-empty').length === 3);
+
+console.log('\nHidden-by-filters is surfaced (#953 direction C):');
+T.boardData.reviews = {
+  unseen: 0,
+  group_order: ['in_review', 'not_approved_yet', 'approved_recently'],
+  group_counts: { in_review: 0, not_approved_yet: 0, approved_recently: 0 },
+  hidden_by_filters: 12,
+  reviews: [],
+};
+T.renderBoard();
+check('the hidden count is stated', /12 hidden by filters/.test((q('.board-note')[0] || {}).textContent || ''));
+T.boardData.reviews.hidden_by_filters = 0;
+T.renderBoard();
+check('no note when nothing is hidden', q('.board-note').length === 0);
+
+console.log('\nSearching scopes to matching groups and counts the visible rows:');
+T.boardData.reviews = {
+  unseen: 0,
+  group_order: ['in_review', 'not_approved_yet', 'approved_recently'],
+  group_counts: { in_review: 1, not_approved_yet: 1, approved_recently: 1 },
+  hidden_by_filters: 0,
+  reviews: [
+    grouped('g1', 101, 'in_review', { review_session_id: 'sess-1', kickoff_action: 'skip' }),
+    grouped('g2', 102, 'not_approved_yet', { kickoff_action: 'create' }),
+    grouped('g3', 103, 'approved_recently', { kickoff_action: 'create' }),
+  ],
+};
+T.reviewSearch = '102';
+T.renderBoard();
+check('only the matching group is shown', JSON.stringify(groupTitles()) === JSON.stringify(['Not approved yet']));
+check('its count reflects the visible rows, not the unfiltered total', groupCounts()[0] === '1');
+T.reviewSearch = 'nothing-matches-this';
+T.renderBoard();
+check('a search with no hits falls back to the empty-board message', q('.board-empty').length === 1);
+T.reviewSearch = '';
+
+console.log('\nAn older daemon that sends no groups still renders every review:');
+T.boardData.reviews = reviewsPayload;   // no group / group_counts / group_order
+T.renderBoard();
+check('ungrouped reviews default into Not approved yet', cardsUnder('Not approved yet').length === 3);
+check('count falls back to the rendered rows rather than claiming zero',
+  groupCounts()[groupTitles().indexOf('Not approved yet')] === '3');
+
+console.log('\nApproving something never chimes "review requested":');
+T.soundArmed = true;
+T.boardData.reviews = {
+  unseen: 0,
+  reviews: [grouped('g2', 102, 'not_approved_yet', { kickoff_action: 'create' })],
+};
+T.detectReviewSounds();                       // arm the baseline
+const emitted = [];
+T.setEmitEventSpy((name, key) => emitted.push([name, key]));
+T.boardData.reviews = {
+  unseen: 0,
+  reviews: [
+    grouped('g2', 102, 'not_approved_yet', { kickoff_action: 'create' }),
+    grouped('g3', 103, 'approved_recently', { kickoff_action: 'create' }),
+    grouped('g4', 104, 'not_approved_yet', { kickoff_action: 'create' }),
+  ],
+};
+T.detectReviewSounds();
+check('a genuinely new request chimes', emitted.some(([n, k]) => n === 'reviewRequested' && k === 'g4'));
+check('the approved tail does not', !emitted.some(([, k]) => k === 'g3'));
+T.setEmitEventSpy(null);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

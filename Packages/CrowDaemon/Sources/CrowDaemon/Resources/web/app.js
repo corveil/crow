@@ -974,7 +974,12 @@ function detectSessionSounds() {
 
 let _prevReviewIDs = null;
 function detectReviewSounds() {
-  const rs = (boardData.reviews && boardData.reviews.reviews) || [];
+  // Only reviews still *requested* of the viewer can be a new request. Since
+  // CROW-982 the payload also carries the "Approved recently" tail, which enters
+  // the list precisely when you finish a review — chiming `reviewRequested` for
+  // your own approval would announce work arriving when work just left.
+  const rs = ((boardData.reviews && boardData.reviews.reviews) || [])
+    .filter((r) => r.group !== 'approved_recently');
   const ids = new Set(rs.map((r) => r.id).filter(Boolean));
   const prev = _prevReviewIDs;
   _prevReviewIDs = ids;
@@ -4673,10 +4678,69 @@ function renderReviewBoard(root) {
   // #714: search bar; clearing restores the full list.
   root.appendChild(boardFilterInput('review-filter', reviewSearch, 'Filter reviews…', (v) => { reviewSearch = v; }));
 
-  if (!reviews.length) { root.appendChild(boardEmpty(q ? 'No matching reviews' : 'No review requests')); return; }
-  const list = el('div', 'card-list');
-  for (const r of reviews) list.appendChild(reviewCard(r));
-  root.appendChild(list);
+  // Three groups, not one flat list (CROW-982). The server assigns every review
+  // a `group` and publishes the display order, so the board and
+  // `crow list-reviews` can't disagree about which bucket a PR is in — and a
+  // future fourth group needs no change here.
+  //
+  // Empty groups render with a zero count instead of disappearing: an approved
+  // PR used to vanish outright, and a board that shows nothing at all can't
+  // tell you *what* is empty. That silence was half the shock in #953.
+  const order = (d && d.group_order) || ['in_review', 'not_approved_yet', 'approved_recently'];
+  const counts = (d && d.group_counts) || null;
+  const searching = !!q;
+  let rendered = 0;
+  for (const g of order) {
+    const inGroup = reviews.filter((r) => (r.group || 'not_approved_yet') === g);
+    // While searching, the counts chip would contradict the visible rows
+    // (`group_counts` is unfiltered), and empty groups are just noise — so show
+    // only groups with matches and count what's actually on screen. Same
+    // fallback when an older daemon sends no counts at all: count the rows
+    // rather than claim zero under a group that visibly has cards.
+    if (searching && !inGroup.length) continue;
+    const total = (searching || !counts) ? inGroup.length : (counts[g] || 0);
+    const head = el('div', 'group-head');
+    head.appendChild(el('span', 'group-title', reviewGroupTitle(g)));
+    head.appendChild(el('span', 'group-count', String(total)));
+    root.appendChild(head);
+    if (!inGroup.length) {
+      root.appendChild(el('div', 'group-empty', reviewGroupEmptyText(g)));
+      continue;
+    }
+    const list = el('div', 'card-list');
+    for (const r of inGroup) list.appendChild(reviewCard(r));
+    root.appendChild(list);
+    rendered += inGroup.length;
+  }
+  if (searching && !rendered) root.appendChild(boardEmpty('No matching reviews'));
+
+  // #953 direction C: `ignoreReviewLabels` / `excludeReviewRepos` silently hid
+  // real `review-requested:@me` PRs during that incident and the board looked
+  // empty while GitHub's queue was not. Say so.
+  const hidden = (d && d.hidden_by_filters) || 0;
+  if (hidden) {
+    root.appendChild(el('div', 'board-note',
+      hidden + ' hidden by filters (repo/label rules in Settings → Automation)'));
+  }
+}
+
+// Titles come from the server's group ids so the two clients agree on naming as
+// well as on membership. Unknown ids fall back to the raw id rather than being
+// dropped — a board that silently swallows a group is the bug this fixes.
+function reviewGroupTitle(g) {
+  return ({
+    in_review: 'In review',
+    not_approved_yet: 'Not approved yet',
+    approved_recently: 'Approved recently · 24h',
+  })[g] || g;
+}
+
+function reviewGroupEmptyText(g) {
+  return ({
+    in_review: 'No reviews in progress',
+    not_approved_yet: 'Nothing waiting on you',
+    approved_recently: 'No approvals in the last 24h',
+  })[g] || 'Empty';
 }
 
 function toggleReviewSelect(url) {
@@ -4763,8 +4827,14 @@ function reviewCard(r) {
   if (selecting) chip.onclick = (e) => e.stopPropagation();
   meta.appendChild(chip);
   if (r.is_draft) meta.appendChild(el('span', 'draft-badge', 'Draft'));
-  const t = relTime(r.requested_at);
-  if (t) meta.appendChild(el('span', 'card-time', t));
+  // On the approved tail, "when did I approve this" is the question the group
+  // exists to answer — `requested_at` (the PR's updatedAt) doesn't answer it.
+  const approvedAgo = r.group === 'approved_recently' && relTime(r.viewer_last_reviewed_at);
+  if (approvedAgo) meta.appendChild(el('span', 'card-time', 'approved ' + approvedAgo));
+  else {
+    const t = relTime(r.requested_at);
+    if (t) meta.appendChild(el('span', 'card-time', t));
+  }
   card.appendChild(meta);
   card.appendChild(el('div', 'card-title', r.title));
   const sub = el('div', 'card-sub');

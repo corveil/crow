@@ -1897,6 +1897,168 @@ final class BackendsTests: XCTestCase {
         XCTAssertFalse(GitHubCodeBackend.isMergeCommitMessage("Merge two records into one"))   // not a merge prefix
         XCTAssertFalse(GitHubCodeBackend.isMergeCommitMessage("Fix authentication bug"))
     }
+
+    // MARK: - Approved tail + viewer verdict (CROW-982)
+
+    /// Two searches in one document. The approved tail comes from `approvedPRs`
+    /// (`reviewed-by:@me`) and is **narrowed to approvals**: `reviewed-by:`
+    /// matches any submitted review, so a PR the viewer requested changes on
+    /// would otherwise be duplicated into the approved group.
+    func testParseMonitoredPRsSplitsApprovedTailFromRequestedQueue() throws {
+        let json = """
+        {
+          "data": {
+            "viewerPRs": {"pullRequests": {"nodes": []}},
+            "reviewPRs": {
+              "nodes": [
+                {
+                  "number": 1, "title": "Waiting on me", "url": "https://github.com/a/b/pull/1",
+                  "isDraft": false, "updatedAt": "2026-06-07T10:00:00Z",
+                  "headRefName": "f1", "headRefOid": "sha1", "baseRefName": "main", "state": "OPEN",
+                  "author": {"login": "alice"}, "repository": {"nameWithOwner": "a/b"},
+                  "labels": {"nodes": []}, "reviews": {"nodes": []}
+                }
+              ]
+            },
+            "approvedPRs": {
+              "nodes": [
+                {
+                  "number": 2, "title": "I approved this", "url": "https://github.com/a/b/pull/2",
+                  "isDraft": false, "updatedAt": "2026-06-07T11:00:00Z",
+                  "headRefName": "f2", "headRefOid": "sha2", "baseRefName": "main", "state": "OPEN",
+                  "author": {"login": "alice"}, "repository": {"nameWithOwner": "a/b"},
+                  "labels": {"nodes": []},
+                  "reviews": {"nodes": [
+                    {"author": {"login": "me"}, "state": "APPROVED", "submittedAt": "2026-06-07T11:00:00Z"}
+                  ]}
+                },
+                {
+                  "number": 3, "title": "I blocked this", "url": "https://github.com/a/b/pull/3",
+                  "isDraft": false, "updatedAt": "2026-06-07T12:00:00Z",
+                  "headRefName": "f3", "headRefOid": "sha3", "baseRefName": "main", "state": "OPEN",
+                  "author": {"login": "alice"}, "repository": {"nameWithOwner": "a/b"},
+                  "labels": {"nodes": []},
+                  "reviews": {"nodes": [
+                    {"author": {"login": "me"}, "state": "CHANGES_REQUESTED", "submittedAt": "2026-06-07T12:00:00Z"}
+                  ]}
+                }
+              ]
+            },
+            "viewer": {"login": "me"},
+            "rateLimit": {"remaining": 5000, "limit": 5000, "resetAt": "2026-06-08T17:00:00Z", "cost": 1}
+          }
+        }
+        """
+        let listing = try GitHubCodeBackend.parseMonitoredPRsResponse(json)
+        XCTAssertEqual(listing.reviewRequests.map(\.prNumber), [1])
+        XCTAssertEqual(listing.recentlyApprovedPRs.map(\.prNumber), [2])
+        XCTAssertEqual(listing.recentlyApprovedPRs.first?.viewerLastReviewState, .approved)
+        // 2026-06-07T11:00:00Z. Built from epoch, not from the parser's own
+        // formatter, so a nil-returning formatter can't co-fail both sides.
+        XCTAssertEqual(listing.recentlyApprovedPRs.first?.viewerLastReviewedAt,
+                       Date(timeIntervalSince1970: 1780830000))
+    }
+
+    /// The verdict must reach `ReviewRequest` on the requested-queue path too —
+    /// that is what tells "not approved yet" from "I requested changes" without
+    /// a second lookup. Only the viewer's own reviews count.
+    func testParseReviewRequestsCapturesViewerVerdictOnly() throws {
+        let json = """
+        {
+          "data": {
+            "viewerPRs": {"pullRequests": {"nodes": []}},
+            "reviewPRs": {
+              "nodes": [
+                {
+                  "number": 4, "title": "Round two", "url": "https://github.com/a/b/pull/4",
+                  "isDraft": false, "updatedAt": "2026-06-07T10:00:00Z",
+                  "headRefName": "f4", "headRefOid": "sha4", "baseRefName": "main", "state": "OPEN",
+                  "author": {"login": "alice"}, "repository": {"nameWithOwner": "a/b"},
+                  "labels": {"nodes": []},
+                  "reviews": {"nodes": [
+                    {"author": {"login": "me"},    "state": "APPROVED",          "submittedAt": "2026-06-01T10:00:00Z"},
+                    {"author": {"login": "me"},    "state": "CHANGES_REQUESTED", "submittedAt": "2026-06-05T10:00:00Z"},
+                    {"author": {"login": "bob"},   "state": "APPROVED",          "submittedAt": "2026-06-06T10:00:00Z"},
+                    {"author": {"login": "me"},    "state": "COMMENTED",         "submittedAt": "2026-06-07T10:00:00Z"}
+                  ]}
+                }
+              ]
+            },
+            "approvedPRs": {"nodes": []},
+            "viewer": {"login": "me"},
+            "rateLimit": {"remaining": 5000, "limit": 5000, "resetAt": "2026-06-08T17:00:00Z", "cost": 1}
+          }
+        }
+        """
+        let listing = try GitHubCodeBackend.parseMonitoredPRsResponse(json)
+        XCTAssertEqual(listing.reviewRequests.count, 1)
+        // Bob's later approval is somebody else's verdict; the viewer's later
+        // COMMENTED is notes without a decision. The last *verdict* stands.
+        XCTAssertEqual(listing.reviewRequests[0].viewerLastReviewState, .changesRequested)
+        // 2026-06-05T10:00:00Z, from epoch rather than the parser's formatter.
+        XCTAssertEqual(listing.reviewRequests[0].viewerLastReviewedAt,
+                       Date(timeIntervalSince1970: 1780653600))
+    }
+
+    /// An unknown viewer login (a degraded or SAML-partial response) leaves the
+    /// tail empty rather than guessing. `nil` verdict means "not fetched".
+    func testApprovedTailIsEmptyWithoutViewerLogin() throws {
+        let json = """
+        {
+          "data": {
+            "viewerPRs": {"pullRequests": {"nodes": []}},
+            "reviewPRs": {"nodes": []},
+            "approvedPRs": {
+              "nodes": [
+                {
+                  "number": 5, "title": "Approved by someone", "url": "https://github.com/a/b/pull/5",
+                  "isDraft": false, "updatedAt": "2026-06-07T10:00:00Z",
+                  "headRefName": "f5", "headRefOid": "sha5", "baseRefName": "main", "state": "OPEN",
+                  "author": {"login": "alice"}, "repository": {"nameWithOwner": "a/b"},
+                  "labels": {"nodes": []},
+                  "reviews": {"nodes": [
+                    {"author": {"login": "me"}, "state": "APPROVED", "submittedAt": "2026-06-07T10:00:00Z"}
+                  ]}
+                }
+              ]
+            },
+            "viewer": {},
+            "rateLimit": {"remaining": 5000, "limit": 5000, "resetAt": "2026-06-08T17:00:00Z", "cost": 1}
+          }
+        }
+        """
+        let listing = try GitHubCodeBackend.parseMonitoredPRsResponse(json)
+        XCTAssertTrue(listing.recentlyApprovedPRs.isEmpty)
+    }
+
+    /// A response predating the `approvedPRs` alias (or one where GitHub
+    /// nullified it) must degrade to an empty tail, never to a parse failure —
+    /// the requested queue is the load-bearing half.
+    func testMissingApprovedAliasDegradesToEmptyTail() throws {
+        let json = """
+        {
+          "data": {
+            "viewerPRs": {"pullRequests": {"nodes": []}},
+            "reviewPRs": {"nodes": []},
+            "viewer": {"login": "me"},
+            "rateLimit": {"remaining": 5000, "limit": 5000, "resetAt": "2026-06-08T17:00:00Z", "cost": 1}
+          }
+        }
+        """
+        let listing = try GitHubCodeBackend.parseMonitoredPRsResponse(json)
+        XCTAssertTrue(listing.recentlyApprovedPRs.isEmpty)
+        XCTAssertEqual(listing.viewerLogin, "me")
+    }
+
+    /// The query declares both search variables, and `listMonitoredPRs` passes
+    /// both. A mismatch is a runtime GraphQL error, not a compile error, so pin
+    /// the contract here.
+    func testMonitoredPRsQueryDeclaresBothSearchVariables() {
+        let q = GitHubCodeBackend.monitoredPRsQuery
+        XCTAssertTrue(q.contains("$reviewQuery: String!"))
+        XCTAssertTrue(q.contains("$approvedQuery: String!"))
+        XCTAssertTrue(q.contains("approvedPRs: search(type: ISSUE, query: $approvedQuery"))
+    }
 }
 
 private func XCTAssertThrowsErrorAsync<T>(_ expression: @autoclosure () async throws -> T,

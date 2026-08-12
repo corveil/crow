@@ -263,12 +263,42 @@ public final class AppState {
     public var reviewRequests: [ReviewRequest] = []
     public var isLoadingReviews: Bool = false
 
+    /// Open PRs the viewer has **approved**, from the separate `reviewed-by:@me`
+    /// search (CROW-982). Disjoint from `reviewRequests` in the normal case:
+    /// submitting a review clears the pending request, so an approved PR drops
+    /// out of `review-requested:@me` entirely and this is the only place it
+    /// survives. Feeds the board's "Approved recently" group.
+    ///
+    /// Stored unbounded-by-time and trimmed to the 24 h window at serialization
+    /// time (`ReviewsPayload`), so the cutoff tracks the clock rather than the
+    /// poll. The provider caps the underlying search at 50 rows, so this stays
+    /// small without further pruning.
+    public var recentlyApprovedReviews: [ReviewRequest] = []
+
+    /// How many `review-requested:@me` PRs the repo/label filters hid this poll.
+    ///
+    /// Surfaced on the board because silence here was half of #953: with
+    /// `ignoreReviewLabels`/`excludeReviewRepos` set, real requested reviews
+    /// vanished and the board read "No review requests" while GitHub's queue
+    /// was not empty. A count makes hidden ≠ absent.
+    public var hiddenReviewCount: Int = 0
+
     public var excludeReviewRepos: [String] = []
     public var excludeTicketRepos: [String] = []
     public var ignoreReviewLabels: [String] = []
 
     public var filteredReviewRequests: [ReviewRequest] {
-        var result = reviewRequests
+        applyReviewFilters(reviewRequests)
+    }
+
+    /// `recentlyApprovedReviews` under the same repo/label filters. A repo you
+    /// excluded from the board shouldn't reappear in the approved tail.
+    public var filteredRecentlyApprovedReviews: [ReviewRequest] {
+        applyReviewFilters(recentlyApprovedReviews)
+    }
+
+    private func applyReviewFilters(_ requests: [ReviewRequest]) -> [ReviewRequest] {
+        var result = requests
         if !excludeReviewRepos.isEmpty {
             result = result.filter { !repoMatchesPatterns($0.repo, patterns: excludeReviewRepos) }
         }
