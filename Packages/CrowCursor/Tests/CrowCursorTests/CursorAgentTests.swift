@@ -12,8 +12,31 @@ struct CursorAgentTests {
         #expect(agent.displayName == "Cursor")
         #expect(agent.iconSystemName == "cursorarrow.rays")
         #expect(agent.supportsRemoteControl == true)
-        #expect(agent.launchCommandToken == "agent")
+        #expect(agent.launchCommandToken == "cursor-agent")
+        #expect(agent.alternateLaunchCommandTokens == ["agent"])
         #expect(agent.sessionRenameSlashCommand(newName: "my-session") == "/rename my-session\n")
+    }
+
+    // MARK: - Binary token collision (CROW-989)
+
+    /// Cursor ships the same executable under two names. Crow prefers the
+    /// unambiguous `cursor-agent`; the generic `agent` is kept only as an alias
+    /// because xAI's grok-build installs `~/.grok/bin/agent` and won the PATH
+    /// walk, so Crow built a Cursor command and ran Grok's binary — which died
+    /// on `--force`.
+    @Test func prefersTheUnambiguousNameAndKeepsTheLegacyAlias() {
+        #expect(agent.binaryTokens == ["cursor-agent", "agent"])
+    }
+
+    /// Hardcoded fallbacks follow the same preference: a `…/bin/agent` on disk is
+    /// just as likely to be grok-build's as a PATH one, so every `cursor-agent`
+    /// candidate is tried before any bare `agent`.
+    @Test func fallbackCandidatesPreferCursorAgent() {
+        let names = agent.fallbackCandidates.map { ($0 as NSString).lastPathComponent }
+        let lastPreferred = names.lastIndex(of: "cursor-agent")
+        let firstLegacy = names.firstIndex(of: "agent")
+        #expect(lastPreferred != nil && firstLegacy != nil)
+        #expect(lastPreferred! < firstLegacy!)
     }
 
     @Test func autoLaunchCommandWorkSession() {
@@ -315,5 +338,105 @@ struct CursorAgentTests {
         // path may or may not exist depending on the developer machine,
         // so we accept either outcome and just verify the result type.
         _ = agent.findBinary()  // smoke test: must not crash
+    }
+
+    // MARK: - Identity probe (CROW-989)
+
+    /// Real `cursor-agent 2026.08.04-aaa8809 --help`, trimmed to the option lines
+    /// the markers key on. Note the `Usage:` line says **`agent`** — the binary
+    /// reports its generic argv[0] name even when invoked as `cursor-agent` —
+    /// which is exactly why the markers are flags and env vars, not the program
+    /// name.
+    private static let cursorHelp = """
+        Usage: agent [options] [command] [prompt...]
+
+        Start the Cursor Agent
+
+        Options:
+          -v, --version              Output the version number
+          --api-key <key>            API key for authentication (can also use
+                                     CURSOR_API_KEY env var)
+          -e, --endpoint <url>       Target API endpoint URL (can also use
+                                     CURSOR_API_ENDPOINT env var)
+          -f, --force                Force allow commands unless explicitly denied
+          --approve-mcps             Automatically approve all MCP servers
+          --trust                    Trust the current workspace without prompting
+        """
+
+    /// Real `grok 1.0.0 --help` (grok-build, installed as `~/.grok/bin/agent`),
+    /// trimmed. This is the binary Crow actually launched in the CROW-989 repro:
+    /// it has a `--force`-adjacent vocabulary but none of Cursor's flags, so
+    /// Cursor's `--force --approve-mcps` died on parse.
+    private static let grokBuildHelp = """
+        Grok Build TUI
+
+        Usage: agent [OPTIONS] [PROMPT] [COMMAND]
+
+        Options:
+              --allow <RULE>       Permission allow rule (compat alias: --allowedTools)
+              --always-approve     Auto-approve all tool executions
+          -c, --continue           Continue the most recent session
+              --deny <RULE>        Permission deny rule
+        """
+
+    @Test func identityProbeAcceptsCursorHelp() async {
+        let agent = CursorAgent(probeRunner: FakeProbeRunner(
+            outputs: ["--help": Self.cursorHelp]))
+        #expect(await agent.verifyBinaryIdentity(atPath: "/Users/x/.local/bin/cursor-agent"))
+    }
+
+    /// The exact CROW-989 false positive: `agent` resolved to grok-build. The
+    /// probe rejects it, so registration reports Cursor unavailable (naming the
+    /// resolved path) instead of launching and failing on flag parsing.
+    @Test func identityProbeRejectsGrokBuildUnderTheAgentName() async {
+        let agent = CursorAgent(probeRunner: FakeProbeRunner(
+            outputs: ["--help": Self.grokBuildHelp]))
+        #expect(await agent.verifyBinaryIdentity(atPath: "/Users/x/.grok/bin/agent") == false)
+    }
+
+    /// A binary that prints nothing — or a probe that times out — can't be
+    /// identified, so it's rejected rather than optimistically launched.
+    @Test func identityProbeRejectsEmptyOutput() async {
+        let agent = CursorAgent(probeRunner: FakeProbeRunner(outputs: [:]))
+        #expect(await agent.verifyBinaryIdentity(atPath: "/usr/local/bin/agent") == false)
+    }
+
+    /// Cursor's `--version` is a bare build stamp with no vendor text, so it
+    /// could never match a marker; probing it would only cost a second spawn per
+    /// boot. `--help` is the only leg.
+    @Test func identityProbeOnlySpawnsHelp() async {
+        let runner = FakeProbeRunner(outputs: ["--version": "2026.08.04-aaa8809"])
+        _ = await CursorAgent(probeRunner: runner).verifyBinaryIdentity(atPath: "/bin/x")
+        #expect(runner.probed.value == ["--help"])
+    }
+
+    /// Every marker must be present in the real Cursor help — a marker that
+    /// matches nothing is dead weight that silently narrows the probe.
+    @Test func everyMarkerAppearsInRealCursorHelp() {
+        let help = Self.cursorHelp.lowercased()
+        for marker in CursorAgent.identityMarkers {
+            #expect(help.contains(marker), "marker \(marker) no longer appears in Cursor's --help")
+        }
+    }
+}
+
+/// Canned `--help` responder for the identity probe, recording which args were
+/// spawned. Lets a test hand `verifyBinaryIdentity` real Cursor vs grok-build
+/// output without spawning a subprocess.
+private struct FakeProbeRunner: ShellRunner {
+    let outputs: [String: String]
+    let probed = Recorder()
+
+    final class Recorder: @unchecked Sendable {
+        private let lock = NSLock()
+        private var args: [String] = []
+        var value: [String] { lock.lock(); defer { lock.unlock() }; return args }
+        func record(_ a: String) { lock.lock(); defer { lock.unlock() }; args.append(a) }
+    }
+
+    func run(args: [String], env: [String: String], cwd: String?) async throws -> String {
+        let arg = args.dropFirst().first ?? ""
+        probed.record(arg)
+        return outputs[arg] ?? ""
     }
 }

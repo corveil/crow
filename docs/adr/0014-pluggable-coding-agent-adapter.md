@@ -53,7 +53,13 @@ protocol. Capabilities are **members of the protocol**, not a central switch:
   ignore.
 - **Binary discovery:** `findBinary()` with a default three-tier impl
   (explicit `defaults.binaries.<kind>` override → `PATH` walk →
-  hardcoded `fallbackCandidates`; CROW-484).
+  hardcoded `fallbackCandidates`; CROW-484). The `PATH` walk is *token-major*
+  over `binaryTokens` (`launchCommandToken` then any
+  `alternateLaunchCommandTokens`), so a harness shipping several names for one
+  executable resolves by preferred name rather than by install order — and a
+  `PATH`/fallback match on a collision-prone name is confirmed by
+  `verifyBinaryIdentity` before registration marks the agent available
+  (CROW-911 for Grok, CROW-989 for Cursor; shared `BinaryIdentityProbe`).
 
 Harnesses are keyed by
 [`AgentKind`](../../Packages/CrowCore/Sources/CrowCore/Agent/AgentKind.swift),

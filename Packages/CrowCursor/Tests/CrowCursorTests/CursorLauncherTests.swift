@@ -42,7 +42,7 @@ struct CursorLauncherTests {
         let cmd = try await CursorLauncher().launchCommand(
             sessionID: UUID(), worktreePath: "/w", prompt: "p", seedTrust: true)
         #expect(cmd.contains("_CROW_P=$(< "))
-        #expect(cmd.contains("eval \"'agent' --trust -- $(printf '%q'"))
+        #expect(cmd.contains("eval \"'cursor-agent' --trust -- $(printf '%q'"))
         #expect(cmd.contains("--force") == false)          // no auto-permission
     }
 
@@ -55,7 +55,7 @@ struct CursorLauncherTests {
         let cmd = try await CursorLauncher().launchCommand(
             sessionID: UUID(), worktreePath: "/w", prompt: "p", seedTrust: false)
         #expect(cmd.contains("--trust") == false)
-        #expect(cmd.contains("eval \"'agent' -- $(printf '%q'"))
+        #expect(cmd.contains("eval \"'cursor-agent' -- $(printf '%q'"))
     }
 
     /// CROW-968: the handoff prompt runs through the same commander parser as

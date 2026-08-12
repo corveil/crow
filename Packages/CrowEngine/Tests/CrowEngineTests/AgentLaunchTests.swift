@@ -83,6 +83,7 @@ private struct MockAgent: CodingAgent {
     var kind: AgentKind
     let spy: SpyHookConfigWriter
     var launchCommandToken: String = "claude"
+    var alternateLaunchCommandTokens: [String] = []
 
     var displayName: String { "Mock" }
     var iconSystemName: String { "sparkles" }
@@ -158,6 +159,45 @@ private struct MockAgent: CodingAgent {
             worktreePath: nil, crowPath: nil, telemetryPort: 4318)
         #expect(didLaunch)
         #expect(text == "cursor-agent chat")
+    }
+
+    /// A legacy install invoked under the alias still counts as a launch, so it
+    /// gets hook config written. Crow prefers `cursor-agent` since CROW-989, but
+    /// an older install — or an operator recovering a pane by hand with
+    /// `crow send "agent --continue"` — still says `agent`, and a miss here would
+    /// silently leave that session without hooks.
+    @Test func alternateTokenAlsoCountsAsALaunch() {
+        var a = agent(.cursor)
+        a.launchCommandToken = "cursor-agent"
+        a.alternateLaunchCommandTokens = ["agent"]
+        let sid = UUID()
+        let (_, didLaunch) = AgentLaunch.prepareAgentLaunchText(
+            command: "'/Users/x/.local/bin/agent' --trust", agent: a, sessionID: sid,
+            worktreePath: "/tmp/wt", crowPath: "/usr/local/bin/crow", telemetryPort: nil)
+        #expect(didLaunch)
+        #expect(a.spy.calls == [.init(worktreePath: "/tmp/wt", sessionID: sid, crowPath: "/usr/local/bin/crow")])
+    }
+
+    /// The alias must not widen matching into prose. `commandLaunchesToken` is
+    /// already anchored, and adding `agent` as an alias doesn't relax that —
+    /// otherwise a `crow send` of ordinary text mentioning the word would flip
+    /// readiness and rewrite hook config.
+    @Test func aliasDoesNotMatchIncidentalProse() {
+        var a = agent(.cursor)
+        a.launchCommandToken = "cursor-agent"
+        a.alternateLaunchCommandTokens = ["agent"]
+        #expect(!AgentLaunch.commandLaunchesAgent("ask the agent to retry", agent: a))
+        #expect(!AgentLaunch.commandLaunchesAgent("./my-agent run", agent: a))
+        #expect(AgentLaunch.commandLaunchesAgent("agent --continue", agent: a))
+        #expect(AgentLaunch.commandLaunchesAgent("cd /tmp && cursor-agent", agent: a))
+    }
+
+    /// An agent with no aliases matches exactly as before — the CROW-989
+    /// plumbing is inert for every single-name harness.
+    @Test func singleTokenAgentMatchingIsUnchanged() {
+        let a = agent(.claudeCode)
+        #expect(AgentLaunch.commandLaunchesAgent("claude --continue", agent: a))
+        #expect(!AgentLaunch.commandLaunchesAgent("agent --continue", agent: a))
     }
 
     /// #897 end-to-end on the wiring: the launch path resolves its crow binary

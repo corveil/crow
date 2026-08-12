@@ -1057,7 +1057,7 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                         // write, so a plain `crow send "yes"` doesn't re-strip. Strip is
                         // a no-op unless this is a Grok `.review` clone.
                         if let wtPath,
-                           AgentLaunch.commandLaunchesToken(text, token: agent.launchCommandToken) {
+                           AgentLaunch.commandLaunchesAgent(text, agent: agent) {
                             SessionService.prepareWorktreeForAgentLaunch(
                                 agentKind: session.agentKind,
                                 sessionKind: session.kind,
