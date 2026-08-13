@@ -125,6 +125,11 @@ enum RPCLanePolicy {
         "workspace-remove": .fixed(.config),
         "gateway-set": .fixed(.config),
         "web-password-set": .fixed(.config),
+        // MCP tokens live in config.json, so they share its lane — two concurrent
+        // mints would otherwise read the same token array and one would lose its
+        // append (CROW-1004).
+        "mcp-token-mint": .fixed(.config),
+        "mcp-token-revoke": .fixed(.config),
         "job-add": .fixed(.config),
         "job-edit": .fixed(.config),
         "job-enable": .fixed(.config),

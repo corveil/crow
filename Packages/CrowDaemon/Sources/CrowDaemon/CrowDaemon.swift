@@ -510,6 +510,16 @@ public enum CrowDaemon {
         // "Start Crow at login" for Settings → General — same local-only gating,
         // since it registers a launch agent on the host machine (CROW-769).
         AutostartRoutes.mount(on: httpRouter, boundHost: options.host, options: options)
+        // Read-only MCP for off-box clients (CROW-1004). Authenticates with a scoped
+        // bearer token minted by `crow mcp token mint`, NOT the web-session cookie —
+        // `/mcp` is listed in `WebAuthMiddleware.isAuthExempt` for that reason, and
+        // `MCPRoutes` is strictly stricter than the middleware it replaces.
+        MCPRoutes.mount(
+            on: httpRouter,
+            commandRouter: commandRouter,
+            boundHost: options.host,
+            devRoot: options.devRoot,
+            serverVersion: buildInfo.version)
         StaticAssets.mount(on: httpRouter, webDir: options.webDir)
         // Per-session generated images (diagrams/screenshots an agent dropped
         // in the scratch dir), served read-only + sandboxed (CROW-593).

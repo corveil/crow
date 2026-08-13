@@ -336,6 +336,18 @@ enum RPCWebSocketHandler {
         case "gateway-get", "gateway-set", "web-password-get", "web-password-set":
             // Secret reads *and* writes (CROW-815) — see the doc comment above.
             return "gateway and web-password management is local-only"
+        case "mcp-token-list", "mcp-token-mint", "mcp-token-revoke":
+            // MCP bearer tokens (CROW-1004). `mcp-token-mint` returns the plaintext
+            // token exactly once, so a remote peer that could call it would be
+            // minting itself the credential that gates remote MCP access — the same
+            // shape of hole as a remote `web-password-set`. `mcp-token-list` returns
+            // no secret but is gated alongside them, matching `web-password-get`.
+            //
+            // Note the `/mcp` endpoint itself is a *different* door: it authenticates
+            // with a bearer token and reaches only `MCPToolCatalog`'s read-only
+            // allowlist, which by construction contains none of the methods listed
+            // in this switch. `MCPLedgerExportTests` asserts that emptiness.
+            return "MCP token management is local-only"
         case "set-config":
             guard setConfigTouchesPrivilegedFields(request, devRoot: devRoot) else { return nil }
             return "set-config binaries is local-only"

@@ -959,6 +959,69 @@ import CrowPersistence
         }
     }
 
+    @Test func mcpTokenMethodsAreLocalOnly() {
+        // `mcp-token-mint` returns the plaintext token exactly once, so a remote
+        // peer able to call it would be minting itself the credential that gates
+        // remote MCP access — the same shape of hole as a remote `web-password-set`.
+        // `mcp-token-list` carries no secret but is gated alongside them, matching
+        // how `web-password-get` is gated next to its setter (CROW-1004).
+        for method in ["mcp-token-list", "mcp-token-mint", "mcp-token-revoke"] {
+            let req = JSONRPCRequest(id: 1, method: method, params: [
+                "name": .string("probe"),
+                "scopes": .array([.string("board:read")]),
+            ])
+            #expect(RPCWebSocketHandler.localOnlyDenial(for: req, devRoot: tempDevRoot())
+                == "MCP token management is local-only")
+        }
+    }
+
+    @Test func mcpExportedMethodsAreReachableRemotely() {
+        // The mirror image, and the reason the MCP endpoint can share the daemon's
+        // router: every method the MCP tool catalog reads must NOT be gated here, or
+        // an authenticated remote `/rpc` browser would lose a read it has today.
+        for method in MCPToolCatalog.exportedMethods.sorted() {
+            let req = JSONRPCRequest(id: 1, method: method, params: [
+                "session_id": .string(UUID().uuidString),
+            ])
+            #expect(RPCWebSocketHandler.localOnlyDenial(for: req, devRoot: tempDevRoot()) == nil,
+                    "\(method) is MCP-exported and must stay ungated on /rpc")
+        }
+    }
+
+    @Test func localOnlyLedgerMirrorMatchesTheGate() {
+        // `ParityLedger.localOnlyRPCMethods` is a mirror of this switch's
+        // unconditional cases, hoisted into CrowCore so `MCPLedgerExportTests` can
+        // assert "no MCP-exported method is local-only" from the Linux PR lane —
+        // CrowDaemon is Darwin-only and its tests do not run on PRs (ADR 0007).
+        //
+        // A mirror that can drift is worse than no mirror, so pin it in both
+        // directions here, where the real gate is visible.
+        let devRoot = tempDevRoot()
+
+        // Every mirrored method is genuinely denied.
+        for method in ParityLedger.localOnlyRPCMethods.sorted() {
+            let req = JSONRPCRequest(id: 1, method: method, params: [
+                "session_id": .string(UUID().uuidString),
+                "target": .string("manager"),
+            ])
+            #expect(RPCWebSocketHandler.localOnlyDenial(for: req, devRoot: devRoot) != nil,
+                    "\(method) is listed in localOnlyRPCMethods but the gate allows it")
+        }
+
+        // And no *unconditionally* denied method is missing from the mirror. The two
+        // conditional gates (`set-config`, `defaults-set`) are excluded by
+        // construction: both are probed here with an empty payload, which is exactly
+        // the case they allow.
+        for entry in ParityLedger.rpcMethods {
+            let req = JSONRPCRequest(id: 1, method: entry.method, params: [:])
+            let denied = RPCWebSocketHandler.localOnlyDenial(for: req, devRoot: devRoot) != nil
+            if denied {
+                #expect(ParityLedger.localOnlyRPCMethods.contains(entry.method),
+                        "\(entry.method) is denied by the gate but missing from localOnlyRPCMethods")
+            }
+        }
+    }
+
     @Test func setConfigBinariesChangeIsLocalOnly() throws {
         let devRoot = tempDevRoot()
         defer { try? FileManager.default.removeItem(atPath: devRoot) }

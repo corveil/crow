@@ -72,6 +72,12 @@ Every subcommand and flag the `crow` binary accepts, generated from the commands
 | [`crow list-worktrees`](#crow-list-worktrees) | List worktrees for a session |
 | [`crow mark-in-review`](#crow-mark-in-review) | Move a session to In Review |
 | [`crow mark-issue-done`](#crow-mark-issue-done) | Close the session's linked issue and complete the session |
+| [`crow mcp`](#crow-mcp) | Serve Crow over MCP, and manage the tokens remote clients use |
+| [`crow mcp serve`](#crow-mcp-serve) | Serve the read-only MCP surface over stdio (for a local client) |
+| [`crow mcp token`](#crow-mcp-token) | Mint, list and revoke MCP bearer tokens (local-only) |
+| [`crow mcp token list`](#crow-mcp-token-list) | List MCP bearer tokens (never the tokens themselves) |
+| [`crow mcp token mint`](#crow-mcp-token-mint) | Mint a scoped MCP bearer token |
+| [`crow mcp token revoke`](#crow-mcp-token-revoke) | Revoke an MCP bearer token |
 | [`crow new-session`](#crow-new-session) | Create a new session |
 | [`crow new-terminal`](#crow-new-terminal) | Create a terminal tab inside Crow (tmux) |
 | [`crow notifications`](#crow-notifications) | Read and write notification settings |
@@ -1039,6 +1045,108 @@ GitHub/GitLab close the issue; Jira and Corveil transition it to the mapped done
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |
 | `--session` | `<session>` | yes | Session UUID |
+
+---
+
+## `crow mcp`
+
+Serve Crow over MCP, and manage the tokens remote clients use.
+
+```
+crow mcp <serve|token>
+```
+
+Subcommands: [`serve`](#crow-mcp-serve), [`token`](#crow-mcp-token).
+
+---
+
+## `crow mcp serve`
+
+Serve the read-only MCP surface over stdio (for a local client).
+
+```
+crow mcp serve [--scope <scope> ...]
+```
+
+Speaks MCP on stdin/stdout and forwards each tool call to the running `crowd` over its Unix socket. Point a local MCP client at it:
+
+```
+{"mcpServers": {"crow": {"command": "crow", "args": ["mcp", "serve"]}}}
+```
+
+No token is needed. The socket is 0600 and reachable only from this machine, so a caller that can run this command could already run every other `crow` verb — a token would gate nothing. Remote clients use `POST /mcp` with a token from `crow mcp token mint` instead.
+
+The surface is read-only either way, and identical: six tools over five read RPCs. This command cannot send prompts, create sessions, or write anything.
+
+Unlike every other `crow` verb, stdout here carries framed JSON-RPC rather than one JSON object — it is a transport, not a query. Diagnostics go to stderr.
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--scope` | `<scope>` _(repeatable)_ | no | Limit the served tools to these scopes (repeatable). Defaults to all read scopes: board:read, sessions:read. |
+
+---
+
+## `crow mcp token`
+
+Mint, list and revoke MCP bearer tokens (local-only).
+
+```
+crow mcp token <list|mint|revoke>
+```
+
+Subcommands: [`list`](#crow-mcp-token-list), [`mint`](#crow-mcp-token-mint), [`revoke`](#crow-mcp-token-revoke).
+
+---
+
+## `crow mcp token list`
+
+List MCP bearer tokens (never the tokens themselves).
+
+```
+crow mcp token list
+```
+
+---
+
+## `crow mcp token mint`
+
+Mint a scoped MCP bearer token.
+
+```
+crow mcp token mint --name <name> [--scope <scope> ...] [--expires-in <expires-in>] [--no-expiry]
+```
+
+Prints the token once. It is stored only as a SHA-256 hash, so it cannot be recovered — losing it means minting another and revoking this one.
+
+```
+crow mcp token mint --name grok-bot --scope board:read
+```
+
+Expiry defaults to 90 days. Pass --expires-in to choose another, or --no-expiry for a token that never expires — which has to be typed, because an off-box credential that never lapses is a decision, not a default.
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--name` | `<name>` | yes | A label for this token, e.g. "grok-bot" |
+| `--scope` | `<scope>` _(repeatable)_ | no | Capability to grant (repeatable). One of: board:read, sessions:read. |
+| `--expires-in` | `<expires-in>` | no | Lifetime — a number with a unit: s (seconds), m (minutes), h (hours), d (days), w (weeks) — e.g. 90d. Defaults to 90d. |
+| `--no-expiry` | — | no | Mint a token that never expires (mutually exclusive with --expires-in) |
+
+---
+
+## `crow mcp token revoke`
+
+Revoke an MCP bearer token.
+
+```
+crow mcp token revoke [--id <id>] [--name <name>]
+```
+
+Revoke by --id (from `crow mcp token list`), or by --name when only one token carries that name. An ambiguous name is refused rather than guessed.
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--id` | `<id>` | no | Token UUID, from `crow mcp token list` |
+| `--name` | `<name>` | no | Token name, when it is unambiguous |
 
 ---
 

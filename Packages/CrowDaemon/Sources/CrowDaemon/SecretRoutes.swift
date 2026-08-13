@@ -128,6 +128,77 @@ enum SecretRoutes {
                 }
             }
         }
+
+        // Mint or revoke an MCP bearer token. Local-only (see type doc) — a remote
+        // peer must not be able to issue itself the credential that gates remote MCP
+        // access. Shares its decisions with the `mcp-token-*` RPCs through
+        // `MCPTokenRPC`, so the browser and `crow mcp token` cannot drift (CROW-1004).
+        router.post("/config/mcp-tokens") { request, context -> Response in
+            guard gateOK(request, context, boundHost: boundHost) else {
+                return json(["error": "local-only"], status: .forbidden)
+            }
+            guard let body = await decode(MCPTokenBody.self, request) else {
+                return json(["error": "a JSON body is required"], status: .badRequest)
+            }
+
+            do {
+                switch body.action {
+                case "mint":
+                    let minted = try MCPTokenRPC.mint(
+                        name: body.name ?? "",
+                        rawScopes: body.scopes ?? [],
+                        noExpiry: body.noExpiry == true,
+                        expiresInSeconds: body.expiresInSeconds)
+                    try ConfigStore.withConfigLock {
+                        var c = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
+                        c.mcpTokens.append(minted.record)
+                        try ConfigStore.saveConfig(c, devRoot: devRoot)
+                    }
+                    // The one and only time the plaintext leaves the daemon. It
+                    // travels over a loopback connection to a local browser — the
+                    // same trust boundary `crow mcp token mint` uses.
+                    return json([
+                        "saved": true,
+                        "token": minted.plaintext,
+                        "warning": "This token is shown once and cannot be recovered.",
+                        "id": minted.record.id.uuidString,
+                        "name": minted.record.name,
+                        "prefix": minted.record.prefix,
+                    ])
+
+                case "revoke":
+                    let removed = try ConfigStore.withConfigLock { () -> MCPTokenRecord in
+                        var c = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
+                        let token = try MCPTokenRPC.tokenToRevoke(
+                            id: body.id, name: body.name, in: c.mcpTokens)
+                        c.mcpTokens.removeAll { $0.id == token.id }
+                        try ConfigStore.saveConfig(c, devRoot: devRoot)
+                        return token
+                    }
+                    return json(["revoked": true, "id": removed.id.uuidString, "name": removed.name])
+
+                default:
+                    return json(["error": "action must be \"mint\" or \"revoke\""], status: .badRequest)
+                }
+            } catch let error as MCPTokenRPC.Invalid {
+                return json(["error": error.message], status: .badRequest)
+            } catch {
+                return json(
+                    ["error": "failed to save: \(error.localizedDescription)"],
+                    status: .internalServerError)
+            }
+        }
+    }
+
+    /// Body of `POST /config/mcp-tokens`. One shape for both actions — `mint` reads
+    /// `name`/`scopes`/expiry, `revoke` reads `id` or `name`.
+    struct MCPTokenBody: Decodable {
+        let action: String?
+        let name: String?
+        let scopes: [String]?
+        let expiresInSeconds: Int?
+        let noExpiry: Bool?
+        let id: String?
     }
 
     // MARK: - Gateway body + validation

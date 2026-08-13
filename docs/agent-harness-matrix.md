@@ -20,6 +20,11 @@ capabilities, update this table in the same PR.
 > (`TaskBackend` / `CodeBackend` for GitHub / GitLab / Jira / Corveil), which is
 > a separate axis governed by [ADR 0005](adr/0005-task-and-code-backend-protocols.md).
 > A session pairs one harness with one (or two) providers.
+>
+> The **MCP** row below is likewise about a harness *consuming* MCP servers the
+> user configured. `crowd` also *serves* a read-only MCP surface of its own
+> ([docs/mcp.md](mcp.md), [ADR 0019](adr/0019-read-only-mcp-server.md)) — the
+> opposite direction on the same wire, and not a harness capability.
 
 ## The matrix
 
