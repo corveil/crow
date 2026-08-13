@@ -34,6 +34,14 @@ public enum SettingsSecrets {
         // present, so the read-only web view can show "a password is set" without
         // ever seeing the hash.
         if c.webAuth != nil { c.webAuth?.hashB64 = ""; c.webAuth?.saltB64 = "" }
+        // MCP bearer tokens (CROW-1004): blank the hash but keep the record, so the
+        // Settings UI can list, identify and revoke tokens without ever holding
+        // material that could authenticate as one.
+        c.mcpTokens = c.mcpTokens.map { token in
+            var t = token
+            t.hashB64 = ""
+            return t
+        }
         if let gateway = c.managerGateway { c.managerGateway = stripHeaderValues(gateway) }
         c.workspaces = c.workspaces.map { workspace in
             var w = workspace
@@ -61,6 +69,16 @@ public enum SettingsSecrets {
         // through `set-config`, so a config round-trip always restores the stored
         // value (a browser can neither change nor blank it here).
         result.webAuth = current?.webAuth
+        // MCP bearer tokens (CROW-1004) follow `webAuth` exactly: they are minted and
+        // revoked only through the local-only `mcp-token-*` RPCs, never `set-config`.
+        //
+        // ⚠️ This line is load-bearing. `strippedForTransport` above sends the token
+        // records to the browser with blank hashes so Settings can render them; if a
+        // returning config were trusted, an authenticated remote peer could POST a
+        // `set-config` carrying a token record whose hash it chose — minting itself a
+        // credential for the very MCP surface the token gates. Restoring from
+        // `current` means a round-trip is a no-op regardless of what came back.
+        result.mcpTokens = current?.mcpTokens ?? []
         result.managerGateway = current?.managerGateway
         if let current {
             let currentGatewaysByID = Dictionary(

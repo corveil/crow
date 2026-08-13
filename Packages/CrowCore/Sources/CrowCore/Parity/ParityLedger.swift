@@ -55,6 +55,31 @@ public enum ParityLedger {
 
     // MARK: - RPC methods
 
+    /// Whether an RPC method may be read through the MCP server (CROW-1004).
+    ///
+    /// The default is ``none`` and the factories below default to it, so a newly
+    /// registered RPC is **not** exported unless somebody types the flag. That
+    /// direction is the whole point: a method that quietly becomes a Grok-reachable
+    /// tool is the failure this exists to prevent, and "forgot to add the flag"
+    /// must fail closed.
+    ///
+    /// There is no `write` case. v1 is read-only, and `MCPLedgerExportTests` fails
+    /// the build if an exported row is also `isWrite` — so adding a write tool means
+    /// coming here and deciding, not just registering a handler.
+    public enum MCPExposure: Sendable, Equatable {
+        /// Not reachable from MCP.
+        case none
+        /// Readable by an MCP caller holding this scope.
+        case read(scope: MCPScope)
+
+        public var scope: MCPScope? {
+            if case .read(let scope) = self { return scope }
+            return nil
+        }
+
+        public var isExported: Bool { scope != nil }
+    }
+
     /// One registered JSON-RPC method.
     public struct RPCEntry: Sendable, Equatable {
         public let method: String
@@ -64,13 +89,26 @@ public enum ParityLedger {
         /// `get-something`.
         public let isWrite: Bool
         public let coverage: Coverage
+        /// Whether the MCP server may read this method, and at what scope.
+        public let mcp: MCPExposure
 
-        public static func read(_ method: String, cli path: String) -> RPCEntry {
-            RPCEntry(method: method, isWrite: false, coverage: .cli(path))
+        public init(method: String, isWrite: Bool, coverage: Coverage, mcp: MCPExposure = .none) {
+            self.method = method
+            self.isWrite = isWrite
+            self.coverage = coverage
+            self.mcp = mcp
         }
 
-        public static func read(_ method: String, noCLI reason: String) -> RPCEntry {
-            RPCEntry(method: method, isWrite: false, coverage: .noCLI(reason: reason))
+        public static func read(
+            _ method: String, cli path: String, mcp: MCPExposure = .none
+        ) -> RPCEntry {
+            RPCEntry(method: method, isWrite: false, coverage: .cli(path), mcp: mcp)
+        }
+
+        public static func read(
+            _ method: String, noCLI reason: String, mcp: MCPExposure = .none
+        ) -> RPCEntry {
+            RPCEntry(method: method, isWrite: false, coverage: .noCLI(reason: reason), mcp: mcp)
         }
 
         public static func write(_ method: String, cli path: String) -> RPCEntry {
@@ -82,6 +120,33 @@ public enum ParityLedger {
         }
     }
 
+    /// Methods `RPCWebSocketHandler.localOnlyDenial` refuses outright for a non-local
+    /// `/rpc` peer — the unconditional cases only.
+    ///
+    /// Hoisted here so the export gate can assert `MCP ∩ local-only = ∅` from
+    /// `CrowCore`, which runs in the Linux PR lane; `CrowDaemon` (where the real
+    /// gate lives) is Darwin-only and its tests do not run on PRs. This is the same
+    /// split ADR 0016 already makes for the RPC ledger itself: the authoritative
+    /// check lives beside the truth, and a mirror runs where CI can see it.
+    ///
+    /// `LocalOnlyRPCGateTests` pins this set against `localOnlyDenial` in both
+    /// directions, so the mirror cannot drift from the boundary it mirrors.
+    /// `set-config` and `defaults-set` are deliberately absent: they are denied
+    /// *conditionally*, on payload inspection, and neither is MCP-exported.
+    public static let localOnlyRPCMethods: Set<String> = [
+        "run-setup",
+        "hook-event",
+        "open-in-vscode",
+        "open-terminal",
+        "gateway-get",
+        "gateway-set",
+        "web-password-get",
+        "web-password-set",
+        "mcp-token-list",
+        "mcp-token-mint",
+        "mcp-token-revoke",
+    ]
+
     /// Every method reachable through the live router pair — the daemon's
     /// `makeCommandRouter` unioned with the `makeEngineRouter` it falls back to.
     public static let rpcMethods: [RPCEntry] = [
@@ -89,8 +154,8 @@ public enum ParityLedger {
         .write("new-session", cli: "new-session"),
         .write("rename-session", cli: "rename-session"),
         .write("select-session", cli: "select-session"),
-        .read("list-sessions", cli: "list-sessions"),
-        .read("get-session", cli: "get-session"),
+        .read("list-sessions", cli: "list-sessions", mcp: .read(scope: .sessionsRead)),
+        .read("get-session", cli: "get-session", mcp: .read(scope: .sessionsRead)),
         .write("set-status", cli: "set-status"),
         .write("set-locked", cli: "set-locked"),
         .write("delete-session", cli: "delete-session"),
@@ -101,7 +166,11 @@ public enum ParityLedger {
                 Web-board streaming read: the same rows as `list-sessions` plus live \
                 terminal/agent state, shaped for the browser's poll loop. `crow \
                 list-sessions` and `crow get-session` cover the CLI's needs.
-                """),
+                """,
+            // MCP-exported despite having no CLI verb: the two axes are independent.
+            // `list_stuck_sessions` needs the auto-merge / auto-rebase / PR-check
+            // state that rides only here, joined against `list-sessions` (CROW-1004).
+            mcp: .read(scope: .sessionsRead)),
         .write(
             "set-pinned",
             noCLI: """
@@ -149,8 +218,8 @@ public enum ParityLedger {
         .write("open-terminal", cli: "open-terminal"),
 
         // Board & workflow
-        .read("list-tickets", cli: "list-tickets"),
-        .read("list-reviews", cli: "list-reviews"),
+        .read("list-tickets", cli: "list-tickets", mcp: .read(scope: .boardRead)),
+        .read("list-reviews", cli: "list-reviews", mcp: .read(scope: .boardRead)),
         .write("refresh-tickets", cli: "refresh-tickets"),
         .write("work-on-issue", cli: "work-on-issue"),
         .write("batch-work-on-issues", cli: "batch-work-on-issues"),
@@ -260,6 +329,18 @@ public enum ParityLedger {
         .write("gateway-set", cli: "gateway set"),
         .read("web-password-get", cli: "web-password status"),
         .write("web-password-set", cli: "web-password set"),
+
+        // MCP bearer tokens — local-socket only (CROW-1004), for the same reason as
+        // the two blocks above: `mcp-token-mint` returns the plaintext token exactly
+        // once, and a remote peer that could mint one would be issuing itself the
+        // credential that gates remote access. `mcp-token-list` is gated alongside
+        // them even though it returns no secret, matching `web-password-get`.
+        //
+        // These methods are NOT MCP-exported. They are writes plus a secret read,
+        // and the MCP surface is read-only — `MCPLedgerExportTests` enforces both.
+        .read("mcp-token-list", cli: "mcp token list"),
+        .write("mcp-token-mint", cli: "mcp token mint"),
+        .write("mcp-token-revoke", cli: "mcp token revoke"),
 
         // Jobs
         .read("job-list", cli: "job list"),
@@ -402,6 +483,47 @@ public enum ParityLedger {
                 the same reason. Written as a unit with the hash by `web-password set`.
                 """,
             write: "web-password set"),
+
+        // MARK: Covered — MCP bearer tokens (CROW-1004)
+
+        // Local-socket only, like the two blocks above. Every field is minted
+        // server-side by `mcp token mint`; the only other write is deletion via
+        // `mcp token revoke`, so each row's write verb is the mint.
+        .field("mcpTokens[].name", read: "mcp token list", write: "mcp token mint"),
+        .field("mcpTokens[].scopes", read: "mcp token list", write: "mcp token mint"),
+        .field("mcpTokens[].expiresAt", read: "mcp token list", write: "mcp token mint"),
+        .field(
+            "mcpTokens[].id",
+            read: "mcp token list",
+            writeNoCLI: """
+                Server-assigned UUID, minted by `mcp token mint` and thereafter the \
+                handle `mcp token revoke --id` takes. Not user-settable by design.
+                """),
+        .field(
+            "mcpTokens[].prefix",
+            read: "mcp token list",
+            writeNoCLI: """
+                The first 8 characters of the minted token, stored so a human can \
+                tell two tokens apart in a listing. Derived from the secret at mint \
+                time; setting it independently would make the listing lie.
+                """),
+        .field(
+            "mcpTokens[].createdAt",
+            read: "mcp token list",
+            writeNoCLI: """
+                Server-assigned mint timestamp. Not user-settable — a token that \
+                could claim to be older than it is would defeat any audit of when \
+                access was granted.
+                """),
+        .field(
+            "mcpTokens[].hashB64",
+            readNoCLI: """
+                The SHA-256 of the token is never read back by anything — not the \
+                CLI, not the web UI. `mcp token list` reports the name, prefix, \
+                scopes and expiry only. Exposing it would defeat storing a hash \
+                rather than the token.
+                """,
+            write: "mcp token mint"),
 
         // MARK: Covered — jobs
 

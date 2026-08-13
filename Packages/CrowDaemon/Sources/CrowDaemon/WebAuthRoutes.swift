@@ -78,10 +78,20 @@ struct WebAuthMiddleware<Context: RemoteAddressRequestContext>: RouterMiddleware
     }
 
     /// Paths served without the web-auth gate: the login/logout endpoints, the
-    /// health probe, and the brand asset the login page needs before auth. Every
-    /// other path (incl. `/auth/check`, `/`, `/rpc`, the secret POSTs) is gated.
+    /// health probe, the brand asset the login page needs before auth, and the MCP
+    /// endpoint. Every other path (incl. `/auth/check`, `/`, `/rpc`, the secret
+    /// POSTs) is gated.
+    ///
+    /// `/mcp` is exempt because it authenticates **differently and more strictly**
+    /// (CROW-1004): this middleware gates on the `crow_session` cookie and is
+    /// *opt-in* — with no web password configured `WebAuthGuard.authorize` returns
+    /// authorized for everything — whereas `MCPRoutes` requires a valid, unexpired,
+    /// scope-bearing bearer token on every request with no loopback bypass. Leaving
+    /// `/mcp` here would 401 every legitimate token client while waving anyone
+    /// through on a passwordless daemon. `MCPRoutesTests` pins the stricter behavior.
     static func isAuthExempt(path: String) -> Bool {
         path == "/login" || path == "/logout" || path == "/health" || path == "/brand.svg"
+            || path == "/mcp"
     }
 
     /// For an unauthorized request, whether to answer with the login page (200)

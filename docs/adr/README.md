@@ -55,3 +55,4 @@ Don't delete the old file. Update its `Status` to `Superseded by NNNN` and point
 | 0016 | [Every user-mutable capability has a CLI path](./0016-cli-control-plane-parity.md) | Accepted | 2026-07-27 |
 | 0017 | [No blocking I/O on the MainActor: logging goes through `CrowLog`](./0017-non-blocking-logging.md) | Accepted | 2026-07-27 |
 | 0018 | [The web client routes on the URL fragment (hash routing)](./0018-web-client-hash-routing.md) | Accepted | 2026-08-04 |
+| 0019 | [MCP is a third client, not a mirror of the RPC surface](./0019-read-only-mcp-server.md) | Accepted | 2026-08-13 |

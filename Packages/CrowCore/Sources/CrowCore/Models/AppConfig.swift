@@ -94,6 +94,14 @@ public struct AppConfig: Codable, Sendable, Equatable {
     /// the `set-web-password` RPC, never through `set-config`.
     public var webAuth: WebAuthConfig?
 
+    /// Scoped bearer tokens for the read-only MCP server at `POST /mcp` (CROW-1004).
+    /// Each record stores a SHA-256 hash of the token, never the token itself — the
+    /// plaintext is returned exactly once, by `mcp-token-mint`. Stripped of its hash
+    /// before the config reaches a browser and restored verbatim on the way back
+    /// (`SettingsSecrets`), so a `set-config` round-trip can neither mint nor revoke
+    /// one. Minted/revoked via the local-only `mcp-token-*` RPCs.
+    public var mcpTokens: [MCPTokenRecord]
+
     /// Effective review-exclude patterns: the global `defaults.excludeReviewRepos`
     /// unioned with every workspace's per-workspace `excludeReviewRepos`. A repo
     /// excluded by any workspace (or the global default) is hidden from the review
@@ -156,7 +164,8 @@ public struct AppConfig: Codable, Sendable, Equatable {
         agentsByKind: [String: AgentKind] = [:],
         managerGateway: WorkspaceGateway? = nil,
         jiraCredential: JiraCredential? = nil,
-        webAuth: WebAuthConfig? = nil
+        webAuth: WebAuthConfig? = nil,
+        mcpTokens: [MCPTokenRecord] = []
     ) {
         self.workspaces = workspaces
         self.defaults = defaults
@@ -182,6 +191,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         self.managerGateway = managerGateway
         self.jiraCredential = jiraCredential
         self.webAuth = webAuth
+        self.mcpTokens = mcpTokens
     }
 
     public init(from decoder: Decoder) throws {
@@ -234,6 +244,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
             }
         }
         webAuth = try container.decodeIfPresent(WebAuthConfig.self, forKey: .webAuth)
+        mcpTokens = try container.decodeIfPresent([MCPTokenRecord].self, forKey: .mcpTokens) ?? []
     }
 
     /// Pre-CROW-528 shape of the now-removed `atlassianMCP` config, decoded only
@@ -257,7 +268,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case workspaces, defaults, notifications, sidebar, switcher, remoteControlEnabled, managerAutoPermissionMode, jobsAutoPermissionMode, reviewAutoPermissionMode, coderViewAutoPermissionMode, telemetry, terminal, autoRespond, attributionTrailers, autoMergeWatcherEnabled, autoCreateWatcherEnabled, cleanup, versionUpdate, jobs, defaultAgentKind, agentsByKind, managerGateway, jiraCredential, webAuth
+        case workspaces, defaults, notifications, sidebar, switcher, remoteControlEnabled, managerAutoPermissionMode, jobsAutoPermissionMode, reviewAutoPermissionMode, coderViewAutoPermissionMode, telemetry, terminal, autoRespond, attributionTrailers, autoMergeWatcherEnabled, autoCreateWatcherEnabled, cleanup, versionUpdate, jobs, defaultAgentKind, agentsByKind, managerGateway, jiraCredential, webAuth, mcpTokens
     }
 
     /// Resolve the agent that should drive a newly-created session of the

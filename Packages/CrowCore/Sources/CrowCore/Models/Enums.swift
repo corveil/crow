@@ -16,7 +16,12 @@ public enum SessionKind: String, Codable, Sendable, CaseIterable {
 }
 
 /// Status of a development session.
-public enum SessionStatus: String, Codable, Sendable {
+///
+/// `CaseIterable` so the MCP tool schemas can be checked against the real set
+/// rather than a hand-copied list (CROW-1004) — `MCPLedgerExportTests` pins the two
+/// equal, so adding a status here surfaces in the schema instead of silently
+/// becoming a value `list_sessions --status` rejects.
+public enum SessionStatus: String, Codable, Sendable, CaseIterable {
     case active
     case paused
     case inReview

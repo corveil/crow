@@ -1666,6 +1666,85 @@ There is deliberately **no `--password` flag** — a plaintext password in `argv
 
 ---
 
+## MCP Commands
+
+Crow serves a **read-only** MCP surface so agent clients that speak MCP — Cowork, a Grok bot — can read the board without a Crow-launched session. Six tools over five read RPCs; there is no prompt-send, no session creation, and no config access. See [MCP](mcp.md) for client setup and the full tool list.
+
+There are two transports, with two different trust models:
+
+| Transport | Verb / endpoint | Credential | For |
+| --- | --- | --- | --- |
+| stdio | `crow mcp serve` | none — the 0600 Unix socket is the boundary | a local client on this machine |
+| HTTP | `POST /mcp` | `Authorization: Bearer <token>` | an off-box client |
+
+### `crow mcp serve`
+
+Speaks MCP on stdin/stdout, forwarding each tool call to the running `crowd` over its Unix socket. Point a local MCP client at it:
+
+```bash
+crow mcp serve
+crow mcp serve --scope board:read          # narrow the served tools
+```
+
+```json
+{"mcpServers": {"crow": {"command": "crow", "args": ["mcp", "serve"]}}}
+```
+
+| Flag      | Required | Description                                                    |
+| --------- | -------- | -------------------------------------------------------------- |
+| `--scope` | no       | Limit served tools (repeatable). Defaults to every read scope.  |
+
+No token is needed: a caller that can run this could already run every other `crow` verb, so a token would gate nothing. Unlike every other verb, **stdout carries framed JSON-RPC** rather than one JSON object — it is a transport, not a query. Diagnostics go to stderr.
+
+### `crow mcp token mint`
+
+Mint a scoped bearer token for the remote `POST /mcp` endpoint. **Local-only**, like the gateway and web-password commands — a remote peer must not be able to issue itself the credential that gates remote access.
+
+```bash
+crow mcp token mint --name grok-bot --scope board:read
+crow mcp token mint --name cowork --scope sessions:read --scope board:read --expires-in 30d
+crow mcp token mint --name ci --scope board:read --no-expiry
+```
+
+| Flag           | Required | Description                                                          |
+| -------------- | -------- | -------------------------------------------------------------------- |
+| `--name`       | yes      | A label for the token, e.g. `grok-bot`                                |
+| `--scope`      | yes      | `sessions:read` or `board:read` (repeatable; at least one)            |
+| `--expires-in` | no       | Lifetime: `30s`, `45m`, `12h`, `90d`, `2w`. Defaults to `90d`.        |
+| `--no-expiry`  | no       | Mint a token that never expires (mutually exclusive with the above)   |
+
+The token is printed **once** and stored only as a SHA-256 hash, so it cannot be recovered — losing it means minting another and revoking the old one. A bare `--expires-in 90` is rejected rather than guessed: seconds and days differ by seven orders of magnitude in what a leaked token buys.
+
+Returns `{"saved": true, "token": "crow_mcp_…", "warning": "...", "record": {...}}`.
+
+### `crow mcp token list`
+
+List tokens — names, prefixes, scopes and expiry, never the tokens themselves.
+
+```bash
+crow mcp token list
+```
+
+Returns `{"tokens": [{"id": "...", "name": "...", "prefix": "...", "scopes": [...], "created_at": "...", "expires_at": "...", "expired": false}], "count": 1}`.
+
+### `crow mcp token revoke`
+
+Revoke a token. Takes exactly one of `--id` or `--name`; an ambiguous name is refused rather than guessed, since deleting the wrong credential is not something to be helpful about.
+
+```bash
+crow mcp token revoke --name grok-bot
+crow mcp token revoke --id 7F3A1C22-0B4E-4E51-9E2A-2C9F4E6D1A80
+```
+
+| Flag     | Required | Description                                       |
+| -------- | -------- | ------------------------------------------------- |
+| `--id`   | one of   | Token UUID, from `crow mcp token list`            |
+| `--name` | one of   | Token name, when only one token carries it        |
+
+Returns `{"revoked": true, "id": "...", "name": "...", "remaining": 0}`.
+
+---
+
 ## Not Exposed on the CLI
 
 The **Jira credential** (`AppConfig.jiraCredential`) is intentionally UI-only. It is a `op://` 1Password reference managed outside Crow, and the app resolves it at call time rather than storing a secret — so there is nothing for a CLI verb to write that editing the reference in Settings (or 1Password) does not already cover.

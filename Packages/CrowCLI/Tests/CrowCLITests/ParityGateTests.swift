@@ -189,7 +189,15 @@ struct ParityGateTests {
             agentsByKind: ["work": .claudeCode],
             managerGateway: gateway,
             jiraCredential: JiraCredential(username: "probe", tokenRef: "op://probe/token"),
-            webAuth: WebAuthConfig(hashB64: "aGFzaA==", saltB64: "c2FsdA==", iterations: 210_000)
+            webAuth: WebAuthConfig(hashB64: "aGFzaA==", saltB64: "c2FsdA==", iterations: 210_000),
+            mcpTokens: [
+                MCPTokenRecord(
+                    name: "probe",
+                    prefix: "AbCdEfGh",
+                    hashB64: "aGFzaA==",
+                    scopes: [.sessionsRead, .boardRead],
+                    expiresAt: Date())
+            ]
         )
     }
 

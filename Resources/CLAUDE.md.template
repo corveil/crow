@@ -50,6 +50,19 @@ crow defaults set --add-exclude-review-repo R | --remove-exclude-review-repo R |
 
 `crow defaults` patches `AppConfig.defaults`; at least one flag required. Lists are edited incrementally and matched case-insensitively — `--clear-X` is exclusive with add/remove for that list only. Everything is live except `--binary`, which needs a `crowd` restart (including on removal).
 
+### MCP
+
+Crow's read-only MCP surface (CROW-1004): six tools over five read RPCs, so an MCP client can read the board without a Crow-launched session. No prompt-send, no writes. See `docs/mcp.md` and ADR 0019.
+```
+crow mcp serve [--scope sessions:read] [--scope board:read]   → speaks MCP on stdin/stdout; for a LOCAL client, no token
+crow mcp token list                                           → {"tokens":[{id,name,prefix,scopes,created_at,expires_at,expired}],"count":N}
+crow mcp token mint --name N --scope S [--expires-in 90d | --no-expiry]
+                                                              → {"saved":true,"token":"crow_mcp_…","warning":"…","record":{…}}
+crow mcp token revoke --id <uuid> | --name N                  → {"revoked":true,"id":"…","name":"…","remaining":N}
+```
+
+Two transports, two trust models: `crow mcp serve` bridges stdio to the Unix socket with **no token** (a caller who can run it can already run every other `crow` verb), while off-box clients POST to `/mcp` with `Authorization: Bearer <token>`. `mcp serve` is the one verb whose stdout is framed JSON-RPC rather than a single JSON object. The three `token` verbs are **local-only**, like `gateway`/`web-password`. Scopes are exactly `sessions:read` and `board:read`, and `tools/list` is filtered by the token. Expiry defaults to 90 days; `--no-expiry` must be typed, and `--expires-in` needs a unit (`90d`, not `90`). The token is printed once and stored as a SHA-256 hash — there is no `--reveal`.
+
 ### Automation Commands
 
 The Settings → Automation toggles. Every `set` flag is a patch; passing none is an error.

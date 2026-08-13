@@ -195,6 +195,7 @@ Handy for Rust/window work, but each relaunch re-runs the launch logic and tears
 - [**Architecture**](docs/architecture.md) — Packages, key components, data flow
 - [**Configuration**](docs/configuration.md) — File locations, workspace config, directory layout, session lifecycle
 - [**Automation**](docs/automation.md) — Auto-create, auto-respond, auto-complete, and the Settings → Automation tab
+- [**MCP**](docs/mcp.md) — Crow's read-only MCP server: pointing Cowork or an off-box bot at the board
 - [**Troubleshooting**](docs/troubleshooting.md) — Build and runtime errors
 
 ## Usage

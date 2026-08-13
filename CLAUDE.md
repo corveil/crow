@@ -268,6 +268,25 @@ crow web-password clear                                                 → {"sa
 
 `gateway get` blanks header values unless `--reveal`. A `--header` with a blank value (`--header "X-Api-Key:"`) keeps the stored secret — that's how to change a base URL without restating credentials. A header value must not be wrapped in literal quotes (`--header 'X-Api-Key: "Bearer sk-…"'`) — they'd be sent as part of the credential and the gateway would reject the request; quote the whole `Name: Value` pair in your shell, not inside it. `web-password set` prompts twice with echo off; pipe with `--stdin` for scripts. There is no `--password` flag on purpose (shell history / `ps`).
 
+### MCP
+
+Crow's read-only MCP surface (CROW-1004) — six tools over five read RPCs, so an MCP client can read the board without a Crow-launched session. No prompt-send, no writes. See `docs/mcp.md` and ADR 0019.
+
+```
+crow mcp serve [--scope sessions:read] [--scope board:read]   → speaks MCP on stdin/stdout; for a LOCAL client, no token
+crow mcp token list                                           → {"tokens":[{id,name,prefix,scopes,created_at,expires_at,expired}],"count":N}
+crow mcp token mint --name N --scope S [--expires-in 90d | --no-expiry]
+                                                              → {"saved":true,"token":"crow_mcp_…","warning":"…","record":{…}}
+crow mcp token revoke --id <uuid> | --name N                  → {"revoked":true,"id":"…","name":"…","remaining":N}
+```
+
+- **Two transports, two trust models.** `crow mcp serve` bridges stdio to the Unix socket with **no token** — a caller who can run it can already run every other `crow` verb. Off-box clients POST to `/mcp` with `Authorization: Bearer <token>`.
+- `mcp serve` is the one verb whose **stdout is not a single JSON object**: it streams framed JSON-RPC. Diagnostics go to stderr.
+- The three `token` verbs are **local-only** (like `gateway`/`web-password`) — a remote peer must not mint the credential that gates remote access. Settings → Web access has the same controls, local browser only.
+- Scopes are exactly `sessions:read` and `board:read`. `tools/list` is filtered **by the token**, so a `board:read` client never learns the session tools exist.
+- Expiry defaults to **90 days**; `--no-expiry` must be typed. `--expires-in` needs a unit (`90d`, `12h`, `2w`) — a bare `90` is rejected as ambiguous.
+- The token is printed **once** and stored as a SHA-256 hash; there is no `--reveal`. A lost token is replaced, not recovered.
+
 ### Automation Commands
 
 Settings → Automation as a CLI verb. Every `set` flag is a patch; passing none is an error.

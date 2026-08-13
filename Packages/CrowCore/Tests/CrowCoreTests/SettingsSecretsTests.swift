@@ -24,6 +24,11 @@ import CrowCore
                     baseURL: "https://ws.example",
                     customHeaders: ["Authorization": "Bearer WS-SECRET"])),
         ]
+        c.mcpTokens = [
+            MCPTokenRecord(
+                name: "grok-bot", prefix: "AbCdEfGh", hashB64: "TE9DQUwtVE9LRU4tSEFTSA==",
+                scopes: [.boardRead], expiresAt: Date(timeIntervalSince1970: 1_900_000_000)),
+        ]
         return c
     }
 
@@ -110,5 +115,62 @@ import CrowCore
         #expect(merged.jiraCredential == nil)
         #expect(merged.managerGateway == nil)
         #expect(merged.workspaces.first?.gateway == nil)
+    }
+
+    // MARK: - MCP bearer tokens (CROW-1004)
+
+    @Test func strippedBlanksMCPTokenHashesButKeepsRecords() {
+        let stripped = SettingsSecrets.strippedForTransport(configWithSecrets())
+        // The record survives so Settings can list and revoke it…
+        #expect(stripped.mcpTokens.count == 1)
+        #expect(stripped.mcpTokens[0].name == "grok-bot")
+        #expect(stripped.mcpTokens[0].prefix == "AbCdEfGh")
+        #expect(stripped.mcpTokens[0].scopes == [.boardRead])
+        // …but nothing that could authenticate as it goes to the browser.
+        #expect(stripped.mcpTokens[0].hashB64 == "")
+    }
+
+    @Test func strippedMCPTokenNeverAppearsInTheSerializedConfig() throws {
+        let stripped = SettingsSecrets.strippedForTransport(configWithSecrets())
+        let text = try #require(String(data: JSONEncoder().encode(stripped), encoding: .utf8))
+        #expect(!text.contains("TE9DQUwtVE9LRU4tSEFTSA=="))
+    }
+
+    @Test func preserveIgnoresBrowserMintedMCPTokens() {
+        // ⚠️ The attack this closes. `strippedForTransport` hands the token records
+        // to an authenticated remote browser with blank hashes. If a returning
+        // `set-config` were trusted, that peer could post back a record whose hash it
+        // chose — minting itself a working bearer token for the very MCP surface the
+        // token gates, without ever touching the local-only `mcp-token-mint`.
+        let current = configWithSecrets()
+        var incoming = SettingsSecrets.strippedForTransport(current)
+        incoming.mcpTokens = [
+            MCPTokenRecord(
+                name: "attacker", prefix: "EEEEEEEE", hashB64: "RVZJTC1IQVNI",
+                scopes: [.sessionsRead, .boardRead], expiresAt: nil),
+        ]
+
+        let merged = SettingsSecrets.preservingSecrets(incoming: incoming, current: current)
+        #expect(merged.mcpTokens == current.mcpTokens)
+        #expect(!merged.mcpTokens.contains { $0.name == "attacker" })
+    }
+
+    @Test func preserveIgnoresBrowserRevocationOfMCPTokens() {
+        // The mirror image: a set-config that omits the tokens must not delete them.
+        // Revocation is a local-only verb, not a side effect of saving Settings.
+        let current = configWithSecrets()
+        var incoming = SettingsSecrets.strippedForTransport(current)
+        incoming.mcpTokens = []
+
+        let merged = SettingsSecrets.preservingSecrets(incoming: incoming, current: current)
+        #expect(merged.mcpTokens == current.mcpTokens)
+    }
+
+    @Test func preserveWithNilCurrentDropsMCPTokens() {
+        // No stored config to restore from — drop whatever the browser echoed rather
+        // than persist a token nobody minted.
+        let incoming = SettingsSecrets.strippedForTransport(configWithSecrets())
+        let merged = SettingsSecrets.preservingSecrets(incoming: incoming, current: nil)
+        #expect(merged.mcpTokens.isEmpty)
     }
 }
