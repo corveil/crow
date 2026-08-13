@@ -99,11 +99,22 @@ public struct MCPServe: ParsableCommand {
                 }
             }
             // A notification produces no bytes; anything else is one line out.
-            guard let data = outcome.responseData,
-                  let text = String(data: data, encoding: .utf8)
-            else { continue }
-            print(text)
-            fflush(stdout)
+            guard let data = outcome.responseData else { continue }
+            // `FileHandle.write` rather than `print` + `fflush(stdout)`.
+            //
+            // Flushing is not optional here: stdout to a pipe — which is exactly what
+            // an MCP client gives us — is block-buffered, so a `print`ed reply would
+            // sit in the buffer while the client waited for it. But `fflush(stdout)`
+            // does not compile on Linux: Glibc declares `stdout` as a `var`, so Swift
+            // 6 rejects it as shared mutable state (Darwin's declaration differs,
+            // which is why this built locally and only the Linux lane caught it).
+            //
+            // `FileHandle` writes go straight to `write(2)` with no userspace buffer,
+            // so the flush problem disappears rather than being worked around. Same
+            // approach as `warn()` uses for stderr.
+            var framed = data
+            framed.append(0x0A)
+            FileHandle.standardOutput.write(framed)
         }
     }
 
