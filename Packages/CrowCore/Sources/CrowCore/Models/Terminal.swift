@@ -95,10 +95,11 @@ extension SessionTerminal {
     /// Whether this terminal hosts a repainting agent TUI, and so takes the
     /// agent-surface scroll model instead of the unified scrollback (ADR-0013).
     /// Single source of truth for that classification — the daemon uses it to
-    /// set `alternate-screen on` at window creation/adopt (and, when the agent
-    /// does not enter the alt buffer, to clamp `history-limit` to 0 — CROW-1008),
-    /// and `list-terminals` uses it for the `agent_surface` fallback, so the two
-    /// can't disagree.
+    /// set `alternate-screen on` at window creation/adopt, and `list-terminals`
+    /// uses it for the `agent_surface` fallback, so the two can't disagree.
+    /// Scrollback removal is a separate axis (`CodingAgent.usesAlternateScreen`,
+    /// CROW-1010): only alt-buffer agents cap history; inline agents keep the
+    /// unified 50k.
     ///
     /// TWO shapes qualify, and both are load-bearing:
     ///   * a managed work terminal (`isManaged`), and

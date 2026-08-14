@@ -598,11 +598,10 @@ public final class SessionService {
                 let session = appState.sessions.first(where: { $0.id == terminal.sessionID })
                 if terminal.isAgentSurface(session: session) {
                     TmuxBackend.shared.enableAlternateScreen(index: binding.windowIndex)
-                    // history-limit is frozen at birth — an inline agent window
-                    // created before CROW-1008 keeps its 50k cap (and any
-                    // already-accumulated sediment) until Recreate. The client
-                    // still caps xterm scrollback to 0 for agent_surface, which
-                    // is the immediate wheel-sediment fix without a restart.
+                    // history-limit is frozen at birth. CROW-1008 clamped
+                    // inline agents to 0; CROW-1010 retracted that (Cursor's
+                    // transcript is real scrollback). A leftover 0-limit
+                    // window fails the history floor and is badged ⚠ Recreate.
                 }
                 // The window survived the prior quit → Claude is already up.
                 // Belt-and-suspenders against any other readiness path: drop

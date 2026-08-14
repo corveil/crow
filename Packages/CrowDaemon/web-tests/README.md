@@ -50,7 +50,9 @@ and mouse-tracking signals still routing to the app; the conditional mouse-mode
 swallow (swallowed on a shell, passed through on an agent surface, never
 swallowing a non-mouse mode like `?25`), including xterm's params-object and
 sub-parameter shapes; and graceful degradation when `activeTerminal` is null or
-an older daemon omits `agent_surface`.
+an older daemon omits `agent_surface`. CROW-1010: `applySurfaceScrollback` caps
+xterm scrollback to 0 only for alt-buffer agents (`uses_alternate_screen`); an
+inline agent (Cursor) keeps `UNIFIED_SCROLLBACK`.
 
 ## `long-press.test.js` — mobile terminal context menu (CROW-1006)
 

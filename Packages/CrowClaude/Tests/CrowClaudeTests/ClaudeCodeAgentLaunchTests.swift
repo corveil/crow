@@ -15,8 +15,8 @@ struct ClaudeCodeAgentLaunchTests {
     private let agent = ClaudeCodeAgent()
 
     @Test func usesAlternateScreen() {
-        // Claude Code is the one confirmed smcup TUI; CROW-1008's inline clamp
-        // must not apply here or the alt-buffer path regresses.
+        // Claude Code is the one confirmed smcup TUI; CROW-1010 keeps the
+        // alt-buffer path here and the unified 50k on inline agents.
         #expect(agent.usesAlternateScreen == true)
     }
 

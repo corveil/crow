@@ -38,11 +38,10 @@ public final class TmuxBackend {
     /// be fixed by recreating it (CROW-804).
     nonisolated public static let scrollbackHistoryLimit = 50000
 
-    /// Scrollback cap for an agent surface whose TUI never enters the alt
-    /// buffer (CROW-1008). Zero emulates the scrollback-less alt screen so
-    /// full-frame repaints cannot fossilize as duplicate-frame sediment.
-    /// Distinct from the CROW-804 floor: an agent window born at this cap is
-    /// healthy, not a ⚠ Recreate casualty.
+    /// Windows born under the retracted CROW-1008 inline-agent clamp
+    /// (`history-limit 0`). That cap is no longer applied (CROW-1010): Cursor's
+    /// transcript is legitimate native scrollback, not frame sediment. A window
+    /// still sitting at this limit fails the history floor and should Recreate.
     nonisolated public static let inlineAgentHistoryLimit = 0
 
     /// Fired when a tmux-backed terminal's readiness state changes.
@@ -224,12 +223,16 @@ public final class TmuxBackend {
     /// test — in particular `isManaged` ALONE is wrong, because the Manager's
     /// terminal is built without that flag yet still runs an agent.
     ///
-    /// `usesAlternateScreen` is the per-agent capability (CROW-1008). `true`
-    /// (Claude Code) relies on the alt buffer to kill sediment. `false`
+    /// `usesAlternateScreen` is the per-agent capability (CROW-1008 / CROW-1010).
+    /// `true` (Claude Code) relies on the alt buffer to kill sediment. `false`
     /// (Cursor, and any inline renderer) still gets `alternate-screen on` so
-    /// `list-terminals` classifies the window as an agent surface, but the
-    /// window is born with `history-limit 0` because tmux cannot force an app
-    /// that never issues `smcup` into the alt buffer.
+    /// `list-terminals` classifies the window as an agent surface, but keeps
+    /// the unified 50k history — its transcript is legitimate native scrollback
+    /// and the wheel at a non-mouse-tracking prompt scrolls it (#850). The
+    /// CROW-1008 `history-limit 0` clamp is retracted: it deleted Cursor's only
+    /// scroll path. The flag is forwarded to the client as
+    /// `uses_alternate_screen` so `applySurfaceScrollback` caps xterm only for
+    /// true alt-buffer agents.
     @discardableResult
     public func registerTerminal(
         id: UUID,
@@ -239,7 +242,7 @@ public final class TmuxBackend {
         trackReadiness: Bool,
         agentKind: AgentKind? = nil,
         agentSurface: Bool = false,
-        usesAlternateScreen: Bool = true,
+        usesAlternateScreen _: Bool = true,
         extraEnv: [String: String] = [:],
         newWindowTimeout: TimeInterval = TmuxController.defaultTimeout
     ) throws -> TmuxBinding {
@@ -297,20 +300,13 @@ public final class TmuxBackend {
             env["PATH"] = "\(crowBinDir):\(ShellEnvironment.shared.resolvedPATH)"
         }
 
-        // history-limit is frozen at window birth. For an inline agent TUI
-        // (never issues smcup) drop the session cap to 0 around new-window so
-        // the pane is born scrollback-less, then restore the 50k default so a
-        // later shell window is unaffected (CROW-1008). MainActor serializes
-        // this sandwich against concurrent registerTerminal calls.
-        let clampHistory = agentSurface && !usesAlternateScreen
-        if clampHistory {
-            applySessionHistoryLimit(Self.inlineAgentHistoryLimit, ctrl: ctrl)
-        }
-        defer {
-            if clampHistory {
-                applySessionHistoryLimit(Self.scrollbackHistoryLimit, ctrl: ctrl)
-            }
-        }
+        // CROW-1010: do not clamp `history-limit` for inline agents. Cursor's
+        // history is a clean transcript and the local-viewport wheel (#850) is
+        // its only scroll path; `history-limit 0` made that wheel a no-op.
+        // Alt-buffer agents (Claude Code) don't need a clamp either — the alt
+        // buffer has no history. `usesAlternateScreen` is still accepted so
+        // callers keep passing the capability; list-terminals reads it from
+        // AgentRegistry and forwards `uses_alternate_screen` to the client.
 
         let windowIndex = try ctrl.newWindow(
             name: name,
@@ -745,10 +741,10 @@ public final class TmuxBackend {
     /// casualties measured `history_limit=5000` alongside `alternate_on=1`, so
     /// they stay caught by the floor.
     ///
-    /// CROW-1008: an inline agent surface is born with `history-limit 0` on
-    /// purpose (the TUI never enters the alt buffer, so the clamp is what
-    /// stops frame sediment). That cap is healthy when the window opted into
-    /// `alternate-screen on`; a plain shell at 0 is still degraded.
+    /// CROW-1010 retracted the CROW-1008 inline-agent `history-limit 0` clamp,
+    /// so an agent window at 0 is a leftover of that clamp and fails the floor
+    /// like any other under-cap window (Recreate rebuilds it at 50k). A plain
+    /// shell at 0 was always degraded.
     ///
     /// Known blind spot: an agent window genuinely wedged in the alt buffer at
     /// the full 50000 limit is now indistinguishable from the normal state.
@@ -760,9 +756,6 @@ public final class TmuxBackend {
         alternateScreenEnabled: Bool = false,
         floor: Int = TmuxBackend.scrollbackHistoryLimit
     ) -> Bool {
-        if alternateScreenEnabled && historyLimit == inlineAgentHistoryLimit {
-            return false
-        }
         if historyLimit < floor { return true }
         // An agent surface is SUPPOSED to be in the alt buffer.
         return alternateScreenEnabled ? false : alternateOn
@@ -843,21 +836,9 @@ public final class TmuxBackend {
         }
     }
 
-    /// Temporarily move the session `history-limit` so the next `new-window`
-    /// inherits it. Best-effort: a failure here must not fail terminal creation.
-    /// Restore is the caller's job (see `registerTerminal`'s defer).
-    private func applySessionHistoryLimit(_ limit: Int, ctrl: TmuxController) {
-        do {
-            try ctrl.setSessionOption(name: "history-limit", value: "\(limit)")
-        } catch {
-            reportIfTimeout(error)
-            CrowLog.info("[Crow] could not set session history-limit \(limit): \(error)")
-        }
-    }
-
     /// Live per-window scrollback tuple. Empty when tmux is down. Test/debug
     /// counterpart of `windowScrollbackClassification` that keeps the raw
-    /// `history_limit` so CROW-1008 can assert the inline-agent clamp stuck.
+    /// `history_limit` so CROW-1010 can assert inline agents keep the 50k cap.
     func windowScrollbackSnapshot() -> [(index: Int, historyLimit: Int, alternateOn: Bool, alternateScreenEnabled: Bool)] {
         guard let ctrl = controller else { return [] }
         return (try? ctrl.listWindowScrollback()) ?? []

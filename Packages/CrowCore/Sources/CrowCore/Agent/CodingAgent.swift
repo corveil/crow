@@ -74,15 +74,17 @@ public protocol CodingAgent: Sendable {
 
     /// Whether this agent's interactive TUI enters the terminal alternate
     /// screen (`smcup` / DECSET 1049). Crow still classifies the window as an
-    /// agent surface either way (ADR-0013); this flag selects the sediment
-    /// kill: alt-buffer (true) vs a `history-limit 0` clamp that emulates a
-    /// scrollback-less buffer for inline renderers (false, CROW-1008).
+    /// agent surface either way (ADR-0013); this flag selects the scroll
+    /// model: alt-buffer sediment kill (true) vs unified 50k native
+    /// scrollback, like a plain shell (false, CROW-1010).
     ///
     /// Claude Code is the one confirmed `true`. Cursor's `agent` CLI paints
-    /// inline and never requests the alt buffer — the default is `false` so
-    /// an unverified harness (Codex, OpenCode, Grok, Antigravity) takes the
-    /// inline path rather than silently accumulating duplicate-frame sediment.
-    /// Opt in with `true` once a live pane shows `alternate_on=1`.
+    /// inline and never requests the alt buffer — its history is a clean
+    /// transcript, so it must keep terminal scrollback (the CROW-1008
+    /// `history-limit 0` clamp deleted its only wheel path). The default is
+    /// `false` so an unverified harness (Codex, OpenCode, Grok, Antigravity)
+    /// scrolls like a shell. Opt in with `true` once a live pane shows
+    /// `alternate_on=1`.
     var usesAlternateScreen: Bool { get }
 
     /// The shell token that identifies a command as launching this agent.
@@ -248,8 +250,9 @@ public extension CodingAgent {
     /// override this.
     var fallbackCandidates: [String] { [] }
 
-    /// Default: the TUI is an inline renderer. Only Claude Code currently
-    /// opts into the alt-buffer path; see `usesAlternateScreen` on the protocol.
+    /// Default: the TUI is an inline renderer and keeps the unified 50k
+    /// scrollback (CROW-1010). Only Claude Code currently opts into the
+    /// alt-buffer path; see `usesAlternateScreen` on the protocol.
     var usesAlternateScreen: Bool { false }
 
     /// Default: no aliases — the agent's CLI ships exactly one binary name.

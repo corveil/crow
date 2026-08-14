@@ -289,20 +289,29 @@ console.log('\nMissing surface metadata degrades to the shell path:');
   check('absent agent_surface field → shell path', t.scrolled.join() === '-3');
 }
 
-// ---- CROW-1008: xterm scrollback cap on agent surfaces ---------------------
+// ---- CROW-1010: xterm scrollback cap is alt-buffer agents only --------------
 
-console.log('\nAgent surfaces cap xterm scrollback so inline TUI frames cannot fossilize:');
+console.log('\nOnly alt-buffer agent surfaces cap xterm scrollback; inline agents keep UNIFIED_SCROLLBACK:');
 {
   const fake = { options: { scrollback: 50000 } };
   T.term = fake;
+  T.activeTerminal = { id: 't1', window: 1, agent_surface: true, uses_alternate_screen: true };
+  T.applySurfaceScrollback();
+  check('alt-buffer agent → scrollback 0', fake.options.scrollback === 0);
+  T.activeTerminal = { id: 't1', window: 1, agent_surface: true, uses_alternate_screen: false };
+  T.applySurfaceScrollback();
+  check('inline agent (Cursor) keeps the unified 50k', fake.options.scrollback === 50000);
   T.activeTerminal = { id: 't1', window: 1, agent_surface: true };
   T.applySurfaceScrollback();
-  check('agent_surface true → scrollback 0', fake.options.scrollback === 0);
+  check('agent_surface true without uses_alternate_screen keeps 50k (older daemon)', fake.options.scrollback === 50000);
+  T.activeTerminal = { id: 't1', window: 1, agent_surface: false, uses_alternate_screen: true };
+  T.applySurfaceScrollback();
+  check('plain shell in a Claude session keeps 50k', fake.options.scrollback === 50000);
   T.activeTerminal = { id: 't1', window: 1, agent_surface: false };
   T.applySurfaceScrollback();
   check('plain shell restores the unified 50k', fake.options.scrollback === 50000);
   T.term = { rows: 24 }; // no options — must not throw
-  T.activeTerminal = { id: 't1', window: 1, agent_surface: true };
+  T.activeTerminal = { id: 't1', window: 1, agent_surface: true, uses_alternate_screen: true };
   T.applySurfaceScrollback();
   check('missing term.options is a no-op', true);
 }

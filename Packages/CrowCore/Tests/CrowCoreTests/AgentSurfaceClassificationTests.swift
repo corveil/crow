@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import CrowCore
 
-/// Which terminals take the agent-surface scroll model (ADR-0013, #824, #1008).
+/// Which terminals take the agent-surface scroll model (ADR-0013, #824, #1008, #1010).
 ///
 /// The classification lives in one place because the daemon uses it twice — to
 /// set `alternate-screen on` at window creation/adopt, and as the

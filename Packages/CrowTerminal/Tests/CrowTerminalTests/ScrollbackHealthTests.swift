@@ -37,15 +37,15 @@ struct ScrollbackHealthTests {
             historyLimit: 50000, alternateOn: false, alternateScreenEnabled: true))
     }
 
-    @Test func inlineAgentHistoryClampIsHealthy() {
-        // CROW-1008: Cursor never enters the alt buffer, so the window is born
-        // with history-limit 0 on purpose. That must not look like a CROW-804
-        // 5000-line casualty.
-        #expect(!TmuxBackend.isScrollbackDegraded(
+    @Test func leftoverInlineAgentHistoryClampIsDegraded() {
+        // CROW-1010 retracted the CROW-1008 `history-limit 0` clamp. A window
+        // still sitting at 0 — born after that rebuild, before this fix —
+        // fails the floor so the UI badges ⚠ Recreate (the only heal; the
+        // limit is frozen at birth). A plain shell at 0 was always degraded.
+        #expect(TmuxBackend.isScrollbackDegraded(
             historyLimit: TmuxBackend.inlineAgentHistoryLimit,
             alternateOn: false,
             alternateScreenEnabled: true))
-        // A plain shell at 0 is still degraded — the clamp is agent-only.
         #expect(TmuxBackend.isScrollbackDegraded(
             historyLimit: TmuxBackend.inlineAgentHistoryLimit,
             alternateOn: false,

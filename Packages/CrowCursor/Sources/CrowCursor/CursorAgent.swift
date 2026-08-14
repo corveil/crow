@@ -21,10 +21,11 @@ public struct CursorAgent: CodingAgent {
     public let iconSystemName: String = "cursorarrow.rays"
     public let supportsRemoteControl: Bool = true
     /// Cursor's interactive TUI paints inline in the main buffer and never
-    /// issues `smcup`. `alternate-screen on` is therefore inert, and full-frame
-    /// repaints silt up the 50k scrollback as duplicate-frame sediment
-    /// (CROW-1008). Crow still classifies the window as an agent surface; the
-    /// sediment kill is a `history-limit 0` clamp, not the alt buffer.
+    /// issues `smcup`. `alternate-screen on` is therefore inert. Live capture
+    /// against a Cursor pane (CROW-1010) showed a single clean transcript —
+    /// not stacked TUI frames — so this surface keeps the unified 50k
+    /// scrollback and the #850 local-viewport wheel. Crow still classifies
+    /// the window as an agent surface (mouse-mode swallow, wheel routing).
     public let usesAlternateScreen: Bool = false
     /// Cursor's CLI installs under **two** names for the same executable —
     /// `cursor-agent` and the generic `agent` — both symlinked into PATH from

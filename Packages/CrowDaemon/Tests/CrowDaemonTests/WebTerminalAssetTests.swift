@@ -157,11 +157,15 @@ import Testing
         #expect(
             try Self.functionBody("activeSurfaceIsAgent", in: source).contains("agent_surface"),
             "the surface kind comes from the list-terminals payload")
+        let capBody = try Self.functionBody("applySurfaceScrollback", in: source)
         #expect(
-            try Self.functionBody("applySurfaceScrollback", in: source).contains("activeSurfaceIsAgent()"),
-            "agent surfaces cap xterm scrollback to 0 so inline TUI repaints cannot fossilize (CROW-1008)")
+            capBody.contains("activeSurfaceIsAgent()") && capBody.contains("activeSurfaceUsesAltScreen()"),
+            "xterm scrollback caps to 0 only for alt-buffer agents; inline agents keep UNIFIED_SCROLLBACK (CROW-1010)")
         #expect(
-            try Self.functionBody("applySurfaceScrollback", in: source).contains("term.options.scrollback"),
+            try Self.functionBody("activeSurfaceUsesAltScreen", in: source).contains("uses_alternate_screen"),
+            "the alt-buffer capability comes from the list-terminals payload")
+        #expect(
+            capBody.contains("term.options.scrollback"),
             "the cap is the live xterm option, reapplied on every tab bind")
         // Touch must not diverge from the wheel — #777's shim and #824's wheel
         // routing have to agree about who owns the surface.
@@ -193,7 +197,7 @@ import Testing
             "must still fall back to the first terminal, then null")
         #expect(
             body.contains("applySurfaceScrollback()"),
-            "rebinding the active row must re-apply the agent vs shell xterm scrollback cap (CROW-1008)")
+            "rebinding the active row must re-apply the alt-buffer vs inline vs shell xterm scrollback cap (CROW-1010)")
     }
 
     /// The swallow is conditional on surface kind (ADR-0013): plain shells keep
