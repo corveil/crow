@@ -127,6 +127,33 @@ deliberate, documented gaps (full grid in the
 > Google-auth-locked); this amendment closes only the review deferral, not the
 > Tier-2 classification.
 
+> **Amendment (2026-08-13, CROW-1001):** **Decision item 3's Codex clause was
+> not a stale pin — it was never correct**, and that is a failure mode this ADR
+> did not anticipate. The recorded reason for `supportsRemoteControl = false`
+> ("Codex doesn't do remote control"; elaborated in the matrix as "Codex's TUI
+> isn't stdin-drivable the way `crow send` fakes RC for the others") described
+> Crow's *own* plumbing, not upstream Codex — and described it wrongly.
+> `crow send` does not write stdin: `TerminalRouter.send` → `TmuxBackend.sendText`
+> is tmux `load-buffer` → `paste-buffer` → `send-keys Enter`. Codex's composer
+> accepts exactly that, verified in a live pane on `codex-cli 0.141.0`. Since the
+> flag gates only the badge and `remoteControlActiveTerminals` — never
+> `TerminalRouter.send` — Codex sessions had been remotely drivable the whole
+> time, with the UI asserting the opposite. Item 3 is corrected below and the
+> flag is now `true`.
+>
+> The re-check discipline this ADR establishes is aimed at claims **with an
+> expiry date** ("sync-only as of v0.139.0"). It has no answer for a claim that
+> was wrong on the day it was written, because re-probing *upstream* would never
+> have caught this one: nothing about Codex changed. What was needed was
+> re-reading Crow's own send path. The lesson for future gap entries: when the
+> stated reason is about **Crow's** capability to drive a harness rather than the
+> harness's capability, cite the Crow code path that makes it true — a reason
+> naming `TerminalRouter.send` would have been falsifiable by reading one
+> function. Native `codex remote-control` was evaluated in the same pass and
+> **declined on its own merits**, unrelated to the flag; the three blockers and
+> their version caveats are in the
+> [matrix](../agent-harness-matrix.md#remote-control) and gap audit §3b.
+
 Until now, the *why* behind each gap lived only in scattered code comments —
 several of them **pinned to a specific upstream version** ("sync-only as of
 v0.139.0"). That makes the reasons easy to lose and, worse, easy to leave stale:
@@ -150,12 +177,21 @@ records the rationale for each gap here (verbatim reasons preserved from source)
    equivalent in MVP"* — a restart re-enters a bare TUI rather than replaying the
    prompt. OpenCode's `--continue` re-enters the TUI but carries no history.
 
-3. **Remote control is Claude-native; others are faked or absent.** Codex sets
-   `supportsRemoteControl = false` ("Codex doesn't do remote control", no `--rc`
-   flag). Cursor and OpenCode set it `true` but have **no RC flag** — remote
-   driving is `crow send` typing into the interactive TUI (the `send` RPC handler
-   in `EngineRouter.swift` → `TerminalRouter.send`), agent-agnostic, not a per-launch
-   flag.
+3. **Remote control is Claude-native; every other harness is faked.** Claude has
+   real `--rc --name` flags. Cursor, Codex, OpenCode, Grok and Antigravity set
+   `supportsRemoteControl = true` with **no RC flag** — remote driving is
+   `crow send` into the interactive TUI (the `send` RPC handler in
+   `EngineRouter.swift` → `TerminalRouter.send`), agent-agnostic, not a
+   per-launch flag.
+
+   *Codex was `false` here until CROW-1001, on the recorded reason "Codex doesn't
+   do remote control" / "its TUI isn't stdin-drivable the way `crow send` fakes
+   RC for the others." Both halves were wrong: `crow send` is a tmux
+   `paste-buffer`, not stdin, and Codex's composer accepts it (verified live on
+   `codex-cli 0.141.0`). Since `TerminalRouter.send` never consulted the flag,
+   Codex sessions were already drivable and only the badge disagreed. Native
+   `codex remote-control` remains unwired for reasons unrelated to the flag —
+   see the [harness matrix](../agent-harness-matrix.md#remote-control).*
 
 4. **Codex hooks are sync-only.** `CodexHookConfigWriter.asyncEvents` is empty:
    *"Codex's hook runtime is sync-only as of v0.139.0 — declaring `async = true`
@@ -221,7 +257,11 @@ that will close them (Cursor/Codex/OpenCode launchers are written but
   five have gained an upstream flag (resume, auto-permission, MCP, Codex review,
   per-project hook scope) with closure tickets
   [#829](https://github.com/corveil/crow/issues/829)–[#831](https://github.com/corveil/crow/issues/831);
-  Codex async hooks (gap 4) still holds. The canonical
+  Codex async hooks (gap 4) still holds; gap 3's Codex clause was **retired as
+  incorrect** rather than closed by an upstream bump
+  ([CROW-1001](https://github.com/corveil/crow/issues/1001) — see the 2026-08-13
+  amendment, and note that an upstream-only re-probe could not have caught it).
+  The canonical
   row-set lives in the matrix's
   [Version-pinned reasons — re-check targets](../agent-harness-matrix.md#version-pinned-reasons--re-check-targets)
   table (kept in one place so the two docs can't go stale asymmetrically);

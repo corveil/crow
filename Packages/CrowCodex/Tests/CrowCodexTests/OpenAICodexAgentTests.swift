@@ -11,7 +11,7 @@ struct OpenAICodexAgentTests {
         #expect(agent.kind == .codex)
         #expect(agent.displayName == "OpenAI Codex")
         #expect(agent.iconSystemName == "terminal.fill")
-        #expect(agent.supportsRemoteControl == false)
+        #expect(agent.supportsRemoteControl == true)
         #expect(agent.usesAlternateScreen == false)
         #expect(agent.launchCommandToken == "codex")
         #expect(agent.sessionRenameSlashCommand(newName: "my-session") == "/rename my-session\n")
@@ -34,7 +34,7 @@ struct OpenAICodexAgentTests {
     }
 
     @Test func autoLaunchCommandIgnoresTelemetryAndRemoteControl() {
-        // Codex has no OTEL exporter and doesn't honor --rc — toggling these
+        // Codex has no OTEL exporter and ships no `--rc` flag — toggling these
         // shouldn't change the launch text.
         let session = Session(name: "test", agentKind: .codex)
         let cmd = agent.autoLaunchCommand(
@@ -49,6 +49,40 @@ struct OpenAICodexAgentTests {
         // referenced for a plain work session.
         #expect(cmd?.contains("OTEL_") == false)
         #expect(cmd?.contains(".crow-job-prompt.md") == false)
+    }
+
+    /// CROW-1001 flipped `supportsRemoteControl` to `true`, which is a *badge*
+    /// claim about the shared `crow send` paste path — not a launch flag. Codex
+    /// has no `--rc`, so `remoteControlEnabled` must remain inert on every
+    /// session kind; emitting one would make Codex reject its own launch line.
+    @Test func remoteControlEnabledNeverEmitsAnRCFlag() {
+        for kind in SessionKind.allCases {
+            let session = Session(name: "rc", kind: kind, agentKind: .codex)
+            let on = agent.autoLaunchCommand(
+                session: session,
+                worktreePath: "/tmp/wt",
+                remoteControlEnabled: true,
+                autoPermissionMode: false,
+                telemetryPort: nil
+            )
+            let off = agent.autoLaunchCommand(
+                session: session,
+                worktreePath: "/tmp/wt",
+                remoteControlEnabled: false,
+                autoPermissionMode: false,
+                telemetryPort: nil
+            )
+            #expect(on == off, "remoteControlEnabled changed the \(kind) launch text")
+            #expect(on?.contains("--rc") != true, "\(kind) launch emitted --rc")
+        }
+        // The Manager launcher takes the same argument and must ignore it too.
+        #expect(
+            agent.managerLaunchCommand(
+                sessionName: "Manager", remoteControlEnabled: true,
+                autoPermissionMode: false, telemetryPort: nil)
+                == agent.managerLaunchCommand(
+                    sessionName: "Manager", remoteControlEnabled: false,
+                    autoPermissionMode: false, telemetryPort: nil))
     }
 
     @Test func autoLaunchCommandReviewSessionFirstLaunchFeedsPrompt() {

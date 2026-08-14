@@ -3,7 +3,8 @@ import CrowCore
 
 /// `CodingAgent` conformer for the OpenAI Codex CLI. Mirrors the shape of
 /// `ClaudeCodeAgent` while honoring Codex's quirks — global `~/.codex/`
-/// configuration and no `--rc` remote-control support.
+/// configuration and no `--rc` launch flag (remote driving is the shared
+/// `crow send` paste path; see `supportsRemoteControl`).
 ///
 /// `codex` 0.141.0 closed the early-MVP gaps (#830): restarts now `codex
 /// resume --last` (cwd-scoped by default — `--all` is what disables cwd
@@ -20,7 +21,31 @@ public struct OpenAICodexAgent: CodingAgent {
     /// Visually distinct from Claude's `"sparkles"`. Easy to swap once
     /// branding firms up.
     public let iconSystemName: String = "terminal.fill"
-    public let supportsRemoteControl: Bool = false
+    /// `true` on the same basis as Cursor/OpenCode/Grok/Antigravity: the badge
+    /// means *Crow* can drive the session remotely, not that the harness ships
+    /// a native RC protocol. It does **not** put `--rc` on any launch — Codex
+    /// has no such flag and `autoLaunchCommand` ignores `remoteControlEnabled`.
+    ///
+    /// This was `false` on the claim that "Codex's TUI isn't stdin-drivable the
+    /// way `crow send` fakes RC for the others" — which is wrong, and was never
+    /// what `crow send` does. `TerminalRouter.send` is agent-agnostic: it goes
+    /// through tmux `load-buffer` → `paste-buffer` → `send-keys Enter`
+    /// (`TmuxBackend.sendText`), a paste into the pane, not a write to the
+    /// process's stdin. Verified end-to-end against `codex-cli 0.141.0` in a
+    /// live pane (CROW-1001): the pasted payload lands in the composer verbatim
+    /// and the trailing Enter submits it. So Codex sessions were already
+    /// remotely drivable from Crow's web UI and the badge just said otherwise.
+    ///
+    /// Native `codex remote-control` is **not** why this is true, and is not
+    /// wired — three blockers, any one disqualifying (see the harness matrix):
+    /// it demands the managed standalone install at
+    /// `~/.codex/packages/standalone/current/codex` and refuses on the npm
+    /// build every Crow resolves; its daemon is a machine-global singleton on a
+    /// fixed control socket with no per-instance flag, so N per-worktree
+    /// sessions can't be addressed individually; and `--remote` points a local
+    /// TUI at a remote app server, which is the reverse of Crow's direction —
+    /// Crow already *is* the remote surface.
+    public let supportsRemoteControl: Bool = true
     public let launchCommandToken: String = "codex"
     public let hookConfigWriter: any HookConfigWriter
     public let stateSignalSource: any StateSignalSource
@@ -69,8 +94,11 @@ public struct OpenAICodexAgent: CodingAgent {
             // but never took a turn) `codex resume --last` gracefully opens a new
             // interactive TUI rather than erroring — verified against 0.141.0 in
             // a pty, so no `|| codex` fallback is needed (#843 review round 3).
-            // No env prefix (Codex has no OTEL equivalent), no `--rc` (Codex
-            // doesn't do remote control). Mirrors Claude's `--continue`.
+            // No env prefix (Codex has no OTEL equivalent), and no `--rc` —
+            // Codex ships no such flag, so `remoteControlEnabled` never changes
+            // the launch text even though `supportsRemoteControl` is `true`
+            // (the badge tracks the `crow send` paste path, CROW-1001).
+            // Mirrors Claude's `--continue`.
             return "\(codexPath) resume --last\n"
         case .job:
             if !session.reviewPromptDispatched {
@@ -188,9 +216,15 @@ public struct OpenAICodexAgent: CodingAgent {
         telemetryPort: UInt16?
     ) -> String {
         // Codex's Manager is a plain TUI in the devRoot — no auto-prompt,
-        // no remote-control, no auto-permission knob (CROW-433). Terminal
+        // no `--rc` flag, no auto-permission knob (CROW-433). Terminal
         // backend appends the submitting Enter, so we return the bare
         // command without a trailing newline.
+        //
+        // Emitting no `--rc` also keeps the Manager off the RC badge: the
+        // Manager's bookkeeping gates on `" --rc"` appearing in the built
+        // command rather than on `supportsRemoteControl`
+        // (`SessionService.ensureManagerSession`), so the CROW-1001 flip
+        // leaves this path exactly as it was — same as Cursor's Manager.
         return findBinary() ?? "codex"
     }
 

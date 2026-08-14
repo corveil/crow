@@ -3,7 +3,7 @@
 **Status:** Living audit — re-run when upstream CLIs bump major/minor versions.
 **Baseline:** the capability matrix + capability-tiers ADR proposed in [#827](https://github.com/corveil/crow/issues/827) (still open at audit time; its matrix table and its verbatim version-pinned "why"s are the checklist below).
 **Audit ticket:** [#828](https://github.com/corveil/crow/issues/828).
-**Audited:** 2026-07-23.
+**Audited:** 2026-07-23. **Codex RC row re-probed:** 2026-08-13 against installed `codex-cli 0.141.0` ([CROW-1001](https://github.com/corveil/crow/issues/1001) — §2 #3 / §3b Remote control).
 
 The Cursor / Codex / OpenCode adapters were written against specific upstream CLI
 versions, and several matrix cells were marked ❌ / ⚠️ with a version-pinned reason
@@ -31,7 +31,7 @@ re-probe; the OpenCode row is exactly where a stale build bit this audit (see §
 |---|---|---|---|---|
 | Claude Code | `claude` | `2.1.206 (Claude Code)` | `2.1.218` | baseline (mostly ✅) |
 | Cursor | `agent` / `cursor-agent` | `2026.07.23-e383d2b` | (rolling; audit build is same-day) | pre-resume/print MVP |
-| OpenAI Codex | `codex` | `codex-cli 0.141.0` | `rust-v0.145.0` (2026-07-21) | comments pin `v0.139.0` |
+| OpenAI Codex | `codex` | `codex-cli 0.141.0` | `rust-v0.145.0` (2026-07-21); **`0.147.0` @ 2026-08-13** (the 0.141.0 TUI advertises the upgrade) | comments pin `v0.139.0` |
 | OpenCode | `opencode` | `1.17.10` | `v1.18.4` (2026-07-20) | CROW-545/547 MVP |
 
 > **Reproducing:** flag/version claims below are cited to each installed CLI's own
@@ -54,7 +54,7 @@ the stale version reference).
 |---|---|---|---|
 | 1 | Codex review unsupported → `nil` ("Phase C; `/crow-review-pr` is Claude-only") | ✅ **NOW AVAILABLE** | `codex review [--base BRANCH] [--commit SHA] [--uncommitted] [--title]` (TUI entry point) and `codex exec review` (the non-interactive one). Either works from a Crow terminal. |
 | 2 | Codex / Cursor no resume ("no `--continue` equivalent in MVP") | ✅ **NOW AVAILABLE (both)** | Codex: `codex resume [SESSION_ID] [--last] [--all]` + `codex fork`. Cursor: `agent --resume [chatId]`, `agent --continue`, `agent resume`, `agent ls`. |
-| 3 | Codex `supportsRemoteControl=false` (no RC flag); Cursor/OpenCode fake RC via `crow send` stdin | ⚠️ **PARTIAL** | Codex now has experimental `codex remote-control {start,stop}` (app-server daemon) + `codex --remote <ws://…>` to connect a TUI to a remote app server. OpenCode has `opencode serve` (headless server) + `opencode attach <url>` + `opencode acp` (Agent Client Protocol) + `opencode web`. Both are *native* remote surfaces that could retire the stdin fake, but both are heavier than the current `crow send` paste — see closing approach. |
+| 3 | Codex `supportsRemoteControl=false` (no RC flag); Cursor/OpenCode fake RC via `crow send` stdin | ✅ **RESOLVED — but the pinned reason was wrong** (CROW-1001) | The premise ("Codex's TUI isn't stdin-drivable") failed on two counts. `crow send` does not use stdin: `TerminalRouter.send` → `TmuxBackend.sendText` is tmux `load-buffer` → `paste-buffer` → `send-keys Enter`, a paste into the pane. And Codex accepts it — verified end-to-end in a live pane on `codex-cli 0.141.0`: payload lands in the composer verbatim, trailing Enter submits. `supportsRemoteControl` is now `true` for Codex, matching Cursor/OpenCode/Grok/Antigravity. **Native RC is separately non-viable** and stays unwired: `codex remote-control start` refuses on an npm install (demands the managed standalone at `~/.codex/packages/standalone/current/codex`); `codex app-server daemon` is a machine-global singleton on a fixed socket (`~/.codex/app-server-control/app-server-control.sock`) with no port/instance flag, so N per-worktree sessions can't be addressed; and `--remote` points a *local* TUI at a *remote* app server, the reverse of Crow's direction. OpenCode's `serve`/`attach`/`acp` remain in the same "heavier than the paste that works" bucket. See §3b. |
 | 4 | Codex hooks sync-only ("as of v0.139.0; async breaks state detection") | ❌ **STILL ABSENT** | `async: true` is still **parsed but skipped** upstream at HEAD (~`0.146-alpha`), not just 0.141.0 — refresh the pin. [`discovery.rs:480`](https://github.com/openai/codex/blob/main/codex-rs/hooks/src/engine/discovery.rs) logs `"async hooks are not supported yet"` for every event **except `SessionEnd`**, which is kept but downgraded to synchronous (`discovery.rs:503`, `"running async SessionEnd hook synchronously"`). So no fire-and-forget async for the events Crow's state machine needs; `asyncEvents` stays `[]`. [Codex hooks docs](https://developers.openai.com/codex/config-advanced) |
 | 5 | Auto-permission only Claude (`--permission-mode auto`) + OpenCode (runtime-probed `--auto`) | ✅ **NOW AVAILABLE (Cursor + Codex)** | Cursor (`cursor-agent --help`): `-f/--force`, `--yolo` (alias), `--approve-mcps`, `--trust`, `--sandbox` (`--auto-review` also present in `--help` — see §3a caveat). Codex: `-a/--ask-for-approval never` + `-s/--sandbox workspace-write` (bounded; the recommended default), or the full-bypass `--dangerously-bypass-approvals-and-sandbox` / `-s danger-full-access` (**not** recommended — §3a/§3b). OpenCode is **not** broken today: `OpenCodeLaunchArgs.runAutoApproveSuffix` probes `--auto` first and **falls back to** `--dangerously-skip-permissions` on the `run` path; only the separate `tuiSupportsAuto` top-level `--auto` probe was dead weight on `v1.17.x`, and `v1.18.0` re-added TUI `--auto` anyway (§3c). |
 | 6 | MCP Claude-only (Jira via `~/.claude.json`) | ✅ **NOW AVAILABLE (all three)** | `codex mcp {list,get,add,remove,login,logout}` + `codex mcp-server`; `cursor-agent mcp`; `opencode mcp`. |
@@ -82,7 +82,7 @@ Claude Code is the baseline and omitted except where it frames the target shape.
 | MCP (e.g. Jira) | ❌ | ✅ | file-based `mcp.json` (the `mcp` subcommand is `login`/`list`/`list-tools`/`enable`/`disable` only — **no `add`** on 2026.07.23) | ~~register via `cursor-agent mcp add`~~ (no such subcommand). **Landed #829:** `CursorMCPConfigWriter` bridges the user's `jira` server from `~/.claude.json` (root `mcpServers` or default project-local `projects[<path>].mcpServers`) into `~/.cursor/mcp.json`, keyed on an `x-crow-managed` marker so a user's own entry is never clobbered; unattended runs add `--approve-mcps`. |
 | Hook scope (per-session) | ❌ global `~/.cursor/hooks.json`, cwd-match | ✅ *(caveat)* | project `.cursor/hooks.json` (hooks landed [CLI Jan 16 2026](https://cursor.com/changelog/cli-jan-16-2026)) | Write per-worktree `.cursor/hooks.json` with the Crow session UUID in the command (mirror `ClaudeCodeAgent`). **Caveat:** community reports the CLI only fires a subset of events (`beforeShellExecution`/`afterShellExecution`, session start/end/prompt/stop) — verify event coverage against `CursorSignalSource`'s state machine before ripping out the cwd-match. |
 | Prompt injection / launcher auto-wire | ⚠️ launcher not auto-wired; `.work` drops into bare TUI | ✅ | positional prompt already works (`agent "<prompt>"`); print mode gives a clean injection surface | With `-p`/`--print` for jobs and positional prompt for `.work`, `CursorLauncher.generatePrompt` output can finally be fed at launch instead of leaving a bare TUI. |
-| Remote control | ⚠️ faked via `crow send` stdin | ⚠️ (no dedicated local RC socket) | — | No change recommended; `crow send` paste remains the simplest driver. `supportsRemoteControl=true` stays correct. |
+| Remote control | ⚠️ faked via `crow send` paste | ⚠️ (no dedicated local RC socket) | — | No change recommended; `crow send` paste remains the simplest driver. `supportsRemoteControl=true` stays correct. |
 
 ### 3b. OpenAI Codex (`codex` 0.141.0)
 
@@ -94,7 +94,7 @@ Claude Code is the baseline and omitted except where it frames the target shape.
 | MCP (e.g. Jira) | ❌ | ✅ | `codex mcp {list,add,get,remove,login,logout}`; `codex mcp-server` (Codex as MCP server) | Register the Jira MCP via `codex mcp add`; parity with Claude's `~/.claude.json` MCP. |
 | Hook scope (per-session) | ❌ global `~/.codex/hooks.json`, no-op per-session writer, cwd-match | ✅ *(trust caveat)* | project `.codex/hooks.json` **or** inline `[hooks]` in `.codex/config.toml`; loads only in **trusted** projects (hooks stable [v0.124.0, Apr 2026](https://developers.openai.com/codex/config-advanced)) | Make `CodexHookConfigWriter.writeHookConfig` non-nop: write a per-worktree `.codex/hooks.json` carrying `--session <uuid>`, then get the project layer trusted. **⚠️ Do not auto-seed trust with `--dangerously-bypass-hook-trust`:** Codex's trusted-project gate exists precisely so a *cloned* repo's committed `.codex/hooks.json` doesn't execute on checkout. A blanket bypass would run any hostile/compromised repo's committed hooks on Crow session start, for every repo Crow opens. Instead **persist trust for the specific worktree** so only Crow's own written config runs. Also unlike Claude's gitignored `.claude/settings.local.json`, `.codex/hooks.json` is not conventionally gitignored, so a repo may already ship one — **#830 must resolve the merge/overwrite question** (preserve user entries, like the existing global writer does) rather than clobber it. |
 | Hook async | ❌ sync-only (pinned v0.139.0) | ❌ **still** (pin refreshed) | `async:true` parsed-but-skipped at HEAD (~`0.146-alpha`), not just v0.141.0 — `discovery.rs:480`. Carve-out: async `SessionEnd` is kept but run synchronously (`discovery.rs:503`); every other event's async hook is skipped. | **Deferred** — the events Crow's state machine relies on have no working async path; keep `asyncEvents` empty. Re-check on a future Codex minor (refresh the pin, note the SessionEnd exception). |
-| Remote control | ❌ `supportsRemoteControl=false` | ⚠️ experimental | `codex remote-control {start,stop}` (app-server daemon) + `codex --remote <ws://…>` | Flip `supportsRemoteControl=true` **only** once the experimental app-server path is validated end-to-end; until then the badge stays off. Lower priority than resume/review — the stdin paste isn't available for Codex's TUI the way it is for Cursor/OpenCode, so this is the one harness where native RC actually adds a capability. |
+| Remote control | ❌ `supportsRemoteControl=false` | ✅ *(via `crow send`, not native)* | `codex remote-control {start,stop}` (app-server daemon) + `codex --remote <ws://…>` | **Closed by [CROW-1001](https://github.com/corveil/crow/issues/1001), on the paste path — not this row's flag.** The "stdin paste isn't available for Codex's TUI" claim this row rested on is false: `crow send` is a tmux `paste-buffer`, not stdin, and Codex's composer takes it (verified live, 0.141.0 — text appears verbatim, trailing Enter submits). `supportsRemoteControl` flipped to `true`; `crow send` never gated on it anyway, so this fixed a false-negative badge rather than adding a drive path. **Native RC stays unwired, and should stay that way until three things change:** (1) `codex remote-control start` errors *"managed standalone Codex install not found at `~/.codex/packages/standalone/current/codex` … requires the standalone install managed by the Codex installer"* — Crow resolves `codex` via PATH + homebrew/`/usr/local/bin`/`~/.local/bin` fallbacks, all npm-shaped, so every install would need a second differently-obtained Codex; (2) `codex app-server daemon {start,restart,stop}` expose no port, socket-path, or instance flag and bind one fixed control socket `~/.codex/app-server-control/app-server-control.sock`, so Crow's N concurrent per-worktree sessions cannot be addressed individually — the hooks `cwd`-collision defect relocated to the drive path; (3) `--remote` attaches a *local* TUI to a *remote* app server, which is backwards for Crow — Crow already **is** the remote surface (browser → `crowd` → tmux), so this would add a second parallel one outside its session model. Re-check only if upstream adds a per-instance socket **and** drops the standalone-install requirement. **Probed on the installed `0.141.0`, not `0.147.0` stable** — blocker (3) is architectural and version-independent, but (1) and (2) are pinned to 0.141.0 and are precisely what `0.147.0`'s added `pair` subcommand might move; re-probe them before citing this row against a newer build. |
 | Notify bridge | via `~/.codex/hooks.json` + `notify` | ⚠️ possibly redundant | first-class hooks now stable | Once per-worktree hooks land, evaluate retiring the `notify`→`CodexNotifyCommand` bridge in favor of a `Stop`/`SessionEnd` hook. **Folded into #830** as a stretch item (see §4). |
 
 ### 3c. OpenCode (`opencode` 1.17.10 installed; ≥1.18 for auto-permission — see note)
@@ -105,7 +105,7 @@ Claude Code is the baseline and omitted except where it frames the target shape.
 | Auto-permission (probe) | ⚠️ runtime `--help` probe for `--auto`, job-only | ✅ *(surface unstable)* | The `run` path already works today: `OpenCodeLaunchArgs.runAutoApproveSuffix` probes `--auto` first, else `--dangerously-skip-permissions` (present on `opencode run` at `v1.17.10`). The **TUI** `--auto` surface flipped twice across two minors: absent in the `v1.17.x` window (verified `tui.ts@v1.17.10`), then **re-added in `v1.18.0`** (2026-07-14, before this audit) — [`tui.ts@v1.18.4`](https://github.com/sst/opencode/blob/v1.18.4/packages/opencode/src/cli/cmd/tui.ts) exposes `--auto`, `--yolo`, **and** `--dangerously-skip-permissions` (`auto: args.auto \|\| args.yolo \|\| args["dangerously-skip-permissions"]`). | **Do not hard-code a single flag name.** The earlier "retire the probe, hard-code `--dangerously-skip-permissions`" advice was scoped to `v1.17.x`, where TUI `--auto` was gone; upstream re-added it a minor later, so a hard-coded name is *more* brittle than the probe. `runAutoApproveSuffix`'s "try `--auto`, else `--dangerously-skip-permissions`" fallback is the resilient shape — keep it. **Note the blast radius:** `--dangerously-skip-permissions` auto-approves *all* non-denied tool calls (no sandbox knob analogous to Codex's `-s`), so it's a full escape — scope it to `.job` + `autoPermissionMode` only, as the adapter already does. The one true dead-weight is `tuiSupportsAuto`'s top-level `--auto` probe **on `v1.17.x` only**; on ≥`1.18` it matches again. #831 should *narrow* the probe (or make it version-aware), not delete it. |
 | MCP (e.g. Jira) | ❌ | ✅ | `opencode mcp` subcommand | Register Jira MCP via `opencode mcp`; parity with Claude. |
 | Hook scope (per-session) | ❌ global `~/.config/opencode/plugins/`, cwd-match | ✅ | project `.opencode/plugins/` (project-scoped plugins; project config overrides global). Upstream globs `{plugin,plugins}` ([`plugin.ts@v1.18.4:21`](https://github.com/sst/opencode/blob/v1.18.4/packages/opencode/src/config/plugin.ts#L18-L29)) so either spelling loads — Crow's writer uses `plugins/`. | Install the `crow-hooks.js` plugin into the **worktree's** `.opencode/plugins/` with the session UUID baked in, instead of the global dir. Matches the existing `OpenCodeHookConfigWriter` dir name (`plugins/`, `OpenCodeHookConfigWriter.swift:71`). Closes the shared-cwd collision. |
-| Remote control | ⚠️ faked via `crow send` stdin | ⚠️ native option exists | `opencode serve` (headless server) + `opencode attach <url>` + `opencode acp` (Agent Client Protocol) + `opencode web` | No change recommended near-term; `crow send` paste is simpler than standing up a server per session. `supportsRemoteControl=true` stays correct. Note ACP as the strategic option if Crow ever wants structured (non-paste) driving. |
+| Remote control | ⚠️ faked via `crow send` paste | ⚠️ native option exists | `opencode serve` (headless server) + `opencode attach <url>` + `opencode acp` (Agent Client Protocol) + `opencode web` | No change recommended near-term; `crow send` paste is simpler than standing up a server per session. `supportsRemoteControl=true` stays correct. Note ACP as the strategic option if Crow ever wants structured (non-paste) driving. |
 | Review | ✅ inlined skill (already works) | ✅ | `opencode run` + inlined skill; also `opencode github` / `opencode pr <n>` | No change needed. `opencode pr <number>` could simplify PR-checkout for review jobs later. |
 
 > **Version note (auto-permission):** the installed build was `1.17.10`; the analysis
@@ -123,12 +123,12 @@ a single adapter + its launcher + hook writer + tests change together).
 | Ticket | Scope | Closes |
 |---|---|---|
 | [#829](https://github.com/corveil/crow/issues/829) — Cursor closures | resume (`--continue`/`--resume`), interactive positional-prompt jobs/review (not `-p` — see §3a), auto-permission `--force --approve-mcps` (parity with Claude auto; `--sandbox enabled` dropped in review — blocks network; `--trust` headless-only; **not** `--yolo`/`--auto-review`), MCP file bridge (**no** `cursor-agent mcp add`), per-project `.cursor/hooks.json`, auto-wire `CursorLauncher` | §3a rows 1–6 |
-| [#830](https://github.com/corveil/crow/issues/830) — Codex closures | resume (`codex resume --last`), review (`codex review`), non-interactive `codex exec` + auto-approve (`-a never -s workspace-write`, bounded — **not** full-bypass), MCP (`codex mcp`), per-project `.codex/hooks.json` (persist per-worktree trust — **not** `--dangerously-bypass-hook-trust`; resolve merge-vs-clobber), retire `notify` bridge, evaluate experimental `remote-control` | §3b rows 1–5, 7, 8 |
+| [#830](https://github.com/corveil/crow/issues/830) — Codex closures | resume (`codex resume --last`), review (`codex review`), non-interactive `codex exec` + auto-approve (`-a never -s workspace-write`, bounded — **not** full-bypass), MCP (`codex mcp`), per-project `.codex/hooks.json` (persist per-worktree trust — **not** `--dangerously-bypass-hook-trust`; resolve merge-vs-clobber), retire `notify` bridge, evaluate experimental `remote-control` (→ split out as [CROW-1001](https://github.com/corveil/crow/issues/1001), closed) | §3b rows 1–5, 7, 8 |
 | [#831](https://github.com/corveil/crow/issues/831) — OpenCode closures | MCP (`opencode mcp`), per-project `.opencode/plugins/`; **narrow (do not delete) the auto-permission probe** — TUI `--auto` was gone only in `v1.17.x` and returned in `v1.18.0`, so keep `runAutoApproveSuffix`'s fallback and make the probe version-aware. **Resume-with-history is already shipped (#547)** — the only remainder is `--session <id>` targeting + whether `.work` should resume (both optional). | §3c rows 1–4 |
 
 **Deferred (no ticket):**
 - **Codex async hooks** (§2 #4 / §3b) — upstream still parses-but-skips `async:true` at HEAD (~`0.146-alpha`), except `SessionEnd` which runs synchronously; nothing to wire for Crow's state events. Re-check on a future Codex minor.
-- **Cursor / OpenCode native RC** (§3a, §3c RC rows) — native surfaces exist (`--remote`, `serve`/`attach`/`acp`) but are heavier than the working `crow send` paste; no user-facing capability gained today.
+- **Cursor / Codex / OpenCode native RC** (§3a, §3b, §3c RC rows) — native surfaces exist (`--remote`, `remote-control`, `serve`/`attach`/`acp`) but are heavier than the working `crow send` paste; no user-facing capability gained today. Codex joined this bucket in [CROW-1001](https://github.com/corveil/crow/issues/1001), which also disqualified its path on three concrete grounds (standalone-install requirement, singleton daemon socket, reversed direction) rather than leaving it "experimental, evaluate later".
 
 > **#830 resolution (landed).** §3b rows 1–4 shipped: `.work`/`.job`-restart →
 > `codex resume --last` (cwd-scoped by default; opens a fresh TUI when no thread
@@ -160,6 +160,57 @@ a single adapter + its launcher + hook writer + tests change together).
 > dedup — out of scope here. The `notify`→`CodexNotifyCommand` bridge stays (its
 > retirement was contingent on that hooks cutover), and `supportsRemoteControl`
 > stays `false` pending end-to-end `codex remote-control` validation.
+
+> **CROW-1001 resolution (landed).** The RC deferral above is closed, with its
+> premise corrected. #830 left `supportsRemoteControl` at `false` "pending
+> end-to-end `codex remote-control` validation", on §3b's reasoning that Codex
+> was the one harness where native RC would add real capability *because the
+> stdin paste wasn't available for its TUI*. That reasoning does not survive
+> contact with the code or the binary. `crow send` is not stdin — it is
+> `TerminalRouter.send` → `TmuxBackend.sendText`, i.e. tmux `load-buffer` →
+> `paste-buffer` → `send-keys Enter` — and Codex's composer accepts it: verified
+> in a live pane on `codex-cli 0.141.0`, pasted text appears verbatim and the
+> trailing Enter submits. Nor did anything gate on the flag: `TerminalRouter.send`
+> is agent-agnostic, so Codex sessions were already drivable from the web UI
+> while the badge claimed they weren't. `supportsRemoteControl` is now `true`,
+> on the same basis as Cursor/OpenCode/Grok/Antigravity, and no `--rc` is
+> emitted (Codex has none; a test pins that `remoteControlEnabled` leaves every
+> session kind's launch text byte-identical).
+>
+> The native path was validated too, and **failed** — recorded as a concrete pin
+> rather than another "evaluate": `codex remote-control start` refuses on the npm
+> build Crow resolves (wants the managed standalone at
+> `~/.codex/packages/standalone/current/codex`), `codex app-server daemon` is a
+> machine-global singleton on one fixed control socket with no per-instance flag
+> (unusable for N per-worktree sessions), and `--remote` runs the wrong
+> direction — it attaches a local TUI to a remote app server, whereas Crow *is*
+> the remote surface. See §3b's Remote control row for the re-check condition.
+>
+> **Version caveat, stated plainly.** The probe ran on the **installed** build,
+> `codex-cli 0.141.0`; stable was `0.147.0` on the probe date, and CROW-1001's
+> description cites `0.147.0` shipping a documented `remote-control
+> {start,stop,pair}` (0.141.0 has `{start,stop}` only). The three blockers are
+> therefore not equally durable. Blocker 3 — **wrong direction** — is
+> architectural: it follows from what `--remote` *is*, and no version bump
+> changes it short of Codex adding an inbound drive protocol. Blockers 1 and 2 —
+> the standalone-install requirement and the singleton control socket — are
+> version-specific and are exactly what a `pair` subcommand might move, so they
+> are pinned to 0.141.0 and should be re-probed on 0.147.0+ rather than treated
+> as settled. **None of this gates the flag**, which rests on the `crow send`
+> paste path, not on native RC; a future Codex that fixes 1 and 2 would make
+> native RC an *optional upgrade* to how a `true` badge is honored, not a
+> correction to whether it should be `true`.
+>
+> Two side observations from the same probe, worth recording since they cost
+> nothing to check: the live pane reported `alternate_on=0`, so Codex's
+> `usesAlternateScreen = false` is now **verified** rather than inherited from
+> the inline default (the matrix cell said "unverified"); and 0.141.0 gates a
+> fresh directory behind **two** interactive prompts — folder trust, then a
+> hook-trust prompt (*"6 hooks are new or changed"*, listing Crow's global
+> `~/.codex/hooks.json` entries). `CodexTrustSeeder` addresses the first. Whether
+> the second blocks unattended auto-launch is untested here and is not this
+> ticket's scope, but it is the natural next probe if a `.job` on Codex ever
+> stalls at startup.
 
 Spin-off tickets are opened against `corveil/crow` and reference this audit + [#828](https://github.com/corveil/crow/issues/828).
 
