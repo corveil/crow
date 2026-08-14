@@ -633,78 +633,90 @@ import Testing
             "the --tk-refresh token both the head's spacer track and the button derive from must be defined, or the var() references resolve to `none`/`auto` (CROW-924)")
     }
 
-    /// CROW-1016: the sidebar and the board scroll with a VISIBLE bar again.
-    /// CROW-593 hid it (`scrollbar-width: none` + a zero-width
-    /// `::-webkit-scrollbar`) for "web-UI parity", which took away the gutter
-    /// people grabbed in the desktop app — nothing else regressed, so the hide
-    /// survived every suite. Pin both halves: the hide must stay gone, and each
-    /// engine's mechanism must stay present.
+    /// CROW-1020: the scrollbar policy, both halves of it.
     ///
-    /// Both mechanisms are load-bearing and neither substitutes for the other:
-    /// Firefox reads `scrollbar-width`/`scrollbar-color` and ignores the
-    /// pseudo-elements; WebKit/Blink read the pseudo-elements and ignore
-    /// `scrollbar-color`. The explicit `::-webkit-scrollbar` width is what opts
-    /// the element out of macOS overlay scrollbars, so losing it is exactly the
-    /// "bar you can't see until you already scrolled" the ticket rejects.
-    @Test func sidebarAndBoardKeepAVisibleScrollbar() throws {
-        // stripComments throughout: the rules' own doc comment names
-        // `scrollbar-width`, `::-webkit-scrollbar` and both engines, so a
+    /// CROW-1016 read "the scrollbar is gone" as being about `#sidebar`/`#board`
+    /// — those were the panes carrying CROW-593's hide rule — and #1019 gave
+    /// them a permanent styled gutter. Wrong surface: what people grab is the
+    /// TERMINAL's history thumb. So this pins the corrected split, in one test
+    /// because the two halves are one decision and must not drift apart:
+    ///
+    ///   * the sidebar and board stay overlay chrome (hide rule restored);
+    ///   * the terminal gets a bar you can see and grab.
+    ///
+    /// The terminal half needs BOTH of its pieces, and neither substitutes for
+    /// the other. xterm 6 paints its slider from JS `theme` options (so the
+    /// colour has to come from app.js, not CSS) and builds its scrollable
+    /// element with `ScrollbarVisibility.Auto` (so the thumb fades out unless
+    /// CSS pins it). Half of that leaves either an invisible bar or a
+    /// disappearing one — which is the bug, twice over.
+    @Test func sidebarStaysOverlayAndTerminalGetsAVisibleScrollbar() throws {
+        // stripComments throughout: these rules' own doc comments name
+        // `scrollbar-width: none`, `.has-scrollback` and both engines, so a
         // raw-file `contains` would false-pass off the prose once a declaration
         // is deleted (mutation-checked, like the CROW-924 pins above).
         let css = Self.stripComments(try Self.webAsset("app.css"))
-        let settingsCSS = Self.stripComments(try Self.webAsset("settings.css"))
+        let appJS = Self.stripComments(try Self.webAsset("app.js"))
 
-        // 1. The CROW-593 hide, in either stylesheet, is the regression itself.
-        for (name, sheet) in [("app.css", css), ("settings.css", settingsCSS)] {
+        // 1. Sidebar and board are back to scrolling without a gutter. Scoped to
+        // the rule body so this fails if the hide migrates to some other pane
+        // and leaves these two pinned open.
+        let hide = try Self.ruleBody(openedBy: "#board, #sidebar {", in: css)
+        #expect(
+            hide.contains("scrollbar-width: none"),
+            "the sidebar/board hide must stay: they are overlay chrome, and a permanent gutter is real width off a 350px sidebar (CROW-1020)")
+        #expect(
+            hide.contains("-ms-overflow-style: none"),
+            "the legacy Edge/IE half of the hide belongs with it (CROW-1020)")
+        #expect(
+            try Self.ruleBody(openedBy: "#board::-webkit-scrollbar, #sidebar::-webkit-scrollbar {", in: css)
+                .contains("width: 0"),
+            "WebKit/Blink ignore scrollbar-width, so the pseudo-element half of the hide is not optional (CROW-1020)")
+
+        // 2. The terminal's bar is pinned visible. `opacity` alone is not
+        // enough — xterm.css's `.invisible` sets `pointer-events: none` too, so
+        // dropping that line leaves a thumb you can see and cannot grab, which
+        // is a subtler version of the same complaint.
+        let termBar = try Self.ruleBody(
+            openedBy: "#terminal-wrap.has-scrollback .xterm-scrollable-element > .scrollbar.vertical {",
+            in: css)
+        #expect(
+            termBar.contains("opacity: 1"),
+            "the terminal thumb must be pinned opaque, or xterm's Auto visibility fades it out whenever the pointer leaves (CROW-1020)")
+        #expect(
+            termBar.contains("pointer-events: auto"),
+            "xterm.css's .invisible also kills pointer-events, so the thumb must be made grabbable and not merely visible (CROW-1020)")
+
+        // 3. …and only while there is history. Ungated, the pin would paint a
+        // permanent stripe down every empty terminal: xterm sizes the slider to
+        // the FULL track when the bar is not needed. The class is toggled from
+        // app.js off the buffer's baseY (behaviour covered by
+        // web-tests/terminal-scrollbar.test.js); what this pins is that the CSS
+        // still asks for it rather than matching #terminal-wrap outright.
+        #expect(
+            appJS.contains("classList.toggle('has-scrollback'"),
+            "app.css gates the terminal thumb on .has-scrollback, so app.js must still be the thing that sets it (CROW-1020)")
+
+        // 4. The colour handoff. xterm derives the slider from the FOREGROUND at
+        // 0.20 alpha — 1.67:1 on #1e1e1e, under WCAG 2.2 §1.4.11's 3:1 — so
+        // without an explicit theme the pinned bar is pinned invisible, and
+        // every assertion above still passes.
+        #expect(
+            appJS.contains("scrollbarSliderBackground: '--scroll-thumb'"),
+            "xterm paints its slider from JS theme options, so the thumb colour must be handed over there (CROW-1020)")
+        #expect(
+            appJS.contains("...scrollbarTheme()"),
+            "scrollbarTheme() must actually reach the Terminal's theme, not just be defined (CROW-1020)")
+
+        // 5. The tokens it reads must exist: a missing one is dropped rather
+        // than sent as an empty string (xterm's css.toColor THROWS on that, at
+        // construction), so this failing means a silently default-coloured bar.
+        // `var(--scroll-…)` has no colon, so the trailing colon matches only the
+        // declarations.
+        for token in ["--scroll-thumb:", "--scroll-thumb-hover:", "--scroll-thumb-active:"] {
             #expect(
-                !sheet.contains("scrollbar-width: none"),
-                "\(name) must not hide the scrollbar again for overlay-chrome parity (CROW-1016)")
-            #expect(
-                !sheet.contains("-ms-overflow-style: none"),
-                "\(name) must not hide the scrollbar again via the legacy Edge/IE property (CROW-1016)")
+                css.contains(token),
+                "the \(token.dropLast()) token app.js reads for xterm's slider must be defined (CROW-1020)")
         }
-
-        // 2. Firefox's mechanism.
-        #expect(
-            css.contains("scrollbar-width: thin"),
-            "Firefox draws the thumb from scrollbar-width/scrollbar-color, which it needs stated (CROW-1016)")
-        #expect(
-            css.contains("scrollbar-color: var(--scroll-thumb) transparent"),
-            "the Firefox thumb must be themed off --scroll-thumb, not left as the platform default (CROW-1016)")
-
-        // 3. WebKit/Blink's — and specifically that ::-webkit-scrollbar carries
-        // an explicit width, since that (not the thumb colour) is what makes the
-        // bar persistent rather than overlay-on-scroll. Scoped to each rule's
-        // body via `ruleBody`, so moving the width onto the thumb — which sizes
-        // nothing and leaves the element on overlay — fails here.
-        #expect(
-            try Self.ruleBody(openedBy: "::-webkit-scrollbar {", in: css)
-                .contains("width: var(--scroll-gutter)"),
-            "::-webkit-scrollbar needs an explicit width or WebKit keeps the element on overlay scrollbars (CROW-1016)")
-        #expect(
-            try Self.ruleBody(openedBy: "::-webkit-scrollbar-thumb {", in: css)
-                .contains("background-color: var(--scroll-thumb)"),
-            "the WebKit thumb must be painted, or the sized track shows as an empty gutter (CROW-1016)")
-
-        // 4. Both tokens must exist: an unresolvable var() computes to the
-        // property's unset value — `width: auto` drops WebKit straight back to
-        // overlay, undoing (3) with every suite still green. `var(--scroll-…)`
-        // has no colon, so the trailing colon matches only the declarations.
-        #expect(
-            css.contains("--scroll-thumb:") && css.contains("--scroll-gutter:"),
-            "the --scroll-thumb / --scroll-gutter tokens the rules read must be defined (CROW-1016)")
-
-        // 5. The two panes the ticket names are actually covered. Scanning the
-        // scrollbar selectors (rather than pinning the whole `:is(…)` list)
-        // keeps this green when a later pane joins the list, while still failing
-        // if the sidebar or the board is dropped from it.
-        let scrollbarSelectors = css.split(separator: "\n", omittingEmptySubsequences: false)
-            .filter { $0.contains("::-webkit-scrollbar") }
-        #expect(
-            scrollbarSelectors.contains { $0.contains("#sidebar") },
-            "the sidebar session list must keep its scrollbar styling (CROW-1016)")
-        #expect(
-            scrollbarSelectors.contains { $0.contains("#board") },
-            "the ticket/reviews board must keep its scrollbar styling (CROW-1016)")
     }
 }
