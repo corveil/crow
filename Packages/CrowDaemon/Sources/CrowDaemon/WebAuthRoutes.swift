@@ -72,7 +72,7 @@ struct WebAuthMiddleware<Context: RemoteAddressRequestContext>: RouterMiddleware
             return try await next(request, context)
         }
         if Self.serveLoginPageForUnauthorized(method: request.method, accept: request.headers[.accept]) {
-            return StaticAssets.loginPage(webDir: webDir)
+            return StaticAssets.loginPage(webDir: webDir, request: request)
         }
         return Response(status: .unauthorized)
     }
