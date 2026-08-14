@@ -33,7 +33,7 @@ capabilities, update this table in the same PR.
 | Binary token (`launchCommandToken`) | `claude` | `cursor-agent` ✅ (alias `agent` ⚠️ collides with grok-build) — identity-probed | `codex` | `opencode` | `grok` ⚠️ collision (`grok-cli`) — identity-probed | `agy` ✅ low collision |
 | Registered at boot | **always** (default out of the box) | only if binary found | only if binary found | only if binary found | only if binary found | only if binary found |
 | Resume / continue | ✅ `--continue` | ✅ `--continue` (job/review restart, #829) | ✅ `resume --last` | ⚠️ `--continue` re-enters TUI, no history | ✅ `-c`/`-r` (run-then-`-c`; job/review restart) | ⚠️ `-c` (machine-global most-recent; no per-run id, FR #7) |
-| Remote control | ✅ native `--rc --name` | ⚠️ faked via `crow send` stdin | ❌ `supportsRemoteControl=false` (experimental `--remote` unwired) | ⚠️ faked via `crow send` stdin | ⚠️ faked via `crow send` stdin (native ACP `grok agent serve` deferred) | ⚠️ faked via `crow send` stdin (no native RC) |
+| Remote control | ✅ native `--rc --name` | ⚠️ faked via `crow send` paste | ⚠️ faked via `crow send` paste (native `remote-control` unwired — see below) | ⚠️ faked via `crow send` paste | ⚠️ faked via `crow send` paste (native ACP `grok agent serve` deferred) | ⚠️ faked via `crow send` paste (no native RC) |
 | Auto-permission | ✅ `--permission-mode auto` | ✅ `--force --approve-mcps` (parity with Claude auto, #829) | ✅ `-a never -s workspace-write` (`.job`, interactive) | ⚠️ runtime-probed `--auto`, `.job` only | ⚠️ `.job`-only `--permission-mode auto` (the real prompt-reducer) + a deliberately minimal `--deny` backstop (`rm -rf /` literals only, not a comprehensive block) (**not** `--yolo`); dangerous ops still gate | ⚠️ `settings.json` modes only (no verified launch flag; never `--dangerously-skip-permissions`) |
 | Hooks transport | per-worktree `.claude/settings.local.json` | per-worktree `.cursor/hooks.json` (#829) | global `~/.codex/hooks.json` + `config.toml` `notify` bridge (per-worktree deferred — see below) | global JS plugin `~/.config/opencode/plugins/crow-hooks.js` | per-worktree `.grok/hooks/crow.json` | per-worktree `.agents/hooks.json` (#860) |
 | Hook → session scope | ✅ per-session UUID | ✅ per-session UUID (#829) | ❌ `cwd` match (per-worktree UUID deferred) | ❌ `cwd` match | ✅ per-session UUID | ✅ per-session UUID |
@@ -43,7 +43,7 @@ capabilities, update this table in the same PR.
 | Initial-prompt injection | ✅ prompt-file contents as argv + deferred paste | ✅ job/review, `--`-separated (CROW-968); handoff launcher auto-wired (#829); `.work` bare | ✅ `.job` + `.review` (prompt-file contents as argv) | ✅ run-then-`--continue` | ✅ run-then-`-c` (`.job`/`.review`); `.work` bare | ✅ `-p "$prompt"` (`.job`/`.review`, #902); `.work` bare |
 | Gateway env / trust seed / telemetry | ✅ Claude special-case | ⚠️ trust seed only (`--trust`, per-launch, every kind) | ⚠️ trust seed only (`[projects."…"]` in `config.toml`) | ❌ | ⚠️ trust seed only (`[folders."…"]` in `~/.grok/trusted_folders.toml`) | ❌ |
 | Rename passthrough (`/rename`) | ✅ | ✅ | ✅ | ✅ | ✅ (alias `/title`) | ❌ unverified on v1.1.7 (opt-out `nil`) |
-| Interactive TUI uses alt screen (`smcup`) | ✅ Claude Code requests it | ❌ inline renderer — `history-limit 0` clamp (CROW-1008) | ❌ unverified; inherits inline default | ❌ unverified; inherits inline default | ❌ unverified; inherits inline default | ❌ unverified; inherits inline default |
+| Interactive TUI uses alt screen (`smcup`) | ✅ Claude Code requests it | ❌ inline renderer — `history-limit 0` clamp (CROW-1008) | ❌ **verified** inline (`alternate_on=0`, 0.141.0, CROW-1001) | ❌ unverified; inherits inline default | ❌ unverified; inherits inline default | ❌ unverified; inherits inline default |
 | Self-host / local models | provider-dependent | provider-dependent | provider-dependent | provider-dependent | ✅ `config.toml` `[model.*]` → any OpenAI/Anthropic-compatible or local (Ollama) endpoint | ❌ **permanent** — closed-source, Google-Sign-In/GCP-locked (Gemini 3 Pro / Claude Sonnet 4.5 only) |
 
 Legend: ✅ full · ⚠️ partial / faked / unverified · ❌ not supported.
@@ -65,7 +65,7 @@ Legend: ✅ full · ⚠️ partial / faked / unverified · ❌ not supported.
 > | MCP | `codex mcp`, `opencode mcp` (Cursor has no `mcp add`; file-based `~/.cursor/mcp.json`) | #830 / #831 — Cursor ✅ landed #829 (file bridge) |
 > | Review (Codex) | `codex review --base <branch>` / `codex exec review` | #830 |
 > | Hook → session scope | `.codex/hooks.json`, `.opencode/plugins/` (per-worktree UUID) | #830 / #831 — Cursor ✅ landed #829 |
-> | Remote control (Codex) | experimental `codex remote-control` / `--remote` | #830 (evaluate) |
+> | Remote control (Codex) | experimental `codex remote-control` / `--remote` | ✅ **closed [CROW-1001](https://github.com/corveil/crow/issues/1001)** — badge flipped on the `crow send` path; native RC pinned as non-viable |
 >
 > Still absent upstream: Codex **async hooks** (parsed-but-skipped, except
 > `SessionEnd`). See the gap audit for flags, min versions, and closing approaches.
@@ -82,10 +82,14 @@ Legend: ✅ full · ⚠️ partial / faked / unverified · ❌ not supported.
 > verdict) and would be re-kicked on every head-SHA advance. **Deferred within
 > #830:** per-worktree `.codex/hooks.json` (would double-fire alongside the
 > still-needed global writer — both dispatch to the same session, doubling
-> notifications; needs server-side event dedup first), retiring the `notify`
-> bridge (tied to that hooks cutover), and flipping `supportsRemoteControl`
-> (experimental `codex remote-control` needs end-to-end validation). See the gap
-> audit §3b update.
+> notifications; needs server-side event dedup first) and retiring the `notify`
+> bridge (tied to that hooks cutover). The third deferral — flipping
+> `supportsRemoteControl` — was **closed by
+> [CROW-1001](https://github.com/corveil/crow/issues/1001)**, though not on the
+> premise #830 recorded: the flag is `true` because the shared `crow send` paste
+> path drives the Codex TUI (verified end-to-end on 0.141.0), *not* because
+> native `codex remote-control` was validated. That path is pinned non-viable —
+> see the Remote control note below. See the gap audit §3b update.
 
 ## Notes per dimension
 
@@ -192,21 +196,81 @@ managed-terminal command needs hook/env prep.
 `supportsRemoteControl` drives whether the remote-control badge is shown for a
 harness's sessions
 ([`CodingAgent.swift`](../Packages/CrowCore/Sources/CrowCore/Agent/CodingAgent.swift)).
+It is **only** a badge input: `crow send` never consults it, so the flag
+describes what the UI claims, not what Crow can do.
+
+> **Two different gates, worth knowing before reading a badge.** Work / job /
+> review sessions light the badge on `rcEnabled && agent.supportsRemoteControl`
+> (`SessionService.launchAgent`), but the **Manager** lights it on the literal
+> `" --rc"` appearing in its built command (`ensureManagerSession`, CROW-433).
+> So on every harness whose `true` is the `crow send` fake — Cursor, Codex,
+> OpenCode, Grok, Antigravity — a Manager shows no badge while that harness's
+> ordinary sessions do, even though `crow send` drives both identically. That
+> asymmetry predates CROW-1001 and is unchanged by it.
 
 - **Claude:** `true`, backed by real `--rc --name` flags
   (`ClaudeLaunchArgs.argsSuffix`). `--name` labels the session in claude.ai's
   Remote Control panel.
-- **Cursor & OpenCode:** `true`, but there is **no RC flag** — remote driving is
-  `crow send` typing into the interactive TUI (the agent-agnostic stdin path: the
-  `send` RPC handler in `EngineRouter.swift` → `TerminalRouter.send`). The badge
-  reflects that Crow *can* drive them, not that the agent has a native RC
-  protocol.
-- **Codex:** `false` — the badge stays off pending end-to-end validation of
-  Codex's **experimental** `codex remote-control` / `--remote` app-server path
-  (`OpenAICodexAgent`). Unlike Cursor/OpenCode, Codex's TUI isn't stdin-drivable
-  the way `crow send` fakes RC for the others, so native RC is the one place
-  where flipping this would add real capability — hence "evaluate," not "wire it
-  now" (#830).
+- **Cursor, OpenCode, Grok & Antigravity:** `true`, but there is **no RC
+  flag** — remote driving is `crow send` pasting into the interactive TUI (the
+  agent-agnostic path: the `send` RPC handler in `EngineRouter.swift` →
+  `TerminalRouter.send`). The badge reflects that Crow *can* drive them, not
+  that the agent has a native RC protocol.
+- **Codex was `false` on a premise that turned out to be wrong.** The reason
+  recorded here and in ADR 0015 was that "Codex's TUI isn't stdin-drivable the
+  way `crow send` fakes RC for the others." Two things were off. First,
+  `crow send` never touches stdin: `TerminalRouter.send` → `TmuxBackend.sendText`
+  is tmux `load-buffer` → `paste-buffer` → `send-keys Enter`, a **paste into the
+  pane**, so a TUI that refuses stdin is not thereby undrivable. Second, Codex
+  accepts it. Verified end-to-end against `codex-cli 0.141.0` in a live tmux
+  pane (CROW-1001): the pasted payload lands in the composer verbatim and the
+  trailing Enter submits it. So Codex sessions were **already** drivable from
+  Crow's web UI — `crow send` never consulted `supportsRemoteControl`, which
+  only feeds the badge and `remoteControlActiveTerminals` — and the flag was a
+  false negative. It is now `true`, on the same footing as the four harnesses
+  above.
+
+  The grid row above says "paste", not "stdin", for **every** harness for the
+  same reason: the stdin framing is what made this cell wrong for four releases.
+  A reader who believes `crow send` writes stdin will keep asking whether a
+  given TUI reads stdin, which is not the question.
+
+  Native `codex remote-control` is **not** the reason, and stays unwired. Three
+  blockers, any one of them disqualifying:
+
+  1. **Wrong install channel.** `codex remote-control start` refuses on the npm
+     build: *"managed standalone Codex install not found at
+     `~/.codex/packages/standalone/current/codex` … requires the standalone
+     install managed by the Codex installer, because the daemon starts and
+     updates app-server from that fixed path."* Crow resolves `codex` by PATH
+     walk plus homebrew / `/usr/local/bin` / `~/.local/bin` fallbacks — all npm
+     shaped. Every install would need a second Codex, obtained a different way.
+  2. **Machine-global singleton, no per-session scoping.** `codex app-server
+     daemon` is *the* local daemon on a fixed control socket
+     (`~/.codex/app-server-control/app-server-control.sock`); `start` / `restart`
+     / `stop` take no port, socket-path, or instance flag. Crow runs N
+     concurrent Codex sessions, one per worktree, so one daemon cannot be
+     addressed per session — the same defect class as the Codex hooks `cwd`
+     match, moved onto the drive path.
+  3. **Opposite direction.** `codex --remote <ws://…>` connects a *local* TUI to
+     a *remote* app server. Crow's badge claims the converse: this local agent
+     is drivable from Crow's remote web UI. Crow already **is** the remote
+     surface (browser → `crowd` → tmux), so `--remote` would stand up a second,
+     parallel remote surface in front of the same agent, outside Crow's session
+     model — and mobile pairing commonly still wants Codex Desktop as a bridge.
+
+  This puts Codex exactly where the gap audit already put Cursor and OpenCode:
+  a native RC surface exists, it is heavier than the paste that works, and it
+  buys no user-facing capability today.
+
+  **Probed on the installed `codex-cli 0.141.0`, while stable was `0.147.0`** —
+  so the three blockers age differently. (3) is architectural and survives any
+  version bump; (1) and (2) are 0.141.0 facts and are the sort of thing
+  `0.147.0`'s added `remote-control pair` subcommand could move, so re-probe
+  them before citing this against a newer build. The badge does not depend on
+  any of it: it rests on the `crow send` paste path, so a Codex that fixed (1)
+  and (2) would change *how* Crow could honor a `true` badge, not whether it
+  should be `true`.
 
 ### Auto-permission
 
@@ -578,6 +642,19 @@ Every harness except Antigravity overrides `sessionRenameSlashCommand` to return
 sent after a Crow rename so the agent's own session title stays in sync
 (CROW-629). The protocol default is `nil` so a *future* harness can't inherit a
 spurious `/rename` paste.
+
+**Delivery is gated on the RC badge for non-Manager sessions**, which is why
+CROW-1001 changed behaviour here as a side effect. `agentRenameTargets` sends to
+command-bearing terminals for a Manager, but for work / job / review sessions it
+falls through to `remoteControlRenameTargets` — i.e. `remoteControlActiveTerminals`.
+While Codex's `supportsRemoteControl` was `false` its worker terminals never
+entered that set, so a renamed Codex work session forwarded **nothing**, despite
+this row reading ✅ and `OpenAICodexAgent.sessionRenameSlashCommand` returning a
+real command. With the flag `true` (and `remoteControlEnabled` on) the paste now
+lands, making the ✅ true for Codex workers rather than only for its Manager. The
+same gate still applies to Cursor / OpenCode / Grok, and only ever targets
+agent-launched terminals — `remoteControlActiveTerminals` is populated in
+`launchAgent`, so a plain Shell tab can't receive a `/rename` paste.
 
 ## Antigravity (Tier-2 / experimental)
 

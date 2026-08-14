@@ -6,8 +6,9 @@ import CrowCore
 /// auto-permission flags for unattended `.job`/`.review`, and per-worktree
 /// hook config with the Crow session UUID baked in (see
 /// `CursorHookConfigWriter`, #829). Remote control is enabled: Cursor runs an
-/// interactive TUI, so `crow send` (the agent-agnostic stdin-paste path in
-/// `SessionService`) drives it; no per-launch RC flag needed. Cursor's hook
+/// interactive TUI, so `crow send` (the agent-agnostic tmux paste-buffer path
+/// in `SessionService`, not stdin — CROW-1001) drives it; no per-launch RC flag
+/// needed. Cursor's hook
 /// engine is a superset of Claude Code's — same exit-code 0/2 protocol,
 /// accepts `CLAUDE_PROJECT_DIR` as an alias — which is why the
 /// `HookConfigWriter` / `StateSignalSource` pair works rather than being a
