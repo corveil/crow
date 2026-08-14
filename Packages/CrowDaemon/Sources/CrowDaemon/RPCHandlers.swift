@@ -2090,6 +2090,7 @@ func makeCommandRouter(
     ]
     handlers.merge(makeWorkspaceHandlers(appState: appState, devRoot: devRoot)) { existing, _ in existing }
     handlers.merge(makeMCPTokenHandlers(devRoot: devRoot)) { existing, _ in existing }
+    handlers.merge(makeCorveilHandlers(appState: appState, devRoot: devRoot)) { existing, _ in existing }
     return CommandRouter(handlers: handlers, fallback: fallback)
 }
 
@@ -2162,6 +2163,88 @@ private func makeMCPTokenHandlers(devRoot: String) -> [String: CommandRouter.Han
             }
         },
     ]
+}
+
+/// The `corveil-*` verb group — Settings → Corveil CLI's **Verify** and
+/// **Reinstall skill** (CROW-1011).
+///
+/// Its own function for the reason `makeMCPTokenHandlers` states above, and it
+/// must stay in this file because `scripts/check-cli-parity.sh` greps
+/// `RPCHandlers.swift` for handler registrations.
+///
+/// Both are local-only on `/rpc`
+/// (``RPCWebSocketHandler/localOnlyDenial(for:devRoot:)``). The path they run is
+/// `defaults.binaries["corveil"]` — an absolute path on the *daemon host* — and
+/// that field is already local-only to **write** for exactly this reason. A
+/// remote peer who could execute it would gain the arbitrary-execution half of
+/// the thing the write gate withholds, from an ungated read of the same config.
+/// `open-in-vscode` / `open-terminal` are gated on the same argument.
+///
+/// Neither writes config: `corveil-verify` runs `--version`, and
+/// `corveil-reinstall-skill` writes one file inside the devRoot. What the
+/// reinstall *does* update is `AppState.corveilSkillInstallWarning` — the
+/// launch-time diagnostic — so a manual reinstall that succeeds clears the
+/// stale warning and one that fails replaces it. That was the retired desktop
+/// app's behaviour and it is the point: "is corveil broken?" stays
+/// single-sourced instead of having a launch answer and a button answer.
+private func makeCorveilHandlers(
+    appState: AppState, devRoot: String
+) -> [String: CommandRouter.Handler] {
+    [
+        "corveil-verify": { params in
+            let path = try corveilBinary(params, devRoot: devRoot)
+            let outcome = await runCorveilAction { CorveilCLI.verify(path: path) }
+            return [
+                "ok": .bool(outcome.ok),
+                "message": .string(outcome.message),
+                "path": .string(outcome.path),
+            ]
+        },
+        "corveil-reinstall-skill": { params in
+            let path = try corveilBinary(params, devRoot: devRoot)
+            let outcome = await runCorveilAction {
+                CorveilCLI.reinstallSkill(path: path, devRoot: devRoot)
+            }
+            await MainActor.run {
+                appState.corveilSkillInstallWarning = outcome.ok ? nil : outcome.message
+            }
+            return [
+                "ok": .bool(outcome.ok),
+                "message": .string(outcome.message),
+                "path": .string(outcome.path),
+                "skill_path": .string(CorveilCLI.skillPath(devRoot: devRoot)),
+            ]
+        },
+    ]
+}
+
+/// The binary a `corveil-*` call should act on: the caller's `path`, else the
+/// configured one. Throws rather than defaulting to something, because "verify
+/// nothing" has no useful answer.
+///
+/// File-scope rather than a local function inside `makeCorveilHandlers`: the
+/// handlers are `@Sendable` closures, and a captured local function is not.
+private func corveilBinary(_ params: [String: JSONValue], devRoot: String) throws -> String {
+    let configured = ConfigStore.loadConfig(devRoot: devRoot)?.defaults.binaries["corveil"]
+    guard let path = CorveilCLI.resolvePath(
+        explicit: params["path"]?.stringValue, configured: configured)
+    else {
+        throw DaemonRPCError.invalidParams(
+            "No corveil binary configured — pass --path, or set one in Settings → General → Corveil CLI.")
+    }
+    return path
+}
+
+/// Run one `CorveilCLI` action off the cooperative pool.
+///
+/// Both actions block on `Process.waitUntilExit` for up to `CorveilCLI.timeout`
+/// seconds. The daemon serves every other session from the cooperative pool, so
+/// a hung corveil binary must not be able to hold one of its threads for five
+/// seconds — `Task.detached` gives the wait a thread of its own.
+private func runCorveilAction(
+    _ work: @escaping @Sendable () -> CorveilCLI.Outcome
+) async -> CorveilCLI.Outcome {
+    await Task.detached(priority: .userInitiated, operation: work).value
 }
 
 /// Paths this call just set that aren't executable right now.

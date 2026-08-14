@@ -15,8 +15,8 @@ Crow-launched agent session.
 **Read-only, and structurally so.** The tool catalog is a closed allowlist of six
 tools over five read RPC methods. There is no passthrough tool and no way to name an
 RPC method from the wire, so the local-only surfaces — gateways, the web password,
-MCP tokens themselves, `run-setup`, hook events, host-app launches — are unreachable
-regardless of transport or scope.
+MCP tokens themselves, `run-setup`, hook events, host-app launches, the Corveil CLI
+verify/reinstall actions — are unreachable regardless of transport or scope.
 
 There is **no prompt-send**: nothing here can type into an agent's terminal, create
 a session, change a status, or write config. That is deliberate and enforced by a

@@ -46,6 +46,7 @@ public struct CrowCommand: ParsableCommand {
             Defaults.self,
             Agents.self,
             Workspace.self,
+            Corveil.self,
             Gateway.self,
             WebPassword.self,
             MCP.self,

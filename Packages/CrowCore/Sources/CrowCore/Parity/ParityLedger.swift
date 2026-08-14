@@ -145,6 +145,8 @@ public enum ParityLedger {
         "mcp-token-list",
         "mcp-token-mint",
         "mcp-token-revoke",
+        "corveil-verify",
+        "corveil-reinstall-skill",
     ]
 
     /// Every method reachable through the live router pair — the daemon's
@@ -341,6 +343,16 @@ public enum ParityLedger {
         .read("mcp-token-list", cli: "mcp token list"),
         .write("mcp-token-mint", cli: "mcp token mint"),
         .write("mcp-token-revoke", cli: "mcp token revoke"),
+
+        // Corveil CLI (CROW-1011). Local-only, because both execute
+        // `defaults.binaries["corveil"]` on the daemon host.
+        //
+        // Both are `.write` despite neither touching config: `isWrite` means
+        // "performs an action", and spawning a process on the host is the most
+        // action a row here describes. Reading them as `.read` would make them
+        // candidates for MCP export, which is exactly wrong.
+        .write("corveil-verify", cli: "corveil verify"),
+        .write("corveil-reinstall-skill", cli: "corveil reinstall-skill"),
 
         // Jobs
         .read("job-list", cli: "job list"),

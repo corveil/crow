@@ -510,6 +510,11 @@ public enum CrowDaemon {
         // "Start Crow at login" for Settings → General — same local-only gating,
         // since it registers a launch agent on the host machine (CROW-769).
         AutostartRoutes.mount(on: httpRouter, boundHost: options.host, options: options)
+        // Settings → Corveil CLI's Verify / Reinstall skill buttons (CROW-1011).
+        // Local-only for the same reason as the two above: both run an absolute
+        // path on this machine.
+        CorveilRoutes.mount(
+            on: httpRouter, boundHost: options.host, devRoot: options.devRoot, appState: appState)
         // Read-only MCP for off-box clients (CROW-1004). Authenticates with a scoped
         // bearer token minted by `crow mcp token mint`, NOT the web-session cookie —
         // `/mcp` is listed in `WebAuthMiddleware.isAuthExempt` for that reason, and
