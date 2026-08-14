@@ -66,10 +66,13 @@ struct ScrollbackHealthTests {
         // whether this host happens to have a live tmux server.
         let backend = TmuxBackend()
         #expect(backend.windowScrollbackClassification() == nil,
-                "a read that could not run must be nil, not ([], [])")
+                "a read that could not run must be nil, not ([], [], [])")
         // The fail-open convenience accessors still collapse it to empty.
         #expect(backend.degradedWindowIndices().isEmpty)
         #expect(backend.agentSurfaceWindowIndices().isEmpty)
+        // CROW-1023: the alt-buffer accessor fails open too — a failed read must
+        // not report windows as latched (which would cap their scrollback to 0).
+        #expect(backend.altBufferWindowIndices().isEmpty)
     }
 
     @Test func agentSurfaceStillFailsTheHistoryFloor() {

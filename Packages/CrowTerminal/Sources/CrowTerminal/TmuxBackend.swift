@@ -681,6 +681,12 @@ public final class TmuxBackend {
     public func destroyTerminal(id: UUID) {
         if let windowIndex = bindings[id] {
             controller?.killWindow(index: windowIndex)
+            // CROW-1023: drop the alt-buffer latch on this path too — close-tab
+            // goes straight to `controller?.killWindow`, not `killWindow(index:)`,
+            // so the ADR's "cleared at kill" would otherwise not hold here. Prune
+            // + the register-time remove already cover a recycled index; this
+            // keeps every teardown path consistent (review).
+            observedAltBufferWindows.remove(windowIndex)
         }
         bindings.removeValue(forKey: id)
         // Forget the active marker if this was the selected terminal, so a

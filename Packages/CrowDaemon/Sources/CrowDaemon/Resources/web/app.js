@@ -3660,6 +3660,10 @@ async function refreshTerminals() {
     || terminals[0] || null;
   pendingTerminalId = null;
   applySurfaceScrollback();
+  // CROW-1023: keep re-reading list-terminals while the attached surface is an
+  // agent that hasn't latched into the alt buffer yet, so an alt-buffer build's
+  // cap-to-0 isn't stranded behind the un-polled first snapshot (review).
+  maybePollAltScreenLatch();
   // Whenever the URL names a terminal this session no longer has — a dead id
   // from the link, or a tab that has since been closed — point it at whatever
   // we actually landed on. Running on every pass rather than only the routed one
@@ -5369,6 +5373,53 @@ function applySurfaceScrollback() {
   const wanted = (activeSurfaceIsAgent() && activeSurfaceUsesAltScreen())
     ? 0 : UNIFIED_SCROLLBACK;
   if (term.options.scrollback !== wanted) term.options.scrollback = wanted;
+}
+
+// CROW-1023: `uses_alternate_screen` is detected per-window from tmux's RUNTIME
+// alt-buffer state, which an alt-buffer agent (e.g. Claude Code 2.1.233) only
+// reaches AFTER it launches and issues smcup — usually a few seconds after
+// new-terminal/recreate snapshots the row at `false`. `list-terminals` is not
+// polled (onServerChanged/refreshLive don't re-read it), so without this nudge
+// an alt-buffer agent's row would stay `false`, applySurfaceScrollback would
+// leave xterm at UNIFIED_SCROLLBACK, and its live frames would fossilize in the
+// local viewport — the #822 regression the cap-to-0 exists to prevent.
+//
+// So while the ATTACHED surface is an agent surface not yet latched to the alt
+// buffer, re-read `list-terminals` on a short bounded schedule until it latches
+// (`uses_alternate_screen` flips true → applySurfaceScrollback caps to 0 and
+// xterm discards any frames that fossilized in the meantime) or the budget runs
+// out — at which point it is a genuinely inline build (Cursor / inline Claude)
+// that correctly keeps the 50k. Bounded and per-surface: switching to a new
+// unlatched agent tab refreshes the budget; a latched or non-agent surface arms
+// nothing. Not a tab-switch dependency (that was the review gap) — it self-arms
+// from every refreshTerminals until the flag settles.
+const ALT_LATCH_POLL_MS = 1000;
+const ALT_LATCH_POLL_MAX = 15; // ~15s: agent launch + first alt-screen frame
+let altLatchPollTimer = null;
+let altLatchPollTermId = null;
+let altLatchPollLeft = 0;
+function maybePollAltScreenLatch() {
+  const t = activeTerminal;
+  // A window must exist (else `uses_alternate_screen` is still the pre-window
+  // prior, not a real read) and the surface must be an as-yet-uncapped agent.
+  const unlatched = !!(t && t.agent_surface && t.window != null && !t.uses_alternate_screen);
+  if (!unlatched) { // latched, gone, or not an agent surface → stop watching
+    clearTimeout(altLatchPollTimer);
+    altLatchPollTimer = null;
+    altLatchPollTermId = null;
+    return;
+  }
+  if (t.id !== altLatchPollTermId) { // a fresh surface to stabilize → fresh budget
+    altLatchPollTermId = t.id;
+    altLatchPollLeft = ALT_LATCH_POLL_MAX;
+  }
+  if (altLatchPollLeft <= 0) return; // gave up → a genuinely inline build (keeps 50k)
+  if (altLatchPollTimer) return;     // already scheduled
+  altLatchPollTimer = setTimeout(() => {
+    altLatchPollTimer = null;
+    altLatchPollLeft -= 1;
+    refreshTerminals(); // rebinds activeTerminal + applySurfaceScrollback, then re-arms here
+  }, ALT_LATCH_POLL_MS);
 }
 
 // Mouse-mode swallow — same handler as web/terminal.html (CROW-581). The agent
