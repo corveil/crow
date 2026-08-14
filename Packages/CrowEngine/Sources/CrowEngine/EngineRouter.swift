@@ -941,17 +941,28 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                             classification.flatMap { c in
                                 t.tmuxBinding.map { c.agentSurfaces.contains($0.windowIndex) }
                             } ?? t.isAgentSurface(session: session)),
-                        // Sibling of `agent_surface` (CROW-1010). True only for
-                        // agents that actually enter the alt buffer (Claude
-                        // Code). The client caps xterm scrollback to 0 on this
-                        // — NOT on `agent_surface` alone — so an inline agent
-                        // (Cursor) keeps the unified 50k and the #850 local
-                        // wheel has something to scroll. Session-scoped: a
-                        // plain shell in a Claude session still has
-                        // `agent_surface: false`, so the AND on the client
-                        // keeps its 50k.
+                        // Sibling of `agent_surface` (CROW-1010, redefined
+                        // CROW-1023). True only for a window that has actually
+                        // entered the alt buffer. The client caps xterm
+                        // scrollback to 0 on THIS — not on `agent_surface` alone
+                        // — so an inline agent (Cursor, AND an inline-rendering
+                        // Claude Code build) keeps the unified 50k, and the #850
+                        // local wheel + the CROW-1020 scrollbar have something to
+                        // scroll.
+                        //
+                        // CROW-1023: detected per-window from the runtime
+                        // `#{alternate_on}` read, latched sticky
+                        // (`observedAltBufferWindows`) — NOT the static per-kind
+                        // capability. Two Claude Code builds diverge: one enters
+                        // the alt buffer (`alt_on=1`), one renders inline
+                        // (`alt_on=0`), and only a runtime read separates them.
+                        // The `AgentRegistry` capability survives as the
+                        // pre-window / read-failure prior (no window observed
+                        // yet), mirroring the `agent_surface` fallback above.
                         "uses_alternate_screen": .bool(
-                            AgentRegistry.shared.usesAlternateScreen(for: session?.agentKind)),
+                            classification.flatMap { c in
+                                t.tmuxBinding.map { c.altBuffer.contains($0.windowIndex) }
+                            } ?? AgentRegistry.shared.usesAlternateScreen(for: session?.agentKind)),
                     ])
                 }
                 return ["terminals": .array(items)]

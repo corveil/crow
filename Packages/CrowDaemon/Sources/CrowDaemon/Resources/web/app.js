@@ -3660,6 +3660,10 @@ async function refreshTerminals() {
     || terminals[0] || null;
   pendingTerminalId = null;
   applySurfaceScrollback();
+  // CROW-1023: keep re-reading list-terminals while the attached surface is an
+  // agent that hasn't latched into the alt buffer yet, so an alt-buffer build's
+  // cap-to-0 isn't stranded behind the un-polled first snapshot (review).
+  maybePollAltScreenLatch();
   // Whenever the URL names a terminal this session no longer has — a dead id
   // from the link, or a tab that has since been closed — point it at whatever
   // we actually landed on. Running on every pass rather than only the routed one
@@ -3752,6 +3756,13 @@ function switchTerminal(t) {
   if (selectedId) navigate({ view: 'session', sessionId: selectedId, terminalId: t.id });
   activeTerminal = t;
   applySurfaceScrollback();
+  // CROW-1023: a tab switch is a bind of `activeTerminal` just like a
+  // refreshTerminals pass, so it must (dis)arm the alt-buffer latch poll too —
+  // otherwise switching away from a still-starting Claude tab and back (e.g.
+  // opening a shell while it launches) reapplies the stale `false` row and never
+  // re-reads, re-stranding the cap-to-0 (review). Leaving disarms; returning to
+  // a still-unlatched tab gets a fresh budget (disarm nulls the tracked id).
+  maybePollAltScreenLatch();
   renderTabs();
   // #673: the in-place resize+replay from #672 didn't recover a mismatched grid —
   // the cursor stayed misaligned from the actual line. Attaching to a different
@@ -5329,23 +5340,25 @@ const DEFAULT_TERM_FONT = '"MesloLGS NF", "MesloLGS Nerd Font", "JetBrainsMono N
 //     (CROW-606), and the wheel scrolls that local buffer.
 //   * AGENT-TUI surfaces own their own viewport like a naked terminal.
 //     crowd sets `alternate-screen on` for those windows so an agent that
-//     requests smcup (Claude Code) keeps full-frame repaints in the alt
-//     buffer, which has no scrollback. Inline renderers (Cursor) never
-//     issue smcup: their history is a clean transcript in the main buffer,
-//     so they keep the unified 50k and the wheel at a non-mouse-tracking
-//     prompt scrolls that local viewport (#850 / CROW-1010). Capping
-//     xterm scrollback to 0 on `agent_surface` alone deleted Cursor's only
-//     scroll path (the #1008/#1009 regression).
+//     requests smcup keeps full-frame repaints in the alt buffer, which has
+//     no scrollback. Inline renderers (Cursor, and Claude Code builds that
+//     render inline — CROW-1023) never issue smcup: their history is a clean
+//     transcript in the main buffer, so they keep the unified 50k and the
+//     wheel at a non-mouse-tracking prompt scrolls that local viewport
+//     (#850 / CROW-1010). Capping xterm scrollback to 0 on `agent_surface`
+//     alone deleted Cursor's only scroll path (the #1008/#1009 regression).
 //
 // `agent_surface` comes from `list-terminals`, sourced from the tmux window
 // option crowd actually set — NOT from `term.buffer.active.type`. The client
 // can't use the buffer type here: crow-tmux.conf strips the client's
 // smcup/rmcup, and `terminal-overrides` is keyed on the client's TERM while a
 // single tmux client serves every tab, so there is no per-window client buffer
-// state to read. `uses_alternate_screen` is the sibling flag: true only for
-// agents that actually enter the alt buffer. The buffer/mouse-mode checks
-// below are kept as an additional signal for surfaces that do legitimately
-// enter the alt buffer.
+// state to read. `uses_alternate_screen` is the sibling flag: true only for a
+// window that has ACTUALLY entered the alt buffer — detected per-window from
+// tmux's runtime `#{alternate_on}` and latched sticky (CROW-1023), not a
+// per-kind guess, so the two diverging Claude Code builds (alt vs inline) route
+// correctly. The buffer/mouse-mode checks below are kept as an additional
+// signal for surfaces that do legitimately enter the alt buffer.
 function activeSurfaceIsAgent() {
   return !!(activeTerminal && activeTerminal.agent_surface);
 }
@@ -5367,6 +5380,53 @@ function applySurfaceScrollback() {
   const wanted = (activeSurfaceIsAgent() && activeSurfaceUsesAltScreen())
     ? 0 : UNIFIED_SCROLLBACK;
   if (term.options.scrollback !== wanted) term.options.scrollback = wanted;
+}
+
+// CROW-1023: `uses_alternate_screen` is detected per-window from tmux's RUNTIME
+// alt-buffer state, which an alt-buffer agent (e.g. Claude Code 2.1.233) only
+// reaches AFTER it launches and issues smcup — usually a few seconds after
+// new-terminal/recreate snapshots the row at `false`. `list-terminals` is not
+// polled (onServerChanged/refreshLive don't re-read it), so without this nudge
+// an alt-buffer agent's row would stay `false`, applySurfaceScrollback would
+// leave xterm at UNIFIED_SCROLLBACK, and its live frames would fossilize in the
+// local viewport — the #822 regression the cap-to-0 exists to prevent.
+//
+// So while the ATTACHED surface is an agent surface not yet latched to the alt
+// buffer, re-read `list-terminals` on a short bounded schedule until it latches
+// (`uses_alternate_screen` flips true → applySurfaceScrollback caps to 0 and
+// xterm discards any frames that fossilized in the meantime) or the budget runs
+// out — at which point it is a genuinely inline build (Cursor / inline Claude)
+// that correctly keeps the 50k. Bounded and per-surface: switching to a new
+// unlatched agent tab refreshes the budget; a latched or non-agent surface arms
+// nothing. Not a tab-switch dependency (that was the review gap) — it self-arms
+// from every refreshTerminals until the flag settles.
+const ALT_LATCH_POLL_MS = 1000;
+const ALT_LATCH_POLL_MAX = 15; // ~15s: agent launch + first alt-screen frame
+let altLatchPollTimer = null;
+let altLatchPollTermId = null;
+let altLatchPollLeft = 0;
+function maybePollAltScreenLatch() {
+  const t = activeTerminal;
+  // A window must exist (else `uses_alternate_screen` is still the pre-window
+  // prior, not a real read) and the surface must be an as-yet-uncapped agent.
+  const unlatched = !!(t && t.agent_surface && t.window != null && !t.uses_alternate_screen);
+  if (!unlatched) { // latched, gone, or not an agent surface → stop watching
+    clearTimeout(altLatchPollTimer);
+    altLatchPollTimer = null;
+    altLatchPollTermId = null;
+    return;
+  }
+  if (t.id !== altLatchPollTermId) { // a fresh surface to stabilize → fresh budget
+    altLatchPollTermId = t.id;
+    altLatchPollLeft = ALT_LATCH_POLL_MAX;
+  }
+  if (altLatchPollLeft <= 0) return; // gave up → a genuinely inline build (keeps 50k)
+  if (altLatchPollTimer) return;     // already scheduled
+  altLatchPollTimer = setTimeout(() => {
+    altLatchPollTimer = null;
+    altLatchPollLeft -= 1;
+    refreshTerminals(); // rebinds activeTerminal + applySurfaceScrollback, then re-arms here
+  }, ALT_LATCH_POLL_MS);
 }
 
 // Mouse-mode swallow — same handler as web/terminal.html (CROW-581). The agent
@@ -6249,9 +6309,12 @@ function armScrollbackHeal() {
 function verifyScrollbackAfterAttach() {
   scrollbackHealTimer = null;
   if (!term || !activeTerminal) return;
-  // Alt-buffer agents (Claude Code) forward the wheel by design — no local
-  // scrollback to repair (AC #3). Same gate maybeHydrateScrollback uses.
-  if (activeTerminal.agent_surface) return;
+  // Only a TRUE alt-buffer agent (Claude Code that entered the alt screen)
+  // forwards the wheel and has no local scrollback to repair (AC #3). An inline
+  // agent — Cursor, or an inline-rendering Claude build (CROW-1023) — keeps the
+  // unified 50k and CAN land on a one-screen buffer after attach, so it stays
+  // eligible for this heal. Same axis as fireScrollbackCapture / applySurfaceScrollback.
+  if (activeSurfaceIsAgent() && activeSurfaceUsesAltScreen()) return;
   if (activeTerminal.window == null) return;
   if (!termWs || termWs.readyState !== WebSocket.OPEN) return;
   const buf = term.buffer && term.buffer.active;

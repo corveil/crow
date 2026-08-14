@@ -10,9 +10,13 @@ public struct ClaudeCodeAgent: CodingAgent {
     public let displayName: String = "Claude Code"
     public let iconSystemName: String = "sparkles"
     public let supportsRemoteControl: Bool = true
-    /// Claude Code requests the alternate screen (`smcup`). That is the
-    /// ADR-0013 alt-buffer sediment kill; the client caps xterm scrollback
-    /// to 0 for this surface (CROW-1010). Do not clamp `history-limit`.
+    /// The common Claude Code build requests the alternate screen (`smcup`) —
+    /// the ADR-0013 alt-buffer sediment kill, for which the client caps xterm
+    /// scrollback to 0. But some builds render INLINE and never enter the alt
+    /// buffer; those must scroll like a shell. So this is only the pre-window
+    /// prior — `list-terminals` reports `uses_alternate_screen` from a per-window
+    /// runtime `#{alternate_on}` read (CROW-1023), which routes each build
+    /// correctly. Do not clamp `history-limit` either way.
     public let usesAlternateScreen: Bool = true
     public let launchCommandToken: String = "claude"
     public let hookConfigWriter: any HookConfigWriter
