@@ -763,6 +763,52 @@ Notes:
 
 ---
 
+## Corveil CLI Commands
+
+Settings → General → Corveil CLI's two buttons, as verbs (CROW-1011). Both act on `defaults.binaries["corveil"]` — the path that section stores — and both are **local-only** on `/rpc`: they execute an absolute path on the daemon host, which is the same capability writing that field is gated for. That is no obstacle from the CLI, which reaches the daemon over its 0600 Unix socket and is local by construction.
+
+Pass `--path` to act on a different binary. That is how you check one *before* committing it to config; omit the flag and the configured path is used.
+
+### `crow corveil verify`
+
+Run `corveil --version` and report what came back.
+
+```bash
+crow corveil verify
+crow corveil verify --path /opt/homebrew/bin/corveil
+```
+
+```json
+{"ok": true, "message": "corveil 1.4.0", "path": "/opt/homebrew/bin/corveil"}
+```
+
+- **Branch on `ok`, not on the exit code.** A corveil that is missing, not executable, exits non-zero, or hangs past 5s is a successful *report* of a broken binary — `ok` is `false` and `message` carries the diagnostic. A non-zero exit from `crow` itself means the request never ran (no daemon, no path configured anywhere).
+- `message` is one line. A chatty `--version` banner is truncated to its first, and a binary that writes its version to stderr is still read.
+- The 5s ceiling matches the launch-time `corveil skill install` budget, so a wedged binary reports the same way from either.
+
+### `crow corveil reinstall-skill`
+
+Reinstall the `/query-corveil` slash command from the corveil binary — the same `corveil skill install` the daemon runs at launch, without restarting it.
+
+```bash
+crow corveil reinstall-skill
+crow corveil reinstall-skill --path ~/src/corveil/bin/corveil
+```
+
+```json
+{
+  "ok": true,
+  "message": "Skill reinstalled",
+  "path": "/opt/homebrew/bin/corveil",
+  "skill_path": "/Users/you/Dev/.claude/commands/query-corveil.md"
+}
+```
+
+- The loop this serves is "I just rebuilt corveil locally; install its new embedded skill." The install is idempotent, so running it repeatedly is safe.
+- A run also updates the launch-time corveil warning: succeeding clears it, failing replaces it. There is one answer to "is corveil broken?", not a startup one and a button one.
+
+---
+
 ## Automation Commands
 
 Settings → Automation: which sessions launch in auto permission mode, whether Crow watches for `crow:auto` / `crow:merge` labels, and whether it responds to changes-requested reviews and failed checks on your behalf.

@@ -348,6 +348,15 @@ enum RPCWebSocketHandler {
             // allowlist, which by construction contains none of the methods listed
             // in this switch. `MCPLedgerExportTests` asserts that emptiness.
             return "MCP token management is local-only"
+        case "corveil-verify", "corveil-reinstall-skill":
+            // Settings → Corveil CLI's two buttons (CROW-1011). Both execute
+            // `defaults.binaries["corveil"]` — an absolute path on the daemon
+            // host — so they hand a caller the arbitrary-execution half of the
+            // capability that field's *write* gate (below) exists to withhold,
+            // reachable from a read of config that is not gated. `open-in-vscode`
+            // / `open-terminal` are gated on the same argument: a remote session
+            // does not get to spawn host processes.
+            return "corveil verify and reinstall are local-only"
         case "set-config":
             guard setConfigTouchesPrivilegedFields(request, devRoot: devRoot) else { return nil }
             return "set-config binaries is local-only"

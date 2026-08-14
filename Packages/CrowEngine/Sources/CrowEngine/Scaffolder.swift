@@ -307,14 +307,19 @@ public struct Scaffolder {
             return "Corveil skill install skipped — binary at \(path) is missing or not executable. Check Settings → General → Corveil CLI."
         }
 
-        let commandsDir = (devRoot as NSString).appendingPathComponent(".claude/commands")
+        // Via `CorveilCLI`, not a second literal: the Settings "Reinstall skill"
+        // button names this file to the user, and a target that drifts from the
+        // name shown would make the button's own report wrong (CROW-1011). The
+        // directory is derived from the target for the same reason — creating
+        // one path and writing to another is how that drift would show up.
+        let target = CorveilCLI.skillPath(devRoot: devRoot)
+        let commandsDir = (target as NSString).deletingLastPathComponent
         do {
             try fm.createDirectory(atPath: commandsDir, withIntermediateDirectories: true)
         } catch {
             CrowLog.info("[Scaffolder] could not create commands dir: \(error.localizedDescription)")
             return "Corveil skill install failed — could not create .claude/commands directory."
         }
-        let target = (commandsDir as NSString).appendingPathComponent("query-corveil.md")
 
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: path)
@@ -748,11 +753,11 @@ public struct Scaffolder {
 /// to bound `waitUntilExit` without a polling loop (a polling loop on
 /// `proc.isRunning` consumes the exit observation Foundation needs to run
 /// its pipe-write-FD cleanup, so post-exit `readToEnd()` reads return empty).
-/// Mirrors `SettingsView`'s `TimeoutWatchdog`; duplicated here because
-/// Scaffolder and SettingsView live in different targets with no shared
-/// private utility module today, and the helper is small enough that two
-/// copies beat introducing a CrowCore type for two callers.
-fileprivate final class ScaffolderTimeoutWatchdog: @unchecked Sendable {
+/// `internal`, not `fileprivate`: `CorveilCLI.verify` bounds its `--version`
+/// subprocess the same way, and it is the same watchdog rather than a copy. (It
+/// used to duplicate `SettingsView`'s `TimeoutWatchdog` — that target is gone
+/// with the macOS app, so the duplication went with it.)
+final class ScaffolderTimeoutWatchdog: @unchecked Sendable {
     private let proc: Process
     private let timer: DispatchSourceTimer
     private let lock = NSLock()

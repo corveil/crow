@@ -600,10 +600,12 @@
     // it stays local-only (CROW-593/665) — editable only from a local browser and
     // read-only when proxied/remote, mirroring the web password & AI gateways.
     // (Scheduled jobs, by contrast, are editable from any authenticated session.)
-    body.appendChild(textField('Path to corveil binary', cfg.defaults.binaries, 'corveil',
-      isLocal
-        ? { placeholder: '/path/to/corveil', help: 'Leave blank to skip. Verify/Reinstall are available in the desktop app.' }
-        : { readonly: true, help: 'The corveil binary path is editable only from a local browser (on the machine running crowd).' }));
+    // The local editor carries Verify / Reinstall skill with it (CROW-1011);
+    // both run the binary on the daemon host, so a remote session gets neither.
+    body.appendChild(isLocal
+      ? corveilField()
+      : textField('Path to corveil binary', cfg.defaults.binaries, 'corveil',
+        { readonly: true, help: 'The corveil binary path is editable only from a local browser (on the machine running crowd).' }));
 
     body.appendChild(group('Sidebar'));
     body.appendChild(toggleField('Hide session details', cfg.sidebar, 'hideSessionDetails',
@@ -631,6 +633,92 @@
     body.appendChild(selectField('Retention', cfg.cleanup, 'retentionHours', [
       [1, '1 hour'], [4, '4 hours'], [8, '8 hours'], [24, '1 day'], [72, '3 days'], [168, '7 days'], [720, '30 days'],
     ], { number: true }));
+  }
+
+  // Path + Verify + Reinstall skill for the Corveil CLI (CROW-1011).
+  //
+  // Both buttons existed in the retired macOS app and were lost with it; until
+  // now this section told people to go use a desktop app that no longer exists.
+  // Unlike the rest of General they are actions rather than config fields, so
+  // they POST immediately (no Save) to a local-only endpoint — the daemon
+  // executes the binary at this path, which is why the caller only builds this
+  // for a local browser and renders a read-only field otherwise.
+  //
+  // The input is built here rather than by `textField` so the buttons can read
+  // and watch it directly. That matters: they act on the value CURRENTLY IN THE
+  // FIELD, saved or not, which is the point of a Verify button — you check a
+  // path before committing it.
+  function corveilField() {
+    const wrap = el('div', 'st-field');
+    wrap.appendChild(el('label', 'st-label', 'Path to corveil binary'));
+
+    const input = el('input', 'st-input');
+    input.type = 'text';
+    input.placeholder = '/path/to/corveil';
+    input.value = cfg.defaults.binaries.corveil || '';
+    wrap.appendChild(input);
+    wrap.appendChild(el('div', 'st-help',
+      'Leave blank to skip. Crow installs the /query-corveil slash command from this binary at launch.'));
+
+    const row = el('div', 'st-row-actions');
+    row.style.marginTop = '8px';
+    const verify = el('button', 'action-btn', 'Verify');
+    verify.type = 'button';
+    const reinstall = el('button', 'action-btn', 'Reinstall skill');
+    reinstall.type = 'button';
+    row.appendChild(verify);
+    row.appendChild(reinstall);
+    wrap.appendChild(row);
+
+    // One result line for both buttons — they report the same thing about the
+    // same binary, and two lines would leave a stale verdict sitting next to a
+    // fresh one. The retired desktop app coalesced them for that reason.
+    const status = el('div', 'st-perm-status', '');
+    status.style.marginTop = '6px';
+    wrap.appendChild(status);
+
+    let running = false;
+    const reinstallHint = 'Reinstall the bundled /query-corveil skill from this binary — '
+      + 'picks up a rebuilt corveil without restarting Crow.';
+    // A blank path has nothing to run. Re-evaluated on every keystroke rather
+    // than at build time, so typing a path enables the buttons without a save.
+    function sync() {
+      const empty = !input.value.trim();
+      verify.disabled = running || empty;
+      reinstall.disabled = running || empty;
+      verify.title = empty ? 'Set the Corveil CLI path first.' : '';
+      reinstall.title = empty ? 'Set the Corveil CLI path first.' : reinstallHint;
+    }
+
+    input.oninput = () => {
+      cfg.defaults.binaries.corveil = input.value;
+      markDirty();
+      sync();
+    };
+
+    // Only one action at a time: a slow Verify must not land its answer under a
+    // Reinstall clicked after it.
+    async function act(button, action, runningLabel, idleLabel) {
+      running = true;
+      sync();
+      button.textContent = runningLabel;
+      status.textContent = '';
+      try {
+        const result = await postConfig('/config/corveil', { action, path: input.value.trim() });
+        status.textContent = (result.ok ? '✓ ' : '✗ ') + (result.message || '');
+      } catch (err) {
+        status.textContent = '✗ ' + (err.message || err);
+      }
+      button.textContent = idleLabel;
+      running = false;
+      sync();
+    }
+
+    verify.onclick = () => act(verify, 'verify', 'Verifying…', 'Verify');
+    reinstall.onclick = () => act(reinstall, 'reinstall-skill', 'Reinstalling…', 'Reinstall skill');
+
+    sync();
+    return wrap;
   }
 
   // "Start Crow at login" (CROW-769). Unlike the rest of General this is not a

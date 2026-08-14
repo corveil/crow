@@ -35,6 +35,9 @@ Every subcommand and flag the `crow` binary accepts, generated from the commands
 | [`crow close-terminal`](#crow-close-terminal) | Close a terminal tab in a session |
 | [`crow codex-notify`](#crow-codex-notify) | Bridge Codex's notify command into Crow's hook-event pipeline |
 | [`crow complete-session`](#crow-complete-session) | Mark a session completed |
+| [`crow corveil`](#crow-corveil) | Verify the configured Corveil CLI binary, and reinstall its skill |
+| [`crow corveil reinstall-skill`](#crow-corveil-reinstall-skill) | Reinstall the /query-corveil slash command from the corveil binary |
+| [`crow corveil verify`](#crow-corveil-verify) | Run `corveil --version` and report what came back |
 | [`crow create-manager`](#crow-create-manager) | Create an additional Manager session |
 | [`crow defaults`](#crow-defaults) | View or change workspace and automation defaults |
 | [`crow defaults get`](#crow-defaults-get) | Show the current workspace and automation defaults |
@@ -471,6 +474,52 @@ crow complete-session --session <session>
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |
 | `--session` | `<session>` | yes | Session UUID |
+
+---
+
+## `crow corveil`
+
+Verify the configured Corveil CLI binary, and reinstall its skill.
+
+```
+crow corveil <verify|reinstall-skill>
+```
+
+Subcommands: [`verify`](#crow-corveil-verify), [`reinstall-skill`](#crow-corveil-reinstall-skill).
+
+---
+
+## `crow corveil reinstall-skill`
+
+Reinstall the /query-corveil slash command from the corveil binary.
+
+```
+crow corveil reinstall-skill [--path <path>]
+```
+
+Re-runs the `corveil skill install` that `crowd` runs at launch, writing `{devRoot}/.claude/commands/query-corveil.md`. Use it after rebuilding corveil locally to pick up its new embedded skill without restarting the daemon.
+
+A run also updates the launch-time corveil warning: succeeding clears it, failing replaces it, so there is one answer to "is corveil broken?" rather than a startup one and a button one.
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--path` | `<path>` | no | Binary to act on. Defaults to the path in Settings → General → Corveil CLI. |
+
+---
+
+## `crow corveil verify`
+
+Run `corveil --version` and report what came back.
+
+```
+crow corveil verify [--path <path>]
+```
+
+Prints `{"ok": true|false, "message": "…", "path": "…"}`. Branch on `ok`, not on the exit code — a corveil that is missing, not executable, exits non-zero, or hangs past 5s is a successful *report* of a broken binary.
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--path` | `<path>` | no | Binary to act on. Defaults to the path in Settings → General → Corveil CLI. |
 
 ---
 

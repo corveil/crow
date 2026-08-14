@@ -126,6 +126,20 @@ crow agents set [--default <kind>] [--work|--review|--job|--manager <kind>] [--c
 - `--clear <role>` **removes** the override key, never writes a null — one null would make the whole `config.json` undecodable. Repeat per role; `--clear X` with `--X <kind>` is rejected.
 - If `effective` names a kind that isn't available, the CLI warns on stderr — that role's sessions will not launch.
 
+### Corveil CLI
+
+Settings → General → Corveil CLI's **Verify** and **Reinstall skill** buttons, as verbs (CROW-1011). Both act on `defaults.binaries["corveil"]`; `--path` overrides it for one call, which is how you check a binary before committing it to config.
+
+```
+crow corveil verify [--path PATH]              → {"ok":bool,"message":"corveil 1.4.0","path":"…"}
+crow corveil reinstall-skill [--path PATH]     → {"ok":bool,"message":"Skill reinstalled","path":"…","skill_path":"…"}
+```
+
+- **Branch on `ok`, not the exit code.** A corveil that is missing, non-executable, exits non-zero, or hangs past 5s is a successful *report* of a broken binary. A non-zero `crow` exit means the request never ran (no daemon, or no path configured anywhere).
+- `reinstall-skill` re-runs the launch-time `corveil skill install`, writing `{devRoot}/.claude/commands/query-corveil.md` — the "I just rebuilt corveil, pick up its new embedded skill" loop, no `crowd` restart. It is idempotent.
+- A reinstall also updates the launch-time corveil warning: succeeding clears it, failing replaces it.
+- Both are **local-only** on `/rpc` (they execute a path on the daemon host), like `gateway`/`web-password`/`mcp token`. The CLI is unaffected — it goes over the Unix socket.
+
 ### Job Commands
 
 Scheduled prompt-sets scoped to one repo in a workspace (CROW-604) — the Jobs sidebar, as CLI verbs. Jobs are addressed by UUID; `crow job list` prints them. Mutations hit the app's live config, so the scheduler and Settings UI see them immediately.
