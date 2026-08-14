@@ -3659,6 +3659,7 @@ async function refreshTerminals() {
     || terminals.find((t) => t.id === (activeTerminal && activeTerminal.id))
     || terminals[0] || null;
   pendingTerminalId = null;
+  applySurfaceScrollback();
   // Whenever the URL names a terminal this session no longer has — a dead id
   // from the link, or a tab that has since been closed — point it at whatever
   // we actually landed on. Running on every pass rather than only the routed one
@@ -3750,6 +3751,7 @@ function switchTerminal(t) {
   // switch to home.
   if (selectedId) navigate({ view: 'session', sessionId: selectedId, terminalId: t.id });
   activeTerminal = t;
+  applySurfaceScrollback();
   renderTabs();
   // #673: the in-place resize+replay from #672 didn't recover a mismatched grid —
   // the cursor stayed misaligned from the actual line. Attaching to a different
@@ -5322,10 +5324,12 @@ const DEFAULT_TERM_FONT = '"MesloLGS NF", "MesloLGS Nerd Font", "JetBrainsMono N
 //     (CROW-606), and the wheel scrolls that local buffer.
 //   * AGENT-TUI surfaces (Claude Code, Cursor, Manager) own their own viewport
 //     like a naked terminal. crowd sets `alternate-screen on` for those windows
-//     so the agent's constant full-frame repaints stay in the alt buffer, which
-//     has no scrollback. Without that, every repaint deposited its predecessor
-//     into the shared history and scrolling up walked hundreds of stacked
-//     copies of the TUI (#822).
+//     so an agent that requests smcup (Claude Code) keeps full-frame repaints
+//     in the alt buffer, which has no scrollback. Inline renderers (Cursor)
+//     never issue smcup, so the daemon also clamps that window's `history-limit`
+//     to 0 and this client caps xterm scrollback to 0 (CROW-1008) — otherwise
+//     every repaint deposited its predecessor into the shared history and
+//     scrolling up walked hundreds of stacked copies of the TUI (#822).
 //
 // `agent_surface` comes from `list-terminals`, sourced from the tmux window
 // option crowd actually set — NOT from `term.buffer.active.type`. The client
@@ -5336,6 +5340,18 @@ const DEFAULT_TERM_FONT = '"MesloLGS NF", "MesloLGS Nerd Font", "JetBrainsMono N
 // signal for surfaces that do legitimately enter the alt buffer.
 function activeSurfaceIsAgent() {
   return !!(activeTerminal && activeTerminal.agent_surface);
+}
+
+// Agent TUIs don't use xterm's local history: Claude lives in tmux's
+// scrollback-less alt buffer, and inline agents (Cursor, CROW-1008) would
+// otherwise accumulate full-frame repaints as wheel-walkable sediment.
+// Plain shells keep the unified 50k (CROW-606). One shared xterm, so this
+// must re-run on every tab bind — not just at construct time.
+const UNIFIED_SCROLLBACK = 50000;
+function applySurfaceScrollback() {
+  if (!term || !term.options) return;
+  const wanted = activeSurfaceIsAgent() ? 0 : UNIFIED_SCROLLBACK;
+  if (term.options.scrollback !== wanted) term.options.scrollback = wanted;
 }
 
 // Mouse-mode swallow — same handler as web/terminal.html (CROW-581). The agent
@@ -5432,7 +5448,7 @@ function ensureTerminal() {
     fontSize: 14,
     fontFamily: DEFAULT_TERM_FONT,
     theme: { background: '#1e1e1e', foreground: '#d4d4d4' },
-    scrollback: 50000,
+    scrollback: UNIFIED_SCROLLBACK,
     allowTransparency: true,
     // Escape hatch for agent surfaces, where we stop swallowing mouse modes so
     // the agent owns the wheel (ADR-0013) — which also means xterm reports
@@ -5455,6 +5471,7 @@ function ensureTerminal() {
   // layout / first-fit reflow flash; connectTerminalWs() re-arms it below.
   showTerminalSkeleton();
   term.open(document.getElementById('terminal'));
+  applySurfaceScrollback();
   // Jump-to-bottom pill (#668), shared with the desktop surface. Must load after
   // open() so the addon can anchor its button to the terminal's container.
   term.loadAddon(new CrowJumpBottomAddon.CrowJumpBottomAddon());

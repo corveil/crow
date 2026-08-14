@@ -844,6 +844,7 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                                 // (ADR-0013). `agentKind` can't discriminate —
                                 // it always resolves to a default.
                                 agentSurface: terminal.isAgentSurface(session: session),
+                                usesAlternateScreen: AgentRegistry.shared.usesAlternateScreen(for: session?.agentKind),
                                 newWindowTimeout: 3.0
                             )
                         }

@@ -28,3 +28,60 @@ struct AgentRegistryResolverTests {
         #expect(AgentRegistry.shared.registeredKind(nil) == nil)
     }
 }
+
+@Suite("AgentRegistry.usesAlternateScreen")
+struct AgentRegistryScrollCapabilityTests {
+
+    private struct StubAgent: CodingAgent {
+        let kind: AgentKind
+        var usesAlternateScreen: Bool
+        var displayName: String { kind.rawValue }
+        var iconSystemName: String { "sparkles" }
+        var supportsRemoteControl: Bool { false }
+        var launchCommandToken: String { kind.rawValue }
+        let hookConfigWriter: any HookConfigWriter = NoopHookConfigWriter()
+        let stateSignalSource: any StateSignalSource = NoopStateSignalSource()
+        func autoLaunchCommand(
+            session: Session, worktreePath: String, remoteControlEnabled: Bool,
+            autoPermissionMode: Bool, telemetryPort: UInt16?
+        ) -> String? { nil }
+        func generatePrompt(
+            session: Session, worktrees: [SessionWorktree], ticketURL: String?,
+            provider: Provider?, codeProvider: Provider?
+        ) async -> String { "" }
+        func launchCommand(sessionID: UUID, worktreePath: String, prompt: String) async throws -> String { "" }
+    }
+
+    private struct NoopHookConfigWriter: HookConfigWriter {
+        func writeHookConfig(worktreePath: String, sessionID: UUID, crowPath: String) throws {}
+        func removeHookConfig(worktreePath: String) {}
+    }
+
+    private struct NoopStateSignalSource: StateSignalSource {
+        func transition(
+            for event: AgentHookEvent,
+            currentActivityState: AgentActivityState,
+            currentNotificationType: String?,
+            currentLastTopLevelStopAt: Date?
+        ) -> AgentStateTransition { AgentStateTransition() }
+    }
+
+    @Test func unknownKindKeepsTheAltScreenPath() {
+        let registry = AgentRegistry()
+        #expect(registry.usesAlternateScreen(for: nil) == true)
+        #expect(registry.usesAlternateScreen(for: AgentKind(rawValue: "crow-1008-unknown")) == true)
+    }
+
+    @Test func readsTheDeclaredCapabilityFromKnownAgents() {
+        let registry = AgentRegistry()
+        let claude = AgentKind(rawValue: "crow-1008-claude")
+        let cursor = AgentKind(rawValue: "crow-1008-cursor")
+        registry.registerKnown(
+            StubAgent(kind: claude, usesAlternateScreen: true), available: true)
+        registry.registerKnown(
+            StubAgent(kind: cursor, usesAlternateScreen: false), available: false)
+        #expect(registry.usesAlternateScreen(for: claude) == true)
+        // Unavailable still has a declared scroll model.
+        #expect(registry.usesAlternateScreen(for: cursor) == false)
+    }
+}

@@ -12,6 +12,7 @@ struct OpenCodeAgentTests {
         #expect(agent.displayName == "OpenCode")
         #expect(agent.iconSystemName == "chevron.left.forwardslash.chevron.right")
         #expect(agent.supportsRemoteControl == true)
+        #expect(agent.usesAlternateScreen == false)
         #expect(agent.launchCommandToken == "opencode")
         #expect(agent.sessionRenameSlashCommand(newName: "my-session") == "/rename my-session\n")
     }

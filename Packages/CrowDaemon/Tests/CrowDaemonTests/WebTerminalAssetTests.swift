@@ -157,6 +157,12 @@ import Testing
         #expect(
             try Self.functionBody("activeSurfaceIsAgent", in: source).contains("agent_surface"),
             "the surface kind comes from the list-terminals payload")
+        #expect(
+            try Self.functionBody("applySurfaceScrollback", in: source).contains("activeSurfaceIsAgent()"),
+            "agent surfaces cap xterm scrollback to 0 so inline TUI repaints cannot fossilize (CROW-1008)")
+        #expect(
+            try Self.functionBody("applySurfaceScrollback", in: source).contains("term.options.scrollback"),
+            "the cap is the live xterm option, reapplied on every tab bind")
         // Touch must not diverge from the wheel — #777's shim and #824's wheel
         // routing have to agree about who owns the surface.
         #expect(
@@ -179,11 +185,15 @@ import Testing
     @Test func refreshTerminalsRebindsTheActiveTerminalToTheFreshRow() throws {
         let body = try Self.functionBody("refreshTerminals", in: Self.webAsset("app.js"))
         #expect(
-            body.contains("activeTerminal = terminals.find("),
+            body.contains("pendingTerminalId && terminals.find(")
+                && body.contains("t.id === (activeTerminal && activeTerminal.id)"),
             "must re-resolve activeTerminal from the fresh list, not keep the old object")
         #expect(
             body.contains("|| terminals[0] || null"),
             "must still fall back to the first terminal, then null")
+        #expect(
+            body.contains("applySurfaceScrollback()"),
+            "rebinding the active row must re-apply the agent vs shell xterm scrollback cap (CROW-1008)")
     }
 
     /// The swallow is conditional on surface kind (ADR-0013): plain shells keep

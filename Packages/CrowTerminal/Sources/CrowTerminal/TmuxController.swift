@@ -310,6 +310,17 @@ public struct TmuxController: Sendable {
         try run(["set-window-option", "-t", "\(sessionName):\(index)", name, value])
     }
 
+    /// Set a tmux SESSION option on this controller's session.
+    ///
+    /// Used to sandwich `new-window` with a temporary `history-limit` so an
+    /// inline-rendering agent surface is *born* with a scrollback-less main
+    /// buffer (CROW-1008). `history-limit` is frozen at window birth — a
+    /// subsequent `setw` does not change `#{history_limit}` — so the session
+    /// option has to move before the window exists, then move back.
+    public func setSessionOption(name: String, value: String) throws {
+        try run(["set-option", "-t", sessionName, name, value])
+    }
+
     public func selectWindow(index: Int) throws {
         try run(["select-window", "-t", "\(sessionName):\(index)"])
     }

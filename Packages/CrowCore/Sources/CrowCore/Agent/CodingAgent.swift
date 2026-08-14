@@ -72,6 +72,19 @@ public protocol CodingAgent: Sendable {
     /// badge is shown for this agent's sessions.
     var supportsRemoteControl: Bool { get }
 
+    /// Whether this agent's interactive TUI enters the terminal alternate
+    /// screen (`smcup` / DECSET 1049). Crow still classifies the window as an
+    /// agent surface either way (ADR-0013); this flag selects the sediment
+    /// kill: alt-buffer (true) vs a `history-limit 0` clamp that emulates a
+    /// scrollback-less buffer for inline renderers (false, CROW-1008).
+    ///
+    /// Claude Code is the one confirmed `true`. Cursor's `agent` CLI paints
+    /// inline and never requests the alt buffer — the default is `false` so
+    /// an unverified harness (Codex, OpenCode, Grok, Antigravity) takes the
+    /// inline path rather than silently accumulating duplicate-frame sediment.
+    /// Opt in with `true` once a live pane shows `alternate_on=1`.
+    var usesAlternateScreen: Bool { get }
+
     /// The shell token that identifies a command as launching this agent.
     /// Used by the `send` RPC handler to decide whether a managed-terminal
     /// command needs hook-config + env-var prep before being forwarded.
@@ -234,6 +247,10 @@ public extension CodingAgent {
     /// declare an empty array. Agents with known install locations should
     /// override this.
     var fallbackCandidates: [String] { [] }
+
+    /// Default: the TUI is an inline renderer. Only Claude Code currently
+    /// opts into the alt-buffer path; see `usesAlternateScreen` on the protocol.
+    var usesAlternateScreen: Bool { false }
 
     /// Default: no aliases — the agent's CLI ships exactly one binary name.
     var alternateLaunchCommandTokens: [String] { [] }

@@ -13,6 +13,7 @@ struct AntigravityAgentTests {
         #expect(agent.displayName == "Antigravity")
         #expect(agent.iconSystemName == "arrow.up.circle")
         #expect(agent.supportsRemoteControl == true)
+        #expect(agent.usesAlternateScreen == false)
         #expect(agent.launchCommandToken == "agy")
         // Rename surface is unverified on v1.1.7 → opt-out nil (no stray paste).
         #expect(agent.sessionRenameSlashCommand(newName: "my-session") == nil)

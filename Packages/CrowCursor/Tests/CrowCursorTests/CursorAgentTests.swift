@@ -12,6 +12,7 @@ struct CursorAgentTests {
         #expect(agent.displayName == "Cursor")
         #expect(agent.iconSystemName == "cursorarrow.rays")
         #expect(agent.supportsRemoteControl == true)
+        #expect(agent.usesAlternateScreen == false)
         #expect(agent.launchCommandToken == "cursor-agent")
         #expect(agent.alternateLaunchCommandTokens == ["agent"])
         #expect(agent.sessionRenameSlashCommand(newName: "my-session") == "/rename my-session\n")

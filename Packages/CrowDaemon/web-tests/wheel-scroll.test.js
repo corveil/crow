@@ -13,6 +13,7 @@ const epilogue = `
   enableWheelScroll(node){ return enableWheelScroll(node); },
   swallowMouseMode(params){ return swallowMouseMode(params); },
   appOwnsScroll(){ return appOwnsScroll(); },
+  applySurfaceScrollback(){ return applySurfaceScrollback(); },
   showTerminalMenu(e){ return showTerminalMenu(e); },
   wheelNotches(e){ return wheelNotches(e); },
   set term(v){ term = v; },
@@ -286,6 +287,24 @@ console.log('\nMissing surface metadata degrades to the shell path:');
   T.activeTerminal = { id: 't1', window: 1 }; // older daemon: field absent
   t.up();
   check('absent agent_surface field → shell path', t.scrolled.join() === '-3');
+}
+
+// ---- CROW-1008: xterm scrollback cap on agent surfaces ---------------------
+
+console.log('\nAgent surfaces cap xterm scrollback so inline TUI frames cannot fossilize:');
+{
+  const fake = { options: { scrollback: 50000 } };
+  T.term = fake;
+  T.activeTerminal = { id: 't1', window: 1, agent_surface: true };
+  T.applySurfaceScrollback();
+  check('agent_surface true → scrollback 0', fake.options.scrollback === 0);
+  T.activeTerminal = { id: 't1', window: 1, agent_surface: false };
+  T.applySurfaceScrollback();
+  check('plain shell restores the unified 50k', fake.options.scrollback === 50000);
+  T.term = { rows: 24 }; // no options — must not throw
+  T.activeTerminal = { id: 't1', window: 1, agent_surface: true };
+  T.applySurfaceScrollback();
+  check('missing term.options is a no-op', true);
 }
 
 // ---- Selection escape-hatch discoverability --------------------------------

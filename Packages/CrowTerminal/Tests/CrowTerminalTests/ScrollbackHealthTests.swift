@@ -37,6 +37,21 @@ struct ScrollbackHealthTests {
             historyLimit: 50000, alternateOn: false, alternateScreenEnabled: true))
     }
 
+    @Test func inlineAgentHistoryClampIsHealthy() {
+        // CROW-1008: Cursor never enters the alt buffer, so the window is born
+        // with history-limit 0 on purpose. That must not look like a CROW-804
+        // 5000-line casualty.
+        #expect(!TmuxBackend.isScrollbackDegraded(
+            historyLimit: TmuxBackend.inlineAgentHistoryLimit,
+            alternateOn: false,
+            alternateScreenEnabled: true))
+        // A plain shell at 0 is still degraded — the clamp is agent-only.
+        #expect(TmuxBackend.isScrollbackDegraded(
+            historyLimit: TmuxBackend.inlineAgentHistoryLimit,
+            alternateOn: false,
+            alternateScreenEnabled: false))
+    }
+
     /// A failed tmux read must be distinguishable from a successful read that
     /// found nothing. `list-terminals` re-derives `agent_surface` from
     /// `SessionTerminal.isAgentSurface` when tmux can't answer; if failure were

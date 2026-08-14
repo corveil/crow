@@ -14,6 +14,12 @@ struct ClaudeCodeAgentLaunchTests {
 
     private let agent = ClaudeCodeAgent()
 
+    @Test func usesAlternateScreen() {
+        // Claude Code is the one confirmed smcup TUI; CROW-1008's inline clamp
+        // must not apply here or the alt-buffer path regresses.
+        #expect(agent.usesAlternateScreen == true)
+    }
+
     private func command(kind: SessionKind, dispatched: Bool) -> String? {
         agent.autoLaunchCommand(
             session: Session(name: "s", kind: kind, reviewPromptDispatched: dispatched),
