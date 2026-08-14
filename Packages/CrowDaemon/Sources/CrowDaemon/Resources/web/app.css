@@ -408,8 +408,13 @@ body {
 /* #777: `touch-action: none` hands the one-finger gesture to enableTouchScroll
    instead of iOS Safari's overscroll — without it Safari rubber-bands the fixed
    xterm canvas and the swipe never reaches the buffer. Costs pinch-zoom over the
-   terminal (change the font size instead); long-press selection is unaffected. */
-#terminal { width: 100%; height: 100%; touch-action: none; }
+   terminal (change the font size instead).
+   CROW-1006: `-webkit-touch-callout: none` keeps iOS from popping its own
+   long-press sheet over the canvas, so Crow's menu (attached in app.js's boot
+   block) is the only thing a long-press here produces. Nothing is lost — the
+   grid is already `user-select: none` via xterm.css, so there is no native
+   selection to call out; the menu's Select all / Copy is the way out. */
+#terminal { width: 100%; height: 100%; touch-action: none; -webkit-touch-callout: none; }
 
 /* ---- Terminal skeleton loading overlay (#677) ----
    Masks the xterm attach/reload window (blank/garbled grid, reflow flash,
@@ -948,11 +953,16 @@ body.update-banner-visible #back-to-sidebar {
    now a tinted chip inside the PR pill, so its color can distinguish "armed"
    from "Crow gave up". See PR_AUTOMERGE_GLYPH in app.js. */
 
-/* ---- Custom right-click context menu ---- */
+/* ---- Custom right-click / long-press context menu ---- */
+/* CROW-1006: the menu now also opens on touch, where a second long-press landing
+   on it would otherwise raise iOS's text-selection callout over the item labels.
+   These are actions, not copyable text — same treatment terminal.html's #ctxmenu
+   has always had. */
 .ctx-menu {
   position: fixed; z-index: 1000; min-width: 190px; padding: 4px;
   background: var(--bg-card); border: 1px solid var(--border-strong);
   border-radius: 8px; box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
+  user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
 }
 .ctx-item { padding: 6px 10px; border-radius: 5px; font-size: 12px; color: var(--text-primary); cursor: pointer; }
 .ctx-item:hover { background: rgba(221, 196, 130, 0.14); }
@@ -968,6 +978,15 @@ body.update-banner-visible #back-to-sidebar {
 .ctx-hint {
   padding: 6px 10px 2px; font-size: 11px; color: var(--text-secondary);
   border-top: 1px solid var(--border-subtle); margin-top: 4px; cursor: default;
+}
+/* A 12px/6px row is a comfortable mouse target and a fiddly thumb one. Now that
+   long-press makes this menu the ONLY way to copy/paste out of the terminal on a
+   phone (CROW-1006), give the rows a finger-sized hit area there. Scoped to a
+   coarse pointer, so the desktop menu is untouched. */
+@media (pointer: coarse) {
+  .ctx-menu { min-width: 220px; }
+  .ctx-item { padding: 11px 12px; font-size: 14px; }
+  .ctx-hint { padding: 10px 12px 4px; font-size: 12px; }
 }
 
 /* ---- Detail header: gold PR chip + inline PR status ---- */

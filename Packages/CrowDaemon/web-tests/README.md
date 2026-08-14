@@ -52,6 +52,24 @@ swallowing a non-mouse mode like `?25`), including xterm's params-object and
 sub-parameter shapes; and graceful degradation when `activeTerminal` is null or
 an older daemon omits `agent_surface`.
 
+## `long-press.test.js` — mobile terminal context menu (CROW-1006)
+
+Drives the boot-time registration on `#terminal-wrap` against a fake xterm,
+synthesised touch events, and a controllable clock. The grid is a canvas under
+`user-select: none`, so a phone has no native selection or copy callout there —
+Crow's own menu *is* the mobile context menu, and long-press is its only touch
+entry point.
+
+Coverage: a still 500ms press opens the menu at the touch point; the trailing
+emulated click is swallowed so the tap never reaches xterm (and never closes the
+menu it just opened); a drag past the 10px threshold cancels instead and leaves
+`touchend` uncancelled, so an ordinary scroll drag keeps its native tap
+semantics; a sub-threshold wobble still counts; multi-touch (pinch) arms
+nothing; `Copy` appears only with a selection; the full touch-only `Select all`
+→ `Copy` route that is the whole point of the ticket; the agent-surface
+force-select hint; the pre-attach `term === null` guard; and the desktop
+`contextmenu` path producing the same menu at the cursor.
+
 ## `key-handler.test.js` — terminal copy/paste keys (#875)
 
 Drives `handleTerminalKey` and `pasteIntoTerminal` against a fake xterm +

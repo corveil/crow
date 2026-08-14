@@ -2,10 +2,10 @@
   "name": "crow-web-tests",
   "version": "1.0.0",
   "private": true,
-  "description": "Headless jsdom regression tests for the web UI (Ticket Board; efficiency scorecard Manager metering; terminal touch- and wheel-scroll; terminal scrollback re-sync; terminal key handling; terminal reload button; terminal visual-viewport/software-keyboard fit; session switcher overlay; sidebar session rows; sidebar grouping/collapse; sidebar select toggle; JSON-RPC deadlines and late responses; JSON-RPC close codes; hash URL routing; version-update banner). Drives the real app.js from Resources/web against mocks.",
+  "description": "Headless jsdom regression tests for the web UI (Ticket Board; efficiency scorecard Manager metering; terminal touch- and wheel-scroll; terminal long-press context menu; terminal scrollback re-sync; terminal key handling; terminal reload button; terminal visual-viewport/software-keyboard fit; session switcher overlay; sidebar session rows; sidebar grouping/collapse; sidebar select toggle; JSON-RPC deadlines and late responses; JSON-RPC close codes; hash URL routing; version-update banner). Drives the real app.js from Resources/web against mocks.",
   "scripts": {
-    "test": "fail=0; for f in board scorecard touch-scroll wheel-scroll scrollback-hydrate key-handler terminal-reload visual-viewport switcher row sidebar-groups sidebar-select rpc-timeout rpc-close-code router version-banner; do node \"$f.test.js\" || fail=1; done; exit $fail",
-    "test:ci": "fail=0; for f in board scorecard touch-scroll wheel-scroll scrollback-hydrate key-handler terminal-reload visual-viewport switcher sidebar-groups sidebar-select rpc-timeout rpc-close-code router version-banner; do node \"$f.test.js\" || fail=1; done; exit $fail"
+    "test": "fail=0; for f in board scorecard touch-scroll wheel-scroll long-press scrollback-hydrate key-handler terminal-reload visual-viewport switcher row sidebar-groups sidebar-select rpc-timeout rpc-close-code router version-banner; do node \"$f.test.js\" || fail=1; done; exit $fail",
+    "test:ci": "fail=0; for f in board scorecard touch-scroll wheel-scroll long-press scrollback-hydrate key-handler terminal-reload visual-viewport switcher sidebar-groups sidebar-select rpc-timeout rpc-close-code router version-banner; do node \"$f.test.js\" || fail=1; done; exit $fail"
   },
   "devDependencies": {
     "jsdom": "^24.0.0"
