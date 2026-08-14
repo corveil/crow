@@ -5227,6 +5227,11 @@ let searchAddon = null;
 let termWs = null;
 let termSkelTimer = null; // #677: safety timeout that clears the skeleton overlay
 let termReconnectDelay = 1000; // #687: backoff between reconnect attempts (ms), reset on open
+// CROW-1027: id of the pending onclose auto-reconnect. Tracked so a manual
+// ↻ Reload (or attachWindow) can cancel it before opening its own socket —
+// otherwise the stray timer fires a SECOND attach that races the reload's on the
+// shared window/term (dead-wheel double-connect hazard).
+let termReconnectTimer = null;
 
 // In-flight state for the header's ↻ Reload button (CROW-979). Module state, not
 // DOM state: `refreshLive` repaints the whole detail header every 4s, so a busy
@@ -5923,8 +5928,19 @@ function showTerminalMenu(e) {
   armContextMenuClose();
 }
 
+// CROW-1027: cancel a queued onclose auto-reconnect. Idempotent — safe to call
+// when nothing is pending, and a no-op when the timer's own callback (which nulls
+// the id first) is what's running.
+function clearTermReconnectTimer() {
+  clearTimeout(termReconnectTimer);
+  termReconnectTimer = null;
+}
+
 function connectTerminalWs() {
   if (sessionDead) { hideTerminalSkeleton(); return; } // don't loop after an expired remote cookie (review Yellow); clear any overlay so the #679 scrim owns the screen
+  // CROW-1027: this attach supersedes any queued auto-reconnect — drop it so two
+  // sockets can't race on the shared window/term.
+  clearTermReconnectTimer();
   // #677: cover this (re)attach — initial connect, auto-reconnect, and (via
   // reloadTerminal) the #675 right-click Reload + tab/session switch — with the
   // skeleton. `painted` gates the hide to the FIRST PTY byte of THIS socket.
@@ -5954,6 +5970,9 @@ function connectTerminalWs() {
       // Keep the attach bookkeeping truthful after any (re)connect — initial
       // connect, reloadTerminal, or a dropped-socket auto-reconnect (#673).
       attachedWindow = activeTerminal.window;
+      // CROW-1027: the fit above races the replay's capture, which can rebuild a
+      // one-screen (dead-wheel) buffer. Verify shortly after and re-capture if so.
+      armScrollbackHeal();
     }
   };
   termWs.onmessage = (event) => {
@@ -5992,7 +6011,9 @@ function connectTerminalWs() {
     if (sessionDead) { hideTerminalSkeleton(); return; }
     setTerminalReconnecting(true);
     showTerminalSkeleton();
-    setTimeout(connectTerminalWs, termReconnectDelay);
+    // CROW-1027: track the id so a manual reload can cancel this before it fires
+    // (null it first inside the callback so a later clear is a harmless no-op).
+    termReconnectTimer = setTimeout(() => { termReconnectTimer = null; connectTerminalWs(); }, termReconnectDelay);
     termReconnectDelay = Math.min(termReconnectDelay * 2, 10000);
   };
   termWs.onerror = () => termWs.close(); // funnels to onclose (keeps overlay up)
@@ -6121,6 +6142,18 @@ let scrollbackFullySynced = false; // last capture returned nothing new
 let lastHydrateAt = 0;
 let lastViewportY = 0; // previous scroll position, to detect arrival at the top
 
+// CROW-1027: post-attach scrollback self-heal. The reload/attach fits (resizes)
+// the pane immediately before select-window replays it, so `capture-pane` can run
+// mid-reflow and come back ONE screen tall — the replay's ESC[3J then wipes what
+// little history the buffer had, leaving `baseY === 0` and a dead wheel. A brief
+// settle after attach, then a re-capture when the buffer really is one screen
+// tall, rebuilds it against a now-settled pane. Gated on `baseY === 0` so a
+// healthy attach (the common case) sends nothing, and bounded so it never loops.
+const SCROLLBACK_HEAL_MS = 250; // distinct from 1500 (skeleton) / 10000 (reload settle)
+const SCROLLBACK_HEAL_MAX = 2; // bounded re-captures — accept a genuine one-screen pane after this
+let scrollbackHealTimer = null;
+let scrollbackHealLeft = 0;
+
 // The flight ends this long after the last frame, but never later than the
 // arm-time deadline. There is deliberately NO viewport restore here: the replay
 // rebuilds the buffer while `isUserScrolling` is true (which the trigger's
@@ -6177,6 +6210,42 @@ function resetScrollbackSync() {
   scrollbackDirty = true;
   lastHydrateAt = 0; // the new surface gets its own budget, not the old one's
   lastViewportY = 0; // ...and its own scroll history, not the old one's position
+  // CROW-1027: drop any pending self-heal — a fresh attach arms its own.
+  clearTimeout(scrollbackHealTimer);
+  scrollbackHealTimer = null;
+  scrollbackHealLeft = 0;
+}
+
+// CROW-1027: arm the post-attach scrollback check. Called from onopen after
+// select-window, so it runs once per (re)attach; resetScrollbackSync clears it on
+// the next teardown.
+function armScrollbackHeal() {
+  clearTimeout(scrollbackHealTimer);
+  scrollbackHealLeft = SCROLLBACK_HEAL_MAX;
+  scrollbackHealTimer = setTimeout(verifyScrollbackAfterAttach, SCROLLBACK_HEAL_MS);
+}
+
+// If the attach's replay rebuilt a one-screen buffer (`baseY === 0`) on a surface
+// that owns its scrollback locally, re-issue one select-window so crowd re-captures
+// the pane — by now the resize's reflow has settled, so the capture carries the
+// full history and the wheel comes back. A healthy buffer (`baseY > 0`) sends
+// nothing. Bounded by scrollbackHealLeft so a genuinely one-screen pane is accepted
+// rather than re-captured forever.
+function verifyScrollbackAfterAttach() {
+  scrollbackHealTimer = null;
+  if (!term || !activeTerminal) return;
+  // Alt-buffer agents (Claude Code) forward the wheel by design — no local
+  // scrollback to repair (AC #3). Same gate maybeHydrateScrollback uses.
+  if (activeTerminal.agent_surface) return;
+  if (activeTerminal.window == null) return;
+  if (!termWs || termWs.readyState !== WebSocket.OPEN) return;
+  const buf = term.buffer && term.buffer.active;
+  if (!buf || buf.type === 'alternate') return;
+  if (buf.baseY > 0) return; // scrollback present → healthy, stop
+  if (scrollbackHealLeft <= 0) return; // exhausted → accept a real one-screen pane
+  scrollbackHealLeft -= 1;
+  selectWindow(activeTerminal.window); // re-capture against the now-settled pane
+  scrollbackHealTimer = setTimeout(verifyScrollbackAfterAttach, SCROLLBACK_HEAL_MS);
 }
 
 function maybeHydrateScrollback() {
@@ -6242,6 +6311,9 @@ function reloadTerminal() {
   // anyway — drop any in-flight re-sync (its restore would fight the fresh
   // attach) and treat the rebuilt buffer as needing one again.
   resetScrollbackSync();
+  // CROW-1027: cancel a queued auto-reconnect so it can't open a second socket
+  // that races the one we're about to build on the shared window/term.
+  clearTermReconnectTimer();
   if (termWs) {
     const old = termWs;
     old.onopen = old.onmessage = old.onclose = old.onerror = null;

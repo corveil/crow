@@ -21,6 +21,8 @@ const epilogue = `
   showEmptyDetail(m, o){ return showEmptyDetail(m, o); },
   showTerminalMenu(e){ return showTerminalMenu(e); },
   reloadTerminalAction(){ return reloadTerminalAction(); },
+  reloadTerminal(){ return reloadTerminal(); },
+  connectTerminalWs(){ return connectTerminalWs(); },
   clearTerminalReloadPending(){ return clearTerminalReloadPending(); },
   syncTerminalReloadEnabled(){ return syncTerminalReloadEnabled(); },
   get terminalReloadPending(){ return terminalReloadPending; },
@@ -31,6 +33,8 @@ const epilogue = `
   set selectedId(v){ selectedId = v; },
   set activeTerminal(v){ activeTerminal = v; },
   TERMINAL_RELOAD_SETTLE_MS,
+  SCROLLBACK_HEAL_MS,
+  SCROLLBACK_HEAL_MAX,
 };
 `;
 const APP_JS = __dirname + '/../Sources/CrowDaemon/Resources/web/app.js';
@@ -314,6 +318,101 @@ console.log('\nthe existing right-click path is untouched:');
   check('“Reload terminal” still in the terminal menu', items.includes('Reload terminal'));
   const menu = window.document.querySelector('.ctx-menu');
   if (menu) menu.remove();
+}
+
+// --- CROW-1027: post-attach scrollback self-heal + reconnect-timer cancel -----
+// The reload attach fits (resizes) the pane immediately before select-window
+// replays it, so `capture-pane` can run mid-reflow and rebuild a ONE-screen
+// (dead-wheel) buffer. onopen arms a short settle; if the buffer really came back
+// one screen tall (`baseY === 0`) on a shell surface, it re-issues select-window
+// so crowd re-captures the now-settled pane.
+function selectWindowCount(sock) {
+  return sock.sent.filter((d) => { try { return JSON.parse(d).type === 'select-window'; } catch (_) { return false; } }).length;
+}
+
+console.log('\nCROW-1027: a reload that rebuilds a one-screen buffer self-heals:');
+{
+  mount('work'); // shell surface — activeTerminal carries no agent_surface flag
+  T.reloadTerminal();
+  const sock = sockets[sockets.length - 1];
+  sock.fireOpen(); // onopen → selectWindow (initial) + armScrollbackHeal
+  const initial = selectWindowCount(sock);
+  check('initial attach selected the window once', initial === 1);
+  lastTerm.buffer.active.baseY = 0; // daemon replay landed one screen tall
+  fireTimersAt(T.SCROLLBACK_HEAL_MS);
+  check('dead wheel triggers one re-capture', selectWindowCount(sock) === initial + 1);
+  lastTerm.buffer.active.baseY = 42; // the re-capture rebuilt real history
+  fireTimersAt(T.SCROLLBACK_HEAL_MS);
+  check('a healthy buffer stops re-capturing', selectWindowCount(sock) === initial + 1);
+  check('the wheel is live again (baseY > 0)', lastTerm.buffer.active.baseY > 0);
+}
+
+console.log('\nCROW-1027: a healthy attach never re-captures:');
+{
+  mount('work');
+  T.reloadTerminal();
+  const sock = sockets[sockets.length - 1];
+  lastTerm.buffer.active.baseY = 30; // scrollback already present when onopen fires
+  sock.fireOpen();
+  const n = selectWindowCount(sock);
+  fireTimersAt(T.SCROLLBACK_HEAL_MS);
+  check('no extra select-window on a healthy buffer', selectWindowCount(sock) === n);
+}
+
+console.log('\nCROW-1027: self-heal is bounded and never loops:');
+{
+  mount('work');
+  T.reloadTerminal();
+  const sock = sockets[sockets.length - 1];
+  sock.fireOpen();
+  const initial = selectWindowCount(sock);
+  lastTerm.buffer.active.baseY = 0; // stays dead however many times we re-capture
+  for (let i = 0; i < 5; i++) fireTimersAt(T.SCROLLBACK_HEAL_MS);
+  check('caps at SCROLLBACK_HEAL_MAX re-captures', selectWindowCount(sock) === initial + T.SCROLLBACK_HEAL_MAX);
+  check('no self-heal timer left armed', timerCountAt(T.SCROLLBACK_HEAL_MS) === 0);
+}
+
+console.log('\nCROW-1027: alt-buffer agents (Claude Code) are unaffected:');
+{
+  mount('work');
+  T.activeTerminal = { id: 't1', name: 'Claude Code', window: 3, agent_surface: true };
+  T.reloadTerminal();
+  const sock = sockets[sockets.length - 1];
+  sock.fireOpen();
+  const initial = selectWindowCount(sock);
+  lastTerm.buffer.active.baseY = 0;
+  fireTimersAt(T.SCROLLBACK_HEAL_MS);
+  check('agent surface: no self-heal re-capture', selectWindowCount(sock) === initial);
+
+  // Even a non-agent surface parked on the ALT buffer has no local scrollback to
+  // repair, so the buffer-type gate short-circuits too.
+  mount('work');
+  T.reloadTerminal();
+  const sock2 = sockets[sockets.length - 1];
+  sock2.fireOpen();
+  const initial2 = selectWindowCount(sock2);
+  lastTerm.buffer.active.baseY = 0;
+  lastTerm.buffer.active.type = 'alternate';
+  fireTimersAt(T.SCROLLBACK_HEAL_MS);
+  check('alt buffer type: no self-heal re-capture', selectWindowCount(sock2) === initial2);
+}
+
+console.log('\nCROW-1027: a reload cancels a pending auto-reconnect (no double-connect):');
+{
+  mount('work');
+  T.connectTerminalWs();
+  const s0 = sockets[sockets.length - 1];
+  s0.fireOpen(); // resets the reconnect backoff to 1000ms
+  s0.close();    // simulate a dropped socket → arms the auto-reconnect timer
+  check('auto-reconnect armed at 1000ms', timerCountAt(1000) === 1);
+  const before = sockets.length;
+  T.reloadTerminal(); // manual reload builds its own socket...
+  check('reload built exactly one new socket', sockets.length === before + 1);
+  check('reload cancelled the pending reconnect', timerCountAt(1000) === 0);
+  const after = sockets.length;
+  fireTimersAt(1000); // the stray reconnect, had it survived, would have attached here
+  check('no second attach races the reload', sockets.length === after);
+  check('termWs is the reload’s socket', T.termWs === sockets[sockets.length - 1]);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
