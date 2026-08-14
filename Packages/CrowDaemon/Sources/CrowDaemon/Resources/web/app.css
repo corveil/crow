@@ -18,6 +18,16 @@
   --blue: #0A84FF;
   --purple: #BF5AF2;
   --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  /* Scrollbar (CROW-1016). Gold so the thumb reads as chrome, not content, at
+     the lowest alpha that still clears WCAG 2.2 §1.4.11's 3:1 non-text contrast
+     against every surface it can sit on — 0.50 gives 3.3:1 (--bg-card) to
+     3.6:1 (--bg-deep), where 0.30 gave a barely-there 2.0:1, which is the
+     invisibility this ticket exists to fix. Dimming this below ~0.45 re-hides
+     the bar by another name. --scroll-gutter is the track width AND the grab
+     target. */
+  --scroll-thumb: rgba(221, 196, 130, 0.50);
+  --scroll-thumb-hover: rgba(221, 196, 130, 0.72);
+  --scroll-gutter: 10px;
 }
 
 * { box-sizing: border-box; }
@@ -569,9 +579,84 @@ body.update-banner-visible #back-to-sidebar {
 #app.board-active #tabbar,
 #app.board-active #terminal-wrap { display: none; }
 
-/* Scroll, but no visible scrollbar. */
-#board, #sidebar { scrollbar-width: none; -ms-overflow-style: none; }
-#board::-webkit-scrollbar, #sidebar::-webkit-scrollbar { width: 0; height: 0; display: none; }
+/* ---- Scrollbars (CROW-1016) ----
+   CROW-593 hid the bar on #board and #sidebar for "web-UI parity". That also
+   took away the gutter people grabbed in the desktop app, leaving panes that
+   scroll with no thumb and no hint that there is more below. Restore it.
+
+   Two engines, two mechanisms, and they are not redundant:
+     * Firefox honours `scrollbar-width` / `scrollbar-color` and ignores the
+       ::-webkit- pseudo-elements.
+     * WebKit/Blink honour the pseudo-elements and ignore `scrollbar-color`.
+       Giving ::-webkit-scrollbar an explicit width ALSO opts the element out of
+       macOS overlay scrollbars, so the thumb is drawn before the wheel moves —
+       which is the whole point of the ticket, not a side effect.
+
+   Scoped to a fine pointer on purpose. This UI is driven from a phone as much
+   as a desktop, and a permanent 10px gutter is real width lost off a 350px
+   sidebar; touch platforms already draw an overlay thumb during a flick, and
+   with the hide rule gone they are free to. So: desktop gets a persistent,
+   grabbable bar, touch keeps the native overlay one. Neither gets nothing.
+
+   `.settings-body` is settings.css's pane, styled from here so the app has ONE
+   scrollbar policy rather than a copy per stylesheet (settings.css already
+   draws its palette from this file's tokens).
+
+   The selector list is spelled out per rule instead of factored into one
+   `:is(…)`. That is deliberate, not an oversight: custom-scrollbar
+   pseudo-elements resolve on an old, narrow path in WebKit/Blink, an
+   unsupported selector form drops the whole rule silently, and the failure mode
+   — a bar you cannot see — is the exact bug this ticket is fixing. Repetition
+   is the cheaper risk. */
+@media (hover: hover) and (pointer: fine) {
+  #sidebar,
+  #board,
+  .settings-body,
+  .notif-list,
+  .wizard-list {
+    scrollbar-width: thin;
+    scrollbar-color: var(--scroll-thumb) transparent;
+  }
+  #sidebar::-webkit-scrollbar,
+  #board::-webkit-scrollbar,
+  .settings-body::-webkit-scrollbar,
+  .notif-list::-webkit-scrollbar,
+  .wizard-list::-webkit-scrollbar {
+    width: var(--scroll-gutter);
+    height: var(--scroll-gutter);
+  }
+  #sidebar::-webkit-scrollbar-track,
+  #board::-webkit-scrollbar-track,
+  .settings-body::-webkit-scrollbar-track,
+  .notif-list::-webkit-scrollbar-track,
+  .wizard-list::-webkit-scrollbar-track,
+  #sidebar::-webkit-scrollbar-corner,
+  #board::-webkit-scrollbar-corner,
+  .settings-body::-webkit-scrollbar-corner,
+  .notif-list::-webkit-scrollbar-corner,
+  .wizard-list::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+  /* The transparent border + content-box clip inset the *painted* thumb without
+     shrinking it: the pointer still hits the full --scroll-gutter track. */
+  #sidebar::-webkit-scrollbar-thumb,
+  #board::-webkit-scrollbar-thumb,
+  .settings-body::-webkit-scrollbar-thumb,
+  .notif-list::-webkit-scrollbar-thumb,
+  .wizard-list::-webkit-scrollbar-thumb {
+    background-color: var(--scroll-thumb);
+    background-clip: content-box;
+    border: 2px solid transparent;
+    border-radius: var(--scroll-gutter);
+  }
+  #sidebar::-webkit-scrollbar-thumb:hover,
+  #board::-webkit-scrollbar-thumb:hover,
+  .settings-body::-webkit-scrollbar-thumb:hover,
+  .notif-list::-webkit-scrollbar-thumb:hover,
+  .wizard-list::-webkit-scrollbar-thumb:hover {
+    background-color: var(--scroll-thumb-hover);
+  }
+}
 
 .board-head { position: sticky; top: 0; z-index: 2; background: var(--bg-deep); display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; padding: 4px 0 8px; }
 .board-title { color: var(--gold); font-size: 18px; font-weight: 700; margin-right: auto; }
