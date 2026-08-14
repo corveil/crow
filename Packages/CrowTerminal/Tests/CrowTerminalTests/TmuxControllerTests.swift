@@ -275,9 +275,11 @@ struct TmuxControllerTests {
         #expect(!shell.alternateOn)
     }
 
-    /// CROW-1008: `history-limit` is frozen at window birth, so an inline agent
-    /// surface has to inherit a session-level 0 *as it is created*, then the
-    /// 50k default must come back so a later shell window is unaffected.
+    /// `history-limit` is frozen at window birth: a session-level sandwich
+    /// around `new-window` sticks on that window and must be restored so a
+    /// later sibling is unaffected. CROW-1008 used this to clamp inline
+    /// agents to 0; CROW-1010 retracted that use, but the freeze is still
+    /// why Recreate is the only heal for a leftover 0-limit window.
     @Test func sessionHistoryLimitSandwichClampsOnlyTheNewWindow() throws {
         let confURL = try #require(BundledResources.tmuxConfURL)
         let ctrl = makeController()

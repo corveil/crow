@@ -941,6 +941,17 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                             classification.flatMap { c in
                                 t.tmuxBinding.map { c.agentSurfaces.contains($0.windowIndex) }
                             } ?? t.isAgentSurface(session: session)),
+                        // Sibling of `agent_surface` (CROW-1010). True only for
+                        // agents that actually enter the alt buffer (Claude
+                        // Code). The client caps xterm scrollback to 0 on this
+                        // — NOT on `agent_surface` alone — so an inline agent
+                        // (Cursor) keeps the unified 50k and the #850 local
+                        // wheel has something to scroll. Session-scoped: a
+                        // plain shell in a Claude session still has
+                        // `agent_surface: false`, so the AND on the client
+                        // keeps its 50k.
+                        "uses_alternate_screen": .bool(
+                            AgentRegistry.shared.usesAlternateScreen(for: session?.agentKind)),
                     ])
                 }
                 return ["terminals": .array(items)]

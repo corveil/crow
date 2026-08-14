@@ -312,11 +312,11 @@ public struct TmuxController: Sendable {
 
     /// Set a tmux SESSION option on this controller's session.
     ///
-    /// Used to sandwich `new-window` with a temporary `history-limit` so an
-    /// inline-rendering agent surface is *born* with a scrollback-less main
-    /// buffer (CROW-1008). `history-limit` is frozen at window birth — a
-    /// subsequent `setw` does not change `#{history_limit}` — so the session
-    /// option has to move before the window exists, then move back.
+    /// Used to sandwich `new-window` with a temporary `history-limit` (the
+    /// option is frozen at window birth — a subsequent `setw` does not change
+    /// `#{history_limit}`). CROW-1008 used this to birth inline agents at 0;
+    /// CROW-1010 retracted that clamp, but the primitive stays: the freeze is
+    /// still load-bearing for CROW-804 degraded-window detection.
     public func setSessionOption(name: String, value: String) throws {
         try run(["set-option", "-t", sessionName, name, value])
     }

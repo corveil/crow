@@ -66,10 +66,10 @@ struct AgentRegistryScrollCapabilityTests {
         ) -> AgentStateTransition { AgentStateTransition() }
     }
 
-    @Test func unknownKindKeepsTheAltScreenPath() {
+    @Test func unknownKindKeepsTheInlinePath() {
         let registry = AgentRegistry()
-        #expect(registry.usesAlternateScreen(for: nil) == true)
-        #expect(registry.usesAlternateScreen(for: AgentKind(rawValue: "crow-1008-unknown")) == true)
+        #expect(registry.usesAlternateScreen(for: nil) == false)
+        #expect(registry.usesAlternateScreen(for: AgentKind(rawValue: "crow-1010-unknown")) == false)
     }
 
     @Test func readsTheDeclaredCapabilityFromKnownAgents() {

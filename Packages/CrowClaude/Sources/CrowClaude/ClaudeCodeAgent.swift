@@ -11,7 +11,8 @@ public struct ClaudeCodeAgent: CodingAgent {
     public let iconSystemName: String = "sparkles"
     public let supportsRemoteControl: Bool = true
     /// Claude Code requests the alternate screen (`smcup`). That is the
-    /// ADR-0013 alt-buffer sediment kill; do not clamp `history-limit` for it.
+    /// ADR-0013 alt-buffer sediment kill; the client caps xterm scrollback
+    /// to 0 for this surface (CROW-1010). Do not clamp `history-limit`.
     public let usesAlternateScreen: Bool = true
     public let launchCommandToken: String = "claude"
     public let hookConfigWriter: any HookConfigWriter

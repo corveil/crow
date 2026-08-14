@@ -5317,40 +5317,50 @@ const DEFAULT_TERM_FONT = '"MesloLGS NF", "MesloLGS Nerd Font", "JetBrainsMono N
 
 // --- Per-surface hybrid scroll model (ADR-0013) -----------------------------
 //
-// Crow runs two scroll models side by side, chosen per tmux window:
+// Crow runs three scroll models side by side, chosen per tmux window:
 //
 //   * PLAIN SHELL / REVIEW surfaces keep the unified model — output flows into
 //     xterm's 50k scrollback, the daemon replays tmux history on reconnect
 //     (CROW-606), and the wheel scrolls that local buffer.
-//   * AGENT-TUI surfaces (Claude Code, Cursor, Manager) own their own viewport
-//     like a naked terminal. crowd sets `alternate-screen on` for those windows
-//     so an agent that requests smcup (Claude Code) keeps full-frame repaints
-//     in the alt buffer, which has no scrollback. Inline renderers (Cursor)
-//     never issue smcup, so the daemon also clamps that window's `history-limit`
-//     to 0 and this client caps xterm scrollback to 0 (CROW-1008) — otherwise
-//     every repaint deposited its predecessor into the shared history and
-//     scrolling up walked hundreds of stacked copies of the TUI (#822).
+//   * AGENT-TUI surfaces own their own viewport like a naked terminal.
+//     crowd sets `alternate-screen on` for those windows so an agent that
+//     requests smcup (Claude Code) keeps full-frame repaints in the alt
+//     buffer, which has no scrollback. Inline renderers (Cursor) never
+//     issue smcup: their history is a clean transcript in the main buffer,
+//     so they keep the unified 50k and the wheel at a non-mouse-tracking
+//     prompt scrolls that local viewport (#850 / CROW-1010). Capping
+//     xterm scrollback to 0 on `agent_surface` alone deleted Cursor's only
+//     scroll path (the #1008/#1009 regression).
 //
 // `agent_surface` comes from `list-terminals`, sourced from the tmux window
 // option crowd actually set — NOT from `term.buffer.active.type`. The client
 // can't use the buffer type here: crow-tmux.conf strips the client's
 // smcup/rmcup, and `terminal-overrides` is keyed on the client's TERM while a
 // single tmux client serves every tab, so there is no per-window client buffer
-// state to read. The buffer/mouse-mode checks below are kept as an additional
-// signal for surfaces that do legitimately enter the alt buffer.
+// state to read. `uses_alternate_screen` is the sibling flag: true only for
+// agents that actually enter the alt buffer. The buffer/mouse-mode checks
+// below are kept as an additional signal for surfaces that do legitimately
+// enter the alt buffer.
 function activeSurfaceIsAgent() {
   return !!(activeTerminal && activeTerminal.agent_surface);
 }
 
-// Agent TUIs don't use xterm's local history: Claude lives in tmux's
-// scrollback-less alt buffer, and inline agents (Cursor, CROW-1008) would
-// otherwise accumulate full-frame repaints as wheel-walkable sediment.
-// Plain shells keep the unified 50k (CROW-606). One shared xterm, so this
-// must re-run on every tab bind — not just at construct time.
+function activeSurfaceUsesAltScreen() {
+  return !!(activeTerminal && activeTerminal.uses_alternate_screen);
+}
+
+// Only true alt-buffer agents (Claude Code) skip xterm's local history —
+// they live in tmux's scrollback-less alt buffer. Inline agents (Cursor)
+// keep UNIFIED_SCROLLBACK: their transcript is the scrollback, and the
+// wheel at a non-mouse-tracking prompt scrolls it (CROW-1010). Plain shells
+// keep the unified 50k (CROW-606). One shared xterm, so this must re-run on
+// every tab bind — not just at construct time. A missing flag (older daemon)
+// keeps 50k rather than capping — taking scrollback away is what broke Cursor.
 const UNIFIED_SCROLLBACK = 50000;
 function applySurfaceScrollback() {
   if (!term || !term.options) return;
-  const wanted = activeSurfaceIsAgent() ? 0 : UNIFIED_SCROLLBACK;
+  const wanted = (activeSurfaceIsAgent() && activeSurfaceUsesAltScreen())
+    ? 0 : UNIFIED_SCROLLBACK;
   if (term.options.scrollback !== wanted) term.options.scrollback = wanted;
 }
 

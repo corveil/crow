@@ -83,10 +83,12 @@ struct TmuxBackendTests {
         #expect(bindingA.windowIndex != bindingB.windowIndex)
     }
 
-    /// CROW-1008: an inline agent surface is born with history-limit 0 and
-    /// still classified as an agent window (`alternate-screen on`), while a
-    /// sibling shell and a Claude-style alt-screen agent keep the 50k cap.
-    @Test func inlineAgentSurfaceClampsHistoryWithoutAffectingSiblings() throws {
+    /// CROW-1010: an inline agent surface is born with the unified 50k
+    /// history-limit and still classified as an agent window (`alternate-screen
+    /// on`). A sibling shell and a Claude-style alt-screen agent share the
+    /// same 50k cap. The CROW-1008 `history-limit 0` clamp is retracted —
+    /// Cursor's transcript is legitimate native scrollback.
+    @Test func inlineAgentSurfaceKeepsUnifiedHistoryWithoutAffectingSiblings() throws {
         let backend = makeBackend()
         defer { backend.shutdown() }
 
@@ -110,7 +112,7 @@ struct TmuxBackendTests {
         #expect(shellWin.historyLimit == TmuxBackend.scrollbackHistoryLimit)
         #expect(!shellWin.alternateScreenEnabled)
 
-        #expect(inlineWin.historyLimit == TmuxBackend.inlineAgentHistoryLimit)
+        #expect(inlineWin.historyLimit == TmuxBackend.scrollbackHistoryLimit)
         #expect(inlineWin.alternateScreenEnabled, "classification still keys off the option")
         #expect(!TmuxBackend.isScrollbackDegraded(
             historyLimit: inlineWin.historyLimit,
