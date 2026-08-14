@@ -43,6 +43,7 @@ capabilities, update this table in the same PR.
 | Initial-prompt injection | ✅ prompt-file contents as argv + deferred paste | ✅ job/review, `--`-separated (CROW-968); handoff launcher auto-wired (#829); `.work` bare | ✅ `.job` + `.review` (prompt-file contents as argv) | ✅ run-then-`--continue` | ✅ run-then-`-c` (`.job`/`.review`); `.work` bare | ✅ `-p "$prompt"` (`.job`/`.review`, #902); `.work` bare |
 | Gateway env / trust seed / telemetry | ✅ Claude special-case | ⚠️ trust seed only (`--trust`, per-launch, every kind) | ⚠️ trust seed only (`[projects."…"]` in `config.toml`) | ❌ | ⚠️ trust seed only (`[folders."…"]` in `~/.grok/trusted_folders.toml`) | ❌ |
 | Rename passthrough (`/rename`) | ✅ | ✅ | ✅ | ✅ | ✅ (alias `/title`) | ❌ unverified on v1.1.7 (opt-out `nil`) |
+| Interactive TUI uses alt screen (`smcup`) | ✅ Claude Code requests it | ❌ inline renderer — `history-limit 0` clamp (CROW-1008) | ❌ unverified; inherits inline default | ❌ unverified; inherits inline default | ❌ unverified; inherits inline default | ❌ unverified; inherits inline default |
 | Self-host / local models | provider-dependent | provider-dependent | provider-dependent | provider-dependent | ✅ `config.toml` `[model.*]` → any OpenAI/Anthropic-compatible or local (Ollama) endpoint | ❌ **permanent** — closed-source, Google-Sign-In/GCP-locked (Gemini 3 Pro / Claude Sonnet 4.5 only) |
 
 Legend: ✅ full · ⚠️ partial / faked / unverified · ❌ not supported.

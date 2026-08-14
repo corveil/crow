@@ -12,6 +12,7 @@ struct GrokAgentTests {
         #expect(agent.displayName == "Grok Build")
         #expect(agent.iconSystemName == "bolt.fill")
         #expect(agent.supportsRemoteControl == true)
+        #expect(agent.usesAlternateScreen == false)
         #expect(agent.launchCommandToken == "grok")
         #expect(agent.sessionRenameSlashCommand(newName: "my-session") == "/rename my-session\n")
     }

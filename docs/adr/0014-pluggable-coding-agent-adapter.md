@@ -42,8 +42,8 @@ Crow's harness contract is the
 [`CodingAgent`](../../Packages/CrowCore/Sources/CrowCore/Agent/CodingAgent.swift)
 protocol. Capabilities are **members of the protocol**, not a central switch:
 
-- **Static capability members:** `supportsRemoteControl`, `launchCommandToken`,
-  `displayName`, `iconSystemName`, `fallbackCandidates`.
+- **Static capability members:** `supportsRemoteControl`, `usesAlternateScreen`,
+  `launchCommandToken`, `displayName`, `iconSystemName`, `fallbackCandidates`.
 - **Delegated collaborators:** `hookConfigWriter: any HookConfigWriter` and
   `stateSignalSource: any StateSignalSource` — each harness supplies its own hook
   transport and its own pure event→state machine.

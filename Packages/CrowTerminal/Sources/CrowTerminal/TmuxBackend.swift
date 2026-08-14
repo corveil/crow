@@ -38,6 +38,13 @@ public final class TmuxBackend {
     /// be fixed by recreating it (CROW-804).
     nonisolated public static let scrollbackHistoryLimit = 50000
 
+    /// Scrollback cap for an agent surface whose TUI never enters the alt
+    /// buffer (CROW-1008). Zero emulates the scrollback-less alt screen so
+    /// full-frame repaints cannot fossilize as duplicate-frame sediment.
+    /// Distinct from the CROW-804 floor: an agent window born at this cap is
+    /// healthy, not a ⚠ Recreate casualty.
+    nonisolated public static let inlineAgentHistoryLimit = 0
+
     /// Fired when a tmux-backed terminal's readiness state changes.
     /// Callers wire this through to the `TerminalReadiness` state machine so
     /// downstream consumers (e.g. `ClaudeLauncher`) stay backend-agnostic.
@@ -216,6 +223,13 @@ public final class TmuxBackend {
     /// pass `SessionTerminal.isAgentSurface(session:)` rather than a hand-rolled
     /// test — in particular `isManaged` ALONE is wrong, because the Manager's
     /// terminal is built without that flag yet still runs an agent.
+    ///
+    /// `usesAlternateScreen` is the per-agent capability (CROW-1008). `true`
+    /// (Claude Code) relies on the alt buffer to kill sediment. `false`
+    /// (Cursor, and any inline renderer) still gets `alternate-screen on` so
+    /// `list-terminals` classifies the window as an agent surface, but the
+    /// window is born with `history-limit 0` because tmux cannot force an app
+    /// that never issues `smcup` into the alt buffer.
     @discardableResult
     public func registerTerminal(
         id: UUID,
@@ -225,6 +239,7 @@ public final class TmuxBackend {
         trackReadiness: Bool,
         agentKind: AgentKind? = nil,
         agentSurface: Bool = false,
+        usesAlternateScreen: Bool = true,
         extraEnv: [String: String] = [:],
         newWindowTimeout: TimeInterval = TmuxController.defaultTimeout
     ) throws -> TmuxBinding {
@@ -282,6 +297,21 @@ public final class TmuxBackend {
             env["PATH"] = "\(crowBinDir):\(ShellEnvironment.shared.resolvedPATH)"
         }
 
+        // history-limit is frozen at window birth. For an inline agent TUI
+        // (never issues smcup) drop the session cap to 0 around new-window so
+        // the pane is born scrollback-less, then restore the 50k default so a
+        // later shell window is unaffected (CROW-1008). MainActor serializes
+        // this sandwich against concurrent registerTerminal calls.
+        let clampHistory = agentSurface && !usesAlternateScreen
+        if clampHistory {
+            applySessionHistoryLimit(Self.inlineAgentHistoryLimit, ctrl: ctrl)
+        }
+        defer {
+            if clampHistory {
+                applySessionHistoryLimit(Self.scrollbackHistoryLimit, ctrl: ctrl)
+            }
+        }
+
         let windowIndex = try ctrl.newWindow(
             name: name,
             cwd: cwd.isEmpty ? nil : cwd,
@@ -292,8 +322,10 @@ public final class TmuxBackend {
         bindings[id] = windowIndex
 
         // Hand agent-TUI windows their own viewport BEFORE the launch command
-        // below is pasted, so the agent enters the alt buffer on its very first
-        // repaint and never deposits a frame into the shared history (#822).
+        // below is pasted, so an agent that *does* request smcup enters the alt
+        // buffer on its very first repaint and never deposits a frame into the
+        // shared history (#822). For inline renderers the option is inert but
+        // still the source of truth for `agent_surface` on list-terminals.
         if agentSurface {
             enableAlternateScreen(index: windowIndex)
         }
@@ -713,6 +745,11 @@ public final class TmuxBackend {
     /// casualties measured `history_limit=5000` alongside `alternate_on=1`, so
     /// they stay caught by the floor.
     ///
+    /// CROW-1008: an inline agent surface is born with `history-limit 0` on
+    /// purpose (the TUI never enters the alt buffer, so the clamp is what
+    /// stops frame sediment). That cap is healthy when the window opted into
+    /// `alternate-screen on`; a plain shell at 0 is still degraded.
+    ///
     /// Known blind spot: an agent window genuinely wedged in the alt buffer at
     /// the full 50000 limit is now indistinguishable from the normal state.
     /// That is the accepted cost of the hybrid model — the alternative is a
@@ -723,6 +760,9 @@ public final class TmuxBackend {
         alternateScreenEnabled: Bool = false,
         floor: Int = TmuxBackend.scrollbackHistoryLimit
     ) -> Bool {
+        if alternateScreenEnabled && historyLimit == inlineAgentHistoryLimit {
+            return false
+        }
         if historyLimit < floor { return true }
         // An agent surface is SUPPOSED to be in the alt buffer.
         return alternateScreenEnabled ? false : alternateOn
@@ -801,6 +841,26 @@ public final class TmuxBackend {
             CrowLog.info("[Crow] could not set alternate-screen on window \(index): \(error)")
             return false
         }
+    }
+
+    /// Temporarily move the session `history-limit` so the next `new-window`
+    /// inherits it. Best-effort: a failure here must not fail terminal creation.
+    /// Restore is the caller's job (see `registerTerminal`'s defer).
+    private func applySessionHistoryLimit(_ limit: Int, ctrl: TmuxController) {
+        do {
+            try ctrl.setSessionOption(name: "history-limit", value: "\(limit)")
+        } catch {
+            reportIfTimeout(error)
+            CrowLog.info("[Crow] could not set session history-limit \(limit): \(error)")
+        }
+    }
+
+    /// Live per-window scrollback tuple. Empty when tmux is down. Test/debug
+    /// counterpart of `windowScrollbackClassification` that keeps the raw
+    /// `history_limit` so CROW-1008 can assert the inline-agent clamp stuck.
+    func windowScrollbackSnapshot() -> [(index: Int, historyLimit: Int, alternateOn: Bool, alternateScreenEnabled: Bool)] {
+        guard let ctrl = controller else { return [] }
+        return (try? ctrl.listWindowScrollback()) ?? []
     }
 
     /// Kill the cockpit window at `index`. Passthrough to the controller so

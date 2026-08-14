@@ -274,4 +274,30 @@ struct TmuxControllerTests {
         #expect(!shell.alternateScreenEnabled, "per-window `on` must not leak to siblings")
         #expect(!shell.alternateOn)
     }
+
+    /// CROW-1008: `history-limit` is frozen at window birth, so an inline agent
+    /// surface has to inherit a session-level 0 *as it is created*, then the
+    /// 50k default must come back so a later shell window is unaffected.
+    @Test func sessionHistoryLimitSandwichClampsOnlyTheNewWindow() throws {
+        let confURL = try #require(BundledResources.tmuxConfURL)
+        let ctrl = makeController()
+        defer {
+            ctrl.killServer()
+            try? FileManager.default.removeItem(atPath: ctrl.socketPath)
+        }
+        try ctrl.newSessionDetached(configPath: confURL.path, command: "/bin/sh -c 'sleep 60'")
+        try ctrl.setSessionOption(name: "history-limit", value: "\(TmuxBackend.inlineAgentHistoryLimit)")
+        let inlineIdx = try ctrl.newWindow(name: "Cursor", command: "/bin/sh -c 'sleep 60'")
+        try ctrl.setSessionOption(name: "history-limit", value: "\(TmuxBackend.scrollbackHistoryLimit)")
+        let shellIdx = try ctrl.newWindow(name: "Shell", command: "/bin/sh -c 'sleep 60'")
+
+        let windows = try ctrl.listWindowScrollback()
+        let inline = try #require(windows.first(where: { $0.index == inlineIdx }))
+        let shell = try #require(windows.first(where: { $0.index == shellIdx }))
+        #expect(inline.historyLimit == TmuxBackend.inlineAgentHistoryLimit)
+        #expect(shell.historyLimit == TmuxBackend.scrollbackHistoryLimit)
+        let anchor = try #require(windows.first(where: { $0.index == 0 }))
+        #expect(anchor.historyLimit == TmuxBackend.scrollbackHistoryLimit,
+                "the sandwich must not resize windows that already existed")
+    }
 }

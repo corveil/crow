@@ -10,6 +10,9 @@ public struct ClaudeCodeAgent: CodingAgent {
     public let displayName: String = "Claude Code"
     public let iconSystemName: String = "sparkles"
     public let supportsRemoteControl: Bool = true
+    /// Claude Code requests the alternate screen (`smcup`). That is the
+    /// ADR-0013 alt-buffer sediment kill; do not clamp `history-limit` for it.
+    public let usesAlternateScreen: Bool = true
     public let launchCommandToken: String = "claude"
     public let hookConfigWriter: any HookConfigWriter
     public let stateSignalSource: any StateSignalSource

@@ -598,6 +598,11 @@ public final class SessionService {
                 let session = appState.sessions.first(where: { $0.id == terminal.sessionID })
                 if terminal.isAgentSurface(session: session) {
                     TmuxBackend.shared.enableAlternateScreen(index: binding.windowIndex)
+                    // history-limit is frozen at birth — an inline agent window
+                    // created before CROW-1008 keeps its 50k cap (and any
+                    // already-accumulated sediment) until Recreate. The client
+                    // still caps xterm scrollback to 0 for agent_surface, which
+                    // is the immediate wheel-sediment fix without a restart.
                 }
                 // The window survived the prior quit → Claude is already up.
                 // Belt-and-suspenders against any other readiness path: drop
@@ -683,6 +688,7 @@ public final class SessionService {
                 trackReadiness: trackReadiness,
                 agentKind: session?.agentKind,
                 agentSurface: terminal.isAgentSurface(session: session),
+                usesAlternateScreen: AgentRegistry.shared.usesAlternateScreen(for: session?.agentKind),
                 extraEnv: Self.artifactsEnv(sessionID: terminal.sessionID)
             )
             var updated = terminal
@@ -4451,6 +4457,7 @@ public final class SessionService {
                 // Covers the Manager, whose terminal is built without
                 // `isManaged` but still runs a repainting agent (ADR-0013).
                 agentSurface: t.isAgentSurface(session: session),
+                usesAlternateScreen: AgentRegistry.shared.usesAlternateScreen(for: session?.agentKind),
                 extraEnv: Self.artifactsEnv(sessionID: t.sessionID)
             )
             t.tmuxBinding = binding

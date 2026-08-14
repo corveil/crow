@@ -83,6 +83,44 @@ struct TmuxBackendTests {
         #expect(bindingA.windowIndex != bindingB.windowIndex)
     }
 
+    /// CROW-1008: an inline agent surface is born with history-limit 0 and
+    /// still classified as an agent window (`alternate-screen on`), while a
+    /// sibling shell and a Claude-style alt-screen agent keep the 50k cap.
+    @Test func inlineAgentSurfaceClampsHistoryWithoutAffectingSiblings() throws {
+        let backend = makeBackend()
+        defer { backend.shutdown() }
+
+        let shell = try backend.registerTerminal(
+            id: UUID(), name: "Shell", cwd: NSHomeDirectory(),
+            command: nil, trackReadiness: false, agentSurface: false)
+        let inline = try backend.registerTerminal(
+            id: UUID(), name: "Cursor", cwd: NSHomeDirectory(),
+            command: nil, trackReadiness: false,
+            agentSurface: true, usesAlternateScreen: false)
+        let alt = try backend.registerTerminal(
+            id: UUID(), name: "Claude Code", cwd: NSHomeDirectory(),
+            command: nil, trackReadiness: false,
+            agentSurface: true, usesAlternateScreen: true)
+
+        let snap = backend.windowScrollbackSnapshot()
+        let shellWin = try #require(snap.first(where: { $0.index == shell.windowIndex }))
+        let inlineWin = try #require(snap.first(where: { $0.index == inline.windowIndex }))
+        let altWin = try #require(snap.first(where: { $0.index == alt.windowIndex }))
+
+        #expect(shellWin.historyLimit == TmuxBackend.scrollbackHistoryLimit)
+        #expect(!shellWin.alternateScreenEnabled)
+
+        #expect(inlineWin.historyLimit == TmuxBackend.inlineAgentHistoryLimit)
+        #expect(inlineWin.alternateScreenEnabled, "classification still keys off the option")
+        #expect(!TmuxBackend.isScrollbackDegraded(
+            historyLimit: inlineWin.historyLimit,
+            alternateOn: inlineWin.alternateOn,
+            alternateScreenEnabled: inlineWin.alternateScreenEnabled))
+
+        #expect(altWin.historyLimit == TmuxBackend.scrollbackHistoryLimit)
+        #expect(altWin.alternateScreenEnabled)
+    }
+
     @Test func makeActiveOnUnregisteredThrows() async throws {
         let backend = makeBackend()
         defer { backend.shutdown() }

@@ -63,6 +63,19 @@ public final class AgentRegistry: @unchecked Sendable {
         return agents[kind]
     }
 
+    /// Whether `kind`'s interactive TUI enters the alt screen (ADR-0013 /
+    /// CROW-1008). Looks at known agents, not just launchable ones — the
+    /// scroll model is a declared capability, independent of PATH. `nil` or
+    /// an unknown kind returns `true` (the Claude path) so we don't clamp
+    /// history on a surface we cannot attribute.
+    public func usesAlternateScreen(for kind: AgentKind?) -> Bool {
+        guard let kind else { return true }
+        lock.lock(); defer { lock.unlock() }
+        if let agent = agents[kind] { return agent.usesAlternateScreen }
+        if let known = known[kind] { return known.agent.usesAlternateScreen }
+        return true
+    }
+
     /// The single registry gate for a caller-supplied `AgentKind` (CROW-593; #834).
     ///
     /// Returns `requested` only when an agent is actually registered for it;
