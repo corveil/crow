@@ -5443,6 +5443,53 @@ function appOwnsScroll() {
   return !!(buf && buf.type === 'alternate');
 }
 
+// CROW-1020: xterm paints its scrollbar slider from the JS `theme` object, not
+// from CSS, so the gold thumb has to be handed across from app.css's --scroll-*
+// tokens rather than styled in place. Left alone, xterm derives the slider from
+// the FOREGROUND at 0.20 alpha — #d4d4d4 over #1e1e1e is 1.67:1, under WCAG 2.2
+// §1.4.11's 3:1 floor, which is why the bar read as "gone" even while it was
+// technically being drawn.
+//
+// A missing token yields an omitted key, so xterm falls back to its own default
+// instead of us duplicating the literal here — app.css stays the one place the
+// palette is written down. `rgba(r, g, b, a)` is one of the forms xterm's
+// css.toColor parses (alongside #rgb/#rrggbb/#rrggbbaa), so the token text goes
+// over verbatim.
+const TERM_SCROLLBAR_TOKENS = {
+  scrollbarSliderBackground: '--scroll-thumb',
+  scrollbarSliderHoverBackground: '--scroll-thumb-hover',
+  scrollbarSliderActiveBackground: '--scroll-thumb-active',
+};
+function scrollbarTheme() {
+  const theme = {};
+  if (typeof getComputedStyle !== 'function' || !document.documentElement) return theme;
+  const css = getComputedStyle(document.documentElement);
+  for (const key of Object.keys(TERM_SCROLLBAR_TOKENS)) {
+    const value = (css.getPropertyValue(TERM_SCROLLBAR_TOKENS[key]) || '').trim();
+    if (value) theme[key] = value;
+  }
+  return theme;
+}
+
+// CROW-1020: xterm 6 scrolls through a VS Code scrollable element built with
+// `vertical: ScrollbarVisibility.Auto`, so the thumb fades out whenever the
+// pointer is off the grid — you cannot grab what is not drawn. app.css pins it
+// visible while this class is on.
+//
+// The class is gated on the buffer actually HAVING history, not just on the
+// surface allowing it: with nothing to scroll, xterm sizes the slider to the
+// whole track, so an ungated pin would paint a permanent stripe down every
+// empty terminal. `baseY` (lines that have scrolled off the top) is exactly
+// xterm's own "is the bar needed" test, and it is 0 in the alternate screen —
+// which is where alt-buffer agents like Claude Code live and where there is no
+// local scrollback to reach anyway (see applySurfaceScrollback).
+function updateTerminalScrollbar() {
+  const wrap = document.getElementById('terminal-wrap');
+  if (!wrap) return;
+  const buf = term && term.buffer && term.buffer.active;
+  wrap.classList.toggle('has-scrollback', !!buf && buf.baseY > 0);
+}
+
 function ensureTerminal() {
   if (term) return;
   fitAddon = new FitAddon.FitAddon();
@@ -5457,7 +5504,7 @@ function ensureTerminal() {
     cursorBlink: true,
     fontSize: 14,
     fontFamily: DEFAULT_TERM_FONT,
-    theme: { background: '#1e1e1e', foreground: '#d4d4d4' },
+    theme: { background: '#1e1e1e', foreground: '#d4d4d4', ...scrollbarTheme() },
     scrollback: UNIFIED_SCROLLBACK,
     allowTransparency: true,
     // Escape hatch for agent surfaces, where we stop swallowing mouse modes so
@@ -5506,6 +5553,14 @@ function ensureTerminal() {
   // CROW-934: hydrate the shell scrollback from tmux when the user reaches the
   // top of what the live stream actually delivered.
   term.onScroll(maybeHydrateScrollback);
+  // CROW-1020: keep the "there is history to grab" class in step with the
+  // buffer. Same pair of triggers as the #668 jump-to-bottom pill, for the same
+  // reason — onScroll is what fires when the user moves, onRender is what fires
+  // when output (or a tab bind, or a reload) changes what there is to move
+  // through. classList.toggle with an unchanged value is a no-op, so the
+  // per-frame call costs nothing.
+  term.onScroll(updateTerminalScrollbar);
+  term.onRender(updateTerminalScrollbar);
   term.attachCustomKeyEventHandler(handleTerminalKey);
   enableTouchScroll(document.getElementById('terminal'));
   enableWheelScroll(document.getElementById('terminal'));
