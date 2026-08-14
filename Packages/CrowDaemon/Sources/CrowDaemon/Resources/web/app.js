@@ -5329,23 +5329,25 @@ const DEFAULT_TERM_FONT = '"MesloLGS NF", "MesloLGS Nerd Font", "JetBrainsMono N
 //     (CROW-606), and the wheel scrolls that local buffer.
 //   * AGENT-TUI surfaces own their own viewport like a naked terminal.
 //     crowd sets `alternate-screen on` for those windows so an agent that
-//     requests smcup (Claude Code) keeps full-frame repaints in the alt
-//     buffer, which has no scrollback. Inline renderers (Cursor) never
-//     issue smcup: their history is a clean transcript in the main buffer,
-//     so they keep the unified 50k and the wheel at a non-mouse-tracking
-//     prompt scrolls that local viewport (#850 / CROW-1010). Capping
-//     xterm scrollback to 0 on `agent_surface` alone deleted Cursor's only
-//     scroll path (the #1008/#1009 regression).
+//     requests smcup keeps full-frame repaints in the alt buffer, which has
+//     no scrollback. Inline renderers (Cursor, and Claude Code builds that
+//     render inline — CROW-1023) never issue smcup: their history is a clean
+//     transcript in the main buffer, so they keep the unified 50k and the
+//     wheel at a non-mouse-tracking prompt scrolls that local viewport
+//     (#850 / CROW-1010). Capping xterm scrollback to 0 on `agent_surface`
+//     alone deleted Cursor's only scroll path (the #1008/#1009 regression).
 //
 // `agent_surface` comes from `list-terminals`, sourced from the tmux window
 // option crowd actually set — NOT from `term.buffer.active.type`. The client
 // can't use the buffer type here: crow-tmux.conf strips the client's
 // smcup/rmcup, and `terminal-overrides` is keyed on the client's TERM while a
 // single tmux client serves every tab, so there is no per-window client buffer
-// state to read. `uses_alternate_screen` is the sibling flag: true only for
-// agents that actually enter the alt buffer. The buffer/mouse-mode checks
-// below are kept as an additional signal for surfaces that do legitimately
-// enter the alt buffer.
+// state to read. `uses_alternate_screen` is the sibling flag: true only for a
+// window that has ACTUALLY entered the alt buffer — detected per-window from
+// tmux's runtime `#{alternate_on}` and latched sticky (CROW-1023), not a
+// per-kind guess, so the two diverging Claude Code builds (alt vs inline) route
+// correctly. The buffer/mouse-mode checks below are kept as an additional
+// signal for surfaces that do legitimately enter the alt buffer.
 function activeSurfaceIsAgent() {
   return !!(activeTerminal && activeTerminal.agent_surface);
 }
@@ -6249,9 +6251,12 @@ function armScrollbackHeal() {
 function verifyScrollbackAfterAttach() {
   scrollbackHealTimer = null;
   if (!term || !activeTerminal) return;
-  // Alt-buffer agents (Claude Code) forward the wheel by design — no local
-  // scrollback to repair (AC #3). Same gate maybeHydrateScrollback uses.
-  if (activeTerminal.agent_surface) return;
+  // Only a TRUE alt-buffer agent (Claude Code that entered the alt screen)
+  // forwards the wheel and has no local scrollback to repair (AC #3). An inline
+  // agent — Cursor, or an inline-rendering Claude build (CROW-1023) — keeps the
+  // unified 50k and CAN land on a one-screen buffer after attach, so it stays
+  // eligible for this heal. Same axis as fireScrollbackCapture / applySurfaceScrollback.
+  if (activeSurfaceIsAgent() && activeSurfaceUsesAltScreen()) return;
   if (activeTerminal.window == null) return;
   if (!termWs || termWs.readyState !== WebSocket.OPEN) return;
   const buf = term.buffer && term.buffer.active;

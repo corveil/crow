@@ -78,7 +78,15 @@ public protocol CodingAgent: Sendable {
     /// model: alt-buffer sediment kill (true) vs unified 50k native
     /// scrollback, like a plain shell (false, CROW-1010).
     ///
-    /// Claude Code is the one confirmed `true`. Cursor's `agent` CLI paints
+    /// CROW-1023: this static capability is now only the PRE-WINDOW prior. Once
+    /// a tmux window exists, `list-terminals` reports `uses_alternate_screen`
+    /// from a per-window runtime read of `#{alternate_on}` (latched), because
+    /// Claude Code builds diverge — some enter the alt buffer, some render
+    /// inline — and a single per-kind value cannot describe both. Keep this in
+    /// sync with the *common* build's behavior so the brief pre-window window is
+    /// right, but the runtime read is the source of truth thereafter.
+    ///
+    /// Claude Code's common build is `true`. Cursor's `agent` CLI paints
     /// inline and never requests the alt buffer — its history is a clean
     /// transcript, so it must keep terminal scrollback (the CROW-1008
     /// `history-limit 0` clamp deleted its only wheel path). The default is

@@ -99,4 +99,51 @@ struct ScrollbackHealthTests {
         #expect(TmuxBackend.isScrollbackDegraded(historyLimit: 10000, alternateOn: false, floor: 20000))
         #expect(!TmuxBackend.isScrollbackDegraded(historyLimit: 10000, alternateOn: false, floor: 5000))
     }
+
+    // MARK: - Alt-buffer latch (CROW-1023)
+
+    @Test func altBufferLatchRecordsAWindowInTheAltBuffer() {
+        // A window currently in the alt buffer enters the latch → the client
+        // caps its scrollback (an alt-buffer Claude build).
+        #expect(TmuxBackend.updatedAltBufferLatch(
+            liveWindows: [(4, true)], prior: []) == [4])
+    }
+
+    @Test func altBufferLatchIsSticky() {
+        // THE core property: once observed in the alt buffer, a window stays
+        // latched even when a later read finds it back in the main buffer
+        // (an alt-buffer build shelling out / exiting). Without this the client
+        // would flip its scrollback to 50k and back every such transient.
+        #expect(TmuxBackend.updatedAltBufferLatch(
+            liveWindows: [(4, false)], prior: [4]) == [4])
+    }
+
+    @Test func inlineWindowNeverLatches() {
+        // A window never seen in the alt buffer (an INLINE Claude build, or
+        // Cursor) stays out of the latch → keeps the unified 50k, a working
+        // wheel, and a visible scrollbar. This is the CROW-1023 fix.
+        #expect(TmuxBackend.updatedAltBufferLatch(
+            liveWindows: [(4, false)], prior: []).isEmpty)
+        // Still empty after many inline reads.
+        var latch: Set<Int> = []
+        for _ in 0..<5 {
+            latch = TmuxBackend.updatedAltBufferLatch(liveWindows: [(4, false)], prior: latch)
+        }
+        #expect(latch.isEmpty)
+    }
+
+    @Test func altBufferLatchPrunesKilledWindows() {
+        // A killed index drops out of the latch so a reused index doesn't
+        // inherit a stale observation (belt-and-suspenders with the explicit
+        // clear at register/kill).
+        #expect(TmuxBackend.updatedAltBufferLatch(
+            liveWindows: [(5, true)], prior: [4]) == [5])
+    }
+
+    @Test func altBufferLatchKeepsAStillLivingLatchedWindow() {
+        // A previously latched window that still exists — even in the main
+        // buffer now — is retained, while a new alt-buffer window is added.
+        #expect(TmuxBackend.updatedAltBufferLatch(
+            liveWindows: [(1, true), (2, false)], prior: [2]) == [1, 2])
+    }
 }

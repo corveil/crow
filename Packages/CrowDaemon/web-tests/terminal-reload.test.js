@@ -372,17 +372,33 @@ console.log('\nCROW-1027: self-heal is bounded and never loops:');
   check('no self-heal timer left armed', timerCountAt(T.SCROLLBACK_HEAL_MS) === 0);
 }
 
-console.log('\nCROW-1027: alt-buffer agents (Claude Code) are unaffected:');
+console.log('\nCROW-1027/1023: only a TRUE alt-buffer agent skips the self-heal; inline agents heal like a shell:');
 {
   mount('work');
-  T.activeTerminal = { id: 't1', name: 'Claude Code', window: 3, agent_surface: true };
+  // A true alt-buffer agent (Claude build that entered the alt screen):
+  // uses_alternate_screen: true → forwards the wheel, no local scrollback to
+  // repair, so the heal short-circuits.
+  T.activeTerminal = { id: 't1', name: 'Claude Code', window: 3, agent_surface: true, uses_alternate_screen: true };
   T.reloadTerminal();
   const sock = sockets[sockets.length - 1];
   sock.fireOpen();
   const initial = selectWindowCount(sock);
   lastTerm.buffer.active.baseY = 0;
   fireTimersAt(T.SCROLLBACK_HEAL_MS);
-  check('agent surface: no self-heal re-capture', selectWindowCount(sock) === initial);
+  check('alt-buffer agent: no self-heal re-capture', selectWindowCount(sock) === initial);
+
+  // CROW-1023: an INLINE agent (Cursor, or an inline-rendering Claude build)
+  // keeps the unified 50k and CAN land one-screen tall after attach, so it is
+  // eligible for the same heal a shell gets — same axis as fireScrollbackCapture.
+  mount('work');
+  T.activeTerminal = { id: 't2', name: 'Claude Code', window: 4, agent_surface: true, uses_alternate_screen: false };
+  T.reloadTerminal();
+  const sockInline = sockets[sockets.length - 1];
+  sockInline.fireOpen();
+  const initialInline = selectWindowCount(sockInline);
+  lastTerm.buffer.active.baseY = 0;
+  fireTimersAt(T.SCROLLBACK_HEAL_MS);
+  check('inline agent: dead wheel triggers one re-capture', selectWindowCount(sockInline) === initialInline + 1);
 
   // Even a non-agent surface parked on the ALT buffer has no local scrollback to
   // repair, so the buffer-type gate short-circuits too.

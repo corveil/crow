@@ -77,6 +77,26 @@ public final class TmuxBackend {
     /// lands) is never reaped (CROW-581).
     private var orphanGraceWindows: Set<Int> = []
 
+    /// Window indices observed in the alternate buffer (`#{alternate_on}==1`) at
+    /// least once, latched sticky (CROW-1023). This is the ground truth for the
+    /// `uses_alternate_screen` flag `list-terminals` forwards to the client —
+    /// which caps xterm scrollback to 0 only for a window that truly owns an alt
+    /// buffer. It supersedes the static per-kind `CodingAgent.usesAlternateScreen`
+    /// capability, because two Claude Code builds diverge at runtime: one enters
+    /// the alt buffer (`alt_on=1`, no client scrollback needed), the other renders
+    /// INLINE (`alt_on=0`) and must be treated like Cursor — unified 50k, local
+    /// wheel, a visible bar. Only a runtime read tells them apart.
+    ///
+    /// Sticky (union across reads) so a build that enters the alt screen once
+    /// keeps the capped-0 model through its transient main-buffer drops (a
+    /// shell-out, exit) instead of flip-flopping its scrollback every poll. Only
+    /// windows with `alternate-screen on` (agent surfaces) can ever land here —
+    /// a plain shell keeps the global `off`, so even a full-screen app in it
+    /// stays `alt_on=0`. Pruned to live windows on each read, and cleared per
+    /// index at (re)registration, so a recycled tmux index never inherits a
+    /// stale observation.
+    private var observedAltBufferWindows: Set<Int> = []
+
     /// Terminal whose tmux window is currently selected, so `makeActive` can
     /// skip a redundant `select-window`. `makeActive` is called repeatedly for
     /// the same visible tab (e.g. re-selecting an already-active terminal), and
@@ -316,6 +336,11 @@ public final class TmuxBackend {
             timeout: newWindowTimeout
         )
         bindings[id] = windowIndex
+        // CROW-1023: a freshly created window has not entered the alt buffer
+        // yet, so forget any observation a prior tenant of this index left
+        // behind (tmux reuses freed indices). Detection re-latches on the next
+        // `list-windows` read once this window actually enters the alt screen.
+        observedAltBufferWindows.remove(windowIndex)
 
         // Hand agent-TUI windows their own viewport BEFORE the launch command
         // below is pasted, so an agent that *does* request smcup enters the alt
@@ -761,25 +786,54 @@ public final class TmuxBackend {
         return alternateScreenEnabled ? false : alternateOn
     }
 
-    /// Both per-window classifications the web UI needs, from ONE `list-windows`
-    /// read: which windows are scrollback-degraded (CROW-804 ⚠ Recreate) and
-    /// which run the agent-TUI scroll model (ADR-0013 wheel/mouse routing).
+    /// Pure CROW-1023 alt-buffer latch update. Given the live windows (index +
+    /// current `#{alternate_on}`) and the prior latch, return the new latch:
+    /// every window ever observed in the alt buffer, minus windows that no
+    /// longer exist.
+    ///
+    /// STICKY (union) is the point — a Claude/agent build that enters the alt
+    /// screen once keeps the capped-0 scroll model through its transient
+    /// main-buffer drops (shell-out, exit) instead of flip-flopping xterm's
+    /// scrollback every poll. PRUNE (intersect with live indices) keeps a killed
+    /// window's observation from leaking to whatever tmux later assigns that
+    /// index. `nonisolated static` so the policy is unit-testable without tmux,
+    /// exactly like `isScrollbackDegraded`.
+    nonisolated public static func updatedAltBufferLatch(
+        liveWindows: [(index: Int, alternateOn: Bool)],
+        prior: Set<Int>
+    ) -> Set<Int> {
+        var latch = prior
+        for w in liveWindows where w.alternateOn { latch.insert(w.index) }
+        latch.formIntersection(liveWindows.map(\.index))
+        return latch
+    }
+
+    /// The per-window classifications the web UI needs, from ONE `list-windows`
+    /// read: which windows are scrollback-degraded (CROW-804 ⚠ Recreate), which
+    /// run the agent-TUI scroll model (ADR-0013 wheel/mouse routing), and which
+    /// have actually entered the alternate buffer (CROW-1023, the sticky
+    /// `uses_alternate_screen` latch).
     ///
     /// They ship together on every `list-terminals` RPC, and each is derived
     /// from the same three fields, so reading twice would fork a second `tmux`
     /// subprocess per call for nothing.
     ///
     /// Returns `nil` when tmux is unavailable or the read fails — deliberately
-    /// NOT a pair of empty sets. Empty is a perfectly valid SUCCESS (a server
+    /// NOT a triple of empty sets. Empty is a perfectly valid SUCCESS (a server
     /// of nothing but plain shells), so emptiness cannot double as a failure
     /// signal. Callers that need to fall back to a different source of truth on
     /// failure — `list-terminals` re-deriving `agent_surface` from
-    /// `SessionTerminal.isAgentSurface` — can only do that if failure is
+    /// `SessionTerminal.isAgentSurface`, and `uses_alternate_screen` from the
+    /// `AgentRegistry` capability — can only do that if failure is
     /// distinguishable. Callers that are happy to fail open collapse it with
     /// `?? []`.
+    ///
+    /// Not read-only: it maintains the alt-buffer latch (`observedAltBufferWindows`).
+    /// Confined to `@MainActor` like the rest of this type, so the mutation is
+    /// race-free.
     public func windowScrollbackClassification(
         floor: Int = TmuxBackend.scrollbackHistoryLimit
-    ) -> (degraded: Set<Int>, agentSurfaces: Set<Int>)? {
+    ) -> (degraded: Set<Int>, agentSurfaces: Set<Int>, altBuffer: Set<Int>)? {
         guard let ctrl = controller else { return nil }
         do {
             let windows = try ctrl.listWindowScrollback()
@@ -791,7 +845,14 @@ public final class TmuxBackend {
                     floor: floor)
             }
             let agents = windows.filter(\.alternateScreenEnabled)
-            return (Set(degraded.map(\.index)), Set(agents.map(\.index)))
+            // CROW-1023: update the sticky alt-buffer latch from this read (pure
+            // policy in `updatedAltBufferLatch`), then report it as the third set.
+            observedAltBufferWindows = Self.updatedAltBufferLatch(
+                liveWindows: windows.map { ($0.index, $0.alternateOn) },
+                prior: observedAltBufferWindows)
+            return (Set(degraded.map(\.index)),
+                    Set(agents.map(\.index)),
+                    observedAltBufferWindows)
         } catch {
             reportIfTimeout(error)
             return nil
@@ -814,6 +875,17 @@ public final class TmuxBackend {
     /// truth the daemon actually applied.
     public func agentSurfaceWindowIndices() -> Set<Int> {
         windowScrollbackClassification()?.agentSurfaces ?? []
+    }
+
+    /// Window indices that have entered the alternate buffer at least once and
+    /// are latched to the capped-0 scroll model (CROW-1023). This — not the
+    /// static per-kind capability — is what `list-terminals` forwards as
+    /// `uses_alternate_screen`. Fails open (`[]`); a window not yet observed in
+    /// the alt buffer is treated as inline (unified 50k), which is the safe
+    /// direction (a real alt-buffer build re-latches within a poll, an inline
+    /// build stays scrollable).
+    public func altBufferWindowIndices() -> Set<Int> {
+        windowScrollbackClassification()?.altBuffer ?? []
     }
 
     /// Give one window the agent-TUI scroll model: `alternate-screen on`, so a
@@ -850,6 +922,9 @@ public final class TmuxBackend {
     /// fresh one. No-op when tmux is unavailable.
     public func killWindow(index: Int) {
         controller?.killWindow(index: index)
+        // CROW-1023: drop the alt-buffer latch for a killed index up front, so a
+        // recreate that reuses it starts inline until it re-enters the alt screen.
+        observedAltBufferWindows.remove(index)
     }
 
     /// Reap orphaned cockpit windows per `shouldReapOrphanWindow` (targeted-auto).
