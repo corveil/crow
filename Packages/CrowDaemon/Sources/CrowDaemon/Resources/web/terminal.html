@@ -26,16 +26,21 @@
       box-sizing: border-box;
       padding-bottom: env(safe-area-inset-bottom);
     }
+    /* CROW-1006: iOS must not pop its own long-press sheet over the grid — the
+       #ctxmenu below is what a long-press opens here. Nothing is lost: xterm.css
+       already marks the grid `user-select: none`. */
     #terminal {
       width: 100%;
       height: 100%;
+      -webkit-touch-callout: none;
     }
-    /* Our own right-click menu — tmux's mouse menu is suppressed below. */
+    /* Our own right-click / long-press menu — tmux's mouse menu is suppressed below. */
     #ctxmenu {
       position: fixed; z-index: 50; display: none;
       background: #252526; border: 1px solid #3c3c3c; border-radius: 6px;
       padding: 4px; min-width: 140px; box-shadow: 0 4px 16px rgba(0,0,0,.4);
       font: 13px -apple-system, system-ui, sans-serif; color: #d4d4d4; user-select: none;
+      -webkit-touch-callout: none;
     }
     #ctxmenu button {
       display: block; width: 100%; text-align: left; background: none; border: 0;
@@ -43,6 +48,11 @@
     }
     #ctxmenu button:hover { background: #04395e; }
     #ctxmenu button:disabled { color: #6a6a6a; cursor: default; background: none; }
+    /* Finger-sized rows where the menu is reached by long-press (CROW-1006). */
+    @media (pointer: coarse) {
+      #ctxmenu { min-width: 200px; font-size: 15px; }
+      #ctxmenu button { padding: 11px 12px; }
+    }
   </style>
 </head>
 <body>
@@ -227,8 +237,7 @@
         b.onclick = function () { hideMenu(); fn(); };
         menu.appendChild(b);
       }
-      document.getElementById('terminal').addEventListener('contextmenu', function (e) {
-        e.preventDefault();
+      function openMenu(x, y) {
         menu.innerHTML = '';
         const hasSel = term.hasSelection();
         addItem('Copy', hasSel, copySelection);
@@ -237,9 +246,41 @@
         addItem('Clear', true, function () { term.clear(); });
         menu.style.display = 'block';
         const mw = menu.offsetWidth || 140, mh = menu.offsetHeight || 120;
-        menu.style.left = Math.min(e.clientX, window.innerWidth - mw - 4) + 'px';
-        menu.style.top = Math.min(e.clientY, window.innerHeight - mh - 4) + 'px';
+        menu.style.left = Math.min(x, window.innerWidth - mw - 4) + 'px';
+        menu.style.top = Math.min(y, window.innerHeight - mh - 4) + 'px';
+      }
+      const termEl = document.getElementById('terminal');
+      termEl.addEventListener('contextmenu', function (e) {
+        e.preventDefault();
+        openMenu(e.clientX, e.clientY);
       });
+      // Touch has no right-click, and the grid is `user-select: none`, so without
+      // this bridge copy/paste were unreachable on a phone (CROW-1006). Mirrors
+      // app.js's attachLongPress: fire at the touch point after ~500ms if the
+      // finger hasn't moved past a small threshold, then swallow the emulated
+      // click so the trailing tap doesn't immediately hideMenu().
+      (function attachLongPress(node) {
+        let timer = null, sx = 0, sy = 0, fired = false;
+        const clear = function () { if (timer) { clearTimeout(timer); timer = null; } };
+        node.addEventListener('touchstart', function (e) {
+          if (e.touches.length !== 1) { clear(); return; }
+          fired = false;
+          sx = e.touches[0].clientX;
+          sy = e.touches[0].clientY;
+          clear();
+          timer = setTimeout(function () { fired = true; timer = null; openMenu(sx, sy); }, 500);
+        }, { passive: true });
+        node.addEventListener('touchmove', function (e) {
+          if (!timer) return;
+          const t = e.touches[0];
+          if (Math.abs(t.clientX - sx) > 10 || Math.abs(t.clientY - sy) > 10) clear();
+        }, { passive: true });
+        node.addEventListener('touchend', function (e) {
+          clear();
+          if (fired) { e.preventDefault(); fired = false; }
+        });
+        node.addEventListener('touchcancel', clear, { passive: true });
+      })(termEl);
       window.addEventListener('click', hideMenu);
       window.addEventListener('blur', hideMenu);
 

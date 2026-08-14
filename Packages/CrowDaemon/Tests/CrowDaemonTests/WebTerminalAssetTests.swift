@@ -340,6 +340,83 @@ import Testing
             "\(page)'s viewport meta must opt into the full-bleed safe-area layout")
     }
 
+    /// CROW-1006: both terminal surfaces must reach their context menu by
+    /// long-press, not right-click alone.
+    ///
+    /// The grid is a canvas that `xterm.css` marks `user-select: none`, so a
+    /// phone has no native selection or copy callout over it — these menus *are*
+    /// the mobile context menu, and until this bridge landed copy and paste were
+    /// unreachable there. A `contextmenu` listener is not enough on its own:
+    /// iOS Safari dispatches no `contextmenu` for a long-press on a plain
+    /// element, which is the case this exists for.
+    ///
+    /// Asserted per-surface because the two carry separate implementations (the
+    /// drift this suite exists to prevent) — `app.js` reuses its shared
+    /// `attachLongPress`, the debug page inlines an equivalent.
+    ///
+    /// Deliberately NOT run through `stripComments`: every assertion here is
+    /// positive, and the shapes matched are code, not prose. `stripComments`
+    /// pairs the `/*` inside app.js's `// … #/settings/*` line comment with a
+    /// later `*after*`, swallowing the region this registration lives in — a
+    /// hazard only *negative* guards need to bear.
+    @Test func bothTerminalSurfacesOpenTheirMenuOnLongPress() throws {
+        let appJS = try Self.webAsset("app.js")
+        #expect(
+            appJS.contains("wrap.addEventListener('contextmenu', showTerminalMenu)"),
+            "app.js must keep the desktop right-click path on #terminal-wrap")
+        #expect(
+            appJS.contains("attachLongPress(wrap,"),
+            "app.js must bridge long-press to the same menu on #terminal-wrap (CROW-1006)")
+
+        let debugPage = try Self.webAsset("terminal.html")
+        // One builder, two entry points: routing both through `openMenu` is what
+        // keeps the touch menu from drifting from the right-click one *within*
+        // the page, the way the two pages once drifted from each other.
+        #expect(
+            debugPage.contains("openMenu(e.clientX, e.clientY)")
+                && debugPage.contains("openMenu(sx, sy)"),
+            "terminal.html's right-click and long-press must build the same menu (CROW-1006)")
+    }
+
+    /// The gesture contract the bridge above depends on, pinned on both
+    /// surfaces: a press must be still, single-fingered, and held — otherwise
+    /// the menu would ambush a scroll drag (the #777 touch-scroll shim owns the
+    /// same finger) or a pinch. The trailing `preventDefault` matters just as
+    /// much: without it the emulated click lands on the surface underneath and
+    /// dismisses the menu it just opened.
+    @Test(arguments: ["app.js", "terminal.html"])
+    func longPressIsStillSingleFingeredAndHeld(asset: String) throws {
+        let code = try Self.webAsset(asset)
+        #expect(
+            code.contains("}, 500)"),
+            "\(asset)'s long-press must be held, not instant")
+        #expect(
+            code.contains("touches.length !== 1"),
+            "\(asset) must ignore multi-touch — a pinch is not a long-press")
+        #expect(
+            code.contains("> 10 ||"),
+            "\(asset) must cancel on movement so a scroll drag never opens the menu")
+        #expect(
+            code.contains("if (fired) { e.preventDefault();"),
+            "\(asset) must swallow the emulated click, or the menu closes itself")
+    }
+
+    /// iOS must not pre-empt either menu with its own long-press sheet. Nothing
+    /// is given up by suppressing it: the grid carries `user-select: none`
+    /// already, so there is no native selection for the callout to act on — only
+    /// a sheet that would race Crow's menu for the same gesture (CROW-1006).
+    @Test(arguments: ["app.css", "terminal.html"])
+    func theTerminalGridSuppressesTheIOSCallout(asset: String) throws {
+        let source = try Self.webAsset(asset)
+        let block = try #require(
+            source.range(of: "#terminal {"),
+            "\(asset) must style #terminal")
+        let rule = source[block.lowerBound...].prefix(while: { $0 != "}" })
+        #expect(
+            rule.contains("-webkit-touch-callout: none"),
+            "\(asset)'s #terminal must suppress the iOS long-press callout (CROW-1006)")
+    }
+
     /// Cancelling a gesture and being able to perform it are one decision: a
     /// surface may only `preventDefault()` the copy chord if its copy always
     /// delivers. `navigator.clipboard` is absent over plain http (a

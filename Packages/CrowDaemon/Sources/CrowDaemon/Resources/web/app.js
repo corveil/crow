@@ -6605,7 +6605,22 @@ document.getElementById('back-to-sidebar').onclick = () => {
 };
 // Our own terminal context menu (copy/paste/select-all/clear) replaces the
 // browser default over the coding pane.
-document.getElementById('terminal-wrap').addEventListener('contextmenu', showTerminalMenu);
+//
+// Long-press is the touch half of the same menu (CROW-1006). xterm draws into a
+// canvas under `user-select: none`, so a phone has no native selection or copy
+// callout to fall back on here — this menu IS the mobile context menu, and
+// without a touch entry point copy and paste were simply unreachable. The bridge
+// carries its own weight even where the platform has one: iOS Safari dispatches
+// no `contextmenu` for a long-press on a plain element. Android Chrome does, so
+// both paths fire ~500ms in — harmless, because showTerminalMenu closes any open
+// menu before rebuilding it at (nearly) the same point, which reads as one menu.
+{
+  const wrap = document.getElementById('terminal-wrap');
+  wrap.addEventListener('contextmenu', showTerminalMenu);
+  attachLongPress(wrap, (x, y) => {
+    showTerminalMenu({ preventDefault() {}, clientX: x, clientY: y });
+  });
+}
 
 // Paint the left pane immediately — cached last-known layout, or skeleton
 // placeholders — before the first /rpc round-trip (CROW-613). A stale-schema
