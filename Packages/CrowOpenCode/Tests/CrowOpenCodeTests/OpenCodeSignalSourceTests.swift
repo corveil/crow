@@ -61,8 +61,9 @@ struct OpenCodeSignalSourceTests {
         }
     }
 
-    @Test func sessionIdleMappedToStopMarksDone() {
-        // OpenCode's `session.idle` → canonical `Stop` in the plugin; the
+    @Test func sessionStatusIdleMappedToStopMarksDone() {
+        // OpenCode's `session.status {idle}` → canonical `Stop` in the plugin
+        // (with the deprecated `session.idle` as an older-build fallback); the
         // signal source drives `.done` + records the top-level stop.
         let t = source.transition(
             for: event("Stop"),
@@ -73,6 +74,22 @@ struct OpenCodeSignalSourceTests {
         #expect(t.newActivityState == .done)
         if case .set = t.lastTopLevelStopAt {} else {
             Issue.record("Stop should set lastTopLevelStopAt")
+        }
+    }
+
+    @Test func sessionStatusBusyMappedToUserPromptSubmitResumesWorking() {
+        // `session.status {busy}` → canonical `UserPromptSubmit`: the turn
+        // started, so a `.done` card must go back to `.working` *before* the
+        // first tool call, and the stale top-level stop must be cleared.
+        let t = source.transition(
+            for: event("UserPromptSubmit"),
+            currentActivityState: .done,
+            currentNotificationType: nil,
+            currentLastTopLevelStopAt: Date()
+        )
+        #expect(t.newActivityState == .working)
+        if case .clear = t.lastTopLevelStopAt {} else {
+            Issue.record("UserPromptSubmit should clear the stale lastTopLevelStopAt")
         }
     }
 

@@ -25,6 +25,9 @@ struct OpenCodeHookConfigWriterTests {
         // OpenCode event.type → Crow-canonical PascalCase.
         #expect(js.contains("case \"session.created\":"))
         #expect(js.contains("\"SessionStart\""))
+        // Done detection rides `session.status` (CROW-1000), with the
+        // deprecated `session.idle` kept only as an older-build fallback.
+        #expect(js.contains("case \"session.status\":"))
         #expect(js.contains("case \"session.idle\":"))
         #expect(js.contains("\"Stop\""))
         // Permission detection uses the first-class `permission.ask` hook, not
@@ -36,6 +39,37 @@ struct OpenCodeHookConfigWriterTests {
         #expect(js.contains("\"PostToolUse\""))
         // Prefers the git worktree path for cwd resolution.
         #expect(js.contains("worktree || directory"))
+    }
+
+    @Test func pluginSourceLatchesSessionStatusSoIdleDoesNotDoubleEmit() {
+        // Upstream publishes BOTH `session.status {idle}` and the deprecated
+        // `session.idle` at turn end (status first), so the plugin must ignore
+        // the compat event once it has seen a `session.status`.
+        let js = OpenCodeHookConfigWriter.pluginSource(crowPath: "/bin/crow")
+        #expect(js.contains("let sawSessionStatus = false;"))
+        #expect(js.contains("sawSessionStatus = true;"))
+        #expect(js.contains("if (!sawSessionStatus) await emit($, cwd, \"Stop\");"))
+    }
+
+    @Test func pluginSourceActsOnStatusTransitionsOnly() {
+        // `session.status` is published on every internal status write, not
+        // only on changes, so the plugin dedups per sessionID.
+        let js = OpenCodeHookConfigWriter.pluginSource(crowPath: "/bin/crow")
+        #expect(js.contains("const lastStatus = new Map();"))
+        #expect(js.contains("const prev = lastStatus.get(id) || \"idle\";"))
+        #expect(js.contains("if (prev === state) break;"))
+    }
+
+    @Test func pluginSourceMapsBusyToWorkingAndNeverTreatsRetryAsDone() {
+        let js = OpenCodeHookConfigWriter.pluginSource(crowPath: "/bin/crow")
+        // `busy` is the "turn started" edge — the card must leave `.done`
+        // before the first tool call.
+        #expect(js.contains("\"UserPromptSubmit\""))
+        // `retry` is a busy sub-state: folded into busy, never mapped to Stop.
+        #expect(js.contains("raw === \"retry\" ? \"busy\" : raw"))
+        // Only these two normalized states produce an emit.
+        #expect(js.contains("if (state === \"idle\") {"))
+        #expect(js.contains("if (state === \"busy\") {"))
     }
 
     @Test func globalPluginSourceSelfSuppressesWhenPerProjectExists() {

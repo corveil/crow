@@ -267,8 +267,10 @@ that will close them (Cursor/Codex/OpenCode launchers are written but
   table (kept in one place so the two docs can't go stale asymmetrically);
   today it covers Codex sync-only (**v0.139.0**), the `codex_hooks`→`hooks`
   rename (**v0.139.0+**), the `ClaudeHooksEngine` reuse (**codex 0.123.0**),
-  Claude's recap subagent (**≥ 2.1.108**), and the two unpinned empirical
-  timings (Cursor async, OpenCode `session.idle` / CROW-545).
+  Claude's recap subagent (**≥ 2.1.108**), OpenCode's `session.status` done
+  signal (**opencode 1.18.5**, CROW-1000 — replaces the formerly unpinned
+  `session.idle` question), and the one still-unpinned empirical timing
+  (Cursor async).
 
 - The gating rule (8) means a partially-installed environment produces a smaller,
   correct picker rather than broken entries — but "why can't I hand off to X?"
