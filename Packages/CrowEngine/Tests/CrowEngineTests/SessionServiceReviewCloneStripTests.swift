@@ -108,7 +108,7 @@ struct SessionServiceReviewCloneStripTests {
     /// No registered agent is review-incapable today, so the refusal gate is
     /// uniformly `false` across every kind × session-kind combination.
     @Test func refuseGateNeverFires() {
-        for k: AgentKind in [.claudeCode, .cursor, .codex, .openCode, .grok, .antigravity] {
+        for k: AgentKind in [.claudeCode, .cursor, .codex, .openCode, .grok, .antigravity, .muse] {
             for sk: SessionKind in [.work, .job, .review, .manager] {
                 #expect(!SessionService.shouldRefuseReviewHandoff(
                     targetKind: k, sessionKind: sk))
