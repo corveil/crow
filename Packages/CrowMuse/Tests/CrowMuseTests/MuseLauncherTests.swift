@@ -47,7 +47,8 @@ struct MuseLauncherTests {
     @Test func launchCommandMaterializesPromptWith0600AndExec() async throws {
         let sid = UUID()
         let cmd = try await launcher.launchCommand(
-            sessionID: sid, worktreePath: "/wt/crow", prompt: "hello world", binary: "/bin/muse")
+            sessionID: sid, worktreePath: "/wt/crow", prompt: "hello world",
+            binary: "/bin/muse", trustWorkspace: true)
 
         #expect(cmd.hasPrefix("cd '/wt/crow' && { "))
         #expect(cmd.contains("'/bin/muse' exec"))
@@ -67,7 +68,17 @@ struct MuseLauncherTests {
     @Test func launchCommandQuotesWorktreeWithSpaces() async throws {
         let cmd = try await launcher.launchCommand(
             sessionID: UUID(), worktreePath: "/Users/x/My Projects/wt",
-            prompt: "p", binary: "/bin/muse")
+            prompt: "p", binary: "/bin/muse", trustWorkspace: true)
         #expect(cmd.hasPrefix("cd '/Users/x/My Projects/wt' && "))
+    }
+
+    @Test func launchCommandWithholdsTrustWhenAsked() async throws {
+        let cmd = try await launcher.launchCommand(
+            sessionID: UUID(), worktreePath: "/wt/crow", prompt: "p",
+            binary: "/bin/muse", trustWorkspace: false)
+        #expect(!cmd.contains("--trust-workspace"))
+        #expect(cmd.contains(" exec"))
+        #expect(cmd.contains(" resume"))
+        #expect(!cmd.contains("--yolo"))
     }
 }

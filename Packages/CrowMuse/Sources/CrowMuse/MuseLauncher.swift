@@ -78,11 +78,17 @@ public actor MuseLauncher {
     /// `MuseAgent.findBinary()`, which is override-aware. `muse` is a
     /// collision-prone token (Muse Sequencer), so we must **not** re-resolve
     /// it here with a bare PATH walk.
+    ///
+    /// `trustWorkspace` is the per-launch `--trust-workspace` seed. Review
+    /// handoffs must pass `false` so a stripped clone is not immediately
+    /// re-trusted (skills/rules under `.claude/` / `.codex/` load after
+    /// workspace trust even though `.muse/` + `.agents/` were stripped).
     public func launchCommand(
         sessionID: UUID,
         worktreePath: String,
         prompt: String,
-        binary: String = "muse"
+        binary: String = "muse",
+        trustWorkspace: Bool
     ) throws -> String {
         let tmpDir = FileManager.default.temporaryDirectory
         let promptPath = tmpDir.appendingPathComponent("crow-muse-\(sessionID.uuidString)-prompt.md")
@@ -93,7 +99,7 @@ public actor MuseLauncher {
             binary: binary,
             promptPath: promptPath.path,
             autoPermissionMode: false,
-            trustWorkspace: true
+            trustWorkspace: trustWorkspace
         ).trimmingCharacters(in: .newlines)
         return "cd \(MuseLaunchArgs.shellQuote(worktreePath)) && { \(inner); }\n"
     }

@@ -150,11 +150,33 @@ public struct MuseAgent: CodingAgent {
         worktreePath: String,
         prompt: String
     ) async throws -> String {
+        // Fail closed: a kindless signature cannot prove the worktree isn't
+        // `.review`. `handoffAgent` calls the kind-aware overload below with
+        // the live `session.kind`.
         try await launcher.launchCommand(
             sessionID: sessionID,
             worktreePath: worktreePath,
             prompt: prompt,
-            binary: findBinary() ?? "muse"
+            binary: findBinary() ?? "muse",
+            trustWorkspace: false
+        )
+    }
+
+    public func launchCommand(
+        sessionID: UUID,
+        worktreePath: String,
+        prompt: String,
+        sessionKind: SessionKind
+    ) async throws -> String {
+        // Strip-not-trust: match `autoLaunchCommand`. Review clones withhold
+        // `--trust-workspace` so attacker-committed skills/rules (`.claude/`,
+        // `.codex/`) that the launch-path strip does not remove stay unloaded.
+        try await launcher.launchCommand(
+            sessionID: sessionID,
+            worktreePath: worktreePath,
+            prompt: prompt,
+            binary: findBinary() ?? "muse",
+            trustWorkspace: sessionKind != .review
         )
     }
 

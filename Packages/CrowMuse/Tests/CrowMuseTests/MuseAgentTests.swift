@@ -144,13 +144,59 @@ struct MuseAgentTests {
             sessionID: UUID(),
             worktreePath: "/tmp/wt",
             prompt: "do the thing",
-            binary: "/opt/my tools/muse"
+            binary: "/opt/my tools/muse",
+            trustWorkspace: true
         )
         #expect(cmd.contains("'/opt/my tools/muse'"))
         #expect(cmd.contains("--prompt-file"))
         #expect(cmd.contains(" resume"))
         #expect(cmd.contains("--trust-workspace"))
         #expect(!cmd.contains("--yolo"))
+    }
+
+    @Test func reviewHandoffWithholdsTrustWorkspace() async throws {
+        // Mirrors `reviewFirstLaunchExecThenResumeWithoutTrust` on the handoff
+        // path: `handoffAgent` calls the kind-aware `launchCommand` with the
+        // live `session.kind`. A `.review` handoff must not re-trust a clone
+        // the launch-path strip just cleaned.
+        let cmd = try await agent.launchCommand(
+            sessionID: UUID(), worktreePath: "/tmp/wt", prompt: "review this",
+            sessionKind: .review)
+        #expect(cmd.contains(" exec"))
+        #expect(cmd.contains("--prompt-file"))
+        #expect(cmd.contains(" resume"))
+        #expect(!cmd.contains("--trust-workspace"))
+        #expect(!cmd.contains("--yolo"))
+    }
+
+    @Test func workHandoffSeedsTrustWorkspace() async throws {
+        let cmd = try await agent.launchCommand(
+            sessionID: UUID(), worktreePath: "/tmp/wt", prompt: "do the thing",
+            sessionKind: .work)
+        #expect(cmd.contains("--trust-workspace"))
+        #expect(!cmd.contains("--yolo"))
+    }
+
+    @Test func existentialDispatchWithholdsTrustOnReviewHandoff() async throws {
+        // `handoffAgent` holds the agent as `any CodingAgent`. Pin that the
+        // kind-aware override dispatches through the existential, not the
+        // protocol default that would ignore `sessionKind` and fail-closed
+        // (or, worse, a 3-arg that always trusted).
+        let erased: any CodingAgent = MuseAgent()
+        let review = try await erased.launchCommand(
+            sessionID: UUID(), worktreePath: "/tmp/wt", prompt: "p",
+            sessionKind: .review)
+        #expect(!review.contains("--trust-workspace"))
+        let work = try await erased.launchCommand(
+            sessionID: UUID(), worktreePath: "/tmp/wt", prompt: "p",
+            sessionKind: .work)
+        #expect(work.contains("--trust-workspace"))
+    }
+
+    @Test func kindlessLaunchCommandFailsClosedWithoutTrust() async throws {
+        let cmd = try await agent.launchCommand(
+            sessionID: UUID(), worktreePath: "/tmp/wt", prompt: "p")
+        #expect(!cmd.contains("--trust-workspace"))
     }
 
     @Test func findBinaryDoesNotCrash() {

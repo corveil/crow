@@ -203,14 +203,15 @@ public protocol CodingAgent: Sendable {
     /// `sessionKind` and delegates to the three-argument `launchCommand`, so an
     /// agent with no kind-dependent launch need not implement it.
     ///
-    /// **No agent overrides this today.** Cursor was the only one — it withheld
-    /// its `--trust` workspace-trust seed from `.review` handoff clones — and
-    /// CROW-954 dropped that carve-out (review clones now launch pre-trusted,
-    /// defended by the launch-path `.cursor/` strip instead of a folder-trust
-    /// dialog). The requirement is kept because it is the seam a future harness
-    /// needs to treat a hostile review checkout differently from a `.work`
-    /// worktree; `SessionService.handoffAgent` already calls through it with the
-    /// live `session.kind`, so adding one is a single override.
+    /// **Muse overrides this** to withhold `--trust-workspace` from `.review`
+    /// handoff clones (strip-not-trust — skills/rules load after workspace
+    /// trust even when `.muse/` + `.agents/` have been stripped). Cursor used
+    /// to, then CROW-954 dropped that carve-out (review clones now launch
+    /// pre-trusted, defended by the launch-path `.cursor/` strip). The
+    /// requirement is the seam a harness needs to treat a hostile review
+    /// checkout differently from a `.work` worktree;
+    /// `SessionService.handoffAgent` already calls through it with the live
+    /// `session.kind`.
     func launchCommand(
         sessionID: UUID,
         worktreePath: String,
@@ -264,10 +265,10 @@ public extension CodingAgent {
     var binaryTokens: [String] { [launchCommandToken] + alternateLaunchCommandTokens }
 
     /// Default kind-aware launch: ignore `sessionKind` and delegate to the
-    /// three-argument `launchCommand`. Overridden only by agents whose launch
-    /// varies by kind (today just Cursor's trust seed). A protocol *requirement*
-    /// with an extension default, so a call on `any CodingAgent` still
-    /// dynamically dispatches to an overriding conformer.
+    /// three-argument `launchCommand`. Overridden by agents whose launch
+    /// varies by kind (Muse withholds `--trust-workspace` from `.review`).
+    /// A protocol *requirement* with an extension default, so a call on
+    /// `any CodingAgent` still dynamically dispatches to an overriding conformer.
     func launchCommand(
         sessionID: UUID,
         worktreePath: String,
