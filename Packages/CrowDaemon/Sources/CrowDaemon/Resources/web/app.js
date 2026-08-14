@@ -5480,9 +5480,15 @@ function scrollbarTheme() {
 // surface allowing it: with nothing to scroll, xterm sizes the slider to the
 // whole track, so an ungated pin would paint a permanent stripe down every
 // empty terminal. `baseY` (lines that have scrolled off the top) is exactly
-// xterm's own "is the bar needed" test, and it is 0 in the alternate screen —
-// which is where alt-buffer agents like Claude Code live and where there is no
-// local scrollback to reach anyway (see applySurfaceScrollback).
+// xterm's own "is the bar needed" test.
+//
+// That also covers alt-buffer agents (Claude Code) for free — but NOT via the
+// buffer type, and the distinction matters if this is ever rewritten.
+// crow-tmux.conf strips smcup/rmcup toward the CLIENT, so the web xterm is
+// permanently in its main buffer and `buffer.active.type` is never 'alternate'
+// here (the same trap ADR-0013 calls out for the wheel routing). What actually
+// zeroes baseY on those surfaces is applySurfaceScrollback pinning
+// `options.scrollback = 0`, which caps the main buffer at `rows`.
 function updateTerminalScrollbar() {
   const wrap = document.getElementById('terminal-wrap');
   if (!wrap) return;
