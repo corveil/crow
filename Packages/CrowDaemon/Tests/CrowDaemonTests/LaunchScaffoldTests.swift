@@ -35,7 +35,7 @@ struct LaunchScaffoldTests {
         // Fresh install shape: the dev root exists but `.claude/` does not.
         let claudeDir = (devRoot as NSString).appendingPathComponent(".claude")
 
-        LaunchScaffold.run(devRoot: devRoot, configured: true)
+        LaunchScaffold.run(devRoot: devRoot, configured: true, codexAsyncHooksSupported: false)
 
         let fm = FileManager.default
         for relative in Self.expectedSkillFiles {
@@ -69,7 +69,7 @@ struct LaunchScaffoldTests {
             withIntermediateDirectories: true)
         try "# stale from an older Crow\n".write(toFile: skillPath, atomically: true, encoding: .utf8)
 
-        LaunchScaffold.run(devRoot: devRoot, configured: true)
+        LaunchScaffold.run(devRoot: devRoot, configured: true, codexAsyncHooksSupported: false)
 
         let refreshed = try String(contentsOfFile: skillPath, encoding: .utf8)
         #expect(!refreshed.contains("stale from an older Crow"))
@@ -84,7 +84,7 @@ struct LaunchScaffoldTests {
         let devRoot = try Self.makeTempDevRoot()
         defer { try? FileManager.default.removeItem(atPath: devRoot) }
 
-        let warning = LaunchScaffold.run(devRoot: devRoot, configured: false)
+        let warning = LaunchScaffold.run(devRoot: devRoot, configured: false, codexAsyncHooksSupported: false)
 
         #expect(warning == nil)
         #expect(!FileManager.default.fileExists(
@@ -101,7 +101,7 @@ struct LaunchScaffoldTests {
         defer { try? FileManager.default.removeItem(atPath: devRoot) }
         let claudeDir = (devRoot as NSString).appendingPathComponent(".claude")
 
-        LaunchScaffold.run(devRoot: devRoot, configured: true)
+        LaunchScaffold.run(devRoot: devRoot, configured: true, codexAsyncHooksSupported: false)
 
         // Simulate the user editing both files between launches.
         let claudeMDPath = (claudeDir as NSString).appendingPathComponent("CLAUDE.md")
@@ -115,7 +115,7 @@ struct LaunchScaffoldTests {
             of: "\"allow\": [", with: "\"allow\": [\n      \"Bash(npm test:*)\",")
         try settings.write(toFile: settingsPath, atomically: true, encoding: .utf8)
 
-        LaunchScaffold.run(devRoot: devRoot, configured: true)
+        LaunchScaffold.run(devRoot: devRoot, configured: true, codexAsyncHooksSupported: false)
 
         let claudeMDAfter = try String(contentsOfFile: claudeMDPath, encoding: .utf8)
         #expect(claudeMDAfter.contains("## Known Issues / Corrections"))

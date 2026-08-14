@@ -42,8 +42,13 @@ enum LaunchScaffold {
     /// the non-fatal `corveil skill install` warning (`nil` when unconfigured or
     /// successful), which the caller mirrors into
     /// `AppState.corveilSkillInstallWarning`.
+    ///
+    /// `codexAsyncHooksSupported` is `CodexVersionProbe`'s verdict, taken by the
+    /// caller because the probe is async and this is not (CROW-999). It has no
+    /// default: a silent `false` would quietly drop async hooks on a capable
+    /// Codex, and the decision belongs to whoever ran the probe.
     @discardableResult
-    static func run(devRoot: String, configured: Bool) -> String? {
+    static func run(devRoot: String, configured: Bool, codexAsyncHooksSupported: Bool) -> String? {
         guard configured else { return nil }
 
         let config = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
@@ -61,7 +66,10 @@ enum LaunchScaffold {
             CrowDaemon.log("WARNING: dev-root scaffold failed: \(error.localizedDescription)")
         }
 
-        scaffoldAgents(devRoot: devRoot, mirrorClaudeMCPToCodex: config.defaults.mirrorClaudeMCPToCodex)
+        scaffoldAgents(
+            devRoot: devRoot,
+            mirrorClaudeMCPToCodex: config.defaults.mirrorClaudeMCPToCodex,
+            codexAsyncHooksSupported: codexAsyncHooksSupported)
         return warning
     }
 
@@ -126,7 +134,11 @@ enum LaunchScaffold {
     /// gets a `~/.codex`. `AGENTS.md` is shared by all three scaffolders; all are
     /// idempotent and preserve the user-edited `## Known Issues / Corrections`
     /// section, so co-existence is safe.
-    private static func scaffoldAgents(devRoot: String, mirrorClaudeMCPToCodex: Bool) {
+    private static func scaffoldAgents(
+        devRoot: String,
+        mirrorClaudeMCPToCodex: Bool,
+        codexAsyncHooksSupported: Bool
+    ) {
         let crowPath = ClaudeHookConfigWriter.resolveCrowBinary(devRoot: devRoot)
 
         if AgentRegistry.shared.agent(for: .codex) != nil {
@@ -148,7 +160,10 @@ enum LaunchScaffold {
             }
             if let crowPath {
                 attempt("Codex global config install") {
-                    try CodexHookConfigWriter.installGlobalConfig(codexHome: codexHome, crowPath: crowPath)
+                    try CodexHookConfigWriter.installGlobalConfig(
+                        codexHome: codexHome,
+                        crowPath: crowPath,
+                        asyncHooksSupported: codexAsyncHooksSupported)
                     try CodexHookConfigWriter.installGlobalTomlConfig(codexHome: codexHome, crowPath: crowPath)
                 }
             }

@@ -31,15 +31,14 @@ public enum OpenCodeLaunchArgs {
     static let tuiAutoRemovedVersion = SemVer(1, 17, 0)
 
     /// A parsed `MAJOR.MINOR.PATCH`, compared field-by-field.
-    struct SemVer: Comparable, Equatable {
-        let major, minor, patch: Int
-        init(_ major: Int, _ minor: Int, _ patch: Int) {
-            self.major = major; self.minor = minor; self.patch = patch
-        }
-        static func < (lhs: SemVer, rhs: SemVer) -> Bool {
-            (lhs.major, lhs.minor, lhs.patch) < (rhs.major, rhs.minor, rhs.patch)
-        }
-    }
+    ///
+    /// Hoisted into CrowCore as `AgentSemVer` when Codex's async-hook gate
+    /// needed the same comparison (CROW-999). The alias keeps this module's
+    /// call sites and tests reading as before. `AgentSemVer` also models a
+    /// pre-release suffix, which this probe never populates — `parseVersion`
+    /// below matches the bare triple, so `2.0.0-beta` parses as `2.0.0`,
+    /// unchanged.
+    typealias SemVer = AgentSemVer
 
     /// Parse the leading `MAJOR.MINOR.PATCH` out of `opencode --version` output
     /// (e.g. `"1.17.10"`, or `"opencode 1.18.4"`). Returns `nil` when no such
@@ -48,9 +47,7 @@ public enum OpenCodeLaunchArgs {
         // First run of `digits.digits.digits` anywhere in the string.
         guard let range = text.range(
             of: #"\d+\.\d+\.\d+"#, options: .regularExpression) else { return nil }
-        let parts = text[range].split(separator: ".").compactMap { Int($0) }
-        guard parts.count == 3 else { return nil }
-        return SemVer(parts[0], parts[1], parts[2])
+        return AgentSemVer.parse(token: String(text[range]))
     }
 
     /// Whether a known installed `version` falls in the window where the TUI

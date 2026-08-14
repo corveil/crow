@@ -177,10 +177,11 @@ struct CodexHookConfigWriterTests {
         #expect(toml == second)
     }
 
-    @Test func installGlobalConfigEmitsNoAsyncHooks() throws {
-        // Codex's hook runtime is sync-only; declaring async causes the
-        // entry to be silently skipped at startup, which breaks Crow's
-        // session-state detection. Guard against the regression.
+    @Test func installGlobalConfigEmitsNoAsyncHooksByDefault() throws {
+        // Fail-closed default: without a `CodexVersionProbe` verdict, no entry
+        // may carry `async`. On a pre-0.148 Codex an async entry isn't
+        // downgraded, it's skipped — which would silently stop Crow's
+        // session-state detection.
         let codexHome = try makeTempCodexHome()
         defer { try? FileManager.default.removeItem(at: codexHome) }
         try CodexHookConfigWriter.installGlobalConfig(
@@ -188,21 +189,67 @@ struct CodexHookConfigWriterTests {
             crowPath: "/usr/local/bin/crow"
         )
 
+        for (event, entry) in try hookEntries(in: codexHome) {
+            #expect(
+                entry["async"] == nil,
+                "event \(event) has async flag; pre-0.148 Codex silently skips async hooks"
+            )
+        }
+    }
+
+    @Test func installGlobalConfigEmitsAsyncOnlyForPostToolUseWhenSupported() throws {
+        let codexHome = try makeTempCodexHome()
+        defer { try? FileManager.default.removeItem(at: codexHome) }
+        try CodexHookConfigWriter.installGlobalConfig(
+            codexHome: codexHome.path,
+            crowPath: "/usr/local/bin/crow",
+            asyncHooksSupported: true
+        )
+
+        var sawAsync = false
+        for (event, entry) in try hookEntries(in: codexHome) {
+            if event == "PostToolUse" {
+                #expect(entry["async"] as? Bool == true, "PostToolUse should be async")
+                sawAsync = true
+            } else {
+                // PreToolUse in particular stays sync so it is accepted ahead of
+                // the PermissionRequest that follows it (#903).
+                #expect(entry["async"] == nil, "event \(event) must stay synchronous")
+            }
+        }
+        #expect(sawAsync, "PostToolUse entry should exist")
+    }
+
+    @Test func installGlobalConfigStripsAsyncOnDowngrade() throws {
+        // A user who downgrades Codex (or whose probe stops answering) must not
+        // be left with a stranded `async` on a build that would skip the hook.
+        // Each event's entry is rebuilt whole, so the key disappears.
+        let codexHome = try makeTempCodexHome()
+        defer { try? FileManager.default.removeItem(at: codexHome) }
+        try CodexHookConfigWriter.installGlobalConfig(
+            codexHome: codexHome.path, crowPath: "/usr/local/bin/crow", asyncHooksSupported: true)
+        try CodexHookConfigWriter.installGlobalConfig(
+            codexHome: codexHome.path, crowPath: "/usr/local/bin/crow", asyncHooksSupported: false)
+
+        for (event, entry) in try hookEntries(in: codexHome) {
+            #expect(entry["async"] == nil, "event \(event) kept a stale async flag")
+        }
+    }
+
+    /// Flatten `hooks.json` to `(eventName, innerHookEntry)` pairs.
+    private func hookEntries(in codexHome: URL) throws -> [(String, [String: Any])] {
         let data = try Data(contentsOf: codexHome.appendingPathComponent("hooks.json"))
         let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
         let hooks = json["hooks"] as! [String: Any]
+        var pairs: [(String, [String: Any])] = []
         for (event, value) in hooks {
-            let entries = value as! [[String: Any]]
-            for outer in entries {
-                let inner = outer["hooks"] as! [[String: Any]]
-                for entry in inner {
-                    #expect(
-                        entry["async"] == nil,
-                        "event \(event) has async flag; Codex silently skips async hooks"
-                    )
+            for outer in value as! [[String: Any]] {
+                for entry in outer["hooks"] as! [[String: Any]] {
+                    pairs.append((event, entry))
                 }
             }
         }
+        return pairs
     }
 
     // MARK: - Inline parent-table safety (#843 review round 7)
