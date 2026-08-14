@@ -3,10 +3,10 @@
 Crow can drive several coding agents ("harnesses") through one adapter protocol,
 [`CodingAgent`](../Packages/CrowCore/Sources/CrowCore/Agent/CodingAgent.swift):
 **Claude Code**, **Cursor**, **OpenAI Codex**, **OpenCode** (sst/opencode),
-**Grok Build** (xai-org/grok-build), and the Tier-2 **Antigravity** (Google's
-`agy` CLI). Claude Code is the reference implementation and the default; the
-others ship with deliberate gaps, and Antigravity ships as **Tier-2 /
-experimental** (closed-source, Google-auth-locked — see its section below).
+**Grok Build** (xai-org/grok-build), the Tier-2 **Antigravity** (Google's
+`agy` CLI), and the Tier-2 **Muse Code** (Meta's `muse` CLI). Claude Code is the reference implementation and the default; the
+others ship with deliberate gaps, and Antigravity / Muse ship as **Tier-2 /
+experimental** (closed-source, vendor-auth-locked — see their sections below).
 
 This page is the living reference for **what each harness can do and why the
 gaps exist**. The *architecture* of the adapter is
@@ -28,23 +28,23 @@ capabilities, update this table in the same PR.
 
 ## The matrix
 
-| Dimension | Claude Code | Cursor | Codex | OpenCode | Grok Build | Antigravity (Tier-2) |
-|---|---|---|---|---|---|---|
-| Binary token (`launchCommandToken`) | `claude` | `cursor-agent` ✅ (alias `agent` ⚠️ collides with grok-build) — identity-probed | `codex` | `opencode` | `grok` ⚠️ collision (`grok-cli`) — identity-probed | `agy` ✅ low collision |
-| Registered at boot | **always** (default out of the box) | only if binary found | only if binary found | only if binary found | only if binary found | only if binary found |
-| Resume / continue | ✅ `--continue` | ✅ `--continue` (job/review restart, #829) | ✅ `resume --last` | ⚠️ `--continue` re-enters TUI, no history | ✅ `-c`/`-r` (run-then-`-c`; job/review restart) | ⚠️ `-c` (machine-global most-recent; no per-run id, FR #7) |
-| Remote control | ✅ native `--rc --name` | ⚠️ faked via `crow send` paste | ⚠️ faked via `crow send` paste (native `remote-control` unwired — see below) | ⚠️ faked via `crow send` paste | ⚠️ faked via `crow send` paste (native ACP `grok agent serve` deferred) | ⚠️ faked via `crow send` paste (no native RC) |
-| Auto-permission | ✅ `--permission-mode auto` | ✅ `--force --approve-mcps` (parity with Claude auto, #829) | ✅ `-a never -s workspace-write` (`.job`, interactive) | ⚠️ runtime-probed `--auto`, `.job` only | ⚠️ `.job`-only `--permission-mode auto` (the real prompt-reducer) + a deliberately minimal `--deny` backstop (`rm -rf /` literals only, not a comprehensive block) (**not** `--yolo`); dangerous ops still gate | ⚠️ `settings.json` modes only (no verified launch flag; never `--dangerously-skip-permissions`) |
-| Hooks transport | per-worktree `.claude/settings.local.json` | per-worktree `.cursor/hooks.json` (#829) | global `~/.codex/hooks.json` + `config.toml` `notify` bridge (per-worktree deferred — see below) | global JS plugin `~/.config/opencode/plugins/crow-hooks.js` | per-worktree `.grok/hooks/crow.json` | per-worktree `.agents/hooks.json` (#860) |
-| Hook → session scope | ✅ per-session UUID | ✅ per-session UUID (#829) | ❌ `cwd` match (per-worktree UUID deferred) | ❌ `cwd` match | ✅ per-session UUID | ✅ per-session UUID |
-| Hook async delivery | ✅ `PostToolUse*` async | ⚠️ declared, timing unverified | ⚠️ `PostToolUse` async, **gated on `codex ≥ 0.148.0`** (older → sync; CROW-999) — timing unverified | ⚠️ names verified, timing unverified | ❌ sync-only (async support unverified) | ❌ no `async` in Antigravity's schema — all sync |
-| MCP (e.g. Jira) | ✅ `jira` MCP server via `~/.claude.json` | ✅ `jira` bridged into `~/.cursor/mcp.json` (#829) | ✅ mirrored from `~/.claude.json` into `config.toml` | ❌ falls back to `acli` | ❌ falls back to `acli` (Jira MCP bridge deferred; Grok *does* read Claude/Cursor MCP configs) | ❌ falls back to `acli` (file bridge deferred) |
-| Review (`/crow-review-pr`) | ✅ slash-command | ✅ inlined skill body | ✅ inlined skill body | ✅ inlined skill body | ✅ inlined skill body (human-gated) | ✅ inlined skill body (#902) |
-| Initial-prompt injection | ✅ prompt-file contents as argv + deferred paste | ✅ job/review, `--`-separated (CROW-968); handoff launcher auto-wired (#829); `.work` bare | ✅ `.job` + `.review` (prompt-file contents as argv) | ✅ run-then-`--continue` | ✅ run-then-`-c` (`.job`/`.review`); `.work` bare | ✅ `-p "$prompt"` (`.job`/`.review`, #902); `.work` bare |
-| Gateway env / trust seed / telemetry | ✅ Claude special-case | ⚠️ trust seed only (`--trust`, per-launch, every kind) | ⚠️ trust seed only (`[projects."…"]` in `config.toml`) | ❌ | ⚠️ trust seed only (`[folders."…"]` in `~/.grok/trusted_folders.toml`) | ❌ |
-| Rename passthrough (`/rename`) | ✅ | ✅ | ✅ | ✅ | ✅ (alias `/title`) | ❌ unverified on v1.1.7 (opt-out `nil`) |
-| Interactive TUI uses alt screen (`smcup`) | ✅ Claude Code requests it | ❌ inline renderer — unified 50k scrollback like a shell (CROW-1010) | ❌ **verified** inline (`alternate_on=0`, 0.141.0, CROW-1001) | ❌ unverified; inherits inline default | ❌ unverified; inherits inline default | ❌ unverified; inherits inline default |
-| Self-host / local models | provider-dependent | provider-dependent | provider-dependent | provider-dependent | ✅ `config.toml` `[model.*]` → any OpenAI/Anthropic-compatible or local (Ollama) endpoint | ❌ **permanent** — closed-source, Google-Sign-In/GCP-locked (Gemini 3 Pro / Claude Sonnet 4.5 only) |
+| Dimension | Claude Code | Cursor | Codex | OpenCode | Grok Build | Antigravity (Tier-2) | Muse Code (Tier-2) |
+|---|---|---|---|---|---|---|---|
+| Binary token (`launchCommandToken`) | `claude` | `cursor-agent` ✅ (alias `agent` ⚠️ collides with grok-build) — identity-probed | `codex` | `opencode` | `grok` ⚠️ collision (`grok-cli`) — identity-probed | `agy` ✅ low collision | `muse` ⚠️ collision (Muse Sequencer) — identity-probed |
+| Registered at boot | **always** (default out of the box) | only if binary found | only if binary found | only if binary found | only if binary found | only if binary found | only if binary found |
+| Resume / continue | ✅ `--continue` | ✅ `--continue` (job/review restart, #829) | ✅ `resume --last` | ⚠️ `--continue` re-enters TUI, no history | ✅ `-c`/`-r` (run-then-`-c`; job/review restart) | ⚠️ `-c` (machine-global most-recent; no per-run id, FR #7) | ⚠️ `muse resume` after `muse exec --prompt-file` (workspace-scoped; `--session-id` unused — needs-eval) |
+| Remote control | ✅ native `--rc --name` | ⚠️ faked via `crow send` paste | ⚠️ faked via `crow send` paste (native `remote-control` unwired — see below) | ⚠️ faked via `crow send` paste | ⚠️ faked via `crow send` paste (native ACP `grok agent serve` deferred) | ⚠️ faked via `crow send` paste (no native RC) | ⚠️ faked via `crow send` paste (no native RC) |
+| Auto-permission | ✅ `--permission-mode auto` | ✅ `--force --approve-mcps` (parity with Claude auto, #829) | ✅ `-a never -s workspace-write` (`.job`, interactive) | ⚠️ runtime-probed `--auto`, `.job` only | ⚠️ `.job`-only `--permission-mode auto` (the real prompt-reducer) + a deliberately minimal `--deny` backstop (`rm -rf /` literals only, not a comprehensive block) (**not** `--yolo`); dangerous ops still gate | ⚠️ `settings.json` modes only (no verified launch flag; never `--dangerously-skip-permissions`) | ⚠️ `--disable-approval` (sandbox stays; **never** `--yolo` / `--disable-sandbox`) on `.job`/`.review`/Manager when auto-perm is on |
+| Hooks transport | per-worktree `.claude/settings.local.json` | per-worktree `.cursor/hooks.json` (#829) | global `~/.codex/hooks.json` + `config.toml` `notify` bridge (per-worktree deferred — see below) | global JS plugin `~/.config/opencode/plugins/crow-hooks.js` | per-worktree `.grok/hooks/crow.json` | per-worktree `.agents/hooks.json` (#860) | per-worktree `.muse/hooks.json` (Claude-compatible schema; **needs-eval** — JSON shape not confirmed against a real binary) |
+| Hook → session scope | ✅ per-session UUID | ✅ per-session UUID (#829) | ❌ `cwd` match (per-worktree UUID deferred) | ❌ `cwd` match | ✅ per-session UUID | ✅ per-session UUID | ✅ per-session UUID (baked into the command) |
+| Hook async delivery | ✅ `PostToolUse*` async | ⚠️ declared, timing unverified | ⚠️ `PostToolUse` async, **gated on `codex ≥ 0.148.0`** (older → sync; CROW-999) — timing unverified | ⚠️ names verified, timing unverified | ❌ sync-only (async support unverified) | ❌ no `async` in Antigravity's schema — all sync | ❌ sync-only (async field unverified; declaring one risks a parse failure) |
+| MCP (e.g. Jira) | ✅ `jira` MCP server via `~/.claude.json` | ✅ `jira` bridged into `~/.cursor/mcp.json` (#829) | ✅ mirrored from `~/.claude.json` into `config.toml` | ❌ falls back to `acli` | ❌ falls back to `acli` (Jira MCP bridge deferred; Grok *does* read Claude/Cursor MCP configs) | ❌ falls back to `acli` (file bridge deferred) | ❌ falls back to `acli` (file bridge deferred; Muse reads `mcp_servers` in `~/.config/muse/settings.json`) |
+| Review (`/crow-review-pr`) | ✅ slash-command | ✅ inlined skill body | ✅ inlined skill body | ✅ inlined skill body | ✅ inlined skill body (human-gated) | ✅ inlined skill body (#902) | ✅ inlined skill body (#1033); strip-not-trust |
+| Initial-prompt injection | ✅ prompt-file contents as argv + deferred paste | ✅ job/review, `--`-separated (CROW-968); handoff launcher auto-wired (#829); `.work` bare | ✅ `.job` + `.review` (prompt-file contents as argv) | ✅ run-then-`--continue` | ✅ run-then-`-c` (`.job`/`.review`); `.work` bare | ✅ `-p "$prompt"` (`.job`/`.review`, #902); `.work` bare | ✅ `muse exec --prompt-file` then `muse resume` (`.job`/`.review`); `.work` bare TUI |
+| Gateway env / trust seed / telemetry | ✅ Claude special-case | ⚠️ trust seed only (`--trust`, per-launch, every kind) | ⚠️ trust seed only (`[projects."…"]` in `config.toml`) | ❌ | ⚠️ trust seed only (`[folders."…"]` in `~/.grok/trusted_folders.toml`) | ❌ | ⚠️ trust seed only (`--trust-workspace`, per-launch, withheld from `.review`) |
+| Rename passthrough (`/rename`) | ✅ | ✅ | ✅ | ✅ | ✅ (alias `/title`) | ❌ unverified on v1.1.7 (opt-out `nil`) | ❌ unverified (documented slash set has no `/rename`; opt-out `nil`) |
+| Interactive TUI uses alt screen (`smcup`) | ✅ Claude Code requests it | ❌ inline renderer — unified 50k scrollback like a shell (CROW-1010) | ❌ **verified** inline (`alternate_on=0`, 0.141.0, CROW-1001) | ❌ unverified; inherits inline default | ❌ unverified; inherits inline default | ❌ unverified; inherits inline default | ❌ unverified; inherits inline default |
+| Self-host / local models | provider-dependent | provider-dependent | provider-dependent | provider-dependent | ✅ `config.toml` `[model.*]` → any OpenAI/Anthropic-compatible or local (Ollama) endpoint | ❌ **permanent** — closed-source, Google-Sign-In/GCP-locked (Gemini 3 Pro / Claude Sonnet 4.5 only) | ❌ **permanent** — closed-source, Meta-auth-locked (browser sign-in or `META_API_KEY`; default model Muse Spark 1.2) |
 
 Legend: ✅ full · ⚠️ partial / faked / unverified · ❌ not supported.
 
@@ -104,9 +104,9 @@ Each harness declares a `launchCommandToken` — the binary name Crow resolves o
 `PATH` and the token the `send` RPC watches for to decide whether a
 managed-terminal command needs hook/env prep.
 
-- Tokens: `claude`, `cursor-agent`, `codex`, `opencode`, `grok`, `agy`
+- Tokens: `claude`, `cursor-agent`, `codex`, `opencode`, `grok`, `agy`, `muse`
   (`ClaudeCodeAgent`, `CursorAgent`, `OpenAICodexAgent`, `OpenCodeAgent`,
-  `GrokAgent`, `AntigravityAgent`).
+  `GrokAgent`, `AntigravityAgent`, `MuseAgent`).
 - **Cursor ships two names for one executable**, and Crow prefers the
   unambiguous `cursor-agent`; the generic `agent` is kept as an
   `alternateLaunchCommandTokens` alias for older installs. The generic name
@@ -148,6 +148,16 @@ managed-terminal command needs hook/env prep.
   `BinaryOverrides` keys on `AgentKind.rawValue` = `"grok"`. Cursor and Grok share
   one implementation of the bounded subprocess race (`BinaryIdentityProbe`,
   CROW-989) rather than each carrying a copy.
+- **Muse's token is `muse`, which collides** with the Muse Sequencer
+  (`muse-sequencer.github.io`) and any other same-named tool. Registration
+  **identity-probes** a bare PATH/fallback match — `muse --help` (then
+  `--version`), matched against Muse Code flag markers in
+  `MuseAgent.identityMarkers` (`--disable-approval`, `--trust-workspace`,
+  `--sandbox-network`, `--prompt-file`) — and shows Muse Code **disabled** when
+  the resolved binary is a foreign `muse`. An explicit `defaults.binaries.muse`
+  pin is authoritative and **skips the probe**. Crow never downloads `muse`
+  itself: the official installer (`curl -fsSL https://dev.meta.ai/install.sh`)
+  writes `~/.local/bin/muse`; Crow only resolves what that installer placed.
   ⚠️ **Trust-boundary delta:** `crowd` now *executes* the PATH-resolved binary
   (an unvetted third-party one) at boot to probe it — inherent to identity
   probing, on the user's own PATH, output only substring-matched (never logged
@@ -157,7 +167,7 @@ managed-terminal command needs hook/env prep.
   the *first* kind registered
   ([`AgentRegistry.swift`](../Packages/CrowCore/Sources/CrowCore/Agent/AgentRegistry.swift)).
   `CrowDaemon.registerAgents` registers **Claude unconditionally first** (and
-  available), then Codex / Cursor / OpenCode / Antigravity as *known* regardless
+  available), then Codex / Cursor / OpenCode / Antigravity / Grok / Muse as *known* regardless
   of `PATH`, marking each **available** only if `findBinary()` resolves
   ([`CrowDaemon.swift`](../Packages/CrowDaemon/Sources/CrowDaemon/CrowDaemon.swift),
   `registerAgents`; #879). Available agents enter the launchable map; a harness
@@ -208,12 +218,12 @@ describes what the UI claims, not what Crow can do.
 > So on every harness whose `true` is the `crow send` fake — Cursor, Codex,
 > OpenCode, Grok, Antigravity — a Manager shows no badge while that harness's
 > ordinary sessions do, even though `crow send` drives both identically. That
-> asymmetry predates CROW-1001 and is unchanged by it.
+> asymmetry predates CROW-1001 and is unchanged by it. Muse joins the same set.
 
 - **Claude:** `true`, backed by real `--rc --name` flags
   (`ClaudeLaunchArgs.argsSuffix`). `--name` labels the session in claude.ai's
   Remote Control panel.
-- **Cursor, OpenCode, Grok & Antigravity:** `true`, but there is **no RC
+- **Cursor, OpenCode, Grok, Antigravity & Muse:** `true`, but there is **no RC
   flag** — remote driving is `crow send` pasting into the interactive TUI (the
   agent-agnostic path: the `send` RPC handler in `EngineRouter.swift` →
   `TerminalRouter.send`). The badge reflects that Crow *can* drive them, not
@@ -316,6 +326,15 @@ describes what the UI claims, not what Crow can do.
   fallback) and the headless-`run` auto-approve (probed with `opencode run
   --help`: `--auto`, else `--dangerously-skip-permissions`). Each flag is omitted
   when its probe doesn't advertise it (#547). Reviews never auto-approve.
+- **Muse:** `--disable-approval` (`MuseLaunchArgs.autoPermissionSuffix`) —
+  skip approval prompts, **keep the OS sandbox** (Seatbelt on macOS, bubblewrap
+  on Linux). Applied to `.job` / `.review` / Manager when the caller asks.
+  Deliberately **not**: `--yolo` (disables approval *and* the sandbox *and*
+  trusts the workspace), `--disable-sandbox` (lifts filesystem confinement and
+  forces full network). `--trust-workspace` is a *separate* per-launch trust
+  seed, withheld from `.review`. `--sandbox-network` is left at Muse's default
+  (`proxy-only`); `--disable-approval` should also skip the first-connection
+  network prompt — **needs-eval** against a real binary.
 
 ### Hooks transport & session scope
 
@@ -433,7 +452,21 @@ All harnesses report lifecycle events by shelling out to `crow hook-event`, but
   on the restart/handoff paths needs the review context those paths don't carry
   (#861 r12 Green).
 
-Claude, Cursor, and Grok get **per-session UUID scope**; Codex and OpenCode
+- **Muse** — per-worktree `.muse/hooks.json`, written per session with
+  `hook-event --session <UUID>`, resolved by **UUID** (#1033,
+  `MuseHookConfigWriter`). Event names are documented
+  (`SessionStart` / `UserPromptSubmit` / `PreToolUse` / `PermissionRequest` /
+  `PostToolUse` / `Stop` plus LLM/compact/subagent events). The on-disk JSON
+  **shape** is a needs-eval pin: Crow writes a Claude-compatible
+  `{ "hooks": { "<Event>": […] } }` document because the names match Claude
+  and Muse already Claude-compat-loads `CLAUDE.md` / `.claude/skills`. `PreToolUse`
+  is deliberately not registered (stdout verdict unverified; Antigravity's
+  lesson). User/project hooks also require `muse hooks trust <key>` before they
+  run; `--trust-workspace` *loads* them. Whether load implies run is
+  **needs-eval** — state detection may stay dark until a real binary confirms.
+  A git-tracked or user-owned `.muse/hooks.json` is left untouched.
+
+Claude, Cursor, Grok, Antigravity, and Muse get **per-session UUID scope**; Codex and OpenCode
 share the host's global config and are disambiguated by `cwd`. See
 [ADR 0015](adr/0015-harness-capability-tiers.md).
 
@@ -556,6 +589,12 @@ share the host's global config and are disambiguated by `cwd`. See
   Cursor/OpenCode/Codex, #861). A bare `/crow-review-pr <URL>` would never expand
   → never post `gh pr review` → never satisfy `decideReviewCompletions`
   (`buildReviewPromptGrokBranchInlinesSkillBody` guards the regression).
+- **Muse** inlines the skill body the same way (`buildReviewPrompt` `.muse`
+  arm, #1033). Review clones are **strip-not-trust**: Crow withholds
+  `--trust-workspace` (so project hooks/skills/rules do not load) and strips
+  `.muse/` plus `.agents/` on every launch path. `.agents/memory/` is
+  load-bearing — Muse injects committed project memory even in an untrusted
+  workspace. Auto-perm is `--disable-approval` (sandbox stays), never `--yolo`.
 
 The inlined body is **frontmatter-stripped** (`MarkdownFrontmatter.stripped`,
 CROW-968). The SKILL file opens with a `---` YAML block because Claude Code's
@@ -594,6 +633,15 @@ harness (CROW-439) — it's gated on the prompt-file convention, not on agent ki
 - **Antigravity:** `agy -p "$prompt"` for job/review (path shell-quoted); the
   tmux PTY means the non-TTY `-p` stdout-drop doesn't bite. Restart resumes with
   `-c`. `.work` launches `agy` bare (#902).
+- **Muse:** **exec-then-`resume`** — headless `muse exec --prompt-file <path>`
+  consumes the prompt (any prompt arg is headless-only), then `; muse resume`
+  reopens the workspace session in the TUI with a fresh stdin. Uses
+  `--prompt-file` (not a `$(cat …)` subshell) so a large inlined review-skill
+  body never becomes a giant argv. `.job`/`.review` only; `.work` launches
+  `muse --trust-workspace` bare. `muse resume` without a session id is assumed
+  workspace-scoped most-recent (same heuristic as Antigravity's `-c`) —
+  **needs-eval** against a real binary. `muse exec --session-id` exists but
+  is unused: Crow does not capture the exec session id.
 
 `ShellLaunchArgs.evalPromptLaunch` builds every one of these except Grok's, whose
 prompt is read from a path and so never becomes argv. Its `endOfOptions` flag adds
@@ -777,9 +825,57 @@ fallbacks (`/opt/homebrew/bin/agy`, `/usr/local/bin/agy`, `~/.local/bin/agy`,
 the safe default. **The exact official install path must be confirmed before
 Antigravity is promoted out of Tier-2.**
 
+## Muse Code (Tier-2 / experimental)
+
+Meta Muse Code's CLI (binary **`muse`**) is the terminal surface of Meta's
+coding agent, built on Muse Spark 1.2. Crow drives it through the same
+`CodingAgent` protocol as the others — its adapter (`CrowMuse`) is structurally
+a **near-clone of `CrowGrok`**: hooks feed lifecycle events so the
+`HookConfigWriter`/`StateSignalSource` pair does real work; per-worktree
+`.muse/hooks.json` with the session UUID baked in; remote control faked via
+`crow send`; `.job`/`.review` dispatch via `muse exec --prompt-file` then
+`muse resume`; `.review` uses the inlined `crow-review-pr` SKILL body. It ships
+**Tier-2** ([ADR 0015](adr/0015-harness-capability-tiers.md)) with honest,
+documented gaps (#1033).
+
+**Bounded auto-permission is `--disable-approval`.** Official permissions
+docs: that flag skips approval prompts and **keeps the OS sandbox**. `--yolo`
+disables approval *and* the sandbox *and* trusts the workspace; `--disable-sandbox`
+lifts filesystem confinement. Crow never emits either. `--trust-workspace` is a
+separate per-launch trust seed (Cursor `--trust` analogue), applied on `.work` /
+`.job` / Manager and **withheld from `.review`**.
+
+**Review is strip-not-trust.** The clone is an attacker-controlled `gh` checkout.
+Withholding `--trust-workspace` means project skills, rules, and hooks do not
+load. Project **memory** under `.agents/memory/` is injected even in an
+untrusted workspace, so `stripMuseConfigFromReviewClone` removes `.muse/` **and**
+`.agents/` at creation (`prepareReviewClone`) **and on every launch path**
+(`prepareWorktreeForAgentLaunch`).
+
+**Subagent worktree fan-out is a Crow risk, not a flag we pass.**
+`--subagent-worktree-isolation` makes Muse create its own git worktrees per
+child, outside Crow's session tree. Crow does **not** emit the flag. Default
+is children share the lead's workspace. A user who enables isolation in
+`~/.config/muse/settings.json` can still leak worktrees — documented
+**wire-worthy** follow-up if a disable/isolate path appears.
+
+**Permanent gap — self-host.** The `muse` binary is **closed-source** and auth
+is **Meta browser sign-in or `META_API_KEY`**, so it runs only against Meta's
+cloud models (default `muse-spark-1.2`) — never an arbitrary self-hosted/local
+model. That fails Corveil's self-host axis and is a **fixed** gap, not a phase.
+
+**⚠️ Supply-chain / probe note.** Crow never installs `muse`. Resolution is
+PATH-first (picking up whatever the official `https://dev.meta.ai/install.sh`
+installer placed at `~/.local/bin/muse`), plus conservative standard-bin
+fallbacks. A bare `muse` is identity-probed because the name collides with the
+Muse Sequencer. This adapter was wired against official docs dated 2026-08-14,
+**not** a local `muse --help` — the installer is Meta-auth-gated. Every flag
+is a version-pinned re-check target; confirm against a real binary before
+promoting Muse out of Tier-2.
+
 ## Handoff between harnesses
 
-`crow handoff-agent --session <UUID> --agent <claude-code|cursor|codex|opencode|grok|antigravity>
+`crow handoff-agent --session <UUID> --agent <claude-code|cursor|codex|opencode|grok|antigravity|muse>
 [--note "…"]` switches a running session to a different harness. It preserves the
 Crow session identity, worktree, branch, ticket, and links; it does **not**
 transfer chat history ([ADR 0011](adr/0011-agent-handoff-preserves-session-not-chat.md)).
@@ -823,3 +919,10 @@ against current upstream CLIs.
 | Grok **`--permission-mode auto` now exists** — the ticket's pinned probe (#859) reported it absent; current docs show `grok --permission-mode auto`. Bounded `.job` posture stays `--permission-mode auto` + a minimal `--deny` backstop (never `--yolo`) regardless | Grok mirror **@ 2026-07-25** | `GrokLaunchArgs.autoPermissionSuffix` | 2026-07-26 |
 | Grok `Stop` / `Notification` fire on the transitions Crow's state machine needs — **confirm empirically** | — (empirical, #859) | `GrokSignalSource` | 2026-07-26 |
 | Grok double-fire: only the **global** `~/.claude`/`~/.cursor` hook configs Grok also discovers (its compat scanning) firing alongside `.grok/hooks/crow.json` — dedup deferred (genuinely user-controlled config, no Crow session UUID, not RCE; cf. Codex §3b). *Project* compat sources are handled: stripped on `.review` clones (`stripGrokConfigFromReviewClone`, RCE) and neutralized on `.work`/`.job` handoff + warm-adopt (`stripPriorCompatHooksForGrokHandoff` + session-own adopt write, #861 r9-r10). The Grok-**Manager** devRoot case stays a documented limitation (`writeManagerHookConfig`). | — (empirical, #859) | `GrokHookConfigWriter` / `SessionService` | 2026-07-27 |
+| **Entire Muse flag set** — `exec` / `--prompt-file` / `resume` / `--session-id` / `--disable-approval` / `--yolo` / `--disable-sandbox` / `--trust-workspace` / `--sandbox-network` / `--subagent-worktree-isolation` / hook event names | Official docs **2026-08-14** (https://dev.meta.ai/docs/muse-code/); **no local `muse --help`** (installer is Meta-auth-gated) | `MuseAgent` / `MuseLaunchArgs` / `MuseHookConfigWriter` / `MuseSignalSource` | 2026-08-14 (#1033) — **needs-eval** against a real binary before promoting out of Tier-2 |
+| Muse `muse` binary collides with Muse Sequencer | **Identity probe** at registration (`muse --help`/`--version` vs Muse Code flag markers) greys out a foreign `muse`; explicit `defaults.binaries.muse` pin bypasses it | `MuseAgent.identityMarkers` / `verifyBinaryIdentity` | 2026-08-14 (#1033) |
+| Muse hook JSON schema is unverified (event *names* documented; on-disk shape is a Claude-compatible guess) | Official extending docs 2026-08-14 list events + `muse hooks trust <key>` but not the file format | `MuseHookConfigWriter` | 2026-08-14 — **needs-eval**; a rejected shape would break launch, so a git-tracked / user-owned `.muse/hooks.json` is left untouched. Confirm with `muse hooks validate` |
+| Muse `muse hooks trust <key>` vs `--trust-workspace`: does workspace trust *run* project hooks, or only *load* them? | Official docs 2026-08-14: trust-workspace "loads" skills/rules/hooks; user/project hooks "must" be trusted by key | `MuseHookConfigWriter` / `MuseLaunchArgs.trustSuffix` | 2026-08-14 — **needs-eval**; state detection may stay dark until confirmed |
+| Muse `muse resume` without a session id is workspace-scoped most-recent (the exec-then-resume heuristic) | Official docs: `muse resume` opens the interactive UI; `muse exec --session-id` is the headless continue; `/resume --last` is a slash command | `MuseLaunchArgs.resumeTUICommand` | 2026-08-14 — **needs-eval**; `--session-id` capture is **wire-worthy** if bare `resume` is not last-session |
+| Muse `--subagent-worktree-isolation` creates git worktrees outside Crow's session tree | Official extending docs 2026-08-14; Crow never passes the flag; a user `settings.json` opt-in still can | `MuseLaunchArgs` (deliberately omitted) | 2026-08-14 — **wire-worthy** if a disable/isolate path appears; default is children share the lead workspace |
+| Muse review-clone strip list exhaustiveness: is any project-scope config `muse` reads **outside** `.muse/` + `.agents/` still uncovered? | Official docs: project hooks `.muse/hooks.json`; skills `.agents/skills` + `.claude/skills` + `.codex/skills` (skills load only after trust); memory `.agents/memory/` (loads **even untrusted**) | `stripMuseConfigFromReviewClone` | 2026-08-14 — strip covers `.muse/` + `.agents/` (memory). `.claude/skills` / `.codex/skills` load only after trust, which review withholds. Confirm no other untrusted-read surface before promoting out of Tier-2 |

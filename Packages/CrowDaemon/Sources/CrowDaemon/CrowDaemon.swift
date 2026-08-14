@@ -11,6 +11,7 @@ import CrowCursor
 import CrowOpenCode
 import CrowAntigravity
 import CrowGrok
+import CrowMuse
 import CrowEngine
 import CrowProvider
 import CrowGit
@@ -1069,6 +1070,13 @@ public enum CrowDaemon {
         // so the foreign `grok` is shown disabled rather than falsely active
         // (CROW-911); genuinely off-PATH ⇒ shown disabled too (#879).
         await registerDiscovered(GrokAgent())
+        // Muse Code (`muse`, Meta) — #1033. Tier-2 / experimental: closed-source
+        // and Meta-auth-locked (same class as Antigravity). Surfaced in the
+        // picker regardless of install state; off-PATH ⇒ shown disabled (#879).
+        // A bare PATH match is identity-probed because `muse` collides with the
+        // Muse Sequencer; an explicit `defaults.binaries.muse` pin skips the
+        // probe. Crow never installs `muse` itself.
+        await registerDiscovered(MuseAgent())
     }
 
     /// (Re)populate `appState` from the store snapshot — sessions + their

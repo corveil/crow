@@ -29,6 +29,7 @@ public enum CrowAttribution {
         AgentKind.openCode.rawValue: "OpenCode",
         AgentKind.antigravity.rawValue: "Antigravity",
         AgentKind.grok.rawValue: "Grok Build",
+        AgentKind.muse.rawValue: "Muse Code",
     ]
 
     /// Every display name Crow knows for its built-in kinds — the

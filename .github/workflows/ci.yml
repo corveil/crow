@@ -66,14 +66,14 @@ jobs:
       - name: Build & test Linux packages
         run: |
           LINUX_PACKAGES=(CrowCore CrowIPC CrowClaude CrowCodex CrowCursor \
-                          CrowAntigravity CrowGit CrowOpenCode CrowGrok CrowPersistence CrowProvider CrowCLI)
+                          CrowAntigravity CrowGit CrowOpenCode CrowGrok CrowMuse CrowPersistence CrowProvider CrowCLI)
           for pkg in "${LINUX_PACKAGES[@]}"; do
             echo "==> Building & testing $pkg on Linux..."
             # --enable-code-coverage on BOTH invocations, deliberately: toggling
             # the flag invalidates SwiftPM's build plan, so an uninstrumented
             # build here would be thrown away and recompiled from scratch by the
             # instrumented `swift test` below. That is a full second compile of
-            # all 12 packages on a lane that keeps no compiled products between
+            # all 13 packages on a lane that keeps no compiled products between
             # runs (ADR 0007) — sharing the flag makes the build reusable.
             swift build --enable-code-coverage --package-path "Packages/$pkg"
             # --no-parallel: the CrowIPC socket tests spin up real servers with

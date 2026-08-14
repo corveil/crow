@@ -157,7 +157,7 @@ struct SessionServiceGrokReviewCloneStripTests {
     /// surface the reviewing agent doesn't load would just hide the files a
     /// hostile PR ships.
     @Test func stripGateSkipsReviewForNonGrokAgents() {
-        for k: AgentKind in [.claudeCode, .codex, .cursor, .openCode] {
+        for k: AgentKind in [.claudeCode, .codex, .cursor, .openCode, .antigravity, .muse] {
             #expect(!SessionService.shouldStripGrokReviewClone(
                 agentKind: k, sessionKind: .review))
         }

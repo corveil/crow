@@ -261,6 +261,11 @@ enum LaunchScaffold {
         // in Phase A (the launcher prompt uses `acli` for Jira). Nothing to clean
         // up at daemon boot, so there's no `AgentRegistry.shared.agent(for: .grok)`
         // block (#861 review r8).
+        //
+        // Muse Code is the same shape (#1033): per-worktree `.muse/hooks.json`
+        // written by the engine, per-launch `--trust-workspace` (no durable
+        // store to seed at boot), no global MCP bridge in Phase A. Nothing to
+        // clean up here.
     }
 
     /// The value of environment variable `name`, or `nil` when it is unset or

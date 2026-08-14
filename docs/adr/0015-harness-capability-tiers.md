@@ -127,6 +127,19 @@ deliberate, documented gaps (full grid in the
 > Google-auth-locked); this amendment closes only the review deferral, not the
 > Tier-2 classification.
 
+> **Amendment (2026-08-14, #1033):** a seventh harness — **Muse Code** (Meta's
+> `muse` CLI) — joined as an explicit **Tier-2 / experimental** target, the
+> same class as Antigravity (#860): a real, driveable CLI that lands below the
+> self-hostable harnesses and ships with honest, documented gaps (closed-source
+> + Meta-auth-locked ⇒ a *permanent* self-host ❌). Its gaps live in the same
+> [capability matrix](../agent-harness-matrix.md) column. Bounded auto-permission
+> is the documented `--disable-approval` flag (sandbox stays); Crow never emits
+> `--yolo` or `--disable-sandbox`. Review is strip-not-trust (withhold
+> `--trust-workspace`, strip `.muse/` + `.agents/` on every launch path). The
+> adapter was wired against official docs dated 2026-08-14, **not** a local
+> `muse --help` — several cells are tagged needs-eval / wire-worthy for a real
+> binary pass before Muse is promoted out of Tier-2.
+
 > **Amendment (2026-08-13, CROW-1001):** **Decision item 3's Codex clause was
 > not a stale pin — it was never correct**, and that is a failure mode this ADR
 > did not anticipate. The recorded reason for `supportsRemoteControl = false`
@@ -178,7 +191,7 @@ records the rationale for each gap here (verbatim reasons preserved from source)
    prompt. OpenCode's `--continue` re-enters the TUI but carries no history.
 
 3. **Remote control is Claude-native; every other harness is faked.** Claude has
-   real `--rc --name` flags. Cursor, Codex, OpenCode, Grok and Antigravity set
+   real `--rc --name` flags. Cursor, Codex, OpenCode, Grok, Antigravity and Muse set
    `supportsRemoteControl = true` with **no RC flag** — remote driving is
    `crow send` into the interactive TUI (the `send` RPC handler in
    `EngineRouter.swift` → `TerminalRouter.send`), agent-agnostic, not a

@@ -27,6 +27,7 @@ let package = Package(
         .package(path: "../CrowOpenCode"),
         .package(path: "../CrowAntigravity"),
         .package(path: "../CrowGrok"),
+        .package(path: "../CrowMuse"),
         // OTLP receiver + telemetry.db (#772). Darwin-only (Network.framework).
         // CrowTerminal now builds on Linux (CROW-645); telemetry stays macOS-only.
         .package(path: "../CrowTelemetry"),
@@ -54,6 +55,7 @@ let package = Package(
                 .product(name: "CrowOpenCode", package: "CrowOpenCode"),
                 .product(name: "CrowAntigravity", package: "CrowAntigravity"),
                 .product(name: "CrowGrok", package: "CrowGrok"),
+                .product(name: "CrowMuse", package: "CrowMuse"),
                 // OTLP receiver (Network.framework) — macOS-only; Linux crowd runs
                 // without per-session analytics collection (CROW-645).
                 .product(name: "CrowTelemetry", package: "CrowTelemetry", condition: .when(platforms: [.macOS])),

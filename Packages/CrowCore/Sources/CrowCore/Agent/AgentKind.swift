@@ -29,6 +29,10 @@ public struct AgentKind: Hashable, Sendable, Codable, RawRepresentable {
 
     /// The Grok Build agent (xai-org/grok-build, binary `grok`).
     public static let grok = AgentKind(rawValue: "grok")
+
+    /// The Muse Code agent (Meta's `muse` CLI). Tier-2 / experimental —
+    /// closed-source, Meta-auth-locked, same class as Antigravity (#1033).
+    public static let muse = AgentKind(rawValue: "muse")
 }
 
 public extension AgentKind {

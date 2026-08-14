@@ -131,7 +131,7 @@ public struct CreateManager: ParsableCommand {
         abstract: "Create an additional Manager session"
     )
 
-    @Option(name: .long, help: "Coding agent kind (claude-code, cursor, codex, opencode, antigravity, grok); default agent when omitted")
+    @Option(name: .long, help: "Coding agent kind (claude-code, cursor, codex, opencode, antigravity, grok, muse); default agent when omitted")
     var agent: String?
 
     public init() {}
@@ -141,7 +141,7 @@ public struct CreateManager: ParsableCommand {
         // downstream packages extend, so a hardcoded allowlist would go stale
         // (same reasoning as `crow handoff-agent`).
         if let agent, agent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            throw ValidationError("--agent must not be blank (e.g. claude-code, cursor, codex, opencode, antigravity, grok).")
+            throw ValidationError("--agent must not be blank (e.g. claude-code, cursor, codex, opencode, antigravity, grok, muse).")
         }
     }
 

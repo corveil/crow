@@ -188,6 +188,8 @@ agent_display_name() {
     codex)       echo "OpenAI Codex" ;;
     opencode)    echo "OpenCode" ;;
     grok)        echo "Grok Build" ;;
+    antigravity) echo "Antigravity" ;;
+    muse)        echo "Muse Code" ;;
     *)           echo "Claude Code" ;;
   esac
 }
@@ -389,7 +391,7 @@ Optional:
   --pr-url <url>             Existing PR URL
   --pr-branch <branch>       Existing PR branch name
   --prompt-content <path>    Path to LLM-written prompt file
-  --agent-kind <kind>        Coding agent: claude-code | cursor | codex | opencode.
+  --agent-kind <kind>        Coding agent: claude-code | cursor | codex | opencode | grok | muse.
                              Defaults to agentsByKind["work"] then
                              defaultAgentKind from {devRoot}/.claude/config.json
                              (final fallback: claude-code).
@@ -473,8 +475,8 @@ parse_args() {
   # Validate --agent-kind early so bad values fail fast rather than at launch.
   if [[ -n "$AGENT_KIND" ]]; then
     case "$AGENT_KIND" in
-      claude-code|cursor|codex|opencode|grok) ;;
-      *) die "parse_args" "Unknown --agent-kind: $AGENT_KIND (expected claude-code | cursor | codex | opencode | grok)" ;;
+      claude-code|cursor|codex|opencode|grok|muse) ;;
+      *) die "parse_args" "Unknown --agent-kind: $AGENT_KIND (expected claude-code | cursor | codex | opencode | grok | muse)" ;;
     esac
   fi
 }
@@ -1462,6 +1464,35 @@ launch_grok() {
   create_agent_terminal "Grok Build" "$launch_cmd"
 }
 
+launch_muse() {
+  local prompt_path="$1"
+  local override_bin="$2"
+  local bin
+  if [[ -n "$override_bin" ]]; then
+    bin="$override_bin"
+  else
+    bin=$(resolve_binary "muse" "muse" \
+      "/opt/homebrew/bin/muse" \
+      "/usr/local/bin/muse" \
+      "$HOME/.local/bin/muse" \
+      "$HOME/.muse/bin/muse") || \
+      die "launch_agent" "muse binary not found at PATH or known locations; provide --agent-binary or set defaults.binaries.muse in config.json (note: 'muse' collides with Muse Sequencer — pin Meta's Muse Code there)"
+  fi
+  log "Resolved muse binary: $bin"
+  # Muse: any prompt arg is headless-only (`muse exec`), so exec
+  # `--prompt-file` consumes the prompt, then `; resume` reopens the
+  # interactive TUI. `--prompt-file` (not `$(cat …)`) so a large prompt
+  # never becomes a giant argv. Brace group keeps both commands gated on
+  # a successful `cd`. Mirrors the *no-auto-flags* form of
+  # MuseLaunchArgs.firstLaunchChainedCommand: this `/crow-workspace` path
+  # only ever launches `.work` (interactive). Trust the Crow-created
+  # worktree so project hooks/skills/rules load. Never `--yolo`. Quoted
+  # like Grok because `muse` is collision-prone and a spaced
+  # `defaults.binaries.muse` pin is the expected escape hatch.
+  local launch_cmd="cd $(posix_quote "$WORKTREE_PATH") && { $(posix_quote "$bin") exec --trust-workspace --prompt-file $(posix_quote "$prompt_path"); $(posix_quote "$bin") --trust-workspace resume; }"
+  create_agent_terminal "Muse Code" "$launch_cmd"
+}
+
 # Shared terminal creation + readiness polling, used by every launch_<kind>.
 # Sets TERMINAL_ID on success. Polls `crow list-terminals` for up to 15s.
 create_agent_terminal() {
@@ -1553,7 +1584,8 @@ launch_agent() {
     codex)       launch_codex "$prompt_path" "$override_bin" ;;
     opencode)    launch_opencode "$prompt_path" "$override_bin" ;;
     grok)        launch_grok "$prompt_path" "$override_bin" ;;
-    *) die "launch_agent" "Unknown agent kind: $kind (expected claude-code | cursor | codex | opencode | grok)" ;;
+    muse)        launch_muse "$prompt_path" "$override_bin" ;;
+    *) die "launch_agent" "Unknown agent kind: $kind (expected claude-code | cursor | codex | opencode | grok | muse)" ;;
   esac
 }
 

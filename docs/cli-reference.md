@@ -220,7 +220,7 @@ crow handoff-agent --session <uuid> --agent claude-code --note "Hit credit limit
 | Flag / Arg    | Required | Description                                              |
 | ------------- | -------- | -------------------------------------------------------- |
 | `--session`   | yes      | Session UUID                                             |
-| `--agent`     | yes      | Target kind: `claude-code`, `cursor`, `codex`, `opencode` |
+| `--agent`     | yes      | Target kind: `claude-code`, `cursor`, `codex`, `opencode`, `grok`, `antigravity`, `muse` |
 | `--note`      | no       | Optional resume note for the incoming agent              |
 
 Returns `{"session_id":"…","agent_kind":"…","terminal_id":"…"}`. Manager sessions are not supported — change the Manager agent in Settings and restart instead.
@@ -1579,7 +1579,7 @@ crow create-manager --agent cursor
 
 | Flag      | Required | Description                                                                  |
 | --------- | -------- | ---------------------------------------------------------------------------- |
-| `--agent` | no       | Coding agent kind (`claude-code`, `cursor`, `codex`, `opencode`); default agent when omitted |
+| `--agent` | no       | Coding agent kind (`claude-code`, `cursor`, `codex`, `opencode`, `antigravity`, `grok`, `muse`); default agent when omitted |
 
 Returns `{"session_id": "...", "name": "Manager N"}`.
 
