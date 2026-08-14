@@ -80,7 +80,7 @@ const check = (name, cond) => { if (cond) { pass++; console.log('  ✓ ' + name)
 // at all); `viewportY` is where the user is looking, 0 == the very top. The fake
 // records any attempt to move the viewport: the settle must never make one.
 let sends, fake;
-function setup({ agentSurface = false, baseY = 500, viewportY = 0, from = 400,
+function setup({ agentSurface = false, usesAltScreen = false, baseY = 500, viewportY = 0, from = 400,
                  readyState = 1, window: win = 7, dirty = true } = {}) {
   sends = [];
   timers.clear();
@@ -93,7 +93,8 @@ function setup({ agentSurface = false, baseY = 500, viewportY = 0, from = 400,
   };
   T.term = fake;
   T.termWs = { readyState, send(s) { sends.push(JSON.parse(s)); } };
-  T.activeTerminal = win === null ? null : { id: 't1', window: win, agent_surface: agentSurface };
+  T.activeTerminal = win === null ? null
+    : { id: 't1', window: win, agent_surface: agentSurface, uses_alternate_screen: usesAltScreen };
   T.resetScrollbackSync();
   T.scrollbackDirty = dirty;
   T.lastViewportY = from; // where the user scrolled FROM (0 == already parked)
@@ -115,9 +116,24 @@ console.log('scrollback hydrate (CROW-934)');
   check('  ... and clears the dirty flag', T.scrollbackDirty === false);
 }
 {
-  setup({ agentSurface: true });
+  setup({ agentSurface: true, usesAltScreen: true });
   T.maybeHydrateScrollback();
-  check('agent surface never re-syncs', selects().length === 0);
+  check('alt-buffer agent (Claude Code) never re-syncs', selects().length === 0);
+}
+{
+  // CROW-1026: an inline agent (Cursor, and every Manager tab) is agent_surface
+  // but keeps the unified 50k buffer, so it CAN thin and must stay eligible —
+  // same axis as applySurfaceScrollback (agent_surface && uses_alternate_screen).
+  setup({ agentSurface: true, usesAltScreen: false });
+  T.maybeHydrateScrollback();
+  check('inline agent (Cursor/Manager) re-syncs like a shell', selects().length === 1);
+}
+{
+  // A plain shell inside a Claude session is uses_alternate_screen (kind-scoped)
+  // yet NOT agent_surface — it has a real 50k buffer, so it stays eligible.
+  setup({ agentSurface: false, usesAltScreen: true });
+  T.maybeHydrateScrollback();
+  check('plain shell in a Claude session still re-syncs', selects().length === 1);
 }
 {
   setup({ baseY: 0, viewportY: 0 });
@@ -127,7 +143,7 @@ console.log('scrollback hydrate (CROW-934)');
 {
   setup({ baseY: 500, viewportY: 120 });
   T.maybeHydrateScrollback();
-  check('mid-buffer scroll does not re-sync', selects().length === 0);
+  check('mid-buffer scroll does not re-sync synchronously', selects().length === 0);
 }
 {
   setup({ dirty: false });
@@ -278,6 +294,64 @@ console.log('\n  teardown');
   T.maybeHydrateScrollback();
   check('reset clears the cooldown so a new surface can sync immediately',
     selects().length === 2);
+}
+
+// ---- CROW-1026: mid-buffer scroll-idle heal --------------------------------
+
+console.log('\n  mid-buffer scroll-idle heal');
+{
+  // A hole the user parked on mid-buffer heals once scrolling AND output go
+  // quiet — no trip to line 1, no manual Reload. The debounce is 400ms; advance
+  // past it to fire the pending re-capture.
+  setup({ baseY: 500, viewportY: 120 });
+  T.maybeHydrateScrollback();
+  check('the scroll itself issues no synchronous capture', selects().length === 0);
+  advance(500);
+  check('going idle mid-buffer heals the hole',
+    selects().length === 1 && selects()[0].window === 7);
+}
+{
+  // The debounce re-arms on every scroll AND every bottom-pushed line (onScroll
+  // is not a user event), so a streaming build never trips it mid-stream.
+  setup({ baseY: 500, viewportY: 120 });
+  for (let i = 0; i < 50; i++) { T.maybeHydrateScrollback(); advance(100); } // 100 < 400
+  check('a streaming build never fires the idle heal', selects().length === 0);
+  advance(500);
+  check('  ... but one settle after it stops heals once', selects().length === 1);
+}
+{
+  // Alt-buffer agents (Claude Code) have no scrollback to fetch — excluded on the
+  // idle path too, not only the arrival path.
+  setup({ agentSurface: true, usesAltScreen: true, baseY: 500, viewportY: 120 });
+  T.maybeHydrateScrollback();
+  advance(500);
+  check('alt-buffer agent is excluded from the idle heal', selects().length === 0);
+}
+{
+  // The dirty flag is the idle path's primary brake: an already-synced buffer
+  // (nothing thinned since the last sync) does not re-capture.
+  setup({ baseY: 500, viewportY: 120, dirty: false });
+  T.maybeHydrateScrollback();
+  advance(500);
+  check('a clean buffer does not idle-heal', selects().length === 0);
+}
+{
+  // After an idle heal that returns new lines, scrollbackDirty stays false, so
+  // fiddling the scroll again does not re-capture until fresh output dirties it.
+  setup({ baseY: 500, viewportY: 120 });
+  T.maybeHydrateScrollback();
+  advance(500);                       // heal #1
+  fake.buffer.active.baseY = 19949;   // the replay brought the full history...
+  T.noteTerminalFrame();              // ...landing during the flight
+  advance(3000);                      // settle: saw replay, baseY grew → not latched, dirty stays false
+  check('the idle heal issued exactly one capture', selects().length === 1);
+  check('  ... and consumed the dirty flag', T.scrollbackDirty === false);
+  fake.buffer.active.viewportY = 90;  // user nudges the scroll again
+  T.maybeHydrateScrollback();
+  advance(500);
+  check('  ... so a clean buffer does not heal again', selects().length === 1);
+  T.noteTerminalFrame();              // fresh live output (not in flight) re-dirties
+  check('  ... until fresh output marks it dirty', T.scrollbackDirty === true);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

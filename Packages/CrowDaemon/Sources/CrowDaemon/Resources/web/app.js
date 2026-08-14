@@ -6083,14 +6083,15 @@ function selectWindow(win) {
   }
 }
 
-// CROW-934: re-sync a plain-shell surface's scrollback from tmux's history.
+// CROW-934: re-sync a scrollback surface's history from tmux's pane.
 //
 // tmux collapses pane redraws when the attached client can't drain them fast
 // enough, and the browser IS that slow client. Measured against the bundled
 // config: `seq 1 20000` leaves all 19 989 lines in the pane's own history, but
 // a browser-paced reader receives only ~337 of them (a raw reader gets 19 768).
 // So the local xterm buffer is NOT a faithful copy of the pane — scroll-up hits
-// its top after a few screens while tmux still holds the rest.
+// its top after a few screens while tmux still holds the rest, and the middle
+// grows holes as thinned live output accumulates (CROW-1026).
 //
 // crowd's `select-window` reply carries the authoritative copy
 // (`capture-pane -pe -S -50000`, CROW-606) and REBUILDS the buffer in place, so
@@ -6098,11 +6099,13 @@ function selectWindow(win) {
 // (attachWindow → reloadTerminal), which is why switching away and back
 // "fixed" the history — but the tab you sit on never re-synced.
 //
-// Trigger on reaching the top of the local buffer: that is exactly when the
-// user is asking for older lines. Shell surfaces only — an agent keeps its
-// transcript in the scrollback-less alt buffer and repaints it itself
-// (ADR-0013), so a capture there returns just the viewport and would buy
-// nothing.
+// Two triggers: reaching the top of the local buffer (asking for older lines)
+// and, since CROW-1026, going idle parked on a hole mid-buffer. Any surface that
+// keeps the unified 50k scrollback is eligible — plain shells AND inline agents
+// (Cursor, and the Manager, which runs one). Only a true alt-buffer agent (Claude
+// Code) is excluded: it keeps its transcript in the scrollback-less alt buffer
+// and repaints it itself (ADR-0013 #1010), so a capture there returns just the
+// viewport and would buy nothing. Same axis as applySurfaceScrollback.
 //
 // Two independent brakes, because `onScroll` is NOT a user-scroll event: xterm's
 // BufferService.scroll ends in an unconditional `this._onScroll.fire(ydisp)`, so
@@ -6154,6 +6157,16 @@ const SCROLLBACK_HEAL_MAX = 2; // bounded re-captures — accept a genuine one-s
 let scrollbackHealTimer = null;
 let scrollbackHealLeft = 0;
 
+// CROW-1026: arrival-at-top is not the only place a hole appears — the thinned
+// live stream drops lines anywhere in the middle, and the user may be parked on
+// one. Debounce off `onScroll` (which also fires for every line pushed at the
+// bottom): the timer re-arms on each scroll AND each output frame, so it fires
+// exactly once, only after scrolling AND output have both gone quiet. During a
+// streaming build it never fires; when the user stops on a mid-buffer hole it
+// re-captures once, subject to every brake the arrival path uses.
+const HYDRATE_SCROLL_IDLE_MS = 400;
+let hydrateIdleTimer = null;
+
 // The flight ends this long after the last frame, but never later than the
 // arm-time deadline. There is deliberately NO viewport restore here: the replay
 // rebuilds the buffer while `isUserScrolling` is true (which the trigger's
@@ -6204,6 +6217,8 @@ function noteTerminalFrame() {
 function resetScrollbackSync() {
   clearTimeout(hydrateSettleTimer);
   hydrateSettleTimer = null;
+  clearTimeout(hydrateIdleTimer); // CROW-1026: drop a pending mid-buffer re-sync too
+  hydrateIdleTimer = null;
   hydratingScrollback = false;
   hydrateSawReplay = false;
   scrollbackFullySynced = false;
@@ -6248,8 +6263,59 @@ function verifyScrollbackAfterAttach() {
   scrollbackHealTimer = setTimeout(verifyScrollbackAfterAttach, SCROLLBACK_HEAL_MS);
 }
 
+// Shared arm tail for both hydrate triggers (arrival-at-top and the CROW-1026
+// scroll-idle mid-buffer heal). The caller has already decided this surface has a
+// hole worth re-fetching; here we apply the surface/socket/cooldown brakes and, if
+// they pass, arm exactly one authoritative re-capture.
+function fireScrollbackCapture(buf) {
+  if (!activeTerminal || activeTerminal.window == null) return;
+  // Only a true alt-buffer agent (Claude Code) has no scrollback to fetch — a
+  // capture there returns just the viewport. Inline agents (Cursor, and the
+  // Manager, which runs one) keep the unified 50k buffer and CAN thin, so they
+  // stay eligible. Same axis as applySurfaceScrollback (ADR-0013 #1010).
+  if (activeSurfaceIsAgent() && activeSurfaceUsesAltScreen()) return;
+  if (!termWs || termWs.readyState !== WebSocket.OPEN) return;
+  const now = Date.now();
+  if (now - lastHydrateAt < HYDRATE_MIN_INTERVAL_MS) return;
+  lastHydrateAt = now;
+  hydratingScrollback = true;
+  scrollbackDirty = false;
+  hydrateArmedAt = now;
+  hydrateBaseY = buf.baseY;
+  hydrateSawReplay = false;
+  scheduleHydrateSettle(2000);
+  selectWindow(activeTerminal.window);
+}
+
+// CROW-1026: (re)arm the scroll-idle mid-buffer heal. Debounced off `onScroll`,
+// which also fires for every line pushed at the bottom — so a streaming build
+// keeps pushing the deadline out and this never fires mid-stream; it fires once
+// when scrolling AND output have both gone quiet.
+function scheduleHydrateIdle() {
+  clearTimeout(hydrateIdleTimer);
+  hydrateIdleTimer = setTimeout(hydrateWhenIdle, HYDRATE_SCROLL_IDLE_MS);
+}
+
+// Heal a hole the user parked on mid-buffer, without a trip to line 1. The arrival
+// path owns viewportY 0; this owns everything below it. Every brake the arrival
+// path uses still applies (in-flight, latch, dirty, cooldown, settle), so #935's
+// extend-forever cannot return: a heal that finds new lines leaves scrollbackDirty
+// false until fresh output dirties it, and one that finds nothing new latches via
+// the unchanged settle. As on the arrival path there is no viewport restore, so
+// the rebuild (isUserScrolling) leaves the user at the top of the healed history.
+function hydrateWhenIdle() {
+  if (!term) return;
+  const buf = term.buffer.active;
+  if (buf.viewportY === 0) return; // the top is the arrival path's job
+  if (hydratingScrollback) return;
+  if (scrollbackFullySynced || !scrollbackDirty) return;
+  if (buf.baseY === 0) return;
+  fireScrollbackCapture(buf);
+}
+
 function maybeHydrateScrollback() {
   if (!term) return;
+  scheduleHydrateIdle(); // CROW-1026: any scroll/frame re-arms the mid-buffer heal
   const buf = term.buffer.active;
   const arrivedAtTop = buf.viewportY === 0 && lastViewportY !== 0;
   lastViewportY = buf.viewportY;
@@ -6263,19 +6329,7 @@ function maybeHydrateScrollback() {
   // `baseY > 0` is load-bearing: on a tab that has printed less than one screen
   // viewportY is permanently 0, so there is no scrollback to go fetch.
   if (buf.baseY === 0) return;
-  if (!activeTerminal || activeTerminal.agent_surface) return;
-  if (activeTerminal.window == null) return;
-  if (!termWs || termWs.readyState !== WebSocket.OPEN) return;
-  const now = Date.now();
-  if (now - lastHydrateAt < HYDRATE_MIN_INTERVAL_MS) return;
-  lastHydrateAt = now;
-  hydratingScrollback = true;
-  scrollbackDirty = false;
-  hydrateArmedAt = now;
-  hydrateBaseY = buf.baseY;
-  hydrateSawReplay = false;
-  scheduleHydrateSettle(2000);
-  selectWindow(activeTerminal.window);
+  fireScrollbackCapture(buf);
 }
 
 // #673: which tmux window this shared surface shows changes on both a terminal-tab
