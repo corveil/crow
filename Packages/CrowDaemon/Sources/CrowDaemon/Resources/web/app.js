@@ -4342,6 +4342,18 @@ function relTime(iso) {
   return Math.floor(mo / 12) + 'y';
 }
 
+// CROW-1030: the commit page for a stamped build SHA on the upstream repo.
+// Returns null for anything that would land on a 404 — `dev` (no git at build
+// time), an empty/absent stamp, or any non-hex string — so callers render inert
+// text instead of a broken link. The 7–40 hex bound matches
+// VersionUpdateClient.githubCompareURL, which guards the same stamp Swift-side.
+const CROW_UPSTREAM_REPO = 'corveil/crow';
+function crowCommitURL(sha) {
+  const s = String(sha == null ? '' : sha).trim().toLowerCase();
+  if (!/^[0-9a-f]{7,40}$/.test(s)) return null;
+  return 'https://github.com/' + CROW_UPSTREAM_REPO + '/commit/' + s;
+}
+
 function linkChip(text, url, type) {
   // Non-http(s) urls (javascript:/data: from injected data) render as a plain,
   // non-clickable chip — never an href (review).

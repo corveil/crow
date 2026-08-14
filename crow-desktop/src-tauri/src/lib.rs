@@ -138,6 +138,19 @@ fn enable_webkit_accessibility() {
 #[cfg(not(target_os = "macos"))]
 fn enable_webkit_accessibility() {}
 
+/// CROW-1030: the commit page for a stamped build SHA on the upstream repo.
+/// `None` for anything that would land on a 404 — `dev` (built outside a git
+/// checkout), empty, or non-hex — so the menu item disables instead of opening
+/// a broken page. Mirrors `crowCommitURL` in the web UI and
+/// `VersionUpdateClient.githubCompareURL` in Swift.
+fn crow_commit_url(sha: &str) -> Option<String> {
+    let s = sha.trim().to_ascii_lowercase();
+    if !(7..=40).contains(&s.len()) || !s.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(format!("https://github.com/corveil/crow/commit/{s}"))
+}
+
 /// Native menu: a Crow app menu, standard Edit (so copy/paste shortcuts work in
 /// the web UI), a View menu with Reload (handy for a web frontend), and Window.
 fn build_menu(app: &tauri::App) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
@@ -146,8 +159,16 @@ fn build_menu(app: &tauri::App) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> 
         .version(Some(format!("0.1.0 · {}", env!("CROW_GIT_SHA"))))
         .icon(app.default_window_icon().cloned())
         .build();
+    // macOS draws the About panel itself (NSAboutPanel) and muda hands it plain
+    // strings, so the SHA *inside* that panel cannot be made clickable. The
+    // control lives beside it instead: same commit, one menu item away, and
+    // disabled when the SHA isn't a real commit (CROW-1030).
+    let build_link = MenuItemBuilder::with_id("build-on-github", "Build on GitHub")
+        .enabled(crow_commit_url(env!("CROW_GIT_SHA_FULL")).is_some())
+        .build(app)?;
     let app_menu = SubmenuBuilder::new(app, "Crow")
         .about(Some(about))
+        .item(&build_link)
         .separator()
         .hide()
         .hide_others()
@@ -193,6 +214,15 @@ pub fn run() {
             if event.id().as_ref() == "reload" {
                 if let Some(win) = app.get_webview_window("main") {
                     let _ = win.eval("window.location.reload()");
+                }
+            } else if event.id().as_ref() == "build-on-github" {
+                // Unreachable while the SHA is unlinkable — the item is built
+                // disabled — but re-derived rather than captured so the URL has
+                // one source of truth (CROW-1030).
+                if let Some(url) = crow_commit_url(env!("CROW_GIT_SHA_FULL")) {
+                    if let Err(e) = tauri_plugin_opener::open_url(&url, None::<&str>) {
+                        eprintln!("[crow-desktop] open {url} failed: {e}");
+                    }
                 }
             }
         })
@@ -317,4 +347,39 @@ pub fn run() {
                 }
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::crow_commit_url;
+
+    #[test]
+    fn links_a_real_sha() {
+        assert_eq!(
+            crow_commit_url("2a24aeb3").as_deref(),
+            Some("https://github.com/corveil/crow/commit/2a24aeb3")
+        );
+        // Full 40-char hashes and mixed case both normalize to a lowercase URL.
+        let full = "abc1234567890abcdef1234567890abcdef12345";
+        assert_eq!(
+            crow_commit_url(&full.to_ascii_uppercase()).as_deref(),
+            Some(format!("https://github.com/corveil/crow/commit/{full}").as_str())
+        );
+        assert!(crow_commit_url("  2a24aeb3 \n").is_some(), "trims whitespace");
+    }
+
+    #[test]
+    fn refuses_anything_that_would_404() {
+        for sha in [
+            "dev",      // built outside a git checkout
+            "",         // never stamped
+            "   ",
+            "2a24ae",   // 6 chars — below git's minimum unambiguous prefix
+            "abc1234567890abcdef1234567890abcdef123456", // 41 chars
+            "zzzzzzz",  // non-hex
+            "2a24aeb3/../../evil",
+        ] {
+            assert!(crow_commit_url(sha).is_none(), "expected None for {sha:?}");
+        }
+    }
 }

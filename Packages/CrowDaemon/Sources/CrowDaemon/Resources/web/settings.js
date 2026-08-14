@@ -1004,12 +1004,37 @@
       });
     }
 
+    // CROW-1030: the SHA is a link to that commit on corveil/crow. Built as
+    // nodes rather than one textContent so the SHA can carry an <a>; the link
+    // href uses `gitShaFull` when stamped (the display stays short), and an
+    // unlinkable stamp (`dev`, missing, non-hex) renders as plain text.
+    function renderVersionLine(v) {
+      ver.textContent = '';
+      const parts = [];
+      parts.push(document.createTextNode('Version ' + (v.version || '?')));
+      if (v.gitSha) {
+        const url = crowCommitURL(v.gitShaFull || v.gitSha);
+        if (url) {
+          const a = el('a', 'st-about-sha', v.gitSha);
+          a.href = url;
+          a.target = '_blank';
+          a.rel = 'noopener';
+          a.title = 'View this commit on GitHub';
+          parts.push(a);
+        } else {
+          parts.push(document.createTextNode(v.gitSha));
+        }
+      }
+      if (v.buildDate) parts.push(document.createTextNode(v.buildDate));
+      parts.forEach((node, i) => {
+        if (i > 0) ver.appendChild(document.createTextNode(' · '));
+        ver.appendChild(node);
+      });
+    }
+
     fetch('/version.json').then((r) => (r.ok ? r.json() : null)).then((v) => {
       if (!v) { ver.textContent = 'Version unavailable'; return; }
-      const parts = ['Version ' + (v.version || '?')];
-      if (v.gitSha) parts.push(v.gitSha);
-      if (v.buildDate) parts.push(v.buildDate);
-      ver.textContent = parts.join(' · ');
+      renderVersionLine(v);
     }).catch(() => { ver.textContent = 'Version unavailable'; });
 
     loadUpdateStatus();
