@@ -69,6 +69,18 @@ import Testing
             .joined(separator: "\n")
     }
 
+    /// The declarations of the first CSS rule opened by `opener` — a selector's
+    /// trailing text plus ` {` — up to that rule's closing brace. Lets a pin say
+    /// WHICH rule it expects a declaration in without also freezing the
+    /// selector's line breaks and indentation (CROW-1016).
+    private static func ruleBody(openedBy opener: String, in css: String) throws -> Substring {
+        let start = try #require(css.range(of: opener), "no rule opened by \(opener)")
+        let end = try #require(
+            css.range(of: "}", range: start.upperBound..<css.endIndex),
+            "unterminated rule opened by \(opener)")
+        return css[start.upperBound..<end.lowerBound]
+    }
+
     /// The body of a top-level `function <name>(` … `\n}` block, for asserting on
     /// one handler rather than the whole file.
     private static func functionBody(_ name: String, in source: String) throws -> Substring {
@@ -619,5 +631,80 @@ import Testing
         #expect(
             css.contains("--tk-refresh:"),
             "the --tk-refresh token both the head's spacer track and the button derive from must be defined, or the var() references resolve to `none`/`auto` (CROW-924)")
+    }
+
+    /// CROW-1016: the sidebar and the board scroll with a VISIBLE bar again.
+    /// CROW-593 hid it (`scrollbar-width: none` + a zero-width
+    /// `::-webkit-scrollbar`) for "web-UI parity", which took away the gutter
+    /// people grabbed in the desktop app — nothing else regressed, so the hide
+    /// survived every suite. Pin both halves: the hide must stay gone, and each
+    /// engine's mechanism must stay present.
+    ///
+    /// Both mechanisms are load-bearing and neither substitutes for the other:
+    /// Firefox reads `scrollbar-width`/`scrollbar-color` and ignores the
+    /// pseudo-elements; WebKit/Blink read the pseudo-elements and ignore
+    /// `scrollbar-color`. The explicit `::-webkit-scrollbar` width is what opts
+    /// the element out of macOS overlay scrollbars, so losing it is exactly the
+    /// "bar you can't see until you already scrolled" the ticket rejects.
+    @Test func sidebarAndBoardKeepAVisibleScrollbar() throws {
+        // stripComments throughout: the rules' own doc comment names
+        // `scrollbar-width`, `::-webkit-scrollbar` and both engines, so a
+        // raw-file `contains` would false-pass off the prose once a declaration
+        // is deleted (mutation-checked, like the CROW-924 pins above).
+        let css = Self.stripComments(try Self.webAsset("app.css"))
+        let settingsCSS = Self.stripComments(try Self.webAsset("settings.css"))
+
+        // 1. The CROW-593 hide, in either stylesheet, is the regression itself.
+        for (name, sheet) in [("app.css", css), ("settings.css", settingsCSS)] {
+            #expect(
+                !sheet.contains("scrollbar-width: none"),
+                "\(name) must not hide the scrollbar again for overlay-chrome parity (CROW-1016)")
+            #expect(
+                !sheet.contains("-ms-overflow-style: none"),
+                "\(name) must not hide the scrollbar again via the legacy Edge/IE property (CROW-1016)")
+        }
+
+        // 2. Firefox's mechanism.
+        #expect(
+            css.contains("scrollbar-width: thin"),
+            "Firefox draws the thumb from scrollbar-width/scrollbar-color, which it needs stated (CROW-1016)")
+        #expect(
+            css.contains("scrollbar-color: var(--scroll-thumb) transparent"),
+            "the Firefox thumb must be themed off --scroll-thumb, not left as the platform default (CROW-1016)")
+
+        // 3. WebKit/Blink's — and specifically that ::-webkit-scrollbar carries
+        // an explicit width, since that (not the thumb colour) is what makes the
+        // bar persistent rather than overlay-on-scroll. Scoped to each rule's
+        // body via `ruleBody`, so moving the width onto the thumb — which sizes
+        // nothing and leaves the element on overlay — fails here.
+        #expect(
+            try Self.ruleBody(openedBy: "::-webkit-scrollbar {", in: css)
+                .contains("width: var(--scroll-gutter)"),
+            "::-webkit-scrollbar needs an explicit width or WebKit keeps the element on overlay scrollbars (CROW-1016)")
+        #expect(
+            try Self.ruleBody(openedBy: "::-webkit-scrollbar-thumb {", in: css)
+                .contains("background-color: var(--scroll-thumb)"),
+            "the WebKit thumb must be painted, or the sized track shows as an empty gutter (CROW-1016)")
+
+        // 4. Both tokens must exist: an unresolvable var() computes to the
+        // property's unset value — `width: auto` drops WebKit straight back to
+        // overlay, undoing (3) with every suite still green. `var(--scroll-…)`
+        // has no colon, so the trailing colon matches only the declarations.
+        #expect(
+            css.contains("--scroll-thumb:") && css.contains("--scroll-gutter:"),
+            "the --scroll-thumb / --scroll-gutter tokens the rules read must be defined (CROW-1016)")
+
+        // 5. The two panes the ticket names are actually covered. Scanning the
+        // scrollbar selectors (rather than pinning the whole `:is(…)` list)
+        // keeps this green when a later pane joins the list, while still failing
+        // if the sidebar or the board is dropped from it.
+        let scrollbarSelectors = css.split(separator: "\n", omittingEmptySubsequences: false)
+            .filter { $0.contains("::-webkit-scrollbar") }
+        #expect(
+            scrollbarSelectors.contains { $0.contains("#sidebar") },
+            "the sidebar session list must keep its scrollbar styling (CROW-1016)")
+        #expect(
+            scrollbarSelectors.contains { $0.contains("#board") },
+            "the ticket/reviews board must keep its scrollbar styling (CROW-1016)")
     }
 }
