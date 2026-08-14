@@ -376,7 +376,9 @@ All harnesses report lifecycle events by shelling out to `crow hook-event`, but
   dropping the global writer (#830).
 - **OpenCode** — no command-hook file at all; Crow installs a global **JS
   plugin** `crow-hooks.js` under `~/.config/opencode/plugins/` that subscribes to
-  OpenCode's event bus + `tool.execute.*` / `permission.ask` hooks and pipes a
+  OpenCode's event bus (`session.status` for the busy/idle edges — see
+  [Hook async delivery](#hook-async-delivery)) + `tool.execute.*` /
+  `permission.ask` hooks and pipes a
   `{cwd, …}` JSON payload to `crow hook-event --agent opencode`. `cwd`-resolved
   (`OpenCodeHookConfigWriter`).
 - **Grok** — per-worktree `.grok/hooks/crow.json`, written per session with
@@ -444,9 +446,33 @@ share the host's global config and are disambiguated by `cwd`. See
   re-check target — see below.)*
 - **Cursor:** declares `PostToolUse` / `Notification` async, but the timing is
   "one of the three things to confirm empirically" (`CursorSignalSource`).
-- **OpenCode:** event *names* are verified; the *timing/semantics* (esp. whether
-  `session.idle` is the right "done" signal for interactive TUI sessions) are an
-  open empirical question (CROW-545, `OpenCodeHookConfigWriter`).
+- **OpenCode:** event *names* are verified, and the "done" signal is now the
+  **canonical `session.status`** rather than the deprecated `session.idle`
+  (CROW-1000). Timing measured on **opencode 1.18.5** via headless
+  `opencode run`: upstream's `SessionStatus.set` publishes
+  `session.status {idle}` and then `session.idle` from the same call — 246 µs
+  apart — so the plugin latches on the first `session.status` and ignores the
+  compat event, keeping one `Stop` per turn. `session.status` is published on
+  *every* status write (three consecutive `busy` events in one observed turn),
+  so the plugin acts on transitions only. `busy` now maps to `UserPromptSubmit`,
+  which is what closed the real gap: in a live end-to-end run the turn-start
+  edge landed **6.65 s before** the first `PreToolUse`, a window the card
+  previously spent on a stale `.done`. `retry` is folded into `busy` and never
+  reads as done. ⚠️ **Still open:** the probe was headless, so the *interactive
+  TUI* claim CROW-545 originally asked about is inferred (same server bus), not
+  measured — a TUI job session is the remaining human re-check.
+- **OpenCode child sessions leak into the parent's card** (confirmed 2026-08-13,
+  opencode 1.18.5; **pre-existing**, not introduced by CROW-1000). The bus is
+  per-server, and `session.status` / `session.idle` carry only a `sessionID` —
+  no parent link — so a **subagent's** status is mapped onto the one Crow
+  session UUID like the parent's. A run that delegated to a subagent emitted
+  `SessionStart` (child `session.created`), then `Stop` when the **child** went
+  idle **1.9 s before the parent finished**, leaving the card `.done` mid-turn.
+  The deprecated `session.idle` had the identical failure, so this is a
+  standing gap rather than a regression. Fixing it means correlating
+  `session.created`'s `info.parentID` and dropping non-root sessions — a
+  distinct behavior change (it also re-opens what `SessionStart`/`PreToolUse`
+  should mean for subagents), so it is **not** in CROW-1000.
 
 > **Apply-order caveat (#903).** Since `crow hook-event` became fire-and-forget,
 > `PreToolUse` being non-async only guarantees the daemon *accepts* it ahead of
@@ -773,7 +799,7 @@ against current upstream CLIs.
 | Claude background-recap subagent must not elevate state | Claude Code **≥ 2.1.108** (`awaySummaryEnabled`) | `ClaudeHookSignalSource` | 2026-07-24 |
 | Cursor `PostToolUse` / `Notification` async timing unconfirmed | — (empirical) | `CursorSignalSource` | 2026-07-24 |
 | Cursor interactive `--trust` (workspace-trust seed) — reverses the earlier headless-only omission; now emitted on **every** kind incl. `.review` | **min: Cursor CLI ≥ 2026.07.20** (changelog: interactive); verified `agent 2026.08.04` (`--help` drops "headless mode only"; pty run with no `--print` writes `.workspace-trusted` / `"trustMethod": "cli-flag"`) | `CursorLaunchArgs.trustSuffix` | 2026-08-10 (CROW-954) — emitted on every path. The `.review` carve-out is **removed**: `--force` was observed NOT to suppress the trust dialog (the CROW-890 "unverified" note, now settled), so the carve-out stranded unattended reviews on a prompt that gated nothing — review already runs `--force --approve-mcps`. Review clones are now defended by the launch-path `.cursor/` strip (`shouldStripCursorReviewClone`) instead. Pre-2026.07.20 CLI out of support; probed 2026.07.23 that the parser ignores a mode-gated flag (`--output-format json --version` exits 0), so older builds no-op `--trust` rather than reject. Re-probe if `--help` ever restores the headless-only qualifier |
-| OpenCode `session.idle` "done" semantics unconfirmed for TUI | — (CROW-545) | `OpenCodeHookConfigWriter` | 2026-07-24 |
+| OpenCode "done" signal is `session.status {idle}`, not the deprecated `session.idle` | opencode **1.18.5** (probed; `session.status` present) | `OpenCodeHookConfigWriter` | 2026-08-13 (CROW-1000) — upstream publishes **both** at turn end (`session/status.ts` `set` → Status then Idle, 246 µs apart), so the plugin latches on the first `session.status` and drops the compat event; older builds keep the `session.idle` fallback. `session.status` fires on every status write, not only on changes, so transitions are deduped per `sessionID`. ⚠️ Probed via headless `opencode run`, **not** the interactive TUI — the TUI pass is the open human re-check, as is a build ≥ **1.18.16** (the version the ticket cites for the deprecation docs). Re-probe if upstream stops emitting `session.idle` (fallback becomes dead code) or adds a fourth `SessionStatus` type |
 | Antigravity flags (`agy` hooks events, `-p` non-TTY stdout, `-c`/`--conversation` resume) | `agy` **v1.1.7 (2026-07-26)** | `AntigravityAgent` / `AntigravityHookConfigWriter` | 2026-07-26 — re-probe on upgrade |
 | Antigravity structured-stdout (would promote toward first-class parity) | upstream FRs **#119/#597** (`--output-format stream-json`), **#31** (ACP) | `AntigravitySignalSource` | 2026-07-26 — hooks are the only transport until either lands |
 | Antigravity bounded auto-permission has no verified interactive launch flag | `agy` **v1.1.7**; headless `-p` ignores `permissions.allow` (issue #548) | `AntigravityLaunchArgs.autoPermissionSuffix` | 2026-07-26 |

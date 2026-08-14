@@ -42,12 +42,56 @@ import CrowCore
 /// the `@opencode-ai/sdk` `Event` union and the `Hooks` interface in
 /// `@opencode-ai/plugin` (CROW-545 review):
 ///
-///   session.created           → SessionStart     (event bus)
+///   session.created           → SessionStart      (event bus)
 ///   tool.execute.before       → PreToolUse        (hook)
 ///   tool.execute.after        → PostToolUse       (hook)
-///   session.idle              → Stop              (event bus; "agent finished")
+///   session.status {idle}     → Stop              (event bus; "agent finished")
+///   session.status {busy}     → UserPromptSubmit  (event bus; "turn started")
+///   session.status {retry}    → (none — still busy; see below)
+///   session.idle              → Stop              (deprecated fallback only)
 ///   permission.ask            → PermissionRequest (hook — see below)
 ///   session.error             → Notification      (event bus)
+///
+/// **`session.status`, not `session.idle` (CROW-1000).** Upstream deprecated
+/// `session.idle` in favor of `session.status`, whose payload is
+/// `{ sessionID, status: { type: "idle" | "busy" | "retry" } }`
+/// (`packages/schema/src/session-status-event.ts` — `Idle` is literally marked
+/// `// deprecated`). Two properties of the upstream publisher
+/// (`packages/opencode/src/session/status.ts`) drive the plugin's shape, both
+/// confirmed empirically against **opencode 1.18.5** (headless `opencode run`;
+/// the events come off the same server bus the TUI uses, but the *interactive
+/// TUI* pass is still the human re-check in CROW-1000):
+///
+///  1. **Both events fire, status first.** `SessionStatus.set` publishes
+///     `session.status` and then, only when the type is `idle`, `session.idle`
+///     — 246 µs apart in the probe. So a plugin that handles both naively emits
+///     `Stop` twice per turn. The plugin therefore latches: once *any*
+///     `session.status` arrives, this build speaks the modern event and the
+///     deprecated `session.idle` is ignored. Older builds that never emit
+///     `session.status` keep the `session.idle` path, so one plugin body works
+///     across both eras with no version probe.
+///  2. **`session.status` is published on every set, not only on changes** —
+///     the probe recorded three consecutive `busy` events in a single turn. The
+///     plugin tracks the last status per `sessionID` and acts only on
+///     transitions, so one turn costs one `UserPromptSubmit` and one `Stop`
+///     rather than a subprocess per internal status write.
+///
+/// `busy` earns its own mapping: it is the "turn started" edge OpenCode
+/// otherwise never gave us. Before this, a session left `.done` only when its
+/// first tool ran, so a turn that answered without calling a tool (or thought
+/// for a while first) showed a stale `.done` card. `retry` is a *busy*
+/// sub-state (a provider retry mid-turn), so it is normalized to `busy` for
+/// transition bookkeeping and never mapped to `Stop` — treating it as "done"
+/// would park the card on a turn that is still running.
+///
+/// **Known gap (pre-existing, not CROW-1000).** OpenCode's bus is per-*server*
+/// and `session.status` carries no parent link, so a **subagent's** child
+/// session is mapped onto this plugin's one Crow session UUID: the child going
+/// idle emits a `Stop` while the parent is still working (measured 1.9 s early
+/// on 1.18.5). The deprecated `session.idle` behaved identically, so nothing
+/// here regresses it; closing it means correlating `session.created`'s
+/// `info.parentID` and ignoring non-root sessions. See
+/// `docs/agent-harness-matrix.md` → Hook async delivery.
 ///
 /// Permission detection uses the **first-class `permission.ask` hook**, not a
 /// bus `event.type`: the SDK `Event` union has no `permission.asked` literal
@@ -200,6 +244,21 @@ public struct OpenCodeHookConfigWriter: HookConfigWriter {
         const CROW = \(crow);
         const SESSION = \(session);
 
+        // Does this OpenCode build speak `session.status`? Upstream publishes
+        // BOTH `session.status {idle}` and the deprecated `session.idle` on the
+        // same turn end (status first, ~246µs earlier on 1.18.5), so handling
+        // both unconditionally would emit Stop twice. Latch on the first
+        // `session.status` we see and ignore `session.idle` from then on; a
+        // build old enough to never emit `session.status` keeps the fallback.
+        let sawSessionStatus = false;
+
+        // Last status type per sessionID. `session.status` is published on
+        // every internal status write, not only on changes (three consecutive
+        // `busy` events in one observed turn), so we act on transitions only.
+        // Absent means idle — matching upstream, which deletes the entry when a
+        // session goes idle.
+        const lastStatus = new Map();
+
         async function emit($, cwd, event, extra) {
           try {
             const payload = JSON.stringify(Object.assign({ cwd }, extra || {}));
@@ -236,9 +295,40 @@ public struct OpenCodeHookConfigWriter: HookConfigWriter {
                 case "session.created":
                   await emit($, cwd, "SessionStart", { source: "startup" });
                   break;
+                case "session.status": {
+                  // Canonical idle/busy signal (`session.idle` is deprecated).
+                  sawSessionStatus = true;
+                  const props = event.properties || {};
+                  const id = props.sessionID || "";
+                  const raw = (props.status && props.status.type) || "";
+                  // `retry` is a busy sub-state (provider retry mid-turn), NOT a
+                  // finished turn — fold it into `busy` so a busy→retry→busy
+                  // round trip stays one working stretch and never reads as done.
+                  const state = raw === "retry" ? "busy" : raw;
+                  // Absent = idle, so the first `busy` of a turn is a transition.
+                  const prev = lastStatus.get(id) || "idle";
+                  if (prev === state) break;
+                  if (state === "idle") {
+                    lastStatus.delete(id);
+                    // OpenCode has finished the turn and is waiting on the user.
+                    await emit($, cwd, "Stop");
+                  } else {
+                    lastStatus.set(id, state);
+                    if (state === "busy") {
+                      // Turn started — the only "agent began working" edge
+                      // OpenCode gives us. Without it a session stays `.done`
+                      // until its first tool call. An unrecognized future state
+                      // is recorded but emits nothing.
+                      await emit($, cwd, "UserPromptSubmit");
+                    }
+                  }
+                  break;
+                }
                 case "session.idle":
-                  // OpenCode has finished the turn and is waiting on the user.
-                  await emit($, cwd, "Stop");
+                  // Deprecated upstream, and emitted alongside
+                  // `session.status {idle}` on builds that have it — so only
+                  // act on it when this build never spoke `session.status`.
+                  if (!sawSessionStatus) await emit($, cwd, "Stop");
                   break;
                 case "session.error":
                   await emit($, cwd, "Notification", { message: "Session error" });

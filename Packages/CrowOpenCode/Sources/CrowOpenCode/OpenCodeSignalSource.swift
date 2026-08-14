@@ -7,9 +7,11 @@ import CrowCore
 /// Crow-canonical PascalCase name in the `--event` argument, so this source
 /// shares Claude/Codex/Cursor's vocabulary verbatim: `SessionStart`,
 /// `PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `Stop`, `Notification`,
-/// `PermissionRequest`. The MVP plugin only emits a subset (no
-/// `UserPromptSubmit`); the extra cases are kept for cross-agent parity and
-/// to absorb events a future plugin revision may add without code changes.
+/// `PermissionRequest`. `UserPromptSubmit` and `Stop` are the two edges of
+/// OpenCode's `session.status` event (`busy` and `idle` respectively, CROW-1000);
+/// the plugin emits no other canonical names today, and the extra cases are kept
+/// for cross-agent parity and to absorb events a future plugin revision adds
+/// without code changes.
 ///
 /// The mapping is intentionally identical to `CursorSignalSource` — OpenCode
 /// and Cursor are both TUI agents whose state model (idle ⇄ working ⇄ waiting)
@@ -68,7 +70,7 @@ public struct OpenCodeSignalSource: StateSignalSource {
             }
 
         case "PermissionRequest":
-            // OpenCode's `permission.asked` maps here — the agent is blocked
+            // OpenCode's `permission.ask` hook maps here — the agent is blocked
             // waiting on a user decision.
             if currentNotificationType != "question" {
                 transition.notification = .set(HookNotification(
