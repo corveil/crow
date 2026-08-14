@@ -3756,6 +3756,13 @@ function switchTerminal(t) {
   if (selectedId) navigate({ view: 'session', sessionId: selectedId, terminalId: t.id });
   activeTerminal = t;
   applySurfaceScrollback();
+  // CROW-1023: a tab switch is a bind of `activeTerminal` just like a
+  // refreshTerminals pass, so it must (dis)arm the alt-buffer latch poll too —
+  // otherwise switching away from a still-starting Claude tab and back (e.g.
+  // opening a shell while it launches) reapplies the stale `false` row and never
+  // re-reads, re-stranding the cap-to-0 (review). Leaving disarms; returning to
+  // a still-unlatched tab gets a fresh budget (disarm nulls the tracked id).
+  maybePollAltScreenLatch();
   renderTabs();
   // #673: the in-place resize+replay from #672 didn't recover a mismatched grid —
   // the cursor stayed misaligned from the actual line. Attaching to a different

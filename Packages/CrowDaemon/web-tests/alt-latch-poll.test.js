@@ -14,9 +14,13 @@ const { JSDOM } = require('jsdom');
 const epilogue = `
 ;globalThis.__t = {
   maybePollAltScreenLatch(){ return maybePollAltScreenLatch(); },
+  switchTerminal(t){ return switchTerminal(t); },
   set activeTerminal(v){ activeTerminal = v; },
   get activeTerminal(){ return activeTerminal; },
   set refreshTerminals(fn){ refreshTerminals = fn; },
+  set term(v){ term = v; },
+  set selectedId(v){ selectedId = v; },
+  set sessions(v){ sessions = v; },
   ALT_LATCH_POLL_MS,
   ALT_LATCH_POLL_MAX,
 };
@@ -138,6 +142,40 @@ console.log('\nswitching to a different unlatched agent tab refreshes the budget
   T.activeTerminal = { id: 'x2', window: 8, agent_surface: true, uses_alternate_screen: false };
   T.maybePollAltScreenLatch();
   check('a new agent tab re-arms', timerCountAt(POLL) === 1);
+}
+
+// The above drives maybePollAltScreenLatch directly. These drive the REAL
+// switchTerminal (the review gap: it rebinds activeTerminal but must also
+// (dis)arm the poll, else switching away from a still-starting Claude tab and
+// back re-strands the cap-to-0).
+console.log('\nswitchTerminal arms/disarms the latch poll on the real tab-switch path:');
+{
+  installStub(); flipAfter = Infinity;
+  T.selectedId = null;      // skip navigate() — switchTerminal guards on selectedId
+  T.sessions = [];          // renderTabs falls through to the terminals loop harmlessly
+  T.term = { options: { scrollback: 50000 }, focus() {} };
+  T.activeTerminal = null;
+
+  const claude = { id: 'c1', window: 9, agent_surface: true, uses_alternate_screen: false };
+  const shell = { id: 's1', window: 10, agent_surface: false };
+
+  // Hole 2: no poll running, user clicks the (unlatched) Claude tab.
+  T.switchTerminal(claude);
+  check('switch to an unlatched agent tab arms the poll', timerCountAt(POLL) === 1);
+
+  // Hole 1a: switch away to a shell → the poll disarms immediately.
+  T.switchTerminal(shell);
+  check('switch away to a shell disarms the poll', timerCountAt(POLL) === 0);
+
+  // Hole 1b: switch back to the SAME still-unlatched Claude tab → re-arms with a
+  // fresh budget (disarm nulled the tracked id), rather than staying stranded.
+  T.switchTerminal(claude);
+  check('switch back to the unlatched agent re-arms', timerCountAt(POLL) === 1);
+
+  // Switching to an already-latched agent tab must NOT arm.
+  const latched = { id: 'c2', window: 11, agent_surface: true, uses_alternate_screen: true };
+  T.switchTerminal(latched);
+  check('switch to a latched agent tab does not arm', timerCountAt(POLL) === 0);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
