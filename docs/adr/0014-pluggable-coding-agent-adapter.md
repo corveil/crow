@@ -198,5 +198,5 @@ These are the accepted exceptions — the candidates for a future
   - `Packages/CrowEngine/Sources/CrowEngine/SessionService.swift` (`launchAgent`, `handoffAgent`, `buildReviewPrompt`, Manager trust-seed sites)
   - `Packages/CrowEngine/Sources/CrowEngine/AgentLaunch.swift` (`prepareAgentLaunchText`, OTEL gate)
   - `Packages/CrowCLI/Sources/CrowCLILib/Commands/SessionCommands.swift` (`HandoffAgent.validate`)
-  - `Packages/Crow{Claude,Cursor,Codex,OpenCode}/`
+  - `Packages/Crow{Claude,Cursor,Codex,OpenCode,Antigravity,Grok,Muse}/`
 - Reference: [Coding-agent harness capability matrix](../agent-harness-matrix.md)

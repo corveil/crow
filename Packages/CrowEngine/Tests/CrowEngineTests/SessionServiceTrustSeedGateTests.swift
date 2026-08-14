@@ -32,7 +32,7 @@ struct SessionServiceTrustSeedGateTests {
 
     /// Agents with no folder-trust store never seed.
     @Test func trustlessAgentsNeverSeed() {
-        for kind: AgentKind in [.cursor, .openCode, .antigravity] {
+        for kind: AgentKind in [.cursor, .openCode, .antigravity, .muse] {
             for k: SessionKind in [.work, .job, .review, .manager] {
                 #expect(!SessionService.shouldSeedFolderTrust(agentKind: kind, sessionKind: k))
             }
@@ -55,7 +55,7 @@ struct SessionServiceTrustSeedGateTests {
     /// user's hand-edited `permissions`). Claude is excluded too (it writes, not
     /// clears).
     @Test func nonCompatKindsDoNotReadClaudeSettings() {
-        for kind: AgentKind in [.claudeCode, .cursor, .openCode, .antigravity] {
+        for kind: AgentKind in [.claudeCode, .cursor, .openCode, .antigravity, .muse] {
             #expect(!SessionService.readsClaudeCompatSettings(kind))
         }
     }

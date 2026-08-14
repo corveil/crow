@@ -192,7 +192,7 @@ struct AgentsRPCSupportTests {
         // since #902), so this asserts no throw across the board — and keeps the
         // two surfaces coupled should a future review-incapable agent flip it.
         for role in SessionKind.allCases {
-            for kind in [AgentKind.claudeCode, .codex, .cursor, .openCode, .grok, .antigravity] {
+            for kind in [AgentKind.claudeCode, .codex, .cursor, .openCode, .grok, .antigravity, .muse] {
                 let refused = SessionService.shouldRefuseReviewHandoff(
                     targetKind: kind, sessionKind: role)
                 if refused {

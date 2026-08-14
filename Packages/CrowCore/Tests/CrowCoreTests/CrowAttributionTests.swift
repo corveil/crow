@@ -50,6 +50,7 @@ import Testing
     #expect(CrowAttribution.agentDisplayName(for: .codex) == "OpenAI Codex")
     #expect(CrowAttribution.agentDisplayName(for: .openCode) == "OpenCode")
     #expect(CrowAttribution.agentDisplayName(for: .grok) == "Grok Build")
+    #expect(CrowAttribution.agentDisplayName(for: .muse) == "Muse Code")
     #expect(CrowAttribution.agentDisplayName(for: nil) == "Claude Code")
 }
 
@@ -59,7 +60,7 @@ import Testing
 /// added to the table is picked up with zero reaper edits.
 @Test func crowAttributionAllKnownDisplayNames() {
     let all = CrowAttribution.allKnownDisplayNames
-    for name in ["Claude Code", "Cursor", "OpenAI Codex", "OpenCode", "Antigravity", "Grok Build"] {
+    for name in ["Claude Code", "Cursor", "OpenAI Codex", "OpenCode", "Antigravity", "Grok Build", "Muse Code"] {
         #expect(all.contains(name))
     }
 }

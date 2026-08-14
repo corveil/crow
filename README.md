@@ -74,7 +74,7 @@ flowchart TB
 | `glab`   | GitLab CLI (optional, for GitLab repos)                       | `brew install glab`                                   |
 | `acli`   | Atlassian CLI (optional, for Jira task tracking)              | [developer.atlassian.com/cloud/acli](https://developer.atlassian.com/cloud/acli/guides/install-acli/) |
 
-> Install commands above are macOS/Homebrew; on Linux use your distribution's package manager (e.g. `apt install git tmux`; `gh`/`glab` have their own apt repos). `git` ships with Xcode CLT on macOS. `claude` is the default coding agent — **OpenCode**, **Cursor**, **Codex**, and **Antigravity** are also supported and selectable per session (Settings → General, or `crow agents set`); install whichever agents you use.
+> Install commands above are macOS/Homebrew; on Linux use your distribution's package manager (e.g. `apt install git tmux`; `gh`/`glab` have their own apt repos). `git` ships with Xcode CLT on macOS. `claude` is the default coding agent — **OpenCode**, **Cursor**, **Codex**, **Grok Build**, **Antigravity**, and **Muse Code** are also supported and selectable per session (Settings → General, or `crow agents set`); install whichever agents you use. An uninstalled agent still appears in the picker, greyed out.
 
 ## Quick Start
 

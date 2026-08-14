@@ -182,6 +182,28 @@ struct SessionServiceReviewPromptTests {
             agentKind: .antigravity))
     }
 
+    @Test func buildReviewPromptMuseBranchInlinesSkillBody() {
+        // #1033: Muse has no Crow slash-command engine, so like
+        // Cursor/Codex/OpenCode/Grok/Antigravity it MUST get the inlined SKILL
+        // body — not the bare `/crow-review-pr <URL>` one-liner it can't
+        // resolve. Guards the regression where `.muse` silently fell into the
+        // Claude `default` branch.
+        let prompt = SessionService.buildReviewPrompt(
+            prURL: Self.prURL,
+            prTitle: Self.prTitle,
+            repoSlug: Self.repoSlug,
+            prNumber: Self.prNumber,
+            agentKind: .muse
+        )
+
+        #expect(!prompt.isEmpty)
+        #expect(!prompt.hasPrefix("/crow-review-pr"))
+        #expect(prompt == SessionService.cursorReviewPrompt(
+            skillBody: Scaffolder.bundledReviewSkill(),
+            prURL: Self.prURL,
+            agentKind: .muse))
+    }
+
     // MARK: - Frontmatter strip (CROW-968)
 
     /// The inlined prompt is handed to the agent CLI as a bare positional
@@ -230,7 +252,7 @@ struct SessionServiceReviewPromptTests {
     /// way, so none of them may emit a leading `-`. Mirrors the agent loop in
     /// `buildReviewPromptInlineBranchesCarryTheWorkspacePolicy`.
     @Test func noInlineBranchEmitsALeadingHyphen() {
-        for agentKind: AgentKind in [.cursor, .openCode, .codex, .grok, .antigravity] {
+        for agentKind: AgentKind in [.cursor, .openCode, .codex, .grok, .antigravity, .muse] {
             let prompt = SessionService.buildReviewPrompt(
                 prURL: Self.prURL,
                 prTitle: Self.prTitle,
@@ -260,7 +282,7 @@ struct SessionServiceReviewPromptTests {
         let redOnlyBody = ReviewVerdictPolicy.expand(
             Self.policyFixtureSkillBody, blocking: [.red])
 
-        for agentKind: AgentKind in [.cursor, .openCode, .codex, .grok, .antigravity] {
+        for agentKind: AgentKind in [.cursor, .openCode, .codex, .grok, .antigravity, .muse] {
             let prompt = SessionService.buildReviewPrompt(
                 prURL: Self.prURL,
                 prTitle: Self.prTitle,
@@ -290,7 +312,7 @@ struct SessionServiceReviewPromptTests {
         for blocking in [ReviewSeverity.defaultBlocking, [.red]] {
             let body = ReviewVerdictPolicy.expand(Self.policyFixtureSkillBody, blocking: blocking)
 
-            for agentKind: AgentKind in [.cursor, .openCode, .codex, .grok, .antigravity] {
+            for agentKind: AgentKind in [.cursor, .openCode, .codex, .grok, .antigravity, .muse] {
                 let prompt = SessionService.buildReviewPrompt(
                     prURL: Self.prURL,
                     prTitle: Self.prTitle,

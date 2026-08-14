@@ -108,7 +108,7 @@ struct SessionServiceReviewCloneStripTests {
     /// No registered agent is review-incapable today, so the refusal gate is
     /// uniformly `false` across every kind × session-kind combination.
     @Test func refuseGateNeverFires() {
-        for k: AgentKind in [.claudeCode, .cursor, .codex, .openCode, .grok, .antigravity] {
+        for k: AgentKind in [.claudeCode, .cursor, .codex, .openCode, .grok, .antigravity, .muse] {
             for sk: SessionKind in [.work, .job, .review, .manager] {
                 #expect(!SessionService.shouldRefuseReviewHandoff(
                     targetKind: k, sessionKind: sk))
@@ -205,7 +205,7 @@ struct SessionServiceReviewCloneStripTests {
     /// Antigravity loads it, so stripping for another agent would just hide the
     /// files a hostile PR ships (same reasoning as the `.cursor/`/`.codex/` gates).
     @Test func antigravityStripGateSkipsReviewForOtherAgents() {
-        for k: AgentKind in [.claudeCode, .cursor, .codex, .openCode, .grok] {
+        for k: AgentKind in [.claudeCode, .cursor, .codex, .openCode, .grok, .muse] {
             #expect(!SessionService.shouldStripAntigravityReviewClone(
                 agentKind: k, sessionKind: .review))
         }
@@ -277,7 +277,7 @@ struct SessionServiceReviewCloneStripTests {
     /// PR ships (same reasoning as the `.codex/`/`.agents/` gates). Grok is the
     /// deliberate exception and strips `.cursor/` through its own broader helper.
     @Test func cursorStripGateSkipsReviewForOtherAgents() {
-        for k: AgentKind in [.claudeCode, .codex, .openCode, .antigravity] {
+        for k: AgentKind in [.claudeCode, .codex, .openCode, .antigravity, .muse] {
             #expect(!SessionService.shouldStripCursorReviewClone(
                 agentKind: k, sessionKind: .review))
         }

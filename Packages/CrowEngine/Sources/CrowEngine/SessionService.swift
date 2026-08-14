@@ -987,6 +987,9 @@ public final class SessionService {
         if shouldStripCursorReviewClone(agentKind: agentKind, sessionKind: sessionKind) {
             stripCursorConfigFromReviewClone(clonePath: worktreePath)
         }
+        if shouldStripMuseReviewClone(agentKind: agentKind, sessionKind: sessionKind) {
+            stripMuseConfigFromReviewClone(clonePath: worktreePath)
+        }
         seedTrustIfNeeded(
             agentKind: agentKind, sessionKind: sessionKind, worktreePath: worktreePath)
         reconcileMainCloneHooks(worktreePath: worktreePath, ownership: ownership)
@@ -3226,6 +3229,41 @@ public final class SessionService {
         agentKind == .antigravity && sessionKind == .review
     }
 
+    /// Whether Muse is about to open a `.review` clone and must therefore strip
+    /// its committed config layers first. Only a `.review` session on Muse
+    /// strips: `.work`/`.job` branch off a trusted base, and a `.review` on any
+    /// other agent must not strip a surface that agent doesn't load. Muse
+    /// withholds `--trust-workspace` from review (so project hooks/skills/rules
+    /// do not load) but **project memory under `.agents/memory/` is injected
+    /// even in an untrusted workspace** (official configuration docs,
+    /// 2026-08-14), so the strip is load-bearing for that layer and must
+    /// re-fire on every launch via `prepareWorktreeForAgentLaunch`.
+    nonisolated static func shouldStripMuseReviewClone(
+        agentKind: AgentKind, sessionKind: SessionKind) -> Bool {
+        agentKind == .muse && sessionKind == .review
+    }
+
+    /// Neutralize a review clone's committed Muse config layers. A hostile PR
+    /// head can commit:
+    ///  - `.muse/hooks.json` — project hooks that `--trust-workspace` (or a
+    ///    later `muse hooks trust`) would run outside the sandbox.
+    ///  - `.agents/` — project skills (`<repo>/.agents/skills/`) plus
+    ///    **project memory** (`<repo>/.agents/memory/`), which Muse injects
+    ///    even in an untrusted workspace. Prompt injection, and the one
+    ///    layer withholding `--trust-workspace` does not cover.
+    /// Working-tree removal only (the git index entry survives). Shared by
+    /// `prepareReviewClone` and `prepareWorktreeForAgentLaunch`. Idempotent;
+    /// each layer no-ops when absent. A genuine removal failure is audible.
+    nonisolated static func stripMuseConfigFromReviewClone(clonePath: String) {
+        let base = clonePath as NSString
+        removeReviewCloneConfig(
+            base.appendingPathComponent(".muse"),
+            label: ".muse/", clonePath: clonePath)
+        removeReviewCloneConfig(
+            base.appendingPathComponent(".agents"),
+            label: ".agents/", clonePath: clonePath)
+    }
+
     /// Neutralize a review clone's committed Antigravity config layers by removing
     /// the working-tree config dirs `agy` may discover. A hostile PR head can
     /// commit `.agents/hooks.json` with arbitrary command hooks that `agy` runs
@@ -3568,6 +3606,14 @@ public final class SessionService {
                 _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "checkout", "--", path])
             }
         }
+        // Same restore-before-pull for Muse reviews (#1033): the strip below
+        // applies as an unstaged deletion of `.muse/` + `.agents/`. Restore
+        // first so `git pull` cannot refuse when the new head touches them.
+        if reviewAgentKind == .muse {
+            for path in [".muse", ".agents"] {
+                _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "checkout", "--", path])
+            }
+        }
         _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "fetch", "origin", headBranch])
         _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "checkout", headBranch])
         _ = try? await runShellAsync(env: env, args: ["git", "-C", clonePath, "pull", "origin", headBranch])
@@ -3607,6 +3653,14 @@ public final class SessionService {
         // reintroduce it.
         if reviewAgentKind == .antigravity {
             Self.stripAntigravityConfigFromReviewClone(clonePath: clonePath)
+        }
+        // Defense-in-depth for Muse review clones (#1033): withhold
+        // `--trust-workspace` so project hooks/skills/rules do not load, and
+        // strip `.muse/` + `.agents/` (memory loads even untrusted). The
+        // launch-path strip in `prepareWorktreeForAgentLaunch` is load-bearing
+        // — the review skill's `gh pr checkout` can restore a committed layer.
+        if reviewAgentKind == .muse {
+            Self.stripMuseConfigFromReviewClone(clonePath: clonePath)
         }
         // Defense-in-depth for Grok reviews (#859, extended #861 rounds 2-3, r12):
         // Grok discovers & merges project config from `.grok/hooks/*.json`,
@@ -3974,8 +4028,8 @@ public final class SessionService {
         skillBody: String? = nil
     ) -> String {
         switch agentKind {
-        case .cursor, .openCode, .codex, .grok, .antigravity:
-            // Cursor, OpenCode, Codex, Grok, and Antigravity all lack a Crow
+        case .cursor, .openCode, .codex, .grok, .antigravity, .muse:
+            // Cursor, OpenCode, Codex, Grok, Antigravity, and Muse all lack a Crow
             // slash-command engine, so they get the whole crow-review-pr SKILL
             // body inlined into the prompt file (a self-contained brief). Without
             // this, the review would receive a bare `/crow-review-pr <URL>` line

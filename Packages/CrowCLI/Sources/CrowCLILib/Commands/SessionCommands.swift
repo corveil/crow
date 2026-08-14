@@ -186,7 +186,7 @@ public struct HandoffAgent: ParsableCommand {
         abstract: "Switch a session to a different coding agent (e.g. when credits run out)"
     )
     @Option(name: .long, help: "Session UUID") var session: String
-    @Option(name: .long, help: "Target agent kind (claude-code, cursor, codex, opencode, grok, antigravity)")
+    @Option(name: .long, help: "Target agent kind (claude-code, cursor, codex, opencode, grok, antigravity, muse)")
     var agent: String
     @Option(name: .long, help: "Optional note for the incoming agent about where to resume")
     var note: String?
@@ -196,7 +196,7 @@ public struct HandoffAgent: ParsableCommand {
     public func validate() throws {
         try validateUUID(session, label: "session UUID")
         guard !agent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw ValidationError("agent must be non-empty (claude-code, cursor, codex, opencode, grok, or antigravity)")
+            throw ValidationError("agent must be non-empty (claude-code, cursor, codex, opencode, grok, antigravity, or muse)")
         }
     }
 

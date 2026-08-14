@@ -1127,7 +1127,7 @@ const STATUS_COLOR = {
   active: 'var(--green)', paused: 'var(--yellow)',
   inReview: 'var(--gold)', completed: 'var(--gold)', archived: 'var(--text-muted)',
 };
-const AGENT_GLYPH = { 'claude-code': '✦', cursor: '▲', codex: '◆', 'open-code': '◇', opencode: '◇', grok: '⚡', antigravity: '↑' };
+const AGENT_GLYPH = { 'claude-code': '✦', cursor: '▲', codex: '◆', 'open-code': '◇', opencode: '◇', grok: '⚡', antigravity: '↑', muse: '✶' };
 
 // Sidebar session groups (Managers now live in the nav pill row, not a group).
 const GROUPS = [
@@ -2313,7 +2313,7 @@ async function openHandoffAgentMenu(session, anchorEl) {
   // so instead of listing rows that can only fail (#879). Off-PATH others don't
   // count as somewhere you can switch to.
   if (!others.some((a) => a.available !== false)) {
-    alertModal('No other coding agents are available. Install Cursor, Codex, OpenCode, or Grok Build to switch.');
+    alertModal('No other coding agents are available. Install Cursor, Codex, OpenCode, Grok Build, or Muse Code to switch.');
     return;
   }
   closeContextMenu();
