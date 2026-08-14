@@ -27,15 +27,27 @@ public struct CodexHookConfigWriter: HookConfigWriter {
         "PermissionRequest",
     ]
 
-    /// Events that should run async (fire-and-forget). Codex's hook runtime
-    /// is sync-only as of v0.139.0 — declaring `async = true` causes the
-    /// entry to be silently skipped on startup, which breaks Crow's
-    /// session-state detection. Keep this empty until/unless Codex grows
-    /// real async support upstream. Note (#903): since `crow hook-event` is
-    /// fire-and-forget, even fully-sync registration no longer guarantees the
-    /// daemon *applies* events in arrival order — see the "Hook async delivery"
-    /// apply-order caveat in docs/agent-harness-matrix.md.
-    private static let asyncEvents: Set<String> = []
+    /// Events Crow runs async (fire-and-forget) **when the installed Codex is
+    /// new enough** — see `CodexVersionProbe`, which gates this on
+    /// `codex >= 0.148.0`. On older builds the set is unused and every hook is
+    /// registered sync, because an `async: true` there isn't downgraded, it is
+    /// *skipped* — which would silently stop Crow's session-state detection.
+    ///
+    /// The membership mirrors `ClaudeHookConfigWriter.asyncEvents`, minus the
+    /// events Codex doesn't emit: post-execution only. `PreToolUse` stays sync
+    /// deliberately so it is *accepted* by the daemon ahead of the
+    /// `PermissionRequest` that follows it. Note (#903): since `crow
+    /// hook-event` is fire-and-forget, non-async no longer guarantees the
+    /// daemon *applies* events in arrival order either — it only narrows the
+    /// window to the `MainActor` scheduling race instead of also racing the
+    /// writes. Making `PreToolUse` async would widen exactly the inversion
+    /// that does **not** self-heal (a `PreToolUse` applied after
+    /// `PermissionRequest` clears the permission badge while the agent is
+    /// parked at the prompt, and no further event arrives until the user
+    /// answers). See the "Hook async delivery" apply-order caveat in
+    /// docs/agent-harness-matrix.md; the durable fix is server-side
+    /// per-session sequencing.
+    private static let asyncEvents: Set<String> = ["PostToolUse"]
 
     public init() {}
 
@@ -54,7 +66,14 @@ public struct CodexHookConfigWriter: HookConfigWriter {
     /// Build the hooks dict in the schema Codex expects. Each event invokes
     /// `<crow> hook-event --agent codex --event <Name>` with no `--session`
     /// flag — the crow server resolves the session from `cwd` in the payload.
-    static func generateHooks(crowPath: String) -> [String: Any] {
+    ///
+    /// `asyncHooksSupported` comes from `CodexVersionProbe` and decides whether
+    /// `asyncEvents` are marked `async`. When `false`, no entry carries the key
+    /// at all — and because each event's entry is rebuilt whole here and
+    /// overwritten in `installGlobalConfig`, a downgrade (or a probe that stops
+    /// answering) *removes* a previously-written `async` rather than leaving it
+    /// stranded on a build that would skip the hook.
+    static func generateHooks(crowPath: String, asyncHooksSupported: Bool) -> [String: Any] {
         var hooks: [String: Any] = [:]
         for event in allEvents {
             let command = "\(crowPath) hook-event --agent codex --event \(event)"
@@ -63,7 +82,7 @@ public struct CodexHookConfigWriter: HookConfigWriter {
                 "command": command,
                 "timeout": 5,
             ]
-            if asyncEvents.contains(event) {
+            if asyncHooksSupported && asyncEvents.contains(event) {
                 entry["async"] = true
             }
             hooks[event] = [
@@ -76,7 +95,14 @@ public struct CodexHookConfigWriter: HookConfigWriter {
     /// Install or refresh `<codexHome>/hooks.json` with Crow's 6 hook
     /// commands. Idempotent — re-running just rewrites the same content.
     /// Preserves any user-authored entries for events Crow doesn't manage.
-    public static func installGlobalConfig(codexHome: String, crowPath: String) throws {
+    ///
+    /// `asyncHooksSupported` defaults to `false` so any caller that hasn't
+    /// probed gets the always-safe sync registration (CROW-999).
+    public static func installGlobalConfig(
+        codexHome: String,
+        crowPath: String,
+        asyncHooksSupported: Bool = false
+    ) throws {
         try FileManager.default.createDirectory(atPath: codexHome, withIntermediateDirectories: true)
         let hooksPath = (codexHome as NSString).appendingPathComponent("hooks.json")
 
@@ -88,7 +114,7 @@ public struct CodexHookConfigWriter: HookConfigWriter {
             existing = parsed
         }
         var existingHooks = existing["hooks"] as? [String: Any] ?? [:]
-        let ours = generateHooks(crowPath: crowPath)
+        let ours = generateHooks(crowPath: crowPath, asyncHooksSupported: asyncHooksSupported)
         for (eventName, config) in ours {
             existingHooks[eventName] = config
         }

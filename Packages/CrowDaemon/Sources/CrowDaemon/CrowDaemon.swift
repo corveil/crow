@@ -121,6 +121,19 @@ public enum CrowDaemon {
         // same store-backed binary overrides (CROW-581, M-B).
         await registerAgents(devRoot: options.devRoot)
 
+        // Ask the installed `codex` whether its hook engine honors
+        // `async: true` before the scaffold writes `~/.codex/hooks.json`
+        // (CROW-999). Fail-closed: no Codex, no binary, a hang, or an
+        // unreadable banner all leave hooks registered synchronously, which
+        // every Codex build handles. Probed once here — like agent
+        // availability — so upgrading `codex` under a running `crowd` needs a
+        // restart to take effect. Bounded by the probe's own 3s timeout.
+        var codexAsyncHooks = CodexVersionProbe.AsyncHookSupport.unsupported
+        if let codexBinary = AgentRegistry.shared.agent(for: .codex)?.findBinary() {
+            codexAsyncHooks = await CodexVersionProbe.probe(binaryPath: codexBinary)
+            log("Codex hooks: \(codexAsyncHooks.logLine)")
+        }
+
         // Refresh the dev-root scaffold — bundled skills, CLAUDE.md,
         // settings.local.json, .claude/bin symlinks — on every launch, the way
         // the retired app's `AppDelegate.launchMainApp` used to (#766). Runs
@@ -130,7 +143,9 @@ public enum CrowDaemon {
         // sees `.claude/skills/` on first paint. Bounded by
         // `Scaffolder.corveilInstallTimeout` in the worst case.
         let scaffoldWarning = LaunchScaffold.run(
-            devRoot: options.devRoot, configured: options.devRootConfigured)
+            devRoot: options.devRoot,
+            configured: options.devRootConfigured,
+            codexAsyncHooksSupported: codexAsyncHooks.supported)
         await MainActor.run { appState.corveilSkillInstallWarning = scaffoldWarning }
 
         // Repair hook blocks left dangling by an earlier build (#897). Must run

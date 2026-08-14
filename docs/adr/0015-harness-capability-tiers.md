@@ -193,10 +193,20 @@ records the rationale for each gap here (verbatim reasons preserved from source)
    `codex remote-control` remains unwired for reasons unrelated to the flag —
    see the [harness matrix](../agent-harness-matrix.md#remote-control).*
 
-4. **Codex hooks are sync-only.** `CodexHookConfigWriter.asyncEvents` is empty:
-   *"Codex's hook runtime is sync-only as of v0.139.0 — declaring `async = true`
-   causes the entry to be silently skipped on startup, which breaks Crow's
-   session-state detection."*
+4. **Codex hooks were sync-only.** `CodexHookConfigWriter.asyncEvents` was
+   empty: *"Codex's hook runtime is sync-only as of v0.139.0 — declaring
+   `async = true` causes the entry to be silently skipped on startup, which
+   breaks Crow's session-state detection."* **Closed by CROW-999** — Codex
+   `0.148.0` honors `async` for every event but `SessionEnd` (which it
+   downgrades rather than skips, and which Crow doesn't register). The gap is
+   now a **version gate** rather than a capability gap: `CodexVersionProbe`
+   reads `codex --version` once at boot, and `asyncEvents` (`PostToolUse`) is
+   emitted only at `>= 0.148.0`. Below the pin the original reason still
+   applies verbatim, so the gate is fail-closed and rejects pre-releases of
+   `0.148.0` — async landed at `alpha.9`, so an earlier alpha of that release
+   would still skip the hooks. `PreToolUse` stays sync deliberately, matching
+   Claude, so it is accepted ahead of the `PermissionRequest` that follows it
+   (#903).
 
 5. **Auto-permission is Claude + OpenCode only.** Claude emits
    `--permission-mode auto`; OpenCode runtime-probes `opencode --help` for the
@@ -257,20 +267,23 @@ that will close them (Cursor/Codex/OpenCode launchers are written but
   five have gained an upstream flag (resume, auto-permission, MCP, Codex review,
   per-project hook scope) with closure tickets
   [#829](https://github.com/corveil/crow/issues/829)–[#831](https://github.com/corveil/crow/issues/831);
-  Codex async hooks (gap 4) still holds; gap 3's Codex clause was **retired as
-  incorrect** rather than closed by an upstream bump
-  ([CROW-1001](https://github.com/corveil/crow/issues/1001) — see the 2026-08-13
-  amendment, and note that an upstream-only re-probe could not have caught it).
-  The canonical
+  Codex async hooks (gap 4) closed on the 2026-08-13 re-check and shipped behind
+  a version gate in [CROW-999](https://github.com/corveil/crow/issues/999); gap
+  3's Codex clause was **retired as incorrect** rather than closed by an upstream
+  bump ([CROW-1001](https://github.com/corveil/crow/issues/1001) — see the
+  2026-08-13 amendment, and note that an upstream-only re-probe could not have
+  caught it). The canonical
   row-set lives in the matrix's
   [Version-pinned reasons — re-check targets](../agent-harness-matrix.md#version-pinned-reasons--re-check-targets)
   table (kept in one place so the two docs can't go stale asymmetrically);
-  today it covers Codex sync-only (**v0.139.0**), the `codex_hooks`→`hooks`
+  today it covers the Codex async-hook **minimum** (**≥ 0.148.0**), the
+  `codex_hooks`→`hooks`
   rename (**v0.139.0+**), the `ClaudeHooksEngine` reuse (**codex 0.123.0**),
   Claude's recap subagent (**≥ 2.1.108**), OpenCode's `session.status` done
   signal (**opencode 1.18.5**, CROW-1000 — replaces the formerly unpinned
   `session.idle` question), and the one still-unpinned empirical timing
-  (Cursor async).
+  (Cursor async). Codex's async *timing* is an open empirical question too,
+  tracked inside its pinned row rather than as a separate one.
 
 - The gating rule (8) means a partially-installed environment produces a smaller,
   correct picker rather than broken entries — but "why can't I hand off to X?"
@@ -286,7 +299,9 @@ that will close them (Cursor/Codex/OpenCode launchers are written but
   what's missing or why.
 - **Fake the missing capabilities** (e.g. emit `--auto` for Codex regardless).
   Rejected — a flag the harness silently drops (or that breaks state detection,
-  as async Codex hooks do) is worse than an honest gap.
+  as an `async` hook does on a pre-0.148 Codex) is worse than an honest gap.
+  Gap 4's closure keeps that rule rather than relaxing it: `async` is emitted
+  only once a probe confirms the installed Codex honors it.
 - **A `Set<Capability>` per agent** (mirroring 0005's `TaskCapability`).
   Considered — the current design encodes capabilities as typed protocol members
   instead, which the compiler checks. A capability set may still be worth adding
