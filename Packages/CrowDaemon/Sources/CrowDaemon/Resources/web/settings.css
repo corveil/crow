@@ -256,6 +256,19 @@
 .st-about-logo { width: 46px; height: 46px; flex: 0 0 auto; }
 .st-about-name { font-size: 18px; font-weight: 700; color: var(--gold); line-height: 1.1; }
 .st-about-ver { font-size: 12px; color: var(--text-muted); margin-top: 3px; }
+/* CROW-1030: the build SHA links to its commit on corveil/crow. Padded a little
+   past the 7-char glyph run so it's tappable on a phone, where this UI mostly
+   lives; an unlinkable stamp renders as plain text and gets none of this. */
+.st-about-sha {
+  color: var(--gold);
+  text-decoration: none;
+  padding: 2px 3px;
+  margin: 0 -3px;
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.st-about-sha:hover { text-decoration: underline; background: rgba(221, 196, 130, 0.10); }
+.st-about-sha:focus-visible { outline: 2px solid var(--gold); outline-offset: 1px; }
 .st-about-update { font-size: 12px; margin-top: 6px; }
 .st-about-update.st-update-ok { color: var(--text-muted); }
 .st-about-update.st-update-behind { color: var(--gold); }
