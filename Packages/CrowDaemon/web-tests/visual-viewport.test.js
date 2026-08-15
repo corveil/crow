@@ -6,6 +6,8 @@ const { JSDOM } = require('jsdom');
 // xterm-addon-crow-viewport.js (served to the web UI at /xterm/…) against a fake
 // visualViewport, a fake xterm and a controllable rAF, so the geometry maths and
 // the "leave every non-phone surface alone" guards are pinned without a device.
+// CROW-1045 adds the desktop-WKWebView guard: `visualViewport` presence is not a
+// keyboard, so a non-touch surface must stay fully inert (case 1b).
 const ADDON_JS =
   __dirname + '/../../CrowTerminal/Sources/CrowTerminal/Resources/xterm/xterm-addon-crow-viewport.js';
 
@@ -17,10 +19,18 @@ const HOST_TOP = 120;      // the web app's terminal sits below header + tabbar
 
 // A fresh world per case: the addon holds module-free per-instance state, but
 // each test wants its own listener set, rAF queue and host element.
-function makeWorld({ hasVisualViewport = true, hostTop = HOST_TOP } = {}) {
+function makeWorld({ hasVisualViewport = true, hostTop = HOST_TOP, keyboardCapable = true } = {}) {
   const dom = new JSDOM('<!doctype html><html><body><div id="host"></div></body></html>',
     { runScripts: 'outside-only', url: 'http://localhost/' });
   const { window } = dom;
+
+  // CROW-1045: the addon now gates on a keyboard-capable surface (touch), not
+  // merely `visualViewport` presence — a desktop WKWebView exposes visualViewport
+  // but has no software keyboard. jsdom implements neither `matchMedia` nor a
+  // non-zero `maxTouchPoints`, so it reads as desktop by default; hand it a
+  // `matchMedia` that answers `(pointer: coarse)` to model a phone/tablet. The
+  // one desktop case flips this off to prove the addon stays wholly inert.
+  window.matchMedia = (q) => ({ media: q, matches: keyboardCapable && /coarse/.test(q) });
 
   // rAF we drive by hand. Callbacks registered DURING a flush land in the next
   // one, matching the browser — the addon relies on that to pin the prompt only
@@ -98,6 +108,27 @@ function makeWorld({ hasVisualViewport = true, hostTop = HOST_TOP } = {}) {
   check('registers no listeners', Object.keys(w.listeners).length === 0);
   check('schedules no frames', w.frames() === 0);
   check('writes no inline height', w.height() === '');
+  check('dispose is safe', (() => { try { w.addon.dispose(); return true; } catch (_) { return false; } })());
+}
+
+// ---- 1b. Desktop WKWebView (has visualViewport, no keyboard) → inert ---------
+// CROW-1045 regression: the macOS desktop app is a WKWebView that exposes
+// `visualViewport` just like a phone, and under viewport-fit=cover its layout
+// viewport can outrun the visible height enough to look like a keyboard. With no
+// software keyboard on the surface, the addon must not act on that — it has to
+// be as inert as the no-visualViewport case, or it shrinks a full-height grid
+// and strands a dead band below it.
+{
+  console.log('desktop WKWebView (no software keyboard)');
+  const w = makeWorld({ keyboardCapable: false });
+  w.activate();
+  check('registers no listeners', Object.keys(w.listeners).length === 0);
+  check('schedules no frames', w.frames() === 0);
+  // A keyboard-sized occlusion that WOULD size the host on a phone…
+  w.keyboard(300);
+  w.emit();       // no subscription, so nothing runs — asserted for intent
+  check('writes no inline height', w.height() === '');
+  check('asks for no refit', w.resizes.length === 0);
   check('dispose is safe', (() => { try { w.addon.dispose(); return true; } catch (_) { return false; } })());
 }
 

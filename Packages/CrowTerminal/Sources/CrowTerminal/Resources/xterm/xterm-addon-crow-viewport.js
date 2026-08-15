@@ -16,12 +16,24 @@
 // the parity drift that bit reflow-debounce #661/#662 and the mouse-mode
 // swallow #776.
 //
-// Deliberately inert everywhere a keyboard can't occlude the page: absent
-// `visualViewport` (older embedded webviews) is a hard no-op, and so is any
-// occlusion below KEYBOARD_MIN_OCCLUSION — which is what desktop browsers and
-// mobile browser chrome produce. Nothing is written to the host's style until a
-// keyboard-sized inset actually appears, and it is restored verbatim when that
-// inset goes away.
+// Deliberately inert everywhere a keyboard can't occlude the page. Three
+// independent guards: absent `visualViewport` (older embedded webviews) is a
+// hard no-op; a surface with no software keyboard (the desktop WKWebView — see
+// below) never even subscribes; and past those, any occlusion below
+// KEYBOARD_MIN_OCCLUSION is ignored. Nothing is written to the host's style
+// until a keyboard-sized inset actually appears, and it is restored verbatim
+// when that inset goes away.
+//
+// CROW-1045: `visualViewport` presence alone is NOT "this surface has a
+// keyboard." The macOS desktop app is a WKWebView (Tauri), and WKWebViews
+// expose `visualViewport` just like a phone does. Under `viewport-fit=cover`
+// its layout viewport (`documentElement.clientHeight`) can outrun the visible
+// `visualViewport.height` by the window chrome / safe-area — an offset the
+// occlusion test above then mistakes for a keyboard, shrinking the terminal
+// host and stranding a dead band below the grid (the reported regression). A
+// software keyboard only exists on a touch surface, so gate the whole addon on
+// that: coarse pointer or touch points. Desktop fails both and stays inert,
+// exactly like the no-`visualViewport` case; phones and tablets are unchanged.
 //
 // Loaded via <script src> (not ES modules), so it exposes a namespaced UMD-style
 // global matching the vendored addons
@@ -42,6 +54,31 @@
   // FitAddon a 0-or-negative box, whose degenerate proposeDimensions makes a
   // junk grid — the same failure the host pages already guard against.
   var MIN_HOST_HEIGHT = 40;
+
+  // Does this surface have a software keyboard that can occlude the page? Only a
+  // touch surface does. `visualViewport` is not the test — desktop WKWebViews
+  // (the Tauri macOS app) expose it too, and CROW-1045 is exactly that surface
+  // tripping the occlusion detector on window chrome. `maxTouchPoints > 0` is
+  // the primary signal (iOS reports 5, macOS reports 0); `(pointer: coarse)` is
+  // the fallback for the rare touch device that under-reports it. Both are
+  // wrapped/typed defensively — an embedded webview may lack `matchMedia`, and a
+  // throwing/absent one must read as "not touch," i.e. desktop, i.e. inert.
+  function keyboardCapable(global) {
+    var nav = global.navigator;
+    if (nav && typeof nav.maxTouchPoints === 'number' && nav.maxTouchPoints > 0) {
+      return true;
+    }
+    var mm = global.matchMedia;
+    if (typeof mm === 'function') {
+      try {
+        var q = mm.call(global, '(pointer: coarse)');
+        if (q && q.matches) {
+          return true;
+        }
+      } catch (_) { /* no usable matchMedia → treat as non-touch */ }
+    }
+    return false;
+  }
 
   /// `options.host`    element to size; defaults to the container passed to
   ///                   `term.open()` (i.e. `term.element.parentElement`).
@@ -68,6 +105,13 @@
     // No signal → leave the page exactly as it was. This is the whole
     // "non-visualViewport webviews are unchanged" guarantee.
     if (!vv) {
+      return;
+    }
+    // No software keyboard on this surface → same hard no-op (CROW-1045). The
+    // desktop WKWebView has `visualViewport` but no keyboard, so acting on its
+    // occlusion would shrink a full-height terminal for nothing. Bail before
+    // subscribing so this surface never even schedules a measurement.
+    if (!keyboardCapable(global)) {
       return;
     }
     var host = this._host || (term.element && term.element.parentElement);

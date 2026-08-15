@@ -21,10 +21,13 @@
     }
     /* Under viewport-fit=cover the page runs under the home indicator, so inset
        the grid — otherwise the prompt line sits behind it once the keyboard
-       closes (CROW-988). border-box keeps the page exactly one viewport tall. */
-    body {
-      box-sizing: border-box;
-      padding-bottom: env(safe-area-inset-bottom);
+       closes (CROW-988). border-box keeps the page exactly one viewport tall.
+       Scoped to coarse pointer (CROW-1045): only a touch surface has a home
+       indicator, and the desktop WKWebView must not carry bottom padding —
+       env() already resolves to 0 there, so this is belt-and-suspenders. */
+    body { box-sizing: border-box; }
+    @media (pointer: coarse) {
+      body { padding-bottom: env(safe-area-inset-bottom); }
     }
     /* CROW-1006: iOS must not pop its own long-press sheet over the grid — the
        #ctxmenu below is what a long-press opens here. Nothing is lost: xterm.css
