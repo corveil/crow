@@ -84,6 +84,10 @@ the selection and cancelling the browser default, while Ctrl+C with no
 selection still falls through as SIGINT; Cmd+F cancelling the browser find bar
 and opening ours; and non-keydown / unmodified keys passing through untouched.
 
+## `session-switch-attach.test.js` — agent tab/session switch (CROW-1035)
+
+Drives `attachWindow` against a fake xterm + a live `/terminal` socket. Coverage: switching to a Claude (alt-buffer) or Cursor (inline agent) surface is in-place — no new WebSocket, `term.reset` + `select-window` on the existing socket, alt-buffer skips the CROW-1027 heal and inline agents still get it; a plain shell still takes the #673 full reload; re-clicking the attached window is a no-op; a missing socket only records `attachedWindow`.
+
 ## `terminal-reload.test.js` — header ↻ Reload button (CROW-979)
 
 Drives `renderHeader` and `reloadTerminalAction` against a fake xterm + a fake

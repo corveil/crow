@@ -43,6 +43,14 @@ import Testing
         #expect(String(decoding: data, as: UTF8.self) == Self.clearPrefix)
     }
 
+    /// CROW-1035: an alt-buffer pane's live attach already paints the current
+    /// frame. Replaying the capture on top is what parks the caret below the
+    /// input box. Shells and inline agents (alternate_on=0) still replay.
+    @Test func altBufferPaneSkipsScrollbackReplay() {
+        #expect(TerminalCockpit.shouldReplayScrollback(alternateOn: true) == false)
+        #expect(TerminalCockpit.shouldReplayScrollback(alternateOn: false) == true)
+    }
+
     @Test func plainPreviewTextStripsAnsiAndTrailingNewlines() {
         let text = TerminalCockpit.plainPreviewText(from: "line1\n\u{1b}[31mred\u{1b}[0m\n\n")
         #expect(text == "line1\nred")
