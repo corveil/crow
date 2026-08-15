@@ -98,9 +98,12 @@ enum TerminalWebSocket {
                                 // Replay the pane's tmux scrollback into the xterm buffer
                                 // so history survives a crowd restart / browser reload —
                                 // the client re-selects its window on every reconnect and
-                                // tab switch (CROW-606). Yield through the same stream the
-                                // PTY writes to, so this serializes with live output on the
-                                // single `outputTask` (no concurrent `outbound` writes).
+                                // tab switch (CROW-606). Alt-buffer panes skip the replay
+                                // (CROW-1035): capture-pane returns only the current
+                                // frame, and injecting it races the live attach redraw.
+                                // Yield through the same stream the PTY writes to, so this
+                                // serializes with live output on the single `outputTask`
+                                // (no concurrent `outbound` writes).
                                 if let replay = cockpit.replayData(group: group, index: window) {
                                     continuation.yield(replay)
                                 }

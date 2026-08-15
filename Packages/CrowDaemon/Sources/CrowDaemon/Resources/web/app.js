@@ -3685,11 +3685,10 @@ async function refreshTerminals() {
   // awaiting this, so without a nudge the button would sit disabled until the next
   // 4s refreshLive tick.
   syncTerminalReloadEnabled();
-  // #673: session switches funnel through here too (selectSession → refreshTerminals),
-  // changing which window this shared socket shows — same corruption as a terminal-tab
-  // switch. attachWindow reloads only when the window actually changes, so a same-session
-  // background refresh (a "terminals changed" event) stays a no-op and won't tear down
-  // the socket mid-work.
+  // Session/tab switches funnel through here too (selectSession → refreshTerminals),
+  // changing which window this shared socket shows. attachWindow is a no-op when
+  // the window didn't change, so a same-session background refresh stays put.
+  // Agent surfaces switch in place (CROW-1035); shells still take the #673 reload.
   if (activeTerminal) attachWindow(activeTerminal.window);
 }
 
@@ -3764,13 +3763,11 @@ function switchTerminal(t) {
   // a still-unlatched tab gets a fresh budget (disarm nulls the tracked id).
   maybePollAltScreenLatch();
   renderTabs();
-  // #673: the in-place resize+replay from #672 didn't recover a mismatched grid —
-  // the cursor stayed misaligned from the actual line. Attaching to a different
-  // window now does the full "Reload terminal" recovery (reset + fresh socket)
-  // instead, which is the only path that reliably repaints against a stable
-  // layout. attachWindow only pays that cost when the window actually changes.
-  // (Re-clicking the active tab is a no-op: attachWindow guards on win ===
-  // attachedWindow, superseding #674's id-based early-return guard.)
+  // Window change is attachWindow's job. Shells still take the #673 full
+  // reload (reset + fresh socket) so a surface another client reshaped
+  // self-heals. Agent TUIs switch in place — the reload's new PTY (24×80
+  // then SIGWINCH) is what jumps Claude's caret and doubles Cursor chrome
+  // (CROW-1035). Re-clicking the active tab is a no-op (win === attachedWindow).
   attachWindow(t.window);
   if (term) term.focus();
 }
@@ -5497,8 +5494,9 @@ function forceSelectModifierLabel() {
 // defensive coding. There is ONE shared xterm instance across every tab, and
 // agent surfaces now let DECSET 1000–1016 through, so
 // `term.modes.mouseTrackingMode` can outlive the tab that set it: `attachWindow`
-// only clears it via `reloadTerminal()`/`term.reset()` when the socket is
-// already OPEN, and skips that during a reconnect. If we tested the mode first,
+// clears it via `term.reset()` (in-place agent switch) or `reloadTerminal()`
+// (shells) when the socket is already OPEN, and skips that during a reconnect.
+// If we tested the mode first,
 // a shell tab visited right after an agent tab would inherit that stale mode and
 // forward the wheel to the PTY — regressing the exact shell path this model
 // exists to preserve. So a KNOWN surface reads its own kind and only an agent
@@ -6013,9 +6011,11 @@ function connectTerminalWs() {
   // CROW-1027: this attach supersedes any queued auto-reconnect — drop it so two
   // sockets can't race on the shared window/term.
   clearTermReconnectTimer();
-  // #677: cover this (re)attach — initial connect, auto-reconnect, and (via
-  // reloadTerminal) the #675 right-click Reload + tab/session switch — with the
-  // skeleton. `painted` gates the hide to the FIRST PTY byte of THIS socket.
+  // #677: cover this (re)attach — initial connect, auto-reconnect, and the
+  // explicit Reload path — with the skeleton. Agent tab/session switches no
+  // longer tear the socket down (CROW-1035); they raise the overlay from
+  // switchAgentWindow instead. `painted` gates the hide to the FIRST PTY byte
+  // of THIS socket.
   showTerminalSkeleton();
   let painted = false;
   termWs = new WebSocket(wsURL('/terminal'));
@@ -6168,8 +6168,9 @@ function selectWindow(win) {
 // crowd's `select-window` reply carries the authoritative copy
 // (`capture-pane -pe -S -50000`, CROW-606) and REBUILDS the buffer in place, so
 // re-requesting it is idempotent. It already ran on connect and on a tab CHANGE
-// (attachWindow → reloadTerminal), which is why switching away and back
-// "fixed" the history — but the tab you sit on never re-synced.
+// (attachWindow → reload for shells, in-place select-window for agents),
+// which is why switching away and back "fixed" the history — but the tab
+// you sit on never re-synced.
 //
 // Two triggers: reaching the top of the local buffer (asking for older lines)
 // and, since CROW-1026, going idle parked on a hole mid-buffer. Any surface that
@@ -6407,20 +6408,49 @@ function maybeHydrateScrollback() {
   fireScrollbackCapture(buf);
 }
 
-// #673: which tmux window this shared surface shows changes on both a terminal-tab
-// switch (switchTerminal) and a session switch (refreshTerminals). A plain
-// selectWindow on the live socket replays the pane but leaves the grid mismatched
-// (cursor off from the actual line) when another surface has reshaped the window —
-// #672's in-place resize+replay wasn't enough. Do the full "Reload terminal"
-// recovery on a real change instead. Only reload when the target window differs
-// from what's attached, so background refreshes / re-clicking the active tab don't
-// tear down the socket mid-work. When the socket isn't open yet, connectTerminalWs's
-// onopen selects this window against a fresh surface anyway — no reload needed.
+// Which tmux window this shared surface shows changes on both a terminal-tab
+// switch (switchTerminal) and a session switch (refreshTerminals).
+//
+// Shells keep the #673 full reload (term.reset + fresh socket): a plain
+// select-window on the live socket left the grid mismatched when another
+// surface had reshaped the window, and only Reload recovered it.
+//
+// Agent TUIs must NOT take that path (CROW-1035). The reload opens a new
+// PTY at tmux's default 24×80, SIGWINCHes it to the real size, then injects
+// a capture-pane replay that races the live attach redraw. On Claude (alt
+// buffer) the caret lands below the input box; on Cursor the footer chrome
+// stacks one extra copy. Switch those in place: reset the local buffer so
+// the previous window's cells/modes don't leak, then select-window on the
+// live socket. No new PTY, no same-size SIGWINCH (#637). The daemon skips
+// replay for an alt-buffer pane (live attach already has the frame); an
+// inline agent still gets CROW-606 history via the existing replay.
+//
+// Only act when the target window differs, so background refreshes /
+// re-clicking the active tab don't churn. When the socket isn't open yet,
+// connectTerminalWs's onopen selects this window against a fresh surface.
 let attachedWindow = null;
 function attachWindow(win) {
   if (win == null || win === attachedWindow) return;
   attachedWindow = win;
-  if (termWs && termWs.readyState === WebSocket.OPEN) reloadTerminal();
+  if (!termWs || termWs.readyState !== WebSocket.OPEN) return;
+  if (activeSurfaceIsAgent()) { switchAgentWindow(win); return; }
+  reloadTerminal();
+}
+
+// In-place window switch for agent TUIs. See attachWindow.
+function switchAgentWindow(win) {
+  if (!term) return;
+  showTerminalSkeleton();
+  clearTimeout(termSkelTimer);
+  termSkelTimer = setTimeout(hideTerminalSkeleton, 1500);
+  try { term.reset(); } catch (_) {}
+  applySurfaceScrollback();
+  resetScrollbackSync();
+  selectWindow(win);
+  // Inline agents keep the unified 50k and can land one-screen after a
+  // mid-reflow capture, so they stay eligible for the CROW-1027 heal. A
+  // true alt-buffer agent has no local history to repair.
+  if (!activeSurfaceUsesAltScreen()) armScrollbackHeal();
 }
 
 // Right-click "Reload terminal" (#661): recover a corrupted/thrashed surface

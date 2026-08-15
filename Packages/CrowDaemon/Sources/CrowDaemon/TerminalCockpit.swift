@@ -130,12 +130,36 @@ struct TerminalCockpit: Sendable {
     /// Capture window `index`'s pane scrollback (history + current screen) and
     /// package it as bytes ready to write into a reconnecting xterm.js buffer.
     /// Returns `nil` when the capture fails (best-effort — a live-only pane is
-    /// still preferable to dropping the connection). See `replayFrame`.
+    /// still preferable to dropping the connection) **or** when the pane is in
+    /// the alternate buffer — injecting that frame races the live attach
+    /// redraw and parks the TUI caret below the input box (CROW-1035). See
+    /// `replayFrame` and `shouldReplayScrollback`.
     func replayData(group: String, index: Int) -> Data? {
+        if !Self.shouldReplayScrollback(alternateOn: paneIsOnAlternateScreen(group: group, index: index)) {
+            return nil
+        }
         guard let raw = try? controller.capturePane(
             target: "\(group):\(index)", linesBack: Self.replayLines, escapes: true)
         else { return nil }
         return Self.replayFrame(from: raw)
+    }
+
+    /// `#{alternate_on}` for `group:index`. `false` when tmux doesn't answer
+    /// so a failed probe still takes the CROW-606 replay path (shells / inline
+    /// agents) rather than silently dropping history.
+    func paneIsOnAlternateScreen(group: String, index: Int) -> Bool {
+        guard let raw = try? controller.displayMessage(
+            target: "\(group):\(index)", format: "#{alternate_on}")
+        else { return false }
+        return raw.trimmingCharacters(in: .whitespacesAndNewlines) == "1"
+    }
+
+    /// Whether `select-window` should follow up with a capture-pane replay.
+    /// Alt-buffer panes already have their current frame painted by the live
+    /// attach; a second, line-oriented dump of that same frame is what jumps
+    /// Claude's caret below the input box (CROW-1035).
+    static func shouldReplayScrollback(alternateOn: Bool) -> Bool {
+        !alternateOn
     }
 
     /// Capture the last `previewLines` rows of a cockpit window as plain text for

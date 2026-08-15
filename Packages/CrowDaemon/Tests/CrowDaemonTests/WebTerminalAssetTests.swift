@@ -212,6 +212,33 @@ import Testing
             "rebinding the active row must re-apply the alt-buffer vs inline vs shell xterm scrollback cap (CROW-1010)")
     }
 
+    /// CROW-1035: attaching to an agent TUI must switch in place, not take the
+    /// #673 full reload. The reload's new PTY (24×80 then SIGWINCH) plus the
+    /// capture-pane replay is what jumps Claude's caret and doubles Cursor
+    /// chrome. Shells keep the reload so a surface another client reshaped
+    /// still self-heals. The jsdom suite drives the branch; this pins the
+    /// routing so a later edit can't silently send agents back through reload.
+    @Test func attachWindowSwitchesAgentSurfacesInPlace() throws {
+        let source = try Self.webAsset("app.js")
+        let attach = try Self.functionBody("attachWindow", in: source)
+        #expect(
+            attach.contains("activeSurfaceIsAgent()") && attach.contains("switchAgentWindow("),
+            "an agent surface must take the in-place switch, not reloadTerminal")
+        #expect(
+            attach.contains("reloadTerminal()"),
+            "a plain shell must still take the #673 full reload")
+        let inPlace = try Self.functionBody("switchAgentWindow", in: source)
+        #expect(
+            inPlace.contains("term.reset()") && inPlace.contains("selectWindow("),
+            "in-place switch resets the local buffer then select-windows on the live socket")
+        #expect(
+            !inPlace.contains("reloadTerminal(") && !inPlace.contains("connectTerminalWs("),
+            "in-place switch must not tear down the PTY")
+        #expect(
+            inPlace.contains("armScrollbackHeal()"),
+            "inline agents stay eligible for the CROW-1027 post-switch heal")
+    }
+
     /// The swallow is conditional on surface kind (ADR-0013): plain shells keep
     /// it (so drag-select and the context menu survive), agent surfaces let the
     /// mode toggles through so the app claims the wheel. Because that hands
