@@ -127,6 +127,16 @@ deliberate, documented gaps (full grid in the
 > Google-auth-locked); this amendment closes only the review deferral, not the
 > Tier-2 classification.
 
+> **Amendment (2026-08-15, CROW-1037):** Grok's Crow Auto mapping is
+> `--always-approve` + hard `--deny` on `.work` and `.job`, not `--permission-mode
+> auto`. The earlier matrix/code posture treated Grok's classifier `auto` as the
+> analogue of Claude's `--permission-mode auto` and declined `--yolo` as a full
+> bypass. Lived failure: a Grok work session with Crow Auto on still blocked
+> `gh pr create` as an "external publish" until the operator typed
+> `/always-approve` in the TUI. Claude under the same Crow flag would have
+> opened the PR. Deny still wins over always-approve, so the `rm -rf /`
+> literals stay. Reviews stay human-gated. Auto off is still bare `grok`.
+>
 > **Amendment (2026-08-14, #1033):** a seventh harness — **Muse Code** (Meta's
 > `muse` CLI) — joined as an explicit **Tier-2 / experimental** target, the
 > same class as Antigravity (#860): a real, driveable CLI that lands below the

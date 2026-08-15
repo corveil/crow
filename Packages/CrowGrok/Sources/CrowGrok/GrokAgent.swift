@@ -80,23 +80,31 @@ public struct GrokAgent: CodingAgent {
 
         switch session.kind {
         case .work:
-            // Bare `grok` launch — the user types their prompt into the TUI. No
-            // env prefix (Grok reads its creds from its own config), no `-c`
-            // (MVP `.work` doesn't auto-resume), no remote-control flag (remote
-            // control is `crow send` typing into the TUI — agent-agnostic).
-            return GrokLaunchArgs.bareCommand(binary: grokPath)
+            // Interactive TUI — the user types their prompt. No env prefix
+            // (Grok reads its creds from its own config), no `-c` (MVP `.work`
+            // doesn't auto-resume), no remote-control flag (remote control is
+            // `crow send` typing into the TUI — agent-agnostic). Crow Auto
+            // maps to `--always-approve` + hard `--deny` so a ticket that
+            // asks to open a PR can `gh pr create` without a second in-TUI
+            // `/always-approve` (CROW-1037). Auto off stays a bare `grok`.
+            return GrokLaunchArgs.bareCommand(
+                binary: grokPath,
+                autoPermissionMode: autoPermissionMode
+            )
         case .job, .review:
             // First launch runs the prompt file headlessly, then chains into
             // `-c` to resume in the interactive TUI (run-then-continue — any
             // prompt arg forces headless). Subsequent restarts skip the headless
             // re-run and resume the TUI only. `reviewPromptDispatched` gates both.
             //
-            // Auto-permission is `.job`-only: reviews are human-gated (the
-            // headless leg does the read-only analysis — read-only tools don't
-            // prompt in Grok's default mode — and the human approves the final
-            // `gh pr review` post in the resumed TUI). Review prompts are
-            // agent-aware: SessionService.buildReviewPrompt inlines the
-            // crow-review-pr SKILL body (Grok has no Crow slash-command engine).
+            // Auto-permission is `.work`/`.job` only: reviews stay human-gated
+            // (the headless leg does the read-only analysis — read-only tools
+            // don't prompt in Grok's default mode — and the human approves the
+            // final `gh pr review` post in the resumed TUI). `.job` Auto is
+            // `--always-approve` + `--deny`, same as `.work` (CROW-1037).
+            // Review prompts are agent-aware: SessionService.buildReviewPrompt
+            // inlines the crow-review-pr SKILL body (Grok has no Crow
+            // slash-command engine).
             let autoForJob = (session.kind == .job) && autoPermissionMode
             if !session.reviewPromptDispatched {
                 let promptFile = session.kind == .review

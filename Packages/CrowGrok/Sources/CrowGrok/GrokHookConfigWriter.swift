@@ -125,7 +125,7 @@ public struct GrokHookConfigWriter: HookConfigWriter {
         try data.write(to: URL(fileURLWithPath: filePath))
         // `crow.json` embeds the absolute `crow` path and the session UUID and
         // lives inside the user's git worktree, where an agent's `git add -A`
-        // (an unattended `.job` runs with `--permission-mode auto`) could stage
+        // (an unattended `.job` runs with `--always-approve`) could stage
         // it — and a committed hook pointing at a dead per-machine UUID breaks
         // every teammate who then opens the repo in Grok. A self-scoped
         // `.gitignore` (ignoring `crow.json` + itself, NOT `*.json`, so a user's

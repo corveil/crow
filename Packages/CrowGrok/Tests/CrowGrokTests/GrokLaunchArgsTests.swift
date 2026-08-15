@@ -13,14 +13,15 @@ struct GrokLaunchArgsTests {
         #expect(GrokLaunchArgs.autoPermissionSuffix(autoPermissionMode: false) == "")
     }
 
-    @Test func autoPermissionSuffixOnIsBoundedNotYolo() {
+    @Test func autoPermissionSuffixOnIsAlwaysApproveWithDeny() {
         let s = GrokLaunchArgs.autoPermissionSuffix(autoPermissionMode: true)
-        #expect(s.contains("--permission-mode auto"))
+        #expect(s.contains("--always-approve"))
         #expect(s.contains("--deny 'Bash(rm -rf /)'"))
         #expect(s.contains("--deny 'Bash(rm -rf /*)'"))
-        // Never the full-bypass forms.
+        // Canonical flag, not the `--yolo` alias; classifier `auto` is not
+        // Claude-equivalent (CROW-1037).
         #expect(!s.contains("--yolo"))
-        #expect(!s.contains("--always-approve"))
+        #expect(!s.contains("--permission-mode auto"))
         #expect(!s.contains("bypassPermissions"))
     }
 
@@ -49,15 +50,17 @@ struct GrokLaunchArgsTests {
             promptPath: "/tmp/p.md",
             autoPermissionMode: true
         )
-        // Both the headless leg and the resumed TUI carry the bounded flags.
-        #expect(cmd.contains("'grok' --permission-mode auto"))
-        // Two occurrences of the mode flag: flagged headless + flagged resume. The
+        // Both the headless leg and the resumed TUI carry `--always-approve`.
+        #expect(cmd.contains("'grok' --always-approve"))
+        #expect(cmd.contains("--deny 'Bash(rm -rf /)'"))
+        #expect(cmd.contains("--deny 'Bash(rm -rf /*)'"))
+        // Two occurrences of the flag: flagged headless + flagged resume. The
         // bare `||` fallbacks on each leg carry none.
-        let occurrences = cmd.components(separatedBy: "--permission-mode auto").count - 1
+        let occurrences = cmd.components(separatedBy: "--always-approve").count - 1
         #expect(occurrences == 2)
         // Flag-rejection fallback on BOTH legs (#861 r12-r14): the headless leg
         // (carries the prompt) and the resume leg each fall back to a bare form —
-        // gated on clap's exit-2 usage error, so an upstream `--permission-mode`/
+        // gated on clap's exit-2 usage error, so an upstream `--always-approve`/
         // `--deny` rename neither loses the prompt nor strands the resume, while a
         // mid-turn failure or Ctrl-C does NOT trigger a re-run.
         #expect(cmd.contains("--prompt-file '/tmp/p.md' || { [ $? -eq 2 ] && 'grok' --prompt-file '/tmp/p.md'; }"))
@@ -92,7 +95,7 @@ struct GrokLaunchArgsTests {
 
     @Test func resumeTUICommandCarriesAutoForResumedJobs() {
         let cmd = GrokLaunchArgs.resumeTUICommand(binary: "grok", autoPermissionMode: true)
-        #expect(cmd.contains("--permission-mode auto"))
+        #expect(cmd.contains("--always-approve"))
         // Every restart of an auto job also gets the exit-2 flag-rejection fallback,
         // so a later upstream flag change can't make each restart die identically.
         #expect(cmd.hasSuffix(" -c || { [ $? -eq 2 ] && 'grok' -c; }\n"))
@@ -103,8 +106,8 @@ struct GrokLaunchArgsTests {
         #expect(GrokLaunchArgs.resumeLeg(bin: "'grok'", flags: "") == "'grok' -c")
         // Flags present → retry bare ONLY on clap's exit-2 usage error, never on a
         // Ctrl-C (130) or other non-zero — so the pane doesn't reopen on quit.
-        #expect(GrokLaunchArgs.resumeLeg(bin: "'grok'", flags: " --permission-mode auto")
-            == "'grok' --permission-mode auto -c || { [ $? -eq 2 ] && 'grok' -c; }")
+        #expect(GrokLaunchArgs.resumeLeg(bin: "'grok'", flags: " --always-approve")
+            == "'grok' --always-approve -c || { [ $? -eq 2 ] && 'grok' -c; }")
     }
 
     @Test func headlessLegFallbackIsExitTwoGated() {
@@ -113,12 +116,23 @@ struct GrokLaunchArgsTests {
         // does NOT re-run the whole job. No fallback when flags are empty.
         #expect(GrokLaunchArgs.headlessLeg(bin: "'grok'", flags: "", quotedPath: "'/p.md'")
             == "'grok' --prompt-file '/p.md'")
-        #expect(GrokLaunchArgs.headlessLeg(bin: "'grok'", flags: " --permission-mode auto", quotedPath: "'/p.md'")
-            == "'grok' --permission-mode auto --prompt-file '/p.md' || { [ $? -eq 2 ] && 'grok' --prompt-file '/p.md'; }")
+        #expect(GrokLaunchArgs.headlessLeg(bin: "'grok'", flags: " --always-approve", quotedPath: "'/p.md'")
+            == "'grok' --always-approve --prompt-file '/p.md' || { [ $? -eq 2 ] && 'grok' --prompt-file '/p.md'; }")
     }
 
-    @Test func bareCommandIsJustTheQuotedBinary() {
+    @Test func bareCommandIsJustTheQuotedBinaryWhenAutoOff() {
         #expect(GrokLaunchArgs.bareCommand(binary: "grok") == "'grok'\n")
         #expect(GrokLaunchArgs.bareCommand(binary: "/opt/my tools/grok") == "'/opt/my tools/grok'\n")
+        #expect(GrokLaunchArgs.bareCommand(binary: "grok", autoPermissionMode: false) == "'grok'\n")
+    }
+
+    @Test func bareCommandAddsAlwaysApproveAndExitTwoFallback() {
+        let cmd = GrokLaunchArgs.bareCommand(binary: "grok", autoPermissionMode: true)
+        #expect(cmd.contains("'grok' --always-approve"))
+        #expect(cmd.contains("--deny 'Bash(rm -rf /)'"))
+        #expect(cmd.contains("--deny 'Bash(rm -rf /*)'"))
+        #expect(cmd.hasSuffix(" || { [ $? -eq 2 ] && 'grok'; }\n"))
+        #expect(!cmd.contains("--permission-mode auto"))
+        #expect(!cmd.contains("--yolo"))
     }
 }

@@ -23,29 +23,31 @@ import Foundation
 /// on exit 2, not any non-zero, so a mid-turn failure or Ctrl-C doesn't re-run the
 /// job or reopen the pane (see `headlessLeg` / `resumeLeg`).
 ///
-/// **Bounded auto-permission (`.job` only, never `--yolo`).** Grok has no
-/// sandbox flag; its only prompt-reducing modes are `--permission-mode auto`
-/// (a classifier auto-approves read-only/safe tools and still gates dangerous
-/// ones — the direct analog of Claude's `--permission-mode auto`) and
-/// `--always-approve` (alias `--yolo`, = `--permission-mode bypassPermissions`,
-/// a *full* bypass). The ADR-0015-honest bounded posture is the former plus
-/// hard `--deny` guards (deny wins over auto and over always-approve), **not**
-/// the bypass. Consequence, documented in the matrix: a genuinely dangerous op
-/// in an unattended job still gates rather than running — the honest trade-off.
+/// **Auto-permission = `--always-approve` + hard `--deny` (`.work` / `.job`).**
+/// Grok has no sandbox flag. `--permission-mode auto` is a *classifier* that
+/// still gates "external publish" (`gh pr create`, sometimes `git push`) even
+/// when the ticket asked for it — that is **not** Claude's `--permission-mode
+/// auto`, which lets a work session finish a ticket including publish. Crow's
+/// Auto toggle therefore launches `--always-approve` (alias `--yolo` /
+/// `--permission-mode bypassPermissions`) so `.work` coder views and unattended
+/// `.job`s can `gh` / `git push` / `gh pr create` without a second in-TUI
+/// `/always-approve`. Hard `--deny` guards stay on: Grok's docs say deny wins
+/// over always-approve. Reviews stay human-gated (no auto flags). Auto off
+/// still launches bare `grok`.
 ///
-/// **Version-pinned re-check target (#859):** the ticket's pinned probe (@
-/// 2026-07-25) reported *no* `--permission-mode auto`; the current docs show it
-/// (`grok --permission-mode auto`). Grok's repo is a periodic, PR-closed mirror
-/// of xAI's monorepo, so re-probe `--permission-mode`, `--allow`/`--deny`,
-/// `-p`/`--single`, and `-c`/`-r` on each upstream sync.
+/// **Version-pinned re-check target (#859 / CROW-1037):** the #859 probe (@
+/// 2026-07-25) reported *no* `--permission-mode auto`; current docs show both
+/// that and `--always-approve`. Grok's repo is a periodic, PR-closed mirror of
+/// xAI's monorepo, so re-probe `--always-approve`/`--yolo`, `--permission-mode`,
+/// `--allow`/`--deny`, `-p`/`--single`, and `-c`/`-r` on each upstream sync.
 public enum GrokLaunchArgs {
 
-    /// Catastrophic-op hard denies applied to bounded `.job` launches. Kept
-    /// deliberately minimal — only patterns that are *never* legitimate job
-    /// work — so `--permission-mode auto` remains the primary prompt-reducer and
-    /// this doesn't over-restrict normal job operations (git, gh, edits, tests).
-    /// A tuning/re-check seam: Grok's `--deny` rule grammar may churn upstream.
-    static let jobDenyRules = [
+    /// Catastrophic-op hard denies applied whenever Crow Auto is on (`.work`
+    /// and `.job`). Kept deliberately minimal — only patterns that are *never*
+    /// legitimate ticket work — so `--always-approve` can run git / gh / edits /
+    /// tests while deny still wins over a `rm -rf /`. A tuning/re-check seam:
+    /// Grok's `--deny` rule grammar may churn upstream.
+    static let hardDenyRules = [
         "Bash(rm -rf /)",
         "Bash(rm -rf /*)",
     ]
@@ -55,13 +57,13 @@ public enum GrokLaunchArgs {
         "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
-    /// Bounded auto-permission flag suffix for an unattended `.job` (leading
-    /// space), or `""` when off. `--permission-mode auto` + hard `--deny`
-    /// guards — never `--always-approve` / `--yolo`.
+    /// Auto-permission flag suffix (leading space), or `""` when off.
+    /// `--always-approve` so Grok matches Claude Code Auto (`gh pr create`
+    /// included), plus hard `--deny` guards (deny still wins).
     public static func autoPermissionSuffix(autoPermissionMode: Bool) -> String {
         guard autoPermissionMode else { return "" }
-        var out = " --permission-mode auto"
-        for rule in jobDenyRules {
+        var out = " --always-approve"
+        for rule in hardDenyRules {
             out += " --deny \(shellQuote(rule))"
         }
         return out
@@ -80,7 +82,8 @@ public enum GrokLaunchArgs {
     /// giant argv (large inlined review-skill bodies would risk `ARG_MAX`) and
     /// never rides through a `$(cat …)` subshell. `--prompt-file` triggers the
     /// same headless mode as `-p` (verified, `14-headless-mode.md`), so the
-    /// run-then-continue shape is unchanged.
+    /// run-then-continue shape is unchanged. Auto flags (when on) are
+    /// `--always-approve` + `--deny`, not `--permission-mode auto`.
     public static func firstLaunchChainedCommand(
         binary: String,
         promptPath: String,
@@ -95,9 +98,9 @@ public enum GrokLaunchArgs {
 
     /// The headless prompt-consuming leg (`grok --prompt-file <p>`). Like
     /// `resumeLeg`, when the bounded flags are present it appends a fallback that
-    /// re-runs the *bare* form so a `--permission-mode`/`--deny` rename/removal
+    /// re-runs the *bare* form so an `--always-approve`/`--deny` rename/removal
     /// still consumes the prompt at Grok's default `ask` policy — *more*
-    /// restrictive than the dropped `--permission-mode auto` + `--deny`, so nothing
+    /// restrictive than the dropped `--always-approve` + `--deny`, so nothing
     /// is loosened — instead of the prompt being lost forever. That loss is
     /// permanent without this: `launchAgent` sets `reviewPromptDispatched = true`
     /// unconditionally after dispatch, so a first launch whose headless leg failed
@@ -108,7 +111,7 @@ public enum GrokLaunchArgs {
     /// the whole job prompt when Grok fails *mid-turn* (API 5xx, tool error) after
     /// it already edited/committed, risking duplicated work; `[ $? -eq 2 ]`
     /// restricts the retry to a genuine usage error, where nothing ran first. No
-    /// fallback when flags are empty (`.work`/`.review`).
+    /// fallback when flags are empty (`.work` Auto-off / `.review`).
     static func headlessLeg(bin: String, flags: String, quotedPath: String) -> String {
         let flagged = "\(bin)\(flags) --prompt-file \(quotedPath)"
         guard !flags.isEmpty else { return flagged }
@@ -130,29 +133,37 @@ public enum GrokLaunchArgs {
 
     /// The interactive-resume leg (`grok -c`). When the bounded auto-permission
     /// flags are present, append a fallback that resumes *bare* if a future
-    /// upstream rename/removal of `--permission-mode`/`--deny` (this mirror churns
-    /// — the ticket's pinned probe reported `--permission-mode auto` *absent*, the
-    /// current docs *present*) turns the flagged resume into a usage error, so the
-    /// TUI still opens at Grok's default `ask` policy instead of the pane silently
-    /// dying. The `;`-not-`&&` chain alone can't survive that, because the headless
-    /// leg carries the *same* flags — so both flagged legs fail together, and every
-    /// later `resumeTUICommand` restart fails identically.
+    /// upstream rename/removal of `--always-approve`/`--deny` (this mirror churns
+    /// — the #859 probe reported `--permission-mode auto` *absent*, current docs
+    /// *present*, and `--always-approve` is the same surface) turns the flagged
+    /// resume into a usage error, so the TUI still opens at Grok's default `ask`
+    /// policy instead of the pane silently dying. The `;`-not-`&&` chain alone
+    /// can't survive that, because the headless leg carries the *same* flags —
+    /// so both flagged legs fail together, and every later `resumeTUICommand`
+    /// restart fails identically.
     ///
     /// Gated on **exit code 2** (clap usage error), not any non-zero exit (#861
     /// review r14): a bare `||` would re-open the TUI on a user Ctrl-C (130) too,
     /// so the pane reopens Grok instead of returning to the shell. `[ $? -eq 2 ]`
     /// fires only on a genuine flag rejection. No fallback when flags are empty
-    /// (`.work`/`.review`): a bare `grok -c` has no flags to reject (#861 r12).
+    /// (`.work` Auto-off / `.review`): a bare `grok -c` has no flags to reject
+    /// (#861 r12).
     static func resumeLeg(bin: String, flags: String) -> String {
         let flagged = "\(bin)\(flags) -c"
         guard !flags.isEmpty else { return flagged }
         return "\(flagged) || { [ $? -eq 2 ] && \(bin) -c; }"
     }
 
-    /// Bare interactive TUI launch — the `.work` path, where the user types
-    /// their prompt directly into Grok. `binary` is shell-quoted (see
-    /// `firstLaunchChainedCommand`).
-    public static func bareCommand(binary: String) -> String {
-        "\(shellQuote(binary))\n"
+    /// Interactive TUI launch — the `.work` path, where the user types their
+    /// prompt directly into Grok. When Crow Auto is on, carries
+    /// `--always-approve` + `--deny` and the same exit-2 flag-rejection
+    /// fallback as the job legs, so an upstream `--always-approve` rename still
+    /// opens a TUI at Grok's default `ask` policy instead of a dead pane.
+    /// `binary` is shell-quoted (see `firstLaunchChainedCommand`).
+    public static func bareCommand(binary: String, autoPermissionMode: Bool = false) -> String {
+        let bin = shellQuote(binary)
+        let flags = autoPermissionSuffix(autoPermissionMode: autoPermissionMode)
+        guard !flags.isEmpty else { return "\(bin)\n" }
+        return "\(bin)\(flags) || { [ $? -eq 2 ] && \(bin); }\n"
     }
 }
