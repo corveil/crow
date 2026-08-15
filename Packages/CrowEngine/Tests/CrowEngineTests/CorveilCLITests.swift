@@ -140,7 +140,7 @@ struct CorveilCLITests {
         let script = try makeScript(
             #"""
             if [ "$1" = "skill" ] && [ "$2" = "list" ]; then
-              printf 'query-corveil\ncrow-runner\n'
+              printf 'query-corveil\nsample-skill\n'
               exit 0
             fi
             if [ "$1" = "skill" ] && [ "$2" = "install" ]; then
@@ -164,7 +164,7 @@ struct CorveilCLITests {
         #expect(outcome.ok)
         #expect(outcome.message == "Skills reinstalled")
 
-        for skill in ["query-corveil", "crow-runner"] {
+        for skill in ["query-corveil", "sample-skill"] {
             let installed = try String(
                 contentsOfFile: CorveilCLI.skillPath(devRoot: devRoot, skill: skill), encoding: .utf8)
             #expect(installed == "body:\(skill)")
@@ -202,7 +202,7 @@ struct CorveilCLITests {
         #expect(CorveilCLI.commandsDir(devRoot: "/dev/root") == "/dev/root/.claude/commands")
         #expect(CorveilCLI.skillPath(devRoot: "/dev/root", skill: "query-corveil")
             == "/dev/root/.claude/commands/query-corveil.md")
-        #expect(CorveilCLI.skillPath(devRoot: "/dev/root", skill: "crow-runner")
-            == "/dev/root/.claude/commands/crow-runner.md")
+        #expect(CorveilCLI.skillPath(devRoot: "/dev/root", skill: "sample-skill")
+            == "/dev/root/.claude/commands/sample-skill.md")
     }
 }

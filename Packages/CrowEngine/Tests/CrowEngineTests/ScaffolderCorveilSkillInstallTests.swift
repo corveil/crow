@@ -66,7 +66,7 @@ struct ScaffolderCorveilSkillInstallTests {
     @Test func installsEveryEnumeratedSkill() throws {
         let (dir, devRoot) = try makeTempDevRoot()
         defer { try? FileManager.default.removeItem(atPath: dir) }
-        let names = ["query-corveil", "crow-runner", "worker-runner", "create-corveil-workflow"]
+        let names = ["query-corveil", "sample-skill", "worker-runner", "create-corveil-workflow"]
         let binary = try makeEnumeratingCorveil(in: dir, skills: names)
 
         let warning = Scaffolder(devRoot: devRoot).installCorveilSkill(binary)
@@ -135,13 +135,13 @@ struct ScaffolderCorveilSkillInstallTests {
     @Test func aggregatesPerSkillFailuresButInstallsTheRest() throws {
         let (dir, devRoot) = try makeTempDevRoot()
         defer { try? FileManager.default.removeItem(atPath: dir) }
-        // `crow-runner` fails to install; the other two succeed. One bad skill
+        // `sample-skill` fails to install; the other two succeed. One bad skill
         // must not abort the others, and the single returned warning must name
         // the failure with corveil's own diagnostic.
         let binary = try makeScript(
             #"""
             if [ "$1" = "skill" ] && [ "$2" = "list" ]; then
-              printf 'query-corveil\ncrow-runner\nworker-runner\n'
+              printf 'query-corveil\nsample-skill\nworker-runner\n'
               exit 0
             fi
             if [ "$1" = "skill" ] && [ "$2" = "install" ]; then
@@ -154,8 +154,8 @@ struct ScaffolderCorveilSkillInstallTests {
                   *) shift;;
                 esac
               done
-              if [ "$name" = "crow-runner" ]; then
-                echo 'embed missing for crow-runner' >&2
+              if [ "$name" = "sample-skill" ]; then
+                echo 'embed missing for sample-skill' >&2
                 exit 7
               fi
               printf 'ok' > "$target"
@@ -173,11 +173,11 @@ struct ScaffolderCorveilSkillInstallTests {
         #expect(FileManager.default.fileExists(
             atPath: CorveilCLI.skillPath(devRoot: devRoot, skill: "worker-runner")))
         #expect(!FileManager.default.fileExists(
-            atPath: CorveilCLI.skillPath(devRoot: devRoot, skill: "crow-runner")))
+            atPath: CorveilCLI.skillPath(devRoot: devRoot, skill: "sample-skill")))
 
         let text = try #require(warning)
-        #expect(text.contains("crow-runner"))
-        #expect(text.contains("embed missing for crow-runner"))
+        #expect(text.contains("sample-skill"))
+        #expect(text.contains("embed missing for sample-skill"))
         #expect(text.contains("1 skill"))
     }
 
@@ -203,19 +203,19 @@ struct ScaffolderCorveilSkillInstallTests {
     // MARK: - parseSkillNames
 
     @Test func parsesOneNamePerLine() {
-        #expect(Scaffolder.parseSkillNames(from: "query-corveil\ncrow-runner\nworker-runner\n")
-            == ["query-corveil", "crow-runner", "worker-runner"])
+        #expect(Scaffolder.parseSkillNames(from: "query-corveil\nsample-skill\nworker-runner\n")
+            == ["query-corveil", "sample-skill", "worker-runner"])
     }
 
     @Test func parsesAJSONArrayOfStrings() {
         // A future corveil build may honour `--format json` with a real array.
-        #expect(Scaffolder.parseSkillNames(from: #"["query-corveil","crow-runner"]"#)
-            == ["query-corveil", "crow-runner"])
+        #expect(Scaffolder.parseSkillNames(from: #"["query-corveil","sample-skill"]"#)
+            == ["query-corveil", "sample-skill"])
     }
 
     @Test func parsesAJSONArrayOfObjects() {
-        let json = #"[{"name":"query-corveil","description":"x"},{"name":"crow-runner"}]"#
-        #expect(Scaffolder.parseSkillNames(from: json) == ["query-corveil", "crow-runner"])
+        let json = #"[{"name":"query-corveil","description":"x"},{"name":"sample-skill"}]"#
+        #expect(Scaffolder.parseSkillNames(from: json) == ["query-corveil", "sample-skill"])
     }
 
     @Test func dropsBannerAndBlankLines() {
@@ -225,9 +225,9 @@ struct ScaffolderCorveilSkillInstallTests {
         Available skills:
           query-corveil   Walk a Corveil ontology.
 
-        crow-runner
+        sample-skill
         """
-        #expect(Scaffolder.parseSkillNames(from: chatty) == ["crow-runner"])
+        #expect(Scaffolder.parseSkillNames(from: chatty) == ["sample-skill"])
     }
 
     @Test func rejectsPathTraversalNames() {
