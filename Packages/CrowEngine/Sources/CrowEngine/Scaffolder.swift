@@ -22,11 +22,12 @@ public struct Scaffolder {
     /// these files, so its agent kind is the right one to bake in.
     ///
     /// `corveilBinaryPath`, when set and executable, triggers a post-scaffold
-    /// `corveil skill install --path {devRoot}/.claude/commands/query-corveil.md`
-    /// so the embedded `/query-corveil` slash command stays in sync with the
-    /// user's locally-built corveil binary (CROW-482). Failures here are
-    /// non-fatal: they are returned as `ScaffoldResult.warning` and never
-    /// throw — the rest of the scaffold has already succeeded by that point.
+    /// install of *every* embedded corveil skill into
+    /// `{devRoot}/.claude/commands/` (CROW-1039, generalizing CROW-482), so each
+    /// `/slash-command` the binary ships stays in sync with the user's
+    /// locally-built corveil. Failures here are non-fatal: they are returned as
+    /// `ScaffoldResult.warning` and never throw — the rest of the scaffold has
+    /// already succeeded by that point.
     ///
     /// `binaryOverrides` is the full `defaults.binaries` map. Every entry
     /// whose target is executable becomes a symlink at
@@ -209,8 +210,8 @@ public struct Scaffolder {
         ClaudeHookConfigWriter.ensureCrowCLISymlink(
             devRoot: devRoot, appCrowPath: appCrowBinaryPath)
 
-        // Re-install the embedded /query-corveil slash command from the
-        // user-configured corveil binary on every launch (CROW-482). Failure
+        // Re-install every embedded corveil slash command from the
+        // user-configured corveil binary on every launch (CROW-1039). Failure
         // here is intentionally non-fatal — the rest of the scaffold is done.
         let warning = installCorveilSkill(corveilBinaryPath)
         return ScaffoldResult(warning: warning)
@@ -278,18 +279,31 @@ public struct Scaffolder {
         }
     }
 
-    /// Runs `<corveilBinaryPath> skill install --path {devRoot}/.claude/commands/query-corveil.md`
-    /// when the path is set and points at an executable. Returns a short
-    /// user-facing warning string on failure; `nil` on success or when the
-    /// feature is unconfigured (empty/nil path).
+    /// Installs **every** embedded corveil skill as a `/slash-command` under
+    /// `{devRoot}/.claude/commands/` when `corveilBinaryPath` is set and points
+    /// at an executable (CROW-1039). Returns a short user-facing warning string
+    /// summarizing any per-skill failures; `nil` on success or when the feature
+    /// is unconfigured (empty/nil path).
+    ///
+    /// The set is *enumerated* from the binary (`corveil skill list`), not
+    /// hardcoded, so a corveil that ships a new embedded skill gets it installed
+    /// without a Crow change. Each skill is installed independently
+    /// (`corveil skill install --skill <name> --path .../<name>.md`); one skill
+    /// failing does not abort the rest — failures are aggregated into the single
+    /// returned warning (→ `AppState.corveilSkillInstallWarning`). If the binary
+    /// can't enumerate (older build, no `list` subcommand, empty output) the
+    /// install falls back to the historical single default, ``defaultCorveilSkill``,
+    /// so a launch never regresses to installing *fewer* skills than before.
     ///
     /// `Scaffolder.scaffold(...)` runs synchronously on the daemon's launch
     /// path (`CrowDaemon.run` → `LaunchScaffold.run`, before the Manager
-    /// session is ensured), so a hung corveil binary (wrong executable, stdin
-    /// prompt, etc.) would stall startup before the Manager comes up. The hard
-    /// wall-clock timeout bounds the worst case: after `corveilInstallTimeout`
-    /// seconds the process is sent SIGTERM and the install reports a warning
-    /// rather than blocking forever.
+    /// session is ensured), so a hung corveil binary would stall startup before
+    /// the Manager comes up. Two guards bound the worst case: each subprocess is
+    /// SIGTERM'd after ``corveilInstallTimeout`` seconds, and the whole
+    /// enumerate-then-install sequence shares one ``corveilInstallBudget``
+    /// wall-clock deadline — once it is spent, no further subprocess is launched.
+    /// A binary that hangs on `list` (the common wedged case) still costs only a
+    /// single ``corveilInstallTimeout``, exactly as the one-skill install did.
     ///
     /// Public, not private — it is also the "reinstall without restarting Crow"
     /// entry point for a corveil binary the user just picked (CROW-490) or
@@ -308,12 +322,10 @@ public struct Scaffolder {
         }
 
         // Via `CorveilCLI`, not a second literal: the Settings "Reinstall skill"
-        // button names this file to the user, and a target that drifts from the
-        // name shown would make the button's own report wrong (CROW-1011). The
-        // directory is derived from the target for the same reason — creating
-        // one path and writing to another is how that drift would show up.
-        let target = CorveilCLI.skillPath(devRoot: devRoot)
-        let commandsDir = (target as NSString).deletingLastPathComponent
+        // button names this directory to the user, and a target that drifts from
+        // the name shown would make the button's own report wrong (CROW-1011).
+        // Every skill lands in this one dir, so it is created once up front.
+        let commandsDir = CorveilCLI.commandsDir(devRoot: devRoot)
         do {
             try fm.createDirectory(atPath: commandsDir, withIntermediateDirectories: true)
         } catch {
@@ -321,57 +333,192 @@ public struct Scaffolder {
             return "Corveil skill install failed — could not create .claude/commands directory."
         }
 
+        // One wall-clock deadline shared by enumeration + every install, so N
+        // skills can't stall startup for N × the per-process timeout.
+        let deadline = Date().addingTimeInterval(Self.corveilInstallBudget)
+
+        // 1. Enumerate the embedded skills from the binary itself. A hung `list`
+        //    is the common wedged case — bail with the timeout warning rather
+        //    than spending the rest of the budget on installs that will also
+        //    hang. Any other `list` failure (older binary, no `list`
+        //    subcommand, empty output) falls back to the historical single
+        //    default so we never install *fewer* skills than before CROW-1039.
+        var didFallBack = false
+        let skills: [String]
+        switch runCorveil(binary: path, args: ["skill", "list", "--format", "json"], deadline: deadline) {
+        case .timedOut:
+            CrowLog.info("[Scaffolder] corveil skill list timed out")
+            return Self.timeoutWarning
+        case .launchFailed(let message):
+            CrowLog.info("[Scaffolder] corveil skill list launch failed: \(message)")
+            return "Corveil skill install failed — \(message). Check path in Settings."
+        case .failed(let stderr, let code):
+            CrowLog.info("[Scaffolder] corveil skill list exit=\(code) stderr=\(stderr) — falling back to \(Self.defaultCorveilSkill)")
+            skills = [Self.defaultCorveilSkill]
+            didFallBack = true
+        case .succeeded(let stdout, _):
+            let parsed = Self.parseSkillNames(from: stdout)
+            if parsed.isEmpty {
+                CrowLog.info("[Scaffolder] corveil skill list returned no skills — falling back to \(Self.defaultCorveilSkill)")
+                skills = [Self.defaultCorveilSkill]
+                didFallBack = true
+            } else {
+                skills = parsed
+            }
+        }
+
+        // 2. Install each skill independently. Best-effort: collect per-skill
+        //    failures and keep going, so one broken skill doesn't cost the
+        //    others. A timeout means the binary is now hung, so stop.
+        var failures: [(skill: String, reason: String)] = []
+        installLoop: for skill in skills {
+            guard deadline.timeIntervalSinceNow > 0 else {
+                CrowLog.info("[Scaffolder] corveil install budget spent before \(skill)")
+                failures.append((skill, "timed out"))
+                break
+            }
+            let target = CorveilCLI.skillPath(devRoot: devRoot, skill: skill)
+            // Fallback installs the historical default with no `--skill`, exactly
+            // matching corveil's own default — so an old binary that predates the
+            // `--skill` flag still installs query-corveil.
+            let args = didFallBack
+                ? ["skill", "install", "--path", target]
+                : ["skill", "install", "--skill", skill, "--path", target]
+            switch runCorveil(binary: path, args: args, deadline: deadline) {
+            case .succeeded:
+                CrowLog.info("[Scaffolder] corveil skill '\(skill)' installed at \(target)")
+            case .timedOut:
+                CrowLog.info("[Scaffolder] corveil skill '\(skill)' install timed out")
+                failures.append((skill, "timed out"))
+                break installLoop  // hung binary — don't burn the rest of the budget
+            case .launchFailed(let message):
+                CrowLog.info("[Scaffolder] corveil skill '\(skill)' launch failed: \(message)")
+                failures.append((skill, message))
+            case .failed(let stderr, let code):
+                let detail = stderr.isEmpty ? "exit code \(code)" : stderr
+                CrowLog.info("[Scaffolder] corveil skill '\(skill)' install exit=\(code) stderr=\(stderr)")
+                failures.append((skill, detail))
+            }
+        }
+
+        guard !failures.isEmpty else { return nil }
+        let detail = failures.map { "\($0.skill) (\($0.reason))" }.joined(separator: ", ")
+        let noun = failures.count == 1 ? "skill" : "skills"
+        return "Corveil skill install failed for \(failures.count) \(noun): \(detail). Check path in Settings."
+    }
+
+    /// Outcome of one bounded corveil subprocess run by ``runCorveil(binary:args:deadline:)``.
+    private enum CorveilRun {
+        case succeeded(stdout: String, stderr: String)
+        case failed(stderr: String, code: Int32)
+        case timedOut
+        case launchFailed(String)
+    }
+
+    /// Run `<binary> <args>` bounded by both the per-process
+    /// ``corveilInstallTimeout`` and the caller's shared `deadline`, capturing
+    /// stdout/stderr. Reads the pipes after `waitUntilExit` (the same proven
+    /// pattern as ``CorveilCLI/verify(path:)``): corveil's `list`/`install`
+    /// output is a few short lines, well under the pipe buffer, so a post-exit
+    /// read is deadlock-free and picks up EOF immediately once both writers
+    /// (child + Foundation) have closed.
+    private func runCorveil(binary: String, args: [String], deadline: Date) -> CorveilRun {
+        let remaining = deadline.timeIntervalSinceNow
+        guard remaining > 0 else { return .timedOut }
+
         let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: path)
-        proc.arguments = ["skill", "install", "--path", target]
-        let stderrPipe = Pipe()
-        proc.standardError = stderrPipe
-        // Discard stdout explicitly. We don't surface corveil's diagnostic
-        // line, and routing to /dev/null is deadlock-proof — an undrained
-        // `Pipe()` would block the child if it ever wrote >64KB before exit.
-        proc.standardOutput = FileHandle.nullDevice
+        proc.executableURL = URL(fileURLWithPath: binary)
+        proc.arguments = args
+        let outPipe = Pipe()
+        let errPipe = Pipe()
+        proc.standardOutput = outPipe
+        proc.standardError = errPipe
 
         do {
             try proc.run()
         } catch {
-            CrowLog.info("[Scaffolder] corveil launch failed: \(error.localizedDescription)")
-            return "Corveil skill install failed — \(error.localizedDescription). Check path in Settings."
+            return .launchFailed(error.localizedDescription)
         }
 
-        // Watchdog: SIGTERM after `corveilInstallTimeout` so a hung binary
-        // unblocks `waitUntilExit`. The watchdog records the timeout so we
-        // can distinguish exit-N from wall-clock kill below. `waitUntilExit`
-        // (not a polling loop) is what triggers Foundation's pipe-write-FD
-        // cleanup, which is the only way the post-exit `readToEnd()` below
-        // reliably sees EOF.
-        let watchdog = ScaffolderTimeoutWatchdog(deadline: Self.corveilInstallTimeout, proc: proc)
+        // Cap this process at whichever comes first: the per-process ceiling or
+        // whatever remains of the shared budget.
+        let watchdog = ScaffolderTimeoutWatchdog(
+            deadline: min(Self.corveilInstallTimeout, remaining), proc: proc)
         watchdog.start()
         proc.waitUntilExit()
         let timedOut = watchdog.cancel()
 
-        if timedOut {
-            CrowLog.info("[Scaffolder] corveil skill install timed out after \(String(format: "%.1f", Self.corveilInstallTimeout))s")
-            return "Corveil skill install timed out after \(Int(Self.corveilInstallTimeout))s — binary may be hung. Check path in Settings."
-        }
-        if proc.terminationStatus != 0 {
-            let stderr = (try? stderrPipe.fileHandleForReading.readToEnd())
-                .flatMap { String(data: $0, encoding: .utf8) }?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            CrowLog.info("[Scaffolder] corveil skill install exit=\(proc.terminationStatus) stderr=\(stderr)")
-            let detail = stderr.isEmpty ? "exit code \(proc.terminationStatus)" : stderr
-            return "Corveil skill install failed — \(detail). Check path in Settings."
-        }
-        CrowLog.info("[Scaffolder] corveil skill installed at \(target)")
-        return nil
+        let stdout = Self.readTrimmed(outPipe)
+        let stderr = Self.readTrimmed(errPipe)
+        if timedOut { return .timedOut }
+        if proc.terminationStatus != 0 { return .failed(stderr: stderr, code: proc.terminationStatus) }
+        return .succeeded(stdout: stdout, stderr: stderr)
     }
 
-    /// Wall-clock budget for the per-launch `corveil skill install` run. Tight
-    /// because `Scaffolder.scaffold(...)` runs synchronously on the daemon
-    /// launch path (`CrowDaemon.run` → `LaunchScaffold.run`) before the Manager
-    /// session is ensured — a hung corveil binary delays the Manager's spawn by
-    /// this many seconds. 5s is generous for a local subprocess that only writes
-    /// one ~10KB file.
+    /// Read a pipe to EOF after the child has exited, trimmed. Returns at once
+    /// because `waitUntilExit` has already closed both writer FDs.
+    private static func readTrimmed(_ pipe: Pipe) -> String {
+        let data = (try? pipe.fileHandleForReading.readToEnd()) ?? Data()
+        return String(data: data, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
+    /// Parse `corveil skill list` output into embedded-skill names. Current
+    /// corveil builds print one name per line even under `--format json`; a
+    /// future build may emit a JSON array (of strings, or of `{name}` objects).
+    /// Accept all three, and keep only well-formed slugs so a stray banner or
+    /// log line can't become a bogus install target or `<name>.md` filename.
+    static func parseSkillNames(from output: String) -> [String] {
+        if let data = output.data(using: .utf8),
+           let json = try? JSONSerialization.jsonObject(with: data) {
+            if let names = json as? [String] {
+                return names.compactMap(sanitizedSkillName)
+            }
+            if let objects = json as? [[String: Any]] {
+                return objects.compactMap { ($0["name"] as? String).flatMap(sanitizedSkillName) }
+            }
+        }
+        return output.split(whereSeparator: { $0.isNewline })
+            .compactMap { sanitizedSkillName(String($0)) }
+    }
+
+    /// A skill name is a lowercase kebab/underscore slug. Anything else — a
+    /// banner line, a path, a blank line — is rejected, which both filters
+    /// non-skill output and blocks path traversal via the `<name>.md` target
+    /// (a name with `/` or `.` never survives).
+    private static func sanitizedSkillName(_ raw: String) -> String? {
+        let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty,
+              name.allSatisfy({
+                  ("a"..."z").contains($0) || ("0"..."9").contains($0) || $0 == "-" || $0 == "_"
+              })
+        else { return nil }
+        return name
+    }
+
+    /// The single skill corveil installs by default, and the historical Crow
+    /// behaviour before CROW-1039. The fallback when the binary can't enumerate
+    /// its embedded skills, so a launch never regresses to installing nothing.
+    static let defaultCorveilSkill = "query-corveil"
+
+    /// Wall-clock budget for a *single* `corveil skill list`/`install`
+    /// subprocess. Tight because `Scaffolder.scaffold(...)` runs synchronously on
+    /// the daemon launch path (`CrowDaemon.run` → `LaunchScaffold.run`) before
+    /// the Manager session is ensured — a hung corveil binary delays the
+    /// Manager's spawn by this many seconds. 5s is generous for a local
+    /// subprocess that only writes one ~10KB file.
     static let corveilInstallTimeout: TimeInterval = 5.0
+
+    /// Overall wall-clock budget across enumeration + *all* installs on the
+    /// launch path (CROW-1039). Bounds the worst case when several installs are
+    /// each slow-but-not-hung: once it is spent, no further subprocess starts. A
+    /// single hung subprocess is bounded tighter, by ``corveilInstallTimeout``.
+    static let corveilInstallBudget: TimeInterval = 10.0
+
+    /// Shared warning text for a corveil binary that hangs during install —
+    /// reused by the `list` bail-out and any per-skill timeout.
+    static let timeoutWarning =
+        "Corveil skill install timed out after \(Int(corveilInstallTimeout))s — binary may be hung. Check path in Settings."
 
     // MARK: - Bundled Templates
 

@@ -136,7 +136,7 @@ crow corveil reinstall-skill [--path PATH]     → {"ok":bool,"message":"Skill r
 ```
 
 - **Branch on `ok`, not the exit code.** A corveil that is missing, non-executable, exits non-zero, or hangs past 5s is a successful *report* of a broken binary. A non-zero `crow` exit means the request never ran (no daemon, or no path configured anywhere).
-- `reinstall-skill` re-runs the launch-time `corveil skill install`, writing `{devRoot}/.claude/commands/query-corveil.md` — the "I just rebuilt corveil, pick up its new embedded skill" loop, no `crowd` restart. It is idempotent.
+- `reinstall-skill` re-runs the launch-time `corveil skill install` for **every** embedded skill (enumerated via `corveil skill list`), writing each into `{devRoot}/.claude/commands/<name>.md` — the "I just rebuilt corveil, pick up its new embedded skills" loop, no `crowd` restart. `skill_path` names that directory. It is idempotent; one skill failing doesn't abort the rest (the warning names any that didn't install).
 - A reinstall also updates the launch-time corveil warning: succeeding clears it, failing replaces it.
 - Both are **local-only** on `/rpc` (they execute a path on the daemon host), like `gateway`/`web-password`/`mcp token`. The CLI is unaffected — it goes over the Unix socket.
 

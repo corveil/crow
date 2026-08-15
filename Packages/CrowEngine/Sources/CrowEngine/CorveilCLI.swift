@@ -120,26 +120,39 @@ public enum CorveilCLI {
         return Outcome(ok: false, message: detail, path: path)
     }
 
-    /// Re-run `corveil skill install --path {devRoot}/.claude/commands/query-corveil.md`
-    /// on demand — the same flow the daemon runs at launch, without a restart.
+    /// Re-run `corveil skill install` for **every** embedded skill on demand —
+    /// the same flow the daemon runs at launch, without a restart (CROW-1039,
+    /// generalizing the single-skill CROW-482 install).
     ///
     /// Thin over ``Scaffolder/installCorveilSkill(_:)`` rather than a second
     /// implementation: the button must install exactly what launch installs, or
     /// "reinstall and see if that fixes it" stops being a diagnosis. The
     /// `String?` warning it returns is the daemon's `corveilSkillInstallWarning`
-    /// text, so a failure here reads the same as a failure at startup.
+    /// text — a per-skill failure summary when some skills don't install — so a
+    /// failure here reads the same as a failure at startup.
     public static func reinstallSkill(path: String, devRoot: String) -> Outcome {
         let path = path.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let warning = Scaffolder(devRoot: devRoot).installCorveilSkill(path) else {
-            return Outcome(ok: true, message: "Skill reinstalled", path: path)
+            return Outcome(ok: true, message: "Skills reinstalled", path: path)
         }
         return Outcome(ok: false, message: warning, path: path)
     }
 
-    /// Where ``reinstallSkill(path:devRoot:)`` writes, for surfaces that want to
-    /// name the file. Kept next to the install so the two cannot disagree.
-    public static func skillPath(devRoot: String) -> String {
-        (devRoot as NSString).appendingPathComponent(".claude/commands/query-corveil.md")
+    /// The `.claude/commands` directory every embedded skill installs into, for
+    /// surfaces that want to name the destination (the Reinstall button's
+    /// `skill_path`). One directory rather than one file now that the install is
+    /// multi-skill (CROW-1039). Kept next to the install so the two cannot
+    /// disagree.
+    public static func commandsDir(devRoot: String) -> String {
+        (devRoot as NSString).appendingPathComponent(".claude/commands")
+    }
+
+    /// The install target for a single embedded skill: `<commandsDir>/<skill>.md`,
+    /// mirroring `corveil skill install`'s own `~/.claude/commands/<skill>.md`
+    /// default. Kept next to the install so the destination and any reported path
+    /// cannot disagree.
+    public static func skillPath(devRoot: String, skill: String) -> String {
+        (commandsDir(devRoot: devRoot) as NSString).appendingPathComponent("\(skill).md")
     }
 
     /// Read a pipe to EOF after the child has exited, so this returns at once.

@@ -80,7 +80,7 @@ enum CorveilRoutes {
                     appState.corveilSkillInstallWarning = outcome.ok ? nil : outcome.message
                 }
                 var payload = outcomeJSON(outcome)
-                payload["skill_path"] = CorveilCLI.skillPath(devRoot: devRoot)
+                payload["skill_path"] = CorveilCLI.commandsDir(devRoot: devRoot)
                 return json(payload)
 
             default:

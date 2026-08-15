@@ -67,16 +67,17 @@ public struct CorveilVerify: ParsableCommand {
 public struct CorveilReinstallSkill: ParsableCommand {
     public static let configuration = CommandConfiguration(
         commandName: "reinstall-skill",
-        abstract: "Reinstall the /query-corveil slash command from the corveil binary",
+        abstract: "Reinstall every embedded slash command from the corveil binary",
         discussion: """
         Re-runs the `corveil skill install` that `crowd` runs at launch, writing \
-        `{devRoot}/.claude/commands/query-corveil.md`. Use it after rebuilding \
-        corveil locally to pick up its new embedded skill without restarting \
-        the daemon.
+        every embedded skill the binary ships (`corveil skill list`) into \
+        `{devRoot}/.claude/commands/` — one `<skill>.md` per skill. Use it after \
+        rebuilding corveil locally to pick up its new embedded skills without \
+        restarting the daemon. `skill_path` in the response is that directory.
 
         A run also updates the launch-time corveil warning: succeeding clears \
-        it, failing replaces it, so there is one answer to "is corveil broken?" \
-        rather than a startup one and a button one.
+        it, a per-skill failure replaces it, so there is one answer to "is \
+        corveil broken?" rather than a startup one and a button one.
         """
     )
 

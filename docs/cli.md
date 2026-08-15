@@ -36,7 +36,7 @@ Every subcommand and flag the `crow` binary accepts, generated from the commands
 | [`crow codex-notify`](#crow-codex-notify) | Bridge Codex's notify command into Crow's hook-event pipeline |
 | [`crow complete-session`](#crow-complete-session) | Mark a session completed |
 | [`crow corveil`](#crow-corveil) | Verify the configured Corveil CLI binary, and reinstall its skill |
-| [`crow corveil reinstall-skill`](#crow-corveil-reinstall-skill) | Reinstall the /query-corveil slash command from the corveil binary |
+| [`crow corveil reinstall-skill`](#crow-corveil-reinstall-skill) | Reinstall every embedded slash command from the corveil binary |
 | [`crow corveil verify`](#crow-corveil-verify) | Run `corveil --version` and report what came back |
 | [`crow create-manager`](#crow-create-manager) | Create an additional Manager session |
 | [`crow defaults`](#crow-defaults) | View or change workspace and automation defaults |
@@ -491,15 +491,15 @@ Subcommands: [`verify`](#crow-corveil-verify), [`reinstall-skill`](#crow-corveil
 
 ## `crow corveil reinstall-skill`
 
-Reinstall the /query-corveil slash command from the corveil binary.
+Reinstall every embedded slash command from the corveil binary.
 
 ```
 crow corveil reinstall-skill [--path <path>]
 ```
 
-Re-runs the `corveil skill install` that `crowd` runs at launch, writing `{devRoot}/.claude/commands/query-corveil.md`. Use it after rebuilding corveil locally to pick up its new embedded skill without restarting the daemon.
+Re-runs the `corveil skill install` that `crowd` runs at launch, writing every embedded skill the binary ships (`corveil skill list`) into `{devRoot}/.claude/commands/` — one `<skill>.md` per skill. Use it after rebuilding corveil locally to pick up its new embedded skills without restarting the daemon. `skill_path` in the response is that directory.
 
-A run also updates the launch-time corveil warning: succeeding clears it, failing replaces it, so there is one answer to "is corveil broken?" rather than a startup one and a button one.
+A run also updates the launch-time corveil warning: succeeding clears it, a per-skill failure replaces it, so there is one answer to "is corveil broken?" rather than a startup one and a button one.
 
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |
