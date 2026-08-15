@@ -128,18 +128,32 @@ struct CorveilCLITests {
 
     // MARK: - reinstallSkill
 
-    @Test func reinstallWritesTheSkillFromTheBinary() throws {
+    @Test func reinstallWritesEverySkillFromTheBinary() throws {
         let dir = try makeTempDir()
         defer { try? FileManager.default.removeItem(atPath: dir) }
         let devRoot = (dir as NSString).appendingPathComponent("devRoot")
         try FileManager.default.createDirectory(atPath: devRoot, withIntermediateDirectories: true)
 
-        // Stand in for `corveil skill install --path <target>`: write the body
-        // the real CLI would write to whatever `--path` names.
+        // Stand in for a real corveil: enumerate two embedded skills, then on
+        // `skill install --skill <name> --path <target>` write a per-skill body
+        // to `<target>` so the test can prove each one landed (CROW-1039).
         let script = try makeScript(
             #"""
-            if [ "$1" = "skill" ] && [ "$2" = "install" ] && [ "$3" = "--path" ]; then
-              printf 'installed body' > "$4"
+            if [ "$1" = "skill" ] && [ "$2" = "list" ]; then
+              printf 'query-corveil\ncrow-runner\n'
+              exit 0
+            fi
+            if [ "$1" = "skill" ] && [ "$2" = "install" ]; then
+              name=""; target=""
+              shift 2
+              while [ $# -gt 0 ]; do
+                case "$1" in
+                  --skill) name="$2"; shift 2;;
+                  --path) target="$2"; shift 2;;
+                  *) shift;;
+                esac
+              done
+              printf 'body:%s' "$name" > "$target"
               exit 0
             fi
             exit 1
@@ -148,10 +162,13 @@ struct CorveilCLITests {
 
         let outcome = CorveilCLI.reinstallSkill(path: script, devRoot: devRoot)
         #expect(outcome.ok)
-        #expect(outcome.message == "Skill reinstalled")
+        #expect(outcome.message == "Skills reinstalled")
 
-        let installed = try String(contentsOfFile: CorveilCLI.skillPath(devRoot: devRoot), encoding: .utf8)
-        #expect(installed == "installed body")
+        for skill in ["query-corveil", "crow-runner"] {
+            let installed = try String(
+                contentsOfFile: CorveilCLI.skillPath(devRoot: devRoot, skill: skill), encoding: .utf8)
+            #expect(installed == "body:\(skill)")
+        }
     }
 
     @Test func reinstallSurfacesTheLaunchTimeWarningOnFailure() throws {
@@ -176,12 +193,16 @@ struct CorveilCLITests {
         #expect(outcome.message.contains("not executable"))
     }
 
-    // MARK: - skillPath
+    // MARK: - commandsDir / skillPath
 
-    @Test func skillPathIsTheFileScaffoldInstalls() {
-        // Pinned because Settings names this file to the user; `Scaffolder`
-        // installs to exactly this path via the same function.
-        #expect(CorveilCLI.skillPath(devRoot: "/dev/root")
+    @Test func commandsDirAndSkillPathAreWhereScaffoldInstalls() {
+        // Pinned because Settings names the commands dir to the user, and
+        // `Scaffolder` installs each skill to exactly `<dir>/<name>.md` via the
+        // same helpers (CROW-1039).
+        #expect(CorveilCLI.commandsDir(devRoot: "/dev/root") == "/dev/root/.claude/commands")
+        #expect(CorveilCLI.skillPath(devRoot: "/dev/root", skill: "query-corveil")
             == "/dev/root/.claude/commands/query-corveil.md")
+        #expect(CorveilCLI.skillPath(devRoot: "/dev/root", skill: "crow-runner")
+            == "/dev/root/.claude/commands/crow-runner.md")
     }
 }

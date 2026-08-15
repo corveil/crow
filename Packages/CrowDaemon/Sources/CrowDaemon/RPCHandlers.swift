@@ -2181,8 +2181,8 @@ private func makeMCPTokenHandlers(devRoot: String) -> [String: CommandRouter.Han
 /// `open-in-vscode` / `open-terminal` are gated on the same argument.
 ///
 /// Neither writes config: `corveil-verify` runs `--version`, and
-/// `corveil-reinstall-skill` writes one file inside the devRoot. What the
-/// reinstall *does* update is `AppState.corveilSkillInstallWarning` — the
+/// `corveil-reinstall-skill` writes the embedded skill files inside the devRoot.
+/// What the reinstall *does* update is `AppState.corveilSkillInstallWarning` —
 /// launch-time diagnostic — so a manual reinstall that succeeds clears the
 /// stale warning and one that fails replaces it. That was the retired desktop
 /// app's behaviour and it is the point: "is corveil broken?" stays
@@ -2212,7 +2212,7 @@ private func makeCorveilHandlers(
                 "ok": .bool(outcome.ok),
                 "message": .string(outcome.message),
                 "path": .string(outcome.path),
-                "skill_path": .string(CorveilCLI.skillPath(devRoot: devRoot)),
+                "skill_path": .string(CorveilCLI.commandsDir(devRoot: devRoot)),
             ]
         },
     ]

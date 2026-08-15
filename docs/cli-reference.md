@@ -788,7 +788,7 @@ crow corveil verify --path /opt/homebrew/bin/corveil
 
 ### `crow corveil reinstall-skill`
 
-Reinstall the `/query-corveil` slash command from the corveil binary — the same `corveil skill install` the daemon runs at launch, without restarting it.
+Reinstall **every** embedded slash command from the corveil binary — the same `corveil skill install` the daemon runs at launch, without restarting it. The set is enumerated from the binary (`corveil skill list`), so a corveil that ships a new embedded skill gets it installed without a Crow change.
 
 ```bash
 crow corveil reinstall-skill
@@ -798,14 +798,15 @@ crow corveil reinstall-skill --path ~/src/corveil/bin/corveil
 ```json
 {
   "ok": true,
-  "message": "Skill reinstalled",
+  "message": "Skills reinstalled",
   "path": "/opt/homebrew/bin/corveil",
-  "skill_path": "/Users/you/Dev/.claude/commands/query-corveil.md"
+  "skill_path": "/Users/you/Dev/.claude/commands"
 }
 ```
 
-- The loop this serves is "I just rebuilt corveil locally; install its new embedded skill." The install is idempotent, so running it repeatedly is safe.
-- A run also updates the launch-time corveil warning: succeeding clears it, failing replaces it. There is one answer to "is corveil broken?", not a startup one and a button one.
+- Each skill lands as `{devRoot}/.claude/commands/<name>.md`; `skill_path` names that directory. The install is idempotent, so running it repeatedly is safe.
+- The loop this serves is "I just rebuilt corveil locally; install its new embedded skills." Each skill installs independently — one that fails doesn't abort the rest, and `message` names the ones that didn't install (`ok` is then `false`).
+- A run also updates the launch-time corveil warning: succeeding clears it, a per-skill failure replaces it. There is one answer to "is corveil broken?", not a startup one and a button one.
 
 ---
 

@@ -44,7 +44,19 @@ import Testing
         try """
         #!/bin/sh
         : > "\(marker)"
-        if [ "$1" = "skill" ]; then printf 'stub skill' > "$4"; fi
+        if [ "$1" = "skill" ] && [ "$2" = "list" ]; then
+          echo query-corveil
+          exit 0
+        fi
+        if [ "$1" = "skill" ] && [ "$2" = "install" ]; then
+          target=""
+          shift 2
+          while [ $# -gt 0 ]; do
+            case "$1" in --path) target="$2"; shift 2;; *) shift;; esac
+          done
+          printf 'stub skill' > "$target"
+          exit 0
+        fi
         echo 'corveil 0.0.1-stub'
         """.write(toFile: binary, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: binary)
@@ -105,13 +117,14 @@ import Testing
                     try JSONSerialization.jsonObject(with: Data(buffer: response.body))
                         as? [String: Any])
                 #expect(json["ok"] as? Bool == true)
-                // The response names the file it wrote, so the UI can say where.
+                // The response names the directory it wrote into, so the UI can
+                // say where the skills landed.
                 #expect(json["skill_path"] as? String
-                    == CorveilCLI.skillPath(devRoot: fixture.devRoot))
+                    == CorveilCLI.commandsDir(devRoot: fixture.devRoot))
             }
         }
         #expect(FileManager.default.fileExists(
-            atPath: CorveilCLI.skillPath(devRoot: fixture.devRoot)))
+            atPath: CorveilCLI.skillPath(devRoot: fixture.devRoot, skill: "query-corveil")))
     }
 
     /// A broken binary is a successful *report* of a broken binary. 200 with
