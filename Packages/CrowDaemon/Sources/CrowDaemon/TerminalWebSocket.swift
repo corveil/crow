@@ -95,6 +95,20 @@ enum TerminalWebSocket {
                             // clients (incl. the desktop app) keep their own view.
                             if let window = control.window {
                                 cockpit.selectWindow(group: group, index: window)
+                                // Re-arm the pane's mouse-tracking mode (CROW-1043).
+                                // The in-place agent switch (CROW-1035) does a
+                                // `term.reset()` before this select, clearing xterm's
+                                // mouse mode, and tmux only paints mouse-mode DELTAS —
+                                // so an agent→agent switch (same mouse state) restores
+                                // no DECSET and the forwarded wheel goes dead until a
+                                // full Reload. Re-sending the pane's actual mouse mode
+                                // fixes the wheel deterministically; it's inert on a
+                                // plain shell (`swallowMouseMode` drops it). Yielded
+                                // through the same stream as the replay/live output so
+                                // it serializes on the single `outputTask`.
+                                if let reArm = cockpit.mouseModeReArmData(group: group, index: window) {
+                                    continuation.yield(reArm)
+                                }
                                 // Replay the pane's tmux scrollback into the xterm buffer
                                 // so history survives a crowd restart / browser reload —
                                 // the client re-selects its window on every reconnect and

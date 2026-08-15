@@ -51,6 +51,37 @@ import Testing
         #expect(TerminalCockpit.shouldReplayScrollback(alternateOn: false) == true)
     }
 
+    /// CROW-1043: `select-window` re-arms the pane's mouse-tracking mode so the
+    /// in-place agent switch's `term.reset()` can't strand the forwarded wheel.
+    /// `flags` is `#{mouse_standard_flag}#{mouse_button_flag}#{mouse_any_flag}`
+    /// `#{mouse_utf8_flag}#{mouse_sgr_flag}`.
+    @Test func mouseModeReArmBuildsDecsetEnablesFromFlags() {
+        // A real Claude Code / Manager pane: any-event tracking + SGR encoding.
+        #expect(TerminalCockpit.mouseModeReArmSequence(flags: "00101")
+            == "\u{1b}[?1003h\u{1b}[?1006h")
+        // Standard tracking + SGR.
+        #expect(TerminalCockpit.mouseModeReArmSequence(flags: "10001")
+            == "\u{1b}[?1000h\u{1b}[?1006h")
+        // Every mode set, in canonical order.
+        #expect(TerminalCockpit.mouseModeReArmSequence(flags: "11111")
+            == "\u{1b}[?1000h\u{1b}[?1002h\u{1b}[?1003h\u{1b}[?1005h\u{1b}[?1006h")
+    }
+
+    /// No active mouse mode (a shell, or an agent idling without tracking) → no
+    /// sequence, so the client keeps its local-viewport scroll rather than being
+    /// forced to forward a wheel nothing is listening for.
+    @Test func mouseModeReArmIsNilWhenNoModeActive() {
+        #expect(TerminalCockpit.mouseModeReArmSequence(flags: "00000") == nil)
+    }
+
+    /// A failed read / an older tmux that can't answer these flags must yield nil
+    /// rather than a truncated, malformed DECSET.
+    @Test func mouseModeReArmRejectsMalformedFlagStrings() {
+        #expect(TerminalCockpit.mouseModeReArmSequence(flags: "") == nil)
+        #expect(TerminalCockpit.mouseModeReArmSequence(flags: "1") == nil)
+        #expect(TerminalCockpit.mouseModeReArmSequence(flags: "001010") == nil)
+    }
+
     @Test func plainPreviewTextStripsAnsiAndTrailingNewlines() {
         let text = TerminalCockpit.plainPreviewText(from: "line1\n\u{1b}[31mred\u{1b}[0m\n\n")
         #expect(text == "line1\nred")
