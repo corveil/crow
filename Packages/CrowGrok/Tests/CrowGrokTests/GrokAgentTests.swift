@@ -26,8 +26,32 @@ struct GrokAgentTests {
             autoPermissionMode: false,
             telemetryPort: nil
         )
-        // Work sessions launch a bare `grok` TUI — no `-p`, no prompt file.
+        // Work sessions launch a bare `grok` TUI — no `-p`, no prompt file,
+        // no always-approve when Crow Auto is off.
         #expect(cmd?.hasSuffix("grok'\n") == true)
+        #expect(cmd?.contains(" -p ") == false)
+        #expect(cmd?.contains(".crow-job-prompt.md") == false)
+        #expect(cmd?.contains("--always-approve") == false)
+        #expect(cmd?.contains("--deny") == false)
+    }
+
+    @Test func autoLaunchCommandWorkSessionAutoPermissionMode() {
+        // `.work` + autoPermissionMode is `--always-approve` + hard `--deny`
+        // so a ticket that asks to open a PR can `gh pr create` without the
+        // operator running `/always-approve` in the TUI (CROW-1037).
+        let session = Session(name: "test", agentKind: .grok)
+        let cmd = agent.autoLaunchCommand(
+            session: session,
+            worktreePath: "/tmp/wt",
+            remoteControlEnabled: false,
+            autoPermissionMode: true,
+            telemetryPort: nil
+        )
+        #expect(cmd?.contains("--always-approve") == true)
+        #expect(cmd?.contains("--deny") == true)
+        #expect(cmd?.contains("--permission-mode auto") == false)
+        #expect(cmd?.contains("--yolo") == false)
+        #expect(cmd?.contains(" || { [ $? -eq 2 ] && ") == true)
         #expect(cmd?.contains(" -p ") == false)
         #expect(cmd?.contains(".crow-job-prompt.md") == false)
     }
@@ -66,14 +90,17 @@ struct GrokAgentTests {
         #expect(cmd?.contains(" -c") == true)
         #expect(cmd?.contains(".crow-job-prompt.md") == true)
         #expect(cmd?.contains(".crow-review-prompt.md") == false)
-        // Auto-permission off → no bounded flags.
+        // Auto-permission off → no always-approve / deny flags.
         #expect(cmd?.contains("--permission-mode") == false)
+        #expect(cmd?.contains("--always-approve") == false)
+        #expect(cmd?.contains("--deny") == false)
         #expect(cmd?.hasSuffix("\n") == true)
     }
 
     @Test func autoLaunchCommandJobSessionAutoPermissionMode() {
-        // `.job` + autoPermissionMode adds bounded auto flags to both legs —
-        // `--permission-mode auto` + hard `--deny`, never `--yolo`.
+        // `.job` + autoPermissionMode adds `--always-approve` + hard `--deny`
+        // to both legs (CROW-1037). Not `--permission-mode auto` (classifier)
+        // and not the `--yolo` alias.
         let session = Session(name: "job", kind: .job, agentKind: .grok)
         let cmd = agent.autoLaunchCommand(
             session: session,
@@ -82,10 +109,10 @@ struct GrokAgentTests {
             autoPermissionMode: true,
             telemetryPort: nil
         )
-        #expect(cmd?.contains("--permission-mode auto") == true)
+        #expect(cmd?.contains("--always-approve") == true)
         #expect(cmd?.contains("--deny") == true)
+        #expect(cmd?.contains("--permission-mode auto") == false)
         #expect(cmd?.contains("--yolo") == false)
-        #expect(cmd?.contains("--always-approve") == false)
     }
 
     @Test func autoLaunchCommandReviewSessionFirstLaunch() {
@@ -105,8 +132,9 @@ struct GrokAgentTests {
     }
 
     @Test func autoLaunchCommandReviewNeverAutoApproves() {
-        // Auto-permission is `.job`-only: a review is human-gated even when
-        // reviewAutoPermissionMode is on (autoPermissionMode == true here).
+        // Reviews stay human-gated even when reviewAutoPermissionMode is on
+        // (autoPermissionMode == true here). `.work`/`.job` Auto is
+        // `--always-approve`; reviews are not.
         let session = Session(name: "review", kind: .review, agentKind: .grok)
         let cmd = agent.autoLaunchCommand(
             session: session,
@@ -116,6 +144,7 @@ struct GrokAgentTests {
             telemetryPort: nil
         )
         #expect(cmd?.contains("--permission-mode") == false)
+        #expect(cmd?.contains("--always-approve") == false)
         #expect(cmd?.contains("--deny") == false)
     }
 
@@ -150,7 +179,7 @@ struct GrokAgentTests {
         )
         #expect(cmd?.contains(" -c") == true)
         #expect(cmd?.contains(" -p ") == false)
-        #expect(cmd?.contains("--permission-mode auto") == true)
+        #expect(cmd?.contains("--always-approve") == true)
     }
 
     @Test func autoLaunchCommandManagerSessionUnsupported() {
