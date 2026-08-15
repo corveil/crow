@@ -162,6 +162,51 @@ struct TerminalCockpit: Sendable {
         !alternateOn
     }
 
+    /// The DECSET mouse-tracking sequences a `select-window` must re-send so the
+    /// browser's xterm mouse mode matches the pane again. Returns `nil` when the
+    /// pane reports no active mouse mode (a shell, or an agent idling without
+    /// tracking) — there is nothing to re-arm and the client keeps its local
+    /// viewport scroll (ADR-0013).
+    ///
+    /// Why the daemon has to do this at all (CROW-1043): an in-place agent switch
+    /// (`switchAgentWindow`, CROW-1035) calls `term.reset()` before `select-window`,
+    /// which clears xterm's `mouseTrackingMode`. tmux emits mouse-mode changes to a
+    /// client as **deltas**, so switching between two agent windows that share the
+    /// same mouse state (Claude → Claude / the Manager) repaints no mouse DECSET —
+    /// the client is stranded at `mouseTrackingMode: none`, `appOwnsScroll()` returns
+    /// `false`, and the forwarded wheel goes dead until an explicit Reload re-attaches
+    /// with the full initial state. Re-sending the pane's ACTUAL mouse mode restores
+    /// the wheel deterministically, independent of tmux's per-client delta. The
+    /// sequence is inert on a plain-shell surface — `swallowMouseMode` drops DECSET
+    /// 1000–1016 there — so it is safe to emit on every `select-window`.
+    func mouseModeReArmData(group: String, index: Int) -> Data? {
+        guard let raw = try? controller.displayMessage(
+            target: "\(group):\(index)",
+            // Order: standard(1000) button(1002) any(1003) utf8(1005) sgr(1006).
+            format: "#{mouse_standard_flag}#{mouse_button_flag}#{mouse_any_flag}#{mouse_utf8_flag}#{mouse_sgr_flag}")
+        else { return nil }
+        return Self.mouseModeReArmSequence(flags: raw.trimmingCharacters(in: .whitespacesAndNewlines))
+            .map { Data($0.utf8) }
+    }
+
+    /// Build the DECSET enables for a `#{mouse_*_flag}` string. Pure (no tmux) so
+    /// its shape is unit-testable. `flags` is the five `"0"`/`"1"` characters in the
+    /// order standard/button/any/utf8/sgr; any other shape (a failed read, an older
+    /// tmux) yields `nil` rather than a malformed sequence.
+    static func mouseModeReArmSequence(flags: String) -> String? {
+        let chars = Array(flags)
+        guard chars.count == 5 else { return nil }
+        let modes: [(Int, Character)] = [
+            (1000, chars[0]), (1002, chars[1]), (1003, chars[2]), (1005, chars[3]), (1006, chars[4]),
+        ]
+        let esc = "\u{1b}"
+        var seq = ""
+        for (mode, flag) in modes where flag == "1" {
+            seq += "\(esc)[?\(mode)h"
+        }
+        return seq.isEmpty ? nil : seq
+    }
+
     /// Capture the last `previewLines` rows of a cockpit window as plain text for
     /// the session-switcher card. Best-effort — returns nil when capture fails.
     func previewText(windowIndex: Int) -> String? {
