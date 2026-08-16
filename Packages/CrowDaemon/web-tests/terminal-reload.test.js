@@ -388,8 +388,9 @@ console.log('\nCROW-1027/1023: only a TRUE alt-buffer agent skips the self-heal;
   check('alt-buffer agent: no self-heal re-capture', selectWindowCount(sock) === initial);
 
   // CROW-1023: an INLINE agent (Cursor, or an inline-rendering Claude build)
-  // keeps the unified 50k and CAN land one-screen tall after attach, so it is
-  // eligible for the same heal a shell gets — same axis as fireScrollbackCapture.
+  // keeps the unified 50k and CAN land one-screen tall after a resize-then-
+  // capture attach, so connect/reload still heals. Mid-session hydrate is a
+  // different gate (fireScrollbackCapture skips all agents, CROW-1048).
   mount('work');
   T.activeTerminal = { id: 't2', name: 'Claude Code', window: 4, agent_surface: true, uses_alternate_screen: false };
   T.reloadTerminal();

@@ -150,7 +150,7 @@ console.log('\nCROW-1035: switching to a Cursor (inline agent) session is in-pla
   check('select-window went out on the live socket', selectWindowCount(sock) === 1);
   T.term.buffer.active.baseY = 0;
   fireTimersAt(T.SCROLLBACK_HEAL_MS);
-  check('inline agent still gets the CROW-1027 heal recapture', selectWindowCount(sock) === 2);
+  check('in-place switch does not CROW-1027 recapture (no PTY resize to heal)', selectWindowCount(sock) === 1);
 }
 
 console.log('\nplain shell tabs still take the #673 full reload:');

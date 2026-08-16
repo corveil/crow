@@ -121,12 +121,13 @@ console.log('scrollback hydrate (CROW-934)');
   check('alt-buffer agent (Claude Code) never re-syncs', selects().length === 0);
 }
 {
-  // CROW-1026: an inline agent (Cursor, and every Manager tab) is agent_surface
-  // but keeps the unified 50k buffer, so it CAN thin and must stay eligible —
-  // same axis as applySurfaceScrollback (agent_surface && uses_alternate_screen).
+  // CROW-1048: an inline agent (Cursor, and every Manager tab) is agent_surface
+  // and keeps the unified 50k so the wheel works (#1010), but mid-session
+  // capture-pane replay deposits a second chrome copy. Connect/switch still
+  // restore history; only this live hydrate is skipped.
   setup({ agentSurface: true, usesAltScreen: false });
   T.maybeHydrateScrollback();
-  check('inline agent (Cursor/Manager) re-syncs like a shell', selects().length === 1);
+  check('inline agent (Cursor/Manager) never mid-session re-syncs', selects().length === 0);
 }
 {
   // A plain shell inside a Claude session is uses_alternate_screen (kind-scoped)
@@ -326,6 +327,15 @@ console.log('\n  mid-buffer scroll-idle heal');
   T.maybeHydrateScrollback();
   advance(500);
   check('alt-buffer agent is excluded from the idle heal', selects().length === 0);
+}
+{
+  // CROW-1048: Cursor's idle-prompt chrome stacked after every tool call because
+  // the 400ms idle heal re-injected capture-pane onto the already-painted TUI.
+  // Same skip as the arrival path — agent_surface, not uses_alternate_screen.
+  setup({ agentSurface: true, usesAltScreen: false, baseY: 500, viewportY: 120 });
+  T.maybeHydrateScrollback();
+  advance(500);
+  check('inline agent is excluded from the idle heal', selects().length === 0);
 }
 {
   // The dirty flag is the idle path's primary brake: an already-synced buffer
