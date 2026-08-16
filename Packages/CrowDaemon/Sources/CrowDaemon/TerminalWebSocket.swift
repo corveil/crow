@@ -96,16 +96,16 @@ enum TerminalWebSocket {
                             if let window = control.window {
                                 cockpit.selectWindow(group: group, index: window)
                                 // Re-arm the pane's mouse-tracking mode (CROW-1043).
-                                // The in-place agent switch (CROW-1035) clears the
-                                // xterm buffer before this select without a full
-                                // `term.reset()` — see `clearTermBuffer` in app.js.
-                                // so an agent→agent switch (same mouse state) restores
-                                // no DECSET and the forwarded wheel goes dead until a
-                                // full Reload. Re-sending the pane's actual mouse mode
-                                // fixes the wheel deterministically; it's inert on a
-                                // plain shell (`swallowMouseMode` drops it). Yielded
-                                // through the same stream as the replay/live output so
-                                // it serializes on the single `outputTask`.
+                                // In-place agent switches clear the xterm buffer without
+                                // a full `term.reset()` (see `clearTermBuffer` in app.js),
+                                // but tmux emits mouse-mode changes as deltas — so an
+                                // agent→agent switch (same mouse state) restores no DECSET
+                                // and the forwarded wheel goes dead until a full Reload.
+                                // Re-sending the pane's actual mouse mode fixes the wheel
+                                // deterministically; it's inert on a plain shell
+                                // (`swallowMouseMode` drops it). Yielded through the same
+                                // stream as the replay/live output so it serializes on
+                                // the single `outputTask`.
                                 if let reArm = cockpit.mouseModeReArmData(group: group, index: window) {
                                     continuation.yield(reArm)
                                 }
