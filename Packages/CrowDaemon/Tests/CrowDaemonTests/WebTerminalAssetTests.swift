@@ -179,6 +179,13 @@ import Testing
         #expect(
             capBody.contains("term.options.scrollback"),
             "the cap is the live xterm option, reapplied on every tab bind")
+        #expect(
+            capBody.contains("viewportY") && capBody.contains("baseY"),
+            "alt-buffer cap must defer while the user is mid-history (CROW-1047)")
+        let idle = try Self.functionBody("hydrateWhenIdle", in: source)
+        #expect(
+            idle.contains("if (activeSurfaceIsAgent()) return;"),
+            "idle hydrate must skip every agent surface, not only fireScrollbackCapture (CROW-1047)")
         // Touch must not diverge from the wheel — #777's shim and #824's wheel
         // routing have to agree about who owns the surface.
         #expect(
