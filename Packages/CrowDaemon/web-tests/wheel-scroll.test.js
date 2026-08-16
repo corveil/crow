@@ -202,9 +202,11 @@ console.log('\nwheelNotches normalizes by deltaMode:');
   check('absent deltaMode is treated as pixel', n(120) === 1 && n(120, undefined) === 1);
   // Line mode (1, Firefox mouse): 3 lines is one OS notch.
   check('line 3 → +1 notch', n(3, 1) === 1);
+  check('line -9 → -1 notch (no burst)', n(-9, 1) === -1);
   check('line 1 → 1/3 notch (accumulates)', Math.abs(n(1, 1) - 1 / 3) < 1e-9);
-  // Page mode (2, rare): one page per notch.
+  // Page mode (2, rare): one page ≈ one notch.
   check('page 1 → +1 notch', n(1, 2) === 1);
+  check('page -3 → -1 notch (no burst)', n(-3, 2) === -1);
 }
 
 console.log('\nSub-detent trackpad deltas accumulate into whole notches:');
@@ -314,6 +316,23 @@ console.log('\nOnly alt-buffer agent surfaces cap xterm scrollback; inline agent
   T.activeTerminal = { id: 't1', window: 1, agent_surface: true, uses_alternate_screen: true };
   T.applySurfaceScrollback();
   check('missing term.options is a no-op', true);
+}
+
+// ---- CROW-1047: defer alt-buffer cap while mid-history ---------------------
+
+console.log('\nAlt-buffer cap waits until the user is back at the live edge:');
+{
+  const fake = {
+    options: { scrollback: 50000 },
+    buffer: { active: { baseY: 500, viewportY: 120 } },
+  };
+  T.term = fake;
+  T.activeTerminal = { id: 't1', window: 1, agent_surface: true, uses_alternate_screen: true };
+  T.applySurfaceScrollback();
+  check('mid-history scroll does not cap yet', fake.options.scrollback === 50000);
+  fake.buffer.active.viewportY = 500;
+  T.applySurfaceScrollback();
+  check('cap applies once viewportY reaches baseY', fake.options.scrollback === 0);
 }
 
 // ---- Selection escape-hatch discoverability --------------------------------

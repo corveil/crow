@@ -17,6 +17,7 @@ const { JSDOM } = require('jsdom');
 const epilogue = `
 ;globalThis.__t = {
   maybeHydrateScrollback(){ return maybeHydrateScrollback(); },
+  hydrateWhenIdle(){ return hydrateWhenIdle(); },
   noteTerminalFrame(){ return noteTerminalFrame(); },
   resetScrollbackSync(){ return resetScrollbackSync(); },
   set term(v){ term = v; },
@@ -336,6 +337,15 @@ console.log('\n  mid-buffer scroll-idle heal');
   T.maybeHydrateScrollback();
   advance(500);
   check('inline agent is excluded from the idle heal', selects().length === 0);
+}
+{
+  // Defense in depth (#1047): a pending idle timer armed on a shell must not
+  // capture after the surface is reclassified as an agent.
+  setup({ agentSurface: false, baseY: 500, viewportY: 120 });
+  T.maybeHydrateScrollback(); // arms the 400ms idle timer
+  T.activeTerminal = { id: 't1', window: 7, agent_surface: true, uses_alternate_screen: false };
+  advance(500);
+  check('hydrateWhenIdle skips every agent surface', selects().length === 0);
 }
 {
   // The dirty flag is the idle path's primary brake: an already-synced buffer

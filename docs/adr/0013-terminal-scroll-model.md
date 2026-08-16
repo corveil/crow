@@ -149,7 +149,14 @@ Cursor never issues `smcup`. Its live bytes **are** the transcript — a few lin
 
 Claude's alt-buffer path is unchanged: it already skipped hydrate, still caps xterm to 0, still forwards the wheel while mouse-tracking.
 
-This is **not** ADR-0013's rejected Option C (dedupe full-frame repaints in a linear buffer). The chrome is not collapsed after the fact; Crow simply stops re-injecting a capture it already painted.
+### Amendment — #1047: alt-buffer cap and SGR wheel must not yank mid-scroll
+
+Two paths made wheel-up in Claude Code land on line 1 of the transcript instead of moving a few lines.
+
+1. **Defer the cap-to-0 while mid-history.** CROW-1023's alt latch can flip `uses_alternate_screen` several seconds after launch, while xterm still holds the transitional 50k. Wheel-up through that buffer, then an immediate cap, truncates scrollback and leaves `ydisp` at 0 on the oldest surviving lines — session start. `applySurfaceScrollback` now waits until `viewportY >= baseY` before capping; `maybePollAltScreenLatch` re-calls it on every `refreshTerminals` pass until the cap lands.
+2. **One DOM wheel event → one forwarded notch.** Line/page `deltaMode` could emit many notches per event; repeated SGR wheel reports made Claude's mouse-tracking scroll jump to the top. `wheelNotches` magnitude-snaps those modes like pixel mode (CROW-835). `hydrateWhenIdle` also skips every `agent_surface` beside CROW-1048's capture gate.
+
+Inline agents and shells are unchanged except shells inherit the idle-hydrate defense-in-depth. Cursor's local wheel path is untouched.
 
 ## Consequences
 

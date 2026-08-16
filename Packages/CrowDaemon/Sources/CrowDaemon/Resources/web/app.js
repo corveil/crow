@@ -5388,7 +5388,17 @@ function applySurfaceScrollback() {
   if (!term || !term.options) return;
   const wanted = (activeSurfaceIsAgent() && activeSurfaceUsesAltScreen())
     ? 0 : UNIFIED_SCROLLBACK;
-  if (term.options.scrollback !== wanted) term.options.scrollback = wanted;
+  if (term.options.scrollback === wanted) return;
+  // CROW-1047: the alt-buffer latch caps xterm from 50k → 0. Truncating while
+  // the user is mid-history in the transitional unlatched window resets ydisp to
+  // 0 on the oldest surviving lines — session start — instead of a few lines up.
+  // Defer until they return to the live edge; maybePollAltScreenLatch re-calls
+  // this on every refreshTerminals pass until the cap lands.
+  if (wanted === 0) {
+    const buf = term.buffer && term.buffer.active;
+    if (buf && buf.viewportY < buf.baseY) return;
+  }
+  term.options.scrollback = wanted;
 }
 
 // CROW-1023: `uses_alternate_screen` is detected per-window from tmux's RUNTIME
@@ -5753,8 +5763,16 @@ function enableTouchScroll(node) {
 const WHEEL_NOTCH_MIN_PX = 40; // a single pixel-mode delta at least this big is one detent
 function wheelNotches(e) {
   const mode = e.deltaMode || 0;
-  if (mode === 1) return e.deltaY / 3; // line mode (Firefox mouse): OS 3 lines/notch
-  if (mode === 2) return e.deltaY;      // page mode (rare): one page ≈ one notch
+  if (mode === 1) { // line mode (Firefox mouse): OS 3 lines/notch
+    const lines = e.deltaY;
+    // Magnitude-snap like the pixel branch (CROW-835): one DOM event is one
+    // physical detent even when the OS reports many lines (free-spin / fling).
+    // Without this, a forwarded SGR burst can fly Claude's transcript to the top.
+    return Math.abs(lines) >= 3 ? Math.sign(lines) : lines / 3;
+  }
+  if (mode === 2) { // page mode (rare)
+    return Math.abs(e.deltaY) >= 1 ? Math.sign(e.deltaY) : e.deltaY;
+  }
   const px = e.deltaY;                  // pixel mode (Chrome/Safari mouse + all trackpads)
   return Math.abs(px) >= WHEEL_NOTCH_MIN_PX ? Math.sign(px) : px / WHEEL_NOTCH_MIN_PX;
 }
@@ -6388,6 +6406,7 @@ function scheduleHydrateIdle() {
 // the rebuild (isUserScrolling) leaves the user at the top of the healed history.
 function hydrateWhenIdle() {
   if (!term) return;
+  if (activeSurfaceIsAgent()) return; // defense in depth (CROW-1048 / #1047)
   const buf = term.buffer.active;
   if (buf.viewportY === 0) return; // the top is the arrival path's job
   if (hydratingScrollback) return;
