@@ -96,9 +96,9 @@ enum TerminalWebSocket {
                             if let window = control.window {
                                 cockpit.selectWindow(group: group, index: window)
                                 // Re-arm the pane's mouse-tracking mode (CROW-1043).
-                                // The in-place agent switch (CROW-1035) does a
-                                // `term.reset()` before this select, clearing xterm's
-                                // mouse mode, and tmux only paints mouse-mode DELTAS —
+                                // The in-place agent switch (CROW-1035) clears the
+                                // xterm buffer before this select without a full
+                                // `term.reset()` — see `clearTermBuffer` in app.js.
                                 // so an agent→agent switch (same mouse state) restores
                                 // no DECSET and the forwarded wheel goes dead until a
                                 // full Reload. Re-sending the pane's actual mouse mode
@@ -117,8 +117,11 @@ enum TerminalWebSocket {
                                 // frame, and injecting it races the live attach redraw.
                                 // Yield through the same stream the PTY writes to, so this
                                 // serializes with live output on the single `outputTask`
-                                // (no concurrent `outbound` writes).
-                                if let replay = cockpit.replayData(group: group, index: window) {
+                                // (no concurrent `outbound` writes). In-place agent switches
+                                // pass `replay: false` (CROW-1035): the live attach already
+                                // has the frame and a capture-pane dump stacks inline chrome.
+                                if control.replay != false,
+                                   let replay = cockpit.replayData(group: group, index: window) {
                                     continuation.yield(replay)
                                 }
                             }
@@ -159,4 +162,8 @@ private struct TerminalControl: Decodable {
     let rows: Int?
     let cols: Int?
     let window: Int?
+    /// When `false`, skip the CROW-606 capture-pane replay. In-place agent tab
+    /// switches send this — the live attach already has the frame and replay
+    /// races it (CROW-1035). Omitted or `true` keeps connect/reload/heal behavior.
+    let replay: Bool?
 }

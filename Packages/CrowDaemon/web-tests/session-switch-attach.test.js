@@ -5,9 +5,9 @@ const { JSDOM } = require('jsdom');
 // CROW-1035: switching to a Claude / Cursor session must NOT take the #673
 // full reload (new PTY at 24×80 → SIGWINCH → capture-pane replay). That path
 // parks Claude's caret below the input box and stacks Cursor's footer chrome.
-// Agent surfaces switch in place (reset + select-window on the live socket);
-// plain shells keep the reload so a surface another client reshaped still
-// self-heals.
+// Agent surfaces switch in place (clear buffer + select-window with replay:false
+// on the live socket); plain shells keep the reload so a surface another client
+// reshaped still self-heals.
 const epilogue = `
 ;globalThis.__t = {
   attachWindow(win){ return attachWindow(win); },
@@ -24,6 +24,7 @@ const epilogue = `
   get activeTerminal(){ return activeTerminal; },
   SCROLLBACK_HEAL_MS,
   SCROLLBACK_HEAL_MAX,
+  TERM_BUFFER_CLEAR,
 };
 `;
 const APP_JS = __dirname + '/../Sources/CrowDaemon/Resources/web/app.js';
@@ -87,11 +88,13 @@ const check = (name, cond) => {
 
 function fakeTerm() {
   return {
-    resets: 0,
-    reset() { this.resets++; },
+    clears: 0,
+    reset() { this.resets = (this.resets || 0) + 1; },
+    write(d) {
+      if (d === T.TERM_BUFFER_CLEAR) this.clears++;
+    },
     options: { scrollback: 50000 },
     buffer: { active: { viewportY: 0, baseY: 0 } },
-    write() {},
     focus() {},
   };
 }
@@ -108,10 +111,14 @@ function openSocket() {
   return s;
 }
 
+function selectWindowPayloads(sock) {
+  return sock.sent.map((d) => {
+    try { return JSON.parse(d); } catch (_) { return null; }
+  }).filter((m) => m && m.type === 'select-window');
+}
+
 function selectWindowCount(sock) {
-  return sock.sent.filter((d) => {
-    try { return JSON.parse(d).type === 'select-window'; } catch (_) { return false; }
-  }).length;
+  return selectWindowPayloads(sock).length;
 }
 
 function mount(surface) {
@@ -129,12 +136,13 @@ console.log('CROW-1035: switching to a Claude (alt-buffer) session is in-place:'
 {
   const sock = mount(claude);
   const socketsBefore = sockets.length;
-  const resetsBefore = T.term.resets;
+  const clearsBefore = T.term.clears;
   T.attachWindow(claude.window);
   check('no new WebSocket', sockets.length === socketsBefore);
   check('live socket was not closed', sock.closed === false);
-  check('xterm was reset', T.term.resets === resetsBefore + 1);
+  check('xterm buffer was cleared, not reset', T.term.clears === clearsBefore + 1);
   check('select-window went out on the live socket', selectWindowCount(sock) === 1);
+  check('in-place agent switch skips scrollback replay', selectWindowPayloads(sock)[0].replay === false);
   check('attachedWindow tracks the new window', T.attachedWindow === claude.window);
   fireTimersAt(T.SCROLLBACK_HEAL_MS);
   check('alt-buffer agent does not self-heal-recapture', selectWindowCount(sock) === 1);
@@ -148,6 +156,7 @@ console.log('\nCROW-1035: switching to a Cursor (inline agent) session is in-pla
   check('no new WebSocket', sockets.length === socketsBefore);
   check('live socket was not closed', sock.closed === false);
   check('select-window went out on the live socket', selectWindowCount(sock) === 1);
+  check('inline agent in-place switch skips replay', selectWindowPayloads(sock)[0].replay === false);
   T.term.buffer.active.baseY = 0;
   fireTimersAt(T.SCROLLBACK_HEAL_MS);
   check('in-place switch does not CROW-1027 recapture (no PTY resize to heal)', selectWindowCount(sock) === 1);
@@ -168,10 +177,10 @@ console.log('\nre-clicking the already-attached window is a no-op:');
   const sock = mount(claude);
   T.attachedWindow = claude.window;
   const sentBefore = sock.sent.length;
-  const resetsBefore = T.term.resets;
+  const clearsBefore = T.term.clears;
   T.attachWindow(claude.window);
   check('no select-window', sock.sent.length === sentBefore);
-  check('no reset', T.term.resets === resetsBefore);
+  check('no buffer clear', T.term.clears === clearsBefore);
 }
 
 console.log('\nno open socket: attachWindow only records the window (onopen will select):');

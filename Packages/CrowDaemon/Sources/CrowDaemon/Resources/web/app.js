@@ -5504,7 +5504,7 @@ function forceSelectModifierLabel() {
 // defensive coding. There is ONE shared xterm instance across every tab, and
 // agent surfaces now let DECSET 1000–1016 through, so
 // `term.modes.mouseTrackingMode` can outlive the tab that set it: `attachWindow`
-// clears it via `term.reset()` (in-place agent switch) or `reloadTerminal()`
+// clears it via `clearTermBuffer()` (in-place agent switch) or `reloadTerminal()`
 // (shells) when the socket is already OPEN, and skips that during a reconnect.
 // If we tested the mode first,
 // a shell tab visited right after an agent tab would inherit that stale mode and
@@ -6166,10 +6166,24 @@ function takeTerminalOwnership() {
   applyTermFit();
 }
 
-function selectWindow(win) {
+// Same leading sequence as `TerminalCockpit.replayFrame` (CROW-606): home, clear
+// screen, clear scrollback. Used on in-place agent switches instead of
+// `term.reset()` — reset also clears `mouseTrackingMode` and other parser state
+// tmux re-sends only as deltas, which is what parked Claude's caret below the
+// TUI after #1036 (CROW-1035, CROW-1043).
+const TERM_BUFFER_CLEAR = '\x1b[H\x1b[2J\x1b[3J';
+
+function clearTermBuffer() {
+  if (!term) return;
+  try { term.write(TERM_BUFFER_CLEAR); } catch (_) {}
+}
+
+function selectWindow(win, opts) {
   if (win == null) return;
   if (termWs && termWs.readyState === WebSocket.OPEN) {
-    termWs.send(JSON.stringify({ type: 'select-window', window: win }));
+    const msg = { type: 'select-window', window: win };
+    if (opts && opts.replay === false) msg.replay = false;
+    termWs.send(JSON.stringify(msg));
   }
 }
 
@@ -6197,8 +6211,9 @@ function selectWindow(win) {
 // bytes ARE the transcript. Re-injecting capture-pane onto that already-painted
 // chrome is how the idle/prompt tip, model line, and cwd stack after every
 // tool call (and when scrolling history). #1010 kept the unified 50k so the
-// wheel still works; the connect/switch select-window still restores that
-// history (CROW-606). Only a true alt-buffer agent was already excluded
+// wheel still works; connect/reload select-window still restores that history
+// (CROW-606). In-place agent switches skip replay (CROW-1035). Only a true
+// alt-buffer agent was already excluded server-side
 // (capture returns just the viewport); CROW-1048 extends the skip to inline
 // agents for a different reason: the replay is harmful, not empty.
 //
@@ -6450,11 +6465,11 @@ function maybeHydrateScrollback() {
 // PTY at tmux's default 24×80, SIGWINCHes it to the real size, then injects
 // a capture-pane replay that races the live attach redraw. On Claude (alt
 // buffer) the caret lands below the input box; on Cursor the footer chrome
-// stacks one extra copy. Switch those in place: reset the local buffer so
-// the previous window's cells/modes don't leak, then select-window on the
-// live socket. No new PTY, no same-size SIGWINCH (#637). The daemon skips
-// replay for an alt-buffer pane (live attach already has the frame); an
-// inline agent still gets CROW-606 history via the existing replay.
+// stacks one extra copy. Switch those in place: clear the local buffer so
+// the previous window's cells don't leak (not `term.reset()` — that also
+// clears modes tmux won't re-send), then select-window with `replay: false`
+// on the live socket. No new PTY, no same-size SIGWINCH (#637), no
+// capture-pane dump racing the live attach (alt-buffer and inline alike).
 //
 // Only act when the target window differs, so background refreshes /
 // re-clicking the active tab don't churn. When the socket isn't open yet,
@@ -6474,10 +6489,10 @@ function switchAgentWindow(win) {
   showTerminalSkeleton();
   clearTimeout(termSkelTimer);
   termSkelTimer = setTimeout(hideTerminalSkeleton, 1500);
-  try { term.reset(); } catch (_) {}
+  clearTermBuffer();
   applySurfaceScrollback();
   resetScrollbackSync();
-  selectWindow(win);
+  selectWindow(win, { replay: false });
   // Do not arm CROW-1027 here. In-place switch has no new PTY and no
   // SIGWINCH, so the mid-reflow one-screen capture that heal exists for
   // cannot happen. A second select-window 250ms later (the fake-xterm
