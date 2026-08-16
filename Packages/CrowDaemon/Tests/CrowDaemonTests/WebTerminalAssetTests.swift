@@ -235,8 +235,36 @@ import Testing
             !inPlace.contains("reloadTerminal(") && !inPlace.contains("connectTerminalWs("),
             "in-place switch must not tear down the PTY")
         #expect(
-            inPlace.contains("armScrollbackHeal()"),
-            "inline agents stay eligible for the CROW-1027 post-switch heal")
+            !inPlace.contains("armScrollbackHeal()"),
+            "in-place switch must not CROW-1027 recapture — no PTY resize, and a second replay stacks Cursor chrome (CROW-1048)")
+    }
+
+    /// CROW-1048: mid-session capture-pane replay onto an inline agent TUI
+    /// stacks the idle chrome. `fireScrollbackCapture` / `maybeHydrateScrollback`
+    /// skip every agent surface; the first-attach heal still runs for inline
+    /// agents (`verifyScrollbackAfterAttach`) because that path resizes first.
+    /// Scrollback stays at 50k — do not re-introduce the #1008/#1009 cap.
+    @Test func inlineAgentSkipsMidSessionHydrateWithoutCappingScrollback() throws {
+        let source = try Self.webAsset("app.js")
+        let capture = Self.stripComments(String(try Self.functionBody("fireScrollbackCapture", in: source)))
+        #expect(
+            capture.contains("if (activeSurfaceIsAgent()) return;"),
+            "mid-session hydrate must skip every agent surface, not only alt-buffer")
+        #expect(
+            !capture.contains("activeSurfaceUsesAltScreen()"),
+            "inline agents must not stay eligible for live re-capture")
+        let maybe = Self.stripComments(String(try Self.functionBody("maybeHydrateScrollback", in: source)))
+        #expect(
+            maybe.contains("if (activeSurfaceIsAgent()) return;"),
+            "onScroll must not arm the idle heal on an agent TUI")
+        let heal = try Self.functionBody("verifyScrollbackAfterAttach", in: source)
+        #expect(
+            heal.contains("activeSurfaceIsAgent()") && heal.contains("activeSurfaceUsesAltScreen()"),
+            "first-attach heal still skips only a true alt-buffer agent")
+        let capBody = try Self.functionBody("applySurfaceScrollback", in: source)
+        #expect(
+            capBody.contains("activeSurfaceIsAgent()") && capBody.contains("activeSurfaceUsesAltScreen()"),
+            "xterm scrollback still caps to 0 only for alt-buffer agents (CROW-1010)")
     }
 
     /// The swallow is conditional on surface kind (ADR-0013): plain shells keep

@@ -6173,12 +6173,16 @@ function selectWindow(win) {
 // you sit on never re-synced.
 //
 // Two triggers: reaching the top of the local buffer (asking for older lines)
-// and, since CROW-1026, going idle parked on a hole mid-buffer. Any surface that
-// keeps the unified 50k scrollback is eligible — plain shells AND inline agents
-// (Cursor, and the Manager, which runs one). Only a true alt-buffer agent (Claude
-// Code) is excluded: it keeps its transcript in the scrollback-less alt buffer
-// and repaints it itself (ADR-0013 #1010), so a capture there returns just the
-// viewport and would buy nothing. Same axis as applySurfaceScrollback.
+// and, since CROW-1026, going idle parked on a hole mid-buffer. Only a PLAIN
+// SHELL is eligible. An agent surface — alt-buffer OR inline — must not
+// mid-session re-capture (CROW-1048). Cursor never issues smcup; its live
+// bytes ARE the transcript. Re-injecting capture-pane onto that already-painted
+// chrome is how the idle/prompt tip, model line, and cwd stack after every
+// tool call (and when scrolling history). #1010 kept the unified 50k so the
+// wheel still works; the connect/switch select-window still restores that
+// history (CROW-606). Only a true alt-buffer agent was already excluded
+// (capture returns just the viewport); CROW-1048 extends the skip to inline
+// agents for a different reason: the replay is harmful, not empty.
 //
 // Two independent brakes, because `onScroll` is NOT a user-scroll event: xterm's
 // BufferService.scroll ends in an unconditional `this._onScroll.fire(ydisp)`, so
@@ -6325,8 +6329,10 @@ function verifyScrollbackAfterAttach() {
   // Only a TRUE alt-buffer agent (Claude Code that entered the alt screen)
   // forwards the wheel and has no local scrollback to repair (AC #3). An inline
   // agent — Cursor, or an inline-rendering Claude build (CROW-1023) — keeps the
-  // unified 50k and CAN land on a one-screen buffer after attach, so it stays
-  // eligible for this heal. Same axis as fireScrollbackCapture / applySurfaceScrollback.
+  // unified 50k and CAN land on a one-screen buffer after a resize-then-capture
+  // attach, so connect/reload still heals. This is NOT the same gate as
+  // fireScrollbackCapture: that skip is mid-session (CROW-1048); this heal is
+  // first-attach only and is not armed from switchAgentWindow.
   if (activeSurfaceIsAgent() && activeSurfaceUsesAltScreen()) return;
   if (activeTerminal.window == null) return;
   if (!termWs || termWs.readyState !== WebSocket.OPEN) return;
@@ -6345,11 +6351,12 @@ function verifyScrollbackAfterAttach() {
 // they pass, arm exactly one authoritative re-capture.
 function fireScrollbackCapture(buf) {
   if (!activeTerminal || activeTerminal.window == null) return;
-  // Only a true alt-buffer agent (Claude Code) has no scrollback to fetch — a
-  // capture there returns just the viewport. Inline agents (Cursor, and the
-  // Manager, which runs one) keep the unified 50k buffer and CAN thin, so they
-  // stay eligible. Same axis as applySurfaceScrollback (ADR-0013 #1010).
-  if (activeSurfaceIsAgent() && activeSurfaceUsesAltScreen()) return;
+  // Agent TUIs must not mid-session re-capture (CROW-1048). An alt-buffer
+  // Claude has nothing to fetch (capture is the live frame). An inline agent
+  // (Cursor) keeps the unified 50k, but replaying that pane onto an already-
+  // painted TUI deposits a second chrome copy — the #1014 sediment. Shells
+  // still hydrate: their live stream is a thinned log, not a repainting TUI.
+  if (activeSurfaceIsAgent()) return;
   if (!termWs || termWs.readyState !== WebSocket.OPEN) return;
   const now = Date.now();
   if (now - lastHydrateAt < HYDRATE_MIN_INTERVAL_MS) return;
@@ -6391,6 +6398,11 @@ function hydrateWhenIdle() {
 
 function maybeHydrateScrollback() {
   if (!term) return;
+  // CROW-1048: don't even arm the idle timer on an agent TUI. fireScrollbackCapture
+  // would no-op, but onScroll fires per output line and a 400ms timer per line
+  // is wasted work — and a future edit that widened the capture gate would
+  // silently re-stack Cursor chrome after every tool call.
+  if (activeSurfaceIsAgent()) return;
   scheduleHydrateIdle(); // CROW-1026: any scroll/frame re-arms the mid-buffer heal
   const buf = term.buffer.active;
   const arrivedAtTop = buf.viewportY === 0 && lastViewportY !== 0;
@@ -6447,10 +6459,13 @@ function switchAgentWindow(win) {
   applySurfaceScrollback();
   resetScrollbackSync();
   selectWindow(win);
-  // Inline agents keep the unified 50k and can land one-screen after a
-  // mid-reflow capture, so they stay eligible for the CROW-1027 heal. A
-  // true alt-buffer agent has no local history to repair.
-  if (!activeSurfaceUsesAltScreen()) armScrollbackHeal();
+  // Do not arm CROW-1027 here. In-place switch has no new PTY and no
+  // SIGWINCH, so the mid-reflow one-screen capture that heal exists for
+  // cannot happen. A second select-window 250ms later (the fake-xterm
+  // baseY===0 case, or a slow 50k replay) re-injects the current chrome
+  // on top of the first replay — the CROW-1035 stack, back on the
+  // switch path (CROW-1048). Connect/reload still arm the heal: that
+  // attach really does resize first.
 }
 
 // Right-click "Reload terminal" (#661): recover a corrupted/thrashed surface
