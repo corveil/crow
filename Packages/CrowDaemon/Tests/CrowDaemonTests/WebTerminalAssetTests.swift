@@ -236,8 +236,11 @@ import Testing
             "a plain shell must still take the #673 full reload")
         let inPlace = try Self.functionBody("switchAgentWindow", in: source)
         #expect(
-            inPlace.contains("term.reset()") && inPlace.contains("selectWindow("),
-            "in-place switch resets the local buffer then select-windows on the live socket")
+            inPlace.contains("clearTermBuffer()") && inPlace.contains("selectWindow(win, { replay: false })"),
+            "in-place switch clears the local buffer then select-windows without replay")
+        #expect(
+            !inPlace.contains("term.reset()"),
+            "in-place switch must not term.reset() — that clears modes tmux won't re-send")
         #expect(
             !inPlace.contains("reloadTerminal(") && !inPlace.contains("connectTerminalWs("),
             "in-place switch must not tear down the PTY")

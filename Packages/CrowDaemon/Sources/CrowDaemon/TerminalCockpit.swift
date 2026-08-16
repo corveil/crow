@@ -169,8 +169,8 @@ struct TerminalCockpit: Sendable {
     /// viewport scroll (ADR-0013).
     ///
     /// Why the daemon has to do this at all (CROW-1043): an in-place agent switch
-    /// (`switchAgentWindow`, CROW-1035) calls `term.reset()` before `select-window`,
-    /// which clears xterm's `mouseTrackingMode`. tmux emits mouse-mode changes to a
+    /// (`switchAgentWindow`, CROW-1035) clears the xterm buffer before `select-window`
+    /// without a full `term.reset()` (which would also clear `mouseTrackingMode`). tmux emits mouse-mode changes to a
     /// client as **deltas**, so switching between two agent windows that share the
     /// same mouse state (Claude → Claude / the Manager) repaints no mouse DECSET —
     /// the client is stranded at `mouseTrackingMode: none`, `appOwnsScroll()` returns
