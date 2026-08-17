@@ -8,6 +8,10 @@ const { JSDOM } = require('jsdom');
 // Agent surfaces switch in place (clear buffer + select-window with replay:false
 // on the live socket); plain shells keep the reload so a surface another client
 // reshaped still self-heals.
+//
+// CROW-1052: Grok is the exception that *does* reset() on that in-place
+// path, so leftover Claude mouse-tracking on the shared xterm is dropped.
+// Claude/Cursor must still clear, not reset.
 const epilogue = `
 ;globalThis.__t = {
   attachWindow(win){ return attachWindow(win); },
@@ -128,8 +132,9 @@ function mount(surface) {
   return openSocket();
 }
 
-const claude = { id: 't-claude', name: 'Claude Code', window: 3, agent_surface: true, uses_alternate_screen: true };
-const cursor = { id: 't-cursor', name: 'Cursor', window: 4, agent_surface: true, uses_alternate_screen: false };
+const claude = { id: 't-claude', name: 'Claude Code', window: 3, agent_surface: true, agent_kind: 'claude-code', uses_alternate_screen: true };
+const cursor = { id: 't-cursor', name: 'Cursor', window: 4, agent_surface: true, agent_kind: 'cursor', uses_alternate_screen: false };
+const grok = { id: 't-grok', name: 'Grok Build', window: 6, agent_surface: true, agent_kind: 'grok', uses_alternate_screen: false };
 const shell = { id: 't-shell', name: 'Shell', window: 5, agent_surface: false };
 
 console.log('CROW-1035: switching to a Claude (alt-buffer) session is in-place:');
@@ -192,6 +197,32 @@ console.log('\nno open socket: attachWindow only records the window (onopen will
   T.attachWindow(claude.window);
   check('records attachedWindow', T.attachedWindow === claude.window);
   check('does not throw without a socket', true);
+}
+
+console.log('\nCROW-1052: switching to a Grok session reset()s to drop leftover mouse tracking:');
+{
+  const sock = mount(grok);
+  const socketsBefore = sockets.length;
+  T.attachWindow(grok.window);
+  check('no new WebSocket', sockets.length === socketsBefore);
+  check('live socket was not closed', sock.closed === false);
+  check('Grok in-place switch reset()s', (T.term.resets || 0) === 1);
+  check('Grok does not clearTermBuffer (reset replaces it)', T.term.clears === 0);
+  check('select-window still replay:false', selectWindowPayloads(sock)[0].replay === false);
+}
+
+console.log('\nCROW-1052: Claude and Cursor still clear, not reset:');
+{
+  mount(claude);
+  T.attachWindow(claude.window);
+  check('Claude still clears', T.term.clears === 1);
+  check('Claude still does not reset', (T.term.resets || 0) === 0);
+}
+{
+  mount(cursor);
+  T.attachWindow(cursor.window);
+  check('Cursor still clears', T.term.clears === 1);
+  check('Cursor still does not reset', (T.term.resets || 0) === 0);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
