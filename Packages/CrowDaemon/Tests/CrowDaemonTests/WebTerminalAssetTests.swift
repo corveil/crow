@@ -161,8 +161,8 @@ import Testing
             body.contains("typeof activeTerminal.agent_surface === 'boolean'"),
             "must treat a known surface kind as authoritative in BOTH directions")
         #expect(
-            body.contains("return activeTerminal.agent_surface && mouseTracking;"),
-            "a known surface is authoritative: a plain shell always scrolls locally, and an agent forwards only while mouse-tracking — at a plain prompt it scrolls the local viewport rather than the history-nav arrow keys (#850)")
+            body.contains("return activeTerminal.agent_surface && mouseTracking && !activeSurfaceIsGrok();"),
+            "a known surface is authoritative: a plain shell always scrolls locally, and an agent forwards only while mouse-tracking — at a plain prompt it scrolls the local viewport rather than the history-nav arrow keys (#850). Grok never forwards, even with leftover Claude mouse-tracking on the shared xterm (CROW-1052)")
         #expect(
             body.contains("'alternate'") && body.contains("mouseTrackingMode"),
             "must keep the alt-buffer / mouse-tracking signals as the unclassified fallback")
@@ -239,8 +239,8 @@ import Testing
             inPlace.contains("clearTermBuffer()") && inPlace.contains("selectWindow(win, { replay: false })"),
             "in-place switch clears the local buffer then select-windows without replay")
         #expect(
-            !inPlace.contains("term.reset()"),
-            "in-place switch must not term.reset() — that clears modes tmux won't re-send")
+            inPlace.contains("activeSurfaceIsGrok()") && inPlace.contains("term.reset()"),
+            "Grok is the only surface that reset()s on in-place switch (CROW-1052); Claude/Cursor keep clearTermBuffer (CROW-1035)")
         #expect(
             !inPlace.contains("reloadTerminal(") && !inPlace.contains("connectTerminalWs("),
             "in-place switch must not tear down the PTY")
@@ -291,6 +291,65 @@ import Testing
         #expect(
             source.contains("macOptionClickForcesSelection: true"),
             "⌥-drag selection must be enabled explicitly (xterm.js defaults it to false)")
+    }
+
+    /// CROW-1052: Grok Build copy/paste is four gated exceptions, not a global
+    /// clipboard/mouse rewrite. Each pin is the Grok path AND the Claude/Cursor
+    /// non-regression — a suite that only proved Grok works would pass while
+    /// silently regressing everyone else.
+    @Test func grokCopyPasteGatesAreGrokOnly() throws {
+        let source = try Self.webAsset("app.js")
+        let grok = try Self.functionBody("activeSurfaceIsGrok", in: source)
+        #expect(
+            grok.contains("agent_kind === 'grok'") && grok.contains("agent_surface"),
+            "Grok is identified by agent_kind, and only on an agent surface (extra shells stay shells)")
+
+        let swallow = try Self.functionBody("swallowMouseMode", in: source)
+        #expect(
+            swallow.contains("activeSurfaceIsAgent() && !activeSurfaceIsGrok()"),
+            "Grok keeps the shell swallow; other agent surfaces still own the mouse")
+
+        let scroll = try Self.functionBody("appOwnsScroll", in: source)
+        #expect(
+            scroll.contains("&& !activeSurfaceIsGrok()"),
+            "Grok never forwards the wheel, even with leftover Claude mouse-tracking")
+
+        let osc = try Self.functionBody("handleOsc52Clipboard", in: source)
+        #expect(
+            osc.contains("if (!activeSurfaceIsGrok()) return false;"),
+            "OSC 52 must fail closed on every non-Grok surface")
+        #expect(
+            osc.contains("dest !== 'c' && dest !== '0'"),
+            "OSC 52 handles dest c / 0 only")
+        #expect(
+            osc.contains("copyToClipboard(text)"),
+            "OSC 52 must use copyToClipboard so a rejected writeText falls back to execCommand")
+        #expect(
+            source.contains("registerOscHandler(52, handleOsc52Clipboard)"),
+            "the OSC 52 handler must actually be registered")
+
+        let inPlace = try Self.functionBody("switchAgentWindow", in: source)
+        #expect(
+            inPlace.contains("if (activeSurfaceIsGrok())") && inPlace.contains("term.reset()"),
+            "Grok in-place switch reset()s to drop leftover mouse tracking")
+        #expect(
+            inPlace.contains("clearTermBuffer()"),
+            "Claude/Cursor in-place switch must still clearTermBuffer (CROW-1035)")
+
+        let menu = try Self.functionBody("showTerminalMenu", in: source)
+        #expect(
+            menu.contains("activeSurfaceIsAgent() && !activeSurfaceIsGrok() && !sel"),
+            "Grok hides the option-select hint; other agents still show it")
+
+        // The debug page has no agent_kind. It must not grow an ungated OSC 52
+        // handler, and it must keep documenting that CROW-1052 is out of scope.
+        let debug = try Self.webAsset("terminal.html")
+        #expect(
+            !Self.stripComments(debug).contains("registerOscHandler(52"),
+            "terminal.html must not handle OSC 52 ungated (no agent_kind to fail closed on)")
+        #expect(
+            debug.contains("CROW-1052"),
+            "terminal.html must record that Grok OSC 52 is out of scope on this page")
     }
 
     /// #875: neither surface may handle the paste chord in its key handler, and
