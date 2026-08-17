@@ -40,6 +40,8 @@ window.WebSocket = function () {
 };
 window.WebSocket.OPEN = 1;
 window.TextEncoder = TextEncoder; // jsdom omits it; real browsers have it
+window.TextDecoder = TextDecoder;
+window.atob = atob;
 window.setInterval = () => 0;
 window.setTimeout = () => 0;
 window.requestAnimationFrame = () => 0;
@@ -501,19 +503,19 @@ console.log('\nCROW-1052: writeText rejection falls back to execCommand:');
   const execs = [];
   const origExec = window.document.execCommand;
   window.document.execCommand = (cmd) => { execs.push(cmd); return true; };
-  window.navigator.clipboard = { writeText: () => Promise.reject(new Error('denied')) };
+  // Thenable that invokes catch synchronously so this file stays a sync
+  // process.exit harness. A real Promise.reject is the browser path;
+  // copyToClipboard attaches .catch → fallbackCopy either way.
+  window.navigator.clipboard = {
+    writeText() {
+      return { then() { return this; }, catch(fn) { fn(new Error('denied')); return this; } };
+    },
+  };
   T.activeTerminal = grokTerm();
   check('rejected writeText still reports handled', T.handleOsc52Clipboard('c;' + b64('async-fb')) === true);
-  Promise.resolve()
-    .then(() => Promise.resolve())
-    .then(() => {
-      check('writeText rejection falls back to execCommand', execs.includes('copy'));
-      window.document.execCommand = origExec;
-      console.log(`\n${pass} passed, ${fail} failed`);
-      process.exit(fail ? 1 : 0);
-    })
-    .catch((err) => {
-      console.log('FATAL: OSC 52 rejection test threw', err);
-      process.exit(2);
-    });
+  check('writeText rejection falls back to execCommand', execs.includes('copy'));
+  window.document.execCommand = origExec;
 }
+
+console.log(`\n${pass} passed, ${fail} failed`);
+process.exit(fail ? 1 : 0);
