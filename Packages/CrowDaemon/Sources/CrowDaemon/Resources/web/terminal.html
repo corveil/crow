@@ -112,12 +112,6 @@
       // (per-window `alternate-screen on`), so this page benefits from that fix
       // regardless; what it gives up is only the wheel forwarding. So the two
       // files are expected to differ now — do NOT "resync" this with app.js.
-      //
-      // CROW-1052: this page also has no `agent_kind`, so it cannot gate an
-      // OSC 52 clipboard handler the way app.js does for Grok. The
-      // unconditional swallow already makes drag-select + Cmd+C work here
-      // (including on a Grok pane). Grok's `y` / `/copy` (OSC 52) stays
-      // unhandled on this debug page — out of scope; the live surface is app.js.
       const MOUSE_MODES = new Set([1000, 1001, 1002, 1003, 1005, 1006, 1015, 1016]);
       function swallowMouseMode(params) {
         const arr = params && params.params ? params.params : params;

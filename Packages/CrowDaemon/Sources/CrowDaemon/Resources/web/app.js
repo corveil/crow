@@ -5376,20 +5376,6 @@ function activeSurfaceUsesAltScreen() {
   return !!(activeTerminal && activeTerminal.uses_alternate_screen);
 }
 
-// True when the attached surface is a Grok Build agent TUI (CROW-1052).
-// Grok always enables mouse reporting and copies via `y` / `/copy` (OSC 52);
-// treating it like Claude (app owns the mouse, no clipboard handler) is the bug.
-//
-// Kind comes from the terminal row when present, else the selected session —
-// `list-terminals` does not yet carry `agent_kind`. Extra shells in a Grok
-// session stay shells (`agent_surface` is false).
-function activeSurfaceIsGrok() {
-  if (!(activeTerminal && activeTerminal.agent_surface)) return false;
-  if (activeTerminal.agent_kind === 'grok') return true;
-  const s = selectedId && sessions.find((x) => x.id === selectedId);
-  return !!(s && s.agent_kind === 'grok');
-}
-
 // Only true alt-buffer agents (Claude Code) skip xterm's local history —
 // they live in tmux's scrollback-less alt buffer. Inline agents (Cursor)
 // keep UNIFIED_SCROLLBACK: their transcript is the scrollback, and the
@@ -5478,13 +5464,9 @@ function maybePollAltScreenLatch() {
 // eaten inside agent windows. Hold ⌥ (Alt) to force selection anyway — that's
 // why `macOptionClickForcesSelection` is enabled in the Terminal config, since
 // xterm.js gates the Mac force-selection path on it and it defaults to false.
-//
-// Grok is the exception (CROW-1052): it always enables mouse reporting, which
-// eats drag-select, and it copies via OSC 52 rather than owning the wheel the
-// way Claude/Cursor do. Keep the shell swallow so highlight + Cmd+C work.
 const MOUSE_MODES = new Set([1000, 1001, 1002, 1003, 1005, 1006, 1015, 1016]);
 function swallowMouseMode(params) {
-  if (activeSurfaceIsAgent() && !activeSurfaceIsGrok()) return false;
+  if (activeSurfaceIsAgent()) return false; // agent surface → let it own the mouse
   const arr = params && params.params ? params.params : params;
   const len = arr ? arr.length : 0;
   for (let i = 0; i < len; i++) {
@@ -5538,44 +5520,12 @@ function appOwnsScroll() {
     // agent's transcript); at a plain prompt fall through to a LOCAL viewport
     // scroll instead of the arrow keys it reads as history nav (#850). A plain
     // shell always scrolls locally, even if a prior agent tab left the shared
-    // xterm mouse-tracking. Grok never forwards (CROW-1052): leftover Claude
-    // mouse-tracking on this shared xterm would otherwise become SGR reports
-    // Grok doesn't want, and Grok's own DECSETs are swallowed above.
-    return activeTerminal.agent_surface && mouseTracking && !activeSurfaceIsGrok();
+    // xterm mouse-tracking.
+    return activeTerminal.agent_surface && mouseTracking;
   }
   if (mouseTracking) return true;
   const buf = term && term.buffer && term.buffer.active;
   return !!(buf && buf.type === 'alternate');
-}
-
-// OSC 52 clipboard write. Grok's `y` / `/copy` emit this; xterm.js has no
-// clipboard addon so the sequence would otherwise be dropped. Fail closed:
-// only dest `c` / `0`, only while a Grok agent surface is attached, so
-// Claude/Cursor/Codex/OpenCode/shells keep the default (no-op) path.
-// A rejected `writeText` falls through to the existing execCommand fallback
-// — silently dropping a copy the user asked for is its own bug (CROW-1052).
-function handleOsc52Clipboard(data) {
-  if (!activeSurfaceIsGrok()) return false;
-  const raw = typeof data === 'string' ? data : '';
-  const semi = raw.indexOf(';');
-  if (semi < 0) return false;
-  const dest = raw.slice(0, semi);
-  if (dest !== 'c' && dest !== '0') return false;
-  const payload = raw.slice(semi + 1).replace(/\s+/g, '');
-  if (!payload || payload === '?') return false;
-  let text;
-  try { text = decodeOsc52Payload(payload); } catch (_) { return false; }
-  copyToClipboard(text);
-  return true;
-}
-
-function decodeOsc52Payload(b64) {
-  const pad = b64.length % 4;
-  const padded = pad ? b64 + '='.repeat(4 - pad) : b64;
-  const bin = atob(padded);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return new TextDecoder('utf-8').decode(bytes);
 }
 
 // CROW-1020: xterm paints its scrollbar slider from the JS `theme` object, not
@@ -5658,10 +5608,6 @@ function ensureTerminal() {
   // Registered before open()/first write so no mode toggle slips past.
   term.parser.registerCsiHandler({ prefix: '?', final: 'h' }, swallowMouseMode);
   term.parser.registerCsiHandler({ prefix: '?', final: 'l' }, swallowMouseMode);
-  // Grok's y / /copy emit OSC 52. xterm.js has no clipboard addon, so without
-  // this the sequence is dropped. The handler itself fails closed on every
-  // non-Grok surface (CROW-1052).
-  term.parser.registerOscHandler(52, handleOsc52Clipboard);
 
   // #677: seed the skeleton before first open() so it covers the initial xterm
   // layout / first-fit reflow flash; connectTerminalWs() re-arms it below.
@@ -6058,7 +6004,7 @@ function showTerminalMenu(e) {
   // platform-dependent — ⌥ on macOS (gated on macOptionClickForcesSelection,
   // set in ensureTerminal), Shift everywhere else — and this UI is reachable
   // from any browser, so name the right key for the client we're running on.
-  if (activeSurfaceIsAgent() && !activeSurfaceIsGrok() && !sel) {
+  if (activeSurfaceIsAgent() && !sel) {
     const hint = el('div', 'ctx-hint', `Hold ${forceSelectModifierLabel()} to select text`);
     menu.appendChild(hint);
   }
@@ -6543,15 +6489,7 @@ function switchAgentWindow(win) {
   showTerminalSkeleton();
   clearTimeout(termSkelTimer);
   termSkelTimer = setTimeout(hideTerminalSkeleton, 1500);
-  // Grok is the one agent that may reset: leftover Claude mouse-tracking
-  // on the shared xterm would keep eating selection, and Grok's own
-  // DECSETs are swallowed so tmux-delta modes don't matter (CROW-1052).
-  // Claude/Cursor must keep clearTermBuffer — term.reset() is CROW-1035.
-  if (activeSurfaceIsGrok()) {
-    try { term.reset(); } catch (_) {}
-  } else {
-    clearTermBuffer();
-  }
+  clearTermBuffer();
   applySurfaceScrollback();
   resetScrollbackSync();
   selectWindow(win, { replay: false });
