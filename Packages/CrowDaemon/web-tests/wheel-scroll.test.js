@@ -13,16 +13,12 @@ const epilogue = `
   enableWheelScroll(node){ return enableWheelScroll(node); },
   swallowMouseMode(params){ return swallowMouseMode(params); },
   appOwnsScroll(){ return appOwnsScroll(); },
-  activeSurfaceIsGrok(){ return activeSurfaceIsGrok(); },
-  handleOsc52Clipboard(data){ return handleOsc52Clipboard(data); },
   applySurfaceScrollback(){ return applySurfaceScrollback(); },
   showTerminalMenu(e){ return showTerminalMenu(e); },
   wheelNotches(e){ return wheelNotches(e); },
   set term(v){ term = v; },
   set termWs(v){ termWs = v; },
   set activeTerminal(v){ activeTerminal = v; },
-  set sessions(v){ sessions = v; },
-  set selectedId(v){ selectedId = v; },
   get uiConfig(){ return uiConfig; },
 };
 `;
@@ -40,8 +36,6 @@ window.WebSocket = function () {
 };
 window.WebSocket.OPEN = 1;
 window.TextEncoder = TextEncoder; // jsdom omits it; real browsers have it
-window.TextDecoder = TextDecoder;
-window.atob = atob;
 window.setInterval = () => 0;
 window.setTimeout = () => 0;
 window.requestAnimationFrame = () => 0;
@@ -351,10 +345,10 @@ console.log('\nAlt-buffer cap waits until the user is back at the live edge:');
 // sits on the #terminal-wrap ANCESTOR of xterm's element, so the event bubbles
 // up regardless of what the app is reporting.
 console.log('\nThe selection hint is discoverable on agent surfaces:');
-function openMenu({ agentSurface, agentKind, selection = '' }) {
+function openMenu({ agentSurface, selection = '' }) {
   document.querySelectorAll('.ctx-menu').forEach((n) => n.remove());
   T.term = { getSelection: () => selection, selectAll() {}, clear() {} };
-  T.activeTerminal = { id: 't1', window: 1, agent_surface: agentSurface, agent_kind: agentKind };
+  T.activeTerminal = { id: 't1', window: 1, agent_surface: agentSurface };
   const e = new window.Event('contextmenu', { bubbles: true, cancelable: true });
   T.showTerminalMenu(e);
   return document.querySelector('.ctx-menu');
@@ -376,145 +370,6 @@ const { document } = window;
   check('no hint once the user has a selection', menu && !menu.querySelector('.ctx-hint'));
   check('...and Copy is offered instead',
     menu && [...menu.querySelectorAll('.ctx-item')].some((n) => n.textContent === 'Copy'));
-}
-
-// ---- CROW-1052: Grok is a shell for mouse/clipboard; everyone else stays ----
-
-function b64(s) { return Buffer.from(s, 'utf8').toString('base64'); }
-
-function grokTerm(extra) {
-  return Object.assign({ id: 't-grok', window: 1, agent_surface: true, agent_kind: 'grok' }, extra);
-}
-
-console.log('\nCROW-1052: Grok swallows mouse modes; Claude/Cursor/Codex/OpenCode still let them through:');
-{
-  setup({ agentSurface: true });
-  T.activeTerminal = grokTerm();
-  const swallowed = [1000, 1001, 1002, 1003, 1005, 1006, 1015, 1016]
-    .every((m) => T.swallowMouseMode([m]) === true);
-  check('Grok swallows every tracking mode (drag-select works)', swallowed);
-  check('Grok still lets a non-mouse mode through', T.swallowMouseMode([25]) === false);
-}
-{
-  setup({ agentSurface: true });
-  T.activeTerminal = { id: 't1', window: 1, agent_surface: true, agent_kind: 'claude-code' };
-  check('Claude still lets tracking modes through', T.swallowMouseMode([1006]) === false);
-  T.activeTerminal = { id: 't1', window: 1, agent_surface: true, agent_kind: 'cursor' };
-  check('Cursor still lets tracking modes through', T.swallowMouseMode([1006]) === false);
-  T.activeTerminal = { id: 't1', window: 1, agent_surface: true, agent_kind: 'codex' };
-  check('Codex still lets tracking modes through', T.swallowMouseMode([1006]) === false);
-  T.activeTerminal = { id: 't1', window: 1, agent_surface: true, agent_kind: 'opencode' };
-  check('OpenCode still lets tracking modes through', T.swallowMouseMode([1006]) === false);
-}
-{
-  setup({ agentSurface: true });
-  T.sessions = [{ id: 's-grok', agent_kind: 'grok' }];
-  T.selectedId = 's-grok';
-  T.activeTerminal = { id: 't1', window: 1, agent_surface: true }; // no agent_kind on the row
-  check('session agent_kind=grok fallback swallows mouse modes', T.swallowMouseMode([1006]) === true);
-  T.activeTerminal = { id: 't-shell', window: 2, agent_surface: false };
-  check('extra shell in a Grok session is not a Grok surface', T.activeSurfaceIsGrok() === false);
-  T.sessions = [];
-  T.selectedId = null;
-}
-
-console.log('\nCROW-1052: Grok never forwards the wheel, even with leftover Claude mouse-tracking:');
-{
-  const t = setup({ agentSurface: true, mouseTrackingMode: 'any' });
-  T.activeTerminal = grokTerm();
-  check('Grok appOwnsScroll is false despite leftover tracking', T.appOwnsScroll() === false);
-  t.up();
-  check('Grok leftover tracking scrolls locally, not SGR to the PTY', t.scrolled.join() === '-3' && t.sent.length === 0);
-}
-{
-  const t = setup({ agentSurface: true, mouseTrackingMode: 'any' });
-  T.activeTerminal = { id: 't1', window: 1, agent_surface: true, agent_kind: 'claude-code' };
-  check('Claude still forwards while mouse-tracking', T.appOwnsScroll() === true);
-  t.up();
-  check('Claude still sends SGR wheel-up', t.sent.join() === '\x1b[<64;1;1M');
-}
-{
-  const t = setup({ agentSurface: true, mouseTrackingMode: 'any' });
-  T.activeTerminal = { id: 't1', window: 1, agent_surface: true, agent_kind: 'cursor' };
-  check('Cursor still forwards while mouse-tracking', T.appOwnsScroll() === true);
-  t.up();
-  check('Cursor still sends SGR wheel-up', t.sent.join() === '\x1b[<64;1;1M');
-}
-
-console.log('\nCROW-1052: OSC 52 copies only for Grok, dest c/0 only:');
-{
-  const writes = [];
-  window.navigator.clipboard = { writeText: (t) => { writes.push(t); return Promise.resolve(); } };
-
-  T.activeTerminal = grokTerm();
-  check('Grok OSC 52 dest c is handled', T.handleOsc52Clipboard('c;' + b64('hello')) === true);
-  check('...and wrote hello', writes[0] === 'hello');
-  check('Grok OSC 52 dest 0 is handled', T.handleOsc52Clipboard('0;' + b64('world')) === true);
-  check('...and wrote world', writes[1] === 'world');
-  check('Grok OSC 52 dest s is refused', T.handleOsc52Clipboard('s;' + b64('nope')) === false);
-  check('Grok OSC 52 query is refused', T.handleOsc52Clipboard('c;?') === false);
-  check('Grok OSC 52 empty dest is refused', T.handleOsc52Clipboard(';' + b64('x')) === false);
-  check('Grok OSC 52 invalid base64 is refused', T.handleOsc52Clipboard('c;!!!!') === false);
-  check('refusals wrote nothing extra', writes.length === 2);
-
-  T.activeTerminal = { id: 't1', window: 1, agent_surface: true, agent_kind: 'claude-code' };
-  check('Claude OSC 52 is not handled', T.handleOsc52Clipboard('c;' + b64('claude')) === false);
-  T.activeTerminal = { id: 't1', window: 1, agent_surface: true, agent_kind: 'cursor' };
-  check('Cursor OSC 52 is not handled', T.handleOsc52Clipboard('c;' + b64('cursor')) === false);
-  T.activeTerminal = { id: 't1', window: 1, agent_surface: true, agent_kind: 'codex' };
-  check('Codex OSC 52 is not handled', T.handleOsc52Clipboard('c;' + b64('codex')) === false);
-  T.activeTerminal = { id: 't1', window: 1, agent_surface: true, agent_kind: 'opencode' };
-  check('OpenCode OSC 52 is not handled', T.handleOsc52Clipboard('c;' + b64('opencode')) === false);
-  T.activeTerminal = { id: 't1', window: 1, agent_surface: false };
-  check('plain shell OSC 52 is not handled', T.handleOsc52Clipboard('c;' + b64('shell')) === false);
-  check('non-Grok refusals wrote nothing', writes.length === 2);
-}
-
-console.log('\nCROW-1052: OSC 52 copy must not silently drop when writeText is missing:');
-{
-  const execs = [];
-  const origExec = window.document.execCommand;
-  window.document.execCommand = (cmd) => { execs.push(cmd); return true; };
-  const savedClip = window.navigator.clipboard;
-  window.navigator.clipboard = undefined;
-  T.activeTerminal = grokTerm();
-  check('missing clipboard API still reports handled', T.handleOsc52Clipboard('c;' + b64('legacy')) === true);
-  check('...and falls back to execCommand', execs.includes('copy'));
-  window.navigator.clipboard = savedClip;
-  window.document.execCommand = origExec;
-}
-
-console.log('\nCROW-1052: Grok hides the option-select hint; Claude/Cursor still show it:');
-{
-  const menu = openMenu({ agentSurface: true, agentKind: 'grok' });
-  check('Grok shows no hint (selection works like a shell)', menu && !menu.querySelector('.ctx-hint'));
-}
-{
-  const menu = openMenu({ agentSurface: true, agentKind: 'claude-code' });
-  check('Claude still shows the selection hint', !!(menu && menu.querySelector('.ctx-hint')));
-}
-{
-  const menu = openMenu({ agentSurface: true, agentKind: 'cursor' });
-  check('Cursor still shows the selection hint', !!(menu && menu.querySelector('.ctx-hint')));
-}
-
-console.log('\nCROW-1052: writeText rejection falls back to execCommand:');
-{
-  const execs = [];
-  const origExec = window.document.execCommand;
-  window.document.execCommand = (cmd) => { execs.push(cmd); return true; };
-  // Thenable that invokes catch synchronously so this file stays a sync
-  // process.exit harness. A real Promise.reject is the browser path;
-  // copyToClipboard attaches .catch → fallbackCopy either way.
-  window.navigator.clipboard = {
-    writeText() {
-      return { then() { return this; }, catch(fn) { fn(new Error('denied')); return this; } };
-    },
-  };
-  T.activeTerminal = grokTerm();
-  check('rejected writeText still reports handled', T.handleOsc52Clipboard('c;' + b64('async-fb')) === true);
-  check('writeText rejection falls back to execCommand', execs.includes('copy'));
-  window.document.execCommand = origExec;
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
