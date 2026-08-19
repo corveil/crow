@@ -101,6 +101,66 @@ browser and the whole block is writable only through the local-only
 opt-in can never be flipped by a remote peer. See
 [cli-reference.md](cli-reference.md#session-log-sync-commands).
 
+## Per-workspace UI opt-in that reuses the gateway credential (CROW-1066)
+
+The CLI-only opt-in above works but has friction: a user must drop to a terminal
+(`crow logsync set --add-workspace …`) and, for a Corveil workspace, re-enter a
+Corveil API key they already configured once as the workspace's **AI gateway**.
+CROW-1066 adds a second opt-in surface — a **checkbox in Settings → Workspaces**,
+"Upload session transcripts to Corveil" — that **reuses that workspace's gateway
+credential** instead of asking for a second key.
+
+- **Model.** A per-workspace `WorkspaceInfo.uploadSessionLogs: Bool` (default
+  `false`), decode-tolerant and in `CodingKeys` like every other workspace field.
+  Unlike `logSync.enabledWorkspaces` it rides on the workspace record, so the
+  existing Settings → Workspaces form, the `set-config` round-trip and
+  `crow workspace edit --upload-session-logs` all reach it with no new plumbing.
+- **Opt-in is the union of both surfaces.** `LogSyncCollector` uploads a session
+  when the local-only master switch `logSync.enabled` is on **and** the session's
+  workspace either sets `uploadSessionLogs` **or** appears in
+  `logSync.enabledWorkspaces`. The legacy CLI path is unchanged.
+- **Credential reuse.** For a workspace opted in via the checkbox, the collector
+  resolves the upload key from that workspace's `gateway` — the Corveil key it
+  already holds — via the same `op://…` resolution the gateway launch path uses,
+  falling back to the global `logSync.apiKeyRef` when the workspace has no
+  reusable gateway credential.
+- **UI.** The checkbox is **disabled with a tooltip** ("Configure a Corveil
+  gateway first") when the workspace has no gateway — the reuse is the whole
+  point, so the control is only meaningful with a gateway to reuse. The master
+  switch / base URL / retention / quiet-period stay on the local-only `logSync`
+  block.
+
+### Three decisions resolved in CROW-1066
+
+1. **Artifact base URL: the global, local-only `logSync.baseURL`.** The gateway
+   `baseURL` is the *LLM proxy* endpoint (`ANTHROPIC_BASE_URL`), a different
+   host/path from the REST artifact endpoint, so it is never used for the upload.
+   We also deliberately do **not** derive the destination from the workspace's
+   `corveilHost`: that field is **browser-flippable**, and letting a browser-set
+   value choose where a *credential-bearing* upload goes would let an
+   authenticated remote peer redirect the workspace's Corveil key to a host it
+   chose (an exfiltration vector). The destination therefore stays the local-only
+   `logSync.baseURL`; only the per-workspace on/off toggle is browser-flippable. A
+   future need for per-workspace REST hosts would add a *local-only* override, not
+   reuse a browser-writable field.
+2. **Which gateway header carries the key.** Crow's established Corveil-gateway
+   convention is the header **`x-citadel-api-key`** with a `Bearer sk-citadel-…`
+   value (see [configuration.md](configuration.md#ai-gateway)). The collector
+   looks the credential up case-insensitively, preferring `x-citadel-api-key` then
+   `authorization` / `x-api-key` / `x-corveil-key` defensively, resolves an
+   `op://…` value, and strips a leading `Bearer ` so `TranscriptUploader` can
+   re-wrap the bare key as `Authorization: Bearer <key>` (double-prefixing would
+   401).
+3. **Security tradeoff: acceptable, bounded.** Making `uploadSessionLogs`
+   browser-flippable relaxes the previously all-local-only posture, but narrowly:
+   it only *reuses* a credential the workspace already holds (the gateway key,
+   itself local-only — never readable or authorable from the web via
+   `SettingsSecrets`), the destination stays local-operator-owned (decision 1),
+   and the master `logSync.enabled` remains **local-only and the kill switch** —
+   with it off, no workspace uploads regardless of any checkbox. So the only thing
+   a remote peer gains is toggling one workspace's transcript upload on/off, to
+   the operator's own Corveil, with a credential it can neither see nor change.
+
 ## Depends on
 
 - The artifact contract + upload endpoint, [#2426](https://github.com/corveil/corveil/issues/2426)

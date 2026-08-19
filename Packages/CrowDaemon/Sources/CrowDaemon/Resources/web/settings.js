@@ -1634,6 +1634,31 @@
         render();
       }));
     }
+
+    // Session-log upload opt-in (CROW-1066). A plain workspace field, so it
+    // round-trips through the normal Save (`set-config`) — unlike the gateway
+    // above, which is local-only. The upload REUSES this workspace's gateway
+    // credential, so the checkbox is meaningful only when a gateway is set:
+    // disabled with a tooltip otherwise. The global master switch / base URL /
+    // API key stay on the local-only `logSync` block (`crow logsync`).
+    body.appendChild(group('Session logs'));
+    const hasGateway = !!(d.gateway && (d.gateway.baseURL
+      || (d.gateway.customHeaders && Object.keys(d.gateway.customHeaders).length)));
+    const slRow = el('label', 'st-switch-row');
+    const slCb = el('input', 'st-switch');
+    slCb.type = 'checkbox';
+    slCb.checked = !!d.uploadSessionLogs;
+    slCb.disabled = !hasGateway;
+    if (!hasGateway) slRow.title = 'Configure a Corveil gateway first — the upload reuses its credential.';
+    slCb.onchange = () => { d.uploadSessionLogs = slCb.checked; markDirty(); };
+    slRow.appendChild(slCb);
+    slRow.appendChild(el('span', 'st-switch-label', 'Upload session transcripts to Corveil'));
+    const slField = el('div', 'st-field');
+    slField.appendChild(slRow);
+    slField.appendChild(el('div', 'st-help', hasGateway
+      ? 'Uploads this workspace’s coding-session transcripts to Corveil, reusing its gateway credential (no second key needed). Also requires the local-only log-sync master switch — enable it on the daemon host with `crow logsync set --enabled true`.'
+      : 'Configure a Corveil gateway above first — the upload reuses its credential.'));
+    body.appendChild(slField);
   }
 
   // ---- Job sub-form -------------------------------------------------------

@@ -31,6 +31,59 @@ import CrowCore
         #expect(collector { _ in nil }.resolveAPIKey("op://missing") == nil)
     }
 
+    // MARK: Gateway credential reuse (CROW-1066)
+
+    @Test func stripBearerRemovesSchemeCaseInsensitively() {
+        #expect(LogSyncCollector.stripBearer("Bearer sk-1") == "sk-1")
+        #expect(LogSyncCollector.stripBearer("bearer sk-2") == "sk-2")
+        #expect(LogSyncCollector.stripBearer("  Bearer   sk-3 ") == "sk-3")
+        // No scheme — returned trimmed but otherwise untouched.
+        #expect(LogSyncCollector.stripBearer("sk-4") == "sk-4")
+        // "bearerish" is not the scheme (no space) — left alone.
+        #expect(LogSyncCollector.stripBearer("bearerish") == "bearerish")
+    }
+
+    @Test func corveilAPIKeyFromCitadelHeaderStripsBearer() {
+        let gw = WorkspaceGateway(
+            baseURL: "https://gw.example",
+            customHeaders: ["x-citadel-api-key": "Bearer sk-citadel-abc"])
+        #expect(LogSyncCollector.corveilAPIKey(from: gw, resolveSecret: { _ in nil }) == "sk-citadel-abc")
+    }
+
+    @Test func corveilAPIKeyResolvesOpReferenceHeader() {
+        let gw = WorkspaceGateway(
+            baseURL: "https://gw.example",
+            customHeaders: ["X-Citadel-Api-Key": "op://Vault/Citadel/key"])
+        let key = LogSyncCollector.corveilAPIKey(from: gw) { $0 == "op://Vault/Citadel/key" ? "Bearer sk-resolved" : nil }
+        #expect(key == "sk-resolved") // header name matched case-insensitively; op resolved; Bearer stripped
+    }
+
+    @Test func corveilAPIKeyPrefersCitadelOverGenericHeaders() {
+        let gw = WorkspaceGateway(
+            baseURL: "https://gw.example",
+            customHeaders: ["authorization": "Bearer generic", "x-citadel-api-key": "Bearer citadel"])
+        #expect(LogSyncCollector.corveilAPIKey(from: gw, resolveSecret: { _ in nil }) == "citadel")
+    }
+
+    @Test func corveilAPIKeyFallsBackToAuthorizationHeader() {
+        let gw = WorkspaceGateway(
+            baseURL: "https://gw.example",
+            customHeaders: ["Authorization": "Bearer sk-auth"])
+        #expect(LogSyncCollector.corveilAPIKey(from: gw, resolveSecret: { _ in nil }) == "sk-auth")
+    }
+
+    @Test func corveilAPIKeyNilWhenNoKnownHeader() {
+        let gw = WorkspaceGateway(
+            baseURL: "https://gw.example",
+            customHeaders: ["X-Some-Other": "value"])
+        #expect(LogSyncCollector.corveilAPIKey(from: gw, resolveSecret: { _ in nil }) == nil)
+        // Unresolvable op:// reference in the credential header ⇒ nil, not a broken key.
+        let gw2 = WorkspaceGateway(
+            baseURL: "https://gw.example",
+            customHeaders: ["x-citadel-api-key": "op://missing"])
+        #expect(LogSyncCollector.corveilAPIKey(from: gw2, resolveSecret: { _ in nil }) == nil)
+    }
+
     // MARK: File resolution
 
     @Test func resolveFilesForDirectorySortsByMtimeAndFiltersExtension() throws {
