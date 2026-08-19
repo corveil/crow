@@ -123,7 +123,7 @@ public enum CrowDaemon {
         await registerAgents(devRoot: options.devRoot)
 
         // Ask the installed `codex` whether its hook engine honors
-        // `async: true` before the scaffold writes `~/.codex/hooks.json`
+        // `async: true` before the per-worktree hook writer starts running
         // (CROW-999). Fail-closed: no Codex, no binary, a hang, or an
         // unreadable banner all leave hooks registered synchronously, which
         // every Codex build handles. Probed once here — like agent
@@ -133,6 +133,19 @@ public enum CrowDaemon {
         if let codexBinary = AgentRegistry.shared.agent(for: .codex)?.findBinary() {
             codexAsyncHooks = await CodexVersionProbe.probe(binaryPath: codexBinary)
             log("Codex hooks: \(codexAsyncHooks.logLine)")
+            // Re-register Codex with an async-aware per-worktree hook writer.
+            // The initial `registerAgents` registration ran *before* the probe
+            // (it needs the registered agent to resolve the binary), with the
+            // sync-safe default; now that the verdict is in, replace the agent so
+            // `writeHookConfig` emits `async` for `PostToolUse` where the installed
+            // Codex honors it (>= 0.148.0). `registerKnown` updates in place —
+            // `agent(for:)` returned non-nil only because Codex is available, so
+            // re-registering `available: true` preserves that (CROW-1060).
+            AgentRegistry.shared.registerKnown(
+                OpenAICodexAgent(
+                    hookConfigWriter: CodexHookConfigWriter(
+                        asyncHooksSupported: codexAsyncHooks.supported)),
+                available: true)
         }
 
         // Refresh the dev-root scaffold — bundled skills, CLAUDE.md,
@@ -145,8 +158,7 @@ public enum CrowDaemon {
         // `Scaffolder.corveilInstallTimeout` in the worst case.
         let scaffoldWarning = LaunchScaffold.run(
             devRoot: options.devRoot,
-            configured: options.devRootConfigured,
-            codexAsyncHooksSupported: codexAsyncHooks.supported)
+            configured: options.devRootConfigured)
         await MainActor.run { appState.corveilSkillInstallWarning = scaffoldWarning }
 
         // Repair hook blocks left dangling by an earlier build (#897). Must run

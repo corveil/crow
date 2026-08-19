@@ -35,9 +35,9 @@ capabilities, update this table in the same PR.
 | Resume / continue | ✅ `--continue` | ✅ `--continue` (job/review restart, #829) | ✅ `resume --last` | ⚠️ `--continue` re-enters TUI, no history | ✅ `-c`/`-r` (run-then-`-c`; job/review restart) | ⚠️ `-c` (machine-global most-recent; no per-run id, FR #7) | ⚠️ `muse resume` after `muse exec --prompt-file` (workspace-scoped; `--session-id` unused — needs-eval) |
 | Remote control | ✅ native `--rc --name` | ⚠️ faked via `crow send` paste | ⚠️ faked via `crow send` paste (native `remote-control` unwired — see below) | ⚠️ faked via `crow send` paste | ⚠️ faked via `crow send` paste (native ACP `grok agent serve` deferred) | ⚠️ faked via `crow send` paste (no native RC) | ⚠️ faked via `crow send` paste (no native RC) |
 | Auto-permission | ✅ `--permission-mode auto` | ✅ `--force --approve-mcps` (parity with Claude auto, #829) | ✅ `-a never -s workspace-write` (`.job`, interactive) | ⚠️ runtime-probed `--auto`, `.job` only | ✅ `--always-approve` + hard `--deny` (`rm -rf /` literals) on `.work`/`.job` when Crow Auto is on (CROW-1037); reviews stay human-gated | ⚠️ `settings.json` modes only (no verified launch flag; never `--dangerously-skip-permissions`) | ⚠️ `--disable-approval` (sandbox stays; **never** `--yolo` / `--disable-sandbox`) on `.job`/`.review`/Manager when auto-perm is on |
-| Hooks transport | per-worktree `.claude/settings.local.json` | per-worktree `.cursor/hooks.json` (#829) | global `~/.codex/hooks.json` + `config.toml` `notify` bridge (per-worktree deferred — see below) | global JS plugin `~/.config/opencode/plugins/crow-hooks.js` | per-worktree `.grok/hooks/crow.json` | per-worktree `.agents/hooks.json` (#860) | per-worktree `.muse/hooks.json` (Claude-compatible schema; **needs-eval** — JSON shape not confirmed against a real binary) |
-| Hook → session scope | ✅ per-session UUID | ✅ per-session UUID (#829) | ❌ `cwd` match (per-worktree UUID deferred) | ❌ `cwd` match | ✅ per-session UUID | ✅ per-session UUID | ✅ per-session UUID (baked into the command) |
-| Hook async delivery | ✅ `PostToolUse*` async | ⚠️ declared, timing unverified | ⚠️ `PostToolUse` async, **gated on `codex ≥ 0.148.0`** (older → sync; CROW-999) — timing unverified | ⚠️ names verified, timing unverified | ❌ sync-only (async support unverified) | ❌ no `async` in Antigravity's schema — all sync | ❌ sync-only (async field unverified; declaring one risks a parse failure) |
+| Hooks transport | per-worktree `.claude/settings.local.json` | per-worktree `.cursor/hooks.json` (#829) | per-worktree `.codex/hooks.json` (CROW-1060; `config.toml` `[features] hooks = true` enables the subsystem) | global JS plugin `~/.config/opencode/plugins/crow-hooks.js` | per-worktree `.grok/hooks/crow.json` | per-worktree `.agents/hooks.json` (#860) | per-worktree `.muse/hooks.json` (Claude-compatible schema; **needs-eval** — JSON shape not confirmed against a real binary) |
+| Hook → session scope | ✅ per-session UUID | ✅ per-session UUID (#829) | ✅ per-session UUID (CROW-1060; notify bridge retired) | ❌ `cwd` match | ✅ per-session UUID | ✅ per-session UUID | ✅ per-session UUID (baked into the command) |
+| Hook async delivery | ✅ `PostToolUse*` async | ⚠️ declared, timing unverified | ⚠️ `PostToolUse` async, **gated on `codex ≥ 0.148.0`** (older → sync; CROW-999/1060) — timing unverified | ⚠️ names verified, timing unverified | ❌ sync-only (async support unverified) | ❌ no `async` in Antigravity's schema — all sync | ❌ sync-only (async field unverified; declaring one risks a parse failure) |
 | MCP (e.g. Jira) | ✅ `jira` MCP server via `~/.claude.json` | ✅ `jira` bridged into `~/.cursor/mcp.json` (#829) | ✅ mirrored from `~/.claude.json` into `config.toml` | ❌ falls back to `acli` | ❌ falls back to `acli` (Jira MCP bridge deferred; Grok *does* read Claude/Cursor MCP configs) | ❌ falls back to `acli` (file bridge deferred) | ❌ falls back to `acli` (file bridge deferred; Muse reads `mcp_servers` in `~/.config/muse/settings.json`) |
 | Review (`/crow-review-pr`) | ✅ slash-command | ✅ inlined skill body | ✅ inlined skill body | ✅ inlined skill body | ✅ inlined skill body (human-gated) | ✅ inlined skill body (#902) | ✅ inlined skill body (#1033); strip-not-trust |
 | Initial-prompt injection | ✅ prompt-file contents as argv + deferred paste | ✅ job/review, `--`-separated (CROW-968); handoff launcher auto-wired (#829); `.work` bare | ✅ `.job` + `.review` (prompt-file contents as argv) | ✅ run-then-`--continue` | ✅ run-then-`-c` (`.job`/`.review`); `.work` bare | ✅ `-p "$prompt"` (`.job`/`.review`, #902); `.work` bare | ✅ `muse exec --prompt-file` then `muse resume` (`.job`/`.review`); `.work` bare TUI |
@@ -81,12 +81,15 @@ Legend: ✅ full · ⚠️ partial / faked / unverified · ❌ not supported.
 > native `codex review --base` subcommand: `codex review` only prints local
 > findings and posts no GitHub verdict, so a review driven by it could never
 > satisfy Crow's completion contract (`decideReviewCompletions` needs a posted
-> verdict) and would be re-kicked on every head-SHA advance. **Deferred within
-> #830:** per-worktree `.codex/hooks.json` (would double-fire alongside the
-> still-needed global writer — both dispatch to the same session, doubling
-> notifications; needs server-side event dedup first) and retiring the `notify`
-> bridge (tied to that hooks cutover). The third deferral — flipping
-> `supportsRemoteControl` — was **closed by
+> verdict) and would be re-kicked on every head-SHA advance. **Closed by
+> [CROW-1060](https://github.com/corveil/crow/issues/1060):** the two
+> hook-scope deferrals from #830 landed together — Codex now writes per-worktree
+> `.codex/hooks.json` with `--session <uuid>` baked in (the same good tier as
+> Cursor/Grok/Muse), the retired global `~/.codex/hooks.json` writer is stripped
+> once at daemon boot (`removeManagedGlobalConfig`, so no double-fire during
+> migration), and the `notify`→`CodexNotifyCommand` bridge is gone (the
+> per-worktree `Stop` hook drives `.done` on its own). The third deferral —
+> flipping `supportsRemoteControl` — was **closed by
 > [CROW-1001](https://github.com/corveil/crow/issues/1001)**, though not on the
 > premise #830 recorded: the flag is `true` because the shared `crow send` paste
 > path drives the Codex TUI (verified end-to-end on 0.141.0), *not* because
@@ -278,8 +281,9 @@ describes what the UI claims, not what Crow can do.
      (`~/.codex/app-server-control/app-server-control.sock`); `start` / `restart`
      / `stop` take no port, socket-path, or instance flag. Crow runs N
      concurrent Codex sessions, one per worktree, so one daemon cannot be
-     addressed per session — the same defect class as the Codex hooks `cwd`
-     match, moved onto the drive path.
+     addressed per session — the same defect class the Codex hooks `cwd` match
+     had before CROW-1060 gave them per-session UUID scope, moved onto the drive
+     path.
   3. **Opposite direction.** `codex --remote <ws://…>` connects a *local* TUI to
      a *remote* app server. Crow's badge claims the converse: this local agent
      is drivable from Crow's remote web UI. Crow already **is** the remote
@@ -402,24 +406,32 @@ All harnesses report lifecycle events by shelling out to `crow hook-event`, but
   hook-based state detection (logged; a session-visible warning is a fast-follow).
   This is also what makes the **Manager** hookable — the devRoot isn't
   a registered worktree, so the old `cwd` match could never route it.
-- **Codex** — global `$CODEX_HOME/hooks.json` (default `~/.codex/hooks.json`),
-  plus a `config.toml` `notify = ["<crow>", "codex-notify"]` line and
-  `features.hooks = true`. `cwd`-resolved like Cursor. The `notify` bridge is a
-  Tier-2 fallback: `crow codex-notify` translates Codex's post-turn JSON payload
-  into a hook event (`CodexNotifyPayload`, `CodexNotify`). Auto-launched
-  **`.work`/`.job` worktrees and the Manager devRoot** additionally get
-  per-worktree **project-trust** seeded into `config.toml`
-  (`[projects."<worktree>"] trust_level = "trusted"`, `CodexTrustSeeder`) so
-  Codex's folder-trust gate never blocks an unattended launch. **`.review`
-  clones are deliberately not trust-seeded** — their working tree is `gh repo
-  clone` output at the PR author's head (attacker-controlled), and trusting it
-  would arm a committed `.codex/hooks.json`; they fall back to Codex's folder-
-  trust prompt (the human-gated path), and `prepareReviewClone` strips any
-  committed `.codex/` as defense-in-depth (#843). Per-worktree
-  `.codex/hooks.json` (UUID-scoped) is **deferred** — Codex layers project hooks
-  atop the global file, so both would fire and the `hook-event` handler would
-  double-count; a clean cutover needs server-side (session,event) dedup or
-  dropping the global writer (#830).
+- **Codex** — per-worktree `<worktree>/.codex/hooks.json` with the session UUID
+  baked into every command (`hook-event --session <uuid> --agent codex`), the
+  same UUID-scoped good tier as Cursor/Grok/Muse (CROW-1060). `config.toml`
+  carries `[features] hooks = true` (enables the hook subsystem so the project
+  file loads); the deprecated `codex_hooks` key and the legacy `notify` bridge
+  line are stripped at boot. The old global `$CODEX_HOME/hooks.json` writer is
+  retired — its managed entries are cleaned once at daemon boot
+  (`removeManagedGlobalConfig`, mirroring Cursor/Antigravity), because Codex
+  layers project hooks atop the global file and running both would double-count.
+  The `notify`→`CodexNotifyCommand` bridge is gone: the per-worktree `Stop` hook
+  drives `.done` on its own (`CodexSignalSource`). Write/remove follow the
+  Cursor/Muse protections — a git-tracked or non-Crow-owned `.codex/hooks.json`
+  is left untouched (a user may ship one; it isn't conventionally gitignored),
+  an untracked Crow write is git-excluded. Auto-launched **`.work`/`.job`
+  worktrees and the Manager devRoot** additionally get per-worktree
+  **project-trust** seeded into `config.toml` (`[projects."<worktree>"]
+  trust_level = "trusted"`, `CodexTrustSeeder`) so Codex's folder-trust gate
+  never blocks an unattended launch — and so the project hooks actually load
+  (project hooks run only in trusted folders). **`.review` clones are
+  deliberately not trust-seeded** — their working tree is `gh repo clone` output
+  at the PR author's head (attacker-controlled), and trusting it would arm a
+  committed `.codex/hooks.json`; they fall back to Codex's folder-trust prompt
+  (the human-gated path), and `prepareReviewClone` strips any committed
+  `.codex/` as defense-in-depth (#843). One consequence: a review clone's
+  Crow-written `.codex/hooks.json` won't fire (the clone stays untrusted), so
+  Codex review state detection is human-gated — matching the review posture.
 - **OpenCode** — no command-hook file at all; Crow installs a global **JS
   plugin** `crow-hooks.js` under `~/.config/opencode/plugins/` that subscribes to
   OpenCode's event bus (`session.status` for the busy/idle edges — see
@@ -491,8 +503,9 @@ All harnesses report lifecycle events by shelling out to `crow hook-event`, but
   **needs-eval** — state detection may stay dark until a real binary confirms.
   A git-tracked or user-owned `.muse/hooks.json` is left untouched.
 
-Claude, Cursor, Grok, Antigravity, and Muse get **per-session UUID scope**; Codex and OpenCode
-share the host's global config and are disambiguated by `cwd`. See
+Claude, Cursor, Codex, Grok, Antigravity, and Muse get **per-session UUID scope**; only OpenCode
+still shares the host's global config and is disambiguated by `cwd` (Codex joined
+the UUID-scoped tier in CROW-1060). See
 [ADR 0015](adr/0015-harness-capability-tiers.md).
 
 ### Hook async delivery
@@ -501,10 +514,12 @@ share the host's global config and are disambiguated by `cwd`. See
   intentionally *not* async so it is *accepted* by the daemon before the
   following `PermissionRequest` (`ClaudeHookConfigWriter.asyncEvents`).
 - **Codex:** `PostToolUse` fires async **when the installed `codex` is ≥
-  0.148.0**, decided once at boot by `CodexVersionProbe` and passed into
-  `CodexHookConfigWriter.installGlobalConfig` (CROW-999). Below that pin every
-  hook is registered synchronously, because a pre-0.148 Codex does not downgrade
-  an `async: true` entry — it *skips* it, taking Crow's state detection with it.
+  0.148.0**, decided once at boot by `CodexVersionProbe`. The daemon re-registers
+  Codex with `CodexHookConfigWriter(asyncHooksSupported:)` after the probe, so the
+  per-worktree writer emits `async` with the accurate verdict (CROW-999/1060).
+  Below that pin every hook is registered synchronously, because a pre-0.148 Codex
+  does not downgrade an `async: true` entry — it *skips* it, taking Crow's state
+  detection with it.
   The gate is fail-closed (no binary, a hung probe, an unreadable banner → sync)
   and rejects pre-releases of the pin, since async landed mid-alpha
   (`0.148.0-alpha.9`) and an earlier alpha of the same release would still drop
@@ -943,7 +958,7 @@ against current upstream CLIs.
 | Cursor's legacy `agent` alias collides with grok-build's `~/.grok/bin/agent` (fired in the field) | Prefer the unambiguous **`cursor-agent`** via a token-major PATH walk (order-independent), plus the same **identity probe** on a bare `agent` match. Markers (`--approve-mcps`, `--trust`, `CURSOR_API_KEY`, `CURSOR_API_ENDPOINT`) are the flags this adapter passes — re-verify with `CursorLaunchArgs` on each Cursor CLI baseline bump. CROW-1058 then closed the two gaps that let it fire again: discovery **probes every** candidate instead of stopping at the first (so a genuine `cursor-agent` behind grok-build's `agent` still registers), and launch reads the **verified path** (`launchBinary()` / `VerifiedBinaries`) instead of re-walking PATH — with the unverified fallback narrowed to the unambiguous `cursor-agent`, never the alias | `CursorAgent.identityMarkers` / `verifyBinaryIdentity` · `BinaryTokenResolver` · `BinaryIdentityProbe` · `VerifiedBinaries` / `launchBinary()` | 2026-08-19 (CROW-1058) — Cursor CLI baseline `2026.08.04-aaa8809` |
 | Grok **`--permission-mode auto` now exists** — the #859 probe reported it absent; current docs show it *and* `--always-approve`. Crow Auto maps to `--always-approve` + `--deny` on `.work`/`.job` (CROW-1037): Grok's classifier `auto` still gates `gh pr create`, which is not Claude-equivalent. Reviews stay human-gated. Re-probe `--always-approve`/`--yolo` with the rest of the flag set | Grok mirror **@ 2026-07-25** | `GrokLaunchArgs.autoPermissionSuffix` | 2026-08-15 (CROW-1037; was 2026-07-26) |
 | Grok `Stop` / `Notification` fire on the transitions Crow's state machine needs — **confirm empirically** | — (empirical, #859) | `GrokSignalSource` | 2026-07-26 |
-| Grok double-fire: only the **global** `~/.claude`/`~/.cursor` hook configs Grok also discovers (its compat scanning) firing alongside `.grok/hooks/crow.json` — dedup deferred (genuinely user-controlled config, no Crow session UUID, not RCE; cf. Codex §3b). *Project* compat sources are handled: stripped on `.review` clones (`stripGrokConfigFromReviewClone`, RCE) and neutralized on `.work`/`.job` handoff + warm-adopt (`stripPriorCompatHooksForGrokHandoff` + session-own adopt write, #861 r9-r10). The Grok-**Manager** devRoot case stays a documented limitation (`writeManagerHookConfig`). | — (empirical, #859) | `GrokHookConfigWriter` / `SessionService` | 2026-07-27 |
+| Grok double-fire: only the **global** `~/.claude`/`~/.cursor` hook configs Grok also discovers (its compat scanning) firing alongside `.grok/hooks/crow.json` — dedup deferred (genuinely user-controlled config, no Crow session UUID, not RCE; unlike Codex's *Crow-written* global double-fire, which CROW-1060 closed by dropping the global writer — Crow can't delete configs the user owns). *Project* compat sources are handled: stripped on `.review` clones (`stripGrokConfigFromReviewClone`, RCE) and neutralized on `.work`/`.job` handoff + warm-adopt (`stripPriorCompatHooksForGrokHandoff` + session-own adopt write, #861 r9-r10). The Grok-**Manager** devRoot case stays a documented limitation (`writeManagerHookConfig`). | — (empirical, #859) | `GrokHookConfigWriter` / `SessionService` | 2026-07-27 |
 | **Entire Muse flag set** — `exec` / `--prompt-file` / `resume` / `--session-id` / `--disable-approval` / `--yolo` / `--disable-sandbox` / `--trust-workspace` / `--sandbox-network` / `--subagent-worktree-isolation` / hook event names | Official docs **2026-08-14** (https://dev.meta.ai/docs/muse-code/); **no local `muse --help`** (installer is Meta-auth-gated) | `MuseAgent` / `MuseLaunchArgs` / `MuseHookConfigWriter` / `MuseSignalSource` | 2026-08-14 (#1033) — **needs-eval** against a real binary before promoting out of Tier-2 |
 | Muse `muse` binary collides with Muse Sequencer | **Identity probe** at registration (`muse --help`/`--version` vs Muse Code flag markers) greys out a foreign `muse`; explicit `defaults.binaries.muse` pin bypasses it | `MuseAgent.identityMarkers` / `verifyBinaryIdentity` | 2026-08-14 (#1033) |
 | Muse hook JSON schema is unverified (event *names* documented; on-disk shape is a Claude-compatible guess) | Official extending docs 2026-08-14 list events + `muse hooks trust <key>` but not the file format | `MuseHookConfigWriter` | 2026-08-14 — **needs-eval**; a rejected shape would break launch, so a git-tracked / user-owned `.muse/hooks.json` is left untouched. Confirm with `muse hooks validate` |

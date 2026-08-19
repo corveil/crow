@@ -249,7 +249,10 @@ records the rationale for each gap here (verbatim reasons preserved from source)
    (`~/.cursor/hooks.json`), Codex (`~/.codex/hooks.json` + `config.toml`
    `notify`), and OpenCode (global JS plugin `crow-hooks.js`) all omit
    `--session` and let the server resolve the session by matching `cwd` against
-   registered worktree paths.
+   registered worktree paths. *(Observed at authoring; since closed for Cursor
+   (#829) and Codex ([CROW-1060](https://github.com/corveil/crow/issues/1060) —
+   per-worktree `.codex/hooks.json`, `notify` bridge retired). The live
+   per-harness hook-scope state is `docs/agent-harness-matrix.md`.)*
 
 8. **Capability availability is gated on binary registration.** A harness whose
    `findBinary()` misses is registered as *known-but-unavailable* (surfaced-but-
@@ -337,7 +340,7 @@ that will close them (Cursor/Codex/OpenCode launchers are written but
   [0004](./0004-manager-auto-permission-mode.md) (`--permission-mode auto`),
   [0011](./0011-agent-handoff-preserves-session-not-chat.md) (handoff)
 - Code:
-  - `Packages/CrowCodex/Sources/CrowCodex/{OpenAICodexAgent,CodexHookConfigWriter,CodexSignalSource,CodexNotifyPayload}.swift`
+  - `Packages/CrowCodex/Sources/CrowCodex/{OpenAICodexAgent,CodexHookConfigWriter,CodexSignalSource}.swift`
   - `Packages/CrowCursor/Sources/CrowCursor/{CursorAgent,CursorHookConfigWriter,CursorSignalSource}.swift`
   - `Packages/CrowOpenCode/Sources/CrowOpenCode/{OpenCodeAgent,OpenCodeLaunchArgs,OpenCodeHookConfigWriter}.swift`
   - `Packages/CrowClaude/Sources/CrowClaude/{ClaudeLauncher,ClaudeHookConfigWriter,ClaudeHookSignalSource}.swift`

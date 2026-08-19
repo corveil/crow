@@ -12,202 +12,122 @@ struct CodexHookConfigWriterTests {
         return url
     }
 
-    @Test func writeHookConfigIsNoOp() throws {
-        // Per-session writes are no-ops — Codex hooks are global.
-        let writer = CodexHookConfigWriter()
-        let tmp = try makeTempCodexHome()
-        defer { try? FileManager.default.removeItem(at: tmp) }
-        try writer.writeHookConfig(
-            worktreePath: tmp.path,
-            sessionID: UUID(),
-            crowPath: "/usr/local/bin/crow"
-        )
-        // No file should have been created in the worktree.
-        let files = try FileManager.default.contentsOfDirectory(atPath: tmp.path)
-        #expect(files.isEmpty)
+    private func makeTempWorktree() throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("codex-wt-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        CodexHookConfigWriter.resetTrackedCacheForTesting()
+        return url
     }
 
-    @Test func installGlobalConfigWritesAllSixEvents() throws {
-        let codexHome = try makeTempCodexHome()
-        defer { try? FileManager.default.removeItem(at: codexHome) }
-        try CodexHookConfigWriter.installGlobalConfig(
-            codexHome: codexHome.path,
-            crowPath: "/opt/homebrew/bin/crow"
-        )
+    // MARK: - Per-worktree hook document (CROW-1060)
 
-        let hooksPath = codexHome.appendingPathComponent("hooks.json")
-        let data = try Data(contentsOf: hooksPath)
-        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
-        let hooks = json["hooks"] as! [String: Any]
+    @Test func generateDocumentBakesInSessionUUIDAndAgentForAllSixEvents() throws {
+        let sid = UUID()
+        let doc = CodexHookConfigWriter.generateDocument(
+            sessionID: sid, crowPath: "/opt/homebrew/bin/crow", asyncHooksSupported: false)
+        let hooks = try #require(doc["hooks"] as? [String: Any])
 
         #expect(hooks.count == 6)
-        for event in ["SessionStart", "PreToolUse", "PostToolUse", "UserPromptSubmit", "Stop", "PermissionRequest"] {
-            #expect(hooks[event] != nil, "missing hook entry for \(event)")
+        for event in CodexHookConfigWriter.allEvents {
+            let groups = try #require(hooks[event] as? [[String: Any]], "missing hook entry for \(event)")
+            let entry = try #require((groups.first?["hooks"] as? [[String: Any]])?.first)
+            #expect(entry["type"] as? String == "command")
+            let command = try #require(entry["command"] as? String)
+            // Shell-quoted crow path, session UUID routing, explicit agent kind.
+            #expect(command == "'/opt/homebrew/bin/crow' hook-event --session \(sid.uuidString) --agent codex --event \(event)")
+            #expect(entry["timeout"] as? Int == 5)
         }
-
-        // Spot-check the command shape.
-        let entries = hooks["PreToolUse"] as! [[String: Any]]
-        let inner = entries.first!["hooks"] as! [[String: Any]]
-        let command = inner.first!["command"] as! String
-        #expect(command == "/opt/homebrew/bin/crow hook-event --agent codex --event PreToolUse")
     }
 
-    @Test func installGlobalConfigPreservesUserEntries() throws {
-        let codexHome = try makeTempCodexHome()
-        defer { try? FileManager.default.removeItem(at: codexHome) }
-
-        // Pre-seed a user-managed hook for a non-Crow event.
-        let hooksPath = codexHome.appendingPathComponent("hooks.json")
-        let preExisting: [String: Any] = [
-            "hooks": [
-                "CustomUserEvent": [
-                    ["hooks": [["type": "command", "command": "/usr/local/bin/my-tool"]]]
-                ]
-            ]
-        ]
-        let data = try JSONSerialization.data(withJSONObject: preExisting)
-        try data.write(to: hooksPath)
-
-        try CodexHookConfigWriter.installGlobalConfig(
-            codexHome: codexHome.path,
-            crowPath: "/usr/local/bin/crow"
-        )
-
-        let after = try Data(contentsOf: hooksPath)
-        let json = try JSONSerialization.jsonObject(with: after) as! [String: Any]
-        let hooks = json["hooks"] as! [String: Any]
-        #expect(hooks["CustomUserEvent"] != nil, "user-managed hook entry should be preserved")
-        #expect(hooks["Stop"] != nil, "Crow's Stop hook should still be installed")
+    @Test func generateDocumentShellQuotesSpacedCrowPath() throws {
+        let doc = CodexHookConfigWriter.generateDocument(
+            sessionID: UUID(), crowPath: "/Users/me/My Apps/crow", asyncHooksSupported: false)
+        let hooks = try #require(doc["hooks"] as? [String: Any])
+        let stop = try #require(hooks["Stop"] as? [[String: Any]])
+        let entry = try #require((stop.first?["hooks"] as? [[String: Any]])?.first)
+        let command = try #require(entry["command"] as? String)
+        #expect(command.hasPrefix("'/Users/me/My Apps/crow' hook-event"))
     }
 
-    @Test func installGlobalConfigIsIdempotent() throws {
-        let codexHome = try makeTempCodexHome()
-        defer { try? FileManager.default.removeItem(at: codexHome) }
-        try CodexHookConfigWriter.installGlobalConfig(codexHome: codexHome.path, crowPath: "/bin/crow")
-        let first = try Data(contentsOf: codexHome.appendingPathComponent("hooks.json"))
-        try CodexHookConfigWriter.installGlobalConfig(codexHome: codexHome.path, crowPath: "/bin/crow")
-        let second = try Data(contentsOf: codexHome.appendingPathComponent("hooks.json"))
+    @Test func writeHookConfigWritesPerWorktreeSessionScopedFile() throws {
+        let worktree = try makeTempWorktree()
+        defer { try? FileManager.default.removeItem(at: worktree) }
+
+        let sid = UUID()
+        try CodexHookConfigWriter().writeHookConfig(
+            worktreePath: worktree.path, sessionID: sid, crowPath: "/bin/crow")
+
+        let path = worktree.appendingPathComponent(".codex/hooks.json")
+        #expect(FileManager.default.fileExists(atPath: path.path))
+
+        let data = try #require(FileManager.default.contents(atPath: path.path))
+        let root = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(CodexHookConfigWriter.isCrowOwned(root))
+        let hooks = try #require(root["hooks"] as? [String: Any])
+        let stop = try #require(hooks["Stop"] as? [[String: Any]])
+        let entry = try #require((stop.first?["hooks"] as? [[String: Any]])?.first)
+        let command = try #require(entry["command"] as? String)
+        #expect(command.contains("--session \(sid.uuidString)"))
+        #expect(command.contains("--agent codex"))
+    }
+
+    @Test func writeHookConfigIsIdempotent() throws {
+        let worktree = try makeTempWorktree()
+        defer { try? FileManager.default.removeItem(at: worktree) }
+        let sid = UUID()
+        let path = worktree.appendingPathComponent(".codex/hooks.json")
+
+        try CodexHookConfigWriter().writeHookConfig(
+            worktreePath: worktree.path, sessionID: sid, crowPath: "/bin/crow")
+        let first = try #require(FileManager.default.contents(atPath: path.path))
+        try CodexHookConfigWriter().writeHookConfig(
+            worktreePath: worktree.path, sessionID: sid, crowPath: "/bin/crow")
+        let second = try #require(FileManager.default.contents(atPath: path.path))
         #expect(first == second)
     }
 
-    // MARK: - TOML config
+    @Test func writeDoesNotClobberUserHooks() throws {
+        let worktree = try makeTempWorktree()
+        defer { try? FileManager.default.removeItem(at: worktree) }
 
-    @Test func installGlobalTomlConfigCreatesFreshFile() throws {
-        let codexHome = try makeTempCodexHome()
-        defer { try? FileManager.default.removeItem(at: codexHome) }
-        try CodexHookConfigWriter.installGlobalTomlConfig(
-            codexHome: codexHome.path,
-            crowPath: "/opt/homebrew/bin/crow"
-        )
-        let toml = try String(contentsOf: codexHome.appendingPathComponent("config.toml"))
-        #expect(toml.contains("notify = [\"/opt/homebrew/bin/crow\", \"codex-notify\"]"))
-        #expect(toml.contains("[features]"))
-        #expect(toml.contains("hooks = true"))
-        #expect(!toml.contains("codex_hooks"), "deprecated codex_hooks key must not be written")
+        let codexDir = worktree.appendingPathComponent(".codex")
+        try FileManager.default.createDirectory(at: codexDir, withIntermediateDirectories: true)
+        let path = codexDir.appendingPathComponent("hooks.json")
+        // A user's own hooks.json (no `hook-event --session` marker).
+        let userDoc = "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"/usr/local/bin/my-tool\"}]}]}}"
+        try userDoc.write(to: path, atomically: true, encoding: .utf8)
+
+        try CodexHookConfigWriter().writeHookConfig(
+            worktreePath: worktree.path, sessionID: UUID(), crowPath: "/bin/crow")
+
+        let body = try String(contentsOf: path, encoding: .utf8)
+        #expect(body == userDoc, "a user-owned .codex/hooks.json must be left untouched")
     }
 
-    @Test func installGlobalTomlConfigPreservesUserSettings() throws {
-        let codexHome = try makeTempCodexHome()
-        defer { try? FileManager.default.removeItem(at: codexHome) }
+    // MARK: - Async gating (CROW-999)
 
-        let preExisting = """
-        # User config
-        model = "gpt-4o"
+    @Test func writeEmitsNoAsyncHooksByDefault() throws {
+        let worktree = try makeTempWorktree()
+        defer { try? FileManager.default.removeItem(at: worktree) }
+        try CodexHookConfigWriter(asyncHooksSupported: false).writeHookConfig(
+            worktreePath: worktree.path, sessionID: UUID(), crowPath: "/bin/crow")
 
-        [features]
-        memories = true
-        """
-        try preExisting.write(
-            toFile: codexHome.appendingPathComponent("config.toml").path,
-            atomically: true, encoding: .utf8
-        )
-
-        try CodexHookConfigWriter.installGlobalTomlConfig(
-            codexHome: codexHome.path,
-            crowPath: "/usr/local/bin/crow"
-        )
-
-        let toml = try String(contentsOf: codexHome.appendingPathComponent("config.toml"))
-        // User entries preserved.
-        #expect(toml.contains("model = \"gpt-4o\""))
-        #expect(toml.contains("memories = true"))
-        // Crow entries added.
-        #expect(toml.contains("notify = "))
-        #expect(toml.contains("hooks = true"))
-        #expect(!toml.contains("codex_hooks"), "deprecated codex_hooks key must not be written")
-    }
-
-    @Test func installGlobalTomlConfigMigratesLegacyCodexHooksKey() throws {
-        let codexHome = try makeTempCodexHome()
-        defer { try? FileManager.default.removeItem(at: codexHome) }
-
-        // Pre-seed with the deprecated `codex_hooks` key that pre-fix
-        // installs left behind. The migration should strip it and replace
-        // it with the current `hooks` key.
-        let legacy = """
-        model = "gpt-4o"
-
-        [features]
-        codex_hooks = true
-        memories = true
-        """
-        try legacy.write(
-            toFile: codexHome.appendingPathComponent("config.toml").path,
-            atomically: true, encoding: .utf8
-        )
-
-        try CodexHookConfigWriter.installGlobalTomlConfig(
-            codexHome: codexHome.path,
-            crowPath: "/usr/local/bin/crow"
-        )
-
-        let toml = try String(contentsOf: codexHome.appendingPathComponent("config.toml"))
-        #expect(toml.contains("hooks = true"), "modern hooks key should be present")
-        #expect(!toml.contains("codex_hooks"), "deprecated codex_hooks key should be stripped")
-        // Unrelated user entries survive.
-        #expect(toml.contains("model = \"gpt-4o\""))
-        #expect(toml.contains("memories = true"))
-
-        // Migration is idempotent — re-running produces the same content.
-        try CodexHookConfigWriter.installGlobalTomlConfig(
-            codexHome: codexHome.path,
-            crowPath: "/usr/local/bin/crow"
-        )
-        let second = try String(contentsOf: codexHome.appendingPathComponent("config.toml"))
-        #expect(toml == second)
-    }
-
-    @Test func installGlobalConfigEmitsNoAsyncHooksByDefault() throws {
-        // Fail-closed default: without a `CodexVersionProbe` verdict, no entry
-        // may carry `async`. On a pre-0.148 Codex an async entry isn't
-        // downgraded, it's skipped — which would silently stop Crow's
-        // session-state detection.
-        let codexHome = try makeTempCodexHome()
-        defer { try? FileManager.default.removeItem(at: codexHome) }
-        try CodexHookConfigWriter.installGlobalConfig(
-            codexHome: codexHome.path,
-            crowPath: "/usr/local/bin/crow"
-        )
-
-        for (event, entry) in try hookEntries(in: codexHome) {
+        for (event, entry) in try hookEntries(in: worktree) {
             #expect(
                 entry["async"] == nil,
-                "event \(event) has async flag; pre-0.148 Codex silently skips async hooks"
-            )
+                "event \(event) has async flag; pre-0.148 Codex silently skips async hooks")
         }
     }
 
-    @Test func installGlobalConfigEmitsAsyncOnlyForPostToolUseWhenSupported() throws {
-        let codexHome = try makeTempCodexHome()
-        defer { try? FileManager.default.removeItem(at: codexHome) }
-        try CodexHookConfigWriter.installGlobalConfig(
-            codexHome: codexHome.path,
-            crowPath: "/usr/local/bin/crow",
-            asyncHooksSupported: true
-        )
+    @Test func writeEmitsAsyncOnlyForPostToolUseWhenSupported() throws {
+        let worktree = try makeTempWorktree()
+        defer { try? FileManager.default.removeItem(at: worktree) }
+        try CodexHookConfigWriter(asyncHooksSupported: true).writeHookConfig(
+            worktreePath: worktree.path, sessionID: UUID(), crowPath: "/bin/crow")
 
         var sawAsync = false
-        for (event, entry) in try hookEntries(in: codexHome) {
+        for (event, entry) in try hookEntries(in: worktree) {
             if event == "PostToolUse" {
                 #expect(entry["async"] as? Bool == true, "PostToolUse should be async")
                 sawAsync = true
@@ -220,25 +140,227 @@ struct CodexHookConfigWriterTests {
         #expect(sawAsync, "PostToolUse entry should exist")
     }
 
-    @Test func installGlobalConfigStripsAsyncOnDowngrade() throws {
-        // A user who downgrades Codex (or whose probe stops answering) must not
-        // be left with a stranded `async` on a build that would skip the hook.
-        // Each event's entry is rebuilt whole, so the key disappears.
-        let codexHome = try makeTempCodexHome()
-        defer { try? FileManager.default.removeItem(at: codexHome) }
-        try CodexHookConfigWriter.installGlobalConfig(
-            codexHome: codexHome.path, crowPath: "/usr/local/bin/crow", asyncHooksSupported: true)
-        try CodexHookConfigWriter.installGlobalConfig(
-            codexHome: codexHome.path, crowPath: "/usr/local/bin/crow", asyncHooksSupported: false)
+    // MARK: - Removal
 
-        for (event, entry) in try hookEntries(in: codexHome) {
-            #expect(entry["async"] == nil, "event \(event) kept a stale async flag")
-        }
+    @Test func removeHookConfigDeletesCrowOwnedFileAndPrunesDir() throws {
+        let worktree = try makeTempWorktree()
+        defer { try? FileManager.default.removeItem(at: worktree) }
+
+        try CodexHookConfigWriter().writeHookConfig(
+            worktreePath: worktree.path, sessionID: UUID(), crowPath: "/bin/crow")
+        #expect(FileManager.default.fileExists(
+            atPath: worktree.appendingPathComponent(".codex/hooks.json").path))
+
+        CodexHookConfigWriter().removeHookConfig(worktreePath: worktree.path)
+        #expect(!FileManager.default.fileExists(
+            atPath: worktree.appendingPathComponent(".codex/hooks.json").path))
+        #expect(!FileManager.default.fileExists(
+            atPath: worktree.appendingPathComponent(".codex").path))
     }
 
-    /// Flatten `hooks.json` to `(eventName, innerHookEntry)` pairs.
-    private func hookEntries(in codexHome: URL) throws -> [(String, [String: Any])] {
-        let data = try Data(contentsOf: codexHome.appendingPathComponent("hooks.json"))
+    @Test func removeHookConfigLeavesUserFile() throws {
+        let worktree = try makeTempWorktree()
+        defer { try? FileManager.default.removeItem(at: worktree) }
+
+        let codexDir = worktree.appendingPathComponent(".codex")
+        try FileManager.default.createDirectory(at: codexDir, withIntermediateDirectories: true)
+        let path = codexDir.appendingPathComponent("hooks.json")
+        try "{\"hooks\":{}}".write(to: path, atomically: true, encoding: .utf8)
+
+        CodexHookConfigWriter().removeHookConfig(worktreePath: worktree.path)
+        #expect(FileManager.default.fileExists(atPath: path.path))
+    }
+
+    @Test func isCrowOwnedRejectsEmptyAndForeign() {
+        #expect(!CodexHookConfigWriter.isCrowOwned([:]))
+        #expect(!CodexHookConfigWriter.isCrowOwned(["hooks": [String: Any]()]))
+        #expect(!CodexHookConfigWriter.isCrowOwned(["hooks": ["Stop": "nope"]]))
+    }
+
+    // MARK: - Global-config migration (one-time cleanup)
+
+    @Test func removeManagedGlobalConfigStripsCrowEntriesAndDeletesWhenEmpty() throws {
+        let codexHome = try makeTempCodexHome()
+        defer { try? FileManager.default.removeItem(at: codexHome) }
+
+        // Seed the legacy global form the retired `installGlobalConfig` wrote:
+        // one Crow group per event, commands carrying `hook-event --agent codex`
+        // (no `--session`, cwd-resolved).
+        var hooks: [String: Any] = [:]
+        for event in CodexHookConfigWriter.allEvents {
+            hooks[event] = [[
+                "hooks": [[
+                    "type": "command",
+                    "command": "/opt/homebrew/bin/crow hook-event --agent codex --event \(event)",
+                ]]
+            ]]
+        }
+        let hooksPath = codexHome.appendingPathComponent("hooks.json")
+        try JSONSerialization.data(withJSONObject: ["hooks": hooks])
+            .write(to: hooksPath)
+
+        CodexHookConfigWriter.removeManagedGlobalConfig(codexHome: codexHome.path)
+
+        // Only Crow's entries existed, so the file is removed rather than left a husk.
+        #expect(!FileManager.default.fileExists(atPath: hooksPath.path))
+    }
+
+    @Test func removeManagedGlobalConfigPreservesUserEntries() throws {
+        let codexHome = try makeTempCodexHome()
+        defer { try? FileManager.default.removeItem(at: codexHome) }
+
+        let seed: [String: Any] = [
+            "hooks": [
+                // Crow's managed Stop group.
+                "Stop": [[
+                    "hooks": [["type": "command", "command": "/bin/crow hook-event --agent codex --event Stop"]]
+                ]],
+                // A user's own hook for an event Crow doesn't manage.
+                "CustomUserEvent": [[
+                    "hooks": [["type": "command", "command": "/usr/local/bin/my-tool"]]
+                ]],
+            ]
+        ]
+        let hooksPath = codexHome.appendingPathComponent("hooks.json")
+        try JSONSerialization.data(withJSONObject: seed).write(to: hooksPath)
+
+        CodexHookConfigWriter.removeManagedGlobalConfig(codexHome: codexHome.path)
+
+        let after = try #require(FileManager.default.contents(atPath: hooksPath.path))
+        let root = try #require(try JSONSerialization.jsonObject(with: after) as? [String: Any])
+        let hooks = try #require(root["hooks"] as? [String: Any])
+        #expect(hooks["Stop"] == nil, "Crow's managed group should be stripped")
+        #expect(hooks["CustomUserEvent"] != nil, "user-managed hook entry should be preserved")
+    }
+
+    @Test func removeManagedGlobalConfigPreservesUserGroupOnManagedEvent() throws {
+        let codexHome = try makeTempCodexHome()
+        defer { try? FileManager.default.removeItem(at: codexHome) }
+
+        // Same managed event (Stop) carrying both Crow's group and a user's own.
+        let seed: [String: Any] = [
+            "hooks": [
+                "Stop": [
+                    ["hooks": [["type": "command", "command": "/bin/crow hook-event --agent codex --event Stop"]]],
+                    ["hooks": [["type": "command", "command": "/usr/local/bin/user-stop"]]],
+                ]
+            ]
+        ]
+        let hooksPath = codexHome.appendingPathComponent("hooks.json")
+        try JSONSerialization.data(withJSONObject: seed).write(to: hooksPath)
+
+        CodexHookConfigWriter.removeManagedGlobalConfig(codexHome: codexHome.path)
+
+        let after = try #require(FileManager.default.contents(atPath: hooksPath.path))
+        let root = try #require(try JSONSerialization.jsonObject(with: after) as? [String: Any])
+        let hooks = try #require(root["hooks"] as? [String: Any])
+        let stop = try #require(hooks["Stop"] as? [[String: Any]])
+        #expect(stop.count == 1, "only Crow's group should be removed")
+        let command = try #require((stop.first?["hooks"] as? [[String: Any]])?.first?["command"] as? String)
+        #expect(command == "/usr/local/bin/user-stop")
+    }
+
+    @Test func removeManagedGlobalConfigNoOpsWhenAbsent() throws {
+        let codexHome = try makeTempCodexHome()
+        defer { try? FileManager.default.removeItem(at: codexHome) }
+        // No hooks.json at all — must not throw or create one.
+        CodexHookConfigWriter.removeManagedGlobalConfig(codexHome: codexHome.path)
+        #expect(!FileManager.default.fileExists(
+            atPath: codexHome.appendingPathComponent("hooks.json").path))
+    }
+
+    // MARK: - config.toml (feature enable + notify retirement)
+
+    @Test func installGlobalTomlConfigEnablesHooksWithoutNotify() throws {
+        let codexHome = try makeTempCodexHome()
+        defer { try? FileManager.default.removeItem(at: codexHome) }
+        try CodexHookConfigWriter.installGlobalTomlConfig(codexHome: codexHome.path)
+
+        let toml = try String(contentsOf: codexHome.appendingPathComponent("config.toml"))
+        #expect(toml.contains("[features]"))
+        #expect(toml.contains("hooks = true"))
+        // CROW-1060: the notify bridge is retired — no notify line is written.
+        #expect(!toml.contains("notify"), "the legacy notify bridge line must not be written")
+        #expect(!toml.contains("codex_hooks"), "deprecated codex_hooks key must not be written")
+    }
+
+    @Test func installGlobalTomlConfigRetiresCrowNotifyLine() throws {
+        let codexHome = try makeTempCodexHome()
+        defer { try? FileManager.default.removeItem(at: codexHome) }
+
+        // A prior Crow wrote the notify bridge line; a current boot must strip it.
+        let legacy = """
+        model = "gpt-4o"
+        notify = ["/opt/homebrew/bin/crow", "codex-notify"]
+
+        [features]
+        hooks = true
+        """
+        try legacy.write(
+            toFile: codexHome.appendingPathComponent("config.toml").path,
+            atomically: true, encoding: .utf8)
+
+        try CodexHookConfigWriter.installGlobalTomlConfig(codexHome: codexHome.path)
+
+        let toml = try String(contentsOf: codexHome.appendingPathComponent("config.toml"))
+        #expect(!toml.contains("codex-notify"), "the retired notify bridge line should be stripped")
+        #expect(toml.contains("model = \"gpt-4o\""), "unrelated user config survives")
+        #expect(toml.contains("hooks = true"))
+    }
+
+    @Test func installGlobalTomlConfigPreservesUserNotify() throws {
+        let codexHome = try makeTempCodexHome()
+        defer { try? FileManager.default.removeItem(at: codexHome) }
+
+        // A user's own notify hook (not Crow's) must survive.
+        let user = """
+        notify = ["/usr/local/bin/my-notifier"]
+        model = "gpt-4o"
+        """
+        try user.write(
+            toFile: codexHome.appendingPathComponent("config.toml").path,
+            atomically: true, encoding: .utf8)
+
+        try CodexHookConfigWriter.installGlobalTomlConfig(codexHome: codexHome.path)
+
+        let toml = try String(contentsOf: codexHome.appendingPathComponent("config.toml"))
+        #expect(toml.contains("/usr/local/bin/my-notifier"), "a user's own notify must be preserved")
+    }
+
+    @Test func installGlobalTomlConfigMigratesLegacyCodexHooksKey() throws {
+        let codexHome = try makeTempCodexHome()
+        defer { try? FileManager.default.removeItem(at: codexHome) }
+
+        // Pre-seed with the deprecated `codex_hooks` key that pre-fix installs
+        // left behind. The migration should strip it and replace it with `hooks`.
+        let legacy = """
+        model = "gpt-4o"
+
+        [features]
+        codex_hooks = true
+        memories = true
+        """
+        try legacy.write(
+            toFile: codexHome.appendingPathComponent("config.toml").path,
+            atomically: true, encoding: .utf8)
+
+        try CodexHookConfigWriter.installGlobalTomlConfig(codexHome: codexHome.path)
+
+        let toml = try String(contentsOf: codexHome.appendingPathComponent("config.toml"))
+        #expect(toml.contains("hooks = true"), "modern hooks key should be present")
+        #expect(!toml.contains("codex_hooks"), "deprecated codex_hooks key should be stripped")
+        #expect(toml.contains("model = \"gpt-4o\""))
+        #expect(toml.contains("memories = true"))
+
+        // Idempotent — re-running produces the same content.
+        try CodexHookConfigWriter.installGlobalTomlConfig(codexHome: codexHome.path)
+        let second = try String(contentsOf: codexHome.appendingPathComponent("config.toml"))
+        #expect(toml == second)
+    }
+
+    /// Flatten a worktree's `.codex/hooks.json` to `(eventName, innerHookEntry)`.
+    private func hookEntries(in worktree: URL) throws -> [(String, [String: Any])] {
+        let data = try Data(contentsOf: worktree.appendingPathComponent(".codex/hooks.json"))
         let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
         let hooks = json["hooks"] as! [String: Any]
         var pairs: [(String, [String: Any])] = []

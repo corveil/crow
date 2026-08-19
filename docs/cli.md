@@ -33,7 +33,6 @@ Every subcommand and flag the `crow` binary accepts, generated from the commands
 | [`crow cleanup get`](#crow-cleanup-get) | Show the current cleanup settings |
 | [`crow cleanup set`](#crow-cleanup-set) | Change automatic session cleanup |
 | [`crow close-terminal`](#crow-close-terminal) | Close a terminal tab in a session |
-| [`crow codex-notify`](#crow-codex-notify) | Bridge Codex's notify command into Crow's hook-event pipeline |
 | [`crow complete-session`](#crow-complete-session) | Mark a session completed |
 | [`crow corveil`](#crow-corveil) | Verify the configured Corveil CLI binary, and reinstall its skill |
 | [`crow corveil reinstall-skill`](#crow-corveil-reinstall-skill) | Reinstall every embedded slash command from the corveil binary |
@@ -446,20 +445,6 @@ crow close-terminal --session <session> --terminal <terminal>
 | --- | --- | --- | --- |
 | `--session` | `<session>` | yes | Session UUID |
 | `--terminal` | `<terminal>` | yes | Terminal UUID |
-
----
-
-## `crow codex-notify`
-
-Bridge Codex's notify command into Crow's hook-event pipeline.
-
-```
-crow codex-notify [<payload-arg> ...]
-```
-
-| Flag | Value | Required | Description |
-| --- | --- | --- | --- |
-| _(positional)_ | `<payload-arg>` _(repeatable)_ | no | Codex notify JSON payload (final positional arg) |
 
 ---
 
