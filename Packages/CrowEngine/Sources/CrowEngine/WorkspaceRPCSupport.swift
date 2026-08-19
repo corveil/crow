@@ -44,7 +44,7 @@ public enum WorkspaceRPC {
         "jira_site", "jira_project_key", "jira_jql", "jira_status_map",
         "corveil_host", "custom_instructions", "session_env",
         "always_include", "auto_review_repos", "exclude_review_repos",
-        "review_blocking_severities",
+        "review_blocking_severities", "upload_session_logs",
         "clear_always_include", "clear_auto_review_repos", "clear_exclude_review_repos",
         "clear_jira_status_map", "clear_session_env", "clear_review_blocking_severities",
     ]
@@ -117,6 +117,18 @@ public enum WorkspaceRPC {
     /// throws, so a typo'd `"true"` string fails loudly instead of reading false.
     public static func flag(_ params: [String: JSONValue], _ key: String) throws -> Bool {
         guard let value = params[key], value != .null else { return false }
+        guard let flag = value.boolValue else {
+            throw RPCError.invalidParams("\(key) must be a boolean (true or false)")
+        }
+        return flag
+    }
+
+    /// A tri-state boolean *field* patch (CROW-1066). Unlike ``flag(_:_:)``, absent
+    /// returns `nil` ("leave unchanged") rather than `false` — this writes a stored
+    /// bool, so omitting the key must not silently clear it. A present non-boolean
+    /// throws, matching every other typed patch helper.
+    public static func patchBool(_ params: [String: JSONValue], _ key: String) throws -> Bool? {
+        guard let value = params[key], value != .null else { return nil }
         guard let flag = value.boolValue else {
             throw RPCError.invalidParams("\(key) must be a boolean (true or false)")
         }
@@ -399,6 +411,13 @@ public enum WorkspaceRPC {
             workspace.reviewBlockingSeverities = try decodeReviewBlockingSeverities(raw)
         }
 
+        // Per-workspace session-log opt-in (CROW-1066). A plain bool field — not a
+        // clear-flag — so `patchBool` returns nil when the key is absent, leaving
+        // the stored value untouched (a PATCH).
+        if let upload = try patchBool(params, "upload_session_logs") {
+            workspace.uploadSessionLogs = upload
+        }
+
         try validateCoherence(workspace, params: params)
         return workspace != before
     }
@@ -506,6 +525,7 @@ public enum WorkspaceRPC {
         object["review_blocking_severities"] = .array(
             workspace.effectiveReviewBlockingSeverities.map { .string($0.rawValue) })
         object["review_blocking_severities_explicit"] = .bool(workspace.reviewBlockingSeverities != nil)
+        object["upload_session_logs"] = .bool(workspace.uploadSessionLogs)
         return .object(object)
     }
 }

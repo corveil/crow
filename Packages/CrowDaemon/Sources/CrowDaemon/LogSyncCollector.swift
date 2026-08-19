@@ -47,16 +47,29 @@ struct LogSyncCollector {
     /// One collection pass. Reads config fresh so a Settings edit applies within
     /// one tick.
     func sweep(appState: AppState) async {
-        guard let config = ConfigStore.loadConfig(devRoot: devRoot)?.logSync,
-              config.enabled,
-              !config.baseURL.trimmingCharacters(in: .whitespaces).isEmpty
+        guard let appConfig = ConfigStore.loadConfig(devRoot: devRoot),
+              let config = appConfig.logSync,
+              config.enabled
         else { return }
-        guard let apiKey = resolveAPIKey(config.apiKeyRef) else {
-            LogSyncLog.warnOnce("log-sync enabled but the Corveil API key could not be resolved; nothing will upload")
+        // Cheap exit before touching the store or disk: nothing opted in via
+        // either surface — the per-workspace checkbox (CROW-1066) or the legacy,
+        // local-only `enabledWorkspaces` list.
+        let anyWorkspaceOptIn = appConfig.workspaces.contains { $0.uploadSessionLogs }
+        guard anyWorkspaceOptIn || !config.enabledWorkspaces.isEmpty else { return }
+
+        // The upload destination is the local-only, operator-set `logSync.baseURL`
+        // — deliberately NOT the browser-flippable `corveilHost` (CROW-1066): a
+        // remote peer who can tick the per-workspace checkbox must not also be able
+        // to redirect a credential-bearing upload to a host it chose. Empty ⇒ off.
+        let baseURL = config.baseURL.trimmingCharacters(in: .whitespaces)
+        guard !baseURL.isEmpty else {
+            LogSyncLog.warnOnce("log-sync enabled but logSync.baseURL is empty; nothing will upload")
             return
         }
-        // Nothing opted in — cheap exit before touching the store or disk.
-        guard !config.enabledWorkspaces.isEmpty else { return }
+        // Global Corveil key (may be nil): authenticates the legacy list path and
+        // is the fallback when a per-workspace opt-in has no reusable gateway
+        // credential. Resolved once per sweep.
+        let globalAPIKey = resolveAPIKey(config.apiKeyRef)
 
         // Snapshot the live sessions + their worktrees on the main actor, then do
         // all filesystem/network work off it.
@@ -74,11 +87,32 @@ struct LogSyncCollector {
             if session.isManager { continue }
             guard let worktree = primaryWorktree(worktrees) else { continue }
 
-            // Per-workspace opt-in.
             guard let workspaceName = SessionService.workspaceName(
-                    forWorktreePath: worktree.worktreePath, devRoot: devRoot),
-                  config.uploadsWorkspace(workspaceName)
+                    forWorktreePath: worktree.worktreePath, devRoot: devRoot)
             else { continue }
+            let workspace = appConfig.workspaces.first {
+                $0.name.lowercased() == workspaceName.lowercased()
+            }
+
+            // Opt-in via either surface: the per-workspace checkbox (CROW-1066) or
+            // the legacy `enabledWorkspaces` list (matched case-insensitively).
+            let optedInViaWorkspace = workspace?.uploadSessionLogs == true
+            guard optedInViaWorkspace || config.uploadsWorkspace(workspaceName) else { continue }
+
+            // Reuse the workspace's own gateway credential when it opted in that way
+            // (CROW-1066) so the operator never re-enters a Corveil key; otherwise
+            // fall back to the global `logSync` key.
+            let resolvedKey: String? = {
+                if optedInViaWorkspace, let gateway = workspace?.gateway, !gateway.isEmpty,
+                   let key = Self.corveilAPIKey(from: gateway, resolveSecret: resolveSecret) {
+                    return key
+                }
+                return globalAPIKey
+            }()
+            guard let apiKey = resolvedKey else {
+                LogSyncLog.warnOnce("log-sync: no Corveil API key for workspace \"\(workspaceName)\" (no reusable gateway credential and no global logSync.apiKeyRef); skipping")
+                continue
+            }
 
             let harness = LogSyncHarness(agentKind: session.agentKind)
             let kind = LogSyncArtifactKind.sessionTranscript
@@ -121,7 +155,7 @@ struct LogSyncCollector {
                 orgGoal: session.orgGoal)
 
             let result = await uploader.upload(
-                baseURL: config.baseURL, apiKey: apiKey,
+                baseURL: baseURL, apiKey: apiKey,
                 sessionUID: session.id.uuidString,
                 harness: harness, kind: kind, format: format,
                 transcript: transcript, metadata: metadata, agentSessionID: agentSessionID)
@@ -146,11 +180,61 @@ struct LogSyncCollector {
     /// Resolve an API key reference: `op://…` via `resolveSecret`, otherwise the
     /// literal value. Returns nil for a blank ref or a failed `op` read.
     func resolveAPIKey(_ ref: String) -> String? {
+        Self.resolveRef(ref, resolveSecret: resolveSecret)
+    }
+
+    /// Resolve an `op://…` reference (via `resolveSecret`) or return a plaintext
+    /// value literally. Nil for a blank ref or a failed `op` read. Shared by the
+    /// global-key and per-workspace gateway-credential paths (CROW-1066).
+    static func resolveRef(_ ref: String, resolveSecret: (String) -> String?) -> String? {
         let trimmed = ref.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         if trimmed.hasPrefix("op://") {
-            guard let secret = resolveSecret(trimmed), !secret.isEmpty else { return nil }
-            return secret
+            guard let secret = resolveSecret(trimmed) else { return nil }
+            let cleaned = secret.trimmingCharacters(in: .whitespacesAndNewlines)
+            return cleaned.isEmpty ? nil : cleaned
+        }
+        return trimmed
+    }
+
+    /// Gateway header names that may carry the Corveil API key, in preference
+    /// order. `x-citadel-api-key` is Crow's established Corveil-gateway convention
+    /// (see `docs/configuration.md`); the rest are accepted defensively so a
+    /// differently-named credential header still resolves.
+    static let corveilKeyHeaderNames = ["x-citadel-api-key", "authorization", "x-api-key", "x-corveil-key"]
+
+    /// Extract the bare Corveil API key carried by a workspace's gateway (CROW-1066)
+    /// so the upload can reuse it instead of asking for a second key. Finds the
+    /// credential header by known name (case-insensitive), resolves an `op://…`
+    /// reference the same way the gateway launch path does, and strips a leading
+    /// `Bearer ` so the uploader can re-wrap it as `Authorization: Bearer <key>`.
+    /// Returns nil when no known header is present or its value can't be resolved.
+    static func corveilAPIKey(
+        from gateway: WorkspaceGateway, resolveSecret: (String) -> String?
+    ) -> String? {
+        // Case-insensitive lookup; on a duplicate lowercased name keep the first
+        // (deterministic).
+        let byLowerName = Dictionary(
+            gateway.customHeaders.map { ($0.key.lowercased(), $0.value) },
+            uniquingKeysWith: { first, _ in first })
+        for name in corveilKeyHeaderNames {
+            guard let raw = byLowerName[name],
+                  let resolved = resolveRef(raw, resolveSecret: resolveSecret)
+            else { continue }
+            let key = stripBearer(resolved)
+            if !key.isEmpty { return key }
+        }
+        return nil
+    }
+
+    /// Strip a leading, case-insensitive `Bearer ` scheme from a header value,
+    /// leaving the bare key. A Corveil gateway stores `x-citadel-api-key: Bearer
+    /// sk-…`, but `TranscriptUploader` assembles the `Authorization` header with
+    /// its own `Bearer ` prefix — double-prefixing would authenticate as garbage.
+    static func stripBearer(_ value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespaces)
+        if trimmed.count >= 7, trimmed.prefix(7).lowercased() == "bearer " {
+            return String(trimmed.dropFirst(7)).trimmingCharacters(in: .whitespaces)
         }
         return trimmed
     }

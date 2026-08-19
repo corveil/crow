@@ -94,6 +94,10 @@ struct WorkspaceFieldArgs: ParsableArguments {
     @Flag(name: .customLong("clear-session-env"), help: "Drop every session env var")
     var clearSessionEnv: Bool = false
 
+    @Option(name: .customLong("upload-session-logs"),
+            help: "Upload this workspace's coding-session transcripts to Corveil, reusing its gateway credential: true or false (needs the local-only log-sync master switch on)")
+    var uploadSessionLogs: Bool?
+
     @Option(name: .customLong("review-blocking-severity"), parsing: .singleValue,
             help: "Review finding severity that forces --request-changes (repeatable; replaces the whole list; default red + yellow)")
     var reviewBlockingSeverities: [ReviewSeverity] = []
@@ -121,6 +125,7 @@ struct WorkspaceFieldArgs: ParsableArguments {
             || corveilHost != nil || customInstructions != nil || customInstructionsFile != nil
             || !alwaysInclude.isEmpty || !autoReviewRepos.isEmpty || !excludeReviewRepos.isEmpty
             || !sessionEnv.isEmpty || !reviewBlockingSeverities.isEmpty
+            || uploadSessionLogs != nil
             || jiraStatusFlags.contains { $0.value != nil }
             || clearAlwaysInclude || clearAutoReviewRepos || clearExcludeReviewRepos
             || clearJiraStatusMap || clearSessionEnv || clearReviewBlockingSeverities
@@ -186,6 +191,7 @@ struct WorkspaceFieldArgs: ParsableArguments {
         if clearReviewBlockingSeverities {
             params["clear_review_blocking_severities"] = .bool(true)
         }
+        if let uploadSessionLogs { params["upload_session_logs"] = .bool(uploadSessionLogs) }
         return params
     }
 

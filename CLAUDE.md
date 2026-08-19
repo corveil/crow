@@ -258,7 +258,7 @@ crow workspace edit --workspace <name|uuid> [flags]      → patch; {"saved":fal
 crow workspace remove --workspace <name|uuid> [--force]  → {"removed":true,"gateway_discarded":bool,...}
 ```
 
-Field flags (shared by `add`/`edit`): `--provider github|gitlab`, `--host`, `--task-provider github|gitlab|jira|corveil`, `--jira-site`, `--jira-project-key`, `--jira-jql`, `--jira-status-{backlog,ready,in-progress,in-review,done}`, `--corveil-host`, `--custom-instructions[-file]`, `--always-include`, `--auto-review-repo`, `--exclude-review-repo`, `--review-blocking-severity red|yellow|green`, `--session-env KEY=VALUE`, and `--clear-{always-include,auto-review-repos,exclude-review-repos,jira-status-map,session-env,review-blocking-severities}`.
+Field flags (shared by `add`/`edit`): `--provider github|gitlab`, `--host`, `--task-provider github|gitlab|jira|corveil`, `--jira-site`, `--jira-project-key`, `--jira-jql`, `--jira-status-{backlog,ready,in-progress,in-review,done}`, `--corveil-host`, `--custom-instructions[-file]`, `--always-include`, `--auto-review-repo`, `--exclude-review-repo`, `--review-blocking-severity red|yellow|green`, `--session-env KEY=VALUE`, `--upload-session-logs true|false`, and `--clear-{always-include,auto-review-repos,exclude-review-repos,jira-status-map,session-env,review-blocking-severities}`.
 
 - **Clearing:** optional scalars clear with an empty string (`--host ""`); lists/maps need their `--clear-*` flag. `--jira-status-ready ""` clears one entry.
 - **Repeatable flags replace the whole list**, they don't append — but `--jira-status-*` patches per key.
@@ -297,6 +297,7 @@ crow logsync set [--enabled true|false] [--base-url URL] [--api-key-ref REF]
 - `--api-key-ref` takes an `op://…` 1Password reference (resolved at upload, never at rest in `config.json`) or a plaintext key. `logsync get` masks a plaintext key unless `--reveal`; an `op://…` reference is always shown (it's a pointer, not the secret).
 - `set` is a PATCH (only the flags you pass change; at least one required). Workspace list edits compose: clear → remove → add. Empty `--base-url ''`/`--api-key-ref ''` clears that field.
 - Only Claude Code transcripts are collected today (its logs are the one harness partitioned by working directory); other harnesses are wired as their log paths are confirmed. Live within ~1 collector tick (~5 min); no restart.
+- **Two opt-in surfaces (CROW-1066).** `--add-workspace` here is the local-only list. The other is the per-workspace `crow workspace edit --upload-session-logs true` flag / Settings → Workspaces checkbox, which **reuses that workspace's gateway credential** instead of this block's `--api-key-ref`. Unlike this local-only block, that flag is a normal workspace field (browser-flippable). Both surfaces still require `--enabled true` + a `--base-url` here; the upload destination is always this block's `base_url`, never the browser-flippable `--corveil-host`. `logSync.enabled` stays the kill switch.
 
 ### MCP
 

@@ -1460,6 +1460,7 @@ Notes:
 | `--clear-session-env`        | Drop every session env var                                                  |
 | `--review-blocking-severity` | Review finding severity that forces `--request-changes`: `red`, `yellow`, or `green` (repeatable) |
 | `--clear-review-blocking-severities` | Restore the default review blocking set (`red` + `yellow`)          |
+| `--upload-session-logs`      | Upload this workspace's coding-session transcripts to Corveil, reusing its gateway credential: `true` or `false` |
 
 Notes:
 
@@ -1472,6 +1473,7 @@ Notes:
 - **Fields are checked against the resulting workspace.** `--host` on a GitHub workspace, or any `--jira-*` flag on a workspace whose task provider isn't Jira, is an error rather than a value that would be stored and never read. Set the provider in the same invocation and both apply. Clearing a stranded field is always allowed.
 - **`--session-env` is one variable per entry.** The `/crow-workspace` setup script reads the map as one `KEY=VALUE` per line and splits each at the first `=`, so both delimiters are reserved: a newline in a key or value is rejected (it would smuggle in a second variable), and so is a `=` in a *key* (it would come back as a different variable). A `=` in a value is fine — the split takes only the first one. Keys additionally may not contain whitespace or control characters, since no shell could reference them. All enforced server-side, not just by the CLI.
 - **`--session-env` values are not credentials.** Unlike a gateway header they are stored in plain `config.json` and are not stripped from the web Settings payload. Put tokens in a gateway header instead.
+- **`--upload-session-logs` opts this workspace's session transcripts in to Corveil upload (CROW-1066), reusing its gateway credential** so you don't re-enter a Corveil key. It is the CLI twin of the Settings → Workspaces checkbox and, unlike the local-only `crow logsync` block, is a normal workspace field — so a remote `set-config` can flip it too. Uploads still require the local-only master switch (`crow logsync set --enabled true`), which stays the kill switch, and a base URL on the `logSync` block (the destination is never the browser-flippable `--corveil-host`). A workspace with no gateway falls back to the global `logSync` API key. See [session-log-collector.md](session-log-collector.md#per-workspace-ui-opt-in-that-reuses-the-gateway-credential-crow-1066).
 - **`cli` is derived, never set.** It follows `--provider` (`gh` / `glab`) on every write, so a stale value from an older config is repaired by any edit.
 - There is no `--gateway` flag; see [Gateway Commands](#gateway-commands).
 
@@ -1716,6 +1718,8 @@ There is deliberately **no `--password` flag** — a plaintext password in `argv
 ## Session-Log Sync Commands
 
 The multi-harness session-log collector (CROW-1056) uploads each opted-in workspace's coding-session transcripts to Corveil as session artifacts, attributed to your own Corveil API key. It is **opt-in and OFF by default** — nothing uploads until you enable it *and* opt a workspace in. Uploads are best-effort and never block or fail a session, and **no AWS credentials are stored on this machine** (the server performs the object-storage upload). These verbs are **local-only**, like `gateway` / `web-password` — they configure uploads from the daemon host and carry a Corveil API-key reference.
+
+> **Two ways to opt a workspace in.** `--add-workspace` (below) is the local-only list on this block. The second surface (CROW-1066) is the per-workspace `--upload-session-logs` flag / Settings → Workspaces checkbox, which **reuses the workspace's gateway credential** instead of the `--api-key-ref` here — see [`crow workspace edit`](#workspace-commands) and [session-log-collector.md](session-log-collector.md#per-workspace-ui-opt-in-that-reuses-the-gateway-credential-crow-1066). Either surface opts a workspace in; both still require `--enabled true` and a `--base-url` on this block.
 
 ### `crow logsync get`
 

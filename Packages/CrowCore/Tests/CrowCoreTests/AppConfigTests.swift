@@ -643,10 +643,30 @@ import Testing
         taskProvider: "jira", jiraProjectKey: "PROPS", jiraJQL: "assignee = currentUser()",
         jiraSite: "acme.atlassian.net", jiraStatusMap: ["In Progress": "In Dev"],
         corveilHost: "corveil.acme.io", sessionEnv: ["AWS_PROFILE": "dev"],
+        uploadSessionLogs: true,
         gateway: WorkspaceGateway(baseURL: "https://gw.acme.io", customHeaders: ["X-Key": "sk-1"]))
     let data = try JSONEncoder().encode(AppConfig(workspaces: [workspace]))
     let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
     #expect(decoded.workspaces[0] == workspace)
+}
+
+// MARK: - Per-workspace session-log opt-in (CROW-1066)
+
+@Test func workspaceUploadSessionLogsRoundTrip() throws {
+    let config = AppConfig(workspaces: [WorkspaceInfo(name: "Org", uploadSessionLogs: true)])
+    let data = try JSONEncoder().encode(config)
+    let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+    #expect(decoded.workspaces[0].uploadSessionLogs == true)
+}
+
+@Test func workspaceUploadSessionLogsDefaultsFalseWhenKeyMissing() throws {
+    // A config written before the flag existed must opt OUT, keeping the feature
+    // OFF by default.
+    let json = """
+    {"workspaces": [{"id": "11111111-2222-3333-4444-555555555555", "name": "Org", "provider": "github", "cli": "gh"}]}
+    """.data(using: .utf8)!
+    let config = try JSONDecoder().decode(AppConfig.self, from: json)
+    #expect(config.workspaces[0].uploadSessionLogs == false)
 }
 
 // MARK: - Review blocking severities (CROW-963)

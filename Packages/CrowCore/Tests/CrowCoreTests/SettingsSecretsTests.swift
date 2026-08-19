@@ -92,6 +92,28 @@ import CrowCore
         #expect(merged == current)
     }
 
+    /// CROW-1066: the per-workspace `uploadSessionLogs` opt-in rides on the
+    /// workspace record (not the local-only `logSync` block), so a browser edit of
+    /// it must survive `preservingSecrets` — unlike the `logSync` block, which is
+    /// always restored from `current`. This is the intended, bounded relaxation:
+    /// the checkbox is browser-flippable; the credential and master switch are not.
+    @Test func preservingKeepsBrowserToggleOfUploadSessionLogsButNotLogSyncBlock() {
+        let wsID = UUID()
+        var current = configWithSecrets(workspaceID: wsID)
+        current.logSync = LogSyncConfig(enabled: true, baseURL: "https://api.corveil.io",
+                                        apiKeyRef: "op://vault/corveil/key")
+
+        var incoming = SettingsSecrets.strippedForTransport(current)
+        incoming.workspaces[0].uploadSessionLogs = true  // browser ticks the checkbox
+        // A browser trying to change the local-only master switch must be ignored.
+        incoming.logSync = LogSyncConfig(enabled: true, baseURL: "https://evil.example",
+                                         apiKeyRef: "evil", enabledWorkspaces: ["ws"])
+
+        let merged = SettingsSecrets.preservingSecrets(incoming: incoming, current: current)
+        #expect(merged.workspaces[0].uploadSessionLogs == true)  // browser edit kept
+        #expect(merged.logSync == current.logSync)               // local-only block restored, not the browser's
+    }
+
     @Test func preserveIgnoresBrowserCredentialEdits() {
         // A hostile/buggy client that tries to inject a new token or gateway must
         // be ignored: stored values always win.

@@ -587,6 +587,38 @@ struct WorkspaceRPCSupportTests {
         #expect(object["gateway_base_url"] == .null)
     }
 
+    /// The per-workspace session-log opt-in is a plain bool PATCH (CROW-1066):
+    /// present writes it, absent leaves it, a non-bool throws.
+    @Test func applyPatchWritesUploadSessionLogs() throws {
+        var target = WorkspaceInfo(name: "Acme")
+        #expect(target.uploadSessionLogs == false)
+
+        #expect(try WorkspaceRPC.applyPatch(["upload_session_logs": .bool(true)], to: &target))
+        #expect(target.uploadSessionLogs == true)
+
+        // Absent ⇒ untouched (a PATCH), unlike a clear-flag that defaults to false.
+        _ = try WorkspaceRPC.applyPatch(["custom_instructions": .string("x")], to: &target)
+        #expect(target.uploadSessionLogs == true)
+
+        #expect(try WorkspaceRPC.applyPatch(["upload_session_logs": .bool(false)], to: &target))
+        #expect(target.uploadSessionLogs == false)
+
+        #expect(throws: RPCError.self) {
+            _ = try WorkspaceRPC.applyPatch(["upload_session_logs": .string("true")], to: &target)
+        }
+    }
+
+    /// `upload_session_logs` is a field key, so `workspace edit` carrying only it
+    /// is a real edit; `workspace get` echoes the stored bool.
+    @Test func uploadSessionLogsIsAFieldAndIsEchoed() {
+        #expect(WorkspaceRPC.hasAnyField(["upload_session_logs": .bool(true)]))
+        #expect(WorkspaceRPC.hasAnyField(["upload_session_logs": .bool(false)]))
+        let on = WorkspaceRPC.workspaceJSON(WorkspaceInfo(name: "Acme", uploadSessionLogs: true)).objectValue
+        #expect(on?["upload_session_logs"] == .bool(true))
+        let off = WorkspaceRPC.workspaceJSON(WorkspaceInfo(name: "Acme")).objectValue
+        #expect(off?["upload_session_logs"] == .bool(false))
+    }
+
     /// Capture the message a caller would see, for asserting it names the valid
     /// values rather than merely throwing something.
     private func errorMessage(_ body: () throws -> Void) -> String {

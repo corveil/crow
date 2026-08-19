@@ -642,6 +642,24 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
     /// by `SettingsSecrets`, so don't put tokens here — use a gateway header.
     public var sessionEnv: [String: String]?
 
+    /// Opt this workspace's coding-session transcripts in to Corveil upload
+    /// (CROW-1066). The follow-up to the CLI-only `logSync.enabledWorkspaces`
+    /// list: a per-workspace checkbox in Settings → Workspaces that **reuses the
+    /// workspace's own `gateway` credential** so the operator never re-enters a
+    /// Corveil API key. `LogSyncCollector` uploads a session only when the
+    /// local-only master switch `logSync.enabled` is on **and** the session's
+    /// workspace either sets this flag or appears in `logSync.enabledWorkspaces`.
+    ///
+    /// Unlike the rest of the `logSync` block — which is local-only, so a remote
+    /// peer cannot flip it — this rides on the workspace record and is therefore
+    /// **browser-flippable** through `set-config` / `workspace edit`. That is a
+    /// deliberate, bounded relaxation (CROW-1066): it only reuses a credential the
+    /// workspace already holds (the gateway key, itself local-only and never
+    /// readable/authorable from the web), the upload destination stays the
+    /// local-only `logSync.baseURL`, and `logSync.enabled` remains the local kill
+    /// switch. Default `false`.
+    public var uploadSessionLogs: Bool
+
     /// The CLI tool name derived from the current `provider` value.
     /// Unlike `cli` (which may be stale from an old config file), this is always correct.
     public var derivedCLI: String {
@@ -678,6 +696,7 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
         jiraStatusMap: [String: String]? = nil,
         corveilHost: String? = nil,
         sessionEnv: [String: String]? = nil,
+        uploadSessionLogs: Bool = false,
         gateway: WorkspaceGateway? = nil
     ) {
         self.id = id
@@ -697,6 +716,7 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
         self.jiraStatusMap = jiraStatusMap
         self.corveilHost = corveilHost
         self.sessionEnv = sessionEnv
+        self.uploadSessionLogs = uploadSessionLogs
         self.gateway = gateway
     }
 
@@ -734,6 +754,8 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
         jiraStatusMap = try container.decodeIfPresent([String: String].self, forKey: .jiraStatusMap)
         corveilHost = try container.decodeIfPresent(String.self, forKey: .corveilHost)
         sessionEnv = try container.decodeIfPresent([String: String].self, forKey: .sessionEnv)
+        // Decode-tolerant (CROW-1066): an older config lacking the key opts out.
+        uploadSessionLogs = try container.decodeIfPresent(Bool.self, forKey: .uploadSessionLogs) ?? false
         gateway = try container.decodeIfPresent(WorkspaceGateway.self, forKey: .gateway)
     }
 
@@ -743,7 +765,7 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case id, name, provider, cli, host, alwaysInclude, autoReviewRepos, excludeReviewRepos, customInstructions
         case reviewBlockingSeverities
-        case taskProvider, jiraProjectKey, jiraJQL, jiraSite, jiraStatusMap, corveilHost, sessionEnv, gateway
+        case taskProvider, jiraProjectKey, jiraJQL, jiraSite, jiraStatusMap, corveilHost, sessionEnv, uploadSessionLogs, gateway
     }
 
     /// Legal `provider` values — the code/PR hosts.
