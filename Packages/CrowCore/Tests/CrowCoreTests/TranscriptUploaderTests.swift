@@ -2,6 +2,10 @@ import Foundation
 import Testing
 import CrowCore
 
+#if canImport(FoundationNetworking)
+import FoundationNetworking  // URLRequest / URLError live here on Linux
+#endif
+
 /// Records requests and replays scripted outcomes so the uploader is testable
 /// without a live server.
 final class MockUploadTransport: TranscriptUploadTransport, @unchecked Sendable {
