@@ -42,13 +42,8 @@ enum LaunchScaffold {
     /// the non-fatal `corveil skill install` warning (`nil` when unconfigured or
     /// successful), which the caller mirrors into
     /// `AppState.corveilSkillInstallWarning`.
-    ///
-    /// `codexAsyncHooksSupported` is `CodexVersionProbe`'s verdict, taken by the
-    /// caller because the probe is async and this is not (CROW-999). It has no
-    /// default: a silent `false` would quietly drop async hooks on a capable
-    /// Codex, and the decision belongs to whoever ran the probe.
     @discardableResult
-    static func run(devRoot: String, configured: Bool, codexAsyncHooksSupported: Bool) -> String? {
+    static func run(devRoot: String, configured: Bool) -> String? {
         guard configured else { return nil }
 
         let config = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
@@ -68,8 +63,7 @@ enum LaunchScaffold {
 
         scaffoldAgents(
             devRoot: devRoot,
-            mirrorClaudeMCPToCodex: config.defaults.mirrorClaudeMCPToCodex,
-            codexAsyncHooksSupported: codexAsyncHooksSupported)
+            mirrorClaudeMCPToCodex: config.defaults.mirrorClaudeMCPToCodex)
         return warning
     }
 
@@ -128,16 +122,18 @@ enum LaunchScaffold {
         }
     }
 
-    /// Per-agent dev-root files and global hook configs, each gated on the agent
-    /// actually being registered (i.e. its binary resolved on PATH or via a
+    /// Per-agent dev-root files, per-agent config-home enablement, and one-time
+    /// global-hook-config cleanups, each gated on the agent actually being
+    /// registered (i.e. its binary resolved on PATH or via a
     /// `defaults.binaries.*` override) — so a user without Codex installed never
-    /// gets a `~/.codex`. `AGENTS.md` is shared by all three scaffolders; all are
-    /// idempotent and preserve the user-edited `## Known Issues / Corrections`
-    /// section, so co-existence is safe.
+    /// gets a `~/.codex`. Per-worktree hook files are NOT written here; the
+    /// engine writes them per session via `agent.hookConfigWriter`. `AGENTS.md`
+    /// is shared by all three scaffolders; all are idempotent and preserve the
+    /// user-edited `## Known Issues / Corrections` section, so co-existence is
+    /// safe.
     private static func scaffoldAgents(
         devRoot: String,
-        mirrorClaudeMCPToCodex: Bool,
-        codexAsyncHooksSupported: Bool
+        mirrorClaudeMCPToCodex: Bool
     ) {
         let crowPath = ClaudeHookConfigWriter.resolveCrowBinary(devRoot: devRoot)
 
@@ -158,14 +154,22 @@ enum LaunchScaffold {
                         atPath: (codexHome as NSString).appendingPathComponent(name))
                 }
             }
-            if let crowPath {
-                attempt("Codex global config install") {
-                    try CodexHookConfigWriter.installGlobalConfig(
-                        codexHome: codexHome,
-                        crowPath: crowPath,
-                        asyncHooksSupported: codexAsyncHooksSupported)
-                    try CodexHookConfigWriter.installGlobalTomlConfig(codexHome: codexHome, crowPath: crowPath)
-                }
+            // Enable the hook subsystem in `config.toml` (`[features] hooks =
+            // true`) so per-worktree `.codex/hooks.json` loads, migrate the
+            // deprecated `codex_hooks` key, and retire the legacy `notify`
+            // bridge line (CROW-1060). Independent of `crowPath` — the hook
+            // commands now live per-worktree, not here.
+            attempt("Codex config.toml") {
+                try CodexHookConfigWriter.installGlobalTomlConfig(codexHome: codexHome)
+            }
+            // Per-worktree `.codex/hooks.json` (with `--session` baked in) is now
+            // the authority (CROW-1060), written by the engine per session. Codex
+            // layers global + project hooks and runs both, so any global config a
+            // prior Crow installed would double-fire every event — strip our
+            // managed entries from `<codexHome>/hooks.json` (user entries survive).
+            // Doesn't need `crowPath`. Mirrors the Cursor / Antigravity cleanups.
+            attempt("Codex global hook cleanup") {
+                CodexHookConfigWriter.removeManagedGlobalConfig(codexHome: codexHome)
             }
             // #830: mirror the user's Claude MCP servers (e.g. `jira`) into
             // Codex so Codex sessions get the same tools a Claude session

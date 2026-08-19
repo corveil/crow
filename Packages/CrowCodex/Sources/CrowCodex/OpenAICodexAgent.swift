@@ -2,9 +2,11 @@ import Foundation
 import CrowCore
 
 /// `CodingAgent` conformer for the OpenAI Codex CLI. Mirrors the shape of
-/// `ClaudeCodeAgent` while honoring Codex's quirks — global `~/.codex/`
-/// configuration and no `--rc` launch flag (remote driving is the shared
-/// `crow send` paste path; see `supportsRemoteControl`).
+/// `ClaudeCodeAgent` while honoring Codex's quirks — per-worktree
+/// `.codex/hooks.json` with the session UUID baked in (CROW-1060; the daemon
+/// re-registers this agent with a `CodexHookConfigWriter(asyncHooksSupported:)`
+/// once `CodexVersionProbe` has run) and no `--rc` launch flag (remote driving
+/// is the shared `crow send` paste path; see `supportsRemoteControl`).
 ///
 /// `codex` 0.141.0 closed the early-MVP gaps (#830): restarts now `codex
 /// resume --last` (cwd-scoped by default — `--all` is what disables cwd

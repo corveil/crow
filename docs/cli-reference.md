@@ -1802,23 +1802,13 @@ The **Jira credential** (`AppConfig.jiraCredential`) is intentionally UI-only. I
 
 ### `crow hook-event`
 
-Forwards a Claude Code hook event (e.g. `Stop`, `Notification`, `PreToolUse`) to `crowd`. The JSON payload is read from stdin and wrapped in an RPC call. This is wired up automatically by Claude Code's hook system — you do not invoke it by hand.
+Forwards an agent hook event (e.g. `Stop`, `Notification`, `PreToolUse`) to `crowd`. The JSON payload is read from stdin and wrapped in an RPC call. This is wired up automatically by each agent's per-worktree hook config (Claude Code, Cursor, Codex, Grok, Muse, …), with the Crow session UUID baked into the command — you do not invoke it by hand.
 
 ```bash
 echo '{"tool":"Bash"}' | crow hook-event --session <uuid> --event PreToolUse
 ```
 
 On success it is silent; on error it prints JSON to stdout.
-
-### `crow codex-notify`
-
-The same bridge for Codex, whose `notify` config is global rather than per-session and passes its JSON payload as the final positional argument instead of on stdin. Crow resolves the session from the payload's `cwd`, matching it against registered worktree paths — which is why no `--session` is needed (and why Codex could not supply one anyway).
-
-```bash
-crow codex-notify '{"type":"agent-turn-complete","cwd":"/path/to/worktree"}'
-```
-
-Wired up automatically when a session is handed off to Codex; you do not invoke it by hand.
 
 ---
 

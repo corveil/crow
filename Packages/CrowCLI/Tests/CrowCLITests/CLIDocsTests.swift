@@ -7,9 +7,8 @@ import Testing
 ///
 /// The parity tests prove a verb *exists*; these prove it is *documented*. A new
 /// subcommand that nobody writes up fails the build here rather than shipping
-/// invisible — which is how `crow job`, `set-locked`, `recreate-terminal`,
-/// `resync-jira` and `codex-notify` all went missing from the reference before
-/// this existed.
+/// invisible — which is how `crow job`, `set-locked`, `recreate-terminal` and
+/// `resync-jira` all went missing from the reference before this existed.
 ///
 /// These run in CI's Linux lane, which builds only `Packages/CrowCLI` and never
 /// links the `crow` executable — so everything here works in-process, off the
@@ -266,7 +265,6 @@ private func section(_ invocation: String, in markdown: String) -> String? {
     let exempt = [
         "crow setup": "first-run installer, not a control-plane verb",
         "crow hook-event": "invoked by agent hook configs, never by hand",
-        "crow codex-notify": "invoked by Codex's notify config, never by hand",
         "crow set-pinned": "hidden deprecated alias for set-locked",
         "crow generate-docs": "repo maintenance, not part of the control plane",
     ]
