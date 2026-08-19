@@ -256,4 +256,55 @@ struct ReviewVerdictPolicyTests {
         #expect(byDefault == everything)
         #expect(redOnly == ReviewVerdictPolicy.gradingGuidanceBlock)
     }
+
+    // MARK: - Architecture study (CROW-1062)
+
+    /// The Step 3 "Architecture & Existing Patterns" study step is static prose in
+    /// the skill body (not a placeholder), so it must survive expansion under any
+    /// workspace policy and reach every harness. Pin it on the real skill the same
+    /// way `expandingTheRealSkillReproducesTodaysDefaultText` pins the verdict
+    /// blocks: a reword or a dropped step fails here.
+    @Test func expandedSkillCarriesTheArchitectureStudyStepForEveryPolicy() throws {
+        var dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        var found: URL?
+        for _ in 0..<10 {
+            let candidate = dir.appendingPathComponent("skills/crow-review-pr/SKILL.md")
+            if FileManager.default.fileExists(atPath: candidate.path) {
+                found = candidate
+                break
+            }
+            dir = dir.deletingLastPathComponent()
+        }
+        let skill = try String(contentsOf: try #require(found), encoding: .utf8)
+
+        for blocking in [ReviewSeverity.defaultBlocking, [.red], ReviewSeverity.allCases] {
+            let expanded = ReviewVerdictPolicy.expand(skill, blocking: blocking)
+            // The study step, its two load-bearing instructions, and the grade it
+            // mandates for architectural mismatch.
+            #expect(expanded.contains("Architecture & Existing Patterns (study this before scoring the diff):"),
+                    "\(blocking) lost the architecture study step")
+            #expect(expanded.contains("Name the existing pathway the change should have extended"),
+                    "\(blocking) lost the name-the-existing-pathway instruction")
+            #expect(expanded.contains("Invents a parallel mechanism where a small extension of current behavior would do."),
+                    "\(blocking) lost the reinvented-pathway finding")
+            #expect(expanded.contains("grade them **Yellow** (should-fix) or **Red** (must-fix), never Green"),
+                    "\(blocking) lost the Yellow/Red grade for architecture findings")
+            // The posted review body must carry the section too, so the study is visible.
+            #expect(expanded.contains("### Architecture / Existing Patterns"),
+                    "\(blocking) lost the review-body architecture section")
+        }
+    }
+
+    /// The grade-side reconciliation (CROW-1062): the third grading rule now carves
+    /// an architectural defect out of "roadmap", so a reviewer cannot cap a
+    /// reinvented-pathway finding at Green by calling it a future refactor. Adding
+    /// this must not disturb the three loop-breaking rule headers.
+    @Test func gradingGuidanceLetsArchitectureDefectsBlock() {
+        let guidance = ReviewVerdictPolicy.gradingGuidanceBlock
+        #expect(guidance.contains("may be graded **Yellow** or **Red**, not waved through as a future refactor."))
+        // The three loop-breakers survive unchanged.
+        #expect(guidance.contains("An accepted risk is not a blocker."))
+        #expect(guidance.contains("Do not re-block a declined finding."))
+        #expect(guidance.contains("Grade against the diff, not the roadmap."))
+    }
 }

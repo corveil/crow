@@ -45,7 +45,21 @@ gh pr view $ARGUMENTS --json title,body,headRefName,baseRefName,additions,deleti
 
 ### Step 3: Review the Code
 
-Read all changed files in the PR. For each file, analyze:
+**Architecture & Existing Patterns (study this before scoring the diff):**
+
+A PR can be correct in isolation yet wrong for the codebase — it reinvents a pathway that already exists, or builds the wrong shape because it misread the current control flow. Judge the change against how the system works **today**, not only against its own hunks:
+
+- Read the surrounding modules, the call sites the change touches, and any ADRs in that area (`docs/adr/`) — not just the changed lines.
+- Name the existing pathway the change should have extended, or state plainly that none exists.
+- Raise a finding when the PR:
+  - Invents a parallel mechanism where a small extension of current behavior would do.
+  - Over-engineers relative to the established patterns in the same area.
+  - Assumes a behavior is missing that the codebase already provides.
+  - Misunderstands the current control flow and builds the wrong shape because of it.
+
+These are defects in **this change**, not future improvements — grade them **Yellow** (should-fix) or **Red** (must-fix), never Green "consider later." A forced redesign or a reject is in scope when the approach cannot be made to fit an existing pattern.
+
+Then read all changed files in the PR. For each file, analyze:
 
 **Security Review:**
 - Authentication/authorization issues
@@ -104,6 +118,10 @@ Draft the review using this format:
 
 ### Critical Issues (if any)
 [List blocking issues that must be fixed]
+
+### Architecture / Existing Patterns
+- **Existing pathway:** [name the current path the change should have used, or "none — this is a genuinely new capability"]
+- [Architecture findings, if any — with file references and severity. State when the PR reinvents an existing path, over-engineers, assumes a behavior the codebase already has, or misreads the current control flow.]
 
 ### Security Review
 **Strengths:**
