@@ -72,9 +72,9 @@ Every subcommand and flag the `crow` binary accepts, generated from the commands
 | [`crow list-terminals`](#crow-list-terminals) | List terminals for a session |
 | [`crow list-tickets`](#crow-list-tickets) | List the ticket board (issues, per-status counts, loading state) |
 | [`crow list-worktrees`](#crow-list-worktrees) | List worktrees for a session |
-| [`crow logsync`](#crow-logsync) | View or change session-log upload (opt-in, local-only) |
-| [`crow logsync get`](#crow-logsync-get) | Show the session-log collector settings |
-| [`crow logsync set`](#crow-logsync-set) | Change session-log upload settings |
+| [`crow logsync`](#crow-logsync) | View or change session-log upload behavior knobs |
+| [`crow logsync get`](#crow-logsync-get) | Show the session-log collector behavior knobs |
+| [`crow logsync set`](#crow-logsync-set) | Change session-log upload behavior knobs |
 | [`crow mark-in-review`](#crow-mark-in-review) | Move a session to In Review |
 | [`crow mark-issue-done`](#crow-mark-issue-done) | Close the session's linked issue and complete the session |
 | [`crow mcp`](#crow-mcp) | Serve Crow over MCP, and manage the tokens remote clients use |
@@ -1053,15 +1053,15 @@ crow list-worktrees --session <session>
 
 ## `crow logsync`
 
-View or change session-log upload (opt-in, local-only).
+View or change session-log upload behavior knobs.
 
 ```
 crow logsync <get|set>
 ```
 
-The session-log collector uploads each opted-in workspace's coding-session transcripts to Corveil as session artifacts, attributed to your own Corveil API key (no AWS credentials are stored on this machine). It is OFF by default and uploads nothing until you both enable it and opt a workspace in.
+The session-log collector uploads each opted-in workspace's coding-session transcripts to Corveil as session artifacts, reusing that workspace's AI gateway for the destination and credential (no AWS credentials are stored on this machine). Opt a workspace in with `crow workspace edit --workspace NAME --upload-session-logs true` (or the Settings → Workspaces checkbox); it uploads once it also has a gateway.
 
-Uploads are best-effort and never block or fail a session. Only Claude Code transcripts are collected today; other harnesses are wired as their on-disk log locations are confirmed.
+These verbs tune only global behavior — ledger retention, the quiet period before a transcript is captured, and the per-upload size cap. Uploads are best-effort and never block or fail a session. Only Claude Code transcripts are collected today; other harnesses are wired as their on-disk log locations are confirmed.
 
 Subcommands: [`get`](#crow-logsync-get), [`set`](#crow-logsync-set).
 
@@ -1069,40 +1069,30 @@ Subcommands: [`get`](#crow-logsync-get), [`set`](#crow-logsync-set).
 
 ## `crow logsync get`
 
-Show the session-log collector settings.
+Show the session-log collector behavior knobs.
 
 ```
-crow logsync get [--reveal]
+crow logsync get
 ```
-
-| Flag | Value | Required | Description |
-| --- | --- | --- | --- |
-| `--reveal` | — | no | Reveal a plaintext API key (op:// references are always shown) |
 
 ---
 
 ## `crow logsync set`
 
-Change session-log upload settings.
+Change session-log upload behavior knobs.
 
 ```
-crow logsync set [--enabled <enabled>] [--base-url <base-url>] [--api-key-ref <api-key-ref>] [--add-workspace <add-workspace> ...] [--remove-workspace <remove-workspace> ...] [--clear-workspaces] [--retention-days <retention-days>] [--quiet-period-minutes <quiet-period-minutes>] [--max-upload-bytes <max-upload-bytes>]
+crow logsync set [--retention-days <retention-days>] [--quiet-period-minutes <quiet-period-minutes>] [--max-upload-bytes <max-upload-bytes>]
 ```
 
 Only the flags you pass change; at least one is required.
 
-Turn the feature on with --enabled true, point it at your Corveil API with --base-url and --api-key-ref (an op://… 1Password reference is resolved at upload so the key never lands in config.json), then opt workspaces in with --add-workspace. Nothing uploads until a workspace is opted in.
+Opt a workspace in (and set its gateway) elsewhere — with `crow workspace edit --upload-session-logs true` and `crow gateway set`. These flags only tune collector behavior.
 
-Live: the collector re-reads config each tick, so changes apply within a few minutes with no restart. Pass an empty string to --base-url/--api-key-ref to clear it.
+Live: the collector re-reads config each tick, so changes apply within a few minutes with no restart.
 
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |
-| `--enabled` | `<enabled>` | no | Enable session-log upload (true or false) |
-| `--base-url` | `<base-url>` | no | Corveil API base URL (e.g. https://api.corveil.io) |
-| `--api-key-ref` | `<api-key-ref>` | no | Corveil API key: an op://… reference (preferred) or a plaintext key |
-| `--add-workspace` | `<add-workspace>` _(repeatable)_ | no | Opt a workspace in (repeatable) |
-| `--remove-workspace` | `<remove-workspace>` _(repeatable)_ | no | Opt a workspace out (repeatable) |
-| `--clear-workspaces` | — | no | Opt every workspace out |
 | `--retention-days` | `<retention-days>` | no | Days to keep the local upload ledger (0 = forever, default 30) |
 | `--quiet-period-minutes` | `<quiet-period-minutes>` | no | Wait this long after a session's last activity before uploading (default 30) |
 | `--max-upload-bytes` | `<max-upload-bytes>` | no | Per-transcript upload cap in bytes (default 8000000) |

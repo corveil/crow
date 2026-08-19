@@ -92,26 +92,24 @@ import CrowCore
         #expect(merged == current)
     }
 
-    /// CROW-1066: the per-workspace `uploadSessionLogs` opt-in rides on the
-    /// workspace record (not the local-only `logSync` block), so a browser edit of
-    /// it must survive `preservingSecrets` — unlike the `logSync` block, which is
-    /// always restored from `current`. This is the intended, bounded relaxation:
-    /// the checkbox is browser-flippable; the credential and master switch are not.
-    @Test func preservingKeepsBrowserToggleOfUploadSessionLogsButNotLogSyncBlock() {
+    /// CROW-1066/1070: the per-workspace `uploadSessionLogs` opt-in rides on the
+    /// workspace record and survives `preservingSecrets` (browser-flippable). Since
+    /// CROW-1070 the `logSync` block holds only non-secret behavior knobs, so it is
+    /// ALSO browser-writable — the browser's edit wins rather than being restored
+    /// from `current`. Neither can leak or redirect a credential (both the upload
+    /// credential and destination are the per-workspace gateway).
+    @Test func preservingKeepsBrowserEditsToUploadOptInAndLogSyncKnobs() {
         let wsID = UUID()
         var current = configWithSecrets(workspaceID: wsID)
-        current.logSync = LogSyncConfig(enabled: true, baseURL: "https://api.corveil.io",
-                                        apiKeyRef: "op://vault/corveil/key")
+        current.logSync = LogSyncConfig(retentionDays: 30)
 
         var incoming = SettingsSecrets.strippedForTransport(current)
-        incoming.workspaces[0].uploadSessionLogs = true  // browser ticks the checkbox
-        // A browser trying to change the local-only master switch must be ignored.
-        incoming.logSync = LogSyncConfig(enabled: true, baseURL: "https://evil.example",
-                                         apiKeyRef: "evil", enabledWorkspaces: ["ws"])
+        incoming.workspaces[0].uploadSessionLogs = true                             // browser ticks the checkbox
+        incoming.logSync = LogSyncConfig(retentionDays: 90, quietPeriodMinutes: 5)  // browser tunes a knob
 
         let merged = SettingsSecrets.preservingSecrets(incoming: incoming, current: current)
         #expect(merged.workspaces[0].uploadSessionLogs == true)  // browser edit kept
-        #expect(merged.logSync == current.logSync)               // local-only block restored, not the browser's
+        #expect(merged.logSync == incoming.logSync)              // browser knobs win (no longer restored)
     }
 
     @Test func preserveIgnoresBrowserCredentialEdits() {

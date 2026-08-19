@@ -102,12 +102,12 @@ public struct AppConfig: Codable, Sendable, Equatable {
     /// one. Minted/revoked via the local-only `mcp-token-*` RPCs.
     public var mcpTokens: [MCPTokenRecord]
 
-    /// Session-log collector settings (CROW-1056). Opt-in, local-only, default
-    /// OFF. When enabled, the daemon uploads opted-in workspaces' harness session
-    /// transcripts to Corveil as session-artifacts. `nil`/absent means never
-    /// configured — the collector is inert. Like `managerGateway`/`webAuth`, its
-    /// API-key value is stripped before the config reaches a browser and it is
-    /// writable only through the local-only `logsync-set` RPC (`SettingsSecrets`).
+    /// Session-log collector behavior tuning (CROW-1056; slimmed in CROW-1070).
+    /// Holds only the three global knobs — ledger retention, quiet period, upload
+    /// cap. The opt-in and the upload destination + credential are per-workspace
+    /// (the `uploadSessionLogs` checkbox reusing that workspace's local-only
+    /// `gateway`), so this block carries no secret and is an ordinary
+    /// browser-editable config block. `nil`/absent means all-default knobs.
     public var logSync: LogSyncConfig?
 
     /// Effective review-exclude patterns: the global `defaults.excludeReviewRepos`
@@ -643,21 +643,20 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
     public var sessionEnv: [String: String]?
 
     /// Opt this workspace's coding-session transcripts in to Corveil upload
-    /// (CROW-1066). The follow-up to the CLI-only `logSync.enabledWorkspaces`
-    /// list: a per-workspace checkbox in Settings → Workspaces that **reuses the
-    /// workspace's own `gateway` credential** so the operator never re-enters a
-    /// Corveil API key. `LogSyncCollector` uploads a session only when the
-    /// local-only master switch `logSync.enabled` is on **and** the session's
-    /// workspace either sets this flag or appears in `logSync.enabledWorkspaces`.
+    /// (CROW-1066; sole opt-in since CROW-1070). A per-workspace checkbox in
+    /// Settings → Workspaces that **reuses this workspace's own `gateway`** for
+    /// both the upload destination (`{gateway.baseURL}/api/crow-sessions/…`) and
+    /// the credential (its `x-citadel-api-key`), so the operator never re-enters a
+    /// Corveil key or host. `LogSyncCollector` uploads a session iff this flag is
+    /// set **and** the workspace has a gateway to reuse — there is no separate
+    /// master switch.
     ///
-    /// Unlike the rest of the `logSync` block — which is local-only, so a remote
-    /// peer cannot flip it — this rides on the workspace record and is therefore
-    /// **browser-flippable** through `set-config` / `workspace edit`. That is a
-    /// deliberate, bounded relaxation (CROW-1066): it only reuses a credential the
-    /// workspace already holds (the gateway key, itself local-only and never
-    /// readable/authorable from the web), the upload destination stays the
-    /// local-only `logSync.baseURL`, and `logSync.enabled` remains the local kill
-    /// switch. Default `false`.
+    /// The reuse is what makes browser-flippability safe: the destination +
+    /// credential come only from the **local-only** `gateway` (never readable or
+    /// authorable from the web, and never from the browser-writable `corveilHost`),
+    /// so a remote peer ticking this box can at most turn one workspace's upload
+    /// on/off, to the operator's own Corveil, with a credential it can neither see
+    /// nor change. Default `false`.
     public var uploadSessionLogs: Bool
 
     /// The CLI tool name derived from the current `provider` value.
@@ -1190,37 +1189,22 @@ public struct CleanupConfig: Codable, Sendable, Equatable {
     enum CodingKeys: String, CodingKey { case enabled, retentionHours }
 }
 
-/// Session-log upload settings (CROW-1056) — the opt-in, local-only control
-/// block for the multi-harness session-log collector.
+/// Session-log collector **behavior tuning** (CROW-1056, slimmed in CROW-1070) —
+/// the global knobs for the multi-harness session-log collector.
 ///
-/// **Local-only, default OFF.** This block configures uploads *from the daemon
-/// host* and carries a Corveil API-key reference, so — like `managerGateway` /
-/// `webAuth` / `mcpTokens` — it is stripped before the config reaches a browser
-/// (`SettingsSecrets`) and is writable only through the local-only `logsync-set`
-/// RPC, never `set-config`. Nothing uploads unless a local operator turns it on.
+/// **Not a secret; not the opt-in.** Since CROW-1070 the upload *destination* and
+/// *credential* are the opting-in workspace's own **local-only AI gateway**
+/// (`WorkspaceInfo.gateway`) — never a field in this block — and the opt-in is the
+/// per-workspace `WorkspaceInfo.uploadSessionLogs` checkbox. So this block carries
+/// no credential, no destination and no opt-in list: only three behavior knobs.
+/// It is therefore an ordinary, browser-editable config block (Settings → General
+/// → "Session logs"), reachable over `set-config` and the (no-longer-local-only)
+/// `crow logsync` CLI alike.
 ///
-/// The collector uploads a session's transcript only when **both** `enabled` is
-/// true **and** the session's workspace name is listed in `enabledWorkspaces`
-/// (the per-workspace opt-in — matched case-insensitively). Uploads are
-/// best-effort and never block or fail a session.
+/// The removed `enabled` / `baseURL` / `apiKeyRef` / `enabledWorkspaces` fields are
+/// migrated on first boot by ``LogSyncMigration`` — a legacy `enabledWorkspaces`
+/// opt-in becomes the matching workspace's `uploadSessionLogs`.
 public struct LogSyncConfig: Codable, Sendable, Equatable {
-    /// Master switch. `false` (the default) means the collector does nothing.
-    public var enabled: Bool
-    /// Corveil API base URL that hosts `POST /api/crow-sessions/{id}/artifacts`
-    /// (e.g. `https://api.corveil.io`). Empty disables uploads even when
-    /// `enabled` is true.
-    public var baseURL: String
-    /// The developer's own Corveil API key, as an `op://…` 1Password reference
-    /// (resolved at upload via `GatewayResolver.opRead`, so the secret never
-    /// lands at rest in `config.json`) or a plaintext key. Sent as
-    /// `Authorization: Bearer <key>`. The upload is authenticated as — and
-    /// attributed to — this principal, server-side; there are no AWS credentials
-    /// on the laptop.
-    public var apiKeyRef: String
-    /// Names of the workspaces opted in to transcript upload. A session uploads
-    /// only if its workspace name appears here (case-insensitive). Empty = no
-    /// workspace uploads, which is the default even when `enabled` is true.
-    public var enabledWorkspaces: [String]
     /// Days to retain entries in the local upload ledger before pruning
     /// (housekeeping only — mirrors `TelemetryConfig.retentionDays`; the server
     /// enforces its own artifact retention). 0 keeps entries forever.
@@ -1236,43 +1220,28 @@ public struct LogSyncConfig: Codable, Sendable, Equatable {
     public var maxUploadBytes: Int
 
     public init(
-        enabled: Bool = false,
-        baseURL: String = "",
-        apiKeyRef: String = "",
-        enabledWorkspaces: [String] = [],
         retentionDays: Int = 30,
         quietPeriodMinutes: Int = 30,
         maxUploadBytes: Int = 8_000_000
     ) {
-        self.enabled = enabled
-        self.baseURL = baseURL
-        self.apiKeyRef = apiKeyRef
-        self.enabledWorkspaces = enabledWorkspaces
         self.retentionDays = retentionDays
         self.quietPeriodMinutes = quietPeriodMinutes
         self.maxUploadBytes = maxUploadBytes
     }
 
     /// Per-key tolerant decode — an older `config.json` lacking any field (or the
-    /// whole block) still decodes (CROW-814 idiom).
+    /// whole block) still decodes (CROW-814 idiom). The removed CROW-1070 keys
+    /// (`enabled`/`baseURL`/`apiKeyRef`/`enabledWorkspaces`) are simply ignored
+    /// here and dropped on the next encode; ``LogSyncMigration`` reads them once,
+    /// from the raw JSON, to carry a legacy opt-in over to `uploadSessionLogs`.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
-        baseURL = try c.decodeIfPresent(String.self, forKey: .baseURL) ?? ""
-        apiKeyRef = try c.decodeIfPresent(String.self, forKey: .apiKeyRef) ?? ""
-        enabledWorkspaces = try c.decodeIfPresent([String].self, forKey: .enabledWorkspaces) ?? []
         retentionDays = try c.decodeIfPresent(Int.self, forKey: .retentionDays) ?? 30
         quietPeriodMinutes = try c.decodeIfPresent(Int.self, forKey: .quietPeriodMinutes) ?? 30
         maxUploadBytes = try c.decodeIfPresent(Int.self, forKey: .maxUploadBytes) ?? 8_000_000
     }
 
-    /// Whether this workspace name is opted in (case-insensitive).
-    public func uploadsWorkspace(_ name: String) -> Bool {
-        let lower = name.lowercased()
-        return enabledWorkspaces.contains { $0.lowercased() == lower }
-    }
-
     enum CodingKeys: String, CodingKey {
-        case enabled, baseURL, apiKeyRef, enabledWorkspaces, retentionDays, quietPeriodMinutes, maxUploadBytes
+        case retentionDays, quietPeriodMinutes, maxUploadBytes
     }
 }

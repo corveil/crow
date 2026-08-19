@@ -146,6 +146,8 @@ A workspace can route its Claude Code sessions through a proxy/gateway (e.g. an 
 - **`baseURL`** — exported as `ANTHROPIC_BASE_URL` for the session's `claude` launches.
 - **`customHeaders`** — a `Name: Value` map exported as `ANTHROPIC_CUSTOM_HEADERS` (newline-separated). Both fields must be set together; a `baseURL` with no headers (or vice versa) is rejected when the config is loaded.
 
+> **Also reused for session-log upload (CROW-1070):** when a workspace opts in to Corveil transcript upload (the Settings → Workspaces "Upload session transcripts to Corveil" checkbox / `crow workspace edit --upload-session-logs true`), the collector reuses **this same gateway** — POSTing to `{baseURL}/api/crow-sessions/{id}/artifacts` with the gateway's `x-citadel-api-key`. No second key or host is needed, and because the gateway config is local-only (see [Gateways & Secrets](cli-reference.md#gateways--secrets)) the upload destination can never be a browser-writable field. See [session-log-collector.md](session-log-collector.md).
+
 When a session resolves to a workspace with a `gateway`, Crow injects these vars two ways so they apply on the initial launch *and* survive manual `claude` re-runs:
 
 1. **Launch line** — the `claude` invocation is prefixed with the env-var assignments, overriding any global `~/.zshrc` export for that launch. (When a workspace has multiple headers, the header value can't go on the line — an embedded newline would submit the command early — so it's carried by `settings.local.json` and the launch line instead `unset`s any inherited `ANTHROPIC_CUSTOM_HEADERS` so the gateway's `baseURL` is never paired with stale global headers.)

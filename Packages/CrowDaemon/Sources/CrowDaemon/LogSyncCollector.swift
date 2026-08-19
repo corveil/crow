@@ -11,8 +11,9 @@ import CrowPersistence
 /// with the session's metadata attached.
 ///
 /// Design guarantees:
-/// - **Opt-in, default OFF.** Nothing uploads unless `logSync.enabled` is true
-///   *and* the session's workspace is listed in `logSync.enabledWorkspaces`.
+/// - **Opt-in, default OFF.** Nothing uploads unless a session's workspace ticks
+///   `uploadSessionLogs` **and** that workspace has a `gateway` to reuse (the
+///   upload destination + credential come from it — CROW-1070).
 /// - **Non-blocking / best-effort.** This runs entirely off the session
 ///   lifecycle; a failed or slow upload never delays or fails a session. One
 ///   retry inside the uploader, then the ledger records and (for transient
@@ -47,29 +48,16 @@ struct LogSyncCollector {
     /// One collection pass. Reads config fresh so a Settings edit applies within
     /// one tick.
     func sweep(appState: AppState) async {
-        guard let appConfig = ConfigStore.loadConfig(devRoot: devRoot),
-              let config = appConfig.logSync,
-              config.enabled
-        else { return }
-        // Cheap exit before touching the store or disk: nothing opted in via
-        // either surface — the per-workspace checkbox (CROW-1066) or the legacy,
-        // local-only `enabledWorkspaces` list.
-        let anyWorkspaceOptIn = appConfig.workspaces.contains { $0.uploadSessionLogs }
-        guard anyWorkspaceOptIn || !config.enabledWorkspaces.isEmpty else { return }
+        guard let appConfig = ConfigStore.loadConfig(devRoot: devRoot) else { return }
+        // Behavior tuning only (retention / quiet period / upload cap); an absent
+        // block means all-default knobs (CROW-1070).
+        let config = appConfig.logSync ?? LogSyncConfig()
 
-        // The upload destination is the local-only, operator-set `logSync.baseURL`
-        // — deliberately NOT the browser-flippable `corveilHost` (CROW-1066): a
-        // remote peer who can tick the per-workspace checkbox must not also be able
-        // to redirect a credential-bearing upload to a host it chose. Empty ⇒ off.
-        let baseURL = config.baseURL.trimmingCharacters(in: .whitespaces)
-        guard !baseURL.isEmpty else {
-            LogSyncLog.warnOnce("log-sync enabled but logSync.baseURL is empty; nothing will upload")
-            return
-        }
-        // Global Corveil key (may be nil): authenticates the legacy list path and
-        // is the fallback when a per-workspace opt-in has no reusable gateway
-        // credential. Resolved once per sweep.
-        let globalAPIKey = resolveAPIKey(config.apiKeyRef)
+        // Cheap exit before touching the store or disk: nothing opted in. Since
+        // CROW-1070 the sole opt-in is the per-workspace `uploadSessionLogs`
+        // checkbox — the legacy global master switch and `enabledWorkspaces` list
+        // are gone (a legacy opt-in is migrated to this flag at boot).
+        guard appConfig.workspaces.contains(where: { $0.uploadSessionLogs }) else { return }
 
         // Snapshot the live sessions + their worktrees on the main actor, then do
         // all filesystem/network work off it.
@@ -90,29 +78,24 @@ struct LogSyncCollector {
             guard let workspaceName = SessionService.workspaceName(
                     forWorktreePath: worktree.worktreePath, devRoot: devRoot)
             else { continue }
-            let workspace = appConfig.workspaces.first {
+            // The per-workspace checkbox is the whole opt-in (matched
+            // case-insensitively, like every other workspace lookup).
+            guard let workspace = appConfig.workspaces.first(where: {
                 $0.name.lowercased() == workspaceName.lowercased()
-            }
+            }), workspace.uploadSessionLogs else { continue }
 
-            // Opt-in via either surface: the per-workspace checkbox (CROW-1066) or
-            // the legacy `enabledWorkspaces` list (matched case-insensitively).
-            let optedInViaWorkspace = workspace?.uploadSessionLogs == true
-            guard optedInViaWorkspace || config.uploadsWorkspace(workspaceName) else { continue }
-
-            // Reuse the workspace's own gateway credential when it opted in that way
-            // (CROW-1066) so the operator never re-enters a Corveil key; otherwise
-            // fall back to the global `logSync` key.
-            let resolvedKey: String? = {
-                if optedInViaWorkspace, let gateway = workspace?.gateway, !gateway.isEmpty,
-                   let key = Self.corveilAPIKey(from: gateway, resolveSecret: resolveSecret) {
-                    return key
-                }
-                return globalAPIKey
-            }()
-            guard let apiKey = resolvedKey else {
-                LogSyncLog.warnOnce("log-sync: no Corveil API key for workspace \"\(workspaceName)\" (no reusable gateway credential and no global logSync.apiKeyRef); skipping")
+            // Destination + credential come SOLELY from this workspace's local-only
+            // `gateway` (CROW-1070) — never the browser-flippable `corveilHost` or
+            // any other web-writable field, so a remote peer who ticked the checkbox
+            // cannot redirect a credential-bearing upload to a host it chose. No
+            // gateway (or no resolvable key / blank base URL) ⇒ nothing to reuse ⇒
+            // skip. This is the security invariant, asserted in the tests.
+            guard let upload = Self.resolvedUpload(for: workspace, resolveSecret: resolveSecret) else {
+                LogSyncLog.warnOnce("log-sync: workspace \"\(workspaceName)\" opted in but has no reusable Corveil gateway (needs a base URL and an x-citadel-api-key); skipping")
                 continue
             }
+            let baseURL = upload.baseURL
+            let apiKey = upload.apiKey
 
             let harness = LogSyncHarness(agentKind: session.agentKind)
             let kind = LogSyncArtifactKind.sessionTranscript
@@ -177,15 +160,29 @@ struct LogSyncCollector {
 
     // MARK: - Pure helpers (unit-tested)
 
-    /// Resolve an API key reference: `op://…` via `resolveSecret`, otherwise the
-    /// literal value. Returns nil for a blank ref or a failed `op` read.
-    func resolveAPIKey(_ ref: String) -> String? {
-        Self.resolveRef(ref, resolveSecret: resolveSecret)
+    /// The upload destination + credential for a workspace, derived **solely** from
+    /// its local-only `gateway` (CROW-1070). This is the security invariant: the
+    /// destination is `{gateway.baseURL}/api/crow-sessions/…` and the credential is
+    /// the gateway's Corveil key — never `corveilHost` or any other browser-writable
+    /// field, so a remote peer who ticked the `uploadSessionLogs` checkbox cannot
+    /// redirect a credential-bearing upload.
+    ///
+    /// Returns `nil` — meaning "upload nothing" — when the workspace has no gateway,
+    /// the gateway carries no resolvable Corveil key, or its base URL is blank. A
+    /// browser-writable field alone can therefore never produce an upload.
+    static func resolvedUpload(
+        for workspace: WorkspaceInfo, resolveSecret: (String) -> String?
+    ) -> (baseURL: String, apiKey: String)? {
+        guard let gateway = workspace.gateway, !gateway.isEmpty else { return nil }
+        let baseURL = gateway.baseURL.trimmingCharacters(in: .whitespaces)
+        guard !baseURL.isEmpty else { return nil }
+        guard let apiKey = corveilAPIKey(from: gateway, resolveSecret: resolveSecret) else { return nil }
+        return (baseURL, apiKey)
     }
 
     /// Resolve an `op://…` reference (via `resolveSecret`) or return a plaintext
-    /// value literally. Nil for a blank ref or a failed `op` read. Shared by the
-    /// global-key and per-workspace gateway-credential paths (CROW-1066).
+    /// value literally. Nil for a blank ref or a failed `op` read. Used by the
+    /// per-workspace gateway-credential path (CROW-1066).
     static func resolveRef(_ ref: String, resolveSecret: (String) -> String?) -> String? {
         let trimmed = ref.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }

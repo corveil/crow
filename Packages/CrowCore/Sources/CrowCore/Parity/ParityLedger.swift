@@ -147,8 +147,6 @@ public enum ParityLedger {
         "mcp-token-revoke",
         "corveil-verify",
         "corveil-reinstall-skill",
-        "logsync-get",
-        "logsync-set",
     ]
 
     /// Every method reachable through the live router pair — the daemon's
@@ -483,12 +481,10 @@ public enum ParityLedger {
         .field("workspaces[].gateway.baseURL", read: "gateway get", write: "gateway set"),
         .field("workspaces[].gateway.customHeaders", read: "gateway get", write: "gateway set"),
 
-        // Session-log collector (CROW-1056). Local-socket only, like the gateway
-        // block: `logsync get`/`logsync set` are refused on the remote /rpc path.
-        .field("logSync.enabled", read: "logsync get", write: "logsync set"),
-        .field("logSync.baseURL", read: "logsync get", write: "logsync set"),
-        .field("logSync.apiKeyRef", read: "logsync get", write: "logsync set"),
-        .field("logSync.enabledWorkspaces", read: "logsync get", write: "logsync set"),
+        // Session-log collector behavior knobs (CROW-1056; slimmed in CROW-1070).
+        // No longer local-only: the block holds no credential and no opt-in (both
+        // are per-workspace via the gateway), so it round-trips over `set-config`
+        // (Settings → General → Session logs) and the `crow logsync` CLI alike.
         .field("logSync.retentionDays", read: "logsync get", write: "logsync set"),
         .field("logSync.quietPeriodMinutes", read: "logsync get", write: "logsync set"),
         .field("logSync.maxUploadBytes", read: "logsync get", write: "logsync set"),
@@ -650,12 +646,11 @@ public enum ParityLedger {
         .field("workspaces[].jiraStatusMap", read: "workspace get", write: "workspace edit"),
         .field("workspaces[].corveilHost", read: "workspace get", write: "workspace edit"),
         .field("workspaces[].sessionEnv", read: "workspace get", write: "workspace edit"),
-        // Per-workspace session-log opt-in (CROW-1066). Unlike the `logSync` block
-        // above, this rides on the workspace record and is intentionally writable
-        // from the same surfaces as every other workspace field — `workspace edit`
-        // over the socket, `set-config` from an authenticated browser — because it
-        // only reuses a credential the workspace already holds and `logSync.enabled`
-        // stays the local-only kill switch.
+        // Per-workspace session-log opt-in (CROW-1066; sole opt-in since
+        // CROW-1070). Writable from the same surfaces as every other workspace
+        // field — `workspace edit` over the socket, `set-config` from an
+        // authenticated browser — because it only reuses a credential the workspace
+        // already holds (its local-only gateway) and can't redirect the upload.
         .field("workspaces[].uploadSessionLogs", read: "workspace get", write: "workspace edit"),
 
         // MARK: Automation toggles (web Settings tab + `crow automation`)

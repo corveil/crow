@@ -284,20 +284,19 @@ crow web-password clear                                                 → {"sa
 
 ### Session-Log Sync
 
-Local-only (CROW-1056) — the multi-harness session-log collector's opt-in controls. Uploads each opted-in workspace's coding-session transcripts to Corveil as session artifacts, authed by your own Corveil API key (no AWS creds on the laptop). **Default OFF**; nothing uploads until enabled *and* a workspace is opted in. Best-effort — never blocks or fails a session.
+The multi-harness session-log collector (CROW-1056). Uploads each opted-in workspace's coding-session transcripts to Corveil as session artifacts. **Default OFF**; best-effort — never blocks or fails a session. Since CROW-1070 the opt-in, destination and credential are all **per-workspace**: a workspace uploads iff its `--upload-session-logs` flag / Settings → Workspaces checkbox is on **and** it has an AI gateway, whose `baseURL` + `x-citadel-api-key` the upload reuses (no second key/host, no AWS creds on the laptop).
+
+`crow logsync` tunes only **global collector behavior** — no credential, so **not** local-only; it also backs the web Settings → General → Session logs section.
 
 ```
-crow logsync get [--reveal]                                             → {"logsync":{enabled,base_url,api_key_ref,api_key_set,enabled_workspaces,retention_days,quiet_period_minutes,max_upload_bytes,configured}}
-crow logsync set [--enabled true|false] [--base-url URL] [--api-key-ref REF]
-                 [--add-workspace NAME ...] [--remove-workspace NAME ...] [--clear-workspaces]
-                 [--retention-days N] [--quiet-period-minutes N] [--max-upload-bytes N]   → {"logsync":{...},"saved":true}
+crow logsync get                                                        → {"logsync":{retention_days,quiet_period_minutes,max_upload_bytes,configured}}
+crow logsync set [--retention-days N] [--quiet-period-minutes N] [--max-upload-bytes N]   → {"logsync":{...},"saved":true}
 ```
 
-- Local-only on `/rpc` (like `gateway`/`web-password`): the RPCs are refused for non-loopback peers, so the opt-in can't be flipped remotely.
-- `--api-key-ref` takes an `op://…` 1Password reference (resolved at upload, never at rest in `config.json`) or a plaintext key. `logsync get` masks a plaintext key unless `--reveal`; an `op://…` reference is always shown (it's a pointer, not the secret).
-- `set` is a PATCH (only the flags you pass change; at least one required). Workspace list edits compose: clear → remove → add. Empty `--base-url ''`/`--api-key-ref ''` clears that field.
-- Only Claude Code transcripts are collected today (its logs are the one harness partitioned by working directory); other harnesses are wired as their log paths are confirmed. Live within ~1 collector tick (~5 min); no restart.
-- **Two opt-in surfaces (CROW-1066).** `--add-workspace` here is the local-only list. The other is the per-workspace `crow workspace edit --upload-session-logs true` flag / Settings → Workspaces checkbox, which **reuses that workspace's gateway credential** instead of this block's `--api-key-ref`. Unlike this local-only block, that flag is a normal workspace field (browser-flippable). Both surfaces still require `--enabled true` + a `--base-url` here; the upload destination is always this block's `base_url`, never the browser-flippable `--corveil-host`. `logSync.enabled` stays the kill switch.
+- **Opt a workspace in elsewhere**: `crow workspace edit --workspace NAME --upload-session-logs true` (or the checkbox) + a gateway via `crow gateway set`. There is no `crow logsync` flag that opts a workspace in — CROW-1070 dropped the global master switch, base URL, API key and `enabledWorkspaces` list.
+- **Security invariant**: the upload destination + credential come only from the workspace's **local-only** gateway (`{gateway.baseURL}/api/crow-sessions/{id}/artifacts` + `x-citadel-api-key`), never `--corveil-host` or any browser-writable field. A workspace with no gateway uploads nothing.
+- `set` is a PATCH (only the flags you pass change; at least one required). Live within ~1 collector tick (~5 min); no restart.
+- **Migration**: a legacy `crow logsync set --add-workspace` opt-in is carried over to `--upload-session-logs` on first boot (only when the old master switch was on). Only Claude Code transcripts are collected today; other harnesses are wired as their log paths are confirmed.
 
 ### MCP
 

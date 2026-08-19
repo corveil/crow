@@ -633,6 +633,22 @@
     body.appendChild(selectField('Retention', cfg.cleanup, 'retentionHours', [
       [1, '1 hour'], [4, '4 hours'], [8, '8 hours'], [24, '1 day'], [72, '3 days'], [168, '7 days'], [720, '30 days'],
     ], { number: true }));
+
+    // Session-log upload tuning (CROW-1070). Global collector behavior only —
+    // per-workspace opt-in (and the reused Corveil gateway) live on each workspace
+    // under Settings → Workspaces. No credential here.
+    cfg.logSync = cfg.logSync || {};
+    body.appendChild(group('Session logs'));
+    body.appendChild(el('div', 'st-help',
+      'Timing and size limits for the session-transcript upload. Opt a workspace in — and configure its AI gateway — under Settings → Workspaces.'));
+    body.appendChild(selectField('Quiet period', cfg.logSync, 'quietPeriodMinutes', [
+      [5, '5 minutes'], [15, '15 minutes'], [30, '30 minutes (default)'], [60, '1 hour'], [120, '2 hours'],
+    ], { number: true, help: 'Wait this long after a session’s last activity before capturing its transcript (a session is uploaded once, when quiescent).' }));
+    body.appendChild(selectField('Ledger retention', cfg.logSync, 'retentionDays', [
+      [30, '30 days (default)'], [90, '90 days'], [180, '6 months'], [365, '1 year'], [0, 'Forever'],
+    ], { number: true, help: 'How long the local upload ledger keeps a record of each session before pruning.' }));
+    body.appendChild(textField('Max upload size (bytes)', cfg.logSync, 'maxUploadBytes',
+      { number: true, type: 'number', help: 'Per-transcript upload cap (default 8000000). Larger transcripts are truncated and flagged.' }));
   }
 
   // Path + Verify + Reinstall skill for the Corveil CLI (CROW-1011).
@@ -1635,12 +1651,12 @@
       }));
     }
 
-    // Session-log upload opt-in (CROW-1066). A plain workspace field, so it
-    // round-trips through the normal Save (`set-config`) — unlike the gateway
-    // above, which is local-only. The upload REUSES this workspace's gateway
+    // Session-log upload opt-in (CROW-1066; sole opt-in since CROW-1070). A plain
+    // workspace field, so it round-trips through the normal Save (`set-config`).
+    // The upload REUSES this workspace's gateway for BOTH destination and
     // credential, so the checkbox is meaningful only when a gateway is set:
-    // disabled with a tooltip otherwise. The global master switch / base URL /
-    // API key stay on the local-only `logSync` block (`crow logsync`).
+    // disabled with a tooltip otherwise. There is no separate master switch — a
+    // ticked box plus a configured gateway is the whole opt-in.
     body.appendChild(group('Session logs'));
     const hasGateway = !!(d.gateway && (d.gateway.baseURL
       || (d.gateway.customHeaders && Object.keys(d.gateway.customHeaders).length)));
@@ -1649,15 +1665,15 @@
     slCb.type = 'checkbox';
     slCb.checked = !!d.uploadSessionLogs;
     slCb.disabled = !hasGateway;
-    if (!hasGateway) slRow.title = 'Configure a Corveil gateway first — the upload reuses its credential.';
+    if (!hasGateway) slRow.title = 'Turn on the AI Gateway for this workspace first — the upload reuses its URL and credential.';
     slCb.onchange = () => { d.uploadSessionLogs = slCb.checked; markDirty(); };
     slRow.appendChild(slCb);
     slRow.appendChild(el('span', 'st-switch-label', 'Upload session transcripts to Corveil'));
     const slField = el('div', 'st-field');
     slField.appendChild(slRow);
     slField.appendChild(el('div', 'st-help', hasGateway
-      ? 'Uploads this workspace’s coding-session transcripts to Corveil, reusing its gateway credential (no second key needed). Also requires the local-only log-sync master switch — enable it on the daemon host with `crow logsync set --enabled true`.'
-      : 'Configure a Corveil gateway above first — the upload reuses its credential.'));
+      ? 'Uploads this workspace’s coding-session transcripts to Corveil, reusing its AI-gateway URL and credential (no second key or host needed). That’s the only setting required — collector timing and size limits live under Settings → General → Session logs.'
+      : 'Turn on the AI Gateway for this workspace above first — the upload reuses its URL and credential.'));
     body.appendChild(slField);
   }
 

@@ -91,75 +91,77 @@ has gone quiescent** — terminal status (`completed`/`archived`) or no log-file
 activity within `quietPeriodMinutes` (default 30) — to avoid capturing a partial
 transcript it could never replace.
 
-## Controls — `crow logsync` (local-only, default OFF)
+## Opt-in and controls (CROW-1070)
 
-`AppConfig.logSync` (`enabled`, `baseURL`, `apiKeyRef`, `enabledWorkspaces`,
-`retentionDays`, `quietPeriodMinutes`, `maxUploadBytes`) is **local-only**: like
-`managerGateway`/`webAuth`, its API key is stripped before the config reaches a
-browser and the whole block is writable only through the local-only
-`logsync-get`/`logsync-set` RPCs (`RPCWebSocketHandler.localOnlyDenial`), so the
-opt-in can never be flipped by a remote peer. See
-[cli-reference.md](cli-reference.md#session-log-sync-commands).
+A workspace uploads its coding-session transcripts iff **both**:
 
-## Per-workspace UI opt-in that reuses the gateway credential (CROW-1066)
+1. its **"Upload session transcripts to Corveil"** checkbox is on
+   (`WorkspaceInfo.uploadSessionLogs`, default `false`) — set in Settings →
+   Workspaces or with `crow workspace edit --workspace NAME --upload-session-logs true`; **and**
+2. the workspace has an **AI gateway** configured.
 
-The CLI-only opt-in above works but has friction: a user must drop to a terminal
-(`crow logsync set --add-workspace …`) and, for a Corveil workspace, re-enter a
-Corveil API key they already configured once as the workspace's **AI gateway**.
-CROW-1066 adds a second opt-in surface — a **checkbox in Settings → Workspaces**,
-"Upload session transcripts to Corveil" — that **reuses that workspace's gateway
-credential** instead of asking for a second key.
+That is the whole opt-in. There is no separate global master switch, base URL or
+API-key reference — CROW-1070 removed them. The upload **destination and
+credential are the workspace's own gateway** (see below), so ticking the box on a
+workspace that already routes its LLM traffic through Corveil is all it takes.
 
-- **Model.** A per-workspace `WorkspaceInfo.uploadSessionLogs: Bool` (default
-  `false`), decode-tolerant and in `CodingKeys` like every other workspace field.
-  Unlike `logSync.enabledWorkspaces` it rides on the workspace record, so the
-  existing Settings → Workspaces form, the `set-config` round-trip and
-  `crow workspace edit --upload-session-logs` all reach it with no new plumbing.
-- **Opt-in is the union of both surfaces.** `LogSyncCollector` uploads a session
-  when the local-only master switch `logSync.enabled` is on **and** the session's
-  workspace either sets `uploadSessionLogs` **or** appears in
-  `logSync.enabledWorkspaces`. The legacy CLI path is unchanged.
-- **Credential reuse.** For a workspace opted in via the checkbox, the collector
-  resolves the upload key from that workspace's `gateway` — the Corveil key it
-  already holds — via the same `op://…` resolution the gateway launch path uses,
-  falling back to the global `logSync.apiKeyRef` when the workspace has no
-  reusable gateway credential.
-- **UI.** The checkbox is **disabled with a tooltip** ("Configure a Corveil
-  gateway first") when the workspace has no gateway — the reuse is the whole
-  point, so the control is only meaningful with a gateway to reuse. The master
-  switch / base URL / retention / quiet-period stay on the local-only `logSync`
-  block.
+The remaining global block, `AppConfig.logSync`, holds only **behavior knobs** —
+`retentionDays`, `quietPeriodMinutes`, `maxUploadBytes`. These are not credentials,
+so unlike the pre-1070 block they are an ordinary, browser-editable config surface:
+Settings → General → **Session logs**, or the (no-longer-local-only) `crow logsync`
+CLI. See [cli-reference.md](cli-reference.md#session-log-sync-commands).
 
-### Three decisions resolved in CROW-1066
+### Gateway reuse — destination and credential (the security invariant)
 
-1. **Artifact base URL: the global, local-only `logSync.baseURL`.** The gateway
-   `baseURL` is the *LLM proxy* endpoint (`ANTHROPIC_BASE_URL`), a different
-   host/path from the REST artifact endpoint, so it is never used for the upload.
-   We also deliberately do **not** derive the destination from the workspace's
-   `corveilHost`: that field is **browser-flippable**, and letting a browser-set
-   value choose where a *credential-bearing* upload goes would let an
-   authenticated remote peer redirect the workspace's Corveil key to a host it
-   chose (an exfiltration vector). The destination therefore stays the local-only
-   `logSync.baseURL`; only the per-workspace on/off toggle is browser-flippable. A
-   future need for per-workspace REST hosts would add a *local-only* override, not
-   reuse a browser-writable field.
-2. **Which gateway header carries the key.** Crow's established Corveil-gateway
-   convention is the header **`x-citadel-api-key`** with a `Bearer sk-citadel-…`
-   value (see [configuration.md](configuration.md#ai-gateway)). The collector
-   looks the credential up case-insensitively, preferring `x-citadel-api-key` then
-   `authorization` / `x-api-key` / `x-corveil-key` defensively, resolves an
-   `op://…` value, and strips a leading `Bearer ` so `TranscriptUploader` can
-   re-wrap the bare key as `Authorization: Bearer <key>` (double-prefixing would
-   401).
-3. **Security tradeoff: acceptable, bounded.** Making `uploadSessionLogs`
-   browser-flippable relaxes the previously all-local-only posture, but narrowly:
-   it only *reuses* a credential the workspace already holds (the gateway key,
-   itself local-only — never readable or authorable from the web via
-   `SettingsSecrets`), the destination stays local-operator-owned (decision 1),
-   and the master `logSync.enabled` remains **local-only and the kill switch** —
-   with it off, no workspace uploads regardless of any checkbox. So the only thing
-   a remote peer gains is toggling one workspace's transcript upload on/off, to
-   the operator's own Corveil, with a credential it can neither see nor change.
+For an opted-in workspace, `LogSyncCollector.resolvedUpload(for:)` derives the
+upload target **solely** from that workspace's local-only `gateway`:
+
+- **Destination** = `{gateway.baseURL}/api/crow-sessions/{sessionUID}/artifacts`.
+  The Corveil gateway `baseURL` is the Corveil host root (e.g. `https://corveil.io`
+  — see [configuration.md](configuration.md#ai-gateway)), which is exactly where the
+  REST artifact endpoint lives.
+- **Credential** = the gateway's Corveil key. The collector looks it up
+  case-insensitively, preferring `x-citadel-api-key` then `authorization` /
+  `x-api-key` / `x-corveil-key` defensively, resolves an `op://…` reference the same
+  way the gateway launch path does, and strips a leading `Bearer ` so
+  `TranscriptUploader` can re-wrap the bare key as `Authorization: Bearer <key>`.
+
+**The invariant:** the destination and credential come only from the **local-only**
+gateway — never from `corveilHost` or any other browser-writable field. `corveilHost`
+is browser-flippable, so letting it choose where a *credential-bearing* upload goes
+would let an authenticated remote peer redirect the workspace's Corveil key to a host
+it chose (an exfiltration vector). `resolvedUpload` never reads it; a workspace with no
+gateway (or no resolvable key) returns `nil` and uploads nothing — a browser field
+alone can never supply a destination. This is asserted in `LogSyncCollectorTests`
+(`browserWritableCorveilHostCannotRedirectTheUpload`, `noGatewayResolvesToNilEvenWithCorveilHost`).
+
+Why this is safe where the earlier design wasn't: the `crow gateway` config is itself
+**local-only** (CROW-815 — it carries credentials, so the remote `/rpc` path refuses
+it and only the local Unix socket can write it). Reusing it introduces **zero** new
+exposure — it is the same local-only, already-trusted key going to the same Corveil
+host that already receives the workspace's LLM traffic. The only thing a remote peer
+gains from the browser-flippable checkbox is toggling one workspace's transcript
+upload on/off, to the operator's own Corveil, with a credential it can neither see
+nor change.
+
+### Decisions recorded here (CROW-1070)
+
+1. **Dropped the global `logSync.enabled` master switch.** A ticked checkbox plus a
+   configured gateway is the only gate. The old switch was the "check the box and
+   nothing happens" foot-gun (uploads also required a separate `crow logsync set
+   --enabled true`), so removing it is the fix, not a regression.
+2. **The behavior knobs (`retentionDays`/`quietPeriodMinutes`/`maxUploadBytes`) moved
+   to the web Settings UI** (General → Session logs) as well as the CLI, since they
+   carry no credential. A slim, no-longer-local-only `crow logsync get/set` stays for
+   control-plane parity (ADR 0016) and headless hosts.
+3. **Migration.** A legacy opt-in via `crow logsync set --add-workspace` (the removed
+   `logSync.enabledWorkspaces` list) is carried over on first boot by
+   `LogSyncMigration` / `ConfigStore.migrateLogSyncAtBoot` — a listed workspace's
+   `uploadSessionLogs` is set (only when the legacy master switch was on, so a
+   workspace that uploaded nothing before keeps uploading nothing). The removed keys
+   (`enabled`/`baseURL`/`apiKeyRef`/`enabledWorkspaces`) drop on the re-encode, so the
+   migration is idempotent. A legacy workspace with no gateway simply needs a gateway
+   configured before it uploads — that reuse is now the point.
 
 ## Depends on
 
