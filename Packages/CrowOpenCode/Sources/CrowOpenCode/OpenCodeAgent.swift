@@ -70,7 +70,7 @@ public struct OpenCodeAgent: CodingAgent {
         autoPermissionMode: Bool,
         telemetryPort: UInt16?
     ) -> String? {
-        let opencodePath = findBinary() ?? "opencode"
+        let opencodePath = launchBinary() ?? "opencode"
 
         switch session.kind {
         case .work:
@@ -171,7 +171,7 @@ public struct OpenCodeAgent: CodingAgent {
         // apply (parity with `CursorAgent`). Terminal backend appends the
         // submitting Enter, so we return the bare command without a trailing
         // newline to match the cross-agent convention.
-        return findBinary() ?? "opencode"
+        return launchBinary() ?? "opencode"
     }
 
     /// OpenCode TUI exposes `/rename` for the current session (CROW-629).

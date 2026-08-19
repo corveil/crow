@@ -1482,7 +1482,14 @@ public final class SessionService {
         guard let target = AgentRegistry.shared.agent(for: targetKind) else {
             throw AgentHandoffError.agentNotRegistered(targetKind.rawValue)
         }
-        guard target.findBinary() != nil else {
+        // `launchBinary()`, not `findBinary()` — the gate must ask the same
+        // question the launch will. `findBinary()` says "some binary by that
+        // name exists", which for a colliding token can be a foreign tool; the
+        // handoff would then pass here and fail (or worse, exec the impostor)
+        // one step later. `launchBinary()` returns the identity-verified path or
+        // nothing, so a Cursor handoff on a box where the only `agent` is
+        // grok-build is refused here with a named error (CROW-1058).
+        guard target.launchBinary() != nil else {
             throw AgentHandoffError.agentBinaryMissing(targetKind.rawValue)
         }
         // Review-handoff gate. `shouldRefuseReviewHandoff` is now `false` for

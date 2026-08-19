@@ -51,7 +51,7 @@ public struct ClaudeCodeAgent: CodingAgent {
         autoPermissionMode: Bool,
         telemetryPort: UInt16?
     ) -> String? {
-        let claudePath = findBinary() ?? "claude"
+        let claudePath = launchBinary() ?? "claude"
         let rcArgs = ClaudeLaunchArgs.argsSuffix(
             remoteControl: remoteControlEnabled,
             sessionName: session.name,
@@ -130,7 +130,7 @@ public struct ClaudeCodeAgent: CodingAgent {
         autoPermissionMode: Bool,
         telemetryPort: UInt16?
     ) -> String {
-        let claudePath = findBinary() ?? "claude"
+        let claudePath = launchBinary() ?? "claude"
         return claudePath + ClaudeLaunchArgs.argsSuffix(
             remoteControl: remoteControlEnabled,
             sessionName: sessionName,
