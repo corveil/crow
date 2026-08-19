@@ -123,6 +123,33 @@ public final class ConfigStore: Sendable {
         return try body()
     }
 
+    // MARK: - One-shot migrations
+
+    /// Migrate a legacy global `logSync` opt-in to the per-workspace
+    /// `uploadSessionLogs` checkbox (CROW-1070), once, at daemon boot.
+    ///
+    /// Runs under the config-write lock, before the collector poll and RPC serving
+    /// start, so there is no writer to race. Reads the config file once; skips
+    /// silently if it is absent or undecodable (never overwriting a malformed
+    /// config with defaults, matching ``loadConfig``). Idempotent: once the removed
+    /// keys are dropped by the re-encode, ``LogSyncMigration/migrate(config:rawJSON:)``
+    /// returns `nil` and nothing is written.
+    public static func migrateLogSyncAtBoot(devRoot: String) {
+        withConfigLock {
+            let url = configURL(devRoot: devRoot)
+            guard let raw = try? Data(contentsOf: url),
+                  let config = try? JSONDecoder().decode(AppConfig.self, from: raw),
+                  let migrated = LogSyncMigration.migrate(config: config, rawJSON: raw)
+            else { return }
+            do {
+                try saveConfig(migrated, devRoot: devRoot)
+                CrowLog.info("[LogSyncMigration] carried a legacy logSync opt-in over to per-workspace uploadSessionLogs")
+            } catch {
+                CrowLog.info("[LogSyncMigration] failed to persist migrated config: \(error.localizedDescription)")
+            }
+        }
+    }
+
     // MARK: - Import from CMUX workspace-repos.json
 
     /// Import config from `~/.claude/workspace-repos.json` (legacy CMUX format).

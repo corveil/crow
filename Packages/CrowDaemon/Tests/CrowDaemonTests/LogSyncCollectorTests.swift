@@ -4,10 +4,6 @@ import CrowCore
 @testable import CrowDaemon
 
 @Suite struct LogSyncCollectorTests {
-    private func collector(resolveSecret: @escaping (String) -> String? = { _ in nil }) -> LogSyncCollector {
-        LogSyncCollector(devRoot: "/tmp/does-not-matter", resolveSecret: resolveSecret)
-    }
-
     private func tempDir() throws -> URL {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("logsync-collector-\(UUID().uuidString)", isDirectory: true)
@@ -15,20 +11,90 @@ import CrowCore
         return dir
     }
 
-    // MARK: API key resolution
+    // MARK: Reference resolution (op:// vs plaintext)
 
-    @Test func resolvesPlaintextKeyLiterally() {
-        #expect(collector().resolveAPIKey("sk-citadel-abc") == "sk-citadel-abc")
+    @Test func resolvesPlaintextRefLiterally() {
+        #expect(LogSyncCollector.resolveRef("sk-citadel-abc", resolveSecret: { _ in nil }) == "sk-citadel-abc")
     }
 
     @Test func resolvesOpReference() {
-        let c = collector { $0 == "op://vault/corveil/key" ? "RESOLVED" : nil }
-        #expect(c.resolveAPIKey("op://vault/corveil/key") == "RESOLVED")
+        let key = LogSyncCollector.resolveRef("op://vault/corveil/key") { $0 == "op://vault/corveil/key" ? "RESOLVED" : nil }
+        #expect(key == "RESOLVED")
     }
 
-    @Test func blankOrUnresolvableKeyIsNil() {
-        #expect(collector().resolveAPIKey("   ") == nil)
-        #expect(collector { _ in nil }.resolveAPIKey("op://missing") == nil)
+    @Test func blankOrUnresolvableRefIsNil() {
+        #expect(LogSyncCollector.resolveRef("   ", resolveSecret: { _ in nil }) == nil)
+        #expect(LogSyncCollector.resolveRef("op://missing", resolveSecret: { _ in nil }) == nil)
+    }
+
+    // MARK: Upload destination + credential come ONLY from the gateway (CROW-1070)
+
+    /// An opted-in Corveil workspace, optionally with a (browser-writable)
+    /// `corveilHost` set to prove it can't influence the upload destination.
+    private func corveilWorkspace(
+        gateway: WorkspaceGateway?, corveilHost: String? = nil
+    ) -> WorkspaceInfo {
+        WorkspaceInfo(name: "Corveil", corveilHost: corveilHost,
+                      uploadSessionLogs: true, gateway: gateway)
+    }
+
+    @Test func resolvedUploadComesFromTheGateway() {
+        let gw = WorkspaceGateway(
+            baseURL: "https://corveil.io",
+            customHeaders: ["x-citadel-api-key": "Bearer sk-real"])
+        let upload = LogSyncCollector.resolvedUpload(
+            for: corveilWorkspace(gateway: gw), resolveSecret: { _ in nil })
+        #expect(upload?.baseURL == "https://corveil.io")
+        #expect(upload?.apiKey == "sk-real") // Bearer stripped for the uploader to re-wrap
+    }
+
+    @Test func browserWritableCorveilHostCannotRedirectTheUpload() {
+        // THE security invariant: a hostile `corveilHost` (browser-flippable) must
+        // not change where a credential-bearing upload goes. The destination is the
+        // local-only gateway, full stop.
+        let gw = WorkspaceGateway(
+            baseURL: "https://corveil.io",
+            customHeaders: ["x-citadel-api-key": "Bearer sk-real"])
+        let ws = corveilWorkspace(gateway: gw, corveilHost: "https://evil.example")
+        let upload = LogSyncCollector.resolvedUpload(for: ws, resolveSecret: { _ in nil })
+        #expect(upload?.baseURL == "https://corveil.io")
+        #expect(upload?.baseURL.contains("evil") == false)
+    }
+
+    @Test func noGatewayResolvesToNilEvenWithCorveilHost() {
+        // A browser-writable field alone can never supply an upload destination:
+        // with no gateway to reuse, `resolvedUpload` is nil and nothing uploads.
+        let ws = corveilWorkspace(gateway: nil, corveilHost: "https://evil.example")
+        #expect(LogSyncCollector.resolvedUpload(for: ws, resolveSecret: { _ in nil }) == nil)
+    }
+
+    @Test func emptyGatewayOrMissingKeyResolvesToNil() {
+        // An empty gateway has nothing to reuse.
+        #expect(LogSyncCollector.resolvedUpload(
+            for: corveilWorkspace(gateway: WorkspaceGateway(baseURL: "", customHeaders: [:])),
+            resolveSecret: { _ in nil }) == nil)
+        // A gateway with a base URL but no recognizable Corveil key can't authenticate.
+        let noKey = WorkspaceGateway(baseURL: "https://corveil.io", customHeaders: ["X-Other": "v"])
+        #expect(LogSyncCollector.resolvedUpload(
+            for: corveilWorkspace(gateway: noKey), resolveSecret: { _ in nil }) == nil)
+    }
+
+    @Test func corveilHostIsBrowserWritableButDoesNotAffectTheDestination() {
+        // End-to-end: a browser CAN change `corveilHost` through the normal
+        // set-config round-trip, yet that never touches the gateway-derived upload
+        // destination (the gateway itself is restored from the stored config).
+        let gw = WorkspaceGateway(
+            baseURL: "https://corveil.io",
+            customHeaders: ["x-citadel-api-key": "Bearer sk-real"])
+        let stored = AppConfig(workspaces: [corveilWorkspace(gateway: gw, corveilHost: "https://corveil.io")])
+        var incoming = stored
+        incoming.workspaces[0].corveilHost = "https://evil.example" // browser flips it
+        let merged = SettingsSecrets.preservingSecrets(
+            incoming: SettingsSecrets.strippedForTransport(incoming), current: stored)
+        #expect(merged.workspaces[0].corveilHost == "https://evil.example") // the field IS browser-writable
+        let upload = LogSyncCollector.resolvedUpload(
+            for: merged.workspaces[0], resolveSecret: { _ in nil })
+        #expect(upload?.baseURL == "https://corveil.io") // …but the upload host is unchanged
     }
 
     // MARK: Gateway credential reuse (CROW-1066)

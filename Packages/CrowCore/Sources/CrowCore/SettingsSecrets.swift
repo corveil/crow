@@ -48,11 +48,10 @@ public enum SettingsSecrets {
             if let gateway = w.gateway { w.gateway = stripHeaderValues(gateway) }
             return w
         }
-        // Session-log collector (CROW-1056): blank the Corveil API-key reference
-        // but keep the rest of the block so the read-only web view can show what
-        // is configured. Like the gateway/token secrets, it is authored only via
-        // the local-only `logsync-set` RPC.
-        if c.logSync != nil { c.logSync?.apiKeyRef = "" }
+        // Session-log collector (CROW-1070): the `logSync` block now holds only
+        // behavior knobs (retention / quiet period / upload cap) — no credential
+        // and no opt-in — so there is nothing to strip. Both the opt-in and the
+        // upload credential are the per-workspace gateway, handled above.
         return c
     }
 
@@ -85,11 +84,12 @@ public enum SettingsSecrets {
         // `current` means a round-trip is a no-op regardless of what came back.
         result.mcpTokens = current?.mcpTokens ?? []
         result.managerGateway = current?.managerGateway
-        // Session-log collector (CROW-1056): the whole block is authored only via
-        // the local-only `logsync-set` RPC, so a `set-config` round-trip always
-        // restores the stored value — a browser can neither enable uploads,
-        // opt a workspace in, nor introduce a plaintext API key here.
-        result.logSync = current?.logSync
+        // Session-log collector (CROW-1070): the `logSync` block is now ordinary,
+        // non-secret behavior tuning, so — unlike the gateways/tokens above — it is
+        // NOT restored from `current`; the browser's edited knobs round-trip
+        // through `set-config` like Telemetry / Cleanup. It can't carry a credential
+        // or redirect an upload (both are the per-workspace gateway), so there is
+        // nothing here for a remote peer to abuse.
         if let current {
             let currentGatewaysByID = Dictionary(
                 current.workspaces.map { ($0.id, $0.gateway) },

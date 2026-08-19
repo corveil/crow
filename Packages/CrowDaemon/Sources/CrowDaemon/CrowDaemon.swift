@@ -381,9 +381,13 @@ public enum CrowDaemon {
             appState: appState, devRoot: options.devRoot)
 
         // Drive the session-log collector (CROW-1056). Opt-in and default OFF —
-        // the tick is a cheap no-op until `logSync` is enabled with an opted-in
-        // workspace. Terminal-independent (it reads harness log files off disk),
-        // so it runs whenever `crowd` runs.
+        // the tick is a cheap no-op until a workspace ticks `uploadSessionLogs`
+        // and has a gateway to reuse. Terminal-independent (it reads harness log
+        // files off disk), so it runs whenever `crowd` runs.
+        //
+        // First carry any legacy global `logSync` opt-in over to the per-workspace
+        // checkbox (CROW-1070), once, under the config lock before the poll starts.
+        ConfigStore.migrateLogSyncAtBoot(devRoot: options.devRoot)
         startLogSyncPoll(appState: appState, devRoot: options.devRoot)
 
         // Wire the IssueTracker's config-flag providers and its notification-only

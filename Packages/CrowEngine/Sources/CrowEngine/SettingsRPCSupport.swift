@@ -165,27 +165,13 @@ public enum SettingsRPC {
         ])
     }
 
-    /// The session-log collector block (CROW-1056). The Corveil API-key reference
-    /// is shown only when `reveal` is set OR it is an `op://…` pointer (which is a
-    /// reference, not the secret); a plaintext key is masked. `api_key_set`
-    /// reports presence either way, and `configured` distinguishes an absent block
-    /// (`logSync == nil`, the collector inert) from an all-defaults one.
-    public static func logsyncJSON(_ logSync: LogSyncConfig?, reveal: Bool) -> JSONValue {
+    /// The session-log collector's behavior knobs (CROW-1056; slimmed in
+    /// CROW-1070). No credential and no opt-in list live here any more — both are
+    /// per-workspace via the gateway — so nothing is masked. `configured`
+    /// distinguishes an absent block (`logSync == nil`) from an all-defaults one.
+    public static func logsyncJSON(_ logSync: LogSyncConfig?) -> JSONValue {
         let cfg = logSync ?? LogSyncConfig()
-        let apiKeyDisplay: String
-        if cfg.apiKeyRef.isEmpty {
-            apiKeyDisplay = ""
-        } else if reveal || cfg.apiKeyRef.hasPrefix("op://") {
-            apiKeyDisplay = cfg.apiKeyRef
-        } else {
-            apiKeyDisplay = "<hidden>"
-        }
         return .object([
-            "enabled": .bool(cfg.enabled),
-            "base_url": .string(cfg.baseURL),
-            "api_key_ref": .string(apiKeyDisplay),
-            "api_key_set": .bool(!cfg.apiKeyRef.isEmpty),
-            "enabled_workspaces": stringArray(cfg.enabledWorkspaces),
             "retention_days": .int(cfg.retentionDays),
             "quiet_period_minutes": .int(cfg.quietPeriodMinutes),
             "max_upload_bytes": .int(cfg.maxUploadBytes),

@@ -2504,83 +2504,47 @@ private func mutateConfig<T>(devRoot: String, _ transform: (inout AppConfig) thr
     }
 }
 
-/// `logsync-get` (CROW-1056): echo the session-log collector block. `reveal`
-/// unmasks a plaintext API key (an `op://…` reference is always shown — it is a
-/// pointer, not the secret).
+/// `logsync-get` (CROW-1056; slimmed in CROW-1070): echo the session-log
+/// collector's behavior knobs. No secret to reveal any more — the credential and
+/// destination are per-workspace on the gateway.
 private func logsyncGetHandler(params: [String: JSONValue], devRoot: String) -> [String: JSONValue] {
-    let reveal = params["reveal"]?.boolValue ?? false
     let config = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
-    return ["logsync": SettingsRPC.logsyncJSON(config.logSync, reveal: reveal)]
+    return ["logsync": SettingsRPC.logsyncJSON(config.logSync)]
 }
 
-/// `logsync-set` (CROW-1056): PATCH the session-log collector block. Extracted
-/// from the handler dictionary so the big literal stays inside the type-checker's
-/// budget. Local-only (gated in `RPCWebSocketHandler.localOnlyDenial`).
+/// `logsync-set` (CROW-1056; slimmed in CROW-1070): PATCH the session-log
+/// collector's behavior knobs. Extracted from the handler dictionary so the big
+/// literal stays inside the type-checker's budget. No longer local-only — the
+/// block carries no credential and no opt-in (both are per-workspace via the
+/// gateway), so it is an ordinary config write, like `telemetry-set`.
 private func logsyncSetHandler(params: [String: JSONValue], devRoot: String) async throws -> [String: JSONValue] {
     try await mapRPCError {
-        let enabled = try SettingsRPC.patchBool(params, "enabled")
-        let baseURL = try SettingsRPC.patchStringAllowingEmpty(params, "base_url")
-        let apiKeyRef = try SettingsRPC.patchStringAllowingEmpty(params, "api_key_ref")
         let retentionDays = try SettingsRPC.patchBoundedInt(params, "retention_days", min: 0)
         let quietPeriod = try SettingsRPC.patchBoundedInt(params, "quiet_period_minutes", min: 0)
         let maxUploadBytes = try SettingsRPC.patchBoundedInt(params, "max_upload_bytes", min: 1)
-        let addWorkspaces = try SettingsRPC.patchStringList(params, "add_workspaces")
-        let removeWorkspaces = try SettingsRPC.patchStringList(params, "remove_workspaces")
-        let clearWorkspaces = try SettingsRPC.patchBool(params, "clear_workspaces") ?? false
 
-        let anySet = enabled != nil || baseURL != nil || apiKeyRef != nil
-            || retentionDays != nil || quietPeriod != nil || maxUploadBytes != nil
-            || addWorkspaces != nil || removeWorkspaces != nil || clearWorkspaces
+        let anySet = retentionDays != nil || quietPeriod != nil || maxUploadBytes != nil
         guard anySet else {
             throw RPCError.invalidParams(
-                "Nothing to set — provide at least one of enabled, base_url, api_key_ref, "
-                + "retention_days, quiet_period_minutes, max_upload_bytes, "
-                + "add_workspaces, remove_workspaces, clear_workspaces.")
+                "Nothing to set — provide at least one of retention_days, "
+                + "quiet_period_minutes, max_upload_bytes.")
         }
 
         let logSync: LogSyncConfig = try mutateConfig(devRoot: devRoot) { config in
             var block = config.logSync ?? LogSyncConfig()
-            if let enabled { block.enabled = enabled }
-            if let baseURL { block.baseURL = baseURL }
-            if let apiKeyRef { block.apiKeyRef = apiKeyRef }
             if let retentionDays { block.retentionDays = retentionDays }
             if let quietPeriod { block.quietPeriodMinutes = quietPeriod }
             if let maxUploadBytes { block.maxUploadBytes = maxUploadBytes }
-            block.enabledWorkspaces = editedWorkspaceList(
-                current: block.enabledWorkspaces,
-                clear: clearWorkspaces, remove: removeWorkspaces, add: addWorkspaces)
             config.logSync = block
             return block
         }
         // The collector re-reads config from disk every tick, so this takes
         // effect within ~5 min — no restart.
         return [
-            "logsync": SettingsRPC.logsyncJSON(logSync, reveal: true),
+            "logsync": SettingsRPC.logsyncJSON(logSync),
             "saved": .bool(true),
         ]
     }
-}
-
-/// Apply clear/remove/add to a workspace opt-in list, case-insensitively and
-/// de-duplicated (clear first, then remove, then add — `defaults set` semantics).
-private func editedWorkspaceList(
-    current: [String], clear: Bool, remove: [String]?, add: [String]?
-) -> [String] {
-    var list = clear ? [] : current
-    if let remove, !remove.isEmpty {
-        let drop = Set(remove.map { $0.lowercased() })
-        list = list.filter { !drop.contains($0.lowercased()) }
-    }
-    if let add {
-        for name in add {
-            let trimmed = name.trimmingCharacters(in: .whitespaces)
-            guard !trimmed.isEmpty,
-                  !list.contains(where: { $0.lowercased() == trimmed.lowercased() })
-            else { continue }
-            list.append(trimmed)
-        }
-    }
-    return list
 }
 
 /// Like ``mutateConfig(devRoot:_:)`` but skips the disk write when `transform`

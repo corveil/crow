@@ -974,20 +974,17 @@ import CrowPersistence
                 == "MCP token management is local-only")
         }
     }
-    @Test func logsyncMethodsAreLocalOnly() {
-        // `logsync-set` enables uploading developers' session transcripts off the
-        // host and carries a Corveil API-key reference; `logsync-get` can reveal
-        // it. A remote peer must not be able to flip the opt-in or read the key,
-        // so both are gated like the gateway/MCP-token surfaces (CROW-1056). This
-        // regression test is what stops a refactor silently dropping either method
-        // from the `localOnlyDenial` switch.
+    @Test func logsyncMethodsAreNotLocalOnly() {
+        // CROW-1070 removed the credential + opt-in from the `logSync` block — it
+        // now holds only behavior knobs (retention / quiet period / upload cap), and
+        // both the upload credential and destination are the per-workspace gateway.
+        // So, unlike the gateway / MCP-token surfaces, `logsync-*` is an ordinary
+        // config surface reachable remotely (that's what backs the web Settings →
+        // General → Session logs section). This regression test stops a refactor
+        // re-adding a local-only gate that would break that section.
         for method in ["logsync-get", "logsync-set"] {
-            let req = JSONRPCRequest(id: 1, method: method, params: [
-                "enabled": .bool(true),
-                "api_key_ref": .string("plaintext-would-be-stolen"),
-            ])
-            #expect(RPCWebSocketHandler.localOnlyDenial(for: req, devRoot: tempDevRoot())
-                == "session-log sync management is local-only")
+            let req = JSONRPCRequest(id: 1, method: method, params: ["retention_days": .int(14)])
+            #expect(RPCWebSocketHandler.localOnlyDenial(for: req, devRoot: tempDevRoot()) == nil)
         }
     }
 
