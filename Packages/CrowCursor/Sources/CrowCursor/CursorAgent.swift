@@ -84,6 +84,34 @@ public struct CursorAgent: CodingAgent {
         self.launcher = CursorLauncher()
     }
 
+    /// The binary text every Cursor launch path interpolates — the one place
+    /// this adapter decides what to exec (CROW-1058).
+    ///
+    /// `launchBinary()`, never `findBinary()`. `findBinary()` re-walks PATH at
+    /// exec time and may land on a *different* `agent` than the one
+    /// registration identity-probed: grok-build mirrors its own into
+    /// `~/.grok/bin` and `~/.local/bin`, and that second walk is how a session
+    /// configured as Cursor came up running grok even though `cursor-agent` was
+    /// installed and the boot probe had passed. `launchBinary()` returns the
+    /// path discovery verified, and — because Cursor declares an alias — `nil`
+    /// rather than an unverified `…/bin/agent`.
+    ///
+    /// The `nil` fallback is `launchCommandToken`: `cursor-agent`, the
+    /// *unambiguous* name. Never the `agent` alias, so no Cursor launch text can
+    /// name grok-build's binary under any resolution outcome — the required
+    /// outcome, since running the colliding tool is not a success. A bare token
+    /// is still worth emitting rather than refusing outright: the pane runs a
+    /// login shell whose PATH is richer than `crowd`'s, so a `cursor-agent` the
+    /// daemon couldn't see may well resolve there — and if it doesn't, the
+    /// failure is an honest `command not found: cursor-agent`.
+    ///
+    /// Reaching the fallback at all is off the normal path: Cursor only enters
+    /// the launchable `agents` map once discovery verified a binary (CROW-989),
+    /// and that verified path is exactly what gets pinned.
+    private var resolvedLaunchBinary: String {
+        launchBinary() ?? launchCommandToken
+    }
+
     public func autoLaunchCommand(
         session: Session,
         worktreePath: String,
@@ -91,16 +119,7 @@ public struct CursorAgent: CodingAgent {
         autoPermissionMode: Bool,
         telemetryPort: UInt16?
     ) -> String? {
-        let agentPath = CursorLaunchArgs.shellQuote(findBinary() ?? launchCommandToken)
-        // NB: `findBinary()` resolves to an absolute path here — Cursor is
-        // registered as *known* regardless of PATH (#879), but only enters the
-        // launchable `agents` map when it resolves **and passes the identity
-        // probe** (CROW-989), and `autoLaunchCommand` only runs for a launchable
-        // agent. So the quoted form is `'/…/cursor-agent'` and
-        // `AgentLaunch.commandLaunchesToken` still matches it via its `/` prefix
-        // alternative. A bare `'cursor-agent'` (findBinary→nil) would NOT match
-        // that regex — but that path is unreachable while the launch gate
-        // excludes unavailable kinds.
+        let agentPath = CursorLaunchArgs.shellQuote(resolvedLaunchBinary)
         // The `--trust` workspace-trust seed (skips the folder-trust dialog on a
         // fresh worktree — the per-launch analogue of `ClaudeTrustSeeder`,
         // CROW-890) rides EVERY launch path, `.review` included as of CROW-954.
@@ -209,7 +228,7 @@ public struct CursorAgent: CodingAgent {
             sessionID: sessionID,
             worktreePath: worktreePath,
             prompt: prompt,
-            binary: findBinary() ?? launchCommandToken,
+            binary: resolvedLaunchBinary,
             seedTrust: true
         )
     }
@@ -232,7 +251,7 @@ public struct CursorAgent: CodingAgent {
         // network/filesystem-blocked — see `CursorLaunchArgs`). Terminal backend
         // appends the submitting Enter, so we return the command without a
         // trailing newline to match the cross-agent convention.
-        let agentPath = CursorLaunchArgs.shellQuote(findBinary() ?? launchCommandToken)
+        let agentPath = CursorLaunchArgs.shellQuote(resolvedLaunchBinary)
         return agentPath + CursorLaunchArgs.launchSuffix(
             seedTrust: true, autoPermissionMode: autoPermissionMode)
     }

@@ -153,6 +153,132 @@ struct BinaryResolutionTests {
     }
 }
 
+// MARK: - Multi-candidate walk (CROW-1058)
+
+// Serialized: these share the process-wide `VerifiedBinaries` /
+// `BinaryOverrides` singletons, so running them in parallel would have
+// each test tearing down the next one's fixture.
+@Suite("Binary candidates and launch selection", .serialized)
+struct LaunchBinarySelectionTests {
+
+    /// `allOnPath` keeps the token-major preference order of `firstOnPath` while
+    /// surfacing the runners-up — every `cursor-agent` hit precedes every
+    /// `agent` hit, regardless of where each sits in PATH.
+    @Test func allOnPathIsTokenMajorAndKeepsEveryHit() {
+        let path: [String: [String]] = [
+            "cursor-agent": ["/opt/homebrew/bin/cursor-agent", "/Users/x/.local/bin/cursor-agent"],
+            "agent": ["/Users/x/.grok/bin/agent", "/Users/x/.local/bin/agent"],
+        ]
+        #expect(BinaryTokenResolver.allOnPath(
+            tokens: ["cursor-agent", "agent"], lookup: { path[$0] ?? [] }) == [
+                "/opt/homebrew/bin/cursor-agent",
+                "/Users/x/.local/bin/cursor-agent",
+                "/Users/x/.grok/bin/agent",
+                "/Users/x/.local/bin/agent",
+            ])
+    }
+
+    /// The same absolute path reached under two token names (Cursor symlinks
+    /// both into one directory) is probed once, not twice.
+    @Test func allOnPathDeDuplicatesSharedPaths() {
+        let shared = ["/usr/local/bin/agent"]
+        #expect(BinaryTokenResolver.allOnPath(
+            tokens: ["cursor-agent", "agent"],
+            lookup: { $0 == "agent" ? shared : shared }) == shared)
+    }
+
+    @Test func allOnPathReturnsEmptyWhenNothingResolves() {
+        #expect(BinaryTokenResolver.allOnPath(
+            tokens: ["cursor-agent", "agent"], lookup: { _ in [] }).isEmpty)
+    }
+
+    // MARK: - launchBinary()
+
+    /// **The CROW-1058 assertion.** Launch must exec the binary discovery
+    /// verified, not whatever a fresh walk turns up — those can differ, and when
+    /// they did, a Cursor session came up running grok-build.
+    @Test func launchPrefersTheVerifiedPathOverAFreshResolution() {
+        VerifiedBinaries.shared.clear(kind: .cursor)
+        defer { VerifiedBinaries.shared.clear(kind: .cursor) }
+        VerifiedBinaries.shared.record(kind: .cursor, path: "/bin/sh")
+        var agent = StubAgent()
+        agent.aliases = ["agent"]
+        agent.candidates = [ResolvedBinary(path: "/Users/x/.grok/bin/agent", source: .path)]
+        #expect(agent.launchBinary() == "/bin/sh")
+    }
+
+    // NB: "an explicit `defaults.binaries.cursor` pin still outranks the verified
+    // path" is asserted in `CursorAgentTests`, not here. `BinaryOverrides.shared`
+    // is process-wide and `BinaryOverridesTests` — a sibling suite that runs in
+    // parallel with this one — resets it, so a fixture built on it would flake
+    // in this package. There it is also the stronger assertion: it reads the
+    // real Cursor launch text rather than a stub's resolution.
+
+    /// A pin that no longer points at an executable (upgrade, uninstall) is
+    /// dropped rather than interpolated into the pane as a dead path.
+    @Test func launchIgnoresAVerifiedPathThatIsGone() {
+        VerifiedBinaries.shared.clear(kind: .cursor)
+        defer { VerifiedBinaries.shared.clear(kind: .cursor) }
+        VerifiedBinaries.shared.record(kind: .cursor, path: "/tmp/crow1058-does-not-exist")
+        var agent = StubAgent()
+        agent.candidates = [ResolvedBinary(path: "/usr/bin/true", source: .path)]
+        #expect(agent.launchBinary() == "/usr/bin/true")
+    }
+
+    /// With nothing verified, an agent that declares an alias will not launch a
+    /// path named after that alias — `…/bin/agent` is precisely the colliding
+    /// name, and "no launch" is the required outcome, not "launch it anyway".
+    @Test func launchRefusesAnUnverifiedAliasNamedBinary() {
+        VerifiedBinaries.shared.clear(kind: .cursor)
+        defer { VerifiedBinaries.shared.clear(kind: .cursor) }
+        var agent = StubAgent()
+        agent.aliases = ["agent"]
+        agent.candidates = [ResolvedBinary(path: "/Users/x/.grok/bin/agent", source: .path)]
+        #expect(agent.launchBinary() == nil)
+    }
+
+    /// …but the unambiguous preferred name is still launchable unverified, so a
+    /// genuine install on a host where the probe never ran (a unit test, a
+    /// registration-free embedding) isn't grounded.
+    @Test func launchAcceptsAnUnverifiedPreferredNameBinary() {
+        VerifiedBinaries.shared.clear(kind: .cursor)
+        defer { VerifiedBinaries.shared.clear(kind: .cursor) }
+        var agent = StubAgent()
+        agent.aliases = ["agent"]
+        agent.candidates = [ResolvedBinary(path: "/usr/local/bin/stub", source: .path)]
+        #expect(agent.launchBinary() == "/usr/local/bin/stub")
+    }
+
+    /// An agent with no alias declares its token unambiguous, so the narrowing
+    /// never applies — every conformer but Cursor keeps the old behavior byte
+    /// for byte, whatever its binary is named.
+    @Test func launchLeavesAliasFreeAgentsAlone() {
+        VerifiedBinaries.shared.clear(kind: .cursor)
+        defer { VerifiedBinaries.shared.clear(kind: .cursor) }
+        var agent = StubAgent()  // no aliases
+        agent.candidates = [ResolvedBinary(path: "/opt/weird/place/renamed", source: .fallback)]
+        #expect(agent.launchBinary() == "/opt/weird/place/renamed")
+    }
+
+    @Test func launchReturnsNilWhenNothingResolvesAtAll() {
+        VerifiedBinaries.shared.clear(kind: .cursor)
+        defer { VerifiedBinaries.shared.clear(kind: .cursor) }
+        #expect(StubAgent().launchBinary() == nil)
+    }
+
+    /// `resolveBinary()` is still the head of the candidate list — the selection
+    /// CROW-1058 preserves while widening what discovery may probe.
+    @Test func resolveBinaryIsTheHeadOfTheCandidateList() {
+        var agent = StubAgent()
+        agent.candidates = [
+            ResolvedBinary(path: "/first", source: .path),
+            ResolvedBinary(path: "/second", source: .path),
+        ]
+        #expect(agent.resolveBinary() == ResolvedBinary(path: "/first", source: .path))
+        #expect(agent.findBinary() == "/first")
+    }
+}
+
 // MARK: - Fixtures
 
 /// Canned probe responder keyed by the probe arg, recording which args were
@@ -193,6 +319,11 @@ private struct NeverRunner: ShellRunner {
 /// Minimal conformer for exercising the `binaryTokens` default composition.
 private struct StubAgent: CodingAgent {
     var aliases: [String] = []
+    /// Overrides the PATH walk so `launchBinary()`'s fallback leg is
+    /// exercisable without a real install.
+    var candidates: [ResolvedBinary] = []
+
+    func resolveBinaryCandidates() -> [ResolvedBinary] { candidates }
 
     let kind: AgentKind = .cursor
     var displayName: String { "Stub" }

@@ -3,7 +3,10 @@ import Testing
 @testable import CrowCursor
 @testable import CrowCore
 
-@Suite("CursorAgent")
+// Serialized: the CROW-1058 cases write the process-wide `VerifiedBinaries` /
+// `BinaryOverrides` singletons, which the other launch-text tests read through
+// `launchBinary()`. In parallel they would tear down each other's fixtures.
+@Suite("CursorAgent", .serialized)
 struct CursorAgentTests {
     private let agent = CursorAgent()
 
@@ -339,6 +342,98 @@ struct CursorAgentTests {
         // path may or may not exist depending on the developer machine,
         // so we accept either outcome and just verify the result type.
         _ = agent.findBinary()  // smoke test: must not crash
+    }
+
+    // MARK: - Launch binary selection (CROW-1058)
+
+    /// The reported machine, as a launch-text assertion: `cursor-agent` is
+    /// installed and discovery verified it, while grok-build's `agent` is
+    /// earlier on PATH. The pane must run Cursor.
+    ///
+    /// Serialized + pinned rather than PATH-driven because the bug was never
+    /// about the *first* walk — registration already got that right. It was
+    /// about launch re-resolving and disagreeing, so the fixture pins what
+    /// discovery decided and asserts the launch text honors it.
+    @Test func launchUsesTheVerifiedCursorBinary() {
+        VerifiedBinaries.shared.clear(kind: .cursor)
+        defer { VerifiedBinaries.shared.clear(kind: .cursor) }
+        VerifiedBinaries.shared.record(kind: .cursor, path: "/bin/sh")  // stand-in: any real executable
+
+        let cmd = agent.autoLaunchCommand(
+            session: Session(name: "test", agentKind: .cursor),
+            worktreePath: "/tmp/wt",
+            remoteControlEnabled: false,
+            autoPermissionMode: false,
+            telemetryPort: nil)
+        #expect(cmd?.hasPrefix("'/bin/sh' --trust") == true)
+        #expect(cmd?.contains("grok") == false)
+    }
+
+    /// The Manager terminal and the handoff path build their command text
+    /// separately, so each is asserted against the same pin — a fix that only
+    /// covered auto-launch would leave two live routes to the wrong binary.
+    @Test func managerAndHandoffLaunchUseTheVerifiedCursorBinary() async throws {
+        VerifiedBinaries.shared.clear(kind: .cursor)
+        defer { VerifiedBinaries.shared.clear(kind: .cursor) }
+        VerifiedBinaries.shared.record(kind: .cursor, path: "/bin/sh")
+
+        let manager = agent.managerLaunchCommand(
+            sessionName: "Manager", remoteControlEnabled: false,
+            autoPermissionMode: false, telemetryPort: nil)
+        #expect(manager.hasPrefix("'/bin/sh' --trust"))
+
+        let handoff = try await agent.launchCommand(
+            sessionID: UUID(), worktreePath: "/tmp/wt", prompt: "hello")
+        #expect(handoff.contains("'/bin/sh'"))
+        #expect(handoff.contains("grok") == false)
+    }
+
+    /// Ticket verify #2, at the launch layer: when the only `agent` Crow can
+    /// resolve is grok-build's, no Cursor launch path may name it. Registration
+    /// already greys Cursor out (the probe rejects it); this is the belt to that
+    /// brace, because the residual CROW-989 documented is precisely a resolution
+    /// that reaches launch without a passing probe.
+    ///
+    /// The fallback is the unambiguous `cursor-agent` token — never the `agent`
+    /// alias — so the worst case is `command not found`, not the wrong agent.
+    @Test func launchNeverNamesAnUnverifiedAgentAliasBinary() {
+        VerifiedBinaries.shared.clear(kind: .cursor)
+        defer { VerifiedBinaries.shared.clear(kind: .cursor) }
+
+        // No pin and no override: whatever this host resolves, the emitted
+        // binary is either an absolute `…/cursor-agent` or the bare preferred
+        // token. A path ending in `/agent` would be the CROW-1058 regression.
+        let cmd = agent.autoLaunchCommand(
+            session: Session(name: "test", agentKind: .cursor),
+            worktreePath: "/tmp/wt",
+            remoteControlEnabled: false,
+            autoPermissionMode: false,
+            telemetryPort: nil)
+        let binary = String(cmd?.prefix(while: { $0 != " " }) ?? "").trimmingCharacters(
+            in: CharacterSet(charactersIn: "'"))
+        #expect(binary == "cursor-agent" || binary.hasSuffix("/cursor-agent"))
+        #expect(binary.hasSuffix("/agent") == false)
+        #expect(binary.contains("grok") == false)
+    }
+
+    /// Ticket verify #3: an explicit `defaults.binaries.cursor` pin still wins
+    /// over the probe's pick, so the user's escape hatch survives the change.
+    @Test func explicitOverrideStillOutranksTheVerifiedPath() {
+        VerifiedBinaries.shared.clear(kind: .cursor)
+        BinaryOverrides.shared.set(["cursor": "/usr/bin/true"])
+        defer {
+            VerifiedBinaries.shared.clear(kind: .cursor)
+            BinaryOverrides.shared.set([:])
+        }
+        VerifiedBinaries.shared.record(kind: .cursor, path: "/bin/sh")
+
+        let cmd = agent.autoLaunchCommand(
+            session: Session(name: "test", agentKind: .cursor),
+            worktreePath: "/tmp/wt",
+            remoteControlEnabled: false,
+            autoPermissionMode: false,
+            telemetryPort: nil)
+        #expect(cmd?.hasPrefix("'/usr/bin/true' --trust") == true)
     }
 
     // MARK: - Identity probe (CROW-989)

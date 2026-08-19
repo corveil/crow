@@ -79,7 +79,7 @@ public struct OpenAICodexAgent: CodingAgent {
         autoPermissionMode: Bool,
         telemetryPort: UInt16?
     ) -> String? {
-        let codexPath = findBinary() ?? "codex"
+        let codexPath = launchBinary() ?? "codex"
 
         switch session.kind {
         case .work:
@@ -225,7 +225,7 @@ public struct OpenAICodexAgent: CodingAgent {
         // command rather than on `supportsRemoteControl`
         // (`SessionService.ensureManagerSession`), so the CROW-1001 flip
         // leaves this path exactly as it was — same as Cursor's Manager.
-        return findBinary() ?? "codex"
+        return launchBinary() ?? "codex"
     }
 
     /// Codex TUI exposes `/rename` for the current thread (CROW-629).
