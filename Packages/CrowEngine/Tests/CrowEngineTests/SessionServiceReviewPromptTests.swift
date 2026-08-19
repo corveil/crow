@@ -49,6 +49,28 @@ struct SessionServiceReviewPromptTests {
     \(ReviewVerdictPolicy.notesPlaceholder)
     """
 
+    /// SKILL-shaped fixture carrying the CROW-1062 static architecture-study prose
+    /// (the Step 3 sub-step + the review-body section) alongside the placeholders.
+    /// Because the study step is static prose — not a placeholder — the inline
+    /// pipeline (frontmatter strip, `$ARGUMENTS`, attribution expansion) must carry
+    /// it through untouched. Kept minimal so a reword in the real skill fails the
+    /// CrowCore pin, while this asserts the *transport* preserves it.
+    private static let architectureFixtureSkillBody = """
+    # Crow Review PR
+    Review PR $ARGUMENTS.
+
+    **Architecture & Existing Patterns (study this before scoring the diff):**
+
+    - Name the existing pathway the change should have extended, or state plainly that none exists.
+    - Invents a parallel mechanism where a small extension of current behavior would do.
+
+    These are defects in **this change** — grade them **Yellow** (should-fix) or **Red** (must-fix), never Green "consider later."
+
+    ### Architecture / Existing Patterns
+
+    \(ReviewVerdictPolicy.rulePlaceholder)
+    """
+
     /// `fixtureSkillBody` with the real skill's YAML frontmatter prepended — the
     /// shape `Scaffolder.bundledReviewSkill()` actually returns in production, and
     /// the one that killed every Cursor review (CROW-968).
@@ -331,6 +353,39 @@ struct SessionServiceReviewPromptTests {
                 // No verdict-family placeholder may survive expansion.
                 #expect(!prompt.contains("{{CROW_REVIEW_"))
             }
+        }
+    }
+
+    /// CROW-1062: the Step 3 architecture-study prose is static (not a
+    /// placeholder), so the inline pipeline — frontmatter strip, `$ARGUMENTS`
+    /// substitution, attribution expansion — must carry it to every non-Claude
+    /// harness verbatim. If the strip or expansion ever dropped a static section,
+    /// the inlining agents would review against the diff only while the copied
+    /// SKILL.md (which Claude reads) still had it. Mirrors the grading-guidance
+    /// transport test above.
+    @Test func buildReviewPromptCarriesTheArchitectureStudyForEveryInlineAgent() {
+        for agentKind: AgentKind in [.cursor, .openCode, .codex, .grok, .antigravity, .muse] {
+            let prompt = SessionService.buildReviewPrompt(
+                prURL: Self.prURL,
+                prTitle: Self.prTitle,
+                repoSlug: Self.repoSlug,
+                prNumber: Self.prNumber,
+                agentKind: agentKind,
+                skillBody: Self.architectureFixtureSkillBody
+            )
+
+            #expect(prompt.contains("Architecture & Existing Patterns (study this before scoring the diff):"),
+                    "\(agentKind.rawValue) lost the architecture study step")
+            #expect(prompt.contains("Name the existing pathway the change should have extended"),
+                    "\(agentKind.rawValue) lost the name-the-existing-pathway instruction")
+            #expect(prompt.contains("grade them **Yellow** (should-fix) or **Red** (must-fix), never Green"),
+                    "\(agentKind.rawValue) lost the Yellow/Red grade for architecture findings")
+            #expect(prompt.contains("### Architecture / Existing Patterns"),
+                    "\(agentKind.rawValue) lost the review-body architecture section")
+            // The transport must not cost us the existing substitutions.
+            #expect(prompt.contains(Self.prURL))
+            #expect(!prompt.contains("$ARGUMENTS"))
+            #expect(!prompt.contains("{{CROW_REVIEW_"))
         }
     }
 

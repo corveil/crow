@@ -179,12 +179,20 @@ public enum ReviewVerdictPolicy {
     /// surfaces one. These three rules give the reviewer a way to say "your call,
     /// approved" by capping such findings at Green, which the default and red-only
     /// policies treat as non-blocking.
+    ///
+    /// The third rule ("grade against the diff, not the roadmap") also carries the
+    /// CROW-1062 reconciliation: an *architectural* mismatch — a change that
+    /// reinvents an existing pathway, misreads the current control flow, or assumes
+    /// a behavior the codebase already has — is a defect in the shape of what is
+    /// written, so it stays gradeable at Yellow/Red rather than being waved through
+    /// as a future refactor. That is the grade-side counterpart to the Step 3
+    /// "Architecture & Existing Patterns" study the skill body now requires.
     public static let gradingGuidanceBlock = """
     Grading discipline — the rules below bound the **severity you may assign** to a finding. They hold no matter which severities gate the verdict above, because they are about how to grade, not about what blocks:
 
     - **An accepted risk is not a blocker.** A hazard the PR explicitly documents and consciously accepts is at most **Green**. When the diff is correct and the only disagreement is whether to accept a risk the author has already called out, that acceptance is the author's decision to make — state your view in the body and let the verdict follow the grade, rather than blocking on it.
     - **Do not re-block a declined finding.** A finding you raised in an earlier round that the author has answered with a rationale — rather than a code change — may be restated at most as **Green**. Re-raising the same point at a blocking severity round after round is not permitted; if you remain unconvinced, leave it Green and, if it is worth tracking, file a follow-up issue instead of holding up the PR.
-    - **Grade against the diff, not the roadmap.** Severity measures a defect in what is written. "The code is correct, but a hazard it identifies is left unenforced" is **Green** — not Yellow or Red. A future improvement you would like to see is not a defect in this change.
+    - **Grade against the diff, not the roadmap.** Severity measures a defect in what is written. "The code is correct, but a hazard it identifies is left unenforced" is **Green** — not Yellow or Red. A future improvement you would like to see is not a defect in this change. But building the wrong *shape* is a defect in what is written: a change that reinvents a pathway the codebase already has, misreads the current control flow, or assumes a behavior the system already provides may be graded **Yellow** or **Red**, not waved through as a future refactor. Study the surrounding architecture before you decide which of the two this is.
     """
 
     // MARK: - Helpers
