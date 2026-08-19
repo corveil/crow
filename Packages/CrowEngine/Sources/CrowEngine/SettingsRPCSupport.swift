@@ -165,6 +165,46 @@ public enum SettingsRPC {
         ])
     }
 
+    /// The session-log collector block (CROW-1056). The Corveil API-key reference
+    /// is shown only when `reveal` is set OR it is an `op://…` pointer (which is a
+    /// reference, not the secret); a plaintext key is masked. `api_key_set`
+    /// reports presence either way, and `configured` distinguishes an absent block
+    /// (`logSync == nil`, the collector inert) from an all-defaults one.
+    public static func logsyncJSON(_ logSync: LogSyncConfig?, reveal: Bool) -> JSONValue {
+        let cfg = logSync ?? LogSyncConfig()
+        let apiKeyDisplay: String
+        if cfg.apiKeyRef.isEmpty {
+            apiKeyDisplay = ""
+        } else if reveal || cfg.apiKeyRef.hasPrefix("op://") {
+            apiKeyDisplay = cfg.apiKeyRef
+        } else {
+            apiKeyDisplay = "<hidden>"
+        }
+        return .object([
+            "enabled": .bool(cfg.enabled),
+            "base_url": .string(cfg.baseURL),
+            "api_key_ref": .string(apiKeyDisplay),
+            "api_key_set": .bool(!cfg.apiKeyRef.isEmpty),
+            "enabled_workspaces": stringArray(cfg.enabledWorkspaces),
+            "retention_days": .int(cfg.retentionDays),
+            "quiet_period_minutes": .int(cfg.quietPeriodMinutes),
+            "max_upload_bytes": .int(cfg.maxUploadBytes),
+            "configured": .bool(logSync != nil),
+        ])
+    }
+
+    /// PATCH helper for a string-array param: `nil` when absent/null ("leave
+    /// unchanged"), throws when present but not an array of strings.
+    public static func patchStringList(
+        _ params: [String: JSONValue], _ key: String
+    ) throws -> [String]? {
+        guard let value = params[key], value != .null else { return nil }
+        guard let array = value.arrayValue else {
+            throw RPCError.invalidParams("\(key) must be an array of strings")
+        }
+        return array.compactMap { $0.stringValue }
+    }
+
     /// The `ui` group is a *view* namespace, not a single `AppConfig` block:
     /// today `sidebar` and `switcher`, later `terminal` and anything else purely
     /// presentational. Nesting by config-block name mirrors `config.json` and
@@ -246,6 +286,34 @@ public enum SettingsRPC {
             throw RPCError.invalidParams("\(key) must be a non-empty string")
         }
         return text
+    }
+
+    /// PATCH helper for a string that MAY be set to empty: `nil` when absent/null
+    /// ("leave unchanged"), and an explicit `""` clears the stored value. Used for
+    /// `logsync-set`'s `base_url` / `api_key_ref`, where clearing is meaningful.
+    public static func patchStringAllowingEmpty(
+        _ params: [String: JSONValue], _ key: String
+    ) throws -> String? {
+        guard let value = params[key], value != .null else { return nil }
+        guard let text = value.stringValue else {
+            throw RPCError.invalidParams("\(key) must be a string")
+        }
+        return text
+    }
+
+    /// PATCH helper for an integer with a lower bound: `nil` when absent/null,
+    /// throws when present-but-not-an-integer or below `min`.
+    public static func patchBoundedInt(
+        _ params: [String: JSONValue], _ key: String, min: Int
+    ) throws -> Int? {
+        guard let value = params[key], value != .null else { return nil }
+        guard let n = value.intValue else {
+            throw RPCError.invalidParams("\(key) must be an integer")
+        }
+        guard n >= min else {
+            throw RPCError.invalidParams("\(key) must be at least \(min)")
+        }
+        return n
     }
 
     /// Whether a telemetry change needs a daemon restart to take effect.

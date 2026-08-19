@@ -282,6 +282,22 @@ crow web-password clear                                                 → {"sa
 
 `gateway get` blanks header values unless `--reveal`. A `--header` with a blank value (`--header "X-Api-Key:"`) keeps the stored secret — that's how to change a base URL without restating credentials. A header value must not be wrapped in literal quotes (`--header 'X-Api-Key: "Bearer sk-…"'`) — they'd be sent as part of the credential and the gateway would reject the request; quote the whole `Name: Value` pair in your shell, not inside it. `web-password set` prompts twice with echo off; pipe with `--stdin` for scripts. There is no `--password` flag on purpose (shell history / `ps`).
 
+### Session-Log Sync
+
+Local-only (CROW-1056) — the multi-harness session-log collector's opt-in controls. Uploads each opted-in workspace's coding-session transcripts to Corveil as session artifacts, authed by your own Corveil API key (no AWS creds on the laptop). **Default OFF**; nothing uploads until enabled *and* a workspace is opted in. Best-effort — never blocks or fails a session.
+
+```
+crow logsync get [--reveal]                                             → {"logsync":{enabled,base_url,api_key_ref,api_key_set,enabled_workspaces,retention_days,quiet_period_minutes,max_upload_bytes,configured}}
+crow logsync set [--enabled true|false] [--base-url URL] [--api-key-ref REF]
+                 [--add-workspace NAME ...] [--remove-workspace NAME ...] [--clear-workspaces]
+                 [--retention-days N] [--quiet-period-minutes N] [--max-upload-bytes N]   → {"logsync":{...},"saved":true}
+```
+
+- Local-only on `/rpc` (like `gateway`/`web-password`): the RPCs are refused for non-loopback peers, so the opt-in can't be flipped remotely.
+- `--api-key-ref` takes an `op://…` 1Password reference (resolved at upload, never at rest in `config.json`) or a plaintext key. `logsync get` masks a plaintext key unless `--reveal`; an `op://…` reference is always shown (it's a pointer, not the secret).
+- `set` is a PATCH (only the flags you pass change; at least one required). Workspace list edits compose: clear → remove → add. Empty `--base-url ''`/`--api-key-ref ''` clears that field.
+- Only Claude Code transcripts are collected today (its logs are the one harness partitioned by working directory); other harnesses are wired as their log paths are confirmed. Live within ~1 collector tick (~5 min); no restart.
+
 ### MCP
 
 Crow's read-only MCP surface (CROW-1004) — six tools over five read RPCs, so an MCP client can read the board without a Crow-launched session. No prompt-send, no writes. See `docs/mcp.md` and ADR 0019.

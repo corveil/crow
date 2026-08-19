@@ -380,6 +380,12 @@ public enum CrowDaemon {
             tracker: tracker, eventHub: eventHub, sessionService: sessionService,
             appState: appState, devRoot: options.devRoot)
 
+        // Drive the session-log collector (CROW-1056). Opt-in and default OFF —
+        // the tick is a cheap no-op until `logSync` is enabled with an opted-in
+        // workspace. Terminal-independent (it reads harness log files off disk),
+        // so it runs whenever `crowd` runs.
+        startLogSyncPoll(appState: appState, devRoot: options.devRoot)
+
         // Wire the IssueTracker's config-flag providers and its notification-only
         // outcome hooks. Terminal-INDEPENDENT, so this runs whenever `crowd` runs —
         // enabling GitHub native auto-merge is a pure gh/GraphQL call and
@@ -1005,6 +1011,22 @@ public enum CrowDaemon {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 3600 * 1_000_000_000)
                 await rebuild()
+            }
+        }
+    }
+
+    /// Drive the multi-harness session-log collector on a 5-minute cadence
+    /// (CROW-1056). Delay-first so boot isn't slowed; config is read fresh each
+    /// tick (via `ConfigStore` inside `sweep`), so enabling `logSync` in Settings
+    /// takes effect within one tick. The whole pass is a cheap no-op while the
+    /// feature is off (the default), and every upload is best-effort — a failure
+    /// never touches session state.
+    private static func startLogSyncPoll(appState: AppState, devRoot: String) {
+        let collector = LogSyncCollector(devRoot: devRoot)
+        Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 300 * 1_000_000_000)
+                await collector.sweep(appState: appState)
             }
         }
     }

@@ -1713,6 +1713,51 @@ There is deliberately **no `--password` flag** — a plaintext password in `argv
 
 ---
 
+## Session-Log Sync Commands
+
+The multi-harness session-log collector (CROW-1056) uploads each opted-in workspace's coding-session transcripts to Corveil as session artifacts, attributed to your own Corveil API key. It is **opt-in and OFF by default** — nothing uploads until you enable it *and* opt a workspace in. Uploads are best-effort and never block or fail a session, and **no AWS credentials are stored on this machine** (the server performs the object-storage upload). These verbs are **local-only**, like `gateway` / `web-password` — they configure uploads from the daemon host and carry a Corveil API-key reference.
+
+### `crow logsync get`
+
+```bash
+crow logsync get
+crow logsync get --reveal   # unmask a plaintext API key (op:// refs are always shown)
+```
+
+Returns the collector block: `enabled`, `base_url`, `api_key_ref` (masked unless `--reveal` or an `op://…` reference), `api_key_set`, `enabled_workspaces`, `retention_days`, `quiet_period_minutes`, `max_upload_bytes`, and `configured` (whether the block exists at all).
+
+### `crow logsync set`
+
+PATCH — only the flags you pass change; at least one is required.
+
+```bash
+# Turn it on, point it at your Corveil API, opt a workspace in.
+crow logsync set --enabled true \
+  --base-url https://api.corveil.io \
+  --api-key-ref 'op://vault/corveil/api-key' \
+  --add-workspace Corveil
+crow logsync set --add-workspace Acme --remove-workspace Legacy
+crow logsync set --clear-workspaces          # opt every workspace out
+crow logsync set --enabled false             # stop uploading
+crow logsync set --api-key-ref ''            # clear the stored key
+```
+
+| Flag | Description |
+| --- | --- |
+| `--enabled true\|false` | Master switch (default false) |
+| `--base-url URL` | Corveil API base (hosts `POST /api/crow-sessions/{id}/artifacts`); empty clears |
+| `--api-key-ref REF` | Corveil API key as an `op://…` reference (preferred) or plaintext; empty clears |
+| `--add-workspace NAME` | Opt a workspace in (repeatable) |
+| `--remove-workspace NAME` | Opt a workspace out (repeatable) |
+| `--clear-workspaces` | Opt every workspace out |
+| `--retention-days N` | Local upload-ledger retention (0 = forever, default 30) |
+| `--quiet-period-minutes N` | Wait this long after a session's last activity before uploading (default 30) |
+| `--max-upload-bytes N` | Per-transcript upload cap (default 8000000) |
+
+Only Claude Code transcripts are collected today (its logs are the one harness partitioned by working directory); other harnesses are wired as their on-disk log locations are confirmed. Changes are live — the collector re-reads config each tick, so they apply within a few minutes with no restart.
+
+---
+
 ## MCP Commands
 
 Crow serves a **read-only** MCP surface so agent clients that speak MCP — Cowork, a Grok bot — can read the board without a Crow-launched session. Six tools over five read RPCs; there is no prompt-send, no session creation, and no config access. See [MCP](mcp.md) for client setup and the full tool list.
