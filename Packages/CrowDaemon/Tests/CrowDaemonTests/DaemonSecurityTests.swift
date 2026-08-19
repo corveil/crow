@@ -974,6 +974,22 @@ import CrowPersistence
                 == "MCP token management is local-only")
         }
     }
+    @Test func logsyncMethodsAreLocalOnly() {
+        // `logsync-set` enables uploading developers' session transcripts off the
+        // host and carries a Corveil API-key reference; `logsync-get` can reveal
+        // it. A remote peer must not be able to flip the opt-in or read the key,
+        // so both are gated like the gateway/MCP-token surfaces (CROW-1056). This
+        // regression test is what stops a refactor silently dropping either method
+        // from the `localOnlyDenial` switch.
+        for method in ["logsync-get", "logsync-set"] {
+            let req = JSONRPCRequest(id: 1, method: method, params: [
+                "enabled": .bool(true),
+                "api_key_ref": .string("plaintext-would-be-stolen"),
+            ])
+            #expect(RPCWebSocketHandler.localOnlyDenial(for: req, devRoot: tempDevRoot())
+                == "session-log sync management is local-only")
+        }
+    }
 
     @Test func mcpExportedMethodsAreReachableRemotely() {
         // The mirror image, and the reason the MCP endpoint can share the daemon's

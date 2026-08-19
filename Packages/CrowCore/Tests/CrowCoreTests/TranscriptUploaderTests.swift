@@ -102,8 +102,20 @@ final class MockUploadTransport: TranscriptUploadTransport, @unchecked Sendable 
         #expect(TranscriptUploader.classify(status: 409) == .alreadyExists)
         #expect(TranscriptUploader.classify(status: 413) == .tooLarge)
         #expect(TranscriptUploader.classify(status: 500) == .transient)
+        // Rate limit / request timeout are retryable, not permanent skips.
+        #expect(TranscriptUploader.classify(status: 429) == .transient)
+        #expect(TranscriptUploader.classify(status: 408) == .transient)
         #expect(TranscriptUploader.classify(status: 404) == .rejected(status: 404))
         #expect(TranscriptUploader.classify(status: 401) == .rejected(status: 401))
+    }
+
+    @Test func rateLimitedUploadRetriesThenBacksOff() async {
+        // 429 must reach the backoff path, not be recorded permanently.
+        let t = MockUploadTransport(outcomes: [.success(429), .success(429)])
+        let r = await doUpload(t)
+        #expect(r == .transient)
+        #expect(!r.isPermanentFailure)
+        #expect(t.callCount == 2)
     }
 
     private func doUpload(_ transport: MockUploadTransport) async -> TranscriptUploadResult {

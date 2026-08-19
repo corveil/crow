@@ -130,6 +130,10 @@ public struct TranscriptUploader: Sendable {
         case 200...299: return .created
         case 409: return .alreadyExists
         case 413: return .tooLarge
+        // Rate limiting (429) and request timeout (408) are temporary: retrying
+        // later can succeed, so they take the backoff path rather than being
+        // recorded as a permanent skip that never retries.
+        case 408, 429: return .transient
         case 500...599: return .transient
         default: return .rejected(status: status)
         }
