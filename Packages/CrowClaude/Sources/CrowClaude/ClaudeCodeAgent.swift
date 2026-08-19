@@ -44,6 +44,28 @@ public struct ClaudeCodeAgent: CodingAgent {
         self.launcher = ClaudeLauncher()
     }
 
+    /// Claude Code writes one NDJSON transcript per session under a per-project
+    /// directory named by slugifying the working directory:
+    /// `~/.claude/projects/<slug>/<claude-session-uuid>.jsonl`, where the slug
+    /// replaces every non-alphanumeric character of the absolute worktree path
+    /// with `-` (CROW-1056; verified against a live `~/.claude/projects`).
+    ///
+    /// That slug makes Claude the one harness whose durable logs are partitioned
+    /// by working directory, so a Crow worktree path maps directly to its
+    /// transcripts. When the Claude session id is known (`harnessSessionID`,
+    /// resolved from telemetry) the exact file is returned; otherwise the whole
+    /// project-slug directory — every Claude session that ran in this worktree —
+    /// is returned and the collector concatenates it into one transcript.
+    public func logSources(worktreePath: String, harnessSessionID: String?) -> [AgentLogSource] {
+        let projectDir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".claude/projects", isDirectory: true)
+            .appendingPathComponent(AgentLogSource.posixPathSlug(worktreePath), isDirectory: true)
+        if let sid = harnessSessionID?.trimmingCharacters(in: .whitespaces), !sid.isEmpty {
+            return [.file(projectDir.appendingPathComponent("\(sid).jsonl").path, format: .jsonl)]
+        }
+        return [.directory(projectDir.path, format: .jsonl, fileExtension: "jsonl")]
+    }
+
     public func autoLaunchCommand(
         session: Session,
         worktreePath: String,

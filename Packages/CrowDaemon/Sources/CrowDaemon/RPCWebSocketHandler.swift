@@ -336,6 +336,13 @@ enum RPCWebSocketHandler {
         case "gateway-get", "gateway-set", "web-password-get", "web-password-set":
             // Secret reads *and* writes (CROW-815) — see the doc comment above.
             return "gateway and web-password management is local-only"
+        case "logsync-get", "logsync-set":
+            // Session-log collector (CROW-1056). `logsync-set` enables uploading
+            // developers' session transcripts off the daemon host and carries a
+            // Corveil API-key reference; `logsync-get` can reveal it. Both configure
+            // an upload capability from the host, so — like `gateway-*` — they are
+            // loopback-only. The opt-in must never be flippable by a remote peer.
+            return "session-log sync management is local-only"
         case "mcp-token-list", "mcp-token-mint", "mcp-token-revoke":
             // MCP bearer tokens (CROW-1004). `mcp-token-mint` returns the plaintext
             // token exactly once, so a remote peer that could call it would be

@@ -102,6 +102,14 @@ public struct AppConfig: Codable, Sendable, Equatable {
     /// one. Minted/revoked via the local-only `mcp-token-*` RPCs.
     public var mcpTokens: [MCPTokenRecord]
 
+    /// Session-log collector settings (CROW-1056). Opt-in, local-only, default
+    /// OFF. When enabled, the daemon uploads opted-in workspaces' harness session
+    /// transcripts to Corveil as session-artifacts. `nil`/absent means never
+    /// configured — the collector is inert. Like `managerGateway`/`webAuth`, its
+    /// API-key value is stripped before the config reaches a browser and it is
+    /// writable only through the local-only `logsync-set` RPC (`SettingsSecrets`).
+    public var logSync: LogSyncConfig?
+
     /// Effective review-exclude patterns: the global `defaults.excludeReviewRepos`
     /// unioned with every workspace's per-workspace `excludeReviewRepos`. A repo
     /// excluded by any workspace (or the global default) is hidden from the review
@@ -165,7 +173,8 @@ public struct AppConfig: Codable, Sendable, Equatable {
         managerGateway: WorkspaceGateway? = nil,
         jiraCredential: JiraCredential? = nil,
         webAuth: WebAuthConfig? = nil,
-        mcpTokens: [MCPTokenRecord] = []
+        mcpTokens: [MCPTokenRecord] = [],
+        logSync: LogSyncConfig? = nil
     ) {
         self.workspaces = workspaces
         self.defaults = defaults
@@ -192,6 +201,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         self.jiraCredential = jiraCredential
         self.webAuth = webAuth
         self.mcpTokens = mcpTokens
+        self.logSync = logSync
     }
 
     public init(from decoder: Decoder) throws {
@@ -245,6 +255,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         }
         webAuth = try container.decodeIfPresent(WebAuthConfig.self, forKey: .webAuth)
         mcpTokens = try container.decodeIfPresent([MCPTokenRecord].self, forKey: .mcpTokens) ?? []
+        logSync = try container.decodeIfPresent(LogSyncConfig.self, forKey: .logSync)
     }
 
     /// Pre-CROW-528 shape of the now-removed `atlassianMCP` config, decoded only
@@ -268,7 +279,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case workspaces, defaults, notifications, sidebar, switcher, remoteControlEnabled, managerAutoPermissionMode, jobsAutoPermissionMode, reviewAutoPermissionMode, coderViewAutoPermissionMode, telemetry, terminal, autoRespond, attributionTrailers, autoMergeWatcherEnabled, autoCreateWatcherEnabled, cleanup, versionUpdate, jobs, defaultAgentKind, agentsByKind, managerGateway, jiraCredential, webAuth, mcpTokens
+        case workspaces, defaults, notifications, sidebar, switcher, remoteControlEnabled, managerAutoPermissionMode, jobsAutoPermissionMode, reviewAutoPermissionMode, coderViewAutoPermissionMode, telemetry, terminal, autoRespond, attributionTrailers, autoMergeWatcherEnabled, autoCreateWatcherEnabled, cleanup, versionUpdate, jobs, defaultAgentKind, agentsByKind, managerGateway, jiraCredential, webAuth, mcpTokens, logSync
     }
 
     /// Resolve the agent that should drive a newly-created session of the
@@ -1155,4 +1166,91 @@ public struct CleanupConfig: Codable, Sendable, Equatable {
     }
 
     enum CodingKeys: String, CodingKey { case enabled, retentionHours }
+}
+
+/// Session-log upload settings (CROW-1056) — the opt-in, local-only control
+/// block for the multi-harness session-log collector.
+///
+/// **Local-only, default OFF.** This block configures uploads *from the daemon
+/// host* and carries a Corveil API-key reference, so — like `managerGateway` /
+/// `webAuth` / `mcpTokens` — it is stripped before the config reaches a browser
+/// (`SettingsSecrets`) and is writable only through the local-only `logsync-set`
+/// RPC, never `set-config`. Nothing uploads unless a local operator turns it on.
+///
+/// The collector uploads a session's transcript only when **both** `enabled` is
+/// true **and** the session's workspace name is listed in `enabledWorkspaces`
+/// (the per-workspace opt-in — matched case-insensitively). Uploads are
+/// best-effort and never block or fail a session.
+public struct LogSyncConfig: Codable, Sendable, Equatable {
+    /// Master switch. `false` (the default) means the collector does nothing.
+    public var enabled: Bool
+    /// Corveil API base URL that hosts `POST /api/crow-sessions/{id}/artifacts`
+    /// (e.g. `https://api.corveil.io`). Empty disables uploads even when
+    /// `enabled` is true.
+    public var baseURL: String
+    /// The developer's own Corveil API key, as an `op://…` 1Password reference
+    /// (resolved at upload via `GatewayResolver.opRead`, so the secret never
+    /// lands at rest in `config.json`) or a plaintext key. Sent as
+    /// `Authorization: Bearer <key>`. The upload is authenticated as — and
+    /// attributed to — this principal, server-side; there are no AWS credentials
+    /// on the laptop.
+    public var apiKeyRef: String
+    /// Names of the workspaces opted in to transcript upload. A session uploads
+    /// only if its workspace name appears here (case-insensitive). Empty = no
+    /// workspace uploads, which is the default even when `enabled` is true.
+    public var enabledWorkspaces: [String]
+    /// Days to retain entries in the local upload ledger before pruning
+    /// (housekeeping only — mirrors `TelemetryConfig.retentionDays`; the server
+    /// enforces its own artifact retention). 0 keeps entries forever.
+    public var retentionDays: Int
+    /// A session whose newest log file changed within this window is treated as
+    /// still active and is NOT uploaded yet — the server rejects a second upload
+    /// of the same `(session, harness, kind)` with 409, so the collector waits
+    /// for the transcript to go quiescent before capturing it once. Terminal
+    /// sessions (completed/archived) bypass this. Default 30 minutes.
+    public var quietPeriodMinutes: Int
+    /// Per-artifact upload cap in bytes. A larger transcript is truncated and
+    /// flagged. Kept at/under the server's own limit. Default 8,000,000.
+    public var maxUploadBytes: Int
+
+    public init(
+        enabled: Bool = false,
+        baseURL: String = "",
+        apiKeyRef: String = "",
+        enabledWorkspaces: [String] = [],
+        retentionDays: Int = 30,
+        quietPeriodMinutes: Int = 30,
+        maxUploadBytes: Int = 8_000_000
+    ) {
+        self.enabled = enabled
+        self.baseURL = baseURL
+        self.apiKeyRef = apiKeyRef
+        self.enabledWorkspaces = enabledWorkspaces
+        self.retentionDays = retentionDays
+        self.quietPeriodMinutes = quietPeriodMinutes
+        self.maxUploadBytes = maxUploadBytes
+    }
+
+    /// Per-key tolerant decode — an older `config.json` lacking any field (or the
+    /// whole block) still decodes (CROW-814 idiom).
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
+        baseURL = try c.decodeIfPresent(String.self, forKey: .baseURL) ?? ""
+        apiKeyRef = try c.decodeIfPresent(String.self, forKey: .apiKeyRef) ?? ""
+        enabledWorkspaces = try c.decodeIfPresent([String].self, forKey: .enabledWorkspaces) ?? []
+        retentionDays = try c.decodeIfPresent(Int.self, forKey: .retentionDays) ?? 30
+        quietPeriodMinutes = try c.decodeIfPresent(Int.self, forKey: .quietPeriodMinutes) ?? 30
+        maxUploadBytes = try c.decodeIfPresent(Int.self, forKey: .maxUploadBytes) ?? 8_000_000
+    }
+
+    /// Whether this workspace name is opted in (case-insensitive).
+    public func uploadsWorkspace(_ name: String) -> Bool {
+        let lower = name.lowercased()
+        return enabledWorkspaces.contains { $0.lowercased() == lower }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case enabled, baseURL, apiKeyRef, enabledWorkspaces, retentionDays, quietPeriodMinutes, maxUploadBytes
+    }
 }

@@ -147,6 +147,8 @@ public enum ParityLedger {
         "mcp-token-revoke",
         "corveil-verify",
         "corveil-reinstall-skill",
+        "logsync-get",
+        "logsync-set",
     ]
 
     /// Every method reachable through the live router pair — the daemon's
@@ -292,6 +294,8 @@ public enum ParityLedger {
         .write("telemetry-set", cli: "telemetry set"),
         .read("cleanup-get", cli: "cleanup get"),
         .write("cleanup-set", cli: "cleanup set"),
+        .read("logsync-get", cli: "logsync get"),
+        .write("logsync-set", cli: "logsync set"),
         .read("ui-get", cli: "ui get"),
         .write("ui-set", cli: "ui set"),
         .read("version-update-get", cli: "version get"),
@@ -478,6 +482,16 @@ public enum ParityLedger {
         .field("managerGateway.customHeaders", read: "gateway get", write: "gateway set"),
         .field("workspaces[].gateway.baseURL", read: "gateway get", write: "gateway set"),
         .field("workspaces[].gateway.customHeaders", read: "gateway get", write: "gateway set"),
+
+        // Session-log collector (CROW-1056). Local-socket only, like the gateway
+        // block: `logsync get`/`logsync set` are refused on the remote /rpc path.
+        .field("logSync.enabled", read: "logsync get", write: "logsync set"),
+        .field("logSync.baseURL", read: "logsync get", write: "logsync set"),
+        .field("logSync.apiKeyRef", read: "logsync get", write: "logsync set"),
+        .field("logSync.enabledWorkspaces", read: "logsync get", write: "logsync set"),
+        .field("logSync.retentionDays", read: "logsync get", write: "logsync set"),
+        .field("logSync.quietPeriodMinutes", read: "logsync get", write: "logsync set"),
+        .field("logSync.maxUploadBytes", read: "logsync get", write: "logsync set"),
 
         .field("webAuth.iterations", read: "web-password status", write: "web-password set"),
         .field(

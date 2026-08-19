@@ -197,7 +197,15 @@ struct ParityGateTests {
                     hashB64: "aGFzaA==",
                     scopes: [.sessionsRead, .boardRead],
                     expiresAt: Date())
-            ]
+            ],
+            logSync: LogSyncConfig(
+                enabled: true,
+                baseURL: "https://api.corveil.example",
+                apiKeyRef: "op://probe/corveil/key",
+                enabledWorkspaces: ["probe"],
+                retentionDays: 30,
+                quietPeriodMinutes: 30,
+                maxUploadBytes: 8_000_000)
         )
     }
 

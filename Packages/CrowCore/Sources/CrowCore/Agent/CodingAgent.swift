@@ -312,6 +312,29 @@ public protocol CodingAgent: Sendable {
     /// the protocol default returns `nil` so future agents cannot inherit a
     /// spurious `/rename` paste; Claude/Cursor/Codex/OpenCode override.
     func sessionRenameSlashCommand(newName: String) -> String?
+
+    /// Where this harness writes durable session logs on disk for a session
+    /// running in `worktreePath` (CROW-1056). The daemon's `LogSyncCollector`
+    /// resolves these to concrete files, normalizes them to NDJSON, and uploads
+    /// them as session-transcript artifacts for opted-in workspaces.
+    ///
+    /// Crow persists no transcript of its own — terminal scrollback is
+    /// tmux-memory-only — but every harness writes its own durable logs in its
+    /// own place and format. The adapter already knows how to launch each
+    /// harness; this is where it declares where that harness's logs live.
+    ///
+    /// `harnessSessionID` is the harness's OWN session identifier when known
+    /// (e.g. the Claude `.jsonl` filename UUID resolved from telemetry), letting
+    /// an adapter point at the exact file; pass `nil` to have the adapter return
+    /// the broadest per-worktree source it can (e.g. Claude's whole project-slug
+    /// directory).
+    ///
+    /// Opt-in: the protocol default returns `[]`, so a harness whose on-disk log
+    /// location is unconfirmed contributes nothing rather than uploading the
+    /// wrong bytes. Only Claude Code is fully wired today (its logs are the only
+    /// ones partitioned by working directory); the globally-stored harnesses
+    /// (Codex/Cursor/OpenCode) return `[]` pending per-harness cwd matching.
+    func logSources(worktreePath: String, harnessSessionID: String?) -> [AgentLogSource]
 }
 
 public extension CodingAgent {
@@ -470,4 +493,10 @@ public extension CodingAgent {
     /// here prevents a future agent from silently inheriting a paste that
     /// would be sent to the model as a stray prompt (CROW-629 review).
     func sessionRenameSlashCommand(newName: String) -> String? { nil }
+
+    /// Opt-in default: no known log sources (CROW-1056). A harness whose
+    /// durable-log location is unconfirmed — or whose logs are not partitioned
+    /// by working directory — contributes nothing until its adapter overrides
+    /// this. Only `ClaudeCodeAgent` overrides it today.
+    func logSources(worktreePath: String, harnessSessionID: String?) -> [AgentLogSource] { [] }
 }

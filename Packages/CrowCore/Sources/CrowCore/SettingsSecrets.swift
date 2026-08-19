@@ -48,6 +48,11 @@ public enum SettingsSecrets {
             if let gateway = w.gateway { w.gateway = stripHeaderValues(gateway) }
             return w
         }
+        // Session-log collector (CROW-1056): blank the Corveil API-key reference
+        // but keep the rest of the block so the read-only web view can show what
+        // is configured. Like the gateway/token secrets, it is authored only via
+        // the local-only `logsync-set` RPC.
+        if c.logSync != nil { c.logSync?.apiKeyRef = "" }
         return c
     }
 
@@ -80,6 +85,11 @@ public enum SettingsSecrets {
         // `current` means a round-trip is a no-op regardless of what came back.
         result.mcpTokens = current?.mcpTokens ?? []
         result.managerGateway = current?.managerGateway
+        // Session-log collector (CROW-1056): the whole block is authored only via
+        // the local-only `logsync-set` RPC, so a `set-config` round-trip always
+        // restores the stored value — a browser can neither enable uploads,
+        // opt a workspace in, nor introduce a plaintext API key here.
+        result.logSync = current?.logSync
         if let current {
             let currentGatewaysByID = Dictionary(
                 current.workspaces.map { ($0.id, $0.gateway) },
