@@ -98,4 +98,31 @@ struct StaticAssetsCacheTests {
             }
         }
     }
+
+    // MARK: - Web app manifest + install icons (CROW-1073)
+
+    @Test("The web app manifest is served with the manifest+json content type")
+    func manifestServedWithCorrectContentType() async throws {
+        try await makeApp().test(.router) { client in
+            try await client.execute(uri: "/manifest.webmanifest", method: .get) { response in
+                #expect(response.status == .ok)
+                #expect(response.body.readableBytes > 0)
+                let ct = try #require(response.headers[.contentType])
+                #expect(ct == "application/manifest+json")
+            }
+        }
+    }
+
+    @Test("The install icons are served as image/png")
+    func installIconsServedAsPNG() async throws {
+        try await makeApp().test(.router) { client in
+            for path in ["/icon-192.png", "/icon-512.png", "/apple-touch-icon.png"] {
+                try await client.execute(uri: path, method: .get) { response in
+                    #expect(response.status == .ok, "\(path) should be served")
+                    #expect(response.body.readableBytes > 0, "\(path) should have a body")
+                    #expect(response.headers[.contentType] == "image/png", "\(path) content type")
+                }
+            }
+        }
+    }
 }
