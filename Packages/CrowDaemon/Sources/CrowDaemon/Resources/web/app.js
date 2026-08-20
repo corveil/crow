@@ -23,6 +23,10 @@ const RPC_DEFAULT_TIMEOUT_MS = 30000;
 const RPC_TIMEOUTS_MS = {
   // Rebuilds the whole scorecard from the event log.
   'rebuild-scorecard': 180000,
+  // Historical backfill (CROW-1075): scan reads hundreds of transcript heads +
+  // git remotes; upload is serial network I/O over the selected set.
+  'backfill-scan': 180000,
+  'backfill-upload': 600000,
   // Shell out to gh/glab/Jira across every configured repo; clone a repo and
   // spawn tmux; run a job's full command.
   'refresh-tickets': 120000,

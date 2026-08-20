@@ -294,6 +294,10 @@ public enum ParityLedger {
         .write("cleanup-set", cli: "cleanup set"),
         .read("logsync-get", cli: "logsync get"),
         .write("logsync-set", cli: "logsync set"),
+        // Historical session backfill (CROW-1075). `scan` reconciles on-disk
+        // transcripts; `upload` pushes a user-selected set through the live path.
+        .read("backfill-scan", cli: "backfill scan"),
+        .write("backfill-upload", cli: "backfill upload"),
         .read("ui-get", cli: "ui get"),
         .write("ui-set", cli: "ui set"),
         .read("version-update-get", cli: "version get"),

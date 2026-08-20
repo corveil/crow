@@ -65,10 +65,15 @@ struct LogSyncCollector {
             appState.sessions.map { ($0, appState.worktrees(for: $0.id)) }
         }
 
-        var ledger = LogSyncLedger.load(devRoot: devRoot)
         let nowDate = now()
         let nowEpoch = nowDate.timeIntervalSince1970
         let quietPeriod = TimeInterval(max(0, config.quietPeriodMinutes) * 60)
+
+        // Route ledger reads/writes through the shared, serialized store so the
+        // user-initiated backfill (CROW-1075) can write concurrently without
+        // losing updates. Both the poll loop and the backfill RPC handler resolve
+        // the same actor via `shared(devRoot:)`.
+        let ledgerStore = LogSyncLedgerStore.shared(devRoot: devRoot)
 
         for (session, worktrees) in snapshot {
             // Manager sessions run at the dev root, not in a workspace worktree.
@@ -100,7 +105,7 @@ struct LogSyncCollector {
             let harness = LogSyncHarness(agentKind: session.agentKind)
             let kind = LogSyncArtifactKind.sessionTranscript
             let ledgerKey = LogSyncLedger.key(sessionUID: session.id.uuidString, harness: harness, kind: kind)
-            guard ledger.shouldUpload(key: ledgerKey, now: nowEpoch, retryBackoff: retryBackoff) else { continue }
+            guard await ledgerStore.shouldUpload(key: ledgerKey, now: nowEpoch, retryBackoff: retryBackoff) else { continue }
 
             // Where does this harness write its logs? Empty for harnesses whose
             // on-disk logs are not yet wired (everything but Claude today).
@@ -144,18 +149,13 @@ struct LogSyncCollector {
                 transcript: transcript, metadata: metadata, agentSessionID: agentSessionID)
 
             let entry = Self.ledgerEntry(for: result, sha: sha, size: transcript.data.count, at: nowEpoch)
-            ledger.record(key: ledgerKey, entry: entry)
+            await ledgerStore.record(key: ledgerKey, entry: entry)
             if result.isSuccess {
                 LogSyncLog.info("uploaded transcript for session \(session.id.uuidString) (\(harness.rawValue), \(transcript.data.count) bytes)")
             }
         }
 
-        ledger.prune(retentionDays: config.retentionDays, now: nowEpoch)
-        do {
-            try ledger.save(devRoot: devRoot)
-        } catch {
-            LogSyncLog.info("failed to persist log-sync ledger: \(error.localizedDescription)")
-        }
+        await ledgerStore.prune(retentionDays: config.retentionDays, now: nowEpoch)
     }
 
     // MARK: - Pure helpers (unit-tested)

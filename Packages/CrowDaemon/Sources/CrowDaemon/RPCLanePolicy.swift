@@ -138,6 +138,10 @@ enum RPCLanePolicy {
         "job-delete": .fixed(.config),
         "job-duplicate": .fixed(.config),
         "version-update-set": .fixed(.config),
+        // Long, user-initiated upload run — its own lane so it serializes against
+        // itself (never two concurrent backfills) without blocking config writes
+        // (CROW-1075).
+        "backfill-upload": .fixed(.backfill),
         // Already single-flight: a second caller awaits the in-flight compare
         // instead of spawning another `gh auth token` subprocess + GitHub call.
         "version-update-check": .concurrent,

@@ -298,6 +298,19 @@ crow logsync set [--retention-days N] [--quiet-period-minutes N] [--max-upload-b
 - `set` is a PATCH (only the flags you pass change; at least one required). Live within ~1 collector tick (~5 min); no restart.
 - **Migration**: a legacy `crow logsync set --add-workspace` opt-in is carried over to `--upload-session-logs` on first boot (only when the old master switch was on). Only Claude Code transcripts are collected today; other harnesses are wired as their log paths are confirmed.
 
+### Session Backfill
+
+The historical session backfill (CROW-1075) — reconcile the coding-session transcripts already on disk (predating the live path, or reaped from Crow's store) and upload the ones you choose as real, fully-linked Corveil session artifacts. Claude Code only for v1.
+
+```
+crow backfill scan                                                      → {"sessions":[{uid,workspace,repo_name,owner_repo,ticket_number,confidence,upload_status,...}],"summary":{total,uploaded,linkable,repo_only,orphan}}
+crow backfill upload --workspace NAME (--session UID … | --all-high-confidence | --all)   → {"results":[{uid,result,linked,owner_repo,ticket_number,reason}],"summary":{...}}
+```
+
+- `scan` is disk- and git-only (no provider calls) — fast over hundreds of sessions. Reconstructs each session's workspace/repo/ticket from the transcript's own `cwd`/`gitBranch` (authoritative, not the lossy slug) plus live git remotes; `confidence` is `high` (repo + ticket) · `medium` (repo only) · `low` (orphan).
+- `upload` reuses the **live path** and is **idempotent** (local ledger + server write-once 409). `--workspace` names the workspace whose local-only gateway supplies the destination + credential (same security invariant as the live collector). Choose exactly one selection mode; `--all-high-confidence`/`--all` scope to that workspace's sessions.
+- A reconstructed ticket becomes a **REFERENCE only when the provider (`gh`/`glab`) confirms it exists** — otherwise the session uploads repo-only, and a true orphan uploads attributed but unlinked. Never automatic or unbounded — the user always chooses.
+
 ### MCP
 
 Crow's read-only MCP surface (CROW-1004) — six tools over five read RPCs, so an MCP client can read the board without a Crow-launched session. No prompt-send, no writes. See `docs/mcp.md` and ADR 0019.
