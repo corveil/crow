@@ -9,21 +9,15 @@ import CrowCore
 public actor ProviderManager {
     /// Additional GitLab hosts beyond gitlab.com (user-configurable).
     nonisolated private let additionalGitLabHosts: [String]
-    /// Additional Corveil hosts beyond corveil.io (user-configurable per
-    /// workspace via `WorkspaceInfo.corveilHost`). URL detection routes any
-    /// match here to `.corveil`.
-    nonisolated private let additionalCorveilHosts: [String]
 
     /// Subprocess runner shared by all backends this manager hands out.
     nonisolated private let shellRunner: ShellRunner
 
     public init(
         additionalGitLabHosts: [String] = [],
-        additionalCorveilHosts: [String] = [],
         shellRunner: ShellRunner = ProcessShellRunner()
     ) {
         self.additionalGitLabHosts = additionalGitLabHosts
-        self.additionalCorveilHosts = additionalCorveilHosts
         self.shellRunner = shellRunner
     }
 
@@ -34,23 +28,20 @@ public actor ProviderManager {
     public nonisolated func taskBackend(
         for provider: Provider,
         host: String? = nil,
-        jira: JiraConfig? = nil,
-        corveil: CorveilConfig? = nil
+        jira: JiraConfig? = nil
     ) -> TaskBackend {
         switch provider {
         case .github:
             return GitHubTaskBackend(shellRunner: shellRunner)
         case .gitlab:
             return GitLabTaskBackend(shellRunner: shellRunner, host: host)
-        case .corveil:
-            return CorveilTaskBackend(shellRunner: shellRunner, config: corveil ?? CorveilConfig())
         case .jira:
             return JiraTaskBackend(shellRunner: shellRunner, config: jira ?? JiraConfig())
         }
     }
 
     /// Hand out a ``CodeBackend`` for the given provider, or `nil` for providers
-    /// that have no VCS-side surface (Corveil). Callers must handle `nil` —
+    /// that have no VCS-side surface (Jira). Callers must handle `nil` —
     /// a non-coding task may legitimately have no code backend at all.
     public nonisolated func codeBackend(for provider: Provider, host: String? = nil) -> CodeBackend? {
         switch provider {
@@ -58,7 +49,7 @@ public actor ProviderManager {
             return GitHubCodeBackend(shellRunner: shellRunner)
         case .gitlab:
             return GitLabCodeBackend(shellRunner: shellRunner, host: host)
-        case .corveil, .jira:
+        case .jira:
             // Task-only providers — no VCS surface. A Jira-tasked session pairs
             // with a GitHub/GitLab code backend via `Session.codeProvider`.
             return nil
@@ -74,7 +65,7 @@ public actor ProviderManager {
     /// URL-driven `TaskBackend` lookup — detect the provider from `url` and
     /// hand back the matching backend.
     public nonisolated func taskBackend(forURL url: String) -> TaskBackend {
-        let detected = Self.detect(url: url, additionalGitLabHosts: additionalGitLabHosts, additionalCorveilHosts: additionalCorveilHosts)
+        let detected = Self.detect(url: url, additionalGitLabHosts: additionalGitLabHosts)
         return taskBackend(for: detected.provider, host: detected.host)
     }
 
@@ -83,8 +74,7 @@ public actor ProviderManager {
     /// here so the matching logic can never drift.
     nonisolated static func detect(
         url: String,
-        additionalGitLabHosts: [String],
-        additionalCorveilHosts: [String] = []
+        additionalGitLabHosts: [String]
     ) -> (provider: Provider, cli: String, host: String?) {
         if url.contains("github.com") {
             return (.github, "gh", nil)
@@ -95,12 +85,6 @@ public actor ProviderManager {
             return (.jira, "acli", nil)
         } else if url.contains("gitlab.com") {
             return (.gitlab, "glab", "gitlab.com")
-        } else if url.contains("corveil.io") {
-            // Public corveil.io — task-only, driven by `corveil`. See ADR 0005.
-            return (.corveil, "corveil", nil)
-        }
-        for host in additionalCorveilHosts where !host.isEmpty && url.contains(host) {
-            return (.corveil, "corveil", host)
         }
         for host in additionalGitLabHosts {
             if url.contains(host) {
@@ -115,7 +99,7 @@ public actor ProviderManager {
     /// Falls back to `.github` for unrecognized hosts — the `gh` CLI call will fail clearly
     /// if the URL is actually a self-hosted GitLab instance, which is an acceptable failure mode.
     public func detectProvider(from url: String) -> (provider: Provider, cli: String, host: String?) {
-        Self.detect(url: url, additionalGitLabHosts: additionalGitLabHosts, additionalCorveilHosts: additionalCorveilHosts)
+        Self.detect(url: url, additionalGitLabHosts: additionalGitLabHosts)
     }
 
     /// Parse issue/PR number and repo from a ticket URL.
@@ -175,11 +159,6 @@ public actor ProviderManager {
         if detected.provider == .jira {
             return try await taskBackend(for: .jira).fetchTask(url: url)
         }
-        // Corveil ids aren't org/repo/number tuples either; delegate to its
-        // backend the same way Jira does.
-        if detected.provider == .corveil {
-            return try await taskBackend(for: .corveil).fetchTask(url: url)
-        }
 
         guard let parsed = parseTicketURL(url) else {
             throw ProviderError.invalidURL(url)
@@ -204,9 +183,6 @@ public actor ProviderManager {
             } else {
                 output = try await shell(env: env, cwd: NSHomeDirectory(), "glab", "issue", "view", "\(parsed.number)", "--repo", repoSlug)
             }
-        case .corveil:
-            // Handled by the early return above (delegated to CorveilTaskBackend).
-            throw ProviderError.unimplemented("unreachable: Corveil handled before the switch")
         case .jira:
             // Handled by the early return above (delegated to JiraTaskBackend).
             throw ProviderError.unimplemented("unreachable: Jira handled before the switch")
@@ -285,8 +261,8 @@ public actor ProviderManager {
                     "--jq", ".[].path_with_namespace"
                 )
                 return Self.nonEmptyLines(out)
-            case .corveil, .jira:
-                // Task-only providers; no repo listing is meaningful here.
+            case .jira:
+                // Task-only provider; no repo listing is meaningful here.
                 return []
             }
         } catch {
@@ -383,7 +359,7 @@ public struct TicketInfo: Sendable {
     public let provider: Provider
     public let isMR: Bool
     /// Normalized ticket priority (#696, ADR 0008 follow-up 8). Only Jira
-    /// surfaces one today; nil for GitHub/GitLab/Corveil tickets.
+    /// surfaces one today; nil for GitHub/GitLab tickets.
     public let priority: TicketPriority?
     /// Epic/parent work-item key (Jira Cloud unified `parent` field). Fetched
     /// for future epic-based goal inference; unused by the v1 alignment weight.

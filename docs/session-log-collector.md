@@ -127,13 +127,13 @@ upload target **solely** from that workspace's local-only `gateway`:
   `TranscriptUploader` can re-wrap the bare key as `Authorization: Bearer <key>`.
 
 **The invariant:** the destination and credential come only from the **local-only**
-gateway — never from `corveilHost` or any other browser-writable field. `corveilHost`
-is browser-flippable, so letting it choose where a *credential-bearing* upload goes
-would let an authenticated remote peer redirect the workspace's Corveil key to a host
-it chose (an exfiltration vector). `resolvedUpload` never reads it; a workspace with no
+gateway — never from any browser-writable workspace field. A web-flippable field must
+not be able to choose where a *credential-bearing* upload goes, or an authenticated
+remote peer could redirect the workspace's Corveil key to a host it chose (an
+exfiltration vector). `resolvedUpload` reads only the gateway; a workspace with no
 gateway (or no resolvable key) returns `nil` and uploads nothing — a browser field
 alone can never supply a destination. This is asserted in `LogSyncCollectorTests`
-(`browserWritableCorveilHostCannotRedirectTheUpload`, `noGatewayResolvesToNilEvenWithCorveilHost`).
+(`resolvedUploadComesFromTheGateway`, `noGatewayResolvesToNil`).
 
 Why this is safe where the earlier design wasn't: the `crow gateway` config is itself
 **local-only** (CROW-815 — it carries credentials, so the remote `/rpc` path refuses

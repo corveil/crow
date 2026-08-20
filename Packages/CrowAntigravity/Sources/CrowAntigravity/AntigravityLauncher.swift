@@ -60,7 +60,7 @@ public actor AntigravityLauncher {
                 } else {
                     lines.append("URL: \(url) — fetch it with `acli jira workitem view <KEY> --fields summary,status,description,comment`.")
                 }
-            case .corveil, nil:
+            case nil:
                 lines.append("URL: \(url)")
             }
         }

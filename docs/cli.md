@@ -1125,7 +1125,7 @@ Close the session's linked issue and complete the session.
 crow mark-issue-done --session <session>
 ```
 
-GitHub/GitLab close the issue; Jira and Corveil transition it to the mapped done status. On success the session flips to completed. Requires a linked ticket and a provider-configured daemon.
+GitHub/GitLab close the issue; Jira transitions it to the mapped done status. On success the session flips to completed. Requires a linked ticket and a provider-configured daemon.
 
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |
@@ -1970,7 +1970,7 @@ Subcommands: [`list`](#crow-workspace-list), [`get`](#crow-workspace-get), [`add
 Create a workspace.
 
 ```
-crow workspace add --name <name> [--provider <provider>] [--host <host>] [--task-provider <task-provider>] [--jira-site <jira-site>] [--jira-project-key <jira-project-key>] [--jira-jql <jira-jql>] [--jira-status-backlog <jira-status-backlog>] [--jira-status-ready <jira-status-ready>] [--jira-status-in-progress <jira-status-in-progress>] [--jira-status-in-review <jira-status-in-review>] [--jira-status-done <jira-status-done>] [--clear-jira-status-map] [--corveil-host <corveil-host>] [--custom-instructions <custom-instructions>] [--custom-instructions-file <custom-instructions-file>] [--always-include <always-include> ...] [--clear-always-include] [--auto-review-repo <auto-review-repo> ...] [--clear-auto-review-repos] [--exclude-review-repo <exclude-review-repo> ...] [--clear-exclude-review-repos] [--session-env <session-env> ...] [--clear-session-env] [--upload-session-logs <upload-session-logs>] [--review-blocking-severity <review-blocking-severity> ...] [--clear-review-blocking-severities]
+crow workspace add --name <name> [--provider <provider>] [--host <host>] [--task-provider <task-provider>] [--jira-site <jira-site>] [--jira-project-key <jira-project-key>] [--jira-jql <jira-jql>] [--jira-status-backlog <jira-status-backlog>] [--jira-status-ready <jira-status-ready>] [--jira-status-in-progress <jira-status-in-progress>] [--jira-status-in-review <jira-status-in-review>] [--jira-status-done <jira-status-done>] [--clear-jira-status-map] [--custom-instructions <custom-instructions>] [--custom-instructions-file <custom-instructions-file>] [--always-include <always-include> ...] [--clear-always-include] [--auto-review-repo <auto-review-repo> ...] [--clear-auto-review-repos] [--exclude-review-repo <exclude-review-repo> ...] [--clear-exclude-review-repos] [--session-env <session-env> ...] [--clear-session-env] [--upload-session-logs <upload-session-logs>] [--review-blocking-severity <review-blocking-severity> ...] [--clear-review-blocking-severities]
 ```
 
 Only --name is required; every other field takes its documented default and can be set later with `crow workspace edit`. The name becomes a directory under the dev root, so it cannot contain / or :, cannot be "." or "..", and must not collide with an existing workspace (case-insensitively).
@@ -1982,7 +1982,7 @@ Creating a workspace does not create its directory — the daemon scaffolds it o
 | `--name` | `<name>` | yes | Workspace name (becomes a folder under the dev root) |
 | `--provider` | `<provider>` | no | Code/PR host: github or gitlab |
 | `--host` | `<host>` | no | GitLab host, e.g. gitlab.example.com (GitLab workspaces only; "" clears) |
-| `--task-provider` | `<task-provider>` | no | Where tickets live: github, gitlab, jira, or corveil ("" follows the code provider) |
+| `--task-provider` | `<task-provider>` | no | Where tickets live: github, gitlab, or jira ("" follows the code provider) |
 | `--jira-site` | `<jira-site>` | no | Atlassian site, e.g. acme.atlassian.net ("" clears) |
 | `--jira-project-key` | `<jira-project-key>` | no | Jira project key, e.g. PROPS ("" clears) |
 | `--jira-jql` | `<jira-jql>` | no | JQL for this workspace's ticket board ("" clears) |
@@ -1992,7 +1992,6 @@ Creating a workspace does not create its directory — the daemon scaffolds it o
 | `--jira-status-in-review` | `<jira-status-in-review>` | no | Jira status name for In Review ("" clears) |
 | `--jira-status-done` | `<jira-status-done>` | no | Jira status name for Done ("" clears) |
 | `--clear-jira-status-map` | — | no | Drop every Crow→Jira status mapping |
-| `--corveil-host` | `<corveil-host>` | no | Self-hosted Corveil host, e.g. corveil.acme.io ("" clears; blank means corveil.io) |
 | `--custom-instructions` | `<custom-instructions>` | no | Free text appended to this workspace's session prompts ("" clears) |
 | `--custom-instructions-file` | `<custom-instructions-file>` | no | Read --custom-instructions from a file; '-' reads stdin |
 | `--always-include` | `<always-include>` _(repeatable)_ | no | Repo always listed in the prompt table (repeatable; replaces the whole list) |
@@ -2014,7 +2013,7 @@ Creating a workspace does not create its directory — the daemon scaffolds it o
 Change fields on an existing workspace.
 
 ```
-crow workspace edit --workspace <workspace> [--name <name>] [--provider <provider>] [--host <host>] [--task-provider <task-provider>] [--jira-site <jira-site>] [--jira-project-key <jira-project-key>] [--jira-jql <jira-jql>] [--jira-status-backlog <jira-status-backlog>] [--jira-status-ready <jira-status-ready>] [--jira-status-in-progress <jira-status-in-progress>] [--jira-status-in-review <jira-status-in-review>] [--jira-status-done <jira-status-done>] [--clear-jira-status-map] [--corveil-host <corveil-host>] [--custom-instructions <custom-instructions>] [--custom-instructions-file <custom-instructions-file>] [--always-include <always-include> ...] [--clear-always-include] [--auto-review-repo <auto-review-repo> ...] [--clear-auto-review-repos] [--exclude-review-repo <exclude-review-repo> ...] [--clear-exclude-review-repos] [--session-env <session-env> ...] [--clear-session-env] [--upload-session-logs <upload-session-logs>] [--review-blocking-severity <review-blocking-severity> ...] [--clear-review-blocking-severities] [--force]
+crow workspace edit --workspace <workspace> [--name <name>] [--provider <provider>] [--host <host>] [--task-provider <task-provider>] [--jira-site <jira-site>] [--jira-project-key <jira-project-key>] [--jira-jql <jira-jql>] [--jira-status-backlog <jira-status-backlog>] [--jira-status-ready <jira-status-ready>] [--jira-status-in-progress <jira-status-in-progress>] [--jira-status-in-review <jira-status-in-review>] [--jira-status-done <jira-status-done>] [--clear-jira-status-map] [--custom-instructions <custom-instructions>] [--custom-instructions-file <custom-instructions-file>] [--always-include <always-include> ...] [--clear-always-include] [--auto-review-repo <auto-review-repo> ...] [--clear-auto-review-repos] [--exclude-review-repo <exclude-review-repo> ...] [--clear-exclude-review-repos] [--session-env <session-env> ...] [--clear-session-env] [--upload-session-logs <upload-session-logs>] [--review-blocking-severity <review-blocking-severity> ...] [--clear-review-blocking-severities] [--force]
 ```
 
 Only the provided flags change. A repeatable list flag replaces the whole list rather than appending, matching `crow job edit`; use the matching --clear-* flag to empty one. The --jira-status-* flags patch individually — each sets one mapping and leaves the other four alone.
@@ -2029,7 +2028,7 @@ An edit whose values already hold is reported as "saved": false and skips the wr
 | `--name` | `<name>` | no | New workspace name (see the rename guard above) |
 | `--provider` | `<provider>` | no | Code/PR host: github or gitlab |
 | `--host` | `<host>` | no | GitLab host, e.g. gitlab.example.com (GitLab workspaces only; "" clears) |
-| `--task-provider` | `<task-provider>` | no | Where tickets live: github, gitlab, jira, or corveil ("" follows the code provider) |
+| `--task-provider` | `<task-provider>` | no | Where tickets live: github, gitlab, or jira ("" follows the code provider) |
 | `--jira-site` | `<jira-site>` | no | Atlassian site, e.g. acme.atlassian.net ("" clears) |
 | `--jira-project-key` | `<jira-project-key>` | no | Jira project key, e.g. PROPS ("" clears) |
 | `--jira-jql` | `<jira-jql>` | no | JQL for this workspace's ticket board ("" clears) |
@@ -2039,7 +2038,6 @@ An edit whose values already hold is reported as "saved": false and skips the wr
 | `--jira-status-in-review` | `<jira-status-in-review>` | no | Jira status name for In Review ("" clears) |
 | `--jira-status-done` | `<jira-status-done>` | no | Jira status name for Done ("" clears) |
 | `--clear-jira-status-map` | — | no | Drop every Crow→Jira status mapping |
-| `--corveil-host` | `<corveil-host>` | no | Self-hosted Corveil host, e.g. corveil.acme.io ("" clears; blank means corveil.io) |
 | `--custom-instructions` | `<custom-instructions>` | no | Free text appended to this workspace's session prompts ("" clears) |
 | `--custom-instructions-file` | `<custom-instructions-file>` | no | Read --custom-instructions from a file; '-' reads stdin |
 | `--always-include` | `<always-include>` _(repeatable)_ | no | Repo always listed in the prompt table (repeatable; replaces the whole list) |

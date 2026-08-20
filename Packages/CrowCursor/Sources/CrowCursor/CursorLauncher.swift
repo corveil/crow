@@ -60,7 +60,7 @@ public actor CursorLauncher {
                 } else {
                     lines.append("URL: \(url) — fetch it via the `jira` MCP server (`jira_get_issue`), or `acli` if the MCP isn't available.")
                 }
-            case .corveil, nil:
+            case nil:
                 lines.append("URL: \(url)")
             }
         }

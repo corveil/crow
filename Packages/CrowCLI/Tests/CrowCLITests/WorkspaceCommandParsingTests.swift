@@ -74,12 +74,11 @@ import Testing
 /// a present-but-empty value, not get dropped as "nothing to do".
 @Test func workspaceEmptyStringClearsScalars() throws {
     let cmd = try WorkspaceEdit.parse([
-        "--workspace", "Acme", "--host", "", "--task-provider", "", "--corveil-host", "",
+        "--workspace", "Acme", "--host", "", "--task-provider", "",
     ])
     let params = try cmd.fields.paramsJSON()
     #expect(params["host"] == .string(""))
     #expect(params["task_provider"] == .string(""))
-    #expect(params["corveil_host"] == .string(""))
 }
 
 // MARK: - repo lists
@@ -274,9 +273,8 @@ import Testing
         let cmd = try WorkspaceAdd.parse(["--name", "A", "--provider", "bitbucket"])
         try cmd.validate()
     }
-    // Jira and Corveil are task-only — they have no git surface, so they are
-    // never a code provider.
-    for taskOnly in ["jira", "corveil"] {
+    // Jira is task-only — it has no git surface, so it is never a code provider.
+    for taskOnly in ["jira"] {
         #expect(throws: (any Error).self) {
             let cmd = try WorkspaceAdd.parse(["--name", "A", "--provider", taskOnly])
             try cmd.validate()

@@ -258,7 +258,7 @@ crow workspace edit --workspace <name|uuid> [flags]      → patch; {"saved":fal
 crow workspace remove --workspace <name|uuid> [--force]  → {"removed":true,"gateway_discarded":bool,...}
 ```
 
-Field flags (shared by `add`/`edit`): `--provider github|gitlab`, `--host`, `--task-provider github|gitlab|jira|corveil`, `--jira-site`, `--jira-project-key`, `--jira-jql`, `--jira-status-{backlog,ready,in-progress,in-review,done}`, `--corveil-host`, `--custom-instructions[-file]`, `--always-include`, `--auto-review-repo`, `--exclude-review-repo`, `--review-blocking-severity red|yellow|green`, `--session-env KEY=VALUE`, `--upload-session-logs true|false`, and `--clear-{always-include,auto-review-repos,exclude-review-repos,jira-status-map,session-env,review-blocking-severities}`.
+Field flags (shared by `add`/`edit`): `--provider github|gitlab`, `--host`, `--task-provider github|gitlab|jira`, `--jira-site`, `--jira-project-key`, `--jira-jql`, `--jira-status-{backlog,ready,in-progress,in-review,done}`, `--custom-instructions[-file]`, `--always-include`, `--auto-review-repo`, `--exclude-review-repo`, `--review-blocking-severity red|yellow|green`, `--session-env KEY=VALUE`, `--upload-session-logs true|false`, and `--clear-{always-include,auto-review-repos,exclude-review-repos,jira-status-map,session-env,review-blocking-severities}`.
 
 - **Clearing:** optional scalars clear with an empty string (`--host ""`); lists/maps need their `--clear-*` flag. `--jira-status-ready ""` clears one entry.
 - **Repeatable flags replace the whole list**, they don't append — but `--jira-status-*` patches per key.
