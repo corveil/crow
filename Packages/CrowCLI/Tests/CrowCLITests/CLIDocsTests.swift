@@ -278,6 +278,27 @@ private func section(_ invocation: String, in markdown: String) -> String? {
     }
 }
 
+/// CROW-1079: an additional Manager self-renames from its first ask via
+/// `crow rename-session`. The instruction lives only in the Manager's
+/// scaffolded context, so if it falls out of either template source the
+/// behavior silently disappears — guard both. The shipped `.app` reads
+/// `Resources/CLAUDE.md.template`; dev builds read the repo `CLAUDE.md`
+/// (see `Scaffolder.bundledCLAUDEMD`), so the two must both carry it.
+@Test func managerContextExplainsSelfRename() throws {
+    for source in ["CLAUDE.md", "Resources/CLAUDE.md.template"] {
+        let doc = try repoFile(source)
+        #expect(
+            doc.contains("crow rename-session --session \"$CROW_SESSION_ID\""),
+            "\(source) no longer tells additional Managers to self-rename via crow rename-session (CROW-1079)"
+        )
+        // The primary-Manager guard is what keeps the nav pill as "Manager".
+        #expect(
+            doc.contains("00000000-0000-0000-0000-000000000000"),
+            "\(source) dropped the primary-Manager guard for self-rename (CROW-1079)"
+        )
+    }
+}
+
 // MARK: - Independent view of the command tree
 
 /// Walks `CommandConfiguration` a second time, keeping the concrete types so
