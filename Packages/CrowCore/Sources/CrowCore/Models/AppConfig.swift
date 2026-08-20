@@ -622,11 +622,6 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
     /// ``JiraTaskBackend.defaultJiraStatusName(for:)``. Only meaningful when
     /// `taskProvider == "jira"`. See #523.
     public var jiraStatusMap: [String: String]?
-    /// Self-hosted Corveil host (e.g. "corveil.acme.io") used **only** for URL
-    /// routing in `ProviderManager.detect` — Corveil's own auth/state lives in
-    /// the CLI (`corveil login`, `CORVEIL_URL`), so Crow doesn't pipe it through.
-    /// `nil` is fine: the public `corveil.io` is auto-detected.
-    public var corveilHost: String?
     /// Extra environment variables exported into every agent launched in this
     /// workspace, as a plain `KEY: VALUE` map.
     ///
@@ -653,7 +648,7 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
     ///
     /// The reuse is what makes browser-flippability safe: the destination +
     /// credential come only from the **local-only** `gateway` (never readable or
-    /// authorable from the web, and never from the browser-writable `corveilHost`),
+    /// authorable from the web, and never from any browser-writable field),
     /// so a remote peer ticking this box can at most turn one workspace's upload
     /// on/off, to the operator's own Corveil, with a credential it can neither see
     /// nor change. Default `false`.
@@ -693,7 +688,6 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
         jiraJQL: String? = nil,
         jiraSite: String? = nil,
         jiraStatusMap: [String: String]? = nil,
-        corveilHost: String? = nil,
         sessionEnv: [String: String]? = nil,
         uploadSessionLogs: Bool = false,
         gateway: WorkspaceGateway? = nil
@@ -713,7 +707,6 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
         self.jiraJQL = jiraJQL
         self.jiraSite = jiraSite
         self.jiraStatusMap = jiraStatusMap
-        self.corveilHost = corveilHost
         self.sessionEnv = sessionEnv
         self.uploadSessionLogs = uploadSessionLogs
         self.gateway = gateway
@@ -747,11 +740,18 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
             }
             .flatMap { $0.isEmpty ? nil : $0 }
         taskProvider = try container.decodeIfPresent(String.self, forKey: .taskProvider)
+        // CROW-1068: the `corveil` task provider was removed with `CorveilTaskBackend`
+        // (the Corveil Tasks API it wrapped was retired, corveil/corveil#2440). A
+        // legacy config still carrying it decodes to nil ("follow the code provider")
+        // rather than a now-unmatched value that would silently blank the workspace's
+        // board — the poll only recognizes github/gitlab/jira. The write path
+        // (`WorkspaceRPC.decodeTaskProvider`) already rejects it, so this is the only
+        // way an old value survives, and it's normalized on the next save.
+        if taskProvider == "corveil" { taskProvider = nil }
         jiraProjectKey = try container.decodeIfPresent(String.self, forKey: .jiraProjectKey)
         jiraJQL = try container.decodeIfPresent(String.self, forKey: .jiraJQL)
         jiraSite = try container.decodeIfPresent(String.self, forKey: .jiraSite)
         jiraStatusMap = try container.decodeIfPresent([String: String].self, forKey: .jiraStatusMap)
-        corveilHost = try container.decodeIfPresent(String.self, forKey: .corveilHost)
         sessionEnv = try container.decodeIfPresent([String: String].self, forKey: .sessionEnv)
         // Decode-tolerant (CROW-1066): an older config lacking the key opts out.
         uploadSessionLogs = try container.decodeIfPresent(Bool.self, forKey: .uploadSessionLogs) ?? false
@@ -764,15 +764,15 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case id, name, provider, cli, host, alwaysInclude, autoReviewRepos, excludeReviewRepos, customInstructions
         case reviewBlockingSeverities
-        case taskProvider, jiraProjectKey, jiraJQL, jiraSite, jiraStatusMap, corveilHost, sessionEnv, uploadSessionLogs, gateway
+        case taskProvider, jiraProjectKey, jiraJQL, jiraSite, jiraStatusMap, sessionEnv, uploadSessionLogs, gateway
     }
 
     /// Legal `provider` values — the code/PR hosts.
     ///
     /// Derived from ``Provider`` rather than spelled out, so a new provider case
     /// lands in the CLI's `--provider` rejection message and the `workspace-*`
-    /// RPC validation without a second edit. Task-only providers (Jira, Corveil)
-    /// have no git surface, so they're never a code provider.
+    /// RPC validation without a second edit. Task-only providers (Jira) have no
+    /// git surface, so they're never a code provider.
     public static var validProviders: [String] {
         Provider.allCases.filter { !$0.isTaskOnly }.map(\.rawValue)
     }

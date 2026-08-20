@@ -17,7 +17,7 @@ capabilities, update this table in the same PR.
 
 > **Scope.** "Harness" here means a *coding agent* (`CodingAgent` /
 > `AgentKind`). Do not confuse it with the *task/code provider* abstraction
-> (`TaskBackend` / `CodeBackend` for GitHub / GitLab / Jira / Corveil), which is
+> (`TaskBackend` / `CodeBackend` for GitHub / GitLab / Jira), which is
 > a separate axis governed by [ADR 0005](adr/0005-task-and-code-backend-protocols.md).
 > A session pairs one harness with one (or two) providers.
 >

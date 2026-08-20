@@ -23,7 +23,7 @@ flowchart TB
         TMUX["tmux cockpit"]
         AGENTS["Claude Code agents"]
         GIT["git worktrees"]
-        PROV["GitHub · GitLab · Jira · Corveil"]
+        PROV["GitHub · GitLab · Jira"]
     end
 
     WEB -- "WebSocket: /rpc + /terminal" --> HTTP
@@ -58,7 +58,7 @@ crow/
 │   ├── CrowAutostart/               # Login-item installer (launchd LaunchAgent) for crowd
 │   ├── CrowTerminal/                # tmux backend + terminal cockpit
 │   ├── CrowGit/                     # Git operations
-│   ├── CrowProvider/                # GitHub/GitLab/Jira/Corveil provider abstraction
+│   ├── CrowProvider/                # GitHub/GitLab/Jira provider abstraction
 │   ├── CrowPersistence/             # JSON store, config persistence
 │   ├── CrowClaude / CrowCodex / CrowCursor / CrowOpenCode  # coding-agent adapters
 │   └── CrowTelemetry/               # telemetry

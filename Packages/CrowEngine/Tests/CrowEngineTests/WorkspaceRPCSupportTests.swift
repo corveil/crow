@@ -76,7 +76,7 @@ struct WorkspaceRPCSupportTests {
         #expect(try WorkspaceRPC.decodeProvider("github") == "github")
         #expect(try WorkspaceRPC.decodeProvider(" gitlab ") == "gitlab")
         // Task-only providers have no git surface.
-        for taskOnly in ["jira", "corveil", "bitbucket"] {
+        for taskOnly in ["jira", "bitbucket"] {
             #expect(throws: RPCError.self) { _ = try WorkspaceRPC.decodeProvider(taskOnly) }
         }
     }
@@ -439,10 +439,6 @@ struct WorkspaceRPCSupportTests {
                 _ = try WorkspaceRPC.applyPatch([key: .string("x")], to: &target)
             }
         }
-        var notCorveil = WorkspaceInfo(name: "Acme", taskProvider: "jira")
-        #expect(throws: RPCError.self) {
-            _ = try WorkspaceRPC.applyPatch(["corveil_host": .string("c.io")], to: &notCorveil)
-        }
     }
 
     /// The check runs against the *merged* result, so setting the provider and
@@ -524,7 +520,7 @@ struct WorkspaceRPCSupportTests {
             excludeReviewRepos: ["acme/legacy"], customInstructions: "Run make test.",
             taskProvider: "jira", jiraProjectKey: "PROPS", jiraJQL: "assignee = currentUser()",
             jiraSite: "acme.atlassian.net", jiraStatusMap: ["In Progress": "In Dev"],
-            corveilHost: nil, sessionEnv: ["AWS_PROFILE": "dev"])
+            sessionEnv: ["AWS_PROFILE": "dev"])
         let object = try #require(WorkspaceRPC.workspaceJSON(workspace).objectValue)
 
         #expect(object["id"] == .string(workspace.id.uuidString))
@@ -537,9 +533,6 @@ struct WorkspaceRPCSupportTests {
         #expect(object["always_include"] == .array([.string("acme/api")]))
         #expect(object["jira_status_map"] == .object(["In Progress": .string("In Dev")]))
         #expect(object["session_env"] == .object(["AWS_PROFILE": .string("dev")]))
-        // Unset optionals are explicit nulls, not missing keys, so a consumer can
-        // tell "cleared" from "this build doesn't report it".
-        #expect(object["corveil_host"] == .null)
     }
 
     /// `task_provider` reports the *effective* provider, so the extra flag is the

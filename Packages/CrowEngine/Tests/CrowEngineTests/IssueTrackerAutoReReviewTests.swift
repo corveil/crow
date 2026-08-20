@@ -211,7 +211,7 @@ struct IssueTrackerAutoReReviewTests {
     // MARK: - Tracker-level dispatch
 
     /// Tracker with one work session linked to `prURL`. The session's provider
-    /// is `.corveil` on purpose: it has no `CodeBackend`, so even if the
+    /// is `.jira` on purpose: it has no `CodeBackend`, so even if the
     /// dispatched `Task` runs after the test body it can only log, never shell
     /// out to `gh`. The assertions below are all synchronous and read the
     /// dispatch bookkeeping, which `applyPRStatuses` writes before the `Task`
@@ -225,7 +225,7 @@ struct IssueTrackerAutoReReviewTests {
     ) -> (tracker: IssueTracker, sessionID: UUID, state: AppState) {
         let state = AppState()
         var session = Session(name: "feature/x", kind: kind)
-        session.provider = .corveil
+        session.provider = .jira
         state.sessions = [session]
         state.links[session.id] = [
             SessionLink(sessionID: session.id, label: "PR #1898", url: prURL, linkType: .pr)
@@ -383,7 +383,7 @@ struct IssueTrackerAutoReReviewTests {
 
     @Test
     func aPermanentlyUnservableSessionIsNotRetriedEveryPoll() async {
-        // The session's provider (`.corveil`) has no `CodeBackend`, which is a
+        // The session's provider (`.jira`) has no `CodeBackend`, which is a
         // property of the session and cannot change under a live round. The
         // first cut cleared the round key here, so the watcher re-dispatched
         // every 60s poll for the life of the PR and emitted two un-deduped log

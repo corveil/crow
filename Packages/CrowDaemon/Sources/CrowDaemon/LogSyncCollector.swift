@@ -85,8 +85,8 @@ struct LogSyncCollector {
             }), workspace.uploadSessionLogs else { continue }
 
             // Destination + credential come SOLELY from this workspace's local-only
-            // `gateway` (CROW-1070) — never the browser-flippable `corveilHost` or
-            // any other web-writable field, so a remote peer who ticked the checkbox
+            // `gateway` (CROW-1070) — never a browser-flippable / web-writable
+            // field, so a remote peer who ticked the checkbox
             // cannot redirect a credential-bearing upload to a host it chose. No
             // gateway (or no resolvable key / blank base URL) ⇒ nothing to reuse ⇒
             // skip. This is the security invariant, asserted in the tests.
@@ -163,7 +163,7 @@ struct LogSyncCollector {
     /// The upload destination + credential for a workspace, derived **solely** from
     /// its local-only `gateway` (CROW-1070). This is the security invariant: the
     /// destination is `{gateway.baseURL}/api/crow-sessions/…` and the credential is
-    /// the gateway's Corveil key — never `corveilHost` or any other browser-writable
+    /// the gateway's Corveil key — never a browser-writable
     /// field, so a remote peer who ticked the `uploadSessionLogs` checkbox cannot
     /// redirect a credential-bearing upload.
     ///

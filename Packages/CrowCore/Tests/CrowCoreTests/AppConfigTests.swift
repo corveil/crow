@@ -642,7 +642,7 @@ import Testing
         reviewBlockingSeverities: [.red],
         taskProvider: "jira", jiraProjectKey: "PROPS", jiraJQL: "assignee = currentUser()",
         jiraSite: "acme.atlassian.net", jiraStatusMap: ["In Progress": "In Dev"],
-        corveilHost: "corveil.acme.io", sessionEnv: ["AWS_PROFILE": "dev"],
+        sessionEnv: ["AWS_PROFILE": "dev"],
         uploadSessionLogs: true,
         gateway: WorkspaceGateway(baseURL: "https://gw.acme.io", customHeaders: ["X-Key": "sk-1"]))
     let data = try JSONEncoder().encode(AppConfig(workspaces: [workspace]))
@@ -745,6 +745,19 @@ import Testing
     for provider in WorkspaceInfo.validProviders {
         #expect(Provider(rawValue: provider)?.isTaskOnly == false)
     }
+}
+
+/// CROW-1068: a legacy config carrying the retired `corveil` task provider
+/// decodes to nil ("follow the code provider") rather than an unmatched value
+/// that would silently blank the workspace's board.
+@Test func legacyCorveilTaskProviderDecodesToFollowCodeProvider() throws {
+    let json = #"""
+    {"workspaces": [{"id": "00000000-0000-0000-0000-000000000001", "name": "Org",
+      "provider": "github", "cli": "gh", "taskProvider": "corveil"}]}
+    """#.data(using: .utf8)!
+    let decoded = try JSONDecoder().decode(AppConfig.self, from: json)
+    #expect(decoded.workspaces[0].taskProvider == nil)
+    #expect(decoded.workspaces[0].derivedTaskProvider == "github")
 }
 
 @Test func workspaceNameValidation() {

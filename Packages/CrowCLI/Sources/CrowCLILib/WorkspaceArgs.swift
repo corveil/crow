@@ -33,7 +33,7 @@ struct WorkspaceFieldArgs: ParsableArguments {
     var host: String?
 
     @Option(name: .customLong("task-provider"),
-            help: "Where tickets live: github, gitlab, jira, or corveil (\"\" follows the code provider)")
+            help: "Where tickets live: github, gitlab, or jira (\"\" follows the code provider)")
     var taskProvider: String?
 
     @Option(name: .customLong("jira-site"), help: "Atlassian site, e.g. acme.atlassian.net (\"\" clears)")
@@ -58,10 +58,6 @@ struct WorkspaceFieldArgs: ParsableArguments {
     var jiraStatusDone: String?
     @Flag(name: .customLong("clear-jira-status-map"), help: "Drop every Crow→Jira status mapping")
     var clearJiraStatusMap: Bool = false
-
-    @Option(name: .customLong("corveil-host"),
-            help: "Self-hosted Corveil host, e.g. corveil.acme.io (\"\" clears; blank means corveil.io)")
-    var corveilHost: String?
 
     @Option(name: .customLong("custom-instructions"),
             help: "Free text appended to this workspace's session prompts (\"\" clears)")
@@ -122,7 +118,7 @@ struct WorkspaceFieldArgs: ParsableArguments {
     var hasAnyField: Bool {
         provider != nil || host != nil || taskProvider != nil
             || jiraSite != nil || jiraProjectKey != nil || jiraJQL != nil
-            || corveilHost != nil || customInstructions != nil || customInstructionsFile != nil
+            || customInstructions != nil || customInstructionsFile != nil
             || !alwaysInclude.isEmpty || !autoReviewRepos.isEmpty || !excludeReviewRepos.isEmpty
             || !sessionEnv.isEmpty || !reviewBlockingSeverities.isEmpty
             || uploadSessionLogs != nil
@@ -153,7 +149,6 @@ struct WorkspaceFieldArgs: ParsableArguments {
         if let jiraSite { params["jira_site"] = .string(jiraSite) }
         if let jiraProjectKey { params["jira_project_key"] = .string(jiraProjectKey) }
         if let jiraJQL { params["jira_jql"] = .string(jiraJQL) }
-        if let corveilHost { params["corveil_host"] = .string(corveilHost) }
 
         if let customInstructions { params["custom_instructions"] = .string(customInstructions) }
         if let customInstructionsFile {

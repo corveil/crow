@@ -1338,7 +1338,6 @@ Returns:
     "jira_project_key": "PROPS",
     "jira_jql": "assignee = currentUser() AND statusCategory != Done",
     "jira_status_map": { "In Progress": "In Dev" },
-    "corveil_host": null,
     "always_include": ["acme/api"],
     "auto_review_repos": ["acme/web"],
     "exclude_review_repos": [],
@@ -1437,7 +1436,7 @@ Notes:
 | ---------------------------- | -------------------------------------------------------------------------- |
 | `--provider`                 | Code/PR host: `github` or `gitlab`                                          |
 | `--host`                     | GitLab host, e.g. `gitlab.example.com` — GitLab workspaces only              |
-| `--task-provider`            | Where tickets live: `github`, `gitlab`, `jira`, `corveil`, or `""` to follow the code provider |
+| `--task-provider`            | Where tickets live: `github`, `gitlab`, `jira`, or `""` to follow the code provider |
 | `--jira-site`                | Atlassian site, e.g. `acme.atlassian.net`                                   |
 | `--jira-project-key`         | Jira project key, e.g. `PROPS`                                              |
 | `--jira-jql`                 | JQL for this workspace's ticket board                                       |
@@ -1447,7 +1446,6 @@ Notes:
 | `--jira-status-in-review`    | Jira workflow status name for **In Review**                                 |
 | `--jira-status-done`         | Jira workflow status name for **Done**                                      |
 | `--clear-jira-status-map`    | Drop every Crow→Jira status mapping                                         |
-| `--corveil-host`             | Self-hosted Corveil host — blank means the public `corveil.io`               |
 | `--custom-instructions`      | Free text appended to this workspace's session prompts                      |
 | `--custom-instructions-file` | Read `--custom-instructions` from a file; `-` reads stdin                   |
 | `--always-include`           | Repo always listed in the prompt table (repeatable)                         |

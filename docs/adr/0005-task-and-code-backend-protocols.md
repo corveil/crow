@@ -3,6 +3,12 @@
 - **Status:** Accepted (foundation #411, migration #454)
 - **Date:** 2026-06-03 (proposed), 2026-06-07 (accepted)
 - **Deciders:** Crow maintainers
+- **Update (2026-08-19, CROW-1068):** `CorveilTaskBackend` and the `.corveil`
+  task-provider were **removed** — the Corveil first-party **Tasks** API they
+  wrapped was retired (corveil/corveil#2440). The task/code split this ADR
+  established is unchanged; **Jira** is now the sole task-only exemplar. The
+  Corveil rows and mentions below are preserved as the history that motivated
+  the two-axis design — they no longer describe a live backend.
 
 ## Context
 

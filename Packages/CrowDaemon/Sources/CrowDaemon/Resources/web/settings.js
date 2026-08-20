@@ -1543,7 +1543,7 @@
       body.appendChild(textField('GitLab host', d, 'host', { placeholder: 'gitlab.example.com' }));
     }
     body.appendChild(selectField('Task provider', d, 'taskProvider', [
-      ['', 'Follow code provider'], ['github', 'GitHub'], ['gitlab', 'GitLab'], ['jira', 'Jira'], ['corveil', 'Corveil'],
+      ['', 'Follow code provider'], ['github', 'GitHub'], ['gitlab', 'GitLab'], ['jira', 'Jira'],
     ], { nullable: true, rerender: true, help: 'Where tickets live, independent of the code host.' }));
 
     if (d.taskProvider === 'jira') {
@@ -1557,9 +1557,6 @@
           { placeholder: 'Jira status name for ' + status }));
       }
       body.appendChild(el('div', 'st-help', 'Live "Fetch from Jira" status lookup is available in the desktop app.'));
-    }
-    if (d.taskProvider === 'corveil') {
-      body.appendChild(textField('Corveil host', d, 'corveilHost', { placeholder: 'corveil.acme.io (blank = corveil.io)' }));
     }
 
     body.appendChild(group('Repos'));

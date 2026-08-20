@@ -59,7 +59,7 @@ public actor GrokLauncher {
                 } else {
                     lines.append("URL: \(url)")
                 }
-            case .corveil, nil:
+            case nil:
                 lines.append("URL: \(url)")
             }
         }

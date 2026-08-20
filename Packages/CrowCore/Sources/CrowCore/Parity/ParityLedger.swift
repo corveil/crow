@@ -644,7 +644,6 @@ public enum ParityLedger {
         .field("workspaces[].jiraJQL", read: "workspace get", write: "workspace edit"),
         .field("workspaces[].jiraSite", read: "workspace get", write: "workspace edit"),
         .field("workspaces[].jiraStatusMap", read: "workspace get", write: "workspace edit"),
-        .field("workspaces[].corveilHost", read: "workspace get", write: "workspace edit"),
         .field("workspaces[].sessionEnv", read: "workspace get", write: "workspace edit"),
         // Per-workspace session-log opt-in (CROW-1066; sole opt-in since
         // CROW-1070). Writable from the same surfaces as every other workspace

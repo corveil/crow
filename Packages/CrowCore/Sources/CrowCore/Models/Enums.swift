@@ -33,12 +33,11 @@ public enum SessionStatus: String, Codable, Sendable, CaseIterable {
 ///
 /// Per ADR 0005 a "provider" is really two independent axes — a task tracker
 /// (where the work-unit lives) and a code host (where the PR lives). `.jira` is
-/// a **task-only** provider (no embedded git, like `.corveil`): a Jira-tasked
-/// session pairs with a GitHub/GitLab `CodeBackend` via `Session.codeProvider`.
+/// a **task-only** provider (no embedded git): a Jira-tasked session pairs with
+/// a GitHub/GitLab `CodeBackend` via `Session.codeProvider`.
 public enum Provider: String, Codable, Sendable, CaseIterable {
     case github
     case gitlab
-    case corveil
     case jira
 
     /// Task-only providers have no code/VCS surface (`ProviderManager.codeBackend`
@@ -46,7 +45,7 @@ public enum Provider: String, Codable, Sendable, CaseIterable {
     /// operations through `Session.codeProvider` instead.
     public var isTaskOnly: Bool {
         switch self {
-        case .corveil, .jira: return true
+        case .jira: return true
         case .github, .gitlab: return false
         }
     }

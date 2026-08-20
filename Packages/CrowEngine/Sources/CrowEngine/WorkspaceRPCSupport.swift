@@ -42,7 +42,7 @@ public enum WorkspaceRPC {
     public static let fieldKeys = [
         "name", "provider", "host", "task_provider",
         "jira_site", "jira_project_key", "jira_jql", "jira_status_map",
-        "corveil_host", "custom_instructions", "session_env",
+        "custom_instructions", "session_env",
         "always_include", "auto_review_repos", "exclude_review_repos",
         "review_blocking_severities", "upload_session_logs",
         "clear_always_include", "clear_auto_review_repos", "clear_exclude_review_repos",
@@ -360,9 +360,6 @@ public enum WorkspaceRPC {
             workspace.jiraProjectKey = blankToNil(key)
         }
         if let jql = try patchString(params, "jira_jql") { workspace.jiraJQL = blankToNil(jql) }
-        if let host = try patchString(params, "corveil_host") {
-            workspace.corveilHost = blankToNil(host)
-        }
         // Custom instructions are free text: trimmed only at the ends, and never
         // blank-stripped in the middle. An all-whitespace value clears.
         if let instructions = try patchString(params, "custom_instructions") {
@@ -467,10 +464,6 @@ public enum WorkspaceRPC {
             throw RPCError.invalidParams(
                 "\(written) applies to Jira workspaces only — set task_provider=\"jira\" (currently \"\(workspace.derivedTaskProvider)\")")
         }
-        if wrote("corveil_host"), workspace.derivedTaskProvider != "corveil" {
-            throw RPCError.invalidParams(
-                "corveil_host applies to Corveil workspaces only — set task_provider=\"corveil\" (currently \"\(workspace.derivedTaskProvider)\")")
-        }
     }
 
     /// Trim, and treat an all-whitespace value as "cleared".
@@ -512,7 +505,6 @@ public enum WorkspaceRPC {
         object["jira_site"] = workspace.jiraSite.map { .string($0) } ?? .null
         object["jira_project_key"] = workspace.jiraProjectKey.map { .string($0) } ?? .null
         object["jira_jql"] = workspace.jiraJQL.map { .string($0) } ?? .null
-        object["corveil_host"] = workspace.corveilHost.map { .string($0) } ?? .null
         object["jira_status_map"] = workspace.jiraStatusMap
             .map { JSONValue.object($0.mapValues { .string($0) }) } ?? .null
         object["session_env"] = workspace.sessionEnv
