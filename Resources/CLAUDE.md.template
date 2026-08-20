@@ -2,6 +2,22 @@
 
 This is the development root managed by Crow. The Manager tab runs Claude Code here to orchestrate work sessions via the `crow` CLI.
 
+## Naming this Manager session
+
+Additional Managers are created as `Manager 2`, `Manager 3`, … — a title that tells the operator nothing about the work. As soon as you know what this session is for, give it a name that reflects that, so the sidebar stays legible.
+
+**On the first real ask of this session** — the first user turn that hands you actual work, not a greeting — and before you start that work:
+
+1. If `$CROW_SESSION_ID` is `00000000-0000-0000-0000-000000000000`, you are the **primary Manager**. Never rename it — stop here.
+2. Run `crow get-session --session "$CROW_SESSION_ID"` and read `name`. If it is **not** of the form `Manager <N>` (e.g. `Manager 2`), this session was already named — stop here.
+3. Otherwise derive a short title from the ask: 2–6 words or a short slug (`ios-keyboard-cursor`, `review crow-1078`, `file keyboard bug`). It must be non-empty, ≤256 characters, free of control characters, and must not collide with an existing name — check `crow list-sessions`.
+4. Rename through the CLI, so the persist / sidebar row / agent `/rename` (CROW-629) all run on one path:
+   ```
+   crow rename-session --session "$CROW_SESSION_ID" "<derived-name>"
+   ```
+
+Do this **once**. After step 4 the name is no longer `Manager <N>`, so step 2 keeps it from firing again on later turns. Never rename on every message, and never rename the primary Manager or a session the operator already named.
+
 ## crow CLI Reference
 
 The `crow` CLI communicates with the Crow app via Unix socket at `~/.local/share/crow/crow.sock`. The app must be running for commands to work. All commands require `dangerouslyDisableSandbox: true` and return JSON.
