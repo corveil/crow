@@ -1748,6 +1748,48 @@ Only Claude Code transcripts are collected today (its logs are the one harness p
 
 ---
 
+## Session Backfill Commands
+
+The **historical session backfill** (CROW-1075) captures the coding-session transcripts already on disk — sessions that predate the live upload path or were reaped from Crow's store — and uploads them as **real, fully-linked** Corveil session artifacts, reconstructing the workspace / repo / ticket a live run would have carried. The live collector is session-centric (it walks Crow's store); this is the one-time reconciliation of the on-disk backlog. Claude Code only for v1 (the harness whose logs are partitioned by working directory).
+
+It reuses the live upload path, so it inherits its guarantees: the destination + credential come only from the named workspace's **local-only** AI gateway (never a browser-writable field), no AWS credentials touch this machine, and every upload is **idempotent** (a local ledger + the server's write-once 409). It is always **user-initiated** — never automatic or unbounded.
+
+### `crow backfill scan`
+
+```bash
+crow backfill scan
+```
+
+Reconciles every on-disk Claude transcript (`~/.claude/projects/**/*.jsonl`) against the upload ledger and returns the reconstructed rows plus a `summary`. Disk- and git-only (no provider calls), so it stays fast over hundreds of sessions. Each row carries the recovered `workspace` / `repo_name` / `owner_repo` / `ticket_number`, a `confidence` tier, and its ledger `upload_status`:
+
+| Confidence | Meaning |
+| --- | --- |
+| `high` | Repo resolved **and** a ticket number recovered — uploads with a validated ticket link |
+| `medium` | Repo recovered but no ticket — uploads repo-only |
+| `low` | Neither workspace nor repo matched (a true orphan) — uploads attributed but unlinked, only if selected |
+
+Ticket links are **validated at upload, not here** — a reconstructed `(repo, number)` becomes a REFERENCE only when the provider (`gh`/`glab`) confirms it exists.
+
+### `crow backfill upload`
+
+```bash
+crow backfill upload --workspace RadiusMethod --session <uid> --session <uid>
+crow backfill upload --workspace RadiusMethod --all-high-confidence
+crow backfill upload --workspace RadiusMethod --all
+```
+
+Uploads a chosen set through the live path, idempotently and serially. `--workspace` names the workspace whose gateway supplies the upload destination and credential (it must have a gateway configured). Choose sessions in exactly one way:
+
+| Flag | Description |
+| --- | --- |
+| `--session <uid>` | A Claude session UID to upload (repeatable; UIDs come from `crow backfill scan`) |
+| `--all-high-confidence` | Every not-yet-uploaded **high-confidence** session in this workspace |
+| `--all` | Every not-yet-uploaded session in this workspace |
+
+Returns a per-session `results` list (each `uploaded` / `already` / `skipped` / `failed`, whether it was `linked` to a validated ticket, and a `reason` for a skip/failure) and a roll-up `summary`. Re-running never duplicates — a slot the ledger records as uploaded is skipped.
+
+---
+
 ## MCP Commands
 
 Crow serves a **read-only** MCP surface so agent clients that speak MCP — Cowork, a Grok bot — can read the board without a Crow-launched session. Six tools over five read RPCs; there is no prompt-send, no session creation, and no config access. See [MCP](mcp.md) for client setup and the full tool list.

@@ -75,6 +75,13 @@ actor RPCDispatcher {
         /// and transition its ticket. Two at once would double every provider
         /// call.
         case tracker
+
+        /// The user-initiated historical backfill (`backfill-upload`, CROW-1075).
+        /// A single long upload run serializes against itself — two concurrent
+        /// backfills would double the provider validation and upload work — while
+        /// staying off the `config` lane so a lengthy backfill never blocks
+        /// ordinary Settings saves.
+        case backfill
     }
 
     // MARK: - Configuration

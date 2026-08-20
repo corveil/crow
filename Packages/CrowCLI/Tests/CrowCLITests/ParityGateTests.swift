@@ -263,11 +263,15 @@ struct ParityGateTests {
 
     /// Rows whose deliberate `isWrite` classification disagrees with the name.
     ///
-    /// Empty today. The hand classification always wins — a method named
-    /// `get-something` that mutates state is a write, full stop. This set only
-    /// forces the disagreement to be *stated* rather than sitting unnoticed in a
-    /// row nobody re-reads.
-    static let namingExceptions: Set<String> = []
+    /// The hand classification always wins — a method named `get-something` that
+    /// mutates state is a write, full stop. This set only forces the disagreement
+    /// to be *stated* rather than sitting unnoticed in a row nobody re-reads.
+    static let namingExceptions: Set<String> = [
+        // `backfill-scan` reconciles on-disk transcripts and returns them — a pure
+        // read — but its name isn't `get-`/`list-` prefixed, so the heuristic
+        // presumes a write (CROW-1075).
+        "backfill-scan",
+    ]
 
     /// `isWrite` is hand-set per row, deliberately, because a `get-`/`list-`
     /// heuristic would wave through a future write named `get-something`. But

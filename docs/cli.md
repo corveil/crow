@@ -28,6 +28,9 @@ Every subcommand and flag the `crow` binary accepts, generated from the commands
 | [`crow autostart install`](#crow-autostart-install) | Register crowd to start at login (idempotent; re-points after an upgrade) |
 | [`crow autostart status`](#crow-autostart-status) | Report whether crowd is set to start at login, and whether it's running |
 | [`crow autostart uninstall`](#crow-autostart-uninstall) | Remove the login item (leaves a running crowd alone) |
+| [`crow backfill`](#crow-backfill) | Reconcile and upload historical on-disk session transcripts |
+| [`crow backfill scan`](#crow-backfill-scan) | List on-disk sessions with reconstructed metadata and upload status |
+| [`crow backfill upload`](#crow-backfill-upload) | Upload selected historical sessions (idempotent) |
 | [`crow batch-work-on-issues`](#crow-batch-work-on-issues) | Start working on several tickets in one batch |
 | [`crow cleanup`](#crow-cleanup) | View or change automatic session cleanup |
 | [`crow cleanup get`](#crow-cleanup-get) | Show the current cleanup settings |
@@ -373,6 +376,55 @@ crow autostart uninstall [--json]
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |
 | `--json` | — | no | Print the status as JSON |
+
+---
+
+## `crow backfill`
+
+Reconcile and upload historical on-disk session transcripts.
+
+```
+crow backfill <scan|upload>
+```
+
+Scans the coding-session transcripts already on disk (~/.claude/projects), reconstructs each one's workspace, repo, and ticket/PR, and uploads the ones you choose to Corveil as session artifacts — so a backfilled session lands in the ontology indistinguishable from a live-captured one.
+
+A reconstructed ticket becomes a link only when the provider confirms it exists; otherwise the session uploads repo-only, and a true orphan uploads attributed but unlinked. Uploads reuse the named workspace's AI gateway for the destination and credential (no AWS credentials on this machine) and are idempotent — re-running never duplicates.
+
+Subcommands: [`scan`](#crow-backfill-scan), [`upload`](#crow-backfill-upload).
+
+---
+
+## `crow backfill scan`
+
+List on-disk sessions with reconstructed metadata and upload status.
+
+```
+crow backfill scan
+```
+
+Disk- and git-only (no provider calls), so it's fast over hundreds of sessions. Each row carries the recovered workspace/repo/ticket, a confidence tier (high = repo + ticket, medium = repo only, low = orphan), and its ledger upload status. Ticket links are validated at upload, not here.
+
+---
+
+## `crow backfill upload`
+
+Upload selected historical sessions (idempotent).
+
+```
+crow backfill upload --workspace <workspace> [--session <session> ...] [--all-high-confidence] [--all]
+```
+
+Choose sessions with repeated --session <uid> (UIDs come from `crow backfill scan`), or bulk-select this workspace's history with --all-high-confidence (repo + validated ticket) or --all. Exactly one selection mode is required.
+
+--workspace names the workspace whose AI gateway supplies the upload destination and credential; it must have a gateway configured. Uploads are serial and idempotent, so a re-run only fills gaps.
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--workspace` | `<workspace>` | yes | Workspace whose gateway supplies the upload destination + credential |
+| `--session` | `<session>` _(repeatable)_ | no | A Claude session UID to upload (repeatable). Mutually exclusive with --all/--all-high-confidence. |
+| `--all-high-confidence` | — | no | Upload every not-yet-uploaded high-confidence session in this workspace |
+| `--all` | — | no | Upload every not-yet-uploaded session in this workspace |
 
 ---
 

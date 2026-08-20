@@ -168,3 +168,10 @@ nor change.
 - The artifact contract + upload endpoint, [#2426](https://github.com/corveil/corveil/issues/2426)
   (`POST /api/crow-sessions/{sessionUID}/artifacts`).
 - `docs/agent-harness-matrix.md`, ADR 0014 / 0015.
+
+## See also
+
+- [session-backfill.md](session-backfill.md) — the **historical** backfill
+  ([CROW-1075](https://github.com/corveil/crow/issues/1075)): a user-initiated
+  reconciliation of the on-disk transcripts this session-centric collector never
+  reaches (reaped or ad-hoc sessions), reusing this same upload path.

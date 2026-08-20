@@ -273,3 +273,41 @@
 .st-about-update.st-update-ok { color: var(--text-muted); }
 .st-about-update.st-update-behind { color: var(--gold); }
 .st-about-update.st-update-unknown { color: var(--text-muted); font-style: italic; }
+
+/* -------- Backfill history dialog (CROW-1075) -------- */
+.backfill-modal { width: min(1040px, 96vw); height: min(720px, 92vh); }
+.backfill-summary {
+  font-size: 12px; color: var(--text-secondary);
+  padding-bottom: 10px; margin-bottom: 10px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.backfill-filters { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+.backfill-filter-text { flex: 1 1 240px; min-width: 160px; }
+.backfill-sel { flex: 0 0 auto; width: auto; }
+.backfill-table-wrap {
+  overflow: auto; border: 1px solid var(--border-subtle); border-radius: 8px;
+  max-height: 100%;
+}
+.backfill-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.backfill-table th, .backfill-table td {
+  text-align: left; padding: 6px 10px; white-space: nowrap;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.backfill-table thead th {
+  position: sticky; top: 0; z-index: 1;
+  background: var(--bg-card); color: var(--text-secondary);
+  font-weight: 600;
+}
+.backfill-table tbody tr:hover { background: rgba(221, 196, 130, 0.05); }
+.backfill-check { width: 32px; text-align: center; }
+.backfill-repo { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--text-primary); }
+.backfill-conf { color: var(--text-muted); }
+.backfill-row.conf-high .backfill-conf { color: var(--green); }
+.backfill-row.conf-medium .backfill-conf { color: var(--gold); }
+.backfill-row.conf-low .backfill-conf { color: var(--text-muted); }
+.backfill-status.status-uploaded { color: var(--green); }
+.backfill-status.status-skipped { color: var(--orange); }
+.backfill-status.status-failed { color: var(--red); }
+.backfill-status.status-new { color: var(--text-muted); }
+.backfill-empty { padding: 28px; text-align: center; color: var(--text-muted); font-size: 13px; }
+.backfill-note { font-size: 12px; color: var(--text-secondary); flex: 1 1 auto; }
