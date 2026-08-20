@@ -545,18 +545,20 @@ the UUID-scoped tier in CROW-1060). See
   reads as done. ⚠️ **Still open:** the probe was headless, so the *interactive
   TUI* claim CROW-545 originally asked about is inferred (same server bus), not
   measured — a TUI job session is the remaining human re-check.
-- **OpenCode child sessions leak into the parent's card** (confirmed 2026-08-13,
-  opencode 1.18.5; **pre-existing**, not introduced by CROW-1000). The bus is
-  per-server, and `session.status` / `session.idle` carry only a `sessionID` —
-  no parent link — so a **subagent's** status is mapped onto the one Crow
-  session UUID like the parent's. A run that delegated to a subagent emitted
+- **OpenCode child sessions are dropped from the card** (CROW-1082; gap
+  confirmed 2026-08-13, opencode 1.18.5). The bus is per-server, and
+  `session.status` / `session.idle` carry only a `sessionID` with no parent
+  link, so a **subagent's** status would otherwise map onto the one Crow session
+  UUID like the parent's — a run that delegated to a subagent emitted
   `SessionStart` (child `session.created`), then `Stop` when the **child** went
-  idle **1.9 s before the parent finished**, leaving the card `.done` mid-turn.
-  The deprecated `session.idle` had the identical failure, so this is a
-  standing gap rather than a regression. Fixing it means correlating
-  `session.created`'s `info.parentID` and dropping non-root sessions — a
-  distinct behavior change (it also re-opens what `SessionStart`/`PreToolUse`
-  should mean for subagents), so it is **not** in CROW-1000.
+  idle **1.9 s before the parent finished**, parking the card on `.done`
+  mid-turn. `session.created` is the one event exposing the parent link
+  (`info.parentID`), so the plugin records every child session's id there and
+  then **ignores that id's `session.status` / `session.idle`** — only the
+  **root** session (no `parentID`) drives the card, and a child no longer
+  re-announces via `SessionStart`. Scoped to the premature-`.done` failure: a
+  child's tool hooks still map to working state, which is correct because the
+  parent *is* working.
 
 > **Apply-order caveat (#903).** Since `crow hook-event` became fire-and-forget,
 > `PreToolUse` being non-async only guarantees the daemon *accepts* it ahead of
@@ -947,6 +949,7 @@ against current upstream CLIs.
 | Cursor `PostToolUse` / `Notification` async timing unconfirmed | — (empirical) | `CursorSignalSource` | 2026-07-24 |
 | Cursor interactive `--trust` (workspace-trust seed) — reverses the earlier headless-only omission; now emitted on **every** kind incl. `.review` | **min: Cursor CLI ≥ 2026.07.20** (changelog: interactive); verified `agent 2026.08.04` (`--help` drops "headless mode only"; pty run with no `--print` writes `.workspace-trusted` / `"trustMethod": "cli-flag"`) | `CursorLaunchArgs.trustSuffix` | 2026-08-10 (CROW-954) — emitted on every path. The `.review` carve-out is **removed**: `--force` was observed NOT to suppress the trust dialog (the CROW-890 "unverified" note, now settled), so the carve-out stranded unattended reviews on a prompt that gated nothing — review already runs `--force --approve-mcps`. Review clones are now defended by the launch-path `.cursor/` strip (`shouldStripCursorReviewClone`) instead. Pre-2026.07.20 CLI out of support; probed 2026.07.23 that the parser ignores a mode-gated flag (`--output-format json --version` exits 0), so older builds no-op `--trust` rather than reject. Re-probe if `--help` ever restores the headless-only qualifier |
 | OpenCode "done" signal is `session.status {idle}`, not the deprecated `session.idle` | opencode **1.18.5** (probed; `session.status` present) | `OpenCodeHookConfigWriter` | 2026-08-13 (CROW-1000) — upstream publishes **both** at turn end (`session/status.ts` `set` → Status then Idle, 246 µs apart), so the plugin latches on the first `session.status` and drops the compat event; older builds keep the `session.idle` fallback. `session.status` fires on every status write, not only on changes, so transitions are deduped per `sessionID`. ⚠️ Probed via headless `opencode run`, **not** the interactive TUI — the TUI pass is the open human re-check, as is a build ≥ **1.18.16** (the version the ticket cites for the deprecation docs). Re-probe if upstream stops emitting `session.idle` (fallback becomes dead code) or adds a fourth `SessionStatus` type |
+| OpenCode subagent child sessions carry no parent link on `session.status`/`session.idle` — only `session.created`'s `info.parentID` does | opencode **1.18.5** (child idle measured 1.9 s before parent finish) | `OpenCodeHookConfigWriter` | 2026-08-20 (CROW-1082) — plugin records every child id from `session.created` and drops that id's status/idle so only the **root** session moves the card; a child no longer emits `SessionStart` either. Scoped to premature `.done`; child tool hooks still map to working (parent is working). Re-probe if upstream stops populating `info.parentID` on `session.created`, or starts stamping a parent id onto `session.status`/`session.idle` (the guard could then key off that directly) |
 | Antigravity flags (`agy` hooks events, `-p` non-TTY stdout, `-c`/`--conversation` resume) | `agy` **v1.1.7 (2026-07-26)** | `AntigravityAgent` / `AntigravityHookConfigWriter` | 2026-07-26 — re-probe on upgrade |
 | Antigravity structured-stdout (would promote toward first-class parity) | upstream FRs **#119/#597** (`--output-format stream-json`), **#31** (ACP) | `AntigravitySignalSource` | 2026-07-26 — hooks are the only transport until either lands |
 | Antigravity bounded auto-permission has no verified interactive launch flag | `agy` **v1.1.7**; headless `-p` ignores `permissions.allow` (issue #548) | `AntigravityLaunchArgs.autoPermissionSuffix` | 2026-07-26 |
