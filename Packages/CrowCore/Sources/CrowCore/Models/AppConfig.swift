@@ -102,6 +102,14 @@ public struct AppConfig: Codable, Sendable, Equatable {
     /// one. Minted/revoked via the local-only `mcp-token-*` RPCs.
     public var mcpTokens: [MCPTokenRecord]
 
+    /// Session-log collector behavior tuning (CROW-1056; slimmed in CROW-1070).
+    /// Holds only the three global knobs — ledger retention, quiet period, upload
+    /// cap. The opt-in and the upload destination + credential are per-workspace
+    /// (the `uploadSessionLogs` checkbox reusing that workspace's local-only
+    /// `gateway`), so this block carries no secret and is an ordinary
+    /// browser-editable config block. `nil`/absent means all-default knobs.
+    public var logSync: LogSyncConfig?
+
     /// Effective review-exclude patterns: the global `defaults.excludeReviewRepos`
     /// unioned with every workspace's per-workspace `excludeReviewRepos`. A repo
     /// excluded by any workspace (or the global default) is hidden from the review
@@ -165,7 +173,8 @@ public struct AppConfig: Codable, Sendable, Equatable {
         managerGateway: WorkspaceGateway? = nil,
         jiraCredential: JiraCredential? = nil,
         webAuth: WebAuthConfig? = nil,
-        mcpTokens: [MCPTokenRecord] = []
+        mcpTokens: [MCPTokenRecord] = [],
+        logSync: LogSyncConfig? = nil
     ) {
         self.workspaces = workspaces
         self.defaults = defaults
@@ -192,6 +201,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         self.jiraCredential = jiraCredential
         self.webAuth = webAuth
         self.mcpTokens = mcpTokens
+        self.logSync = logSync
     }
 
     public init(from decoder: Decoder) throws {
@@ -245,6 +255,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         }
         webAuth = try container.decodeIfPresent(WebAuthConfig.self, forKey: .webAuth)
         mcpTokens = try container.decodeIfPresent([MCPTokenRecord].self, forKey: .mcpTokens) ?? []
+        logSync = try container.decodeIfPresent(LogSyncConfig.self, forKey: .logSync)
     }
 
     /// Pre-CROW-528 shape of the now-removed `atlassianMCP` config, decoded only
@@ -268,7 +279,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case workspaces, defaults, notifications, sidebar, switcher, remoteControlEnabled, managerAutoPermissionMode, jobsAutoPermissionMode, reviewAutoPermissionMode, coderViewAutoPermissionMode, telemetry, terminal, autoRespond, attributionTrailers, autoMergeWatcherEnabled, autoCreateWatcherEnabled, cleanup, versionUpdate, jobs, defaultAgentKind, agentsByKind, managerGateway, jiraCredential, webAuth, mcpTokens
+        case workspaces, defaults, notifications, sidebar, switcher, remoteControlEnabled, managerAutoPermissionMode, jobsAutoPermissionMode, reviewAutoPermissionMode, coderViewAutoPermissionMode, telemetry, terminal, autoRespond, attributionTrailers, autoMergeWatcherEnabled, autoCreateWatcherEnabled, cleanup, versionUpdate, jobs, defaultAgentKind, agentsByKind, managerGateway, jiraCredential, webAuth, mcpTokens, logSync
     }
 
     /// Resolve the agent that should drive a newly-created session of the
@@ -611,11 +622,6 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
     /// ``JiraTaskBackend.defaultJiraStatusName(for:)``. Only meaningful when
     /// `taskProvider == "jira"`. See #523.
     public var jiraStatusMap: [String: String]?
-    /// Self-hosted Corveil host (e.g. "corveil.acme.io") used **only** for URL
-    /// routing in `ProviderManager.detect` — Corveil's own auth/state lives in
-    /// the CLI (`corveil login`, `CORVEIL_URL`), so Crow doesn't pipe it through.
-    /// `nil` is fine: the public `corveil.io` is auto-detected.
-    public var corveilHost: String?
     /// Extra environment variables exported into every agent launched in this
     /// workspace, as a plain `KEY: VALUE` map.
     ///
@@ -630,6 +636,23 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
     /// Unlike ``gateway`` this is not treated as a credential: it is not stripped
     /// by `SettingsSecrets`, so don't put tokens here — use a gateway header.
     public var sessionEnv: [String: String]?
+
+    /// Opt this workspace's coding-session transcripts in to Corveil upload
+    /// (CROW-1066; sole opt-in since CROW-1070). A per-workspace checkbox in
+    /// Settings → Workspaces that **reuses this workspace's own `gateway`** for
+    /// both the upload destination (`{gateway.baseURL}/api/crow-sessions/…`) and
+    /// the credential (its `x-citadel-api-key`), so the operator never re-enters a
+    /// Corveil key or host. `LogSyncCollector` uploads a session iff this flag is
+    /// set **and** the workspace has a gateway to reuse — there is no separate
+    /// master switch.
+    ///
+    /// The reuse is what makes browser-flippability safe: the destination +
+    /// credential come only from the **local-only** `gateway` (never readable or
+    /// authorable from the web, and never from any browser-writable field),
+    /// so a remote peer ticking this box can at most turn one workspace's upload
+    /// on/off, to the operator's own Corveil, with a credential it can neither see
+    /// nor change. Default `false`.
+    public var uploadSessionLogs: Bool
 
     /// The CLI tool name derived from the current `provider` value.
     /// Unlike `cli` (which may be stale from an old config file), this is always correct.
@@ -665,8 +688,8 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
         jiraJQL: String? = nil,
         jiraSite: String? = nil,
         jiraStatusMap: [String: String]? = nil,
-        corveilHost: String? = nil,
         sessionEnv: [String: String]? = nil,
+        uploadSessionLogs: Bool = false,
         gateway: WorkspaceGateway? = nil
     ) {
         self.id = id
@@ -684,8 +707,8 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
         self.jiraJQL = jiraJQL
         self.jiraSite = jiraSite
         self.jiraStatusMap = jiraStatusMap
-        self.corveilHost = corveilHost
         self.sessionEnv = sessionEnv
+        self.uploadSessionLogs = uploadSessionLogs
         self.gateway = gateway
     }
 
@@ -717,12 +740,21 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
             }
             .flatMap { $0.isEmpty ? nil : $0 }
         taskProvider = try container.decodeIfPresent(String.self, forKey: .taskProvider)
+        // CROW-1068: the `corveil` task provider was removed with `CorveilTaskBackend`
+        // (the Corveil Tasks API it wrapped was retired, corveil/corveil#2440). A
+        // legacy config still carrying it decodes to nil ("follow the code provider")
+        // rather than a now-unmatched value that would silently blank the workspace's
+        // board — the poll only recognizes github/gitlab/jira. The write path
+        // (`WorkspaceRPC.decodeTaskProvider`) already rejects it, so this is the only
+        // way an old value survives, and it's normalized on the next save.
+        if taskProvider == "corveil" { taskProvider = nil }
         jiraProjectKey = try container.decodeIfPresent(String.self, forKey: .jiraProjectKey)
         jiraJQL = try container.decodeIfPresent(String.self, forKey: .jiraJQL)
         jiraSite = try container.decodeIfPresent(String.self, forKey: .jiraSite)
         jiraStatusMap = try container.decodeIfPresent([String: String].self, forKey: .jiraStatusMap)
-        corveilHost = try container.decodeIfPresent(String.self, forKey: .corveilHost)
         sessionEnv = try container.decodeIfPresent([String: String].self, forKey: .sessionEnv)
+        // Decode-tolerant (CROW-1066): an older config lacking the key opts out.
+        uploadSessionLogs = try container.decodeIfPresent(Bool.self, forKey: .uploadSessionLogs) ?? false
         gateway = try container.decodeIfPresent(WorkspaceGateway.self, forKey: .gateway)
     }
 
@@ -732,15 +764,15 @@ public struct WorkspaceInfo: Identifiable, Codable, Sendable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case id, name, provider, cli, host, alwaysInclude, autoReviewRepos, excludeReviewRepos, customInstructions
         case reviewBlockingSeverities
-        case taskProvider, jiraProjectKey, jiraJQL, jiraSite, jiraStatusMap, corveilHost, sessionEnv, gateway
+        case taskProvider, jiraProjectKey, jiraJQL, jiraSite, jiraStatusMap, sessionEnv, uploadSessionLogs, gateway
     }
 
     /// Legal `provider` values — the code/PR hosts.
     ///
     /// Derived from ``Provider`` rather than spelled out, so a new provider case
     /// lands in the CLI's `--provider` rejection message and the `workspace-*`
-    /// RPC validation without a second edit. Task-only providers (Jira, Corveil)
-    /// have no git surface, so they're never a code provider.
+    /// RPC validation without a second edit. Task-only providers (Jira) have no
+    /// git surface, so they're never a code provider.
     public static var validProviders: [String] {
         Provider.allCases.filter { !$0.isTaskOnly }.map(\.rawValue)
     }
@@ -1155,4 +1187,61 @@ public struct CleanupConfig: Codable, Sendable, Equatable {
     }
 
     enum CodingKeys: String, CodingKey { case enabled, retentionHours }
+}
+
+/// Session-log collector **behavior tuning** (CROW-1056, slimmed in CROW-1070) —
+/// the global knobs for the multi-harness session-log collector.
+///
+/// **Not a secret; not the opt-in.** Since CROW-1070 the upload *destination* and
+/// *credential* are the opting-in workspace's own **local-only AI gateway**
+/// (`WorkspaceInfo.gateway`) — never a field in this block — and the opt-in is the
+/// per-workspace `WorkspaceInfo.uploadSessionLogs` checkbox. So this block carries
+/// no credential, no destination and no opt-in list: only three behavior knobs.
+/// It is therefore an ordinary, browser-editable config block (Settings → General
+/// → "Session logs"), reachable over `set-config` and the (no-longer-local-only)
+/// `crow logsync` CLI alike.
+///
+/// The removed `enabled` / `baseURL` / `apiKeyRef` / `enabledWorkspaces` fields are
+/// migrated on first boot by ``LogSyncMigration`` — a legacy `enabledWorkspaces`
+/// opt-in becomes the matching workspace's `uploadSessionLogs`.
+public struct LogSyncConfig: Codable, Sendable, Equatable {
+    /// Days to retain entries in the local upload ledger before pruning
+    /// (housekeeping only — mirrors `TelemetryConfig.retentionDays`; the server
+    /// enforces its own artifact retention). 0 keeps entries forever.
+    public var retentionDays: Int
+    /// A session whose newest log file changed within this window is treated as
+    /// still active and is NOT uploaded yet — the server rejects a second upload
+    /// of the same `(session, harness, kind)` with 409, so the collector waits
+    /// for the transcript to go quiescent before capturing it once. Terminal
+    /// sessions (completed/archived) bypass this. Default 30 minutes.
+    public var quietPeriodMinutes: Int
+    /// Per-artifact upload cap in bytes. A larger transcript is truncated and
+    /// flagged. Kept at/under the server's own limit. Default 8,000,000.
+    public var maxUploadBytes: Int
+
+    public init(
+        retentionDays: Int = 30,
+        quietPeriodMinutes: Int = 30,
+        maxUploadBytes: Int = 8_000_000
+    ) {
+        self.retentionDays = retentionDays
+        self.quietPeriodMinutes = quietPeriodMinutes
+        self.maxUploadBytes = maxUploadBytes
+    }
+
+    /// Per-key tolerant decode — an older `config.json` lacking any field (or the
+    /// whole block) still decodes (CROW-814 idiom). The removed CROW-1070 keys
+    /// (`enabled`/`baseURL`/`apiKeyRef`/`enabledWorkspaces`) are simply ignored
+    /// here and dropped on the next encode; ``LogSyncMigration`` reads them once,
+    /// from the raw JSON, to carry a legacy opt-in over to `uploadSessionLogs`.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        retentionDays = try c.decodeIfPresent(Int.self, forKey: .retentionDays) ?? 30
+        quietPeriodMinutes = try c.decodeIfPresent(Int.self, forKey: .quietPeriodMinutes) ?? 30
+        maxUploadBytes = try c.decodeIfPresent(Int.self, forKey: .maxUploadBytes) ?? 8_000_000
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case retentionDays, quietPeriodMinutes, maxUploadBytes
+    }
 }

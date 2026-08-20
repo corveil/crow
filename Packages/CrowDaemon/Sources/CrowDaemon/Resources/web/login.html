@@ -4,6 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Crow — Sign in</title>
+  <!-- Web app manifest + apple-touch-icon (CROW-1073): the login page is served
+       pre-auth, so an install prompt reached here still gets the Crow identity. -->
+  <link rel="icon" type="image/svg+xml" href="/brand.svg">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <meta name="theme-color" content="#121416">
   <!-- Standalone: the auth gate blocks app.css/app.js until you're in, so this
        page inlines its own styles (CROW-593). -->
   <style>

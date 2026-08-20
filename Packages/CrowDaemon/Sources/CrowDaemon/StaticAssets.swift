@@ -25,6 +25,15 @@ enum StaticAssets {
         router.get("/settings.css") { req, _ in webResponse("settings.css", webDir: webDir, request: req) }
         router.get("/settings.js") { req, _ in webResponse("settings.js", webDir: webDir, request: req) }
         router.get("/brand.svg") { req, _ in webResponse("brand.svg", webDir: webDir, request: req) }
+        // Web app manifest + install icons (CROW-1073) so Chrome installs Crow as a
+        // standalone app with the Crow mark instead of a page screenshot. The manifest
+        // and its PNG icons are auth-exempt (WebAuthMiddleware.isAuthExempt) like
+        // brand.svg, so the pre-auth login page can reference them and Chrome's install
+        // prompt can fetch them on a remote session.
+        router.get("/manifest.webmanifest") { req, _ in webResponse("manifest.webmanifest", webDir: webDir, request: req) }
+        router.get("/icon-192.png") { req, _ in webResponse("icon-192.png", webDir: webDir, request: req) }
+        router.get("/icon-512.png") { req, _ in webResponse("icon-512.png", webDir: webDir, request: req) }
+        router.get("/apple-touch-icon.png") { req, _ in webResponse("apple-touch-icon.png", webDir: webDir, request: req) }
         // Build info for the Settings → About tab, written by
         // scripts/generate-build-info.sh. 404s gracefully when absent (the daemon
         // stays buildable without it — CROW-581).
@@ -153,6 +162,9 @@ enum StaticAssets {
         "style-src 'self' 'unsafe-inline'",
         "img-src 'self' data: blob:",
         "font-src 'self'",
+        // Same-origin web app manifest (CROW-1073). Redundant with default-src 'self'
+        // today, but explicit so a future default-src tightening can't break install.
+        "manifest-src 'self'",
         "connect-src 'self'",
         "worker-src 'self' blob:",
         "object-src 'none'",
@@ -166,6 +178,8 @@ enum StaticAssets {
         if file.hasSuffix(".html") { return "text/html; charset=utf-8" }
         if file.hasSuffix(".svg") { return "image/svg+xml" }
         if file.hasSuffix(".json") { return "application/json; charset=utf-8" }
+        if file.hasSuffix(".webmanifest") { return "application/manifest+json" }
+        if file.hasSuffix(".png") { return "image/png" }
         return "application/octet-stream"
     }
 }

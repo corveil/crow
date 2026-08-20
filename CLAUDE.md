@@ -5,6 +5,22 @@
 
 This is the development root managed by Crow. The Manager tab runs Claude Code here to orchestrate work sessions via the `crow` CLI.
 
+## Naming this Manager session
+
+Additional Managers are created as `Manager 2`, `Manager 3`, … — a title that tells the operator nothing about the work. As soon as you know what this session is for, give it a name that reflects that, so the sidebar stays legible.
+
+**On the first real ask of this session** — the first user turn that hands you actual work, not a greeting — and before you start that work:
+
+1. If `$CROW_SESSION_ID` is `00000000-0000-0000-0000-000000000000`, you are the **primary Manager**. Never rename it — stop here.
+2. Run `crow get-session --session "$CROW_SESSION_ID"` and read `name`. If it is **not** of the form `Manager <N>` (e.g. `Manager 2`), this session was already named — stop here.
+3. Otherwise derive a short title from the ask: 2–6 words or a short slug (`ios-keyboard-cursor`, `review crow-1078`, `file keyboard bug`). It must be non-empty, ≤256 characters, free of control characters, and must not collide with an existing name — check `crow list-sessions`.
+4. Rename through the CLI, so the persist / sidebar row / agent `/rename` (CROW-629) all run on one path:
+   ```
+   crow rename-session --session "$CROW_SESSION_ID" "<derived-name>"
+   ```
+
+Do this **once**. After step 4 the name is no longer `Manager <N>`, so step 2 keeps it from firing again on later turns. Never rename on every message, and never rename the primary Manager or a session the operator already named.
+
 ## Architecture Decision Records
 
 Architectural decisions live in [`docs/adr/`](docs/adr/). Read [`docs/adr/README.md`](docs/adr/README.md) for the index, and copy [`docs/adr/template.md`](docs/adr/template.md) to start a new one. When superseding a decision, update the old ADR's `Status` field to `Superseded by NNNN` — don't delete it. The history is the point.
@@ -258,7 +274,7 @@ crow workspace edit --workspace <name|uuid> [flags]      → patch; {"saved":fal
 crow workspace remove --workspace <name|uuid> [--force]  → {"removed":true,"gateway_discarded":bool,...}
 ```
 
-Field flags (shared by `add`/`edit`): `--provider github|gitlab`, `--host`, `--task-provider github|gitlab|jira|corveil`, `--jira-site`, `--jira-project-key`, `--jira-jql`, `--jira-status-{backlog,ready,in-progress,in-review,done}`, `--corveil-host`, `--custom-instructions[-file]`, `--always-include`, `--auto-review-repo`, `--exclude-review-repo`, `--review-blocking-severity red|yellow|green`, `--session-env KEY=VALUE`, and `--clear-{always-include,auto-review-repos,exclude-review-repos,jira-status-map,session-env,review-blocking-severities}`.
+Field flags (shared by `add`/`edit`): `--provider github|gitlab`, `--host`, `--task-provider github|gitlab|jira`, `--jira-site`, `--jira-project-key`, `--jira-jql`, `--jira-status-{backlog,ready,in-progress,in-review,done}`, `--custom-instructions[-file]`, `--always-include`, `--auto-review-repo`, `--exclude-review-repo`, `--review-blocking-severity red|yellow|green`, `--session-env KEY=VALUE`, `--upload-session-logs true|false`, and `--clear-{always-include,auto-review-repos,exclude-review-repos,jira-status-map,session-env,review-blocking-severities}`.
 
 - **Clearing:** optional scalars clear with an empty string (`--host ""`); lists/maps need their `--clear-*` flag. `--jira-status-ready ""` clears one entry.
 - **Repeatable flags replace the whole list**, they don't append — but `--jira-status-*` patches per key.
@@ -281,6 +297,35 @@ crow web-password clear                                                 → {"sa
 ```
 
 `gateway get` blanks header values unless `--reveal`. A `--header` with a blank value (`--header "X-Api-Key:"`) keeps the stored secret — that's how to change a base URL without restating credentials. A header value must not be wrapped in literal quotes (`--header 'X-Api-Key: "Bearer sk-…"'`) — they'd be sent as part of the credential and the gateway would reject the request; quote the whole `Name: Value` pair in your shell, not inside it. `web-password set` prompts twice with echo off; pipe with `--stdin` for scripts. There is no `--password` flag on purpose (shell history / `ps`).
+
+### Session-Log Sync
+
+The multi-harness session-log collector (CROW-1056). Uploads each opted-in workspace's coding-session transcripts to Corveil as session artifacts. **Default OFF**; best-effort — never blocks or fails a session. Since CROW-1070 the opt-in, destination and credential are all **per-workspace**: a workspace uploads iff its `--upload-session-logs` flag / Settings → Workspaces checkbox is on **and** it has an AI gateway, whose `baseURL` + `x-citadel-api-key` the upload reuses (no second key/host, no AWS creds on the laptop).
+
+`crow logsync` tunes only **global collector behavior** — no credential, so **not** local-only; it also backs the web Settings → General → Session logs section.
+
+```
+crow logsync get                                                        → {"logsync":{retention_days,quiet_period_minutes,max_upload_bytes,configured}}
+crow logsync set [--retention-days N] [--quiet-period-minutes N] [--max-upload-bytes N]   → {"logsync":{...},"saved":true}
+```
+
+- **Opt a workspace in elsewhere**: `crow workspace edit --workspace NAME --upload-session-logs true` (or the checkbox) + a gateway via `crow gateway set`. There is no `crow logsync` flag that opts a workspace in — CROW-1070 dropped the global master switch, base URL, API key and `enabledWorkspaces` list.
+- **Security invariant**: the upload destination + credential come only from the workspace's **local-only** gateway (`{gateway.baseURL}/api/crow-sessions/{id}/artifacts` + `x-citadel-api-key`), never `--corveil-host` or any browser-writable field. A workspace with no gateway uploads nothing.
+- `set` is a PATCH (only the flags you pass change; at least one required). Live within ~1 collector tick (~5 min); no restart.
+- **Migration**: a legacy `crow logsync set --add-workspace` opt-in is carried over to `--upload-session-logs` on first boot (only when the old master switch was on). Only Claude Code transcripts are collected today; other harnesses are wired as their log paths are confirmed.
+
+### Session Backfill
+
+The historical session backfill (CROW-1075) — reconcile the coding-session transcripts already on disk (predating the live path, or reaped from Crow's store) and upload the ones you choose as real, fully-linked Corveil session artifacts. Claude Code only for v1.
+
+```
+crow backfill scan                                                      → {"sessions":[{uid,workspace,repo_name,owner_repo,ticket_number,confidence,upload_status,...}],"summary":{total,uploaded,linkable,repo_only,orphan}}
+crow backfill upload --workspace NAME (--session UID … | --all-high-confidence | --all)   → {"results":[{uid,result,linked,owner_repo,ticket_number,reason}],"summary":{...}}
+```
+
+- `scan` is disk- and git-only (no provider calls) — fast over hundreds of sessions. Reconstructs each session's workspace/repo/ticket from the transcript's own `cwd`/`gitBranch` (authoritative, not the lossy slug) plus live git remotes; `confidence` is `high` (repo + ticket) · `medium` (repo only) · `low` (orphan).
+- `upload` reuses the **live path** and is **idempotent** (local ledger + server write-once 409). `--workspace` names the workspace whose local-only gateway supplies the destination + credential (same security invariant as the live collector). Choose exactly one selection mode; `--all-high-confidence`/`--all` scope to that workspace's sessions.
+- A reconstructed ticket becomes a **REFERENCE only when the provider (`gh`/`glab`) confirms it exists** — otherwise the session uploads repo-only, and a true orphan uploads attributed but unlinked. Never automatic or unbounded — the user always chooses.
 
 ### MCP
 

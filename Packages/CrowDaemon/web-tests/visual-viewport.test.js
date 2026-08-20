@@ -8,6 +8,11 @@ const { JSDOM } = require('jsdom');
 // the "leave every non-phone surface alone" guards are pinned without a device.
 // CROW-1045 adds the desktop-WKWebView guard: `visualViewport` presence is not a
 // keyboard, so a non-touch surface must stay fully inert (case 1b).
+// CROW-1078 adds the cursor reconciliation: re-home the off-screen helper
+// textarea so iOS stops chasing it (cases 10, 11), keep the keyboard-presence
+// test independent of a chased visual-viewport scroll (case 12), and repaint the
+// cursor when the inset changes (case 13). keyboardCapable is exported and shared
+// with app.js's WebGL gate (case 14).
 const ADDON_JS =
   __dirname + '/../../CrowTerminal/Sources/CrowTerminal/Resources/xterm/xterm-addon-crow-viewport.js';
 
@@ -70,10 +75,20 @@ function makeWorld({ hasVisualViewport = true, hostTop = HOST_TOP, keyboardCapab
   // term.open(), which is what the addon defaults its host to.
   const element = window.document.createElement('div');
   host.appendChild(element);
+  // The helper textarea xterm parks off-screen; the addon re-homes it and hooks
+  // its focus to reconcile the cursor (CROW-1078). A real element so a dispatched
+  // focus event reaches the addon's listener.
+  const textarea = window.document.createElement('textarea');
+  textarea.className = 'xterm-helper-textarea';
+  element.appendChild(textarea);
   const scrolls = [];
   const resizes = [];
+  const refreshes = [];
   const term = {
     element,
+    textarea,
+    rows: 24,
+    refresh: (a, b) => refreshes.push([a, b]),
     buffer: { active: { viewportY: 10, baseY: 10 } }, // at the live edge
     scrollToBottom: () => scrolls.push(1),
   };
@@ -89,7 +104,7 @@ function makeWorld({ hasVisualViewport = true, hostTop = HOST_TOP, keyboardCapab
   };
 
   return {
-    window, vv, host, term, addon, scrolls, resizes, listeners, flush, frames, emit,
+    window, vv, host, term, addon, scrolls, resizes, refreshes, listeners, flush, frames, emit,
     activate: () => addon.activate(term),
     height: () => host.style.height,
     // A keyboard of `px`, iOS-style: visual viewport shrinks, layout does not.
@@ -97,6 +112,12 @@ function makeWorld({ hasVisualViewport = true, hostTop = HOST_TOP, keyboardCapab
     // `display: none` — the web app hides the terminal while a board is open.
     hide: () => { clientHeight = 0; },
     show: () => { clientHeight = LAYOUT_HEIGHT - hostTop; },
+    // iOS raises the keyboard on focus; dispatch it, then settle the frame.
+    focus: () => { textarea.dispatchEvent(new window.Event('focus')); flush(); },
+    // The on-screen park <style> the addon injects (touch surfaces only).
+    homeStyle: () => window.document.getElementById('crow-vv-textarea-home'),
+    // The addon's exported namespace (keyboardCapable is shared with app.js).
+    ns: () => ctx.CrowViewportAddon,
   };
 }
 
@@ -263,6 +284,95 @@ function makeWorld({ hasVisualViewport = true, hostTop = HOST_TOP, keyboardCapab
   // A frame already in flight must not touch a disposed terminal.
   w.flush();
   check('no pin after dispose', w.scrolls.length === 0);
+}
+
+// ---- 10. Touch surface re-homes the parked helper textarea -----------------
+// CROW-1078 #1: xterm parks .xterm-helper-textarea at left:-9999em. On a touch
+// surface iOS scrolls the visual viewport to chase that off-screen field the
+// instant it's focused, stranding the cursor. The addon re-parks it on-screen
+// with a stylesheet rule that must yield to xterm's own inline sync.
+{
+  console.log('touch surface re-homes the parked helper textarea');
+  const w = makeWorld();
+  check('no park style before activate', !w.homeStyle());
+  w.activate();
+  const style = w.homeStyle();
+  check('injects the on-screen park style', !!style);
+  check('parks the field on-screen, not at -9999em',
+    !!style && /left:\s*0/.test(style.textContent) && !/9999/.test(style.textContent));
+  check('rule is NOT !important (so xterm inline sync still wins the cell)',
+    !!style && !/!important/i.test(style.textContent));
+  check('targets the helper textarea',
+    !!style && /\.xterm-helper-textarea/.test(style.textContent));
+}
+
+// ---- 11. Focus reconciles the cursor the moment the keyboard is raised ------
+// iOS opens the keyboard on focus, before the trailing vv resize/scroll — so a
+// focus reconcile makes the first keyboard frame correct.
+{
+  console.log('focus reconciles when the keyboard is raised');
+  const w = makeWorld();
+  w.activate();
+  w.keyboard(300);     // keyboard-sized shrink already present at focus time
+  w.focus();
+  check('focus sized the host', w.height() === '380px');
+  check('focus repainted the cursor', w.refreshes.length >= 1);
+}
+
+// ---- 12. A chased visual-viewport scroll still reads as a keyboard ----------
+// CROW-1078 #4: iOS scrolls the visual viewport (offsetTop grows) to chase the
+// textarea. The OLD occlusion test, layoutHeight - (offsetTop + height), then
+// computes ~0 and wrongly restores. Keyboard height, layoutHeight - height, is
+// independent of the scroll and still fires; sizing still uses offsetTop.
+{
+  console.log('chased visual-viewport scroll still reads as keyboard');
+  const w = makeWorld();
+  w.activate();
+  w.vv.offsetTop = 200; // iOS scrolled down chasing the field
+  w.keyboard(300);      // vv.height = 500
+  w.emit();
+  // Old math: 800 - (200 + 500) = 100 ≤ 120 → would have restored (no keyboard).
+  // New math: 800 - 500 = 300 > 120 → detected.
+  check('still detects the keyboard', w.resizes.length === 1);
+  // Sizing uses visibleBottom = offsetTop + height = 700; host top is 120.
+  check('host sized to the visible bottom (offsetTop honored)', w.height() === '580px');
+  check('cursor repainted on apply', w.refreshes.length >= 1);
+}
+
+// ---- 13. Cursor is repainted on both apply and restore ---------------------
+// CROW-1078 #3: after the inset is applied or released the drawn cursor can lag
+// the moved host, so the addon forces a repaint each way.
+{
+  console.log('cursor repainted on apply and restore');
+  const w = makeWorld();
+  w.activate();
+  w.keyboard(300);
+  w.emit();
+  const afterOpen = w.refreshes.length;
+  check('repaints when the inset is applied', afterOpen >= 1);
+  check('repaint spans the whole grid', w.refreshes[0][0] === 0 && w.refreshes[0][1] === 23);
+  w.keyboard(0);
+  w.emit();
+  check('repaints again when the inset is released', w.refreshes.length > afterOpen);
+}
+
+// ---- 14. keyboardCapable is exported and shared with app.js -----------------
+// CROW-1078 #5: app.js drops WebGL on touch surfaces using THIS test, so it must
+// be exported and agree with the addon's own gate.
+{
+  console.log('keyboardCapable is exported and shared');
+  const phone = makeWorld();                          // coarse pointer
+  check('exported as a function', typeof phone.ns().keyboardCapable === 'function');
+  check('true on a touch surface', phone.ns().keyboardCapable() === true);
+  const desk = makeWorld({ keyboardCapable: false }); // desktop WKWebView
+  check('false on a non-touch surface', desk.ns().keyboardCapable() === false);
+  // And the desktop surface injects no park style / wires no focus reconcile.
+  desk.activate();
+  check('desktop injects no park style', !desk.homeStyle());
+  desk.keyboard(300);
+  desk.focus();
+  check('desktop does not size on focus', desk.height() === '');
+  check('desktop does not repaint on focus', desk.refreshes.length === 0);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -28,12 +28,14 @@ Every subcommand and flag the `crow` binary accepts, generated from the commands
 | [`crow autostart install`](#crow-autostart-install) | Register crowd to start at login (idempotent; re-points after an upgrade) |
 | [`crow autostart status`](#crow-autostart-status) | Report whether crowd is set to start at login, and whether it's running |
 | [`crow autostart uninstall`](#crow-autostart-uninstall) | Remove the login item (leaves a running crowd alone) |
+| [`crow backfill`](#crow-backfill) | Reconcile and upload historical on-disk session transcripts |
+| [`crow backfill scan`](#crow-backfill-scan) | List on-disk sessions with reconstructed metadata and upload status |
+| [`crow backfill upload`](#crow-backfill-upload) | Upload selected historical sessions (idempotent) |
 | [`crow batch-work-on-issues`](#crow-batch-work-on-issues) | Start working on several tickets in one batch |
 | [`crow cleanup`](#crow-cleanup) | View or change automatic session cleanup |
 | [`crow cleanup get`](#crow-cleanup-get) | Show the current cleanup settings |
 | [`crow cleanup set`](#crow-cleanup-set) | Change automatic session cleanup |
 | [`crow close-terminal`](#crow-close-terminal) | Close a terminal tab in a session |
-| [`crow codex-notify`](#crow-codex-notify) | Bridge Codex's notify command into Crow's hook-event pipeline |
 | [`crow complete-session`](#crow-complete-session) | Mark a session completed |
 | [`crow corveil`](#crow-corveil) | Verify the configured Corveil CLI binary, and reinstall its skill |
 | [`crow corveil reinstall-skill`](#crow-corveil-reinstall-skill) | Reinstall every embedded slash command from the corveil binary |
@@ -73,6 +75,9 @@ Every subcommand and flag the `crow` binary accepts, generated from the commands
 | [`crow list-terminals`](#crow-list-terminals) | List terminals for a session |
 | [`crow list-tickets`](#crow-list-tickets) | List the ticket board (issues, per-status counts, loading state) |
 | [`crow list-worktrees`](#crow-list-worktrees) | List worktrees for a session |
+| [`crow logsync`](#crow-logsync) | View or change session-log upload behavior knobs |
+| [`crow logsync get`](#crow-logsync-get) | Show the session-log collector behavior knobs |
+| [`crow logsync set`](#crow-logsync-set) | Change session-log upload behavior knobs |
 | [`crow mark-in-review`](#crow-mark-in-review) | Move a session to In Review |
 | [`crow mark-issue-done`](#crow-mark-issue-done) | Close the session's linked issue and complete the session |
 | [`crow mcp`](#crow-mcp) | Serve Crow over MCP, and manage the tokens remote clients use |
@@ -374,6 +379,55 @@ crow autostart uninstall [--json]
 
 ---
 
+## `crow backfill`
+
+Reconcile and upload historical on-disk session transcripts.
+
+```
+crow backfill <scan|upload>
+```
+
+Scans the coding-session transcripts already on disk (~/.claude/projects), reconstructs each one's workspace, repo, and ticket/PR, and uploads the ones you choose to Corveil as session artifacts — so a backfilled session lands in the ontology indistinguishable from a live-captured one.
+
+A reconstructed ticket becomes a link only when the provider confirms it exists; otherwise the session uploads repo-only, and a true orphan uploads attributed but unlinked. Uploads reuse the named workspace's AI gateway for the destination and credential (no AWS credentials on this machine) and are idempotent — re-running never duplicates.
+
+Subcommands: [`scan`](#crow-backfill-scan), [`upload`](#crow-backfill-upload).
+
+---
+
+## `crow backfill scan`
+
+List on-disk sessions with reconstructed metadata and upload status.
+
+```
+crow backfill scan
+```
+
+Disk- and git-only (no provider calls), so it's fast over hundreds of sessions. Each row carries the recovered workspace/repo/ticket, a confidence tier (high = repo + ticket, medium = repo only, low = orphan), and its ledger upload status. Ticket links are validated at upload, not here.
+
+---
+
+## `crow backfill upload`
+
+Upload selected historical sessions (idempotent).
+
+```
+crow backfill upload --workspace <workspace> [--session <session> ...] [--all-high-confidence] [--all]
+```
+
+Choose sessions with repeated --session <uid> (UIDs come from `crow backfill scan`), or bulk-select this workspace's history with --all-high-confidence (repo + validated ticket) or --all. Exactly one selection mode is required.
+
+--workspace names the workspace whose AI gateway supplies the upload destination and credential; it must have a gateway configured. Uploads are serial and idempotent, so a re-run only fills gaps.
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--workspace` | `<workspace>` | yes | Workspace whose gateway supplies the upload destination + credential |
+| `--session` | `<session>` _(repeatable)_ | no | A Claude session UID to upload (repeatable). Mutually exclusive with --all/--all-high-confidence. |
+| `--all-high-confidence` | — | no | Upload every not-yet-uploaded high-confidence session in this workspace |
+| `--all` | — | no | Upload every not-yet-uploaded session in this workspace |
+
+---
+
 ## `crow batch-work-on-issues`
 
 Start working on several tickets in one batch.
@@ -446,20 +500,6 @@ crow close-terminal --session <session> --terminal <terminal>
 | --- | --- | --- | --- |
 | `--session` | `<session>` | yes | Session UUID |
 | `--terminal` | `<terminal>` | yes | Terminal UUID |
-
----
-
-## `crow codex-notify`
-
-Bridge Codex's notify command into Crow's hook-event pipeline.
-
-```
-crow codex-notify [<payload-arg> ...]
-```
-
-| Flag | Value | Required | Description |
-| --- | --- | --- | --- |
-| _(positional)_ | `<payload-arg>` _(repeatable)_ | no | Codex notify JSON payload (final positional arg) |
 
 ---
 
@@ -1063,6 +1103,54 @@ crow list-worktrees --session <session>
 
 ---
 
+## `crow logsync`
+
+View or change session-log upload behavior knobs.
+
+```
+crow logsync <get|set>
+```
+
+The session-log collector uploads each opted-in workspace's coding-session transcripts to Corveil as session artifacts, reusing that workspace's AI gateway for the destination and credential (no AWS credentials are stored on this machine). Opt a workspace in with `crow workspace edit --workspace NAME --upload-session-logs true` (or the Settings → Workspaces checkbox); it uploads once it also has a gateway.
+
+These verbs tune only global behavior — ledger retention, the quiet period before a transcript is captured, and the per-upload size cap. Uploads are best-effort and never block or fail a session. Only Claude Code transcripts are collected today; other harnesses are wired as their on-disk log locations are confirmed.
+
+Subcommands: [`get`](#crow-logsync-get), [`set`](#crow-logsync-set).
+
+---
+
+## `crow logsync get`
+
+Show the session-log collector behavior knobs.
+
+```
+crow logsync get
+```
+
+---
+
+## `crow logsync set`
+
+Change session-log upload behavior knobs.
+
+```
+crow logsync set [--retention-days <retention-days>] [--quiet-period-minutes <quiet-period-minutes>] [--max-upload-bytes <max-upload-bytes>]
+```
+
+Only the flags you pass change; at least one is required.
+
+Opt a workspace in (and set its gateway) elsewhere — with `crow workspace edit --upload-session-logs true` and `crow gateway set`. These flags only tune collector behavior.
+
+Live: the collector re-reads config each tick, so changes apply within a few minutes with no restart.
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--retention-days` | `<retention-days>` | no | Days to keep the local upload ledger (0 = forever, default 30) |
+| `--quiet-period-minutes` | `<quiet-period-minutes>` | no | Wait this long after a session's last activity before uploading (default 30) |
+| `--max-upload-bytes` | `<max-upload-bytes>` | no | Per-transcript upload cap in bytes (default 8000000) |
+
+---
+
 ## `crow mark-in-review`
 
 Move a session to In Review.
@@ -1089,7 +1177,7 @@ Close the session's linked issue and complete the session.
 crow mark-issue-done --session <session>
 ```
 
-GitHub/GitLab close the issue; Jira and Corveil transition it to the mapped done status. On success the session flips to completed. Requires a linked ticket and a provider-configured daemon.
+GitHub/GitLab close the issue; Jira transitions it to the mapped done status. On success the session flips to completed. Requires a linked ticket and a provider-configured daemon.
 
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |
@@ -1934,7 +2022,7 @@ Subcommands: [`list`](#crow-workspace-list), [`get`](#crow-workspace-get), [`add
 Create a workspace.
 
 ```
-crow workspace add --name <name> [--provider <provider>] [--host <host>] [--task-provider <task-provider>] [--jira-site <jira-site>] [--jira-project-key <jira-project-key>] [--jira-jql <jira-jql>] [--jira-status-backlog <jira-status-backlog>] [--jira-status-ready <jira-status-ready>] [--jira-status-in-progress <jira-status-in-progress>] [--jira-status-in-review <jira-status-in-review>] [--jira-status-done <jira-status-done>] [--clear-jira-status-map] [--corveil-host <corveil-host>] [--custom-instructions <custom-instructions>] [--custom-instructions-file <custom-instructions-file>] [--always-include <always-include> ...] [--clear-always-include] [--auto-review-repo <auto-review-repo> ...] [--clear-auto-review-repos] [--exclude-review-repo <exclude-review-repo> ...] [--clear-exclude-review-repos] [--session-env <session-env> ...] [--clear-session-env] [--review-blocking-severity <review-blocking-severity> ...] [--clear-review-blocking-severities]
+crow workspace add --name <name> [--provider <provider>] [--host <host>] [--task-provider <task-provider>] [--jira-site <jira-site>] [--jira-project-key <jira-project-key>] [--jira-jql <jira-jql>] [--jira-status-backlog <jira-status-backlog>] [--jira-status-ready <jira-status-ready>] [--jira-status-in-progress <jira-status-in-progress>] [--jira-status-in-review <jira-status-in-review>] [--jira-status-done <jira-status-done>] [--clear-jira-status-map] [--custom-instructions <custom-instructions>] [--custom-instructions-file <custom-instructions-file>] [--always-include <always-include> ...] [--clear-always-include] [--auto-review-repo <auto-review-repo> ...] [--clear-auto-review-repos] [--exclude-review-repo <exclude-review-repo> ...] [--clear-exclude-review-repos] [--session-env <session-env> ...] [--clear-session-env] [--upload-session-logs <upload-session-logs>] [--review-blocking-severity <review-blocking-severity> ...] [--clear-review-blocking-severities]
 ```
 
 Only --name is required; every other field takes its documented default and can be set later with `crow workspace edit`. The name becomes a directory under the dev root, so it cannot contain / or :, cannot be "." or "..", and must not collide with an existing workspace (case-insensitively).
@@ -1946,7 +2034,7 @@ Creating a workspace does not create its directory — the daemon scaffolds it o
 | `--name` | `<name>` | yes | Workspace name (becomes a folder under the dev root) |
 | `--provider` | `<provider>` | no | Code/PR host: github or gitlab |
 | `--host` | `<host>` | no | GitLab host, e.g. gitlab.example.com (GitLab workspaces only; "" clears) |
-| `--task-provider` | `<task-provider>` | no | Where tickets live: github, gitlab, jira, or corveil ("" follows the code provider) |
+| `--task-provider` | `<task-provider>` | no | Where tickets live: github, gitlab, or jira ("" follows the code provider) |
 | `--jira-site` | `<jira-site>` | no | Atlassian site, e.g. acme.atlassian.net ("" clears) |
 | `--jira-project-key` | `<jira-project-key>` | no | Jira project key, e.g. PROPS ("" clears) |
 | `--jira-jql` | `<jira-jql>` | no | JQL for this workspace's ticket board ("" clears) |
@@ -1956,7 +2044,6 @@ Creating a workspace does not create its directory — the daemon scaffolds it o
 | `--jira-status-in-review` | `<jira-status-in-review>` | no | Jira status name for In Review ("" clears) |
 | `--jira-status-done` | `<jira-status-done>` | no | Jira status name for Done ("" clears) |
 | `--clear-jira-status-map` | — | no | Drop every Crow→Jira status mapping |
-| `--corveil-host` | `<corveil-host>` | no | Self-hosted Corveil host, e.g. corveil.acme.io ("" clears; blank means corveil.io) |
 | `--custom-instructions` | `<custom-instructions>` | no | Free text appended to this workspace's session prompts ("" clears) |
 | `--custom-instructions-file` | `<custom-instructions-file>` | no | Read --custom-instructions from a file; '-' reads stdin |
 | `--always-include` | `<always-include>` _(repeatable)_ | no | Repo always listed in the prompt table (repeatable; replaces the whole list) |
@@ -1967,6 +2054,7 @@ Creating a workspace does not create its directory — the daemon scaffolds it o
 | `--clear-exclude-review-repos` | — | no | Empty the exclude-from-reviews list |
 | `--session-env` | `<session-env>` _(repeatable)_ | no | KEY=VALUE exported into agents in this workspace (repeatable; replaces the whole map) |
 | `--clear-session-env` | — | no | Drop every session env var |
+| `--upload-session-logs` | `<upload-session-logs>` | no | Upload this workspace's coding-session transcripts to Corveil, reusing its gateway credential: true or false (needs the local-only log-sync master switch on) |
 | `--review-blocking-severity` | `<review-blocking-severity>` _(repeatable)_ | no | Review finding severity that forces --request-changes (repeatable; replaces the whole list; default red + yellow). Values: `red`, `yellow`, `green`. |
 | `--clear-review-blocking-severities` | — | no | Restore the default review blocking set (red + yellow) |
 
@@ -1977,7 +2065,7 @@ Creating a workspace does not create its directory — the daemon scaffolds it o
 Change fields on an existing workspace.
 
 ```
-crow workspace edit --workspace <workspace> [--name <name>] [--provider <provider>] [--host <host>] [--task-provider <task-provider>] [--jira-site <jira-site>] [--jira-project-key <jira-project-key>] [--jira-jql <jira-jql>] [--jira-status-backlog <jira-status-backlog>] [--jira-status-ready <jira-status-ready>] [--jira-status-in-progress <jira-status-in-progress>] [--jira-status-in-review <jira-status-in-review>] [--jira-status-done <jira-status-done>] [--clear-jira-status-map] [--corveil-host <corveil-host>] [--custom-instructions <custom-instructions>] [--custom-instructions-file <custom-instructions-file>] [--always-include <always-include> ...] [--clear-always-include] [--auto-review-repo <auto-review-repo> ...] [--clear-auto-review-repos] [--exclude-review-repo <exclude-review-repo> ...] [--clear-exclude-review-repos] [--session-env <session-env> ...] [--clear-session-env] [--review-blocking-severity <review-blocking-severity> ...] [--clear-review-blocking-severities] [--force]
+crow workspace edit --workspace <workspace> [--name <name>] [--provider <provider>] [--host <host>] [--task-provider <task-provider>] [--jira-site <jira-site>] [--jira-project-key <jira-project-key>] [--jira-jql <jira-jql>] [--jira-status-backlog <jira-status-backlog>] [--jira-status-ready <jira-status-ready>] [--jira-status-in-progress <jira-status-in-progress>] [--jira-status-in-review <jira-status-in-review>] [--jira-status-done <jira-status-done>] [--clear-jira-status-map] [--custom-instructions <custom-instructions>] [--custom-instructions-file <custom-instructions-file>] [--always-include <always-include> ...] [--clear-always-include] [--auto-review-repo <auto-review-repo> ...] [--clear-auto-review-repos] [--exclude-review-repo <exclude-review-repo> ...] [--clear-exclude-review-repos] [--session-env <session-env> ...] [--clear-session-env] [--upload-session-logs <upload-session-logs>] [--review-blocking-severity <review-blocking-severity> ...] [--clear-review-blocking-severities] [--force]
 ```
 
 Only the provided flags change. A repeatable list flag replaces the whole list rather than appending, matching `crow job edit`; use the matching --clear-* flag to empty one. The --jira-status-* flags patch individually — each sets one mapping and leaves the other four alone.
@@ -1992,7 +2080,7 @@ An edit whose values already hold is reported as "saved": false and skips the wr
 | `--name` | `<name>` | no | New workspace name (see the rename guard above) |
 | `--provider` | `<provider>` | no | Code/PR host: github or gitlab |
 | `--host` | `<host>` | no | GitLab host, e.g. gitlab.example.com (GitLab workspaces only; "" clears) |
-| `--task-provider` | `<task-provider>` | no | Where tickets live: github, gitlab, jira, or corveil ("" follows the code provider) |
+| `--task-provider` | `<task-provider>` | no | Where tickets live: github, gitlab, or jira ("" follows the code provider) |
 | `--jira-site` | `<jira-site>` | no | Atlassian site, e.g. acme.atlassian.net ("" clears) |
 | `--jira-project-key` | `<jira-project-key>` | no | Jira project key, e.g. PROPS ("" clears) |
 | `--jira-jql` | `<jira-jql>` | no | JQL for this workspace's ticket board ("" clears) |
@@ -2002,7 +2090,6 @@ An edit whose values already hold is reported as "saved": false and skips the wr
 | `--jira-status-in-review` | `<jira-status-in-review>` | no | Jira status name for In Review ("" clears) |
 | `--jira-status-done` | `<jira-status-done>` | no | Jira status name for Done ("" clears) |
 | `--clear-jira-status-map` | — | no | Drop every Crow→Jira status mapping |
-| `--corveil-host` | `<corveil-host>` | no | Self-hosted Corveil host, e.g. corveil.acme.io ("" clears; blank means corveil.io) |
 | `--custom-instructions` | `<custom-instructions>` | no | Free text appended to this workspace's session prompts ("" clears) |
 | `--custom-instructions-file` | `<custom-instructions-file>` | no | Read --custom-instructions from a file; '-' reads stdin |
 | `--always-include` | `<always-include>` _(repeatable)_ | no | Repo always listed in the prompt table (repeatable; replaces the whole list) |
@@ -2013,6 +2100,7 @@ An edit whose values already hold is reported as "saved": false and skips the wr
 | `--clear-exclude-review-repos` | — | no | Empty the exclude-from-reviews list |
 | `--session-env` | `<session-env>` _(repeatable)_ | no | KEY=VALUE exported into agents in this workspace (repeatable; replaces the whole map) |
 | `--clear-session-env` | — | no | Drop every session env var |
+| `--upload-session-logs` | `<upload-session-logs>` | no | Upload this workspace's coding-session transcripts to Corveil, reusing its gateway credential: true or false (needs the local-only log-sync master switch on) |
 | `--review-blocking-severity` | `<review-blocking-severity>` _(repeatable)_ | no | Review finding severity that forces --request-changes (repeatable; replaces the whole list; default red + yellow). Values: `red`, `yellow`, `green`. |
 | `--clear-review-blocking-severities` | — | no | Restore the default review blocking set (red + yellow) |
 | `--force` | — | no | Rename even when sessions or jobs reference this workspace |

@@ -125,6 +125,7 @@ enum RPCLanePolicy {
         "workspace-remove": .fixed(.config),
         "gateway-set": .fixed(.config),
         "web-password-set": .fixed(.config),
+        "logsync-set": .fixed(.config),
         // MCP tokens live in config.json, so they share its lane — two concurrent
         // mints would otherwise read the same token array and one would lose its
         // append (CROW-1004).
@@ -137,6 +138,10 @@ enum RPCLanePolicy {
         "job-delete": .fixed(.config),
         "job-duplicate": .fixed(.config),
         "version-update-set": .fixed(.config),
+        // Long, user-initiated upload run — its own lane so it serializes against
+        // itself (never two concurrent backfills) without blocking config writes
+        // (CROW-1075).
+        "backfill-upload": .fixed(.backfill),
         // Already single-flight: a second caller awaits the in-flight compare
         // instead of spawning another `gh auth token` subprocess + GitHub call.
         "version-update-check": .concurrent,

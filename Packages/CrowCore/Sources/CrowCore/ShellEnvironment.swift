@@ -46,6 +46,29 @@ public final class ShellEnvironment: Sendable {
         return nil
     }
 
+    /// Returns **every** absolute path at which `name` resolves to an executable
+    /// on the user's PATH, in PATH order and de-duplicated. `findExecutable`
+    /// returns only the first of these.
+    ///
+    /// The plural form exists because "first hit wins" is the wrong rule for a
+    /// launch token that collides: when two different tools are both installed
+    /// as `agent`, stopping at the earlier one hands Cursor whichever of them
+    /// PATH happens to list first (CROW-989's documented residual). Callers that
+    /// can tell the two apart — `AgentDiscovery.evaluate`, via
+    /// `verifyBinaryIdentity` — walk this list until one binary verifies instead
+    /// of accepting or rejecting the whole token on a single sample (CROW-1058).
+    public func findExecutables(_ name: String) -> [String] {
+        let fm = FileManager.default
+        var found: [String] = []
+        var seen = Set<String>()
+        for dir in resolvedPATH.split(separator: ":") {
+            let path = "\(dir)/\(name)"
+            guard fm.isExecutableFile(atPath: path), seen.insert(path).inserted else { continue }
+            found.append(path)
+        }
+        return found
+    }
+
     /// Returns `true` if `name` is an executable found in the resolved PATH.
     public func hasCommand(_ name: String) -> Bool {
         findExecutable(name) != nil

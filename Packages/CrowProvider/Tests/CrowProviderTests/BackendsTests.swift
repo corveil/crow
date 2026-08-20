@@ -1531,16 +1531,10 @@ final class BackendsTests: XCTestCase {
         let mgr = ProviderManager()
         XCTAssertEqual(mgr.taskBackend(for: .github).provider, .github)
         XCTAssertEqual(mgr.taskBackend(for: .gitlab, host: "gitlab.com").provider, .gitlab)
-        XCTAssertEqual(mgr.taskBackend(for: .corveil).provider, .corveil)
+        XCTAssertEqual(mgr.taskBackend(for: .jira).provider, .jira)
         XCTAssertNotNil(mgr.codeBackend(for: .github))
         XCTAssertNotNil(mgr.codeBackend(for: .gitlab))
-        XCTAssertNil(mgr.codeBackend(for: .corveil))
-    }
-
-    func testProviderManagerTaskBackendForCorveilURL() async {
-        let mgr = ProviderManager()
-        let backend = mgr.taskBackend(forURL: "https://corveil.io/tasks/42")
-        XCTAssertEqual(backend.provider, .corveil)
+        XCTAssertNil(mgr.codeBackend(for: .jira))
     }
 
     // MARK: - parseMonitoredPRsResponse timestamps (CROW-508)

@@ -59,7 +59,7 @@ public actor ClaudeLauncher {
                 } else {
                     lines.append("URL: \(url) — fetch it via the `jira` MCP server (`jira_get_issue`).")
                 }
-            case .corveil, nil:
+            case nil:
                 lines.append("URL: \(url)")
             }
         }
@@ -124,7 +124,7 @@ public actor ClaudeLauncher {
                 lines.append("glab mr create --fill --target-branch main")
             }
             lines.append("```")
-        case .jira, .corveil, nil:
+        case .jira, nil:
             // Task-only code providers shouldn't reach here — a Jira-tasked
             // session resolves its `codeProvider` to GitHub/GitLab. Fall back to
             // a generic instruction if it does.

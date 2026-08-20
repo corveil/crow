@@ -76,7 +76,7 @@ struct WorkspaceRPCSupportTests {
         #expect(try WorkspaceRPC.decodeProvider("github") == "github")
         #expect(try WorkspaceRPC.decodeProvider(" gitlab ") == "gitlab")
         // Task-only providers have no git surface.
-        for taskOnly in ["jira", "corveil", "bitbucket"] {
+        for taskOnly in ["jira", "bitbucket"] {
             #expect(throws: RPCError.self) { _ = try WorkspaceRPC.decodeProvider(taskOnly) }
         }
     }
@@ -439,10 +439,6 @@ struct WorkspaceRPCSupportTests {
                 _ = try WorkspaceRPC.applyPatch([key: .string("x")], to: &target)
             }
         }
-        var notCorveil = WorkspaceInfo(name: "Acme", taskProvider: "jira")
-        #expect(throws: RPCError.self) {
-            _ = try WorkspaceRPC.applyPatch(["corveil_host": .string("c.io")], to: &notCorveil)
-        }
     }
 
     /// The check runs against the *merged* result, so setting the provider and
@@ -524,7 +520,7 @@ struct WorkspaceRPCSupportTests {
             excludeReviewRepos: ["acme/legacy"], customInstructions: "Run make test.",
             taskProvider: "jira", jiraProjectKey: "PROPS", jiraJQL: "assignee = currentUser()",
             jiraSite: "acme.atlassian.net", jiraStatusMap: ["In Progress": "In Dev"],
-            corveilHost: nil, sessionEnv: ["AWS_PROFILE": "dev"])
+            sessionEnv: ["AWS_PROFILE": "dev"])
         let object = try #require(WorkspaceRPC.workspaceJSON(workspace).objectValue)
 
         #expect(object["id"] == .string(workspace.id.uuidString))
@@ -537,9 +533,6 @@ struct WorkspaceRPCSupportTests {
         #expect(object["always_include"] == .array([.string("acme/api")]))
         #expect(object["jira_status_map"] == .object(["In Progress": .string("In Dev")]))
         #expect(object["session_env"] == .object(["AWS_PROFILE": .string("dev")]))
-        // Unset optionals are explicit nulls, not missing keys, so a consumer can
-        // tell "cleared" from "this build doesn't report it".
-        #expect(object["corveil_host"] == .null)
     }
 
     /// `task_provider` reports the *effective* provider, so the extra flag is the
@@ -585,6 +578,38 @@ struct WorkspaceRPCSupportTests {
         let object = try #require(WorkspaceRPC.workspaceJSON(workspace()).objectValue)
         #expect(object["gateway_set"] == .bool(false))
         #expect(object["gateway_base_url"] == .null)
+    }
+
+    /// The per-workspace session-log opt-in is a plain bool PATCH (CROW-1066):
+    /// present writes it, absent leaves it, a non-bool throws.
+    @Test func applyPatchWritesUploadSessionLogs() throws {
+        var target = WorkspaceInfo(name: "Acme")
+        #expect(target.uploadSessionLogs == false)
+
+        #expect(try WorkspaceRPC.applyPatch(["upload_session_logs": .bool(true)], to: &target))
+        #expect(target.uploadSessionLogs == true)
+
+        // Absent ⇒ untouched (a PATCH), unlike a clear-flag that defaults to false.
+        _ = try WorkspaceRPC.applyPatch(["custom_instructions": .string("x")], to: &target)
+        #expect(target.uploadSessionLogs == true)
+
+        #expect(try WorkspaceRPC.applyPatch(["upload_session_logs": .bool(false)], to: &target))
+        #expect(target.uploadSessionLogs == false)
+
+        #expect(throws: RPCError.self) {
+            _ = try WorkspaceRPC.applyPatch(["upload_session_logs": .string("true")], to: &target)
+        }
+    }
+
+    /// `upload_session_logs` is a field key, so `workspace edit` carrying only it
+    /// is a real edit; `workspace get` echoes the stored bool.
+    @Test func uploadSessionLogsIsAFieldAndIsEchoed() {
+        #expect(WorkspaceRPC.hasAnyField(["upload_session_logs": .bool(true)]))
+        #expect(WorkspaceRPC.hasAnyField(["upload_session_logs": .bool(false)]))
+        let on = WorkspaceRPC.workspaceJSON(WorkspaceInfo(name: "Acme", uploadSessionLogs: true)).objectValue
+        #expect(on?["upload_session_logs"] == .bool(true))
+        let off = WorkspaceRPC.workspaceJSON(WorkspaceInfo(name: "Acme")).objectValue
+        #expect(off?["upload_session_logs"] == .bool(false))
     }
 
     /// Capture the message a caller would see, for asserting it names the valid

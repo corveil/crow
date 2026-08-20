@@ -9,7 +9,7 @@ import CrowProvider
 /// untouched forever, exercised through the real dispatch bookkeeping rather
 /// than the pure predicates.
 ///
-/// Every session here uses `provider = .corveil` on purpose: it has no
+/// Every session here uses `provider = .jira` on purpose: it has no
 /// `CodeBackend`, so `codeBackend(for:)` returns nil and a dispatched `Task`
 /// can only log — it can never shell out to `gh`. That is also exactly the
 /// no-backend return path the leak regression needs.
@@ -30,7 +30,7 @@ struct IssueTrackerBehindPRHandoffTests {
     private func makeTracker() -> (tracker: IssueTracker, session: Session, state: AppState) {
         let state = AppState()
         var session = Session(name: "feature/x", kind: .work)
-        session.provider = .corveil
+        session.provider = .jira
         state.sessions = [session]
         state.links[session.id] = [
             SessionLink(sessionID: session.id, label: "PR #944", url: Self.prURL, linkType: .pr)

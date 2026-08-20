@@ -758,15 +758,21 @@ import CrowPersistence
 // MARK: - Security surface re-homed from the retired root suite (CROW-607)
 
 /// `WebAuthMiddleware` is the HTTP-side gate: it exempts the login/health/brand
-/// endpoints and runs every other path — crucially `/auth/check`, the web UI's
-/// session-validity probe — through `WebAuthGuard.authorize` (exhaustively
-/// covered in `WebAuthGuardTests`). These lock in the wrapper decisions: the
-/// exempt allowlist and the unauthorized-response selector (login page vs 401).
+/// endpoints and the install assets (manifest + icons), and runs every other path
+/// — crucially `/auth/check`, the web UI's session-validity probe — through
+/// `WebAuthGuard.authorize` (exhaustively covered in `WebAuthGuardTests`). These
+/// lock in the wrapper decisions: the exempt allowlist and the unauthorized-response
+/// selector (login page vs 401).
 @Suite struct WebAuthMiddlewareGatingTests {
     private typealias MW = WebAuthMiddleware<CrowHTTPContext>
 
-    @Test func exemptsOnlyLoginLogoutHealthAndBrand() {
-        for path in ["/login", "/logout", "/health", "/brand.svg"] {
+    @Test func exemptsLoginLogoutHealthBrandAndInstallAssets() {
+        // The install assets (CROW-1073) are exempt like brand.svg: the pre-auth
+        // login page references them and Chrome's install prompt fetches them
+        // regardless of auth state.
+        for path in ["/login", "/logout", "/health", "/brand.svg",
+                     "/manifest.webmanifest", "/icon-192.png", "/icon-512.png",
+                     "/apple-touch-icon.png"] {
             #expect(MW.isAuthExempt(path: path), "\(path) must bypass the auth gate")
         }
     }
@@ -972,6 +978,19 @@ import CrowPersistence
             ])
             #expect(RPCWebSocketHandler.localOnlyDenial(for: req, devRoot: tempDevRoot())
                 == "MCP token management is local-only")
+        }
+    }
+    @Test func logsyncMethodsAreNotLocalOnly() {
+        // CROW-1070 removed the credential + opt-in from the `logSync` block — it
+        // now holds only behavior knobs (retention / quiet period / upload cap), and
+        // both the upload credential and destination are the per-workspace gateway.
+        // So, unlike the gateway / MCP-token surfaces, `logsync-*` is an ordinary
+        // config surface reachable remotely (that's what backs the web Settings →
+        // General → Session logs section). This regression test stops a refactor
+        // re-adding a local-only gate that would break that section.
+        for method in ["logsync-get", "logsync-set"] {
+            let req = JSONRPCRequest(id: 1, method: method, params: ["retention_days": .int(14)])
+            #expect(RPCWebSocketHandler.localOnlyDenial(for: req, devRoot: tempDevRoot()) == nil)
         }
     }
 

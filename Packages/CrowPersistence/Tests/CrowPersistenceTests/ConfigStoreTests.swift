@@ -53,6 +53,56 @@ import Testing
     #expect(loaded?.coderViewAutoPermissionMode == false)
 }
 
+@Test func migrateLogSyncAtBootFoldsLegacyOptInAndDropsDeadKeys() throws {
+    let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let claudeDir = tmpDir.appendingPathComponent(".claude", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: tmpDir) }
+    try FileManager.default.createDirectory(at: claudeDir, withIntermediateDirectories: true)
+
+    // A pre-CROW-1070 config: the old master switch on, a workspace opted in via
+    // the legacy list (case-insensitively), and a retention knob.
+    let json = #"""
+    {"workspaces": [{"id": "\#(UUID().uuidString)", "name": "Corveil", "provider": "github", "cli": "gh"}],
+     "logSync": {"enabled": true, "baseURL": "https://api", "apiKeyRef": "op://v/k",
+                 "enabledWorkspaces": ["corveil"], "retentionDays": 14}}
+    """#
+    let configURL = claudeDir.appendingPathComponent("config.json")
+    try json.write(to: configURL, atomically: true, encoding: .utf8)
+
+    ConfigStore.migrateLogSyncAtBoot(devRoot: tmpDir.path)
+
+    let migrated = try #require(ConfigStore.loadConfig(devRoot: tmpDir.path))
+    #expect(migrated.workspaces[0].uploadSessionLogs == true) // folded into the checkbox
+    #expect(migrated.logSync?.retentionDays == 14)            // behavior knob preserved
+
+    // The removed credential/opt-in keys are gone from the file on disk.
+    let raw = try String(contentsOf: configURL, encoding: .utf8)
+    #expect(!raw.contains("apiKeyRef"))
+    #expect(!raw.contains("enabledWorkspaces"))
+
+    // Idempotent: a second boot changes nothing.
+    ConfigStore.migrateLogSyncAtBoot(devRoot: tmpDir.path)
+    let again = try #require(ConfigStore.loadConfig(devRoot: tmpDir.path))
+    #expect(again.workspaces[0].uploadSessionLogs == true)
+}
+
+@Test func migrateLogSyncAtBootIsANoOpWithoutLegacyKeys() throws {
+    let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let claudeDir = tmpDir.appendingPathComponent(".claude", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: tmpDir) }
+    try FileManager.default.createDirectory(at: claudeDir, withIntermediateDirectories: true)
+
+    var config = AppConfig(workspaces: [WorkspaceInfo(name: "Corveil")])
+    config.logSync = LogSyncConfig(retentionDays: 90)
+    try ConfigStore.saveConfig(config, to: claudeDir)
+    let before = try Data(contentsOf: claudeDir.appendingPathComponent("config.json"))
+
+    ConfigStore.migrateLogSyncAtBoot(devRoot: tmpDir.path)
+
+    let after = try Data(contentsOf: claudeDir.appendingPathComponent("config.json"))
+    #expect(before == after) // no rewrite when there is nothing to migrate
+}
+
 @Test func configStoreCoderViewAutoPermissionModeRoundTrip() throws {
     let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     let claudeDir = tmpDir.appendingPathComponent(".claude", isDirectory: true)

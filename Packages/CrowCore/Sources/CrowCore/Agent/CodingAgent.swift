@@ -48,6 +48,35 @@ public enum BinaryTokenResolver {
         }
         return nil
     }
+
+    /// Every PATH hit for `tokens`, token-major and de-duplicated — the plural
+    /// form of `firstOnPath`, with the same ordering guarantee.
+    ///
+    /// `firstOnPath` answers "which binary do we launch?" with one sample per
+    /// token, which is only sound when a token names exactly one tool. It does
+    /// not for Cursor's legacy `agent`: with grok-build's `~/.grok/bin/agent`
+    /// earlier on PATH than Cursor's own, the single sample *is* the foreign
+    /// binary and Cursor is written off as unavailable even though a genuine
+    /// install is sitting further down PATH (CROW-989's documented residual).
+    /// Returning the whole list lets `AgentDiscovery.evaluate` keep probing past
+    /// an impostor instead of stopping at it (CROW-1058).
+    ///
+    /// Preference order is preserved end-to-end: every hit for the preferred
+    /// token comes before any hit for an alias, so a verified `cursor-agent`
+    /// still wins over a verified `agent` regardless of PATH order.
+    public static func allOnPath(
+        tokens: [String],
+        lookup: (String) -> [String]
+    ) -> [String] {
+        var found: [String] = []
+        var seen = Set<String>()
+        for token in tokens {
+            for path in lookup(token) where seen.insert(path).inserted {
+                found.append(path)
+            }
+        }
+        return found
+    }
 }
 
 /// A coding agent that Crow can launch in a terminal and observe via hook
@@ -143,10 +172,42 @@ public protocol CodingAgent: Sendable {
     /// per-session picker and the launch-command builder below.
     func resolveBinary() -> ResolvedBinary?
 
+    /// Every binary this agent could plausibly launch, most-preferred first:
+    /// an explicit `defaults.binaries.<kind>` pin alone (authoritative), else
+    /// **all** PATH hits across `binaryTokens` (token-major) followed by every
+    /// executable `fallbackCandidates` entry.
+    ///
+    /// `resolveBinary()` is the head of this list. The tail exists for
+    /// `AgentDiscovery.evaluate`, which identity-probes down the list rather
+    /// than judging the agent on its first sample — the difference between
+    /// "the first `agent` on PATH is grok-build, so Cursor is unavailable" and
+    /// "keep looking; Cursor's own `agent` is two entries further along"
+    /// (CROW-1058).
+    func resolveBinaryCandidates() -> [ResolvedBinary]
+
     /// Resolve this agent's binary on disk, or return `nil` if it isn't
     /// installed. Convenience over `resolveBinary()` for the many callers that
     /// only need the path.
+    ///
+    /// ⚠️ **Presence check, not a launch target.** This is a fresh walk every
+    /// call, and since discovery may now probe *past* a candidate that failed
+    /// identity, the head of the walk is no longer necessarily the binary
+    /// discovery approved. Use `launchBinary()` for anything that will be
+    /// exec'd; keep this for "is it installed?" questions.
     func findBinary() -> String?
+
+    /// The binary to actually **exec**, or `nil` when none can be trusted.
+    ///
+    /// `findBinary()` answers "is this agent installed?"; this answers "what do
+    /// we put in the pane command?", and the two are deliberately not the same
+    /// function. Launch prefers the path that passed the identity probe at
+    /// registration over a fresh walk, because a fresh walk is free to land on
+    /// a *different* binary than the one Crow verified — which is exactly how a
+    /// Cursor session came up running grok-build (CROW-1058).
+    ///
+    /// Returning `nil` means **do not launch**. For a colliding token that is
+    /// the required outcome: running the foreign binary is not a success.
+    func launchBinary() -> String?
 
     /// Confirm the binary resolved at `path` is genuinely *this* agent and not
     /// a different tool that happens to share the launch token (CROW-911).
@@ -251,6 +312,29 @@ public protocol CodingAgent: Sendable {
     /// the protocol default returns `nil` so future agents cannot inherit a
     /// spurious `/rename` paste; Claude/Cursor/Codex/OpenCode override.
     func sessionRenameSlashCommand(newName: String) -> String?
+
+    /// Where this harness writes durable session logs on disk for a session
+    /// running in `worktreePath` (CROW-1056). The daemon's `LogSyncCollector`
+    /// resolves these to concrete files, normalizes them to NDJSON, and uploads
+    /// them as session-transcript artifacts for opted-in workspaces.
+    ///
+    /// Crow persists no transcript of its own — terminal scrollback is
+    /// tmux-memory-only — but every harness writes its own durable logs in its
+    /// own place and format. The adapter already knows how to launch each
+    /// harness; this is where it declares where that harness's logs live.
+    ///
+    /// `harnessSessionID` is the harness's OWN session identifier when known
+    /// (e.g. the Claude `.jsonl` filename UUID resolved from telemetry), letting
+    /// an adapter point at the exact file; pass `nil` to have the adapter return
+    /// the broadest per-worktree source it can (e.g. Claude's whole project-slug
+    /// directory).
+    ///
+    /// Opt-in: the protocol default returns `[]`, so a harness whose on-disk log
+    /// location is unconfirmed contributes nothing rather than uploading the
+    /// wrong bytes. Only Claude Code is fully wired today (its logs are the only
+    /// ones partitioned by working directory); the globally-stored harnesses
+    /// (Codex/Cursor/OpenCode) return `[]` pending per-harness cwd matching.
+    func logSources(worktreePath: String, harnessSessionID: String?) -> [AgentLogSource]
 }
 
 public extension CodingAgent {
@@ -287,10 +371,11 @@ public extension CodingAgent {
             sessionID: sessionID, worktreePath: worktreePath, prompt: prompt)
     }
 
-    /// Default binary discovery with provenance: explicit `BinaryOverrides`
-    /// (`.override`) → PATH walk over `binaryTokens` (`.path`) → hardcoded
-    /// `fallbackCandidates` (`.fallback`). Returns the first resolved absolute
-    /// path + how it was found, or `nil` if nothing matches.
+    /// Default binary discovery with provenance: the head of
+    /// `resolveBinaryCandidates()` — explicit `BinaryOverrides` (`.override`) →
+    /// PATH walk over `binaryTokens` (`.path`) → hardcoded `fallbackCandidates`
+    /// (`.fallback`). Returns the first resolved absolute path + how it was
+    /// found, or `nil` if nothing matches.
     ///
     /// This replaces the per-agent hardcoded-list-only impl that left
     /// nvm/Volta/pnpm/asdf installs invisible to Crow (CROW-484).
@@ -301,32 +386,88 @@ public extension CodingAgent {
     /// an unambiguous `cursor-agent` late in PATH still beats a foreign `agent`
     /// early in it (CROW-989). Agents with no aliases are unaffected: one token,
     /// one walk, byte-identical behavior.
-    func resolveBinary() -> ResolvedBinary? {
+    func resolveBinary() -> ResolvedBinary? { resolveBinaryCandidates().first }
+
+    /// Default candidate enumeration, in the precedence `resolveBinary()`
+    /// documents: `.override` (alone, and authoritative) → every PATH hit across
+    /// `binaryTokens`, token-major (`.path`) → every executable
+    /// `fallbackCandidates` entry (`.fallback`).
+    ///
+    /// The head of this list is byte-identical to the pre-CROW-1058
+    /// `resolveBinary()`, so nothing about which binary Crow *picks* changes
+    /// here. What changes is that the runners-up survive: discovery can probe
+    /// past an impostor sitting in front of a genuine install instead of
+    /// judging the whole token by its first sample.
+    func resolveBinaryCandidates() -> [ResolvedBinary] {
         let fm = FileManager.default
         // 1. Explicit user override from `defaults.binaries.<kind>`. Verify
         //    the path is still executable so a stale override falls through
-        //    to discovery rather than breaking registration outright.
+        //    to discovery rather than breaking registration outright. When it
+        //    holds it is the *only* candidate — the user named the exact
+        //    binary, so there is nothing to fall back to and nothing to probe.
         if let configured = BinaryOverrides.shared.path(for: kind),
            fm.isExecutableFile(atPath: configured) {
-            return ResolvedBinary(path: configured, source: .override)
+            return [ResolvedBinary(path: configured, source: .override)]
         }
+        var candidates: [ResolvedBinary] = []
+        // `allOnPath` already de-duplicates within itself; `seen` carries that
+        // across the two legs, so a `fallbackCandidates` entry that PATH also
+        // resolves isn't probed twice.
+        var seen = Set<String>()
         // 2. Walk the user's resolved PATH the same way `command -v` does, once
-        //    per token in preference order.
-        if let found = BinaryTokenResolver.firstOnPath(
+        //    per token in preference order — but keeping every hit, not just
+        //    the first (CROW-1058).
+        for path in BinaryTokenResolver.allOnPath(
             tokens: binaryTokens,
-            lookup: { ShellEnvironment.shared.findExecutable($0) }
-        ) {
-            return ResolvedBinary(path: found, source: .path)
+            lookup: { ShellEnvironment.shared.findExecutables($0) }
+        ) where seen.insert(path).inserted {
+            candidates.append(ResolvedBinary(path: path, source: .path))
         }
         // 3. Hardcoded last-resort fallback covers the exotic-PATH case.
-        if let fb = fallbackCandidates.first(where: { fm.isExecutableFile(atPath: $0) }) {
-            return ResolvedBinary(path: fb, source: .fallback)
+        for fb in fallbackCandidates
+        where fm.isExecutableFile(atPath: fb) && seen.insert(fb).inserted {
+            candidates.append(ResolvedBinary(path: fb, source: .fallback))
         }
-        return nil
+        return candidates
     }
 
     /// Default `findBinary()`: the resolved path from `resolveBinary()`, or `nil`.
     func findBinary() -> String? { resolveBinary()?.path }
+
+    /// Default launch binary: the user's pin, else the path that passed the
+    /// identity probe at registration, else — only for an agent whose token
+    /// cannot collide — a fresh resolution.
+    ///
+    /// The last leg is where CROW-1058 is closed. An agent that declares an
+    /// alias in `alternateLaunchCommandTokens` has, by that declaration, said
+    /// its binary answers to an ambiguous name; handing back an *unverified*
+    /// path whose basename is that alias is how Crow came to exec grok-build's
+    /// `~/.grok/bin/agent` for a session configured as Cursor. So for those
+    /// agents the unverified fallback is narrowed to the unambiguous preferred
+    /// name, and anything else resolves to `nil` — refuse to launch rather than
+    /// "succeed" by running the colliding binary.
+    ///
+    /// Agents with no aliases (every conformer but Cursor) skip that narrowing
+    /// entirely and behave exactly as before: pin → verified → resolved.
+    ///
+    /// Executability is re-checked on both cached legs so an uninstall between
+    /// boot and launch degrades to "not installed" rather than to a dead path
+    /// interpolated into the pane.
+    func launchBinary() -> String? {
+        let fm = FileManager.default
+        if let pinned = BinaryOverrides.shared.path(for: kind),
+           fm.isExecutableFile(atPath: pinned) {
+            return pinned
+        }
+        if let verified = VerifiedBinaries.shared.path(for: kind),
+           fm.isExecutableFile(atPath: verified) {
+            return verified
+        }
+        guard let resolved = findBinary() else { return nil }
+        guard !alternateLaunchCommandTokens.isEmpty else { return resolved }
+        guard (resolved as NSString).lastPathComponent == launchCommandToken else { return nil }
+        return resolved
+    }
 
     /// Default identity check: trust a bare match. Agents with an unambiguous
     /// launch token don't need to probe — overridden only by collision-prone
@@ -352,4 +493,10 @@ public extension CodingAgent {
     /// here prevents a future agent from silently inheriting a paste that
     /// would be sent to the model as a stray prompt (CROW-629 review).
     func sessionRenameSlashCommand(newName: String) -> String? { nil }
+
+    /// Opt-in default: no known log sources (CROW-1056). A harness whose
+    /// durable-log location is unconfirmed — or whose logs are not partitioned
+    /// by working directory — contributes nothing until its adapter overrides
+    /// this. Only `ClaudeCodeAgent` overrides it today.
+    func logSources(worktreePath: String, harnessSessionID: String?) -> [AgentLogSource] { [] }
 }

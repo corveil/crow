@@ -1338,7 +1338,6 @@ Returns:
     "jira_project_key": "PROPS",
     "jira_jql": "assignee = currentUser() AND statusCategory != Done",
     "jira_status_map": { "In Progress": "In Dev" },
-    "corveil_host": null,
     "always_include": ["acme/api"],
     "auto_review_repos": ["acme/web"],
     "exclude_review_repos": [],
@@ -1437,7 +1436,7 @@ Notes:
 | ---------------------------- | -------------------------------------------------------------------------- |
 | `--provider`                 | Code/PR host: `github` or `gitlab`                                          |
 | `--host`                     | GitLab host, e.g. `gitlab.example.com` — GitLab workspaces only              |
-| `--task-provider`            | Where tickets live: `github`, `gitlab`, `jira`, `corveil`, or `""` to follow the code provider |
+| `--task-provider`            | Where tickets live: `github`, `gitlab`, `jira`, or `""` to follow the code provider |
 | `--jira-site`                | Atlassian site, e.g. `acme.atlassian.net`                                   |
 | `--jira-project-key`         | Jira project key, e.g. `PROPS`                                              |
 | `--jira-jql`                 | JQL for this workspace's ticket board                                       |
@@ -1447,7 +1446,6 @@ Notes:
 | `--jira-status-in-review`    | Jira workflow status name for **In Review**                                 |
 | `--jira-status-done`         | Jira workflow status name for **Done**                                      |
 | `--clear-jira-status-map`    | Drop every Crow→Jira status mapping                                         |
-| `--corveil-host`             | Self-hosted Corveil host — blank means the public `corveil.io`               |
 | `--custom-instructions`      | Free text appended to this workspace's session prompts                      |
 | `--custom-instructions-file` | Read `--custom-instructions` from a file; `-` reads stdin                   |
 | `--always-include`           | Repo always listed in the prompt table (repeatable)                         |
@@ -1460,6 +1458,7 @@ Notes:
 | `--clear-session-env`        | Drop every session env var                                                  |
 | `--review-blocking-severity` | Review finding severity that forces `--request-changes`: `red`, `yellow`, or `green` (repeatable) |
 | `--clear-review-blocking-severities` | Restore the default review blocking set (`red` + `yellow`)          |
+| `--upload-session-logs`      | Upload this workspace's coding-session transcripts to Corveil, reusing its AI gateway for both URL and credential: `true` or `false` |
 
 Notes:
 
@@ -1472,6 +1471,7 @@ Notes:
 - **Fields are checked against the resulting workspace.** `--host` on a GitHub workspace, or any `--jira-*` flag on a workspace whose task provider isn't Jira, is an error rather than a value that would be stored and never read. Set the provider in the same invocation and both apply. Clearing a stranded field is always allowed.
 - **`--session-env` is one variable per entry.** The `/crow-workspace` setup script reads the map as one `KEY=VALUE` per line and splits each at the first `=`, so both delimiters are reserved: a newline in a key or value is rejected (it would smuggle in a second variable), and so is a `=` in a *key* (it would come back as a different variable). A `=` in a value is fine — the split takes only the first one. Keys additionally may not contain whitespace or control characters, since no shell could reference them. All enforced server-side, not just by the CLI.
 - **`--session-env` values are not credentials.** Unlike a gateway header they are stored in plain `config.json` and are not stripped from the web Settings payload. Put tokens in a gateway header instead.
+- **`--upload-session-logs` opts this workspace's session transcripts in to Corveil upload (CROW-1066/1070), reusing its AI gateway for both the upload URL and the credential** so you don't re-enter a Corveil key or host. It is the CLI twin of the Settings → Workspaces checkbox and is a normal workspace field, so a remote `set-config` can flip it too. There is **no** separate master switch: a ticked box plus a configured gateway is the whole opt-in. A workspace with no gateway uploads nothing — the destination is only ever the local-only gateway `baseURL`, never the browser-flippable `--corveil-host`. See [session-log-collector.md](session-log-collector.md#opt-in-and-controls-crow-1070).
 - **`cli` is derived, never set.** It follows `--provider` (`gh` / `glab`) on every write, so a stale value from an older config is repaired by any edit.
 - There is no `--gateway` flag; see [Gateway Commands](#gateway-commands).
 
@@ -1713,6 +1713,83 @@ There is deliberately **no `--password` flag** — a plaintext password in `argv
 
 ---
 
+## Session-Log Sync Commands
+
+The multi-harness session-log collector (CROW-1056) uploads each opted-in workspace's coding-session transcripts to Corveil as session artifacts. It is **opt-in and OFF by default**. Since CROW-1070 the opt-in, the upload destination and the credential are all **per-workspace**: a workspace uploads iff its `--upload-session-logs` flag / Settings → Workspaces checkbox is on **and** it has an AI gateway, whose `baseURL` + `x-citadel-api-key` the upload reuses (so no second key or host, and no AWS credentials on this machine — the server performs the object-storage upload).
+
+These `crow logsync` verbs tune only **global collector behavior** — ledger retention, the quiet period before a transcript is captured, and the per-upload size cap. They carry no credential, so — unlike `gateway` / `web-password` — they are **not** local-only and back the web Settings → General → **Session logs** section too.
+
+> **To opt a workspace in**, use [`crow workspace edit --workspace NAME --upload-session-logs true`](#workspace-commands) (or the Settings → Workspaces checkbox) and give the workspace an AI gateway with [`crow gateway set`](#gateways--secrets). There is no `crow logsync` flag that opts a workspace in.
+
+### `crow logsync get`
+
+```bash
+crow logsync get
+```
+
+Returns the behavior knobs: `retention_days`, `quiet_period_minutes`, `max_upload_bytes`, and `configured` (whether a `logSync` block exists at all).
+
+### `crow logsync set`
+
+PATCH — only the flags you pass change; at least one is required.
+
+```bash
+crow logsync set --retention-days 90
+crow logsync set --quiet-period-minutes 15 --max-upload-bytes 4000000
+```
+
+| Flag | Description |
+| --- | --- |
+| `--retention-days N` | Local upload-ledger retention (0 = forever, default 30) |
+| `--quiet-period-minutes N` | Wait this long after a session's last activity before uploading (default 30) |
+| `--max-upload-bytes N` | Per-transcript upload cap (default 8000000) |
+
+Only Claude Code transcripts are collected today (its logs are the one harness partitioned by working directory); other harnesses are wired as their on-disk log locations are confirmed. Changes are live — the collector re-reads config each tick, so they apply within a few minutes with no restart.
+
+---
+
+## Session Backfill Commands
+
+The **historical session backfill** (CROW-1075) captures the coding-session transcripts already on disk — sessions that predate the live upload path or were reaped from Crow's store — and uploads them as **real, fully-linked** Corveil session artifacts, reconstructing the workspace / repo / ticket a live run would have carried. The live collector is session-centric (it walks Crow's store); this is the one-time reconciliation of the on-disk backlog. Claude Code only for v1 (the harness whose logs are partitioned by working directory).
+
+It reuses the live upload path, so it inherits its guarantees: the destination + credential come only from the named workspace's **local-only** AI gateway (never a browser-writable field), no AWS credentials touch this machine, and every upload is **idempotent** (a local ledger + the server's write-once 409). It is always **user-initiated** — never automatic or unbounded.
+
+### `crow backfill scan`
+
+```bash
+crow backfill scan
+```
+
+Reconciles every on-disk Claude transcript (`~/.claude/projects/**/*.jsonl`) against the upload ledger and returns the reconstructed rows plus a `summary`. Disk- and git-only (no provider calls), so it stays fast over hundreds of sessions. Each row carries the recovered `workspace` / `repo_name` / `owner_repo` / `ticket_number`, a `confidence` tier, and its ledger `upload_status`:
+
+| Confidence | Meaning |
+| --- | --- |
+| `high` | Repo resolved **and** a ticket number recovered — uploads with a validated ticket link |
+| `medium` | Repo recovered but no ticket — uploads repo-only |
+| `low` | Neither workspace nor repo matched (a true orphan) — uploads attributed but unlinked, only if selected |
+
+Ticket links are **validated at upload, not here** — a reconstructed `(repo, number)` becomes a REFERENCE only when the provider (`gh`/`glab`) confirms it exists.
+
+### `crow backfill upload`
+
+```bash
+crow backfill upload --workspace RadiusMethod --session <uid> --session <uid>
+crow backfill upload --workspace RadiusMethod --all-high-confidence
+crow backfill upload --workspace RadiusMethod --all
+```
+
+Uploads a chosen set through the live path, idempotently and serially. `--workspace` names the workspace whose gateway supplies the upload destination and credential (it must have a gateway configured). Choose sessions in exactly one way:
+
+| Flag | Description |
+| --- | --- |
+| `--session <uid>` | A Claude session UID to upload (repeatable; UIDs come from `crow backfill scan`) |
+| `--all-high-confidence` | Every not-yet-uploaded **high-confidence** session in this workspace |
+| `--all` | Every not-yet-uploaded session in this workspace |
+
+Returns a per-session `results` list (each `uploaded` / `already` / `skipped` / `failed`, whether it was `linked` to a validated ticket, and a `reason` for a skip/failure) and a roll-up `summary`. Re-running never duplicates — a slot the ledger records as uploaded is skipped.
+
+---
+
 ## MCP Commands
 
 Crow serves a **read-only** MCP surface so agent clients that speak MCP — Cowork, a Grok bot — can read the board without a Crow-launched session. Six tools over five read RPCs; there is no prompt-send, no session creation, and no config access. See [MCP](mcp.md) for client setup and the full tool list.
@@ -1802,23 +1879,13 @@ The **Jira credential** (`AppConfig.jiraCredential`) is intentionally UI-only. I
 
 ### `crow hook-event`
 
-Forwards a Claude Code hook event (e.g. `Stop`, `Notification`, `PreToolUse`) to `crowd`. The JSON payload is read from stdin and wrapped in an RPC call. This is wired up automatically by Claude Code's hook system — you do not invoke it by hand.
+Forwards an agent hook event (e.g. `Stop`, `Notification`, `PreToolUse`) to `crowd`. The JSON payload is read from stdin and wrapped in an RPC call. This is wired up automatically by each agent's per-worktree hook config (Claude Code, Cursor, Codex, Grok, Muse, …), with the Crow session UUID baked into the command — you do not invoke it by hand.
 
 ```bash
 echo '{"tool":"Bash"}' | crow hook-event --session <uuid> --event PreToolUse
 ```
 
 On success it is silent; on error it prints JSON to stdout.
-
-### `crow codex-notify`
-
-The same bridge for Codex, whose `notify` config is global rather than per-session and passes its JSON payload as the final positional argument instead of on stdin. Crow resolves the session from the payload's `cwd`, matching it against registered worktree paths — which is why no `--session` is needed (and why Codex could not supply one anyway).
-
-```bash
-crow codex-notify '{"type":"agent-turn-complete","cwd":"/path/to/worktree"}'
-```
-
-Wired up automatically when a session is handed off to Codex; you do not invoke it by hand.
 
 ---
 

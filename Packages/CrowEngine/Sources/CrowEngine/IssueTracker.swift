@@ -788,15 +788,6 @@ public final class IssueTracker {
             let cfg = JiraConfig(site: ws.jiraSite, projectKey: ws.jiraProjectKey, jql: ws.jiraJQL, statusMap: ws.jiraStatusMap, authorization: jiraAuthorization)
             if !jiraConfigs.contains(cfg) { jiraConfigs.append(cfg) }
         }
-        // Collect distinct Corveil configs. The corveil CLI is authed to one
-        // host, so the workspace host (used only for URL routing) is what
-        // varies; we dedupe by host to avoid fanning out to the same authed
-        // session twice.
-        var corveilConfigs: [CorveilConfig] = []
-        for ws in config.workspaces where ws.derivedTaskProvider == "corveil" {
-            let cfg = CorveilConfig(host: ws.corveilHost)
-            if !corveilConfigs.contains(cfg) { corveilConfigs.append(cfg) }
-        }
 
         var allIssues: [AssignedIssue] = []
         // Recently-done count, accumulated across every provider this refresh.
@@ -857,12 +848,6 @@ public final class IssueTracker {
             let merged = Self.mergeListing(listing)
             allIssues.append(contentsOf: merged.issues)
             doneCount += merged.doneCount
-        }
-
-        // Corveil — one list per distinct config (best-effort).
-        for cfg in corveilConfigs {
-            let issues = await fetchCorveilIssues(config: cfg)
-            allIssues.append(contentsOf: issues)
         }
 
         appState.assignedIssues = allIssues
@@ -1758,8 +1743,8 @@ public final class IssueTracker {
     }
 
     /// Route a reconcile candidate to a *code* backend. A task-only provider
-    /// (`.jira`/`.corveil`) has no code surface, so a session tracked by one
-    /// resolves PRs through its `codeProvider` — mirroring the
+    /// (`.jira`) has no code surface, so a session tracked by one resolves PRs
+    /// through its `codeProvider` — mirroring the
     /// `codeProvider ?? provider` convention in `SessionService.findPRLink` and
     /// `AutoRespondCoordinator`. Falls back to host sniffing when no
     /// code-bearing provider is recorded (e.g. sessions predating the field).
@@ -5098,20 +5083,6 @@ public final class IssueTracker {
         let openIDs = Set(listing.open.map(\.id))
         let uniqueDone = listing.closed.filter { !openIDs.contains($0.id) }
         return (listing.open + uniqueDone, listing.closedTotalCount)
-    }
-
-    /// Fetch open Corveil tasks assigned to the user for one workspace config.
-    /// Best-effort (the backend itself degrades to empty on failure), mirroring
-    /// the GitLab / Jira paths.
-    private func fetchCorveilIssues(config: CorveilConfig) async -> [AssignedIssue] {
-        let backend = providerManager.taskBackend(for: .corveil, corveil: config)
-        do {
-            let listing = try await backend.listAssigned(includeClosed: false)
-            return listing.open
-        } catch {
-            print("[IssueTracker] fetchCorveilIssues(host: \(config.host ?? "—")) failed: \(error)")
-            return []
-        }
     }
 
     // MARK: - Mark In Review

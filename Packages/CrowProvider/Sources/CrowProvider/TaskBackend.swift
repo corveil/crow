@@ -4,8 +4,8 @@ import CrowCore
 /// Tracker-side operations: issues, tasks, labels, assignment, project status.
 ///
 /// `TaskBackend` is paired with a `CodeBackend` (separate protocol — see ADR 0005)
-/// when a session also produces a PR. A Corveil-tasked session that delegates its
-/// PR work to GitHub will use a `CorveilTaskBackend` here and a `GitHubCodeBackend`
+/// when a session also produces a PR. A Jira-tasked session that delegates its
+/// PR work to GitHub will use a `JiraTaskBackend` here and a `GitHubCodeBackend`
 /// there. The split exists because tasks (the unit of work) and code (the VCS artifact)
 /// are independent dimensions.
 ///

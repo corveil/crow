@@ -16,7 +16,10 @@ All `gh` and `git` commands require `dangerouslyDisableSandbox: true` because th
 
 ## Arguments
 
-- `$ARGUMENTS` - The PR URL or number to review (required)
+`$ARGUMENTS` is the raw argument string. **Parse it — never paste it whole into a command.** A Crow review session passes just the PR reference, but a manual `/crow-review-pr` invocation may append flags (`/crow-review-pr 2437 --no-post`), and pasting the whole string makes step 1 `gh pr checkout 2437 --no-post` fail on an unknown flag.
+
+- **PR reference** (required) — the first URL or number token in `$ARGUMENTS` (e.g. `2437` or `https://github.com/org/repo/pull/2437`). Every command below writes it as `$PR`; set `PR` to it in Step 0 and pass `"$PR"` to `gh`/`git`, never the raw `$ARGUMENTS`.
+- **`--no-post`** / **`--dry-run`** (optional) — render the review to stdout and **skip Step 5** (do not post). Use it when you are the PR author (GitHub rejects a self-review), when iterating on this skill, or when you want to read the findings before deciding to post. Sets `POST=false`; otherwise `POST=true`.
 
 ## Activation
 
@@ -29,10 +32,17 @@ This skill activates when:
 
 You are performing a code and security review on PR $ARGUMENTS. Follow these steps:
 
+### Step 0: Parse the arguments
+
+Split `$ARGUMENTS` (see **Arguments** above) before running anything:
+
+- `PR` — the PR URL or number. Use `"$PR"` in every `gh`/`git` command below; a stray `--no-post` reaching `gh pr checkout` fails at the first command.
+- `POST` — `false` if `$ARGUMENTS` contains `--no-post` or `--dry-run`, otherwise `true`. Gates Step 5.
+
 ### Step 1: Checkout the PR
 
 ```bash
-gh pr checkout $ARGUMENTS
+gh pr checkout "$PR"
 ```
 
 ### Step 2: Gather PR Information
@@ -40,12 +50,26 @@ gh pr checkout $ARGUMENTS
 Get the PR details including title, description, and changed files:
 
 ```bash
-gh pr view $ARGUMENTS --json title,body,headRefName,baseRefName,additions,deletions,changedFiles,files
+gh pr view "$PR" --json title,body,headRefName,baseRefName,additions,deletions,changedFiles,files
 ```
 
 ### Step 3: Review the Code
 
-Read all changed files in the PR. For each file, analyze:
+**Architecture & Existing Patterns (study this before scoring the diff):**
+
+A PR can be correct in isolation yet wrong for the codebase — it reinvents a pathway that already exists, or builds the wrong shape because it misread the current control flow. Judge the change against how the system works **today**, not only against its own hunks:
+
+- Read the surrounding modules, the call sites the change touches, and any ADRs in that area (`docs/adr/`) — not just the changed lines.
+- Name the existing pathway the change should have extended, or state plainly that none exists.
+- Raise a finding when the PR:
+  - Invents a parallel mechanism where a small extension of current behavior would do.
+  - Over-engineers relative to the established patterns in the same area.
+  - Assumes a behavior is missing that the codebase already provides.
+  - Misunderstands the current control flow and builds the wrong shape because of it.
+
+These are defects in **this change**, not future improvements — grade them **Yellow** (should-fix) or **Red** (must-fix), never Green "consider later." A forced redesign or a reject is in scope when the approach cannot be made to fit an existing pattern.
+
+Then read all changed files in the PR. For each file, analyze:
 
 **Security Review:**
 - Authentication/authorization issues
@@ -68,10 +92,12 @@ Read all changed files in the PR. For each file, analyze:
 
 Run the `gh`/`git` review commands (Steps 1–3 and Step 5) as **single, clean invocations** so the allowlist auto-approves them — one command per Bash call, no `cd …`/`echo` prefix or pipe bundling (see CLAUDE.md → "Fetching Ticket / PR Data"). Use a tool's own directory flag (`go -C <dir>`, `git -C <path>`) rather than `cd <dir> && …`.
 
-For Go projects:
+For Go projects — the module is not always at the repo root (corveil's lives in `go/`, not `core/`). Find its directory, then vet/test **that** directory. Drop `-v`: on a large suite it buries the failures and the final tally under thousands of `PASS` lines, and a leading `head` then cuts off inside the first package. Keep the **tail** so the failures and the summary line survive.
+
 ```bash
-go -C core vet ./...
-go -C core test ./... -v 2>&1 | head -50
+git ls-files '*go.mod'                        # module dir(s); use the parent of the go.mod path (`.` if at root)
+go -C <module-dir> vet ./... 2>&1 | tail -50
+go -C <module-dir> test ./... 2>&1 | tail -50
 ```
 
 For JavaScript/TypeScript projects:
@@ -89,7 +115,18 @@ For Python projects:
 ruff check . 2>&1 | head -50
 ```
 
+### Step 4b: Verify every Red finding (REQUIRED)
+
+A Red finding is merge-blocking, so it must be *established*, not asserted — a hedged "this might…" a reader can dismiss is not worth blocking a PR over. For **each Red** finding, before you write it up, do exactly one of:
+
+- **Reproduce it** — a throwaway test, a probe script, or a log line that makes the bad behavior happen. Delete the scratch afterward.
+- **Refute-check it** — read and cite the specific code (`file:line`) that would refute the finding, and confirm it does not.
+
+State in the finding which you did ("reproduced with a temporary test that triggered the double write", "confirmed against `mount.go:42` — no filter is applied"). A Red you could not verify is downgraded to **Yellow** or dropped; it must earn its blocking verdict. This composes with the workspace's `--review-blocking-severity` gate — a finding that forces `--request-changes` should have been checked, not guessed.
+
 ### Step 5: Post Review
+
+> **Dry run (`--no-post` / `--dry-run`):** if `POST=false`, render the full review body below to **stdout** and **stop** — do not run `gh pr review`. The Step 5a guardrails still apply to the drafted body. Everything past this note assumes `POST=true`.
 
 Every Crow review must end with a verdict — **exactly one** of the two actions below. Comment-only reviews (`--comment` / `event: COMMENT`) are **not permitted**: they are ambiguous, don't move the PR forward, and effectively no-op the review.
 
@@ -104,6 +141,10 @@ Draft the review using this format:
 
 ### Critical Issues (if any)
 [List blocking issues that must be fixed]
+
+### Architecture / Existing Patterns
+- **Existing pathway:** [name the current path the change should have used, or "none — this is a genuinely new capability"]
+- [Architecture findings, if any — with file references and severity. State when the PR reinvents an existing path, over-engineers, assumes a behavior the codebase already has, or misreads the current control flow.]
 
 ### Security Review
 **Strengths:**
@@ -136,7 +177,7 @@ Before running `gh pr review`, you **must** pass both checks below on your draft
 Re-fetch the PR's changed-file paths (same data as Step 2):
 
 ```bash
-gh pr view $ARGUMENTS --json files --jq '.files[].path'
+gh pr view "$PR" --json files --jq '.files[].path'
 ```
 
 Collect every repo-relative path cited in your review body — `` `path/to/file:42` ``, `` `path/to/file` ``, bullet references, etc. Strip line/column suffixes (`:42`, `:42-46`) so you compare paths only.
@@ -161,10 +202,10 @@ Only after **both** checks pass, post the review using exactly one of these two 
 
 ```bash
 # If approving:
-gh pr review $ARGUMENTS --approve --body "YOUR_REVIEW_HERE"
+gh pr review "$PR" --approve --body "YOUR_REVIEW_HERE"
 
 # If requesting changes (also the default when uncertain):
-gh pr review $ARGUMENTS --request-changes --body "YOUR_REVIEW_HERE"
+gh pr review "$PR" --request-changes --body "YOUR_REVIEW_HERE"
 ```
 
 ### Step 5b: Attribution (REQUIRED)

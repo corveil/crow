@@ -81,7 +81,7 @@ public struct MarkIssueDone: ParsableCommand {
         commandName: "mark-issue-done",
         abstract: "Close the session's linked issue and complete the session",
         discussion: """
-        GitHub/GitLab close the issue; Jira and Corveil transition it to the \
+        GitHub/GitLab close the issue; Jira transitions it to the \
         mapped done status. On success the session flips to completed. \
         Requires a linked ticket and a provider-configured daemon.
         """

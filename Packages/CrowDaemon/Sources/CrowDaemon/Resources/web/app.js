@@ -23,6 +23,10 @@ const RPC_DEFAULT_TIMEOUT_MS = 30000;
 const RPC_TIMEOUTS_MS = {
   // Rebuilds the whole scorecard from the event log.
   'rebuild-scorecard': 180000,
+  // Historical backfill (CROW-1075): scan reads hundreds of transcript heads +
+  // git remotes; upload is serial network I/O over the selected set.
+  'backfill-scan': 180000,
+  'backfill-upload': 600000,
   // Shell out to gh/glab/Jira across every configured repo; clone a repo and
   // spawn tmux; run a job's full command.
   'refresh-tickets': 120000,
@@ -5629,11 +5633,33 @@ function ensureTerminal() {
   }
   // WebGL renderer for throughput; must load after open(). Falls back to the
   // default renderer if the GL context is unavailable or gets lost.
+  //
+  // CROW-1078: skipped on touch surfaces (iOS/iPad). A WebGL canvas is its own
+  // compositor layer that often fails to re-composite while Safari animates the
+  // *visual* viewport with the software keyboard, so the drawn cursor strands at
+  // its old screen position while the IME caret (a DOM textarea) follows the
+  // keyboard — the two land on different cells. The DOM/canvas renderer follows
+  // the viewport correctly and honors the viewport addon's post-inset repaint.
+  // `keyboardCapable()` is the SAME touch test the viewport addon gates on,
+  // shared from its namespace so the two can't drift; requiring `visualViewport`
+  // too makes this condition identical to "the viewport addon will engage" — so
+  // WebGL is dropped on exactly the surfaces where the keyboard can animate the
+  // viewport, and non-visualViewport webviews keep WebGL unchanged. If the addon
+  // failed to load, `skipWebgl` stays false and WebGL loads exactly as before.
+  let skipWebgl = false;
   try {
-    const webglAddon = new WebglAddon.WebglAddon();
-    webglAddon.onContextLoss(() => webglAddon.dispose());
-    term.loadAddon(webglAddon);
-  } catch (_) { /* WebGL unavailable → canvas/DOM renderer */ }
+    skipWebgl = !!window.visualViewport
+      && typeof CrowViewportAddon === 'object' && CrowViewportAddon
+      && typeof CrowViewportAddon.keyboardCapable === 'function'
+      && CrowViewportAddon.keyboardCapable();
+  } catch (_) { skipWebgl = false; }
+  if (!skipWebgl) {
+    try {
+      const webglAddon = new WebglAddon.WebglAddon();
+      webglAddon.onContextLoss(() => webglAddon.dispose());
+      term.loadAddon(webglAddon);
+    } catch (_) { /* WebGL unavailable → canvas/DOM renderer */ }
+  }
   term.onData(sendToPTY);
   // CROW-934: hydrate the shell scrollback from tmux when the user reaches the
   // top of what the live stream actually delivered.

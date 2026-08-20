@@ -76,7 +76,13 @@ public struct GrokAgent: CodingAgent {
         autoPermissionMode: Bool,
         telemetryPort: UInt16?
     ) -> String? {
-        let grokPath = findBinary() ?? "grok"
+        // `launchBinary()`, not `findBinary()`: Grok identity-probes (its `grok`
+        // collides with `superagent-ai/grok-cli`, CROW-911), and since CROW-1058
+        // discovery may probe *past* a failing candidate to a genuine one
+        // further down PATH. A fresh walk here would still return the impostor
+        // at the head of the list, so launch reads the path discovery actually
+        // verified. Behavior for a single-`grok` box is unchanged.
+        let grokPath = launchBinary() ?? "grok"
 
         switch session.kind {
         case .work:
@@ -154,7 +160,7 @@ public struct GrokAgent: CodingAgent {
             sessionID: sessionID,
             worktreePath: worktreePath,
             prompt: prompt,
-            binary: findBinary() ?? "grok"
+            binary: launchBinary() ?? "grok"
         )
     }
 
@@ -172,7 +178,7 @@ public struct GrokAgent: CodingAgent {
         // `grok` collides with `superagent-ai/grok-cli`, so `defaults.binaries.grok`
         // is the *expected* config here, and an override path with a space would
         // otherwise word-split when the terminal backend runs it (#861 review r8).
-        return GrokLaunchArgs.shellQuote(findBinary() ?? "grok")
+        return GrokLaunchArgs.shellQuote(launchBinary() ?? "grok")
     }
 
     /// Grok's TUI exposes `/rename` (alias `/title`) for the current session

@@ -49,6 +49,8 @@ public struct CrowCommand: ParsableCommand {
             Corveil.self,
             Gateway.self,
             WebPassword.self,
+            Logsync.self,
+            Backfill.self,
             MCP.self,
             AddWorktree.self,
             ListWorktrees.self,
@@ -79,7 +81,6 @@ public struct CrowCommand: ParsableCommand {
             GetState.self,
             ListArtifacts.self,
             HookEventCmd.self,
-            CodexNotify.self,
             GenerateDocs.self,
             Version.self,
         ]

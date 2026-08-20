@@ -292,6 +292,12 @@ public enum ParityLedger {
         .write("telemetry-set", cli: "telemetry set"),
         .read("cleanup-get", cli: "cleanup get"),
         .write("cleanup-set", cli: "cleanup set"),
+        .read("logsync-get", cli: "logsync get"),
+        .write("logsync-set", cli: "logsync set"),
+        // Historical session backfill (CROW-1075). `scan` reconciles on-disk
+        // transcripts; `upload` pushes a user-selected set through the live path.
+        .read("backfill-scan", cli: "backfill scan"),
+        .write("backfill-upload", cli: "backfill upload"),
         .read("ui-get", cli: "ui get"),
         .write("ui-set", cli: "ui set"),
         .read("version-update-get", cli: "version get"),
@@ -479,6 +485,14 @@ public enum ParityLedger {
         .field("workspaces[].gateway.baseURL", read: "gateway get", write: "gateway set"),
         .field("workspaces[].gateway.customHeaders", read: "gateway get", write: "gateway set"),
 
+        // Session-log collector behavior knobs (CROW-1056; slimmed in CROW-1070).
+        // No longer local-only: the block holds no credential and no opt-in (both
+        // are per-workspace via the gateway), so it round-trips over `set-config`
+        // (Settings → General → Session logs) and the `crow logsync` CLI alike.
+        .field("logSync.retentionDays", read: "logsync get", write: "logsync set"),
+        .field("logSync.quietPeriodMinutes", read: "logsync get", write: "logsync set"),
+        .field("logSync.maxUploadBytes", read: "logsync get", write: "logsync set"),
+
         .field("webAuth.iterations", read: "web-password status", write: "web-password set"),
         .field(
             "webAuth.hashB64",
@@ -634,8 +648,13 @@ public enum ParityLedger {
         .field("workspaces[].jiraJQL", read: "workspace get", write: "workspace edit"),
         .field("workspaces[].jiraSite", read: "workspace get", write: "workspace edit"),
         .field("workspaces[].jiraStatusMap", read: "workspace get", write: "workspace edit"),
-        .field("workspaces[].corveilHost", read: "workspace get", write: "workspace edit"),
         .field("workspaces[].sessionEnv", read: "workspace get", write: "workspace edit"),
+        // Per-workspace session-log opt-in (CROW-1066; sole opt-in since
+        // CROW-1070). Writable from the same surfaces as every other workspace
+        // field — `workspace edit` over the socket, `set-config` from an
+        // authenticated browser — because it only reuses a credential the workspace
+        // already holds (its local-only gateway) and can't redirect the upload.
+        .field("workspaces[].uploadSessionLogs", read: "workspace get", write: "workspace edit"),
 
         // MARK: Automation toggles (web Settings tab + `crow automation`)
 

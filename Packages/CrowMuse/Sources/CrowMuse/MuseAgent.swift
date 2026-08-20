@@ -79,7 +79,11 @@ public struct MuseAgent: CodingAgent {
         autoPermissionMode: Bool,
         telemetryPort: UInt16?
     ) -> String? {
-        let musePath = findBinary() ?? "muse"
+        // `launchBinary()`, not `findBinary()`: Muse identity-probes (`muse`
+        // collides with the Muse Sequencer), and since CROW-1058 discovery may
+        // probe past a failing candidate — so launch must read the verified
+        // path rather than re-walking to the impostor at the head of the list.
+        let musePath = launchBinary() ?? "muse"
 
         switch session.kind {
         case .work:
@@ -157,7 +161,7 @@ public struct MuseAgent: CodingAgent {
             sessionID: sessionID,
             worktreePath: worktreePath,
             prompt: prompt,
-            binary: findBinary() ?? "muse",
+            binary: launchBinary() ?? "muse",
             trustWorkspace: false
         )
     }
@@ -175,7 +179,7 @@ public struct MuseAgent: CodingAgent {
             sessionID: sessionID,
             worktreePath: worktreePath,
             prompt: prompt,
-            binary: findBinary() ?? "muse",
+            binary: launchBinary() ?? "muse",
             trustWorkspace: sessionKind != .review
         )
     }
@@ -191,7 +195,7 @@ public struct MuseAgent: CodingAgent {
         // Terminal backend appends Enter, so no trailing newline. Quoted
         // so a spaced `defaults.binaries.muse` pin can't word-split.
         MuseLaunchArgs.managerCommand(
-            binary: findBinary() ?? "muse",
+            binary: launchBinary() ?? "muse",
             autoPermissionMode: autoPermissionMode,
             trustWorkspace: true
         )

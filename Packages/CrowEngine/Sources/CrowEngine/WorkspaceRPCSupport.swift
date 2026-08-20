@@ -42,9 +42,9 @@ public enum WorkspaceRPC {
     public static let fieldKeys = [
         "name", "provider", "host", "task_provider",
         "jira_site", "jira_project_key", "jira_jql", "jira_status_map",
-        "corveil_host", "custom_instructions", "session_env",
+        "custom_instructions", "session_env",
         "always_include", "auto_review_repos", "exclude_review_repos",
-        "review_blocking_severities",
+        "review_blocking_severities", "upload_session_logs",
         "clear_always_include", "clear_auto_review_repos", "clear_exclude_review_repos",
         "clear_jira_status_map", "clear_session_env", "clear_review_blocking_severities",
     ]
@@ -117,6 +117,18 @@ public enum WorkspaceRPC {
     /// throws, so a typo'd `"true"` string fails loudly instead of reading false.
     public static func flag(_ params: [String: JSONValue], _ key: String) throws -> Bool {
         guard let value = params[key], value != .null else { return false }
+        guard let flag = value.boolValue else {
+            throw RPCError.invalidParams("\(key) must be a boolean (true or false)")
+        }
+        return flag
+    }
+
+    /// A tri-state boolean *field* patch (CROW-1066). Unlike ``flag(_:_:)``, absent
+    /// returns `nil` ("leave unchanged") rather than `false` — this writes a stored
+    /// bool, so omitting the key must not silently clear it. A present non-boolean
+    /// throws, matching every other typed patch helper.
+    public static func patchBool(_ params: [String: JSONValue], _ key: String) throws -> Bool? {
+        guard let value = params[key], value != .null else { return nil }
         guard let flag = value.boolValue else {
             throw RPCError.invalidParams("\(key) must be a boolean (true or false)")
         }
@@ -348,9 +360,6 @@ public enum WorkspaceRPC {
             workspace.jiraProjectKey = blankToNil(key)
         }
         if let jql = try patchString(params, "jira_jql") { workspace.jiraJQL = blankToNil(jql) }
-        if let host = try patchString(params, "corveil_host") {
-            workspace.corveilHost = blankToNil(host)
-        }
         // Custom instructions are free text: trimmed only at the ends, and never
         // blank-stripped in the middle. An all-whitespace value clears.
         if let instructions = try patchString(params, "custom_instructions") {
@@ -397,6 +406,13 @@ public enum WorkspaceRPC {
         }
         if let raw = try patchStringList(params, "review_blocking_severities") {
             workspace.reviewBlockingSeverities = try decodeReviewBlockingSeverities(raw)
+        }
+
+        // Per-workspace session-log opt-in (CROW-1066). A plain bool field — not a
+        // clear-flag — so `patchBool` returns nil when the key is absent, leaving
+        // the stored value untouched (a PATCH).
+        if let upload = try patchBool(params, "upload_session_logs") {
+            workspace.uploadSessionLogs = upload
         }
 
         try validateCoherence(workspace, params: params)
@@ -448,10 +464,6 @@ public enum WorkspaceRPC {
             throw RPCError.invalidParams(
                 "\(written) applies to Jira workspaces only — set task_provider=\"jira\" (currently \"\(workspace.derivedTaskProvider)\")")
         }
-        if wrote("corveil_host"), workspace.derivedTaskProvider != "corveil" {
-            throw RPCError.invalidParams(
-                "corveil_host applies to Corveil workspaces only — set task_provider=\"corveil\" (currently \"\(workspace.derivedTaskProvider)\")")
-        }
     }
 
     /// Trim, and treat an all-whitespace value as "cleared".
@@ -493,7 +505,6 @@ public enum WorkspaceRPC {
         object["jira_site"] = workspace.jiraSite.map { .string($0) } ?? .null
         object["jira_project_key"] = workspace.jiraProjectKey.map { .string($0) } ?? .null
         object["jira_jql"] = workspace.jiraJQL.map { .string($0) } ?? .null
-        object["corveil_host"] = workspace.corveilHost.map { .string($0) } ?? .null
         object["jira_status_map"] = workspace.jiraStatusMap
             .map { JSONValue.object($0.mapValues { .string($0) }) } ?? .null
         object["session_env"] = workspace.sessionEnv
@@ -506,6 +517,7 @@ public enum WorkspaceRPC {
         object["review_blocking_severities"] = .array(
             workspace.effectiveReviewBlockingSeverities.map { .string($0.rawValue) })
         object["review_blocking_severities_explicit"] = .bool(workspace.reviewBlockingSeverities != nil)
+        object["upload_session_logs"] = .bool(workspace.uploadSessionLogs)
         return .object(object)
     }
 }

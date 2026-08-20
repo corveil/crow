@@ -84,14 +84,20 @@ import CrowCore
 /// transition bookkeeping and never mapped to `Stop` — treating it as "done"
 /// would park the card on a turn that is still running.
 ///
-/// **Known gap (pre-existing, not CROW-1000).** OpenCode's bus is per-*server*
-/// and `session.status` carries no parent link, so a **subagent's** child
-/// session is mapped onto this plugin's one Crow session UUID: the child going
-/// idle emits a `Stop` while the parent is still working (measured 1.9 s early
-/// on 1.18.5). The deprecated `session.idle` behaved identically, so nothing
-/// here regresses it; closing it means correlating `session.created`'s
-/// `info.parentID` and ignoring non-root sessions. See
-/// `docs/agent-harness-matrix.md` → Hook async delivery.
+/// **Subagent child sessions are dropped (CROW-1082).** OpenCode's bus is
+/// per-*server* and `session.status` / `session.idle` carry only a `sessionID`
+/// with no parent link, so before this fix a **subagent's** child session was
+/// mapped onto this plugin's one Crow session UUID: the child going idle emitted
+/// a `Stop` while the parent was still working (measured 1.9 s early on 1.18.5),
+/// parking the card on `.done` mid-turn. `session.created` is the one event that
+/// exposes the parent link (`info.parentID`), so the plugin records every child
+/// session's id there and then **ignores that id's `session.status` /
+/// `session.idle`** — only the **root** session (no `parentID`) drives the card,
+/// and it also skips `SessionStart` for a child so a subagent never re-announces
+/// the parent. Scoped to the premature-`.done` failure: a child's tool hooks
+/// (`tool.execute.before`/`after`) still map to working state, which is correct
+/// because the parent *is* working. See `docs/agent-harness-matrix.md` → Hook
+/// async delivery.
 ///
 /// Permission detection uses the **first-class `permission.ask` hook**, not a
 /// bus `event.type`: the SDK `Event` union has no `permission.asked` literal
@@ -259,6 +265,14 @@ public struct OpenCodeHookConfigWriter: HookConfigWriter {
         // session goes idle.
         const lastStatus = new Map();
 
+        // sessionIDs of subagent CHILD sessions. OpenCode's bus is per-server
+        // and `session.status`/`session.idle` carry only a `sessionID` with no
+        // parent link, so a child going idle would mark the parent's card
+        // `.done` mid-turn. `session.created` is the one event carrying
+        // `info.parentID`, so we record every child there and drop its
+        // status/idle events below — only the root session drives the card.
+        const childSessions = new Set();
+
         async function emit($, cwd, event, extra) {
           try {
             const payload = JSON.stringify(Object.assign({ cwd }, extra || {}));
@@ -292,14 +306,30 @@ public struct OpenCodeHookConfigWriter: HookConfigWriter {
           return {
             event: async ({ event }) => {
               switch (event.type) {
-                case "session.created":
+                case "session.created": {
+                  // A subagent runs as a CHILD session on the same per-server
+                  // bus. `info.parentID` is the only place the parent link is
+                  // exposed, so record child ids here and drop their lifecycle
+                  // events below. Root sessions (no parentID) alone drive the
+                  // card — and a child never re-announces via SessionStart.
+                  const info = (event.properties && event.properties.info) || {};
+                  if (info.parentID) {
+                    childSessions.add(info.id);
+                    break;
+                  }
                   await emit($, cwd, "SessionStart", { source: "startup" });
                   break;
+                }
                 case "session.status": {
                   // Canonical idle/busy signal (`session.idle` is deprecated).
                   sawSessionStatus = true;
                   const props = event.properties || {};
                   const id = props.sessionID || "";
+                  // A subagent's status must never move the parent's card: its
+                  // idle would falsely mark it `.done`. Drop after the latch
+                  // above so a child-only status still disables the deprecated
+                  // `session.idle` fallback.
+                  if (childSessions.has(id)) break;
                   const raw = (props.status && props.status.type) || "";
                   // `retry` is a busy sub-state (provider retry mid-turn), NOT a
                   // finished turn — fold it into `busy` so a busy→retry→busy
@@ -324,12 +354,17 @@ public struct OpenCodeHookConfigWriter: HookConfigWriter {
                   }
                   break;
                 }
-                case "session.idle":
+                case "session.idle": {
                   // Deprecated upstream, and emitted alongside
                   // `session.status {idle}` on builds that have it — so only
                   // act on it when this build never spoke `session.status`.
+                  // Same child guard as `session.status`: a subagent's idle
+                  // must not mark the parent's card done.
+                  const id = (event.properties && event.properties.sessionID) || "";
+                  if (childSessions.has(id)) break;
                   if (!sawSessionStatus) await emit($, cwd, "Stop");
                   break;
+                }
                 case "session.error":
                   await emit($, cwd, "Notification", { message: "Session error" });
                   break;

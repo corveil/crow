@@ -6,18 +6,45 @@ import Glibc
 import Darwin
 #endif
 
-/// Writes hook configuration that OpenAI Codex picks up. Codex reads hooks
-/// from `$CODEX_HOME/hooks.json` (default `~/.codex/hooks.json`) regardless
-/// of which directory `codex` is invoked from — global, not per-worktree.
+/// Writes OpenAI Codex's **per-worktree** hook configuration into a worktree's
+/// `.codex/hooks.json`, with the Crow session UUID baked into every command
+/// (`hook-event --session <uuid>`). Mirrors `ClaudeHookConfigWriter` /
+/// `CursorHookConfigWriter` / `MuseHookConfigWriter` — one config per session
+/// directory — closing the shared-`cwd` collision the old global config had
+/// (CROW-1060, closing the #830 deferral).
 ///
-/// Because `HookConfigWriter`'s per-session API doesn't fit Codex's global
-/// model, the per-session methods are intentionally no-ops. Real work happens
-/// via the static `installGlobalConfig` / `installGlobalTomlConfig` calls
-/// invoked once at app launch.
+/// **Why per-worktree, not global.** Codex loads project-scoped hooks from
+/// `<project-root>/.codex/hooks.json` (in **trusted** projects only — see
+/// `CodexTrustSeeder`) and layers them on top of any global
+/// `$CODEX_HOME/hooks.json`, running *both*. So a leftover global config a
+/// prior Crow installed plus a per-worktree config would fire each event
+/// **twice** and `hook-event` would double-count. That is exactly why #830 held
+/// the per-worktree cutover: the fix is to make per-worktree the sole authority
+/// and strip the managed global entries once, which `removeManagedGlobalConfig`
+/// does at daemon boot (mirroring `CursorHookConfigWriter`). Per-worktree also
+/// routes the **Manager** session, which runs in the devRoot (not a registered
+/// worktree) and so was previously unroutable by `cwd` match.
+///
+/// **User-owned entries are respected.** Unlike Claude's gitignored,
+/// local-only `.claude/settings.local.json`, `.codex/hooks.json` is a
+/// conventional project file a user may already ship. So write/remove key on a
+/// Crow marker (`hook-event --session` in every command) and follow Cursor/Muse's
+/// protections: a git-tracked file is left untouched (an unattended `.job`'s
+/// `git add -A` must not commit Crow's absolute crow-path + dead session UUID
+/// into the shared repo), an existing file that isn't Crow-owned (or is
+/// unparseable) is left alone, and an untracked Crow write is git-excluded.
+///
+/// The `.codex/config.toml` feature flag (`[features] hooks = true`) that
+/// *enables* the hook subsystem, the deprecated-key migration, and the
+/// retirement of the legacy `notify` bridge line all live in
+/// `installGlobalTomlConfig`, run once at boot — that file also carries Codex's
+/// own model/providers/credentials and the mirrored MCP `env` (`CodexMCPWriter`)
+/// and per-worktree trust (`CodexTrustSeeder`), so it is *edited*, never owned.
 public struct CodexHookConfigWriter: HookConfigWriter {
 
     /// All hook event names Codex can dispatch (from
-    /// codex-rs/hooks/schema/generated/*.input.schema.json).
+    /// codex-rs/hooks/schema/generated/*.input.schema.json). `CodexSignalSource`
+    /// maps each onto Crow's state machine.
     static let allEvents = [
         "SessionStart",
         "PreToolUse",
@@ -28,55 +55,49 @@ public struct CodexHookConfigWriter: HookConfigWriter {
     ]
 
     /// Events Crow runs async (fire-and-forget) **when the installed Codex is
-    /// new enough** — see `CodexVersionProbe`, which gates this on
-    /// `codex >= 0.148.0`. On older builds the set is unused and every hook is
-    /// registered sync, because an `async: true` there isn't downgraded, it is
-    /// *skipped* — which would silently stop Crow's session-state detection.
+    /// new enough** — see `CodexVersionProbe`, which gates `asyncHooksSupported`
+    /// on `codex >= 0.148.0`. On older builds the set is unused and every hook
+    /// is registered sync, because an `async: true` there isn't downgraded, it
+    /// is *skipped* — which would silently stop Crow's session-state detection.
     ///
     /// The membership mirrors `ClaudeHookConfigWriter.asyncEvents`, minus the
     /// events Codex doesn't emit: post-execution only. `PreToolUse` stays sync
     /// deliberately so it is *accepted* by the daemon ahead of the
-    /// `PermissionRequest` that follows it. Note (#903): since `crow
-    /// hook-event` is fire-and-forget, non-async no longer guarantees the
-    /// daemon *applies* events in arrival order either — it only narrows the
-    /// window to the `MainActor` scheduling race instead of also racing the
-    /// writes. Making `PreToolUse` async would widen exactly the inversion
-    /// that does **not** self-heal (a `PreToolUse` applied after
-    /// `PermissionRequest` clears the permission badge while the agent is
-    /// parked at the prompt, and no further event arrives until the user
-    /// answers). See the "Hook async delivery" apply-order caveat in
-    /// docs/agent-harness-matrix.md; the durable fix is server-side
-    /// per-session sequencing.
+    /// `PermissionRequest` that follows it (#903 apply-order caveat — the
+    /// non-self-healing permission-badge inversion; see
+    /// docs/agent-harness-matrix.md).
     private static let asyncEvents: Set<String> = ["PostToolUse"]
 
-    public init() {}
+    /// Whether this writer may emit `async: true` — `CodexVersionProbe`'s
+    /// verdict, taken at daemon boot and baked into the agent's writer
+    /// (`CrowDaemon` re-registers Codex with the probed value). Defaults to
+    /// `false` so any caller that hasn't probed gets the always-safe sync
+    /// registration (CROW-999).
+    public let asyncHooksSupported: Bool
 
-    // MARK: - HookConfigWriter Conformance (no-ops)
+    public init(asyncHooksSupported: Bool = false) {
+        self.asyncHooksSupported = asyncHooksSupported
+    }
 
-    /// No-op. Codex hooks are global, not per-worktree — see
-    /// `installGlobalConfig`.
-    public func writeHookConfig(worktreePath: String, sessionID: UUID, crowPath: String) throws {}
+    // MARK: - Hook document
 
-    /// No-op. Codex's global `hooks.json` stays in place when individual
-    /// sessions are deleted; it serves all sessions.
-    public func removeHookConfig(worktreePath: String) {}
-
-    // MARK: - Global Configuration
-
-    /// Build the hooks dict in the schema Codex expects. Each event invokes
-    /// `<crow> hook-event --agent codex --event <Name>` with no `--session`
-    /// flag — the crow server resolves the session from `cwd` in the payload.
-    ///
-    /// `asyncHooksSupported` comes from `CodexVersionProbe` and decides whether
-    /// `asyncEvents` are marked `async`. When `false`, no entry carries the key
-    /// at all — and because each event's entry is rebuilt whole here and
-    /// overwritten in `installGlobalConfig`, a downgrade (or a probe that stops
-    /// answering) *removes* a previously-written `async` rather than leaving it
-    /// stranded on a build that would skip the hook.
-    static func generateHooks(crowPath: String, asyncHooksSupported: Bool) -> [String: Any] {
+    /// Build the Codex hooks document (`{ "hooks": { … } }`) for a session.
+    /// Each event invokes
+    /// `<crow> hook-event --session <UUID> --agent codex --event <Name>` so the
+    /// server routes by UUID rather than resolving the session from `cwd`.
+    static func generateDocument(
+        sessionID: UUID,
+        crowPath: String,
+        asyncHooksSupported: Bool
+    ) -> [String: Any] {
+        let sid = sessionID.uuidString
         var hooks: [String: Any] = [:]
         for event in allEvents {
-            let command = "\(crowPath) hook-event --agent codex --event \(event)"
+            // Codex runs the command through a shell, so quote the crow path —
+            // `resolveCrowBinary` prefers `{devRoot}/.claude/bin/crow` and devRoot
+            // is user-chosen (`/Users/x/My Projects/…` would otherwise split the
+            // command and silently stop every hook from firing).
+            let command = "\(ShellLaunchArgs.shellQuote(crowPath)) hook-event --session \(sid) --agent codex --event \(event)"
             var entry: [String: Any] = [
                 "type": "command",
                 "command": command,
@@ -89,54 +110,173 @@ public struct CodexHookConfigWriter: HookConfigWriter {
                 ["hooks": [entry]] as [String: Any]
             ]
         }
-        return hooks
+        return ["hooks": hooks]
     }
 
-    /// Install or refresh `<codexHome>/hooks.json` with Crow's 6 hook
-    /// commands. Idempotent — re-running just rewrites the same content.
-    /// Preserves any user-authored entries for events Crow doesn't manage.
-    ///
-    /// `asyncHooksSupported` defaults to `false` so any caller that hasn't
-    /// probed gets the always-safe sync registration (CROW-999).
-    public static func installGlobalConfig(
-        codexHome: String,
-        crowPath: String,
-        asyncHooksSupported: Bool = false
+    // MARK: - HookConfigWriter Conformance
+
+    /// Write `<worktreePath>/.codex/hooks.json` with the session UUID baked in.
+    /// See the type doc for the skip conditions (git-tracked, not Crow-owned,
+    /// unparseable).
+    public func writeHookConfig(
+        worktreePath: String,
+        sessionID: UUID,
+        crowPath: String
     ) throws {
-        try FileManager.default.createDirectory(atPath: codexHome, withIntermediateDirectories: true)
-        let hooksPath = (codexHome as NSString).appendingPathComponent("hooks.json")
+        let codexDir = Self.codexDir(worktreePath)
+        let filePath = (codexDir as NSString).appendingPathComponent(Self.fileName)
+        let relativePath = ".codex/\(Self.fileName)"
 
-        // Read existing hooks.json if present so user-authored entries for
-        // events outside `allEvents` survive.
-        var existing: [String: Any] = [:]
-        if let data = FileManager.default.contents(atPath: hooksPath),
-           let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            existing = parsed
+        // If the repo *tracks* `.codex/hooks.json`, refuse to write into it:
+        // `.git/info/exclude` has no effect on tracked files, so a `git add -A`
+        // would commit Crow's crow-path + dead session UUID into the shared repo.
+        // Checked unconditionally so a tracked-but-deleted file is still caught.
+        if Self.isGitTracked(worktreePath: worktreePath, relativePath: relativePath) {
+            CrowLog.info("[CodexHookConfigWriter] \(worktreePath)/\(relativePath) is git-tracked; not writing Crow's session hooks into a committed file. Gitignore/untrack it to enable hook-based state detection for this worktree.")
+            return
         }
-        var existingHooks = existing["hooks"] as? [String: Any] ?? [:]
-        let ours = generateHooks(crowPath: crowPath, asyncHooksSupported: asyncHooksSupported)
-        for (eventName, config) in ours {
-            existingHooks[eventName] = config
-        }
-        existing["hooks"] = existingHooks
 
+        // If the file exists but isn't Crow-owned (a user's own hooks) or is
+        // unparseable (a torn write / hand-edit), leave it untouched rather than
+        // clobber the user's config.
+        if let existing = FileManager.default.contents(atPath: filePath) {
+            guard let parsed = try? JSONSerialization.jsonObject(with: existing) as? [String: Any],
+                  Self.isCrowOwned(parsed) else {
+                CrowLog.info("[CodexHookConfigWriter] \(filePath) exists and is not Crow-owned (or is unparseable); leaving it untouched.")
+                return
+            }
+        }
+
+        try FileManager.default.createDirectory(atPath: codexDir, withIntermediateDirectories: true)
+
+        let document = Self.generateDocument(
+            sessionID: sessionID,
+            crowPath: crowPath,
+            asyncHooksSupported: asyncHooksSupported)
         let data = try JSONSerialization.data(
-            withJSONObject: existing,
-            options: [.prettyPrinted, .sortedKeys])
-        try data.write(to: URL(fileURLWithPath: hooksPath))
+            withJSONObject: document, options: [.prettyPrinted, .sortedKeys])
+        // Atomic (temp + rename): a crash mid-write would otherwise leave a
+        // truncated file the not-Crow-owned guard then refuses to touch, silently
+        // disabling this worktree's hook-based state detection forever.
+        try data.write(to: URL(fileURLWithPath: filePath), options: [.atomic])
+        Self.ensureGitExcluded(worktreePath: worktreePath, pattern: relativePath)
     }
 
-    /// Install or update `<codexHome>/config.toml` with the
-    /// `features.hooks = true` flag and the Crow `notify` line.
-    /// Preserves any other user-authored config — minimal line-oriented merge
-    /// avoids pulling in a TOML dependency for two simple keys.
+    /// Remove Crow's `.codex/hooks.json` when it is Crow-owned. Leaves a user's
+    /// own file untouched. Prunes `.codex/` when left empty.
+    public func removeHookConfig(worktreePath: String) {
+        let codexDir = Self.codexDir(worktreePath)
+        let filePath = (codexDir as NSString).appendingPathComponent(Self.fileName)
+        if let data = FileManager.default.contents(atPath: filePath),
+           let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           Self.isCrowOwned(parsed) {
+            try? FileManager.default.removeItem(atPath: filePath)
+        }
+        Self.removeIfEmpty(codexDir)
+    }
+
+    // MARK: - Crow-owned probe
+
+    /// A per-worktree file is Crow-owned when every registered event's command
+    /// contains `hook-event --session`. A user's own hooks.json will not.
+    static func isCrowOwned(_ document: [String: Any]) -> Bool {
+        guard let hooks = document["hooks"] as? [String: Any] else { return false }
+        guard !hooks.isEmpty else { return false }
+        for event in allEvents {
+            guard let groups = hooks[event] as? [[String: Any]],
+                  let inner = groups.first?["hooks"] as? [[String: Any]],
+                  let command = inner.first?["command"] as? String,
+                  command.contains("hook-event --session") else {
+                return false
+            }
+        }
+        return true
+    }
+
+    // MARK: - Global-config migration (one-time cleanup)
+
+    /// Strip Crow's managed hook groups from the **global**
+    /// `<codexHome>/hooks.json` a prior Crow installed. Per-worktree configs are
+    /// now the authority (CROW-1060); because Codex layers global + project hooks
+    /// and runs both, a surviving global config would double-fire every event.
+    /// Only Crow's groups are removed (a command shelling
+    /// `crow hook-event … --agent codex` — matches the legacy cwd-resolved form
+    /// that carried no `--session`), so a user's own hooks — even for the same
+    /// event name — survive. Deletes the file when nothing meaningful remains.
+    /// Mirrors `CursorHookConfigWriter.removeManagedGlobalConfig`.
+    public static func removeManagedGlobalConfig(codexHome: String) {
+        let hooksPath = (codexHome as NSString).appendingPathComponent("hooks.json")
+        guard let data = FileManager.default.contents(atPath: hooksPath),
+              var root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              var hooks = root["hooks"] as? [String: Any] else {
+            return
+        }
+
+        var changed = false
+        for event in allEvents {
+            guard var groups = hooks[event] as? [[String: Any]] else { continue }
+            let before = groups.count
+            groups.removeAll { groupIsCrowManagedGlobal($0) }
+            if groups.count == before { continue }
+            changed = true
+            if groups.isEmpty {
+                hooks.removeValue(forKey: event)
+            } else {
+                hooks[event] = groups
+            }
+        }
+        guard changed else { return }
+
+        if hooks.isEmpty {
+            root.removeValue(forKey: "hooks")
+        } else {
+            root["hooks"] = hooks
+        }
+
+        // Nothing meaningful left — remove the file rather than leave a husk.
+        if root.isEmpty {
+            try? FileManager.default.removeItem(atPath: hooksPath)
+            return
+        }
+        do {
+            let out = try JSONSerialization.data(
+                withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
+            try out.write(to: URL(fileURLWithPath: hooksPath), options: [.atomic])
+        } catch {
+            CrowLog.info("[CodexHookConfigWriter] Failed to rewrite \(hooksPath): \(error.localizedDescription)")
+        }
+    }
+
+    /// Whether a global hook group (`{"hooks": [{command…}]}`) is one Crow
+    /// installed via the retired global writer — its command shells
+    /// `crow hook-event … --agent codex`. A user's own command for the same
+    /// event won't carry both tokens.
+    private static func groupIsCrowManagedGlobal(_ group: [String: Any]) -> Bool {
+        guard let inner = group["hooks"] as? [[String: Any]] else { return false }
+        for entry in inner {
+            guard let command = entry["command"] as? String else { continue }
+            if command.contains("hook-event") && command.contains("--agent codex") {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// Install or update `<codexHome>/config.toml` with the `[features] hooks =
+    /// true` flag that *enables* Codex's hook subsystem (per-worktree
+    /// `.codex/hooks.json` won't load without it). Preserves every other
+    /// user-authored line — a minimal line-oriented merge avoids pulling in a
+    /// TOML dependency for one key.
     ///
-    /// Also runs a one-shot migration: legacy installs (Crow before this
-    /// fix, or older Codex versions) wrote `codex_hooks = true` under
-    /// `[features]`. Codex v0.139.0+ renamed the key to `hooks` and emits
-    /// a deprecation warning for the old one — strip it so users converging
-    /// from older configs end up with a single, current entry.
-    public static func installGlobalTomlConfig(codexHome: String, crowPath: String) throws {
+    /// Also runs two one-shot migrations:
+    ///  - Legacy installs wrote `codex_hooks = true` under `[features]`; Codex
+    ///    v0.139.0+ renamed the key to `hooks` and warns on the old one — strip it.
+    ///  - Crow before CROW-1060 wrote a `notify = ["<crow>", "codex-notify"]`
+    ///    line to bridge Codex's post-turn callback into `hook-event`. That
+    ///    bridge is retired now that per-worktree hooks (which carry a `Stop`
+    ///    event) are the sole signal path, and leaving it would double-count
+    ///    turn completion — so strip our `notify` line while leaving a user's own.
+    public static func installGlobalTomlConfig(codexHome: String) throws {
         try FileManager.default.createDirectory(atPath: codexHome, withIntermediateDirectories: true)
         let tomlPath = (codexHome as NSString).appendingPathComponent("config.toml")
 
@@ -153,8 +293,8 @@ public struct CodexHookConfigWriter: HookConfigWriter {
             content = text
         }
 
-        let notifyLine = "notify = [\"\(escapeTomlString(crowPath))\", \"codex-notify\"]"
-        content = upsertTomlLine(content, key: "notify", line: notifyLine)
+        // Retire the legacy `notify` bridge line Crow used to write (CROW-1060).
+        content = removeCrowNotifyLine(content)
         // Strip the deprecated `codex_hooks` key before writing the modern
         // `hooks` key so we don't leave both lines behind on migration.
         content = removeTomlSectionLine(content, section: "features", key: "codex_hooks")
@@ -174,6 +314,26 @@ public struct CodexHookConfigWriter: HookConfigWriter {
     }
 
     // MARK: - TOML Line Editing (Minimal)
+
+    /// Remove a top-level (no section) `notify = …` line whose value references
+    /// Crow's `codex-notify` bridge, leaving a user's own `notify` for another
+    /// tool intact. Idempotent — content unchanged when no such line exists.
+    static func removeCrowNotifyLine(_ content: String) -> String {
+        var lines = content.components(separatedBy: "\n")
+        var inSection = false
+        for (i, raw) in lines.enumerated() {
+            let trimmed = raw.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("[") && trimmed.hasSuffix("]") {
+                inSection = true
+                continue
+            }
+            if !inSection, lineKey(of: raw) == "notify", raw.contains("codex-notify") {
+                lines.remove(at: i)
+                return lines.joined(separator: "\n")
+            }
+        }
+        return content
+    }
 
     /// Replace or append a top-level (no section) `key = …` line in `content`.
     static func upsertTomlLine(_ content: String, key: String, line: String) -> String {
@@ -464,5 +624,118 @@ public struct CodexHookConfigWriter: HookConfigWriter {
             try? fm.removeItem(atPath: tmp)
             throw CocoaError(.fileWriteUnknown)
         }
+    }
+
+    // MARK: - Paths
+
+    static let fileName = "hooks.json"
+
+    private static func codexDir(_ worktree: String) -> String {
+        (worktree as NSString).appendingPathComponent(".codex")
+    }
+
+    private static func removeIfEmpty(_ dir: String) {
+        let fm = FileManager.default
+        guard let contents = try? fm.contentsOfDirectory(atPath: dir), contents.isEmpty else { return }
+        try? fm.removeItem(atPath: dir)
+    }
+
+    // MARK: - Git-tracked probe (mirrors CursorHookConfigWriter / MuseHookConfigWriter)
+
+    private nonisolated(unsafe) static var trackedCache: [String: Bool] = [:]
+    private static let trackedCacheLock = NSLock()
+
+    private static func isGitTracked(worktreePath: String, relativePath: String) -> Bool {
+        let cacheKey = worktreePath + "\u{0}" + relativePath
+        trackedCacheLock.lock()
+        if let cached = trackedCache[cacheKey] {
+            trackedCacheLock.unlock()
+            return cached
+        }
+        trackedCacheLock.unlock()
+
+        let result = probeGitTracked(worktreePath: worktreePath, relativePath: relativePath)
+
+        trackedCacheLock.lock()
+        trackedCache[cacheKey] = result
+        trackedCacheLock.unlock()
+        return result
+    }
+
+    /// Reset the tracked-ness cache (tests only).
+    static func resetTrackedCacheForTesting() {
+        trackedCacheLock.lock()
+        trackedCache.removeAll()
+        trackedCacheLock.unlock()
+    }
+
+    private static func probeGitTracked(worktreePath: String, relativePath: String) -> Bool {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["git", "-C", worktreePath, "ls-files", "--error-unmatch", relativePath]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        let done = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in done.signal() }
+        do {
+            try process.run()
+        } catch {
+            return false
+        }
+        if done.wait(timeout: .now() + 3) == .timedOut {
+            process.terminate()
+            return false
+        }
+        return process.terminationStatus == 0
+    }
+
+    // MARK: - Git exclude
+
+    static func ensureGitExcluded(worktreePath: String, pattern: String) {
+        guard let excludePath = gitInfoExcludePath(worktreePath: worktreePath) else { return }
+        let existing = (try? String(contentsOfFile: excludePath, encoding: .utf8)) ?? ""
+        let alreadyListed = existing
+            .split(separator: "\n")
+            .contains { $0.trimmingCharacters(in: .whitespaces) == pattern }
+        if alreadyListed { return }
+
+        var updated = existing
+        if !updated.isEmpty && !updated.hasSuffix("\n") { updated += "\n" }
+        updated += pattern + "\n"
+        try? FileManager.default.createDirectory(
+            atPath: (excludePath as NSString).deletingLastPathComponent,
+            withIntermediateDirectories: true)
+        try? updated.write(toFile: excludePath, atomically: true, encoding: .utf8)
+    }
+
+    private static func gitInfoExcludePath(worktreePath: String) -> String? {
+        let fm = FileManager.default
+        let dotGit = (worktreePath as NSString).appendingPathComponent(".git")
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: dotGit, isDirectory: &isDir) else { return nil }
+        if isDir.boolValue {
+            return (dotGit as NSString).appendingPathComponent("info/exclude")
+        }
+        // Linked worktree: `.git` is a file `gitdir: <path>`.
+        guard let raw = try? String(contentsOfFile: dotGit, encoding: .utf8) else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("gitdir:") else { return nil }
+        var gitDir = String(trimmed.dropFirst("gitdir:".count)).trimmingCharacters(in: .whitespaces)
+        if !(gitDir as NSString).isAbsolutePath {
+            gitDir = (worktreePath as NSString).appendingPathComponent(gitDir)
+        }
+        gitDir = (gitDir as NSString).standardizingPath
+        // The `info/exclude` in the *common* dir applies to all worktrees; use
+        // it when a `commondir` pointer exists.
+        let commonDirFile = (gitDir as NSString).appendingPathComponent("commondir")
+        if let common = try? String(contentsOfFile: commonDirFile, encoding: .utf8) {
+            var commonPath = common.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !(commonPath as NSString).isAbsolutePath {
+                commonPath = (gitDir as NSString).appendingPathComponent(commonPath)
+            }
+            return ((commonPath as NSString).standardizingPath as NSString)
+                .appendingPathComponent("info/exclude")
+        }
+        return (gitDir as NSString).appendingPathComponent("info/exclude")
     }
 }

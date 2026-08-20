@@ -1,0 +1,151 @@
+import Foundation
+
+/// A harness log normalized to the NDJSON bytes the upload endpoint stores, plus
+/// the cheap hint counts the server-side derivation can use (corveil#2426).
+public struct NormalizedTranscript: Sendable, Equatable {
+    /// The artifact body — NDJSON, uploaded verbatim (uncompressed; the server
+    /// sniffs the content encoding from magic bytes, so plain NDJSON is stored
+    /// with an empty `content_encoding`).
+    public let data: Data
+    /// Number of NDJSON events (non-empty lines). A hint; the server treats it as
+    /// optional.
+    public let eventCount: Int
+    /// Number of tool-use events seen (best-effort substring count). A hint.
+    public let toolCallCount: Int
+    /// Whether the transcript was cut to fit `maxBytes`.
+    public let truncated: Bool
+
+    public init(data: Data, eventCount: Int, toolCallCount: Int, truncated: Bool) {
+        self.data = data
+        self.eventCount = eventCount
+        self.toolCallCount = toolCallCount
+        self.truncated = truncated
+    }
+}
+
+/// Turns a harness's resolved on-disk log files into one NDJSON artifact body,
+/// bounded by a byte cap (CROW-1056). Pure and dependency-free so it is unit
+/// tested in CrowCore.
+public enum TranscriptNormalizer {
+    /// Normalize `files` (already resolved to concrete regular files, in the
+    /// order they should be concatenated) into a single NDJSON body.
+    ///
+    /// Returns `nil` when there is nothing to upload (no files, all empty) or the
+    /// format cannot be normalized yet (`.sqlite` — Cursor row extraction is not
+    /// wired).
+    public static func normalize(
+        files: [URL],
+        format: AgentLogFormat,
+        maxBytes: Int
+    ) -> NormalizedTranscript? {
+        switch format {
+        case .jsonl, .logDir:
+            return concatenateNDJSON(files: files, maxBytes: maxBytes)
+        case .sqlite:
+            // Chat-row extraction out of Cursor's state.vscdb is not implemented
+            // yet; declaring the source without a normalizer would upload the raw
+            // database, which is the wrong shape. Skip until extraction lands.
+            return nil
+        }
+    }
+
+    /// Concatenate NDJSON files, inserting a newline between files that don't end
+    /// in one, and cutting at the last newline within `maxBytes` if the total
+    /// would exceed the cap (marking the result truncated). Reads incrementally so
+    /// a pathologically large file can't blow past the budget in memory.
+    private static func concatenateNDJSON(files: [URL], maxBytes: Int) -> NormalizedTranscript? {
+        guard maxBytes > 0 else { return nil }
+        var out = Data()
+        out.reserveCapacity(min(maxBytes, 1 << 20))
+        let newline: UInt8 = 0x0A
+        var truncated = false
+
+        outer: for url in files {
+            guard let handle = try? FileHandle(forReadingFrom: url) else { continue }
+            defer { try? handle.close() }
+            // Separate files with a newline so a file missing its trailing
+            // newline can't glue two events into one line.
+            if let last = out.last, last != newline, !out.isEmpty {
+                if out.count + 1 > maxBytes { truncated = true; break }
+                out.append(newline)
+            }
+            while out.count < maxBytes {
+                let remaining = maxBytes - out.count
+                guard let chunk = try? handle.read(upToCount: min(65_536, remaining + 1)),
+                      !chunk.isEmpty
+                else { break }
+                if out.count + chunk.count <= maxBytes {
+                    out.append(chunk)
+                } else {
+                    out.append(chunk.prefix(maxBytes - out.count))
+                    truncated = true
+                    break outer
+                }
+            }
+            if out.count >= maxBytes {
+                // Reached the cap; if more files/bytes remain they're dropped.
+                truncated = truncated || url != files.last
+                break
+            }
+        }
+
+        if truncated {
+            out = trimToLastNewline(out)
+        }
+        guard !out.isEmpty else { return nil }
+
+        let (events, toolCalls) = countEvents(out)
+        return NormalizedTranscript(
+            data: out, eventCount: events, toolCallCount: toolCalls, truncated: truncated)
+    }
+
+    /// Drop a trailing partial line so a truncated artifact still parses as clean
+    /// NDJSON. If there is no newline at all, the data is returned unchanged.
+    private static func trimToLastNewline(_ data: Data) -> Data {
+        let newline: UInt8 = 0x0A
+        guard let idx = data.lastIndex(of: newline) else { return data }
+        return data.prefix(through: idx)
+    }
+
+    /// Count NDJSON events (non-empty lines) and tool-use events (lines carrying
+    /// the `"type":"tool_use"` marker). Best-effort hints; a single pass over the
+    /// bytes, no JSON parsing.
+    private static func countEvents(_ data: Data) -> (events: Int, toolCalls: Int) {
+        let newline: UInt8 = 0x0A
+        var events = 0
+        var lineHadBytes = false
+        for byte in data {
+            if byte == newline {
+                if lineHadBytes { events += 1 }
+                lineHadBytes = false
+            } else if byte != 0x0D { // ignore CR
+                lineHadBytes = true
+            }
+        }
+        if lineHadBytes { events += 1 } // last line with no trailing newline
+
+        // Tool-use marker count over the whole body (cheap substring scan).
+        let toolCalls: Int
+        if let marker = "\"type\":\"tool_use\"".data(using: .utf8) {
+            toolCalls = data.ranges(of: marker).count
+        } else {
+            toolCalls = 0
+        }
+        return (events, toolCalls)
+    }
+}
+
+private extension Data {
+    /// Non-overlapping occurrences of `pattern` in this data.
+    func ranges(of pattern: Data) -> [Range<Data.Index>] {
+        guard !pattern.isEmpty, count >= pattern.count else { return [] }
+        var result: [Range<Data.Index>] = []
+        var searchStart = startIndex
+        while searchStart < endIndex,
+              let found = self.range(of: pattern, in: searchStart..<endIndex) {
+            result.append(found)
+            searchStart = found.upperBound
+        }
+        return result
+    }
+}

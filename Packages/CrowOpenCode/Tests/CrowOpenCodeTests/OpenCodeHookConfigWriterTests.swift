@@ -72,6 +72,23 @@ struct OpenCodeHookConfigWriterTests {
         #expect(js.contains("if (state === \"busy\") {"))
     }
 
+    @Test func pluginSourceDropsSubagentChildSessions() {
+        // CROW-1082: a subagent runs as a CHILD session on the same per-server
+        // bus, but `session.status`/`session.idle` carry only a `sessionID`. The
+        // plugin records child ids from `session.created`'s `info.parentID` and
+        // drops that id's status/idle, so a child idling can't mark the parent's
+        // card `.done` mid-turn.
+        let js = OpenCodeHookConfigWriter.pluginSource(crowPath: "/bin/crow")
+        // A set of child session ids, populated from `session.created`.
+        #expect(js.contains("const childSessions = new Set();"))
+        #expect(js.contains("if (info.parentID) {"))
+        #expect(js.contains("childSessions.add(info.id);"))
+        // Both the modern and deprecated idle paths guard on membership.
+        #expect(js.contains("if (childSessions.has(id)) break;"))
+        // The deprecated fallback reads the sessionID it previously ignored.
+        #expect(js.contains("event.properties.sessionID"))
+    }
+
     @Test func globalPluginSourceSelfSuppressesWhenPerProjectExists() {
         // Global variant (no session UUID): SESSION empty, cwd-match emit, and
         // a guard that defers to a per-project plugin so events don't double-emit.
