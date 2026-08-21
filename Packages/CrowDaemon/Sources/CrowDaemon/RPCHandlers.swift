@@ -1682,6 +1682,8 @@ func makeCommandRouter(
         },
         "logsync-get": { params in logsyncGetHandler(params: params, devRoot: devRoot) },
         "logsync-set": { params in try await logsyncSetHandler(params: params, devRoot: devRoot) },
+        "terminal-get": { params in terminalGetHandler(params: params, devRoot: devRoot) },
+        "terminal-set": { params in try await terminalSetHandler(params: params, devRoot: devRoot) },
         "ui-get": { _ in
             let config = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
             return ["ui": SettingsRPC.uiJSON(sidebar: config.sidebar, switcher: config.switcher)]
@@ -2699,6 +2701,44 @@ private func logsyncSetHandler(params: [String: JSONValue], devRoot: String) asy
         return [
             "logsync": SettingsRPC.logsyncJSON(logSync),
             "saved": .bool(true),
+        ]
+    }
+}
+
+/// `terminal-get` (CROW-1085): echo the terminal wheel-scroll knobs. A pure
+/// read, mirroring `cleanup-get` / `ui-get`.
+private func terminalGetHandler(params: [String: JSONValue], devRoot: String) -> [String: JSONValue] {
+    let config = ConfigStore.loadConfig(devRoot: devRoot) ?? AppConfig()
+    return ["terminal": SettingsRPC.terminalJSON(config.terminal)]
+}
+
+/// `terminal-set` (CROW-1085): PATCH the terminal wheel-scroll knobs — the CLI
+/// half of the CROW-835 web Settings sliders (ADR 0016 parity). Extracted from
+/// the handler dictionary so the big literal stays inside the type-checker's
+/// budget. Both knobs floor at 1, matching the web UI's `Math.max(1, …)` clamp:
+/// zero lines-per-notch or zero notches-forwarded would disable wheel scrolling
+/// on that surface entirely.
+private func terminalSetHandler(params: [String: JSONValue], devRoot: String) async throws -> [String: JSONValue] {
+    try await mapRPCError {
+        let wheelScrollLines = try SettingsRPC.patchBoundedInt(params, "wheel_scroll_lines", min: 1)
+        let agentWheelNotches = try SettingsRPC.patchBoundedInt(params, "agent_wheel_notches", min: 1)
+
+        guard wheelScrollLines != nil || agentWheelNotches != nil else {
+            throw RPCError.invalidParams(
+                "Nothing to set — provide at least one of wheel_scroll_lines, agent_wheel_notches.")
+        }
+
+        let terminal: TerminalSettings = try mutateConfig(devRoot: devRoot) { config in
+            if let wheelScrollLines { config.terminal.wheelScrollLines = wheelScrollLines }
+            if let agentWheelNotches { config.terminal.agentWheelNotches = agentWheelNotches }
+            return config.terminal
+        }
+        // Connected browsers re-read the terminal config slice off the
+        // `configReloaded` push that fires when config.json's mtime moves, so a
+        // new wheel speed applies on the next scroll — no restart, no reload.
+        return [
+            "terminal": SettingsRPC.terminalJSON(terminal),
+            "restart_required": .bool(false),
         ]
     }
 }

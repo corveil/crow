@@ -165,6 +165,17 @@ public enum SettingsRPC {
         ])
     }
 
+    /// Terminal wheel-scroll tuning (CROW-835, ADR 0013). Two knobs with
+    /// different natural units — plain-shell scrollback *lines* per notch, and
+    /// agent-TUI *notches* forwarded per physical notch — so each is echoed on
+    /// its own key. Snake-case scalars, matching the other settings blocks.
+    public static func terminalJSON(_ terminal: TerminalSettings) -> JSONValue {
+        .object([
+            "wheel_scroll_lines": .int(terminal.wheelScrollLines),
+            "agent_wheel_notches": .int(terminal.agentWheelNotches),
+        ])
+    }
+
     /// The session-log collector's behavior knobs (CROW-1056; slimmed in
     /// CROW-1070). No credential and no opt-in list live here any more — both are
     /// per-workspace via the gateway — so nothing is masked. `configured`

@@ -300,6 +300,8 @@ public enum ParityLedger {
         .write("backfill-upload", cli: "backfill upload"),
         .read("ui-get", cli: "ui get"),
         .write("ui-set", cli: "ui set"),
+        .read("terminal-get", cli: "terminal get"),
+        .write("terminal-set", cli: "terminal set"),
         .read("version-update-get", cli: "version get"),
         .write("version-update-set", cli: "version set"),
         .write("version-update-check", cli: "version check"),
@@ -422,10 +424,10 @@ public enum ParityLedger {
     /// The rows below are the honest state of the milestone. The settings blocks
     /// that already have verbs are covered: `telemetry`, `cleanup`, `sidebar`,
     /// `notifications`, gateways and jobs, `defaults` since CROW-810, agent
-    /// selection since CROW-811, `workspaces[].*` since CROW-809 and the
-    /// automation toggles since CROW-812. What the web Settings tab still owns
-    /// exclusively is `terminal.*` and `jiraCredential.*`; the `webAuth` hash and
-    /// salt are writable but readable nowhere.
+    /// selection since CROW-811, `workspaces[].*` since CROW-809, the automation
+    /// toggles since CROW-812 and `terminal.*` since CROW-1085. What the web
+    /// Settings tab still owns exclusively is `jiraCredential.*`; the `webAuth`
+    /// hash and salt are writable but readable nowhere.
     ///
     /// Coverage is per-direction, so a covered block can still hold a read-only
     /// row — the server-assigned `jobs[].id`/`createdAt`/`lastRunAt`,
@@ -681,22 +683,12 @@ public enum ParityLedger {
         .field("autoRespond.autoRebaseAndResolveConflicts", read: "automation get", write: "automation set"),
         .field("autoRespond.autoReRequestReview", read: "automation get", write: "automation set"),
 
-        // MARK: Exempt — terminal tuning and Jira credential
+        // Terminal wheel-scroll tuning (CROW-835), CLI-covered since CROW-1085.
+        .field("terminal.wheelScrollLines", read: "terminal get", write: "terminal set"),
+        .field("terminal.agentWheelNotches", read: "terminal get", write: "terminal set"),
 
-        .field(
-            "terminal.wheelScrollLines",
-            noCLI: """
-                Scrollback lines per wheel notch on plain-shell surfaces (CROW-835, \
-                ADR 0013). Web Settings only — the `ui` verb covers the sidebar block, \
-                not this one.
-                """),
-        .field(
-            "terminal.agentWheelNotches",
-            noCLI: """
-                Wheel notches forwarded per physical notch on agent surfaces \
-                (CROW-835, ADR 0013). Web Settings only — see \
-                `terminal.wheelScrollLines`.
-                """),
+        // MARK: Exempt — Jira credential
+
         .field(
             "jiraCredential.username",
             noCLI: """
