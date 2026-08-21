@@ -1103,14 +1103,14 @@ import CrowPersistence
     }
 
     @Test func settingsRPCsAreAllowedRemotely() throws {
-        // The granular telemetry/cleanup/ui RPCs (CROW-814) and automation-*
-        // (CROW-812) are deliberately un-gated. A remote peer can already change
-        // every one of these fields via the un-gated `set-config` path (see
-        // setConfigHarmlessToggleIsAllowedRemotely, which flips `remoteControlEnabled`
-        // — an automation field), so gating them would only push remote callers back
-        // onto the whole-config blob — a strictly larger surface. `automation-set`
-        // writes three `defaults` list fields but cannot reach `defaults.binaries`,
-        // which stays local-only.
+        // The granular telemetry/cleanup/ui/terminal RPCs (CROW-814, CROW-1085)
+        // and automation-* (CROW-812) are deliberately un-gated. A remote peer
+        // can already change every one of these fields via the un-gated
+        // `set-config` path (see setConfigHarmlessToggleIsAllowedRemotely, which
+        // flips `remoteControlEnabled` — an automation field), so gating them
+        // would only push remote callers back onto the whole-config blob — a
+        // strictly larger surface. `automation-set` writes three `defaults` list
+        // fields but cannot reach `defaults.binaries`, which stays local-only.
         let devRoot = tempDevRoot()
         defer { try? FileManager.default.removeItem(atPath: devRoot) }
         try ConfigStore.saveConfig(AppConfig(), devRoot: devRoot)
@@ -1119,6 +1119,7 @@ import CrowPersistence
             "telemetry-get", "telemetry-set",
             "cleanup-get", "cleanup-set",
             "ui-get", "ui-set",
+            "terminal-get", "terminal-set",
             "automation-get", "automation-set",
         ]
         for method in methods {

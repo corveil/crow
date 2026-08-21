@@ -683,14 +683,12 @@ public enum ParityLedger {
         .field("autoRespond.autoRebaseAndResolveConflicts", read: "automation get", write: "automation set"),
         .field("autoRespond.autoReRequestReview", read: "automation get", write: "automation set"),
 
+        // Terminal wheel-scroll tuning (CROW-835), CLI-covered since CROW-1085.
+        .field("terminal.wheelScrollLines", read: "terminal get", write: "terminal set"),
+        .field("terminal.agentWheelNotches", read: "terminal get", write: "terminal set"),
+
         // MARK: Exempt — Jira credential
 
-        .field(
-            "terminal.wheelScrollLines",
-            read: "terminal get", write: "terminal set"),
-        .field(
-            "terminal.agentWheelNotches",
-            read: "terminal get", write: "terminal set"),
         .field(
             "jiraCredential.username",
             noCLI: """
