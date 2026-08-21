@@ -162,4 +162,80 @@ struct CodexSignalSourceTests {
             Issue.record("unknown events should still clear pending notification")
         }
     }
+
+    // MARK: - Async delivery ordering robustness (CROW-1065)
+    //
+    // Codex fires `PostToolUse` **async** (`CodexHookConfigWriter.asyncEvents`)
+    // once the installed `codex` is >= 0.148.0, so its fire-and-forget
+    // `crow hook-event` can reach the daemon *after* a following **sync** `Stop`
+    // — the #903 inversion window, widened by async delivery. These pin the
+    // invariant that makes that window harmless: `PostToolUse` never touches a
+    // completion-driving field (`newActivityState` / `lastTopLevelStopAt` —
+    // both owned by the sync `Stop`), so no ordering of a straggler `PostToolUse`
+    // against `Stop` can un-complete a turn. Its only mutation is
+    // `lastToolActivity`, which `SessionHookState.persistedSnapshot` excludes
+    // (no on-disk card-color write) and which no display code reads today. If a
+    // future change gives `PostToolUse` a completion-field mutation, or the card
+    // starts reading `lastToolActivity`, these break — a signal to re-audit the
+    // async emission before it can show a stale state on `.job`/`.work` cards.
+
+    @Test func postToolUseLeavesCompletionFieldsUntouched() {
+        // Drive it against a *done* turn with a stop already stamped — the state
+        // a late straggler would land on — and assert it changes neither field.
+        let t = source.transition(
+            for: event("PostToolUse", toolName: "Bash"),
+            currentActivityState: .done,
+            currentNotificationType: nil,
+            currentLastTopLevelStopAt: Date()
+        )
+        #expect(t.newActivityState == nil, "PostToolUse must not move activityState")
+        if case .leave = t.lastTopLevelStopAt {} else {
+            Issue.record("PostToolUse must not touch lastTopLevelStopAt (owned by Stop)")
+        }
+        // The one field it may set — persistence-excluded and reader-less.
+        if case .set(let a) = t.toolActivity {
+            #expect(a.isActive == false)
+        } else {
+            Issue.record("PostToolUse should record inactive tool activity")
+        }
+    }
+
+    @Test func lateAsyncPostToolUseAfterStopStaysDone() {
+        // Replay the worst-case inversion the way the daemon applies transitions
+        // (EngineRouter field-by-field, last-write-wins): the turn's PreToolUse,
+        // its Stop, then a *straggler* PostToolUse whose async `hook-event`
+        // landed after Stop. The card must still read done.
+        var activityState: AgentActivityState = .idle
+        var lastTopLevelStopAt: Date? = nil
+        var lastToolActivity: ToolActivity? = nil
+
+        func apply(_ name: String, toolName: String? = nil) {
+            let t = source.transition(
+                for: event(name, toolName: toolName),
+                currentActivityState: activityState,
+                currentNotificationType: nil,
+                currentLastTopLevelStopAt: lastTopLevelStopAt)
+            if let s = t.newActivityState { activityState = s }
+            switch t.toolActivity {
+            case .leave: break
+            case .clear: lastToolActivity = nil
+            case .set(let a): lastToolActivity = a
+            }
+            switch t.lastTopLevelStopAt {
+            case .leave: break
+            case .clear: lastTopLevelStopAt = nil
+            case .set(let d): lastTopLevelStopAt = d
+            }
+        }
+
+        apply("PreToolUse", toolName: "Bash")   // working; tool active
+        apply("Stop")                            // done; stop stamped; tool cleared
+        apply("PostToolUse", toolName: "Bash")   // straggler arrives late
+
+        #expect(activityState == .done, "a late async PostToolUse must not un-complete the turn")
+        #expect(lastTopLevelStopAt != nil, "Stop's completion stamp must survive the straggler")
+        // The straggler re-populates the reader-less, persistence-excluded field
+        // — the *only* residue of the inversion, asserted to document it.
+        #expect(lastToolActivity?.isActive == false)
+    }
 }

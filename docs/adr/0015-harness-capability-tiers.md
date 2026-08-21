@@ -308,8 +308,12 @@ that will close them (Cursor/Codex/OpenCode launchers are written but
   Claude's recap subagent (**≥ 2.1.108**), OpenCode's `session.status` done
   signal (**opencode 1.18.5**, CROW-1000 — replaces the formerly unpinned
   `session.idle` question), and the one still-unpinned empirical timing
-  (Cursor async). Codex's async *timing* is an open empirical question too,
-  tracked inside its pinned row rather than as a separate one.
+  (Cursor async). Codex's async *timing* is **resolved** (CROW-1065): the
+  stable `0.148.0` shipped (2026-08-18), and the timing is safe *by
+  construction* — `PostToolUse` is the only async event and touches only a
+  persistence-excluded, reader-less field, so no ordering against the sync
+  `Stop` is observable on the card — tracked inside its pinned row rather than
+  as a separate one.
 
 - The gating rule (8) means a partially-installed environment produces a smaller,
   correct picker rather than broken entries — but "why can't I hand off to X?"
