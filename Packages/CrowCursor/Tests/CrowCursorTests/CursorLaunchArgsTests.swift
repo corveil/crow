@@ -47,8 +47,4 @@ struct CursorLaunchArgsTests {
         #expect(CursorLaunchArgs.launchSuffix(seedTrust: false, autoPermissionMode: true) == " --force --approve-mcps")
         #expect(CursorLaunchArgs.launchSuffix(seedTrust: false, autoPermissionMode: true).contains("--trust") == false)
     }
-
-    @Test func shellQuoteEscapesSingleQuotes() {
-        #expect(CursorLaunchArgs.shellQuote("a'b") == "'a'\\''b'")
-    }
 }

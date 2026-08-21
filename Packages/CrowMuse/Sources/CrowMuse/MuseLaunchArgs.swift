@@ -1,4 +1,5 @@
 import Foundation
+import CrowCore
 
 /// Helpers for building Muse Code (`muse`) launch commands. Centralized so
 /// `MuseAgent`, `MuseLauncher`, and tests share one implementation of the
@@ -43,11 +44,6 @@ import Foundation
 /// Meta-auth-gated. Every flag is a version-pinned re-check target.
 public enum MuseLaunchArgs {
 
-    /// POSIX single-quote escape for paths interpolated into shell commands.
-    public static func shellQuote(_ s: String) -> String {
-        "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
-    }
-
     /// Bounded auto-permission flag suffix (leading space), or `""` when off.
     /// `--disable-approval` only — never `--yolo` / `--disable-sandbox`.
     public static func autoPermissionSuffix(autoPermissionMode: Bool) -> String {
@@ -76,8 +72,8 @@ public enum MuseLaunchArgs {
         autoPermissionMode: Bool,
         trustWorkspace: Bool
     ) -> String {
-        let bin = shellQuote(binary)
-        let quotedPath = shellQuote(promptPath)
+        let bin = ShellLaunchArgs.shellQuote(binary)
+        let quotedPath = ShellLaunchArgs.shellQuote(promptPath)
         let flags = flagSuffix(
             autoPermissionMode: autoPermissionMode, trustWorkspace: trustWorkspace)
         return "\(headlessLeg(bin: bin, flags: flags, quotedPath: quotedPath))"
@@ -105,7 +101,7 @@ public enum MuseLaunchArgs {
         autoPermissionMode: Bool,
         trustWorkspace: Bool
     ) -> String {
-        let bin = shellQuote(binary)
+        let bin = ShellLaunchArgs.shellQuote(binary)
         let flags = flagSuffix(
             autoPermissionMode: autoPermissionMode, trustWorkspace: trustWorkspace)
         return "\(resumeLeg(bin: bin, flags: flags))\n"
@@ -125,7 +121,7 @@ public enum MuseLaunchArgs {
     /// a future review-shaped interactive launch can withhold it; today's
     /// `.work` always passes `true`.
     public static func bareCommand(binary: String, trustWorkspace: Bool) -> String {
-        "\(shellQuote(binary))\(trustSuffix(trustWorkspace: trustWorkspace))\n"
+        "\(ShellLaunchArgs.shellQuote(binary))\(trustSuffix(trustWorkspace: trustWorkspace))\n"
     }
 
     /// Manager launch line: quoted binary + optional auto-perm + trust,
@@ -135,7 +131,7 @@ public enum MuseLaunchArgs {
         autoPermissionMode: Bool,
         trustWorkspace: Bool
     ) -> String {
-        shellQuote(binary)
+        ShellLaunchArgs.shellQuote(binary)
             + flagSuffix(autoPermissionMode: autoPermissionMode, trustWorkspace: trustWorkspace)
     }
 }

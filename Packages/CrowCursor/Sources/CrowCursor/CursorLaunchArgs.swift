@@ -1,15 +1,11 @@
 import Foundation
+import CrowCore
 
 /// Helpers for building the argument string appended to an `agent` (Cursor CLI)
 /// invocation. Centralized so `CursorAgent`, the launcher, and tests share one
 /// implementation of the flag choices — mirrors `ClaudeLaunchArgs` and
 /// `OpenCodeLaunchArgs` (#829).
 public enum CursorLaunchArgs {
-    /// POSIX single-quote escape for safe interpolation into a shell command line.
-    public static func shellQuote(_ s: String) -> String {
-        "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
-    }
-
     /// Workspace-trust seed appended to **every** Crow-launched Cursor command
     /// (auto-launch, Manager, and the handoff one-shot) — `.review` included. A
     /// leading-space suffix so callers concatenate it onto the shell-quoted

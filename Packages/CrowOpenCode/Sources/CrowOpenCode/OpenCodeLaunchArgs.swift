@@ -60,11 +60,6 @@ public enum OpenCodeLaunchArgs {
         return version >= tuiAutoRemovedVersion && version < tuiAutoReintroducedVersion
     }
 
-    /// POSIX single-quote escape for paths interpolated into shell commands.
-    public static func shellQuote(_ s: String) -> String {
-        "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
-    }
-
     /// Whether `opencode --help` advertises the TUI `--auto` flag.
     public static func parseTUISupportsAuto(from helpText: String) -> Bool {
         helpText.contains("--auto")

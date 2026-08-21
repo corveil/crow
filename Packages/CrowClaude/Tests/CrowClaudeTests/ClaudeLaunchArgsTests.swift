@@ -26,12 +26,6 @@ import CrowCore
     #expect(result == " --rc --name 'Bob'\\''s session'")
 }
 
-@Test func claudeLaunchArgsShellQuoteBasics() {
-    #expect(ClaudeLaunchArgs.shellQuote("plain") == "'plain'")
-    #expect(ClaudeLaunchArgs.shellQuote("with space") == "'with space'")
-    #expect(ClaudeLaunchArgs.shellQuote("has'quote") == "'has'\\''quote'")
-}
-
 @Test func claudeLaunchArgsAutoPermissionModeOnly() {
     #expect(ClaudeLaunchArgs.argsSuffix(remoteControl: false, sessionName: nil, autoPermissionMode: true)
         == " --permission-mode auto")

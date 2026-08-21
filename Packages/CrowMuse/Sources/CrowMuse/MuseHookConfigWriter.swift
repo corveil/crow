@@ -68,7 +68,7 @@ public struct MuseHookConfigWriter: HookConfigWriter {
         var hooks: [String: Any] = [:]
 
         for event in allEvents {
-            let command = "\(shellQuote(crowPath)) hook-event --session \(sid) --event \(event)"
+            let command = "\(ShellLaunchArgs.shellQuote(crowPath)) hook-event --session \(sid) --event \(event)"
             var hookEntry: [String: Any] = [
                 "type": "command",
                 "command": command,
@@ -163,10 +163,6 @@ public struct MuseHookConfigWriter: HookConfigWriter {
         let fm = FileManager.default
         guard let contents = try? fm.contentsOfDirectory(atPath: dir), contents.isEmpty else { return }
         try? fm.removeItem(atPath: dir)
-    }
-
-    private static func shellQuote(_ s: String) -> String {
-        MuseLaunchArgs.shellQuote(s)
     }
 
     // MARK: - Git-tracked probe (mirrors CursorHookConfigWriter / Antigravity)

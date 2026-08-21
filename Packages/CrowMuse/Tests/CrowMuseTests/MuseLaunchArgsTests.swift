@@ -4,11 +4,6 @@ import Testing
 @Suite("MuseLaunchArgs")
 struct MuseLaunchArgsTests {
 
-    @Test func shellQuoteWrapsAndEscapes() {
-        #expect(MuseLaunchArgs.shellQuote("/tmp/p.md") == "'/tmp/p.md'")
-        #expect(MuseLaunchArgs.shellQuote("a'b") == "'a'\\''b'")
-    }
-
     @Test func autoPermissionSuffixOffIsEmpty() {
         #expect(MuseLaunchArgs.autoPermissionSuffix(autoPermissionMode: false) == "")
     }

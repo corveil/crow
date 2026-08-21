@@ -178,7 +178,7 @@ public struct GrokAgent: CodingAgent {
         // `grok` collides with `superagent-ai/grok-cli`, so `defaults.binaries.grok`
         // is the *expected* config here, and an override path with a space would
         // otherwise word-split when the terminal backend runs it (#861 review r8).
-        return GrokLaunchArgs.shellQuote(launchBinary() ?? "grok")
+        return ShellLaunchArgs.shellQuote(launchBinary() ?? "grok")
     }
 
     /// Grok's TUI exposes `/rename` (alias `/title`) for the current session

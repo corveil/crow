@@ -54,7 +54,7 @@ public enum ClaudeHookRepair {
 
         var binary = String(command[command.startIndex..<markerRange.lowerBound])
             .trimmingCharacters(in: .whitespaces)
-        // Reverse `ClaudeLaunchArgs.shellQuote`. Only a fully-wrapped value is
+        // Reverse `ShellLaunchArgs.shellQuote`. Only a fully-wrapped value is
         // accepted; a partially quoted path is a shape we never wrote. Content
         // inside single quotes is inert to the shell, so it needs no further
         // scrutiny — but an *unquoted* segment (every pre-#897 file on disk) is

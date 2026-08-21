@@ -1,4 +1,5 @@
 import Foundation
+import CrowCore
 
 /// Helpers for building Grok Build launch commands. Centralized so `GrokAgent`,
 /// `GrokLauncher`, and tests share one implementation of the run-then-continue
@@ -52,11 +53,6 @@ public enum GrokLaunchArgs {
         "Bash(rm -rf /*)",
     ]
 
-    /// POSIX single-quote escape for paths interpolated into shell commands.
-    public static func shellQuote(_ s: String) -> String {
-        "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
-    }
-
     /// Auto-permission flag suffix (leading space), or `""` when off.
     /// `--always-approve` so Grok matches Claude Code Auto (`gh pr create`
     /// included), plus hard `--deny` guards (deny still wins).
@@ -64,7 +60,7 @@ public enum GrokLaunchArgs {
         guard autoPermissionMode else { return "" }
         var out = " --always-approve"
         for rule in hardDenyRules {
-            out += " --deny \(shellQuote(rule))"
+            out += " --deny \(ShellLaunchArgs.shellQuote(rule))"
         }
         return out
     }
@@ -89,8 +85,8 @@ public enum GrokLaunchArgs {
         promptPath: String,
         autoPermissionMode: Bool
     ) -> String {
-        let bin = shellQuote(binary)
-        let quotedPath = shellQuote(promptPath)
+        let bin = ShellLaunchArgs.shellQuote(binary)
+        let quotedPath = ShellLaunchArgs.shellQuote(promptPath)
         let flags = autoPermissionSuffix(autoPermissionMode: autoPermissionMode)
         return "\(headlessLeg(bin: bin, flags: flags, quotedPath: quotedPath))"
             + "; \(resumeLeg(bin: bin, flags: flags))\n"
@@ -126,7 +122,7 @@ public enum GrokLaunchArgs {
         binary: String,
         autoPermissionMode: Bool
     ) -> String {
-        let bin = shellQuote(binary)
+        let bin = ShellLaunchArgs.shellQuote(binary)
         let flags = autoPermissionSuffix(autoPermissionMode: autoPermissionMode)
         return "\(resumeLeg(bin: bin, flags: flags))\n"
     }
@@ -161,7 +157,7 @@ public enum GrokLaunchArgs {
     /// opens a TUI at Grok's default `ask` policy instead of a dead pane.
     /// `binary` is shell-quoted (see `firstLaunchChainedCommand`).
     public static func bareCommand(binary: String, autoPermissionMode: Bool = false) -> String {
-        let bin = shellQuote(binary)
+        let bin = ShellLaunchArgs.shellQuote(binary)
         let flags = autoPermissionSuffix(autoPermissionMode: autoPermissionMode)
         guard !flags.isEmpty else { return "\(bin)\n" }
         return "\(bin)\(flags) || { [ $? -eq 2 ] && \(bin); }\n"

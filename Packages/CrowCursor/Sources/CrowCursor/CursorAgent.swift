@@ -119,7 +119,7 @@ public struct CursorAgent: CodingAgent {
         autoPermissionMode: Bool,
         telemetryPort: UInt16?
     ) -> String? {
-        let agentPath = CursorLaunchArgs.shellQuote(resolvedLaunchBinary)
+        let agentPath = ShellLaunchArgs.shellQuote(resolvedLaunchBinary)
         // The `--trust` workspace-trust seed (skips the folder-trust dialog on a
         // fresh worktree — the per-launch analogue of `ClaudeTrustSeeder`,
         // CROW-890) rides EVERY launch path, `.review` included as of CROW-954.
@@ -251,7 +251,7 @@ public struct CursorAgent: CodingAgent {
         // network/filesystem-blocked — see `CursorLaunchArgs`). Terminal backend
         // appends the submitting Enter, so we return the command without a
         // trailing newline to match the cross-agent convention.
-        let agentPath = CursorLaunchArgs.shellQuote(resolvedLaunchBinary)
+        let agentPath = ShellLaunchArgs.shellQuote(resolvedLaunchBinary)
         return agentPath + CursorLaunchArgs.launchSuffix(
             seedTrust: true, autoPermissionMode: autoPermissionMode)
     }

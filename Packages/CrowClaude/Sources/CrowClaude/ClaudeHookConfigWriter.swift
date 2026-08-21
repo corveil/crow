@@ -74,7 +74,7 @@ public struct ClaudeHookConfigWriter: HookConfigWriter {
     /// silently broke all 17 hooks. Matches `CursorHookConfigWriter` and
     /// `AntigravityHookConfigWriter`, which already quote for this reason.
     static func hookCommand(crowPath: String, sessionID: UUID, event: String) -> String {
-        "\(ClaudeLaunchArgs.shellQuote(crowPath)) hook-event --session \(sessionID.uuidString) --event \(event)"
+        "\(ShellLaunchArgs.shellQuote(crowPath)) hook-event --session \(sessionID.uuidString) --event \(event)"
     }
 
     /// Generate the hooks dictionary for a session.

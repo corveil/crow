@@ -101,6 +101,6 @@ public actor MuseLauncher {
             autoPermissionMode: false,
             trustWorkspace: trustWorkspace
         ).trimmingCharacters(in: .newlines)
-        return "cd \(MuseLaunchArgs.shellQuote(worktreePath)) && { \(inner); }\n"
+        return "cd \(ShellLaunchArgs.shellQuote(worktreePath)) && { \(inner); }\n"
     }
 }

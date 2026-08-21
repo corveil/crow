@@ -84,7 +84,7 @@ public struct CursorHookConfigWriter: HookConfigWriter {
         // path — `findCrowBinary` prefers `{devRoot}/.claude/bin/crow` and
         // devRoot is user-chosen (`/Users/x/My Projects/…` would otherwise split
         // the command and silently stop every hook from firing).
-        let command = "\(CursorLaunchArgs.shellQuote(crowPath)) hook-event --session \(sessionID.uuidString) --agent cursor --event \(crowEvent)"
+        let command = "\(ShellLaunchArgs.shellQuote(crowPath)) hook-event --session \(sessionID.uuidString) --agent cursor --event \(crowEvent)"
         var entry: [String: Any] = [
             "type": "command",
             "command": command,

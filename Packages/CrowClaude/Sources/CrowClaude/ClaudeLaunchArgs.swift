@@ -6,11 +6,6 @@ import CrowCore
 /// Centralized so worker-session launches, the Manager tab, and crow-CLI-spawned
 /// terminals all produce consistent flags — and so the logic is independently testable.
 public enum ClaudeLaunchArgs {
-    /// POSIX single-quote escape for safe interpolation into a shell command line.
-    public static func shellQuote(_ s: String) -> String {
-        "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
-    }
-
     /// Flags to append after the `claude` binary path.
     ///
     /// Returns a string beginning with a leading space — e.g.
@@ -36,7 +31,7 @@ public enum ClaudeLaunchArgs {
         if remoteControl {
             s += " --rc"
             if let name = sessionName, !name.isEmpty {
-                s += " --name \(shellQuote(name))"
+                s += " --name \(ShellLaunchArgs.shellQuote(name))"
             }
         }
         return s
@@ -67,10 +62,10 @@ public enum ClaudeLaunchArgs {
         guard let resolved else {
             return "unset ANTHROPIC_BASE_URL ANTHROPIC_CUSTOM_HEADERS && "
         }
-        let baseAssignment = "export ANTHROPIC_BASE_URL=\(shellQuote(resolved.baseURL))"
+        let baseAssignment = "export ANTHROPIC_BASE_URL=\(ShellLaunchArgs.shellQuote(resolved.baseURL))"
         if resolved.customHeaders.contains("\n") {
             return "unset ANTHROPIC_CUSTOM_HEADERS && " + baseAssignment + " && "
         }
-        return baseAssignment + " ANTHROPIC_CUSTOM_HEADERS=\(shellQuote(resolved.customHeaders)) && "
+        return baseAssignment + " ANTHROPIC_CUSTOM_HEADERS=\(ShellLaunchArgs.shellQuote(resolved.customHeaders)) && "
     }
 }

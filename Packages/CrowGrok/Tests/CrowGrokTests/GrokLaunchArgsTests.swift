@@ -4,11 +4,6 @@ import Testing
 @Suite("GrokLaunchArgs")
 struct GrokLaunchArgsTests {
 
-    @Test func shellQuoteWrapsAndEscapes() {
-        #expect(GrokLaunchArgs.shellQuote("/tmp/p.md") == "'/tmp/p.md'")
-        #expect(GrokLaunchArgs.shellQuote("a'b") == "'a'\\''b'")
-    }
-
     @Test func autoPermissionSuffixOffIsEmpty() {
         #expect(GrokLaunchArgs.autoPermissionSuffix(autoPermissionMode: false) == "")
     }

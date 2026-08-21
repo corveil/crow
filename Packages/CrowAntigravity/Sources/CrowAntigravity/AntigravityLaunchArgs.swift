@@ -1,15 +1,11 @@
 import Foundation
+import CrowCore
 
 /// Helpers for building the argument string appended to an `agy` (Google
 /// Antigravity CLI) invocation. Centralized so `AntigravityAgent`, the
 /// launcher, and tests share one implementation of the flag choices — mirrors
 /// `CursorLaunchArgs` / `OpenCodeLaunchArgs` (#860).
 public enum AntigravityLaunchArgs {
-    /// POSIX single-quote escape for safe interpolation into a shell command line.
-    public static func shellQuote(_ s: String) -> String {
-        "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
-    }
-
     /// Auto-permission flags for unattended `.job` launches. Returns a
     /// leading-space suffix or `""`.
     ///

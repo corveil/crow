@@ -73,7 +73,7 @@ public struct AntigravityAgent: CodingAgent {
         autoPermissionMode: Bool,
         telemetryPort: UInt16?
     ) -> String? {
-        let agentPath = AntigravityLaunchArgs.shellQuote(launchBinary() ?? "agy")
+        let agentPath = ShellLaunchArgs.shellQuote(launchBinary() ?? "agy")
         // Bounded auto-permission — a no-op suffix on the pinned version (see
         // `AntigravityLaunchArgs.autoPermissionSuffix`); kept for call-site
         // uniformity so a future bounded flag lands once for every path.
@@ -181,7 +181,7 @@ public struct AntigravityAgent: CodingAgent {
         // control doesn't apply. Terminal backend appends the submitting Enter,
         // so return the command without a trailing newline (cross-agent
         // convention).
-        let agentPath = AntigravityLaunchArgs.shellQuote(launchBinary() ?? "agy")
+        let agentPath = ShellLaunchArgs.shellQuote(launchBinary() ?? "agy")
         return agentPath + AntigravityLaunchArgs.autoPermissionSuffix(autoPermissionMode)
     }
 

@@ -80,7 +80,7 @@ public struct AntigravityHookConfigWriter: HookConfigWriter {
     static func crowCommand(sessionID: UUID, event: String, crowPath: String) -> String {
         // Quote the crow path — devRoot is user-chosen (`/Users/x/My Projects/…`
         // would otherwise split the command).
-        "\(AntigravityLaunchArgs.shellQuote(crowPath)) hook-event --session \(sessionID.uuidString) --agent antigravity --event \(event) >/dev/null 2>&1; printf '{}'"
+        "\(ShellLaunchArgs.shellQuote(crowPath)) hook-event --session \(sessionID.uuidString) --agent antigravity --event \(event) >/dev/null 2>&1; printf '{}'"
     }
 
     /// One `{type, command, timeout}` handler object.
