@@ -120,6 +120,9 @@ Every subcommand and flag the `crow` binary accepts, generated from the commands
 | [`crow telemetry`](#crow-telemetry) | View or change session-analytics collection |
 | [`crow telemetry get`](#crow-telemetry-get) | Show the current telemetry settings |
 | [`crow telemetry set`](#crow-telemetry-set) | Change telemetry settings |
+| [`crow terminal`](#crow-terminal) | View or change terminal wheel-scroll speed |
+| [`crow terminal get`](#crow-terminal-get) | Show the current terminal wheel-scroll settings |
+| [`crow terminal set`](#crow-terminal-set) | Change terminal wheel-scroll speed |
 | [`crow transition-ticket`](#crow-transition-ticket) | Transition a session's ticket to a pipeline status |
 | [`crow ui`](#crow-ui) | View or change UI display preferences |
 | [`crow ui get`](#crow-ui-get) | Show the current UI display preferences |
@@ -1806,6 +1809,51 @@ Only the flags you pass change; at least one is required.
 | `--enabled` | `<enabled>` | no | Enable the OTLP receiver (true or false) |
 | `--port` | `<port>` | no | OTLP HTTP receiver port (1024-65535, default 4318) |
 | `--retention-days` | `<retention-days>` | no | Days of telemetry to keep; 0 keeps forever (default 180) |
+
+---
+
+## `crow terminal`
+
+View or change terminal wheel-scroll speed.
+
+```
+crow terminal <get|set>
+```
+
+Wheel-scroll tuning for the web terminal (CROW-835, ADR 0013). The wheel is routed by surface: plain-shell / review surfaces scroll their own scrollback, so the knob is lines per physical notch; agent TUIs (Claude Code, Cursor, the Manager) own their scrolling, so the knob is how many wheel notches are forwarded to the app per physical notch. Each surface gets its own value.
+
+These are the two `AppConfig.terminal` fields the web Settings sliders write; this is the CLI half. Not to be confused with the terminal-*tab* verbs (`new-terminal`, `list-terminals`, `send`, …), which manage panes.
+
+Subcommands: [`get`](#crow-terminal-get), [`set`](#crow-terminal-set).
+
+---
+
+## `crow terminal get`
+
+Show the current terminal wheel-scroll settings.
+
+```
+crow terminal get
+```
+
+---
+
+## `crow terminal set`
+
+Change terminal wheel-scroll speed.
+
+```
+crow terminal set [--wheel-scroll-lines <wheel-scroll-lines>] [--agent-wheel-notches <agent-wheel-notches>]
+```
+
+Only the flags you pass change; at least one is required. Connected browsers pick the change up on their next scroll — no reload.
+
+--wheel-scroll-lines sets scrollback lines per wheel notch on plain-shell and review surfaces (default 3). --agent-wheel-notches sets how many wheel reports are forwarded to the agent per physical notch (default 1 — one detent in, one out; raise it if agent scrolling feels too slow). Both floor at 1: a value of 0 would disable wheel scrolling on that surface.
+
+| Flag | Value | Required | Description |
+| --- | --- | --- | --- |
+| `--wheel-scroll-lines` | `<wheel-scroll-lines>` | no | Scrollback lines per wheel notch on plain-shell/review surfaces (minimum 1, default 3) |
+| `--agent-wheel-notches` | `<agent-wheel-notches>` | no | Wheel notches forwarded to the agent per physical notch (minimum 1, default 1) |
 
 ---
 

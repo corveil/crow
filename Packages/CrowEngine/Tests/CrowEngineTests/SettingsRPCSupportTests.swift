@@ -120,6 +120,23 @@ struct SettingsRPCSupportTests {
         ]))
     }
 
+    @Test func terminalJSONUsesSnakeCaseScalars() throws {
+        let json = SettingsRPC.terminalJSON(
+            TerminalSettings(wheelScrollLines: 5, agentWheelNotches: 2))
+        #expect(json == .object([
+            "wheel_scroll_lines": .int(5),
+            "agent_wheel_notches": .int(2),
+        ]))
+    }
+
+    /// The defaults the CLI echoes when nothing has been set (CROW-835).
+    @Test func terminalJSONEchoesDefaults() throws {
+        #expect(SettingsRPC.terminalJSON(TerminalSettings()) == .object([
+            "wheel_scroll_lines": .int(3),
+            "agent_wheel_notches": .int(1),
+        ]))
+    }
+
     /// Unlike `get-config`, these responses carry no credential shell at all, so
     /// they need no `SettingsSecrets.strippedForTransport` pass. Pin that, because
     /// a future "just reuse the config encoder" refactor would quietly break it.
@@ -138,6 +155,7 @@ struct SettingsRPCSupportTests {
             SettingsRPC.telemetryJSON(TelemetryConfig()),
             SettingsRPC.cleanupJSON(CleanupConfig()),
             SettingsRPC.uiJSON(sidebar: SidebarSettings(), switcher: SwitcherSettings()),
+            SettingsRPC.terminalJSON(TerminalSettings()),
             SettingsRPC.automationJSON(AppConfig()),
             SettingsRPC.automationJSON(loaded),
         ]

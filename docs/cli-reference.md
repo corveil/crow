@@ -498,6 +498,25 @@ crow ui set --hide-session-details true
 
 Settings are grouped by the config block they belong to, so `get` returns `{"ui": {"sidebar": {...}}}` and gains further blocks as more view options become configurable. Connected browsers pick the change up within a couple of seconds — no reload.
 
+### `crow terminal get | set`
+
+Terminal wheel-scroll speed — the two `AppConfig.terminal` knobs behind the CROW-835 Settings sliders (ADR 0013). Not to be confused with the terminal-*tab* verbs (`new-terminal`, `list-terminals`, `send`, …) that manage panes.
+
+```bash
+crow terminal get
+crow terminal set --wheel-scroll-lines 5
+crow terminal set --agent-wheel-notches 2
+```
+
+| Flag                    | Required | Description                                                                            |
+| ----------------------- | -------- | -------------------------------------------------------------------------------------- |
+| `--wheel-scroll-lines`  | no¹      | Scrollback lines scrolled per wheel notch on plain-shell / review surfaces (min 1, default 3) |
+| `--agent-wheel-notches` | no¹      | Wheel notches forwarded to the agent (Claude Code / Cursor / Manager) per physical notch (min 1, default 1) |
+
+¹ At least one flag is required.
+
+The web terminal routes the wheel by surface (ADR 0013): a plain shell owns its own scrollback, so its knob is *lines per notch*; an agent TUI owns its scrolling, so its knob is how many *notches* Crow forwards per physical notch — raise it if agent scrolling feels sluggish. `get` returns `{"terminal":{"wheel_scroll_lines":…,"agent_wheel_notches":…}}`. Both floor at 1 (a value of 0 would disable wheel scrolling on that surface); the daemon and the CLI both reject a lower value. The change is live — connected browsers apply the new speed on their next scroll, no reload.
+
 ### `crow version` / `crow version check` / `crow version get | set`
 
 Compare the running build against `corveil/crow` `main` (CROW-938). The daemon owns the GitHub compare call and caches the result; the CLI and Settings → About read it back.

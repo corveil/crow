@@ -202,6 +202,55 @@ import CrowEngine
         #expect(onDisk.switcher.binding == "esc+tab")
     }
 
+    // MARK: - terminal (CROW-1085)
+
+    @Test @MainActor func terminalSetPatchesWheelKnobs() async throws {
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+
+        let resp = await call("terminal-set", [
+            "wheel_scroll_lines": .int(5),
+            "agent_wheel_notches": .int(2),
+        ], devRoot: devRoot)
+
+        #expect(resp.result?["terminal"] == .object([
+            "wheel_scroll_lines": .int(5),
+            "agent_wheel_notches": .int(2),
+        ]))
+        #expect(resp.result?["restart_required"] == .bool(false))
+
+        let onDisk = try #require(ConfigStore.loadConfig(devRoot: devRoot))
+        #expect(onDisk.terminal.wheelScrollLines == 5)
+        #expect(onDisk.terminal.agentWheelNotches == 2)
+    }
+
+    /// A one-field patch leaves the other knob at its stored value — the PATCH
+    /// contract, same as the switcher fields.
+    @Test @MainActor func terminalSetLeavesUnpatchedKnobAlone() async throws {
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+        var seed = AppConfig()
+        seed.terminal = TerminalSettings(wheelScrollLines: 8, agentWheelNotches: 3)
+        try ConfigStore.saveConfig(seed, devRoot: devRoot)
+
+        _ = await call("terminal-set", ["wheel_scroll_lines": .int(2)], devRoot: devRoot)
+
+        let onDisk = try #require(ConfigStore.loadConfig(devRoot: devRoot))
+        #expect(onDisk.terminal.wheelScrollLines == 2)
+        #expect(onDisk.terminal.agentWheelNotches == 3)
+    }
+
+    @Test @MainActor func terminalGetEchoesDefaults() async {
+        let devRoot = tempDevRoot()
+        defer { try? FileManager.default.removeItem(atPath: devRoot) }
+
+        let resp = await call("terminal-get", devRoot: devRoot)
+        #expect(resp.result?["terminal"] == .object([
+            "wheel_scroll_lines": .int(3),
+            "agent_wheel_notches": .int(1),
+        ]))
+    }
+
     // MARK: - restart_required
 
     @Test @MainActor func telemetryReportsRestartOnlyForEnabledOrPort() async throws {
@@ -231,6 +280,9 @@ import CrowEngine
 
         let ui = await call("ui-set", ["hide_session_details": .bool(true)], devRoot: devRoot)
         #expect(ui.result?["restart_required"] == .bool(false))
+
+        let terminal = await call("terminal-set", ["wheel_scroll_lines": .int(5)], devRoot: devRoot)
+        #expect(terminal.result?["restart_required"] == .bool(false))
     }
 
     // MARK: - Rejections
@@ -241,7 +293,7 @@ import CrowEngine
 
         // A no-op write would still rewrite config.json and fire a spurious
         // "Config reloaded" notification in every open browser.
-        for method in ["telemetry-set", "cleanup-set", "ui-set"] {
+        for method in ["telemetry-set", "cleanup-set", "ui-set", "terminal-set"] {
             let resp = await call(method, devRoot: devRoot)
             #expect(resp.error?.code == RPCErrorCode.invalidParams, "\(method) must reject empty params")
         }
@@ -259,6 +311,9 @@ import CrowEngine
             ("telemetry-set", ["retention_days": .int(-1)]),
             ("cleanup-set", ["retention_hours": .int(0)]),
             ("cleanup-set", ["retention_hours": .int(-24)]),
+            ("terminal-set", ["wheel_scroll_lines": .int(0)]),
+            ("terminal-set", ["agent_wheel_notches": .int(0)]),
+            ("terminal-set", ["wheel_scroll_lines": .int(-3)]),
         ]
         for (method, params) in cases {
             let resp = await call(method, params, devRoot: devRoot)
@@ -277,6 +332,7 @@ import CrowEngine
             ("cleanup-set", ["enabled": .int(1)]),
             ("ui-set", ["hide_session_details": .string("yes")]),
             ("telemetry-set", ["port": .string("4318")]),
+            ("terminal-set", ["wheel_scroll_lines": .string("5")]),
         ]
         for (method, params) in cases {
             let resp = await call(method, params, devRoot: devRoot)

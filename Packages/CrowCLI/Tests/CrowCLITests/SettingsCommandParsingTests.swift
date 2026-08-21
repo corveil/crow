@@ -140,12 +140,46 @@ import ArgumentParser
     }
 }
 
+// MARK: - crow terminal
+
+@Test func terminalSetParsesWheelFlags() throws {
+    let cmd = try TerminalSet.parse([
+        "--wheel-scroll-lines", "5",
+        "--agent-wheel-notches", "2",
+    ])
+    #expect(cmd.wheelScrollLines == 5)
+    #expect(cmd.agentWheelNotches == 2)
+}
+
+@Test func terminalSetAcceptsOneFlag() throws {
+    let cmd = try TerminalSet.parse(["--wheel-scroll-lines", "8"])
+    #expect(cmd.wheelScrollLines == 8)
+    #expect(cmd.agentWheelNotches == nil)
+}
+
+@Test func terminalSetRequiresAtLeastOneField() {
+    #expect(throws: (any Error).self) {
+        _ = try TerminalSet.parse([])
+    }
+}
+
+@Test func terminalSetRejectsBelowOne() {
+    // Both knobs floor at 1 — 0 or negative would disable wheel scrolling.
+    #expect(throws: (any Error).self) {
+        _ = try TerminalSet.parse(["--wheel-scroll-lines", "0"])
+    }
+    #expect(throws: (any Error).self) {
+        _ = try TerminalSet.parse(["--agent-wheel-notches", "0"])
+    }
+}
+
 // MARK: - Groups
 
 @Test func settingsGetCommandsTakeNoArguments() throws {
     _ = try TelemetryGet.parse([])
     _ = try CleanupGet.parse([])
     _ = try UIGet.parse([])
+    _ = try TerminalGet.parse([])
 }
 
 @Test func settingsGroupsRouteToSubcommands() throws {
@@ -155,10 +189,13 @@ import ArgumentParser
     #expect(try Cleanup.parseAsRoot(["set", "--enabled", "true"]) is CleanupSet)
     #expect(try UI.parseAsRoot(["get"]) is UIGet)
     #expect(try UI.parseAsRoot(["set", "--hide-session-details", "true"]) is UISet)
+    #expect(try Terminal.parseAsRoot(["get"]) is TerminalGet)
+    #expect(try Terminal.parseAsRoot(["set", "--wheel-scroll-lines", "5"]) is TerminalSet)
 }
 
 @Test func settingsGroupsRejectUnknownSubcommands() {
     #expect(throws: (any Error).self) { _ = try Telemetry.parseAsRoot(["enable"]) }
     #expect(throws: (any Error).self) { _ = try Cleanup.parseAsRoot(["run"]) }
     #expect(throws: (any Error).self) { _ = try UI.parseAsRoot(["open"]) }
+    #expect(throws: (any Error).self) { _ = try Terminal.parseAsRoot(["scroll"]) }
 }

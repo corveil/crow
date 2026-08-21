@@ -204,6 +204,16 @@ func validateRetentionHours(_ value: Int) throws {
     }
 }
 
+/// Validate a `crow terminal set` wheel-scroll value (CROW-1085). Both knobs are
+/// a plain `Int` flooring at 1 — mirroring the daemon's `patchBoundedInt(min: 1)`
+/// and the web UI's `Math.max(1, …)` clamp — so 0 or negative is rejected here
+/// for a fast, local error rather than a round-trip.
+func validateWheelValue(_ value: Int, flag: String) throws {
+    guard value >= 1 else {
+        throw ValidationError("\(flag) must be at least 1 (got \(value)).")
+    }
+}
+
 /// Validate `crow defaults set --provider` (#810). Delegates to
 /// `ConfigDefaults.validProviders` rather than keeping a copy — `GitManager`
 /// compares the stored value with `==`, so an accepted casing variant would

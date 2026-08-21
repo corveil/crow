@@ -307,3 +307,86 @@ public struct UISet: ParsableCommand {
         printJSON(result)
     }
 }
+
+// MARK: - crow terminal
+
+/// Parent command for terminal wheel-scroll tuning: `crow terminal <subcommand>`.
+public struct Terminal: ParsableCommand {
+    public static let configuration = CommandConfiguration(
+        commandName: "terminal",
+        abstract: "View or change terminal wheel-scroll speed",
+        discussion: """
+        Wheel-scroll tuning for the web terminal (CROW-835, ADR 0013). The wheel \
+        is routed by surface: plain-shell / review surfaces scroll their own \
+        scrollback, so the knob is lines per physical notch; agent TUIs (Claude \
+        Code, Cursor, the Manager) own their scrolling, so the knob is how many \
+        wheel notches are forwarded to the app per physical notch. Each surface \
+        gets its own value.
+
+        These are the two `AppConfig.terminal` fields the web Settings sliders \
+        write; this is the CLI half. Not to be confused with the terminal-*tab* \
+        verbs (`new-terminal`, `list-terminals`, `send`, …), which manage panes.
+        """,
+        subcommands: [TerminalGet.self, TerminalSet.self]
+    )
+
+    public init() {}
+}
+
+public struct TerminalGet: ParsableCommand {
+    public static let configuration = CommandConfiguration(
+        commandName: "get", abstract: "Show the current terminal wheel-scroll settings")
+
+    public init() {}
+
+    public func run() throws {
+        let result = try rpc("terminal-get")
+        printJSON(result)
+    }
+}
+
+public struct TerminalSet: ParsableCommand {
+    public static let configuration = CommandConfiguration(
+        commandName: "set",
+        abstract: "Change terminal wheel-scroll speed",
+        discussion: """
+        Only the flags you pass change; at least one is required. Connected \
+        browsers pick the change up on their next scroll — no reload.
+
+        --wheel-scroll-lines sets scrollback lines per wheel notch on plain-shell \
+        and review surfaces (default 3). --agent-wheel-notches sets how many wheel \
+        reports are forwarded to the agent per physical notch (default 1 — one \
+        detent in, one out; raise it if agent scrolling feels too slow). Both floor \
+        at 1: a value of 0 would disable wheel scrolling on that surface.
+        """
+    )
+
+    @Option(
+        name: .customLong("wheel-scroll-lines"),
+        help: "Scrollback lines per wheel notch on plain-shell/review surfaces (minimum 1, default 3)")
+    var wheelScrollLines: Int?
+
+    @Option(
+        name: .customLong("agent-wheel-notches"),
+        help: "Wheel notches forwarded to the agent per physical notch (minimum 1, default 1)")
+    var agentWheelNotches: Int?
+
+    public init() {}
+
+    public func validate() throws {
+        guard wheelScrollLines != nil || agentWheelNotches != nil else {
+            throw ValidationError(
+                "Nothing to set — provide at least one of --wheel-scroll-lines, --agent-wheel-notches.")
+        }
+        if let wheelScrollLines { try validateWheelValue(wheelScrollLines, flag: "--wheel-scroll-lines") }
+        if let agentWheelNotches { try validateWheelValue(agentWheelNotches, flag: "--agent-wheel-notches") }
+    }
+
+    public func run() throws {
+        var params: [String: JSONValue] = [:]
+        if let wheelScrollLines { params["wheel_scroll_lines"] = .int(wheelScrollLines) }
+        if let agentWheelNotches { params["agent_wheel_notches"] = .int(agentWheelNotches) }
+        let result = try rpc("terminal-set", params: params)
+        printJSON(result)
+    }
+}
