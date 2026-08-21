@@ -37,7 +37,7 @@ capabilities, update this table in the same PR.
 | Auto-permission | ✅ `--permission-mode auto` | ✅ `--force --approve-mcps` (parity with Claude auto, #829) | ✅ `-a never -s workspace-write` (`.job`, interactive) | ⚠️ runtime-probed `--auto`, `.job` only | ✅ `--always-approve` + hard `--deny` (`rm -rf /` literals) on `.work`/`.job` when Crow Auto is on (CROW-1037); reviews stay human-gated | ⚠️ `settings.json` modes only (no verified launch flag; never `--dangerously-skip-permissions`) | ⚠️ `--disable-approval` (sandbox stays; **never** `--yolo` / `--disable-sandbox`) on `.job`/`.review`/Manager when auto-perm is on |
 | Hooks transport | per-worktree `.claude/settings.local.json` | per-worktree `.cursor/hooks.json` (#829) | per-worktree `.codex/hooks.json` (CROW-1060; `config.toml` `[features] hooks = true` enables the subsystem) | global JS plugin `~/.config/opencode/plugins/crow-hooks.js` | per-worktree `.grok/hooks/crow.json` | per-worktree `.agents/hooks.json` (#860) | per-worktree `.muse/hooks.json` (Claude-compatible schema; **needs-eval** — JSON shape not confirmed against a real binary) |
 | Hook → session scope | ✅ per-session UUID | ✅ per-session UUID (#829) | ✅ per-session UUID (CROW-1060; notify bridge retired) | ❌ `cwd` match | ✅ per-session UUID | ✅ per-session UUID | ✅ per-session UUID (baked into the command) |
-| Hook async delivery | ✅ `PostToolUse*` async | ⚠️ declared, timing unverified | ⚠️ `PostToolUse` async, **gated on `codex ≥ 0.148.0`** (older → sync; CROW-999/1060) — timing unverified | ⚠️ names verified, timing unverified | ❌ sync-only (async support unverified) | ❌ no `async` in Antigravity's schema — all sync | ❌ sync-only (async field unverified; declaring one risks a parse failure) |
+| Hook async delivery | ✅ `PostToolUse*` async | ⚠️ declared, timing unverified | ✅ `PostToolUse` async, **gated on `codex ≥ 0.148.0`** (older → sync; CROW-999/1060) — timing safe by construction (CROW-1065) | ⚠️ names verified, timing unverified | ❌ sync-only (async support unverified) | ❌ no `async` in Antigravity's schema — all sync | ❌ sync-only (async field unverified; declaring one risks a parse failure) |
 | MCP (e.g. Jira) | ✅ `jira` MCP server via `~/.claude.json` | ✅ `jira` bridged into `~/.cursor/mcp.json` (#829) | ✅ mirrored from `~/.claude.json` into `config.toml` | ❌ falls back to `acli` | ❌ falls back to `acli` (Jira MCP bridge deferred; Grok *does* read Claude/Cursor MCP configs) | ❌ falls back to `acli` (file bridge deferred) | ❌ falls back to `acli` (file bridge deferred; Muse reads `mcp_servers` in `~/.config/muse/settings.json`) |
 | Review (`/crow-review-pr`) | ✅ slash-command | ✅ inlined skill body | ✅ inlined skill body | ✅ inlined skill body | ✅ inlined skill body (human-gated) | ✅ inlined skill body (#902) | ✅ inlined skill body (#1033); strip-not-trust |
 | Initial-prompt injection | ✅ prompt-file contents as argv + deferred paste | ✅ job/review, `--`-separated (CROW-968); handoff launcher auto-wired (#829); `.work` bare | ✅ `.job` + `.review` (prompt-file contents as argv) | ✅ run-then-`--continue` | ✅ run-then-`-c` (`.job`/`.review`); `.work` bare | ✅ `-p "$prompt"` (`.job`/`.review`, #902); `.work` bare | ✅ `muse exec --prompt-file` then `muse resume` (`.job`/`.review`); `.work` bare TUI |
@@ -524,10 +524,24 @@ the UUID-scoped tier in CROW-1060). See
   and rejects pre-releases of the pin, since async landed mid-alpha
   (`0.148.0-alpha.9`) and an earlier alpha of the same release would still drop
   the hooks. `PreToolUse` stays sync for the same reason it does on Claude — see
-  the apply-order caveat below. *Async **timing** is unverified empirically:
-  `0.148.0` is still pre-release (npm `latest` = `0.147.0` on 2026-08-13), so
-  the enabled branch has unit coverage but no state-card observation yet
-  (ticket scope item 3) — the gate stays inert until the stable ships.*
+  the apply-order caveat below. *Async **timing** was re-checked once the stable
+  shipped (`0.148.0` on 2026-08-18; npm `latest` = `0.149.0` on 2026-08-20, so
+  the gate now passes on real installs) — **CROW-1065**. The verdict is **safe by
+  construction**, not one wall-clock trace: `PostToolUse` is the sole async event,
+  and `CodexSignalSource` gives it exactly one mutation — `lastToolActivity`
+  (`isActive: false`). That field is excluded from `SessionHookState.persistedSnapshot`
+  (no on-disk card-color write) and has no display reader today, while every
+  completion-driving field (`activityState → .done`, the notification badge, the
+  stop timestamp) is owned by the **sync** `Stop`. So a straggler `PostToolUse`
+  whose fire-and-forget `hook-event` lands after `Stop` (the widened #903 window)
+  re-populates only reader-less, non-persisted in-memory state — it cannot
+  un-complete a `.job`/`.work` turn, delay completion, corrupt the persisted
+  sidebar color, or fire a second completion (the retired `notify` bridge is
+  stripped and the global config removed, so `PostToolUse` registers once). Pinned
+  by `lateAsyncPostToolUseAfterStopStaysDone` / `postToolUseLeavesCompletionFieldsUntouched`
+  in `CodexSignalSourceTests`. A literal 0.148.0+ TUI observation remains a nice-to-have
+  human re-check, but it can only confirm the ordering the structural argument
+  already proves harmless for all orderings.*
 - **Cursor:** declares `PostToolUse` / `Notification` async, but the timing is
   "one of the three things to confirm empirically" (`CursorSignalSource`).
 - **OpenCode:** event *names* are verified, and the "done" signal is now the
@@ -942,7 +956,7 @@ against current upstream CLIs.
 
 | Reason | Pin | Source | Last verified |
 |---|---|---|---|
-| Codex honors `async: true` (below the pin it *skips* the entry, breaking state detection) | Codex **≥ 0.148.0** (gate lives in `CodexVersionProbe.minimumAsyncHookVersion`) | `CodexVersionProbe` / `CodexHookConfigWriter.asyncEvents` | 2026-08-13 (CROW-999) — **reason no longer holds**: `discovery.rs` on `main` dropped the "not supported yet" skip and now computes `runs_async = async && event != SessionEnd`, tagging the handler `HookExecutionMode::Async`. Crow emits `async` for `PostToolUse` only when the probe clears the pin. Two things still open: `0.148.0` **has not shipped stable yet** (`npm dist-tags` on 2026-08-13: `latest` = `0.147.0`, `alpha` = `0.148.0-alpha.14`), so the gate is inert on every stable install today and starts passing on its own when the release lands — confirm the stable ships with the behavior; and the async **timing** has no empirical state-card pass yet |
+| Codex honors `async: true` (below the pin it *skips* the entry, breaking state detection) | Codex **≥ 0.148.0** (gate lives in `CodexVersionProbe.minimumAsyncHookVersion`) | `CodexVersionProbe` / `CodexHookConfigWriter.asyncEvents` | 2026-08-20 (CROW-1065) — **closed**. Upstream `discovery.rs` on `rust-v0.148.0` computes `runs_async = async && event != SessionEnd` (the "not supported yet" skip is gone). `0.148.0` shipped **stable** on 2026-08-18 (npm `latest` = `0.149.0` on 2026-08-20), so the gate now passes on real installs — earlier the reason held (2026-08-13, CROW-999) but `0.148.0` was still pre-release. Async **timing** is now resolved **by construction**: `PostToolUse` is the only async event and its sole mutation (`lastToolActivity`) is persistence-excluded + reader-less, while completion is owned by the sync `Stop` — so no straggler-after-`Stop` ordering is observable on the card (proof over all orderings; pinned by `lateAsyncPostToolUseAfterStopStaysDone`). A live 0.148.0+ TUI trace stays a nice-to-have human re-check |
 | Codex `config.toml` hook key renamed `codex_hooks` → `hooks` | Codex **v0.139.0+** | `CodexHookConfigWriter.installGlobalTomlConfig` | 2026-07-24 |
 | Codex reuses Claude's hook engine (`ClaudeHooksEngine`, byte-compatible schemas) | verified against **codex 0.123.0** | `CodexSignalSource` | 2026-07-24 |
 | Claude background-recap subagent must not elevate state | Claude Code **≥ 2.1.108** (`awaySummaryEnabled`) | `ClaudeHookSignalSource` | 2026-07-24 |
