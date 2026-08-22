@@ -25,9 +25,9 @@ public struct Logsync: ParsableCommand {
 
         These verbs tune only global behavior — ledger retention, the quiet period \
         before a transcript is captured, and the per-upload size cap. Uploads are \
-        best-effort and never block or fail a session. Only Claude Code transcripts \
-        are collected today; other harnesses are wired as their on-disk log \
-        locations are confirmed.
+        best-effort and never block or fail a session. Claude Code and Codex \
+        transcripts are collected today (CROW-1089); other harnesses are wired as \
+        their on-disk log locations are confirmed.
         """,
         subcommands: [LogsyncGet.self, LogsyncSet.self]
     )

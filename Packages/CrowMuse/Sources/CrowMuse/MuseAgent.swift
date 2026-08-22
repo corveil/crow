@@ -237,4 +237,8 @@ public struct MuseAgent: CodingAgent {
             markers: Self.identityMarkers,
             runner: probeRunner)
     }
+
+    // `logSources` is intentionally NOT overridden (CROW-1089): Muse Code has no
+    // confirmed durable, cwd-attributable session-log location on disk, so it
+    // inherits the `[]` default. Wire it once a transcript path is verified.
 }

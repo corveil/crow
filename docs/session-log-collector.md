@@ -25,20 +25,26 @@ contributes nothing rather than uploading the wrong bytes.
 
 ## Harness coverage
 
-Only **Claude Code** partitions its logs by working directory, which is what
-makes a Crow worktree map cleanly to exactly that session's transcripts:
+**Claude Code** and **Codex** are wired (CROW-1089). Claude partitions its logs
+by working directory, so a Crow worktree maps straight to that session's
+transcripts. Codex pools its rollouts globally, so it's attributed by **content**
+instead: the source scans the whole `sessions` tree but carries a `cwdFilter`, and
+the collector keeps only the rollouts whose recorded `cwd` matches the worktree
+(`AgentLogCwdReader`). A rollout with no readable cwd is dropped, never guessed.
 
 | Harness | On-disk location | Status |
 |---|---|---|
 | `claude-code` | `~/.claude/projects/<slug>/<uuid>.jsonl` (slug = worktree path, every non-alphanumeric → `-`) | **Wired.** One artifact per session; multiple `.jsonl` under the slug dir are concatenated. |
-| `codex` | `~/.codex/sessions/<YYYY>/…`, `~/.codex/archived_sessions`, `~/.codex/log` | Deferred — global, timestamp-partitioned; needs per-file `cwd` matching. |
-| `opencode` | `~/.local/share/opencode/storage/{session,message,part}`, `.../log` | Deferred — global storage keyed by opencode session id; needs project→worktree matching. |
-| `cursor` | `~/Library/Application Support/Cursor/User/workspaceStorage/<hash>/state.vscdb` | Deferred — per-workspace **SQLite**; needs `workspace.json` hash→path matching + chat-row extraction. |
-| `grok`, `antigravity`, `muse` | app state / TBD | Deferred — log locations unconfirmed. |
+| `codex` | `~/.codex/sessions/<YYYY>/<MM>/<DD>/rollout-<ts>-<uuid>.jsonl` (already NDJSON; cwd in the first-line `session_meta.payload.cwd`) | **Wired.** Recursive `.logDir` source with a `cwdFilter`; the collector keeps only cwd-matching rollouts and concatenates them (`~/.codex/archived_sessions` and `.../log` are not scanned). |
+| `opencode` | `~/.local/share/opencode/storage/{project,session,message,part}` | Deferred — a `project/<id>.json`'s `worktree` maps to the cwd, but a session's `message`/`part` records must be reassembled into ordered NDJSON first. |
+| `cursor` | `~/.cursor/chats/<id>/<sub>/store.db` (CLI store; cwd in the sibling `meta.json`) | Deferred — the conversation is opaque blobs in a per-chat **SQLite** `store.db`; needs a blob extractor (a `.sqlite` normalizer). Not the Cursor IDE's `state.vscdb`. |
+| `grok`, `antigravity`, `muse` | app state / TBD | Deferred — no confirmed durable, cwd-attributable log location. |
 
 The framework (collector, normalizer, uploader, ledger, config, CLI) is
 harness-general; wiring a deferred harness is implementing its `logSources`
-override plus, for `.sqlite`, a row extractor in `TranscriptNormalizer`.
+override — plus, for `.sqlite`/multi-file stores, a normalizer for that on-disk
+shape. A globally-stored harness attributes by `cwdFilter` rather than a
+per-worktree path (Codex is the reference).
 
 Harnesses map to the artifact contract's `harness` value via
 `LogSyncHarness(agentKind:)` — the four the server enumerates map directly, every

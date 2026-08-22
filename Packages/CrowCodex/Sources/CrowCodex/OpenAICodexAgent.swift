@@ -234,4 +234,32 @@ public struct OpenAICodexAgent: CodingAgent {
     public func sessionRenameSlashCommand(newName: String) -> String? {
         "/rename \(newName)\n"
     }
+
+    /// Codex writes one NDJSON rollout per session under a global, date-partitioned
+    /// tree — `<codexHome>/sessions/<YYYY>/<MM>/<DD>/rollout-<ISO-ts>-<uuid>.jsonl` —
+    /// and records the working directory it ran in on the first line
+    /// (`session_meta.payload.cwd`, verified against `codex-cli` 0.100–0.141 rollouts).
+    /// `codexHome` honors `$CODEX_HOME` (`CodexHome`), the same tree the launch,
+    /// trust-seed, and hook paths use, so a user who relocates it is still covered.
+    ///
+    /// Unlike Claude, the rollouts are NOT partitioned by working directory, so a
+    /// worktree path can't be turned into a directory path. Attribution is instead
+    /// by **content**: the source scans the whole `sessions` tree recursively but
+    /// carries a `cwdFilter`, and the collector keeps only the rollouts whose
+    /// recorded `cwd` equals this worktree (`AgentLogCwdReader`). A rollout with no
+    /// readable cwd is dropped rather than guessed — an unattributable transcript
+    /// is worse than a missing one (CROW-1089).
+    ///
+    /// `harnessSessionID` is unused: the exact rollout filename also encodes a
+    /// timestamp, so a bare session id can't name the file, and cwd-matching is
+    /// the reliable selector regardless. The format is `.logDir` (the reserved
+    /// "concatenate per-session files into one NDJSON artifact" case) because a
+    /// Crow session may span several `codex`/`codex resume` invocations in the same
+    /// worktree, each its own rollout; the collector concatenates all cwd-matches
+    /// chronologically.
+    public func logSources(worktreePath: String, harnessSessionID: String?) -> [AgentLogSource] {
+        return [.directory(
+            CodexHome.sessionsDir(), format: .logDir, fileExtension: "jsonl",
+            fileNamePrefix: "rollout-", recursive: true, cwdFilter: worktreePath)]
+    }
 }

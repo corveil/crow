@@ -2227,9 +2227,15 @@ private func makeBackfillHandlers(devRoot: String) -> [String: CommandRouter.Han
                 var toUpload: [BackfillSession] = []
                 if !explicit.isEmpty {
                     let scanned = await service.scan()
-                    let byUID = Dictionary(scanned.map { ($0.claudeSessionUID, $0) },
-                                           uniquingKeysWith: { first, _ in first })
-                    toUpload = explicit.compactMap { byUID[$0] }
+                    // Select every scanned row whose UID was requested — a set
+                    // membership test, not a uid→session map. A UID shared across
+                    // harnesses (a Claude and a Codex session) therefore uploads
+                    // BOTH rows instead of silently dropping one; each lands in its
+                    // own harness-scoped ledger slot (CROW-1089). Cross-harness UID
+                    // collisions are vanishingly rare, but keeping both reachable
+                    // costs nothing and matches `--all`/`--all-high-confidence`.
+                    let wanted = Set(explicit)
+                    toUpload = scanned.filter { wanted.contains($0.claudeSessionUID) }
                 } else if let selectMode = params["select"]?.stringValue {
                     let scanned = await service.scan()
                     let scope = scanned.filter { $0.workspace?.lowercased() == workspaceName.lowercased() }
@@ -2270,6 +2276,7 @@ private func makeBackfillHandlers(devRoot: String) -> [String: CommandRouter.Han
 private func backfillSessionJSON(_ s: BackfillSession) -> JSONValue {
     var obj: [String: JSONValue] = [
         "uid": .string(s.claudeSessionUID),
+        "harness": .string(s.harness.rawValue),
         "file_path": .string(s.filePath),
         "slug": .string(s.slug),
         "modified_at": .double(s.modifiedAt),
@@ -2304,6 +2311,7 @@ private func backfillSummaryJSON(_ s: BackfillSummary) -> JSONValue {
 private func backfillOutcomeJSON(_ o: BackfillUploadOutcome) -> JSONValue {
     var obj: [String: JSONValue] = [
         "uid": .string(o.claudeSessionUID),
+        "harness": .string(o.harness.rawValue),
         "result": .string(o.result.rawValue),
         "linked": .bool(o.linked),
     ]

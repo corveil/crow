@@ -8,9 +8,11 @@ import Foundation
 // fully-linked Corveil session artifacts, reconstructing the workspace / repo /
 // ticket a live run would have carried.
 //
-// Claude Code only in v1 (the one harness whose logs are partitioned by working
-// directory). The upload is idempotent (a local ledger + the server's write-once
-// 409), throttled, and always user-initiated — never automatic or unbounded.
+// Claude Code and Codex in v1 (CROW-1089): Claude's logs are partitioned by
+// working directory, and Codex records the real cwd in each ~/.codex/sessions
+// rollout, so both reconstruct reliably. The upload is idempotent (a local ledger
+// + the server's write-once 409), throttled, and always user-initiated — never
+// automatic or unbounded.
 
 /// Parent command: `crow backfill <subcommand>`.
 public struct Backfill: ParsableCommand {
@@ -18,11 +20,11 @@ public struct Backfill: ParsableCommand {
         commandName: "backfill",
         abstract: "Reconcile and upload historical on-disk session transcripts",
         discussion: """
-        Scans the coding-session transcripts already on disk \
-        (~/.claude/projects), reconstructs each one's workspace, repo, and \
-        ticket/PR, and uploads the ones you choose to Corveil as session \
-        artifacts — so a backfilled session lands in the ontology \
-        indistinguishable from a live-captured one.
+        Scans the coding-session transcripts already on disk (Claude Code under \
+        ~/.claude/projects and Codex under ~/.codex/sessions), reconstructs each \
+        one's workspace, repo, and ticket/PR, and uploads the ones you choose to \
+        Corveil as session artifacts — so a backfilled session lands in the \
+        ontology indistinguishable from a live-captured one.
 
         A reconstructed ticket becomes a link only when the provider confirms it \
         exists; otherwise the session uploads repo-only, and a true orphan uploads \
@@ -78,7 +80,7 @@ public struct BackfillUpload: ParsableCommand {
 
     @Option(
         name: .customLong("session"),
-        help: "A Claude session UID to upload (repeatable). Mutually exclusive with --all/--all-high-confidence.")
+        help: "A session UID to upload (repeatable; Claude or Codex — UIDs come from `crow backfill scan`). Mutually exclusive with --all/--all-high-confidence.")
     var sessions: [String] = []
 
     @Flag(name: .customLong("all-high-confidence"), help: "Upload every not-yet-uploaded high-confidence session in this workspace")

@@ -119,8 +119,16 @@ public struct RepoRemote: Sendable, Equatable {
 /// the unit the uploader acts on. Everything but the identity fields is
 /// best-effort — a `low`-confidence orphan carries only the file facts.
 public struct BackfillSession: Sendable, Equatable, Codable {
-    /// The Claude session UUID — the `.jsonl` stem. Used verbatim as the upload
-    /// `{uid}`: stable, unique, and the natural idempotency key (decision #1).
+    /// The harness that wrote this transcript (CROW-1089). Determines the ledger
+    /// key's harness slot and the upload's `harness` value, so a Claude and a
+    /// Codex session with the same UID never collide. Defaults to `.claude` for
+    /// back-compat with rows persisted before the field existed.
+    public var harness: LogSyncHarness
+    /// The harness session UID — the transcript's identity. For Claude it is the
+    /// `.jsonl` stem; for Codex it is the rollout's `session_meta.payload.id`.
+    /// Used verbatim as the upload `{uid}`: stable, unique, and the natural
+    /// idempotency key (decision #1). Named `claudeSessionUID` for historical
+    /// reasons — it is any harness's session UID now.
     public var claudeSessionUID: String
     /// Absolute path to the transcript file.
     public var filePath: String
@@ -167,6 +175,7 @@ public struct BackfillSession: Sendable, Equatable, Codable {
         claudeSessionUID: String,
         filePath: String,
         slug: String,
+        harness: LogSyncHarness = .claude,
         cwd: String? = nil,
         gitBranch: String? = nil,
         modifiedAt: Double = 0,
@@ -185,6 +194,7 @@ public struct BackfillSession: Sendable, Equatable, Codable {
         self.claudeSessionUID = claudeSessionUID
         self.filePath = filePath
         self.slug = slug
+        self.harness = harness
         self.cwd = cwd
         self.gitBranch = gitBranch
         self.modifiedAt = modifiedAt
@@ -207,6 +217,9 @@ public struct BackfillSession: Sendable, Equatable, Codable {
 /// outcome (uploaded / linked / skipped-already / failed + reason).
 public struct BackfillUploadOutcome: Sendable, Equatable, Codable {
     public var claudeSessionUID: String
+    /// The harness this outcome is for — so a UI keying results back to scan rows
+    /// distinguishes a Claude and a Codex session that share a UID (CROW-1089).
+    public var harness: LogSyncHarness
     /// Terminal disposition of the attempt.
     public enum Result: String, Sendable, Equatable, Codable {
         case uploaded          // 201 stored
@@ -228,6 +241,7 @@ public struct BackfillUploadOutcome: Sendable, Equatable, Codable {
     public init(
         claudeSessionUID: String,
         result: Result,
+        harness: LogSyncHarness = .claude,
         linked: Bool = false,
         ownerRepo: String? = nil,
         ticketNumber: Int? = nil,
@@ -236,6 +250,7 @@ public struct BackfillUploadOutcome: Sendable, Equatable, Codable {
     ) {
         self.claudeSessionUID = claudeSessionUID
         self.result = result
+        self.harness = harness
         self.linked = linked
         self.ownerRepo = ownerRepo
         self.ticketNumber = ticketNumber

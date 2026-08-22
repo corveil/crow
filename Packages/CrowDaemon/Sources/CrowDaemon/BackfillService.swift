@@ -1,5 +1,6 @@
 import Foundation
 import CrowCore
+import CrowCodex
 
 /// The daemon-side orchestration behind `backfill-scan` / `backfill-upload`
 /// (CROW-1075). It composes the CrowCore pieces — the disk scanner, the ticket
@@ -40,7 +41,14 @@ struct BackfillService: Sendable {
     func scan(scanner: BackfillScanner? = nil) async -> [BackfillSession] {
         let store = LogSyncLedgerStore.shared(devRoot: devRoot)
         let ledger = await store.snapshot()
-        let s = scanner ?? BackfillScanner(devRoot: devRoot, now: now)
+        // Resolve the Codex sessions tree through `CodexHome` (honors `$CODEX_HOME`),
+        // the same tree the live collector and the launch path read — CrowCore's
+        // `BackfillScanner` can't import CrowCodex, so the daemon injects it
+        // (CROW-1089).
+        let s = scanner ?? BackfillScanner(
+            devRoot: devRoot,
+            codexSessionsDir: URL(fileURLWithPath: CodexHome.sessionsDir()),
+            now: now)
         return await s.scan(ledger: ledger)
     }
 
@@ -57,7 +65,9 @@ struct BackfillService: Sendable {
     ) async -> BackfillUploadOutcome {
         let store = LogSyncLedgerStore.shared(devRoot: devRoot)
         let uid = session.claudeSessionUID
-        let key = LogSyncLedger.key(sessionUID: uid, harness: .claude, kind: .sessionTranscript)
+        let harness = session.harness
+        let format = Self.uploadFormat(for: harness)
+        let key = LogSyncLedger.key(sessionUID: uid, harness: harness, kind: .sessionTranscript)
         let nowEpoch = now().timeIntervalSince1970
 
         // Idempotent: a slot the ledger records as uploaded or permanently
@@ -65,16 +75,16 @@ struct BackfillService: Sendable {
         // transient failure retry).
         guard await store.shouldUpload(key: key, now: nowEpoch, retryBackoff: 0) else {
             return BackfillUploadOutcome(
-                claudeSessionUID: uid, result: .alreadyUploaded,
+                claudeSessionUID: uid, result: .alreadyUploaded, harness: harness,
                 ownerRepo: session.ownerRepo, ticketNumber: session.ticketNumber)
         }
 
         let file = URL(fileURLWithPath: session.filePath)
         guard let transcript = TranscriptNormalizer.normalize(
-            files: [file], format: .jsonl, maxBytes: max(1, maxUploadBytes)) else {
+            files: [file], format: format, maxBytes: max(1, maxUploadBytes)) else {
             return BackfillUploadOutcome(
-                claudeSessionUID: uid, result: .skipped, ownerRepo: session.ownerRepo,
-                reason: "empty_or_unreadable")
+                claudeSessionUID: uid, result: .skipped, harness: harness,
+                ownerRepo: session.ownerRepo, reason: "empty_or_unreadable")
         }
 
         // Validate the reconstructed ticket before asserting any link.
@@ -96,7 +106,7 @@ struct BackfillService: Sendable {
         let metadata = LogSyncSessionMetadata(
             name: session.worktreeName ?? session.slug,
             status: nil, // a historical session's Crow status is genuinely unknown
-            agentKind: AgentKind.claudeCode.rawValue,
+            agentKind: Self.agentKindRawValue(for: harness),
             ticketURL: ticketURL,
             ticketNumber: linkedNumber,
             repo: session.ownerRepo,
@@ -104,7 +114,7 @@ struct BackfillService: Sendable {
 
         let result = await uploader.upload(
             baseURL: upload.baseURL, apiKey: upload.apiKey,
-            sessionUID: uid, harness: .claude, kind: .sessionTranscript, format: .jsonl,
+            sessionUID: uid, harness: harness, kind: .sessionTranscript, format: format,
             transcript: transcript, metadata: metadata, agentSessionID: uid)
 
         let sha = LogSyncCollector.sha256Hex(transcript.data)
@@ -113,11 +123,29 @@ struct BackfillService: Sendable {
         await store.record(key: key, entry: entry)
 
         return Self.outcome(
-            uid: uid, result: result, linked: linked,
+            uid: uid, result: result, harness: harness, linked: linked,
             ownerRepo: session.ownerRepo, ticketNumber: linkedNumber, ticketKind: ticketKind)
     }
 
     // MARK: - Helpers
+
+    /// The upload `format` stamp for a harness's on-disk transcript. Both wired
+    /// harnesses normalize through `concatenateNDJSON`, but the stamp is honest:
+    /// Claude writes a single NDJSON transcript (`.jsonl`); a Codex rollout is one
+    /// of a set of per-session files the collector concatenates (`.logDir`).
+    static func uploadFormat(for harness: LogSyncHarness) -> AgentLogFormat {
+        harness == .codex ? .logDir : .jsonl
+    }
+
+    /// The `agentKind` sidecar hint for a harness. Only the two wired harnesses
+    /// reach here; any other maps to Claude's kind as a harmless default (it never
+    /// occurs — the scanner only emits `.claude`/`.codex`).
+    static func agentKindRawValue(for harness: LogSyncHarness) -> String {
+        switch harness {
+        case .codex: return AgentKind.codex.rawValue
+        default: return AgentKind.claudeCode.rawValue
+        }
+    }
 
     /// Split a resolved `owner/repo` back into a `RepoRemote` for URL/validation.
     static func remote(ownerRepo: String, host: String) -> RepoRemote? {
@@ -129,7 +157,7 @@ struct BackfillService: Sendable {
     }
 
     static func outcome(
-        uid: String, result: TranscriptUploadResult, linked: Bool,
+        uid: String, result: TranscriptUploadResult, harness: LogSyncHarness, linked: Bool,
         ownerRepo: String?, ticketNumber: Int?, ticketKind: BackfillTicketKind?
     ) -> BackfillUploadOutcome {
         let disposition: BackfillUploadOutcome.Result
@@ -142,7 +170,7 @@ struct BackfillService: Sendable {
         case .transient: disposition = .failed; reason = "transient"
         }
         return BackfillUploadOutcome(
-            claudeSessionUID: uid, result: disposition, linked: linked,
+            claudeSessionUID: uid, result: disposition, harness: harness, linked: linked,
             ownerRepo: ownerRepo, ticketNumber: ticketNumber, ticketKind: ticketKind, reason: reason)
     }
 }

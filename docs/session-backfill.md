@@ -99,11 +99,15 @@ unbounded.
   `crow backfill upload --workspace NAME (--session UID… | --all-high-confidence | --all)`.
   See [cli-reference.md](cli-reference.md#session-backfill-commands).
 
-## Scope (v1)
+## Scope
 
-- **Claude Code only** — the one harness whose logs are partitioned by working
-  directory, which is what makes historical reconstruction reliable. Other
-  harnesses follow as their `logSources` land (see
+- **Claude Code and Codex** — the two harnesses whose transcripts can be reliably
+  attributed to a worktree (CROW-1089). Claude partitions its logs by working
+  directory; Codex pools its `~/.codex/sessions/**/rollout-*.jsonl` globally but
+  records the real `cwd` in each rollout's first-line `session_meta`, so the scan
+  reconstructs it the same way. Both make historical reconstruction reliable
+  because every transcript records the authoritative `cwd`/`gitBranch`, not a
+  lossy directory name. Other harnesses follow as their `logSources` land (see
   [session-log-collector.md](session-log-collector.md)).
-- Cursor additionally needs SQLite extraction in the normalizer before its
-  transcripts can be backfilled.
+- Cursor (SQLite blob store) and OpenCode (multi-file object store) need a
+  normalizer for their on-disk shapes before their transcripts can be backfilled.

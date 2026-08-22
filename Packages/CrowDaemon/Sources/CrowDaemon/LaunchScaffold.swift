@@ -139,11 +139,12 @@ enum LaunchScaffold {
 
         if AgentRegistry.shared.agent(for: .codex) != nil {
             attempt("Codex scaffold") { try CodexScaffolder.scaffold(devRoot: devRoot) }
-            // An empty `CODEX_HOME=` is treated as unset — otherwise
-            // `appendingPathComponent("hooks.json")` on "" is a relative path
-            // and the config writes into the process CWD, matching the empty
-            // `XDG_CONFIG_HOME` guard below (#766 review).
-            let codexHome = nonEmptyEnv("CODEX_HOME") ?? NSString(string: "~/.codex").expandingTildeInPath
+            // Codex home via the shared `CodexHome` resolver (empty `CODEX_HOME=`
+            // is treated as unset — otherwise `appendingPathComponent("hooks.json")`
+            // on "" is a relative path and the config writes into the process CWD,
+            // matching the empty `XDG_CONFIG_HOME` guard below, #766 review). One
+            // source of truth with the log collector and trust-seed paths (CROW-1089).
+            let codexHome = CodexHome.path()
             // Sweep any `.crow-codex-*.tmp` left by a crash between
             // `writeConfigPrivately`'s createFile and rename(2) — a 0600 temp
             // that may hold mirrored MCP tokens (#843 review round 5). Nothing
