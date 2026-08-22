@@ -236,9 +236,11 @@ public struct OpenAICodexAgent: CodingAgent {
     }
 
     /// Codex writes one NDJSON rollout per session under a global, date-partitioned
-    /// tree — `~/.codex/sessions/<YYYY>/<MM>/<DD>/rollout-<ISO-ts>-<uuid>.jsonl` —
+    /// tree — `<codexHome>/sessions/<YYYY>/<MM>/<DD>/rollout-<ISO-ts>-<uuid>.jsonl` —
     /// and records the working directory it ran in on the first line
     /// (`session_meta.payload.cwd`, verified against `codex-cli` 0.100–0.141 rollouts).
+    /// `codexHome` honors `$CODEX_HOME` (`CodexHome`), the same tree the launch,
+    /// trust-seed, and hook paths use, so a user who relocates it is still covered.
     ///
     /// Unlike Claude, the rollouts are NOT partitioned by working directory, so a
     /// worktree path can't be turned into a directory path. Attribution is instead
@@ -256,10 +258,8 @@ public struct OpenAICodexAgent: CodingAgent {
     /// worktree, each its own rollout; the collector concatenates all cwd-matches
     /// chronologically.
     public func logSources(worktreePath: String, harnessSessionID: String?) -> [AgentLogSource] {
-        let sessionsDir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".codex/sessions", isDirectory: true)
         return [.directory(
-            sessionsDir.path, format: .logDir, fileExtension: "jsonl",
-            recursive: true, cwdFilter: worktreePath)]
+            CodexHome.sessionsDir(), format: .logDir, fileExtension: "jsonl",
+            fileNamePrefix: "rollout-", recursive: true, cwdFilter: worktreePath)]
     }
 }

@@ -1,5 +1,6 @@
 import Foundation
 import CrowCore
+import CrowCodex
 
 /// The daemon-side orchestration behind `backfill-scan` / `backfill-upload`
 /// (CROW-1075). It composes the CrowCore pieces — the disk scanner, the ticket
@@ -40,7 +41,14 @@ struct BackfillService: Sendable {
     func scan(scanner: BackfillScanner? = nil) async -> [BackfillSession] {
         let store = LogSyncLedgerStore.shared(devRoot: devRoot)
         let ledger = await store.snapshot()
-        let s = scanner ?? BackfillScanner(devRoot: devRoot, now: now)
+        // Resolve the Codex sessions tree through `CodexHome` (honors `$CODEX_HOME`),
+        // the same tree the live collector and the launch path read — CrowCore's
+        // `BackfillScanner` can't import CrowCodex, so the daemon injects it
+        // (CROW-1089).
+        let s = scanner ?? BackfillScanner(
+            devRoot: devRoot,
+            codexSessionsDir: URL(fileURLWithPath: CodexHome.sessionsDir()),
+            now: now)
         return await s.scan(ledger: ledger)
     }
 

@@ -35,12 +35,13 @@ import CrowCore
     }
 
     @Test func directoryFactoryCarriesCwdFilterAndRecursion() {
-        // The Codex shape: a recursive, cwd-filtered global store.
+        // The Codex shape: a recursive, cwd-filtered, prefix-scoped global store.
         let s = AgentLogSource.directory(
             "/home/.codex/sessions", format: .logDir, fileExtension: "jsonl",
-            recursive: true, cwdFilter: "/dev/ws/repo-1")
+            fileNamePrefix: "rollout-", recursive: true, cwdFilter: "/dev/ws/repo-1")
         #expect(s.selector == .directory)
         #expect(s.format == .logDir)
+        #expect(s.fileNamePrefix == "rollout-")
         #expect(s.recursive == true)
         #expect(s.cwdFilter == "/dev/ws/repo-1")
     }

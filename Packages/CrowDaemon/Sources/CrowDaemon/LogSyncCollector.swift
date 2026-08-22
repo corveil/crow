@@ -273,7 +273,8 @@ struct LogSyncCollector {
             var filtered = files.filter { url in
                 guard (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true
                 else { return false }
-                if let ext = source.fileExtension { return url.pathExtension == ext }
+                if let ext = source.fileExtension, url.pathExtension != ext { return false }
+                if let prefix = source.fileNamePrefix, !url.lastPathComponent.hasPrefix(prefix) { return false }
                 return true
             }
             filtered = applyingCwdFilter(filtered, source.cwdFilter)

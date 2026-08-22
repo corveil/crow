@@ -1879,7 +1879,7 @@
     }
 
     async function scan() {
-      summary.textContent = 'Scanning ~/.claude/projects…';
+      summary.textContent = 'Scanning ~/.claude/projects and ~/.codex/sessions…';
       try {
         const res = await rpc('backfill-scan', {});
         sessions = res.sessions || [];

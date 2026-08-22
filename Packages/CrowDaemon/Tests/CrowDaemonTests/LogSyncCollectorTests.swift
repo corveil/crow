@@ -182,10 +182,14 @@ import CrowCore
         let mine = try rollout("rollout-mine.jsonl", cwd: "/dev/ws/repo-1089")
         _ = try rollout("rollout-other.jsonl", cwd: "/dev/ws/repo-999")
         _ = try rollout("rollout-nocwd.jsonl", cwd: nil) // unattributable → dropped
+        // A non-rollout `.jsonl` with a matching cwd must still be excluded by the
+        // `rollout-` name prefix — keeps the live path in lockstep with backfill
+        // (CROW-1089), even if Codex ever drops other jsonl beside its rollouts.
+        _ = try rollout("history.jsonl", cwd: "/dev/ws/repo-1089")
 
         let source = AgentLogSource.directory(
             dir.path, format: .logDir, fileExtension: "jsonl",
-            recursive: true, cwdFilter: "/dev/ws/repo-1089")
+            fileNamePrefix: "rollout-", recursive: true, cwdFilter: "/dev/ws/repo-1089")
         let files = LogSyncCollector.resolveFiles(source)
         #expect(files.map(\.lastPathComponent) == [mine.lastPathComponent])
     }

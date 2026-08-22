@@ -58,6 +58,13 @@ public struct AgentLogSource: Sendable, Equatable {
     /// collected (e.g. `"jsonl"`); `nil` collects every regular file. Ignored
     /// for `.file`.
     public let fileExtension: String?
+    /// When `selector == .directory`, only files whose name begins with this
+    /// prefix are collected (e.g. `"rollout-"` for Codex). `nil` accepts any
+    /// name. Keeps the live collector and the backfill scanner in lockstep — both
+    /// select a Codex rollout by the same `rollout-*.jsonl` shape, so a stray
+    /// `.jsonl` that Codex might one day drop beside its rollouts can't slip into
+    /// the live path even if it happened to carry a matching cwd (CROW-1089).
+    public let fileNamePrefix: String?
     /// When `selector == .directory`, whether to descend into subdirectories.
     /// Defaults to `false` (Claude's slug directory is flat).
     public let recursive: Bool
@@ -79,6 +86,7 @@ public struct AgentLogSource: Sendable, Equatable {
         selector: Selector,
         format: AgentLogFormat,
         fileExtension: String? = nil,
+        fileNamePrefix: String? = nil,
         recursive: Bool = false,
         cwdFilter: String? = nil
     ) {
@@ -86,6 +94,7 @@ public struct AgentLogSource: Sendable, Equatable {
         self.selector = selector
         self.format = format
         self.fileExtension = fileExtension
+        self.fileNamePrefix = fileNamePrefix
         self.recursive = recursive
         self.cwdFilter = cwdFilter
     }
@@ -95,19 +104,21 @@ public struct AgentLogSource: Sendable, Equatable {
         AgentLogSource(path: path, selector: .file, format: format)
     }
 
-    /// A directory source, optionally filtered by file extension and — for a
-    /// globally-stored harness — by the working directory each file recorded
-    /// (`cwdFilter`).
+    /// A directory source, optionally filtered by file extension / name prefix
+    /// and — for a globally-stored harness — by the working directory each file
+    /// recorded (`cwdFilter`).
     public static func directory(
         _ path: String,
         format: AgentLogFormat,
         fileExtension: String? = nil,
+        fileNamePrefix: String? = nil,
         recursive: Bool = false,
         cwdFilter: String? = nil
     ) -> AgentLogSource {
         AgentLogSource(
             path: path, selector: .directory, format: format,
-            fileExtension: fileExtension, recursive: recursive, cwdFilter: cwdFilter)
+            fileExtension: fileExtension, fileNamePrefix: fileNamePrefix,
+            recursive: recursive, cwdFilter: cwdFilter)
     }
 
     /// Slugify a POSIX path the way Claude Code names its per-project log

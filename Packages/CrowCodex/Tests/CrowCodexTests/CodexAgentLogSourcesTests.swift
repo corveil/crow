@@ -4,8 +4,6 @@ import CrowCore
 @testable import CrowCodex
 
 @Suite struct CodexAgentLogSourcesTests {
-    private var home: String { FileManager.default.homeDirectoryForCurrentUser.path }
-
     @Test func cwdFilteredRecursiveSessionsSource() {
         let sources = OpenAICodexAgent().logSources(
             worktreePath: "/Users/j/Dev/acme-1", harnessSessionID: nil)
@@ -16,9 +14,12 @@ import CrowCore
         #expect(s.selector == .directory)
         #expect(s.format == .logDir)
         #expect(s.fileExtension == "jsonl")
+        #expect(s.fileNamePrefix == "rollout-") // only Codex rollouts, in lockstep with backfill
         #expect(s.recursive == true)
         #expect(s.cwdFilter == "/Users/j/Dev/acme-1")
-        #expect(s.path == home + "/.codex/sessions")
+        // Points at the resolved Codex sessions tree (honors $CODEX_HOME), not a
+        // hardcoded `~/.codex` — asserted against the shared resolver.
+        #expect(s.path == CodexHome.sessionsDir())
     }
 
     @Test func harnessSessionIDIsIgnoredForAttribution() {

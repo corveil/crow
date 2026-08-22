@@ -115,16 +115,11 @@ public enum CodexTrustSeeder {
     }
 
     /// `$CODEX_HOME/config.toml` when `CODEX_HOME` is set and non-empty,
-    /// otherwise `~/.codex/config.toml`. Mirrors `LaunchScaffold`'s
-    /// empty-var-is-unset guard so an empty `CODEX_HOME=` never yields a
+    /// otherwise `~/.codex/config.toml`. Delegates the home resolution to
+    /// `CodexHome` — the one source of truth shared with the log collector and
+    /// the launch path (CROW-1089) — so an empty `CODEX_HOME=` never yields a
     /// CWD-relative path.
     private static func defaultConfigPath() -> String {
-        let codexHome: String
-        if let env = ProcessInfo.processInfo.environment["CODEX_HOME"], !env.isEmpty {
-            codexHome = env
-        } else {
-            codexHome = NSString(string: "~/.codex").expandingTildeInPath
-        }
-        return (codexHome as NSString).appendingPathComponent("config.toml")
+        (CodexHome.path() as NSString).appendingPathComponent("config.toml")
     }
 }

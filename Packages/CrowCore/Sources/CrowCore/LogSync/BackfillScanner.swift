@@ -24,7 +24,9 @@ public struct BackfillScanner: Sendable {
     let projectsDir: URL
     /// `~/.codex/sessions` by default — where Codex writes date-partitioned
     /// `rollout-<ts>-<uuid>.jsonl` files (CROW-1089). Distinct from
-    /// `~/.codex/archived_sessions`, which is deliberately not scanned.
+    /// `~/.codex/archived_sessions`, which is deliberately not scanned. The daemon
+    /// injects the `$CODEX_HOME`-resolved tree (via `CodexHome`, which CrowCore
+    /// can't import); this literal default is the fallback for a direct caller.
     let codexSessionsDir: URL
     /// Resolve a directory's `origin` remote URL (default: `git -C <dir> remote
     /// get-url origin`). Injected so tests need no real repos.
