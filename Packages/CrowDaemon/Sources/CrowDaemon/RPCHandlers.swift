@@ -2270,6 +2270,7 @@ private func makeBackfillHandlers(devRoot: String) -> [String: CommandRouter.Han
 private func backfillSessionJSON(_ s: BackfillSession) -> JSONValue {
     var obj: [String: JSONValue] = [
         "uid": .string(s.claudeSessionUID),
+        "harness": .string(s.harness.rawValue),
         "file_path": .string(s.filePath),
         "slug": .string(s.slug),
         "modified_at": .double(s.modifiedAt),

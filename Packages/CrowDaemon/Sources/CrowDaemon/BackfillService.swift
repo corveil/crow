@@ -57,7 +57,9 @@ struct BackfillService: Sendable {
     ) async -> BackfillUploadOutcome {
         let store = LogSyncLedgerStore.shared(devRoot: devRoot)
         let uid = session.claudeSessionUID
-        let key = LogSyncLedger.key(sessionUID: uid, harness: .claude, kind: .sessionTranscript)
+        let harness = session.harness
+        let format = Self.uploadFormat(for: harness)
+        let key = LogSyncLedger.key(sessionUID: uid, harness: harness, kind: .sessionTranscript)
         let nowEpoch = now().timeIntervalSince1970
 
         // Idempotent: a slot the ledger records as uploaded or permanently
@@ -71,7 +73,7 @@ struct BackfillService: Sendable {
 
         let file = URL(fileURLWithPath: session.filePath)
         guard let transcript = TranscriptNormalizer.normalize(
-            files: [file], format: .jsonl, maxBytes: max(1, maxUploadBytes)) else {
+            files: [file], format: format, maxBytes: max(1, maxUploadBytes)) else {
             return BackfillUploadOutcome(
                 claudeSessionUID: uid, result: .skipped, ownerRepo: session.ownerRepo,
                 reason: "empty_or_unreadable")
@@ -96,7 +98,7 @@ struct BackfillService: Sendable {
         let metadata = LogSyncSessionMetadata(
             name: session.worktreeName ?? session.slug,
             status: nil, // a historical session's Crow status is genuinely unknown
-            agentKind: AgentKind.claudeCode.rawValue,
+            agentKind: Self.agentKindRawValue(for: harness),
             ticketURL: ticketURL,
             ticketNumber: linkedNumber,
             repo: session.ownerRepo,
@@ -104,7 +106,7 @@ struct BackfillService: Sendable {
 
         let result = await uploader.upload(
             baseURL: upload.baseURL, apiKey: upload.apiKey,
-            sessionUID: uid, harness: .claude, kind: .sessionTranscript, format: .jsonl,
+            sessionUID: uid, harness: harness, kind: .sessionTranscript, format: format,
             transcript: transcript, metadata: metadata, agentSessionID: uid)
 
         let sha = LogSyncCollector.sha256Hex(transcript.data)
@@ -118,6 +120,24 @@ struct BackfillService: Sendable {
     }
 
     // MARK: - Helpers
+
+    /// The upload `format` stamp for a harness's on-disk transcript. Both wired
+    /// harnesses normalize through `concatenateNDJSON`, but the stamp is honest:
+    /// Claude writes a single NDJSON transcript (`.jsonl`); a Codex rollout is one
+    /// of a set of per-session files the collector concatenates (`.logDir`).
+    static func uploadFormat(for harness: LogSyncHarness) -> AgentLogFormat {
+        harness == .codex ? .logDir : .jsonl
+    }
+
+    /// The `agentKind` sidecar hint for a harness. Only the two wired harnesses
+    /// reach here; any other maps to Claude's kind as a harmless default (it never
+    /// occurs — the scanner only emits `.claude`/`.codex`).
+    static func agentKindRawValue(for harness: LogSyncHarness) -> String {
+        switch harness {
+        case .codex: return AgentKind.codex.rawValue
+        default: return AgentKind.claudeCode.rawValue
+        }
+    }
 
     /// Split a resolved `owner/repo` back into a `RepoRemote` for URL/validation.
     static func remote(ownerRepo: String, host: String) -> RepoRemote? {

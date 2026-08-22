@@ -190,4 +190,9 @@ public struct AntigravityAgent: CodingAgent {
     // default rather than risk pasting a stray `/rename` prompt into the model
     // (CROW-629). A documented Tier-2 gap; override once a rename command is
     // confirmed.
+
+    // `logSources` is intentionally NOT overridden (CROW-1089): Antigravity's CLI
+    // has no confirmed durable, cwd-attributable session-log location on disk, so
+    // it inherits the `[]` default. Wire it once a rollout/transcript path is
+    // verified.
 }

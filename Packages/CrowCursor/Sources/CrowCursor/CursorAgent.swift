@@ -305,4 +305,12 @@ public struct CursorAgent: CodingAgent {
             markers: Self.identityMarkers,
             runner: probeRunner)
     }
+
+    // `logSources` is intentionally NOT overridden (CROW-1089): the `cursor-agent`
+    // CLI stores each chat's conversation as opaque blobs in a per-chat SQLite
+    // `store.db` (`~/.cursor/chats/<id>/<sub>/store.db`) — the cwd is recoverable
+    // from the sibling `meta.json`, but the transcript needs a `store.db` blob
+    // extractor (a `.sqlite` normalizer) that isn't built yet, so it stays on the
+    // `[]` default rather than upload the wrong bytes. (This is the CLI's store,
+    // not the Cursor IDE's `state.vscdb`.)
 }

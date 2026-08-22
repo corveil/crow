@@ -26,6 +26,22 @@ import Testing
         try body.write(to: dir.appendingPathComponent("\(uid).jsonl"), atomically: true, encoding: .utf8)
     }
 
+    /// Write a Codex rollout — a first-line `session_meta` with cwd/id nested
+    /// under `payload`, in the `<YYYY>/<MM>/<DD>` date tree Codex uses.
+    private func writeCodexRollout(
+        in codexSessions: URL, uid: String, cwd: String
+    ) throws {
+        let dir = codexSessions.appendingPathComponent("2026/08/19", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let body = """
+        {"timestamp":"2026-08-19T00:00:00Z","type":"session_meta","payload":{"id":"\(uid)","cwd":"\(cwd)","git":{}}}
+        {"timestamp":"2026-08-19T00:00:01Z","type":"event_msg","payload":{"type":"task_started"}}
+        """
+        try body.write(
+            to: dir.appendingPathComponent("rollout-2026-08-19T00-00-00-\(uid).jsonl"),
+            atomically: true, encoding: .utf8)
+    }
+
     @Test func reconstructsHighConfidenceSession() async throws {
         let (devRoot, projects, cleanup) = try makeTree()
         defer { cleanup() }
@@ -92,6 +108,69 @@ import Testing
         let sessions = await scanner.scan(ledger: ledger)
         let s = try #require(sessions.first { $0.claudeSessionUID == "UID-3" })
         #expect(s.uploadStatus == .uploaded)
+    }
+
+    @Test func reconstructsCodexHighConfidenceSession() async throws {
+        let (devRoot, projects, cleanup) = try makeTree()
+        defer { cleanup() }
+        let codex = URL(fileURLWithPath: devRoot)
+            .deletingLastPathComponent().appendingPathComponent("codex-sessions", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: codex) }
+
+        // A live clone so the repo → owner/repo resolves.
+        let clone = URL(fileURLWithPath: devRoot)
+            .appendingPathComponent("RadiusMethod/crow", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: clone.appendingPathComponent(".git"), withIntermediateDirectories: true)
+
+        let cwd = "\(devRoot)/RadiusMethod/crow-1089-wire-harness-log-collector"
+        try writeCodexRollout(in: codex, uid: "CODEX-UID-1", cwd: cwd)
+
+        let scanner = BackfillScanner(
+            devRoot: devRoot, projectsDir: projects, codexSessionsDir: codex,
+            gitRemote: { path in
+                path.hasSuffix("/RadiusMethod/crow") ? "https://github.com/corveil/crow.git" : nil
+            })
+
+        let sessions = await scanner.scan(ledger: LogSyncLedger())
+        // Only the Codex rollout — the (empty) Claude projects dir contributes none.
+        let s = try #require(sessions.first { $0.claudeSessionUID == "CODEX-UID-1" })
+        #expect(s.harness == .codex)
+        #expect(s.workspace == "RadiusMethod")
+        #expect(s.worktreeName == "crow-1089-wire-harness-log-collector")
+        #expect(s.repoName == "crow")
+        #expect(s.ownerRepo == "corveil/crow")
+        #expect(s.ticketNumber == 1089)
+        #expect(s.confidence == .high)
+    }
+
+    @Test func codexLedgerStatusKeyedByCodexHarness() async throws {
+        let (devRoot, projects, cleanup) = try makeTree()
+        defer { cleanup() }
+        let codex = URL(fileURLWithPath: devRoot)
+            .deletingLastPathComponent().appendingPathComponent("codex-sessions2", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: codex) }
+        try writeCodexRollout(in: codex, uid: "CODEX-UID-2", cwd: "\(devRoot)/RadiusMethod/crow-9-x")
+
+        // A Claude ledger entry for the SAME uid must NOT mark the Codex row
+        // uploaded — the harness slot distinguishes them.
+        var ledger = LogSyncLedger()
+        ledger.record(
+            key: LogSyncLedger.key(sessionUID: "CODEX-UID-2", harness: .claude, kind: .sessionTranscript),
+            entry: .init(status: .uploaded, sha256: "s", sizeBytes: 1, at: 1))
+
+        let scanner = BackfillScanner(
+            devRoot: devRoot, projectsDir: projects, codexSessionsDir: codex, gitRemote: { _ in nil })
+        let s = try #require(await scanner.scan(ledger: ledger).first { $0.claudeSessionUID == "CODEX-UID-2" })
+        #expect(s.uploadStatus == .new) // the Claude-harness entry does not apply
+
+        // Now record it under the CODEX harness — it reconciles.
+        var ledger2 = LogSyncLedger()
+        ledger2.record(
+            key: LogSyncLedger.key(sessionUID: "CODEX-UID-2", harness: .codex, kind: .sessionTranscript),
+            entry: .init(status: .uploaded, sha256: "s", sizeBytes: 1, at: 1))
+        let s2 = try #require(await scanner.scan(ledger: ledger2).first { $0.claudeSessionUID == "CODEX-UID-2" })
+        #expect(s2.uploadStatus == .uploaded)
     }
 
     @Test func summaryCountsByTier() {

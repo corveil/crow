@@ -116,4 +116,41 @@ private struct StubRunner: ShellRunner {
                 == RepoRemote(host: "github.com", owner: "corveil", repo: "crow"))
         #expect(BackfillService.remote(ownerRepo: "noslash", host: "github.com") == nil)
     }
+
+    // MARK: Codex harness (CROW-1089)
+
+    @Test func harnessMappingHelpers() {
+        #expect(BackfillService.uploadFormat(for: .claude) == .jsonl)
+        #expect(BackfillService.uploadFormat(for: .codex) == .logDir)
+        #expect(BackfillService.agentKindRawValue(for: .claude) == AgentKind.claudeCode.rawValue)
+        #expect(BackfillService.agentKindRawValue(for: .codex) == AgentKind.codex.rawValue)
+    }
+
+    @Test func codexSessionUploadsUnderCodexHarnessSlot() async throws {
+        let devRoot = try tempDevRoot()
+        let path = try writeTranscript(devRoot, uid: "CDX-1")
+        let svc = service(devRoot, status: 201, ticket: .success(#"{"number":12}"#))
+        var s = session(devRoot, uid: "CDX-1", path: path)
+        s.harness = .codex
+
+        let outcome = await svc.upload(
+            session: s, upload: (baseURL: "https://corveil.io", apiKey: "k"),
+            maxUploadBytes: 8_000_000)
+        #expect(outcome.result == .uploaded)
+
+        // Idempotent within the codex slot: a re-run is a no-op...
+        let again = await svc.upload(
+            session: s, upload: (baseURL: "https://corveil.io", apiKey: "k"),
+            maxUploadBytes: 8_000_000)
+        #expect(again.result == .alreadyUploaded)
+
+        // ...but the SAME uid under the Claude harness is a distinct slot that has
+        // not been uploaded, so it proceeds (the harness disambiguates the ledger).
+        var claudeTwin = s
+        claudeTwin.harness = .claude
+        let twin = await svc.upload(
+            session: claudeTwin, upload: (baseURL: "https://corveil.io", apiKey: "k"),
+            maxUploadBytes: 8_000_000)
+        #expect(twin.result == .uploaded)
+    }
 }

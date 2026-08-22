@@ -9,12 +9,19 @@ public enum AgentLogFormat: String, Sendable, Codable, Equatable, CaseIterable {
     /// this (`~/.claude/projects/<slug>/<uuid>.jsonl`), so it needs no
     /// transformation before upload.
     case jsonl
-    /// A SQLite database (Cursor stores chat rows inside a per-workspace
-    /// `state.vscdb`). Requires row extraction before it becomes NDJSON — not
-    /// yet wired (see `CursorAgent.logSources`).
+    /// A SQLite database. The Cursor CLI (`cursor-agent`) stores each chat's
+    /// conversation as opaque blobs inside a per-chat `store.db`
+    /// (`~/.cursor/chats/<id>/<sub>/store.db`, tables `blobs`/`meta`). Requires
+    /// blob extraction before it becomes NDJSON — not yet wired (see
+    /// `CursorAgent`). Note this is the *CLI's* store, not the Cursor IDE's
+    /// `state.vscdb`.
     case sqlite
     /// A directory (or set) of per-session log files the collector concatenates
-    /// into one NDJSON artifact (Codex rollout files, OpenCode storage).
+    /// into one NDJSON artifact. Codex rollout files (`~/.codex/sessions/**/
+    /// rollout-*.jsonl`) use this: each rollout is already newline-delimited JSON,
+    /// so the concatenation needs no per-line transformation — only cwd-matching
+    /// to attribute a globally-stored rollout to a worktree (see the `cwdFilter`
+    /// field and `OpenAICodexAgent.logSources`).
     case logDir
 }
 
@@ -54,19 +61,33 @@ public struct AgentLogSource: Sendable, Equatable {
     /// When `selector == .directory`, whether to descend into subdirectories.
     /// Defaults to `false` (Claude's slug directory is flat).
     public let recursive: Bool
+    /// When set, keep only the resolved files whose *recorded* working directory
+    /// equals this path — the attribution mechanism for a harness whose logs are
+    /// **globally stored** rather than partitioned into a per-worktree directory.
+    ///
+    /// Claude needs no filter: its slug directory already contains exactly this
+    /// worktree's transcripts, so `cwdFilter` is `nil`. Codex is the opposite —
+    /// its rollouts pool under `~/.codex/sessions/<date>/…` regardless of cwd, so
+    /// the collector must read each candidate's head, extract the `cwd` it
+    /// recorded (`AgentLogCwdReader`), and keep only exact matches. A file with no
+    /// readable cwd is dropped, never guessed: an unattributable transcript is
+    /// worse than a missing one (CROW-1089).
+    public let cwdFilter: String?
 
     public init(
         path: String,
         selector: Selector,
         format: AgentLogFormat,
         fileExtension: String? = nil,
-        recursive: Bool = false
+        recursive: Bool = false,
+        cwdFilter: String? = nil
     ) {
         self.path = path
         self.selector = selector
         self.format = format
         self.fileExtension = fileExtension
         self.recursive = recursive
+        self.cwdFilter = cwdFilter
     }
 
     /// A single-file source.
@@ -74,16 +95,19 @@ public struct AgentLogSource: Sendable, Equatable {
         AgentLogSource(path: path, selector: .file, format: format)
     }
 
-    /// A directory source, optionally filtered by file extension.
+    /// A directory source, optionally filtered by file extension and — for a
+    /// globally-stored harness — by the working directory each file recorded
+    /// (`cwdFilter`).
     public static func directory(
         _ path: String,
         format: AgentLogFormat,
         fileExtension: String? = nil,
-        recursive: Bool = false
+        recursive: Bool = false,
+        cwdFilter: String? = nil
     ) -> AgentLogSource {
         AgentLogSource(
             path: path, selector: .directory, format: format,
-            fileExtension: fileExtension, recursive: recursive)
+            fileExtension: fileExtension, recursive: recursive, cwdFilter: cwdFilter)
     }
 
     /// Slugify a POSIX path the way Claude Code names its per-project log

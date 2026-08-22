@@ -5,7 +5,7 @@ import Foundation
 /// CHECK exactly, so an out-of-set value never reaches the endpoint (it would
 /// 400). Crow's own harness roster is larger than this set; anything without a
 /// first-class value maps to `.unknown`.
-public enum LogSyncHarness: String, Sendable, Equatable, CaseIterable {
+public enum LogSyncHarness: String, Sendable, Equatable, Codable, CaseIterable {
     case claude
     case cursor
     case codex

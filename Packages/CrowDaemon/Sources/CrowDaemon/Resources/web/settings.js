@@ -1734,7 +1734,7 @@
     modal.appendChild(head);
 
     const body = el('div', 'settings-body');
-    const summary = el('div', 'backfill-summary', 'Scanning ~/.claude/projects…');
+    const summary = el('div', 'backfill-summary', 'Scanning ~/.claude/projects and ~/.codex/sessions…');
     body.appendChild(summary);
 
     const filterRow = el('div', 'backfill-filters');

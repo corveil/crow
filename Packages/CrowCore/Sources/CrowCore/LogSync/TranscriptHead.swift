@@ -38,20 +38,38 @@ public enum TranscriptHeadReader {
     /// Fold one JSON event line into the accumulating head. Only the four fields
     /// of interest are decoded; everything else is ignored. A non-JSON or
     /// unrelated line leaves the head unchanged.
+    ///
+    /// Two harness shapes are recognized, so one reader serves both the Claude
+    /// backfill and the Codex one (CROW-1089):
+    ///  - **Claude** records `cwd` / `gitBranch` / `sessionId` / `timestamp` as
+    ///    top-level keys on its event lines.
+    ///  - **Codex** records them on its first `session_meta` line under a nested
+    ///    `payload` object (`payload.cwd`, `payload.id`, `payload.timestamp`);
+    ///    Codex writes no git branch, so `gitBranch` simply stays `nil`.
+    /// The two never collide — Claude transcripts carry no `payload` key — so the
+    /// nested lookup is a harmless fallback for Claude and the whole source for
+    /// Codex.
     public static func absorb(_ line: String, into head: inout TranscriptHead) {
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let data = trimmed.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return }
-        func str(_ key: String) -> String? {
-            guard let v = obj[key] as? String else { return nil }
+        func str(_ dict: [String: Any], _ key: String) -> String? {
+            guard let v = dict[key] as? String else { return nil }
             let t = v.trimmingCharacters(in: .whitespacesAndNewlines)
             return t.isEmpty ? nil : t
         }
-        if head.sessionID == nil { head.sessionID = str("sessionId") }
-        if head.cwd == nil { head.cwd = str("cwd") }
-        if head.gitBranch == nil { head.gitBranch = str("gitBranch") }
-        if head.firstTimestamp == nil { head.firstTimestamp = str("timestamp") }
+        let payload = obj["payload"] as? [String: Any]
+        if head.sessionID == nil {
+            head.sessionID = str(obj, "sessionId") ?? payload.flatMap { str($0, "id") }
+        }
+        if head.cwd == nil {
+            head.cwd = str(obj, "cwd") ?? payload.flatMap { str($0, "cwd") }
+        }
+        if head.gitBranch == nil { head.gitBranch = str(obj, "gitBranch") }
+        if head.firstTimestamp == nil {
+            head.firstTimestamp = str(obj, "timestamp") ?? payload.flatMap { str($0, "timestamp") }
+        }
     }
 
     /// Parse a whole in-memory transcript body (test/fixture convenience).
@@ -95,5 +113,50 @@ public enum TranscriptHeadReader {
             absorb(line, into: &head)
         }
         return head
+    }
+}
+
+/// Reads *only* the working directory a harness log recorded, from the head of
+/// the file, and stops the instant it finds one (CROW-1089).
+///
+/// This is the live collector's per-file attribution probe for a globally-stored
+/// harness (Codex): `LogSyncCollector.resolveFiles` calls it for every candidate
+/// rollout to decide whether that rollout ran in the session's worktree. It must
+/// stay cheap — a Codex rollout's first `session_meta` line alone can be several
+/// KB, and there can be hundreds of them — so unlike `TranscriptHeadReader.read`
+/// (which keeps reading until *all* head fields are found, and Codex never fills
+/// `gitBranch`) this returns as soon as `cwd` appears, scanning only a handful of
+/// lines. `cwd` is on line 1 for both Claude and Codex; the small `maxLines`
+/// budget is slack for a harness that emits a preamble line first.
+public enum AgentLogCwdReader {
+    /// The recorded `cwd` from the head of `url`, or `nil` if none is found within
+    /// `maxLines`. Uses `TranscriptHeadReader.absorb`, so it recognizes both the
+    /// Claude (top-level `cwd`) and Codex (`payload.cwd`) shapes.
+    public static func read(_ url: URL, maxLines: Int = 8) -> String? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        var head = TranscriptHead()
+        var buffer = Data()
+        var lines = 0
+        let newline: UInt8 = 0x0A
+        while lines < maxLines, head.cwd == nil {
+            guard let chunk = try? handle.read(upToCount: 65_536), !chunk.isEmpty else { break }
+            buffer.append(chunk)
+            while let idx = buffer.firstIndex(of: newline) {
+                let lineData = buffer[buffer.startIndex..<idx]
+                buffer.removeSubrange(buffer.startIndex...idx)
+                lines += 1
+                if let line = String(data: lineData, encoding: .utf8) {
+                    TranscriptHeadReader.absorb(line, into: &head)
+                }
+                if head.cwd != nil || lines >= maxLines { break }
+            }
+        }
+        // A final partial line (no trailing newline) within budget.
+        if head.cwd == nil, lines < maxLines, !buffer.isEmpty,
+           let line = String(data: buffer, encoding: .utf8) {
+            TranscriptHeadReader.absorb(line, into: &head)
+        }
+        return head.cwd
     }
 }

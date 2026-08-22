@@ -161,6 +161,52 @@ import CrowCore
         #expect(LogSyncCollector.agentSessionID(from: []) == nil)
     }
 
+    // MARK: cwd-filtered resolution (CROW-1089 — Codex global store)
+
+    /// A recursive, cwd-filtered directory source (the Codex shape) keeps only the
+    /// rollouts whose recorded `cwd` matches the worktree, across the date tree.
+    @Test func resolveFilesAppliesCwdFilterRecursively() throws {
+        let dir = try tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let day = dir.appendingPathComponent("2026/08/19", isDirectory: true)
+        try FileManager.default.createDirectory(at: day, withIntermediateDirectories: true)
+
+        func rollout(_ name: String, cwd: String?) throws -> URL {
+            let url = day.appendingPathComponent(name)
+            let head = cwd.map {
+                "{\"type\":\"session_meta\",\"payload\":{\"id\":\"x\",\"cwd\":\"\($0)\"}}\n"
+            } ?? "{\"type\":\"session_meta\",\"payload\":{\"id\":\"x\"}}\n"
+            try head.write(to: url, atomically: true, encoding: .utf8)
+            return url
+        }
+        let mine = try rollout("rollout-mine.jsonl", cwd: "/dev/ws/repo-1089")
+        _ = try rollout("rollout-other.jsonl", cwd: "/dev/ws/repo-999")
+        _ = try rollout("rollout-nocwd.jsonl", cwd: nil) // unattributable → dropped
+
+        let source = AgentLogSource.directory(
+            dir.path, format: .logDir, fileExtension: "jsonl",
+            recursive: true, cwdFilter: "/dev/ws/repo-1089")
+        let files = LogSyncCollector.resolveFiles(source)
+        #expect(files.map(\.lastPathComponent) == [mine.lastPathComponent])
+    }
+
+    @Test func applyingCwdFilterDropsUnattributableAndNoOpsWhenNil() throws {
+        let dir = try tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let a = dir.appendingPathComponent("a.jsonl")
+        try "{\"cwd\":\"/dev/ws/repo-1\"}\n".write(to: a, atomically: true, encoding: .utf8)
+        let b = dir.appendingPathComponent("b.jsonl")
+        try "{\"type\":\"x\"}\n".write(to: b, atomically: true, encoding: .utf8) // no cwd
+
+        // nil filter is a no-op (Claude path): both survive.
+        #expect(LogSyncCollector.applyingCwdFilter([a, b], nil).count == 2)
+        // A concrete filter keeps only the match; the cwd-less file is dropped.
+        let kept = LogSyncCollector.applyingCwdFilter([a, b], "/dev/ws/repo-1")
+        #expect(kept.map(\.lastPathComponent) == ["a.jsonl"])
+        // A blank filter matches nothing (never "match everything").
+        #expect(LogSyncCollector.applyingCwdFilter([a, b], "   ").isEmpty)
+    }
+
     // MARK: Result → ledger mapping
 
     @Test func ledgerEntryMapping() {

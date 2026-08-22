@@ -108,7 +108,9 @@ struct LogSyncCollector {
             guard await ledgerStore.shouldUpload(key: ledgerKey, now: nowEpoch, retryBackoff: retryBackoff) else { continue }
 
             // Where does this harness write its logs? Empty for harnesses whose
-            // on-disk logs are not yet wired (everything but Claude today).
+            // on-disk logs are not yet wired (everything but Claude and Codex
+            // today — CROW-1089). A Codex source carries a `cwdFilter` that
+            // `resolveFiles` applies to attribute a global rollout to this worktree.
             guard let agent = AgentRegistry.shared.agent(for: session.agentKind) else { continue }
             let sources = agent.logSources(worktreePath: worktree.worktreePath, harnessSessionID: nil)
             guard !sources.isEmpty else { continue }
@@ -124,8 +126,10 @@ struct LogSyncCollector {
                 if let newest, nowDate.timeIntervalSince(newest) < quietPeriod { continue }
             }
 
-            // Pick the single format (all Claude sources are .jsonl; a mixed set
-            // would be unusual — take the first source's format).
+            // Pick the single format for the artifact stamp. Claude sources are
+            // `.jsonl`; Codex sources are `.logDir` (a set of per-session rollouts
+            // concatenated). A mixed set would be unusual — take the first source's
+            // format.
             let format = sources.first?.format ?? .jsonl
             guard let transcript = TranscriptNormalizer.normalize(
                 files: files, format: format, maxBytes: max(1, config.maxUploadBytes))
@@ -242,7 +246,11 @@ struct LogSyncCollector {
     }
 
     /// Expand a log source to concrete regular files, oldest-modified first so a
-    /// concatenated transcript reads chronologically.
+    /// concatenated transcript reads chronologically. When the source carries a
+    /// `cwdFilter` (a globally-stored harness like Codex), only files whose
+    /// recorded working directory matches are kept — the attribution step that
+    /// stops one worktree's upload from swallowing every session's rollouts
+    /// (CROW-1089).
     static func resolveFiles(_ source: AgentLogSource) -> [URL] {
         let fm = FileManager.default
         switch source.selector {
@@ -262,15 +270,31 @@ struct LogSyncCollector {
                     at: dir, includingPropertiesForKeys: keys) else { return [] }
                 files = contents
             }
-            let filtered = files.filter { url in
+            var filtered = files.filter { url in
                 guard (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true
                 else { return false }
                 if let ext = source.fileExtension { return url.pathExtension == ext }
                 return true
             }
+            filtered = applyingCwdFilter(filtered, source.cwdFilter)
             return filtered.sorted { a, b in
                 (Self.modificationDate(a) ?? .distantPast) < (Self.modificationDate(b) ?? .distantPast)
             }
+        }
+    }
+
+    /// Keep only files whose recorded `cwd` (read cheaply from the head via
+    /// `AgentLogCwdReader`) equals `cwdFilter`, path-standardized on both sides.
+    /// `nil` filter is a no-op (Claude, whose slug directory is already the
+    /// filter). A file with no readable cwd never matches — an unattributable
+    /// transcript is dropped, not guessed (CROW-1089).
+    static func applyingCwdFilter(_ files: [URL], _ cwdFilter: String?) -> [URL] {
+        guard let cwdFilter else { return files }
+        let want = (cwdFilter as NSString).standardizingPath
+        guard !want.isEmpty else { return [] }
+        return files.filter { url in
+            guard let cwd = AgentLogCwdReader.read(url) else { return false }
+            return (cwd as NSString).standardizingPath == want
         }
     }
 

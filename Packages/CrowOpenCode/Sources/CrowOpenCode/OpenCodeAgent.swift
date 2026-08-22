@@ -178,4 +178,12 @@ public struct OpenCodeAgent: CodingAgent {
     public func sessionRenameSlashCommand(newName: String) -> String? {
         "/rename \(newName)\n"
     }
+
+    // `logSources` is intentionally NOT overridden (CROW-1089): OpenCode keeps a
+    // multi-file object store (`~/.local/share/opencode/storage/{project,session,
+    // message,part}/`) rather than one transcript per session. A
+    // `project/<id>.json`'s `worktree` field maps a project to its cwd, but
+    // reassembling a session's scattered `message`/`part` records into ordered
+    // NDJSON is a normalizer that isn't built yet, so it stays on the `[]`
+    // default rather than upload a malformed transcript.
 }

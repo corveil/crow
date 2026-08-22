@@ -331,9 +331,12 @@ public protocol CodingAgent: Sendable {
     ///
     /// Opt-in: the protocol default returns `[]`, so a harness whose on-disk log
     /// location is unconfirmed contributes nothing rather than uploading the
-    /// wrong bytes. Only Claude Code is fully wired today (its logs are the only
-    /// ones partitioned by working directory); the globally-stored harnesses
-    /// (Codex/Cursor/OpenCode) return `[]` pending per-harness cwd matching.
+    /// wrong bytes. `ClaudeCodeAgent` and `OpenAICodexAgent` are wired today
+    /// (CROW-1089): Claude's logs are partitioned by working directory, and Codex's
+    /// globally-stored rollouts carry a `cwdFilter` so the collector attributes
+    /// them by their recorded `cwd`. Cursor (SQLite blob store) and OpenCode
+    /// (multi-file object store) still return `[]` pending a normalizer for their
+    /// on-disk shapes; see each adapter for the specific blocker.
     func logSources(worktreePath: String, harnessSessionID: String?) -> [AgentLogSource]
 }
 
@@ -496,7 +499,9 @@ public extension CodingAgent {
 
     /// Opt-in default: no known log sources (CROW-1056). A harness whose
     /// durable-log location is unconfirmed — or whose logs are not partitioned
-    /// by working directory — contributes nothing until its adapter overrides
-    /// this. Only `ClaudeCodeAgent` overrides it today.
+    /// by working directory *and* have no cwd-attribution wired — contributes
+    /// nothing until its adapter overrides this. `ClaudeCodeAgent` (per-worktree
+    /// slug directory) and `OpenAICodexAgent` (cwd-filtered global rollouts)
+    /// override it today (CROW-1089).
     func logSources(worktreePath: String, harnessSessionID: String?) -> [AgentLogSource] { [] }
 }
