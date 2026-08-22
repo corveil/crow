@@ -6519,6 +6519,22 @@ function switchAgentWindow(win) {
   applySurfaceScrollback();
   resetScrollbackSync();
   selectWindow(win, { replay: false });
+  // CROW-1091: run the SAME sizing step the reload/connect attach runs, which
+  // this in-place path had skipped. `reloadTerminal`/onopen call `applyTermFit()`
+  // on attach — and `fitAddon.fit()` re-syncs xterm's scroll area, which is what
+  // gives the history scrollbar its geometry — so a shell switch already resized
+  // itself. The agent in-place switch (CROW-1035) did neither, so a switched-in
+  // surface kept the previous window's grid geometry and its scrollbar sizing
+  // until a manual reload re-ran the fit — the reported "no scroll bar until
+  // refresh." Fit here too (deferred a frame via fitTerminal so it measures the
+  // pane at its settled post-switch layout — the tab bar / header height differs
+  // between session kinds), and re-check the pinned-visible class right away so it
+  // reflects the switched-in buffer instead of the previous window's. No replay
+  // and no new PTY, so this stays clear of the CROW-1035 caret jump and CROW-1048
+  // chrome stacking a full reload would reintroduce; a same-size switch fits to
+  // identical cols/rows, so applyTermFit sends no SIGWINCH (#637).
+  fitTerminal();
+  updateTerminalScrollbar();
   // Do not arm CROW-1027 here. In-place switch has no new PTY and no
   // SIGWINCH, so the mid-reflow one-screen capture that heal exists for
   // cannot happen. A second select-window 250ms later (the fake-xterm

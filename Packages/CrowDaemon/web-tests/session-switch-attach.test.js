@@ -22,6 +22,9 @@ const epilogue = `
   set term(v){ term = v; },
   set activeTerminal(v){ activeTerminal = v; },
   get activeTerminal(){ return activeTerminal; },
+  updateTerminalScrollbar(){ return updateTerminalScrollbar(); },
+  get fitScheduled(){ return fitScheduled; },
+  set fitScheduled(v){ fitScheduled = v; },
   SCROLLBACK_HEAL_MS,
   SCROLLBACK_HEAL_MAX,
   TERM_BUFFER_CLEAR,
@@ -192,6 +195,39 @@ console.log('\nno open socket: attachWindow only records the window (onopen will
   T.attachWindow(claude.window);
   check('records attachedWindow', T.attachedWindow === claude.window);
   check('does not throw without a socket', true);
+}
+
+// CROW-1091: the in-place agent switch (above) never ran the sizing step the
+// reload/connect attach runs. `reloadTerminal`/onopen call `applyTermFit()`, and
+// `fitAddon.fit()` re-syncs xterm's scroll area — the history scrollbar's
+// geometry — so a shell switch resized itself; the agent in-place path did not,
+// so a switched-in surface kept the previous window's grid geometry and stale
+// scrollbar sizing until a manual reload. So the switch must now schedule a fit
+// (`fitTerminal`, deferred a frame for the settled layout) and re-check the
+// pinned-visible class — WITHOUT reintroducing the replay it deliberately skips.
+const wrap = window.document.getElementById('terminal-wrap');
+console.log('\nCROW-1091: an in-place agent switch runs the same sizing step as a reload:');
+{
+  const sock = mount(cursor);
+  T.fitScheduled = false;
+  wrap.classList.remove('has-scrollback');
+  T.term.buffer.active.baseY = 42; // history present on the switched-in surface
+  T.attachWindow(cursor.window);
+  check('the switch schedules a fit (parity with the reload attach)', T.fitScheduled === true);
+  check('the history scrollbar is evaluated on switch, not left to a manual refresh',
+    wrap.classList.contains('has-scrollback'));
+  check('and it still skips the replay (no CROW-1035/1048 regression)',
+    selectWindowPayloads(sock)[0].replay === false);
+}
+
+console.log('\nCROW-1091: switching in a surface with no history leaves no stale bar:');
+{
+  const sock = mount(claude);
+  wrap.classList.add('has-scrollback'); // as if left on by the previous window
+  T.term.buffer.active.baseY = 0;       // alt-buffer agent: nothing to scroll
+  T.attachWindow(claude.window);
+  check('the stale scrollbar class is cleared on switch', !wrap.classList.contains('has-scrollback'));
+  check('still an in-place select-window', selectWindowCount(sock) === 1);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
