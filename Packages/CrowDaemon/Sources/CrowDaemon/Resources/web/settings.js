@@ -1908,10 +1908,13 @@
       refresh();
       try {
         const res = await rpc('backfill-upload', { workspace: workspaceName, sessions: uids });
-        const byUid = {};
-        (res.results || []).forEach((r) => { byUid[r.uid] = r; });
+        // Key results by (uid, harness): a UID shared by a Claude and a Codex row
+        // maps each scan row to its own outcome instead of overwriting (CROW-1089).
+        const outcomeKey = (o) => (o.uid || '') + ' ' + (o.harness || 'claude');
+        const byKey = {};
+        (res.results || []).forEach((r) => { byKey[outcomeKey(r)] = r; });
         sessions.forEach((s) => {
-          const r = byUid[s.uid];
+          const r = byKey[outcomeKey(s)];
           if (!r) return;
           s.upload_status = (r.result === 'uploaded' || r.result === 'already') ? 'uploaded'
             : (r.result === 'skipped' ? 'skipped' : 'failed');

@@ -137,6 +137,7 @@ private struct StubRunner: ShellRunner {
             session: s, upload: (baseURL: "https://corveil.io", apiKey: "k"),
             maxUploadBytes: 8_000_000)
         #expect(outcome.result == .uploaded)
+        #expect(outcome.harness == .codex) // the outcome carries its harness for UI keying
 
         // Idempotent within the codex slot: a re-run is a no-op...
         let again = await svc.upload(

@@ -2311,6 +2311,7 @@ private func backfillSummaryJSON(_ s: BackfillSummary) -> JSONValue {
 private func backfillOutcomeJSON(_ o: BackfillUploadOutcome) -> JSONValue {
     var obj: [String: JSONValue] = [
         "uid": .string(o.claudeSessionUID),
+        "harness": .string(o.harness.rawValue),
         "result": .string(o.result.rawValue),
         "linked": .bool(o.linked),
     ]

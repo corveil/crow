@@ -390,7 +390,7 @@ Reconcile and upload historical on-disk session transcripts.
 crow backfill <scan|upload>
 ```
 
-Scans the coding-session transcripts already on disk (~/.claude/projects), reconstructs each one's workspace, repo, and ticket/PR, and uploads the ones you choose to Corveil as session artifacts — so a backfilled session lands in the ontology indistinguishable from a live-captured one.
+Scans the coding-session transcripts already on disk (Claude Code under ~/.claude/projects and Codex under ~/.codex/sessions), reconstructs each one's workspace, repo, and ticket/PR, and uploads the ones you choose to Corveil as session artifacts — so a backfilled session lands in the ontology indistinguishable from a live-captured one.
 
 A reconstructed ticket becomes a link only when the provider confirms it exists; otherwise the session uploads repo-only, and a true orphan uploads attributed but unlinked. Uploads reuse the named workspace's AI gateway for the destination and credential (no AWS credentials on this machine) and are idempotent — re-running never duplicates.
 
@@ -425,7 +425,7 @@ Choose sessions with repeated --session <uid> (UIDs come from `crow backfill sca
 | Flag | Value | Required | Description |
 | --- | --- | --- | --- |
 | `--workspace` | `<workspace>` | yes | Workspace whose gateway supplies the upload destination + credential |
-| `--session` | `<session>` _(repeatable)_ | no | A Claude session UID to upload (repeatable). Mutually exclusive with --all/--all-high-confidence. |
+| `--session` | `<session>` _(repeatable)_ | no | A session UID to upload (repeatable; Claude or Codex — UIDs come from `crow backfill scan`). Mutually exclusive with --all/--all-high-confidence. |
 | `--all-high-confidence` | — | no | Upload every not-yet-uploaded high-confidence session in this workspace |
 | `--all` | — | no | Upload every not-yet-uploaded session in this workspace |
 

@@ -75,7 +75,7 @@ struct BackfillService: Sendable {
         // transient failure retry).
         guard await store.shouldUpload(key: key, now: nowEpoch, retryBackoff: 0) else {
             return BackfillUploadOutcome(
-                claudeSessionUID: uid, result: .alreadyUploaded,
+                claudeSessionUID: uid, result: .alreadyUploaded, harness: harness,
                 ownerRepo: session.ownerRepo, ticketNumber: session.ticketNumber)
         }
 
@@ -83,8 +83,8 @@ struct BackfillService: Sendable {
         guard let transcript = TranscriptNormalizer.normalize(
             files: [file], format: format, maxBytes: max(1, maxUploadBytes)) else {
             return BackfillUploadOutcome(
-                claudeSessionUID: uid, result: .skipped, ownerRepo: session.ownerRepo,
-                reason: "empty_or_unreadable")
+                claudeSessionUID: uid, result: .skipped, harness: harness,
+                ownerRepo: session.ownerRepo, reason: "empty_or_unreadable")
         }
 
         // Validate the reconstructed ticket before asserting any link.
@@ -123,7 +123,7 @@ struct BackfillService: Sendable {
         await store.record(key: key, entry: entry)
 
         return Self.outcome(
-            uid: uid, result: result, linked: linked,
+            uid: uid, result: result, harness: harness, linked: linked,
             ownerRepo: session.ownerRepo, ticketNumber: linkedNumber, ticketKind: ticketKind)
     }
 
@@ -157,7 +157,7 @@ struct BackfillService: Sendable {
     }
 
     static func outcome(
-        uid: String, result: TranscriptUploadResult, linked: Bool,
+        uid: String, result: TranscriptUploadResult, harness: LogSyncHarness, linked: Bool,
         ownerRepo: String?, ticketNumber: Int?, ticketKind: BackfillTicketKind?
     ) -> BackfillUploadOutcome {
         let disposition: BackfillUploadOutcome.Result
@@ -170,7 +170,7 @@ struct BackfillService: Sendable {
         case .transient: disposition = .failed; reason = "transient"
         }
         return BackfillUploadOutcome(
-            claudeSessionUID: uid, result: disposition, linked: linked,
+            claudeSessionUID: uid, result: disposition, harness: harness, linked: linked,
             ownerRepo: ownerRepo, ticketNumber: ticketNumber, ticketKind: ticketKind, reason: reason)
     }
 }

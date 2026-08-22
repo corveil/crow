@@ -1801,7 +1801,7 @@ Uploads a chosen set through the live path, idempotently and serially. `--worksp
 
 | Flag | Description |
 | --- | --- |
-| `--session <uid>` | A Claude session UID to upload (repeatable; UIDs come from `crow backfill scan`) |
+| `--session <uid>` | A session UID to upload (repeatable; Claude or Codex — UIDs come from `crow backfill scan`) |
 | `--all-high-confidence` | Every not-yet-uploaded **high-confidence** session in this workspace |
 | `--all` | Every not-yet-uploaded session in this workspace |
 

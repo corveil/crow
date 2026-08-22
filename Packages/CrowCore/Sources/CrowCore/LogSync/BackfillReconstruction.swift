@@ -217,6 +217,9 @@ public struct BackfillSession: Sendable, Equatable, Codable {
 /// outcome (uploaded / linked / skipped-already / failed + reason).
 public struct BackfillUploadOutcome: Sendable, Equatable, Codable {
     public var claudeSessionUID: String
+    /// The harness this outcome is for — so a UI keying results back to scan rows
+    /// distinguishes a Claude and a Codex session that share a UID (CROW-1089).
+    public var harness: LogSyncHarness
     /// Terminal disposition of the attempt.
     public enum Result: String, Sendable, Equatable, Codable {
         case uploaded          // 201 stored
@@ -238,6 +241,7 @@ public struct BackfillUploadOutcome: Sendable, Equatable, Codable {
     public init(
         claudeSessionUID: String,
         result: Result,
+        harness: LogSyncHarness = .claude,
         linked: Bool = false,
         ownerRepo: String? = nil,
         ticketNumber: Int? = nil,
@@ -246,6 +250,7 @@ public struct BackfillUploadOutcome: Sendable, Equatable, Codable {
     ) {
         self.claudeSessionUID = claudeSessionUID
         self.result = result
+        self.harness = harness
         self.linked = linked
         self.ownerRepo = ownerRepo
         self.ticketNumber = ticketNumber
