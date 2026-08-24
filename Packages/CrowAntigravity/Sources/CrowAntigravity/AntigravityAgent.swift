@@ -229,17 +229,22 @@ public struct AntigravityAgent: CodingAgent {
     // `…/cache/projects.json` workspace↔conversation map. Reading any of those is
     // a new normalizer/attribution subsystem, not a `logSources` override.
     //
-    // Two additional gaps, either sufficient on its own to defer wiring:
-    // `LogSyncHarness` has no `antigravity` case (it maps to `.unknown` — the
-    // Corveil DB CHECK, corveil#2426), and `BackfillScanner`'s per-harness
-    // reconstruction leans on the same head-`cwd` reader, so a `reconstructAntigravity`
-    // written like `reconstructCodex` would resolve every session to `cwd == nil`
-    // → `.low`/orphan.
+    // Downstream, the same no-cwd fact also blocks *backfill*: `BackfillScanner`'s
+    // per-harness reconstruction reads cwd from the transcript head too, so a
+    // `reconstructAntigravity` written like `reconstructCodex` would resolve every
+    // session to `cwd == nil` → `.low`/orphan. NOT a blocker, and explicitly not a
+    // prerequisite for wiring: `LogSyncHarness` has no `antigravity` case, but that
+    // is by design — it maps to `.unknown`, so an upload is still accepted and
+    // attributed, just not harness-typed (`LogSyncSupport`; corveil#2426). Adding a
+    // first-class case is a quality-of-typing follow-up that does NOT gate wiring
+    // logs (the collector stamps the harness, then skips only when `logSources` is
+    // empty).
     //
     // Most promising future path for whoever wires this: Crow already runs
     // Antigravity hooks and knows the worktree it launched `agy` in, and the hook
-    // payload carries `Cwd` + `conversationId` — so capturing that at runtime into
-    // a Crow-side conversation-id→worktree map would give exact, non-guessed
-    // attribution the transcript itself can't. That's a design follow-up, not this
-    // ticket.
+    // stdin payload carries `conversationId` + `workspacePaths` (and
+    // `transcriptPath`, which names the log file directly) — so capturing that at
+    // runtime into a Crow-side conversation-id→worktree map would give exact,
+    // non-guessed attribution the transcript itself can't. That's a design
+    // follow-up, not this ticket.
 }

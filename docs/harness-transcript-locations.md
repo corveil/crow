@@ -51,7 +51,7 @@ CROW-1090. "cwd-attributable?" is the wiring test above.
 | Cursor | `cursor-agent` | ✅ | `~/.cursor/chats/<id>/<sub>/` | `store.db` (+ sibling `meta.json`) | SQLite (opaque blobs) | ✅ cwd in `meta.json` | Deferred — needs blob extractor · [#1095](https://github.com/corveil/crow/issues/1095) |
 | OpenCode | `opencode` | ✅ | `~/.local/share/opencode/storage/{project,session,message,part}/` | scattered `message`/`part` records | multi-file object store | ✅ cwd in `project/<id>.json.worktree` | Deferred — needs reassembler · [#1096](https://github.com/corveil/crow/issues/1096) |
 | Grok Build | `grok` | ✅ | `~/.grok/sessions/<urlencoded-abs-cwd>/<uuid>/` | `chat_history.jsonl` | NDJSON | ✅ path-partitioned (URL-encoded cwd) | **Lead found** — verify identity, then wire · [#1098](https://github.com/corveil/crow/issues/1098) |
-| Antigravity | `agy` | ✅ | unknown | — | — | ❓ unconfirmed | Research-first · [#1097](https://github.com/corveil/crow/issues/1097) |
+| Antigravity | `agy` | ✅ | `~/.gemini/antigravity-cli/brain/<conv-id>/.system_generated/logs/` (pooled globally, keyed by id) | `transcript_full.jsonl` (`transcript.jsonl` is truncated) | NDJSON | ❌ no cwd in transcript (only off-transcript: per-conv SQLite DB / hooks / `cache/projects.json`) | Deferred — durable log confirmed, **not** cwd-attributable · [#1097](https://github.com/corveil/crow/issues/1097) |
 | Muse Code | `muse` | ✅ | unknown | — | — | ❓ unconfirmed | Research-first · [#1099](https://github.com/corveil/crow/issues/1099) |
 | Cowork (Claude desktop, local-agent mode) | — (desktop app) | ❌ | `~/Library/Application Support/Claude/local-agent-mode-sessions/<acct>/<install>/local_<uuid>/` | `audit.jsonl` | NDJSON | ⚠️ cwd inside JSON, no path shortcut | Out of harness scope — see below |
 | Grok Bot | — (Electron app) | ❌ | `~/Library/Application Support/Grok Bot/` | — (leveldb / server-side) | — | ❌ no durable local transcript | No collectable log — skip |
@@ -172,10 +172,18 @@ not blocked on discovery.
   **[#1096](https://github.com/corveil/crow/issues/1096) (OpenCode)** — storage
   already known (table above); these are "build the normalizer" tickets, not
   research.
-- **[#1097](https://github.com/corveil/crow/issues/1097) (Antigravity)** /
-  **[#1099](https://github.com/corveil/crow/issues/1099) (Muse Code)** — still
-  genuinely unknown; CROW-1090 found no location for either. Research-first, as
-  their tickets say.
+- **[#1097](https://github.com/corveil/crow/issues/1097) (Antigravity)** —
+  **resolved.** The `agy` CLI *does* write a durable NDJSON transcript at
+  `~/.gemini/antigravity-cli/brain/<conv-id>/.system_generated/logs/transcript_full.jsonl`,
+  but pooled globally by conversation id with **no cwd on any line** — so it is
+  neither path-partitioned nor content-filterable, and stays on `[]`. The cwd
+  lives only off-transcript (a conditional protobuf-in-SQLite per-conversation DB,
+  the ephemeral hook / status-line payloads, or the `cache/projects.json` map).
+  Verified from Antigravity CLI docs + community tooling, not a live `agy` (not
+  installed; Google-Sign-In/GCP-gated). Full rationale in `AntigravityAgent.logSources`.
+- **[#1099](https://github.com/corveil/crow/issues/1099) (Muse Code)** — still
+  genuinely unknown; CROW-1090 found no location. Research-first, as its ticket
+  says.
 
 ## Caveats
 
