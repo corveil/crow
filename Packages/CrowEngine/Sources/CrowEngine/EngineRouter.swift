@@ -62,6 +62,39 @@ func hookToolName(from payload: [String: JSONValue]) -> String? {
     return payload["toolCall"]?.objectValue?["name"]?.stringValue
 }
 
+/// Extract Antigravity's conversation id from a hook stdin payload, trying the
+/// documented `conversationId` and a snake_case fallback (CROW-1107). The id names
+/// the transcript's `brain/<id>/…` directory, so the `hook-event` handler records
+/// it against the worktree Crow owns for the session.
+///
+/// ⚠️ Docs-derived, pending live-verify: `agy` can't be run here, so the exact
+/// field name is from Antigravity CLI docs, not first-party capture. A wrong name
+/// yields no id ⇒ no map entry ⇒ nothing uploaded for that conversation — never a
+/// misattribution (the worktree comes from session ownership, not the payload).
+func antigravityConversationID(from payload: [String: JSONValue]) -> String? {
+    for key in ["conversationId", "conversation_id"] {
+        if let v = payload[key]?.stringValue {
+            let trimmed = v.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { return trimmed }
+        }
+    }
+    return nil
+}
+
+/// Extract Antigravity's transcript-path hint from a hook payload (`transcriptPath`
+/// / `transcript_path`), if present — an optional locator only; the collector
+/// derives the durable `transcript_full.jsonl` from the conversation id regardless
+/// (CROW-1107).
+func antigravityTranscriptPath(from payload: [String: JSONValue]) -> String? {
+    for key in ["transcriptPath", "transcript_path"] {
+        if let v = payload[key]?.stringValue {
+            let trimmed = v.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { return trimmed }
+        }
+    }
+    return nil
+}
+
 /// Payload `cwd`s already logged as unresolved hook-event drops. An unmapped
 /// global hook config re-fires on every event, so without this the only
 /// diagnostic channel left after #903 (see the hook-event handler) would flood
@@ -1399,6 +1432,26 @@ public func makeEngineRouter(_ ctx: EngineContext) -> CommandRouter {
                         ?? session?.agentKind
                         ?? capturedAppState.defaultAgentKind
                     let signalSource = AgentRegistry.shared.agent(for: resolvedKind)?.stateSignalSource
+
+                    // CROW-1107: capture Antigravity's conversation→worktree map.
+                    // `agy`'s transcript records no cwd, so it can't be attributed
+                    // by the shared `cwdFilter` path (CROW-1097). What Crow *does*
+                    // know is exact: it launched `agy` in this session's worktree,
+                    // and the hook carries the `conversationId` that names the
+                    // transcript's `brain/<id>/…` dir. Record the pairing so
+                    // `AntigravityAgent.logSources` can return exactly this
+                    // worktree's transcripts. The worktree comes from Crow's own
+                    // session ownership — never the payload — so there is no
+                    // possibility of misattribution (best-effort, deduped, and it
+                    // never blocks or fails the hook).
+                    if resolvedKind == .antigravity,
+                       let conversationID = antigravityConversationID(from: payload),
+                       let worktree = capturedAppState.primaryWorktree(for: sessionID)?.worktreePath {
+                        AntigravityConversationMap.record(
+                            conversationID: conversationID,
+                            worktreePath: worktree,
+                            transcriptPath: antigravityTranscriptPath(from: payload))
+                    }
 
                     let state = capturedAppState.hookState(for: sessionID)
                     let stateBefore = state.activityState

@@ -417,6 +417,89 @@ import Testing
     }
 #endif
 
+    // MARK: - Antigravity (CROW-1107)
+
+    /// Write an Antigravity durable transcript at
+    /// `<brain>/<conv-id>/.system_generated/logs/transcript_full.jsonl`, plus the
+    /// truncated sibling `transcript.jsonl` the scanner must ignore.
+    private func writeAntigravityTranscript(in brainDir: URL, conversationID: String) throws {
+        let logs = brainDir
+            .appendingPathComponent(conversationID, isDirectory: true)
+            .appendingPathComponent(".system_generated", isDirectory: true)
+            .appendingPathComponent("logs", isDirectory: true)
+        try FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true)
+        try """
+        {"step_index":0,"type":"user","source":"user","status":"ok","created_at":"2026-08-24T00:00:00Z"}
+        {"step_index":1,"type":"model","source":"agent","status":"ok","created_at":"2026-08-24T00:00:01Z"}
+        """.write(to: logs.appendingPathComponent("transcript_full.jsonl"),
+                  atomically: true, encoding: .utf8)
+        // The known-buggy truncated sibling — must NOT be picked up.
+        try "{}".write(to: logs.appendingPathComponent("transcript.jsonl"),
+                       atomically: true, encoding: .utf8)
+    }
+
+    @Test func reconstructsAntigravityViaRuntimeMap() async throws {
+        let (devRoot, projects, cleanup) = try makeTree()
+        defer { cleanup() }
+        let brain = URL(fileURLWithPath: devRoot)
+            .deletingLastPathComponent().appendingPathComponent("agy-brain", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: brain) }
+
+        // A live clone so the repo → owner/repo resolves.
+        let clone = URL(fileURLWithPath: devRoot)
+            .appendingPathComponent("RadiusMethod/crow", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: clone.appendingPathComponent(".git"), withIntermediateDirectories: true)
+
+        let cwd = "\(devRoot)/RadiusMethod/crow-1107-wire-antigravity-collector"
+        try writeAntigravityTranscript(in: brain, conversationID: "CONV-1")
+
+        // The runtime map supplies the cwd the transcript itself lacks.
+        let map = AntigravityConversationMap(conversations: [
+            "CONV-1": .init(worktreePath: cwd),
+        ])
+        let scanner = BackfillScanner(
+            devRoot: devRoot, projectsDir: projects,
+            antigravityBrainDir: brain, antigravityMap: map,
+            gitRemote: { path in
+                path.hasSuffix("/RadiusMethod/crow") ? "https://github.com/corveil/crow.git" : nil
+            })
+
+        let sessions = await scanner.scan(ledger: LogSyncLedger())
+        // Only the one transcript_full.jsonl — the truncated sibling is ignored.
+        #expect(sessions.count == 1)
+        let s = try #require(sessions.first { $0.claudeSessionUID == "CONV-1" })
+        #expect(s.harness == .antigravity)
+        #expect(s.cwd == cwd)             // recovered from the runtime map, not the file
+        #expect(s.workspace == "RadiusMethod")
+        #expect(s.worktreeName == "crow-1107-wire-antigravity-collector")
+        #expect(s.repoName == "crow")
+        #expect(s.ownerRepo == "corveil/crow")
+        #expect(s.ticketNumber == 1107)
+        #expect(s.confidence == .high)
+    }
+
+    @Test func antigravityWithNoMapEntryIsLowConfidenceOrphan() async throws {
+        let (devRoot, projects, cleanup) = try makeTree()
+        defer { cleanup() }
+        let brain = URL(fileURLWithPath: devRoot)
+            .deletingLastPathComponent().appendingPathComponent("agy-brain2", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: brain) }
+        try writeAntigravityTranscript(in: brain, conversationID: "CONV-ORPHAN")
+
+        // Empty map → the transcript's cwd stays unknown → orphan, never guessed.
+        let scanner = BackfillScanner(
+            devRoot: devRoot, projectsDir: projects, antigravityBrainDir: brain,
+            gitRemote: { _ in nil })
+        let s = try #require(
+            await scanner.scan(ledger: LogSyncLedger()).first { $0.claudeSessionUID == "CONV-ORPHAN" })
+        #expect(s.harness == .antigravity)
+        #expect(s.cwd == nil)
+        #expect(s.workspace == nil)
+        #expect(s.repoName == nil)
+        #expect(s.confidence == .low)
+    }
+
     @Test func summaryCountsByTier() {
         let sessions = [
             BackfillSession(claudeSessionUID: "a", filePath: "", slug: "", confidence: .high, uploadStatus: .uploaded),

@@ -31,6 +31,12 @@ public struct AntigravityAgent: CodingAgent {
     public let hookConfigWriter: any HookConfigWriter
     public let stateSignalSource: any StateSignalSource
 
+    /// Where `logSources` reads the runtime conversation→worktree map and the
+    /// Antigravity brain dir (CROW-1107). Default to the real global locations;
+    /// injectable so a test can point them at a temp tree.
+    private let conversationMapURL: URL
+    private let brainDir: String
+
     private let launcher: AntigravityLauncher
 
     /// Last-resort search paths for `agy`, checked only when a
@@ -59,10 +65,14 @@ public struct AntigravityAgent: CodingAgent {
 
     public init(
         hookConfigWriter: any HookConfigWriter = AntigravityHookConfigWriter(),
-        stateSignalSource: any StateSignalSource = AntigravitySignalSource()
+        stateSignalSource: any StateSignalSource = AntigravitySignalSource(),
+        conversationMapURL: URL = AntigravityConversationMap.defaultMapURL(),
+        brainDir: String = AntigravityHome.brainDir()
     ) {
         self.hookConfigWriter = hookConfigWriter
         self.stateSignalSource = stateSignalSource
+        self.conversationMapURL = conversationMapURL
+        self.brainDir = brainDir
         self.launcher = AntigravityLauncher()
     }
 
@@ -191,62 +201,35 @@ public struct AntigravityAgent: CodingAgent {
     // (CROW-629). A documented Tier-2 gap; override once a rename command is
     // confirmed.
 
-    // `logSources` is intentionally NOT overridden (CROW-1097, a CROW-1089
-    // follow-up). Antigravity's CLI *does* write a durable per-conversation
-    // transcript — the earlier "no confirmed location" note is now resolved — but
-    // that transcript is **not cwd-attributable by Crow's mechanism**, which is
-    // the property the collector needs. So, like Cursor and OpenCode (storage
-    // known, attribution/format the blocker), it stays on the `[]` default rather
-    // than upload transcripts it can't safely attribute to a worktree.
-    //
-    // Where `agy` writes (verified from Antigravity CLI docs + community tooling —
-    // `agy-explore`, `agentgrep`, the `antigravity-conversation-fix` recovery
-    // tool — NOT first-party on-disk inspection: `agy` isn't installed here
-    // (`crow agents list` → `available: false`) and running it needs
-    // Google-Sign-In/GCP auth, so a live session couldn't be captured):
-    //   • App-data root `~/.gemini/antigravity-cli/` (reuses the `~/.gemini`
-    //     home; the *IDE* uses `~/.gemini/antigravity-ide/` — a separate tree).
-    //   • Durable transcript, JSON Lines:
-    //     `…/brain/<conversation-id>/.system_generated/logs/transcript_full.jsonl`
-    //     (`transcript.jsonl` alongside it is the known-buggy truncated one).
-    //     Step records are `{step_index, type, source, status, created_at}`.
-    //   • Storage is **flat/global** — every project's conversations pool in one
-    //     `brain/` dir keyed only by id (like Codex's `~/.codex/sessions`, unlike
-    //     Claude's per-cwd slug dir), so attribution must be by *content*.
-    //
-    // Why the current `cwdFilter` path can't consume it: `AgentLogCwdReader` reads
-    // the recorded `cwd` from the *transcript head* (top-level `cwd` / Codex's
-    // `payload.cwd`). Antigravity records **no cwd in the transcript at all** —
-    // nothing on any line says which repo the agent ran in. So a `.logDir` +
-    // `cwdFilter: worktreePath` source would drop every file for a missing cwd
-    // ("dropped, never guessed", CROW-1089) and collect *zero* — a wiring that
-    // only looks wired. The cwd exists, but only in places the shared infra
-    // doesn't read: a **separate per-conversation SQLite DB** (`<id>.db`) as
-    // opaque protobuf trajectory metadata, and only *conditionally* (an absolute
-    // `file:///` path recorded "when `agy` starts inside a workspace it
-    // recognises"); or the **ephemeral** hook-stdin / status-line JSON payloads
-    // (`conversationId`, `workspacePaths`, `transcriptPath` on the hook; lowercase
-    // `cwd` on the status line); or the `…/cache/last_conversations.json`
-    // workspace→latest-conversation pointer (latest-only, so it can name a stale
-    // conversation — using it would guess). Reading any of those is
-    // a new normalizer/attribution subsystem, not a `logSources` override.
-    //
-    // Downstream, the same no-cwd fact also blocks *backfill*: `BackfillScanner`'s
-    // per-harness reconstruction reads cwd from the transcript head too, so a
-    // `reconstructAntigravity` written like `reconstructCodex` would resolve every
-    // session to `cwd == nil` → `.low`/orphan. NOT a blocker, and explicitly not a
-    // prerequisite for wiring: `LogSyncHarness` has no `antigravity` case, but that
-    // is by design — it maps to `.unknown`, so an upload is still accepted and
-    // attributed, just not harness-typed (`LogSyncSupport`; corveil#2426). Adding a
-    // first-class case is a quality-of-typing follow-up that does NOT gate wiring
-    // logs (the collector stamps the harness, then skips only when `logSources` is
-    // empty).
-    //
-    // Most promising future path for whoever wires this: Crow already runs
-    // Antigravity hooks and knows the worktree it launched `agy` in, and the hook
-    // stdin payload carries `conversationId` + `workspacePaths` (and
-    // `transcriptPath`, which names the log file directly) — so capturing that at
-    // runtime into a Crow-side conversation-id→worktree map would give exact,
-    // non-guessed attribution the transcript itself can't. That's a design
-    // follow-up, not this ticket.
+    /// Where `agy` writes durable session logs, resolved through the **runtime
+    /// conversation→worktree map** (CROW-1107, the wiring follow-up to CROW-1097).
+    ///
+    /// Antigravity pools every conversation's durable transcript in one flat/global
+    /// tree keyed only by id —
+    /// `~/.gemini/antigravity-cli/brain/<conv-id>/.system_generated/logs/transcript_full.jsonl`
+    /// (`transcript.jsonl` beside it is the known-buggy truncated one) — and records
+    /// **no cwd on any transcript line**. So, unlike Codex, a `cwdFilter` source can't
+    /// attribute a transcript to a worktree: it would drop every file and collect
+    /// zero (CROW-1097). The attribution instead comes from a fact only Crow holds:
+    /// it launched `agy` in a known worktree, and each Antigravity hook fires with
+    /// that session's `--session <uuid>`. The `hook-event` handler records
+    /// `conversationId → worktree` as hooks fire (`AntigravityConversationMap`);
+    /// here we read it back and return exactly this worktree's `transcript_full.jsonl`
+    /// files as `.file`/`.jsonl` sources (already NDJSON — no normalizer). A
+    /// transcript with no map entry is dropped, never guessed — the same invariant
+    /// as Codex's cwd filter.
+    ///
+    /// ⚠️ **Docs-derived, pending live-verify (CROW-1107).** `agy` isn't installable
+    /// here (`crow agents list` → `available: false`; Google-Sign-In/GCP-authed), so
+    /// the hook payload field name (`conversationId`) and the brain-dir template are
+    /// from Antigravity CLI docs + community tooling, not first-party capture. The
+    /// worktree is taken from Crow's own session ownership (never the payload), so a
+    /// wrong payload field yields "no map entry" (⇒ nothing uploaded), never a
+    /// misattribution. Confirm the field names against a live `agy` before promoting
+    /// Antigravity out of Tier-2 (ADR 0015).
+    public func logSources(worktreePath: String, harnessSessionID: String?) -> [AgentLogSource] {
+        AntigravityConversationMap.load(mapURL: conversationMapURL)
+            .transcripts(forWorktreePath: worktreePath, brainDir: brainDir)
+            .map { .file($0, format: .jsonl) }
+    }
 }
